@@ -30,6 +30,23 @@ final class GitUITests: XCTestCase {
         XCTAssertTrue(pane.waitForExistence(timeout: 30), "a daemon pane appears")
     }
 
+    /// A phone has no sidebar: worktrees are acted on from the palette and the bar's PR button.
+    private var isPhone: Bool {
+        #if os(iOS)
+        UIDevice.current.userInterfaceIdiom == .phone
+        #else
+        false
+        #endif
+    }
+
+    /// Closes the checks popover (a sheet on a phone).
+    private func closePRPopover() {
+        let popover = element("pr-popover")
+        app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+        if popover.exists { isPhone ? popover.swipeDown(velocity: .fast) : panes.firstMatch.tap() }
+        XCTAssertTrue(popover.waitForNonExistence(timeout: 5), "the popover closes")
+    }
+
     private var panes: XCUIElementQuery {
         app.descendants(matching: .any).matching(NSPredicate(format: "identifier MATCHES 'pane-[0-9]+'"))
     }
@@ -81,18 +98,29 @@ final class GitUITests: XCTestCase {
         palette("New Agent")
         let nameField = element("task-name")
         XCTAssertTrue(nameField.waitForExistence(timeout: 10), "the New Agent sheet opens with a name")
+        // The runner first, while the top of the sheet is in view (a phone's sheet scrolls it
+        // away once the keyboard is up).
+        app.buttons["Shell"].firstMatch.tap()
         // Replace the generated name by deleting it from the end, not with ⌘A: even with the
         // field focused, ⌘A sometimes left nothing selected and the typed name was appended to
-        // the generated one. The tap at the field's trailing edge puts the caret at the end.
+        // the generated one. A plain tap brings the field into view (on a phone it can be under
+        // the keyboard); the tap at its trailing edge puts the caret at the end.
+        nameField.tap()
         nameField.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
         expectation(for: NSPredicate(format: "hasKeyboardFocus == true"), evaluatedWith: nameField)
         waitForExpectations(timeout: 5)
         let generated = nameField.value as? String ?? ""
         nameField.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: generated.count) + name)
         XCTAssertEqual(nameField.value as? String, name, "the task is named \(name)")
-        app.buttons["Shell"].firstMatch.tap()
         shot("new-task")
         element("launch-start").tap()
+        // The repository's setup command runs only once the owner trusts it (asked once per
+        // daemon and command).
+        let trust = app.alerts["Run Setup Commands for proj?"]
+        if trust.waitForExistence(timeout: 10) {
+            XCTAssertTrue(trust.staticTexts.matching(NSPredicate(format: "label CONTAINS 'echo setup done'")).firstMatch.exists, "the alert names the command")
+            trust.buttons["Run"].tap()
+        }
     }
 
     // MARK: Tests
@@ -125,9 +153,7 @@ final class GitUITests: XCTestCase {
         shot("pr-popover")
         element("pr-rerun").tap()
         waitForGhLog("run rerun 9002 --failed")
-        // Close the popover.
-        app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
-        if element("pr-popover").exists { panes.firstMatch.tap() }
+        closePRPopover()
 
         palette("Merge PR")
         let confirm = app.buttons["Merge Commit"].firstMatch
@@ -141,6 +167,7 @@ final class GitUITests: XCTestCase {
     /// The sidebar groups the host's tabs by repository and worktree: the repository header,
     /// the main branch with its tab, the idle worktree with its diff counts and PR number.
     func testSidebarGroupsTabsByRepositoryAndWorktree() throws {
+        try XCTSkipIf(isPhone, "the sidebar is the iPad and Mac layout")
         try launch()
         XCTAssertTrue(element("repo-header-proj").waitForExistence(timeout: 30), "the repository's header")
         let main = element("worktree-row-main")
@@ -167,13 +194,15 @@ final class GitUITests: XCTestCase {
         let worktree = fixtures + "/work/.unnamed/worktrees/proj/brave-heron"
         let port = try XCTUnwrap(waitForPort(of: "brave-heron"), "the daemon gave the worktree a PORT")
 
-        // The sidebar row and the toolbar popover show it.
+        // The sidebar row (iPad, Mac) and the toolbar popover show it.
         let row = element("worktree-row-brave-heron")
-        XCTAssertTrue(row.waitForExistence(timeout: 30), "the new worktree's row")
-        let labelled = NSPredicate(format: "label CONTAINS %@", "PORT \(port)")
-        expectation(for: labelled, evaluatedWith: row)
-        waitForExpectations(timeout: 20)
-        shot("sidebar-port")
+        if !isPhone {
+            XCTAssertTrue(row.waitForExistence(timeout: 30), "the new worktree's row")
+            let labelled = NSPredicate(format: "label CONTAINS %@", "PORT \(port)")
+            expectation(for: labelled, evaluatedWith: row)
+            waitForExpectations(timeout: 20)
+            shot("sidebar-port")
+        }
 
         // A server on $PORT in the worktree's tab (setup runs first; wait for its prompt).
         let deadline = Date().addingTimeInterval(15)
@@ -212,38 +241,51 @@ final class GitUITests: XCTestCase {
             app.buttons["Done"].firstMatch.tap()
         }
 
-        // Archive from the sidebar: it has an untracked file, so it asks.
-        row.press(forDuration: 1.2)
-        let archive = app.buttons["Archive Worktree…"].firstMatch
-        XCTAssertTrue(archive.waitForExistence(timeout: 5), "the row's menu offers Archive")
-        archive.tap()
+        // Archive from the sidebar (the palette on a phone): it has an untracked file, so it asks.
+        if isPhone {
+            palette("Archive Worktree")
+        } else {
+            row.press(forDuration: 1.2)
+            let archive = app.buttons["Archive Worktree…"].firstMatch
+            XCTAssertTrue(archive.waitForExistence(timeout: 5), "the row's menu offers Archive")
+            archive.tap()
+        }
         let confirmArchive = app.buttons["Archive with Changes"].firstMatch
         XCTAssertTrue(confirmArchive.waitForExistence(timeout: 5), "archiving with changes asks first")
         shot("archive-confirm")
         confirmArchive.tap()
         XCTAssertTrue(text(containing: "Archived brave-heron").waitForExistence(timeout: 15), "says so")
-        XCTAssertTrue(row.waitForNonExistence(timeout: 15), "the row goes")
+        if !isPhone { XCTAssertTrue(row.waitForNonExistence(timeout: 15), "the row goes") }
         XCTAssertFalse(FileManager.default.fileExists(atPath: worktree), "the directory is gone")
 
         // Restore from the palette: it comes back with its tab.
-        XCTAssertTrue(element("worktree-row-main").waitForExistence(timeout: 10))
+        if !isPhone { XCTAssertTrue(element("worktree-row-main").waitForExistence(timeout: 10)) }
         palette("Restore brave-heron")
         XCTAssertTrue(text(containing: "Restored brave-heron").waitForExistence(timeout: 20), "says so")
-        XCTAssertTrue(row.waitForExistence(timeout: 20), "the row is back")
+        if isPhone {
+            expectation(for: NSPredicate(format: "label CONTAINS 'brave-heron'"), evaluatedWith: element("pr-button"))
+            waitForExpectations(timeout: 20)
+        } else {
+            XCTAssertTrue(row.waitForExistence(timeout: 20), "the row is back")
+        }
         XCTAssertTrue(FileManager.default.fileExists(atPath: worktree + "/.setup-done"), "with its changes")
         shot("restored")
 
-        // Delete from the sidebar: asks, then removes the directory.
-        row.press(forDuration: 1.2)
-        let delete = app.buttons["Delete Worktree…"].firstMatch
-        XCTAssertTrue(delete.waitForExistence(timeout: 5), "the row's menu offers Delete")
-        delete.tap()
+        // Delete from the sidebar (the palette on a phone): asks, then removes the directory.
+        if isPhone {
+            palette("Delete Worktree")
+        } else {
+            row.press(forDuration: 1.2)
+            let delete = app.buttons["Delete Worktree…"].firstMatch
+            XCTAssertTrue(delete.waitForExistence(timeout: 5), "the row's menu offers Delete")
+            delete.tap()
+        }
         let confirmDelete = app.buttons["Delete Worktree"].firstMatch
         XCTAssertTrue(confirmDelete.waitForExistence(timeout: 5), "deleting asks first")
         shot("delete-confirm")
         confirmDelete.tap()
         XCTAssertTrue(text(containing: "Deleted brave-heron").waitForExistence(timeout: 15), "says so")
-        XCTAssertTrue(row.waitForNonExistence(timeout: 15), "the row goes")
+        if !isPhone { XCTAssertTrue(row.waitForNonExistence(timeout: 15), "the row goes") }
         XCTAssertFalse(FileManager.default.fileExists(atPath: worktree), "the directory is gone")
     }
 

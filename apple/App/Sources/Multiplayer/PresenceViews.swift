@@ -203,6 +203,8 @@ struct MultiplayerPaneOverlay: View {
                             .movingTransition(.bottom)
                     }
                 }
+                // Banners ("Stopped following") rise above these cards, never over them.
+                .toastObstacle()
                 .frame(maxHeight: .infinity, alignment: .bottom)
                 .padding(DS.Space.s)
             }

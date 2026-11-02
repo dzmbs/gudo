@@ -190,3 +190,39 @@ async fn kitty_graphics_are_mirrored_answered_and_survive_reattach() {
     drop((a, b));
     daemon.shutdown().await;
 }
+
+/// A client's mirror keeps the images its host keeps: the daemon sends its
+/// `image_storage_mb`, and an image the host evicts goes from the mirror too.
+#[tokio::test(flavor = "multi_thread")]
+async fn mirrors_follow_the_hosts_image_storage() {
+    let state = tempfile::tempdir().unwrap();
+    let files = tempfile::tempdir().unwrap();
+    // Room for two 2×2 RGBA images (16 bytes each), not three.
+    let daemon = crate::support::start_with(state.path(), |c| c.image_storage_bytes = 40).await;
+    let mut a = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = a.attach_and_follow().await;
+    a.type_line(pane, "echo ready-$((6*7))");
+    a.wait_text(pane, "ready-42").await;
+    assert_eq!(a.client.image_storage_limit(), 40);
+
+    let rgba = [0, 0, 255, 255].repeat(4);
+    let seq: String = (1..=3)
+        .map(|id| {
+            format!(
+                "\x1b[{id};1H{}",
+                apc(&format!("a=T,f=32,s=2,v=2,i={id},q=2"), &rgba)
+            )
+        })
+        .collect();
+    show(&mut a, pane, files.path(), "three", &seq, "shown-three").await;
+    wait_images(&mut a, pane, "the third image", |all| {
+        all.iter().any(|(p, _)| p.image_id == 3)
+    })
+    .await;
+    let stored: Vec<u32> = images(&a, pane)
+        .iter()
+        .filter(|(_, image)| image.is_some())
+        .map(|(p, _)| p.image_id)
+        .collect();
+    assert_eq!(stored, [2, 3], "the host evicted the oldest image");
+}

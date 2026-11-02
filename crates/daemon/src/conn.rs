@@ -131,6 +131,12 @@ async fn run(
         }
         net::send(&mut ctl_tx, &ServerCtl::DaemonInfo(info)).await?;
     }
+    if hello.caps.contains(Caps::TERMINAL_LIMITS) && matches!(handshake, Ok(Admission::Join(..))) {
+        let limits = ServerCtl::TerminalLimits {
+            image_storage_bytes: core.cfg.image_storage_bytes,
+        };
+        net::send(&mut ctl_tx, &limits).await?;
+    }
     let (authz, maintenance) = match handshake {
         Ok(Admission::Join(authz, maintenance)) => (authz, maintenance),
         Ok(Admission::Knock(knocker)) => {

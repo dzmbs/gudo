@@ -42,6 +42,8 @@ struct PortsList: View {
     @Environment(\.terminalTheme) private var theme
     @State private var address = ""
     @State private var opening: UInt16?
+    /// The Ports leaf this list is in: pages open beside it.
+    @Environment(\.toolLeaf) private var leaf
 
     private var ports: [DetectedPort] { model.ports.ports }
 
@@ -152,7 +154,7 @@ struct PortsList: View {
         opening = port.port
         Task {
             defer { opening = nil }
-            await model.openPort(port)
+            await model.openPort(port, besideTool: leaf?.member.id)
         }
     }
 
@@ -167,7 +169,7 @@ struct PortsList: View {
         }
         guard let url = URL(string: input.contains("://") ? input : "https://" + input) else { return }
         if model.opensToolsAsLeaves {
-            model.openPage(url, hostId: nil)
+            model.openPage(url, hostId: nil, besideTool: leaf?.member.id)
         } else {
             withAnimation(DS.Motion.snappy) { model.browserURL = url }
         }
@@ -180,6 +182,12 @@ struct PortOfferBanner: ViewModifier {
     let model: WindowModel
     /// Its height, so a banner can sit above it.
     static let height: CGFloat = 52
+
+    /// Clear of the iPhone's tab bar and, while a page is in front there, of its address bar.
+    static func bottomInset(_ model: WindowModel) -> CGFloat {
+        guard model.widthBucket == .compact else { return DS.Space.l }
+        return 64 + (model.activeMixed?.focusedBrowser != nil ? BrowserView.compactBarHeight : 0)
+    }
 
     func body(content: Content) -> some View {
         content.overlay(alignment: .bottom) {
@@ -212,7 +220,7 @@ struct PortOfferBanner: ViewModifier {
                 .floatingCapsule()
                 .frame(maxWidth: 520)
                 .padding(.horizontal, DS.Space.l)
-                .padding(.bottom, model.widthBucket == .compact ? 64 : DS.Space.l)
+                .padding(.bottom, Self.bottomInset(model))
                 .movingTransition(.bottom)
                 .task(id: port.port) {
                     try? await Task.sleep(for: .seconds(15))
@@ -243,10 +251,12 @@ extension WindowModel {
 
     /// Shows a host port in the in-app browser: a page leaf beside, which reaches the host's
     /// `localhost` itself, where tools are leaves; else the browser sheet, through a forward.
-    func openPort(_ port: DetectedPort) async {
+    /// `besideTool`: the Ports leaf it was opened from, which the page goes beside (else
+    /// beside the focused leaf: the offer, a pane's link).
+    func openPort(_ port: DetectedPort, besideTool tool: UUID? = nil) async {
         if opensToolsAsLeaves {
             ports.dismissOffer()
-            openPage(DevServerRouting.pageURL(for: port), hostId: ports.hostId)
+            openPage(DevServerRouting.pageURL(for: port), hostId: ports.hostId, besideTool: tool)
             return
         }
         do {
@@ -284,14 +294,18 @@ extension WindowModel {
         openPage(url, hostId: nil)
     }
 
-    /// A page in the in-app browser. Where tools are leaves, a page leaf beside the focused one
-    /// (the one already showing it comes forward), so Ports stays a list; else the sheet.
-    func openPage(_ url: URL, hostId: String?) {
+    /// A page in the in-app browser. Where tools are leaves, a page leaf beside the tool leaf it
+    /// came from (Ports stays a list), else beside the focused leaf; the one already showing it
+    /// comes forward. Elsewhere the sheet.
+    func openPage(_ url: URL, hostId: String?, besideTool tool: UUID? = nil) {
         guard opensToolsAsLeaves else {
             browserURL = url
             browserHost = hostId
             if sheet != .browser { sheet = .browser }
             return
+        }
+        if let tool, let tab = composites.tab(containingTool: tool), let leaf = tab.leaf(forTool: tool) {
+            focusLeaf(leaf, inMixedTab: tab.id)
         }
         if let mixed = activeMixed, let leaf = mixed.leaves.first(where: {
             mixed.browsers[$0].map { $0.url == url.absoluteString && $0.hostId == hostId } ?? false

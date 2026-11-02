@@ -18,7 +18,7 @@ extension Terminal {
     /// with `appendHistory(_:)`. Callbacks and colors of this `Terminal` carry over; the size is the
     /// snapshot's (the remote PTY's).
     public func restore(snapshot ready: UnsafeRawBufferPointer) throws(SnapshotError) {
-        let restore = SnapshotRestore(ready: ready)
+        let restore = SnapshotRestore(ready: ready, imageStorageLimit: kittyImageStorageLimit)
         let result = restore.ready()
         guard result.code == GHOSTTY_SUCCESS, let handle = result.terminal else {
             restore.free()
@@ -133,7 +133,7 @@ final class SnapshotRestore {
     private var pending: [UInt16] = []
     private(set) var finished = false
 
-    init(ready: UnsafeRawBufferPointer) {
+    init(ready: UnsafeRawBufferPointer, imageStorageLimit: UInt64) {
         source = Source(Array(ready))
         let reader = GhosttyReader(
             read: { userdata, buffer, capacity, read in
@@ -153,7 +153,7 @@ final class SnapshotRestore {
         var yes = true
         ghostty_snapshot_decoder_set(decoder, GHOSTTY_SNAPSHOT_DECODER_OPT_COMPRESS_HISTORY, &yes)
         _ = KittyGraphics.installPNGDecoder
-        var images = KittyGraphics.storageLimit
+        var images = imageStorageLimit
         ghostty_snapshot_decoder_set(decoder, GHOSTTY_SNAPSHOT_DECODER_OPT_KITTY_IMAGE_STORAGE_LIMIT, &images)
         self.decoder = decoder
     }

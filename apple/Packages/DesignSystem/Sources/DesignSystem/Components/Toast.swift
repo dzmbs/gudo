@@ -59,6 +59,53 @@ public final class ToastCenter {
         dismissTask?.cancel()
         withAnimation(DS.Motion.banner) { current = nil }
     }
+
+    /// Cards at the bottom of panes (others' drafts, a guest's composer), in global
+    /// coordinates: the banner rises above any it would cover.
+    private(set) var obstacles: [AnyHashable: CGRect] = [:]
+
+    func setObstacle(_ id: AnyHashable, _ frame: CGRect?) {
+        let frame = frame.flatMap { $0.isEmpty ? nil : $0 }
+        guard obstacles[id] != frame else { return }
+        obstacles[id] = frame
+    }
+
+    /// The banner's distance from the bottom of `host` (global coordinates): `base`, or just
+    /// above the obstacles a banner of `size`, centred at the bottom, would otherwise cover.
+    public static func bottomInset(
+        base: CGFloat, banner size: CGSize, in host: CGRect, avoiding obstacles: [CGRect], spacing: CGFloat = DS.Space.s
+    ) -> CGFloat {
+        var inset = base
+        for obstacle in obstacles.sorted(by: { $0.maxY > $1.maxY }) {
+            let banner = CGRect(x: host.midX - size.width / 2, y: host.maxY - inset - size.height, width: size.width, height: size.height)
+            if banner.intersects(obstacle) { inset = host.maxY - obstacle.minY + spacing }
+        }
+        return inset
+    }
+}
+
+private struct ToastCenterKey: EnvironmentKey {
+    static let defaultValue: ToastCenter? = nil
+}
+
+extension EnvironmentValues {
+    /// The banners of the window around this view (`toastHost`).
+    var toastCenter: ToastCenter? {
+        get { self[ToastCenterKey.self] }
+        set { self[ToastCenterKey.self] = newValue }
+    }
+}
+
+/// Reports a view's frame to the window's banners so they never cover it.
+private struct ToastObstacle: ViewModifier {
+    @Environment(\.toastCenter) private var center
+    @State private var id = UUID()
+
+    func body(content: Content) -> some View {
+        content
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { center?.setObstacle(id, $0) }
+            .onDisappear { center?.setObstacle(id, nil) }
+    }
 }
 
 /// address bar, an editor's bar, pane headers). The style's symbol sits in a small tinted disc
@@ -147,17 +194,26 @@ private struct ToastHost: ViewModifier {
     let center: ToastCenter
     let bottomInset: CGFloat
 
+    @State private var host = CGRect.zero
+    @State private var size = CGSize.zero
+
     func body(content: Content) -> some View {
-        content.overlay(alignment: .bottom) {
-            if let toast = center.current {
-                Banner(toast) { center.dismiss() }
-                    .padding(.horizontal, DS.Space.l)
-                    .padding(.bottom, bottomInset)
-                    .transition(BannerTransition.value)
-                    .id(toast.id)
-                    .sensoryFeedback(toast.style == .failure ? DS.Haptic.failure : DS.Haptic.success, trigger: toast.id)
+        content
+            .environment(\.toastCenter, center)
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { host = $0 }
+            .overlay(alignment: .bottom) {
+                if let toast = center.current {
+                    Banner(toast) { center.dismiss() }
+                        .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
+                        .padding(.horizontal, DS.Space.l)
+                        .padding(.bottom, ToastCenter.bottomInset(
+                            base: bottomInset, banner: size, in: host, avoiding: Array(center.obstacles.values)))
+                        .animation(DS.Motion.banner, value: center.obstacles.count)
+                        .transition(BannerTransition.value)
+                        .id(toast.id)
+                        .sensoryFeedback(toast.style == .failure ? DS.Haptic.failure : DS.Haptic.success, trigger: toast.id)
+                }
             }
-        }
     }
 }
 
@@ -183,5 +239,11 @@ public extension View {
     /// Banners for `center`, `bottomInset` over the bottom safe area (and the keyboard).
     func toastHost(_ center: ToastCenter, bottomInset: CGFloat = DS.Space.l) -> some View {
         modifier(ToastHost(center: center, bottomInset: bottomInset))
+    }
+
+    /// Keeps the window's banners (`toastHost`) clear of this view: a card at the bottom of a
+    /// pane that a banner rising from the window's bottom would otherwise cover.
+    func toastObstacle() -> some View {
+        modifier(ToastObstacle())
     }
 }

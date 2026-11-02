@@ -56,6 +56,9 @@ final class Pane {
     nonisolated let outputGeneration = OSAllocatedUnfairLock(initialState: 0)
     /// The grid's cell size in pixels, for resizes that follow the stream (off the main actor).
     nonisolated let cellPixels = OSAllocatedUnfairLock<(width: UInt32, height: UInt32)>(initialState: (0, 0))
+    /// Rows from the bottom the saved screen was scrolled back, to restore once the host's
+    /// screen and enough of its scrollback are in (nil once done or the user moved).
+    nonisolated private let keptScroll = OSAllocatedUnfairLock<Int?>(initialState: nil)
 
     /// - Parameter saved: the pane's saved screen (instant start), drawn until the host's
     ///   arrives; input typed over it waits for that.
@@ -70,6 +73,7 @@ final class Pane {
         view = TerminalView(surface: surface)
         view.onInput = { [weak self] bytes in
             self?.moves += 1
+            self?.keptScroll.withLock { $0 = nil }
             bytes.withUnsafeBytes { backend.write($0) }
         }
         view.unpastedDragTypes = [TabDrag.typeIdentifier]
@@ -96,6 +100,7 @@ final class Pane {
             surface.enablePrediction()
             view.onInput = { [weak self, weak surface] bytes in
                 self?.moves += 1
+                self?.keptScroll.withLock { $0 = nil }
                 let seq = surface?.predictor?.lastInputSeq ?? 0
                 bytes.withUnsafeBytes { feed.writeInput($0, inputSeq: seq) }
             }
@@ -110,6 +115,18 @@ final class Pane {
         let cellPixels = cellPixels
         let generation = outputGeneration
         let savedShown = savedScreenShown
+        let keptScroll = keptScroll
+        // Scrolls back to where the saved screen was once the host's scrollback reaches it,
+        // asking for older pages until it does (or there are none).
+        let restoreScroll: @Sendable (_ historyDone: Bool) -> Void = { historyDone in
+            guard let rows = keptScroll.withLock({ $0 }) else { return }
+            let bar = terminal.scrollbar
+            let above = max(0, bar.total - bar.visible)
+            if above < rows, !historyDone, backend.requestHistory() { return }
+            keptScroll.withLock { $0 = nil }
+            terminal.scrollViewport(by: -min(rows, above))
+            surface.outputArrived()
+        }
         // The host's own screen replaced the saved one (checked without a lock hop per output).
         let leaveSaved: @Sendable () -> Void = { [weak self] in
             guard savedShown.withLock({ $0 }), daemon?.isLive == true else { return }
@@ -128,7 +145,14 @@ final class Pane {
                 leaveSaved()
             case .snapshot(let ready):
                 // Resume after a gap or first attach: the daemon's state replaces ours. A bad
-                // snapshot keeps what is on screen (stale beats blank) and is logged.
+                // snapshot keeps what is on screen (stale beats blank) and is logged. The
+                // host's screen replacing a saved one keeps where that was scrolled to.
+                if let limit = backend.kittyImageStorageLimit { terminal.kittyImageStorageLimit = limit }
+                if savedShown.withLock({ $0 }), daemon?.isLive == true {
+                    let bar = terminal.scrollbar
+                    let back = bar.total - bar.offset - bar.visible
+                    keptScroll.withLock { $0 = back > 0 ? back : nil }
+                }
                 do {
                     try terminal.restore(snapshot: ready)
                     let size = terminal.size
@@ -138,9 +162,11 @@ final class Pane {
                 }
                 surface.outputArrived()
                 leaveSaved()
-            case .history(let records, _):
+                restoreScroll(false)
+            case .history(let records, let done):
                 _ = try? terminal.appendHistory(records)
                 surface.outputArrived()
+                restoreScroll(done)
             case .resized(let cols, let rows, let cellWidth, let cellHeight):
                 // The remote PTY changed size at this point of the stream: follow it here, in
                 // order with the output around it, so the bytes after it lay out as they did
@@ -167,6 +193,7 @@ final class Pane {
         // Scrolling to the top of what the pane holds asks the host for older scrollback.
         surface.onScroll = { [weak self, weak surface] rows in
             self?.moves += 1
+            self?.keptScroll.withLock { $0 = nil }
             guard rows < 0, let terminal = surface?.terminal, terminal.scrollbar.offset == 0 else { return }
             _ = backend.requestHistory()
         }

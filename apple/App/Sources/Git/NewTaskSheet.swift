@@ -166,10 +166,12 @@ struct NewTaskSheet: View {
                             Text("Focused pane’s directory").tag(String?.none)
                         }
                         .accessibilityIdentifier("task-repo")
-                    } else if let directory = host?.directory {
+                    } else {
+                        // Always a row here, so repositories arriving later replace it in place.
                         LabeledContent("Directory") {
-                            Text(verbatim: directory)
+                            Text(verbatim: host?.directory ?? "—")
                                 .font(DS.Font.literalSmall)
+                                .foregroundStyle(host?.directory == nil ? DS.Palette.textTertiary : DS.Palette.textSecondary)
                                 .lineLimit(1)
                                 .truncationMode(.head)
                         }
@@ -273,7 +275,7 @@ struct NewTaskSheet: View {
                     .padding(.top, DS.Space.m)
             }
             #endif
-            .macFittedForm(maxHeight: 560)
+            .macFittedForm(maxHeight: 560, step: [AnyHashable(runner), AnyHashable(worktree), AnyHashable(failure != nil)])
             .onAppear {
                 let seed = model.newAgentSeed
                 model.newAgentSeed = NewAgentSeed()
@@ -282,7 +284,9 @@ struct NewTaskSheet: View {
                 repoPath = repoPath ?? (repos.first { preferred.contains($0.path) } ?? repos.first)?.path
                 worktree = repo != nil
                 if let seeded = seed.prompt { prompt = seeded }
-                isPromptFocused = true
+                // Not on a phone: its keyboard would scroll the runner and host out of view as
+                // the sheet opens.
+                isPromptFocused = model.widthBucket != .compact
             }
             .onChange(of: hosts.map(\.id)) { _, ids in
                 if hostID == nil || !ids.contains(hostID!) { hostID = ids.first }

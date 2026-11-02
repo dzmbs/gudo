@@ -186,7 +186,7 @@ Two shadows (`.shadow(DS.Shadow.float)`: r 16, y 6, 12 % light / 35 % dark; `.pa
 | `SwipeAction`, `SwipeActionTray` | `Components/SwipeActions.swift` | swipe actions beside hand-drawn rows, as `List` draws its own since iOS 26: a tinted circle per action (28–48 pt, as the row allows) with the symbol in white, the word under it on tall rows, system tints (never grey), scaling in with the reveal; armed, the outermost stretches into a capsule |
 | `floatingPanel`, `floatingCapsule`, `phoneDetents` | `Components/Glass.swift`, `Sheets.swift` | glass rules above; bottom sheets only on iPhone |
 | `ShortcutLabel`, `KeyCap` | `Components/KeyCaps.swift` | Ghostty `ShortcutSymbolsView`, `KeyCap` |
-| `Toast`, `ToastCenter`, `toastHost`, `Banner` | `Components/Toast.swift` | one at a time; a `person` (joined, left) leads with their avatar instead of the symbol; a glass capsule at the bottom (never over a pane's top bar: address bar, editor bar, pane headers; above the dev-server offer and the iPhone tab bar), edge and float shadow; the symbol in a 24 pt disc tinted at 16 %; one line (failures two); the action in accent semibold after a hairline; tap or flick down dismisses; taps beside it pass through |
+| `Toast`, `ToastCenter`, `toastHost`, `Banner` | `Components/Toast.swift` | one at a time; a `person` (joined, left) leads with their avatar instead of the symbol; a glass capsule at the bottom (never over a pane's top bar: address bar, editor bar, pane headers; above the dev-server offer, the iPhone tab bar and cards at the bottom of a pane such as someone's draft, `toastObstacle()`), edge and float shadow; the symbol in a 24 pt disc tinted at 16 %; one line (failures two); the action in accent semibold after a hairline; tap or flick down dismisses; taps beside it pass through |
 | `PresenceAvatar`, `PresenceStack`, `Participant` | `Components/Presence.swift` | initials on ANSI hues, typing ring, +N; stacks at any size, each avatar cutting a thin gap out of the one under it so they read on any background |
 | `PeopleSwitcher`, `PeopleSwitcherPerson` | `Components/PeopleSwitcher.swift` | the presence button's popover in the host switcher's form: "4 people here", one row per person (avatar, what they are doing, ✓ on the one followed; a tap follows or stops), then Share Session… |
 | `.switcherRow(isHighlighted:in:)`, `SwitcherCheck` | `Components/HostSwitcher.swift` | the switchers' shared row: 36 pt, the sliding highlight, the ✓ slot |
@@ -743,7 +743,11 @@ Form sheets use `SheetScaffold` (DesignSystem): on the Mac no bar, the title lea
 content, which sizes the sheet, and Cancel plus the one default button bottom-right (Esc, Return;
 a lone Done also closes on Esc); on iOS a nav stack with the inline title and the bar's
 cancellation and confirmation slots. Fields are prompt-only and leading (no label-left,
-value-right split), multi-line ones are `TextField(axis: .vertical)`. Files, Changes, Ports and
+value-right split), multi-line ones are `TextField(axis: .vertical)`. A form sheet opens as tall
+as its form (`macFittedForm`; `fittedForm` also on iPad, where a short notice would otherwise
+get a page-tall sheet) and keeps that size: rows a host sends later scroll inside or fill a slot
+that was there from the first frame; only the user's own steps (a pasted link, another mode, an
+error) resize it. Files, Changes, Ports and
 Session Replays are tools you keep beside the terminal, so on the Mac they open as windows of
 their own (`Windows/ToolWindows.swift`, ⌘W closes) with the title and actions in the titlebar;
 iPad and iPhone keep them as sheets.
@@ -824,6 +828,10 @@ with `-snapshot`, so it works on a locked Mac — glass and the sidebar list are
 `cacheDisplay` and show as white). Screens: `single splits bar hosts inbox palette search
 keybar reconnect overlays welcome pairing launchAgent invite links diff files browser editor
 settings toggle programs` (`programs`: one tab per program for the marks, `-fixtureTabs N` for
+`devices`, `app-lock` (locked, stays so) and `stopped-following` (with `-mockPresence YES`: the
+banner above someone's draft). `AppUITests/AccessibilityAuditUITests` runs the system's
+accessibility audit at the largest text size over `projects`, `tab-history`, `tab-selection`,
+`devices` and `app-lock`.
 
 `hosts` (live hosts list), `hetzner-splits` / `hetzner` (the Hetzner daemon session, split on the
 host), `reconnect`, `sidebar`, `tabstrip`, `settings`, `pairing`; `mac-*` drawn by the app itself

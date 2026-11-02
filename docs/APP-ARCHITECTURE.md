@@ -869,7 +869,10 @@ host's page uses that host's data store and claims this device's loopback port b
 `localhost:<port>` navigation (`DevServerRouting.prepareLoopback`). Opened from the palette (New
 Browser Tab, Open Browser Beside), from the browser sheet (Open as Tab), and by the host: a URL a
 pane opens through `BROWSER` comes up beside that pane (`openFromHost`), a sign-in in the system
-sign-in sheet instead (`HostSignIn`).
+sign-in sheet instead (`HostSignIn`). Where tools are leaves, a dev server or address opened from
+a Ports leaf goes beside that Ports leaf (`openPage(_:hostId:besideTool:)`), whichever leaf had
+the focus, so Ports stays a list with its pages next to it; the port offer and a pane's link go
+beside the focused leaf; a leaf already showing the page comes forward instead (`PortsLeafPlacementTests`).
 
 Agents' browser tools (`BrowserAgent`) act on the page beside the agent's pane, the first
 `browser_navigate` opening it. Pages carry two scripts (`BrowserAgentScript`). One runs in
@@ -943,7 +946,9 @@ row in Agents ▸ Session Replay, the palette, or a `.unreplay` file opened in t
 (picture, tool, target, verdict) beside rrweb-player in its own `WebPage` (a throwaway data
 store, no navigation, the recorded page in rrweb's script-less sandboxed frame; a session from a
 file also loads nothing from the network). Play, pause, scrub (a tick per step), speed, and
-previous/next step (← →, space); the list follows the playhead.
+previous/next step (← →, space); the list follows the playhead. In a leaf and on the Mac a
+session opens in place over the Replays list with a back button in the tool's bar (as Files
+browses in place: a push from a leaf would land in the window's navigation); an iOS sheet pushes.
 
 Sharing: a `.unreplay` file (exported type `<bundle prefix>.unreplay`, opened by the app) is one
 JSON document — `session` (the actions), `events` (rrweb) and `keyframes` (base64 JPEGs) — the
@@ -1420,11 +1425,18 @@ paired daemon id; the helper's own start (login item checks, pairing) runs as be
 an early dial that failed. `LaunchTimeline` logs process start → first frame → live (category
 `launch`). Numbers: docs/PERFORMANCE.md "Instant start".
 
+**Scroll position.** A pane saved scrolled back keeps that position when it goes live: the
+host's snapshot has only its screen, so `Pane` asks for older scrollback pages until the rows
+above reach the saved distance from the bottom (or there are none), then scrolls there. Scrolling
+or typing before then cancels it.
+
+**The first frame.** `WindowRoot` makes the window's model in the scene's first update (a box in
+`@State` makes it on first use), and `WindowContent` restores the window's hosts while its first
+frame is built when nothing else is to be opened (no request, launch hook or Handoff), so the
+first frame is the saved workspace rather than the terminal background or this device's shell.
+
 **Not covered.** Plain-SSH hosts and this device's own shells (nothing outlives the app to come
-back to; they start as before). A pane scrolled back when saved shows that position, then the
-live screen at the bottom (the daemon's snapshot has no older scrollback until it is paged in).
-The window's very first frame on the Mac is still the terminal background for one frame while
-`WindowRoot` makes its model.
+back to; they start as before).
 
 Tests: HostKit `WorkspaceCacheTests` (round trip incl. scrollback and scroll position, file
 protection, bounds, invalidation, seeding and reconciliation with a changed layout, saved tabs in
@@ -1432,7 +1444,8 @@ protection, bounds, invalidation, seeding and reconciliation with a changed layo
 `DaemonIntegrationTests.instantStartShowsTheSavedWorkspaceThenGoesLive` (real daemon: saved
 workspace at once, live in place, early input sent; prints the times); App `InstantStartTests`
 (the first frame is the saved workspace with no host connected, drawn by the renderer, then
-swapped in place; input before live; first-frame times); snapshots
+swapped in place; a restored window's first layout is its saved workspace; a scrolled-back pane
+keeps its position going live; input before live; first-frame times); snapshots
 `MacSnapshotTests.testInstantStart` (`instant-start-{cached,live}[-ipad]-{dark,light}`).
 
 ## 28. Floating panes (windows over a tab), rearranging by drag, zoom

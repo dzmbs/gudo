@@ -551,6 +551,9 @@ private struct ProjectHeader: View {
         .accessibilityHint(collapsed ? "Shows its tabs" : "Hides its tabs")
         .accessibilityAddTraits(.isHeader)
         .accessibilityIdentifier("project-\(project.name)")
+        // Combined, the header's own tap and + are reached as its actions.
+        .accessibilityAction { withAnimation(DS.Motion.snappy) { model.groups.toggleCollapsed(project: project.id) } }
+        .accessibilityAction(named: "New Terminal") { model.newTab(inProject: project.id) }
         .accessibilityAction(named: "Rename") { startRename() }
     }
 
@@ -694,7 +697,7 @@ private struct SuggestionRow: View {
             .buttonStyle(.plain)
             Button("Not Now", systemImage: "xmark") { withAnimation(DS.Motion.snappy) { model.dismiss(suggestion) } }
                 .labelStyle(.iconOnly)
-                .buttonStyle(.plain)
+                .buttonStyle(.sidebarDismiss)
                 .font(.caption2)
                 .foregroundStyle(DS.Palette.textTertiary)
         }
@@ -767,7 +770,7 @@ struct ProjectsIntroRow: View {
             Spacer(minLength: 0)
             Button("Close", systemImage: "xmark") { withAnimation(DS.Motion.snappy) { dismissed = true } }
                 .labelStyle(.iconOnly)
-                .buttonStyle(.plain)
+                .buttonStyle(.sidebarDismiss)
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(DS.Palette.textTertiary)
                 .help("Don't show again")

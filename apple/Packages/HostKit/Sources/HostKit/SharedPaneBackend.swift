@@ -181,6 +181,7 @@ nonisolated public final class SharedPaneBackend: Sendable {
                 if park, state.started, !state.exited, let seed {
                     let parked = Terminal(cols: 80, rows: 24) { [backend] in backend.write($0) }
                     parked.answersQueries = !backend.hostAnswersQueries
+                    if let limit = backend.kittyImageStorageLimit { parked.kittyImageStorageLimit = limit }
                     for event in seed() { Self.apply(event, to: parked) }
                     state.parked = parked
                     return (false, nil)
@@ -256,6 +257,7 @@ nonisolated public final class SharedPaneBackend: Sendable {
 
         var sizeFollowsStream: Bool { shared.backend.sizeFollowsStream }
         var hostAnswersQueries: Bool { shared.backend.hostAnswersQueries }
+        var kittyImageStorageLimit: UInt64? { shared.backend.kittyImageStorageLimit }
         func requestHistory() -> Bool { shared.backend.requestHistory() }
         func terminate() { shared.remove(id, park: false) }
         func detach() { shared.remove(id, park: true) }

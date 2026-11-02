@@ -6,9 +6,8 @@ import ImageIO
 /// Kitty graphics (`kitty_graphics.h`): libghostty-vt keeps the images programs send, the render
 /// state says where they go, and this reads their pixels for the renderer.
 public enum KittyGraphics {
-    /// Image storage per screen, the daemon's default (`ghostty_vt::KITTY_IMAGE_STORAGE_LIMIT`):
-    /// a mirror with less could evict an image the daemon still places, and then lay out the
-    /// text after it differently.
+    /// Image storage per screen by default, the daemon's (`ghostty_vt::KITTY_IMAGE_STORAGE_LIMIT`).
+    /// A mirror takes its host's own instead (`Terminal.kittyImageStorageLimit`).
     public static let storageLimit: UInt64 = 64 << 20
 
     /// Installs the process-wide PNG decoder libghostty-vt needs to accept PNG images (`f=100`).
@@ -70,7 +69,37 @@ public struct KittyImagePixels: Sendable {
     public let rgba: Data
 }
 
+extension KittyImagePixels {
+    /// The pixels as a PNG, cropped to `source` (image pixels; the whole image when nil or
+    /// empty, as kitty treats a zero source size).
+    public func png(source: CGRect? = nil) -> Data? {
+        let whole = CGRect(x: 0, y: 0, width: width, height: height)
+        let crop = source.map { $0.isEmpty ? whole : $0.intersection(whole) } ?? whole
+        guard !crop.isNull, !crop.isEmpty,
+              let provider = CGDataProvider(data: rgba as CFData),
+              let image = CGImage(
+                  width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
+                  space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                  bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+                  provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent),
+              let cropped = image.cropping(to: crop.integral)
+        else { return nil }
+        let out = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(out, "public.png" as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(destination, cropped, nil)
+        return CGImageDestinationFinalize(destination) ? out as Data : nil
+    }
+}
+
 extension Terminal {
+    /// The PNG of what `placement` shows (its source rect of the image), for dragging it out.
+    public func kittyPNG(_ placement: ImagePlacement) -> Data? {
+        guard let pixels = kittyImage(id: placement.imageID) else { return nil }
+        return pixels.png(source: CGRect(
+            x: Int(placement.sourceX), y: Int(placement.sourceY),
+            width: Int(placement.sourceWidth), height: Int(placement.sourceHeight)))
+    }
+
     /// The pixels of image `id` on the active screen as RGBA, or nil when there is no such image
     /// or its pixels are still on the way (restored from a snapshot, the pixels behind).
     public func kittyImage(id: UInt32) -> KittyImagePixels? {

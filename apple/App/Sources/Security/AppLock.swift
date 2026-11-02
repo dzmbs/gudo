@@ -84,9 +84,21 @@ nonisolated struct SystemAppLockAuthenticator: AppLockAuthenticator {
 @MainActor
 @Observable
 final class AppLock {
-    static let shared = AppLock(
+    static let shared: AppLock = {
+        // The lock's own design fixture: locked, and stays so (`-screen app-lock`).
+        if LaunchOptions.screen == "app-lock", let defaults = UserDefaults(suiteName: "app-lock.fixture") {
+            defaults.set(true, forKey: enabledKey)
+            return AppLock(defaults: defaults, authenticator: StaysLocked())
+        }
         // Hosting unit tests and fixtures never lock.
-        defaults: LaunchOptions.isTesting || LaunchOptions.mock ? UserDefaults(suiteName: "app-lock.unused") ?? .standard : .standard)
+        return AppLock(
+            defaults: LaunchOptions.isTesting || LaunchOptions.mock ? UserDefaults(suiteName: "app-lock.unused") ?? .standard : .standard)
+    }()
+
+    nonisolated private struct StaysLocked: AppLockAuthenticator {
+        func method() -> AppLockMethod? { .faceID }
+        func authenticate(reason: String) async -> AppLockAuthResult { .cancelled }
+    }
 
     nonisolated enum Grace: Int, CaseIterable, Identifiable, Sendable {
         case immediately = 0

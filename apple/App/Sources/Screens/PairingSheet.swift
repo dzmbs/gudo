@@ -113,7 +113,7 @@ struct PairingSheet: View {
                     .padding(.top, DS.Space.m)
             }
             #endif
-            .macFittedForm(maxHeight: 520)
+            .macFittedForm(maxHeight: 520, step: formStep)
             .onAppear { focusField() }
             .onChange(of: mode) {
                 error = nil
@@ -216,6 +216,11 @@ struct PairingSheet: View {
     }
 
     /// The destination is a tailnet address or MagicDNS name (100.64.0.0/10, `*.ts.net`).
+    /// What the user changed that adds or removes rows: the sheet may resize for these only.
+    private var formStep: [AnyHashable] {
+        [mode, isTailnet, (try? PairingTicket(ticket)) != nil, !linkTicket.isEmpty && ticket == linkTicket, error != nil, flow?.auth]
+    }
+
     private var isTailnet: Bool { parsed.map { Tailscale.isTailnet(host: $0.host) } ?? false }
 
     private var defaultUser: String {

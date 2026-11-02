@@ -64,6 +64,8 @@ struct EditorLicenceSheet: View {
             }
             .formStyle(.grouped)
             .chromeGrouped()
+            // As tall as the terms: a large iPad's form sheet would be twice their height.
+            .fittedForm(maxHeight: 640)
         }
         .interactiveDismissDisabled()
         #if os(iOS)

@@ -327,6 +327,9 @@ bitset! {
         /// `ServerCtl::AccountUsage` (see `proto::account`). Bits 21 and 22 are floating
         /// panes' and agent driving's.
         ACCOUNTS = 23;
+        /// Mirrors panes with the daemon's terminal limits: wants
+        /// `ServerCtl::TerminalLimits` after `DaemonInfo` and before `Welcome`.
+        TERMINAL_LIMITS = 24;
     }
 }
 

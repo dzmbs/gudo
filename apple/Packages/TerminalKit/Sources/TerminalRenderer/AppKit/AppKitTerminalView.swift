@@ -42,6 +42,8 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
     private var dragRectangle = false
     /// A press on the selection: dragging it carries the text out.
     private var dragOutStart: NSEvent?
+    /// The kitty image a press started on: dragging lifts it out as a PNG.
+    private var dragOutImage: (placement: ImagePlacement, rect: CGRect)?
 
     // NSTextInputClient state.
     private var markedText = NSMutableAttributedString()
@@ -205,6 +207,11 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
             surface.setNeedsRender()
             return
         }
+        if event.clickCount == 1, surface.terminal.selection == nil, let image = surface.kittyImage(at: p) {
+            dragOutStart = event
+            dragOutImage = image
+            return
+        }
         if event.clickCount == 1, let selection = surface.terminal.selection,
            let cell = surface.terminal.screenPoint(fromViewport: surface.cell(at: p)), selection.contains(cell)
         {
@@ -224,6 +231,19 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         let p = point(event)
         if mouseReporting {
             emit(surface.mouse(.motion, button: .left, at: p, mods: KeyModifiers(event.modifierFlags)))
+            return
+        }
+        if let start = dragOutStart, let image = dragOutImage {
+            let origin = point(start)
+            guard hypot(p.x - origin.x, p.y - origin.y) > 4 else { return }
+            dragOutStart = nil
+            dragOutImage = nil
+            guard let png = surface.terminal.kittyPNG(image.placement) else { return }
+            let pasteboardItem = NSPasteboardItem()
+            pasteboardItem.setData(png, forType: .png)
+            let item = NSDraggingItem(pasteboardWriter: pasteboardItem)
+            item.setDraggingFrame(image.rect, contents: NSImage(data: png))
+            beginDraggingSession(with: [item], event: start, source: self)
             return
         }
         if let start = dragOutStart {
@@ -248,6 +268,12 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         if mouseReporting {
             emit(surface.mouse(.release, button: .left, at: p, mods: KeyModifiers(event.modifierFlags)))
             mouseReporting = false
+            return
+        }
+        if dragOutStart != nil, dragOutImage != nil {
+            // A click on an image without a drag: nothing to select.
+            dragOutStart = nil
+            dragOutImage = nil
             return
         }
         if dragOutStart != nil {

@@ -10,8 +10,16 @@ struct SettingsView: View {
     #if os(macOS)
     @State private var navigation: SettingsNavigation
     #else
-    /// `-screen themes` opens the theme picker (design review).
-    @State private var path: [SettingsPage] = LaunchOptions.screen == "themes" ? [.theme] : []
+    /// `-screen themes` opens the theme picker, `-screen devices` a host's devices (design review).
+    @State private var path: [SettingsPage] = Self.fixturePath
+
+    private static var fixturePath: [SettingsPage] {
+        switch LaunchOptions.screen {
+        case "themes": [.theme]
+        case "devices": [.hostDevices("studio")]
+        default: []
+        }
+    }
     #endif
 
     /// Settings search: the query, and the row a result jumped to (lit for a moment).

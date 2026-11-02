@@ -9,7 +9,11 @@ use crate::support::{read_to_end, read_until, spawn, spawn_with, within};
 async fn input_for_a_program_that_never_reads_is_bounded() {
     // Raw mode: a canonical tty discards input past its line limit, so writes would never back
     // up into our queue and the bound would go untested.
-    let pty = spawn(&["/bin/sh", "-c", "stty raw -echo; echo ready; exec sleep 100"]);
+    let pty = spawn(&[
+        "/bin/sh",
+        "-c",
+        "stty raw -echo; echo ready; exec sleep 100",
+    ]);
     let mut out = pty.subscribe_from(Seq::ZERO).unwrap();
     read_until(&mut out, "ready").await;
     let chunk = vec![b'x'; 64 * 1024];

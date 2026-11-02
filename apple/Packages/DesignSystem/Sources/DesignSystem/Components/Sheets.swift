@@ -18,24 +18,69 @@ private struct PhoneDetents: ViewModifier {
     }
 }
 
-private struct FittedForm: ViewModifier {
+private struct FittedForm<Step: Equatable>: ViewModifier {
     let maxHeight: CGFloat
+    let step: Step
+    /// Also an iPad's form sheet, which otherwise takes a fixed size far taller than a short form.
+    var onPad = false
     /// Measured in the first layout pass, before the sheet shows.
     @State private var height: CGFloat?
+    /// Until when the form's height follows its rows: from its first rows on as it opens, and
+    /// briefly after each step.
+    @State private var settlesAt: ContinuousClock.Instant?
+    @State private var measuredStep: Step?
 
     func body(content: Content) -> some View {
         #if os(macOS)
+        measured(content)
+            .frame(height: fitted)
+        #else
+        if onPad, UIDevice.current.userInterfaceIdiom == .pad {
+            // The form's own height (its insets include the bar) proposed to the sheet directly:
+            // a navigation stack does not pass an ideal height up for `fitted` to use.
+            measured(content)
+                .presentationSizing(FormHeight(height: height.map { min($0, maxHeight) }))
+        } else {
+            content
+        }
+        #endif
+    }
+
+    private var fitted: CGFloat { min(height ?? maxHeight / 2, maxHeight) }
+
+    private func measured(_ content: Content) -> some View {
         content
             .onScrollGeometryChange(for: CGFloat.self) { geometry in
                 geometry.contentSize.height + geometry.contentInsets.top + geometry.contentInsets.bottom
             } action: { _, measured in
+                // Rows a host sends later scroll inside; only the user's steps resize the sheet.
+                guard measured > 0 else { return }
+                if settlesAt == nil || measuredStep != step { settlesAt = .now + FittedFormTiming.settle }
+                guard let settlesAt, ContinuousClock.now < settlesAt else { return }
                 height = measured
+                measuredStep = step
             }
-            .frame(height: min(height ?? maxHeight / 2, maxHeight))
-        #else
-        content
-        #endif
+            .onChange(of: step) { settlesAt = .now + FittedFormTiming.settle }
     }
+}
+
+#if os(iOS)
+/// A form sheet's size with the form's height, never taller than a form sheet would be.
+private struct FormHeight: PresentationSizing {
+    let height: CGFloat?
+
+    func proposedSize(for root: PresentationSizingRoot, context: PresentationSizingContext) -> ProposedViewSize {
+        let form: FormPresentationSizing = .form
+        var size = form.proposedSize(for: root, context: context)
+        if let height { size.height = min(height, size.height ?? height) }
+        return size
+    }
+}
+#endif
+
+enum FittedFormTiming {
+    /// How long a fitted form's height follows its rows after it opens or takes a step.
+    static let settle = Duration.milliseconds(250)
 }
 
 public extension View {
@@ -49,10 +94,18 @@ public extension View {
         #endif
     }
 
-    /// A Mac sheet's form as tall as its rows, up to `maxHeight` (then it scrolls): the sheet has
-    /// no blank space under it, grows as rows arrive, and the system places it by that height.
-    func macFittedForm(maxHeight: CGFloat) -> some View {
-        modifier(FittedForm(maxHeight: maxHeight))
+    /// A Mac sheet's form as tall as its rows when it opens, up to `maxHeight` (then it
+    /// scrolls): no blank space under it, and the system places it by that height. Rows that
+    /// arrive later (a host's answer) scroll inside it; it resizes only when `step` changes,
+    /// the user moving the form on (a pasted link, another mode).
+    func macFittedForm(maxHeight: CGFloat, step: some Equatable = 0) -> some View {
+        modifier(FittedForm(maxHeight: maxHeight, step: step))
+    }
+
+    /// `macFittedForm`, and on iPad a form sheet as tall as the form too (a short notice
+    /// otherwise opens in a page-tall sheet on a large iPad).
+    func fittedForm(maxHeight: CGFloat, step: some Equatable = 0) -> some View {
+        modifier(FittedForm(maxHeight: maxHeight, step: step, onPad: true))
     }
 
     /// Sheet detents on iPhone only.

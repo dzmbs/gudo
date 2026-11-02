@@ -240,19 +240,26 @@ private struct DeviceRow: View {
     /// Set when it paired while this session ran.
     let pairedNow: Date?
     let onRemove: (() -> Void)?
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        HStack(spacing: DS.Space.m) {
+        // At the accessibility sizes the parts stack, so the name and date are never squeezed.
+        let large = typeSize.isAccessibilitySize
+        let row = large ? AnyLayout(VStackLayout(alignment: .leading, spacing: DS.Space.s)) : AnyLayout(HStackLayout(spacing: DS.Space.m))
+        let title = large ? AnyLayout(VStackLayout(alignment: .leading, spacing: DS.Space.xs)) : AnyLayout(HStackLayout(spacing: DS.Space.row))
+        row {
             Image(systemName: symbol)
                 .foregroundStyle(pairedNow != nil ? DS.Palette.attention : DS.Palette.textSecondary)
                 .frame(width: 22)
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: DS.Space.row) {
+                title {
                     Text(name)
                         .font(pairedNow != nil ? DS.Font.rowTitleEmphasis : DS.Font.rowTitle)
-                        .lineLimit(1)
-                    if isMe { badge("This Device", tint: DS.Palette.textSecondary) }
-                    if pairedNow != nil { badge("New", tint: DS.Palette.attention) }
+                        .lineLimit(large ? 3 : 1)
+                    HStack(spacing: DS.Space.row) {
+                        if isMe { badge("This Device", tint: DS.Palette.textSecondary) }
+                        if pairedNow != nil { badge("New", tint: DS.Palette.attention) }
+                    }
                 }
                 Text(Self.when(device))
                     .font(DS.Font.rowSubtitle)
@@ -260,8 +267,10 @@ private struct DeviceRow: View {
                 Text(groupedHex(device.device))
                     .font(DS.Font.literalSmall)
                     .foregroundStyle(DS.Palette.textTertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
-            Spacer(minLength: DS.Space.s)
+            if !large { Spacer(minLength: DS.Space.s) }
             if device.revoked {
                 Text("Removed").font(DS.Font.badge).foregroundStyle(DS.Palette.error)
             } else if device.connected > 0 {
@@ -282,8 +291,22 @@ private struct DeviceRow: View {
         }
         .padding(.vertical, 2)
         .opacity(device.revoked ? 0.6 : 1)
-        .accessibilityElement(children: .contain)
+        // One element in words (not the glyph and the hex key), Remove as its action.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityActions {
+            if let onRemove { Button("Remove…", action: onRemove) }
+        }
         .accessibilityIdentifier("device-\(device.device.prefix(8))")
+    }
+
+    private var accessibilityLabel: String {
+        var parts = [name]
+        if isMe { parts.append("this device") }
+        if pairedNow != nil { parts.append("new") }
+        parts.append(Self.when(device))
+        if device.revoked { parts.append("removed") } else if device.connected > 0 { parts.append("connected") }
+        return parts.joined(separator: ", ")
     }
 
     private var symbol: String {
@@ -300,6 +323,8 @@ private struct DeviceRow: View {
     private func badge(_ text: String, tint: ChromeStyle) -> some View {
         Text(text)
             .font(DS.Font.badge)
+            .lineLimit(1)
+            .fixedSize()
             .foregroundStyle(tint)
             .padding(.horizontal, 5).padding(.vertical, 1)
             .background(DS.Palette.selectedFill, in: .capsule)

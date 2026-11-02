@@ -284,7 +284,8 @@ final class MockFileSource: FileSource {
 /// The editor as the first run shows it (`-screen editor -mock`): VS Code being set up.
 @Observable
 final class MockEditorSource: EditorSource {
-    var phase = EditorPhase.installing
+    /// `-mockEditorPhase licence`: Microsoft's terms first (design review of the licence sheet).
+    var phase: EditorPhase = LaunchArguments().string(forKey: "mockEditorPhase") == "licence" ? .needsLicence : .installing
     var folder: String { "~/projects/unnamed" }
     var hostName: String { "studio" }
     var unavailableReason: String? { nil }

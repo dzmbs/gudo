@@ -84,7 +84,7 @@ struct WorkspaceView: View {
             }
             // At the bottom, clear of every pane's top bar; over the port offer when it shows,
             // and over the iPhone's tab bar.
-            .toastHost(model.toasts, bottomInset: (model.widthBucket == .compact ? 64 : DS.Space.l)
+            .toastHost(model.toasts, bottomInset: PortOfferBanner.bottomInset(model)
                 + (model.ports.offer != nil && !model.editorHasKeys ? PortOfferBanner.height + DS.Space.s : 0))
             .overlay(alignment: model.widthBucket == .compact ? .top : .topTrailing) { AgentToastStack() }
             .dictationIndicator()
@@ -325,7 +325,12 @@ private struct SidebarDivider: View {
             .ignoresSafeArea()
             .overlay {
                 Color.clear
+                    // The split dividers' hit widths (docs/DESIGN.md): 1 + 6 for a pointer, 20 for a finger.
+                    #if os(iOS)
+                    .frame(width: 20)
+                    #else
                     .frame(width: 7)
+                    #endif
                     .contentShape(.rect)
                     #if os(macOS)
                     .onHover { inside in if inside { NSCursor.columnResize.push() } else { NSCursor.pop() } }
@@ -340,8 +345,16 @@ private struct SidebarDivider: View {
                             .onEnded { _ in start = nil })
                     .onTapGesture(count: 2) { width = SidebarWidth.standard }
                     .ignoresSafeArea()
+                    // VoiceOver resizes the sidebar by swiping up or down on it.
+                    .accessibilityElement()
+                    .accessibilityLabel("Sidebar Width")
+                    .accessibilityValue("\(Int(width)) points")
+                    .accessibilityAdjustableAction { direction in
+                        let step = direction == .increment ? 20.0 : direction == .decrement ? -20.0 : 0
+                        width = min(max(width + step, SidebarWidth.range.lowerBound), SidebarWidth.range.upperBound)
+                    }
+                    .accessibilityIdentifier("sidebar-divider")
             }
-            .accessibilityHidden(true)
     }
 }
 
@@ -605,6 +618,12 @@ private struct CompactRoot: View {
             }
         }
         .tabBarMinimizeBehavior(.onScrollDown)
+        // As in the regular layout: without them a merge, archive or delete from the palette
+        // waited for a confirmation that never showed.
+        .modifier(GitDialogs(git: model.git))
+        .onChange(of: model.git.hub?.repos != nil, initial: true) { _, has in
+            if has { model.git.syncAutoDelete() }
+        }
     }
 }
 #endif

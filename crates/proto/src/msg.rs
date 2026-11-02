@@ -716,6 +716,14 @@ pub enum ServerCtl {
     /// A session's floating panes, right after each [`ServerCtl::LayoutChanged`], to clients
     /// with [`Caps::FLOATS`], cut down to the panes they see (see [`crate::float`]).
     Floats(crate::float::SessionFloats),
+    /// The limits of the daemon's terminals that a client's mirrors must share, or they
+    /// diverge (an image one keeps and the other evicts lays the text after it out
+    /// differently). Sent to admitted clients with [`Caps::TERMINAL_LIMITS`], after
+    /// [`ServerCtl::DaemonInfo`] and before [`ServerCtl::Welcome`].
+    TerminalLimits {
+        /// Kitty graphics image storage per pane and screen, in bytes (0: images off).
+        image_storage_bytes: u64,
+    },
 }
 
 /// Longest clipboard write a program may make (OSC 52), in bytes of decoded text.

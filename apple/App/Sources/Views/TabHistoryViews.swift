@@ -105,7 +105,7 @@ private struct SidebarNoticeRow: View {
             .accessibilityHint(detail)
             Button("Not Now", systemImage: "xmark", action: dismiss)
                 .labelStyle(.iconOnly)
-                .buttonStyle(.plain)
+                .buttonStyle(.sidebarDismiss)
                 .font(.caption2)
                 .foregroundStyle(DS.Palette.textTertiary)
                 .help("Not Now")
@@ -133,7 +133,8 @@ struct TabSelectionBar: View {
             Menu {
                 TabSelectionMenuItems(model: model)
             } label: {
-                Image(systemName: "ellipsis.circle")
+                Label("Actions for Selected Tabs", systemImage: "ellipsis.circle")
+                    .labelStyle(.iconOnly)
             }
             .menuStyle(.button)
             .buttonStyle(.plain)
@@ -314,3 +315,25 @@ struct CompactTabSelection: View {
     }
 }
 #endif
+
+/// The × on a sidebar notice: a small glyph with a finger-sized target that overhangs the row
+/// rather than making it taller.
+struct SidebarDismissButtonStyle: ButtonStyle {
+    #if os(iOS)
+    private static let target: CGFloat = 44
+    #else
+    private static let target: CGFloat = 24
+    #endif
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(configuration.isPressed ? 0.5 : 1)
+            .frame(minWidth: Self.target, minHeight: Self.target)
+            .contentShape(.rect)
+            .padding(.vertical, -Self.target / 4)
+    }
+}
+
+extension ButtonStyle where Self == SidebarDismissButtonStyle {
+    static var sidebarDismiss: SidebarDismissButtonStyle { SidebarDismissButtonStyle() }
+}
