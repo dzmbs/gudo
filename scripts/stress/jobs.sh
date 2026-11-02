@@ -6,7 +6,7 @@ OUT=$ROOT/hookload.txt
 job() {
   local f=$ROOT/job-$1.sh; shift
   print -r -- "HOOKLOAD_OUT=$OUT python3 $H ${(q)@}; exec sleep 1000" >$f
-  "$BIN/un-stress" spawn "sh $f" >/dev/null
+  "$BIN/gudo-stress" spawn "sh $f" >/dev/null
 }
 # waitfor <n>: until hookload has reported n runs (at most 5 min).
 waitfor() {

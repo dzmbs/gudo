@@ -1,4 +1,4 @@
-//! The askpass helper (`un-hook askpass <prompt>`, also `unnamed-hostd askpass <prompt>`):
+//! The askpass helper (`gudo-hook askpass <prompt>`, also `gudo-hostd askpass <prompt>`):
 //! what `SUDO_ASKPASS`, `SSH_ASKPASS` and `GIT_ASKPASS` run in a pane (docs/DAEMON.md §9).
 //!
 //! It asks the daemon over the hook socket, which shows the prompt in the app, and prints the
@@ -55,8 +55,8 @@ pub fn main(args: &[String]) -> i32 {
 
 /// One request on the hook socket; `None` when the daemon cannot be reached.
 fn ask_daemon(query: HelperQuery, probe: bool) -> Option<HelperReply> {
-    let env = |name: &str| std::env::var(brand::env_var(name)).ok();
-    // The endpoint file wins over UN_SOCK so a pane outlives a daemon restart that moved it.
+    let env = |name: &str| brand::var(name);
+    // The endpoint file wins over GUDO_SOCK so a pane outlives a daemon restart that moved it.
     let socket = env("ENDPOINT_FILE")
         .and_then(|f| std::fs::read_to_string(f).ok())
         .map(|s| PathBuf::from(s.trim()))

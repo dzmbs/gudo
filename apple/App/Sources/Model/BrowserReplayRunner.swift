@@ -59,7 +59,7 @@ enum BrowserReplayRunner {
     private static func locate(_ action: ReplayAction, _ pane: BrowserPane) async -> (point: CGPoint, healed: Bool)? {
         guard action.selector != nil || action.role != nil else { return nil }
         let script = """
-            const P = globalThis.__unPlaywright;
+            const P = globalThis.__gudoPlaywright;
             if (!P) return null;
             const pw = new P.InjectedScript(window, { isUnderTest: false, sdkLanguage: "javascript", frameSeq: 0,
               testIdAttributeName: "data-testid", stableRafCount: 1, browserName: "webkit", customEngines: [] });

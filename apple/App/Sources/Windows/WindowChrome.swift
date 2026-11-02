@@ -86,7 +86,7 @@ struct SceneReader: UIViewRepresentable {
 enum TabDrag {
     /// Marks the drag as a tab's or a project's: a terminal under it does not paste its text,
     /// and the sidebar and panes take only drags that carry it.
-    static let typeIdentifier = "dev.unnamed.tab"
+    static let typeIdentifier = "dev.gudo.tab"
     static let contentType = UTType(exportedAs: typeIdentifier)
 
     @MainActor

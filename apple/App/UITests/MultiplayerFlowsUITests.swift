@@ -2,9 +2,9 @@ import XCTest
 
 /// Multiplayer flows against real local daemons (apple/scripts/multiplayer-flows-ui-test.sh):
 ///
-/// - **Join link**: a guest opens `<scheme>://join/…` (another daemon, whose owner is the `un`
+/// - **Join link**: a guest opens `<scheme>://join/…` (another daemon, whose owner is the `gudo`
 ///   CLI), reads the card and joins; the session shows them as a viewer.
-/// - **Knock**: "Kim Lee" knocks with an ask-first link (`un join` waits in the script); the
+/// - **Knock**: "Kim Lee" knocks with an ask-first link (`gudo join` waits in the script); the
 ///   owner app shows the knock over the terminal and admits her as a driver.
 /// - **Take control**: "Rex Diaz" (CLI driver) holds the pane's lease; the owner sees who drives
 ///   and takes control.

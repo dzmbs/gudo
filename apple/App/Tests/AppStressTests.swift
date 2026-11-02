@@ -3,7 +3,7 @@ import AppKit
 import DesignSystem
 @testable import HostKit
 import SwiftUI
-import UnnamedCore
+import GudoCore
 import XCTest
 @testable import App
 
@@ -11,7 +11,7 @@ import XCTest
 /// status changes 100 times a second, an attention feed filling up, the Inbox open over it. A
 /// watchdog thread measures how long the main thread goes unserved: under 100 ms at the full
 /// sizes; the fast variants allow 500 ms (debug build on a shared machine).
-/// The fast variants always run (mock hosts needed: `TEST_RUNNER_UNNAMED_MOCK=1`);
+/// The fast variants always run (mock hosts needed: `TEST_RUNNER_GUDO_MOCK=1`);
 /// `TEST_RUNNER_STRESS=1` runs the full sizes (500 tabs, 50 projects, 10 s).
 @MainActor
 final class AppStressTests: XCTestCase {
@@ -22,7 +22,7 @@ final class AppStressTests: XCTestCase {
     private var duration: Double { env["STRESS_SECONDS"].flatMap(Double.init) ?? (stress ? 10 : 3) }
 
     override func setUp() async throws {
-        try XCTSkipIf(!LaunchOptions.mock, "needs the mock hosts (TEST_RUNNER_UNNAMED_MOCK=1)")
+        try XCTSkipIf(!LaunchOptions.mock, "needs the mock hosts (TEST_RUNNER_GUDO_MOCK=1)")
     }
 
     private final class OffscreenWindow: NSWindow {

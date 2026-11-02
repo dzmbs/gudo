@@ -1,4 +1,4 @@
-//! A real `unnamed-hostd` upgraded while clients come and go restarts into the new build (the
+//! A real `gudo-hostd` upgraded while clients come and go restarts into the new build (the
 //! same process) every time. It used to die of SIGPIPE half of the time: `Command::exec`
 //! resets SIGPIPE to its default before `execve`, while the runtime's threads still write to
 //! sockets peers have just closed.
@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use client_core::{Client, ClientConfig, ClientEvent, DaemonBuild, EventQueue, RelayMode};
 
-const HOSTD: &str = env!("CARGO_BIN_EXE_unnamed-hostd");
+const HOSTD: &str = env!("CARGO_BIN_EXE_gudo-hostd");
 
 fn config(key: &[u8]) -> ClientConfig {
     let mut config = ClientConfig::new(key.to_vec());
@@ -45,7 +45,7 @@ async fn upgrades_restart_the_daemon_while_clients_reconnect() {
     let dir = tempfile::tempdir().unwrap();
     let bin = dir.path().join("bin");
     std::fs::create_dir(&bin).unwrap();
-    let exe = bin.join("unnamed-hostd");
+    let exe = bin.join("gudo-hostd");
     std::fs::copy(HOSTD, &exe).unwrap();
     let state = dir.path().join("state");
     let mut daemon = Daemon(

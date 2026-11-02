@@ -2,7 +2,7 @@ import DesignSystem
 import HostKit
 import PaneLayout
 import SwiftUI
-import UnnamedCore
+import GudoCore
 
 /// The workflow panels, in the palette's place and glass: the argument form and New Workflow.
 struct WorkflowPanelHost: View {

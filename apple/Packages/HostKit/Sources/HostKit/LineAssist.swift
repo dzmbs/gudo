@@ -1,6 +1,6 @@
 import Foundation
 import Synchronization
-import UnnamedCore
+import GudoCore
 
 /// daemon's prompt state, atomic submit, completion and the blocked agent's options. Panes on a
 /// daemon implement it; local and plain-SSH panes don't (the key bar stays in direct mode).

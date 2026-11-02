@@ -1,7 +1,7 @@
 import Foundation
 import Synchronization
 import Testing
-import UnnamedCore
+import GudoCore
 
 /// Saves known_hosts text the way the app would (Keychain), here in memory.
 final class SavedHosts: KnownHostsListener {

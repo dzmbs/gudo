@@ -7,7 +7,7 @@ import SwiftUI
 import Synchronization
 import TerminalCore
 import TerminalRenderer
-import UnnamedCore
+import GudoCore
 #if os(iOS)
 import UIKit
 #else

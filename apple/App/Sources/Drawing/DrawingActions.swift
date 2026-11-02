@@ -3,7 +3,7 @@ import Foundation
 import HostKit
 import PaneLayout
 import UniformTypeIdentifiers
-import UnnamedCore
+import GudoCore
 #if os(iOS)
 import UIKit
 #else

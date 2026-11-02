@@ -1,5 +1,5 @@
 import os
-import UnnamedCore
+import GudoCore
 
 /// Routes the Rust core's `tracing` output to os_log (category `core`), so connection and SSH
 /// diagnostics show up in Console.app and `log stream --predicate 'subsystem == "<bundle id>"'`.

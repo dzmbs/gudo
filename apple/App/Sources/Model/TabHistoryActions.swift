@@ -3,7 +3,7 @@ import Foundation
 import HostKit
 import PaneLayout
 import SwiftUI
-import UnnamedCore
+import GudoCore
 
 // Tab history in a window (docs/APP-ARCHITECTURE.md §25): closing tabs into Recently Closed and
 // bringing them back where they were, "A New Terminal" at launch, the idle-tab suggestion, and

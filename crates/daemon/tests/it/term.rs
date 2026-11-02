@@ -186,7 +186,7 @@ async fn an_agent_runs_waits_reads_and_stays_in_its_lane() {
 
     // A pane's own token speaks for that pane only.
     let run = agent
-        .ok("cmd_run", json!({ "command": "echo $UN_TOKEN" }))
+        .ok("cmd_run", json!({ "command": "echo $GUDO_TOKEN" }))
         .await;
     let other_token = run["output"]["text"].as_str().unwrap().trim().to_owned();
     let other_pane = run["pane"]
@@ -772,7 +772,7 @@ async fn a_panes_environment_reaches_only_that_pane() {
     let run = agent
         .ok(
             "cmd_run",
-            json!({ "command": "env; echo $UN_TOKEN", "maxBytes": 262_144 }),
+            json!({ "command": "env; echo $GUDO_TOKEN", "maxBytes": 262_144 }),
         )
         .await;
     let text = run["output"]["text"].as_str().unwrap();

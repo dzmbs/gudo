@@ -1,7 +1,7 @@
 import Foundation
 @testable import HostKit
 import Testing
-import UnnamedCore
+import GudoCore
 
 nonisolated func daemonInfo(
     build: String = "aaa", builtUnix: UInt64 = 100, protocol level: UInt32 = 1, minClient: UInt32 = 0,
@@ -16,8 +16,8 @@ nonisolated func daemonInfo(
 
 nonisolated let bundled = BundledDaemons(
     builds: [
-        BundledDaemon(file: "unnamed-hostd-x86_64-linux.gz", os: "linux", arch: "x86_64", build: "bbb", builtUnix: 200, protocol: 1),
-        BundledDaemon(file: "unnamed-hostd-aarch64-linux.gz", os: "linux", arch: "aarch64", build: "bbb", builtUnix: 200, protocol: 1),
+        BundledDaemon(file: "gudo-hostd-x86_64-linux.gz", os: "linux", arch: "x86_64", build: "bbb", builtUnix: 200, protocol: 1),
+        BundledDaemon(file: "gudo-hostd-aarch64-linux.gz", os: "linux", arch: "aarch64", build: "bbb", builtUnix: 200, protocol: 1),
     ],
     directory: URL(fileURLWithPath: "/app/Resources"))
 
@@ -39,7 +39,7 @@ nonisolated let bundled = BundledDaemons(
         #expect(advice.canUpdate)
         #expect(advice.message == "A newer helper is available.")
         // The CPU picks the build.
-        #expect(assess(daemonInfo(arch: "aarch64"))?.bundled?.file == "unnamed-hostd-aarch64-linux.gz")
+        #expect(assess(daemonInfo(arch: "aarch64"))?.bundled?.file == "gudo-hostd-aarch64-linux.gz")
         // An older protocol level is older whatever the dates.
         #expect(assess(daemonInfo(builtUnix: 999, protocol: 0))?.kind == .update)
     }
@@ -103,7 +103,7 @@ nonisolated let bundled = BundledDaemons(
         let json = """
             {
               "builds": [
-                {"file": "unnamed-hostd-x86_64-linux.gz", "os": "linux", "arch": "x86_64", "build": "3f2a9c1d7e4b", "built_unix": 1792000000, "protocol": 1, "size": 19000000}
+                {"file": "gudo-hostd-x86_64-linux.gz", "os": "linux", "arch": "x86_64", "build": "3f2a9c1d7e4b", "built_unix": 1792000000, "protocol": 1, "size": 19000000}
               ]
             }
             """
@@ -112,7 +112,7 @@ nonisolated let bundled = BundledDaemons(
         let build = try #require(loaded.build(os: "linux", arch: "x86_64"))
         #expect(build.build == "3f2a9c1d7e4b")
         #expect(build.builtUnix == 1_792_000_000)
-        #expect(loaded.path(of: build).hasSuffix("/unnamed-hostd-x86_64-linux.gz"))
+        #expect(loaded.path(of: build).hasSuffix("/gudo-hostd-x86_64-linux.gz"))
         #expect(BundledDaemons.load(manifest: directory.appending(path: "missing.json")) == nil)
     }
 }
@@ -121,7 +121,7 @@ nonisolated let bundled = BundledDaemons(
     @Test func theDomainIsDropped() {
         #expect(MachineName.display("ubuntu-32gb-hel1-2") == "ubuntu-32gb-hel1-2")
         #expect(MachineName.display("ubuntu-32gb-hel1-2.example.com") == "ubuntu-32gb-hel1-2")
-        #expect(MachineName.display("my-mac.local\n") == "my-mac")
+        #expect(MachineName.display("studio-MacBook-Pro.local\n") == "studio-MacBook-Pro")
         #expect(MachineName.display("") == nil)
         #expect(MachineName.display("localhost") == nil)
         #expect(MachineName.display("localhost.localdomain") == nil)

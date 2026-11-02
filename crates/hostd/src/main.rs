@@ -1,17 +1,17 @@
-//! `unnamed-hostd`: the host daemon. A thin main over the `daemon` crate.
+//! `gudo-hostd`: the host daemon. A thin main over the `daemon` crate.
 //!
 //! ```text
-//! unnamed-hostd run                 serve until SIGINT/SIGTERM
-//! unnamed-hostd pair                print a one-time pairing ticket (text + QR)
-//! unnamed-hostd pair --json --wait 30   the same as JSON, once the daemon is up
-//! unnamed-hostd status              is it running, where, how many devices
-//! unnamed-hostd devices             the paired owner devices
-//! unnamed-hostd unpair <key>        remove one (a lost phone); live connections close at once
-//! unnamed-hostd service install     run at login (systemd --user / launchd)
-//! unnamed-hostd service uninstall
-//! unnamed-hostd build-info --json   this build (version, protocol level, OS, CPU, host name)
-//! unnamed-hostd licenses           third-party licence notices for this binary
-//! unnamed-hostd askpass <prompt>    the askpass helper (normally run as `un-hook askpass`)
+//! gudo-hostd run                 serve until SIGINT/SIGTERM
+//! gudo-hostd pair                print a one-time pairing ticket (text + QR)
+//! gudo-hostd pair --json --wait 30   the same as JSON, once the daemon is up
+//! gudo-hostd status              is it running, where, how many devices
+//! gudo-hostd devices             the paired owner devices
+//! gudo-hostd unpair <key>        remove one (a lost phone); live connections close at once
+//! gudo-hostd service install     run at login (systemd --user / launchd)
+//! gudo-hostd service uninstall
+//! gudo-hostd build-info --json   this build (version, protocol level, OS, CPU, host name)
+//! gudo-hostd licenses           third-party licence notices for this binary
+//! gudo-hostd askpass <prompt>    the askpass helper (normally run as `gudo-hook askpass`)
 //! ```
 //!
 //! `run` restarts itself in place (`exec`, same PID) when its owner installs a new build over
@@ -34,7 +34,7 @@ use daemon::{Config, Daemon, RelayMode};
 #[derive(Parser)]
 #[command(name = brand::DAEMON_BIN, version, about = "Terminal and coding-agent host daemon")]
 struct Cli {
-    /// State directory (keys, paired devices, layout). Defaults to `$UN_STATE_DIR`, then the
+    /// State directory (keys, paired devices, layout). Defaults to `$GUDO_STATE_DIR`, then the
     /// XDG state dir on Linux and ~/Library/Application Support on macOS.
     #[arg(long, global = true)]
     state_dir: Option<PathBuf>,
@@ -115,10 +115,11 @@ fn main() -> Result<()> {
         std::process::exit(askpass::main(&args[1..]));
     }
     let cli = Cli::parse();
-    let state_dir = cli
-        .state_dir
-        .or_else(|| std::env::var_os(brand::env_var("STATE_DIR")).map(PathBuf::from))
-        .unwrap_or_else(daemon::default_state_dir);
+    let state_dir = daemon::migrate::current_state_dir(
+        cli.state_dir
+            .or_else(|| brand::var_os("STATE_DIR").map(PathBuf::from))
+            .unwrap_or_else(daemon::default_state_dir),
+    );
     match cli.command {
         Command::Run {
             bind,
@@ -171,6 +172,7 @@ fn run(
         )
         .with_writer(std::io::stderr)
         .init();
+    adopt_legacy_install(&state_dir)?;
     std::fs::create_dir_all(&state_dir)
         .with_context(|| format!("creating {}", state_dir.display()))?;
     let _lock = lock_instance(&state_dir)?;
@@ -238,6 +240,37 @@ fn run(
         }
         anyhow::Ok(())
     })
+}
+
+/// Takes over an install made under the product's earlier name: its state and config
+/// directories move to today's, and a build that runs under the old binary name as the old
+/// service (it was just upgraded in place) installs itself under today's name and hands over
+/// to the new service, which ends this process.
+fn adopt_legacy_install(state_dir: &Path) -> Result<()> {
+    // Before the move: the executable may live inside the old state directory.
+    let exe = upgradable_exe();
+    if daemon::migrate::adopt_legacy_state(state_dir, Duration::from_secs(10))? {
+        eprintln!("moved the earlier state into {}", state_dir.display());
+    }
+    let Some(mut exe) = exe else { return Ok(()) };
+    if let Ok(rest) = exe.strip_prefix(daemon::migrate::legacy_state_dir()) {
+        exe = state_dir.join(rest);
+    }
+    if exe.file_name() != Some(std::ffi::OsStr::new(brand::legacy::DAEMON_BIN)) {
+        // A newer build already took over: the old files next to it are left over.
+        let old = exe.with_file_name(brand::legacy::DAEMON_BIN);
+        let _ = std::fs::remove_file(daemon::upgrade_prev_path(&old));
+        let _ = std::fs::remove_file(old);
+        return Ok(());
+    }
+    if !service::legacy_installed() {
+        return Ok(());
+    }
+    let new = exe.with_file_name(brand::DAEMON_BIN);
+    std::fs::copy(&exe, &new).with_context(|| format!("installing {}", new.display()))?;
+    eprintln!("handing over to the {} service", brand::DAEMON_BIN);
+    service::hand_over(&new, state_dir)?;
+    std::process::exit(0)
 }
 
 /// The executable, if the daemon may replace it: it exists, its directory is writable (the new
@@ -511,11 +544,7 @@ fn devices(state_dir: &Path) -> Result<()> {
         .map_or(0, |d| d.as_millis() as u64);
     for d in devices {
         let days = now.saturating_sub(d.paired_at) / 86_400_000;
-        let name = if d.name.is_empty() {
-            "unnamed"
-        } else {
-            &d.name
-        };
+        let name = if d.name.is_empty() { "gudo" } else { &d.name };
         println!("{}  {name}  paired {days} day(s) ago", d.device);
     }
     Ok(())
@@ -545,11 +574,9 @@ mod tests {
     #[test]
     fn app_bundles_are_not_upgraded_in_place() {
         assert!(in_app_bundle(Path::new(
-            "/Applications/X.app/Contents/MacOS/unnamed-hostd"
+            "/Applications/X.app/Contents/MacOS/gudo-hostd"
         )));
-        assert!(!in_app_bundle(Path::new(
-            "/home/u/.local/bin/unnamed-hostd"
-        )));
+        assert!(!in_app_bundle(Path::new("/home/u/.local/bin/gudo-hostd")));
         assert!(!in_app_bundle(Path::new("/opt/Contents/X.app/hostd")));
     }
 

@@ -1,5 +1,5 @@
 import Foundation
-import UnnamedCore
+import GudoCore
 
 // The daemon gathers the numbers on the host (`DaemonWorkspace.usage`); this turns them into a
 // compact meter ("Claude · 62% of 5h · resets 14:20") and a detail list. Quiet by design

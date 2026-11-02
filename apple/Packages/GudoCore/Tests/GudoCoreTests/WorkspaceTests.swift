@@ -2,7 +2,7 @@ import Darwin
 import Foundation
 import Synchronization
 import Testing
-import UnnamedCore
+import GudoCore
 
 /// Records multiplayer pushes; tests poll it.
 final class MultiplayerRecorder: MultiplayerListener {
@@ -99,6 +99,7 @@ private func config() -> ClientConfig {
     ClientConfig(secretKey: generateDeviceKey(), relay: .disabled, mirrorVt: true)
 }
 
+/// W3/W4 surface against a local daemon whose file policy allows its state directory.
 @Suite(.serialized) struct WorkspaceTests {
     @Test func forwardFilesAndInviteJoin() async throws {
         let daemon = try LocalDaemon(config: "[files]\nallow = [\"{state}\"]\n")
@@ -142,7 +143,7 @@ private func config() -> ClientConfig {
             roles: [.viewer], scope: .daemon, ttlSecs: 3600, maxUses: 1,
             delegate: false, label: "carol", inviter: "alice"
         ))
-        #expect(invite.link.hasPrefix("unnamed://join/"))
+        #expect(invite.link.hasPrefix("gudo://join/"))
         #expect(invite.qrPayload == invite.link.uppercased())
         #expect(try inspectInvite(invite: invite.qrPayload).roles == [.viewer])
 

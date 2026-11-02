@@ -1,13 +1,13 @@
-//! `un-hook mcp`: a stdio MCP server through which an agent drives the terminal it runs in
+//! `gudo-hook mcp`: a stdio MCP server through which an agent drives the terminal it runs in
 //! (`term_tools`), reads the drawings of its terminal session (docs/DAEMON.md §7.12) and uses
 //! the browser pane beside its terminal in the app (`browser_tools`).
 //!
 //! JSON-RPC 2.0, one message per line. Each tool call becomes one [`PullCall`] on the daemon's
 //! hook socket. The socket comes from `<state>/hook.endpoint`; the token is the pane's own
-//! (`UN_TOKEN` of the pane's environment, ours or the agent's), and only without one
+//! (`GUDO_TOKEN` of the pane's environment, ours or the agent's), and only without one
 //! `<state>/hook.token` (never from the command line). Without `--state` the pane's
-//! environment (`UN_ENDPOINT_FILE` / `UN_SOCK`, `UN_TOKEN`) is used, then the default state
-//! directory. The pane is `--pane`, else `UN_PANE_ID`.
+//! environment (`GUDO_ENDPOINT_FILE` / `GUDO_SOCK`, `GUDO_TOKEN`) is used, then the default state
+//! directory. The pane is `--pane`, else `GUDO_PANE_ID`.
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Write};
@@ -512,7 +512,7 @@ enum Token {
     Value(String),
 }
 
-/// The pane's own token (`UN_TOKEN`) when the environment belongs to `pane`. It speaks for
+/// The pane's own token (`GUDO_TOKEN`) when the environment belongs to `pane`. It speaks for
 /// that pane only, so the server holds the daemon's `hook.token` only as a last resort.
 fn own_token(
     pane: &str,
@@ -559,15 +559,18 @@ impl SocketBackend {
                     .ok_or_else(|| format!("{flag} needs a value"))?,
             );
         }
-        let env = |name: &str| std::env::var(brand::env_var(name)).ok();
+        let env = |name: &str| brand::var(name);
         // Under Codex, which starts servers with a short environment allowlist, the pane's
         // variables are the agent's (an ancestor's).
-        let pane_env =
-            |name: &str| env(name).or_else(|| daemon::inherited_env_var(&brand::env_var(name)));
+        let pane_env = |name: &str| {
+            env(name)
+                .or_else(|| daemon::inherited_env_var(&brand::env_var(name)))
+                .or_else(|| daemon::inherited_env_var(&brand::legacy::env_var(name)))
+        };
         let env_pane = pane_env("PANE_ID");
         let pane = pane
             .or_else(|| env_pane.clone())
-            .ok_or("no pane: pass --pane <id> (the pane's UN_PANE_ID)")?;
+            .ok_or("no pane: pass --pane <id> (the pane's GUDO_PANE_ID)")?;
         let own = own_token(&pane, env_pane.as_deref(), || pane_env("TOKEN"));
         let from_state = |dir: PathBuf| Self {
             endpoint: Endpoint::File(dir.join("hook.endpoint")),
@@ -811,7 +814,7 @@ mod tests {
         assert_eq!(r["id"], 7);
         assert_eq!(r["result"]["protocolVersion"], "2025-03-26");
         assert_eq!(r["result"]["capabilities"], json!({ "tools": {} }));
-        assert_eq!(r["result"]["serverInfo"]["name"], "unnamed-drawings");
+        assert_eq!(r["result"]["serverInfo"]["name"], "Gudo-drawings");
         let r = rpc(
             &mut fake,
             "initialize",

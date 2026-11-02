@@ -1,7 +1,7 @@
 import HostKit
 import PaneLayout
 import SwiftUI
-import UnnamedCore
+import GudoCore
 #if canImport(UIKit)
 import UIKit
 #endif

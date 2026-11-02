@@ -1,6 +1,6 @@
 //! The event stream scripts and agents subscribe to, as JSON (never on the QUIC wire).
 //!
-//! One schema for both sources: `un events --json` (a client, one event per line, built from
+//! One schema for both sources: `gudo events --json` (a client, one event per line, built from
 //! what its connection is shown) and the terminal tools' `events_wait` on the hook socket (an
 //! agent, the events of its own session). Ids are the tools' `p12`, `t3`, `s1`. Version
 //! [`SCRIPT_EVENTS_VERSION`] only ever gains event types and optional fields; a consumer

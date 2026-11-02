@@ -1,6 +1,6 @@
 import XCTest
 
-/// apple/scripts/w3-ui-test.sh`): an agent's browser tools from its terminal (`un-hook
+/// apple/scripts/w3-ui-test.sh`): an agent's browser tools from its terminal (`gudo-hook
 /// browser`) drive a page; the page's Replays then open the session, which steps action by
 /// action and exports as a Playwright test. Skipped without a ticket.
 @MainActor

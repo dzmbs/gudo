@@ -4,7 +4,7 @@ import Foundation
 import HostKit
 import NotifyKit
 import os
-import UnnamedCore
+import GudoCore
 
 /// The agents Live Activity the daemons push (docs/PUSH.md §6). The app only hands out tokens:
 /// the push-to-start token goes into every daemon's push registration (`activityCap`), and

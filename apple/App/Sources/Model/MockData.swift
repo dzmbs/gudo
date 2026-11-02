@@ -1,7 +1,7 @@
 import DesignSystem
 import Foundation
 import Observation
-import enum UnnamedCore.InstallState
+import enum GudoCore.InstallState
 
 // Stand-ins for the daemon-backed sources until the wiring lands. They hold believable data so
 // every screen can be designed, screenshotted and reviewed against real-length content.
@@ -65,7 +65,7 @@ final class MockHostDirectory: HostDirectory {
 final class MockAgentFeed: AgentFeed {
     var items: [AgentItem] = [
         AgentItem(
-            id: "a1", agent: .claude, hostName: "studio", sessionTitle: "unnamed · apple-ffi", state: .blocked,
+            id: "a1", agent: .claude, hostName: "studio", sessionTitle: "gudo · apple-ffi", state: .blocked,
             since: ago(4 * 60), prompt: "Expose the layout store over the FFI boundary and add tests",
             request: .permission(tool: "Bash", detail: "cargo test -p apple-ffi --release")),
         AgentItem(
@@ -73,21 +73,21 @@ final class MockAgentFeed: AgentFeed {
             since: ago(11 * 60), prompt: "Write the v2 sessions migration",
             request: .question("Should the migration drop the legacy sessions_v1 table, or keep it read-only for one release?")),
         AgentItem(
-            id: "a3", agent: .claude, hostName: "studio", sessionTitle: "unnamed · renderer", state: .working,
+            id: "a3", agent: .claude, hostName: "studio", sessionTitle: "gudo · renderer", state: .working,
             since: ago(6 * 60 + 12), prompt: "Batch glyph uploads so a full-screen redraw stays under 2 ms"),
         AgentItem(
             id: "a4", agent: .codex, hostName: "devbox", sessionTitle: "api · reconnect", state: .working,
             since: ago(52), prompt: "Find why the reconnect test flakes on CI"),
         AgentItem(
-            id: "a5", agent: .claude, hostName: "studio", sessionTitle: "unnamed · docs", state: .done,
+            id: "a5", agent: .claude, hostName: "studio", sessionTitle: "gudo · docs", state: .done,
             since: ago(25 * 60), prompt: "Update SSH.md for the new host key flow",
             summary: "Edited 2 files · docs/SSH.md, docs/ROADMAP.md", unseen: true, canReply: true),
         AgentItem(
-            id: "a7", agent: .other, hostName: "studio", sessionTitle: "unnamed", state: .done,
+            id: "a7", agent: .other, hostName: "studio", sessionTitle: "gudo", state: .done,
             since: ago(31 * 60), prompt: "cargo test --workspace --release", summary: "Exited 0 · 4m 12s",
             unseen: true, isCommand: true),
         AgentItem(
-            id: "a6", agent: .claude, hostName: "studio", sessionTitle: "unnamed · ghostty bump", state: .error,
+            id: "a6", agent: .claude, hostName: "studio", sessionTitle: "gudo · ghostty bump", state: .error,
             since: ago(48 * 60), prompt: "Bump libghostty-vt to the latest tip",
             summary: "zig build exited 1: no x86_64 simulator slice"),
     ]
@@ -98,7 +98,7 @@ final class MockAgentFeed: AgentFeed {
     func markDone(_ id: AgentItem.ID) { items.removeAll { $0.id == id } }
     var unseenByHost: [String: Int] { ["studio": 2, "devbox": 1] }
     var launchHosts: [LaunchHost] {
-        [LaunchHost(id: "studio", name: "studio", directory: "~/projects/unnamed"),
+        [LaunchHost(id: "studio", name: "studio", directory: "~/projects/gudo"),
          LaunchHost(id: "devbox", name: "devbox", directory: "~/src/api")]
     }
     func markSeen() {
@@ -217,14 +217,14 @@ enum MockLinks {
         DetectedLink(kind: .path, text: "crates/apple-ffi/src/layout.rs:142:9", line: -3),
         DetectedLink(kind: .path, text: "apple/Packages/PaneLayout/Sources/PaneLayout/Node.swift:88", line: -12),
         DetectedLink(kind: .url, text: "https://github.com/ghostty-org/ghostty/pull/8497", line: -20),
-        DetectedLink(kind: .path, text: "~/projects/unnamed/docs/DESIGN.md", line: -41),
+        DetectedLink(kind: .path, text: "~/projects/gudo/docs/DESIGN.md", line: -41),
         DetectedLink(kind: .url, text: "http://localhost:5173/", line: -58),
         DetectedLink(kind: .path, text: "target/debug/build/ring-4f1a/output", line: -97),
     ]
 }
 
 final class MockFileSource: FileSource {
-    let root = "~/projects/unnamed"
+    let root = "~/projects/gudo"
 
     func list(_ directory: String) async throws -> [FileEntry] {
         func dir(_ name: String, _ git: FileEntry.GitStatus? = nil) -> FileEntry {
@@ -286,7 +286,7 @@ final class MockFileSource: FileSource {
 final class MockEditorSource: EditorSource {
     /// `-mockEditorPhase licence`: Microsoft's terms first (design review of the licence sheet).
     var phase: EditorPhase = LaunchArguments().string(forKey: "mockEditorPhase") == "licence" ? .needsLicence : .installing
-    var folder: String { "~/projects/unnamed" }
+    var folder: String { "~/projects/gudo" }
     var hostName: String { "studio" }
     var unavailableReason: String? { nil }
     var pendingURL: URL?
@@ -329,7 +329,7 @@ final class MockDiffSource: DiffSource {
     var unavailableReason: String? { nil }
 
     func repository() async throws -> DiffRepository {
-        DiffRepository(root: "~/projects/unnamed", branch: "w3-screens", ahead: 2, behind: 0, changedFiles: 3)
+        DiffRepository(root: "~/projects/gudo", branch: "w3-screens", ahead: 2, behind: 0, changedFiles: 3)
     }
 
     func turns() async throws -> [DiffTurn] {

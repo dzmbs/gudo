@@ -1,5 +1,5 @@
 import Foundation
-import UnnamedCore
+import GudoCore
 
 /// artifacts, placements and send-to-agent, and the output offsets its terminal applies (row
 /// anchors are named by offset). Local and plain-SSH panes have no daemon and no drawing.

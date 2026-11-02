@@ -43,7 +43,7 @@ pub trait AssistListener: Send + Sync {
     fn on_assist_event(&self, event: AssistEvent);
 }
 
-/// An [`AssistListener`] that queues events for async Rust consumers (`un`, tests).
+/// An [`AssistListener`] that queues events for async Rust consumers (`gudo`, tests).
 pub struct AssistEventQueue {
     tx: mpsc::UnboundedSender<AssistEvent>,
 }

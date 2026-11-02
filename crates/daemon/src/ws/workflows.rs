@@ -1109,11 +1109,11 @@ shells: []
 
     #[test]
     fn concerns_only_the_target_and_the_way_there() {
-        let t = Path::new("/r/.unnamed/workflows");
-        assert!(concerns(Path::new("/r/.unnamed/workflows/a.yaml"), t));
-        assert!(concerns(Path::new("/r/.unnamed"), t));
+        let t = Path::new("/r/.gudo/workflows");
+        assert!(concerns(Path::new("/r/.gudo/workflows/a.yaml"), t));
+        assert!(concerns(Path::new("/r/.gudo"), t));
         assert!(!concerns(Path::new("/r/src/main.rs"), t));
-        assert!(!concerns(Path::new("/r/.unnamed/other"), t));
+        assert!(!concerns(Path::new("/r/.gudo/other"), t));
     }
 
     #[test]

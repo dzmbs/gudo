@@ -1,6 +1,6 @@
 import Foundation
 import os
-import UnnamedCore
+import GudoCore
 
 // Knock to join (docs/DAEMON.md §6.9): an invite whose owner wants to be asked first. The
 // guest dials, waits while the owner decides, and on "Admit" gets a grant of its own, then

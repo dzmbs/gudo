@@ -830,7 +830,7 @@ an offscreen window and captures it with the window server's picture of the app'
 (glass included, no recording permission). The test host opens no window of its own and never
 activates. `xcodebuild test -scheme App -destination platform=macOS
 -only-testing:AppTests/MacSnapshotTests` with `TEST_RUNNER_SNAPSHOT_DIR=<dir>`,
-`TEST_RUNNER_UNNAMED_MOCK=1`, optionally `TEST_RUNNER_SNAPSHOT_MODE=light` and
+`TEST_RUNNER_GUDO_MOCK=1`, optionally `TEST_RUNNER_SNAPSHOT_MODE=light` and
 `TEST_RUNNER_SNAPSHOT_ONLY=splits,join,…`. The offscreen window is never key, so default buttons
 draw inactive.
 

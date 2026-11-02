@@ -2,7 +2,7 @@ import Foundation
 @testable import HostKit
 import PaneLayout
 import Testing
-import UnnamedCore
+import GudoCore
 
 /// The app's own helper on this device: paired like any daemon, marked as this device, listed
 /// first, never offered a helper update, and replaced (not duplicated) when its folder is reset.

@@ -70,7 +70,7 @@ impl AgentAdapter for Pi {
     }
 
     fn launch(&self, ctx: &LaunchContext, mode: &LaunchMode) -> LaunchSpec {
-        let extension = ctx.state_dir.join("pi/un-agent.ts");
+        let extension = ctx.state_dir.join("pi/gudo-agent.ts");
         let mut args: Vec<OsString> = vec!["-e".into(), extension.clone().into()];
         match mode {
             LaunchMode::Fresh {
@@ -88,7 +88,7 @@ impl AgentAdapter for Pi {
             cwd: ctx.cwd.clone(),
             files: vec![SupportFile {
                 path: extension,
-                contents: "// un-agent extension".into(),
+                contents: "// gudo-agent extension".into(),
             }],
             env_remove: Vec::new(),
             env_pinned: Vec::new(),
@@ -129,10 +129,10 @@ impl AgentAdapter for Pi {
 fn context() -> LaunchContext {
     LaunchContext {
         pane_id: PaneId::new("p7"),
-        socket: "/run/un.sock".into(),
+        socket: "/run/gudo.sock".into(),
         token: "t".into(),
         endpoint_file: "/state/endpoint".into(),
-        hook_bin: "/bin/un-hook".into(),
+        hook_bin: "/bin/gudo-hook".into(),
         state_dir: "/state".into(),
         cwd: "/src".into(),
         account: agents::AccountContext::system(),
@@ -154,7 +154,7 @@ fn a_third_agent_plugs_in_through_the_public_api() {
         [
             "pi",
             "-e",
-            "/state/pi/un-agent.ts",
+            "/state/pi/gudo-agent.ts",
             "--session",
             "/home/me/.pi/agent/sessions/s.jsonl"
         ]

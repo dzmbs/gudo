@@ -2,7 +2,7 @@ import Foundation
 @testable import HostKit
 import Synchronization
 import Testing
-import UnnamedCore
+import GudoCore
 
 /// What the fake daemon was asked (push calls) and whether it offers Live Activities.
 nonisolated private enum PushLog {

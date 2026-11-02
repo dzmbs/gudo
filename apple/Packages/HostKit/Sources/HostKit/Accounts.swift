@@ -1,5 +1,5 @@
 import Foundation
-import UnnamedCore
+import GudoCore
 
 /// Agent accounts on a host (daemons whose `DaemonInfo.accounts` is true; docs/DAEMON.md
 /// "Agent accounts"): several Claude Code / Codex sign-ins, such as Personal and Work. Kept out

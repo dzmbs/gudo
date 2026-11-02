@@ -52,10 +52,10 @@ final class LocalHelper {
         self.defaults = defaults
     }
 
-    /// The app's helper: the bundled build in the daemon's default folder (where the `un` CLI
+    /// The app's helper: the bundled build in the daemon's default folder (where the `gudo` CLI
     /// and agent hooks look), or a test folder.
     static func app(hosts: HostsModel) -> LocalHelper {
-        let binary = Bundle.main.bundleURL.appending(path: "Contents/MacOS/\(Brand.name)-hostd")
+        let binary = Bundle.main.bundleURL.appending(path: "Contents/MacOS/\(Brand.daemonBinary)")
         let home = FileManager.default.homeDirectoryForCurrentUser
         let state = AppData.isolatedDirectory.map { $0.appending(path: "helper", directoryHint: .isDirectory) }
             ?? home.appending(path: "Library/Application Support/\(Brand.name)", directoryHint: .isDirectory)
@@ -152,6 +152,7 @@ final class LocalHelper {
 
     private func run() async throws -> String {
         guard let binary else { throw HelperError.notBundled }
+        if !isIsolated { await retireLegacyHelper() }
         if Self.runningEndpoint(in: stateDirectory) == nil {
             try await launch(binary)
         } else if keepsRunning, agent.status == .enabled, !isRegistered(binary) {
@@ -164,6 +165,28 @@ final class LocalHelper {
         if let id = hosts.thisDeviceId, hosts.record(id)?.daemonId == endpoint.daemonId { return id }
         let ticket = try await Self.mintTicket(binary: binary, stateDirectory: stateDirectory)
         return try await hosts.pairThisDevice(try PairingTicket(ticket), name: WindowModel.deviceName)
+    }
+
+    /// Stops the helper of a build from before the product's rename and keeps its login items
+    /// from starting again, so this build's helper can take over its state folder (keys, paired
+    /// devices, grants, layout), which the helper moves into its own when it starts.
+    private func retireLegacyHelper() async {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let legacy = home.appending(path: "Library/Application Support/\(Brand.Legacy.name)", directoryHint: .isDirectory)
+        guard FileManager.default.fileExists(atPath: legacy.appending(path: "daemon.key").path) else { return }
+        let launchctl = URL(fileURLWithPath: "/bin/launchctl")
+        // The old app's login item, and a helper installed with `service install`.
+        for label in ["\(Brand.Legacy.bundleIdPrefix).app.hostd", "\(Brand.Legacy.bundleIdPrefix).hostd"] {
+            let target = "gui/\(getuid())/\(label)"
+            _ = try? await Self.output(launchctl, ["bootout", target])
+            _ = try? await Self.output(launchctl, ["disable", target])
+        }
+        if let old = Self.runningEndpoint(in: legacy) { kill(old.pid, SIGTERM) }
+        let deadline = ContinuousClock.now + .seconds(5)
+        while Self.runningEndpoint(in: legacy) != nil, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        Self.log.info("helper: retired the helper from before the rename")
     }
 
     private func launch(_ binary: URL) async throws {

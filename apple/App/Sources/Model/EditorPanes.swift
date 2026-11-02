@@ -113,7 +113,7 @@ final class EditorPane: Identifiable {
         if let browser, browserIsIsolated == isolated { return browser }
         if browser != nil { tearDown() }
         let store = isolated
-            ? WKWebsiteDataStore(forIdentifier: WKWebsiteDataStore.stableIdentifier("unnamed-editor:\(member.hostId):\(member.folder)"))
+            ? WKWebsiteDataStore(forIdentifier: WKWebsiteDataStore.stableIdentifier("gudo-editor:\(member.hostId):\(member.folder)"))
             : .default()
         browserIsIsolated = isolated
         let browser = TunnelBrowser(dataStore: store)
@@ -494,7 +494,7 @@ extension WindowModel {
     /// root. Nil (said in a toast) without a host.
     func editorTarget(path: String?) async -> EditorMember? {
         if LaunchOptions.mock {
-            return EditorMember(hostId: "studio", folder: "~/projects/unnamed")
+            return EditorMember(hostId: "studio", folder: "~/projects/gudo")
         }
         var context = HostContext.resolve(app: app, window: self)
         // The window's host may still be connecting: wait a moment for it.

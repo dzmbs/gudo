@@ -15,7 +15,7 @@ directory with `--no-relay`, under `ulimit` caps and an RSS watchdog (`MAXRSS_MB
 load stops, and cleans up.
 
 ```sh
-cargo build --release -p hostd -p un -p stress     # unnamed-hostd, un, un-hook, un-stress
+cargo build --release -p hostd -p cli -p stress     # gudo-hostd, gudo, gudo-hook, gudo-stress
 B=target/release
 scripts/stress/scenarios.sh $B panes churn floods slow clients control lifecycle soak
 scripts/stress/scenarios.sh $B outages hooks term knocks upgrade many   # second pass
@@ -25,15 +25,15 @@ SOAK_MIN=90 scripts/stress/scenarios.sh $B soak
 | Script | What it does |
 |---|---|
 | `scenarios.sh <bin> <case>...` | The scenario matrix below, one case at a time |
-| `with-daemon.sh <bin> <name> <cmd>...` | Starts a daemon, pairs `un`, samples it every second while `<cmd>` runs, reports peak and recovery |
+| `with-daemon.sh <bin> <name> <cmd>...` | Starts a daemon, pairs `gudo`, samples it every second while `<cmd>` runs, reports peak and recovery |
 | `panes.sh`, `deep-restart.sh`, `lifecycle.sh`, `diskfull.sh` | Pane count and fd limits; nested splits across a restart; SIGHUP, zombies, SIGSTOP, restart under load, read-only state; a full disk (hdiutil image) |
 | `s-flood.sh <kind> <n> <secs>` | `n` panes running an output generator, one client following, echo latency of a quiet pane |
 | `s-slow.sh`, `s-clients.sh`, `s-control.sh`, `s-soak.sh` | Stuck clients; many clients (paired or `GUESTS=1`); input and control storms; mixed soak |
 | `gen.py <kind> [rate]` | Output generators: titles, OSC 7/133/9/777/7501/52, OSC 8 links, Unicode storm, alt-screen storm, kitty images, long lines |
 | `s-gen.sh`, `profile-during.sh`, `mem-during.sh` | Diagnostics: RSS of one generator without a client; a `sample(1)` profile; heap and VM regions mid-run |
-| `un-stress` (`crates/stress`) | The driver: `churn`, `deep`, `tabs`, `spawn`, `latency`, `clients`, `slow` (raw peers that never read), `reconnect`, `stale-resume` (raw garbage `Hello`s), `keys`, `paste`, `layout`, `projects`, `outages` (lines typed while the daemon is frozen, checked exactly once), `push-sink` (a device registered with a local fake push relay, counting pushes), `knocks` (fresh devices knocking on one invite) |
-| `s-outages.sh`, `s-hooks.sh`, `s-term.sh`, `s-knocks.sh`, `s-upgrade.sh`, `many.sh`, `s-soak-heap.sh` | Second pass: input across outages; real `un-hook` floods and approval spam with a push sink; agents' terminal tools at high concurrency (a fake `codex` for `agent_spawn`); knock floods; self-upgrade under full load; 1000 panes and a restart; the soak with heap snapshots |
-| `hookload.py`, `jobs.sh` | Load from inside panes (they hold the pane's hook token): `un-hook` processes, held approvals, terminal-tool calls on the hook socket |
+| `gudo-stress` (`crates/stress`) | The driver: `churn`, `deep`, `tabs`, `spawn`, `latency`, `clients`, `slow` (raw peers that never read), `reconnect`, `stale-resume` (raw garbage `Hello`s), `keys`, `paste`, `layout`, `projects`, `outages` (lines typed while the daemon is frozen, checked exactly once), `push-sink` (a device registered with a local fake push relay, counting pushes), `knocks` (fresh devices knocking on one invite) |
+| `s-outages.sh`, `s-hooks.sh`, `s-term.sh`, `s-knocks.sh`, `s-upgrade.sh`, `many.sh`, `s-soak-heap.sh` | Second pass: input across outages; real `gudo-hook` floods and approval spam with a push sink; agents' terminal tools at high concurrency (a fake `codex` for `agent_spawn`); knock floods; self-upgrade under full load; 1000 panes and a restart; the soak with heap snapshots |
+| `hookload.py`, `jobs.sh` | Load from inside panes (they hold the pane's hook token): `gudo-hook` processes, held approvals, terminal-tool calls on the hook socket |
 
 "Echo latency" is the time from sending a token to a pane running `cat` until it comes back in
 that pane's stream, measured by a separate client while the load runs.
@@ -162,9 +162,9 @@ compare numbers.
 | Lines typed every 20 ms while the daemon is frozen (SIGSTOP) 2 s every 10 s, and 8 s every 20 s | 24 MB | — | Survived: 2001/2001 and 3001/3001 lines, exactly once, no reconnect (QUIC retransmits) |
 | Same, frozen 20 s every 30 s (past the 12 s idle timeout, so the link drops) | 24 MB | back 8.3 s after the thaw | before: **601 of 4501 lines lost** (everything typed between the freeze and the drop). **Fixed** (input resume): 5500/5500, none lost or doubled, over 2 drops |
 | Packet loss, high RTT and link flaps through a UDP proxy | — | — | **Not testable on one host**: QUIC multipath opened a direct loopback path around the proxy (12 of thousands of datagrams went through it). Needs pf/dummynet (root) or a second machine |
-| Approval spam: 20 fake agents × 4 threads running `un-hook claude PermissionRequest` in a loop (about 35 000 requests a minute), a device registered for pushes with a local fake relay | 107 MB, 33 %, 275 fds | p99 64 ms | Survived. Each pane holds one request (a newer one replaces it) and identical requests merge into one approval: 20 pushes, 20 inbox items |
+| Approval spam: 20 fake agents × 4 threads running `gudo-hook claude PermissionRequest` in a loop (about 35 000 requests a minute), a device registered for pushes with a local fake relay | 107 MB, 33 %, 275 fds | p99 64 ms | Survived. Each pane holds one request (a newer one replaces it) and identical requests merge into one approval: 20 pushes, 20 inbox items |
 | 40 fake agents each asking for a new approval every 4 s | — | — | before: 40 pushes at once (the relay accepts 30 a burst per daemon, so 10 would be refused and retried). **Fixed**: within the relay's budgets, the rest wait their turn: all 40 delivered over 130 s |
-| Real `un-hook` flood: 4 panes × 16 threads, PreToolUse/PostToolUse, 30 s | 62 MB, 31 % | p99 13–22 ms | Survived: 640–860 hooks/s (by machine load), none failed, hook p99 under 300 ms (process start included) |
+| Real `gudo-hook` flood: 4 panes × 16 threads, PreToolUse/PostToolUse, 30 s | 62 MB, 31 % | p99 13–22 ms | Survived: 640–860 hooks/s (by machine load), none failed, hook p99 under 300 ms (process start included) |
 | 600 `pane_wait`s for a pattern that never comes on a `yes` pane, real hooks from another pane | before: 1.07 GB, 1040 % | before: p50 2.0 s, p99 3.9 s, one lost | **Broke, fixed**: renders were synchronous on the async workers and unbounded; the hook socket was full (hooks 2/s, 5 s each, 32 failed). After: 442 MB, 412 %, echo p99 6 ms, hooks 298/s, none failed; calls past 32 per pane are refused at once |
 | `cmd_run` without a pane from 40 threads | — | — | before: after 16 panes **every call failed** ("too many nested splits"). **Fixed**: past the nesting limit panes open in a background tab; the 32-pane budget then holds |
 | `agent_spawn` (a stand-in `codex`) from 16 threads | — | — | before: **41 panes** opened for a budget of 32 (parallel calls raced the count). **Fixed**: exactly 32 |
@@ -215,7 +215,7 @@ New limits (by design):
 - **Packet loss, latency and flaps on the wire.** Outages were made by freezing the daemon, which
   covers the dead-link and resume paths; QUIC's own loss recovery was not exercised (see the
   scenario table). On a second machine, put `pf`/`dnctl` or `tc netem` between client and daemon
-  and run `un-stress outages` with `--every 0` (a plain typing check).
+  and run `gudo-stress outages` with `--every 0` (a plain typing check).
 - **A real clock step** (needs root). Timers and the arbiter run on monotonic or boot clocks;
   the remaining wall-clock uses are absolute expiries and timestamps.
 - **Memory per client under a flood**: about 3.5–4 MB per client following a `yes` pane, mostly
@@ -254,9 +254,9 @@ never launched in the foreground). They drive the same `TerminalSurface` path th
 - Regression tests (fast; they run with the normal suite):
   `cd apple/Packages/TerminalKit && swift test --filter 'RendererStressTests|AtlasTests|SearchTests'`
 - Probes that print the numbers below (slow, opt-in):
-  `UNNAMED_STRESS=1 swift test -c release -Xswiftc -enable-testing --filter StressProbeTests`.
-  Set `UNNAMED_STRESS_SAMPLE=<file>` to `sample(1)` the hot loop of probes that support it, and
-  `UNNAMED_STRESS_PAUSE=<file>` to make `probeSurfaceChurn` and `probeKittyLimits` write their pid and wait 40 s, so
+  `GUDO_STRESS=1 swift test -c release -Xswiftc -enable-testing --filter StressProbeTests`.
+  Set `GUDO_STRESS_SAMPLE=<file>` to `sample(1)` the hot loop of probes that support it, and
+  `GUDO_STRESS_PAUSE=<file>` to make `probeSurfaceChurn` and `probeKittyLimits` write their pid and wait 40 s, so
   `leaks <pid>` and `vmmap --summary <pid>` can inspect them.
 
 ### Renderer scenarios
@@ -343,7 +343,7 @@ Timings *loaded* (load average 500–650). Memory, fds and threads are reliable.
 ### iOS lifecycle (own iPad Pro 13" simulator, iOS 27.0, local release daemon)
 
 `apple/scripts/lifecycle-stress.sh [cycles]` creates the simulator and the daemon, runs `LifecycleStressUITests`, sends a
-real memory warning every second (`notifyutil -p dev.unnamed.debug.memorywarning`, a DEBUG hook that calls UIKit's own
+real memory warning every second (`notifyutil -p dev.gudo.debug.memorywarning`, a DEBUG hook that calls UIKit's own
 memory-warning path), samples the app's footprint every second, lists crash reports, and deletes the simulator.
 
 | Scenario | Peaks | Outcome |
@@ -360,13 +360,13 @@ probe; a host answering after 5 s is kept). Known limit (client): the client ter
 
 ### More ways to run
 
-- SwiftUI churn (from `apple/`): `TEST_RUNNER_UNNAMED_MOCK=1 xcodebuild -project App.xcodeproj -scheme App -destination
+- SwiftUI churn (from `apple/`): `TEST_RUNNER_GUDO_MOCK=1 xcodebuild -project App.xcodeproj -scheme App -destination
   'platform=macOS,arch=arm64' test -only-testing:AppTests/AppStressTests`. `TEST_RUNNER_STRESS=1` runs the full sizes
   (500 tabs, 50 projects, 10 s), and `TEST_RUNNER_STRESS_TABS` / `_SECONDS` override them.
 - Client and connection: `cargo test -p client-core --test it` (`streams.rs`, `redial.rs`). Then
-  `cd apple/Packages/HostKit && UN_STRESS=1 UN_HOSTD_BIN=<release unnamed-hostd> swift test --no-parallel --filter
-  'ClientStressTests|ConnectionChurnTests'`; `UN_STRESS=heavy` runs the long variants.
-- iOS lifecycle: `UN_HOSTD_BIN=<unnamed-hostd> apple/scripts/lifecycle-stress.sh 40`.
+  `cd apple/Packages/HostKit && GUDO_STRESS=1 GUDO_HOSTD_BIN=<release gudo-hostd> swift test --no-parallel --filter
+  'ClientStressTests|ConnectionChurnTests'`; `GUDO_STRESS=heavy` runs the long variants.
+- iOS lifecycle: `GUDO_HOSTD_BIN=<gudo-hostd> apple/scripts/lifecycle-stress.sh 40`.
 
 ### Not tested (App and renderer)
 

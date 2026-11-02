@@ -92,7 +92,7 @@ func programNamesNormalize(name: String, id: String) {
     #expect(ProgramCatalog.identity(title: "✳ Fix the flaky test")?.id == "claude")
     #expect(ProgramCatalog.identity(title: "nvim README.md")?.id == "neovim")
     #expect(ProgramCatalog.identity(title: "htop")?.id == "htop")
-    #expect(ProgramCatalog.identity(title: "~/projects/unnamed") == nil)
+    #expect(ProgramCatalog.identity(title: "~/projects/gudo") == nil)
     #expect(ProgramCatalog.identity(title: "zsh") == nil)
     #expect(ProgramCatalog.identity(title: "") == nil)
     #expect(ProgramCatalog.identity(title: "make: building") == nil)

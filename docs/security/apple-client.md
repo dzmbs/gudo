@@ -20,8 +20,8 @@ Provider), the packages under `apple/Packages`, and the Rust core it links
 
 ## Who attacks
 
-1. **Another app or web page on the device.** It can open `unnamed://` links (`pair`, `join`,
-   `open`, `inbox`) and hand the app `.unreplay` files.
+1. **Another app or web page on the device.** It can open `gudo://` links (`pair`, `join`,
+   `open`, `inbox`) and hand the app `.gudoreplay` files.
 2. **A phisher.** Sends a pairing link, QR code or invite that leads to *their* host.
 3. **A malicious or compromised host.** This includes a guest's view of someone else's host.
    It controls terminal output (including OSC 8 links), pushes "open this URL" requests,
@@ -66,7 +66,7 @@ Now:
   inviter and the role.
 - Tickets and invites are parsed by the Rust core as strict, versioned base32 structures, never
   as shell text.
-- `.unreplay` files are parsed as JSON. Session ids are UUIDs, keyframe names must match a
+- `.gudoreplay` files are parsed as JSON. Session ids are UUIDs, keyframe names must match a
   fixed pattern, and imported sessions play offline in rrweb's script-less sandbox.
 
 **A host is not trusted with this device** (the "remote-to-local" class: VS Code Remote-SSH

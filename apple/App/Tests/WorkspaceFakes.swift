@@ -1,7 +1,7 @@
 import Foundation
 import HostKit
 import Synchronization
-import UnnamedCore
+import GudoCore
 @testable import App
 
 /// A daemon client for the screens' models: the layout half does nothing, the workspace half
@@ -11,7 +11,7 @@ nonisolated final class FakeWorkspaceClient: DaemonClientAPI, DaemonWorkspaceAPI
         var calls: [String] = []
         var listings: [String: DirListing] = [:]
         var files: [String: Data] = [:]
-        var status: UnnamedCore.GitStatus?
+        var status: GudoCore.GitStatus?
         var diff: GitDiff?
         var turns: [UInt64: [TurnInfo]] = [:]
         var reviews: [ReviewRequest] = []
@@ -47,7 +47,7 @@ nonisolated final class FakeWorkspaceClient: DaemonClientAPI, DaemonWorkspaceAPI
     // MARK: DaemonClientAPI (layout; unused here)
 
     func attach(sessionId: UInt64?) {}
-    func op(op: UnnamedCore.LayoutOp) -> UInt64 { 1 }
+    func op(op: GudoCore.LayoutOp) -> UInt64 { 1 }
     func subscribe(paneId: UInt64) {}
     func unsubscribe(paneId: UInt64) {}
     func setView(focused: UInt64?, visible: [UInt64]) {}
@@ -82,7 +82,7 @@ nonisolated final class FakeWorkspaceClient: DaemonClientAPI, DaemonWorkspaceAPI
     func stopForward(localPort: UInt16) -> Bool { true }
     func forwards() -> [ForwardInfo] { state.withLock { $0.forwards } }
 
-    func gitStatus(path: String) async throws -> UnnamedCore.GitStatus {
+    func gitStatus(path: String) async throws -> GudoCore.GitStatus {
         record("gitStatus \(path)")
         guard let status = state.withLock({ $0.status }) else { throw WorkspaceError.NotFound(message: "not a git repository") }
         return status
@@ -112,7 +112,7 @@ nonisolated final class FakeWorkspaceClient: DaemonClientAPI, DaemonWorkspaceAPI
 
     func worktreeCreate(create: WorktreeCreate) async throws -> WorktreeInfo {
         state.withLock { $0.worktrees.append(create) }
-        return WorktreeInfo(path: "/wt/\(create.branch ?? "unnamed")", branch: create.branch, head: nil, main: false, locked: false, prunable: false, port: 4100)
+        return WorktreeInfo(path: "/wt/\(create.branch ?? "gudo")", branch: create.branch, head: nil, main: false, locked: false, prunable: false, port: 4100)
     }
 
     func prompt(paneId: UInt64, text: String, submit: Bool) async throws -> UInt32 {

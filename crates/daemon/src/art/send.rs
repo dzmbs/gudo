@@ -229,8 +229,8 @@ mod tests {
         let p = |s: &str| paste_text(s).unwrap();
         assert_eq!(p("/tmp/a/1@2.png"), "/tmp/a/1@2.png");
         assert_eq!(
-            p("/Users/me/Library/Application Support/unnamed/x.png"),
-            r"/Users/me/Library/Application\ Support/unnamed/x.png"
+            p("/Users/me/Library/Application Support/gudo/x.png"),
+            r"/Users/me/Library/Application\ Support/gudo/x.png"
         );
         assert_eq!(p("/t/it's (1).png"), r"/t/it\'s\ \(1\).png");
         assert_eq!(p("/t/ü+.png"), "/t/ü\\+.png");

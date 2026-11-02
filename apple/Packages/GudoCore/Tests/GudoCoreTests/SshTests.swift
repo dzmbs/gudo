@@ -1,11 +1,11 @@
 import Foundation
 import Synchronization
 import Testing
-import UnnamedCore
+import GudoCore
 
 /// The VM from scripts/ssh-test-vm.sh (`source target/ssh-test/env`).
 private let sshEnv = ProcessInfo.processInfo.environment
-private let sshHost = sshEnv["UN_SSH_TEST_HOST"].flatMap { $0.isEmpty ? nil : $0 }
+private let sshHost = sshEnv["GUDO_SSH_TEST_HOST"].flatMap { $0.isEmpty ? nil : $0 }
 
 /// Trusts every new host and records what it was asked.
 final class TrustingDelegate: HostKeyDelegate {
@@ -30,9 +30,9 @@ final class Steps: BootstrapListener {
 private func hostdBinaries(keys: URL) -> HostdBinaries {
     func pick(_ arch: String) -> HostdBinary? {
         let candidates = [
-            repoRoot.appending(path: "apple/build/hostd/unnamed-hostd-\(arch)-linux.gz"),
-            sshEnv["UN_SSH_TEST_HOSTD"].map(URL.init(fileURLWithPath:)),
-            keys.appending(path: "bin/unnamed-hostd-\(arch)-linux"),
+            repoRoot.appending(path: "apple/build/hostd/gudo-hostd-\(arch)-linux.gz"),
+            sshEnv["GUDO_SSH_TEST_HOSTD"].map(URL.init(fileURLWithPath:)),
+            keys.appending(path: "bin/gudo-hostd-\(arch)-linux"),
         ].compactMap { $0 }
         return candidates.first { FileManager.default.fileExists(atPath: $0.path) }
             .map { .file(path: $0.path) }
@@ -40,13 +40,13 @@ private func hostdBinaries(keys: URL) -> HostdBinaries {
     return HostdBinaries(linuxAarch64: pick("aarch64"), linuxX8664: pick("x86_64"))
 }
 
-@Suite(.serialized, .enabled(if: sshHost != nil, "set UN_SSH_TEST_HOST (scripts/ssh-test-vm.sh)"))
+@Suite(.serialized, .enabled(if: sshHost != nil, "set GUDO_SSH_TEST_HOST (scripts/ssh-test-vm.sh)"))
 struct SshTests {
     /// Key auth → plain-SSH pane echo → bootstrap the daemon → pair by its ticket → echo.
     @Test func keyAuthPaneBootstrapPair() async throws {
         let host = try #require(sshHost)
-        let user = sshEnv["UN_SSH_TEST_USER"] ?? "untest"
-        let keys = URL(fileURLWithPath: try #require(sshEnv["UN_SSH_TEST_KEYS"]))
+        let user = sshEnv["GUDO_SSH_TEST_USER"] ?? "untest"
+        let keys = URL(fileURLWithPath: try #require(sshEnv["GUDO_SSH_TEST_KEYS"]))
         let pem = try Data(contentsOf: keys.appending(path: "id_ed25519"))
 
         let saved = SavedHosts()
@@ -94,7 +94,7 @@ struct SshTests {
             binaries: hostdBinaries(keys: keys), ticketMinutes: 5, waitSecs: 30, listener: steps
         )
         #expect(report.platform == .linuxAarch64 || report.platform == .linuxX8664)
-        #expect(report.ticket.hasPrefix("unnamed://pair/"))
+        #expect(report.ticket.hasPrefix("gudo://pair/"))
         #expect(steps.steps.withLock { $0.first } == .probing)
         print("bootstrap: \(report.action), \(report.service), steps \(steps.steps.withLock { $0 })")
 
@@ -115,8 +115,8 @@ struct SshTests {
     /// A changed host key reaches the delegate; refusing it is a typed mismatch error.
     @Test func changedHostKeyIsAskedAndRefused() async throws {
         let host = try #require(sshHost)
-        let user = sshEnv["UN_SSH_TEST_USER"] ?? "untest"
-        let keys = URL(fileURLWithPath: try #require(sshEnv["UN_SSH_TEST_KEYS"]))
+        let user = sshEnv["GUDO_SSH_TEST_USER"] ?? "untest"
+        let keys = URL(fileURLWithPath: try #require(sshEnv["GUDO_SSH_TEST_KEYS"]))
         let pem = try Data(contentsOf: keys.appending(path: "id_ed25519"))
         // Record a different (random) key for the host.
         let bogus = try inspectPrivateKey(pem: generateEd25519Key(comment: "").privateKey).publicKey

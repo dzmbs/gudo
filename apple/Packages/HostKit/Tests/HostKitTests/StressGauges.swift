@@ -223,9 +223,9 @@ nonisolated final class NotificationCounts: Sendable {
     }
 }
 
-/// Long stress variants run with `UN_STRESS=heavy` (minutes each).
-nonisolated let heavyStress = ProcessInfo.processInfo.environment["UN_STRESS"] == "heavy"
+/// Long stress variants run with `GUDO_STRESS=heavy` (minutes each).
+nonisolated let heavyStress = ProcessInfo.processInfo.environment["GUDO_STRESS"] == "heavy"
 
-/// The stress suites run only when asked (`UN_STRESS=1`, or `heavy`): they take minutes and
+/// The stress suites run only when asked (`GUDO_STRESS=1`, or `heavy`): they take minutes and
 /// measure, so they run alone (`swift test --no-parallel`), not beside the other suites.
-nonisolated let stressEnabled = ProcessInfo.processInfo.environment["UN_STRESS"] != nil
+nonisolated let stressEnabled = ProcessInfo.processInfo.environment["GUDO_STRESS"] != nil

@@ -9,8 +9,8 @@
 //   keyboard makes, each event in its own task (after Playwright's WebView input).
 // - `probe`/`effect` tell whether an action changed anything.
 (() => {
-  if (window.__un || !globalThis.__unPlaywright) return;
-  const { InjectedScript, WebViewInput, asLocator } = globalThis.__unPlaywright;
+  if (window.__un || !globalThis.__gudoPlaywright) return;
+  const { InjectedScript, WebViewInput, asLocator } = globalThis.__gudoPlaywright;
   const pw = new InjectedScript(window, {
     isUnderTest: false, sdkLanguage: "javascript", frameSeq: 0, testIdAttributeName: "data-testid",
     stableRafCount: 1, browserName: "webkit", customEngines: [],
@@ -37,20 +37,20 @@
   // Frames: each registers with the app; a parent learns which iframe element holds which frame.
   const token = Math.random().toString(36).slice(2, 10);
   const frameTokens = new WeakMap();
-  const announce = () => { try { window.webkit.messageHandlers.unAgentFrame.postMessage({ token, main: window === window.top }); } catch {} };
+  const announce = () => { try { window.webkit.messageHandlers.gudoAgentFrame.postMessage({ token, main: window === window.top }); } catch {} };
   announce();
   addEventListener("pageshow", e => { if (e.persisted) announce(); });
   addEventListener("message", e => {
     const d = e.data;
     if (!d || typeof d !== "object") return;
-    if (typeof d.__unFrameHello === "string") {
-      for (const f of document.querySelectorAll("iframe, frame")) if (f.contentWindow === e.source) frameTokens.set(f, d.__unFrameHello);
-    } else if (d.__unFrameAsk === true && e.source === window.parent && window !== window.top) {
-      window.parent.postMessage({ __unFrameHello: token }, "*");
+    if (typeof d.__gudoFrameHello === "string") {
+      for (const f of document.querySelectorAll("iframe, frame")) if (f.contentWindow === e.source) frameTokens.set(f, d.__gudoFrameHello);
+    } else if (d.__gudoFrameAsk === true && e.source === window.parent && window !== window.top) {
+      window.parent.postMessage({ __gudoFrameHello: token }, "*");
     }
   });
-  if (window !== window.top) window.parent.postMessage({ __unFrameHello: token }, "*");
-  const askFrames = () => { for (const f of document.querySelectorAll("iframe, frame")) if (!frameTokens.has(f)) try { f.contentWindow.postMessage({ __unFrameAsk: true }, "*"); } catch {} };
+  if (window !== window.top) window.parent.postMessage({ __gudoFrameHello: token }, "*");
+  const askFrames = () => { for (const f of document.querySelectorAll("iframe, frame")) if (!frameTokens.has(f)) try { f.contentWindow.postMessage({ __gudoFrameAsk: true }, "*"); } catch {} };
 
   const INTERACTIVE = new Set(["link", "button", "textbox", "searchbox", "checkbox", "radio", "combobox", "slider",
     "spinbutton", "switch", "tab", "menuitem", "menuitemcheckbox", "menuitemradio", "option", "listbox", "treeitem", "iframe"]);

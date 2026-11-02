@@ -2,7 +2,7 @@ import Foundation
 import PaneLayout
 import Synchronization
 import TerminalCore
-import UnnamedCore
+import GudoCore
 
 /// Delivers a connection's pane-stream events to pane backends on the Rust runtime thread
 /// they arrive on, in order, without a hop through the main actor (the terminal is

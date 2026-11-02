@@ -16,7 +16,7 @@ public struct DrawingDragRef: Codable, Equatable, Sendable {
     public var imageHash: String
 
     /// The private pasteboard type that carries it inside the app (Mac).
-    public static let typeIdentifier = "dev.unnamed.drawing-ref"
+    public static let typeIdentifier = "dev.gudo.drawing-ref"
 
     public init(hostId: String, paneId: UInt64, placementId: UInt64, artifactId: UInt64, imageHash: String) {
         self.hostId = hostId

@@ -12,7 +12,7 @@ import Testing
     #expect(action("https://evil.example/", shown: nil) == .confirm)
     #expect(action("https://github.com@evil.example/", shown: "https://github.com@evil.example/") == .confirm)
     // Other schemes start apps: this app's own pairing links, Shortcuts, editors.
-    for other in ["unnamed://pair/abc", "shortcuts://run-shortcut?name=x", "vscode://file/etc/passwd", "mailto:a@b.c", "ssh://h"] {
+    for other in ["gudo://pair/abc", "shortcuts://run-shortcut?name=x", "vscode://file/etc/passwd", "mailto:a@b.c", "ssh://h"] {
         #expect(action(other, shown: other) == .confirm, "\(other)")
     }
     for bad in ["javascript:alert(1)", "data:text/html,<script>", "file:///Applications/Calculator.app"] {

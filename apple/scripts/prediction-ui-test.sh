@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Runs EchoPredictionUITests on a simulator against a real local unnamed-hostd, whose events the
+# Runs EchoPredictionUITests on a simulator against a real local gudo-hostd, whose events the
 # app holds back to make a slow link: typed text is drawn ahead of the echo and confirmed.
 #
 #   apple/scripts/prediction-ui-test.sh [simulator-udid]
 #
-# Needs `cargo build -p hostd` (unnamed-hostd and un-hook, side by side) and the app project
+# Needs `cargo build -p hostd` (gudo-hostd and gudo-hook, side by side) and the app project
 # (xcodegen).
 set -euo pipefail
 
 apple="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 sim="${1:-$(xcrun simctl list devices available | grep -m1 'iPad Pro 13-inch' | grep -oE '[0-9A-F-]{36}')}"
-state="$(mktemp -d "${TMPDIR:-/tmp}/un-ui-prediction.XXXXXX")"
+state="$(mktemp -d "${TMPDIR:-/tmp}/gudo-ui-prediction.XXXXXX")"
 export PORT="${PORT:-47014}"
 daemon() { "$apple/scripts/local-daemon.sh" "$@" "$state"; }
 

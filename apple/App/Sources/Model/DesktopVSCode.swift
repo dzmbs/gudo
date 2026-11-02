@@ -1,7 +1,7 @@
 import Foundation
 import HostKit
 import os
-import UnnamedCore
+import GudoCore
 #if os(macOS)
 import AppKit
 import Network

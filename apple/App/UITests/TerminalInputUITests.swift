@@ -29,7 +29,7 @@ final class TerminalInputUITests: XCTestCase {
         let pane = element(app, "pane-1")
         XCTAssertTrue(pane.waitForExistence(timeout: 10))
 
-        // "unnamed" is the first word of the banner.
+        // "gudo" is the first word of the banner.
         cellPoint(pane, x: 3, y: 0).press(forDuration: 0.8)
         XCTAssertTrue(element(app, "selection-start-handle").waitForExistence(timeout: 5))
         XCTAssertTrue(element(app, "selection-end-handle").exists)
@@ -160,7 +160,7 @@ final class TerminalInputUITests: XCTestCase {
         cellPoint(pane, x: 3, y: 0).press(forDuration: 0.8)
         let end = element(app, "selection-end-handle")
         XCTAssertTrue(end.waitForExistence(timeout: 5))
-        // "unnamed · pane-1" ends at column 15.
+        // "gudo · pane-1" ends at column 15.
         end.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .press(forDuration: 0.1, thenDragTo: cellPoint(pane, x: 15, y: 0))
         let copy = app.menuItems["Copy"].firstMatch
@@ -169,7 +169,7 @@ final class TerminalInputUITests: XCTestCase {
         // A key sent while the edit menu is still going away does not reach the terminal.
         XCTAssertTrue(copy.waitForNonExistence(timeout: 5))
         app.typeKey("v", modifierFlags: .command)
-        expectScreen(app, containing: "❯ unnamed · pane-1")
+        expectScreen(app, containing: "❯ gudo · pane-1")
     }
 
     @MainActor

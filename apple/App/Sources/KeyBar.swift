@@ -5,7 +5,7 @@ import HostKit
 import TerminalCore
 import TerminalRenderer
 import UIKit
-import UnnamedCore
+import GudoCore
 import VoiceKit
 
 /// floating Liquid Glass shapes over the terminal, centred on the keyboard.

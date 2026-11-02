@@ -3,7 +3,7 @@
 # (w3-fixtures.sh: HOME with ~/proj, stand-in `claude` and `code`), plus
 # - an `origin` the repository is pushed to (main is one commit ahead of it);
 # - a second worktree on `fix-login` with changes and no pane;
-# - `.unnamed.json` with a setup command and two scripts;
+# - `.gudo.json` with a setup command and two scripts;
 # - a stand-in `gh`: signed in as octo, pull requests from fixtures/pr-<branch>.json
 #   (#42 for `quiet-otter`, the New Task test's branch; #41 for `fix-login`), `pr merge`
 #   marks the fixture merged; every call is logged to fixtures/log.
@@ -28,7 +28,7 @@ EOF
 
 (
   cd "$repo"
-  cat >.unnamed.json <<'EOF'
+  cat >.gudo.json <<'EOF'
 {
   "setup": "echo setup done > .setup-done",
   "scripts": [
@@ -37,7 +37,7 @@ EOF
   ]
 }
 EOF
-  git add .unnamed.json
+  git add .gudo.json
   git commit -q -m "Repository scripts"
   git init -q --bare "$dir/origin.git"
   git remote add origin "$dir/origin.git"

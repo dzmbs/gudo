@@ -1,7 +1,7 @@
 import Foundation
 import HostKit
 import Observation
-import UnnamedCore
+import GudoCore
 
 /// and the Inbox show it. Views call `watch` / `unwatch` as they appear and disappear, so a
 /// daemon only refreshes while something is on screen.

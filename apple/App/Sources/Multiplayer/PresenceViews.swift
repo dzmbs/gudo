@@ -2,7 +2,7 @@ import DesignSystem
 import HostKit
 import PaneLayout
 import SwiftUI
-import UnnamedCore
+import GudoCore
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -80,7 +80,7 @@ struct PresenceToolbarButton: View {
     }
 
     /// What they are doing, in a few words: "Typing in cargo test", "Following you", "Away".
-    private func detail(_ person: UnnamedCore.Participant, followsMe: Bool) -> String? {
+    private func detail(_ person: GudoCore.Participant, followsMe: Bool) -> String? {
         if person.state == .away { return "Away" }
         let place = person.focus.flatMap(place)
         if person.typing { return place.map { "Typing in \($0)" } ?? "Typing" }
@@ -128,7 +128,7 @@ struct PanePresence: View {
         session.participants.first { $0.actor.principal == principal }.map { AnyShapeStyle($0.avatar.color) } ?? AnyShapeStyle(DS.Palette.textSecondary)
     }
 
-    private func label(_ session: MultiplayerSession, _ people: [UnnamedCore.Participant], _ driver: String?) -> String {
+    private func label(_ session: MultiplayerSession, _ people: [GudoCore.Participant], _ driver: String?) -> String {
         var parts = people.map { $0.typing ? "\($0.name), typing" : $0.name }
         if let driver, driver != session.myPrincipal { parts.append("\(session.name(ofPrincipal: driver)) is driving") }
         return parts.joined(separator: "; ")

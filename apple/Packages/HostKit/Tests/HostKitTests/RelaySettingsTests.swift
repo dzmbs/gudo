@@ -1,7 +1,7 @@
 import Foundation
 @testable import HostKit
 import Testing
-import UnnamedCore
+import GudoCore
 
 /// A private CA (P-256, CN "Homelab Relay CA", O "Homelab", valid until 2036-10-17).
 let homelabCA = """

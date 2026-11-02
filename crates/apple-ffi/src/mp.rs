@@ -825,7 +825,7 @@ pub struct InviteOptions {
 /// A created invite. `Debug` leaves the link out: it is a bearer secret.
 #[derive(Clone, PartialEq, Eq, uniffi::Record)]
 pub struct CreatedInvite {
-    /// The link (`unnamed://join/…`) to share.
+    /// The link (`gudo://join/…`) to share.
     pub link: String,
     /// The text to encode as a QR code: the link upper-cased, so the code can use the
     /// compact alphanumeric mode (parsing ignores case).
@@ -1071,7 +1071,7 @@ pub struct InviteInfo {
     pub since_join: bool,
 }
 
-/// Reads an invite link (`unnamed://join/…` or `#…`, any case) without dialling.
+/// Reads an invite link (`gudo://join/…` or `#…`, any case) without dialling.
 ///
 /// # Errors
 ///

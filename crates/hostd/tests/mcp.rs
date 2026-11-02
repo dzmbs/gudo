@@ -1,4 +1,4 @@
-//! The real MCP server (`un-hook mcp`) against a daemon in this process: an agent's MCP client
+//! The real MCP server (`gudo-hook mcp`) against a daemon in this process: an agent's MCP client
 //! initializes, lists the tools, and pulls the session's drawing as an image and as text; a
 //! browser tool call reaches the app showing the pane and its answer comes back as content; a
 //! terminal tool runs a real command and answers with typed results.
@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 
 use support::{TestClient, start, ticket};
 
-const HOOK: &str = env!("CARGO_BIN_EXE_un-hook");
+const HOOK: &str = env!("CARGO_BIN_EXE_gudo-hook");
 
 struct Server {
     child: Child,

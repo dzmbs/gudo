@@ -6,9 +6,9 @@
   host to paired devices.
 - **The owner allowlist** (`devices.json`): every device on it is a full owner, with a shell as
   the user.
-- **Pairing secrets** (`pairing.json`, the `unnamed://pair/…` ticket and QR code): one secret
+- **Pairing secrets** (`pairing.json`, the `gudo://pair/…` ticket and QR code): one secret
   makes one new owner device.
-- **Grant chains and invite links** (`grants.json`, `unnamed://join/…`): each is access for a
+- **Grant chains and invite links** (`grants.json`, `gudo://join/…`): each is access for a
   guest, from viewing up to driving or approving.
 - **The audit log** (`audit/audit.jsonl`, hash-chained): what happened and who did it.
 - **Traffic**: terminal output, keystrokes, files, approvals and forwarded ports.
@@ -36,7 +36,7 @@
 - A relay only forwards encrypted QUIC packets. It cannot read or modify them.
 - What a relay does see: both endpoint ids, IP addresses, timing and sizes. Self-hosted relays
   (docs/RELAYS.md) keep this metadata in the owner's hands.
-- The ALPN is `unnamed/1`. There is no weaker protocol version to downgrade to.
+- The ALPN is `gudo/1`. There is no weaker protocol version to downgrade to.
 - 0-RTT is never used:
   - The daemon waits for the full handshake before it reads anything.
   - The client does not send early data.
@@ -77,8 +77,8 @@ makes, and then without its old invites.
   (`Revoke(Device)`). This closes the device's connections at once. Its later connection
   attempts on the old pairing are refused with `Revoked`.
 - **On the host:**
-  - `unnamed-hostd devices` lists the owner devices.
-  - `unnamed-hostd unpair <key prefix>` removes one.
+  - `gudo-hostd devices` lists the owner devices.
+  - `gudo-hostd unpair <key prefix>` removes one.
   - The daemon re-reads `devices.json` whenever the file changes, so removal takes effect
     within 0.5 s without a restart.
 - **Guests the device invited.** Removing an owner device in either way also cuts off the guests

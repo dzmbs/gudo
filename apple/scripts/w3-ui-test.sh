@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs W3UITests (Inbox, Files, Diff, Editor, Browser, Links on real daemon data) on an iPad
-# simulator against a local unnamed-hostd set up by w3-fixtures.sh: HOME is a scratch work
+# simulator against a local gudo-hostd set up by w3-fixtures.sh: HOME is a scratch work
 # directory with a git repository, `claude` and `code` are stand-ins on PATH.
 #
 #   apple/scripts/w3-ui-test.sh [simulator-udid] [test-name …]
@@ -8,13 +8,13 @@
 # UI_TEST_CLASS picks another suite on the same fixtures (default W3UITests), e.g.
 # UI_TEST_CLASS=AgentApprovalsUITests for agent toasts and the approval verbs.
 #
-# Needs `cargo build -p hostd` (unnamed-hostd and un-hook) and the app project (xcodegen).
+# Needs `cargo build -p hostd` (gudo-hostd and gudo-hook) and the app project (xcodegen).
 set -euo pipefail
 
 apple="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 sim="${1:-$(xcrun simctl list devices available | grep -m1 'iPad Pro 13-inch' | grep -oE '[0-9A-F-]{36}')}"
 shift || true
-state="$(mktemp -d "${TMPDIR:-/tmp}/un-w3.XXXXXX")"
+state="$(mktemp -d "${TMPDIR:-/tmp}/gudo-w3.XXXXXX")"
 "$apple/scripts/w3-fixtures.sh" "$state" >/dev/null
 export PORT="${PORT:-47613}"
 

@@ -47,7 +47,7 @@ pub trait ApprovalListener: Send + Sync {
     fn on_approval_event(&self, event: ApprovalEvent);
 }
 
-/// An [`ApprovalListener`] that queues events for async consumers (tests, `un`).
+/// An [`ApprovalListener`] that queues events for async consumers (tests, `gudo`).
 pub struct ApprovalEventQueue {
     tx: mpsc::UnboundedSender<ApprovalEvent>,
 }

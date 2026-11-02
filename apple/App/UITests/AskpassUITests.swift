@@ -1,7 +1,7 @@
 #if os(iOS)
 import XCTest
 
-/// Native password prompts against a real local `unnamed-hostd` (apple/scripts/askpass-ui-test.sh
+/// Native password prompts against a real local `gudo-hostd` (apple/scripts/askpass-ui-test.sh
 /// starts one and passes its ticket as `TEST_RUNNER_PAIR_TICKET`): a script in the pane runs
 /// `$SSH_ASKPASS` like ssh does, the secure card opens on the pane, the answer typed there
 /// reaches the script; then a program that reads a password itself with echo off gets the

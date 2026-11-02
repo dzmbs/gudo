@@ -3,7 +3,7 @@ import Synchronization
 @testable import HostKit
 import PaneLayout
 import Testing
-import UnnamedCore
+import GudoCore
 
 /// Multiplayer end to end through HostsModel → DaemonConnection → MultiplayerSession → a real
 /// local daemon, with three devices (three `HostsModel`s, three device keys): the owner pairs
@@ -40,7 +40,7 @@ import UnnamedCore
         draft.uses = .five
         let viewerInvite = try await mp.createInvite(draft.options(
             inviter: "Alex", session: ownerConnection.layout.sessionId, tab: nil, pane: nil))
-        #expect(viewerInvite.link.hasPrefix("unnamed://join/"))
+        #expect(viewerInvite.link.hasPrefix("gudo://join/"))
         #expect(viewerInvite.qrPayload == viewerInvite.link.uppercased())
         let card = try inspectInvite(invite: viewerInvite.qrPayload)
         #expect(card.inviter == "Alex" && card.label == "Vic" && card.roles == [.viewer])

@@ -4,7 +4,7 @@ import Foundation
 import Synchronization
 import Testing
 import UniformTypeIdentifiers
-import UnnamedCore
+import GudoCore
 
 @Suite struct FilesProviderCoreTests {
     let fs = LocalFileSystem()

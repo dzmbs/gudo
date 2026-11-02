@@ -1,5 +1,5 @@
 import Foundation
-import UnnamedCore
+import GudoCore
 
 /// Workflows (docs/DAEMON.md §5.13): YAML files of named commands with `{{arguments}}` on the
 /// host, the pane's repository's first, then the global ones. Kept out of `DaemonWorkspaceAPI`'s

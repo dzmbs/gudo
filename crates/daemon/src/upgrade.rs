@@ -452,8 +452,8 @@ mod tests {
     #[test]
     fn prev_sits_next_to_the_executable() {
         assert_eq!(
-            prev_path(Path::new("/home/u/.local/bin/unnamed-hostd")),
-            PathBuf::from("/home/u/.local/bin/unnamed-hostd.prev")
+            prev_path(Path::new("/home/u/.local/bin/gudo-hostd")),
+            PathBuf::from("/home/u/.local/bin/gudo-hostd.prev")
         );
     }
 

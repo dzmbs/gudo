@@ -1,7 +1,7 @@
 #if os(iOS)
 import XCTest
 
-/// Agent toasts and the approval verbs against a real `unnamed-hostd` and the stand-in `claude`
+/// Agent toasts and the approval verbs against a real `gudo-hostd` and the stand-in `claude`
 /// (apple/scripts/w3-ui-test.sh with `UI_TEST_CLASS=AgentApprovalsUITests`): its
 /// PermissionRequest hook asks to run `rm -rf build` when a prompt says "permission", and prints
 /// what the hook answered. Skipped without a ticket.

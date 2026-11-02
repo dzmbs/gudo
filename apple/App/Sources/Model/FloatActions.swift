@@ -208,7 +208,7 @@ extension WindowModel {
         }
     }
 
-    /// The pane's id as the terminal tools and `un` name it (`p12`).
+    /// The pane's id as the terminal tools and `gudo` name it (`p12`).
     func copyPaneId(_ pane: PaneId) {
         PaneIdPasteboard.copy("p\(pane.rawValue)")
         toasts.show(Toast("Copied p\(pane.rawValue)", systemImage: "doc.on.doc", style: .neutral))

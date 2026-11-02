@@ -6,4 +6,4 @@ import { asLocator } from '@isomorphic/locatorGenerators';
 import { InjectedScript } from '@injected/injectedScript';
 import { WebViewInput } from '@injected/webview/webViewInput';
 
-(globalThis as any).__unPlaywright = { InjectedScript, WebViewInput, asLocator };
+(globalThis as any).__gudoPlaywright = { InjectedScript, WebViewInput, asLocator };

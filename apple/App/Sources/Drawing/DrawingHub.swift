@@ -4,7 +4,7 @@ import ImageIO
 import os
 import Synchronization
 import TerminalRenderer
-import UnnamedCore
+import GudoCore
 
 /// One daemon client's drawing state, on the main actor: placements per pane, canvas panes,
 /// artifact infos, open scenes, and decoded images by blob hash. Fed by the client's

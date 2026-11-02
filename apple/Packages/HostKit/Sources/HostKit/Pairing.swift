@@ -1,5 +1,5 @@
 import Foundation
-import UnnamedCore
+import GudoCore
 
 /// This device's identity: the 32-byte Ed25519 key every daemon allowlists on pairing
 /// (docs/DAEMON.md "Identity and pairing"). Generated once and kept in the secret store.
@@ -16,7 +16,7 @@ nonisolated public enum DeviceIdentity {
 }
 
 /// A pairing ticket as the user hands it over: pasted text, a scanned QR code (upper-cased
-/// by `unnamed-hostd pair`'s terminal QR), or a deep link `<scheme>://pair/<ticket>`.
+/// by `gudo-hostd pair`'s terminal QR), or a deep link `<scheme>://pair/<ticket>`.
 nonisolated public struct PairingTicket: Sendable, Equatable {
     /// The ticket in the form `DaemonClient.connect` takes.
     public let text: String
@@ -34,7 +34,7 @@ nonisolated public struct PairingTicket: Sendable, Equatable {
         text = compact
     }
 
-    /// A deep link (`unnamed://pair/…`), or nil if the URL is not a pairing link.
+    /// A deep link (`gudo://pair/…`), or nil if the URL is not a pairing link.
     public init?(url: URL) {
         guard url.host() == "pair" || url.absoluteString.lowercased().contains("://pair/"),
               let ticket = try? PairingTicket(url.absoluteString)

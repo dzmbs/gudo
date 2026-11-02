@@ -761,6 +761,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 
 [[package]]
+name = "cli"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "brand",
+ "clap",
+ "client-core",
+ "data-encoding",
+ "qrcode",
+ "rustix",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "client-core"
 version = "0.0.0"
 dependencies = [
@@ -5221,22 +5237,6 @@ name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
-
-[[package]]
-name = "un"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "brand",
- "clap",
- "client-core",
- "data-encoding",
- "qrcode",
- "rustix",
- "serde",
- "serde_json",
- "tokio",
-]
 
 [[package]]
 name = "unarray"

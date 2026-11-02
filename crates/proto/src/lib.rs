@@ -146,6 +146,10 @@ pub use workspace::*;
 /// QUIC ALPN identifier this crate's messages are spoken under.
 pub const ALPN: &[u8] = brand::ALPN;
 
+/// The ALPN daemons and apps from before the product's rename speak; the protocol under it is the
+/// same.
+pub const LEGACY_ALPN: &[u8] = brand::legacy::ALPN;
+
 /// How often either side of a connection sends a QUIC keep-alive while it has nothing else to
 /// send.
 pub const KEEP_ALIVE: std::time::Duration = std::time::Duration::from_secs(3);

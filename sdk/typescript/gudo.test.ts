@@ -9,11 +9,11 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { EventsLost, TermError, Terminal } from "./un.ts";
+import { EventsLost, TermError, Terminal } from "./gudo.ts";
 
 /** A hook socket that answers each line with `answer(call)`. */
 async function fake(answer: (call: any) => unknown): Promise<{ socket: string; calls: any[]; server: Server }> {
-  const socket = join(mkdtempSync(join(tmpdir(), "un-sdk-")), "hook.sock");
+  const socket = join(mkdtempSync(join(tmpdir(), "gudo-sdk-")), "hook.sock");
   const calls: any[] = [];
   const server = createServer((conn) => {
     let line = "";
@@ -32,7 +32,7 @@ async function fake(answer: (call: any) => unknown): Promise<{ socket: string; c
 
 test("a call is one line as the pane, and its result comes back typed", async () => {
   const { socket, calls, server } = await fake(() => ({ ok: { pane: "p7", status: "exited", command: { exitCode: 3 } } }));
-  const term = Terminal.fromEnv({ UN_SOCK: socket, UN_TOKEN: "t0k", UN_PANE_ID: "4" });
+  const term = Terminal.fromEnv({ GUDO_SOCK: socket, GUDO_TOKEN: "t0k", GUDO_PANE_ID: "4" });
   const run = await term.run("make", { timeoutMs: 1000 });
   assert.equal(run.command?.exitCode, 3);
   assert.deepEqual(calls[0], {

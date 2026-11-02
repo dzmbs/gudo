@@ -8,7 +8,7 @@
   "compatibility_date": "2026-10-01",
   "workers_dev": false,
   // Owner: set your zone and hostname (must match `brand::PUSH_RELAY_URL`), then deploy.
-  "routes": [{ "pattern": "push.unnamed.dev", "custom_domain": true }],
+  "routes": [{ "pattern": "push.gudo.dev", "custom_domain": true }],
   // Errors only: invocation logs would keep every caller's address and request metadata.
   "observability": {
     "enabled": true,
@@ -20,7 +20,7 @@
     "APNS_TEAM_ID": "TEAMID0000",
     "APNS_KEY_ID": "KEYID00000",
     // The app's bundle id (`apple/Brand.xcconfig`: $(BRAND_BUNDLE_ID_PREFIX).app).
-    "APNS_TOPIC": "dev.unnamed.app",
+    "APNS_TOPIC": "dev.gudo.app",
     "CAP_TTL_DAYS": "180"
   },
   "durable_objects": {
@@ -35,7 +35,7 @@
       "vars": {
         "APNS_TEAM_ID": "DEVTEAM000",
         "APNS_KEY_ID": "DEVKEY0000",
-        "APNS_TOPIC": "dev.unnamed.app",
+        "APNS_TOPIC": "dev.gudo.app",
         "APNS_ORIGIN": "http://127.0.0.1:8790",
         "CAP_TTL_DAYS": "180"
       },

@@ -9,11 +9,11 @@ publish.workspace = true
 
 # Binary names come from crates/brand (DAEMON_BIN, HOOK_BIN); Cargo needs them literally.
 [[bin]]
-name = "unnamed-hostd"
+name = "gudo-hostd"
 path = "src/main.rs"
 
 [[bin]]
-name = "un-hook"
+name = "gudo-hook"
 path = "src/hook.rs"
 
 [dependencies]

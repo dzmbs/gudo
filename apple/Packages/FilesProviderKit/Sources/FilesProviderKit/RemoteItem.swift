@@ -1,7 +1,7 @@
 import FileProvider
 import Foundation
 import UniformTypeIdentifiers
-import UnnamedCore
+import GudoCore
 
 /// A file or folder on the host as Files sees it.
 nonisolated public final class RemoteItem: NSObject, NSFileProviderItem, @unchecked Sendable {

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Runs PairingUITests on an iPad simulator against a real local unnamed-hostd (`--no-relay`):
-# pairing by pasting a ticket into Add Host, by opening a `unnamed://pair/…` deep link, and
+# Runs PairingUITests on an iPad simulator against a real local gudo-hostd (`--no-relay`):
+# pairing by pasting a ticket into Add Host, by opening a `gudo://pair/…` deep link, and
 # with Settings › Network on "Direct and Local Network Only" plus an imported private CA. Each
 # test gets its own ticket (a ticket pairs one device).
 #
@@ -14,9 +14,9 @@ set -euo pipefail
 apple="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 repo="$(cd "$apple/.." && pwd)"
 sim="${1:-$(xcrun simctl list devices available | grep -m1 'iPad Pro 13-inch' | grep -oE '[0-9A-F-]{36}')}"
-state="$(mktemp -d "${TMPDIR:-/tmp}/un-pairing-ui.XXXXXX")"
+state="$(mktemp -d "${TMPDIR:-/tmp}/gudo-pairing-ui.XXXXXX")"
 export PORT="${PORT:-$((47600 + RANDOM % 100))}"
-bin="${UN_HOSTD_BIN:-$repo/target/debug/unnamed-hostd}"
+bin="${GUDO_HOSTD_BIN:-$repo/target/debug/gudo-hostd}"
 daemon() { "$apple/scripts/local-daemon.sh" "$@" "$state"; }
 mint() { "$bin" --state-dir "$state" pair --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["ticket"])'; }
 

@@ -3,7 +3,7 @@
 // is the caller, proven by its own token, so a script has exactly an agent's rights: it drives
 // the panes it opens, and the user's panes only once the owner allows it.
 //
-//   import { Terminal } from "./un.ts";
+//   import { Terminal } from "./gudo.ts";
 //   const term = Terminal.fromEnv();
 //   const { pane } = await term.run("cargo test");
 //   for await (const event of term.events({ types: ["command.finished"] })) { … }
@@ -128,9 +128,9 @@ export type EventType = ScriptEvent["type"];
 export interface TerminalOptions {
   /** The hook socket. */
   socket: string;
-  /** The pane's own token (`UN_TOKEN`). */
+  /** The pane's own token (`GUDO_TOKEN`). */
   token: string;
-  /** The pane's id (`UN_PANE_ID`). */
+  /** The pane's id (`GUDO_PANE_ID`). */
   pane: string;
 }
 
@@ -142,13 +142,13 @@ export class Terminal {
     this.#options = options;
   }
 
-  /** From the pane's environment: `UN_ENDPOINT_FILE` or `UN_SOCK`, `UN_TOKEN`, `UN_PANE_ID`. */
+  /** From the pane's environment: `GUDO_ENDPOINT_FILE` or `GUDO_SOCK`, `GUDO_TOKEN`, `GUDO_PANE_ID`. */
   static fromEnv(env: Record<string, string | undefined> = process.env): Terminal {
-    const file = env.UN_ENDPOINT_FILE;
-    const socket = file ? readFileSync(file, "utf8").trim() : env.UN_SOCK;
-    const { UN_TOKEN: token, UN_PANE_ID: pane } = env;
+    const file = env.GUDO_ENDPOINT_FILE;
+    const socket = file ? readFileSync(file, "utf8").trim() : env.GUDO_SOCK;
+    const { GUDO_TOKEN: token, GUDO_PANE_ID: pane } = env;
     if (!socket || !token || !pane) {
-      throw new Error("not in a pane: UN_SOCK (or UN_ENDPOINT_FILE), UN_TOKEN and UN_PANE_ID are needed");
+      throw new Error("not in a pane: GUDO_SOCK (or GUDO_ENDPOINT_FILE), GUDO_TOKEN and GUDO_PANE_ID are needed");
     }
     return new Terminal({ socket, token, pane });
   }

@@ -364,7 +364,7 @@ struct WindowContent: View {
     /// The app's URL scheme (Brand.xcconfig), for routing links to open windows.
     static let urlScheme: String = {
         let types = Bundle.main.object(forInfoDictionaryKey: "CFBundleURLTypes") as? [[String: Any]]
-        return (types?.first?["CFBundleURLSchemes"] as? [String])?.first ?? "unnamed"
+        return (types?.first?["CFBundleURLSchemes"] as? [String])?.first ?? "gudo"
     }()
 
     /// Restore by default in normal launches; never for design fixtures, `-mock` or dogfood

@@ -1,6 +1,6 @@
 import Foundation
 import Security
-import UnnamedCore
+import GudoCore
 
 /// How this device reaches its daemons (docs/RELAYS.md): the way each host's pairing ticket
 /// says, direct only (LAN, Tailscale, VPN: no relay, no third party), or through the user's

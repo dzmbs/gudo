@@ -10,7 +10,7 @@
 //!   up in the foreground ([`ReconnectPolicy`]), reporting each [`ConnectionState`].
 //! - **Use**: [`Connection::exec`], [`Connection::open_shell`] (PTY, resize, env),
 //!   [`Connection::upload`] (exec `cat`/`gzip -dc` with a SHA-256 check, no SFTP).
-//! - **Upgrade**: [`bootstrap`] installs `unnamed-hostd` and returns a pairing ticket.
+//! - **Upgrade**: [`bootstrap`] installs `gudo-hostd` and returns a pairing ticket.
 //! - **Configure**: [`SshConfig`] reads `~/.ssh/config` with OpenSSH semantics.
 //!
 //! The API takes and returns owned values and uses trait-object callbacks, so it maps onto

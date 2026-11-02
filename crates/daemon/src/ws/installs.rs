@@ -76,7 +76,7 @@ pub(crate) fn mcp_commands(
 ) -> Vec<AgentMcpCommand> {
     let hook_bin = cfg.hook_bin();
     let home = cfg.home();
-    let legacy = agents::legacy_mcp_server_name();
+    let legacy = agents::legacy_mcp_server_names();
     check(cfg, path)
         .into_iter()
         .flat_map(|install| {
@@ -108,8 +108,13 @@ pub(crate) fn mcp_commands(
                             agents::ClaudeCode::user_mcp_command(
                                 &program, &hook_bin, state_dir, register,
                             ),
-                            agents::ClaudeCode::user_mcp_registered(&config, &legacy)
-                                .then(|| agents::ClaudeCode::user_mcp_remove(&program, &legacy)),
+                            legacy
+                                .iter()
+                                .filter(|name| {
+                                    agents::ClaudeCode::user_mcp_registered(&config, name)
+                                })
+                                .map(|name| agents::ClaudeCode::user_mcp_remove(&program, name))
+                                .collect::<Vec<_>>(),
                         )
                     }
                     AgentKind::Codex => {
@@ -121,8 +126,11 @@ pub(crate) fn mcp_commands(
                             agents::Codex::user_mcp_command(
                                 &program, &hook_bin, state_dir, register,
                             ),
-                            agents::Codex::user_mcp_registered(&config, &legacy)
-                                .then(|| agents::Codex::user_mcp_remove(&program, &legacy)),
+                            legacy
+                                .iter()
+                                .filter(|name| agents::Codex::user_mcp_registered(&config, name))
+                                .map(|name| agents::Codex::user_mcp_remove(&program, name))
+                                .collect::<Vec<_>>(),
                         )
                     }
                 };
@@ -135,7 +143,7 @@ pub(crate) fn mcp_commands(
                         vec!["env".into(), format!("{var}={}", dir.display())]
                     })
                     .unwrap_or_default();
-                // The server's old name goes too, so an agent does not run it twice.
+                // The server's old names go too, so an agent does not run it twice.
                 old.into_iter()
                     .chain([add])
                     .map(|argv| AgentMcpCommand {

@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 @testable import HostKit
-import UnnamedCore
+import GudoCore
 
 /// Command blocks from the daemon's command list (rows named from the bottom, as anchors are),
 /// running commands for the sidebar, prompt jumps, and the words around them.

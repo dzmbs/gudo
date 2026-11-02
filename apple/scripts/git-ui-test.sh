@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs GitUITests (git sidebar rows, the PR popover, Merge PR through the palette, New Task
-# making a worktree) on a simulator against a local unnamed-hostd on git-fixtures.sh: a
+# making a worktree) on a simulator against a local gudo-hostd on git-fixtures.sh: a
 # repository with an origin and a second worktree, and a stand-in `gh` with fixture pull
 # requests.
 #
@@ -13,7 +13,7 @@ set -euo pipefail
 apple="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 sim="${1:-$(xcrun simctl list devices available | grep -m1 'iPad Pro 13-inch' | grep -oE '[0-9A-F-]{36}')}"
 shift || true
-state="$(mktemp -d "${TMPDIR:-/tmp}/un-git.XXXXXX")"
+state="$(mktemp -d "${TMPDIR:-/tmp}/gudo-git.XXXXXX")"
 "$apple/scripts/git-fixtures.sh" "$state" >/dev/null
 export PORT="${PORT:-47614}"
 

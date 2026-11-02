@@ -277,7 +277,7 @@ enum DesignFixtures {
     /// tab that needs input (its glyph replaces the mark), the first tab selected.
     private static func programs(_ workspace: Workspace) {
         let tabs: [(name: String, program: String, state: AgentState?)] = [
-            ("~/projects/unnamed", "claude", .working), ("notes.txt", "vim", nil), ("build-01", "htop", nil),
+            ("~/projects/gudo", "claude", .working), ("notes.txt", "vim", nil), ("build-01", "htop", nil),
             ("scratch", "python3.12", nil), ("review", "codex", .blocked), ("README.md", "nvim", nil),
             ("Cargo.toml", "hx", nil), ("work", "tmux", nil), ("history", "git", nil), ("load", "btop", nil),
             ("console", "irb", nil), ("~", "-zsh", nil),
@@ -305,6 +305,6 @@ enum DesignFixtures {
     }
 
     private static func name(_ workspace: Workspace) {
-        if let id = workspace.session.activeTabId { workspace.apply(.rename(id, "~/projects/unnamed")) }
+        if let id = workspace.session.activeTabId { workspace.apply(.rename(id, "~/projects/gudo")) }
     }
 }

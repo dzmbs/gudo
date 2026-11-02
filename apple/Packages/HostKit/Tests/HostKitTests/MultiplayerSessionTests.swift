@@ -2,7 +2,7 @@ import Foundation
 @testable import HostKit
 import Synchronization
 import Testing
-import UnnamedCore
+import GudoCore
 
 /// A daemon's multiplayer side, scripted.
 nonisolated final class FakeMultiplayerClient: MultiplayerClientAPI {
@@ -34,21 +34,21 @@ nonisolated final class FakeMultiplayerClient: MultiplayerClientAPI {
 
     func setMultiplayerListener(listener: any MultiplayerListener) { state.withLock { $0.listener = listener } }
     func me() -> JoinInfo? { nil }
-    func participantList() -> [UnnamedCore.Participant] { [] }
+    func participantList() -> [GudoCore.Participant] { [] }
     func lease(paneId: UInt64) -> Lease? { nil }
     func setTyping(paneId: UInt64, typing: Bool) { state.withLock { $0.typing.append((paneId, typing)) } }
-    func participants() async throws -> [UnnamedCore.Participant] { [] }
+    func participants() async throws -> [GudoCore.Participant] { [] }
     func setName(name: String) async throws {}
     func createInvite(options: InviteOptions) async throws -> CreatedInvite {
         state.withLock { $0.invites.append(options) }
-        let link = "unnamed://join/abc\(options.label.lowercased())"
+        let link = "gudo://join/abc\(options.label.lowercased())"
         return CreatedInvite(link: link, qrPayload: link.uppercased(), grantId: String(repeating: "ab", count: 16), expiresMs: options.ttlSecs.map { $0 * 1000 })
     }
     func listGrants() async throws -> [GrantInfo] { state.withLock { $0.grants } }
     func inviterDevice() -> String? { state.withLock { $0.inviter } }
     func inviteLink(grantId: String, inviter: String) async throws -> String {
         state.withLock { $0.linkRequests.append(grantId) }
-        return "unnamed://join/again-\(grantId)"
+        return "gudo://join/again-\(grantId)"
     }
     func listDevices() async throws -> [DeviceInfo] { state.withLock { $0.devices } }
     func revoke(target: RevokeTarget) async throws -> RevokeResult {
@@ -100,8 +100,8 @@ private func info(_ actor: Actor, _ name: String, _ roles: [Role], grant: String
     JoinInfo(actor: actor, name: name, roles: roles, scope: .daemon, grantId: grant, expiresMs: nil)
 }
 
-private func person(_ actor: Actor, _ name: String, _ roles: [Role], focus: UInt64? = nil, typing: Bool = false) -> UnnamedCore.Participant {
-    UnnamedCore.Participant(actor: actor, name: name, roles: roles, scope: .daemon, grantId: nil, sinceMs: 1, state: .active, focus: focus, typing: typing, cursor: nil)
+private func person(_ actor: Actor, _ name: String, _ roles: [Role], focus: UInt64? = nil, typing: Bool = false) -> GudoCore.Participant {
+    GudoCore.Participant(actor: actor, name: name, roles: roles, scope: .daemon, grantId: nil, sinceMs: 1, state: .active, focus: focus, typing: typing, cursor: nil)
 }
 
 private func peer(_ id: UInt64, rev: UInt64, _ actor: Actor, _ name: String, roles: [Role] = [.driver], focus: UInt64? = nil, typing: UInt64? = nil, draft: Draft? = nil) -> Peer {
@@ -263,8 +263,8 @@ private func settle(_ condition: () -> Bool) async throws {
                                           maxUses: nil, bind: nil, delegate: false, label: "Kim"), parent: nil, bound: [], revoked: false)
         #expect(await session.link(for: mine) == made.link)
         let old = session.activeGrants[1]
-        #expect(await session.link(for: old) == "unnamed://join/again-old")
-        #expect(await session.link(for: old) == "unnamed://join/again-old")
+        #expect(await session.link(for: old) == "gudo://join/again-old")
+        #expect(await session.link(for: old) == "gudo://join/again-old")
         #expect(client.state.withLock { $0.linkRequests } == ["old"])
 
         // Removing a person revokes their device, not the link they came with.

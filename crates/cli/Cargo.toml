@@ -1,5 +1,5 @@
 [package]
-name = "un"
+name = "cli"
 version = "0.0.0"
 description = "Developer CLI over client-core: attach to a pane, drive the layout, forward ports"
 edition.workspace = true
@@ -9,7 +9,7 @@ publish.workspace = true
 
 # The binary name comes from crates/brand (CLI_BIN); Cargo needs it literally.
 [[bin]]
-name = "un"
+name = "gudo"
 path = "src/main.rs"
 
 [dependencies]

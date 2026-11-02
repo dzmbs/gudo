@@ -497,7 +497,7 @@ async fn events_come_to_subscribers_of_their_own_session_only() {
     daemon.shutdown().await;
 }
 
-/// `un events`: a client's stream holds only what its grant shows it.
+/// `gudo events`: a client's stream holds only what its grant shows it.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_clients_event_stream_follows_its_scope() {
     let Some(zsh) = ["/bin/zsh", "/usr/bin/zsh"]
@@ -601,7 +601,7 @@ async fn the_typescript_client_drives_a_real_daemon() {
     let (daemon, owner, user, agent) =
         setup_with(dir.path(), Duration::from_secs(1), Some(zsh)).await;
     let sdk = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../sdk/typescript/un.ts")
+        .join("../../sdk/typescript/gudo.ts")
         .canonicalize()
         .unwrap();
     let script = dir.path().join("drive.mjs");
@@ -626,13 +626,13 @@ process.exit(0);
     .unwrap();
     let out = tokio::process::Command::new("node")
         .arg(&script)
-        .env("UN_SOCK", daemon.hook_socket())
+        .env("GUDO_SOCK", daemon.hook_socket())
         .env(
-            "UN_TOKEN",
+            "GUDO_TOKEN",
             std::fs::read_to_string(dir.path().join("hook.token")).unwrap(),
         )
-        .env("UN_PANE_ID", agent.0.to_string())
-        .env_remove("UN_ENDPOINT_FILE")
+        .env("GUDO_PANE_ID", agent.0.to_string())
+        .env_remove("GUDO_ENDPOINT_FILE")
         .output();
     let out = tokio::time::timeout(Duration::from_secs(60), out)
         .await

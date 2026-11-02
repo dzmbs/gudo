@@ -4,15 +4,15 @@ import PaneLayout
 import Synchronization
 import TerminalCore
 import Testing
-import UnnamedCore
+import GudoCore
 
 /// The repository root (this file is apple/Packages/HostKit/Tests/HostKitTests/…).
 nonisolated let repoRoot = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
 
-/// A local `unnamed-hostd` with relays off (as UnnamedCore's tests run it). Build it first:
-/// `cargo build -p hostd`, or point `UN_HOSTD_BIN` at a build.
+/// A local `gudo-hostd` with relays off (as GudoCore's tests run it). Build it first:
+/// `cargo build -p hostd`, or point `GUDO_HOSTD_BIN` at a build.
 nonisolated final class LocalDaemon {
     let binary: URL
     let stateDir: URL
@@ -36,10 +36,10 @@ nonisolated final class LocalDaemon {
         return UInt16(bigEndian: address.sin_port)
     }
 
-    /// The daemon build the tests run (`UN_HOSTD_BIN`, else the workspace's debug build).
+    /// The daemon build the tests run (`GUDO_HOSTD_BIN`, else the workspace's debug build).
     static var defaultBinary: URL {
-        ProcessInfo.processInfo.environment["UN_HOSTD_BIN"].map(URL.init(fileURLWithPath:))
-            ?? repoRoot.appending(path: "target/debug/unnamed-hostd")
+        ProcessInfo.processInfo.environment["GUDO_HOSTD_BIN"].map(URL.init(fileURLWithPath:))
+            ?? repoRoot.appending(path: "target/debug/gudo-hostd")
     }
 
     init(binary: URL? = nil) throws {

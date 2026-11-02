@@ -2,7 +2,7 @@ import DesignSystem
 import Foundation
 import HostKit
 import PaneLayout
-import UnnamedCore
+import GudoCore
 
 // YAML files on the host. The palette's "/" scope lists the focused pane's (its repository's,
 // then the global ones); one with arguments opens the argument form, which types the filled

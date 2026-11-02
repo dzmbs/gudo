@@ -39,7 +39,7 @@ use proto::{
 
 pub use push::{ActionOffer, Decision, Kind, Notification, PushError, x25519_keypair};
 
-use crate::conn::{Route, endpoint_builder, recv, send, ticket_addr};
+use crate::conn::{Route, connect_daemon, endpoint_builder, recv, send, ticket_addr};
 use crate::{Client, ClientConfig, ConnectOptions};
 
 impl Client {
@@ -175,8 +175,7 @@ pub async fn send_action(
         .map_err(|e| unreachable(&e))?;
     let result = tokio::time::timeout(timeout, async {
         let addr = ticket_addr(&ticket, &route).map_err(|e| unreachable(&e))?;
-        let conn = endpoint
-            .connect(addr, proto::ALPN)
+        let conn = connect_daemon(&endpoint, addr)
             .await
             .map_err(|e| unreachable(&e))?;
         let answer = exchange(&conn, &ticket, &key, request).await;

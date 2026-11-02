@@ -2,19 +2,19 @@
 
 iroh dials daemons by key. Direct UDP paths (LAN, Tailscale, hole punching) come first; a relay
 carries the first packets and any traffic that cannot go direct. ARCHITECTURE D16: the
-default is a managed relay set (Iroh Services); power users can run their own `iroh-relay`, or
+default is the product's own relay, `https://relay.gudo.dev` (`brand::RELAY_URL`); power users can run their own `iroh-relay`, or
 switch relays off entirely.
 
 ## 1. Modes
 
 | Daemon `config.toml` | iroh endpoint | Pairing ticket says | App dials |
 |---|---|---|---|
-| *(nothing)* / `mode = "default"` | n0 preset: default relays + address lookup | nothing extra (classic ticket) | default relays + the daemon's home relay |
+| *(nothing)* / `mode = "default"` | `relay.gudo.dev` + n0's address lookup | nothing extra (classic ticket) | `relay.gudo.dev` + the daemon's home relay |
 | `urls = [...]` / `mode = "custom"` | only these relays, no third-party lookup | `Custom { urls, auth_token }` | only those relays |
 | `mode = "local-only"` (or `hostd run --no-relay`) | no relays, no lookup | `Disabled` | direct addresses only |
 
 ```toml
-# <state>/config.toml   (state dir: `unnamed-hostd status`)
+# <state>/config.toml   (state dir: `gudo-hostd status`)
 [relay]
 mode = "custom"                         # "default" | "custom" | "local-only"
 urls = ["https://relay.example.com"]    # one or more iroh-relay servers
@@ -23,13 +23,13 @@ ca_file = "/etc/ssl/private-ca.pem"     # only for a private CA; web roots stay 
 ```
 
 `hostd run --no-relay` wins over the file. Restart the daemon after editing, then pair again
-(`unnamed-hostd pair`): the relay choice travels **in the pairing ticket**, so the phone needs no
-settings. `unnamed-hostd status` prints the mode.
+(`gudo-hostd pair`): the relay choice travels **in the pairing ticket**, so the phone needs no
+settings. `gudo-hostd status` prints the mode.
 
 ### How the ticket carries it
 
 `proto::TicketExtras { v, relays: TicketRelays }` is appended to the ticket's postcard bytes
-after a marker byte (`0xE7`), inside the same base32 `unnamed://pair/…` payload. Parsers that
+after a marker byte (`0xE7`), inside the same base32 `gudo://pair/…` payload. Parsers that
 predate it ignore trailing bytes, so older apps still pair (through `relay_url`, which a
 custom-relay daemon sets to its home relay among its own). With default relays nothing is
 appended and the ticket is byte-identical to before. Extras of a newer version are ignored.
@@ -101,8 +101,8 @@ Needs: a VPS with a public IPv4 (and ideally IPv6), a DNS name, ports **80/tcp, 
    auth_token = "<token>"
    ```
 
-   then restart the daemon (`unnamed-hostd service install` re-installs and restarts it, or
-   restart the service) and `unnamed-hostd pair` to give the phone a ticket with the relay.
+   then restart the daemon (`gudo-hostd service install` re-installs and restarts it, or
+   restart the service) and `gudo-hostd pair` to give the phone a ticket with the relay.
 4. Several regions: run one relay per region and list them all in `urls`; iroh picks the
    lowest-latency one as the daemon's home relay.
 
@@ -141,7 +141,8 @@ parsers still read extended tickets.
 
 ## 4. Not done
 
-- The managed default (Iroh Services behind `relays.<domain>`) still uses n0's public relays
+- The default relay `relay.gudo.dev` must be running before release: until it is, devices on
+  different networks reach a default-mode daemon only over direct paths.
 - A daemon whose home relay changes while no client is connected relies on the app redialling
 - No per-host override of the Network setting: it applies to every host.
 - The private-CA path is tested in Rust against an in-process relay; the app's UI test imports

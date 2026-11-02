@@ -48,6 +48,21 @@ fn net(e: impl std::fmt::Display) -> ConnError {
     ConnError::Net(e.to_string())
 }
 
+/// Connects to the daemon at `addr`, also offering the ALPN of daemons installed before the
+/// product's rename, so the app can still reach (and upgrade) them.
+pub(crate) async fn connect_daemon(
+    endpoint: &Endpoint,
+    addr: EndpointAddr,
+) -> Result<iroh::endpoint::Connection, String> {
+    let options = iroh::endpoint::ConnectOptions::new()
+        .with_additional_alpns(vec![proto::LEGACY_ALPN.to_vec()]);
+    let connecting = endpoint
+        .connect_with_opts(addr, proto::ALPN, options)
+        .await
+        .map_err(|e| e.to_string())?;
+    connecting.await.map_err(|e| e.to_string())
+}
+
 pub(crate) async fn send<T: Serialize>(stream: &mut SendStream, msg: &T) -> Result<(), ConnError> {
     let buf = proto::frame::to_vec(msg).map_err(net)?;
     stream.write_all(&buf).await.map_err(net)
@@ -106,7 +121,7 @@ fn route(inner: &Inner) -> Route {
 pub(crate) enum Route {
     /// Direct addresses only: no relay, no address lookup.
     Direct,
-    /// The default relays (n0 preset) and the daemon's home relay.
+    /// The default relay ([`brand::RELAY_URL`]) and the daemon's home relay.
     Default,
     /// Only these relays.
     Custom {
@@ -144,6 +159,12 @@ impl Route {
     }
 }
 
+/// The product's own relay ([`brand::RELAY_URL`]), the default unless the app's relay settings or
+/// the ticket name others.
+fn default_relays() -> iroh::RelayMap {
+    iroh::RelayMap::try_from_iter([brand::RELAY_URL]).expect("the default relay URL parses")
+}
+
 /// An endpoint builder for dialling along `route`, trusting `options.relay_ca_der` too.
 pub(crate) fn endpoint_builder(
     route: &Route,
@@ -151,7 +172,9 @@ pub(crate) fn endpoint_builder(
 ) -> Result<iroh::endpoint::Builder, ConnError> {
     let mut builder = match route {
         Route::Direct => Endpoint::builder(presets::Minimal),
-        Route::Default => Endpoint::builder(presets::N0),
+        Route::Default => {
+            Endpoint::builder(presets::N0).relay_mode(iroh::RelayMode::Custom(default_relays()))
+        }
         Route::Custom {
             urls,
             auth_token,
@@ -317,10 +340,7 @@ async fn dial(inner: &Arc<Inner>, endpoint: &Endpoint) -> Result<Live, ConnError
     };
     let mut last = ConnError::Net("no grant tried".into());
     for &v in grants {
-        let conn = endpoint
-            .connect(addr.clone(), proto::ALPN)
-            .await
-            .map_err(net)?;
+        let conn = connect_daemon(endpoint, addr.clone()).await.map_err(net)?;
         match handshake(inner, conn, v).await {
             Ok(live) => {
                 *lock(&inner.paired) = true;

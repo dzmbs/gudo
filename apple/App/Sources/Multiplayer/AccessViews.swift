@@ -1,7 +1,7 @@
 import DesignSystem
 import HostKit
 import SwiftUI
-import UnnamedCore
+import GudoCore
 
 /// The owner's access list: every invite (grant) with who redeemed it, and every device, each
 /// revocable. Revoking disconnects at once (DAEMON.md §6.2).
@@ -483,7 +483,7 @@ struct ActiveLinksSection: View {
 /// working for anyone else.
 struct RemovePersonDialog: ViewModifier {
     let session: MultiplayerSession
-    @Binding var person: UnnamedCore.Participant?
+    @Binding var person: GudoCore.Participant?
 
     func body(content: Content) -> some View {
         content.confirmationDialog(

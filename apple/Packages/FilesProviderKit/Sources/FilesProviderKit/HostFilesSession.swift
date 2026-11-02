@@ -2,7 +2,7 @@ import FileProvider
 import Foundation
 import HostKit
 import Synchronization
-import UnnamedCore
+import GudoCore
 
 /// One host's connection for the extension: dialled on first use, folders listed lately
 /// watched on the host, and a sync anchor that moves whenever something may have changed

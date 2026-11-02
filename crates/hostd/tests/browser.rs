@@ -1,4 +1,4 @@
-//! The real `BROWSER` helper (`un-hook open-url`) against a daemon in this process: a program
+//! The real `BROWSER` helper (`gudo-hook open-url`) against a daemon in this process: a program
 //! in a pane opens a URL the way `claude /login` does (`$BROWSER <url>`, success on exit 0)
 //! and the app showing the pane is asked to open it.
 
@@ -11,7 +11,7 @@ use client_core::proto::BrowserPush;
 
 use support::{TestClient, start_with, ticket};
 
-const HELPER: &str = env!("CARGO_BIN_EXE_un-hook");
+const HELPER: &str = env!("CARGO_BIN_EXE_gudo-hook");
 
 #[tokio::test(flavor = "multi_thread")]
 async fn browser_urls_reach_the_app() {

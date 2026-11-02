@@ -579,7 +579,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-Rust crates in the app (UnnamedCore)
+Rust crates in the app (GudoCore)
 ================================================================================
 
 --------------------------------------------------------------------------------
@@ -7975,7 +7975,7 @@ the following restrictions:
 3. This notice may not be removed or altered from any source distribution.
 
 ================================================================================
-Rust crates in the bundled helpers (unnamed-hostd)
+Rust crates in the bundled helpers (gudo-hostd)
 ================================================================================
 
 --------------------------------------------------------------------------------

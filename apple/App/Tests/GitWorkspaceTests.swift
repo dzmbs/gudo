@@ -1,7 +1,7 @@
 import DesignSystem
 import Foundation
 import HostKit
-import UnnamedCore
+import GudoCore
 import XCTest
 @testable import App
 

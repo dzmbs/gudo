@@ -5,7 +5,7 @@ import Observation
 import PaneLayout
 import TerminalCore
 import TerminalRenderer
-import UnnamedCore
+import GudoCore
 
 /// What the detail column (or the iPhone tab) shows.
 enum Destination: String, Hashable {
@@ -483,7 +483,8 @@ final class WindowModel {
     /// A link or file the system opened the app with. Any app or web page can open one, so a
     /// link only shows what it is about; pairing and joining are always the user's tap.
     func openLink(_ url: URL) {
-        // A `.unreplay` file opens in Session Replay.
+        let url = AppLinks.fromWeb(url, scheme: WindowContent.urlScheme) ?? url
+        // A `.gudoreplay` file opens in Session Replay.
         if url.isFileURL, url.pathExtension.lowercased() == ReplayStore.fileExtension {
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
@@ -1061,8 +1062,8 @@ struct NewAgentSeed {
 }
 
 enum LaunchOptions {
-    /// `-mock`, or `UNNAMED_MOCK` in the environment (in-process snapshot tests).
-    static let mock = ProcessInfo.processInfo.arguments.contains("-mock") || ProcessInfo.processInfo.environment["UNNAMED_MOCK"] != nil
+    /// `-mock`, or `GUDO_MOCK` in the environment (in-process snapshot tests).
+    static let mock = ProcessInfo.processInfo.arguments.contains("-mock") || ProcessInfo.processInfo.environment["GUDO_MOCK"] != nil
     /// Hosting unit tests: no windows of its own, never active.
     static let isTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
     static let screen: String? = LaunchArguments().string(forKey: "screen")

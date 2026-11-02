@@ -1,7 +1,7 @@
 import Foundation
 import HostKit
 import Synchronization
-import UnnamedCore
+import GudoCore
 import XCTest
 @testable import App
 

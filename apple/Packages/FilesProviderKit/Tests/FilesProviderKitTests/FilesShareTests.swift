@@ -3,7 +3,7 @@ import Foundation
 @testable import FilesProviderKit
 import HostKit
 import Testing
-import UnnamedCore
+import GudoCore
 
 @Suite struct FilesShareTests {
     @Test func sharesOwnerDaemonHostsTheirTicketsTheKeyAndRelaySettings() throws {

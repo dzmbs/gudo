@@ -4,7 +4,7 @@ import PaneLayout
 import Synchronization
 import TerminalCore
 import Testing
-import UnnamedCore
+import GudoCore
 
 /// A terminal showing `lines` (and scrollback above them when there are more than its rows).
 nonisolated func terminal(_ lines: [String], cols: UInt16 = 80, rows: UInt16 = 24) -> Terminal {

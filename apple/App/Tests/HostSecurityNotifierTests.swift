@@ -2,7 +2,7 @@ import Foundation
 import HostKit
 import NotifyKit
 import Synchronization
-import UnnamedCore
+import GudoCore
 import UserNotifications
 import XCTest
 @testable import App
@@ -43,7 +43,7 @@ final class HostSecurityNotifierTests: XCTestCase {
 
     private func ownerSession() -> MultiplayerSession {
         MultiplayerSession.preview(
-            me: JoinInfo(actor: me, name: "Sam’s iPad", roles: [.owner], scope: .daemon, grantId: nil, expiresMs: nil), participants: [])
+            me: JoinInfo(actor: me, name: "Mira’s iPad", roles: [.owner], scope: .daemon, grantId: nil, expiresMs: nil), participants: [])
     }
 
     private func device(_ key: Character, _ name: String, kind: DeviceKind = .owner) -> DeviceInfo {
@@ -66,7 +66,7 @@ final class HostSecurityNotifierTests: XCTestCase {
         let poster = RecordingPoster()
         let session = ownerSession()
         await HostSecurityNotifier(poster: poster, ledger: HostAlertLedger(defaults: defaults)) { true }
-            .post(device("a", "Sam’s iPad"), hostId: "h1", hostName: "studio", session: session)
+            .post(device("a", "Mira’s iPad"), hostId: "h1", hostName: "studio", session: session)
         await HostSecurityNotifier(poster: poster, ledger: HostAlertLedger(defaults: defaults)) { true }
             .post(device("e", "Kim", kind: .guest), hostId: "h1", hostName: "studio", session: session)
         await HostSecurityNotifier(poster: poster, ledger: HostAlertLedger(defaults: defaults)) { false }

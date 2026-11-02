@@ -5,7 +5,7 @@ import NotifyKit
 import os
 import PaneLayout
 import PushCrypto
-import UnnamedCore
+import GudoCore
 import UserNotifications
 #if canImport(UIKit)
 import UIKit

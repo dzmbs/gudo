@@ -1,7 +1,7 @@
 # Agents driving the terminal
 
 Coding agents (and scripts) in a pane can drive other panes through the terminal tools: MCP via
-`un-hook mcp`, `un-hook term`, the TypeScript client, all on the hook socket
+`gudo-hook mcp`, `gudo-hook term`, the TypeScript client, all on the hook socket
 (docs/DAEMON.md, "Terminal tools", "Scripting"). An agent is a program that reads untrusted
 text (repos, web pages, tool output) and can be talked into anything, so the tools treat it as
 a capable but untrusted user of the user's own account.
@@ -52,7 +52,7 @@ directory (it holds `hook.token` and can do anything the user can anyway).
   one agent tree may have 32 panes open.
 - **Audit.** Every answer (allow once, for this pane, deny) is a signed `Approval` record in
   the hash-chained audit log.
-- **Event stream.** Agents see only their own session's events; `un events` sees what its
+- **Event stream.** Agents see only their own session's events; `gudo events` sees what its
   connection's grant shows. Neither leaks another session's panes, commands or exit codes.
 
 ## Residual risk

@@ -29,7 +29,7 @@ async fn via_proxy(proxy: &Proxy, keepalive: Keepalive) -> (Connection, ConnectO
 }
 
 #[tokio::test]
-#[cfg_attr(not(ssh_test_host), ignore = "needs UN_SSH_TEST_HOST (docs/SSH.md)")]
+#[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
 async fn keepalives_keep_an_idle_connection_and_measure_rtt() {
     let env = env();
     let mut options = env.options(env.key_creds());
@@ -44,7 +44,7 @@ async fn keepalives_keep_an_idle_connection_and_measure_rtt() {
 }
 
 #[tokio::test]
-#[cfg_attr(not(ssh_test_host), ignore = "needs UN_SSH_TEST_HOST (docs/SSH.md)")]
+#[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
 async fn silent_drop_is_detected_by_keepalives() {
     let env = env();
     let proxy = Proxy::start(format!("{}:22", env.host)).await;
@@ -70,7 +70,7 @@ async fn silent_drop_is_detected_by_keepalives() {
 }
 
 #[tokio::test]
-#[cfg_attr(not(ssh_test_host), ignore = "needs UN_SSH_TEST_HOST (docs/SSH.md)")]
+#[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
 async fn fast_probe_and_input_after_silence() {
     let env = env();
     let proxy = Proxy::start(format!("{}:22", env.host)).await;
@@ -118,7 +118,7 @@ async fn fast_probe_and_input_after_silence() {
 }
 
 #[tokio::test]
-#[cfg_attr(not(ssh_test_host), ignore = "needs UN_SSH_TEST_HOST (docs/SSH.md)")]
+#[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
 async fn frozen_sshd_is_detected() {
     let env = env();
     let mut options = env.options(env.key_creds());
@@ -162,7 +162,7 @@ impl ssh::SessionListener for States {
 }
 
 #[tokio::test]
-#[cfg_attr(not(ssh_test_host), ignore = "needs UN_SSH_TEST_HOST (docs/SSH.md)")]
+#[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
 async fn session_reconnects_after_a_drop_and_reports_states() {
     let env = env();
     let proxy = Proxy::start(format!("{}:22", env.host)).await;
@@ -235,7 +235,7 @@ async fn session_reconnects_after_a_drop_and_reports_states() {
 }
 
 #[tokio::test]
-#[cfg_attr(not(ssh_test_host), ignore = "needs UN_SSH_TEST_HOST (docs/SSH.md)")]
+#[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
 async fn session_needs_attention_on_bad_credentials() {
     let env = env();
     let session = Session::start(

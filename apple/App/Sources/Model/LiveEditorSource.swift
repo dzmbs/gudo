@@ -3,7 +3,7 @@ import HostKit
 import Observation
 import os
 import PaneLayout
-import UnnamedCore
+import GudoCore
 
 private let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app", category: "editor")
 

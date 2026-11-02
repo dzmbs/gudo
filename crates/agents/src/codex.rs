@@ -73,8 +73,8 @@ impl Codex {
     ///
     /// ```
     /// use std::path::Path;
-    /// let remove = agents::Codex::user_mcp_command("codex", Path::new("/b/un-hook"), Path::new("/s"), false);
-    /// assert_eq!(remove.join(" "), "codex mcp remove unnamed");
+    /// let remove = agents::Codex::user_mcp_command("codex", Path::new("/b/gudo-hook"), Path::new("/s"), false);
+    /// assert_eq!(remove.join(" "), "codex mcp remove gudo");
     /// ```
     pub fn user_mcp_command(
         program: &str,
@@ -377,16 +377,12 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         std::fs::create_dir(home.path().join(".codex")).unwrap();
         let config = Codex::config_file(home.path(), None);
-        std::fs::write(
-            &config,
-            "[mcp_servers.unnamed_drawings_x]\ncommand = \"x\"\n",
-        )
-        .unwrap();
-        assert!(!Codex::user_mcp_registered(&config, "unnamed_drawings"));
-        std::fs::write(&config, "[mcp_servers.unnamed_drawings]\ncommand = \"x\"\n").unwrap();
-        assert!(Codex::user_mcp_registered(&config, "unnamed_drawings"));
-        std::fs::write(&config, "mcp_servers.unnamed_drawings.command = \"x\"\n").unwrap();
-        assert!(Codex::user_mcp_registered(&config, "unnamed_drawings"));
+        std::fs::write(&config, "[mcp_servers.gudo_drawings_x]\ncommand = \"x\"\n").unwrap();
+        assert!(!Codex::user_mcp_registered(&config, "gudo_drawings"));
+        std::fs::write(&config, "[mcp_servers.gudo_drawings]\ncommand = \"x\"\n").unwrap();
+        assert!(Codex::user_mcp_registered(&config, "gudo_drawings"));
+        std::fs::write(&config, "mcp_servers.gudo_drawings.command = \"x\"\n").unwrap();
+        assert!(Codex::user_mcp_registered(&config, "gudo_drawings"));
     }
     use super::*;
     use crate::AgentState;
@@ -436,13 +432,13 @@ mod tests {
                 "-c",
                 r#"tui.notification_condition="always""#,
                 "-c",
-                r#"mcp_servers.unnamed.command="/opt/un/bin/un-hook""#,
+                r#"mcp_servers.gudo.command="/opt/gudo/bin/gudo-hook""#,
                 "-c",
-                r#"mcp_servers.unnamed.args=["mcp","--state","/state","--pane","p_9f2"]"#,
+                r#"mcp_servers.gudo.args=["mcp","--state","/state","--pane","p_9f2"]"#,
             ]
         );
         assert!(spec.files.is_empty());
-        assert!(spec.env.iter().any(|(k, _)| k == "UN_HOOK"));
+        assert!(spec.env.iter().any(|(k, _)| k == "GUDO_HOOK"));
     }
 
     #[test]
@@ -459,15 +455,15 @@ mod tests {
     #[test]
     fn mcp_overrides_are_valid_toml_for_any_path() {
         let mut ctx = test_context();
-        ctx.hook_bin = r#"/Users/A "B"\x/un-hook"#.into();
-        ctx.state_dir = "/Users/A B/Library/Application Support/unnamed".into();
+        ctx.hook_bin = r#"/Users/A "B"\x/gudo-hook"#.into();
+        ctx.state_dir = "/Users/A B/Library/Application Support/gudo".into();
         let mut doc = toml::Table::new();
         for o in mcp_overrides(&ctx) {
             let (key, value) = o.split_once('=').unwrap();
             let value: toml::Table = toml::from_str(&format!("v = {value}")).unwrap();
             doc.insert(key.rsplit('.').next().unwrap().into(), value["v"].clone());
         }
-        assert_eq!(doc["command"].as_str(), Some(r#"/Users/A "B"\x/un-hook"#));
+        assert_eq!(doc["command"].as_str(), Some(r#"/Users/A "B"\x/gudo-hook"#));
         let args: Vec<&str> = doc["args"]
             .as_array()
             .unwrap()
@@ -479,7 +475,7 @@ mod tests {
             [
                 "mcp",
                 "--state",
-                "/Users/A B/Library/Application Support/unnamed",
+                "/Users/A B/Library/Application Support/gudo",
                 "--pane",
                 "p_9f2"
             ]

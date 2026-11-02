@@ -3,7 +3,7 @@
 //! # Hook socket protocol
 //!
 //! Agents launched by the daemon run hooks through the shim ([`brand::HOOK_BIN`]), which
-//! connects to the Unix socket named by `UN_SOCK` (or the path in `UN_ENDPOINT_FILE`) and sends
+//! connects to the Unix socket named by `GUDO_SOCK` (or the path in `GUDO_ENDPOINT_FILE`) and sends
 //! one JSON line, a [`HookRequest`]. The daemon answers with one JSON line, a
 //! [`HookResponse`], whose `stdout` the shim prints for the agent. A `PermissionRequest` is held
 //! open until a client decides (or [`PERMISSION_WAIT`] passes), which is how an approval from a
@@ -40,11 +40,11 @@ use crate::fsutil;
 /// How long a `PermissionRequest` hook waits for a decision (Claude allows 600 s; the
 /// recipe's hook timeout is 590 s).
 pub const PERMISSION_WAIT: Duration = Duration::from_secs(585);
-/// The event name the shim sends for Claude Code's status-line input (`un-hook claude
+/// The event name the shim sends for Claude Code's status-line input (`gudo-hook claude
 /// StatusLine`, the `statusLine` command in the settings the daemon launches Claude with).
 pub const STATUS_LINE_EVENT: &str = "StatusLine";
 
-/// The hook shim's agent name for account events (`un-hook account SignIn`), which sign-in
+/// The hook shim's agent name for account events (`gudo-hook account SignIn`), which sign-in
 /// panes send when the agent's login ends.
 pub const ACCOUNT_HOOK: &str = "account";
 
@@ -58,9 +58,9 @@ const MAX_REQUEST: usize = proto::MAX_FRAME_LEN;
 pub struct HookRequest {
     /// Protocol version, 1.
     pub v: u32,
-    /// The token from `UN_TOKEN`.
+    /// The token from `GUDO_TOKEN`.
     pub token: String,
-    /// The pane id from `UN_PANE_ID`.
+    /// The pane id from `GUDO_PANE_ID`.
     pub pane: String,
     /// Which agent ran the hook (`claude`, `codex`).
     pub agent: String,
@@ -614,7 +614,7 @@ impl HookServer {
         })
     }
 
-    /// The token a pane's helpers present (`UN_TOKEN`): it speaks for that pane only, so one
+    /// The token a pane's helpers present (`GUDO_TOKEN`): it speaks for that pane only, so one
     /// pane's programs cannot act as another's.
     pub fn pane_token(&self, pane: PaneId) -> String {
         fsutil::hex(ring::hmac::sign(&self.pane_key, pane.0.to_string().as_bytes()).as_ref())

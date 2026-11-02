@@ -2,7 +2,7 @@ import Foundation
 import Synchronization
 @testable import HostKit
 import TerminalCore
-import UnnamedCore
+import GudoCore
 
 struct TestError: Error, CustomStringConvertible {
     let description: String
@@ -12,7 +12,7 @@ struct TestError: Error, CustomStringConvertible {
 /// A `DaemonClientAPI` that records calls; tests push events through `listener`.
 nonisolated final class FakeClient: DaemonClientAPI {
     enum Call: Equatable {
-        case attach(UInt64?), op(UnnamedCore.LayoutOp), subscribe(UInt64), unsubscribe(UInt64)
+        case attach(UInt64?), op(GudoCore.LayoutOp), subscribe(UInt64), unsubscribe(UInt64)
         case setView(UInt64?, [UInt64]), resize(UInt64, PaneSize), input(UInt64, Data), paste(UInt64, String)
         case fetchHistory(UInt64), decide(UInt64, UInt32), reconnect, suspend, probe
     }
@@ -32,7 +32,7 @@ nonisolated final class FakeClient: DaemonClientAPI {
     func send(_ event: ClientEvent) { listener.onEvent(event: event) }
 
     func attach(sessionId: UInt64?) { record(.attach(sessionId)) }
-    func op(op: UnnamedCore.LayoutOp) -> UInt64 {
+    func op(op: GudoCore.LayoutOp) -> UInt64 {
         record(.op(op))
         return nextOp.add(1, ordering: .relaxed).oldValue
     }

@@ -2,7 +2,7 @@ import DrawingKit
 import Foundation
 import HostKit
 import UniformTypeIdentifiers
-import UnnamedCore
+import GudoCore
 #if os(iOS)
 import UIKit
 #else

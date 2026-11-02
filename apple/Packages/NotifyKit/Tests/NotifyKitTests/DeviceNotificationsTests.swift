@@ -7,11 +7,11 @@ import UserNotifications
 @Suite struct DeviceNotificationsTests {
     private let note = DevicePairedNote(
         hostId: "h1", hostName: "studio", device: String(repeating: "c", count: 64),
-        deviceName: "Sam’s iPhone", pairedAt: Date(timeIntervalSince1970: 1_800_000_000))
+        deviceName: "Mira’s iPhone", pairedAt: Date(timeIntervalSince1970: 1_800_000_000))
 
     @Test func aPairingNamesTheDeviceTheHostAndTheWayOut() {
         let content = DeviceNotifications.content(for: note, now: note.pairedAt.addingTimeInterval(60))
-        #expect(content.title == "New device paired: Sam’s iPhone")
+        #expect(content.title == "New device paired: Mira’s iPhone")
         #expect(content.body.contains("studio"))
         #expect(content.body.contains(note.pairedAt.formatted(date: .omitted, time: .shortened)))
         #expect(content.body.contains("Settings › Devices"))

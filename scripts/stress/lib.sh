@@ -1,19 +1,19 @@
 # Shared setup for the stress scripts. Source it with S=<scenario name> and BIN=<dir with
-# release unnamed-hostd and un>. It starts a daemon in a temp state dir with --no-relay under
-# ulimits and an RSS watchdog, pairs `un`, and defines U (un), sample and cleanup.
+# release gudo-hostd and gudo>. It starts a daemon in a temp state dir with --no-relay under
+# ulimits and an RSS watchdog, pairs `gudo`, and defines U (gudo), sample and cleanup.
 set -u
-BIN=${BIN:?set BIN to the directory with release unnamed-hostd and un}
-OUT=${STRESS_OUT:-${TMPDIR:-/tmp}/unnamed-stress}
+BIN=${BIN:?set BIN to the directory with release gudo-hostd and gudo}
+OUT=${STRESS_OUT:-${TMPDIR:-/tmp}/gudo-stress}
 ROOT=$OUT/run-$S
 rm -rf "$ROOT"; mkdir -p "$ROOT/state" "$ROOT/cfg"
-export XDG_CONFIG_HOME=$ROOT/cfg UN_LOG=${UN_LOG:-warn}
+export XDG_CONFIG_HOME=$ROOT/cfg GUDO_LOG=${GUDO_LOG:-warn}
 
 start_daemon() {
   (
     ulimit -H -n "${DAEMON_NOFILE:-8192}"
     ulimit -S -n "${DAEMON_NOFILE_SOFT:-${DAEMON_NOFILE:-8192}}"
     ulimit -u "${DAEMON_NPROC:-4000}"
-    exec "$BIN/unnamed-hostd" --state-dir "$ROOT/state" run --no-relay --bind 127.0.0.1:0 \
+    exec "$BIN/gudo-hostd" --state-dir "$ROOT/state" run --no-relay --bind 127.0.0.1:0 \
       --shell "${SHELL_BIN:-/bin/sh}" ${DAEMON_ARGS:-}
   ) 2>>"$ROOT/daemon.log" &
   DPID=$!
@@ -31,11 +31,11 @@ start_daemon() {
   WPID=$!
 }
 
-U() { "$BIN/un" --no-relay "$@"; }
+U() { "$BIN/gudo" --no-relay "$@"; }
 
 pair() {
   local ticket
-  ticket=$("$BIN/unnamed-hostd" --state-dir "$ROOT/state" pair --json --local --wait 10 |
+  ticket=$("$BIN/gudo-hostd" --state-dir "$ROOT/state" pair --json --local --wait 10 |
     python3 -c 'import json,sys; print(json.load(sys.stdin)["ticket"])')
   U pair "$ticket" >/dev/null
   echo "$ticket" >"$ROOT/ticket"

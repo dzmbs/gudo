@@ -118,9 +118,9 @@ struct FoldProbe: UIViewRepresentable {
 
 #if DEBUG
 /// Folds the simulator from outside without a prompt: `xcrun simctl spawn <device> notifyutil -p
-/// dev.unnamed.debug.posture.<name>` (`real`: the device's own hinge). A URL would ask first.
+/// dev.gudo.debug.posture.<name>` (`real`: the device's own hinge). A URL would ask first.
 enum DebugPostures {
-    private static let prefix = "dev.unnamed.debug.posture."
+    private static let prefix = "dev.gudo.debug.posture."
     private static let local = Notification.Name("DebugPosture")
     nonisolated(unsafe) private static var installed = false
 

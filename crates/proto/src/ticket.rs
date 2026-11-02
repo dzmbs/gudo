@@ -125,14 +125,28 @@ impl FromStr for Ticket {
     }
 }
 
+/// What follows `<verb>/` or `<verb>#` in a link into the app: `<scheme>://<verb>`, the same
+/// under the product's earlier scheme, or the universal link `https://<web domain>/<verb>`.
+/// `None` when `s` is not such a link. Case is ignored.
+pub(crate) fn link_payload<'a>(s: &'a str, verb: &str) -> Option<&'a str> {
+    [
+        format!("{}://{verb}", brand::URL_SCHEME),
+        format!("{}://{verb}", brand::legacy::URL_SCHEME),
+        format!("https://{}/{verb}", brand::WEB_DOMAIN),
+    ]
+    .iter()
+    .find_map(|head| {
+        let start = s.get(..head.len())?;
+        start
+            .eq_ignore_ascii_case(head)
+            .then(|| s[head.len()..].strip_prefix(['/', '#']))?
+    })
+}
+
 /// The base32 payload of a ticket's text, decoded.
 fn ticket_bytes(s: &str) -> Result<Vec<u8>, TicketError> {
     let s = s.trim();
-    let prefix = format!("{}://pair/", brand::URL_SCHEME);
-    let payload = match s.get(..prefix.len()) {
-        Some(head) if head.eq_ignore_ascii_case(&prefix) => &s[prefix.len()..],
-        _ => s,
-    };
+    let payload = link_payload(s, "pair").unwrap_or(s);
     let cleaned: String = payload
         .chars()
         .filter(|c| !c.is_whitespace())
@@ -249,5 +263,58 @@ impl Ticket {
             _ => TicketExtras::default(),
         };
         Ok((ticket, extras))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{GrantChain, Invite};
+
+    #[test]
+    fn tickets_parse_from_every_link_form() {
+        let ticket = Ticket {
+            v: Ticket::VERSION,
+            daemon_id: DaemonId([7; 32]),
+            addrs: vec!["127.0.0.1:4433".parse().unwrap()],
+            relay_url: None,
+            principal: PrincipalId([1; 16]),
+            secret: PairingSecret([2; 16]),
+            expires: UnixMillis(1_800_000_000_000),
+        };
+        let text = ticket.to_string();
+        let payload = text.rsplit('/').next().unwrap();
+        for link in [
+            format!("{}://pair/{payload}", brand::legacy::URL_SCHEME),
+            format!("https://{}/pair#{payload}", brand::WEB_DOMAIN),
+            format!(
+                "HTTPS://{}/PAIR/{payload}",
+                brand::WEB_DOMAIN.to_uppercase()
+            ),
+        ] {
+            assert_eq!(link.parse::<Ticket>().unwrap(), ticket, "{link}");
+        }
+        let elsewhere = format!("https://elsewhere.example/pair#{payload}");
+        assert!(elsewhere.parse::<Ticket>().is_err());
+    }
+
+    #[test]
+    fn invites_parse_from_every_link_form() {
+        let invite = Invite {
+            v: Invite::VERSION,
+            daemon_id: DaemonId([7; 32]),
+            addrs: vec![],
+            relay_url: None,
+            inviter: "Ana".into(),
+            chain: GrantChain { links: vec![] },
+        };
+        let text = invite.to_string();
+        let payload = text.rsplit('/').next().unwrap();
+        for link in [
+            format!("{}://join#{payload}", brand::legacy::URL_SCHEME),
+            format!("https://{}/join#{payload}", brand::WEB_DOMAIN),
+        ] {
+            assert!(link.parse::<Invite>().unwrap() == invite, "{link}");
+        }
     }
 }

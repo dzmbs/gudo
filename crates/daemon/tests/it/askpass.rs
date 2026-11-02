@@ -98,9 +98,9 @@ async fn askpass_prompt_goes_to_the_app_and_the_first_answer_wins() {
         "printf '%s|%s|%s|%s\\n' \"${SUDO_ASKPASS##*/}\" \"${SSH_ASKPASS##*/}\" \
          \"$SSH_ASKPASS_REQUIRE\" \"${GIT_ASKPASS##*/}\"",
     );
-    a.wait_text(pane, "un-askpass|un-askpass|prefer|un-askpass")
+    a.wait_text(pane, "gudo-askpass|gudo-askpass|prefer|gudo-askpass")
         .await;
-    let helper_path = dir.path().join("askpass/un-askpass");
+    let helper_path = dir.path().join("askpass/gudo-askpass");
     let script = std::fs::read_to_string(&helper_path).unwrap();
     assert!(script.contains(" askpass \"$@\""), "{script}");
 

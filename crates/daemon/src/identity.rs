@@ -296,7 +296,7 @@ impl Identity {
         self.lock_devices().list.len()
     }
 
-    /// The daemon key as a device id: it may sign root grants (`unnamed-hostd invite`).
+    /// The daemon key as a device id: it may sign root grants (`gudo-hostd invite`).
     pub fn daemon_device(&self) -> DeviceId {
         DeviceId(self.daemon_id().0)
     }

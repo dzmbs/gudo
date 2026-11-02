@@ -12,10 +12,10 @@
 //!    only replaces it if it is not older (rollback protection: an older app on another
 //!    device must not quietly reinstate an older helper), unless
 //!    [`BootstrapOptions::allow_downgrade`].
-//! 3. **Service** (if uploaded or not running): `unnamed-hostd service install` (systemd
+//! 3. **Service** (if uploaded or not running): `gudo-hostd service install` (systemd
 //!    `--user` / LaunchAgent, restarting an older daemon). Without a service manager
 //!    (containers, macOS without a GUI login) the daemon is started detached instead.
-//! 4. **Pair**: `unnamed-hostd pair --json --wait 30` mints a one-time ticket once the
+//! 4. **Pair**: `gudo-hostd pair --json --wait 30` mints a one-time ticket once the
 //!    daemon has recorded its endpoint.
 //!
 //! Re-running is cheap and safe: a matching, running install is reused as is.
@@ -218,7 +218,7 @@ pub struct BootstrapReport {
     pub install_path: String,
     /// SHA-256 of the installed binary, hex.
     pub sha256: String,
-    /// `unnamed://pair/…` ticket, valid for one device.
+    /// `gudo://pair/…` ticket, valid for one device.
     pub ticket: String,
     /// The daemon's endpoint id, hex.
     pub daemon_id: String,
@@ -563,8 +563,8 @@ mod tests {
     #[test]
     fn staging_sits_next_to_the_install() {
         assert_eq!(
-            staged_path(".local/bin/unnamed-hostd"),
-            ".local/bin/.unnamed-hostd.new"
+            staged_path(".local/bin/gudo-hostd"),
+            ".local/bin/.gudo-hostd.new"
         );
         assert_eq!(staged_path("hostd"), ".hostd.new");
     }

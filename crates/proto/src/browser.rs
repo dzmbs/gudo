@@ -5,7 +5,7 @@
 //!    one connection that shows the pane: the one that last sized it, else the newest. The
 //!    app decides how: a sign-in whose redirect returns to a loopback port on the host gets
 //!    that port here and a system sign-in sheet; anything else opens in its browser.
-//! 2. **Browser tools.** An agent's MCP server (`un-hook mcp`) or `un-hook browser <verb>`
+//! 2. **Browser tools.** An agent's MCP server (`gudo-hook mcp`) or `gudo-hook browser <verb>`
 //!    asks for a [`BrowserPush::Call`]: navigate, snapshot, click, type, … on the browser pane
 //!    beside the agent's pane. The app answers with
 //!    [`ClientCtl::BrowserResult`](crate::ClientCtl::BrowserResult); the daemon pushes

@@ -2,7 +2,7 @@ import XCTest
 
 /// Share Session against a real local daemon (apple/scripts/multiplayer-ui-test.sh starts it,
 /// pairs the app as the owner with `PAIR_TICKET`, and keeps a guest, "Mira Holt", joined as a
-/// viewer through the `un` CLI): presence shows Mira, the invite sheet signs a driver invite
+/// viewer through the `gudo` CLI): presence shows Mira, the invite sheet signs a driver invite
 /// (link + QR), Access & Grants lists both invites, revoking Mira removes her, and the audit log
 /// shows the join and the revocation with an intact chain. Skipped without a ticket.
 @MainActor

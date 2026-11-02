@@ -5,7 +5,7 @@
 #
 #   apple/scripts/windows-ui-test.sh [ipad-udid] [iphone-udid]
 #
-# Needs `cargo build -p hostd` (or UN_HOSTD_BIN) and the app project (xcodegen). The simulators
+# Needs `cargo build -p hostd` (or GUDO_HOSTD_BIN) and the app project (xcodegen). The simulators
 # are erased before each step (iPadOS keeps the windows of earlier runs, hidden, and a launch
 # beside them is sometimes refused); the iPad gets Stage Manager through SpringBoard's defaults.
 set -euo pipefail
@@ -13,7 +13,7 @@ set -euo pipefail
 apple="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ipad="${1:-$(xcrun simctl list devices available | grep -m1 'iPad Pro 13-inch' | grep -oE '[0-9A-F-]{36}')}"
 iphone="${2:-}"
-root="$(mktemp -d "${TMPDIR:-/tmp}/un-ui-windows.XXXXXX")"
+root="$(mktemp -d "${TMPDIR:-/tmp}/gudo-ui-windows.XXXXXX")"
 started=()
 cleanup() { for entry in "${started[@]}"; do PORT=${entry%%:*} SHELL_ARGS= "$apple/scripts/local-daemon.sh" stop "${entry#*:}" || true; done; }
 . "$apple/scripts/lib/cleanup.sh"

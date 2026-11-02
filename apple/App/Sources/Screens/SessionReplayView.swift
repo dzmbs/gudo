@@ -536,7 +536,7 @@ private struct PlaywrightTestSheet: View {
 
 // MARK: - Sharing
 
-/// A session as its `.unreplay` file.
+/// A session as its `.gudoreplay` file.
 struct ReplayFile: Transferable {
     let session: UUID
 

@@ -2,7 +2,7 @@
 import XCTest
 
 /// Shell command marks (OSC 133 from the daemon's shell integration) against a real local
-/// `unnamed-hostd`: a failed and a successful command get their gutter stripes (accessibility
+/// `gudo-hostd`: a failed and a successful command get their gutter stripes (accessibility
 /// elements `command-mark-<id>` with the outcome as value); a long-press on a command's rows
 /// offers Copy Output, Copy Command, Re-run and Ask Agent, and each does its job; ⌘↑ / ⌘↓ jump
 /// between prompts; the sidebar shows a running command; and the marks are back after the app

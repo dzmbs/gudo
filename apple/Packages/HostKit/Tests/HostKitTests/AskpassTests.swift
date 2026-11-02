@@ -1,7 +1,7 @@
 import Foundation
 import Synchronization
 import Testing
-import UnnamedCore
+import GudoCore
 @testable import HostKit
 
 /// A daemon client's askpass half: records answers, replays pushes.

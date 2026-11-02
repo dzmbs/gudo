@@ -1,7 +1,7 @@
 import Foundation
 @testable import HostKit
 import Testing
-import UnnamedCore
+import GudoCore
 
 private let me = Actor(principal: "aa", device: String(repeating: "a", count: 64))
 private let now = UInt64(Date.now.timeIntervalSince1970 * 1000)
@@ -12,7 +12,7 @@ private func device(_ key: Character, _ name: String, kind: DeviceKind = .owner,
                firstSeenMs: now - ago, grantId: kind == .guest ? "g" : nil, revoked: revoked, connected: connected)
 }
 
-private let thisIPad = DeviceInfo(device: me.device, principal: "aa", kind: .owner, name: "Sam’s iPad", firstSeenMs: now - 40 * day,
+private let thisIPad = DeviceInfo(device: me.device, principal: "aa", kind: .owner, name: "Mira’s iPad", firstSeenMs: now - 40 * day,
                                   grantId: nil, revoked: false, connected: 1)
 
 @MainActor
@@ -20,7 +20,7 @@ private func ownerSession(_ devices: [DeviceInfo], client: FakeMultiplayerClient
     client.state.withLock { $0.devices = devices }
     let session = MultiplayerSession()
     session.attach(client)
-    session.apply(.joined(info: JoinInfo(actor: me, name: "Sam’s iPad", roles: [.owner], scope: .daemon, grantId: nil, expiresMs: nil)))
+    session.apply(.joined(info: JoinInfo(actor: me, name: "Mira’s iPad", roles: [.owner], scope: .daemon, grantId: nil, expiresMs: nil)))
     session.seed(devices: devices)
     return session
 }
@@ -38,7 +38,7 @@ private func settle(_ condition: () -> Bool) async throws {
 @Suite struct DevicesTests {
     @Test func aNewPairingIsNamedAnnouncedAndListedFirst() async throws {
         let mac = device("b", "Studio Mac", ago: 10 * day)
-        let iphone = device("c", "Sam’s iPhone", ago: 0)
+        let iphone = device("c", "Mira’s iPhone", ago: 0)
         let client = FakeMultiplayerClient()
         let session = ownerSession([thisIPad, mac], client: client)
         var announced: [DeviceInfo] = []
@@ -49,7 +49,7 @@ private func settle(_ condition: () -> Bool) async throws {
         session.apply(.devicePaired(device: iphone))
 
         #expect(announced.map(\.device) == [iphone.device])
-        #expect(session.notice?.message.hasPrefix("Sam’s iPhone paired with this host") == true)
+        #expect(session.notice?.message.hasPrefix("Mira’s iPhone paired with this host") == true)
         #expect(session.ownerDevices.map(\.device) == [iphone.device, thisIPad.device, mac.device])
         try await settle { session.devices.count == 3 }
         #expect(session.freshPairings[iphone.device] != nil, "a refresh keeps the highlight")
@@ -89,7 +89,7 @@ private func settle(_ condition: () -> Bool) async throws {
         let liveGuest = device("f", "Mira", kind: .guest, ago: 3 * day, connected: 1)
         let goneGuest = device("1", "Jon", kind: .guest, ago: 0, revoked: true)
         let session = ownerSession([old, ipad, idleGuest, thisIPad, goneGuest, laptop, liveGuest])
-        #expect(session.ownerDevices.map(\.name) == ["Sam’s iPad", "Laptop", "Spare iPad", "Old Mac"])
+        #expect(session.ownerDevices.map(\.name) == ["Mira’s iPad", "Laptop", "Spare iPad", "Old Mac"])
         #expect(session.guestDevices.map(\.name) == ["Mira", "Kim", "Jon"])
     }
 
@@ -118,7 +118,7 @@ private func settle(_ condition: () -> Bool) async throws {
 
         session.apply(.hostAlert(alert: alert))
         let first = session.notice
-        session.apply(.joined(info: JoinInfo(actor: me, name: "Sam’s iPad", roles: [.owner], scope: .daemon, grantId: nil, expiresMs: nil)))
+        session.apply(.joined(info: JoinInfo(actor: me, name: "Mira’s iPad", roles: [.owner], scope: .daemon, grantId: nil, expiresMs: nil)))
         session.apply(.hostAlert(alert: alert))
 
         #expect(first?.message == "Earlier invites stopped working")

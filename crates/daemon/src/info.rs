@@ -1,21 +1,21 @@
 //! This build and machine, as [`proto::DaemonInfo`] (sent to clients before `Welcome`, and
-//! printed by `unnamed-hostd build-info --json` so a new build can be checked before it
+//! printed by `gudo-hostd build-info --json` so a new build can be checked before it
 //! replaces a running one).
 //!
 //! The build id and time come from the release tooling (`cargo xtask build-hostd-linux` sets
-//! `UN_BUILD_ID` and `UN_BUILD_UNIX` at compile time); other builds report `dev` and 0.
+//! `GUDO_BUILD_ID` and `GUDO_BUILD_UNIX` at compile time); other builds report `dev` and 0.
 
 use proto::{DaemonFeatures, DaemonInfo};
 
 /// The build id baked in at compile time, or `dev`.
-pub const BUILD_ID: &str = match option_env!("UN_BUILD_ID") {
+pub const BUILD_ID: &str = match option_env!("GUDO_BUILD_ID") {
     Some(id) => id,
     None => "dev",
 };
 
 /// When the build's source was made (Unix seconds), or 0 for `dev` builds.
 pub fn built_unix() -> u64 {
-    option_env!("UN_BUILD_UNIX")
+    option_env!("GUDO_BUILD_UNIX")
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or(0)
 }

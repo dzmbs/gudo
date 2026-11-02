@@ -11,7 +11,7 @@ final class PortsLeafPlacementTests: XCTestCase {
     private var openedTab: (workspace: Workspace, tab: TabId)?
 
     override func setUp() async throws {
-        try XCTSkipIf(!LaunchOptions.mock, "needs the mock hosts (TEST_RUNNER_UNNAMED_MOCK=1)")
+        try XCTSkipIf(!LaunchOptions.mock, "needs the mock hosts (TEST_RUNNER_GUDO_MOCK=1)")
         model = WindowModel(app: .shared)
         model.start()
         for _ in 0..<50 where model.workspace?.focusedPane == nil { try await Task.sleep(for: .milliseconds(100)) }

@@ -1,6 +1,6 @@
 import DesignSystem
 import Foundation
-import enum UnnamedCore.InstallState
+import enum GudoCore.InstallState
 
 // Data the upcoming screens show, behind protocols. The views only read these types; the wiring
 // (daemon, SSH, agent hooks) replaces the mocks in MockData.swift without touching a view.

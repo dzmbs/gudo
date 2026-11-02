@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Runs WorkflowsUITests (the palette's "/" workflows, the argument form, insert vs ⌘↩ run, New
+# Workflow from Last Command) on a simulator against a local gudo-hostd on the W3 fixtures
 # (w3-fixtures.sh: HOME is a scratch work directory, ~/proj a git repository) plus workflow
-# files: two in ~/proj/.unnamed/workflows and one global in ~/.config/unnamed/workflows.
+# files: two in ~/proj/.gudo/workflows and one global in ~/.config/gudo/workflows.
 #
 #   apple/scripts/workflows-ui-test.sh [simulator-udid] [test-name …]
 #
@@ -12,11 +13,11 @@ set -euo pipefail
 apple="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 sim="${1:-$(xcrun simctl list devices available | grep -m1 'iPad Pro 13-inch' | grep -oE '[0-9A-F-]{36}')}"
 shift || true
-state="$(mktemp -d "${TMPDIR:-/tmp}/un-workflows.XXXXXX")"
+state="$(mktemp -d "${TMPDIR:-/tmp}/gudo-workflows.XXXXXX")"
 "$apple/scripts/w3-fixtures.sh" "$state" >/dev/null
 work="$state/work"
 brand="$(sed -n 's/^BRAND_NAME *= *//p' "$apple/Brand.xcconfig" | tr '[:upper:]' '[:lower:]')"
-brand="${brand:-unnamed}"
+brand="${brand:-gudo}"
 
 mkdir -p "$work/proj/.$brand/workflows" "$work/.config/$brand/workflows"
 cat >"$work/proj/.$brand/workflows/greet.yaml" <<'EOF'

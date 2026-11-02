@@ -11,9 +11,9 @@ background panes should cost close to nothing.
 
 ## 1. How it is measured
 
-Scripts are in `scripts/perf/`. Each one starts a release `unnamed-hostd` with a temporary state
-directory and `--no-relay`, drives it with `un`, and samples the daemon process. Output goes to
-`$BENCH_OUT` (default `$TMPDIR/unnamed-bench`).
+Scripts are in `scripts/perf/`. Each one starts a release `gudo-hostd` with a temporary state
+directory and `--no-relay`, drives it with `gudo`, and samples the daemon process. Output goes to
+`$BENCH_OUT` (default `$TMPDIR/gudo-bench`).
 
 | Script | Scenario |
 |---|---|
@@ -172,7 +172,7 @@ A window opens on the workspace this device saved of each host, before the host 
 So the saved workspace costs about 1 ms to show and 0.03–0.1 s of drawing over an empty window
 (three Metal surfaces and the host's sidebar rows, debug build); the rest is the window itself.
 Before, the window showed "Connecting to This Mac…" until the host's layout arrived. Reproduce:
-`UN_HOSTD_BIN=… swift test --filter instantStartShowsTheSavedWorkspaceThenGoesLive` (HostKit) and
+`GUDO_HOSTD_BIN=… swift test --filter instantStartShowsTheSavedWorkspaceThenGoesLive` (HostKit) and
 `AppTests/InstantStartTests` (`testFirstFrameTimesWarm` prints both window times).
 
 In the app, the `launch` log category (`log stream --predicate 'subsystem == "<bundle id>" AND

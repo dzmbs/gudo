@@ -1141,7 +1141,7 @@ pub struct BootstrapReport {
     pub install_path: String,
     /// SHA-256 of the installed binary, hex.
     pub sha256: String,
-    /// `unnamed://pair/…`, for [`DaemonClient::connect`](crate::DaemonClient::connect).
+    /// `gudo://pair/…`, for [`DaemonClient::connect`](crate::DaemonClient::connect).
     pub ticket: String,
     /// The daemon's endpoint id, hex.
     pub daemon_id: String,

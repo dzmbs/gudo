@@ -51,19 +51,61 @@ fn run(cmd: &mut Command) -> Result<()> {
 }
 
 #[cfg(target_os = "linux")]
-fn unit_path() -> Result<PathBuf> {
+fn unit_dir() -> Result<PathBuf> {
     let config = std::env::var_os("XDG_CONFIG_HOME")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .map_or_else(|| home().map(|h| h.join(".config")), Ok)?;
-    Ok(config
-        .join("systemd/user")
-        .join(format!("{}.service", brand::DAEMON_BIN)))
+    Ok(config.join("systemd/user"))
 }
 
-/// Installs and (re)starts the service.
 #[cfg(target_os = "linux")]
+fn unit_path() -> Result<PathBuf> {
+    Ok(unit_dir()?.join(format!("{}.service", brand::DAEMON_BIN)))
+}
+
+#[cfg(target_os = "linux")]
+fn legacy_unit() -> String {
+    format!("{}.service", brand::legacy::DAEMON_BIN)
+}
+
+/// Whether the service installed under the product's earlier name is still there.
+#[cfg(target_os = "linux")]
+pub fn legacy_installed() -> bool {
+    unit_dir().is_ok_and(|dir| dir.join(legacy_unit()).exists())
+}
+
+/// Stops and removes the service installed under the product's earlier name. The file goes
+/// first: stopping it ends this process too when it runs as that service.
+#[cfg(target_os = "linux")]
+fn retire_legacy() -> Result<()> {
+    let path = unit_dir()?.join(legacy_unit());
+    if !path.exists() {
+        return Ok(());
+    }
+    let unit = legacy_unit();
+    let _ = run(Command::new("systemctl").args(["--user", "disable", &unit]));
+    std::fs::remove_file(&path)?;
+    let _ = run(Command::new("systemctl").args(["--user", "daemon-reload"]));
+    let _ = run(Command::new("systemctl").args(["--user", "stop", &unit]));
+    Ok(())
+}
+
+/// Installs and (re)starts the service, replacing one installed under the earlier name.
 pub fn install(state_dir: &Path) -> Result<()> {
+    retire_legacy()?;
+    install_exe(&exe()?, state_dir)
+}
+
+/// Run by a daemon upgraded in place under the earlier name's service: starts the service
+/// for `exe` (the same build under today's name), then stops the old one, ending this process.
+pub fn hand_over(exe: &Path, state_dir: &Path) -> Result<()> {
+    install_exe(exe, state_dir)?;
+    retire_legacy()
+}
+
+#[cfg(target_os = "linux")]
+fn install_exe(exe: &Path, state_dir: &Path) -> Result<()> {
     let path = unit_path()?;
     let unit = format!(
         "[Unit]\n\
@@ -80,7 +122,7 @@ pub fn install(state_dir: &Path) -> Result<()> {
          [Install]\n\
          WantedBy=default.target\n",
         name = brand::PRODUCT_NAME,
-        exe = systemd_word(&exe()?)?,
+        exe = systemd_word(exe)?,
         state = systemd_word(state_dir)?,
     );
     std::fs::create_dir_all(path.parent().expect("unit path has a parent"))?;
@@ -114,10 +156,15 @@ pub fn uninstall() -> Result<()> {
 }
 
 #[cfg(target_os = "macos")]
-fn plist_path() -> Result<PathBuf> {
+fn plist_path_for(label: &str) -> Result<PathBuf> {
     Ok(home()?
         .join("Library/LaunchAgents")
-        .join(format!("{}.plist", brand::SERVICE_LABEL)))
+        .join(format!("{label}.plist")))
+}
+
+#[cfg(target_os = "macos")]
+fn plist_path() -> Result<PathBuf> {
+    plist_path_for(brand::SERVICE_LABEL)
 }
 
 #[cfg(target_os = "macos")]
@@ -126,11 +173,34 @@ fn gui_domain() -> String {
     format!("gui/{}", unsafe { libc::getuid() })
 }
 
-/// Installs and starts the LaunchAgent.
+/// Whether the LaunchAgent installed under the product's earlier name is still there.
 #[cfg(target_os = "macos")]
-pub fn install(state_dir: &Path) -> Result<()> {
+pub fn legacy_installed() -> bool {
+    plist_path_for(brand::legacy::SERVICE_LABEL).is_ok_and(|p| p.exists())
+}
+
+/// Stops and removes the LaunchAgent installed under the product's earlier name. The file
+/// goes first: stopping it ends this process too when it runs as that agent.
+#[cfg(target_os = "macos")]
+fn retire_legacy() -> Result<()> {
+    let path = plist_path_for(brand::legacy::SERVICE_LABEL)?;
+    if !path.exists() {
+        return Ok(());
+    }
+    std::fs::remove_file(&path)?;
+    let _ = Command::new("launchctl")
+        .args([
+            "bootout",
+            &format!("{}/{}", gui_domain(), brand::legacy::SERVICE_LABEL),
+        ])
+        .status();
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn install_exe(exe: &Path, state_dir: &Path) -> Result<()> {
     let path = plist_path()?;
-    let logs = home()?.join("Library/Logs").join(brand::DIR_NAME);
+    let logs = home()?.join("Library/Logs").join(brand::MAC_DIR_NAME);
     std::fs::create_dir_all(&logs)?;
     let plist = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -153,7 +223,7 @@ pub fn install(state_dir: &Path) -> Result<()> {
 </plist>
 "#,
         label = brand::SERVICE_LABEL,
-        exe = xml_text(&exe()?),
+        exe = xml_text(exe),
         state = xml_text(state_dir),
         logs = xml_text(&logs),
     );
@@ -193,8 +263,8 @@ mod tests {
     #[test]
     fn unit_paths_stay_one_literal_word() {
         assert_eq!(
-            systemd_word(Path::new("/home/a b/bin/un")).unwrap(),
-            r#""/home/a b/bin/un""#
+            systemd_word(Path::new("/home/a b/bin/gudo")).unwrap(),
+            r#""/home/a b/bin/gudo""#
         );
         assert_eq!(
             systemd_word(Path::new(r#"/x/%h$HOME"q\"#)).unwrap(),

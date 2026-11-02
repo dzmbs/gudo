@@ -1,5 +1,5 @@
-//! Load and chaos driver for a running daemon. It reads the device key and ticket `un pair`
-//! saved (`$XDG_CONFIG_HOME/unnamed`) and drives the daemon over the real protocol. The
+//! Load and chaos driver for a running daemon. It reads the device key and ticket `gudo pair`
+//! saved (`$XDG_CONFIG_HOME/gudo`) and drives the daemon over the real protocol. The
 //! scenarios in `scripts/stress/` start the daemon and call this; results go to stdout.
 
 mod outages;
@@ -171,13 +171,13 @@ fn config_dir() -> PathBuf {
         .unwrap_or_else(|| {
             PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config")
         })
-        .join("unnamed")
+        .join("gudo")
 }
 
 fn saved() -> Result<(Vec<u8>, String)> {
     let dir = config_dir();
-    let key = std::fs::read(dir.join("un.key")).context("un.key: run `un pair` first")?;
-    let ticket = std::fs::read_to_string(dir.join("un.ticket"))?
+    let key = std::fs::read(dir.join("gudo.key")).context("gudo.key: run `gudo pair` first")?;
+    let ticket = std::fs::read_to_string(dir.join("gudo.ticket"))?
         .trim()
         .to_owned();
     Ok((key, ticket))
@@ -201,7 +201,7 @@ impl Conn {
         let mut config = ClientConfig::new(key);
         config.relay = RelayMode::Disabled;
         config.mirror_vt = mirror;
-        // A line from `un invite` joins as a guest; anything else is a pairing ticket.
+        // A line from `gudo invite` joins as a guest; anything else is a pairing ticket.
         let client = if ticket.contains("join") {
             Client::join_on(handle, ticket, config, listener)?
         } else {

@@ -1,6 +1,7 @@
 {
   "name": "agent-browser-bundle",
   "private": true,
+  "license": "Apache-2.0",
   "description": "Builds the agent browser's page scripts (apple/scripts/build-agent-browser.sh).",
   "devDependencies": {
     "@rrweb/record": "2.1.7",

@@ -1,5 +1,5 @@
 import Foundation
-import UnnamedCore
+import GudoCore
 
 /// The user's own acceptance of Microsoft's terms for VS Code on a host: the Visual Studio Code
 /// licence (the `code` CLI the host downloads from Microsoft), the VS Code Server licence

@@ -2,7 +2,7 @@ import Foundation
 import HostKit
 import NotifyKit
 import os
-import UnnamedCore
+import GudoCore
 import UserNotifications
 
 /// Where notification requests go: the system center, or a recorder in tests.

@@ -1,4 +1,4 @@
-//! The browser tools agents use (`un-hook mcp`, `un-hook browser <verb>`): the page beside the
+//! The browser tools agents use (`gudo-hook mcp`, `gudo-hook browser <verb>`): the page beside the
 //! agent's pane in the app the user is looking at. Each call goes to the app through the
 //! daemon ([`BrowserAsk::Tool`]); the app answers with JSON (`text`, optional `image`), which
 //! becomes the tool's content here.
@@ -512,7 +512,7 @@ fn save_text(text: &str) -> io::Result<PathBuf> {
     save_private("snapshot", "txt", text.as_bytes())
 }
 
-/// `un-hook browser <verb> [json | key=value …]`: the same tools from a shell (Codex, scripts).
+/// `gudo-hook browser <verb> [json | key=value …]`: the same tools from a shell (Codex, scripts).
 /// `<verb>` is the tool's name without `browser_`. Prints the text and saves an image to a file.
 pub fn cli(args: &[String], backend: &mut dyn Backend) -> i32 {
     let Some(verb) = args.first() else {

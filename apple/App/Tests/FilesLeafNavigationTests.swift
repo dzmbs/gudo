@@ -22,7 +22,7 @@ final class FilesLeafNavigationTests: XCTestCase {
     private let root = MockFileSource().root
 
     override func setUp() async throws {
-        try XCTSkipIf(!LaunchOptions.mock, "needs the mock hosts (TEST_RUNNER_UNNAMED_MOCK=1)")
+        try XCTSkipIf(!LaunchOptions.mock, "needs the mock hosts (TEST_RUNNER_GUDO_MOCK=1)")
         model = WindowModel(app: .shared)
         model.start()
         let frame = NSRect(x: -30000, y: -30000, width: 1180, height: 760)

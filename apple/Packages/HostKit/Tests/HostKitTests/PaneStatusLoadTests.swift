@@ -4,7 +4,7 @@ import Observation
 import PaneLayout
 import Synchronization
 import Testing
-import UnnamedCore
+import GudoCore
 
 /// A fleet of agents reporting hundreds of times a second: views that show one pane see that
 /// pane's changes only, and updates reach views at a bounded rate, newest per pane.

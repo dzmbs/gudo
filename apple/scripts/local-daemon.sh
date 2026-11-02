@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Starts a local unnamed-hostd for app tests (relays off, fixed loopback port) and prints a
+# Starts a local gudo-hostd for app tests (relays off, fixed loopback port) and prints a
 # pairing ticket. The simulator shares the Mac's network, so the iPad app can pair with it.
 #
 #   apple/scripts/local-daemon.sh start [state-dir]   # prints the ticket
 #   apple/scripts/local-daemon.sh stop  [state-dir]
 #
-# UN_HOSTD_BIN overrides the daemon (default: target/debug/unnamed-hostd); PORT the UDP port.
+# GUDO_HOSTD_BIN overrides the daemon (default: target/debug/gudo-hostd); PORT the UDP port.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-bin="${UN_HOSTD_BIN:-$repo_root/target/debug/unnamed-hostd}"
-state="${2:-${TMPDIR:-/tmp}/un-app-test-daemon}"
+bin="${GUDO_HOSTD_BIN:-$repo_root/target/debug/gudo-hostd}"
+state="${2:-${TMPDIR:-/tmp}/gudo-app-test-daemon}"
 port="${PORT:-47011}"
 
 case "${1:-start}" in

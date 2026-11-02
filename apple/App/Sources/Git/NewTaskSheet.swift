@@ -1,7 +1,7 @@
 import DesignSystem
 import HostKit
 import SwiftUI
-import UnnamedCore
+import GudoCore
 
 /// New Agent (⇧⌘N, every + and the palette; one flow for agents and worktree tasks): pick the
 /// host and repository, a friendly generated name, the branch (derived from the name), and

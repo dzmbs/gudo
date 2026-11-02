@@ -3,7 +3,7 @@ import DrawingKit
 import os
 import PencilKit
 import UIKit
-import UnnamedCore
+import GudoCore
 
 /// Pencil (and, with Pen, finger) ink on the draw overlay: PencilKit draws the live stroke
 /// (Apple's latency and prediction), points stream to other clients every ~16 ms (`inkLive`),

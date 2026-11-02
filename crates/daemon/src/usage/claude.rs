@@ -3,7 +3,7 @@
 //!   status-line command's stdin has `rate_limits.five_hour` / `seven_day` (and a gateway's
 //!   `spend_limit`), each `{used_percentage: 0–100, resets_at: Unix seconds}`, for Pro and Max
 //!   subscribers after the session's first response. Sessions the daemon launches run
-//!   `un-hook claude StatusLine` as their status line (which then runs the user's own), so the
+//!   `gudo-hook claude StatusLine` as their status line (which then runs the user's own), so the
 //!   daemon sees it.
 //! - **`claude -p /usage --output-format stream-json --verbose`** (documented, experimental):
 //!   the assistant message's `usage_report.rate_limits.limits[]` rows (`kind` `session` /

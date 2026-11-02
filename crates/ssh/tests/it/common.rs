@@ -30,10 +30,10 @@ pub fn env() -> Env {
         })
     };
     Env {
-        host: var("UN_SSH_TEST_HOST"),
-        user: var("UN_SSH_TEST_USER"),
-        password: var("UN_SSH_TEST_PASSWORD"),
-        keys: PathBuf::from(var("UN_SSH_TEST_KEYS")),
+        host: var("GUDO_SSH_TEST_HOST"),
+        user: var("GUDO_SSH_TEST_USER"),
+        password: var("GUDO_SSH_TEST_PASSWORD"),
+        keys: PathBuf::from(var("GUDO_SSH_TEST_KEYS")),
     }
 }
 

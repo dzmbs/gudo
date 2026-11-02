@@ -1,7 +1,7 @@
 import DesignSystem
 import HostKit
 import SwiftUI
-import UnnamedCore
+import GudoCore
 
 // Knock to join and approval rules (docs/DAEMON.md §6.9). Someone with a knock link waits
 // until the owner lets them in: the owner sees them here (a banner over the terminal, the
@@ -62,7 +62,7 @@ extension Knock {
     /// The knocker as the design system draws people.
     var avatar: DesignSystem.Participant {
         DesignSystem.Participant(id: actor.device, name: name.isEmpty ? "Guest" : name, role: .viewer,
-                                 hue: UnnamedCore.Participant.hue(for: actor.principal))
+                                 hue: GudoCore.Participant.hue(for: actor.principal))
     }
 }
 

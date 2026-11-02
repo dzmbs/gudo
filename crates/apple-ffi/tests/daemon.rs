@@ -4,7 +4,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use unnamed_core::{
+use gudo_core::{
     Axis, ClientConfig, ClientEvent, ClientEventListener, DaemonClient, LayoutOp, OpOutcome,
     PaneLaunch, PaneSize, RelayMode, generate_device_key,
 };
@@ -133,7 +133,7 @@ fn connect_attach_split_echo() {
     });
     assert!(matches!(
         layout.tabs[0].nodes[0],
-        unnamed_core::LayoutNode::Split {
+        gudo_core::LayoutNode::Split {
             axis: Axis::Vertical,
             first: 1,
             second: 2,

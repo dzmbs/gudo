@@ -262,7 +262,7 @@ final class BrowserUITests: XCTestCase {
         shot("back-forward")
     }
 
-    /// An agent's browser tools from its terminal (`un-hook browser`, as Codex would use them):
+    /// An agent's browser tools from its terminal (`gudo-hook browser`, as Codex would use them):
     /// navigate opens a page beside the pane and answers with a snapshot, refs act on it, a
     /// purchase waits for the user's Allow on the device, and a screenshot comes back.
     func testAgentDrivesThePageBesideItsPane() throws {

@@ -16,7 +16,7 @@ df -h "$MNT" | tail -1
 sample "disk full"
 for i in $(seq 20); do U tab new >/dev/null 2>&1 || echo "tab new failed"; done
 U tab rename full >/dev/null 2>&1
-"$BIN/un-stress" latency --secs 3
+"$BIN/gudo-stress" latency --secs 3
 sleep 3
 alive && echo "daemon alive with a full disk" || echo "DAEMON DIED"
 grep -iE 'No space|ENOSPC|saving' "$ROOT/daemon.log" | sed 's/\x1b\[[0-9;]*m//g' | cut -c28-200 | sort | uniq -c | head -5

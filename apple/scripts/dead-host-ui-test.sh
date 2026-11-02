@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs DeadHostPairingUITests on an iPad simulator: pairs a local unnamed-hostd (daemon 1),
+# Runs DeadHostPairingUITests on an iPad simulator: pairs a local gudo-hostd (daemon 1),
 # stops it, then pairs a fresh one on another port (daemon 2) with daemon 1 dead in the app's
 # saved hosts and window state, as consecutive UI suites do. Daemon 2's ticket is minted
 # together with others (the race that lost tickets and failed those suites).
@@ -7,14 +7,14 @@
 #   apple/scripts/dead-host-ui-test.sh [simulator-udid]
 #
 # Needs `cargo build -p hostd` and the app project (xcodegen). PORT sets daemon 1's port
-# (daemon 2 uses PORT+1); DERIVED_DATA the derived data folder; UN_HOSTD_BIN the daemon.
+# (daemon 2 uses PORT+1); DERIVED_DATA the derived data folder; GUDO_HOSTD_BIN the daemon.
 set -euo pipefail
 
 apple="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-bin="${UN_HOSTD_BIN:-$apple/../target/debug/unnamed-hostd}"
+bin="${GUDO_HOSTD_BIN:-$apple/../target/debug/gudo-hostd}"
 sim="${1:-$(xcrun simctl list devices available | grep -m1 'iPad Pro 13-inch' | grep -oE '[0-9A-F-]{36}')}"
-first="$(mktemp -d "${TMPDIR:-/tmp}/un-dead-host-1.XXXXXX")"
-second="$(mktemp -d "${TMPDIR:-/tmp}/un-dead-host-2.XXXXXX")"
+first="$(mktemp -d "${TMPDIR:-/tmp}/gudo-dead-host-1.XXXXXX")"
+second="$(mktemp -d "${TMPDIR:-/tmp}/gudo-dead-host-2.XXXXXX")"
 port="${PORT:-$((47700 + RANDOM % 100 * 2))}"
 log="${TMPDIR:-/tmp}/dead-host-ui-test.log"
 : >"$log"

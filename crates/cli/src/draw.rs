@@ -141,7 +141,7 @@ pub(crate) async fn run(conn: &mut Conn, cmd: DrawCmd) -> Result<()> {
             if pure_ink {
                 let (_, s) = conn.client.artifact_scene(id).context("scene")?;
                 if version.is_some_and(|v| v != s.version) {
-                    bail!("past versions are shown with --mode kitty, or `un draw export`");
+                    bail!("past versions are shown with --mode kitty, or `gudo draw export`");
                 }
                 print!("{}", summary(&s));
                 let img = drawing::rasterize(

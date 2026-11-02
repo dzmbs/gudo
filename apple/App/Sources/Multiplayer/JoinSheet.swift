@@ -1,7 +1,7 @@
 import DesignSystem
 import HostKit
 import SwiftUI
-import UnnamedCore
+import GudoCore
 
 /// Joining someone's host: paste (or open) an invite link, read who invites and with which
 /// rights before anything is dialled, then join. Deep links (`<scheme>://join/…`) open this
@@ -255,7 +255,7 @@ private struct JoinCard: View {
             HStack(spacing: DS.Space.m) {
                 PresenceAvatar(DesignSystem.Participant(
                     id: info.daemonId, name: info.inviter.isEmpty ? "Host" : info.inviter, role: .owner,
-                    hue: UnnamedCore.Participant.hue(for: info.daemonId)), size: 40)
+                    hue: GudoCore.Participant.hue(for: info.daemonId)), size: 40)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(info.inviter.isEmpty ? "You're invited" : "\(info.inviter) invites you")
                         .font(DS.Font.title)

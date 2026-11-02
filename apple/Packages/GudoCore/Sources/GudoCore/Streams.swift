@@ -1,4 +1,4 @@
-// Hand-written conveniences over the generated bindings (UnnamedCore.swift).
+// Hand-written conveniences over the generated bindings (GudoCore.swift).
 
 /// A `ClientEventListener` that turns events into an `AsyncStream`.
 ///

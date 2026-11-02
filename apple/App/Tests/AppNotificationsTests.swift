@@ -1,6 +1,6 @@
 import HostKit
 import NotifyKit
-import UnnamedCore
+import GudoCore
 import UserNotifications
 import XCTest
 @testable import App

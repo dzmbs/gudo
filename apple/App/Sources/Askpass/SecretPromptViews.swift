@@ -2,7 +2,7 @@ import DesignSystem
 import HostKit
 import PaneLayout
 import SwiftUI
-import UnnamedCore
+import GudoCore
 
 extension Workspace {
     /// The window's native password prompts (daemon hosts only).

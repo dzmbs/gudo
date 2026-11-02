@@ -97,7 +97,7 @@ pub trait WorkspaceListener: Send + Sync {
     fn on_workspace_event(&self, event: WorkspaceEvent);
 }
 
-/// A [`WorkspaceListener`] that queues events for async Rust consumers (the `un` CLI, tests).
+/// A [`WorkspaceListener`] that queues events for async Rust consumers (the `gudo` CLI, tests).
 pub struct WorkspaceEventQueue {
     tx: mpsc::UnboundedSender<WorkspaceEvent>,
 }

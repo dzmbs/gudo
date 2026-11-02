@@ -10,7 +10,7 @@ use proto::{
     SignedGrant, Ticket,
 };
 
-use crate::conn::{Route, endpoint_builder, recv, send, ticket_addr};
+use crate::conn::{Route, connect_daemon, endpoint_builder, recv, send, ticket_addr};
 use crate::{ClientConfig, ConnectOptions};
 
 /// How often the waiting connection pings, so idle timeouts and NATs keep it open.
@@ -85,8 +85,7 @@ pub async fn knock(
     };
     let result = async {
         let addr = ticket_addr(&ticket, &route).map_err(|e| unreachable(&e))?;
-        let conn = endpoint
-            .connect(addr, proto::ALPN)
+        let conn = connect_daemon(&endpoint, addr)
             .await
             .map_err(|e| unreachable(&e))?;
         // Dropping the future (the user stopped waiting) hangs up at once, so the owner's

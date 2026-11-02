@@ -2,7 +2,7 @@ import Foundation
 import Observation
 import os
 import PaneLayout
-import UnnamedCore
+import GudoCore
 
 /// What a window needs from a host, whatever kind it is: a layout store, pane backends, a
 /// status, and the lifecycle hooks (04-mobile-ux R1–R12). The connection is a stable logical
@@ -139,7 +139,7 @@ public final class DaemonConnection: HostConnection {
         self.ticket = ticket
         self.dialer = dialer
         attachSession = session
-        var sendOp: ((UnnamedCore.LayoutOp) -> UInt64)?
+        var sendOp: ((GudoCore.LayoutOp) -> UInt64)?
         layout = DaemonLayoutStore { op in sendOp?(op) ?? 0 }
         let echo = AsyncStream<Duration>.makeStream()
         let stalls = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
@@ -617,7 +617,7 @@ public enum HostError: Error, Equatable, LocalizedError {
 }
 
 nonisolated enum Log {
-    static let subsystem = Bundle.main.bundleIdentifier ?? "dev.unnamed.app"
+    static let subsystem = Bundle.main.bundleIdentifier ?? "dev.gudo.app"
 }
 
 /// A one-time message about a host, shown as a toast.

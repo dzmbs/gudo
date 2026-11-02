@@ -1,10 +1,10 @@
 import DesignSystem
 import HostKit
 import SwiftUI
-import UnnamedCore
+import GudoCore
 
 /// The core's agent kind (the app's own `AgentKind` also names other programs).
-typealias AccountAgent = UnnamedCore.AgentKind
+typealias AccountAgent = GudoCore.AgentKind
 
 /// Settings ▸ Agents ▸ Accounts: each owned host's Claude Code and Codex sign-ins (docs/DAEMON.md
 /// "Agent accounts"). An account is a directory on the host the agent is launched with; signing

@@ -55,8 +55,8 @@ impl ClaudeCode {
     ///
     /// ```
     /// use std::path::Path;
-    /// let add = agents::ClaudeCode::user_mcp_command("claude", Path::new("/b/un-hook"), Path::new("/s"), true);
-    /// assert_eq!(add.join(" "), "claude mcp add --scope user unnamed -- /b/un-hook mcp --state /s");
+    /// let add = agents::ClaudeCode::user_mcp_command("claude", Path::new("/b/gudo-hook"), Path::new("/s"), true);
+    /// assert_eq!(add.join(" "), "claude mcp add --scope user gudo -- /b/gudo-hook mcp --state /s");
     /// ```
     pub fn user_mcp_command(
         program: &str,
@@ -745,23 +745,23 @@ mod tests {
         assert!(
             spec.env
                 .iter()
-                .any(|(k, v)| k == "UN_PANE_ID" && v == "p_9f2")
+                .any(|(k, v)| k == "GUDO_PANE_ID" && v == "p_9f2")
         );
         assert_eq!(spec.files[0].path, ClaudeCode::settings_path(&ctx));
         let settings: Value = serde_json::from_str(&spec.files[0].contents).unwrap();
         assert_eq!(
             settings["hooks"]["PermissionRequest"][0]["hooks"][0]["command"],
-            "/opt/un/bin/un-hook claude PermissionRequest"
+            "/opt/gudo/bin/gudo-hook claude PermissionRequest"
         );
         assert_eq!(
             settings["statusLine"]["command"],
-            "/opt/un/bin/un-hook claude StatusLine"
+            "/opt/gudo/bin/gudo-hook claude StatusLine"
         );
         assert_eq!(
             settings["hooks"]["PreToolUse"][0]["matcher"],
             "AskUserQuestion"
         );
-        assert_eq!(settings["permissions"]["allow"], json!(["mcp__unnamed"]));
+        assert_eq!(settings["permissions"]["allow"], json!(["mcp__gudo"]));
     }
 
     #[test]
@@ -809,9 +809,9 @@ mod tests {
             config,
             json!({
                 "mcpServers": {
-                    "unnamed": {
+                    "gudo": {
                         "type": "stdio",
-                        "command": "/opt/un/bin/un-hook",
+                        "command": "/opt/gudo/bin/gudo-hook",
                         "args": ["mcp", "--state", "/state", "--pane", "p_9f2"],
                     }
                 }

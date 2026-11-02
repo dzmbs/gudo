@@ -2,22 +2,22 @@ import Foundation
 import Observation
 import os
 import Synchronization
-import UnnamedCore
+import GudoCore
 
 // Multiplayer on a daemon connection (docs/DAEMON.md §6, docs/APPLE-FFI.md "Multiplayer"):
 // who this connection is, who else is here and where, control leases, the composer path for
 // prompters, invites, grants, revocation and the audit log. Views bind to `MultiplayerSession`
 // (one per `DaemonConnection`); they never hold the client.
 
-/// The multiplayer half of `UnnamedCore.DaemonClient`, so the session can be tested against a
+/// The multiplayer half of `GudoCore.DaemonClient`, so the session can be tested against a
 /// fake. Requests are `async throws` (`MultiplayerError`); the rest answer from the last push.
 nonisolated public protocol MultiplayerClientAPI: AnyObject, Sendable {
     func setMultiplayerListener(listener: any MultiplayerListener)
     func me() -> JoinInfo?
-    func participantList() -> [UnnamedCore.Participant]
+    func participantList() -> [GudoCore.Participant]
     func lease(paneId: UInt64) -> Lease?
     func setTyping(paneId: UInt64, typing: Bool)
-    func participants() async throws -> [UnnamedCore.Participant]
+    func participants() async throws -> [GudoCore.Participant]
     func setName(name: String) async throws
     func createInvite(options: InviteOptions) async throws -> CreatedInvite
     func listGrants() async throws -> [GrantInfo]
@@ -193,7 +193,7 @@ public final class MultiplayerSession {
     /// Who this connection is (roles, scope, grant), after every handshake.
     public private(set) var me: JoinInfo?
     /// Everyone connected, one entry per device, this device included.
-    public private(set) var participants: [UnnamedCore.Participant] = []
+    public private(set) var participants: [GudoCore.Participant] = []
     /// Control leases by pane.
     public private(set) var leases: [UInt64: Lease] = [:]
     /// Someone asked for a lease this principal holds (the holder's accept/keep prompt).
@@ -501,8 +501,8 @@ public final class MultiplayerSession {
     public var isViewOnly: Bool { me != nil && !canDrive && !canPrompt }
 
     /// Other people connected (one entry per principal, the most active device).
-    public var others: [UnnamedCore.Participant] {
-        var byPrincipal: [String: UnnamedCore.Participant] = [:]
+    public var others: [GudoCore.Participant] {
+        var byPrincipal: [String: GudoCore.Participant] = [:]
         for person in participants where person.actor.principal != myPrincipal {
             if let existing = byPrincipal[person.actor.principal], existing.state.rank <= person.state.rank { continue }
             byPrincipal[person.actor.principal] = person
@@ -511,7 +511,7 @@ public final class MultiplayerSession {
     }
 
     /// People focused on a pane (other than this device's principal).
-    public func people(in pane: UInt64) -> [UnnamedCore.Participant] {
+    public func people(in pane: UInt64) -> [GudoCore.Participant] {
         others.filter { $0.focus == pane }
     }
 
@@ -807,7 +807,7 @@ public final class MultiplayerSession {
     }
 
     /// Guests connected now, one per person.
-    public var guests: [UnnamedCore.Participant] {
+    public var guests: [GudoCore.Participant] {
         others.filter { $0.grantId != nil }
     }
 
@@ -838,7 +838,7 @@ public final class MultiplayerSession {
 
     /// Disconnects a person now and keeps their device out; links stay for everyone else.
     @discardableResult
-    public func remove(_ person: UnnamedCore.Participant) async -> RevokeResult? {
+    public func remove(_ person: GudoCore.Participant) async -> RevokeResult? {
         await revoke(.device(device: person.actor.device))
     }
 
@@ -1021,10 +1021,10 @@ public final class MultiplayerSession {
 
     /// "Kim joined", "Kim and Rex left": once per person, not per device, and not for the
     /// list that arrives on (re)connecting.
-    private func announceArrivals(from old: [UnnamedCore.Participant], to new: [UnnamedCore.Participant]) {
+    private func announceArrivals(from old: [GudoCore.Participant], to new: [GudoCore.Participant]) {
         defer { hasRoster = true }
         guard hasRoster, let me = myPrincipal else { return }
-        func people(_ list: [UnnamedCore.Participant]) -> [String: String] {
+        func people(_ list: [GudoCore.Participant]) -> [String: String] {
             Dictionary(list.filter { $0.actor.principal != me }.map { ($0.actor.principal, $0.name) }, uniquingKeysWith: { a, _ in a })
         }
         let before = people(old), after = people(new)
@@ -1097,7 +1097,7 @@ public final class MultiplayerSession {
     // MARK: Previews
 
     /// A session filled with sample data (previews, `-mock` screenshots).
-    public static func preview(me: JoinInfo, participants: [UnnamedCore.Participant], leases: [Lease] = [], peers: [Peer] = [],
+    public static func preview(me: JoinInfo, participants: [GudoCore.Participant], leases: [Lease] = [], peers: [Peer] = [],
                                client: (any MultiplayerClientAPI)? = nil) -> MultiplayerSession {
         let session = MultiplayerSession()
         session.me = me

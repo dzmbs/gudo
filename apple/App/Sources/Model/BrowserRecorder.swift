@@ -18,7 +18,7 @@ import WebKit
 final class BrowserRecorder {
     static let shared = BrowserRecorder()
 
-    static let world = WKContentWorld.world(name: "unnamed-replay")
+    static let world = WKContentWorld.world(name: "gudo-replay")
 
     /// A session ends after this long without an action; the next starts another.
     var idleGap: TimeInterval = 15 * 60
@@ -48,7 +48,7 @@ final class BrowserRecorder {
     static func install(in controller: WKUserContentController, page id: UUID) {
         controller.addUserScript(WKUserScript(source: rrweb, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: world))
         controller.addUserScript(WKUserScript(source: bootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: world))
-        controller.addScriptMessageHandler(Handler(page: id), contentWorld: world, name: "unReplay")
+        controller.addScriptMessageHandler(Handler(page: id), contentWorld: world, name: "gudoReplay")
     }
 
     /// A page that can record (its configuration went through `install`).
@@ -80,7 +80,7 @@ final class BrowserRecorder {
             current = Live(session: session, lastCheckout: entry.time)
             live[entry.page] = current
             store.cleanUp(keeping: liveSessions)
-            Task { _ = try? await page.run("window.__unReplay && window.__unReplay.start()", in: Self.world) }
+            Task { _ = try? await page.run("window.__gudoReplay && window.__gudoReplay.start()", in: Self.world) }
         }
         guard var current else { return }
         let index = current.session.actions.count
@@ -96,7 +96,7 @@ final class BrowserRecorder {
             await previous?.value
             let frame = await Self.keyframe(page)
             guard let self, var session = self.live[entry.page]?.session ?? self.store.session(id) else { return }
-            if checkout { _ = try? await page.run("window.__unReplay && window.__unReplay.checkout()", in: Self.world) }
+            if checkout { _ = try? await page.run("window.__gudoReplay && window.__gudoReplay.checkout()", in: Self.world) }
             if let frame, let name = self.store.writeKeyframe(frame, session: id, action: index), index < session.actions.count {
                 session.actions[index].keyframe = name
                 if self.live[entry.page]?.session.id == id { self.live[entry.page]?.session.actions[index].keyframe = name }
@@ -119,7 +119,7 @@ final class BrowserRecorder {
     /// Waits for a session's pictures and events to be on disk.
     func flush(_ page: UUID) async {
         guard let webPage = pages[page]?.page, let id = live[page]?.session.id else { return }
-        _ = try? await webPage.run("window.__unReplay && window.__unReplay.flush()", in: Self.world)
+        _ = try? await webPage.run("window.__gudoReplay && window.__gudoReplay.flush()", in: Self.world)
         await saving[id]?.value
     }
 
@@ -146,7 +146,7 @@ final class BrowserRecorder {
             let url = frame.request.url?.absoluteString ?? ""
             Task {
                 _ = try? await webPage.run(
-                    "window.__unReplay && window.__unReplay.frame(message, origin, url)",
+                    "window.__gudoReplay && window.__gudoReplay.frame(message, origin, url)",
                     arguments: ["message": message, "origin": origin, "url": url], in: Self.world)
             }
             return nil
@@ -194,7 +194,7 @@ final class BrowserRecorder {
 
     // MARK: Page scripts
 
-    /// rrweb's recorder (apple/scripts/build-agent-browser.sh), as `__unRRWeb`.
+    /// rrweb's recorder (apple/scripts/build-agent-browser.sh), as `__gudoRRWeb`.
     static let rrweb: String = {
         guard let url = Bundle.main.url(forResource: "rrweb-record", withExtension: "js"),
               let text = try? String(contentsOf: url, encoding: .utf8)
@@ -207,8 +207,8 @@ final class BrowserRecorder {
     /// other origins pass their events to the app instead of to their parent.
     static let bootstrap = #"""
     (() => {
-      if (window.__unReplay || !window.__unRRWeb) return;
-      const handler = window.webkit.messageHandlers.unReplay;
+      if (window.__gudoReplay || !window.__gudoRRWeb) return;
+      const handler = window.webkit.messageHandlers.gudoReplay;
       const post = m => handler.postMessage(m);
       const top = window === window.top;
       if (!top) { try { void window.parent.document; return; } catch {} }
@@ -235,7 +235,7 @@ final class BrowserRecorder {
       };
       const start = () => {
         if (stop) return true;
-        const { record } = window.__unRRWeb;
+        const { record } = window.__gudoRRWeb;
         if (top) {
           // rrweb hears frames on window "message"; take its listener so only the app feeds it.
           window.addEventListener = function (type, fn, opts) {
@@ -260,10 +260,10 @@ final class BrowserRecorder {
         }
         return out;
       };
-      Object.defineProperty(window, "__unReplay", { value: {
+      Object.defineProperty(window, "__gudoReplay", { value: {
         start,
         flush,
-        checkout() { if (stop && top && Date.now() - lastFullSnapshot > 1000) window.__unRRWeb.record.takeFullSnapshot(true); return flush(); },
+        checkout() { if (stop && top && Date.now() - lastFullSnapshot > 1000) window.__gudoRRWeb.record.takeFullSnapshot(true); return flush(); },
         // A frame's events, from the app: rrweb places them by the frame's window.
         frame(message, origin, url) {
           if (!relay || !message || typeof message !== "object") return;

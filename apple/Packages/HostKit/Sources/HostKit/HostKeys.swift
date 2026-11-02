@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 import Synchronization
-import UnnamedCore
+import GudoCore
 
 /// Host-key decisions the user has to make (04-mobile-ux C1.3): trust a new host's key
 /// (TOFU), or, after a key change, replace the record. The SSH core asks on a blocking thread

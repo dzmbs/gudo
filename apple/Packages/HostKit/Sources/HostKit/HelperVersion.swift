@@ -1,5 +1,5 @@
 import Foundation
-import UnnamedCore
+import GudoCore
 
 // What the app bundles (`cargo xtask build-hostd-linux` → `hostd-manifest.json` and the
 // gzipped daemons) against what a host runs (`DaemonInfo`, sent before `Welcome`), and the
@@ -8,7 +8,7 @@ import UnnamedCore
 
 /// One daemon build the app bundles.
 nonisolated public struct BundledDaemon: Codable, Equatable, Sendable {
-    /// Resource file name (`unnamed-hostd-x86_64-linux.gz`).
+    /// Resource file name (`gudo-hostd-x86_64-linux.gz`).
     public var file: String
     /// `linux`.
     public var os: String

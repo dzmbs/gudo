@@ -8,10 +8,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use unnamed_core::{
+use gudo_core::{
     ApprovalMode, ApprovalPolicy, ConnectOptions, KnockListener, KnockResult, Risk, knock_invite,
 };
-use unnamed_core::{
+use gudo_core::{
     AttentionKind, AttentionSeen, AttentionUpdate, Axis, ClientConfig, ClientEvent,
     ClientEventListener, DaemonClient, DeleteMode, DiffBase, EditorKind, FileChange, FileKind,
     ForwardTarget, GitDiffRequest, InputRejectReason, InviteOptions, LayoutOp, MultiplayerEvent,
@@ -405,11 +405,7 @@ fn invite_join_and_a_viewer_cannot_type() {
             since_join: false,
         }))
         .unwrap();
-    assert!(
-        invite.link.starts_with("unnamed://join/"),
-        "{}",
-        invite.link
-    );
+    assert!(invite.link.starts_with("gudo://join/"), "{}", invite.link);
     assert_eq!(invite.qr_payload, invite.link.to_ascii_uppercase());
     let info = inspect_invite(invite.qr_payload.clone()).unwrap();
     assert_eq!(info.roles, [Role::Viewer]);
@@ -454,7 +450,7 @@ fn invite_join_and_a_viewer_cannot_type() {
     guest.set_typing(pane, true);
     let err = host.block_on(guest.take_control(pane, false)).unwrap_err();
     assert!(
-        matches!(err, unnamed_core::MultiplayerError::Forbidden { .. }),
+        matches!(err, gudo_core::MultiplayerError::Forbidden { .. }),
         "{err:?}"
     );
 
@@ -785,9 +781,9 @@ fn push_register_status_unregister() {
     );
     let body: serde_json::Value = serde_json::from_str(&push_relay_register_body(
         vec![0xab; 32].into(),
-        unnamed_core::ApnsEnvironment::Sandbox,
+        gudo_core::ApnsEnvironment::Sandbox,
         "AB".repeat(32),
-        unnamed_core::PushCapKind::Alert,
+        gudo_core::PushCapKind::Alert,
     ))
     .unwrap();
     assert_eq!(body["token"], "ab".repeat(32));
@@ -965,7 +961,7 @@ fn knock_admit_and_session_rules() {
                 max_risk: Risk::Any,
             }
         )),
-        Err(unnamed_core::MultiplayerError::Forbidden { .. })
+        Err(gudo_core::MultiplayerError::Forbidden { .. })
     ));
     assert_eq!(host.block_on(dee.approval_policy(session)).unwrap(), rules);
 }

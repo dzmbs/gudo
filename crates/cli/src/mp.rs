@@ -45,7 +45,7 @@ pub(crate) enum MpCmd {
         /// Print only the link.
         #[arg(long)]
         no_qr: bool,
-        /// Joining asks you first (`un knocks`, `un admit`, `un deny`).
+        /// Joining asks you first (`gudo knocks`, `gudo admit`, `gudo deny`).
         #[arg(long)]
         knock: bool,
         /// Scrollback the guest sees: `full` or `since-join`.
@@ -63,7 +63,7 @@ pub(crate) enum MpCmd {
     },
     /// Let a knock in (owner).
     Admit {
-        /// The knock's number from `un knocks`.
+        /// The knock's number from `gudo knocks`.
         knock: u64,
         /// Roles, joined by `+`.
         #[arg(long, default_value = "viewer")]
@@ -77,7 +77,7 @@ pub(crate) enum MpCmd {
     },
     /// Turn a knock away (owner).
     Deny {
-        /// The knock's number from `un knocks`.
+        /// The knock's number from `gudo knocks`.
         knock: u64,
     },
     /// Show or set the attached session's approval rules (setting: owner).

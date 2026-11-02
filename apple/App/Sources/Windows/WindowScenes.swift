@@ -76,7 +76,7 @@ struct HandoffPayload: Codable, Equatable {
     /// The drawing open in `pane` (absent in payloads from builds before drawing Handoff).
     var drawing: Drawing?
 
-    static let activityType = (Bundle.main.bundleIdentifier ?? "dev.unnamed.app") + ".terminal"
+    static let activityType = (Bundle.main.bundleIdentifier ?? "dev.gudo.app") + ".terminal"
     static let userInfoKey = "payload"
 
     /// This installation's id (activities it made itself are drags between its own windows).

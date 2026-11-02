@@ -9,10 +9,10 @@ import Testing
 @MainActor
 @Suite struct ConnectionNoticeTests {
     @Test func theCopyGivesWayInOrder() {
-        let copy = NoticeCopy.reconnecting(to: "my-mac.local", ago: "12s ago")
-        #expect(copy.text == "Reconnecting to my-mac.local… · last contact 12s ago")
+        let copy = NoticeCopy.reconnecting(to: "studio-MacBook-Pro.local", ago: "12s ago")
+        #expect(copy.text == "Reconnecting to studio-MacBook-Pro.local… · last contact 12s ago")
         #expect(copy.compactAfter == "… · 12s ago", "the time survives the short line")
-        #expect(NoticeCopy.shortHost("my-mac.local") == "my-mac")
+        #expect(NoticeCopy.shortHost("studio-MacBook-Pro.local") == "studio-MacBook-Pro")
         #expect(NoticeCopy.shortHost("box.tail1234.ts.net") == "box")
         #expect(NoticeCopy.shortHost("studio") == "studio")
         // An address is a name of its own: never cut at its dots.
@@ -23,7 +23,7 @@ import Testing
     @Test func theNoticeFitsAPhoneWidePane() throws {
         let width: CGFloat = 320
         let notice = ConnectionNotice(
-            state: .reconnecting(attempt: 2, since: .now), copy: .reconnecting(to: "my-mac.local", ago: "12s ago"))
+            state: .reconnecting(attempt: 2, since: .now), copy: .reconnecting(to: "studio-MacBook-Pro.local", ago: "12s ago"))
         let hosting = NSHostingView(rootView: notice.frame(maxWidth: width, alignment: .trailing))
         let size = hosting.fittingSize
         #expect(size.width <= width + 0.5, "\(size)")

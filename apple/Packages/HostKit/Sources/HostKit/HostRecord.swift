@@ -4,7 +4,7 @@ import Foundation
 /// private keys) live in the `SecretStore` under keys derived from `id`.
 nonisolated public struct HostRecord: Codable, Identifiable, Hashable, Sendable {
     public enum Kind: String, Codable, Sendable {
-        /// Paired with `unnamed-hostd`: dialled over iroh by its ticket.
+        /// Paired with `gudo-hostd`: dialled over iroh by its ticket.
         case daemon
         /// Plain SSH, no daemon (yet).
         case ssh
@@ -135,7 +135,7 @@ nonisolated public final class HostRepository: Sendable {
     /// `Application Support/<bundle id>/`, created on demand.
     public static func appDefault() -> HostRepository {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return HostRepository(directory: base.appending(path: Bundle.main.bundleIdentifier ?? "dev.unnamed.app"))
+        return HostRepository(directory: base.appending(path: Bundle.main.bundleIdentifier ?? "dev.gudo.app"))
     }
 
     private var hostsURL: URL { directory.appending(path: "hosts.json") }

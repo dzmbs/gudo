@@ -1,7 +1,7 @@
 import DesignSystem
 import HostKit
 import SwiftUI
-import UnnamedCore
+import GudoCore
 
 /// The pull request of the focused pane's worktree, next to the host button: the PR glyph at
 /// 0.6 with its checks badge and `#42`. Hover (or click) opens the checks popover; the popover

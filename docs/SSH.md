@@ -82,19 +82,19 @@ holds the binaries, checks SHA-256, uploads; the remote never downloads. Each st
 `exec` round trip under `sh -c` (works whatever the login shell is):
 
 1. **Probe**: `uname -s`/`-m`, `$HOME`, gzip present, SHA-256 of an installed
-   `unnamed-hostd`, `unnamed-hostd status`, `loginctl` linger.
+   `gudo-hostd`, `gudo-hostd status`, `loginctl` linger.
 2. **Pick** the build: `HostdBinaries { linux_aarch64, linux_x86_64, macos_aarch64,
    macos_x86_64 }` (each `Bytes` or `Path`). Linux builds are static musl:
    `cargo zigbuild --release -p hostd --target {aarch64,x86_64}-unknown-linux-musl`, then
    strip (18.7 MB); macOS: `cargo build --release -p hostd`.
 3. **Upload** only if the installed SHA-256 differs: gzip on the wire (18.7 → 7.9 MB),
-   to `~/.local/bin/unnamed-hostd` (Linux) or `~/Library/Application Support/unnamed/bin/`
+   to `~/.local/bin/gudo-hostd` (Linux) or `~/Library/Application Support/gudo/bin/`
    (macOS), verified on the remote, then renamed into place.
-4. **Start** if uploaded or not running: `unnamed-hostd service install` (systemd `--user`,
+4. **Start** if uploaded or not running: `gudo-hostd service install` (systemd `--user`,
    now restarting an older daemon; LaunchAgent). If no service manager works (container,
    macOS without a GUI login), the daemon is started detached (`setsid … run`) and the report
    says so. A note suggests `loginctl enable-linger` when lingering is off.
-5. **Pair**: `unnamed-hostd pair --json --wait 30` (new, backwards compatible) waits for a
+5. **Pair**: `gudo-hostd pair --json --wait 30` (new, backwards compatible) waits for a
    live daemon to record its endpoint and, up to 10 s more, its home relay, then prints
    `{ticket, daemon_id, expires_unix_ms, addrs, relay_url, running, version}`.
 
@@ -104,7 +104,7 @@ build → `Upgraded` and restarted with its state (daemon id, paired devices, la
 
 Measured (release, Mac → VM): fresh install 4.2 s = probe 17 ms + upload 0.74 s + service
 0.07 s + pairing 3.3 s (mostly the daemon registering with its relay); reuse 43 ms; then
-`Client::connect(ticket)` paired over iroh in 33–60 ms. `un --ticket <ticket> ls` with a
+`Client::connect(ticket)` paired over iroh in 33–60 ms. `gudo --ticket <ticket> ls` with a
 bootstrap ticket lists the VM's session.
 
 ## 4. Plain-SSH fallback panes (`client_core::SshPane`)
@@ -127,21 +127,21 @@ Unit tests (config, known_hosts, keys, signature encoding, backoff, session stat
 run everywhere: `cargo test -p ssh`.
 
 Integration tests need a real sshd. They are compiled always and `#[ignore]`d unless
-`UN_SSH_TEST_HOST` is set at build time (a `build.rs` cfg):
+`GUDO_SSH_TEST_HOST` is set at build time (a `build.rs` cfg):
 
 ```sh
 scripts/ssh-test-vm.sh            # OrbStack VM `un-linux` (or pass another machine name):
                                   # openssh-server + tmux, user `untest` with a password and
                                   # test keys (ed25519, ecdsa, rsa, encrypted ed25519),
                                   # MaxStartups raised, lingering on, the static hostd build
-source target/ssh-test/env        # UN_SSH_TEST_{HOST,USER,PASSWORD,KEYS}
+source target/ssh-test/env        # GUDO_SSH_TEST_{HOST,USER,PASSWORD,KEYS}
 cargo test -p ssh --test it       # auth, host keys, PTY, exec, upload, ProxyJump,
                                   # keepalive/dead peer, reconnect, bootstrap
 cargo test -p client-core --test it ssh_host   # fallback pane, tmux re-attach,
                                   # fresh bootstrap → pair over iroh → pane echo
 ```
 
-`UN_SSH_TEST_HOSTD` overrides the daemon build the bootstrap tests install. Failures are
+`GUDO_SSH_TEST_HOSTD` overrides the daemon build the bootstrap tests install. Failures are
 injected without root: a test proxy that silently swallows traffic (a dead NAT mapping),
 and `kill -STOP` on the connection's own sshd process. ProxyJump uses the VM as the first
 hop and its own `127.0.0.1:22` as the next. The external-signer test uses a software P-256

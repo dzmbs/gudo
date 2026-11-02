@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs DaemonUITests on an iPad simulator against a real local unnamed-hostd, and drops the
+# Runs DaemonUITests on an iPad simulator against a real local gudo-hostd, and drops the
 # connection mid-test (kills the daemon once the test has split, restarts it 4 s later) so the
 # test can check stale → live.
 #
@@ -10,7 +10,7 @@ set -euo pipefail
 
 apple="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 sim="${1:-$(xcrun simctl list devices available | grep -m1 'iPad Pro 13-inch' | grep -oE '[0-9A-F-]{36}')}"
-state="$(mktemp -d "${TMPDIR:-/tmp}/un-ui-daemon.XXXXXX")"
+state="$(mktemp -d "${TMPDIR:-/tmp}/gudo-ui-daemon.XXXXXX")"
 export PORT="${PORT:-47012}"
 daemon() { SHELL_ARGS= "$apple/scripts/local-daemon.sh" "$@" "$state"; }
 

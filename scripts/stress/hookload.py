@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Load on the hook socket from inside a pane (it needs the pane's UN_SOCK and UN_TOKEN).
+"""Load on the hook socket from inside a pane (it needs the pane's GUDO_SOCK and GUDO_TOKEN).
 
-  hookload.py hooks <un-hook> <threads> <secs>    real un-hook processes, PreToolUse/PostToolUse
-  hookload.py perm <un-hook> <threads> <secs>     real un-hook PermissionRequests, each new one
+  hookload.py hooks <gudo-hook> <threads> <secs>    real gudo-hook processes, PreToolUse/PostToolUse
+  hookload.py perm <gudo-hook> <threads> <secs>     real gudo-hook PermissionRequests, each new one
                                                   replacing the one held open
-  hookload.py perm-every <un-hook> <gap> <secs>   a new PermissionRequest every <gap> seconds
-  hookload.py term <threads> <secs> <tool> <json> terminal-tool calls (what `un-hook mcp` sends)
+  hookload.py perm-every <gudo-hook> <gap> <secs>   a new PermissionRequest every <gap> seconds
+  hookload.py term <threads> <secs> <tool> <json> terminal-tool calls (what `gudo-hook mcp` sends)
 
 Prints calls, rate, latency percentiles and failures to stdout and to $HOOKLOAD_OUT if set.
 """
@@ -42,7 +42,7 @@ def record(seconds, failure):
 
 
 def un_hook(binary, event, payload, n, end):
-    env = dict(os.environ, UN_HOOK_DEBUG="1")
+    env = dict(os.environ, GUDO_HOOK_DEBUG="1")
     started = time.monotonic()
     try:
         # A held PermissionRequest returns once a newer one replaces it; the last one is
@@ -56,14 +56,14 @@ def un_hook(binary, event, payload, n, end):
 
 
 def term_call(tool, args):
-    call = {"v": 1, "token": os.environ["UN_TOKEN"], "pane": os.environ["UN_PANE_ID"],
+    call = {"v": 1, "token": os.environ["GUDO_TOKEN"], "pane": os.environ["GUDO_PANE_ID"],
             "term": {"tool": tool, "args": args}}
     started = time.monotonic()
     failure = None
     try:
         s = socket.socket(socket.AF_UNIX)
         s.settimeout(300)
-        s.connect(os.environ["UN_SOCK"])
+        s.connect(os.environ["GUDO_SOCK"])
         s.sendall(json.dumps(call).encode() + b"\n")
         data = b""
         while not data.endswith(b"\n"):
@@ -83,7 +83,7 @@ def term_call(tool, args):
 def perm_every(binary, gap, secs):
     """One agent asking for a new approval every `gap` seconds (the newest replaces the one
     held open), as a looping agent would."""
-    env = dict(os.environ, UN_HOOK_DEBUG="1")
+    env = dict(os.environ, GUDO_HOOK_DEBUG="1")
     end = time.monotonic() + secs
     held = []
     while time.monotonic() < end:

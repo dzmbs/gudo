@@ -2,7 +2,7 @@ import DesignSystem
 import HostKit
 import PaneLayout
 import SwiftUI
-import UnnamedCore
+import GudoCore
 
 /// Everything the command palette offers, in the order shown with an empty query: what needs the
 /// user first, then tabs, then actions (Raycast's "suggestions first", Ghostty's action list).

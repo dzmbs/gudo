@@ -1,5 +1,5 @@
 import Foundation
-import UnnamedCore
+import GudoCore
 
 /// The daemon's file RPCs the provider uses (docs/DAEMON.md §5.6–5.7). `DaemonClient` conforms
 /// as is; tests use a local folder.

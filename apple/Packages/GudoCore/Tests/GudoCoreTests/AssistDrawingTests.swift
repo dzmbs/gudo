@@ -1,7 +1,7 @@
 import Foundation
 import Synchronization
 import Testing
-import UnnamedCore
+import GudoCore
 
 /// Records input-assistance pushes.
 final class AssistRecorder: AssistListener {

@@ -1,8 +1,8 @@
 import Foundation
 import PaneLayout
-import UnnamedCore
+import GudoCore
 
-/// The git-native workspace half of `UnnamedCore.DaemonClient` (docs/DAEMON.md §5.12,
+/// The git-native workspace half of `GudoCore.DaemonClient` (docs/DAEMON.md §5.12,
 /// `proto::repo`): the repository snapshot, pull request actions through the host's `gh`, the
 /// worktree lifecycle and scripts. Kept apart from `DaemonWorkspaceAPI` so fakes of that one
 /// need not grow; `DaemonClient` conforms as is.
@@ -24,7 +24,7 @@ nonisolated public protocol DaemonRepoAPI: AnyObject, Sendable {
 
 extension DaemonClient: DaemonRepoAPI {}
 
-/// Trust for a repository's own setup and teardown commands (`.unnamed.json`): the daemon
+/// Trust for a repository's own setup and teardown commands (`.gudo.json`): the daemon
 /// runs them only once the owner trusts exactly them. `nil` answers mean nothing to ask (no
 /// commands, already trusted, or a daemon that does not ask).
 nonisolated public protocol DaemonRepoTrustAPI: AnyObject, Sendable {

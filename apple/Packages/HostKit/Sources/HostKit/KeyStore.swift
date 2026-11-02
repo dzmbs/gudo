@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 import Observation
-import UnnamedCore
+import GudoCore
 
 /// An SSH key the app holds. The private part is in the `SecretStore` (`key.<id>`), or in
 /// the Secure Enclave (only its encrypted handle is stored).

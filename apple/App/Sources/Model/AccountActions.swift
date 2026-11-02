@@ -1,7 +1,7 @@
 import DesignSystem
 import HostKit
 import PaneLayout
-import UnnamedCore
+import GudoCore
 
 /// Agent accounts as a window uses them: what a pane's header names, which account New Agent
 /// starts under, and the plan-limit suggestion's action.

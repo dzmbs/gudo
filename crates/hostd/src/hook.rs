@@ -1,8 +1,8 @@
-//! `un-hook`: the agent hook shim. Agents launched by the daemon run
-//! `un-hook <agent> <Event>` with the hook payload on stdin; the shim relays it to the
+//! `gudo-hook`: the agent hook shim. Agents launched by the daemon run
+//! `gudo-hook <agent> <Event>` with the hook payload on stdin; the shim relays it to the
 //! daemon's hook socket and prints the daemon's answer (for example a permission decision).
 //!
-//! `un-hook claude StatusLine` is Claude Code's status-line command in sessions the daemon
+//! `gudo-hook claude StatusLine` is Claude Code's status-line command in sessions the daemon
 //! launches: the input (with the plan's `rate_limits`) goes to the daemon, then the shim runs
 //! the user's own `statusLine` command from their Claude settings with the same input and lets
 //! it print, so the status line looks as the user set it up.
@@ -10,10 +10,10 @@
 //! It never fails the agent: any error prints nothing and exits 0, so a missing daemon only
 //! means the agent falls back to its own prompts.
 //!
-//! `un-hook askpass <prompt>` is the askpass helper instead (see `askpass.rs`), and
-//! `un-hook mcp [--state <dir>] [--pane <id>]` the MCP server through which agents read the
-//! session's drawings and use the app's browser (see `mcp.rs`), and `un-hook open-url <url>…`
-//! the panes' `BROWSER` (see `browser.rs`), and `un-hook browser <verb> …` the browser tools
+//! `gudo-hook askpass <prompt>` is the askpass helper instead (see `askpass.rs`), and
+//! `gudo-hook mcp [--state <dir>] [--pane <id>]` the MCP server through which agents read the
+//! session's drawings and use the app's browser (see `mcp.rs`), and `gudo-hook open-url <url>…`
+//! the panes' `BROWSER` (see `browser.rs`), and `gudo-hook browser <verb> …` the browser tools
 //! from a shell (see `browser_tools.rs`).
 
 mod askpass;
@@ -49,7 +49,7 @@ fn main() {
     let _ = std::io::stdin().take(4 << 20).read_to_end(&mut payload);
     let status_line = args.get(1).map(String::as_str) == Some(STATUS_LINE_EVENT);
     if let Err(e) = relay(&args, &payload, status_line)
-        && std::env::var_os(brand::env_var("HOOK_DEBUG")).is_some()
+        && brand::var_os("HOOK_DEBUG").is_some()
     {
         eprintln!("{}: {e}", brand::HOOK_BIN);
     }
@@ -60,12 +60,12 @@ fn main() {
 
 fn relay(args: &[String], raw: &[u8], status_line: bool) -> Result<(), Box<dyn std::error::Error>> {
     let (Some(agent), Some(event)) = (args.first(), args.get(1)) else {
-        return Err("usage: un-hook <agent> <event>".into());
+        return Err("usage: gudo-hook <agent> <event>".into());
     };
-    let env = |name: &str| std::env::var(brand::env_var(name));
+    let env = |name: &str| brand::var(name).ok_or(std::env::VarError::NotPresent);
     let payload = serde_json::from_slice(raw).unwrap_or(Value::Null);
 
-    // The endpoint file wins over UN_SOCK so a pane outlives a daemon restart that moved it.
+    // The endpoint file wins over GUDO_SOCK so a pane outlives a daemon restart that moved it.
     let socket = env("ENDPOINT_FILE")
         .ok()
         .and_then(|f| std::fs::read_to_string(f).ok())
@@ -131,11 +131,11 @@ fn user_status_line(raw: &[u8]) {
     let _ = child.wait();
 }
 
-/// The pane's Claude configuration directory: its account's (`UN_ACCOUNT_DIR`, which Claude's
+/// The pane's Claude configuration directory: its account's (`GUDO_ACCOUNT_DIR`, which Claude's
 /// subprocess scrub leaves alone), else `CLAUDE_CONFIG_DIR`; `None` means `~/.claude`.
 fn user_config_dir() -> Option<PathBuf> {
     config_dir_from(
-        std::env::var_os(brand::env_var("ACCOUNT_DIR")),
+        brand::var_os("ACCOUNT_DIR"),
         std::env::var_os("CLAUDE_CONFIG_DIR"),
     )
 }
@@ -170,7 +170,10 @@ fn user_status_command(input: &Value) -> Option<String> {
         let settings: Value = serde_json::from_str(&text).ok()?;
         let command = settings.pointer("/statusLine/command")?.as_str()?.trim();
         // Never ourselves (a settings file copied from a launched session).
-        let ours = command.contains(brand::HOOK_BIN) && command.contains(STATUS_LINE_EVENT);
+        let ours = [brand::HOOK_BIN, brand::legacy::HOOK_BIN]
+            .iter()
+            .any(|bin| command.contains(bin))
+            && command.contains(STATUS_LINE_EVENT);
         (!command.is_empty() && !ours).then(|| command.to_owned())
     })
 }

@@ -1,7 +1,7 @@
-# Swift names for the generated bindings (crates/apple-ffi → apple/Packages/UnnamedCore).
-# Brand-bearing: rename together with apple/Packages/UnnamedCore and xtask's CORE_NAME.
+# Swift names for the generated bindings (crates/apple-ffi → apple/Packages/GudoCore).
+# Brand-bearing: rename together with apple/Packages/GudoCore and xtask's CORE_NAME.
 [bindings.swift]
-module_name = "UnnamedCore"
-ffi_module_name = "UnnamedCoreFFI"
-ffi_module_filename = "UnnamedCoreFFI"
+module_name = "GudoCore"
+ffi_module_name = "GudoCoreFFI"
+ffi_module_filename = "GudoCoreFFI"
 generate_module_map = false

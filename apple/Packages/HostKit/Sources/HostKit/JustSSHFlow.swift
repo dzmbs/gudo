@@ -1,6 +1,6 @@
 import Foundation
 import Observation
-import UnnamedCore
+import GudoCore
 
 /// The "just ssh" flow (04-mobile-ux C1): type `user@host[:port]`, pick how to authenticate,
 /// answer the host-key prompt (`HostsModel.hostKeyPrompts`), get a plain-SSH terminal at once,

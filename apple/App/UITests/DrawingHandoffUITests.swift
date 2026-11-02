@@ -2,7 +2,7 @@
 import XCTest
 
 /// Drawings in the window's Handoff activity and canvas panes in the app, against a real local
-/// `unnamed-hostd` (docs/APP-ARCHITECTURE.md "Windows", docs/DAEMON.md §7.2):
+/// `gudo-hostd` (docs/APP-ARCHITECTURE.md "Windows", docs/DAEMON.md §7.2):
 ///
 /// - draw mode puts the drawing (artifact, and the placement once one is reopened) into the
 ///   activity, on the drawing's pane; continuing that activity on "another device" (a fresh

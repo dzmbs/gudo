@@ -2,7 +2,7 @@ import Foundation
 import Observation
 import os
 import PaneLayout
-import UnnamedCore
+import GudoCore
 
 /// What a window shows: the local workspace (macOS shell / iOS scratch echo) or a host.
 enum WorkspaceTarget: Hashable, Codable {
@@ -189,7 +189,7 @@ final class AppModel {
     /// The gzipped static Linux daemons bundled as resources (project.yml), for "Install helper".
     nonisolated static func bundledDaemons() -> HostdBinaries {
         func file(_ arch: String) -> HostdBinary? {
-            let name = "\(Brand.name)-hostd-\(arch)-linux"
+            let name = "\(Brand.daemonBinary)-\(arch)-linux"
             return Bundle.main.url(forResource: name, withExtension: "gz").map { .file(path: $0.path) }
         }
         return HostdBinaries(linuxAarch64: file("aarch64"), linuxX8664: file("x86_64"), macosAarch64: nil, macosX8664: nil)

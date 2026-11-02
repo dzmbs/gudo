@@ -2,7 +2,7 @@ import Foundation
 @testable import HostKit
 import PaneLayout
 import Testing
-import UnnamedCore
+import GudoCore
 
 @Suite struct LayoutConversionTests {
     @Test func flattenedTreesBecomeSplitTrees() {
@@ -25,7 +25,7 @@ import UnnamedCore
 
     @Test func opsMapToTheDaemonVocabulary() {
         let session = LayoutConversion.session(sampleLayout())
-        func op(_ local: PaneLayout.LayoutOp) -> UnnamedCore.LayoutOp? {
+        func op(_ local: PaneLayout.LayoutOp) -> GudoCore.LayoutOp? {
             LayoutConversion.op(local, sessionId: 7, session: session)
         }
         #expect(op(.split(PaneId(3), .horizontal)) == .split(paneId: 3, axis: .horizontal, launch: .shell(cwd: nil)))
@@ -51,7 +51,7 @@ import UnnamedCore
 @MainActor
 @Suite struct DaemonLayoutStoreTests {
     @Test func theDaemonIsTheSourceOfTruth() {
-        var sent: [UnnamedCore.LayoutOp] = []
+        var sent: [GudoCore.LayoutOp] = []
         let store = DaemonLayoutStore { sent.append($0); return UInt64(sent.count) }
         // Nothing to apply to before the first layout.
         store.apply(.newTab)

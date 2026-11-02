@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 import os
-import UnnamedCore
+import GudoCore
 
 /// docs/APPLE-FFI.md "Workspace", "Editor"), so the screens' models can be tested against a
 /// fake. The names are the generated ones: `DaemonClient` conforms as is.

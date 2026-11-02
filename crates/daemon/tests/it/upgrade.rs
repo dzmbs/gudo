@@ -35,7 +35,7 @@ exec 3>>"$f"
 exec sleep 600
 "#;
 
-/// A stand-in for a daemon build: answers `build-info --json` like `unnamed-hostd` does.
+/// A stand-in for a daemon build: answers `build-info --json` like `gudo-hostd` does.
 /// Newer than the daemon under test (a `dev` build) unless `protocol` says otherwise.
 fn fake_build(build: &str, os: &str, arch: &str, exit: i32) -> Vec<u8> {
     build_at(build, os, arch, exit, proto::PROTOCOL_LEVEL + 1)
@@ -248,7 +248,7 @@ async fn owner_upgrades_the_daemon_and_the_session_comes_back() {
     // One upgrade at a time: the daemon is restarting now.
     assert_refused(upgrade(&c, good_build("again")).await, UpgradeFailure::Busy);
 
-    // What `unnamed-hostd run` does next: save, stop, exec the new build. The "new build"
+    // What `gudo-hostd run` does next: save, stop, exec the new build. The "new build"
     // here is this same daemon library on the same state directory and port.
     daemon.shutdown().await;
     let connections = c.connected;

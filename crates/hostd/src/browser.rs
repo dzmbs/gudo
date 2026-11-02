@@ -1,4 +1,4 @@
-//! `un-hook open-url <url>…`: the panes' `BROWSER`. Each URL goes to the app showing the pane
+//! `gudo-hook open-url <url>…`: the panes' `BROWSER`. Each URL goes to the app showing the pane
 //! (a sign-in page opens in a system sign-in sheet there, anything else in its browser). With
 //! no app to take it, the system's own opener runs when there is a display; else it fails, so
 //! the program prints its URL instead.
@@ -9,7 +9,7 @@ use daemon::{BrowserAsk, BrowserReply};
 
 use crate::mcp::{Backend, SocketBackend};
 
-/// `un-hook browser <verb> …` in a pane (its `UN_PANE_ID`); returns the exit status.
+/// `gudo-hook browser <verb> …` in a pane (its `GUDO_PANE_ID`); returns the exit status.
 pub fn cli(args: &[String]) -> i32 {
     match SocketBackend::from_args(&[]) {
         Ok(mut backend) => crate::browser_tools::cli(args, &mut backend),
