@@ -1,5 +1,6 @@
 //! Text rendering of a drawing: box-drawing glyphs for shapes and connectors, junctions
-//! freehand ink as dots. For terminals without graphics and for agents that read text.
+//! where lines meet, text as is, freehand ink as dots. For terminals without graphics and
+//! for agents that read text.
 //!
 //! Every line is snapped to the cell grid: horizontal and vertical segments become `─` and
 //! `│`, others become an elbow (horizontal first, then vertical), which keeps diagrams
@@ -20,41 +21,41 @@ const RIGHT: u8 = 8;
 pub const ASCII_CELL: (f32, f32) = (10.0, 20.0);
 
 struct Grid {
-    w: usize,
-    h: usize,
-    conn: Vec<u8>,
-    glyph: Vec<Option<char>>,
+    width: usize,
+    height: usize,
+    links: Vec<u8>,
+    glyphs: Vec<Option<char>>,
 }
 
 impl Grid {
-    fn idx(&self, x: i64, y: i64) -> Option<usize> {
-        (x >= 0 && y >= 0 && (x as usize) < self.w && (y as usize) < self.h)
-            .then(|| y as usize * self.w + x as usize)
+    fn index(&self, x: i64, y: i64) -> Option<usize> {
+        (x >= 0 && y >= 0 && (x as usize) < self.width && (y as usize) < self.height)
+            .then(|| y as usize * self.width + x as usize)
     }
 
     fn link(&mut self, x: i64, y: i64, bits: u8) {
-        if let Some(i) = self.idx(x, y) {
-            self.conn[i] |= bits;
+        if let Some(i) = self.index(x, y) {
+            self.links[i] |= bits;
         }
     }
 
-    fn put(&mut self, x: i64, y: i64, c: char) {
-        if let Some(i) = self.idx(x, y) {
-            self.glyph[i] = Some(c);
+    fn put(&mut self, x: i64, y: i64, glyph: char) {
+        if let Some(i) = self.index(x, y) {
+            self.glyphs[i] = Some(glyph);
         }
     }
 
     fn hline(&mut self, y: i64, x0: i64, x1: i64) {
-        let (a, b) = (x0.min(x1), x0.max(x1));
-        for x in a..=b {
+        let (start, end) = (x0.min(x1), x0.max(x1));
+        for x in start..=end {
             let mut bits = 0;
-            if x > a {
+            if x > start {
                 bits |= LEFT;
             }
-            if x < b {
+            if x < end {
                 bits |= RIGHT;
             }
-            if a == b {
+            if start == end {
                 bits = LEFT | RIGHT;
             }
             self.link(x, y, bits);
@@ -62,16 +63,16 @@ impl Grid {
     }
 
     fn vline(&mut self, x: i64, y0: i64, y1: i64) {
-        let (a, b) = (y0.min(y1), y0.max(y1));
-        for y in a..=b {
+        let (start, end) = (y0.min(y1), y0.max(y1));
+        for y in start..=end {
             let mut bits = 0;
-            if y > a {
+            if y > start {
                 bits |= UP;
             }
-            if y < b {
+            if y < end {
                 bits |= DOWN;
             }
-            if a == b {
+            if start == end {
                 bits = UP | DOWN;
             }
             self.link(x, y, bits);
@@ -100,12 +101,11 @@ impl Grid {
 
     fn render(&self) -> String {
         let mut out = String::new();
-        for y in 0..self.h {
+        for y in 0..self.height {
             let mut line = String::new();
-            for x in 0..self.w {
-                let i = y * self.w + x;
-                let c = self.glyph[i].unwrap_or_else(|| junction(self.conn[i]));
-                line.push(c);
+            for x in 0..self.width {
+                let i = y * self.width + x;
+                line.push(self.glyphs[i].unwrap_or_else(|| junction(self.links[i])));
             }
             out.push_str(line.trim_end());
             out.push('\n');
@@ -140,33 +140,34 @@ pub fn to_ascii(scene: &Scene, space: CoordSpace, max_cols: usize) -> String {
     let Some((lo, hi)) = scene.bounds() else {
         return String::new();
     };
-    let (mut cw, mut ch) = match space {
+    let (mut cell_w, mut cell_h) = match space {
         CoordSpace::Canvas => ASCII_CELL,
         CoordSpace::Cells => (1.0, 1.0),
     };
-    let cols = ((hi.x - lo.x) / cw).ceil() as usize + 1;
+    let cols = ((hi.x - lo.x) / cell_w).ceil() as usize + 1;
     if cols > max_cols.max(8) {
-        let k = cols as f32 / max_cols.max(8) as f32;
-        cw *= k;
-        ch *= k;
+        let scale = cols as f32 / max_cols.max(8) as f32;
+        cell_w *= scale;
+        cell_h *= scale;
     }
     let cell = |x: f32, y: f32| {
         (
-            ((x - lo.x) / cw).round() as i64,
-            ((y - lo.y) / ch).round() as i64,
+            ((x - lo.x) / cell_w).round() as i64,
+            ((y - lo.y) / cell_h).round() as i64,
         )
     };
-    let (w, h) = cell(hi.x, hi.y);
-    let mut g = Grid {
-        w: w as usize + 2,
-        h: h as usize + 2,
-        conn: vec![0; (w as usize + 2) * (h as usize + 2)],
-        glyph: vec![None; (w as usize + 2) * (h as usize + 2)],
+    let (last_col, last_row) = cell(hi.x, hi.y);
+    let (width, height) = (last_col as usize + 2, last_row as usize + 2);
+    let mut grid = Grid {
+        width,
+        height,
+        links: vec![0; width * height],
+        glyphs: vec![None; width * height],
     };
     let mut texts = Vec::new();
-    let mut heads = Vec::new();
-    for e in scene.draw_order() {
-        match &e.kind {
+    let mut overlays = Vec::new();
+    for element in scene.draw_order() {
+        match &element.kind {
             ElementKind::Shape {
                 shape,
                 from,
@@ -176,63 +177,64 @@ pub fn to_ascii(scene: &Scene, space: CoordSpace, max_cols: usize) -> String {
                 let (a, b) = (cell(from.x, from.y), cell(to.x, to.y));
                 match shape {
                     ShapeKind::Rect | ShapeKind::Ellipse => {
-                        if *filled && e.style.width == 0.0 {
+                        if *filled && element.style.width == 0.0 {
                             // A fill under an outline: the outline draws the box.
                             continue;
                         }
                         let (x0, x1, y0, y1) =
                             (a.0.min(b.0), a.0.max(b.0), a.1.min(b.1), a.1.max(b.1));
-                        g.hline(y0, x0, x1);
-                        g.hline(y1, x0, x1);
-                        g.vline(x0, y0, y1);
-                        g.vline(x1, y0, y1);
+                        grid.hline(y0, x0, x1);
+                        grid.hline(y1, x0, x1);
+                        grid.vline(x0, y0, y1);
+                        grid.vline(x1, y0, y1);
                         if *shape == ShapeKind::Ellipse {
-                            for (x, y, c) in
+                            for (x, y, glyph) in
                                 [(x0, y0, '╭'), (x1, y0, '╮'), (x0, y1, '╰'), (x1, y1, '╯')]
                             {
-                                heads.push((x, y, c));
+                                overlays.push((x, y, glyph));
                             }
                         }
                     }
                     ShapeKind::Line => {
-                        g.connect(a, b);
+                        grid.connect(a, b);
                     }
                     ShapeKind::Arrow => {
-                        let head = g.connect(a, b);
-                        heads.push((b.0, b.1, head));
+                        let head = grid.connect(a, b);
+                        overlays.push((b.0, b.1, head));
                     }
                 }
             }
-            ElementKind::Stroke(s) => {
-                for p in unpack(&s.points).unwrap_or_default() {
-                    let (x, y) = cell(p.x, p.y);
-                    if g.idx(x, y)
-                        .is_some_and(|i| g.conn[i] == 0 && g.glyph[i].is_none())
+            ElementKind::Stroke(stroke) => {
+                for point in unpack(&stroke.points).unwrap_or_default() {
+                    let (x, y) = cell(point.x, point.y);
+                    if grid
+                        .index(x, y)
+                        .is_some_and(|i| grid.links[i] == 0 && grid.glyphs[i].is_none())
                     {
-                        g.put(x, y, '•');
+                        grid.put(x, y, '•');
                     }
                 }
             }
             ElementKind::Text { at, text, .. } => texts.push((cell(at.x, at.y), text.clone())),
             ElementKind::Image { from, to, .. } => {
                 let (a, b) = (cell(from.x, from.y), cell(to.x, to.y));
-                g.hline(a.1, a.0, b.0);
-                g.hline(b.1, a.0, b.0);
-                g.vline(a.0, a.1, b.1);
-                g.vline(b.0, a.1, b.1);
+                grid.hline(a.1, a.0, b.0);
+                grid.hline(b.1, a.0, b.0);
+                grid.vline(a.0, a.1, b.1);
+                grid.vline(b.0, a.1, b.1);
                 texts.push(((a.0 + 1, a.1 + 1), "[image]".into()));
             }
         }
     }
-    for (x, y, c) in heads {
-        g.put(x, y, c);
+    for (x, y, glyph) in overlays {
+        grid.put(x, y, glyph);
     }
     for ((x, y), text) in texts {
         for (dy, line) in text.lines().enumerate() {
-            for (dx, c) in line.chars().enumerate() {
-                g.put(x + dx as i64, y + dy as i64, c);
+            for (dx, glyph) in line.chars().enumerate() {
+                grid.put(x + dx as i64, y + dy as i64, glyph);
             }
         }
     }
-    g.render()
+    grid.render()
 }

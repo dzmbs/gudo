@@ -29,18 +29,23 @@ pub fn wins(incoming: &ExElement, current: &ExElement) -> bool {
 ///
 /// A message when the JSON is not an object with a string `id` and a numeric `version`.
 pub fn parse_element(json: &str) -> Result<ExElement, String> {
-    let v: Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
-    element_from_value(&v, json.to_owned())
+    let value: Value = serde_json::from_str(json).map_err(|error| error.to_string())?;
+    element_from_value(&value, json.to_owned())
 }
 
-fn element_from_value(v: &Value, json: String) -> Result<ExElement, String> {
-    let id = v["id"].as_str().ok_or("element without an id")?.to_owned();
-    let version = v["version"].as_u64().ok_or("element without a version")?;
+fn element_from_value(value: &Value, json: String) -> Result<ExElement, String> {
+    let id = value["id"]
+        .as_str()
+        .ok_or("element without an id")?
+        .to_owned();
+    let version = value["version"]
+        .as_u64()
+        .ok_or("element without a version")?;
     Ok(ExElement {
         id,
         version,
-        version_nonce: v["versionNonce"].as_u64().unwrap_or(0) as u32,
-        deleted: v["isDeleted"].as_bool().unwrap_or(false),
+        version_nonce: value["versionNonce"].as_u64().unwrap_or(0) as u32,
+        deleted: value["isDeleted"].as_bool().unwrap_or(false),
         json,
     })
 }
@@ -58,7 +63,6 @@ pub struct ExScene {
 }
 
 impl ExScene {
-    /// An empty scene.
     pub fn new() -> Self {
         Self::default()
     }
@@ -69,16 +73,17 @@ impl ExScene {
     pub fn merge(&mut self, incoming: Vec<ExElement>) -> (Vec<ExElement>, Vec<ExElement>) {
         let next = self.revision + 1;
         let (mut won, mut lost) = (Vec::new(), Vec::new());
-        for el in incoming {
-            match self.elements.get(&el.id) {
-                Some((cur, _)) if !wins(&el, cur) => {
-                    if cur != &el {
-                        lost.push(cur.clone());
+        for element in incoming {
+            match self.elements.get(&element.id) {
+                Some((current, _)) if !wins(&element, current) => {
+                    if current != &element {
+                        lost.push(current.clone());
                     }
                 }
                 _ => {
-                    self.elements.insert(el.id.clone(), (el.clone(), next));
-                    won.push(el);
+                    self.elements
+                        .insert(element.id.clone(), (element.clone(), next));
+                    won.push(element);
                 }
             }
         }
@@ -90,13 +95,14 @@ impl ExScene {
 
     /// Applies elements someone else won with, at `revision` (a client's cache).
     pub fn absorb(&mut self, elements: Vec<ExElement>, revision: u64) {
-        for el in elements {
+        for element in elements {
             let keep = self
                 .elements
-                .get(&el.id)
-                .is_some_and(|(cur, _)| !wins(&el, cur));
+                .get(&element.id)
+                .is_some_and(|(current, _)| !wins(&element, current));
             if !keep {
-                self.elements.insert(el.id.clone(), (el, revision));
+                self.elements
+                    .insert(element.id.clone(), (element, revision));
             }
         }
         self.revision = self.revision.max(revision);
@@ -106,14 +112,16 @@ impl ExScene {
     pub fn changed_since(&self, since: u64) -> Vec<ExElement> {
         self.elements
             .values()
-            .filter(|(_, rev)| *rev > since)
-            .map(|(e, _)| e.clone())
+            .filter(|(_, revision)| *revision > since)
+            .map(|(element, _)| element.clone())
             .collect()
     }
 
     /// Every element with the revision it last changed at.
     pub fn with_revisions(&self) -> impl Iterator<Item = (&ExElement, u64)> {
-        self.elements.values().map(|(e, r)| (e, *r))
+        self.elements
+            .values()
+            .map(|(element, revision)| (element, *revision))
     }
 
     /// Restores an element with its revision (loading from disk).
@@ -123,16 +131,19 @@ impl ExScene {
             .insert(element.id.clone(), (element, revision));
     }
 
-    /// Live (not deleted) elements.
+    /// Number of live (not deleted) elements.
     pub fn live(&self) -> usize {
-        self.elements.values().filter(|(e, _)| !e.deleted).count()
+        self.elements
+            .values()
+            .filter(|(element, _)| !element.deleted)
+            .count()
     }
 
     /// Bytes of element JSON held.
     pub fn bytes(&self) -> usize {
         self.elements
             .values()
-            .map(|(e, _)| e.json.len())
+            .map(|(element, _)| element.json.len())
             .sum::<usize>()
             + self.app_state.as_ref().map_or(0, String::len)
     }
@@ -142,12 +153,12 @@ impl ExScene {
     pub fn to_scene(&self) -> Scene {
         let mut ops = Vec::new();
         let mut next = 1u64;
-        for (el, _) in self.elements.values() {
-            if el.deleted {
+        for (element, _) in self.elements.values() {
+            if element.deleted {
                 continue;
             }
-            if let Ok(v) = serde_json::from_str::<Value>(&el.json) {
-                convert(&v, &self.files, &mut next, &mut ops);
+            if let Ok(value) = serde_json::from_str::<Value>(&element.json) {
+                convert(&value, &self.files, &mut next, &mut ops);
             }
         }
         // Excalidraw draws in array order, which is its `index` (fractional) order.
@@ -158,39 +169,47 @@ impl ExScene {
     }
 }
 
-fn color(s: &str, opacity: f64) -> Option<u32> {
-    let hex = s.strip_prefix('#')?;
+fn color(css: &str, opacity: f64) -> Option<u32> {
+    let hex = css.strip_prefix('#')?;
     let rgb = match hex.len() {
         6 => u32::from_str_radix(hex, 16).ok()?,
         3 => {
-            let v = u32::from_str_radix(hex, 16).ok()?;
-            let (r, g, b) = ((v >> 8) & 0xf, (v >> 4) & 0xf, v & 0xf);
+            let short = u32::from_str_radix(hex, 16).ok()?;
+            let (r, g, b) = ((short >> 8) & 0xf, (short >> 4) & 0xf, short & 0xf);
             (r * 17) << 16 | (g * 17) << 8 | (b * 17)
         }
         _ => return None,
     };
-    let a = (opacity.clamp(0.0, 100.0) / 100.0 * 255.0).round() as u32;
-    Some(rgb << 8 | a)
+    let alpha = (opacity.clamp(0.0, 100.0) / 100.0 * 255.0).round() as u32;
+    Some(rgb << 8 | alpha)
 }
 
-fn num(v: &Value) -> f32 {
-    v.as_f64().unwrap_or(0.0) as f32
+fn num(value: &Value) -> f32 {
+    value.as_f64().unwrap_or(0.0) as f32
 }
 
-fn convert(v: &Value, files: &BTreeMap<String, ExFile>, next: &mut u64, ops: &mut Vec<DrawOp>) {
+fn convert(
+    element: &Value,
+    files: &BTreeMap<String, ExFile>,
+    next: &mut u64,
+    ops: &mut Vec<DrawOp>,
+) {
     let (x, y, w, h) = (
-        num(&v["x"]),
-        num(&v["y"]),
-        num(&v["width"]),
-        num(&v["height"]),
+        num(&element["x"]),
+        num(&element["y"]),
+        num(&element["width"]),
+        num(&element["height"]),
     );
-    let opacity = v["opacity"].as_f64().unwrap_or(100.0);
-    let stroke =
-        color(v["strokeColor"].as_str().unwrap_or("#1e1e1e"), opacity).unwrap_or(0x1e1e_1eff);
-    let fill = v["backgroundColor"]
+    let opacity = element["opacity"].as_f64().unwrap_or(100.0);
+    let stroke = color(
+        element["strokeColor"].as_str().unwrap_or("#1e1e1e"),
+        opacity,
+    )
+    .unwrap_or(0x1e1e_1eff);
+    let fill = element["backgroundColor"]
         .as_str()
-        .and_then(|c| color(c, opacity));
-    let width = v["strokeWidth"].as_f64().unwrap_or(2.0) as f32;
+        .and_then(|css| color(css, opacity));
+    let width = element["strokeWidth"].as_f64().unwrap_or(2.0) as f32;
     let mut push = |kind: ElementKind, color: u32, width: f32| {
         ops.push(DrawOp::Add(Element {
             id: ElementId(*next),
@@ -207,30 +226,32 @@ fn convert(v: &Value, files: &BTreeMap<String, ExFile>, next: &mut u64, ops: &mu
         to: p(x + w, y + h),
         filled,
     };
-    let points: Vec<(f32, f32)> = v["points"]
+    // Excalidraw points are relative to the element's x/y.
+    let points: Vec<(f32, f32)> = element["points"]
         .as_array()
-        .map(|a| {
-            a.iter()
-                .map(|pt| (x + num(&pt[0]), y + num(&pt[1])))
+        .map(|array| {
+            array
+                .iter()
+                .map(|point| (x + num(&point[0]), y + num(&point[1])))
                 .collect()
         })
         .unwrap_or_default();
-    match v["type"].as_str().unwrap_or("") {
+    match element["type"].as_str().unwrap_or("") {
         kind @ ("rectangle" | "ellipse" | "frame" | "embeddable" | "iframe") => {
-            let s = if kind == "ellipse" {
+            let outline = if kind == "ellipse" {
                 ShapeKind::Ellipse
             } else {
                 ShapeKind::Rect
             };
-            if let Some(f) = fill {
-                push(shape(s, true), f, 0.0);
+            if let Some(fill) = fill {
+                push(shape(outline, true), fill, 0.0);
             }
-            push(shape(s, false), stroke, width);
+            push(shape(outline, false), stroke, width);
         }
         "diamond" => {
             let (cx, cy) = (x + w / 2.0, y + h / 2.0);
-            let c = [p(cx, y), p(x + w, cy), p(cx, y + h), p(x, cy), p(cx, y)];
-            for seg in c.windows(2) {
+            let corners = [p(cx, y), p(x + w, cy), p(cx, y + h), p(x, cy), p(cx, y)];
+            for seg in corners.windows(2) {
                 push(
                     ElementKind::Shape {
                         shape: ShapeKind::Line,
@@ -244,13 +265,12 @@ fn convert(v: &Value, files: &BTreeMap<String, ExFile>, next: &mut u64, ops: &mu
             }
         }
         kind @ ("arrow" | "line") => {
-            let n = points.len();
-            let end_head = kind == "arrow" && !v["endArrowhead"].is_null();
-            let start_head = !v["startArrowhead"].is_null() && kind == "arrow";
+            let end_head = kind == "arrow" && !element["endArrowhead"].is_null();
+            let start_head = !element["startArrowhead"].is_null() && kind == "arrow";
             for (i, seg) in points.windows(2).enumerate() {
                 let (mut a, mut b) = (p(seg[0].0, seg[0].1), p(seg[1].0, seg[1].1));
                 let mut shape = ShapeKind::Line;
-                if i + 2 == n && end_head {
+                if i + 2 == points.len() && end_head {
                     shape = ShapeKind::Arrow;
                 } else if i == 0 && start_head {
                     std::mem::swap(&mut a, &mut b);
@@ -269,18 +289,18 @@ fn convert(v: &Value, files: &BTreeMap<String, ExFile>, next: &mut u64, ops: &mu
             }
         }
         "freedraw" => {
-            let pressures: Vec<f32> = v["pressures"]
+            let pressures: Vec<f32> = element["pressures"]
                 .as_array()
-                .map(|a| a.iter().map(num).collect())
+                .map(|array| array.iter().map(num).collect())
                 .unwrap_or_default();
-            let pts: Vec<InkPoint> = points
+            let ink: Vec<InkPoint> = points
                 .iter()
                 .enumerate()
                 .map(|(i, &(px, py))| InkPoint {
                     pressure: pressures
                         .get(i)
                         .copied()
-                        .filter(|p| *p > 0.0)
+                        .filter(|pressure| *pressure > 0.0)
                         .unwrap_or(0.6),
                     ..InkPoint::at(px, py, i as u32 * 8)
                 })
@@ -288,29 +308,29 @@ fn convert(v: &Value, files: &BTreeMap<String, ExFile>, next: &mut u64, ops: &mu
             push(
                 ElementKind::Stroke(Stroke {
                     tool: Tool::Pen,
-                    points: pack(&pts),
+                    points: pack(&ink),
                 }),
                 stroke,
                 width * 1.5,
             );
         }
         "text" => {
-            let text = v["text"].as_str().unwrap_or_default().to_owned();
+            let text = element["text"].as_str().unwrap_or_default().to_owned();
             push(
                 ElementKind::Text {
                     at: p(x, y),
                     text,
-                    size: v["fontSize"].as_f64().unwrap_or(20.0) as f32,
+                    size: element["fontSize"].as_f64().unwrap_or(20.0) as f32,
                 },
                 stroke,
                 1.0,
             );
         }
         "image" => {
-            let image: Option<ImageRef> = v["fileId"]
+            let image: Option<ImageRef> = element["fileId"]
                 .as_str()
-                .and_then(|f| files.get(f))
-                .map(|f| f.image);
+                .and_then(|file_id| files.get(file_id))
+                .map(|file| file.image);
             if let Some(image) = image {
                 push(
                     ElementKind::Image {
@@ -333,7 +353,6 @@ fn convert(v: &Value, files: &BTreeMap<String, ExFile>, next: &mut u64, ops: &mu
 /// MIME type, decoded bytes).
 #[derive(Debug, Clone, Default)]
 pub struct ExcalidrawFile {
-    /// Elements.
     pub elements: Vec<ExElement>,
     /// `appState` as JSON.
     pub app_state: Option<String>,
@@ -348,24 +367,25 @@ pub struct ExcalidrawFile {
 ///
 /// A message when it is not such a file.
 pub fn parse_file(bytes: &[u8]) -> Result<ExcalidrawFile, String> {
-    let v: Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
-    if v["type"].as_str() != Some("excalidraw") {
+    let root: Value = serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
+    if root["type"].as_str() != Some("excalidraw") {
         return Err("not an Excalidraw file".into());
     }
     let mut out = ExcalidrawFile::default();
-    for el in v["elements"].as_array().ok_or("no elements")? {
-        out.elements.push(element_from_value(el, el.to_string())?);
+    for element in root["elements"].as_array().ok_or("no elements")? {
+        out.elements
+            .push(element_from_value(element, element.to_string())?);
     }
-    if v["appState"].is_object() {
-        out.app_state = Some(v["appState"].to_string());
+    if root["appState"].is_object() {
+        out.app_state = Some(root["appState"].to_string());
     }
-    if let Some(files) = v["files"].as_object() {
-        for (id, f) in files {
-            let mime = f["mimeType"].as_str().unwrap_or_default().to_owned();
-            let Some(data) = f["dataURL"]
+    if let Some(files) = root["files"].as_object() {
+        for (id, file) in files {
+            let mime = file["mimeType"].as_str().unwrap_or_default().to_owned();
+            let Some(data) = file["dataURL"]
                 .as_str()
-                .and_then(|u| u.split_once(";base64,"))
-                .and_then(|(_, b)| data_encoding::BASE64.decode(b.as_bytes()).ok())
+                .and_then(|url| url.split_once(";base64,"))
+                .and_then(|(_, base64)| data_encoding::BASE64.decode(base64.as_bytes()).ok())
             else {
                 continue;
             };
@@ -424,13 +444,13 @@ impl ExcalidrawFile {
         let elements: Vec<Value> = self
             .elements
             .iter()
-            .filter(|e| !e.deleted)
-            .filter_map(|e| serde_json::from_str(&e.json).ok())
+            .filter(|element| !element.deleted)
+            .filter_map(|element| serde_json::from_str(&element.json).ok())
             .collect();
         let app_state = self
             .app_state
             .as_deref()
-            .and_then(|a| serde_json::from_str::<Value>(a).ok())
+            .and_then(|json| serde_json::from_str::<Value>(json).ok())
             .filter(Value::is_object)
             .unwrap_or_else(|| serde_json::json!({}));
         let files: serde_json::Map<String, Value> = self

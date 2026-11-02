@@ -18,7 +18,7 @@ fn style(color: u32, width: f32) -> Style {
     Style { color, width }
 }
 
-fn stroke(id: u64, tool: Tool, pts: &[(f32, f32, f32)]) -> Element {
+fn stroke(id: u64, tool: Tool, points: &[(f32, f32, f32)]) -> Element {
     Element {
         id: ElementId(id),
         z: 0,
@@ -26,10 +26,11 @@ fn stroke(id: u64, tool: Tool, pts: &[(f32, f32, f32)]) -> Element {
         kind: ElementKind::Stroke(Stroke {
             tool,
             points: pack(
-                &pts.iter()
+                &points
+                    .iter()
                     .enumerate()
-                    .map(|(i, &(x, y, p))| InkPoint {
-                        pressure: p,
+                    .map(|(i, &(x, y, pressure))| InkPoint {
+                        pressure,
                         ..InkPoint::at(x, y, i as u32 * 8)
                     })
                     .collect::<Vec<_>>(),
@@ -129,8 +130,8 @@ fn sample() -> Scene {
 #[test]
 fn svg_matches_golden() {
     let scene = sample();
-    let svg = to_svg(&scene, CoordSpace::Canvas, "a & b", &|img| {
-        (img.hash.0[0] == 7).then(|| "data:image/png;base64,AAAA".to_owned())
+    let svg = to_svg(&scene, CoordSpace::Canvas, "a & b", &|image| {
+        (image.hash.0[0] == 7).then(|| "data:image/png;base64,AAAA".to_owned())
     });
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/sample.svg");
     if std::env::var_os("DRAWING_BLESS").is_some() {
@@ -182,40 +183,46 @@ fn batches_converge_in_version_order_and_gaps_are_reported() {
         ops,
     })
     .collect();
-    let mut a = Scene::new();
-    let mut b = Scene::new();
+    let mut in_order = Scene::new();
+    let mut lagging = Scene::new();
     for batch in &batches {
-        a.apply(batch).unwrap();
+        in_order.apply(batch).unwrap();
     }
-    // b misses version 2 first, refuses 3, then catches up.
-    b.apply(&batches[0]).unwrap();
-    assert!(b.apply(&batches[2]).is_err());
+    // Misses version 2 first, refuses 3, then catches up.
+    lagging.apply(&batches[0]).unwrap();
+    assert!(lagging.apply(&batches[2]).is_err());
     for batch in &batches[1..] {
-        b.apply(batch).unwrap();
+        lagging.apply(batch).unwrap();
     }
-    assert_eq!(a, b);
-    assert_eq!(a.version, 4);
-    assert_eq!(a.elements().len(), 1);
-    assert_eq!(a.title.as_deref(), Some("t"));
-    // A full scene from elements equals the replayed one.
-    let c = Scene::from_elements(4, a.elements().to_vec());
-    assert_eq!(c.elements(), a.elements());
+    assert_eq!(in_order, lagging);
+    assert_eq!(in_order.version, 4);
+    assert_eq!(in_order.elements().len(), 1);
+    assert_eq!(in_order.title.as_deref(), Some("t"));
+    let rebuilt = Scene::from_elements(4, in_order.elements().to_vec());
+    assert_eq!(rebuilt.elements(), in_order.elements());
 }
 
 #[test]
 fn raster_and_png() {
     let scene = sample();
-    let img = rasterize(&scene, CoordSpace::Canvas, RasterOptions::default());
-    assert!(img.width > 200 && img.height > 100);
+    let image = rasterize(&scene, CoordSpace::Canvas, RasterOptions::default());
+    assert!(image.width > 200 && image.height > 100);
     // Some pixels are inked, the corner is background.
-    assert_eq!(&img.data[..4], &[255, 255, 255, 255]);
-    assert!(img.data.chunks(4).any(|p| p[2] > 150 && p[0] < 100));
-    let png = encode_png(&img);
-    assert_eq!(sniff(&png), Some((MediaType::Png, img.width, img.height)));
-    let art = drawing::braille(&img, 40);
+    assert_eq!(&image.data[..4], &[255, 255, 255, 255]);
+    assert!(
+        image
+            .data
+            .chunks(4)
+            .any(|pixel| pixel[2] > 150 && pixel[0] < 100)
+    );
+    let png = encode_png(&image);
+    assert_eq!(
+        sniff(&png),
+        Some((MediaType::Png, image.width, image.height))
+    );
+    let art = drawing::braille(&image, 40);
     assert!(art.lines().count() > 3);
     assert!(art.chars().any(|c| ('\u{2801}'..='\u{28ff}').contains(&c)));
-    // Clamped to max_side.
     let small = rasterize(
         &scene,
         CoordSpace::Canvas,
@@ -228,8 +235,9 @@ fn raster_and_png() {
 }
 
 #[test]
-fn spike_ink_encoding_sizes() {
-    let pts: Vec<InkPoint> = (0..240)
+fn ink_encoding_sizes() {
+    // A 1 s Pencil stroke sampled at 240 Hz (Pencil Pro rate), smooth curve.
+    let points: Vec<InkPoint> = (0..240)
         .map(|i| {
             let t = i as f32 / 240.0;
             InkPoint {
@@ -242,34 +250,35 @@ fn spike_ink_encoding_sizes() {
             }
         })
         .collect();
-    let packed = pack(&pts);
-    let raw_f32 = pts.len() * 6 * 4;
-    let simplified = drawing::simplify(&pts, 0.25);
+    let packed = pack(&points);
+    let raw_f32 = points.len() * 6 * 4;
+    let simplified = drawing::simplify(&points, 0.25);
     let packed_simple = pack(&simplified);
-    let postcard_f32 = postcard_len(&pts);
+    let postcard_f32 = postcard_len(&points);
     println!(
-        "spike W5-2: {} points: f32×6 {} B, postcard f32 {} B, packed {} B ({:.1} B/pt); \
+        "{} points: f32×6 {} B, postcard f32 {} B, packed {} B ({:.1} B/pt); \
          simplified ε=0.25 → {} points, {} B",
-        pts.len(),
+        points.len(),
         raw_f32,
         postcard_f32,
         packed.0.len(),
-        packed.0.len() as f32 / pts.len() as f32,
+        packed.0.len() as f32 / points.len() as f32,
         simplified.len(),
         packed_simple.0.len()
     );
     assert!(packed.0.len() < raw_f32 / 3);
-    assert!(simplified.len() < pts.len());
+    assert!(simplified.len() < points.len());
 }
 
-fn postcard_len(pts: &[InkPoint]) -> usize {
+fn postcard_len(points: &[InkPoint]) -> usize {
     // postcard writes f32 as 4 bytes and u32 as a varint.
-    pts.iter()
-        .map(|p| {
+    points
+        .iter()
+        .map(|point| {
             5 * 4
-                + if p.t_ms < 128 {
+                + if point.t_ms < 128 {
                     1
-                } else if p.t_ms < 16384 {
+                } else if point.t_ms < 16384 {
                     2
                 } else {
                     3
