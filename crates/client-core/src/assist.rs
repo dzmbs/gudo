@@ -1,3 +1,4 @@
+//! Input-assistance API for the mobile line editor: the foreground program of
 //! a pane, its shell's prompt state and input line, atomic submit, the host's command history,
 //! completion, fuzzy file search for `@` mentions, and a blocked agent's options.
 //!
@@ -19,22 +20,15 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::{Client, Inner, lock};
 
-/// How long a request waits for its answer.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A push about a pane's input state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AssistEvent {
     /// A pane's foreground program changed.
-    Foreground {
-        /// The new foreground program.
-        foreground: Foreground,
-    },
+    Foreground { foreground: Foreground },
     /// A watched pane's prompt state changed.
-    Prompt {
-        /// The new state.
-        state: PromptState,
-    },
+    Prompt { state: PromptState },
 }
 
 /// Receives [`AssistEvent`]s. Must return quickly; it runs on the network threads.
@@ -76,11 +70,11 @@ pub(crate) struct AssistState {
 
 impl AssistState {
     /// Handles an input-assistance message from `ctl`; returns it back if it is not one.
-    pub(crate) fn dispatch(&self, msg: ServerCtl) -> Option<ServerCtl> {
-        let event = match msg {
+    pub(crate) fn dispatch(&self, message: ServerCtl) -> Option<ServerCtl> {
+        let event = match message {
             ServerCtl::AssistResult { req_id, result } => {
-                if let Some(tx) = lock(&self.pending).remove(&req_id) {
-                    let _ = tx.send(result);
+                if let Some(reply) = lock(&self.pending).remove(&req_id) {
+                    let _ = reply.send(result);
                 }
                 return None;
             }
@@ -95,22 +89,22 @@ impl AssistState {
             other => return Some(other),
         };
         let listener = lock(&self.listener).clone();
-        if let Some(l) = listener {
-            l.on_assist_event(event);
+        if let Some(listener) = listener {
+            listener.on_assist_event(event);
         }
         None
     }
 
     /// The connection dropped: requests in flight will not be answered.
     pub(crate) fn fail_pending(&self) {
-        for (_, tx) in lock(&self.pending).drain() {
-            let _ = tx.send(Err(AssistError::Disconnected));
+        for (_, reply) in lock(&self.pending).drain() {
+            let _ = reply.send(Err(AssistError::Disconnected));
         }
     }
 
     fn remember(&self, state: &PaneAssist) {
-        if let Some(fg) = &state.foreground {
-            lock(&self.foreground).insert(fg.pane_id, fg.clone());
+        if let Some(foreground) = &state.foreground {
+            lock(&self.foreground).insert(foreground.pane_id, foreground.clone());
         }
         lock(&self.prompts).insert(state.prompt.pane_id, state.prompt.clone());
     }
@@ -126,14 +120,14 @@ impl Client {
         *lock(&self.inner.assist.listener) = Some(listener);
     }
 
-    /// The last foreground program the daemon reported for `pane`.
-    pub fn foreground(&self, pane: PaneId) -> Option<Foreground> {
-        lock(&self.inner.assist.foreground).get(&pane).cloned()
+    /// The last foreground program the daemon reported for `pane_id`.
+    pub fn foreground(&self, pane_id: PaneId) -> Option<Foreground> {
+        lock(&self.inner.assist.foreground).get(&pane_id).cloned()
     }
 
-    /// The last prompt state the daemon reported for `pane`.
-    pub fn prompt_state(&self, pane: PaneId) -> Option<PromptState> {
-        lock(&self.inner.assist.prompts).get(&pane).cloned()
+    /// The last prompt state the daemon reported for `pane_id`.
+    pub fn prompt_state(&self, pane_id: PaneId) -> Option<PromptState> {
+        lock(&self.inner.assist.prompts).get(&pane_id).cloned()
     }
 
     /// Sends any input-assistance request and waits for the answer.
@@ -142,18 +136,21 @@ impl Client {
     ///
     /// The daemon's [`AssistError`], or [`AssistError::Disconnected`] if the connection
     /// dropped (or nothing came back within 30 s).
-    pub async fn assist(&self, req: AssistRequest) -> Result<AssistResponse, AssistError> {
+    pub async fn assist(&self, request: AssistRequest) -> Result<AssistResponse, AssistError> {
         let req_id = self
             .inner
             .next_op
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let (tx, rx) = oneshot::channel();
-        lock(&self.inner.assist.pending).insert(req_id, tx);
-        self.inner.send(proto::ClientCtl::Assist { req_id, req });
+        let (reply_tx, reply_rx) = oneshot::channel();
+        lock(&self.inner.assist.pending).insert(req_id, reply_tx);
+        self.inner.send(proto::ClientCtl::Assist {
+            req_id,
+            req: request,
+        });
         let inner: Arc<Inner> = Arc::clone(&self.inner);
         self.handle
             .spawn(async move {
-                match tokio::time::timeout(REQUEST_TIMEOUT, rx).await {
+                match tokio::time::timeout(REQUEST_TIMEOUT, reply_rx).await {
                     Ok(Ok(result)) => result,
                     _ => {
                         lock(&inner.assist.pending).remove(&req_id);
@@ -165,19 +162,17 @@ impl Client {
             .unwrap_or(Err(AssistError::Disconnected))
     }
 
-    /// Starts (or stops) prompt-state pushes for `pane`; returns the state now.
+    /// Starts (or stops) prompt-state pushes for `pane_id`; returns the state now.
     ///
     /// # Errors
     ///
     /// As for [`assist`](Self::assist).
-    pub async fn watch_prompt(&self, pane: PaneId, watch: bool) -> Result<PaneAssist, AssistError> {
-        match self
-            .assist(AssistRequest::Watch {
-                pane_id: pane,
-                watch,
-            })
-            .await?
-        {
+    pub async fn watch_prompt(
+        &self,
+        pane_id: PaneId,
+        watch: bool,
+    ) -> Result<PaneAssist, AssistError> {
+        match self.assist(AssistRequest::Watch { pane_id, watch }).await? {
             AssistResponse::State(state) => {
                 self.inner.assist.remember(&state);
                 Ok(state)
@@ -191,8 +186,8 @@ impl Client {
     /// # Errors
     ///
     /// As for [`assist`](Self::assist).
-    pub async fn pane_assist(&self, pane: PaneId) -> Result<PaneAssist, AssistError> {
-        match self.assist(AssistRequest::State { pane_id: pane }).await? {
+    pub async fn pane_assist(&self, pane_id: PaneId) -> Result<PaneAssist, AssistError> {
+        match self.assist(AssistRequest::State { pane_id }).await? {
             AssistResponse::State(state) => {
                 self.inner.assist.remember(&state);
                 Ok(state)
@@ -210,18 +205,18 @@ impl Client {
     /// prompt; nothing was written. Otherwise as for [`assist`](Self::assist).
     pub async fn submit_line(
         &self,
-        pane: PaneId,
+        pane_id: PaneId,
         prompt_id: u64,
         text: impl Into<String>,
         run: bool,
     ) -> Result<Seq, AssistError> {
-        let req = AssistRequest::SubmitLine(SubmitLine {
-            pane_id: pane,
+        let request = AssistRequest::SubmitLine(SubmitLine {
+            pane_id,
             prompt_id,
             text: text.into(),
             run,
         });
-        match self.assist(req).await? {
+        match self.assist(request).await? {
             AssistResponse::Submitted { at_seq, .. } => Ok(at_seq),
             other => Err(unexpected(other)),
         }
@@ -246,19 +241,19 @@ impl Client {
     /// As for [`assist`](Self::assist).
     pub async fn complete(
         &self,
-        pane: PaneId,
+        pane_id: PaneId,
         line: impl Into<String>,
         cursor: u32,
         limit: u32,
     ) -> Result<Completions, AssistError> {
-        let req = AssistRequest::Complete(CompleteRequest {
-            pane_id: pane,
+        let request = AssistRequest::Complete(CompleteRequest {
+            pane_id,
             line: line.into(),
             cursor,
             limit,
         });
-        match self.assist(req).await? {
-            AssistResponse::Completions(c) => Ok(c),
+        match self.assist(request).await? {
+            AssistResponse::Completions(completions) => Ok(completions),
             other => Err(unexpected(other)),
         }
     }
@@ -274,31 +269,31 @@ impl Client {
         query: impl Into<String>,
         limit: u32,
     ) -> Result<FileMatches, AssistError> {
-        let req = AssistRequest::FileSearch(FileSearch {
+        let request = AssistRequest::FileSearch(FileSearch {
             root: root.into(),
             query: query.into(),
             limit,
         });
-        match self.assist(req).await? {
-            AssistResponse::Files(m) => Ok(m),
+        match self.assist(request).await? {
+            AssistResponse::Files(matches) => Ok(matches),
             other => Err(unexpected(other)),
         }
     }
 
-    /// The decision the agent in `pane` is blocked on, if any.
+    /// The decision the agent in `pane_id` is blocked on, if any.
     ///
     /// # Errors
     ///
     /// As for [`assist`](Self::assist).
     pub async fn blocked_options(
         &self,
-        pane: PaneId,
+        pane_id: PaneId,
     ) -> Result<Option<BlockedPrompt>, AssistError> {
         match self
-            .assist(AssistRequest::BlockedOptions { pane_id: pane })
+            .assist(AssistRequest::BlockedOptions { pane_id })
             .await?
         {
-            AssistResponse::Blocked(b) => Ok(b),
+            AssistResponse::Blocked(blocked) => Ok(blocked),
             other => Err(unexpected(other)),
         }
     }
@@ -311,16 +306,16 @@ impl Client {
     /// [`assist`](Self::assist).
     pub async fn answer_blocked(
         &self,
-        pane: PaneId,
+        pane_id: PaneId,
         index: u32,
         label: impl Into<String>,
     ) -> Result<(), AssistError> {
-        let req = AssistRequest::AnswerBlocked(AnswerBlocked {
-            pane_id: pane,
+        let request = AssistRequest::AnswerBlocked(AnswerBlocked {
+            pane_id,
             index,
             label: label.into(),
         });
-        match self.assist(req).await? {
+        match self.assist(request).await? {
             AssistResponse::Done => Ok(()),
             other => Err(unexpected(other)),
         }

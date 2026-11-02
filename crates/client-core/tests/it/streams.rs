@@ -66,8 +66,10 @@ async fn a_flood_does_not_starve_another_panes_echo() {
     config.relay = RelayMode::Disabled;
     let client = Client::connect_on(runtime.handle(), &ticket, config, listener.clone()).unwrap();
     client.attach(None);
-    let ClientEvent::Layout { layout } =
-        next_matching(&mut events, |e| matches!(e, ClientEvent::Layout { .. })).await
+    let ClientEvent::Layout { layout } = next_matching(&mut events, |event| {
+        matches!(event, ClientEvent::Layout { .. })
+    })
+    .await
     else {
         unreachable!()
     };
@@ -83,7 +85,7 @@ async fn a_flood_does_not_starve_another_panes_echo() {
             ..
         } = next_matching(
             &mut events,
-            |e| matches!(e, ClientEvent::OpResult { op_id, .. } if *op_id == op),
+            |event| matches!(event, ClientEvent::OpResult { op_id, .. } if *op_id == op),
         )
         .await
         else {
@@ -112,7 +114,10 @@ async fn a_flood_does_not_starve_another_panes_echo() {
         config.relay = RelayMode::Disabled;
         let other = Client::connect_on(runtime.handle(), &ticket, config, flood).unwrap();
         other.attach(None);
-        next_matching(&mut events, |e| matches!(e, ClientEvent::Layout { .. })).await;
+        next_matching(&mut events, |event| {
+            matches!(event, ClientEvent::Layout { .. })
+        })
+        .await;
         other.set_view(Some(pane), vec![pane]);
         other.subscribe(pane);
         other.send_input(pane, b"yes\r".to_vec());
@@ -171,21 +176,23 @@ async fn unsubscribing_a_flooding_pane_stops_its_stream() {
         .to_string();
     let (client, mut events) = connect(&ticket, false);
     client.attach(None);
-    let ClientEvent::Layout { layout } =
-        next_matching(&mut events, |e| matches!(e, ClientEvent::Layout { .. })).await
+    let ClientEvent::Layout { layout } = next_matching(&mut events, |event| {
+        matches!(event, ClientEvent::Layout { .. })
+    })
+    .await
     else {
         unreachable!()
     };
     let pane = layout.tabs[0].focused;
     client.subscribe(pane);
-    next_matching(&mut events, |e| {
-        matches!(e, ClientEvent::PaneSnapshot { .. })
+    next_matching(&mut events, |event| {
+        matches!(event, ClientEvent::PaneSnapshot { .. })
     })
     .await;
     client.send_input(pane, b"yes\r".to_vec());
     let mut flooded = 0;
-    next_matching(&mut events, |e| {
-        if let ClientEvent::PaneBytes { data, .. } = e {
+    next_matching(&mut events, |event| {
+        if let ClientEvent::PaneBytes { data, .. } = event {
             flooded += data.len();
         }
         flooded > 4 << 20
@@ -199,23 +206,23 @@ async fn unsubscribing_a_flooding_pane_stops_its_stream() {
     let settled = client.stats();
     tokio::time::sleep(Duration::from_secs(2)).await;
     let mut late = 0;
-    while let Ok(e) = events.try_recv() {
+    while let Ok(event) = events.try_recv() {
         if matches!(
-            e,
+            event,
             ClientEvent::PaneBytes { pane_id, .. } | ClientEvent::PaneSnapshot { pane_id, .. }
                 if pane_id == pane
         ) {
             late += 1;
         }
     }
-    let now = client.stats();
+    let after = client.stats();
     assert_eq!(late, 0, "events for an unsubscribed pane");
     assert_eq!(
-        now.snapshots, settled.snapshots,
+        after.snapshots, settled.snapshots,
         "the stream was not resubscribed"
     );
     assert_eq!(
-        now.byte_frames, settled.byte_frames,
+        after.byte_frames, settled.byte_frames,
         "no bytes after it settled"
     );
     drop(client);

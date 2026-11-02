@@ -4,10 +4,11 @@
 //!
 //! Only owner connections made with [`ConnectOptions::askpass`](crate::ConnectOptions::askpass)
 //! receive them: a guest never announces the capability, and pushes on a connection that did
-//! not announce it are dropped (someone else's host must not ask for this device's passwords). Pushes go to an [`AskpassListener`] set with
-//! [`Client::set_askpass_listener`]; the open prompts and detected prompts are also kept
-//! ([`Client::open_askpass`], [`Client::detected_prompt`]). Answers are
-//! [`Client::answer_askpass`], [`Client::cancel_askpass`] and [`Client::type_secret`].
+//! not announce it are dropped (someone else's host must not ask for this device's passwords).
+//! Pushes go to an [`AskpassListener`] set with [`Client::set_askpass_listener`]; the open
+//! prompts and detected prompts are also kept ([`Client::open_askpass`],
+//! [`Client::detected_prompt`]). Answers are [`Client::answer_askpass`],
+//! [`Client::cancel_askpass`] and [`Client::type_secret`].
 //!
 //! Secrets are passed as [`Secret`], zeroed when dropped, and never logged.
 
@@ -23,7 +24,6 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::{Client, Inner, lock};
 
-/// How long a request waits for its answer.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A change in a pane's password prompts.
@@ -34,27 +34,20 @@ pub enum AskpassEvent {
     /// A program asks for a secret while a guest holds the pane's lease: the guest may have
     /// typed the command that asks.
     PromptWhileGuestDrives {
-        /// The prompt.
         prompt: SecretPrompt,
         /// The guest's name.
         guest: String,
     },
     /// A prompt is over (answered here or elsewhere, cancelled, timed out, abandoned).
     Closed {
-        /// The prompt.
         id: AskpassId,
-        /// Its pane.
         pane_id: PaneId,
-        /// Why.
         reason: CloseReason,
     },
     /// The pane shows a password prompt with echo off.
     Detected(DetectedPrompt),
     /// The detected prompt is gone.
-    DetectedGone {
-        /// The pane.
-        pane_id: PaneId,
-    },
+    DetectedGone { pane_id: PaneId },
     /// The connection dropped: everything above is forgotten. Prompts still open are sent
     /// again (same ids) once the client is attached again.
     Reset,
@@ -111,15 +104,15 @@ impl AskpassState {
     /// Handles an askpass message from `ctl`; returns it back if it is not one. Pushes on a
     /// connection that did not announce the capability are dropped: a daemon is not trusted
     /// to honour it.
-    pub(crate) fn dispatch(&self, msg: ServerCtl, announced: bool) -> Option<ServerCtl> {
-        if !announced && matches!(msg, ServerCtl::Askpass(_)) {
+    pub(crate) fn dispatch(&self, message: ServerCtl, announced: bool) -> Option<ServerCtl> {
+        if !announced && matches!(message, ServerCtl::Askpass(_)) {
             tracing::warn!("askpass push on a connection that did not ask for it; dropped");
             return None;
         }
-        let event = match msg {
+        let event = match message {
             ServerCtl::AskpassResult { req_id, result } => {
-                if let Some(tx) = lock(&self.pending).remove(&req_id) {
-                    let _ = tx.send(result);
+                if let Some(reply) = lock(&self.pending).remove(&req_id) {
+                    let _ = reply.send(result);
                 }
                 return None;
             }
@@ -163,27 +156,27 @@ impl AskpassState {
 
     fn emit(&self, event: AskpassEvent) {
         let listener = lock(&self.listener).clone();
-        if let Some(l) = listener {
-            l.on_askpass_event(event);
+        if let Some(listener) = listener {
+            listener.on_askpass_event(event);
         }
     }
 
     /// The connection dropped: requests in flight will not be answered, and what the daemon
     /// told us is stale.
     pub(crate) fn fail_pending(&self) {
-        for (_, tx) in lock(&self.pending).drain() {
-            let _ = tx.send(Err(AskpassError::Disconnected));
+        for (_, reply) in lock(&self.pending).drain() {
+            let _ = reply.send(Err(AskpassError::Disconnected));
         }
-        let had = {
+        let had_prompts = {
             let mut open = lock(&self.open);
             let mut detected = lock(&self.detected);
-            let had = !open.is_empty() || !detected.is_empty();
+            let had_prompts = !open.is_empty() || !detected.is_empty();
             open.clear();
             detected.clear();
             lock(&self.guests).clear();
-            had
+            had_prompts
         };
-        if had {
+        if had_prompts {
             self.emit(AskpassEvent::Reset);
         }
     }
@@ -199,7 +192,7 @@ impl Client {
     pub fn open_askpass(&self) -> Vec<SecretPrompt> {
         let mut open: Vec<SecretPrompt> =
             lock(&self.inner.askpass.open).values().cloned().collect();
-        open.sort_by_key(|p| p.id);
+        open.sort_by_key(|prompt| prompt.id);
         open
     }
 
@@ -208,9 +201,9 @@ impl Client {
         lock(&self.inner.askpass.guests).get(&id).cloned()
     }
 
-    /// The password prompt `pane` shows with echo off, if any.
-    pub fn detected_prompt(&self, pane: PaneId) -> Option<DetectedPrompt> {
-        lock(&self.inner.askpass.detected).get(&pane).cloned()
+    /// The password prompt `pane_id` shows with echo off, if any.
+    pub fn detected_prompt(&self, pane_id: PaneId) -> Option<DetectedPrompt> {
+        lock(&self.inner.askpass.detected).get(&pane_id).cloned()
     }
 
     /// Sends any askpass request and waits for the answer.
@@ -219,18 +212,21 @@ impl Client {
     ///
     /// The daemon's [`AskpassError`], or [`AskpassError::Disconnected`] if the connection
     /// dropped (or nothing came back within 30 s).
-    pub async fn askpass(&self, req: AskpassRequest) -> Result<(), AskpassError> {
+    pub async fn askpass(&self, request: AskpassRequest) -> Result<(), AskpassError> {
         let req_id = self
             .inner
             .next_op
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let (tx, rx) = oneshot::channel();
-        lock(&self.inner.askpass.pending).insert(req_id, tx);
-        self.inner.send(proto::ClientCtl::Askpass { req_id, req });
+        let (reply_tx, reply_rx) = oneshot::channel();
+        lock(&self.inner.askpass.pending).insert(req_id, reply_tx);
+        self.inner.send(proto::ClientCtl::Askpass {
+            req_id,
+            req: request,
+        });
         let inner: Arc<Inner> = Arc::clone(&self.inner);
         self.handle
             .spawn(async move {
-                match tokio::time::timeout(REQUEST_TIMEOUT, rx).await {
+                match tokio::time::timeout(REQUEST_TIMEOUT, reply_rx).await {
                     Ok(Ok(result)) => result,
                     _ => {
                         lock(&inner.askpass.pending).remove(&req_id);
@@ -260,18 +256,15 @@ impl Client {
         self.askpass(AskpassRequest::Cancel { id }).await
     }
 
-    /// Types `secret` and Return into `pane`, only while its terminal hides input.
+    /// Types `secret` and Return into `pane_id`, only while its terminal hides input.
     ///
     /// # Errors
     ///
     /// [`AskpassError::NotHidden`] (nothing typed) if the pane echoes input now; otherwise
     /// as [`askpass`](Self::askpass).
-    pub async fn type_secret(&self, pane: PaneId, secret: Secret) -> Result<(), AskpassError> {
-        self.askpass(AskpassRequest::TypeSecret {
-            pane_id: pane,
-            secret,
-        })
-        .await
+    pub async fn type_secret(&self, pane_id: PaneId, secret: Secret) -> Result<(), AskpassError> {
+        self.askpass(AskpassRequest::TypeSecret { pane_id, secret })
+            .await
     }
 }
 

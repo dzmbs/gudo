@@ -27,6 +27,8 @@ const MAX_BACKOFF: Duration = Duration::from_secs(5);
 /// rather than a failure, backed off (a daemon that welcomes and then drops every connection
 /// must not be redialled in a tight loop).
 const STABLE_FOR: Duration = Duration::from_secs(5);
+/// Acks are batched per pane at most this often: shorter than the usual ~20 ms keeps a
+/// fast link's budgeted panes moving.
 const ACK_INTERVAL: Duration = Duration::from_millis(5);
 /// How long [`Client::probe`](crate::Client::probe) waits for its pong on a link that has
 /// gone quiet: a live peer's QUIC stack acknowledges the ping at once, even when the daemon is
@@ -44,8 +46,8 @@ pub(crate) enum ConnError {
     Refused(proto::RefuseReason),
 }
 
-fn net(e: impl std::fmt::Display) -> ConnError {
-    ConnError::Net(e.to_string())
+fn net_error(err: impl std::fmt::Display) -> ConnError {
+    ConnError::Net(err.to_string())
 }
 
 /// Connects to the daemon at `addr`, also offering the ALPN of daemons installed before the
@@ -59,13 +61,13 @@ pub(crate) async fn connect_daemon(
     let connecting = endpoint
         .connect_with_opts(addr, proto::ALPN, options)
         .await
-        .map_err(|e| e.to_string())?;
-    connecting.await.map_err(|e| e.to_string())
+        .map_err(|err| err.to_string())?;
+    connecting.await.map_err(|err| err.to_string())
 }
 
 pub(crate) async fn send<T: Serialize>(stream: &mut SendStream, msg: &T) -> Result<(), ConnError> {
-    let buf = proto::frame::to_vec(msg).map_err(net)?;
-    stream.write_all(&buf).await.map_err(net)
+    let frame = proto::frame::to_vec(msg).map_err(net_error)?;
+    stream.write_all(&frame).await.map_err(net_error)
 }
 
 pub(crate) async fn recv<T: DeserializeOwned>(
@@ -75,22 +77,29 @@ pub(crate) async fn recv<T: DeserializeOwned>(
     match stream.read_exact(&mut prefix).await {
         Ok(()) => {}
         Err(ReadExactError::FinishedEarly(0)) => return Ok(None),
-        Err(e) => return Err(net(e)),
+        Err(err) => return Err(net_error(err)),
     }
-    let len = proto::frame::body_len(prefix, proto::MAX_FRAME_LEN).map_err(net)?;
+    let len = proto::frame::body_len(prefix, proto::MAX_FRAME_LEN).map_err(net_error)?;
     let mut body = vec![0; len];
-    stream.read_exact(&mut body).await.map_err(net)?;
-    proto::frame::decode_body(&body).map(Some).map_err(net)
+    stream.read_exact(&mut body).await.map_err(net_error)?;
+    proto::frame::decode_body(&body)
+        .map(Some)
+        .map_err(net_error)
 }
 
 async fn bind(inner: &Inner) -> Result<Endpoint, ConnError> {
-    let key: [u8; 32] = inner.config.secret_key.as_slice().try_into().map_err(net)?;
+    let key: [u8; 32] = inner
+        .config
+        .secret_key
+        .as_slice()
+        .try_into()
+        .map_err(net_error)?;
     let options = lock(&inner.net).1.clone();
     endpoint_builder(&route(inner), &options)?
         .secret_key(iroh::SecretKey::from_bytes(&key))
         .bind()
         .await
-        .map_err(net)
+        .map_err(net_error)
 }
 
 /// Binds an endpoint, retrying until it works (a bad relay URL in the settings keeps failing
@@ -99,10 +108,10 @@ async fn bind_until_ok(inner: &Inner) -> Endpoint {
     loop {
         inner.rebind.store(false, Ordering::SeqCst);
         match bind(inner).await {
-            Ok(ep) => return ep,
-            Err(e) => {
+            Ok(endpoint) => return endpoint,
+            Err(err) => {
                 inner.emit(ClientEvent::Disconnected {
-                    reason: format!("binding endpoint: {e}"),
+                    reason: format!("binding endpoint: {err}"),
                 });
                 let _ = tokio::time::timeout(MAX_BACKOFF, inner.reconnect.notified()).await;
             }
@@ -111,8 +120,8 @@ async fn bind_until_ok(inner: &Inner) -> Endpoint {
 }
 
 fn route(inner: &Inner) -> Route {
-    let net = lock(&inner.net);
-    Route::new(net.0, &inner.relays, &net.1)
+    let network = lock(&inner.net);
+    Route::new(network.0, &inner.relays, &network.1)
 }
 
 /// How to reach a daemon: what the client asks for (local only, its own relays) over what
@@ -181,20 +190,21 @@ pub(crate) fn endpoint_builder(
             own,
         } => {
             let whose = if *own { "relay settings" } else { "ticket" };
-            let map = iroh::RelayMap::try_from_iter(urls.iter().map(String::as_str))
-                .map_err(|e| ConnError::Net(format!("relay urls in the {whose}: {e}")))?;
-            let map = match auth_token {
-                Some(token) => map.with_auth_token(token.clone()),
-                None => map,
+            let relay_map = iroh::RelayMap::try_from_iter(urls.iter().map(String::as_str))
+                .map_err(|err| ConnError::Net(format!("relay urls in the {whose}: {err}")))?;
+            let relay_map = match auth_token {
+                Some(token) => relay_map.with_auth_token(token.clone()),
+                None => relay_map,
             };
-            Endpoint::builder(presets::Minimal).relay_mode(iroh::RelayMode::Custom(map))
+            Endpoint::builder(presets::Minimal).relay_mode(iroh::RelayMode::Custom(relay_map))
         }
     };
-    let idle = iroh::endpoint::IdleTimeout::try_from(proto::IDLE_TIMEOUT).map_err(net)?;
+    let idle_timeout =
+        iroh::endpoint::IdleTimeout::try_from(proto::IDLE_TIMEOUT).map_err(net_error)?;
     builder = builder.transport_config(
         iroh::endpoint::QuicTransportConfig::builder()
             .keep_alive_interval(proto::KEEP_ALIVE)
-            .max_idle_timeout(Some(idle))
+            .max_idle_timeout(Some(idle_timeout))
             .build(),
     );
     if !options.relay_ca_der.is_empty() {
@@ -217,10 +227,10 @@ pub(crate) fn ticket_addr(
     ticket: &proto::Ticket,
     route: &Route,
 ) -> Result<EndpointAddr, ConnError> {
-    let id = EndpointId::from_bytes(&ticket.daemon_id.0).map_err(net)?;
-    let mut addr = EndpointAddr::new(id);
-    for a in &ticket.addrs {
-        addr = addr.with_ip_addr(*a);
+    let endpoint_id = EndpointId::from_bytes(&ticket.daemon_id.0).map_err(net_error)?;
+    let mut addr = EndpointAddr::new(endpoint_id);
+    for ip_addr in &ticket.addrs {
+        addr = addr.with_ip_addr(*ip_addr);
     }
     let home = ticket.relay_url.as_deref();
     let urls: Vec<&str> = match route {
@@ -252,15 +262,14 @@ pub(crate) async fn supervise(inner: Arc<Inner>) {
             continue;
         }
         if inner.rebind.load(Ordering::SeqCst) {
-            // The relay settings changed: a new endpoint built from them.
             endpoint.close().await;
             endpoint = bind_until_ok(&inner).await;
             *lock(&inner.endpoint) = Some(endpoint.clone());
         }
         match connect_once(&inner, &endpoint).await {
-            Ok(conn) => {
-                let up = tokio::time::Instant::now();
-                let reason = run(&inner, conn).await;
+            Ok(live) => {
+                let connected_at = tokio::time::Instant::now();
+                let reason = run(&inner, live).await;
                 *lock(&inner.connection) = None;
                 inner.ws.fail_pending();
                 inner.mp.fail_pending();
@@ -273,7 +282,7 @@ pub(crate) async fn supervise(inner: Arc<Inner>) {
                 if *lock(&inner.paused) {
                     continue;
                 }
-                if up.elapsed() >= STABLE_FOR {
+                if connected_at.elapsed() >= STABLE_FOR {
                     backoff = Duration::from_millis(100);
                     continue;
                 }
@@ -285,13 +294,12 @@ pub(crate) async fn supervise(inner: Arc<Inner>) {
                 inner.reconnect.notified().await;
                 continue;
             }
-            Err(e) => {
+            Err(err) => {
                 inner.emit(ClientEvent::Disconnected {
-                    reason: e.to_string(),
+                    reason: err.to_string(),
                 });
             }
         }
-        // Wait out the backoff, or less if asked to reconnect now.
         let _ = tokio::time::timeout(backoff, inner.reconnect.notified()).await;
         backoff = (backoff * 2).min(MAX_BACKOFF);
     }
@@ -338,10 +346,12 @@ async fn dial(inner: &Arc<Inner>, endpoint: &Endpoint) -> Result<Live, ConnError
     } else {
         &[SignedGrant::DEVICE, SignedGrant::PAIRING]
     };
-    let mut last = ConnError::Net("no grant tried".into());
-    for &v in grants {
-        let conn = connect_daemon(endpoint, addr.clone()).await.map_err(net)?;
-        match handshake(inner, conn, v).await {
+    let mut last_error = ConnError::Net("no grant tried".into());
+    for &grant_version in grants {
+        let conn = connect_daemon(endpoint, addr.clone())
+            .await
+            .map_err(net_error)?;
+        match handshake(inner, conn, grant_version).await {
             Ok(live) => {
                 *lock(&inner.paired) = true;
                 return Ok(live);
@@ -351,18 +361,22 @@ async fn dial(inner: &Arc<Inner>, endpoint: &Endpoint) -> Result<Live, ConnError
             Err(ConnError::Refused(
                 reason @ (proto::RefuseReason::InvalidGrant | proto::RefuseReason::Revoked),
             )) => {
-                last = ConnError::Refused(reason);
+                last_error = ConnError::Refused(reason);
             }
-            Err(e) => return Err(e),
+            Err(err) => return Err(err),
         }
     }
-    Err(last)
+    Err(last_error)
 }
 
-async fn handshake(inner: &Arc<Inner>, conn: Connection, v: u16) -> Result<Live, ConnError> {
-    let (mut ctl_tx, mut ctl_rx) = conn.open_bi().await.map_err(net)?;
+async fn handshake(
+    inner: &Arc<Inner>,
+    conn: Connection,
+    grant_version: u16,
+) -> Result<Live, ConnError> {
+    let (mut ctl_tx, mut ctl_rx) = conn.open_bi().await.map_err(net_error)?;
     let _ = ctl_tx.set_priority(100);
-    let (token, grant_id) = match (&inner.mp.invite, v) {
+    let (token, grant_id) = match (&inner.mp.invite, grant_version) {
         (Some(invite), SignedGrant::CHAIN) => (invite.chain.to_token(), invite.chain.grant_id()),
         (_, SignedGrant::PAIRING) => (inner.ticket.secret.0.to_vec(), proto::GrantId([0; 16])),
         _ => (Vec::new(), proto::GrantId([0; 16])),
@@ -371,7 +385,11 @@ async fn handshake(inner: &Arc<Inner>, conn: Connection, v: u16) -> Result<Live,
     let hello = Hello {
         device_id: device_id(&inner.config),
         principal_id: inner.ticket.principal,
-        grant: SignedGrant { v, grant_id, token },
+        grant: SignedGrant {
+            v: grant_version,
+            grant_id,
+            token,
+        },
         snapshot_format: u32::from(ghostty_vt::snapshot_format()),
         resume,
         caps: Caps::ECHO_PREDICTION
@@ -445,10 +463,10 @@ async fn handshake(inner: &Arc<Inner>, conn: Connection, v: u16) -> Result<Live,
         _ => None,
     };
     *lock(&inner.image_storage_bytes) = limits;
-    let ours = u32::from(ghostty_vt::snapshot_format());
+    let our_format = u32::from(ghostty_vt::snapshot_format());
     match first {
         Some(ServerCtl::Welcome(welcome)) => {
-            let incompatible = welcome.snapshot_format != ours;
+            let incompatible = welcome.snapshot_format != our_format;
             *lock(&inner.incompatible) = incompatible;
             if !incompatible {
                 *lock(&inner.resume_token) = Some(welcome.resume_token);
@@ -482,14 +500,14 @@ fn resume_points(inner: &Inner) -> Vec<ResumePoint> {
     let wanted = lock(&inner.wanted);
     let mirrors = lock(&inner.mirrors);
     let mut panes = wanted.subscribed.clone();
-    panes.sort_by_key(|&p| Some(p) != wanted.focus);
+    panes.sort_by_key(|&pane_id| Some(pane_id) != wanted.focus);
     panes
         .into_iter()
-        .filter_map(|p| {
-            mirrors.get(&p).map(|m| ResumePoint {
-                pane_id: p,
-                last_seq: Seq(m.seq()),
-                snap_gen: m.snap_gen,
+        .filter_map(|pane_id| {
+            mirrors.get(&pane_id).map(|mirror| ResumePoint {
+                pane_id,
+                last_seq: Seq(mirror.seq()),
+                snap_gen: mirror.snap_gen,
             })
         })
         .collect()
@@ -508,77 +526,77 @@ async fn run(inner: &Arc<Inner>, live: Live) -> String {
         incompatible: _,
     } = live;
     let (resumed, same_run) = {
-        let mut e = lock(&inner.epoch);
-        let seen = (e.is_some(), *e == Some(epoch));
-        *e = Some(epoch);
+        let mut last_epoch = lock(&inner.epoch);
+        let seen = (last_epoch.is_some(), *last_epoch == Some(epoch));
+        *last_epoch = Some(epoch);
         seen
     };
     // Input is kept for sending again only for daemons that apply it once.
     let resends = lock(&inner.daemon_info)
         .as_ref()
-        .is_some_and(|i| i.features.contains(proto::DaemonFeatures::INPUT_RESUME));
+        .is_some_and(|info| info.features.contains(proto::DaemonFeatures::INPUT_RESUME));
     lock(&inner.stats).connections += 1;
     inner.mp.reset_for_connection();
     // History requests in flight died with the previous connection.
-    for m in lock(&inner.mirrors).values_mut() {
-        m.history.in_flight = false;
+    for mirror in lock(&inner.mirrors).values_mut() {
+        mirror.history.in_flight = false;
     }
     *lock(&inner.connection) = Some(conn.clone());
     inner.emit(ClientEvent::Connected { epoch, resumed });
 
     let mut input = match conn.open_uni().await {
-        Ok(s) => s,
-        Err(e) => return e.to_string(),
+        Ok(stream) => stream,
+        Err(err) => return err.to_string(),
     };
     let _ = input.set_priority(90);
-    if let Err(e) = send(&mut input, &StreamHeader::Input).await {
-        return e.to_string();
+    if let Err(err) = send(&mut input, &StreamHeader::Input).await {
+        return err.to_string();
     }
     // What the last connection took but the daemon never confirmed: it may have died with it.
     let principal = inner.ticket.principal;
-    let again = lock(&inner.input).resend(resends && same_run);
-    for sent in again {
+    let unconfirmed = lock(&inner.input).resend(resends && same_run);
+    for sent in unconfirmed {
         let frame = ClientInput::Input(Input {
             pane_id: sent.pane_id,
             input_seq: InputSeq(sent.seq),
             principal,
             payload: sent.payload,
         });
-        if let Err(e) = send(&mut input, &frame).await {
-            return e.to_string();
+        if let Err(err) = send(&mut input, &frame).await {
+            return err.to_string();
         }
     }
 
     // Replay what the client wants. Panes in the Hello's resume list are already streaming.
     let replay: Vec<ClientCtl> = {
         let wanted = lock(&inner.wanted);
-        let mut msgs = Vec::new();
+        let mut messages = Vec::new();
         if wanted.attach_requested {
-            msgs.push(ClientCtl::Attach {
+            messages.push(ClientCtl::Attach {
                 session_id: wanted.session,
             });
         }
-        msgs.push(ClientCtl::Visible {
+        messages.push(ClientCtl::Visible {
             pane_ids: wanted.visible.clone(),
         });
-        msgs.push(ClientCtl::Focus {
+        messages.push(ClientCtl::Focus {
             pane_id: wanted.focus,
         });
         for (&pane_id, &size) in &wanted.sizes {
-            msgs.push(ClientCtl::Resize { pane_id, size });
+            messages.push(ClientCtl::Resize { pane_id, size });
         }
         for &pane_id in &wanted.subscribed {
-            msgs.push(ClientCtl::Subscribe {
+            messages.push(ClientCtl::Subscribe {
                 pane_id,
                 mode: proto::SubscribeMode::Live,
                 rows_hint: 0,
             });
         }
-        msgs
+        messages
     };
     for msg in &replay {
-        if let Err(e) = send(&mut ctl_tx, msg).await {
-            return e.to_string();
+        if let Err(err) = send(&mut ctl_tx, msg).await {
+            return err.to_string();
         }
     }
 
@@ -619,8 +637,9 @@ async fn run(inner: &Arc<Inner>, live: Live) -> String {
                             principal,
                             payload,
                         });
-                        if let Err(e) = send(&mut input, &frame).await {
-                            break e.to_string();
+                        // One write per keystroke frame: no batching delay.
+                        if let Err(err) = send(&mut input, &frame).await {
+                            break err.to_string();
                         }
                     }
                 }
@@ -628,7 +647,7 @@ async fn run(inner: &Arc<Inner>, live: Live) -> String {
             done = tasks.join_next() => {
                 break match done {
                     Some(Ok(reason)) => reason,
-                    Some(Err(e)) => e.to_string(),
+                    Some(Err(err)) => err.to_string(),
                     None => "connection tasks ended".to_owned(),
                 };
             }
@@ -662,20 +681,20 @@ async fn run_incompatible(inner: &Arc<Inner>, live: Live) -> String {
 
 async fn write_ctl(
     mut send_stream: SendStream,
-    mut rx: mpsc::UnboundedReceiver<ClientCtl>,
+    mut ctl_rx: mpsc::UnboundedReceiver<ClientCtl>,
 ) -> String {
-    let mut buf = Vec::new();
-    while let Some(msg) = rx.recv().await {
-        buf.clear();
+    let mut batch = Vec::new();
+    while let Some(msg) = ctl_rx.recv().await {
+        batch.clear();
         let mut next = Some(msg);
         while let Some(msg) = next {
-            if let Err(e) = proto::frame::encode(&msg, &mut buf) {
-                tracing::warn!("encoding ctl: {e}");
+            if let Err(err) = proto::frame::encode(&msg, &mut batch) {
+                tracing::warn!("encoding ctl: {err}");
             }
-            next = rx.try_recv().ok();
+            next = ctl_rx.try_recv().ok();
         }
-        if let Err(e) = send_stream.write_all(&buf).await {
-            return e.to_string();
+        if let Err(err) = send_stream.write_all(&batch).await {
+            return err.to_string();
         }
     }
     "ctl writer closed".into()
@@ -703,19 +722,19 @@ pub(crate) async fn probe(inner: Arc<Inner>, conn: Connection) {
     };
     let current = lock(&inner.connection)
         .as_ref()
-        .is_some_and(|c| c.stable_id() == conn.stable_id());
+        .is_some_and(|live| live.stable_id() == conn.stable_id());
     if !alive && current && conn.close_reason().is_none() {
         tracing::info!("no answer to a ping: dropping the connection");
         conn.close(0u32.into(), b"no answer");
     }
 }
 
-async fn read_ctl(inner: Arc<Inner>, mut rx: RecvStream) -> String {
+async fn read_ctl(inner: Arc<Inner>, mut ctl_rx: RecvStream) -> String {
     loop {
-        let msg = match recv::<ServerCtl>(&mut rx).await {
+        let msg = match recv::<ServerCtl>(&mut ctl_rx).await {
             Ok(Some(msg)) => msg,
             Ok(None) => return "daemon closed ctl".into(),
-            Err(e) => return e.to_string(),
+            Err(err) => return err.to_string(),
         };
         if let ServerCtl::InputRejected { input_seq, .. } = &msg {
             lock(&inner.input).confirm(input_seq.0);
@@ -799,7 +818,7 @@ async fn read_ctl(inner: Arc<Inner>, mut rx: RecvStream) -> String {
             ServerCtl::PaneClosed { pane_id } => {
                 lock(&inner.mirrors).remove(&pane_id);
                 lock(&inner.programs).remove(&pane_id);
-                lock(&inner.wanted).subscribed.retain(|&p| p != pane_id);
+                lock(&inner.wanted).subscribed.retain(|&id| id != pane_id);
                 ClientEvent::PaneClosed { pane_id }
             }
             ServerCtl::EchoHintAt(hint) => ClientEvent::EchoHint { hint },
@@ -860,7 +879,7 @@ async fn read_ctl(inner: Arc<Inner>, mut rx: RecvStream) -> String {
 fn forget_programs(inner: &Inner) {
     let panes: Vec<PaneId> = lock(&inner.programs)
         .drain()
-        .map(|(pane, _)| pane)
+        .map(|(pane_id, _)| pane_id)
         .collect();
     for pane_id in panes {
         inner.emit(ClientEvent::ProgramStatus {
@@ -878,8 +897,8 @@ async fn accept_panes(
 ) -> String {
     loop {
         let mut stream = match conn.accept_uni().await {
-            Ok(s) => s,
-            Err(e) => return e.to_string(),
+            Ok(stream) => stream,
+            Err(err) => return err.to_string(),
         };
         let inner = Arc::clone(&inner);
         let acks = Arc::clone(&acks);
@@ -887,8 +906,8 @@ async fn accept_panes(
         tokio::spawn(async move {
             match recv(&mut stream).await {
                 Ok(Some(StreamHeader::Pane { pane_id })) => {
-                    while let Ok(Some(out)) = recv::<PaneOutput>(&mut stream).await {
-                        apply_output(&inner, pane_id, out, &ctl);
+                    while let Ok(Some(output)) = recv::<PaneOutput>(&mut stream).await {
+                        apply_output(&inner, pane_id, output, &ctl);
                         acks.notify_one();
                         // A flooding stream always has the next frame ready, so its reads
                         // never yield: let other panes' output and the input writer run
@@ -910,11 +929,11 @@ async fn accept_panes(
 fn apply_output(
     inner: &Inner,
     pane_id: PaneId,
-    out: PaneOutput,
+    output: PaneOutput,
     ctl: &mpsc::UnboundedSender<ClientCtl>,
 ) {
     let keep_vt = inner.config.mirror_vt;
-    let event = match out {
+    let event = match output {
         PaneOutput::Bytes { seq, data } => {
             lock(&inner.stats).byte_frames += 1;
             let mut mirrors = lock(&inner.mirrors);
@@ -964,8 +983,8 @@ fn apply_output(
                 Some(event) => event,
                 None => return,
             },
-            Err(e) => {
-                tracing::warn!(%pane_id, "bad snapshot: {e}");
+            Err(err) => {
+                tracing::warn!(%pane_id, "bad snapshot: {err}");
                 return;
             }
         },
@@ -978,8 +997,8 @@ fn apply_output(
             None => return,
         },
         PaneOutput::Resized { seq, size } => {
-            if let Some(m) = lock(&inner.mirrors).get_mut(&pane_id) {
-                m.resize(size);
+            if let Some(mirror) = lock(&inner.mirrors).get_mut(&pane_id) {
+                mirror.resize(size);
             }
             ClientEvent::PaneResized {
                 pane_id,
@@ -1029,15 +1048,15 @@ fn apply_bulk(inner: &Inner, msg: Bulk) {
             ..
         } => {
             let records = match inflate(&data, raw_len) {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::warn!(%pane_id, "bad history page: {e}");
+                Ok(records) => records,
+                Err(err) => {
+                    tracing::warn!(%pane_id, "bad history page: {err}");
                     return;
                 }
             };
-            let applied = lock(&inner.mirrors)
-                .get_mut(&pane_id)
-                .and_then(|m| m.apply_history(snapshot_seq.0, offset, next_offset, done, &records));
+            let applied = lock(&inner.mirrors).get_mut(&pane_id).and_then(|mirror| {
+                mirror.apply_history(snapshot_seq.0, offset, next_offset, done, &records)
+            });
             let Some(rows) = applied else {
                 // A page for an older snapshot, or a repeat: nothing to continue.
                 return;
@@ -1054,11 +1073,11 @@ fn apply_bulk(inner: &Inner, msg: Bulk) {
             pane_id,
             snapshot_seq,
         } => {
-            if let Some(m) = lock(&inner.mirrors).get_mut(&pane_id)
-                && m.history.snapshot_seq == snapshot_seq.0
+            if let Some(mirror) = lock(&inner.mirrors).get_mut(&pane_id)
+                && mirror.history.snapshot_seq == snapshot_seq.0
             {
-                m.history.in_flight = false;
-                m.history.done = true;
+                mirror.history.in_flight = false;
+                mirror.history.done = true;
             }
             ClientEvent::PaneHistoryGone { pane_id }
         }
@@ -1080,8 +1099,8 @@ fn snapshot_event(
     if !lock(&inner.wanted).subscribed.contains(&pane_id) {
         return None;
     }
-    let images = crate::image_storage_limit(*lock(&inner.image_storage_bytes));
-    let mirror = Mirror::from_snapshot(snap_gen, seq.0, &raw, keep_vt, images);
+    let image_storage = crate::image_storage_limit(*lock(&inner.image_storage_bytes));
+    let mirror = Mirror::from_snapshot(snap_gen, seq.0, &raw, keep_vt, image_storage);
     lock(&inner.mirrors).insert(pane_id, mirror);
     Some(ClientEvent::PaneSnapshot {
         pane_id,
@@ -1099,10 +1118,10 @@ async fn send_acks(
         notify.notified().await;
         let acks: Vec<(PaneId, u64)> = lock(&inner.mirrors)
             .iter_mut()
-            .filter(|(_, m)| m.seq() > m.acked)
-            .map(|(&p, m)| {
-                m.acked = m.seq();
-                (p, m.seq())
+            .filter(|(_, mirror)| mirror.seq() > mirror.acked)
+            .map(|(&pane_id, mirror)| {
+                mirror.acked = mirror.seq();
+                (pane_id, mirror.seq())
             })
             .collect();
         for (pane_id, seq) in acks {
@@ -1123,9 +1142,9 @@ async fn send_acks(
 /// Accepts local TCP connections and splices each onto a port-forward stream.
 pub(crate) async fn serve_forward(inner: Arc<Inner>, listener: StdTcpListener, remote_port: u16) {
     let listener = match tokio::net::TcpListener::from_std(listener) {
-        Ok(l) => l,
-        Err(e) => {
-            tracing::warn!("port forward listener: {e}");
+        Ok(listener) => listener,
+        Err(err) => {
+            tracing::warn!("port forward listener: {err}");
             return;
         }
     };
@@ -1138,8 +1157,8 @@ pub(crate) async fn serve_forward(inner: Arc<Inner>, listener: StdTcpListener, r
         while splices.try_join_next().is_some() {}
         let inner = Arc::clone(&inner);
         splices.spawn(async move {
-            if let Err(e) = forward_one(&inner, tcp, remote_port).await {
-                tracing::debug!("port forward: {e}");
+            if let Err(err) = forward_one(&inner, tcp, remote_port).await {
+                tracing::debug!("port forward: {err}");
             }
         });
     }
@@ -1152,12 +1171,12 @@ async fn forward_one(
 ) -> Result<(), ConnError> {
     // Wait for a connection if the client is between reconnects.
     let conn = loop {
-        if let Some(c) = lock(&inner.connection).clone() {
-            break c;
+        if let Some(conn) = lock(&inner.connection).clone() {
+            break conn;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
-    let (mut send_stream, mut recv_stream) = conn.open_bi().await.map_err(net)?;
+    let (mut send_stream, mut recv_stream) = conn.open_bi().await.map_err(net_error)?;
     send(
         &mut send_stream,
         &StreamHeader::PortForward { port: remote_port },
@@ -1171,14 +1190,14 @@ async fn forward_one(
     let _ = tcp.set_nodelay(true);
     let (mut tcp_read, mut tcp_write) = tcp.into_split();
     let up = async {
-        let r = tokio::io::copy(&mut tcp_read, &mut send_stream).await;
+        let copied = tokio::io::copy(&mut tcp_read, &mut send_stream).await;
         let _ = send_stream.finish();
-        r
+        copied
     };
     let down = async {
-        let r = tokio::io::copy(&mut recv_stream, &mut tcp_write).await;
+        let copied = tokio::io::copy(&mut recv_stream, &mut tcp_write).await;
         let _ = tcp_write.shutdown().await;
-        r
+        copied
     };
     let _ = tokio::join!(up, down);
     Ok(())
@@ -1211,7 +1230,7 @@ mod tests {
         proto::Ticket {
             v: proto::Ticket::VERSION,
             daemon_id: proto::DaemonId(*iroh::SecretKey::from_bytes(&[7; 32]).public().as_bytes()),
-            addrs: vec!["192.168.1.20:47011".parse().unwrap()],
+            addrs: vec!["192.0.2.20:47011".parse().unwrap()],
             relay_url: Some(HOME.into()),
             principal: proto::PrincipalId([1; 16]),
             secret: proto::PairingSecret([2; 16]),
@@ -1219,7 +1238,7 @@ mod tests {
         }
     }
 
-    fn own() -> ConnectOptions {
+    fn own_relays() -> ConnectOptions {
         ConnectOptions {
             relay_urls: vec![OWN.into()],
             relay_auth_token: Some("token".into()),
@@ -1245,13 +1264,13 @@ mod tests {
         };
         for relays in [TicketRelays::Default, custom, TicketRelays::Disabled] {
             assert_eq!(
-                Route::new(RelayMode::Disabled, &relays, &own()),
+                Route::new(RelayMode::Disabled, &relays, &own_relays()),
                 Route::Direct
             );
         }
         // A local-only daemon is on no relay: the device's own relays cannot reach it.
         assert_eq!(
-            Route::new(RelayMode::Default, &TicketRelays::Disabled, &own()),
+            Route::new(RelayMode::Default, &TicketRelays::Disabled, &own_relays()),
             Route::Direct
         );
         assert!(relays(&Route::Direct).is_empty());
@@ -1259,7 +1278,7 @@ mod tests {
 
     #[test]
     fn the_devices_own_relays_replace_the_tickets() {
-        let route = Route::new(RelayMode::Default, &TicketRelays::Default, &own());
+        let route = Route::new(RelayMode::Default, &TicketRelays::Default, &own_relays());
         assert_eq!(
             route,
             Route::Custom {
@@ -1270,7 +1289,7 @@ mod tests {
         );
         // Only the device's relay, not the daemon's home relay.
         assert_eq!(relays(&route), vec![OWN.to_string()]);
-        assert!(endpoint_builder(&route, &own()).is_ok());
+        assert!(endpoint_builder(&route, &own_relays()).is_ok());
     }
 
     #[test]

@@ -26,15 +26,15 @@ pub(crate) struct Sent {
 /// This client's input numbering and what of it is unacknowledged.
 #[derive(Debug, Default)]
 pub(crate) struct InputLog {
-    last: u64,
+    last_seq: u64,
     unacked: VecDeque<Sent>,
     bytes: usize,
 }
 
 fn payload_len(payload: &InputPayload) -> usize {
     match payload {
-        InputPayload::Bytes(b) => b.len(),
-        InputPayload::Paste(t) => t.len(),
+        InputPayload::Bytes(bytes) => bytes.len(),
+        InputPayload::Paste(text) => text.len(),
         _ => 64,
     }
 }
@@ -42,29 +42,29 @@ fn payload_len(payload: &InputPayload) -> usize {
 impl InputLog {
     /// Numbers `payload`; keeps it for resending when `keep`.
     pub fn send(&mut self, pane_id: PaneId, payload: &InputPayload, keep: bool) -> u64 {
-        self.last += 1;
+        self.last_seq += 1;
         if keep {
             let len = payload_len(payload);
             self.unacked.push_back(Sent {
-                seq: self.last,
+                seq: self.last_seq,
                 pane_id,
                 payload: payload.clone(),
                 len,
             });
             self.bytes += len;
             while self.bytes > MAX_BYTES || self.unacked.len() > MAX_ENTRIES {
-                let Some(old) = self.unacked.pop_front() else {
+                let Some(oldest) = self.unacked.pop_front() else {
                     break;
                 };
-                self.bytes -= old.len;
+                self.bytes -= oldest.len;
             }
         }
-        self.last
+        self.last_seq
     }
 
     /// The daemon has handled everything up to `seq` (input is handled in order).
     pub fn confirm(&mut self, seq: u64) {
-        while self.unacked.front().is_some_and(|s| s.seq <= seq) {
+        while self.unacked.front().is_some_and(|sent| sent.seq <= seq) {
             let done = self.unacked.pop_front().expect("checked");
             self.bytes -= done.len;
         }
@@ -87,18 +87,18 @@ impl InputLog {
 mod tests {
     use super::*;
 
-    fn key(n: u8) -> InputPayload {
-        InputPayload::Bytes(vec![n])
+    fn key(byte: u8) -> InputPayload {
+        InputPayload::Bytes(vec![byte])
     }
 
     #[test]
     fn unacknowledged_input_is_sent_again_in_order() {
         let mut log = InputLog::default();
-        for n in 1..=5 {
-            log.send(PaneId(1), &key(n), true);
+        for byte in 1..=5 {
+            log.send(PaneId(1), &key(byte), true);
         }
         log.confirm(2);
-        let again: Vec<u64> = log.resend(true).iter().map(|s| s.seq).collect();
+        let again: Vec<u64> = log.resend(true).iter().map(|sent| sent.seq).collect();
         assert_eq!(again, [3, 4, 5]);
         assert_eq!(log.send(PaneId(1), &key(6), true), 6, "numbering goes on");
         assert!(log.resend(false).is_empty(), "never to another daemon run");
@@ -113,6 +113,6 @@ mod tests {
             log.send(PaneId(1), &piece, true);
         }
         assert!(log.bytes <= MAX_BYTES);
-        assert_eq!(log.resend(true).first().map(|s| s.seq), Some(7));
+        assert_eq!(log.resend(true).first().map(|sent| sent.seq), Some(7));
     }
 }

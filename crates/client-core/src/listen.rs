@@ -34,7 +34,6 @@ impl LocalListener {
         })
     }
 
-    /// The next accepted connection.
     pub(crate) async fn accept(&mut self) -> TcpStream {
         loop {
             let Some(listener) = &self.listener else {
@@ -43,13 +42,13 @@ impl LocalListener {
             };
             tokio::select! {
                 accepted = listener.accept() => match accepted {
-                    Ok((tcp, _)) => return tcp,
-                    Err(e) if matches!(
-                        e.kind(),
+                    Ok((stream, _)) => return stream,
+                    Err(err) if matches!(
+                        err.kind(),
                         io::ErrorKind::ConnectionAborted | io::ErrorKind::Interrupted
                     ) => {}
-                    Err(e) => {
-                        tracing::debug!("forward accept on {}: {e}", self.port);
+                    Err(err) => {
+                        tracing::debug!("forward accept on {}: {err}", self.port);
                         // Out of file descriptors and the like: no spinning.
                         tokio::time::sleep(Duration::from_millis(50)).await;
                         self.rebind().await;
@@ -72,8 +71,8 @@ impl LocalListener {
                     self.listener = Some(listener);
                     return;
                 }
-                Err(e) => {
-                    tracing::debug!("forward rebind on {}: {e}", self.port);
+                Err(err) => {
+                    tracing::debug!("forward rebind on {}: {err}", self.port);
                     tokio::time::sleep(wait).await;
                     wait = (wait * 2).min(MAX_REBIND_WAIT);
                 }
@@ -88,28 +87,28 @@ mod tests {
 
     #[tokio::test]
     async fn binds_the_same_port_again_on_resume() {
-        let std = StdTcpListener::bind(("127.0.0.1", 0)).unwrap();
-        std.set_nonblocking(true).unwrap();
-        let port = std.local_addr().unwrap().port();
-        let (resumed, rx) = watch::channel(0);
-        let mut listener = LocalListener::new(std, rx).unwrap();
+        let bound = StdTcpListener::bind(("127.0.0.1", 0)).unwrap();
+        bound.set_nonblocking(true).unwrap();
+        let port = bound.local_addr().unwrap().port();
+        let (resumed, resumed_rx) = watch::channel(0);
+        let mut listener = LocalListener::new(bound, resumed_rx).unwrap();
 
         let (accepted, mut seen) = tokio::sync::mpsc::unbounded_channel();
         tokio::spawn(async move {
             loop {
-                let tcp = listener.accept().await;
-                let _ = accepted.send(tcp);
+                let stream = listener.accept().await;
+                let _ = accepted.send(stream);
             }
         });
         let _first = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
         assert!(seen.recv().await.is_some());
 
-        resumed.send_modify(|n| *n += 1);
+        resumed.send_modify(|resumes| *resumes += 1);
         // A connection that reached the old listener just before it closed is lost: try again
         // until the new one accepts.
         let mut again = false;
         for _ in 0..50 {
-            if let Ok(_tcp) = TcpStream::connect(("127.0.0.1", port)).await
+            if let Ok(_stream) = TcpStream::connect(("127.0.0.1", port)).await
                 && tokio::time::timeout(Duration::from_millis(100), seen.recv())
                     .await
                     .is_ok()

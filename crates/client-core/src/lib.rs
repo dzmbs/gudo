@@ -1,6 +1,7 @@
 //! Platform-neutral client core: dial a daemon by pairing ticket, attach to a session, follow
 //! panes with seq/ack, resume after disconnects, forward ports.
 //!
+//! The API is shaped for a UniFFI binding: a [`Client`] handle
 //! with synchronous, non-blocking methods taking owned values, and a [`ClientListener`]
 //! callback receiving [`ClientEvent`]s on the core's own threads. No generics or lifetimes
 //! cross the boundary. The client owns its tokio runtime, so it can be driven from Swift or
@@ -95,7 +96,6 @@ pub struct ClientConfig {
     /// The device's Ed25519 secret key (32 bytes). Keep it in the Keychain; it identifies the
     /// device to every daemon it pairs with.
     pub secret_key: Vec<u8>,
-    /// Relay usage.
     pub relay: RelayMode,
     /// Keep a libghostty-vt mirror of each followed pane (needed for [`Client::pane_text`]
     /// and [`Client::pane_snapshot`]). An app that feeds its own renderer's VT can turn this
@@ -213,10 +213,7 @@ pub enum ClientEvent {
     /// owner device in only to upgrade it ([`Client::upgrade_daemon`]); nothing else works on
     /// this connection. Daemons from before [`proto::DaemonInfo`] refuse instead
     /// ([`ClientEvent::Refused`], preceded by this event).
-    Incompatible {
-        /// Why, in words.
-        reason: String,
-    },
+    Incompatible { reason: String },
     /// Connected (or reconnected) and authenticated.
     Connected {
         /// Daemon run; a change means every pane's resume state was invalid.
@@ -225,24 +222,14 @@ pub enum ClientEvent {
         resumed: bool,
     },
     /// The connection dropped; the client is redialling.
-    Disconnected {
-        /// Why.
-        reason: String,
-    },
+    Disconnected { reason: String },
     /// The daemon refused the connection (bad grant, version mismatch). The client stops
     /// redialling until [`Client::reconnect`].
-    Refused {
-        /// Why.
-        reason: String,
-    },
+    Refused { reason: String },
     /// The session list.
-    Sessions {
-        /// Sessions.
-        sessions: Vec<SessionSummary>,
-    },
+    Sessions { sessions: Vec<SessionSummary> },
     /// Attached to a session.
     Attached {
-        /// The session.
         session_id: SessionId,
         /// How the daemon chose it ([`AttachVia::Requested`] from daemons that do not say).
         via: AttachVia,
@@ -254,31 +241,19 @@ pub enum ClientEvent {
     AttachFailed {
         /// Machine-readable reason.
         code: OpError,
-        /// Why, in words.
         message: String,
     },
     /// The attached session's layout.
-    Layout {
-        /// The layout.
-        layout: SessionLayout,
-    },
+    Layout { layout: SessionLayout },
     /// A pane's metadata.
-    PaneMeta {
-        /// The metadata.
-        meta: PaneMeta,
-    },
+    PaneMeta { meta: PaneMeta },
     /// A pane closed.
-    PaneClosed {
-        /// The pane.
-        pane_id: PaneId,
-    },
+    PaneClosed { pane_id: PaneId },
     /// What the program in a pane reports about itself (OSC 7501 or `status_set`), with
     /// [`ConnectOptions::program_status`]. `None` once cleared, and for every known pane when
     /// the connection drops. Also kept: [`Client::program_status`].
     ProgramStatus {
-        /// The pane.
         pane_id: PaneId,
-        /// The report.
         status: Option<proto::ProgramReport>,
     },
     /// A session's projects, after each [`ClientEvent::Layout`] from daemons with
@@ -296,71 +271,49 @@ pub enum ClientEvent {
     /// A program in the pane wrote to the clipboard (OSC 52) after this device typed into it,
     /// with [`ConnectOptions::clipboard`]. Put it on this device's clipboard, local only, and
     /// say so.
-    Clipboard {
-        /// The pane.
-        pane_id: PaneId,
-        /// The text.
-        text: String,
-    },
+    Clipboard { pane_id: PaneId, text: String },
     /// Raw output to feed the pane's VT, in order, continuing from the previous event.
     PaneBytes {
-        /// The pane.
         pane_id: PaneId,
         /// Offset of `data[0]`.
         seq: u64,
-        /// The bytes.
         data: Vec<u8>,
     },
     /// Replace the pane's VT with this Ghostty snapshot (READY section, decompressed).
     PaneSnapshot {
-        /// The pane.
         pane_id: PaneId,
         /// Offset the snapshot reflects.
         seq: u64,
-        /// The snapshot.
         data: Vec<u8>,
     },
     /// Resize the pane's VT here in the stream.
     PaneResized {
-        /// The pane.
         pane_id: PaneId,
         /// Offset of the resize.
         seq: u64,
-        /// The new size.
         size: PaneSize,
     },
     /// Input `input_seq` is reflected at or after `at_seq`.
     InputAck {
-        /// The pane.
         pane_id: PaneId,
-        /// The input.
         input_seq: u64,
         /// Output offset.
         at_seq: u64,
     },
     /// Echo prediction facts for a pane.
-    EchoHint {
-        /// The hint.
-        hint: EchoHintAt,
-    },
-    AgentEvent {
-        /// The pane.
-        pane_id: PaneId,
-        /// The event.
-        json: String,
-    },
+    EchoHint { hint: EchoHintAt },
+    /// An agent event (JSON).
+    AgentEvent { pane_id: PaneId, json: String },
     /// The result of [`Client::op`].
     OpResult {
         /// The id `op` returned.
         op_id: u64,
-        /// What happened.
         outcome: OpOutcome,
     },
     /// Older scrollback for a pane, from [`Client::fetch_history`]: Ghostty snapshot history
     /// records continuing the pane's last snapshot (feed them to the snapshot's streaming
     /// decoder). The VT mirror, if on, has already prepended them.
     PaneHistory {
-        /// The pane.
         pane_id: PaneId,
         /// `seq` of the snapshot the records extend.
         snapshot_seq: u64,
@@ -373,25 +326,15 @@ pub enum ClientEvent {
     },
     /// The daemon no longer has the history of the pane's snapshot; it arrives again after
     /// the next snapshot.
-    PaneHistoryGone {
-        /// The pane.
-        pane_id: PaneId,
-    },
+    PaneHistoryGone { pane_id: PaneId },
     /// A shell-integration command started or finished in the attached session.
-    CommandMark {
-        /// The mark.
-        mark: CommandMark,
-    },
+    CommandMark { mark: CommandMark },
     /// A long command finished while no client was showing its pane (any session).
-    CommandFinishedUnseen {
-        /// The mark.
-        mark: CommandMark,
-    },
+    CommandFinishedUnseen { mark: CommandMark },
     /// The answer to [`Client::search`].
     SearchResult {
         /// The id `search` returned.
         req_id: u64,
-        /// The pane.
         pane_id: PaneId,
         /// One page of matches.
         result: Result<SearchPage, RpcError>,
@@ -400,7 +343,6 @@ pub enum ClientEvent {
     Links {
         /// The id `links` returned.
         req_id: u64,
-        /// The pane.
         pane_id: PaneId,
         /// What was found.
         result: Result<Links, RpcError>,
@@ -409,18 +351,14 @@ pub enum ClientEvent {
     Commands {
         /// The id `commands` returned.
         req_id: u64,
-        /// The pane.
         pane_id: PaneId,
-        /// The commands.
         result: Result<CommandList, RpcError>,
     },
     /// The answer to [`Client::command_output`].
     CommandOutput {
         /// The id `command_output` returned.
         req_id: u64,
-        /// The pane.
         pane_id: PaneId,
-        /// The output.
         result: Result<CommandOutput, RpcError>,
     },
 }
@@ -458,7 +396,6 @@ impl ClientListener for EventQueue {
 pub struct ClientStats {
     /// Successful connections, the first included.
     pub connections: u64,
-    /// Snapshots received.
     pub snapshots: u64,
     /// `Bytes` frames received.
     pub byte_frames: u64,
@@ -548,8 +485,8 @@ pub(crate) enum Dial {
     Invite(proto::Invite),
 }
 
-pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
+pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl Inner {
@@ -557,8 +494,8 @@ impl Inner {
         self.listener.on_event(event);
     }
 
-    fn send(&self, msg: ClientCtl) {
-        let _ = self.outgoing_tx.send(Outgoing::Ctl(msg));
+    fn send(&self, ctl: ClientCtl) {
+        let _ = self.outgoing_tx.send(Outgoing::Ctl(ctl));
     }
 }
 
@@ -802,7 +739,7 @@ impl Client {
     pub fn unsubscribe(&self, pane_id: PaneId) {
         lock(&self.inner.wanted)
             .subscribed
-            .retain(|&p| p != pane_id);
+            .retain(|&subscribed| subscribed != pane_id);
         lock(&self.inner.mirrors).remove(&pane_id);
         self.inner.send(ClientCtl::Unsubscribe { pane_id });
     }
@@ -937,17 +874,17 @@ impl Client {
     pub fn fetch_history(&self, pane_id: PaneId, max_bytes: u32) -> bool {
         let request = {
             let mut mirrors = lock(&self.inner.mirrors);
-            let Some(h) = mirrors.get_mut(&pane_id).map(|m| &mut m.history) else {
+            let Some(history) = mirrors.get_mut(&pane_id).map(|mirror| &mut mirror.history) else {
                 return false;
             };
-            if h.done || h.in_flight {
+            if history.done || history.in_flight {
                 return false;
             }
-            h.in_flight = true;
+            history.in_flight = true;
             ClientCtl::FetchHistory {
                 pane_id,
-                snapshot_seq: Seq(h.snapshot_seq),
-                offset: h.next_offset,
+                snapshot_seq: Seq(history.snapshot_seq),
+                offset: history.next_offset,
                 max_bytes,
             }
         };
@@ -979,6 +916,7 @@ impl Client {
     }
 
     /// Answers an agent approval request, signed with this device's key so the daemon's
+    /// audit log can prove who approved.
     pub fn decide(&self, request_id: proto::RequestId, option_id: proto::OptionId) {
         let mut decide = Decide {
             request_id,
@@ -1003,7 +941,7 @@ impl Client {
         lock(&self.inner.mirrors).get(&pane_id)?.text()
     }
 
-    /// A Ghostty snapshot of a followed pane's mirror, for painting before the network is up
+    /// A Ghostty snapshot of a followed pane's mirror, for painting before the network is up.
     pub fn pane_snapshot(&self, pane_id: PaneId) -> Option<Vec<u8>> {
         lock(&self.inner.mirrors).get(&pane_id)?.snapshot()
     }
@@ -1044,8 +982,8 @@ impl Client {
         if *lock(&self.inner.paused) {
             return;
         }
-        if let Some(conn) = lock(&self.inner.connection).take() {
-            conn.close(0u32.into(), b"relay settings");
+        if let Some(connection) = lock(&self.inner.connection).take() {
+            connection.close(0u32.into(), b"relay settings");
         }
         self.inner.reconnect.notify_one();
     }
@@ -1053,10 +991,10 @@ impl Client {
     /// Drops the connection and redials immediately (network change, app foregrounded).
     pub fn reconnect(&self) {
         if std::mem::replace(&mut *lock(&self.inner.paused), false) {
-            self.inner.resumed.send_modify(|n| *n += 1);
+            self.inner.resumed.send_modify(|resumes| *resumes += 1);
         }
-        if let Some(conn) = lock(&self.inner.connection).take() {
-            conn.close(0u32.into(), b"reconnect");
+        if let Some(connection) = lock(&self.inner.connection).take() {
+            connection.close(0u32.into(), b"reconnect");
         }
         self.inner.reconnect.notify_one();
     }
@@ -1070,7 +1008,7 @@ impl Client {
         }
         let live = lock(&self.inner.connection)
             .as_ref()
-            .is_some_and(|c| c.close_reason().is_none());
+            .is_some_and(|connection| connection.close_reason().is_none());
         if !live {
             self.inner.reconnect.notify_one();
             return;
@@ -1088,19 +1026,19 @@ impl Client {
     /// seconds rather than at the idle timeout. Without a live connection it does nothing (one
     /// is already being dialled). Returns at once.
     pub fn probe(&self) {
-        let Some(conn) = lock(&self.inner.connection).clone() else {
+        let Some(connection) = lock(&self.inner.connection).clone() else {
             return;
         };
         let inner = Arc::clone(&self.inner);
-        self.handle.spawn(conn::probe(inner, conn));
+        self.handle.spawn(conn::probe(inner, connection));
     }
 
     /// Drops the connection and stays offline until [`reconnect`](Self::reconnect), keeping
     /// all resume state (app suspended).
     pub fn suspend(&self) {
         *lock(&self.inner.paused) = true;
-        if let Some(conn) = lock(&self.inner.connection).take() {
-            conn.close(0u32.into(), b"suspend");
+        if let Some(connection) = lock(&self.inner.connection).take() {
+            connection.close(0u32.into(), b"suspend");
         }
     }
 
@@ -1122,7 +1060,6 @@ impl Client {
         Ok(port)
     }
 
-    /// Counters.
     pub fn stats(&self) -> ClientStats {
         *lock(&self.inner.stats)
     }
@@ -1130,14 +1067,14 @@ impl Client {
 
 impl Drop for Client {
     fn drop(&mut self) {
-        if let Some(conn) = lock(&self.inner.connection).take() {
-            conn.close(0u32.into(), b"bye");
+        if let Some(connection) = lock(&self.inner.connection).take() {
+            connection.close(0u32.into(), b"bye");
         }
         let endpoint = lock(&self.inner.endpoint).take();
         for task in lock(&self.tasks).drain(..) {
             task.abort();
         }
-        let Some(rt) = self.runtime.take() else {
+        let Some(runtime) = self.runtime.take() else {
             // A shared runtime: close in the background, never block the caller (it may be
             // the app's main thread).
             if let Some(endpoint) = endpoint {
@@ -1151,7 +1088,7 @@ impl Drop for Client {
         // attachment now rather than after the idle timeout. A helper thread keeps this safe
         // to call from inside an async context.
         if let Some(endpoint) = endpoint {
-            let handle = rt.handle().clone();
+            let handle = runtime.handle().clone();
             let _ = std::thread::spawn(move || {
                 handle.block_on(async {
                     let _ = tokio::time::timeout(CLOSE_GRACE, endpoint.close()).await;
@@ -1159,7 +1096,7 @@ impl Drop for Client {
             })
             .join();
         }
-        rt.shutdown_background();
+        runtime.shutdown_background();
     }
 }
 

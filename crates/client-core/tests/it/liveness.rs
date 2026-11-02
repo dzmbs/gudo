@@ -18,11 +18,11 @@ fn host(pong_delay: Duration) -> (Ticket, oneshot::Sender<()>) {
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
     let (freeze_tx, freeze_rx) = oneshot::channel::<()>();
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
+        let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
-        rt.block_on(async move {
+        runtime.block_on(async move {
             let endpoint = iroh::Endpoint::builder(presets::Minimal)
                 .alpns(vec![proto::ALPN.to_vec()])
                 .clear_ip_transports()
@@ -40,7 +40,7 @@ fn host(pong_delay: Duration) -> (Ticket, oneshot::Sender<()>) {
                 secret: PairingSecret([3; 16]),
                 expires: UnixMillis(0),
             };
-            let id = ticket.daemon_id;
+            let daemon_id = ticket.daemon_id;
             ready_tx.send(ticket).unwrap();
             tokio::spawn(async move {
                 if freeze_rx.await.is_ok() {
@@ -50,13 +50,15 @@ fn host(pong_delay: Duration) -> (Ticket, oneshot::Sender<()>) {
             });
             while let Some(incoming) = endpoint.accept().await {
                 tokio::spawn(async move {
-                    let Ok(conn) = incoming.await else { return };
-                    let Ok((mut tx, mut rx)) = conn.accept_bi().await else {
+                    let Ok(connection) = incoming.await else {
+                        return;
+                    };
+                    let Ok((mut tx, mut rx)) = connection.accept_bi().await else {
                         return;
                     };
                     read(&mut rx).await;
                     let welcome = ServerCtl::Welcome(Welcome {
-                        daemon_id: id,
+                        daemon_id,
                         session_epoch: SessionEpoch(1),
                         roles: Roles::OWNER,
                         snapshot_format: u32::from(ghostty_vt::snapshot_format()),
@@ -66,9 +68,9 @@ fn host(pong_delay: Duration) -> (Ticket, oneshot::Sender<()>) {
                     tx.write_all(&proto::frame::to_vec(&welcome).unwrap())
                         .await
                         .unwrap();
-                    let _input = conn.accept_uni().await;
-                    while let Some(msg) = read(&mut rx).await {
-                        if let ClientCtl::Ping { nonce } = msg {
+                    let _input = connection.accept_uni().await;
+                    while let Some(ctl) = read(&mut rx).await {
+                        if let ClientCtl::Ping { nonce } = ctl {
                             tokio::time::sleep(pong_delay).await;
                             let pong = proto::frame::to_vec(&ServerCtl::Pong { nonce }).unwrap();
                             if tx.write_all(&pong).await.is_err() {
@@ -98,8 +100,8 @@ async fn disconnects(
     within: Duration,
 ) -> bool {
     tokio::time::timeout(within, async {
-        while let Some(e) = events.recv().await {
-            if matches!(e, ClientEvent::Disconnected { .. }) {
+        while let Some(event) = events.recv().await {
+            if matches!(event, ClientEvent::Disconnected { .. }) {
                 return;
             }
         }
@@ -112,7 +114,10 @@ async fn disconnects(
 async fn a_host_that_stops_answering_is_dropped_within_seconds_of_a_probe() {
     let (ticket, freeze) = host(Duration::ZERO);
     let (client, mut events) = super::connect(&ticket.to_string(), false);
-    super::next_matching(&mut events, |e| matches!(e, ClientEvent::Connected { .. })).await;
+    super::next_matching(&mut events, |event| {
+        matches!(event, ClientEvent::Connected { .. })
+    })
+    .await;
     // A healthy host answers: nothing happens.
     client.probe();
     assert!(!disconnects(&mut events, PROBE_DEADLINE + Duration::from_secs(1)).await);
@@ -133,7 +138,10 @@ async fn a_slow_host_is_not_mistaken_for_a_dead_one() {
     // Answers after the first deadline, while its QUIC stack keeps acknowledging.
     let (ticket, _freeze) = host(PROBE_DEADLINE + Duration::from_secs(2));
     let (client, mut events) = super::connect(&ticket.to_string(), false);
-    super::next_matching(&mut events, |e| matches!(e, ClientEvent::Connected { .. })).await;
+    super::next_matching(&mut events, |event| {
+        matches!(event, ClientEvent::Connected { .. })
+    })
+    .await;
     client.probe();
     assert!(!disconnects(&mut events, PROBE_DEADLINE + Duration::from_secs(4)).await);
 }

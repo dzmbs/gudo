@@ -44,13 +44,19 @@ use crate::{Client, ClientConfig, ConnectOptions};
 
 impl Client {
     /// Registers this device for push notifications from this daemon (or updates its
-    /// registration). `reg.cap` comes from the push relay; the daemon cannot read it.
+    /// registration). `registration.cap` comes from the push relay; the daemon cannot read it.
     ///
     /// # Errors
     ///
     /// The daemon's [`WsError`] (an invalid key or capability), or [`WsError::Disconnected`].
-    pub async fn push_register(&self, reg: PushRegistration) -> Result<PushStatus, WsError> {
-        status(self.workspace(WorkspaceRequest::PushRegister(reg)).await?)
+    pub async fn push_register(
+        &self,
+        registration: PushRegistration,
+    ) -> Result<PushStatus, WsError> {
+        status(
+            self.workspace(WorkspaceRequest::PushRegister(registration))
+                .await?,
+        )
     }
 
     /// Stops pushes from this daemon to this device.
@@ -88,9 +94,9 @@ impl Client {
     }
 }
 
-fn status(resp: WorkspaceResponse) -> Result<PushStatus, WsError> {
-    match resp {
-        WorkspaceResponse::Push(s) => Ok(s),
+fn status(response: WorkspaceResponse) -> Result<PushStatus, WsError> {
+    match response {
+        WorkspaceResponse::Push(status) => Ok(status),
         other => Err(WsError::Failed(format!("unexpected answer {other:?}"))),
     }
 }
@@ -165,21 +171,21 @@ pub async fn send_action(
         approve: decision == Decision::Approve,
         sig,
     };
-    let unreachable = |e: &dyn std::fmt::Display| ActionError::Unreachable(e.to_string());
+    let unreachable = |err: &dyn std::fmt::Display| ActionError::Unreachable(err.to_string());
     let route = Route::new(config.relay, &extras.relays, &options);
     let endpoint = endpoint_builder(&route, &options)
-        .map_err(|e| unreachable(&e))?
+        .map_err(|err| unreachable(&err))?
         .secret_key(iroh::SecretKey::from_bytes(&key))
         .bind()
         .await
-        .map_err(|e| unreachable(&e))?;
+        .map_err(|err| unreachable(&err))?;
     let result = tokio::time::timeout(timeout, async {
-        let addr = ticket_addr(&ticket, &route).map_err(|e| unreachable(&e))?;
-        let conn = connect_daemon(&endpoint, addr)
+        let daemon_addr = ticket_addr(&ticket, &route).map_err(|err| unreachable(&err))?;
+        let connection = connect_daemon(&endpoint, daemon_addr)
             .await
-            .map_err(|e| unreachable(&e))?;
-        let answer = exchange(&conn, &ticket, &key, request).await;
-        conn.close(0u32.into(), b"done");
+            .map_err(|err| unreachable(&err))?;
+        let answer = exchange(&connection, &ticket, &key, request).await;
+        connection.close(0u32.into(), b"done");
         answer
     })
     .await
@@ -189,13 +195,16 @@ pub async fn send_action(
 }
 
 async fn exchange(
-    conn: &Connection,
+    connection: &Connection,
     ticket: &Ticket,
     key: &[u8; 32],
     request: PushActionRequest,
 ) -> Result<Decided, ActionError> {
-    let unreachable = |e: &dyn std::fmt::Display| ActionError::Unreachable(e.to_string());
-    let (mut tx, mut rx) = conn.open_bi().await.map_err(|e| unreachable(&e))?;
+    let unreachable = |err: &dyn std::fmt::Display| ActionError::Unreachable(err.to_string());
+    let (mut send_stream, mut recv_stream) = connection
+        .open_bi()
+        .await
+        .map_err(|err| unreachable(&err))?;
     let device = iroh::SecretKey::from_bytes(key).public();
     let hello = Hello {
         device_id: proto::DeviceId(*device.as_bytes()),
@@ -211,47 +220,47 @@ async fn exchange(
         link: LinkClass::Constrained,
         resume_token: None,
     };
-    send(&mut tx, &ClientCtl::Hello(hello))
+    send(&mut send_stream, &ClientCtl::Hello(hello))
         .await
-        .map_err(|e| unreachable(&e))?;
-    match recv::<ServerCtl>(&mut rx)
+        .map_err(|err| unreachable(&err))?;
+    match recv::<ServerCtl>(&mut recv_stream)
         .await
-        .map_err(|e| unreachable(&e))?
+        .map_err(|err| unreachable(&err))?
     {
         Some(ServerCtl::Welcome(_)) => {}
         Some(ServerCtl::Refused { reason }) => return Err(ActionError::Refused(reason)),
         other => return Err(ActionError::Unreachable(format!("unexpected {other:?}"))),
     }
-    const REQ: u64 = 1;
+    const REQ_ID: u64 = 1;
     send(
-        &mut tx,
+        &mut send_stream,
         &ClientCtl::Workspace {
-            req_id: REQ,
+            req_id: REQ_ID,
             req: WorkspaceRequest::PushAction(request),
         },
     )
     .await
-    .map_err(|e| unreachable(&e))?;
+    .map_err(|err| unreachable(&err))?;
     loop {
-        match recv::<ServerCtl>(&mut rx)
+        match recv::<ServerCtl>(&mut recv_stream)
             .await
-            .map_err(|e| unreachable(&e))?
+            .map_err(|err| unreachable(&err))?
         {
-            Some(ServerCtl::WorkspaceResult { req_id, result }) if req_id == REQ => {
+            Some(ServerCtl::WorkspaceResult { req_id, result }) if req_id == REQ_ID => {
                 let _ = send(
-                    &mut tx,
+                    &mut send_stream,
                     &ClientCtl::Bye {
                         reason: proto::ByeReason::Quit,
                     },
                 )
                 .await;
-                let _ = tx.finish();
+                let _ = send_stream.finish();
                 return match result {
                     Ok(WorkspaceResponse::PushDecided(decided)) => Ok(decided),
                     Ok(other) => Err(ActionError::Rejected(WsError::Failed(format!(
                         "unexpected answer {other:?}"
                     )))),
-                    Err(e) => Err(ActionError::Rejected(e)),
+                    Err(err) => Err(ActionError::Rejected(err)),
                 };
             }
             Some(_) => {}
