@@ -44,6 +44,17 @@ enum Cmd {
         #[arg(long)]
         canvas: bool,
     },
+    /// Open `count` tabs (canvas panes without a process with `--canvas`, else running
+    /// `command` or the shell), 16 ops in flight, and keep them; prints op latency, the time a
+    /// new client takes to get the layout, and the layout's encoded size.
+    Tabs {
+        #[arg(long)]
+        count: usize,
+        #[arg(long)]
+        canvas: bool,
+        #[arg(long)]
+        command: Option<String>,
+    },
     /// Open a tab running `command` and print its pane id.
     Spawn { command: Vec<String> },
     /// Echo latency of a pane running `cat` (created here), sampled every `interval_ms`.
@@ -309,6 +320,11 @@ async fn run(cli: Cli, handle: tokio::runtime::Handle) -> Result<()> {
             command,
         } => churn(&handle, key, &ticket, secs, concurrency, command).await,
         Cmd::Deep { depth, canvas } => deep(&handle, key, &ticket, depth, canvas).await,
+        Cmd::Tabs {
+            count,
+            canvas,
+            command,
+        } => tabs(&handle, key, &ticket, count, canvas, command).await,
         Cmd::Spawn { command } => {
             let mut conn = Conn::open(&handle, key, &ticket, false)?;
             let layout = conn.layout().await?;
@@ -492,6 +508,79 @@ async fn deep(
         "deep: {} panes in the session after {:.1} s",
         all_panes(&layout).len(),
         start.elapsed().as_secs_f64()
+    );
+    Ok(())
+}
+
+async fn tabs(
+    handle: &tokio::runtime::Handle,
+    key: Vec<u8>,
+    ticket: &str,
+    count: usize,
+    canvas: bool,
+    command: Option<String>,
+) -> Result<()> {
+    let mut conn = Conn::open(handle, key.clone(), ticket, false)?;
+    let session = conn.layout().await?.session_id;
+    let new_tab = |c: &Conn| {
+        c.client.op(LayoutOp::NewTab {
+            session_id: session,
+            name: String::new(),
+            launch: if canvas {
+                PaneLaunch::Canvas { artifact_id: None }
+            } else {
+                launch(&command)
+            },
+        })
+    };
+    let mut pending: HashMap<u64, Instant> = HashMap::new();
+    let (mut asked, mut created) = (0, 0);
+    let mut errors: HashMap<String, u64> = HashMap::new();
+    let mut lat = Vec::new();
+    let start = Instant::now();
+    while asked < count.min(16) {
+        pending.insert(new_tab(&conn), Instant::now());
+        asked += 1;
+    }
+    while !pending.is_empty() {
+        let event = tokio::time::timeout(Duration::from_secs(60), conn.next())
+            .await
+            .context("no answer to an op for 60 s")??;
+        let ClientEvent::OpResult { op_id, outcome } = event else {
+            continue;
+        };
+        let Some(at) = pending.remove(&op_id) else {
+            continue;
+        };
+        lat.push(at.elapsed());
+        match outcome {
+            OpOutcome::TabCreated { .. } => created += 1,
+            OpOutcome::Failed { code, message } => {
+                *errors.entry(format!("{code:?}: {message}")).or_default() += 1;
+            }
+            _ => {}
+        }
+        if asked < count {
+            pending.insert(new_tab(&conn), Instant::now());
+            asked += 1;
+        }
+    }
+    println!(
+        "tabs: {created} of {count} created in {:.1} s; op latency {}",
+        start.elapsed().as_secs_f64(),
+        percentiles(lat)
+    );
+    for (e, n) in errors {
+        println!("  {n}x {e}");
+    }
+    let at = Instant::now();
+    let mut fresh = Conn::open(handle, key, ticket, false)?;
+    let layout = fresh.layout().await?;
+    println!(
+        "tabs: a new client had the layout ({} panes, {} KiB encoded) after {:.0} ms",
+        all_panes(&layout).len(),
+        proto::frame::to_vec(&layout)?.len() / 1024,
+        at.elapsed().as_secs_f64() * 1000.0
     );
     Ok(())
 }

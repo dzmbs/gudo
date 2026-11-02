@@ -9,6 +9,7 @@
 
 pub(crate) mod approvals;
 pub(crate) mod audit;
+mod knock_limit;
 pub(crate) mod policy;
 mod presence;
 pub(crate) mod prompt;
@@ -450,6 +451,8 @@ pub(crate) struct Mp {
     live: Mutex<HashMap<ConnId, Live>>,
     leases: Mutex<HashMap<PaneId, LeaseState>>,
     knocks: Mutex<BTreeMap<KnockId, PendingKnock>>,
+    /// How many knocks each invite may still bring, and when its refusals were audited.
+    knock_limits: Mutex<knock_limit::KnockLimits>,
     /// Owner devices that just paired and were not announced yet, with when.
     unannounced: Mutex<HashMap<DeviceId, (PrincipalId, UnixMillis)>>,
     next_knock: AtomicU64,
@@ -499,6 +502,7 @@ impl Mp {
             live: Mutex::new(HashMap::new()),
             leases: Mutex::new(HashMap::new()),
             knocks: Mutex::new(BTreeMap::new()),
+            knock_limits: Mutex::default(),
             unannounced: Mutex::new(HashMap::new()),
             next_knock: AtomicU64::new(1),
             approvals: approvals::Approvals::default(),
@@ -1317,19 +1321,39 @@ impl Mp {
             knocks.remove(id);
         }
         let waiting = knocks.values().filter(|k| k.knock.grant_id == leaf).count();
-        if waiting >= MAX_KNOCKS_PER_GRANT {
+        let now = std::time::Instant::now();
+        let mut limits = lock(&self.knock_limits);
+        if waiting >= MAX_KNOCKS_PER_GRANT || !limits.admit(leaf, now) {
+            let refusal = limits.refused(leaf, now);
+            drop(limits);
             drop(knocks);
-            self.audit.append(
-                AuditKind::Denied,
-                AuditEntry {
-                    actor: Some(knocker.actor),
-                    grant_id: Some(leaf),
-                    detail: format!("knock from {name} refused: too many waiting on this invite"),
-                    ..AuditEntry::default()
-                },
-            );
+            for id in replaced {
+                core.emit(Event::Knock(KnockUpdate::Gone {
+                    knock_id: id,
+                    outcome: KnockOutcome::Withdrawn,
+                    by: None,
+                }));
+            }
+            if let knock_limit::Refusal::Audit { left_out } = refusal {
+                let more = match left_out {
+                    0 => String::new(),
+                    n => format!(" ({n} more refused since the last record)"),
+                };
+                self.audit.append(
+                    AuditKind::Denied,
+                    AuditEntry {
+                        actor: Some(knocker.actor),
+                        grant_id: Some(leaf),
+                        detail: format!(
+                            "knock from {name} refused: too many knocks on this invite{more}"
+                        ),
+                        ..AuditEntry::default()
+                    },
+                );
+            }
             return Err(RefuseReason::InvalidGrant);
         }
+        drop(limits);
         let knock_id = KnockId(self.next_knock.fetch_add(1, Ordering::Relaxed));
         let knock = Knock {
             knock_id,
