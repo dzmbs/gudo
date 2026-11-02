@@ -15,11 +15,11 @@ import XCTest
 /// `TEST_RUNNER_STRESS=1` runs the full sizes (500 tabs, 50 projects, 10 s).
 @MainActor
 final class AppStressTests: XCTestCase {
-    private let env = ProcessInfo.processInfo.environment
-    private var stress: Bool { env["STRESS"] != nil }
+    private let environment = ProcessInfo.processInfo.environment
+    private var stress: Bool { environment["STRESS"] != nil }
     /// `TEST_RUNNER_STRESS_TABS`, `TEST_RUNNER_STRESS_SECONDS` override the sizes (profiling).
-    private var tabCount: Int { env["STRESS_TABS"].flatMap(Int.init) ?? (stress ? 500 : 120) }
-    private var duration: Double { env["STRESS_SECONDS"].flatMap(Double.init) ?? (stress ? 10 : 3) }
+    private var tabCount: Int { environment["STRESS_TABS"].flatMap(Int.init) ?? (stress ? 500 : 120) }
+    private var duration: Double { environment["STRESS_SECONDS"].flatMap(Double.init) ?? (stress ? 10 : 3) }
 
     override func setUp() async throws {
         try XCTSkipIf(!LaunchOptions.mock, "needs the mock hosts (TEST_RUNNER_GUDO_MOCK=1)")
@@ -124,8 +124,8 @@ final class AppStressTests: XCTestCase {
         XCTAssertEqual(made, tabs, "every tab's pane is made, a few per turn")
     }
 
-    /// The sidebar asks for project suggestions on every render: each tab's folder used to
-    /// re-resolve every host's tabs, quadratic in tabs (most of an Inbox-flood frame at 500).
+    /// The sidebar asks for project suggestions on every render, so they must not cost
+    /// quadratic time in tabs.
     func testProjectSuggestionsStayCheapWithManyTabs() async throws {
         let host = try StressHost(id: "stress-suggest", tabs: 500, projects: 0)
         let (model, window) = try await openWindow(on: host, tabs: 500)
@@ -141,7 +141,7 @@ final class AppStressTests: XCTestCase {
         let tabs = tabCount, seconds = duration
         let host = try StressHost(id: "stress-sidebar", tabs: tabs, projects: stress ? 50 : 12)
         let (model, window) = try await openWindow(on: host, tabs: tabs)
-        let idle = await measure("sidebar \(tabs) tabs, no updates") { await pump(env["STRESS_IDLE"].flatMap(Double.init) ?? 2) }
+        let idle = await measure("sidebar \(tabs) tabs, no updates") { await pump(environment["STRESS_IDLE"].flatMap(Double.init) ?? 2) }
         let report = await measure("sidebar \(tabs) tabs, 100 updates/s") {
             await drive(Int(100 * seconds), perSecond: 100) { host.client.send(host.churn($0)) }
         }
@@ -210,8 +210,8 @@ final class AppStressTests: XCTestCase {
         return refs
     }
 
-    /// Each Inbox row asks the feed about its item (approval, options, rules): resolving the
-    /// item rebuilt the whole feed, so a render of 300 agents cost 300 feeds.
+    /// Each Inbox row asks the feed about its item (approval, options, rules): a lookup must not
+    /// rebuild the whole feed, or a render of 300 agents costs 300 feeds.
     func testInboxRowLookupsDoNotRebuildTheFeed() async throws {
         let host = try StressHost(id: "stress-lookup", tabs: 300, projects: 0, attention: 200)
         defer { host.remove() }
@@ -237,9 +237,9 @@ final class AppStressTests: XCTestCase {
         model.destination = .inbox
         await pump(1)
         let report = await measure("inbox \(tabs) agents, 100 updates/s + 100 attention/s") {
-            await drive(Int(100 * seconds), perSecond: 100) { n in
-                host.client.send(host.churn(n))
-                host.pushAttention(UInt64(1000 + n))
+            await drive(Int(100 * seconds), perSecond: 100) { index in
+                host.client.send(host.churn(index))
+                host.pushAttention(UInt64(1000 + index))
             }
         }
         await close(model, window, host)

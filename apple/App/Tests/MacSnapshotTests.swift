@@ -16,18 +16,18 @@ import XCTest
 /// `SNAPSHOT_MODE` is `dark` (default) or `light`, `SNAPSHOT_ONLY` a comma list of fixtures.
 @MainActor
 final class MacSnapshotTests: XCTestCase {
-    private let env = ProcessInfo.processInfo.environment
+    private let environment = ProcessInfo.processInfo.environment
 
     override func setUp() async throws {
-        try XCTSkipIf(env["SNAPSHOT_DIR"] == nil || !LaunchOptions.mock, "snapshots run on request")
+        try XCTSkipIf(environment["SNAPSHOT_DIR"] == nil || !LaunchOptions.mock, "snapshots run on request")
     }
 
-    private var mode: String { env["SNAPSHOT_MODE"] ?? "dark" }
+    private var mode: String { environment["SNAPSHOT_MODE"] ?? "dark" }
     /// The fixture's window, for captures made while it runs.
     private var current: NSWindow?
 
     private func wanted(_ name: String) -> Bool {
-        guard let only = env["SNAPSHOT_ONLY"] else { return true }
+        guard let only = environment["SNAPSHOT_ONLY"] else { return true }
         return only.split(separator: ",").contains { $0 == name }
     }
 
@@ -69,22 +69,22 @@ final class MacSnapshotTests: XCTestCase {
         guard let frameView = window.contentView?.superview else { return XCTFail("no frame view") }
         frameView.layoutSubtreeIfNeeded()
         let bounds = frameView.bounds
-        let rep: NSBitmapImageRep
+        let bitmap: NSBitmapImageRep
         // `SNAPSHOT_DRAW=1`: the views' own drawing, for when the window server hands back blank
         // pictures (a locked or sleeping display).
-        if env["SNAPSHOT_DRAW"] == nil, let image = Self.windowImage(window.windowNumber) {
+        if environment["SNAPSHOT_DRAW"] == nil, let image = Self.windowImage(window.windowNumber) {
             // The window server's picture of our own window (no recording permission needed):
             // glass and vibrancy included, which `cacheDisplay` draws as white slabs.
-            rep = NSBitmapImageRep(cgImage: drawsTerminals ? terminalsDrawn(over: image, in: frameView) ?? image : image)
+            bitmap = NSBitmapImageRep(cgImage: drawsTerminals ? terminalsDrawn(over: image, in: frameView) ?? image : image)
         } else {
             guard let cached = frameView.bitmapImageRepForCachingDisplay(in: bounds) else { return XCTFail("no bitmap") }
             frameView.cacheDisplay(in: bounds, to: cached)
-            rep = cached
+            bitmap = cached
         }
-        let dir = URL(fileURLWithPath: env["SNAPSHOT_DIR"]!)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let url = dir.appendingPathComponent("mac-\(name)-\(mode).png")
-        try rep.representation(using: .png, properties: [:])?.write(to: url)
+        let directory = URL(fileURLWithPath: environment["SNAPSHOT_DIR"]!)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("mac-\(name)-\(mode).png")
+        try bitmap.representation(using: .png, properties: [:])?.write(to: url)
         print("snapshot: \(url.path)")
     }
 
@@ -107,18 +107,18 @@ final class MacSnapshotTests: XCTestCase {
         let layout = model.arrangement.scrub.map { shown.blended(from: $0.from, progress: $0.progress) } ?? shown
         let scale = CGFloat(image.width) / frameView.bounds.width
         let height = CGFloat(image.height)
-        guard let ctx = CGContext(
+        guard let context = CGContext(
             data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: 0,
             space: image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
         ) else { return nil }
-        ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
         // Top-left window points to the bitmap's bottom-left pixels, and to crops of `image`.
         func pixels(_ rect: CGRect) -> CGRect {
             CGRect(x: rect.minX * scale, y: height - rect.maxY * scale, width: rect.width * scale, height: rect.height * scale)
         }
         func restore(_ rect: CGRect) {
             let crop = CGRect(x: rect.minX * scale, y: rect.minY * scale, width: rect.width * scale, height: rect.height * scale)
-            if let part = image.cropping(to: crop) { ctx.draw(part, in: pixels(rect)) }
+            if let part = image.cropping(to: crop) { context.draw(part, in: pixels(rect)) }
         }
         let theme = ThemeCatalog.theme(named: mode == "light" ? "Apple System Colors Light" : "Ghostty Default")
         let dark = mode != "light"
@@ -145,12 +145,12 @@ final class MacSnapshotTests: XCTestCase {
             let held = surface.isHoldingFrame ? heldFrames[pane] : nil
             if held == nil { _ = surface.renderIfDirty(offscreen: true) }
             guard let still = held ?? surface.snapshot() else { return }
-            ctx.saveGState()
-            ctx.clip(to: pixels(rect))
-            ctx.setFillColor(NSColor(theme.background).cgColor)
-            ctx.fill(pixels(rect))
-            ctx.draw(still, in: CGRect(x: pixels(rect).minX, y: pixels(rect).maxY - CGFloat(still.height), width: CGFloat(still.width), height: CGFloat(still.height)))
-            ctx.restoreGState()
+            context.saveGState()
+            context.clip(to: pixels(rect))
+            context.setFillColor(NSColor(theme.background).cgColor)
+            context.fill(pixels(rect))
+            context.draw(still, in: CGRect(x: pixels(rect).minX, y: pixels(rect).maxY - CGFloat(still.height), width: CGFloat(still.width), height: CGFloat(still.height)))
+            context.restoreGState()
         }
         let focused = workspace.focusedPane
         let dim = NSColor(theme.background).withAlphaComponent(1 - TerminalPreferences.Default.unfocusedSplitOpacity).cgColor
@@ -159,13 +159,13 @@ final class MacSnapshotTests: XCTestCase {
             guard let rect = onScreen(leaf.pane) else { continue }
             drawTerminal(leaf.pane)
             if leaf.pane != focused, tiled.count + layout.cards.count > 1 {
-                ctx.setFillColor(dim)
-                ctx.fill(pixels(rect))
+                context.setFillColor(dim)
+                context.fill(pixels(rect))
             }
             // The pane being dragged is washed (`FloatingChrome`).
             if leaf.pane == model.arrangement.paneDrag?.pane {
-                ctx.setFillColor(NSColor(theme.background).withAlphaComponent(0.55).cgColor)
-                ctx.fill(pixels(rect))
+                context.setFillColor(NSColor(theme.background).withAlphaComponent(0.55).cgColor)
+                context.fill(pixels(rect))
             }
         }
         // A pane drawn over the others (zooming) keeps its header over their terminals.
@@ -178,29 +178,31 @@ final class MacSnapshotTests: XCTestCase {
         for (id, leaves) in windows.sorted(by: { ($0.value.first?.z ?? 0) < ($1.value.first?.z ?? 0) }) {
             // Where the window is drawn: its panes' frames, shrunk as the tray shrinks them.
             let drawn = leaves.map { leaf -> CGRect in
-                let f = leaf.frame
-                let p = CGPoint(x: f.minX + leaf.hiddenAnchor.x * f.width, y: f.minY + leaf.hiddenAnchor.y * f.height)
-                let s = leaf.scale
-                return CGRect(x: p.x + (f.minX - p.x) * s, y: p.y + (f.minY - p.y) * s, width: f.width * s, height: f.height * s)
+                let frame = leaf.frame
+                let pivot = CGPoint(x: frame.minX + leaf.hiddenAnchor.x * frame.width, y: frame.minY + leaf.hiddenAnchor.y * frame.height)
+                let shrink = leaf.scale
+                return CGRect(
+                    x: pivot.x + (frame.minX - pivot.x) * shrink, y: pivot.y + (frame.minY - pivot.y) * shrink,
+                    width: frame.width * shrink, height: frame.height * shrink)
             }
             guard var rect = drawn.first.map(window) else { continue }
             for other in drawn.dropFirst() { rect = rect.union(window(other)) }
             if layout.card(id)?.multi == true { rect = rect.insetBy(dx: -1, dy: 0); rect.origin.y -= CanvasLayout.grip; rect.size.height += CanvasLayout.grip + 1 }
             let shape = CGPath(roundedRect: pixels(rect), cornerWidth: CanvasLayout.radius * scale, cornerHeight: CanvasLayout.radius * scale, transform: nil)
-            ctx.saveGState()
-            ctx.setShadow(offset: CGSize(width: 0, height: -DS.Shadow.panel.y * scale), blur: DS.Shadow.panel.radius * scale,
+            context.saveGState()
+            context.setShadow(offset: CGSize(width: 0, height: -DS.Shadow.panel.y * scale), blur: DS.Shadow.panel.radius * scale,
                           color: CGColor(gray: 0, alpha: DS.Shadow.panel.opacity(dark: dark)))
-            ctx.beginTransparencyLayer(auxiliaryInfo: nil)
-            ctx.addPath(shape)
-            ctx.clip()
+            context.beginTransparencyLayer(auxiliaryInfo: nil)
+            context.addPath(shape)
+            context.clip()
             restore(rect)
-            ctx.endTransparencyLayer()
-            ctx.restoreGState()
-            ctx.saveGState()
-            ctx.addPath(shape)
-            ctx.clip()
+            context.endTransparencyLayer()
+            context.restoreGState()
+            context.saveGState()
+            context.addPath(shape)
+            context.clip()
             for leaf in leaves { drawTerminal(leaf.pane) }
-            ctx.restoreGState()
+            context.restoreGState()
         }
         // Above the panes, as captured: the tray, a drag's region, chip and Float target, guides.
         for chip in layout.chips { restore(window(chip.frame).insetBy(dx: -2, dy: -2)) }
@@ -211,14 +213,14 @@ final class MacSnapshotTests: XCTestCase {
         if let region = arrangement.dockPreview ?? arrangement.paneDrag?.preview ?? arrangement.landing {
             let inset = window(region).insetBy(dx: DS.Space.xs, dy: DS.Space.xs)
             let path = CGPath(roundedRect: pixels(inset), cornerWidth: DS.Radius.pane * scale, cornerHeight: DS.Radius.pane * scale, transform: nil)
-            ctx.addPath(path)
-            ctx.setFillColor(accentColor(0.2))
-            ctx.fillPath()
+            context.addPath(path)
+            context.setFillColor(accentColor(0.2))
+            context.fillPath()
             let rim = CGPath(roundedRect: pixels(inset).insetBy(dx: 0.75 * scale, dy: 0.75 * scale), cornerWidth: DS.Radius.pane * scale, cornerHeight: DS.Radius.pane * scale, transform: nil)
-            ctx.addPath(rim)
-            ctx.setStrokeColor(accentColor(0.65))
-            ctx.setLineWidth(1.5 * scale)
-            ctx.strokePath()
+            context.addPath(rim)
+            context.setStrokeColor(accentColor(0.65))
+            context.setLineWidth(1.5 * scale)
+            context.strokePath()
         }
         if let drag = arrangement.paneDrag {
             restore(window(layout.floatTarget).insetBy(dx: -4, dy: -4))
@@ -231,7 +233,7 @@ final class MacSnapshotTests: XCTestCase {
                 : CGRect(x: guide.from, y: guide.position - 2, width: guide.to - guide.from, height: 4)
             restore(window(line))
         }
-        return ctx.makeImage()
+        return context.makeImage()
     }
 
     /// `CGWindowListCreateImage`, looked up at run time: the SDK marks it unavailable, and it is
@@ -572,7 +574,6 @@ final class MacSnapshotTests: XCTestCase {
         }
     }
 
-
     /// New Agent opens at its final size: the host's answer (Claude Code off the PATH here)
     /// changes the status row, never the sheet. Its height is its form's, with nothing blank
     /// under the prompt.
@@ -797,6 +798,7 @@ final class MacSnapshotTests: XCTestCase {
         try? capture(window, "\(name)-8")
     }
 
+    /// htop floating over a shell and a test run, several windows with a split
     /// inside one, the tray, and a zoomed pane with its way back.
     func testFloatingStills() async throws {
         drawsTerminals = true
@@ -829,8 +831,8 @@ final class MacSnapshotTests: XCTestCase {
             let start = CGPoint(x: from.midX, y: from.minY + 12)
             let end = CGPoint(x: onto.maxX - onto.width / 6, y: onto.midY)
             for step in 0...8 {
-                let t = CGFloat(step) / 8
-                arrangement.drag(dragged, to: CGPoint(x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t))
+                let progress = CGFloat(step) / 8
+                arrangement.drag(dragged, to: CGPoint(x: start.x + (end.x - start.x) * progress, y: start.y + (end.y - start.y) * progress))
                 await self.pump(0.05)
                 await self.present(model)
                 try? self.capture(self.current!, "floating-drag-\(step)")
@@ -962,6 +964,7 @@ final class MacSnapshotTests: XCTestCase {
         }
     }
 
+    /// Two panes stacked, the bottom one dragged by its header over the left
     /// part of the top one. The preview shows the panes as the drop leaves them (the dragged
     /// one the tab's whole left half), and the drop settles exactly there.
     func testDragPreview() async throws {
@@ -979,11 +982,11 @@ final class MacSnapshotTests: XCTestCase {
             let end = CGPoint(x: onto.minX + onto.width * 0.18, y: onto.midY)
             self.keepFrames(model)
             for step in 0...10 {
-                let t = CGFloat(step) / 10
+                let progress = CGFloat(step) / 10
                 let shown = arrangement.preview ?? layout
                 let drop = arrangement.paneDrag?.drop
                 arrangement.scrub = .init(from: shown, progress: 0)
-                arrangement.drag(bottom, to: CGPoint(x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t))
+                arrangement.drag(bottom, to: CGPoint(x: start.x + (end.x - start.x) * progress, y: start.y + (end.y - start.y) * progress))
                 if step > 0, arrangement.paneDrag?.drop != drop {
                     // The panes making room, along the `reorder` spring.
                     let spring = Spring(response: 0.3, dampingRatio: 0.84)

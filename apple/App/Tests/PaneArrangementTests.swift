@@ -113,9 +113,9 @@ final class PaneArrangementTests: XCTestCase {
         let layouts: [(String, (inout Session) -> Void)] = [
             ("side by side", { $0.apply(.split($0.activeTab!.focused, .horizontal)) }),
             ("stacked", { $0.apply(.split($0.activeTab!.focused, .vertical)) }),
-            ("three", { s in
-                s.apply(.split(s.activeTab!.focused, .horizontal))
-                s.apply(.split(s.activeTab!.focused, .vertical))
+            ("three", { session in
+                session.apply(.split(session.activeTab!.focused, .horizontal))
+                session.apply(.split(session.activeTab!.focused, .vertical))
             }),
         ]
         var checked = 0
@@ -130,10 +130,10 @@ final class PaneArrangementTests: XCTestCase {
                     CGPoint(x: size.width / 2, y: 10), CGPoint(x: size.width / 2, y: size.height - 10),
                 ]
                 for target in panes where target != dragged {
-                    let r = frame(of: target)
+                    let targetFrame = frame(of: target)
                     points += [
-                        CGPoint(x: r.minX + r.width * 0.2, y: r.midY), CGPoint(x: r.maxX - r.width * 0.2, y: r.midY),
-                        CGPoint(x: r.midX, y: r.minY + r.height * 0.2), CGPoint(x: r.midX, y: r.maxY - r.height * 0.2),
+                        CGPoint(x: targetFrame.minX + targetFrame.width * 0.2, y: targetFrame.midY), CGPoint(x: targetFrame.maxX - targetFrame.width * 0.2, y: targetFrame.midY),
+                        CGPoint(x: targetFrame.midX, y: targetFrame.minY + targetFrame.height * 0.2), CGPoint(x: targetFrame.midX, y: targetFrame.maxY - targetFrame.height * 0.2),
                     ]
                 }
                 for point in points {
@@ -160,13 +160,13 @@ final class PaneArrangementTests: XCTestCase {
     /// other: no flicker.
     func testTheZoneUnderTheHandHoldsNearItsBoundary() {
         let (left, right, _) = make()
-        let r = frame(of: right)
+        let rightFrame = frame(of: right)
         // The diagonal between the right pane's top and right zones.
-        let onTop = CGPoint(x: r.maxX - r.width * 0.3, y: r.minY + r.height * 0.1)
+        let onTop = CGPoint(x: rightFrame.maxX - rightFrame.width * 0.3, y: rightFrame.minY + rightFrame.height * 0.1)
         arrangement.drag(left, to: onTop)
         XCTAssertEqual(arrangement.paneDrag?.drop, .beside(right, .up))
-        let x = r.maxX - r.width * 0.25
-        let diagonalY = r.minY + (r.maxX - x) * r.height / r.width
+        let x = rightFrame.maxX - rightFrame.width * 0.25
+        let diagonalY = rightFrame.minY + (rightFrame.maxX - x) * rightFrame.height / rightFrame.width
         arrangement.drag(left, to: CGPoint(x: x, y: diagonalY + 4))
         XCTAssertEqual(arrangement.paneDrag?.drop, .beside(right, .up), "4 pt past the diagonal: still the top")
         arrangement.drag(left, to: CGPoint(x: x, y: diagonalY + 40))
@@ -235,14 +235,14 @@ final class PaneArrangementTests: XCTestCase {
         let card = relayout().cards[0]
         let target = frame(of: left)
         let point = CGPoint(x: target.minX + 60, y: target.midY)
-        let by = CGSize(width: point.x - card.frame.midX, height: point.y - card.frame.minY)
-        arrangement.move(card.id, by: by, at: point)
+        let offset = CGSize(width: point.x - card.frame.midX, height: point.y - card.frame.minY)
+        arrangement.move(card.id, by: offset, at: point)
         XCTAssertNil(arrangement.dockPreview, "passing over a pane offers nothing at once")
         try await Task.sleep(for: .milliseconds(600))
         let lit = try XCTUnwrap(arrangement.dockPreview)
         XCTAssertEqual(lit.minX, target.minX)
         XCTAssertEqual(lit.width, target.width / 2, accuracy: 2)
-        arrangement.endMove(card.id, by: by, velocity: .zero)
+        arrangement.endMove(card.id, by: offset, velocity: .zero)
         XCTAssertFalse(workspace.session.isFloating(below!))
         XCTAssertEqual(tiledOrder, [below!, left, right])
         XCTAssertEqual(frame(of: below!), lit, "it docks where it was lit")

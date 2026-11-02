@@ -12,13 +12,13 @@ import XCTest
 /// `SNAPSHOT_DIR` and `GUDO_MOCK` set, like `MacSnapshotTests`.
 @MainActor
 final class TouchSnapshotTests: XCTestCase {
-    private let env = ProcessInfo.processInfo.environment
+    private let environment = ProcessInfo.processInfo.environment
 
     override func setUp() async throws {
-        try XCTSkipIf(env["SNAPSHOT_DIR"] == nil || !LaunchOptions.mock, "snapshots run on request")
+        try XCTSkipIf(environment["SNAPSHOT_DIR"] == nil || !LaunchOptions.mock, "snapshots run on request")
     }
 
-    private var mode: String { env["SNAPSHOT_MODE"] ?? "dark" }
+    private var mode: String { environment["SNAPSHOT_MODE"] ?? "dark" }
 
     private func pump(_ seconds: Double) async {
         try? await Task.sleep(for: .seconds(seconds))
@@ -29,10 +29,10 @@ final class TouchSnapshotTests: XCTestCase {
         let image = UIGraphicsImageRenderer(bounds: bounds).image { _ in
             window.drawHierarchy(in: bounds, afterScreenUpdates: true)
         }
-        let dir = URL(fileURLWithPath: env["SNAPSHOT_DIR"]!)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let directory = URL(fileURLWithPath: environment["SNAPSHOT_DIR"]!)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let device = UIDevice.current.userInterfaceIdiom == .pad ? "ipad" : "iphone"
-        let url = dir.appendingPathComponent("\(device)-\(name)-\(mode).png")
+        let url = directory.appendingPathComponent("\(device)-\(name)-\(mode).png")
         try image.pngData()?.write(to: url)
         print("snapshot: \(url.path)")
     }

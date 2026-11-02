@@ -23,7 +23,7 @@ final class AppLockTests: XCTestCase {
 
     private var defaults: UserDefaults!
     private var suite: String!
-    private let auth = FakeAuthenticator()
+    private let authenticator = FakeAuthenticator()
     private let start = ContinuousClock.now
     private var elapsed: Duration = .zero
 
@@ -37,7 +37,7 @@ final class AppLockTests: XCTestCase {
     }
 
     private func makeLock() -> AppLock {
-        AppLock(defaults: defaults, authenticator: auth, now: { [unowned self] in start + elapsed })
+        AppLock(defaults: defaults, authenticator: authenticator, now: { [unowned self] in start + elapsed })
     }
 
     /// App Lock on, as a previous launch left it.
@@ -60,7 +60,7 @@ final class AppLockTests: XCTestCase {
     func testColdLaunchStartsLocked() async {
         let lock = enabledLock()
         XCTAssertTrue(lock.isLocked)
-        auth.answer(.cancelled)
+        authenticator.answer(.cancelled)
         let unlocked = await lock.unlock()
         XCTAssertFalse(unlocked)
         XCTAssertTrue(lock.isLocked, "a cancel keeps it locked")
@@ -134,22 +134,22 @@ final class AppLockTests: XCTestCase {
 
     func testPromptsOnItsOwnOncePerReturn() async {
         let lock = enabledLock(grace: .immediately)
-        auth.answer(.cancelled)
+        authenticator.answer(.cancelled)
         await lock.promptIfNeeded()
         await lock.promptIfNeeded()
-        XCTAssertEqual(auth.asked, 1, "a cancelled prompt is not shown again by itself")
+        XCTAssertEqual(authenticator.asked, 1, "a cancelled prompt is not shown again by itself")
         XCTAssertTrue(lock.isLocked)
         // The next time the app comes back it asks again.
         lock.didEnterBackground()
         lock.willEnterForeground()
         await lock.promptIfNeeded()
-        XCTAssertEqual(auth.asked, 2)
+        XCTAssertEqual(authenticator.asked, 2)
         XCTAssertFalse(lock.isLocked)
     }
 
     func testFailureIsShownAndUnlockingStillWorks() async {
         let lock = enabledLock()
-        auth.answer(.failed("Face ID did not match."))
+        authenticator.answer(.failed("Face ID did not match."))
         await lock.unlock()
         XCTAssertEqual(lock.failure, "Face ID did not match.")
         XCTAssertTrue(lock.isLocked)
@@ -160,7 +160,7 @@ final class AppLockTests: XCTestCase {
 
     func testTurningOnAndOffNeedsTheOwner() async {
         let lock = makeLock()
-        auth.answer(.cancelled)
+        authenticator.answer(.cancelled)
         let cancelled = await lock.setEnabled(true)
         XCTAssertFalse(cancelled)
         XCTAssertFalse(lock.isEnabled)
@@ -171,19 +171,19 @@ final class AppLockTests: XCTestCase {
         XCTAssertTrue(defaults.bool(forKey: AppLock.enabledKey))
         XCTAssertTrue(makeLock().isLocked, "the next launch starts locked")
 
-        auth.answer(.failed("No"))
+        authenticator.answer(.failed("No"))
         let refused = await lock.setEnabled(false)
         XCTAssertFalse(refused)
         XCTAssertTrue(lock.isEnabled, "someone holding the unlocked app cannot quietly turn it off")
     }
 
     func testCannotTurnOnWithoutAPasscode() async {
-        auth.available.withLock { $0 = nil }
+        authenticator.available.withLock { $0 = nil }
         let lock = makeLock()
         let on = await lock.setEnabled(true)
         XCTAssertFalse(on)
         XCTAssertFalse(lock.isEnabled)
-        XCTAssertEqual(auth.asked, 0)
+        XCTAssertEqual(authenticator.asked, 0)
         XCTAssertNotNil(lock.failure)
     }
 
@@ -191,7 +191,7 @@ final class AppLockTests: XCTestCase {
     /// so the app opens instead of locking its owner out.
     func testPasscodeRemovedTurnsItOff() async {
         let lock = enabledLock()
-        auth.answer(.passcodeNotSet)
+        authenticator.answer(.passcodeNotSet)
         await lock.unlock()
         XCTAssertFalse(lock.isLocked)
         XCTAssertFalse(lock.isEnabled)
@@ -199,9 +199,9 @@ final class AppLockTests: XCTestCase {
 
     func testSettingNamesTheDevicesBiometry() {
         XCTAssertEqual(makeLock().settingTitle, "Require Face ID")
-        auth.available.withLock { $0 = .touchID }
+        authenticator.available.withLock { $0 = .touchID }
         XCTAssertEqual(makeLock().settingTitle, "Require Touch ID")
-        auth.available.withLock { $0 = .passcode }
+        authenticator.available.withLock { $0 = .passcode }
         #if os(macOS)
         XCTAssertEqual(makeLock().settingTitle, "Require Password")
         #else

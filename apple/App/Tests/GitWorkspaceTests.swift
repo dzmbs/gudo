@@ -23,18 +23,18 @@ final class GitWorkspaceTests: XCTestCase {
     func testRepositoryScriptsComeFirstAndTheDefaultRunsOnCommandR() {
         GitSettings.globalScripts = [ScriptDef(name: "Lint", command: "make lint", icon: "exclamationmark.triangle", tint: "blue")]
         let git = GitUI()
-        let wt = worktree(scripts: [
+        let scripted = worktree(scripts: [
             RepoScript(name: "Test", command: "make test", icon: nil, tint: "yellow", isDefault: false),
             RepoScript(name: "Dev", command: "make dev", icon: "play", tint: "green", isDefault: true),
         ])
-        XCTAssertEqual(git.scripts(for: wt).map(\.name), ["Test", "Dev", "Lint"])
-        XCTAssertEqual(git.defaultScript(for: wt)?.name, "Dev")
+        XCTAssertEqual(git.scripts(for: scripted).map(\.name), ["Test", "Dev", "Lint"])
+        XCTAssertEqual(git.defaultScript(for: scripted)?.name, "Dev")
         XCTAssertEqual(git.defaultScript(for: worktree(scripts: []))?.name, "Lint", "a global script when the repository has none")
-        XCTAssertEqual(git.scripts(for: wt)[0].systemImage, "play", "a script without a symbol plays")
+        XCTAssertEqual(git.scripts(for: scripted)[0].systemImage, "play", "a script without a symbol plays")
     }
 
     func testMergeStrategyComesFromSettings() {
-        XCTAssertEqual(GitSettings.mergeStrategy, .merge, "supacode's default: a merge commit")
+        XCTAssertEqual(GitSettings.mergeStrategy, .merge, "the default is a merge commit")
         UserDefaults.standard.set("squash", forKey: GitSettings.mergeStrategyKey)
         XCTAssertEqual(GitSettings.mergeStrategy, .squash)
         XCTAssertEqual(GitSettings.name(.rebase), "Rebase and Merge")

@@ -36,8 +36,6 @@ final class AppNotificationsTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(ContinuousClock.now - start, .milliseconds(200), "gives up after the limit")
     }
 
-    // MARK: Drive requests
-
     /// An agent asking to type into the user's pane: the note says what it wants and exactly
     /// what it would type, and Approve on it allows once, never "for this pane".
     func testADriveRequestNoteShowsTheActionAndAllowsOnce() {
@@ -62,8 +60,6 @@ final class AppNotificationsTests: XCTestCase {
         XCTAssertEqual(approve?.label, "Allow once")
         XCTAssertEqual(deny?.id, 2)
     }
-
-    // MARK: Permission
 
     private final class FakeAuthorizer: NotificationAuthorizing, @unchecked Sendable {
         var current: UNAuthorizationStatus = .notDetermined

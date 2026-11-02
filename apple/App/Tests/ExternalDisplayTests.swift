@@ -4,10 +4,9 @@ import UIKit
 import XCTest
 @testable import App
 
-/// The external display (docs/APP-ARCHITECTURE.md "Windows", `Windows/ExternalDisplay.swift`).
-/// The simulator cannot attach a display from the command line (only from Simulator's
-/// I/O menu), so this checks the scene layer: which scene an external display gets, which tab
-/// it mirrors, and the font that makes the iPad's grid fill it.
+/// The external display. The simulator cannot attach a display from the command line (only
+/// from Simulator's I/O menu), so this checks the scene layer: which scene an external display
+/// gets, which tab it mirrors, and the font that makes the iPad's grid fill it.
 @MainActor
 final class ExternalDisplayTests: XCTestCase {
     func testOnlyANonInteractiveExternalDisplayGetsThePresentationScene() throws {
