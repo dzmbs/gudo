@@ -1,5 +1,6 @@
 //! Wire types for the client <-> daemon protocol (ALPN [`ALPN`]).
 //!
+//! One QUIC connection per (device, daemon) carries these streams:
 //!
 //! | Stream            | Direction | First frame               | Then                     |
 //! |-------------------|-----------|---------------------------|--------------------------|
@@ -26,6 +27,7 @@
 //!   use, lowest priority) by [`Bulk::HistoryPage`] or [`Bulk::HistoryGone`], keyed by
 //!   `(pane, snapshot_seq, offset)`: the records after a [`PaneOutput::SnapshotZstd`]'s READY
 //!   section, newest page first, ready for a streaming snapshot decoder.
+//! - Drawings and images are [`ClientCtl::Artifact`] → [`ServerCtl::ArtifactResult`],
 //!   pushes [`ServerCtl::Artifact`], live ink [`ClientCtl::InkLive`], blobs on
 //!   [`StreamHeader::Blob`] streams; see [`artifact`].
 //! - Input-assistance requests (prompt state, atomic submit, history, completion, file search,
@@ -83,9 +85,8 @@
 //! - `tests/golden.rs` pins the exact bytes of every message. A failing golden test means the
 //!   wire changed: never re-bless an existing entry, add a new one instead.
 //!
-//! a single principal: a [`PrincipalId`] (a person) is distinct from a [`DeviceId`] (a key),
-//! every client message is checked against a [`GrantId`], and input and decisions carry the
-//! acting principal.
+//! A [`PrincipalId`] (a person) is distinct from a [`DeviceId`] (a key), every client message is
+//! checked against a [`GrantId`], and input and decisions carry the acting principal.
 
 pub mod account;
 pub mod approve;
@@ -146,12 +147,10 @@ pub use workspace::*;
 /// QUIC ALPN identifier this crate's messages are spoken under.
 pub const ALPN: &[u8] = brand::ALPN;
 
-/// The ALPN daemons and apps from before the product's rename speak; the protocol under it is the
-/// same.
+/// ALPN still spoken by older daemons and apps; the protocol under it is the same.
 pub const LEGACY_ALPN: &[u8] = brand::legacy::ALPN;
 
-/// How often either side of a connection sends a QUIC keep-alive while it has nothing else to
-/// send.
+/// QUIC keep-alive interval for an otherwise idle connection.
 pub const KEEP_ALIVE: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// How long a connection may hear nothing before it is closed (QUIC's max idle timeout; the

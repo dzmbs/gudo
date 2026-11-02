@@ -14,8 +14,6 @@
 //! - Owner clients with [`Caps::ACCOUNTS`](crate::Caps::ACCOUNTS) get
 //!   [`ServerCtl::Accounts`](crate::ServerCtl::Accounts) on every change, and, while they
 //!   watch usage, [`ServerCtl::AccountUsage`](crate::ServerCtl::AccountUsage).
-//!
-//! Same compatibility rules as the rest of the crate: append only.
 
 use serde::{Deserialize, Serialize};
 
@@ -38,7 +36,6 @@ pub struct AgentAccount {
     /// [`SYSTEM_ACCOUNT`] (each agent has one), or an id the daemon minted, unique on the
     /// host. Requests name an account by agent and id.
     pub id: String,
-    /// The agent.
     pub agent: AgentKind,
     /// The user's name for it ("Personal", "Work"); "System" for the system account.
     pub label: String,
@@ -62,7 +59,6 @@ pub enum AccountStatus {
     Unknown,
     /// No sign-in.
     SignedOut,
-    /// Signed in.
     SignedIn(AccountIdentity),
     /// Asking failed, in words ("claude is not on the PATH").
     Failed(String),
@@ -84,23 +80,18 @@ pub struct AccountIdentity {
 /// Which account an agent uses when a launch names none.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountDefault {
-    /// The agent.
     pub agent: AgentKind,
     /// The project ([`Project::id`](crate::Project::id)) this default is for; `None` is the
     /// host's default.
     pub project: Option<String>,
-    /// The account.
     pub account: String,
 }
 
 /// Which account a daemon-launched agent pane runs under.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneAccount {
-    /// The pane.
     pub pane_id: PaneId,
-    /// The pane's agent.
     pub agent: AgentKind,
-    /// The account.
     pub account: String,
 }
 
@@ -139,11 +130,11 @@ impl AccountsReport {
         let find = |project: Option<&str>| {
             self.defaults
                 .iter()
-                .find(|d| d.agent == agent && d.project.as_deref() == project)
-                .map(|d| d.account.as_str())
+                .find(|default| default.agent == agent && default.project.as_deref() == project)
+                .map(|default| default.account.as_str())
         };
         project
-            .and_then(|p| find(Some(p)))
+            .and_then(|project| find(Some(project)))
             .or_else(|| find(None))
             .unwrap_or(SYSTEM_ACCOUNT)
     }
@@ -152,7 +143,6 @@ impl AccountsReport {
 /// A new account ([`WorkspaceRequest::AccountAdd`](crate::WorkspaceRequest::AccountAdd)).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountAdd {
-    /// The agent.
     pub agent: AgentKind,
     /// Its name, 1..=[`MAX_ACCOUNT_LABEL_LEN`] bytes.
     pub label: String,

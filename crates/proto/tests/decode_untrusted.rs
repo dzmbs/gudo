@@ -57,8 +57,8 @@ proptest! {
     ) {
         let mut body = hello();
         for (at, xor) in flips {
-            let i = at % body.len();
-            body[i] ^= xor;
+            let index = at % body.len();
+            body[index] ^= xor;
         }
         body.truncate(cut % (body.len() + 1));
         decode_all(&body);
@@ -87,12 +87,12 @@ fn oversized_lengths_are_refused() {
     // A collection whose element count runs past the body is an error, not an allocation.
     let mut body = hello();
     let mut claim = Vec::new();
-    let mut n: u64 = u64::from(u32::MAX);
-    while n >= 0x80 {
-        claim.push((n as u8) | 0x80);
-        n >>= 7;
+    let mut count: u64 = u64::from(u32::MAX);
+    while count >= 0x80 {
+        claim.push((count as u8) | 0x80);
+        count >>= 7;
     }
-    claim.push(n as u8);
+    claim.push(count as u8);
     body.extend_from_slice(&claim);
     assert!(frame::decode_body::<ClientCtl>(&body).is_err());
     let mut chain = claim.clone();

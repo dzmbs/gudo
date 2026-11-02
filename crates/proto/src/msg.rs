@@ -20,10 +20,6 @@ use crate::workspace::{
     VsCodeTunnelStatus, WorkspaceRequest, WorkspaceResponse, WsError,
 };
 
-// ---------------------------------------------------------------------------------------------
-// Stream headers
-// ---------------------------------------------------------------------------------------------
-
 /// First frame on every unidirectional stream, naming what the stream carries.
 ///
 /// The `ctl` stream needs no header: it is the first bidirectional stream, and its first frame
@@ -34,10 +30,7 @@ pub enum StreamHeader {
     Input,
     /// Daemon → client: [`PaneOutput`] for one pane. Pane messages omit the pane id because the
     /// header binds it.
-    Pane {
-        /// The pane this stream carries.
-        pane_id: PaneId,
-    },
+    Pane { pane_id: PaneId },
     /// Either direction: [`Bulk`] transfers.
     Bulk,
     /// Client → daemon, on a bidirectional stream: connect to `127.0.0.1:port` on the daemon's
@@ -50,10 +43,7 @@ pub enum StreamHeader {
     /// Client → daemon, bidirectional: like [`StreamHeader::PortForward`], to a TCP port or a
     /// Unix socket on the daemon's host. Answered by [`ForwardReply`], then raw bytes; each
     /// side finishes its half when its peer closes that direction (half-close).
-    Forward {
-        /// Where to connect.
-        target: ForwardTarget,
-    },
+    Forward { target: ForwardTarget },
     /// Client → daemon, bidirectional, bulk priority: write a file atomically. See
     /// [`TransferReply`].
     Upload(UploadHeader),
@@ -82,10 +72,6 @@ pub enum ForwardReply {
     },
 }
 
-// ---------------------------------------------------------------------------------------------
-// ctl, client → daemon
-// ---------------------------------------------------------------------------------------------
-
 /// Messages the client sends on `ctl`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ClientCtl {
@@ -93,7 +79,6 @@ pub enum ClientCtl {
     Hello(Hello),
     /// Starts receiving a pane.
     Subscribe {
-        /// Pane to subscribe to.
         pane_id: PaneId,
         /// How much of the pane to stream.
         mode: SubscribeMode,
@@ -101,10 +86,7 @@ pub enum ClientCtl {
         rows_hint: u16,
     },
     /// Stops receiving a pane; the daemon finishes its `pane/<id>` stream.
-    Unsubscribe {
-        /// Pane to unsubscribe from.
-        pane_id: PaneId,
-    },
+    Unsubscribe { pane_id: PaneId },
     /// The panes currently on screen. The daemon derives stream priorities and budgets from it.
     Visible {
         /// Every visible pane, focused one included.
@@ -116,35 +98,25 @@ pub enum ClientCtl {
         pane_id: Option<PaneId>,
     },
     /// The client's size for a pane. Whether the PTY follows depends on [`SizePolicy`].
-    Resize {
-        /// Pane being resized.
-        pane_id: PaneId,
-        /// New size.
-        size: PaneSize,
-    },
+    Resize { pane_id: PaneId, size: PaneSize },
     /// Cumulative acknowledgement: everything up to `seq` has been applied. Sent at most about
+    /// every 20 ms per pane; drives the daemon's per-pane unacked budget.
     Ack {
-        /// Pane being acknowledged.
         pane_id: PaneId,
         /// Output applied up to (exclusive) this offset.
         seq: Seq,
     },
     /// Answers an agent approval request. The first valid decision wins.
     Decide(Decide),
+    /// Asks for the input lease on a pane.
     LeaseRequest {
-        /// Pane whose lease is requested.
         pane_id: PaneId,
         /// Ask the holder, or take it outright (owner only).
         kind: LeaseRequestKind,
     },
     /// Changes how a pane's PTY size is chosen.
-    SetSizePolicy {
-        /// Pane to change.
-        pane_id: PaneId,
-        /// New policy.
-        policy: SizePolicy,
-    },
-    /// This device's presence. Reserved for multiplayer; the MVP sends `focus` and `state`.
+    SetSizePolicy { pane_id: PaneId, policy: SizePolicy },
+    /// This device's presence (clients send `focus` and `state`).
     Presence(Presence),
     /// Liveness and RTT probe; answered by [`ServerCtl::Pong`] with the same nonce.
     Ping {
@@ -152,10 +124,7 @@ pub enum ClientCtl {
         nonce: u64,
     },
     /// The client is going away on purpose. Sent with its final `Ack`s.
-    Bye {
-        /// Why the client is leaving.
-        reason: ByeReason,
-    },
+    Bye { reason: ByeReason },
     /// Asks for the session list, answered by [`ServerCtl::Sessions`].
     ListSessions,
     /// Attaches this connection to a session: the daemon answers [`ServerCtl::Attached`] (or
@@ -163,16 +132,12 @@ pub enum ClientCtl {
     /// [`ServerCtl::LayoutChanged`], then keeps sending layout changes for it. `None` picks the
     /// most recently used session, creating one if there is none. A requested session that no
     /// longer exists falls back the same way; `AttachResult` says so.
-    Attach {
-        /// The session to attach to.
-        session_id: Option<SessionId>,
-    },
+    Attach { session_id: Option<SessionId> },
     /// Changes the layout. Answered by [`ServerCtl::OpResult`] with the same `op_id`, after
     /// the resulting `LayoutChanged` has been sent.
     Op {
         /// Client-chosen id echoed in the result.
         op_id: u64,
-        /// The change.
         op: LayoutOp,
     },
     /// Asks for scrollback older than a snapshot's READY marker. The daemon answers on its
@@ -182,7 +147,6 @@ pub enum ClientCtl {
     /// at the length of the READY section it decoded and continues from each page's
     /// `next_offset`.
     FetchHistory {
-        /// The pane.
         pane_id: PaneId,
         /// `seq` of the snapshot whose history is wanted.
         snapshot_seq: Seq,
@@ -196,9 +160,7 @@ pub enum ClientCtl {
     Search {
         /// Client-chosen id echoed in the result.
         req_id: u64,
-        /// The pane.
         pane_id: PaneId,
-        /// What to look for.
         query: SearchQuery,
         /// Matches to skip, newest first: `0` for the first page, then the previous page's
         /// [`SearchPage::next`].
@@ -211,7 +173,6 @@ pub enum ClientCtl {
     Links {
         /// Client-chosen id echoed in the result.
         req_id: u64,
-        /// The pane.
         pane_id: PaneId,
         /// How many of the most recent finished commands' output to scan besides the screen.
         commands: u16,
@@ -221,7 +182,6 @@ pub enum ClientCtl {
     Commands {
         /// Client-chosen id echoed in the result.
         req_id: u64,
-        /// The pane.
         pane_id: PaneId,
     },
     /// The output of one command (OSC 133 C..D), answered by
@@ -229,7 +189,6 @@ pub enum ClientCtl {
     CommandOutput {
         /// Client-chosen id echoed in the result.
         req_id: u64,
-        /// The pane.
         pane_id: PaneId,
         /// The command, or `None` for the most recent finished one.
         command_id: Option<u64>,
@@ -239,7 +198,6 @@ pub enum ClientCtl {
     Workspace {
         /// Client-chosen id echoed in the result.
         req_id: u64,
-        /// The request.
         req: WorkspaceRequest,
     },
     /// A multiplayer request (grants, revocation, leases, prompts, audit), answered by
@@ -247,14 +205,12 @@ pub enum ClientCtl {
     Multiplayer {
         /// Client-chosen id echoed in the result.
         req_id: u64,
-        /// The request.
         req: MpRequest,
     },
     /// A drawing or image request, answered by [`ServerCtl::ArtifactResult`].
     Artifact {
         /// Client-chosen id echoed in the result.
         req_id: u64,
-        /// The request.
         req: ArtifactRequest,
     },
     /// Points of a stroke being drawn; fanned out to the session's other clients as
@@ -265,7 +221,6 @@ pub enum ClientCtl {
     Assist {
         /// Client-chosen id echoed in the result.
         req_id: u64,
-        /// The request.
         req: AssistRequest,
     },
     /// Answers or cancels a native password prompt, or types a secret at a detected one;
@@ -273,7 +228,6 @@ pub enum ClientCtl {
     Askpass {
         /// Client-chosen id echoed in the result.
         req_id: u64,
-        /// The request.
         req: crate::askpass::AskpassRequest,
     },
     /// Approves with edited input, or adds or revokes an auto-approve rule; answered by
@@ -281,15 +235,12 @@ pub enum ClientCtl {
     Approval {
         /// Client-chosen id echoed in the result.
         req_id: u64,
-        /// The request.
         req: crate::approve::ApprovalRequest,
     },
     /// Answers [`BrowserPush::Call`](crate::BrowserPush::Call): the tool's result (JSON) or
     /// why it failed. Not answered.
     BrowserResult {
-        /// The call's id.
         id: u64,
-        /// The result.
         result: Result<String, String>,
     },
     /// This connection's own presence: draft, viewport, following, activity (see
@@ -319,17 +270,17 @@ pub struct Hello {
     pub resume_token: Option<ResumeToken>,
 }
 
+/// A signed capability grant.
 ///
-/// it is opaque here. `grant_id` is carried in the clear so the daemon can find a cached
-/// verification without parsing the token.
+/// The token is opaque here; `v` names its format. `grant_id` is carried in the clear so the
+/// daemon can find a cached verification without parsing the token.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignedGrant {
-    /// Version of the token format inside `token`: [`SignedGrant::PAIRING`] or
-    /// [`SignedGrant::DEVICE`] in the MVP.
+    /// Version of the token format inside `token`: [`SignedGrant::PAIRING`],
+    /// [`SignedGrant::DEVICE`] or [`SignedGrant::CHAIN`].
     pub v: u16,
     /// Id of the grant `token` encodes.
     pub grant_id: GrantId,
-    /// The signed token.
     #[serde(with = "crate::serde_bytes")]
     pub token: Vec<u8>,
 }
@@ -350,7 +301,6 @@ impl SignedGrant {
 /// A client's resume point for one pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResumePoint {
-    /// The pane.
     pub pane_id: PaneId,
     /// Output applied up to this offset.
     pub last_seq: Seq,
@@ -410,37 +360,25 @@ pub struct Decide {
     pub sig: Vec<u8>,
 }
 
-// ---------------------------------------------------------------------------------------------
-// ctl, daemon → client
-// ---------------------------------------------------------------------------------------------
-
 /// Messages the daemon sends on `ctl`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ServerCtl {
     /// Accepts a `Hello`.
     Welcome(Welcome),
     /// Rejects a `Hello`; the daemon closes the connection after sending it.
-    Refused {
-        /// Why.
-        reason: RefuseReason,
-    },
+    Refused { reason: RefuseReason },
     /// A pane's metadata changed (or is being listed for the first time).
     PaneMeta(PaneMeta),
     /// A pane no longer exists.
-    PaneClosed {
-        /// The pane.
-        pane_id: PaneId,
-    },
+    PaneClosed { pane_id: PaneId },
     /// The PTY facts local echo prediction depends on changed.
     EchoHint(EchoHint),
     /// Input was not applied. Input is never dropped silently. Sent on `ctl` rather than the
     /// pane stream so it arrives even when the client is not subscribed to the pane.
     InputRejected {
-        /// Pane the input targeted.
         pane_id: PaneId,
         /// The rejected input.
         input_seq: InputSeq,
-        /// Why.
         reason: InputRejectReason,
     },
     /// A pane's input lease changed.
@@ -449,7 +387,6 @@ pub enum ServerCtl {
     Decided(Decided),
     /// This client's decision lost: someone else decided first.
     AlreadyDecided {
-        /// The request.
         request_id: RequestId,
         /// Who won.
         by: Actor,
@@ -457,15 +394,9 @@ pub enum ServerCtl {
     /// Another participant's presence. Reserved for multiplayer.
     Presence(Presence),
     /// The grant this connection used was revoked. Streams close after this.
-    Revoked {
-        /// The revoked grant.
-        grant_id: GrantId,
-    },
+    Revoked { grant_id: GrantId },
     /// Answer to [`ClientCtl::Ping`].
-    Pong {
-        /// The ping's nonce.
-        nonce: u64,
-    },
+    Pong { nonce: u64 },
     /// The daemon's sessions. Answers [`ClientCtl::ListSessions`] and is re-sent to every
     /// client when a session is created, renamed or closed.
     Sessions {
@@ -484,19 +415,18 @@ pub enum ServerCtl {
     OpResult {
         /// The client's id for the op.
         op_id: u64,
-        /// What happened.
         outcome: OpOutcome,
     },
+    /// An agent event from a pane of the attached session, as the agents crate's
     /// versioned JSON. Kept as JSON because that schema is shared with hooks, logs and push
     /// payloads and evolves on its own version.
     AgentEvent {
-        /// The pane the agent runs in.
         pane_id: PaneId,
         /// One `AgentEvent` object.
         json: String,
     },
-    /// The PTY facts local echo prediction depends on, with the daemon's verdict under the
-    /// corrected S6 rule and the output offset they apply from. Supersedes
+    /// The PTY facts local echo prediction depends on, with the daemon's verdict and the
+    /// output offset they apply from. Supersedes
     /// [`ServerCtl::EchoHint`].
     EchoHintAt(EchoHintAt),
     /// A shell-integration command started or finished in a pane of the attached session.
@@ -507,52 +437,38 @@ pub enum ServerCtl {
     CommandFinishedUnseen(CommandMark),
     /// Answers [`ClientCtl::Search`].
     SearchResult {
-        /// The request's id.
         req_id: u64,
-        /// The pane searched.
         pane_id: PaneId,
         /// One page of matches.
         result: Result<SearchPage, RpcError>,
     },
     /// Answers [`ClientCtl::Links`].
     LinksResult {
-        /// The request's id.
         req_id: u64,
-        /// The pane.
         pane_id: PaneId,
         /// What was found.
         result: Result<Links, RpcError>,
     },
     /// Answers [`ClientCtl::Commands`].
     CommandsResult {
-        /// The request's id.
         req_id: u64,
-        /// The pane.
         pane_id: PaneId,
         /// The commands still in scrollback, oldest first.
         result: Result<CommandList, RpcError>,
     },
     /// Answers [`ClientCtl::CommandOutput`].
     CommandOutputResult {
-        /// The request's id.
         req_id: u64,
-        /// The pane.
         pane_id: PaneId,
-        /// The output.
         result: Result<CommandOutput, RpcError>,
     },
     /// Answers [`ClientCtl::Workspace`].
     WorkspaceResult {
-        /// The request's id.
         req_id: u64,
-        /// The answer.
         result: Result<WorkspaceResponse, WsError>,
     },
     /// The listening ports in panes changed (the whole list; sent to every client).
-    PortsChanged {
-        /// Every detected port.
-        ports: Vec<PortInfo>,
-    },
+    PortsChanged { ports: Vec<PortInfo> },
     /// A directory this connection watches changed.
     FsChanged(FsChange),
     /// The attention feed changed (sent to every client, whatever session it is attached
@@ -563,9 +479,7 @@ pub enum ServerCtl {
     VsCodeTunnel(VsCodeTunnelStatus),
     /// Answers [`ClientCtl::Multiplayer`].
     MultiplayerResult {
-        /// The request's id.
         req_id: u64,
-        /// The answer.
         result: Result<MpResponse, MpError>,
     },
     /// Who this connection is: sent right after [`ServerCtl::Welcome`].
@@ -580,7 +494,6 @@ pub enum ServerCtl {
     /// [`MpRequest::AnswerControl`](crate::MpRequest::AnswerControl). It moves anyway once
     /// the holder has been idle for the daemon's lease timeout.
     LeaseRequested {
-        /// The pane.
         pane_id: PaneId,
         /// Who asks.
         by: Actor,
@@ -597,18 +510,14 @@ pub enum ServerCtl {
     },
     /// Answers [`ClientCtl::Artifact`].
     ArtifactResult {
-        /// The request's id.
         req_id: u64,
-        /// The answer.
         result: Result<ArtifactResponse, ArtifactError>,
     },
     /// A drawing or image in the attached session changed (or live ink from someone else).
     Artifact(ArtifactEvent),
     /// Answers [`ClientCtl::Assist`].
     AssistResult {
-        /// The request's id.
         req_id: u64,
-        /// The answer.
         result: Result<AssistResponse, AssistError>,
     },
     /// A pane's foreground program or (for watched panes) prompt state changed.
@@ -624,9 +533,7 @@ pub enum ServerCtl {
     DaemonInfo(DaemonInfo),
     /// Answers [`ClientCtl::Askpass`].
     AskpassResult {
-        /// The request's id.
         req_id: u64,
-        /// The answer.
         result: Result<(), crate::askpass::AskpassError>,
     },
     /// A native password prompt opened or closed, or a detected one appeared or went away.
@@ -648,9 +555,7 @@ pub enum ServerCtl {
     /// The approval policy of the attached session (after attaching and on every change), to
     /// clients with [`Caps::APPROVAL_POLICY`].
     ApprovalPolicy {
-        /// The session.
         session_id: SessionId,
-        /// The rules.
         policy: crate::mp::ApprovalPolicy,
     },
     /// An open approval request's votes or claim changed (two-person rule, claims), to
@@ -658,9 +563,7 @@ pub enum ServerCtl {
     ApprovalStatus(crate::mp::ApprovalStatus),
     /// Answers [`ClientCtl::Approval`].
     ApprovalResult {
-        /// The request's id.
         req_id: u64,
-        /// The answer.
         result: Result<crate::approve::ApprovalResponse, crate::approve::ApprovalError>,
     },
     /// An approval request's extras or a pane's auto-approve rules changed. Sent only to
@@ -682,7 +585,6 @@ pub enum ServerCtl {
     /// What the program in a pane reports about itself changed (see [`crate::program`]), to
     /// clients with [`Caps::PROGRAM_STATUS`] that see the pane like its [`PaneMeta`].
     ProgramStatus {
-        /// The pane.
         pane_id: PaneId,
         /// The report; `None` once cleared or when the pane has none.
         status: Option<crate::program::ProgramReport>,
@@ -701,7 +603,6 @@ pub enum ServerCtl {
     /// [`Caps::CLIPBOARD`] that typed into the pane last. Write only: programs can never read
     /// the clipboard.
     Clipboard {
-        /// The pane.
         pane_id: PaneId,
         /// The text, at most [`MAX_CLIPBOARD_BYTES`] of UTF-8.
         text: String,
@@ -803,7 +704,6 @@ pub enum RefuseReason {
 /// Everything a client shows about a pane without streaming it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneMeta {
-    /// The pane.
     pub pane_id: PaneId,
     /// Terminal title (OSC 0/2).
     pub title: String,
@@ -824,9 +724,7 @@ pub struct PaneMeta {
 /// A terminal size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneSize {
-    /// Columns.
     pub cols: u16,
-    /// Rows.
     pub rows: u16,
     /// Width of the text area in pixels, 0 if unknown.
     pub width_px: u16,
@@ -852,6 +750,7 @@ impl PaneSize {
     }
 }
 
+/// How a pane's PTY size is chosen when several clients view it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SizePolicy {
     /// The lease holder's size. Default once a pane is shared.
@@ -859,12 +758,7 @@ pub enum SizePolicy {
     /// The size of the client that last sent input. Default for one principal.
     LastInput,
     /// A fixed size.
-    Fixed {
-        /// Columns.
-        cols: u16,
-        /// Rows.
-        rows: u16,
-    },
+    Fixed { cols: u16, rows: u16 },
     /// The smallest size of all viewers (tmux).
     Smallest,
 }
@@ -874,7 +768,6 @@ pub enum SizePolicy {
 pub struct AgentStatus {
     /// Agent kind, as the daemon's adapter names it (`"claude"`, `"codex"`).
     pub kind: String,
-    /// What it is doing.
     pub state: AgentState,
 }
 
@@ -883,7 +776,6 @@ pub struct AgentStatus {
 pub enum AgentState {
     /// Waiting for a prompt.
     Idle,
-    /// Working.
     Running,
     /// Waiting for a human decision.
     Blocked(Blocker),
@@ -911,9 +803,9 @@ pub struct DecisionOption {
     pub label: String,
 }
 
+/// PTY facts that gate local echo prediction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EchoHint {
-    /// The pane.
     pub pane_id: PaneId,
     /// The slave's `ECHO` flag. Never predict when it is off (password prompts).
     pub echo: bool,
@@ -928,6 +820,7 @@ pub struct EchoHint {
 /// [`EchoHint`] positioned in the output stream, plus the prediction verdict.
 ///
 /// The client applies it once it has applied output up to `at_seq`, so a password prompt's
+/// hidden state is in force before the prompt bytes are shown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EchoHintAt {
     /// The raw facts.
@@ -938,6 +831,7 @@ pub struct EchoHintAt {
     pub prediction: Prediction,
 }
 
+/// The daemon's local-echo verdict.
 ///
 /// `ECHO` off alone does not mean "password": line editors (zsh ZLE, readline) and every TUI
 /// run with `-echo -icanon`. The rule, first match wins:
@@ -955,7 +849,7 @@ pub enum Prediction {
     Allow,
     /// Cooked mode with echo off: a password prompt. Never predict.
     HiddenInput,
-    /// A full-screen program owns the screen; no prediction in v1.
+    /// A full-screen program owns the screen; not predicted.
     AltScreen,
     /// Raw mode outside a shell prompt (a TUI, or a raw-mode password widget).
     RawOutsidePrompt,
@@ -1000,9 +894,9 @@ pub enum InputRejectReason {
     UnknownPane,
 }
 
+/// The input lease on a pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Lease {
-    /// The pane.
     pub pane_id: PaneId,
     /// Current holder; `None` when nobody holds it.
     pub holder: Option<PrincipalId>,
@@ -1015,7 +909,7 @@ pub struct Lease {
 /// Input arbitration for a pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LeaseMode {
-    /// Any Driver may type; keystrokes interleave. The only mode in the MVP.
+    /// Any Driver may type; keystrokes interleave.
     Free,
     /// Only the holder's raw input is accepted.
     Leased,
@@ -1026,7 +920,6 @@ pub enum LeaseMode {
 pub struct Decided {
     /// Pane whose agent asked.
     pub pane_id: PaneId,
-    /// The request.
     pub request_id: RequestId,
     /// The winning answer.
     pub option_id: OptionId,
@@ -1036,9 +929,9 @@ pub struct Decided {
     pub at: UnixMillis,
 }
 
+/// A participant's presence. Throttled to 10 Hz.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Presence {
-    /// Who.
     pub actor: Actor,
     /// Activity level.
     pub state: PresenceState,
@@ -1066,7 +959,6 @@ pub enum PresenceState {
 /// The rows of a pane a participant has on screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Viewport {
-    /// The pane.
     pub pane_id: PaneId,
     /// First visible row, counted from the top of scrollback.
     pub top_row: u32,
@@ -1077,17 +969,11 @@ pub struct Viewport {
 /// A cell position in a pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CursorPos {
-    /// The pane.
     pub pane_id: PaneId,
     /// Row within the viewport.
     pub row: u16,
-    /// Column.
     pub col: u16,
 }
-
-// ---------------------------------------------------------------------------------------------
-// input, client → daemon
-// ---------------------------------------------------------------------------------------------
 
 /// Messages on the `input` stream. Never sent in 0-RTT data (replayable).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1099,7 +985,6 @@ pub enum ClientInput {
 /// One input event for one pane.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Input {
-    /// Target pane.
     pub pane_id: PaneId,
     /// Sequence number, echoed in `InputAck` / `InputRejected`.
     pub input_seq: InputSeq,
@@ -1175,11 +1060,8 @@ pub enum KeyAction {
 /// A mouse event in cell coordinates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MouseEvent {
-    /// What happened.
     pub action: MouseAction,
-    /// Which button.
     pub button: MouseButton,
-    /// Column.
     pub col: u16,
     /// Row within the viewport.
     pub row: u16,
@@ -1205,31 +1087,22 @@ pub enum MouseButton {
     None,
     /// Primary.
     Left,
-    /// Middle.
     Middle,
     /// Secondary.
     Right,
-    /// Wheel up.
     WheelUp,
-    /// Wheel down.
     WheelDown,
-    /// Wheel left.
     WheelLeft,
-    /// Wheel right.
     WheelRight,
 }
 
-// ---------------------------------------------------------------------------------------------
-// pane/<id>, daemon → client
-// ---------------------------------------------------------------------------------------------
-
+/// Messages on a `pane/<id>` stream.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PaneOutput {
     /// Raw PTY output starting at byte offset `seq`.
     Bytes {
         /// Offset of `data[0]` in the pane's output.
         seq: Seq,
-        /// The bytes.
         #[serde(with = "crate::serde_bytes")]
         data: Vec<u8>,
     },
@@ -1246,12 +1119,12 @@ pub enum PaneOutput {
     },
     /// "Your input `input_seq` is reflected at or after output offset `at_seq`."
     InputAck {
-        /// The input.
         input_seq: InputSeq,
         /// Output offset after which its effect is visible.
         at_seq: Seq,
     },
-    /// 200 KB → 42 KB). The daemon always sends this form.
+    /// As [`PaneOutput::Snapshot`], with `data` zstd-compressed (a worst-case READY section
+    /// shrinks from 200 KB to 42 KB). The daemon always sends this form.
     SnapshotZstd {
         /// Output offset the snapshot reflects.
         seq: Seq,
@@ -1268,21 +1141,15 @@ pub enum PaneOutput {
     Resized {
         /// Output offset of the resize.
         seq: Seq,
-        /// The new size.
         size: PaneSize,
     },
 }
-
-// ---------------------------------------------------------------------------------------------
-// bulk
-// ---------------------------------------------------------------------------------------------
 
 /// Messages on a `bulk` stream (lowest priority).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Bulk {
     /// Scrollback older than a snapshot's READY marker, fetched lazily on scroll-up.
     History {
-        /// The pane.
         pane_id: PaneId,
         /// Generation of the snapshot this history extends.
         snap_gen: SnapGen,
@@ -1293,7 +1160,6 @@ pub enum Bulk {
     /// Answers [`ClientCtl::FetchHistory`]: whole snapshot records ending after a page record
     /// or at FINISH, so a streaming decoder can apply every page in it.
     HistoryPage {
-        /// The pane.
         pane_id: PaneId,
         /// The snapshot these records belong to.
         snapshot_seq: Seq,
@@ -1316,16 +1182,11 @@ pub enum Bulk {
     /// The daemon no longer holds that snapshot (a newer one replaced it, or the daemon
     /// restarted). History is available again from the pane's next snapshot.
     HistoryGone {
-        /// The pane.
         pane_id: PaneId,
         /// The snapshot asked for.
         snapshot_seq: Seq,
     },
 }
-
-// ---------------------------------------------------------------------------------------------
-// Shell integration, search, links (ctl requests)
-// ---------------------------------------------------------------------------------------------
 
 /// Why a ctl request failed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1356,7 +1217,6 @@ impl std::error::Error for RpcError {}
 /// A command reported by shell integration (OSC 133).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommandMark {
-    /// The pane.
     pub pane_id: PaneId,
     /// Per-pane command number, from 1, never reused while the pane lives.
     pub command_id: u64,
@@ -1396,9 +1256,7 @@ pub struct CommandRows {
 /// One command in a [`CommandList`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommandInfo {
-    /// The mark.
     pub mark: CommandMark,
-    /// Its rows.
     pub rows: CommandRows,
 }
 
@@ -1416,7 +1274,6 @@ pub struct CommandList {
 /// Answer to [`ClientCtl::CommandOutput`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommandOutput {
-    /// The command.
     pub mark: CommandMark,
     /// Its output as plain text, soft-wrapped lines joined.
     pub text: String,
@@ -1431,7 +1288,6 @@ pub struct SearchQuery {
     pub pattern: String,
     /// How `pattern` is interpreted.
     pub mode: SearchMode,
-    /// Case handling.
     pub case: CaseMode,
 }
 
@@ -1465,7 +1321,6 @@ pub struct SearchPage {
     pub total_rows: u64,
     /// Matches in the whole scrollback.
     pub total: u32,
-    /// This page.
     pub matches: Vec<SearchMatch>,
     /// Cursor for the next page, `None` after the last.
     pub next: Option<u32>,
@@ -1498,7 +1353,6 @@ pub struct Links {
 /// A tappable target found in a pane.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Link {
-    /// What was found.
     pub kind: LinkKind,
     /// The text as shown.
     pub text: String,
@@ -1531,8 +1385,5 @@ pub enum LinkSource {
     /// The visible screen.
     Screen,
     /// The output of a command.
-    Command {
-        /// Its id.
-        command_id: u64,
-    },
+    Command { command_id: u64 },
 }

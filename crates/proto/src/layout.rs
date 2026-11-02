@@ -47,7 +47,6 @@ pub enum LayoutNode {
     Leaf(PaneId),
     /// Two subtrees sharing the space along `axis`.
     Split {
-        /// How the children are arranged.
         axis: Axis,
         /// The first child's share of the space, strictly between 0 and 1.
         ratio: f32,
@@ -61,11 +60,9 @@ pub enum LayoutNode {
 /// One tab of a session.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TabLayout {
-    /// The tab.
     pub tab_id: TabId,
     /// User-visible name; empty means "derive from the focused pane's title".
     pub name: String,
-    /// The split tree.
     pub root: LayoutNode,
     /// The pane with keyboard focus. Always a leaf of `root`.
     pub focused: PaneId,
@@ -76,7 +73,6 @@ pub struct TabLayout {
 /// The full layout of one session, sent whole on every change.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionLayout {
-    /// The session.
     pub session_id: SessionId,
     /// Session name, unique per daemon.
     pub name: String,
@@ -92,9 +88,7 @@ pub struct SessionLayout {
 /// A line in the session list.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionSummary {
-    /// The session.
     pub session_id: SessionId,
-    /// Its name.
     pub name: String,
     /// Number of tabs.
     pub tabs: u32,
@@ -130,7 +124,6 @@ pub enum PaneLaunch {
     },
     /// A coding agent, launched with the daemon's adapter recipe (hooks, status reporting).
     Agent {
-        /// Which agent.
         agent: AgentKind,
         /// The agent's own session id to resume, or `None` for a fresh session.
         resume: Option<String>,
@@ -158,7 +151,6 @@ pub enum PaneLaunch {
     /// `Agent`. Needs [`DaemonFeatures::ACCOUNTS`](crate::DaemonFeatures::ACCOUNTS). A resumed
     /// session always runs under the account that created it, whatever `account` says.
     AccountAgent {
-        /// Which agent.
         agent: AgentKind,
         /// The account ([`AgentAccount::id`](crate::AgentAccount::id)); `None` uses the
         /// tab's project default, else the host default.
@@ -172,9 +164,7 @@ pub enum PaneLaunch {
     /// that account's directory in its environment, then a shell. The user completes it in
     /// the pane; the daemon checks the account when it ends. Owner only.
     AccountSignIn {
-        /// The account's agent.
         agent: AgentKind,
-        /// The account.
         account: String,
         /// Codex: sign in with a device code (`codex login --device-auth`), for a host whose
         /// browser is not the user's. Claude prints a URL and takes a pasted code anyway.
@@ -196,39 +186,31 @@ pub enum LayoutOp {
     },
     /// Closes a pane, killing its process. Closing a tab's last pane closes the tab.
     ClosePane {
-        /// The pane.
         pane_id: PaneId,
     },
     /// Focuses a pane (and selects its tab).
     Focus {
-        /// The pane.
         pane_id: PaneId,
     },
     /// Moves a tab's focus to the nearest pane in `direction`. A no-op at the edge.
     FocusDirection {
-        /// The tab.
         tab_id: TabId,
-        /// Where to move.
         direction: Direction,
     },
     /// Grows (positive `delta`) or shrinks the pane along `axis`, by moving the divider of its
     /// nearest enclosing split on that axis. `delta` is in units of that split's size.
     Resize {
-        /// The pane.
         pane_id: PaneId,
-        /// Which dimension.
         axis: Axis,
         /// Change of the pane's share.
         delta: f32,
     },
     /// Zooms `pane_id` to fill its tab, or unzooms if it is already zoomed.
     ToggleZoom {
-        /// The pane.
         pane_id: PaneId,
     },
     /// Appends a tab with one pane and selects it.
     NewTab {
-        /// The session.
         session_id: SessionId,
         /// Tab name, empty for the default.
         name: String,
@@ -237,59 +219,47 @@ pub enum LayoutOp {
     },
     /// Closes a tab and every pane in it.
     CloseTab {
-        /// The tab.
         tab_id: TabId,
     },
     /// Moves a tab to `index` in its session's tab order (clamped to the end).
     MoveTab {
-        /// The tab.
         tab_id: TabId,
         /// New position.
         index: u32,
     },
     /// Shows a tab.
     SelectTab {
-        /// The tab.
         tab_id: TabId,
     },
-    /// Renames a tab.
     RenameTab {
-        /// The tab.
         tab_id: TabId,
-        /// New name.
         name: String,
     },
     /// Renames a session. Fails if another session has that name.
     RenameSession {
-        /// The session.
         session_id: SessionId,
-        /// New name.
         name: String,
     },
     /// Creates a session with one tab and one pane. Fails if the name is taken.
     CreateSession {
-        /// Its name.
         name: String,
         /// What its first pane runs.
         launch: PaneLaunch,
     },
     /// Closes a session and every pane in it.
     CloseSession {
-        /// The session.
         session_id: SessionId,
     },
     /// Moves a pane out of its tab into a new tab right after it, focused and selected; the
     /// process keeps running. A tab's only pane cannot be moved out (`Invalid`). Only daemons
     /// with [`DaemonFeatures::PANE_MOVES`](crate::DaemonFeatures::PANE_MOVES) understand it.
     BreakPane {
-        /// The pane.
         pane_id: PaneId,
     },
     /// Moves a pane beside `target` (in the same session), on `side` of it, focused; a tab
     /// left without panes closes. Needs
     /// [`DaemonFeatures::PANE_MOVES`](crate::DaemonFeatures::PANE_MOVES).
     MovePane {
-        /// The pane to move.
         pane_id: PaneId,
         /// The pane it goes beside.
         target: PaneId,
@@ -311,7 +281,6 @@ pub enum LayoutOp {
     /// `None`. The project must already be defined in the tab's session (`Invalid`
     /// otherwise). Needs [`DaemonFeatures::PROJECTS`](crate::DaemonFeatures::PROJECTS).
     SetTabProject {
-        /// The tab.
         tab_id: TabId,
         /// The project's id, or `None` to ungroup.
         project: Option<String>,
@@ -322,15 +291,12 @@ pub enum LayoutOp {
     /// has a newer `updated`. Needs
     /// [`DaemonFeatures::PROJECTS`](crate::DaemonFeatures::PROJECTS).
     PutProject {
-        /// The session.
         session_id: SessionId,
-        /// The definition.
         project: Project,
     },
     /// Ungroups every tab of a project in a session and drops its definition. Needs
     /// [`DaemonFeatures::PROJECTS`](crate::DaemonFeatures::PROJECTS).
     RemoveProject {
-        /// The session.
         session_id: SessionId,
         /// The project's id.
         project: String,
@@ -356,7 +322,6 @@ pub enum LayoutOp {
     /// [`MovePane`](LayoutOp::MovePane) beside one of its panes. Needs
     /// [`DaemonFeatures::FLOATS`](crate::DaemonFeatures::FLOATS).
     FloatPane {
-        /// The pane.
         pane_id: PaneId,
         /// Where it sits; `None` keeps a float's frame or picks a free spot.
         frame: Option<crate::float::FloatFrame>,
@@ -366,7 +331,6 @@ pub enum LayoutOp {
     SetFloat {
         /// A pane of the window.
         pane_id: PaneId,
-        /// New frame.
         frame: Option<crate::float::FloatFrame>,
         /// Shown as a chip, or restored (restoring raises it).
         minimized: Option<bool>,
@@ -387,7 +351,6 @@ pub enum LayoutOp {
     /// focused; a tab left without panes closes. Needs
     /// [`DaemonFeatures::FLOATS`](crate::DaemonFeatures::FLOATS).
     MovePaneToEdge {
-        /// The pane to move.
         pane_id: PaneId,
         /// The tab (in the same session).
         tab_id: TabId,
@@ -402,24 +365,13 @@ pub enum OpOutcome {
     /// Applied; nothing was created.
     Done,
     /// Applied; a pane was created (split).
-    PaneCreated {
-        /// The new pane.
-        pane_id: PaneId,
-    },
+    PaneCreated { pane_id: PaneId },
     /// Applied; a tab was created.
-    TabCreated {
-        /// The new tab.
-        tab_id: TabId,
-        /// Its pane.
-        pane_id: PaneId,
-    },
+    TabCreated { tab_id: TabId, pane_id: PaneId },
     /// Applied; a session was created.
     SessionCreated {
-        /// The new session.
         session_id: SessionId,
-        /// Its tab.
         tab_id: TabId,
-        /// Its pane.
         pane_id: PaneId,
     },
     /// Not applied.

@@ -11,8 +11,6 @@
 //!
 //! The app never sees a GitHub token: the daemon runs `gh` as the user on the host, and
 //! [`GhStatus`] says when `gh` is missing or not signed in.
-//!
-//! Same compatibility rules as the rest of the crate: append only.
 
 use serde::{Deserialize, Serialize};
 
@@ -38,7 +36,6 @@ pub struct RepoSnapshot {
 /// A pane and the worktree its working directory is in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneRepo {
-    /// The pane.
     pub pane_id: PaneId,
     /// [`WorktreeState::path`] of its worktree.
     pub worktree: String,
@@ -93,21 +90,16 @@ pub struct WorktreeState {
 /// A pull request as `gh pr view --json …` reports it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PullRequest {
-    /// Its number.
     pub number: u32,
-    /// Its title.
     pub title: String,
     /// Open, closed or merged.
     pub state: PrState,
-    /// A draft.
     pub draft: bool,
     /// The web page.
     pub url: String,
     /// The head branch.
     pub head_ref: String,
-    /// Lines added.
     pub additions: u32,
-    /// Lines removed.
     pub deletions: u32,
     /// Whether it can be merged now.
     pub merge_state: MergeState,
@@ -120,11 +112,9 @@ pub struct PullRequest {
 /// A pull request's state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PrState {
-    /// Open.
     Open,
     /// Closed without merging.
     Closed,
-    /// Merged.
     Merged,
 }
 
@@ -161,7 +151,6 @@ impl MergeState {
 pub struct PrCheck {
     /// The check's name (or the status context).
     pub name: String,
-    /// Where it stands.
     pub status: CheckStatus,
     /// Its page (details URL or target URL).
     pub url: Option<String>,
@@ -174,15 +163,12 @@ pub struct PrCheck {
 pub enum CheckStatus {
     /// Queued or running.
     Pending,
-    /// Passed.
     Success,
     /// Failed, errored or timed out.
     Failure,
     /// Finished without a verdict (neutral).
     Neutral,
-    /// Skipped.
     Skipped,
-    /// Cancelled.
     Cancelled,
 }
 
@@ -248,7 +234,6 @@ pub struct PrMerge {
     pub path: String,
     /// The pull request the user confirmed; refused if the branch's is another one now.
     pub number: u32,
-    /// How.
     pub strategy: MergeStrategy,
 }
 
@@ -269,7 +254,6 @@ pub struct PrCreate {
 pub struct PrCheckout {
     /// Any directory inside the repository.
     pub repo: String,
-    /// The pull request.
     pub number: u32,
 }
 
@@ -290,7 +274,6 @@ pub struct ArchivedWorktree {
     pub head: Option<String>,
     /// Uncommitted changes were saved with it and come back on restore.
     pub saved_changes: bool,
-    /// When.
     pub archived_at: UnixMillis,
 }
 
@@ -324,11 +307,9 @@ pub struct TaskCreate {
 /// What [`TaskCreate`] made.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskCreated {
-    /// The worktree.
     pub worktree: WorktreeInfo,
     /// The new tab.
     pub tab_id: TabId,
-    /// Its pane.
     pub pane_id: PaneId,
     /// The setup command that runs first, if the repository has one.
     pub setup: Option<String>,
@@ -341,7 +322,6 @@ pub struct TaskCreated {
 pub struct ScriptRun {
     /// Working directory (a worktree).
     pub cwd: String,
-    /// The session.
     pub session_id: SessionId,
     /// Tab name.
     pub name: String,
@@ -361,10 +341,7 @@ pub enum RepoHooksFor {
         base: Option<String>,
     },
     /// An existing worktree (its teardown, before archive or delete).
-    Worktree {
-        /// The worktree.
-        path: String,
-    },
+    Worktree { path: String },
 }
 
 /// A repository's setup and teardown commands and whether the owner trusts them. The daemon

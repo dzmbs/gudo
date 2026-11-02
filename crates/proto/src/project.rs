@@ -41,7 +41,6 @@ pub struct Project {
 /// One tab's membership in a project.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TabProject {
-    /// The tab.
     pub tab_id: TabId,
     /// The project's id.
     pub project: String,
@@ -52,7 +51,6 @@ pub struct TabProject {
 /// A session's projects, in [`ServerCtl::Projects`](crate::ServerCtl::Projects).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionProjects {
-    /// The session.
     pub session_id: SessionId,
     /// The session's layout revision these belong to.
     pub revision: u64,

@@ -17,8 +17,6 @@
 //! [`ServerCtl::Approval`](crate::ServerCtl::Approval), sent only to connections that
 //! announced [`Caps::APPROVALS`](crate::Caps::APPROVALS) and can see the pane. Requests need
 //! Approver on the pane.
-//!
-//! Same compatibility rules as the rest of the crate: append only.
 
 use serde::{Deserialize, Serialize};
 
@@ -49,9 +47,9 @@ pub struct RuleMatch {
 /// An auto-approve rule, signed by the device that made it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoApproveRule {
-    /// The rule.
     pub rule_id: RuleId,
-    /// The agent's pane (the task). The rule ends with the agent session running there now.
+    /// The agent's pane (the task). The rule ends with the agent session currently running
+    /// there.
     pub pane_id: PaneId,
     /// An open request to approve with it ("approve this and all like it").
     pub request_id: Option<RequestId>,
@@ -85,7 +83,6 @@ pub struct ActiveRule {
 /// What a client may do with the request a pane is blocked on, beyond `Decide`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApprovalInfo {
-    /// The pane.
     pub pane_id: PaneId,
     /// The request (the one `AgentState::Blocked` names).
     pub request_id: RequestId,
@@ -104,16 +101,13 @@ pub enum ApprovalRequest {
     /// Approves an open request with its input replaced by `input` (signed like any
     /// decision; its option is the allow option).
     ApproveEdited {
-        /// The decision.
         decide: Decide,
         /// The edited input (the command to run instead).
         input: String,
     },
     /// Adds an auto-approve rule, and approves `rule.request_id` if it is open and matches.
     AddRule(AutoApproveRule),
-    /// Revokes a rule.
     RevokeRule {
-        /// The rule.
         rule_id: RuleId,
     },
 }
@@ -121,7 +115,6 @@ pub enum ApprovalRequest {
 /// A successful [`ApprovalRequest`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ApprovalResponse {
-    /// Done.
     Done,
 }
 
@@ -164,7 +157,6 @@ pub enum ApprovalPush {
     Request(ApprovalInfo),
     /// The rules in force on a pane, whole (empty when none are left).
     Rules {
-        /// The pane.
         pane_id: PaneId,
         /// Its rules, oldest first.
         rules: Vec<ActiveRule>,
@@ -181,8 +173,8 @@ pub enum ApprovalPush {
 /// Everything but the signature is covered, and the daemon id stops a rule from being
 /// replayed on another host.
 pub fn auto_approve_signing_bytes(daemon: DaemonId, rule: &AutoApproveRule) -> Vec<u8> {
-    let mut out = b"auto-approve-v1\0".to_vec();
-    out.extend(
+    let mut signed = b"auto-approve-v1\0".to_vec();
+    signed.extend(
         postcard::to_stdvec(&(
             daemon,
             rule.rule_id,
@@ -195,5 +187,5 @@ pub fn auto_approve_signing_bytes(daemon: DaemonId, rule: &AutoApproveRule) -> V
         ))
         .expect("rules always encode"),
     );
-    out
+    signed
 }

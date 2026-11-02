@@ -23,7 +23,7 @@ impl Checker {
         T: Serialize + DeserializeOwned + PartialEq + Debug,
     {
         let wire = frame::to_vec(&msg).unwrap();
-        let hex: String = wire.iter().map(|b| format!("{b:02x}")).collect();
+        let hex: String = wire.iter().map(|byte| format!("{byte:02x}")).collect();
         if self.print {
             println!("GOLDEN {name}: \"{hex}\"");
         }
@@ -66,17 +66,17 @@ fn workflow() -> Workflow {
 
 #[test]
 fn workflow_messages_match_their_frozen_bytes() {
-    let mut c = Checker {
+    let mut checker = Checker {
         print: std::env::var_os("PROTO_PRINT_GOLDEN").is_some(),
         failures: vec![],
     };
-    c.check("Caps::WORKFLOWS", Caps::WORKFLOWS, "03000000018020");
-    c.check(
+    checker.check("Caps::WORKFLOWS", Caps::WORKFLOWS, "03000000018020");
+    checker.check(
         "ServerCtl::WorkflowsChanged",
         ServerCtl::WorkflowsChanged { rev: 9 },
         "03000000013209",
     );
-    c.check(
+    checker.check(
         "WorkflowScope::Global",
         WorkflowScope::Global,
         "020000000100",
@@ -112,7 +112,7 @@ fn workflow_messages_match_their_frozen_bytes() {
             "1e00000001150531010103014e0763207b7b627d7d000001016201016401016d0100",
         ),
     ] {
-        c.check(name, req(r), golden);
+        checker.check(name, req(r), golden);
     }
     let answer = |result| ServerCtl::WorkspaceResult { req_id: 5, result };
     for (name, r, golden) in [
@@ -136,7 +136,11 @@ fn workflow_messages_match_their_frozen_bytes() {
             "44000000011805001c092f722f662e79616d6c014e0c67697420636f207b7b627d7d010144010367697401016201016401016d0101037a73680001017501092f722f662e79616d6c",
         ),
     ] {
-        c.check(name, answer(r), golden);
+        checker.check(name, answer(r), golden);
     }
-    assert!(c.failures.is_empty(), "{}", c.failures.join("\n"));
+    assert!(
+        checker.failures.is_empty(),
+        "{}",
+        checker.failures.join("\n")
+    );
 }

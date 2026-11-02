@@ -27,7 +27,7 @@ impl Checker {
         T: Serialize + DeserializeOwned + PartialEq + Debug,
     {
         let wire = frame::to_vec(&msg).unwrap();
-        let hex: String = wire.iter().map(|b| format!("{b:02x}")).collect();
+        let hex: String = wire.iter().map(|byte| format!("{byte:02x}")).collect();
         if self.print {
             println!("{name}: \"{hex}\"");
         }
@@ -45,14 +45,14 @@ impl Checker {
 
 #[test]
 fn askpass_messages_match_their_frozen_bytes() {
-    let mut c = Checker {
+    let mut checker = Checker {
         print: std::env::var_os("PROTO_PRINT_GOLDEN").is_some(),
         failures: vec![],
     };
     assert_eq!(Caps::ASKPASS.0, 1 << 7);
 
     let req = |req| ClientCtl::Askpass { req_id: 5, req };
-    c.check(
+    checker.check(
         "ClientCtl::Askpass(Answer)",
         req(AskpassRequest::Answer {
             id: ID,
@@ -60,12 +60,12 @@ fn askpass_messages_match_their_frozen_bytes() {
         }),
         "08000000011a050009027077",
     );
-    c.check(
+    checker.check(
         "ClientCtl::Askpass(Cancel)",
         req(AskpassRequest::Cancel { id: ID }),
         "05000000011a050109",
     );
-    c.check(
+    checker.check(
         "ClientCtl::Askpass(TypeSecret)",
         req(AskpassRequest::TypeSecret {
             pane_id: PANE,
@@ -75,7 +75,7 @@ fn askpass_messages_match_their_frozen_bytes() {
     );
 
     let result = |result| ServerCtl::AskpassResult { req_id: 5, result };
-    c.check(
+    checker.check(
         "ServerCtl::AskpassResult(Ok)",
         result(Ok(())),
         "0400000001280500",
@@ -104,14 +104,14 @@ fn askpass_messages_match_their_frozen_bytes() {
             "050000000128050105",
         ),
     ] {
-        c.check(
+        checker.check(
             &format!("ServerCtl::AskpassResult({name})"),
             result(Err(error)),
             golden,
         );
     }
 
-    c.check(
+    checker.check(
         "ServerCtl::Askpass(Prompt)",
         ServerCtl::Askpass(AskpassPush::Prompt(SecretPrompt {
             id: ID,
@@ -149,7 +149,7 @@ fn askpass_messages_match_their_frozen_bytes() {
             "06000000012901090304",
         ),
     ] {
-        c.check(
+        checker.check(
             &format!("ServerCtl::Askpass(Closed {name})"),
             ServerCtl::Askpass(AskpassPush::Closed {
                 id: ID,
@@ -159,7 +159,7 @@ fn askpass_messages_match_their_frozen_bytes() {
             golden,
         );
     }
-    c.check(
+    checker.check(
         "ServerCtl::Askpass(Detected)",
         ServerCtl::Askpass(AskpassPush::Detected(DetectedPrompt {
             pane_id: PANE,
@@ -168,7 +168,7 @@ fn askpass_messages_match_their_frozen_bytes() {
         })),
         "10000000012902030950617373776f72643aac02",
     );
-    c.check(
+    checker.check(
         "ServerCtl::Askpass(DetectedGone)",
         ServerCtl::Askpass(AskpassPush::DetectedGone { pane_id: PANE }),
         "0400000001290303",
@@ -180,7 +180,11 @@ fn askpass_messages_match_their_frozen_bytes() {
         ("Gpg", SecretSource::Gpg, "020000000103"),
         ("Other", SecretSource::Other, "020000000104"),
     ] {
-        c.check(&format!("SecretSource::{name}"), source, golden);
+        checker.check(&format!("SecretSource::{name}"), source, golden);
     }
-    assert!(c.failures.is_empty(), "{}", c.failures.join("\n"));
+    assert!(
+        checker.failures.is_empty(),
+        "{}",
+        checker.failures.join("\n")
+    );
 }

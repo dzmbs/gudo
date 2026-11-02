@@ -1,3 +1,4 @@
+//! Live presence: who is here, where they look, what they are typing, and whom
 //! they follow. Offered by daemons with [`DaemonFeatures::PRESENCE`](crate::DaemonFeatures) to
 //! clients announcing [`Caps::PRESENCE`](crate::Caps).
 //!
@@ -30,7 +31,7 @@ impl fmt::Display for PeerId {
     }
 }
 
-/// What kind of device a peer is on, for "Sam · iPad".
+/// What kind of device a peer is on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum DeviceClass {
     /// Not said (older clients).
@@ -50,11 +51,9 @@ pub enum DeviceClass {
 /// every client whatever scrollback each holds: `from_bottom == 0` is the live screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PeerViewport {
-    /// The pane.
     pub pane_id: PaneId,
     /// Rows scrolled back from the live screen.
     pub from_bottom: u32,
-    /// Rows visible.
     pub rows: u16,
 }
 
@@ -72,7 +71,6 @@ pub enum DraftSource {
 /// Text being composed for a pane, not yet sent.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Draft {
-    /// The pane it is for.
     pub pane_id: PaneId,
     /// Where it is typed.
     pub source: DraftSource,
@@ -94,10 +92,10 @@ impl Draft {
     /// ```
     /// use proto::{Draft, DraftSource, PaneId};
     ///
-    /// let mut d = Draft { pane_id: PaneId(1), source: DraftSource::Composer, text: "é".repeat(3000), caret: 9999 };
-    /// d.clamp();
-    /// assert!(d.text.len() <= Draft::MAX_BYTES);
-    /// assert_eq!(d.caret as usize, d.text.chars().count());
+    /// let mut draft = Draft { pane_id: PaneId(1), source: DraftSource::Composer, text: "é".repeat(3000), caret: 9999 };
+    /// draft.clamp();
+    /// assert!(draft.text.len() <= Draft::MAX_BYTES);
+    /// assert_eq!(draft.caret as usize, draft.text.chars().count());
     /// ```
     pub fn clamp(&mut self) {
         if self.text.len() > Self::MAX_BYTES {
@@ -107,8 +105,8 @@ impl Draft {
             }
             self.text.truncate(end);
         }
-        let chars = self.text.chars().count() as u32;
-        self.caret = self.caret.min(chars);
+        let char_count = self.text.chars().count() as u32;
+        self.caret = self.caret.min(char_count);
     }
 }
 
@@ -143,13 +141,10 @@ pub struct Peer {
     pub peer: PeerId,
     /// The daemon's revision of this state; newer replaces older.
     pub rev: u64,
-    /// Who.
     pub actor: Actor,
-    /// Display name.
     pub name: String,
     /// Effective roles.
     pub roles: Roles,
-    /// The device kind.
     pub device: DeviceClass,
     /// When it connected.
     pub since: UnixMillis,
@@ -159,11 +154,9 @@ pub struct Peer {
     pub focus: Option<PaneId>,
     /// What it sees of its focused pane.
     pub viewport: Option<PeerViewport>,
-    /// The pane it is typing in right now (raw input or a draft), for "Sam is typing…".
+    /// The pane it is typing in right now (raw input or a draft).
     pub typing: Option<PaneId>,
-    /// Its draft, if any.
     pub draft: Option<Draft>,
-    /// The person it follows.
     pub following: Option<PrincipalId>,
 }
 

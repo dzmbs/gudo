@@ -56,7 +56,6 @@ pub struct DaemonInfo {
     pub protocol: u32,
     /// The oldest client level it serves.
     pub min_client_protocol: u32,
-    /// Optional abilities.
     pub features: DaemonFeatures,
     /// The machine's host name as the system reports it (may include a domain). Empty when
     /// the connection was refused.
@@ -117,7 +116,6 @@ pub enum UpgradeEncoding {
 pub struct UpgradeHeader {
     /// Bytes that follow on the stream (encoded).
     pub size: u64,
-    /// Their encoding.
     pub encoding: UpgradeEncoding,
     /// SHA-256 of the executable after decoding.
     pub sha256: [u8; 32],

@@ -75,12 +75,15 @@ impl fmt::Display for FrameError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Oversized { len, max } => write!(f, "frame of {len} bytes exceeds limit {max}"),
-            Self::UnsupportedVersion(v) => {
-                write!(f, "unsupported wire version {v} (speak {WIRE_VERSION})")
+            Self::UnsupportedVersion(version) => {
+                write!(
+                    f,
+                    "unsupported wire version {version} (speak {WIRE_VERSION})"
+                )
             }
-            Self::Decode(e) => write!(f, "malformed frame body: {e}"),
-            Self::TrailingBytes(n) => write!(f, "{n} trailing bytes after message"),
-            Self::Io(e) => write!(f, "frame i/o: {e}"),
+            Self::Decode(error) => write!(f, "malformed frame body: {error}"),
+            Self::TrailingBytes(count) => write!(f, "{count} trailing bytes after message"),
+            Self::Io(error) => write!(f, "frame i/o: {error}"),
         }
     }
 }
@@ -88,22 +91,22 @@ impl fmt::Display for FrameError {
 impl Error for FrameError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::Decode(e) => Some(e),
-            Self::Io(e) => Some(e),
+            Self::Decode(error) => Some(error),
+            Self::Io(error) => Some(error),
             _ => None,
         }
     }
 }
 
 impl From<postcard::Error> for FrameError {
-    fn from(e: postcard::Error) -> Self {
-        Self::Decode(e)
+    fn from(error: postcard::Error) -> Self {
+        Self::Decode(error)
     }
 }
 
 impl From<io::Error> for FrameError {
-    fn from(e: io::Error) -> Self {
-        Self::Io(e)
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
     }
 }
 
@@ -137,9 +140,9 @@ impl Flavor for AppendVec<'_> {
 pub fn encode<T: Serialize>(msg: &T, out: &mut Vec<u8>) -> Result<(), FrameError> {
     let start = out.len();
     out.extend_from_slice(&[0; LEN_PREFIX]);
-    if let Err(e) = postcard::serialize_with_flavor(&(WIRE_VERSION, msg), AppendVec(out)) {
+    if let Err(error) = postcard::serialize_with_flavor(&(WIRE_VERSION, msg), AppendVec(out)) {
         out.truncate(start);
-        return Err(e.into());
+        return Err(error.into());
     }
     let len = out.len() - start - LEN_PREFIX;
     if len > MAX_FRAME_LEN {
@@ -203,8 +206,8 @@ pub fn decode_body<T: DeserializeOwned>(body: &[u8]) -> Result<T, FrameError> {
 ///
 /// As for [`encode`], plus [`FrameError::Io`] if the write fails.
 pub fn write_frame<W: Write, T: Serialize>(writer: &mut W, msg: &T) -> Result<(), FrameError> {
-    let buf = to_vec(msg)?;
-    writer.write_all(&buf)?;
+    let frame = to_vec(msg)?;
+    writer.write_all(&frame)?;
     Ok(())
 }
 
@@ -305,10 +308,10 @@ mod tests {
 
     #[test]
     fn oversized_prefix_is_rejected_before_allocating() {
-        let mut d = FrameDecoder::new(16);
-        d.extend(&17u32.to_le_bytes());
+        let mut decoder = FrameDecoder::new(16);
+        decoder.extend(&17u32.to_le_bytes());
         assert!(matches!(
-            d.next_body(),
+            decoder.next_body(),
             Err(FrameError::Oversized { len: 17, max: 16 })
         ));
     }
@@ -336,19 +339,19 @@ mod tests {
     fn byte_at_a_time_decoding() {
         let msgs: Vec<_> = (0..50).map(|nonce| ClientCtl::Ping { nonce }).collect();
         let mut wire = Vec::new();
-        for m in &msgs {
-            encode(m, &mut wire).unwrap();
+        for msg in &msgs {
+            encode(msg, &mut wire).unwrap();
         }
-        let mut d = FrameDecoder::new(MAX_FRAME_LEN);
-        let mut out = Vec::new();
-        for b in &wire {
-            d.extend(std::slice::from_ref(b));
-            while let Some(m) = d.decode::<ClientCtl>().unwrap() {
-                out.push(m);
+        let mut decoder = FrameDecoder::new(MAX_FRAME_LEN);
+        let mut decoded = Vec::new();
+        for byte in &wire {
+            decoder.extend(std::slice::from_ref(byte));
+            while let Some(msg) = decoder.decode::<ClientCtl>().unwrap() {
+                decoded.push(msg);
             }
         }
-        assert_eq!(out, msgs);
-        assert_eq!(d.buffered(), 0);
+        assert_eq!(decoded, msgs);
+        assert_eq!(decoder.buffered(), 0);
     }
 
     #[test]

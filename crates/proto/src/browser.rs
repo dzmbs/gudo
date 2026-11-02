@@ -12,7 +12,7 @@
 //!    [`BrowserPush::CallClosed`] when the call ends any other way.
 //!
 //! Pushes go only to connections that announced [`Caps::BROWSER`](crate::Caps::BROWSER) and
-//! hold Driver (or Owner) on the pane. Append only, as everywhere in the crate.
+//! hold Driver (or Owner) on the pane.
 
 use serde::{Deserialize, Serialize};
 
@@ -23,7 +23,6 @@ use crate::ids::PaneId;
 pub enum BrowserPush {
     /// A program in `pane_id` asked for `url` to be opened.
     Open {
-        /// The pane the program runs in.
         pane_id: PaneId,
         /// The URL, as the program passed it.
         url: String,
@@ -40,8 +39,5 @@ pub enum BrowserPush {
         args: String,
     },
     /// Call `id` is over (the agent gave up or it timed out): drop it.
-    CallClosed {
-        /// The call.
-        id: u64,
-    },
+    CallClosed { id: u64 },
 }

@@ -21,7 +21,7 @@ fn device_paired_matches_its_frozen_bytes() {
         connected: 1,
     });
     let wire = frame::to_vec(&msg).unwrap();
-    let hex: String = wire.iter().map(|b| format!("{b:02x}")).collect();
+    let hex: String = wire.iter().map(|byte| format!("{byte:02x}")).collect();
     if std::env::var_os("PROTO_PRINT_GOLDEN").is_some() {
         println!("DevicePaired: \"{hex}\"");
     }
@@ -45,7 +45,7 @@ fn host_alert_matches_its_frozen_bytes() {
         body: "b".into(),
     });
     let wire = frame::to_vec(&msg).unwrap();
-    let hex: String = wire.iter().map(|b| format!("{b:02x}")).collect();
+    let hex: String = wire.iter().map(|byte| format!("{byte:02x}")).collect();
     if std::env::var_os("PROTO_PRINT_GOLDEN").is_some() {
         println!("HostAlert: \"{hex}\"");
     }

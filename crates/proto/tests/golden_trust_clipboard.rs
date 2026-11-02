@@ -23,7 +23,7 @@ impl Checker {
         T: Serialize + DeserializeOwned + PartialEq + Debug,
     {
         let wire = frame::to_vec(&msg).unwrap();
-        let hex: String = wire.iter().map(|b| format!("{b:02x}")).collect();
+        let hex: String = wire.iter().map(|byte| format!("{byte:02x}")).collect();
         if self.print {
             println!("{name}: \"{hex}\"");
         }
@@ -43,11 +43,11 @@ fn trust_clipboard_and_driver_messages_match_their_frozen_bytes() {
     assert_eq!(Caps::CLIPBOARD.0, 1 << 19);
     assert_eq!(Caps::ASKPASS_DRIVER.0, 1 << 20);
     assert_eq!(DaemonFeatures::REPO_TRUST.0, 1 << 14);
-    let mut c = Checker {
+    let mut checker = Checker {
         print: std::env::var_os("PROTO_PRINT_GOLDEN").is_some(),
         failures: vec![],
     };
-    c.check(
+    checker.check(
         "ServerCtl::Clipboard",
         ServerCtl::Clipboard {
             pane_id: PaneId(3),
@@ -55,7 +55,7 @@ fn trust_clipboard_and_driver_messages_match_their_frozen_bytes() {
         },
         "06000000013903026869",
     );
-    c.check(
+    checker.check(
         "ServerCtl::Askpass(PromptWhileGuestDrives)",
         ServerCtl::Askpass(AskpassPush::PromptWhileGuestDrives {
             prompt: SecretPrompt {
@@ -73,7 +73,7 @@ fn trust_clipboard_and_driver_messages_match_their_frozen_bytes() {
         "200000000129040903000950617373776f72643a077375646f206c730000e80703626f62",
     );
     let req = |req| ClientCtl::Workspace { req_id: 5, req };
-    c.check(
+    checker.check(
         "WorkspaceRequest::RepoHooks(NewTask)",
         req(WorkspaceRequest::RepoHooks(RepoHooksFor::NewTask {
             repo: "/r".into(),
@@ -81,14 +81,14 @@ fn trust_clipboard_and_driver_messages_match_their_frozen_bytes() {
         })),
         "0e0000000115053400022f7201046d61696e",
     );
-    c.check(
+    checker.check(
         "WorkspaceRequest::RepoHooks(Worktree)",
         req(WorkspaceRequest::RepoHooks(RepoHooksFor::Worktree {
             path: "/w".into(),
         })),
         "080000000115053401022f77",
     );
-    c.check(
+    checker.check(
         "WorkspaceRequest::RepoTrust",
         req(WorkspaceRequest::RepoTrust {
             repo: "/r".into(),
@@ -96,7 +96,7 @@ fn trust_clipboard_and_driver_messages_match_their_frozen_bytes() {
         }),
         "0a00000001150535022f72026162",
     );
-    c.check(
+    checker.check(
         "WorkspaceResponse::RepoHooks",
         ServerCtl::WorkspaceResult {
             req_id: 5,
@@ -112,7 +112,11 @@ fn trust_clipboard_and_driver_messages_match_their_frozen_bytes() {
         },
         "13000000011805001f022f7201046d616b650002616200",
     );
-    assert!(c.failures.is_empty(), "{}", c.failures.join("\n"));
+    assert!(
+        checker.failures.is_empty(),
+        "{}",
+        checker.failures.join("\n")
+    );
 }
 
 /// Invite links and editor tokens are bearer secrets: logging a value must not leak them.

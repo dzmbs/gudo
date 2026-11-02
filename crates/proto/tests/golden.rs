@@ -3,6 +3,7 @@
 //! Each case encodes a representative value, compares the full frame (length prefix, version,
 //! body) with a frozen hex string, and decodes it back. If a case fails, the wire format
 //! changed. Do not edit an existing hex string to make it pass: add a variant or bump
+//! `WIRE_VERSION` instead.
 //!
 //! To print the current encodings when adding a case: `PROTO_PRINT_GOLDEN=1 cargo test -p proto
 //! --test golden -- --nocapture`.
@@ -82,7 +83,7 @@ impl Checker {
         T: Serialize + DeserializeOwned + PartialEq + Debug,
     {
         let wire = frame::to_vec(&msg).unwrap();
-        let hex: String = wire.iter().map(|b| format!("{b:02x}")).collect();
+        let hex: String = wire.iter().map(|byte| format!("{byte:02x}")).collect();
         if self.print {
             println!("{name}: \"{hex}\"");
         }
@@ -100,19 +101,19 @@ impl Checker {
 
 #[test]
 fn every_message_matches_its_frozen_bytes() {
-    let mut c = Checker {
+    let mut checker = Checker {
         print: std::env::var_os("PROTO_PRINT_GOLDEN").is_some(),
         failures: vec![],
     };
 
     // Stream headers.
-    c.check("StreamHeader::Input", StreamHeader::Input, "020000000100");
-    c.check(
+    checker.check("StreamHeader::Input", StreamHeader::Input, "020000000100");
+    checker.check(
         "StreamHeader::Pane",
         StreamHeader::Pane { pane_id: PANE },
         "03000000010103",
     );
-    c.check("StreamHeader::Bulk", StreamHeader::Bulk, "020000000102");
+    checker.check("StreamHeader::Bulk", StreamHeader::Bulk, "020000000102");
 
     // ctl, client → daemon.
     let hello = Hello {
@@ -133,8 +134,8 @@ fn every_message_matches_its_frozen_bytes() {
         link: LinkClass::Constrained,
         resume_token: Some(ResumeToken(vec![1, 2, 3])),
     };
-    c.check("ClientCtl::Hello", ClientCtl::Hello(hello), "530000000100222222222222222222222222222222222222222222222222222222222222222211111111111111111111111111111111013333333333333333333333333333333302aabb010103ac020205010103010203");
-    c.check(
+    checker.check("ClientCtl::Hello", ClientCtl::Hello(hello), "530000000100222222222222222222222222222222222222222222222222222222222222222211111111111111111111111111111111013333333333333333333333333333333302aabb010103ac020205010103010203");
+    checker.check(
         "ClientCtl::Subscribe",
         ClientCtl::Subscribe {
             pane_id: PANE,
@@ -143,26 +144,26 @@ fn every_message_matches_its_frozen_bytes() {
         },
         "050000000101030028",
     );
-    c.check(
+    checker.check(
         "ClientCtl::Unsubscribe",
         ClientCtl::Unsubscribe { pane_id: PANE },
         "03000000010203",
     );
-    c.check(
+    checker.check(
         "ClientCtl::Visible",
         ClientCtl::Visible {
             pane_ids: vec![PANE, PaneId(4)],
         },
         "050000000103020304",
     );
-    c.check(
+    checker.check(
         "ClientCtl::Focus",
         ClientCtl::Focus {
             pane_id: Some(PANE),
         },
         "0400000001040103",
     );
-    c.check(
+    checker.check(
         "ClientCtl::Resize",
         ClientCtl::Resize {
             pane_id: PANE,
@@ -170,7 +171,7 @@ fn every_message_matches_its_frozen_bytes() {
         },
         "090000000105037828a00bc007",
     );
-    c.check(
+    checker.check(
         "ClientCtl::Ack",
         ClientCtl::Ack {
             pane_id: PANE,
@@ -178,7 +179,7 @@ fn every_message_matches_its_frozen_bytes() {
         },
         "06000000010603808004",
     );
-    c.check(
+    checker.check(
         "ClientCtl::Decide",
         ClientCtl::Decide(Decide {
             request_id: RequestId(9),
@@ -188,7 +189,7 @@ fn every_message_matches_its_frozen_bytes() {
         }),
         "3900000001070901111111111111111111111111111111112222222222222222222222222222222222222222222222222222222222222222045a5a5a5a",
     );
-    c.check(
+    checker.check(
         "ClientCtl::LeaseRequest",
         ClientCtl::LeaseRequest {
             pane_id: PANE,
@@ -196,7 +197,7 @@ fn every_message_matches_its_frozen_bytes() {
         },
         "0400000001080301",
     );
-    c.check(
+    checker.check(
         "ClientCtl::SetSizePolicy",
         ClientCtl::SetSizePolicy {
             pane_id: PANE,
@@ -204,13 +205,13 @@ fn every_message_matches_its_frozen_bytes() {
         },
         "06000000010903025018",
     );
-    c.check("ClientCtl::Presence", ClientCtl::Presence(presence()), "3f000000010a111111111111111111111111111111112222222222222222222222222222222222222222222222222222222222222222000103010103e8072801030507");
-    c.check(
+    checker.check("ClientCtl::Presence", ClientCtl::Presence(presence()), "3f000000010a111111111111111111111111111111112222222222222222222222222222222222222222222222222222222222222222000103010103e8072801030507");
+    checker.check(
         "ClientCtl::Ping",
         ClientCtl::Ping { nonce: 0xdead_beef },
         "07000000010beffdb6f50d",
     );
-    c.check(
+    checker.check(
         "ClientCtl::Bye",
         ClientCtl::Bye {
             reason: ByeReason::Suspend,
@@ -227,21 +228,21 @@ fn every_message_matches_its_frozen_bytes() {
         panes: vec![pane_meta()],
         resume_token: ResumeToken(vec![9; 4]),
     };
-    c.check("ServerCtl::Welcome", ServerCtl::Welcome(welcome), "5f000000010044444444444444444444444444444444444444444444444444444444444444440710010103037a736801022f77000106636c61756465020902726d0101026f6b7828a00bc0070101111111111111111111111111111111110409090909");
-    c.check(
+    checker.check("ServerCtl::Welcome", ServerCtl::Welcome(welcome), "5f000000010044444444444444444444444444444444444444444444444444444444444444440710010103037a736801022f77000106636c61756465020902726d0101026f6b7828a00bc0070101111111111111111111111111111111110409090909");
+    checker.check(
         "ServerCtl::Refused",
         ServerCtl::Refused {
             reason: RefuseReason::WireVersion { supported: 1 },
         },
         "0400000001010001",
     );
-    c.check("ServerCtl::PaneMeta", ServerCtl::PaneMeta(pane_meta()), "36000000010203037a736801022f77000106636c61756465020902726d0101026f6b7828a00bc007010111111111111111111111111111111111");
-    c.check(
+    checker.check("ServerCtl::PaneMeta", ServerCtl::PaneMeta(pane_meta()), "36000000010203037a736801022f77000106636c61756465020902726d0101026f6b7828a00bc007010111111111111111111111111111111111");
+    checker.check(
         "ServerCtl::PaneClosed",
         ServerCtl::PaneClosed { pane_id: PANE },
         "03000000010303",
     );
-    c.check(
+    checker.check(
         "ServerCtl::EchoHint",
         ServerCtl::EchoHint(EchoHint {
             pane_id: PANE,
@@ -252,7 +253,7 @@ fn every_message_matches_its_frozen_bytes() {
         }),
         "0700000001040301010001",
     );
-    c.check(
+    checker.check(
         "ServerCtl::InputRejected",
         ServerCtl::InputRejected {
             pane_id: PANE,
@@ -261,7 +262,7 @@ fn every_message_matches_its_frozen_bytes() {
         },
         "050000000105030c00",
     );
-    c.check(
+    checker.check(
         "ServerCtl::Lease",
         ServerCtl::Lease(Lease {
             pane_id: PANE,
@@ -271,7 +272,7 @@ fn every_message_matches_its_frozen_bytes() {
         }),
         "1b00000001060301111111111111111111111111111111118080b3c19c3300",
     );
-    c.check(
+    checker.check(
         "ServerCtl::Decided",
         ServerCtl::Decided(Decided {
             pane_id: PANE,
@@ -282,18 +283,18 @@ fn every_message_matches_its_frozen_bytes() {
         }),
         "3b00000001070309011111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222228080b3c19c33",
     );
-    c.check(
+    checker.check(
         "ServerCtl::AlreadyDecided",
         ServerCtl::AlreadyDecided { request_id: RequestId(9), by: ACTOR },
         "33000000010809111111111111111111111111111111112222222222222222222222222222222222222222222222222222222222222222",
     );
-    c.check("ServerCtl::Presence", ServerCtl::Presence(presence()), "3f0000000109111111111111111111111111111111112222222222222222222222222222222222222222222222222222222222222222000103010103e8072801030507");
-    c.check(
+    checker.check("ServerCtl::Presence", ServerCtl::Presence(presence()), "3f0000000109111111111111111111111111111111112222222222222222222222222222222222222222222222222222222222222222000103010103e8072801030507");
+    checker.check(
         "ServerCtl::Revoked",
         ServerCtl::Revoked { grant_id: GRANT },
         "12000000010a33333333333333333333333333333333",
     );
-    c.check(
+    checker.check(
         "ServerCtl::Pong",
         ServerCtl::Pong { nonce: 0xdead_beef },
         "07000000010beffdb6f50d",
@@ -308,12 +309,12 @@ fn every_message_matches_its_frozen_bytes() {
             payload,
         })
     };
-    c.check(
+    checker.check(
         "ClientInput::Input/Bytes",
         input(InputPayload::Bytes(b"ls\r".to_vec())),
         "190000000100030c1111111111111111111111111111111100036c730d",
     );
-    c.check(
+    checker.check(
         "ClientInput::Input/Key",
         input(InputPayload::Key(KeyEvent {
             key: 42,
@@ -323,12 +324,12 @@ fn every_message_matches_its_frozen_bytes() {
         })),
         "1b0000000100030c11111111111111111111111111111111012a0500010161",
     );
-    c.check(
+    checker.check(
         "ClientInput::Input/Paste",
         input(InputPayload::Paste("hi".into())),
         "180000000100030c1111111111111111111111111111111102026869",
     );
-    c.check(
+    checker.check(
         "ClientInput::Input/Mouse",
         input(InputPayload::Mouse(MouseEvent {
             action: MouseAction::Press,
@@ -341,7 +342,7 @@ fn every_message_matches_its_frozen_bytes() {
     );
 
     // pane/<id>.
-    c.check(
+    checker.check(
         "PaneOutput::Bytes",
         PaneOutput::Bytes {
             seq: Seq(300),
@@ -349,7 +350,7 @@ fn every_message_matches_its_frozen_bytes() {
         },
         "070000000100ac02022420",
     );
-    c.check(
+    checker.check(
         "PaneOutput::Snapshot",
         PaneOutput::Snapshot {
             seq: Seq(300),
@@ -358,7 +359,7 @@ fn every_message_matches_its_frozen_bytes() {
         },
         "090000000101ac020203eeeeee",
     );
-    c.check(
+    checker.check(
         "PaneOutput::InputAck",
         PaneOutput::InputAck {
             input_seq: InputSeq(12),
@@ -368,7 +369,7 @@ fn every_message_matches_its_frozen_bytes() {
     );
 
     // bulk.
-    c.check(
+    checker.check(
         "Bulk::History",
         Bulk::History {
             pane_id: PANE,
@@ -379,29 +380,29 @@ fn every_message_matches_its_frozen_bytes() {
     );
 
     // Layout, sessions, port forwarding, compressed snapshots (appended variants).
-    c.check(
+    checker.check(
         "StreamHeader::PortForward",
         StreamHeader::PortForward { port: 8080 },
         "040000000103903f",
     );
-    c.check(
+    checker.check(
         "ForwardReply::Connected",
         ForwardReply::Connected,
         "020000000100",
     );
-    c.check(
+    checker.check(
         "ForwardReply::Refused",
         ForwardReply::Refused {
             reason: "no".into(),
         },
         "050000000101026e6f",
     );
-    c.check(
+    checker.check(
         "ClientCtl::ListSessions",
         ClientCtl::ListSessions,
         "02000000010d",
     );
-    c.check(
+    checker.check(
         "ClientCtl::Attach",
         ClientCtl::Attach {
             session_id: Some(SESSION),
@@ -409,9 +410,9 @@ fn every_message_matches_its_frozen_bytes() {
         "04000000010e0101",
     );
     for (name, op, golden) in layout_ops() {
-        c.check(name, ClientCtl::Op { op_id: 77, op }, golden);
+        checker.check(name, ClientCtl::Op { op_id: 77, op }, golden);
     }
-    c.check(
+    checker.check(
         "ServerCtl::Sessions",
         ServerCtl::Sessions {
             sessions: vec![SessionSummary {
@@ -424,14 +425,14 @@ fn every_message_matches_its_frozen_bytes() {
         },
         "0c000000010c0101046d61696e020301",
     );
-    c.check(
+    checker.check(
         "ServerCtl::Attached",
         ServerCtl::Attached {
             session_id: SESSION,
         },
         "03000000010d01",
     );
-    c.check(
+    checker.check(
         "ServerCtl::LayoutChanged",
         ServerCtl::LayoutChanged(session_layout()),
         "1b000000010e01046d61696e0501020102017401000000003f000300040400",
@@ -474,9 +475,9 @@ fn every_message_matches_its_frozen_bytes() {
         ),
     ];
     for (name, outcome, golden) in outcomes {
-        c.check(name, ServerCtl::OpResult { op_id: 77, outcome }, golden);
+        checker.check(name, ServerCtl::OpResult { op_id: 77, outcome }, golden);
     }
-    c.check(
+    checker.check(
         "ServerCtl::AgentEvent",
         ServerCtl::AgentEvent {
             pane_id: PANE,
@@ -484,7 +485,7 @@ fn every_message_matches_its_frozen_bytes() {
         },
         "06000000011003027b7d",
     );
-    c.check(
+    checker.check(
         "ServerCtl::EchoHintAt",
         ServerCtl::EchoHintAt(EchoHintAt {
             hint: EchoHint {
@@ -499,7 +500,7 @@ fn every_message_matches_its_frozen_bytes() {
         }),
         "0a00000001110300000001ac0200",
     );
-    c.check(
+    checker.check(
         "PaneOutput::SnapshotZstd",
         PaneOutput::SnapshotZstd {
             seq: Seq(300),
@@ -509,7 +510,7 @@ fn every_message_matches_its_frozen_bytes() {
         },
         "0b0000000103ac0202e80703eeeeee",
     );
-    c.check(
+    checker.check(
         "PaneOutput::Resized",
         PaneOutput::Resized {
             seq: Seq(300),
@@ -517,31 +518,32 @@ fn every_message_matches_its_frozen_bytes() {
         },
         "0a0000000104ac027828a00bc007",
     );
-    terminal_completeness(&mut c);
-    workspace_messages(&mut c);
-    attach_results(&mut c);
-    daemon_info_messages(&mut c);
-    agent_usage_messages(&mut c);
-    multiplayer_messages(&mut c);
-    artifact_messages(&mut c);
-    artifact_messages_2(&mut c);
-    artifact_history_messages(&mut c);
-    live_activity_messages(&mut c);
-    browser_messages(&mut c);
-    reopen_messages(&mut c);
-    terminal_limits_messages(&mut c);
+    terminal_completeness(&mut checker);
+    workspace_messages(&mut checker);
+    attach_results(&mut checker);
+    daemon_info_messages(&mut checker);
+    agent_usage_messages(&mut checker);
+    multiplayer_messages(&mut checker);
+    artifact_messages(&mut checker);
+    artifact_messages_2(&mut checker);
+    artifact_history_messages(&mut checker);
+    live_activity_messages(&mut checker);
+    browser_messages(&mut checker);
+    reopen_messages(&mut checker);
+    terminal_limits_messages(&mut checker);
 
     assert!(
-        c.failures.is_empty(),
+        checker.failures.is_empty(),
         "wire format changed:\n{}",
-        c.failures.join("\n")
+        checker.failures.join("\n")
     );
 }
 
+/// Forwards to Unix sockets, transfers, workspace requests and pushes.
 /// `ServerCtl::AttachResult` (appended after `Assist`, variant 0x26), for clients with
 /// `Caps::ATTACH_RESULT`.
-fn attach_results(c: &mut Checker) {
-    c.check(
+fn attach_results(checker: &mut Checker) {
+    checker.check(
         "ServerCtl::AttachResult(Requested)",
         ServerCtl::AttachResult(Ok(Attachment {
             session_id: SESSION,
@@ -550,7 +552,7 @@ fn attach_results(c: &mut Checker) {
         })),
         "06000000012600010000",
     );
-    c.check(
+    checker.check(
         "ServerCtl::AttachResult(MostRecent, missing)",
         ServerCtl::AttachResult(Ok(Attachment {
             session_id: SESSION,
@@ -559,7 +561,7 @@ fn attach_results(c: &mut Checker) {
         })),
         "0700000001260001010107",
     );
-    c.check(
+    checker.check(
         "ServerCtl::AttachResult(Err)",
         ServerCtl::AttachResult(Err(AttachFailure {
             code: OpError::NotFound,
@@ -611,14 +613,14 @@ fn usage_report() -> AgentUsageReport {
 /// `WorkspaceRequest::UsageWatch` / `UsageUnwatch` (appended after `PushAction`, 0x22/0x23),
 /// `WorkspaceResponse::AgentUsage` (appended after `PushDecided`, 0x15) and
 /// `ServerCtl::AgentUsage` (appended after `DaemonInfo`, 0x28).
-fn agent_usage_messages(c: &mut Checker) {
-    c.check("Caps::AGENT_USAGE", Caps::AGENT_USAGE, "020000000140");
-    c.check(
+fn agent_usage_messages(checker: &mut Checker) {
+    checker.check("Caps::AGENT_USAGE", Caps::AGENT_USAGE, "020000000140");
+    checker.check(
         "DaemonFeatures::AGENT_USAGE",
         DaemonFeatures::AGENT_USAGE,
         "020000000102",
     );
-    c.check(
+    checker.check(
         "ClientCtl::Workspace(UsageWatch)",
         ClientCtl::Workspace {
             req_id: 9,
@@ -626,7 +628,7 @@ fn agent_usage_messages(c: &mut Checker) {
         },
         "050000000115092201",
     );
-    c.check(
+    checker.check(
         "ClientCtl::Workspace(UsageUnwatch)",
         ClientCtl::Workspace {
             req_id: 9,
@@ -634,7 +636,7 @@ fn agent_usage_messages(c: &mut Checker) {
         },
         "0400000001150923",
     );
-    c.check(
+    checker.check(
         "ServerCtl::WorkspaceResult(AgentUsage)",
         ServerCtl::WorkspaceResult {
             req_id: 9,
@@ -642,7 +644,7 @@ fn agent_usage_messages(c: &mut Checker) {
         },
         "3c0000000118090015020001036d617802023568ac02f10401809db6ad953400067765656b6c79e04ee80700010201c0abfc9b95340001000000000103776879",
     );
-    c.check(
+    checker.check(
         "ServerCtl::AgentUsage",
         ServerCtl::AgentUsage(usage_report()),
         "39000000012a020001036d617802023568ac02f10401809db6ad953400067765656b6c79e04ee80700010201c0abfc9b95340001000000000103776879",
@@ -662,7 +664,7 @@ fn agent_usage_messages(c: &mut Checker) {
         ("UsageSource::Cli", UsageSource::Cli, "020000000103"),
         ("UsageSource::Api", UsageSource::Api, "020000000104"),
     ] {
-        c.check(name, source, hex);
+        checker.check(name, source, hex);
     }
 }
 
@@ -683,15 +685,15 @@ fn daemon_info() -> DaemonInfo {
 
 /// `Caps::DAEMON_INFO` (bit 5), `ServerCtl::DaemonInfo` (appended after `AttachResult`,
 /// variant 0x27), `StreamHeader::Upgrade` (appended after `Blob`, variant 7) and its replies.
-fn daemon_info_messages(c: &mut Checker) {
-    c.check("Caps::DAEMON_INFO", Caps::DAEMON_INFO, "020000000120");
-    c.check(
+fn daemon_info_messages(checker: &mut Checker) {
+    checker.check("Caps::DAEMON_INFO", Caps::DAEMON_INFO, "020000000120");
+    checker.check(
         "DaemonFeatures::SELF_UPGRADE",
         DaemonFeatures::SELF_UPGRADE,
         "020000000101",
     );
-    c.check("ServerCtl::DaemonInfo", ServerCtl::DaemonInfo(daemon_info()), "50000000012705302e312e300c3366326139633164376534628080bfd606010001127562756e74752d333267622d68656c312d32056c696e7578125562756e74752032342e30342e31204c5453067838365f3634");
-    c.check(
+    checker.check("ServerCtl::DaemonInfo", ServerCtl::DaemonInfo(daemon_info()), "50000000012705302e312e300c3366326139633164376534628080bfd606010001127562756e74752d333267622d68656c312d32056c696e7578125562756e74752032342e30342e31204c5453067838365f3634");
+    checker.check(
         "StreamHeader::Upgrade",
         StreamHeader::Upgrade(UpgradeHeader {
             size: 7_000_000,
@@ -702,7 +704,7 @@ fn daemon_info_messages(c: &mut Checker) {
         "340000000108c09fab030144444444444444444444444444444444444444444444444444444444444444440c336632613963316437653462",
     );
     // Appended after `Upgrade` (variant 8): the owner's explicit downgrade.
-    c.check(
+    checker.check(
         "StreamHeader::Downgrade",
         StreamHeader::Downgrade(UpgradeHeader {
             size: 7_000_000,
@@ -712,13 +714,13 @@ fn daemon_info_messages(c: &mut Checker) {
         }),
         "340000000109c09fab030144444444444444444444444444444444444444444444444444444444444444440c336632613963316437653462",
     );
-    c.check("UpgradeReply::Ready", UpgradeReply::Ready, "020000000100");
-    c.check(
+    checker.check("UpgradeReply::Ready", UpgradeReply::Ready, "020000000100");
+    checker.check(
         "UpgradeReply::Installed",
         UpgradeReply::Installed(daemon_info()),
         "50000000010105302e312e300c3366326139633164376534628080bfd606010001127562756e74752d333267622d68656c312d32056c696e7578125562756e74752032342e30342e31204c5453067838365f3634",
     );
-    c.check(
+    checker.check(
         "UpgradeReply::Failed",
         UpgradeReply::Failed {
             code: UpgradeFailure::Forbidden,
@@ -751,12 +753,12 @@ fn daemon_info_messages(c: &mut Checker) {
             "020000000106",
         ),
     ] {
-        c.check(name, code, hex);
+        checker.check(name, code, hex);
     }
-    c.check("UpgradeEncoding::Raw", UpgradeEncoding::Raw, "020000000100");
+    checker.check("UpgradeEncoding::Raw", UpgradeEncoding::Raw, "020000000100");
 }
 
-fn workspace_messages(c: &mut Checker) {
+fn workspace_messages(checker: &mut Checker) {
     let stat = || FileStat {
         path: "/h/f".into(),
         name: "f".into(),
@@ -776,21 +778,21 @@ fn workspace_messages(c: &mut Checker) {
         mkdirs: true,
         mode: Some(0o600),
     };
-    c.check(
+    checker.check(
         "StreamHeader::Forward(Tcp)",
         StreamHeader::Forward {
             target: ForwardTarget::Tcp { port: 3000 },
         },
         "05000000010400b817",
     );
-    c.check(
+    checker.check(
         "StreamHeader::Forward(Unix)",
         StreamHeader::Forward {
             target: ForwardTarget::Unix { path: "/s".into() },
         },
         "06000000010401022f73",
     );
-    c.check(
+    checker.check(
         "StreamHeader::Upload",
         StreamHeader::Upload(UploadHeader {
             target: target.clone(),
@@ -798,7 +800,7 @@ fn workspace_messages(c: &mut Checker) {
         }),
         "150000000105037e2f660105312d352d390001018003f0a204",
     );
-    c.check(
+    checker.check(
         "StreamHeader::Download",
         StreamHeader::Download(DownloadHeader {
             path: "/h/f".into(),
@@ -807,7 +809,7 @@ fn workspace_messages(c: &mut Checker) {
         }),
         "090000000106042f682f660a00",
     );
-    c.check(
+    checker.check(
         "TransferReply::Ready",
         TransferReply::Ready {
             stat: Some(stat()),
@@ -815,12 +817,12 @@ fn workspace_messages(c: &mut Checker) {
         },
         "1a000000010001042f682f6601660005e807a40300000005312d352d3905",
     );
-    c.check(
+    checker.check(
         "TransferReply::Done",
         TransferReply::Done(stat()),
         "180000000101042f682f6601660005e807a40300000005312d352d39",
     );
-    c.check(
+    checker.check(
         "TransferReply::Failed",
         TransferReply::Failed(WsError::Conflict("x".into())),
         "050000000102020178",
@@ -1032,9 +1034,9 @@ fn workspace_messages(c: &mut Checker) {
         let goldens = WORKSPACE_REQUEST_GOLDENS;
         let golden = goldens
             .iter()
-            .find(|(n, _)| *n == name)
-            .map_or("missing golden", |(_, g)| *g);
-        c.check(
+            .find(|(case_name, _)| *case_name == name)
+            .map_or("missing golden", |(_, golden)| *golden);
+        checker.check(
             &format!("ClientCtl::Workspace({name})"),
             ClientCtl::Workspace { req_id: 5, req },
             golden,
@@ -1239,21 +1241,21 @@ fn workspace_messages(c: &mut Checker) {
     for (name, result) in responses {
         let golden = WORKSPACE_RESPONSE_GOLDENS
             .iter()
-            .find(|(n, _)| *n == name)
-            .map_or("missing golden", |(_, g)| *g);
-        c.check(
+            .find(|(case_name, _)| *case_name == name)
+            .map_or("missing golden", |(_, golden)| *golden);
+        checker.check(
             &format!("ServerCtl::WorkspaceResult({name})"),
             ServerCtl::WorkspaceResult { req_id: 5, result },
             golden,
         );
     }
 
-    c.check(
+    checker.check(
         "ServerCtl::PortsChanged",
         ServerCtl::PortsChanged { ports: vec![] },
         "03000000011900",
     );
-    c.check(
+    checker.check(
         "ServerCtl::FsChanged",
         ServerCtl::FsChanged(FsChange {
             watch_id: 2,
@@ -1262,12 +1264,12 @@ fn workspace_messages(c: &mut Checker) {
         }),
         "0a000000011a0201042f682f7800",
     );
-    c.check(
+    checker.check(
         "ServerCtl::Attention(Added)",
         ServerCtl::Attention(AttentionUpdate::Added { item, unseen: 1 }),
         "1a000000011b0003e8070301010006636c61756465010901740162000001",
     );
-    c.check(
+    checker.check(
         "ServerCtl::Attention(Seen)",
         ServerCtl::Attention(AttentionUpdate::Seen {
             ids: vec![3],
@@ -1316,7 +1318,7 @@ fn workspace_messages(c: &mut Checker) {
     ] {
         let mut status = tunnel();
         status.state = state;
-        c.check(
+        checker.check(
             &format!("ServerCtl::VsCodeTunnel({name})"),
             ServerCtl::VsCodeTunnel(status),
             golden,
@@ -1456,8 +1458,8 @@ fn mark(finished: bool) -> CommandMark {
 }
 
 /// Messages added for key/mouse/paste, history paging, shell integration, search and links.
-fn terminal_completeness(c: &mut Checker) {
-    c.check(
+fn terminal_completeness(checker: &mut Checker) {
+    checker.check(
         "InputPayload::KeyFull",
         ClientInput::Input(Input {
             pane_id: PANE,
@@ -1475,7 +1477,7 @@ fn terminal_completeness(c: &mut Checker) {
         }),
         "1f00000001000309111111111111111111111111111111110414010101010141016100",
     );
-    c.check(
+    checker.check(
         "ClientCtl::FetchHistory",
         ClientCtl::FetchHistory {
             pane_id: PANE,
@@ -1485,7 +1487,7 @@ fn terminal_completeness(c: &mut Checker) {
         },
         "0a000000011003ac028827808040",
     );
-    c.check(
+    checker.check(
         "ClientCtl::Search",
         ClientCtl::Search {
             req_id: 7,
@@ -1500,7 +1502,7 @@ fn terminal_completeness(c: &mut Checker) {
         },
         "0c000000011107030365727201023219",
     );
-    c.check(
+    checker.check(
         "ClientCtl::Links",
         ClientCtl::Links {
             req_id: 7,
@@ -1509,7 +1511,7 @@ fn terminal_completeness(c: &mut Checker) {
         },
         "050000000112070303",
     );
-    c.check(
+    checker.check(
         "ClientCtl::Commands",
         ClientCtl::Commands {
             req_id: 7,
@@ -1517,7 +1519,7 @@ fn terminal_completeness(c: &mut Checker) {
         },
         "0400000001130703",
     );
-    c.check(
+    checker.check(
         "ClientCtl::CommandOutput",
         ClientCtl::CommandOutput {
             req_id: 7,
@@ -1526,17 +1528,17 @@ fn terminal_completeness(c: &mut Checker) {
         },
         "06000000011407030104",
     );
-    c.check(
+    checker.check(
         "ServerCtl::CommandMark",
         ServerCtl::CommandMark(mark(false)),
         "130000000112030401046d616b6501022f77e807ac0200",
     );
-    c.check(
+    checker.check(
         "ServerCtl::CommandFinishedUnseen",
         ServerCtl::CommandFinishedUnseen(mark(true)),
         "170000000113030401046d616b6501022f77e807ac02010104e05d",
     );
-    c.check(
+    checker.check(
         "ServerCtl::SearchResult",
         ServerCtl::SearchResult {
             req_id: 7,
@@ -1557,7 +1559,7 @@ fn terminal_completeness(c: &mut Checker) {
         },
         "1c0000000114070300ac02e8070201de0704df070108616e206572726f720101",
     );
-    c.check(
+    checker.check(
         "ServerCtl::SearchResult(Err)",
         ServerCtl::SearchResult {
             req_id: 7,
@@ -1566,7 +1568,7 @@ fn terminal_completeness(c: &mut Checker) {
         },
         "080000000114070301010128",
     );
-    c.check(
+    checker.check(
         "ServerCtl::LinksResult",
         ServerCtl::LinksResult {
             req_id: 7,
@@ -1597,7 +1599,7 @@ fn terminal_completeness(c: &mut Checker) {
         },
         "42000000011507030001022f7702020c7372632f612e72733a333a340b2f772f7372632f612e727301030104010101040004646f63730b68747470733a2f2f782e7900000000",
     );
-    c.check(
+    checker.check(
         "ServerCtl::CommandsResult",
         ServerCtl::CommandsResult {
             req_id: 7,
@@ -1617,7 +1619,7 @@ fn terminal_completeness(c: &mut Checker) {
         },
         "240000000116070300ac02e80701030401046d616b6501022f77e807ac02010104e05d010a010b00",
     );
-    c.check(
+    checker.check(
         "ServerCtl::CommandOutputResult",
         ServerCtl::CommandOutputResult {
             req_id: 7,
@@ -1630,7 +1632,7 @@ fn terminal_completeness(c: &mut Checker) {
         },
         "1e0000000117070300030401046d616b6501022f77e807ac02010104e05d026f6b00",
     );
-    c.check(
+    checker.check(
         "ServerCtl::CommandOutputResult(Err)",
         ServerCtl::CommandOutputResult {
             req_id: 7,
@@ -1639,7 +1641,7 @@ fn terminal_completeness(c: &mut Checker) {
         },
         "06000000011707030102",
     );
-    c.check(
+    checker.check(
         "Bulk::HistoryPage",
         Bulk::HistoryPage {
             pane_id: PANE,
@@ -1654,7 +1656,7 @@ fn terminal_completeness(c: &mut Checker) {
         },
         "14000000010103ac028827a846a09c01a01f020003eeeeee",
     );
-    c.check(
+    checker.check(
         "Bulk::HistoryGone",
         Bulk::HistoryGone {
             pane_id: PANE,
@@ -1901,13 +1903,13 @@ fn ticket_extras_carry_relays_and_stay_readable_by_old_parsers() {
         .unwrap();
     let hex: String = bytes[bytes.len() - 3..]
         .iter()
-        .map(|b| format!("{b:02x}"))
+        .map(|byte| format!("{byte:02x}"))
         .collect();
     assert_eq!(hex, "e70102");
 }
 
 #[test]
-fn prediction_rule_matches_spike_s6() {
+fn prediction_rule_table() {
     // (echo, icanon, alt, at_prompt) -> verdict
     let cases = [
         ((false, true, false, true), Prediction::HiddenInput),
@@ -2016,7 +2018,8 @@ fn audit_record() -> AuditRecord {
     }
 }
 
-fn multiplayer_messages(c: &mut Checker) {
+/// Multiplayer: grants, invites, multiplayer requests and pushes.
+fn multiplayer_messages(checker: &mut Checker) {
     for (name, scope, golden) in [
         ("Scope::Daemon", Scope::Daemon, "020000000100"),
         (
@@ -2027,10 +2030,10 @@ fn multiplayer_messages(c: &mut Checker) {
         ("Scope::Tab", Scope::Tab(TabId(4)), "03000000010204"),
         ("Scope::Pane", Scope::Pane(PANE), "03000000010303"),
     ] {
-        c.check(name, scope, golden);
+        checker.check(name, scope, golden);
     }
-    c.check("GrantChain", chain(), "7000000001010133333333333333333333333333333333444444444444444444444444444444444444444444444444444444444444444422222222222222222222222222222222222222222222222222222222222222220c01028080b3c19c330180b8ccea9c330101000103626f62045a5a5a5a");
-    c.check(
+    checker.check("GrantChain", chain(), "7000000001010133333333333333333333333333333333444444444444444444444444444444444444444444444444444444444444444422222222222222222222222222222222222222222222222222222222222222220c01028080b3c19c330180b8ccea9c330101000103626f62045a5a5a5a");
+    checker.check(
         "Invite",
         Invite {
             v: Invite::VERSION,
@@ -2042,7 +2045,7 @@ fn multiplayer_messages(c: &mut Checker) {
         },
         "aa0000000101444444444444444444444444444444444444444444444444444444444444444401007f000001d122010968747470733a2f2f7205616c696365010133333333333333333333333333333333444444444444444444444444444444444444444444444444444444444444444422222222222222222222222222222222222222222222222222222222222222220c01028080b3c19c330180b8ccea9c330101000103626f62045a5a5a5a",
     );
-    c.check(
+    checker.check(
         "Hello(CHAIN)",
         ClientCtl::Hello(Hello {
             device_id: DEVICE,
@@ -2152,7 +2155,7 @@ fn multiplayer_messages(c: &mut Checker) {
         ),
     ];
     for (name, req, golden) in requests {
-        c.check(name, ClientCtl::Multiplayer { req_id: 7, req }, golden);
+        checker.check(name, ClientCtl::Multiplayer { req_id: 7, req }, golden);
     }
 
     let device_info = DeviceInfo {
@@ -2285,22 +2288,22 @@ fn multiplayer_messages(c: &mut Checker) {
         ),
     ];
     for (name, result, golden) in answers {
-        c.check(
+        checker.check(
             name,
             ServerCtl::MultiplayerResult { req_id: 7, result },
             golden,
         );
     }
 
-    c.check("ServerCtl::Joined", ServerCtl::Joined(join_info()), "4c000000011e11111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222203626f6201030301333333333333333333333333333333330105");
-    c.check(
+    checker.check("ServerCtl::Joined", ServerCtl::Joined(join_info()), "4c000000011e11111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222203626f6201030301333333333333333333333333333333330105");
+    checker.check(
         "ServerCtl::Participants",
         ServerCtl::Participants {
             participants: vec![participant()],
         },
         "53000000011f0111111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222203626f6204000133333333333333333333333333333333070101030101030102",
     );
-    c.check(
+    checker.check(
         "ServerCtl::LeaseRequested",
         ServerCtl::LeaseRequested {
             pane_id: PANE,
@@ -2309,7 +2312,7 @@ fn multiplayer_messages(c: &mut Checker) {
         },
         "3700000001200311111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222203626f62",
     );
-    c.check(
+    checker.check(
         "ServerCtl::Forbidden",
         ServerCtl::Forbidden {
             what: "Input".into(),
@@ -2337,7 +2340,7 @@ fn multiplayer_messages(c: &mut Checker) {
         ("AuditKind::Approval", AuditKind::Approval, "020000000108"),
         ("AuditKind::Denied", AuditKind::Denied, "020000000109"),
     ] {
-        c.check(name, kind, golden);
+        checker.check(name, kind, golden);
     }
 }
 
@@ -2370,38 +2373,38 @@ fn invite_round_trips_through_text() {
 
 #[test]
 fn grant_signing_bytes_are_domain_separated() {
-    let g = grant();
-    let bytes = g.signing_bytes();
+    let grant = grant();
+    let bytes = grant.signing_bytes();
     assert!(bytes.starts_with(Grant::SIGNING_CONTEXT));
-    let mut other = g.clone();
+    let mut other = grant.clone();
     other.roles = Roles::OWNER;
     assert_ne!(other.signing_bytes(), bytes);
-    let a = approval_signing_bytes(DAEMON, RequestId(1), OptionId(0), ACTOR);
-    assert!(a.starts_with(b"approval-v1\0"));
+    let approval_bytes = approval_signing_bytes(DAEMON, RequestId(1), OptionId(0), ACTOR);
+    assert!(approval_bytes.starts_with(b"approval-v1\0"));
     assert_ne!(
-        a,
+        approval_bytes,
         approval_signing_bytes(DaemonId([0; 32]), RequestId(1), OptionId(0), ACTOR)
     );
 }
 
 #[test]
 fn roles_parse_and_print() {
-    let r: Roles = "driver+approver".parse().unwrap();
-    assert_eq!(r, Roles::DRIVER | Roles::APPROVER);
-    assert_eq!(r.names(), "approver+driver");
-    assert!(Roles::OWNER.covers(r));
-    assert!(!r.covers(Roles::OWNER));
+    let roles: Roles = "driver+approver".parse().unwrap();
+    assert_eq!(roles, Roles::DRIVER | Roles::APPROVER);
+    assert_eq!(roles.names(), "approver+driver");
+    assert!(Roles::OWNER.covers(roles));
+    assert!(!roles.covers(Roles::OWNER));
     assert!("root".parse::<Roles>().is_err());
 }
 
 /// `EditorKind::Vscodium` (appended): a launch choosing it and its availability entry.
 #[test]
 fn vscodium_editor_messages_match_their_frozen_bytes() {
-    let mut c = Checker {
+    let mut checker = Checker {
         print: std::env::var_os("PROTO_PRINT_GOLDEN").is_some(),
         failures: Vec::new(),
     };
-    c.check(
+    checker.check(
         "ClientCtl::Workspace(EditorLaunch Vscodium)",
         ClientCtl::Workspace {
             req_id: 5,
@@ -2413,7 +2416,7 @@ fn vscodium_editor_messages_match_their_frozen_bytes() {
         },
         "0b00000001150502037e2f70010200",
     );
-    c.check(
+    checker.check(
         "ServerCtl::WorkspaceResult(Editors Vscodium)",
         ServerCtl::WorkspaceResult {
             req_id: 5,
@@ -2432,14 +2435,13 @@ fn vscodium_editor_messages_match_their_frozen_bytes() {
         "1900000001180500020102000100010b312e3134302e30363838300000",
     );
     assert!(
-        c.failures.is_empty(),
+        checker.failures.is_empty(),
         "wire format changed:\n{}",
-        c.failures.join("\n")
+        checker.failures.join("\n")
     );
 }
 
-// ---------------------------------------------------------------------------------------------
-// ---------------------------------------------------------------------------------------------
+// Drawings and images.
 
 const HASH: BlobHash = BlobHash([0x55; 32]);
 
@@ -2534,7 +2536,7 @@ fn ink() -> InkLive {
     }
 }
 
-fn artifact_messages(c: &mut Checker) {
+fn artifact_messages(checker: &mut Checker) {
     let req = |req: ArtifactRequest| ClientCtl::Artifact { req_id: 6, req };
     let anchor_req = AnchorRequest {
         pane_id: PANE,
@@ -2662,27 +2664,26 @@ fn artifact_messages(c: &mut Checker) {
             "480000000118056311111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222202018081fcff0f0000004107010000ffff000400",
         ),
     ] {
-        c.check(name, msg, golden);
+        checker.check(name, msg, golden);
     }
 
-    let res = |result: Result<ArtifactResponse, ArtifactError>| ServerCtl::ArtifactResult {
-        req_id: 6,
-        result,
+    let artifact_result = |result: Result<ArtifactResponse, ArtifactError>| {
+        ServerCtl::ArtifactResult { req_id: 6, result }
     };
     for (name, msg, golden) in [
         (
             "ServerCtl::ArtifactResult(List)",
-            res(Ok(ArtifactResponse::List(vec![artifact_info()]))),
+            artifact_result(Ok(ArtifactResponse::List(vec![artifact_info()]))),
             "750000000122060000010502000174011111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222220a1403020001555555555555555555555555555555555555555555555555555555555555555500e8078005e0030301030084070c0104000109",
         ),
         (
             "ServerCtl::ArtifactResult(Created)",
-            res(Ok(ArtifactResponse::Created(artifact_info()))),
+            artifact_result(Ok(ArtifactResponse::Created(artifact_info()))),
             "7400000001220600010502000174011111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222220a1403020001555555555555555555555555555555555555555555555555555555555555555500e8078005e0030301030084070c0104000109",
         ),
         (
             "ServerCtl::ArtifactResult(Scene)",
-            res(Ok(ArtifactResponse::Scene(ArtifactScene {
+            artifact_result(Ok(ArtifactResponse::Scene(ArtifactScene {
                 info: artifact_info(),
                 elements: Some(vec![element()]),
                 batches: vec![op_batch()],
@@ -2691,7 +2692,7 @@ fn artifact_messages(c: &mut Checker) {
         ),
         (
             "ServerCtl::ArtifactResult(Applied)",
-            res(Ok(ArtifactResponse::Applied {
+            artifact_result(Ok(ArtifactResponse::Applied {
                 artifact_id: ArtifactId(5),
                 version: 4,
             })),
@@ -2699,12 +2700,12 @@ fn artifact_messages(c: &mut Checker) {
         ),
         (
             "ServerCtl::ArtifactResult(Info)",
-            res(Ok(ArtifactResponse::Info(artifact_info()))),
+            artifact_result(Ok(ArtifactResponse::Info(artifact_info()))),
             "7400000001220600040502000174011111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222220a1403020001555555555555555555555555555555555555555555555555555555555555555500e8078005e0030301030084070c0104000109",
         ),
         (
             "ServerCtl::ArtifactResult(Exported)",
-            res(Ok(ArtifactResponse::Exported(Exported {
+            artifact_result(Ok(ArtifactResponse::Exported(Exported {
                 format: ExportFormat::Png,
                 version: 3,
                 data: vec![],
@@ -2714,7 +2715,7 @@ fn artifact_messages(c: &mut Checker) {
         ),
         (
             "ServerCtl::ArtifactResult(Sent)",
-            res(Ok(ArtifactResponse::Sent(Sent {
+            artifact_result(Ok(ArtifactResponse::Sent(Sent {
                 artifact_id: ArtifactId(5),
                 version: 3,
                 path: "/a b/5@3.png".into(),
@@ -2725,42 +2726,42 @@ fn artifact_messages(c: &mut Checker) {
         ),
         (
             "ServerCtl::ArtifactResult(Done)",
-            res(Ok(ArtifactResponse::Done)),
+            artifact_result(Ok(ArtifactResponse::Done)),
             "050000000122060007",
         ),
         (
             "ArtifactError::NotFound",
-            res(Err(ArtifactError::NotFound("x".into()))),
+            artifact_result(Err(ArtifactError::NotFound("x".into()))),
             "0700000001220601000178",
         ),
         (
             "ArtifactError::Forbidden",
-            res(Err(ArtifactError::Forbidden("x".into()))),
+            artifact_result(Err(ArtifactError::Forbidden("x".into()))),
             "0700000001220601010178",
         ),
         (
             "ArtifactError::TooLarge",
-            res(Err(ArtifactError::TooLarge("x".into()))),
+            artifact_result(Err(ArtifactError::TooLarge("x".into()))),
             "0700000001220601020178",
         ),
         (
             "ArtifactError::Invalid",
-            res(Err(ArtifactError::Invalid("x".into()))),
+            artifact_result(Err(ArtifactError::Invalid("x".into()))),
             "0700000001220601030178",
         ),
         (
             "ArtifactError::NotAgentPane",
-            res(Err(ArtifactError::NotAgentPane)),
+            artifact_result(Err(ArtifactError::NotAgentPane)),
             "050000000122060104",
         ),
         (
             "ArtifactError::Failed",
-            res(Err(ArtifactError::Failed("x".into()))),
+            artifact_result(Err(ArtifactError::Failed("x".into()))),
             "0700000001220601050178",
         ),
         (
             "ArtifactError::Disconnected",
-            res(Err(ArtifactError::Disconnected)),
+            artifact_result(Err(ArtifactError::Disconnected)),
             "050000000122060106",
         ),
         (
@@ -2806,7 +2807,7 @@ fn artifact_messages(c: &mut Checker) {
             "0700000001230502010905",
         ),
     ] {
-        c.check(name, msg, golden);
+        checker.check(name, msg, golden);
     }
 
     for (name, msg, golden) in [
@@ -2825,7 +2826,7 @@ fn artifact_messages(c: &mut Checker) {
             "230000000107015555555555555555555555555555555555555555555555555555555555555555",
         ),
     ] {
-        c.check(name, msg, golden);
+        checker.check(name, msg, golden);
     }
     for (name, msg, golden) in [
         ("BlobReply::Ready", BlobReply::Ready, "020000000100"),
@@ -2845,7 +2846,7 @@ fn artifact_messages(c: &mut Checker) {
             "0700000001030203626967",
         ),
     ] {
-        c.check(name, msg, golden);
+        checker.check(name, msg, golden);
     }
     let shapes = vec![
         ElementKind::Shape {
@@ -2897,7 +2898,7 @@ fn artifact_messages(c: &mut Checker) {
         "0400000001000200",
     ];
     for (i, (kind, golden)) in shapes.into_iter().zip(goldens).enumerate() {
-        c.check(&format!("ElementKind#{i}"), kind, golden);
+        checker.check(&format!("ElementKind#{i}"), kind, golden);
     }
     for (name, msg, golden) in [
         (
@@ -2934,9 +2935,9 @@ fn artifact_messages(c: &mut Checker) {
             "0a00000001030084070c01040103",
         ),
     ] {
-        c.check(name, msg, golden);
+        checker.check(name, msg, golden);
     }
-    c.check(
+    checker.check(
         "ArtifactInfo(Image)",
         ArtifactInfo {
             kind: ArtifactKind::Image,
@@ -2949,7 +2950,7 @@ fn artifact_messages(c: &mut Checker) {
         },
         "66000000010502010174001111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222220a14030201555555555555555555555555555555555555555555555555555555555555555500e8078005e003000000",
     );
-    c.check(
+    checker.check(
         "LayoutOp::Split(Canvas)",
         LayoutOp::Split {
             pane_id: PANE,
@@ -2960,14 +2961,15 @@ fn artifact_messages(c: &mut Checker) {
         },
         "0700000001000300030105",
     );
-    c.check(
+    checker.check(
         "PaneLaunch::Canvas(None)",
         PaneLaunch::Canvas { artifact_id: None },
         "03000000010300",
     );
-    c.check("Caps::ARTIFACTS", Caps::ARTIFACTS, "020000000108");
+    checker.check("Caps::ARTIFACTS", Caps::ARTIFACTS, "020000000108");
 }
 
+// Excalidraw scenes, inline placements, import, ASCII export.
 
 fn ex_element() -> ExElement {
     ExElement {
@@ -3002,11 +3004,10 @@ fn placement() -> Placement {
     }
 }
 
-fn artifact_messages_2(c: &mut Checker) {
+fn artifact_messages_2(checker: &mut Checker) {
     let req = |req: ArtifactRequest| ClientCtl::Artifact { req_id: 6, req };
-    let res = |result: Result<ArtifactResponse, ArtifactError>| ServerCtl::ArtifactResult {
-        req_id: 6,
-        result,
+    let artifact_result = |result: Result<ArtifactResponse, ArtifactError>| {
+        ServerCtl::ArtifactResult { req_id: 6, result }
     };
     for (name, msg, golden) in [
         (
@@ -3077,12 +3078,12 @@ fn artifact_messages_2(c: &mut Checker) {
             "160000000117060e030c612e657863616c6964726177027b7d00",
         ),
     ] {
-        c.check(name, msg, golden);
+        checker.check(name, msg, golden);
     }
     for (name, msg, golden) in [
         (
             "ServerCtl::ArtifactResult(Excalidraw)",
-            res(Ok(ArtifactResponse::Excalidraw(ExcalidrawScene {
+            artifact_result(Ok(ArtifactResponse::Excalidraw(ExcalidrawScene {
                 info: ArtifactInfo {
                     kind: ArtifactKind::Excalidraw,
                     ..artifact_info()
@@ -3095,7 +3096,7 @@ fn artifact_messages_2(c: &mut Checker) {
         ),
         (
             "ServerCtl::ArtifactResult(ExcalidrawApplied)",
-            res(Ok(ArtifactResponse::ExcalidrawApplied {
+            artifact_result(Ok(ArtifactResponse::ExcalidrawApplied {
                 artifact_id: ArtifactId(5),
                 version: 10,
                 rejected: vec![ex_element()],
@@ -3104,12 +3105,12 @@ fn artifact_messages_2(c: &mut Checker) {
         ),
         (
             "ServerCtl::ArtifactResult(Placed)",
-            res(Ok(ArtifactResponse::Placed(placement()))),
+            artifact_result(Ok(ArtifactResponse::Placed(placement()))),
             "3d000000012206000a08030503555555555555555555555555555555555555555555555555555555555555555500e8078005e003030084070c01040002280c001e",
         ),
         (
             "ServerCtl::ArtifactResult(Placements)",
-            res(Ok(ArtifactResponse::Placements(vec![Placement {
+            artifact_result(Ok(ArtifactResponse::Placements(vec![Placement {
                 source: PlacementSource::Kitty,
                 ..placement()
             }]))),
@@ -3140,18 +3141,17 @@ fn artifact_messages_2(c: &mut Checker) {
             "050000000123080308",
         ),
     ] {
-        c.check(name, msg, golden);
+        checker.check(name, msg, golden);
     }
 }
 
 /// Drawing history: `DaemonFeatures::ARTIFACT_HISTORY` (bit 2), `ArtifactRequest::History` /
 /// `Restore` (appended after `Import`, 0x0f/0x10) and `ArtifactResponse::History` /
 /// `Restored` (appended after `Placements`, 0x0c/0x0d).
-fn artifact_history_messages(c: &mut Checker) {
+fn artifact_history_messages(checker: &mut Checker) {
     let req = |req: ArtifactRequest| ClientCtl::Artifact { req_id: 6, req };
-    let res = |result: Result<ArtifactResponse, ArtifactError>| ServerCtl::ArtifactResult {
-        req_id: 6,
-        result,
+    let artifact_result = |result: Result<ArtifactResponse, ArtifactError>| {
+        ServerCtl::ArtifactResult { req_id: 6, result }
     };
     let version = ArtifactVersion {
         version: 7,
@@ -3161,19 +3161,19 @@ fn artifact_history_messages(c: &mut Checker) {
         elements: 3,
         restored_from: Some(4),
     };
-    c.check(
+    checker.check(
         "DaemonFeatures::ARTIFACT_HISTORY",
         DaemonFeatures::ARTIFACT_HISTORY,
         "020000000104",
     );
-    c.check(
+    checker.check(
         "ClientCtl::Artifact(History)",
         req(ArtifactRequest::History {
             artifact_id: ArtifactId(5),
         }),
         "050000000117060f05",
     );
-    c.check(
+    checker.check(
         "ClientCtl::Artifact(Restore)",
         req(ArtifactRequest::Restore {
             artifact_id: ArtifactId(5),
@@ -3181,9 +3181,9 @@ fn artifact_history_messages(c: &mut Checker) {
         }),
         "06000000011706100504",
     );
-    c.check(
+    checker.check(
         "ServerCtl::ArtifactResult(History)",
-        res(Ok(ArtifactResponse::History(vec![
+        artifact_result(Ok(ArtifactResponse::History(vec![
             version.clone(),
             ArtifactVersion {
                 version: 4,
@@ -3194,9 +3194,9 @@ fn artifact_history_messages(c: &mut Checker) {
         ]))),
         "9a000000012206000c0207e80711111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222201555555555555555555555555555555555555555555555555555555555555555500e8078005e00303010404e807111111111111111111111111111111112222222222222222222222222222222222222222222222222222222222222222000300",
     );
-    c.check(
+    checker.check(
         "ServerCtl::ArtifactResult(Restored)",
-        res(Ok(ArtifactResponse::Restored {
+        artifact_result(Ok(ArtifactResponse::Restored {
             info: artifact_info(),
             version,
         })),
@@ -3206,13 +3206,13 @@ fn artifact_history_messages(c: &mut Checker) {
 
 /// Live Activity pushes: `DaemonFeatures::LIVE_ACTIVITY` (bit 4) and
 /// `WorkspaceRequest::PushActivity` (appended after `ScriptRun`, 0x2f).
-fn live_activity_messages(c: &mut Checker) {
-    c.check(
+fn live_activity_messages(checker: &mut Checker) {
+    checker.check(
         "DaemonFeatures::LIVE_ACTIVITY",
         DaemonFeatures::LIVE_ACTIVITY,
         "020000000110",
     );
-    c.check(
+    checker.check(
         "ClientCtl::Workspace(PushActivity(Some))",
         ClientCtl::Workspace {
             req_id: 9,
@@ -3222,7 +3222,7 @@ fn live_activity_messages(c: &mut Checker) {
         },
         "070000000115092f010175",
     );
-    c.check(
+    checker.check(
         "ClientCtl::Workspace(PushActivity(None))",
         ClientCtl::Workspace {
             req_id: 9,
@@ -3232,14 +3232,14 @@ fn live_activity_messages(c: &mut Checker) {
     );
 }
 
-fn browser_messages(c: &mut Checker) {
-    c.check("Caps::BROWSER", Caps::BROWSER, "03000000018040");
-    c.check(
+fn browser_messages(checker: &mut Checker) {
+    checker.check("Caps::BROWSER", Caps::BROWSER, "03000000018040");
+    checker.check(
         "DaemonFeatures::BROWSER",
         DaemonFeatures::BROWSER,
         "03000000018002",
     );
-    c.check(
+    checker.check(
         "ServerCtl::Browser(Open)",
         ServerCtl::Browser(BrowserPush::Open {
             pane_id: PANE,
@@ -3247,7 +3247,7 @@ fn browser_messages(c: &mut Checker) {
         }),
         "0d0000000133000308687474703a2f2f78",
     );
-    c.check(
+    checker.check(
         "ServerCtl::Browser(Call)",
         ServerCtl::Browser(BrowserPush::Call {
             id: 7,
@@ -3257,12 +3257,12 @@ fn browser_messages(c: &mut Checker) {
         }),
         "1900000001330107031062726f777365725f736e617073686f74027b7d",
     );
-    c.check(
+    checker.check(
         "ServerCtl::Browser(CallClosed)",
         ServerCtl::Browser(BrowserPush::CallClosed { id: 7 }),
         "0400000001330207",
     );
-    c.check(
+    checker.check(
         "ClientCtl::BrowserResult(Ok)",
         ClientCtl::BrowserResult {
             id: 7,
@@ -3270,7 +3270,7 @@ fn browser_messages(c: &mut Checker) {
         },
         "07000000011c0700027b7d",
     );
-    c.check(
+    checker.check(
         "ClientCtl::BrowserResult(Err)",
         ClientCtl::BrowserResult {
             id: 7,
@@ -3282,8 +3282,8 @@ fn browser_messages(c: &mut Checker) {
 
 /// Reopening a closed pane (`PaneLaunch::Reopen`, appended after `Canvas`), for daemons with
 /// `DaemonFeatures::REOPEN`.
-fn reopen_messages(c: &mut Checker) {
-    c.check(
+fn reopen_messages(checker: &mut Checker) {
+    checker.check(
         "PaneLaunch::Reopen",
         PaneLaunch::Reopen {
             pane_id: PANE,
@@ -3291,7 +3291,7 @@ fn reopen_messages(c: &mut Checker) {
         },
         "0700000001040301022f77",
     );
-    c.check(
+    checker.check(
         "LayoutOp::NewTab(Reopen)",
         LayoutOp::NewTab {
             session_id: SESSION,
@@ -3303,7 +3303,7 @@ fn reopen_messages(c: &mut Checker) {
         },
         "0a00000001060103617069040300",
     );
-    c.check(
+    checker.check(
         "DaemonFeatures::REOPEN",
         DaemonFeatures::REOPEN,
         "0400000001808002",
@@ -3312,13 +3312,13 @@ fn reopen_messages(c: &mut Checker) {
 
 /// The daemon's terminal limits (`Caps::TERMINAL_LIMITS`, bit 24; `ServerCtl::TerminalLimits`,
 /// appended after `Clipboard`).
-fn terminal_limits_messages(c: &mut Checker) {
-    c.check(
+fn terminal_limits_messages(checker: &mut Checker) {
+    checker.check(
         "Caps::TERMINAL_LIMITS",
         Caps::TERMINAL_LIMITS,
         "050000000180808008",
     );
-    c.check(
+    checker.check(
         "ServerCtl::TerminalLimits",
         ServerCtl::TerminalLimits {
             image_storage_bytes: 256 << 20,

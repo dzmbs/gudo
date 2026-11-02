@@ -29,7 +29,7 @@ impl Checker {
         T: Serialize + DeserializeOwned + PartialEq + Debug,
     {
         let wire = frame::to_vec(&msg).unwrap();
-        let hex: String = wire.iter().map(|b| format!("{b:02x}")).collect();
+        let hex: String = wire.iter().map(|byte| format!("{byte:02x}")).collect();
         if self.print {
             println!("{name}: \"{hex}\"");
         }
@@ -63,14 +63,14 @@ fn rule() -> AutoApproveRule {
 
 #[test]
 fn approval_messages_match_their_frozen_bytes() {
-    let mut c = Checker {
+    let mut checker = Checker {
         print: std::env::var_os("PROTO_PRINT_GOLDEN").is_some(),
         failures: vec![],
     };
     assert_eq!(Caps::APPROVALS.0, 1 << 11);
 
     let req = |req| ClientCtl::Approval { req_id: 5, req };
-    c.check(
+    checker.check(
         "ClientCtl::Approval(ApproveEdited)",
         req(ApprovalRequest::ApproveEdited {
             decide: Decide {
@@ -83,12 +83,12 @@ fn approval_messages_match_their_frozen_bytes() {
         }),
         "3b000000011b05000700aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb0109026c73",
     );
-    c.check(
+    checker.check(
         "ClientCtl::Approval(AddRule)",
         req(ApprovalRequest::AddRule(rule())),
         "55000000011b0501111111111111111111111111111111110301070442617368026c73e80702aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb020102",
     );
-    c.check(
+    checker.check(
         "ClientCtl::Approval(RevokeRule)",
         req(ApprovalRequest::RevokeRule {
             rule_id: RuleId([0x11; 16]),
@@ -97,7 +97,7 @@ fn approval_messages_match_their_frozen_bytes() {
     );
 
     let result = |result| ServerCtl::ApprovalResult { req_id: 5, result };
-    c.check(
+    checker.check(
         "ServerCtl::ApprovalResult(Done)",
         result(Ok(ApprovalResponse::Done)),
         "050000000130050000",
@@ -130,14 +130,14 @@ fn approval_messages_match_their_frozen_bytes() {
             "050000000130050105",
         ),
     ] {
-        c.check(
+        checker.check(
             &format!("ServerCtl::ApprovalResult({name})"),
             result(Err(error)),
             golden,
         );
     }
 
-    c.check(
+    checker.check(
         "ServerCtl::Approval(Request)",
         ServerCtl::Approval(ApprovalPush::Request(ApprovalInfo {
             pane_id: PANE,
@@ -151,7 +151,7 @@ fn approval_messages_match_their_frozen_bytes() {
         })),
         "170000000131000307044261736801026c73010442617368026c73",
     );
-    c.check(
+    checker.check(
         "ServerCtl::Approval(Rules)",
         ServerCtl::Approval(ApprovalPush::Rules {
             pane_id: PANE,
@@ -165,5 +165,9 @@ fn approval_messages_match_their_frozen_bytes() {
         "5c0000000131010301111111111111111111111111111111110301070442617368026c73e80702aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb020102010203416e61",
     );
 
-    assert!(c.failures.is_empty(), "{}", c.failures.join("\n"));
+    assert!(
+        checker.failures.is_empty(),
+        "{}",
+        checker.failures.join("\n")
+    );
 }

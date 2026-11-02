@@ -18,7 +18,7 @@ where
     T: Serialize + DeserializeOwned + PartialEq + Debug,
 {
     let wire = frame::to_vec(&msg).unwrap();
-    let hex: String = wire.iter().map(|b| format!("{b:02x}")).collect();
+    let hex: String = wire.iter().map(|byte| format!("{byte:02x}")).collect();
     if std::env::var_os("PROTO_PRINT_GOLDEN").is_some() {
         println!("GOLDEN {name}: \"{hex}\"");
     }

@@ -29,7 +29,6 @@ pub struct ScriptEvent {
     /// The pane, `p12`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane: Option<String>,
-    /// What happened.
     #[serde(flatten)]
     pub kind: ScriptEventKind,
 }

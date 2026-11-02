@@ -73,8 +73,8 @@ macro_rules! key_bytes {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 write!(f, "{}(", stringify!($name))?;
                 // A short prefix is enough to tell ids apart in logs.
-                for b in &self.0[..4] {
-                    write!(f, "{b:02x}")?;
+                for byte in &self.0[..4] {
+                    write!(f, "{byte:02x}")?;
                 }
                 f.write_str("…)")
             }
@@ -91,8 +91,7 @@ key_bytes! {
     DaemonId, 32
 }
 key_bytes! {
-    /// A person, independent of how many devices they use. Random, minted by the daemon (or
-    /// later by a team service).
+    /// A person, independent of how many devices they use. Random, minted by the daemon.
     PrincipalId, 16
 }
 key_bytes! {
@@ -104,7 +103,6 @@ key_bytes! {
 /// Who did something: the person and the device key they did it from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Actor {
-    /// The person.
     pub principal: PrincipalId,
     /// The device the action came from.
     pub device: DeviceId,
@@ -148,7 +146,8 @@ macro_rules! bitset {
 }
 
 bitset! {
-    /// pair-programming partner. The MVP only issues [`Roles::OWNER`].
+    /// The roles a grant confers. Roles combine: `DRIVER | APPROVER` is normal for a
+    /// pair-programming partner.
     ///
     /// # Examples
     ///
@@ -174,7 +173,6 @@ bitset! {
 }
 
 impl Roles {
-    /// Every role.
     pub const ALL: Self = Self(0b1_1111);
 
     /// The roles in force: [`Roles::OWNER`] implies every other role.
@@ -217,8 +215,8 @@ impl Roles {
         ];
         let names: Vec<&str> = NAMES
             .iter()
-            .filter(|(r, _)| self.contains(*r))
-            .map(|(_, n)| *n)
+            .filter(|(role, _)| self.contains(*role))
+            .map(|(_, name)| *name)
             .collect();
         if names.is_empty() {
             "none".into()
@@ -232,9 +230,13 @@ impl std::str::FromStr for Roles {
     type Err = String;
 
     /// Parses role names joined by `+` or `,` (`"driver+approver"`).
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
         let mut roles = Self::EMPTY;
-        for name in s.split(['+', ',']).map(str::trim).filter(|n| !n.is_empty()) {
+        for name in text
+            .split(['+', ','])
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
             roles |= match name.to_ascii_lowercase().as_str() {
                 "viewer" => Self::VIEWER,
                 "prompter" => Self::PROMPTER,
@@ -273,7 +275,7 @@ bitset! {
         AGENT_USAGE = 6;
         /// Shows native password prompts: wants `ServerCtl::Askpass` pushes and answers them
         /// with `ClientCtl::Askpass` (see `proto::askpass`). Without it the daemon's askpass
-        /// helper asks on the terminal. (Bit 6 is the usage meters' `AGENT_USAGE`.)
+        /// helper asks on the terminal.
         ASKPASS = 7;
         /// Wants `ServerCtl::Repos` (repository, worktree, branch and pull request state of
         /// every pane); the daemon only watches repositories while such a client is connected.
@@ -319,13 +321,12 @@ bitset! {
         /// Shows floating panes: wants `ServerCtl::Floats` after each
         /// `ServerCtl::LayoutChanged` (see `proto::float`).
         FLOATS = 21;
-        /// With `APPROVALS`, wants `ApprovalPush::Drive`: the exact action of an agent's request to drive one of
-        /// the user's panes, to show it and offer all three answers (see `proto::drive`).
-        /// Bit 21 is the floating panes' `FLOATS`.
+        /// With `APPROVALS`, wants `ApprovalPush::Drive`: the exact action of an agent's request
+        /// to drive one of the user's panes, to show it and offer all three answers (see
+        /// `proto::drive`).
         DRIVE_ASKS = 22;
         /// On an owner device, wants `ServerCtl::Accounts` and, while watching usage,
-        /// `ServerCtl::AccountUsage` (see `proto::account`). Bits 21 and 22 are floating
-        /// panes' and agent driving's.
+        /// `ServerCtl::AccountUsage` (see `proto::account`).
         ACCOUNTS = 23;
         /// Mirrors panes with the daemon's terminal limits: wants
         /// `ServerCtl::TerminalLimits` after `DaemonInfo` and before `Welcome`.
@@ -348,6 +349,7 @@ bitset! {
         /// Keeps drawings' finished versions and answers `ArtifactRequest::History` /
         /// `Restore`.
         ARTIFACT_HISTORY = 2;
+        /// Multiplayer: invite terms (knock, history since joining) and approval
         /// policies (`MpRequest::RegisterInvite` … `Claim`).
         MP2 = 3;
         /// Sends the agents Live Activity (start, update, end) through the push relay and
@@ -386,11 +388,10 @@ bitset! {
         /// `ServerCtl::Floats` to clients with `Caps::FLOATS`.
         FLOATS = 16;
         /// Asks the owner before an agent drives one of the user's panes (`proto::drive`),
-        /// instead of refusing. Bit 16 is the floating panes' `FLOATS`.
+        /// instead of refusing.
         DRIVE_ASKS = 17;
         /// Keeps agent accounts: answers the `Account*` workspace requests, launches
-        /// `PaneLaunch::AccountAgent` and `AccountSignIn` (see `proto::account`). Bits 16 and 17 are
-        /// floating panes' and agent driving's.
+        /// `PaneLaunch::AccountAgent` and `AccountSignIn` (see `proto::account`).
         ACCOUNTS = 18;
         /// Applies each input of a client once across its reconnects (`Caps::INPUT_RESUME`).
         INPUT_RESUME = 19;

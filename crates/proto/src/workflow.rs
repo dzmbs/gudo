@@ -1,3 +1,4 @@
+//! Workflows: named, parameterised commands kept as YAML files on the host.
 //!
 //! The daemon reads `~/.config/<product>/workflows/*.yaml` (global) and
 //! `<repository>/.<product>/workflows/*.yaml` (the repository a pane's directory is in), and
@@ -10,8 +11,6 @@
 //! for where the placeholder sits (unquoted, inside `'…'` or inside `"…"`) unless the argument
 //! is [`raw`](WorkflowArgument::raw). Nothing here runs anything: the app types the result
 //! into a pane and the user presses Return.
-//!
-//! Same compatibility rules as the rest of the crate: append only.
 
 use std::borrow::Cow;
 
@@ -29,7 +28,6 @@ pub struct Workflow {
     pub name: String,
     /// The command line, with `{{name}}` placeholders.
     pub command: String,
-    /// What it does.
     pub description: Option<String>,
     /// Free-form tags (searchable).
     pub tags: Vec<String>,
@@ -38,7 +36,6 @@ pub struct Workflow {
     pub arguments: Vec<WorkflowArgument>,
     /// Shells it is written for (`bash`, `zsh`, `fish`); empty for any.
     pub shells: Vec<String>,
-    /// Who wrote it.
     pub author: Option<String>,
     /// Where it came from.
     pub source_url: Option<String>,
@@ -90,9 +87,8 @@ pub struct WorkflowList {
 /// A workflow file that was skipped.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkflowProblem {
-    /// The file.
     pub path: String,
-    /// Why (one line).
+    /// Why, in one line.
     pub message: String,
 }
 
@@ -116,7 +112,6 @@ pub struct WorkflowDraft {
     pub command: String,
     /// What it does.
     pub description: Option<String>,
-    /// Tags.
     pub tags: Vec<String>,
     /// Arguments of the placeholders.
     pub arguments: Vec<WorkflowArgument>,
@@ -162,28 +157,28 @@ pub fn placeholders(command: &str) -> Vec<&str> {
 ///     default_value: None,
 ///     raw: false,
 /// };
-/// let out = render(
+/// let command = render(
 ///     r#"git commit -m "{{msg}}" && echo {{who}}"#,
 ///     &[arg("msg"), arg("who")],
 ///     &[("msg", "say \"hi\" $HOME"), ("who", "it's me")],
 /// );
-/// assert_eq!(out, r#"git commit -m "say \"hi\" \$HOME" && echo 'it'\''s me'"#);
+/// assert_eq!(command, r#"git commit -m "say \"hi\" \$HOME" && echo 'it'\''s me'"#);
 /// ```
 pub fn render(command: &str, arguments: &[WorkflowArgument], values: &[(&str, &str)]) -> String {
-    let mut out = String::with_capacity(command.len());
-    let mut last = 0;
+    let mut rendered = String::with_capacity(command.len());
+    let mut copied_to = 0;
     for (start, end, name) in scan(command) {
-        out.push_str(&command[last..start]);
-        last = end;
-        let arg = arguments.iter().find(|a| a.name == name);
+        rendered.push_str(&command[copied_to..start]);
+        copied_to = end;
+        let argument = arguments.iter().find(|argument| argument.name == name);
         let value = values
             .iter()
-            .find(|(n, _)| *n == name)
-            .map(|(_, v)| *v)
-            .or_else(|| arg.and_then(|a| a.default_value.as_deref()))
+            .find(|(value_name, _)| *value_name == name)
+            .map(|(_, value)| *value)
+            .or_else(|| argument.and_then(|argument| argument.default_value.as_deref()))
             .unwrap_or("");
-        if arg.is_some_and(|a| a.raw) {
-            out.push_str(value);
+        if argument.is_some_and(|argument| argument.raw) {
+            rendered.push_str(value);
             continue;
         }
         let quoted = match quoting_at(&command[..start]) {
@@ -191,13 +186,13 @@ pub fn render(command: &str, arguments: &[WorkflowArgument], values: &[(&str, &s
             Quoting::Single => quote_in_single(value),
             Quoting::Double => quote_in_double(value),
         };
-        out.push_str(&quoted);
+        rendered.push_str(&quoted);
     }
-    out.push_str(&command[last..]);
-    out
+    rendered.push_str(&command[copied_to..]);
+    rendered
 }
 
-/// `s` as one POSIX shell word: unchanged when it is only safe characters, else in single
+/// `text` as one POSIX shell word: unchanged when it is only safe characters, else in single
 /// quotes with each `'` written `'\''`. Empty is `''`.
 ///
 /// # Examples
@@ -208,37 +203,37 @@ pub fn render(command: &str, arguments: &[WorkflowArgument], values: &[(&str, &s
 /// assert_eq!(proto::shell_quote("a b"), "'a b'");
 /// assert_eq!(proto::shell_quote("it's"), r"'it'\''s'");
 /// ```
-pub fn shell_quote(s: &str) -> Cow<'_, str> {
-    let safe = |c: char| c.is_ascii_alphanumeric() || "_-.,/:@%+=".contains(c);
-    if !s.is_empty() && s.chars().all(safe) {
-        Cow::Borrowed(s)
+pub fn shell_quote(text: &str) -> Cow<'_, str> {
+    let safe = |ch: char| ch.is_ascii_alphanumeric() || "_-.,/:@%+=".contains(ch);
+    if !text.is_empty() && text.chars().all(safe) {
+        Cow::Borrowed(text)
     } else {
-        Cow::Owned(format!("'{}'", s.replace('\'', r"'\''")))
+        Cow::Owned(format!("'{}'", text.replace('\'', r"'\''")))
     }
 }
 
-/// `s` for the inside of a `"…"` string: `\`, `"`, `$` and `` ` `` escaped.
-pub fn quote_in_double(s: &str) -> Cow<'_, str> {
-    if !s.contains(['\\', '"', '$', '`']) {
-        return Cow::Borrowed(s);
+/// `text` for the inside of a `"…"` string: `\`, `"`, `$` and `` ` `` escaped.
+pub fn quote_in_double(text: &str) -> Cow<'_, str> {
+    if !text.contains(['\\', '"', '$', '`']) {
+        return Cow::Borrowed(text);
     }
-    let mut out = String::with_capacity(s.len() + 4);
-    for c in s.chars() {
-        if matches!(c, '\\' | '"' | '$' | '`') {
-            out.push('\\');
+    let mut escaped = String::with_capacity(text.len() + 4);
+    for ch in text.chars() {
+        if matches!(ch, '\\' | '"' | '$' | '`') {
+            escaped.push('\\');
         }
-        out.push(c);
+        escaped.push(ch);
     }
-    Cow::Owned(out)
+    Cow::Owned(escaped)
 }
 
-/// `s` for the inside of a `'…'` string: each `'` closes the string, adds an escaped quote
+/// `text` for the inside of a `'…'` string: each `'` closes the string, adds an escaped quote
 /// and reopens it (`'\''`).
-pub fn quote_in_single(s: &str) -> Cow<'_, str> {
-    if s.contains('\'') {
-        Cow::Owned(s.replace('\'', r"'\''"))
+pub fn quote_in_single(text: &str) -> Cow<'_, str> {
+    if text.contains('\'') {
+        Cow::Owned(text.replace('\'', r"'\''"))
     } else {
-        Cow::Borrowed(s)
+        Cow::Borrowed(text)
     }
 }
 
@@ -254,8 +249,8 @@ enum Quoting {
 fn quoting_at(prefix: &str) -> Quoting {
     let mut state = Quoting::None;
     let mut chars = prefix.chars();
-    while let Some(c) = chars.next() {
-        match (state, c) {
+    while let Some(ch) = chars.next() {
+        match (state, ch) {
             (Quoting::None | Quoting::Double, '\\') => {
                 chars.next();
             }
@@ -293,8 +288,8 @@ pub fn is_name(name: &str) -> bool {
     let mut chars = name.chars();
     chars
         .next()
-        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
 }
 
 #[cfg(test)]

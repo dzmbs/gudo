@@ -1,3 +1,4 @@
+//! Input assistance for the mobile line editor: the foreground program
 //! per pane, the shell's prompt state and input line, atomic submit, command history,
 //! completion, fuzzy file search for `@` mentions, and the options of a blocked agent.
 //!
@@ -11,34 +12,21 @@
 //! Text positions (`cursor`, completion ranges, match positions) count Unicode scalar values
 //! (Rust `char`s), not bytes or UTF-16 units.
 //!
-//! Same compatibility rules as the rest of the crate: append only. A daemon without these
-//! messages never sends them, so a client stays in direct-typing mode.
+//! A daemon without these messages never sends them, so a client stays in direct-typing mode.
 
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{OptionId, PaneId, RequestId, Seq, UnixMillis};
 use crate::workspace::FileKind;
 
-// ---------------------------------------------------------------------------------------------
-// Requests and responses
-// ---------------------------------------------------------------------------------------------
-
 /// An input-assistance request (see the module docs).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AssistRequest {
     /// Starts (`watch: true`) or stops pushing [`AssistPush::Prompt`] for a pane to this
     /// connection → [`AssistResponse::State`] (the state now, either way).
-    Watch {
-        /// The pane.
-        pane_id: PaneId,
-        /// Watch or stop watching.
-        watch: bool,
-    },
+    Watch { pane_id: PaneId, watch: bool },
     /// The pane's foreground program and prompt state now → [`AssistResponse::State`].
-    State {
-        /// The pane.
-        pane_id: PaneId,
-    },
+    State { pane_id: PaneId },
     /// Replaces the shell's input line with `text` and runs it, atomically →
     /// [`AssistResponse::Submitted`], or [`AssistError::NotAtPrompt`] with nothing written.
     SubmitLine(SubmitLine),
@@ -75,9 +63,7 @@ pub enum AssistResponse {
     },
     /// History entries, best first.
     History(Vec<HistoryEntry>),
-    /// Completion candidates.
     Completions(Completions),
-    /// File search results.
     Files(FileMatches),
     /// The blocked agent's decision, `None` when the agent is not blocked.
     Blocked(Option<BlockedPrompt>),
@@ -135,18 +121,12 @@ pub enum AssistPush {
 pub struct PaneAssist {
     /// The foreground program, if it could be read.
     pub foreground: Option<Foreground>,
-    /// The prompt state.
     pub prompt: PromptState,
 }
-
-// ---------------------------------------------------------------------------------------------
-// D1: foreground program
-// ---------------------------------------------------------------------------------------------
 
 /// The process group in the foreground of a pane's terminal (`tcgetpgrp` on the PTY).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Foreground {
-    /// The pane.
     pub pane_id: PaneId,
     /// Process id of the group leader.
     pub pid: u32,
@@ -179,7 +159,6 @@ pub enum ProgramProfile {
     Repl,
     /// Claude Code.
     Claude,
-    /// Codex.
     Codex,
     /// Anything else.
     Other,
@@ -206,22 +185,25 @@ impl ProgramProfile {
     /// assert_eq!(ProgramProfile::classify("node", &npm), ProgramProfile::Claude);
     /// ```
     pub fn classify(name: &str, argv: &[String]) -> Self {
-        let base = |s: &str| -> String {
-            let b = s.rsplit('/').next().unwrap_or(s);
-            b.strip_prefix('-').unwrap_or(b).to_ascii_lowercase()
+        let base = |path: &str| -> String {
+            let file_name = path.rsplit('/').next().unwrap_or(path);
+            file_name
+                .strip_prefix('-')
+                .unwrap_or(file_name)
+                .to_ascii_lowercase()
         };
         let program = argv
             .first()
-            .map(|a| base(a))
-            .filter(|b| !b.is_empty())
+            .map(|arg| base(arg))
+            .filter(|program| !program.is_empty())
             .unwrap_or_else(|| base(name));
         // Interpreters running a script: classify by the script (npm-installed agents).
         let script = argv
             .iter()
             .skip(1)
-            .find(|a| !a.starts_with('-'))
-            .map(|a| base(a));
-        let stem = program.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+            .find(|arg| !arg.starts_with('-'))
+            .map(|arg| base(arg));
+        let stem = program.trim_end_matches(|ch: char| ch.is_ascii_digit() || ch == '.');
         let interpreter = matches!(stem, "node" | "bun" | "deno" | "python");
         let agent = std::iter::once(program.as_str())
             .chain(script.as_deref().filter(|_| interpreter))
@@ -246,7 +228,7 @@ impl ProgramProfile {
             "python" | "ipython" | "node" | "deno" | "bun" | "irb" | "ruby" | "ghci" | "iex"
             | "erl" | "lua" | "luajit" | "julia" | "r" | "scala" | "clj" | "clojure" | "ocaml"
             | "utop" | "php" | "perl" | "sbcl" | "racket" | "guile" | "swift" | "jshell" => {
-                if script.is_none() || argv.iter().any(|a| a == "-i" || a == "repl") {
+                if script.is_none() || argv.iter().any(|arg| arg == "-i" || arg == "repl") {
                     Self::Repl
                 } else {
                     Self::Other
@@ -259,14 +241,9 @@ impl ProgramProfile {
     }
 }
 
-// ---------------------------------------------------------------------------------------------
-// D2: prompt state
-// ---------------------------------------------------------------------------------------------
-
 /// A pane's shell prompt state, from OSC 133 marks and the screen.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PromptState {
-    /// The pane.
     pub pane_id: PaneId,
     /// Identifies the prompt instance: it changes whenever a command starts (OSC 133;C), so a
     /// submit naming it cannot land in a running command or a later prompt. Redraws of the same
@@ -274,7 +251,6 @@ pub struct PromptState {
     pub prompt_id: u64,
     /// Output offset the state was read at.
     pub at_seq: Seq,
-    /// What the shell is doing.
     pub phase: PromptPhase,
 }
 
@@ -311,10 +287,10 @@ pub struct PromptInput {
     pub suggestion: Option<String>,
     /// A right-hand prompt (zsh `RPROMPT`) was recognised and left out.
     pub right_prompt: bool,
-    /// The shell.
     pub shell: ShellKind,
     /// The shell enabled bracketed paste (mode 2004), so multi-line text can be submitted.
     pub bracketed_paste: bool,
+    /// The line editor's keymap; `Unknown` until the shell reports it.
     pub keymap: Keymap,
 }
 
@@ -344,11 +320,8 @@ pub enum InputDoubt {
 /// Which shell runs at the prompt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ShellKind {
-    /// zsh.
     Zsh,
-    /// bash.
     Bash,
-    /// fish.
     Fish,
     /// Another shell.
     Other,
@@ -365,10 +338,6 @@ pub enum Keymap {
     Unknown,
 }
 
-// ---------------------------------------------------------------------------------------------
-// D3: atomic submit
-// ---------------------------------------------------------------------------------------------
-
 /// Replaces the input line at a prompt and (optionally) runs it, as one PTY write.
 ///
 /// The daemon checks that the pane is still at prompt `prompt_id` with the shell in the
@@ -377,7 +346,6 @@ pub enum Keymap {
 /// text as a bracketed paste, and Return when `run`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubmitLine {
-    /// The pane.
     pub pane_id: PaneId,
     /// [`PromptState::prompt_id`] the client saw.
     pub prompt_id: u64,
@@ -387,10 +355,6 @@ pub struct SubmitLine {
     /// Press Return after it (else the text is left in the shell's editor).
     pub run: bool,
 }
-
-// ---------------------------------------------------------------------------------------------
-// D4: history
-// ---------------------------------------------------------------------------------------------
 
 /// What [`AssistRequest::History`] returns.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -410,7 +374,6 @@ pub struct HistoryQuery {
 /// One distinct command from the history.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HistoryEntry {
-    /// The command line.
     pub command: String,
     /// Directory of its last run, if known.
     pub cwd: Option<String>,
@@ -423,10 +386,6 @@ pub struct HistoryEntry {
     /// How often it ran.
     pub count: u32,
 }
-
-// ---------------------------------------------------------------------------------------------
-// D5: completion
-// ---------------------------------------------------------------------------------------------
 
 /// What [`AssistRequest::Complete`] completes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -446,7 +405,6 @@ pub struct CompleteRequest {
 pub struct Completions {
     /// The directory paths were completed in.
     pub cwd: Option<String>,
-    /// The candidates.
     pub items: Vec<Completion>,
 }
 
@@ -484,13 +442,8 @@ pub enum CompletionKind {
     Command,
     /// An option.
     Flag,
-    /// A snippet.
     Snippet,
 }
-
-// ---------------------------------------------------------------------------------------------
-// D7: file search
-// ---------------------------------------------------------------------------------------------
 
 /// What [`AssistRequest::FileSearch`] looks for.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -508,7 +461,6 @@ pub struct FileSearch {
 pub struct FileMatches {
     /// The root searched, resolved.
     pub root: String,
-    /// The matches.
     pub matches: Vec<FileMatch>,
     /// Paths considered (files that `.gitignore` and hidden-file rules let through).
     pub scanned: u32,
@@ -526,10 +478,6 @@ pub struct FileMatch {
     /// Positions in `path` of the characters that matched the query, for highlighting.
     pub positions: Vec<u32>,
 }
-
-// ---------------------------------------------------------------------------------------------
-// D9: blocked agent options
-// ---------------------------------------------------------------------------------------------
 
 /// A decision an agent is waiting for, with a way to give each answer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
