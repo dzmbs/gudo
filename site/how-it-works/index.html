@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>How it works · Gudo</title>
+<meta name="description" content="The Gudo app, the gudo-hostd host program, pairing, and how devices reach your hosts end to end encrypted.">
+<link rel="canonical" href="https://gudo.dev/how-it-works/">
+<meta name="color-scheme" content="dark light">
+<meta name="theme-color" content="#111214" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#fbfbfc" media="(prefers-color-scheme: light)">
+<meta property="og:title" content="How it works · Gudo">
+<meta property="og:description" content="The Gudo app, the gudo-hostd host program, pairing, and how devices reach your hosts end to end encrypted.">
+<meta property="og:url" content="https://gudo.dev/how-it-works/">
+<meta property="og:type" content="website">
+<meta property="og:image" content="https://gudo.dev/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="preload" href="/assets/fonts/jetbrains-mono-regular.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/assets/site.css">
+<script src="/assets/theme.js"></script>
+<script src="/assets/site.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="/" aria-label="Gudo home"><svg class="mark" viewBox="192 212 640 600" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M308 232H716A96 96 0 0 1 812 328V696A96 96 0 0 1 716 792H308A96 96 0 0 1 212 696V328A96 96 0 0 1 308 232ZM308 286H485V738H308A42 42 0 0 1 266 696V328A42 42 0 0 1 308 286ZM539 286H716A42 42 0 0 1 758 328V485H539V286ZM539 539H758V696A42 42 0 0 1 716 738H539V539Z"/><circle cx="372" cy="624" r="78" fill="var(--accent)"/></svg><svg class="word" viewBox="0 8.25 190 83.75" aria-hidden="true"><path d="M36.25 50A16.25 16.25 0 1 1 3.75 50A16.25 16.25 0 1 1 36.25 50Z M36.25 33.75V74A16.25 16.25 0 0 1 5.75 84 M54.75 33.75V50A16.25 16.25 0 0 0 87.25 50 M87.25 33.75V66.25 M137.25 50A16.25 16.25 0 1 1 104.75 50A16.25 16.25 0 1 1 137.25 50Z M137.25 12V66.25 M186.25 50A16.25 16.25 0 1 1 153.75 50A16.25 16.25 0 1 1 186.25 50Z" fill="none" stroke="currentColor" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+    <nav class="nav" aria-label="Main"><a href="/how-it-works/" class="hide-s" aria-current="page">How it works</a><a href="/download/" class="">Download</a><a class="gh" href="https://github.com/dzmbs/gudo"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><span class="hide-s">GitHub</span></a></nav>
+  </div>
+</header>
+<main>
+
+<section class="page">
+  <div class="wrap narrow">
+    <h1>How it works</h1>
+    <p class="lede">Gudo has two parts: the app on your devices, and a small host program on the machines where your work runs.</p>
+
+    <div class="flow" aria-hidden="true">
+      <div class="node"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="3.5" width="11" height="13" rx="2"/><rect x="12" y="8" width="5.5" height="9" rx="1.5"/></svg><b>Gudo</b><span>iPad, iPhone, Mac</span></div>
+      <div class="link"><span>direct, or through a relay</span></div>
+      <div class="node"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3.5" width="14" height="5.5" rx="1.5"/><rect x="3" y="11" width="14" height="5.5" rx="1.5"/><path d="M6 6.25h.01M6 13.75h.01"/></svg><b>gudo-hostd</b><span>your Mac or Linux box</span></div>
+    </div>
+
+    <div class="prose">
+      <h2>The host</h2>
+      <p><code>gudo-hostd</code> runs your shells and agents. It keeps the state of every pane, so it always knows exactly what is on screen. When the app goes away, nothing stops.</p>
+      <p>On a Mac, the app includes it. On Linux, it is one static binary that runs as your user, installed with <a href="/download/#host">one command</a> or from the app over SSH. It is open source, like the app.</p>
+
+      <h2>Pairing</h2>
+      <p><code>gudo-hostd pair</code> prints a QR code and a one-time ticket that expires after 10 minutes. Scan it with Gudo. Your device makes its own key, and the host adds it to its list of paired devices. From then on the host only lets in keys on that list. You can remove a device at any time.</p>
+
+      <h2>The connection</h2>
+      <p>Your device dials the host by its public key, over QUIC with TLS 1.3. It tries a direct path first: the same network, Tailscale, or a path punched through NAT. When none works, a relay carries the encrypted packets over HTTPS.</p>
+      <p>A relay can&#39;t read or change what it carries. It does see both ends&#39; addresses, and when and how much data passes. You can run your own relay, or turn relays off and connect only directly. The host needs no open ports either way.</p>
+
+      <h2>Coming back</h2>
+      <p>When you open the app, it shows the last screen of each pane right away, dimmed, while it reconnects. The host then sends whatever changed, focused pane first. If you were away for long, it sends a fresh snapshot instead of replaying everything.</p>
+
+      <h2>Agents</h2>
+      <p>Start Claude Code or Codex from Gudo and they report their state: working, done, or waiting for you. Gudo does this through the agents&#39; own hooks and settings for that run, without editing your config.</p>
+      <p>When an agent needs you, you get a notification. Approve or deny from the lock screen: your device signs the decision and the host checks it before anything runs. The host encrypts each notification for your device before it leaves, so the push service only relays it.</p>
+
+      <h2>Just SSH</h2>
+      <p>Any SSH server works without the host program. Type <code>user@host</code> and you are in. Sessions then last as long as the connection, like any SSH client. When you want them to keep running, choose <strong>Install Helper</strong>.</p>
+
+      <h2>Sharing a session</h2>
+      <p>You can invite someone into a session with a link. The link carries a signed grant: what they may do, for how long, and how many times it can be used. The secret part of the link sits after the <code>#</code>, so it never reaches a web server.</p>
+    </div>
+  </div>
+</section>
+
+</main>
+<footer class="foot">
+  <div class="wrap">
+    <div>
+      <a class="brand" href="/" aria-label="Gudo home"><svg class="mark" viewBox="192 212 640 600" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M308 232H716A96 96 0 0 1 812 328V696A96 96 0 0 1 716 792H308A96 96 0 0 1 212 696V328A96 96 0 0 1 308 232ZM308 286H485V738H308A42 42 0 0 1 266 696V328A42 42 0 0 1 308 286ZM539 286H716A42 42 0 0 1 758 328V485H539V286ZM539 539H758V696A42 42 0 0 1 716 738H539V539Z"/><circle cx="372" cy="624" r="78" fill="var(--accent)"/></svg><svg class="word" viewBox="0 8.25 190 83.75" aria-hidden="true"><path d="M36.25 50A16.25 16.25 0 1 1 3.75 50A16.25 16.25 0 1 1 36.25 50Z M36.25 33.75V74A16.25 16.25 0 0 1 5.75 84 M54.75 33.75V50A16.25 16.25 0 0 0 87.25 50 M87.25 33.75V66.25 M137.25 50A16.25 16.25 0 1 1 104.75 50A16.25 16.25 0 1 1 137.25 50Z M137.25 12V66.25 M186.25 50A16.25 16.25 0 1 1 153.75 50A16.25 16.25 0 1 1 186.25 50Z" fill="none" stroke="currentColor" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+      <p class="way"><span lang="ja">求道</span>Gudō: seeking the Way.</p>
+      <div class="theme" role="group" aria-label="Theme">
+        <button type="button" value="auto" aria-pressed="true">Auto</button><button type="button" value="dark" aria-pressed="false">Dark</button><button type="button" value="light" aria-pressed="false">Light</button>
+      </div>
+    </div>
+    <div>
+      <nav aria-label="Footer">
+        <a href="/download/">Download</a>
+        <a href="/how-it-works/">How it works</a>
+        <a href="/privacy/">Privacy</a>
+        <a href="/support/">Support</a>
+        <a href="https://github.com/dzmbs/gudo">GitHub</a>
+      </nav>
+      <p class="way">Open source under the Apache License 2.0.</p>
+    </div>
+  </div>
+</footer>
+</body>
+</html>

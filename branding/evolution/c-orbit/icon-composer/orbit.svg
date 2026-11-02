@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <clipPath id="panes"><path d="M308 272H492V752H308A56 56 0 0 1 252 696V328A56 56 0 0 1 308 272ZM532 272H716A56 56 0 0 1 772 328V492H532V272ZM532 532H772V696A56 56 0 0 1 716 752H532V532Z"/></clipPath>
+  <circle cx="512" cy="512" r="196" fill="none" stroke="#FFFFFF" stroke-opacity="0.38" stroke-width="12" clip-path="url(#panes)"/>
+</svg>

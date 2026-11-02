@@ -1,0 +1,13 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["8SP2H5J666.dev.gudo.app"],
+        "components": [
+          { "/": "/join*", "comment": "Session invites; the invite is in the fragment" },
+          { "/": "/pair*", "comment": "Pairing tickets; the ticket is in the fragment" }
+        ]
+      }
+    ]
+  }
+}

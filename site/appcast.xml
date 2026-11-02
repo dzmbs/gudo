@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Sparkle update feed for the Mac app (SUFeedURL = https://gudo.dev/appcast.xml).
+     Empty until the first signed release. Each release adds one <item>, newest first, made by
+     Sparkle's generate_appcast from the notarized DMG and signed with the EdDSA key whose public
+     half is SUPublicEDKey in the app's Info.plist. Example:
+
+  <item>
+    <title>Version 0.1.0</title>
+    <pubDate>Mon, 02 Nov 2026 12:00:00 +0000</pubDate>
+    <sparkle:version>1</sparkle:version>
+    <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+    <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+    <sparkle:releaseNotesLink>https://github.com/dzmbs/gudo/releases/tag/v0.1.0</sparkle:releaseNotesLink>
+    <enclosure url="https://github.com/dzmbs/gudo/releases/download/v0.1.0/Gudo.dmg"
+               length="0" type="application/octet-stream"
+               sparkle:edSignature="BASE64_SIGNATURE" />
+  </item>
+-->
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>Gudo</title>
+    <link>https://gudo.dev/appcast.xml</link>
+    <description>Updates for Gudo for Mac.</description>
+    <language>en</language>
+  </channel>
+</rss>
