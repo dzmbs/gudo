@@ -4,29 +4,21 @@ import PaneLayout
 import SwiftUI
 import WebKit
 
-/// In-app browser for localhost previews and links printed in a pane. Safari 26's layout: a
-/// floating glass address capsule at the bottom on iPhone; a compact top bar with Chrome's
-/// omnibox on iPad and Mac. The page itself stays edge to edge; glass is only on the controls.
+/// In-app browser for localhost previews and links printed in a pane: a floating address capsule
+/// at the bottom on iPhone, a top bar on iPad and Mac.
 struct BrowserView: View {
-    /// The host a dev server page comes from (its data store routes to it, S-BR1): named next
-    /// to the address.
+    /// The host a dev server page comes from; its data store routes there.
     var routedHost: (id: String, name: String)?
     var onOpenExternally: (URL) -> Void = { _ in }
-    /// Shows a leading "Done" / back control (the browser sheet, the ports list).
     var onDone: (() -> Void)?
     var doneTitle = "Done"
-    /// A browser leaf: its shortcuts only while it has the focus, a close button, and where it
-    /// navigated reported.
+    /// Shortcuts are live only while focused.
     var isFocused = true
     var onClose: (() -> Void)?
     var onNavigate: ((URL) -> Void)?
-    /// A new browser tab beside this one (the bar's +).
     var onNewTab: (() -> Void)?
-    /// The sheet's page moves into a browser tab.
     var onOpenAsTab: ((URL) -> Void)?
-    /// The user points at an element for the agent beside the page.
     var onPointOut: (() -> Void)?
-    /// Opens the page's recorded agent sessions (Session Replay).
     var onReplays: (() -> Void)?
 
     @State private var pane: BrowserPane
@@ -35,12 +27,11 @@ struct BrowserView: View {
     private var page: any BrowserPageContent { pane.page }
     private var initialURL: URL { pane.initialURL }
     #if DEBUG
-    /// UI tests: connections sent to `routedHost` (proof the page went through the host).
+    /// UI tests read this to prove the page went through the host.
     @State private var routedCount = 0
     #endif
 
-    /// `dataStore`: a host's own store for its dev servers (`DevServerRouting`), else the default.
-    /// `intercept` sees each navigation first; true stops it (a sign-in code taken from it).
+    /// `intercept` sees each navigation first; returning true stops it.
     init(
         initialURL: URL, dataStore: WKWebsiteDataStore? = nil, routedHost: (id: String, name: String)? = nil,
         intercept: ((URL) -> Bool)? = nil,
@@ -51,7 +42,7 @@ struct BrowserView: View {
         self.init(pane: pane, routedHost: routedHost, onOpenExternally: onOpenExternally, onDone: onDone, doneTitle: doneTitle)
     }
 
-    /// A page that outlives the view (a browser leaf's).
+    /// A page that outlives the view.
     init(
         pane: BrowserPane, routedHost: (id: String, name: String)? = nil,
         onOpenExternally: @escaping (URL) -> Void = { _ in }, onDone: (() -> Void)? = nil, doneTitle: String = "Done",
@@ -75,12 +66,12 @@ struct BrowserView: View {
     @Environment(\.colorScheme) private var chromeScheme
     @AppStorage(SearchEngine.key) private var engine = SearchEngine.google
     @AppStorage(WebsiteAppearance.key) private var followsTheme = true
-    /// What the field holds: the page's address (Chrome's short form) until it is edited.
+    /// The page's short address until edited.
     @State private var address = ""
     @State private var addressSelection: TextSelection?
-    /// The suggestion arrow keys picked under the address field (-1: none).
+    /// -1 when no suggestion is picked.
     @State private var selection = -1
-    /// A page asked for from the start page, which stays until it is gone or failed.
+    /// Keeps the start page hidden until the requested page loads or fails.
     @State private var leavingStart = false
     @State private var isFieldHovered = false
     @FocusState private var isEditing: Bool
@@ -99,10 +90,10 @@ struct BrowserView: View {
 
     var body: some View {
         // One WebView whatever the size class: a page may be shown by one WebView only, and a
-        // size class that flips while the sheet comes up (presented right after a popover)
-        // would otherwise make a second one before the first is gone (a WebKit trap).
-        // The regular bar sits above the page, not over it: the page then has no top inset, so
-        // its pictures (`BrowserAgent`) start at the document's top.
+        // size class that flips while the sheet comes up would otherwise make a second one
+        // before the first is gone.
+        // The regular bar sits above the page, not over it, so the page has no top inset and
+        // `BrowserAgent` screenshots start at the document's top.
         VStack(spacing: 0) {
             if !isCompact {
                 regularBar
@@ -114,7 +105,6 @@ struct BrowserView: View {
                         if pane.mayShow(in: hold.id) {
                             WebView(web)
                                 .webViewBackForwardNavigationGestures(.enabled)
-                                // `prefers-color-scheme` on the page: the theme's, or the device's.
                                 .environment(\.colorScheme, followsTheme ? chromeScheme : WebsiteAppearance.systemScheme)
                         }
                     } else if let popup = pane.popupPage {
@@ -183,14 +173,11 @@ struct BrowserView: View {
         #endif
     }
 
-    /// Offers moving the page into a browser tab.
     func onOpenAsTab(_ action: @escaping (URL) -> Void) -> BrowserView {
         var view = self
         view.onOpenAsTab = action
         return view
     }
-
-    // MARK: Start page
 
     private var isBlank: Bool { (page.url ?? initialURL).absoluteString == "about:blank" }
     private var showsStart: Bool { isBlank && !leavingStart }
@@ -199,7 +186,7 @@ struct BrowserView: View {
         let servers = model?.devServers(onHost: pane.hostId)
         return BrowserStartPage(
             hostName: servers?.hostName ?? "", devServers: servers?.ports ?? [],
-            // The bar's field has the keyboard when it was reached for (⌘L) first.
+            // ⌘L may have given the bar's field the keyboard first.
             focusOnAppear: isFocused && !isEditing,
             open: pick, openDevServer: openDevServer)
     }
@@ -218,8 +205,7 @@ struct BrowserView: View {
         address = BrowserAddress.display(url)
     }
 
-    /// On a page that reaches its host's `localhost` (a browser leaf), here; else through a
-    /// forward, as from the ports list.
+    /// A browser leaf reaches its host's `localhost` itself; otherwise go through a forward.
     private func openDevServer(_ port: DetectedPort) {
         if pane.prepare != nil || pane.hostId == nil {
             pick(DevServerRouting.pageURL(for: port))
@@ -228,14 +214,9 @@ struct BrowserView: View {
         }
     }
 
-    // MARK: Bars
-
-    /// iPad and Mac: Chrome's bar. History and reload, the omnibox, then the page's actions.
     private var regularBar: some View {
         HStack(spacing: DS.Space.xs) {
             if let onDone {
-                // Safari's way back to where the page came from: the ink, never the accent
-                // (toolbars are monochrome).
                 Button(action: onDone) {
                     if doneTitle == "Done" {
                         Text(doneTitle)
@@ -283,7 +264,6 @@ struct BrowserView: View {
         .overlay(alignment: .bottom) { Hairline() }
     }
 
-    /// Chrome's ⋮: what is done with the page elsewhere.
     private var moreMenu: some View {
         Menu("More", systemImage: "ellipsis") {
             if let url = page.url, !isBlank {
@@ -302,10 +282,9 @@ struct BrowserView: View {
         .accessibilityIdentifier("browser-more")
     }
 
-    /// The iPhone bar's height over the bottom edge: its capsules and the gap under them.
+    /// The iPhone bar's capsules plus the gap under them.
     static let compactBarHeight: CGFloat = 44 + DS.Space.s
 
-    /// iPhone: one floating glass capsule with the controls around the address.
     private var compactBar: some View {
         GlassEffectContainer(spacing: DS.Space.s) {
             HStack(spacing: DS.Space.s) {
@@ -361,7 +340,7 @@ struct BrowserView: View {
         .animation(DS.Motion.snappy, value: isEditing)
     }
 
-    /// Back and forward; a long press (or a held click) lists the history, as in Safari.
+    /// A long press lists the history.
     @ViewBuilder private var navigationButtons: some View {
         let list = page.history
         Menu {
@@ -406,8 +385,6 @@ struct BrowserView: View {
         .accessibilityIdentifier("browser-reload")
     }
 
-    /// Chrome's keys while the page's pane has the focus: ⌘L the address, ⌘R reload, ⌘[ ⌘] history,
-    /// ⌘. or Esc gives up an edit.
     @ViewBuilder private var shortcuts: some View {
         if isFocused {
             Group {
@@ -430,10 +407,6 @@ struct BrowserView: View {
         }
     }
 
-    // MARK: Address
-
-    /// Chrome's omnibox: always a field. A click or tap takes the keyboard and selects the whole
-    /// address; Return goes, Esc gives the page's address back.
     private var addressField: some View {
         HStack(spacing: DS.Space.s) {
             securityMark
@@ -490,8 +463,6 @@ struct BrowserView: View {
         .animation(.easeOut(duration: 0.15), value: isEditing)
     }
 
-    /// Chrome's site mark: a lock on a secure page, a warning on a plain one out on the
-    /// network, a server on a dev server; a magnifier while typing.
     private var securityMark: some View {
         let url = page.url ?? initialURL
         let (symbol, help, style): (String, String, ChromeStyle) =
@@ -510,7 +481,6 @@ struct BrowserView: View {
             .accessibilityIdentifier("browser-security")
     }
 
-    /// The page's address as the field shows it when not editing.
     private var shortAddress: String { isBlank ? "" : BrowserAddress.display(page.url ?? initialURL) }
 
     private func showCurrentAddress() {
@@ -518,7 +488,7 @@ struct BrowserView: View {
         addressSelection = nil
     }
 
-    /// The full address, all of it selected, so typing replaces it.
+    /// Selects the full address so typing replaces it.
     private func beginEditing() {
         address = isBlank ? "" : (page.url ?? initialURL).absoluteString
         // After the field has placed its caret where it was tapped.
@@ -532,7 +502,7 @@ struct BrowserView: View {
         showCurrentAddress()
     }
 
-    /// `github.com`, or `localhost:5173` for local servers (the port matters there).
+    /// Keeps the port for local servers, where it matters.
     private var displayHost: String {
         let url = page.url ?? initialURL
         guard let host = url.host() else { return url.absoluteString }
@@ -541,19 +511,18 @@ struct BrowserView: View {
         return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
     }
 
-    /// The host serving the page, when it is one of its dev servers (`localhost:3000` there).
+    /// The host's name when the page is one of its dev servers.
     private var servingHost: String? {
         guard let routedHost, !routedHost.name.isEmpty, let host = (page.url ?? initialURL).host(),
               DevServerNames.isRouted(host) else { return nil }
         return routedHost.name
     }
 
-    /// A 2 pt accent line along the bar's bottom edge that fills while loading and fades when done.
     private var progressLine: some View {
-        GeometryReader { geo in
+        GeometryReader { geometry in
             Rectangle()
                 .fill(DS.Palette.accent)
-                .frame(width: geo.size.width * page.estimatedProgress)
+                .frame(width: geometry.size.width * page.estimatedProgress)
                 .animation(DS.Motion.overlay, value: page.estimatedProgress)
         }
         .frame(height: 2)
@@ -562,8 +531,6 @@ struct BrowserView: View {
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
-
-    // MARK: Actions
 
     private func go() {
         let picked = suggestions.indices.contains(selection) ? suggestions[selection].url : nil
@@ -587,8 +554,7 @@ struct BrowserView: View {
     }
 }
 
-/// A browser leaf of a split tree: the window's page for it (made once, kept across tab
-/// switches), closed and focused through the window.
+/// A browser leaf of a split tree; its page is kept across tab switches.
 struct BrowserLeafView: View {
     let member: BrowserMember
     let isFocused: Bool
@@ -627,14 +593,13 @@ struct BrowserLeafView: View {
 }
 
 extension BrowserLeafView {
-    /// The terminal in the page's tab (the agent's), if any.
+    /// The agent's terminal in the page's tab, if any.
     private var terminal: HostPane? {
         guard let tab = model.composites.tab(containingBrowser: member.id) else { return nil }
         return tab.leaves.lazy.compactMap { tab.members[$0] }.first { $0.hostId != HostGroups.localId }
     }
 
-    /// The next tap on the page picks an element, which goes to the terminal as text for the
-    /// agent (pasted, not sent).
+    /// The next tap on the page picks an element, pasted (not sent) into the terminal.
     private func pointOut(_ pane: BrowserPane) {
         guard let terminal, let daemon = model.app.hosts.connection(terminal.hostId) as? DaemonConnection else { return }
         model.toasts.show(Toast("Tap what to point out", systemImage: "hand.point.up.left"))
@@ -694,8 +659,8 @@ private struct DialogCard: View {
     }
 }
 
-/// What an agent is doing on a page, and what it needs from the user: approve a step, or do it
-/// themselves (sign-in, payment). Take Over stops the agent until the page is handed back.
+/// What an agent is doing on a page and what it needs from the user. Take Over stops the agent
+/// until the page is handed back.
 private struct AgentBar: View {
     let pane: BrowserPane
 

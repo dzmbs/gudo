@@ -6,9 +6,8 @@ import UIKit
 import AppKit
 #endif
 
-/// First use of VS Code on a host: Microsoft's terms, which the user accepts with Microsoft
-/// themselves. Nothing of Microsoft's is downloaded or started on the host before Accept; Cancel
-/// leaves the host untouched. Asked once per host.
+/// Microsoft's terms on first use of VS Code on a host. Nothing of Microsoft's is downloaded or
+/// started on the host before Accept; Cancel leaves the host untouched.
 struct EditorLicenceSheet: View {
     let hostName: String
     var accept: () -> Void
@@ -18,7 +17,6 @@ struct EditorLicenceSheet: View {
 
     private var host: String { hostName.nonEmpty ?? "this host" }
 
-    /// The whole decision on the Mac's button; one word in an iOS bar.
     #if os(macOS)
     private static let acceptTitle = "Accept and Open VS Code"
     #else
@@ -91,8 +89,7 @@ struct EditorLicenceSheet: View {
     }
 }
 
-/// The opt-in Remote Tunnel: what it means (Microsoft's relay, the user's own GitHub or
-/// Microsoft account on the host), then which account.
+/// The opt-in Remote Tunnel and which account signs in to it.
 struct EditorTunnelOfferSheet: View {
     let hostName: String
     var choose: (EditorTunnelAccount) -> Void
@@ -153,8 +150,8 @@ struct EditorTunnelOfferSheet: View {
     }
 }
 
-/// The tunnel waits for the user to sign in: the code to enter, Copy, and the page to enter it on
-/// in the user's own browser. The app never completes the sign-in itself.
+/// The device code for the tunnel sign-in, which the user completes in their own browser; the app
+/// never completes it itself.
 struct EditorDeviceCodeSheet: View {
     let login: EditorDeviceCode
     let hostName: String
@@ -163,7 +160,7 @@ struct EditorDeviceCodeSheet: View {
     @Environment(\.openURL) private var openURL
     @State private var copied = false
 
-    private var page: String {
+    private var verificationAddress: String {
         let url = login.verificationURL
         return (url.host() ?? url.absoluteString) + (url.path().count > 1 ? url.path() : "")
     }
@@ -172,7 +169,7 @@ struct EditorDeviceCodeSheet: View {
         SheetScaffold(
             "Sign In to \(login.account.title)",
             cancel: SheetAction("Cancel", identifier: "editor-device-cancel", action: cancel),
-            primary: SheetAction("Copy and Open \(page)", identifier: "editor-device-open") {
+            primary: SheetAction("Copy and Open \(verificationAddress)", identifier: "editor-device-open") {
                 Self.copy(login.code)
                 copied = true
                 openURL(login.verificationURL)
@@ -200,7 +197,7 @@ struct EditorDeviceCodeSheet: View {
                 } header: {
                     SectionTitle("Your Code")
                 } footer: {
-                    Text("Enter it at \(page) and sign in with your \(login.account.title) account to let \(hostName.nonEmpty ?? "the host") open a VS Code tunnel.")
+                    Text("Enter it at \(verificationAddress) and sign in with your \(login.account.title) account to let \(hostName.nonEmpty ?? "the host") open a VS Code tunnel.")
                     .foregroundStyle(DS.Palette.textSecondary)
                 }
                 .chromeRows()
