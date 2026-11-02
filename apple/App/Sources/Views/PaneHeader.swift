@@ -99,6 +99,7 @@ struct PaneHeader: View {
         .simultaneousGesture(TapGesture(count: 2).onEnded { zoom() })
         .gesture(handleDrag, including: arrangement?.workspace === workspace ? .all : .subviews)
         .onHover { isHovered = $0 }
+        .task(id: workspace.groupId) { model.loadAccounts(onGroup: workspace.groupId) }
         .contextMenu {
             PaneContextItems(workspace: workspace, model: model, pane: id, focusPane: focus)
         }
@@ -311,5 +312,52 @@ enum WindowSupport {
         #else
         UIApplication.shared.supportsMultipleScenes && UIDevice.current.userInterfaceIdiom == .pad
         #endif
+    }
+}
+
+/// The account an agent pane runs under, after its name: "· ● Work".
+struct PaneAccountLabel: View {
+    let name: String
+    let color: UInt8
+    var emphasized = false
+
+    var body: some View {
+        HStack(spacing: DS.Space.xxs) {
+            Text(verbatim: "·")
+                .foregroundStyle(DS.Palette.textTertiary)
+            AccountDot(color: color, size: 6)
+            Text(name)
+                .foregroundStyle(emphasized ? DS.Palette.text : DS.Palette.textSecondary)
+                .lineLimit(1)
+        }
+        .font(.caption)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Account: \(name)")
+        .help("Runs under the \(name) account")
+    }
+}
+
+/// A pane's account is at a plan limit: a quiet mark whose menu offers a new tab under another
+/// signed-in account. Nothing switches by itself.
+struct LimitHintMenu: View {
+    let hint: LimitHint
+    let start: () -> Void
+
+    var body: some View {
+        Menu {
+            Text(hint.message())
+            Button(hint.action, systemImage: "plus.rectangle.on.rectangle", action: start)
+        } label: {
+            Label("At Limit", systemImage: "gauge.with.dots.needle.100percent")
+                .labelStyle(.titleAndIcon)
+                .font(.caption)
+                .foregroundStyle(DS.Palette.attention)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(hint.message())
+        .accessibilityIdentifier("pane-limit-hint")
     }
 }
