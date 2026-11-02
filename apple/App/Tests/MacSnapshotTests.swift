@@ -154,6 +154,11 @@ final class MacSnapshotTests: XCTestCase {
                 ctx.setFillColor(dim)
                 ctx.fill(pixels(rect))
             }
+            // The pane being dragged is washed (`FloatingChrome`).
+            if leaf.pane == model.arrangement.paneDrag?.pane {
+                ctx.setFillColor(NSColor(theme.background).withAlphaComponent(0.55).cgColor)
+                ctx.fill(pixels(rect))
+            }
         }
         // Windows back to front, from where their panes are now: as captured (header, rim,
         // backdrop) with the panel shadow, then their terminals.
@@ -188,12 +193,25 @@ final class MacSnapshotTests: XCTestCase {
         // Above the panes, as captured: the tray, a drag's region, chip and Float target, guides.
         for chip in layout.chips { restore(window(chip.frame).insetBy(dx: -2, dy: -2)) }
         let arrangement = model.arrangement
-        for region in [arrangement.paneDrag?.preview, arrangement.dockPreview, arrangement.landing].compactMap(\.self) {
-            restore(window(region))
+        // The drop region drawn again as `DropRegion` draws it (the terminal under it is new).
+        let accent = ChromePalette.fromPreferences().accent
+        func accentColor(_ alpha: Double) -> CGColor { CGColor(srgbRed: accent.r, green: accent.g, blue: accent.b, alpha: alpha) }
+        if let region = arrangement.dockPreview ?? arrangement.paneDrag?.preview ?? arrangement.landing {
+            let inset = window(region).insetBy(dx: DS.Space.xs, dy: DS.Space.xs)
+            let path = CGPath(roundedRect: pixels(inset), cornerWidth: DS.Radius.pane * scale, cornerHeight: DS.Radius.pane * scale, transform: nil)
+            ctx.addPath(path)
+            ctx.setFillColor(accentColor(0.2))
+            ctx.fillPath()
+            let rim = CGPath(roundedRect: pixels(inset).insetBy(dx: 0.75 * scale, dy: 0.75 * scale), cornerWidth: DS.Radius.pane * scale, cornerHeight: DS.Radius.pane * scale, transform: nil)
+            ctx.addPath(rim)
+            ctx.setStrokeColor(accentColor(0.65))
+            ctx.setLineWidth(1.5 * scale)
+            ctx.strokePath()
         }
         if let drag = arrangement.paneDrag {
-            restore(window(layout.floatTarget).insetBy(dx: -8, dy: -8))
-            restore(window(CGRect(x: drag.point.x - 20, y: drag.point.y - 8, width: 420, height: 60)))
+            restore(window(layout.floatTarget).insetBy(dx: -4, dy: -4))
+            // The chip that follows the hand: centred 12 right of and 18 under the pointer.
+            restore(window(CGRect(x: drag.point.x + 12 - 70, y: drag.point.y + 18 - 15, width: 140, height: 30)))
         }
         for guide in arrangement.guides {
             let line = guide.axis == .vertical
