@@ -3,7 +3,7 @@ import Observation
 import Synchronization
 import GudoCore
 
-/// Host-key decisions the user has to make (04-mobile-ux C1.3): trust a new host's key
+/// Host-key decisions the user has to make: trust a new host's key
 /// (TOFU), or, after a key change, replace the record. The SSH core asks on a blocking thread
 /// and waits; the UI shows `pending` and calls `answer`.
 @MainActor

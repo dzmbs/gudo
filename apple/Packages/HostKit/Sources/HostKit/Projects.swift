@@ -116,7 +116,7 @@ nonisolated public enum ProjectMerge {
     /// by id; tabs by rank, then host and tab id, so every device draws the same list.
     public static func merge(_ sources: [String: HostProjects], existing: Set<TabRef>) -> [Project] {
         var infos: [String: ProjectInfo] = [:]
-        var tabs: [String: [(TabRef, Int64)]] = [:]
+        var tabs: [String: [(ref: TabRef, rank: Int64)]] = [:]
         for (host, source) in sources {
             for (tab, membership) in source.members {
                 let ref = TabRef(hostId: host, tab: tab)
@@ -132,12 +132,12 @@ nonisolated public enum ProjectMerge {
         return infos.values
             .sorted { $0.order != $1.order ? $0.order < $1.order : $0.id < $1.id }
             .map { info in
-                let members = (tabs[info.id] ?? []).sorted { a, b in
-                    if a.1 != b.1 { return a.1 < b.1 }
-                    if a.0.hostId != b.0.hostId { return a.0.hostId < b.0.hostId }
-                    return a.0.tab.rawValue < b.0.tab.rawValue
+                let members = (tabs[info.id] ?? []).sorted { lhs, rhs in
+                    if lhs.rank != rhs.rank { return lhs.rank < rhs.rank }
+                    if lhs.ref.hostId != rhs.ref.hostId { return lhs.ref.hostId < rhs.ref.hostId }
+                    return lhs.ref.tab.rawValue < rhs.ref.tab.rawValue
                 }
-                return Project(info: info, tabs: members.map(\.0))
+                return Project(info: info, tabs: members.map(\.ref))
             }
     }
 }
@@ -209,8 +209,8 @@ nonisolated public struct ProjectPlanner {
         var order = projects.filter { $0.id != id }
         order.insert(moving, at: min(max(index, 0), order.count))
         var changes: [Change] = []
-        for (i, project) in order.enumerated() {
-            let wanted = Int64(i) * Self.rankStep
+        for (position, project) in order.enumerated() {
+            let wanted = Int64(position) * Self.rankStep
             guard project.info.order != wanted else { continue }
             var info = project.info
             info.order = wanted
@@ -224,8 +224,8 @@ nonisolated public struct ProjectPlanner {
     private func assign(_ order: [TabRef], to info: ProjectInfo) -> [Change] {
         var changes: [Change] = []
         var defined = Set(sources.compactMap { $0.value.projects[info.id] != nil ? $0.key : nil })
-        for (i, ref) in order.enumerated() {
-            let membership = Membership(project: info.id, rank: Int64(i) * Self.rankStep)
+        for (position, ref) in order.enumerated() {
+            let membership = Membership(project: info.id, rank: Int64(position) * Self.rankStep)
             if !defined.contains(ref.hostId) {
                 changes.append((ref.hostId, .put(info)))
                 defined.insert(ref.hostId)

@@ -1,7 +1,6 @@
 import CoreGraphics
 import Foundation
 
-/// One sample of a pen stroke in scene px.
 public struct InkSample: Equatable, Sendable {
     public var x: CGFloat
     public var y: CGFloat
@@ -23,7 +22,6 @@ public struct InkSample: Equatable, Sendable {
     }
 }
 
-/// A finished pen stroke in scene px.
 public struct InkStroke: Equatable, Sendable {
     public var samples: [InkSample]
     /// `#rrggbb`.
@@ -104,17 +102,16 @@ public enum Freedraw {
 
     /// Drops consecutive duplicates (perfect-freehand needs movement between points).
     static func dedupe(_ samples: [InkSample]) -> [InkSample] {
-        var out: [InkSample] = []
-        for s in samples {
-            if let last = out.last, abs(last.x - s.x) < 0.01, abs(last.y - s.y) < 0.01 { continue }
-            out.append(s)
+        var kept: [InkSample] = []
+        for sample in samples {
+            if let last = kept.last, abs(last.x - sample.x) < 0.01, abs(last.y - sample.y) < 0.01 { continue }
+            kept.append(sample)
         }
-        return out
+        return kept
     }
 
-    /// `#rrggbb` for an sRGB color.
     public static func hex(r: CGFloat, g: CGFloat, b: CGFloat) -> String {
-        func byte(_ v: CGFloat) -> Int { Int((min(max(v, 0), 1) * 255).rounded()) }
+        func byte(_ component: CGFloat) -> Int { Int((min(max(component, 0), 1) * 255).rounded()) }
         return String(format: "#%02x%02x%02x", byte(r), byte(g), byte(b))
     }
 }

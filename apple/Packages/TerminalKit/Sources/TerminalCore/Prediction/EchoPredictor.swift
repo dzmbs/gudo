@@ -100,6 +100,7 @@ public struct PredictionStats: Equatable, Sendable {
     public init() {}
 }
 
+/// Local echo prediction for one pane.
 ///
 /// The backend feeds it `EchoHint`s, the round-trip time and (optionally) input acknowledgements;
 /// the view calls `predict` for every keystroke before sending it and `reconcile` after output was
@@ -111,7 +112,7 @@ public struct PredictionStats: Equatable, Sendable {
 ///   input (Enter, Tab, ...) is still unprocessed.
 /// - Printable single-cell characters at the cursor (inserting in the middle of the line shifts the
 ///   rest right), and Backspace / ← / → inside the predicted run. Never the last column (wrap).
-/// - S6 residual race: while earlier keystrokes are outstanding and no output arrived for
+/// - Residual race: while earlier keystrokes are outstanding and no output arrived for
 ///   `idleOutputLimit`, stop predicting (a program may have gone silent into hidden input).
 /// - A cell is confirmed when the screen shows it (a cell that already showed the predicted text
 ///   waits until the echo caught up with the cursor, so it cannot confirm before its input ran). A
@@ -129,7 +130,8 @@ public final class EchoPredictor {
         public var minimumDisplayRTT: Double = 0
         /// Added to 2·RTT before an unacknowledged mismatch counts as a misprediction.
         public var confirmGrace: Double = 0.250
-        /// S6 mitigation: no output for this long with keystrokes outstanding stops prediction.
+        /// No output for this long with keystrokes outstanding stops prediction (the program
+        /// may have gone silent into hidden input).
         public var idleOutputLimit: Double = 1.0
         /// RTT assumed until the backend reports one.
         public var defaultRTT: Double = 0.150
@@ -211,6 +213,7 @@ public final class EchoPredictor {
 
     /// The backend processed inputs up to `seq`, and the output they produced has been applied to
     /// the terminal before this call. `hint` is the echo state the backend read just before writing
+    /// that input, if it sends one.
     public func acknowledge(upTo seq: UInt64, hint: EchoHint? = nil) {
         acknowledgementsSupported = true
         acknowledgedSeq = max(acknowledgedSeq, seq)
@@ -232,42 +235,42 @@ public final class EchoPredictor {
     public func predict(_ input: PredictedInput, screen: some PredictionScreen) -> Bool {
         lastInputSeq += 1
         let seq = lastInputSeq
-        let t = now()
+        let time = now()
         stats.inputs += 1
-        if canPredict(screen: screen, at: t, seq: seq), apply(input, screen: screen, seq: seq, at: t) {
+        if canPredict(screen: screen, at: time, seq: seq), apply(input, screen: screen, seq: seq, at: time) {
             stats.predicted += 1
             return true
         }
         // The program's reaction to this input is unknown, so nothing after it can be predicted
         // until it has been processed.
-        abandonRun(at: t)
-        blocked = (seq, t)
+        abandonRun(at: time)
+        blocked = (seq, time)
         return false
     }
 
     private var effectiveRTT: Double { rtt ?? configuration.defaultRTT }
 
-    private func canPredict(screen: some PredictionScreen, at t: Double, seq: UInt64) -> Bool {
-        guard configuration.enabled, hint?.allowsPrediction == true, !screen.isAlternateScreen, t >= suppressedUntil
+    private func canPredict(screen: some PredictionScreen, at time: Double, seq: UInt64) -> Bool {
+        guard configuration.enabled, hint?.allowsPrediction == true, !screen.isAlternateScreen, time >= suppressedUntil
         else { return false }
         if let blocked {
             let processed = acknowledgementsSupported
                 ? acknowledgedSeq >= blocked.seq
-                : lastOutputAt > blocked.at && t - blocked.at >= effectiveRTT
+                : lastOutputAt > blocked.at && time - blocked.at >= effectiveRTT
             guard processed else { return false }
             self.blocked = nil
         }
         let outstanding = run != nil || (acknowledgementsSupported && seq - 1 > acknowledgedSeq)
-        if outstanding, t - lastOutputAt > configuration.idleOutputLimit { return false }
+        if outstanding, time - lastOutputAt > configuration.idleOutputLimit { return false }
         return true
     }
 
-    private func apply(_ input: PredictedInput, screen: some PredictionScreen, seq: UInt64, at t: Double) -> Bool {
+    private func apply(_ input: PredictedInput, screen: some PredictionScreen, seq: UInt64, at time: Double) -> Bool {
         let cols = screen.cols
         let y = run?.y ?? screen.cursor.y
         let x = run?.cursorX ?? screen.cursor.x
         guard cols > 1, x >= 0, x < cols else { return false }
-        var run = self.run ?? Run(y: y, startX: x, endX: x, cursorX: x, cursorSeq: seq, cursorAt: t, lastInputAt: t)
+        var run = self.run ?? Run(y: y, startX: x, endX: x, cursorX: x, cursorSeq: seq, cursorAt: time, lastInputAt: time)
 
         func current(_ column: Int) -> String {
             run.cells[column]?.text ?? screen.text(atX: column, y: y)
@@ -277,7 +280,7 @@ public final class EchoPredictor {
         }
         func set(_ column: Int, _ text: String) {
             let original = run.cells[column]?.original ?? screen.text(atX: column, y: y)
-            run.cells[column] = Expectation(text: text, original: original, seq: seq, createdAt: t)
+            run.cells[column] = Expectation(text: text, original: original, seq: seq, createdAt: time)
         }
 
         switch input {
@@ -318,8 +321,8 @@ public final class EchoPredictor {
             return false
         }
         run.cursorSeq = seq
-        run.cursorAt = t
-        run.lastInputAt = t
+        run.cursorAt = time
+        run.lastInputAt = time
         self.run = run
         return true
     }
@@ -330,8 +333,8 @@ public final class EchoPredictor {
     /// (`outputArrived: true`) and periodically while predictions are shown (`false`), so timeouts
     /// fire without output.
     public func reconcile(screen: some PredictionScreen, outputArrived: Bool = true) {
-        let t = now()
-        if outputArrived { lastOutputAt = t }
+        let time = now()
+        if outputArrived { lastOutputAt = time }
         if screen.isAlternateScreen {
             discardAll()
             return
@@ -339,74 +342,74 @@ public final class EchoPredictor {
         let timeout = 2 * effectiveRTT + configuration.confirmGrace
 
         abandoned.removeAll { item in
-            let e = item.expectation
-            return screen.text(atX: item.x, y: item.y) == e.text
-                || (acknowledgementsSupported && e.seq <= acknowledgedSeq)
-                || (outputArrived && t > item.abandonedAt)
-                || t - e.createdAt >= timeout
+            let expectation = item.expectation
+            return screen.text(atX: item.x, y: item.y) == expectation.text
+                || (acknowledgementsSupported && expectation.seq <= acknowledgedSeq)
+                || (outputArrived && time > item.abandonedAt)
+                || time - expectation.createdAt >= timeout
         }
 
         guard var run else { return }
         var mismatched = 0
-        for (x, e) in run.cells.sorted(by: { $0.key < $1.key }) {
-            let judged = (acknowledgementsSupported && e.seq <= acknowledgedSeq) || t - e.createdAt >= timeout
-            if screen.text(atX: x, y: run.y) == e.text {
-                if judged || e.text != e.original {
-                    confirm(&run, x, at: t)
+        for (x, expectation) in run.cells.sorted(by: { $0.key < $1.key }) {
+            let judged = (acknowledgementsSupported && expectation.seq <= acknowledgedSeq) || time - expectation.createdAt >= timeout
+            if screen.text(atX: x, y: run.y) == expectation.text {
+                if judged || expectation.text != expectation.original {
+                    confirm(&run, x, at: time)
                 }
             } else if judged {
                 mismatched += 1
             }
         }
-        if mismatched > 0 { return mispredict(mismatched, at: t) }
+        if mismatched > 0 { return mispredict(mismatched, at: time) }
 
         let cursorMatches = screen.cursor.x == run.cursorX && screen.cursor.y == run.y
         // The echo caught up: some output arrived after the last keystroke, every changing cell is
         // shown, and the cursor is where we predicted. Cells that already showed their predicted
         // text are judged now.
         if cursorMatches, lastOutputAt >= run.lastInputAt, !run.cells.values.contains(where: { $0.text != $0.original }) {
-            for (x, e) in run.cells {
-                if screen.text(atX: x, y: run.y) == e.text {
-                    confirm(&run, x, at: t)
+            for (x, expectation) in run.cells {
+                if screen.text(atX: x, y: run.y) == expectation.text {
+                    confirm(&run, x, at: time)
                 } else {
                     mismatched += 1
                 }
             }
-            if mismatched > 0 { return mispredict(mismatched, at: t) }
+            if mismatched > 0 { return mispredict(mismatched, at: time) }
         }
 
-        let cursorJudged = (acknowledgementsSupported && run.cursorSeq <= acknowledgedSeq) || t - run.cursorAt >= timeout
+        let cursorJudged = (acknowledgementsSupported && run.cursorSeq <= acknowledgedSeq) || time - run.cursorAt >= timeout
         if run.cells.isEmpty, cursorMatches {
             self.run = nil
         } else if cursorJudged, !cursorMatches {
-            mispredict(1, at: t)
+            mispredict(1, at: time)
         } else {
             self.run = run
         }
     }
 
-    private func confirm(_ run: inout Run, _ x: Int, at t: Double) {
-        guard let e = run.cells.removeValue(forKey: x) else { return }
+    private func confirm(_ run: inout Run, _ x: Int, at time: Double) {
+        guard let expectation = run.cells.removeValue(forKey: x) else { return }
         stats.confirmed += 1
-        let saved = t - e.createdAt
+        let saved = time - expectation.createdAt
         stats.latencySavedTotal += saved
         stats.latencySavedMax = max(stats.latencySavedMax, saved)
         stats.latencySamples += 1
     }
 
-    private func mispredict(_ cells: Int, at t: Double) {
+    private func mispredict(_ cells: Int, at time: Double) {
         stats.mispredicted += cells
         stats.flushes += 1
         stats.epochs += 1
         run = nil
         abandoned.removeAll()
-        suppressedUntil = t + max(effectiveRTT, configuration.minimumSuppression)
+        suppressedUntil = time + max(effectiveRTT, configuration.minimumSuppression)
     }
 
-    private func abandonRun(at t: Double) {
+    private func abandonRun(at time: Double) {
         guard let run else { return }
-        for (x, e) in run.cells {
-            abandoned.append(Abandoned(x: x, y: run.y, expectation: e, abandonedAt: t))
+        for (x, expectation) in run.cells {
+            abandoned.append(Abandoned(x: x, y: run.y, expectation: expectation, abandonedAt: time))
         }
         stats.abandoned += run.cells.count
         self.run = nil
@@ -424,11 +427,11 @@ public final class EchoPredictor {
     public var overlay: [PredictedCell] {
         let rtt = effectiveRTT
         guard rtt >= configuration.minimumDisplayRTT else { return [] }
-        let t = now()
-        func cell(_ x: Int, _ y: Int, _ e: Expectation) -> PredictedCell {
+        let time = now()
+        func cell(_ x: Int, _ y: Int, _ expectation: Expectation) -> PredictedCell {
             PredictedCell(
-                x: x, y: y, text: e.text,
-                underlined: rtt > configuration.underlineRTT && t - e.createdAt >= configuration.underlineGrace)
+                x: x, y: y, text: expectation.text,
+                underlined: rtt > configuration.underlineRTT && time - expectation.createdAt >= configuration.underlineGrace)
         }
         var cells = abandoned.map { cell($0.x, $0.y, $0.expectation) }
         if let run {

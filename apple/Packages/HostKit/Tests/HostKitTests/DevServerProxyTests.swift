@@ -5,7 +5,7 @@ import WebKit
 import XCTest
 @testable import HostKit
 
-/// S-BR1: the SOCKS proxy and the loopback router route dev server connections to the right
+/// The SOCKS proxy and the loopback router route dev server connections to the right
 /// host's forward, and WebKit keeps the page's origin, cookies and websockets through them.
 nonisolated final class DevServerProxyTests: XCTestCase {
     // MARK: SOCKS
@@ -55,14 +55,14 @@ nonisolated final class DevServerProxyTests: XCTestCase {
     // MARK: Loopback router
 
     func testRouterPicksTheHostByItsCookie() async throws {
-        let a = try await TestDevServer.start(name: "A")
-        let b = try await TestDevServer.start(name: "B")
-        defer { a.stop(); b.stop() }
+        let serverA = try await TestDevServer.start(name: "A")
+        let serverB = try await TestDevServer.start(name: "B")
+        defer { serverA.stop(); serverB.stop() }
         let router = LoopbackRouter()
         defer { router.stop() }
         let port: UInt16 = 48_322
-        try await router.claim(port: port, token: "ta") { _ in a.port }
-        try await router.claim(port: port, token: "tb") { _ in b.port }
+        try await router.claim(port: port, token: "ta") { _ in serverA.port }
+        try await router.claim(port: port, token: "tb") { _ in serverB.port }
         XCTAssertEqual(router.ports, [port])
 
         let viaA = try await RawClient.get(port: port, path: "/whoami", cookie: "x=1; \(LoopbackRouter.routeCookie)=ta")
@@ -132,15 +132,15 @@ nonisolated final class DevServerProxyTests: XCTestCase {
     /// the URL the server printed, with its cookies and a websocket, for `*.localhost` (SOCKS)
     /// and `localhost` (the loopback router).
     @MainActor func testWebKitKeepsTheOriginPerHost() async throws {
-        let a = try await TestDevServer.start(name: "A")
-        let b = try await TestDevServer.start(name: "B")
-        defer { a.stop(); b.stop() }
+        let serverA = try await TestDevServer.start(name: "A")
+        let serverB = try await TestDevServer.start(name: "B")
+        defer { serverA.stop(); serverB.stop() }
         let router = LoopbackRouter()
         defer { router.stop() }
         let port: UInt16 = 48_324
 
         var views: [(String, WKWebView, DevServerSocksProxy)] = []
-        for (name, server) in [("A", a), ("B", b)] {
+        for (name, server) in [("A", serverA), ("B", serverB)] {
             let token = "token-\(name)"
             let proxy = DevServerSocksProxy { _ in server.port }
             try await proxy.start()

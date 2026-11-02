@@ -155,12 +155,12 @@ func sudoPrompt(id: UInt64 = 1, pane: UInt64 = 3, retry: Bool = false) -> Secret
     }
 
     @Test func vaultKeysAreHashedPerHostKindAndPrompt() {
-        let a = AskpassVaultKey(host: "h1", kind: "sudo", prompt: "[sudo] password for ana:")
-        #expect(a == AskpassVaultKey(host: "h1", kind: "sudo", prompt: "[sudo] password for ana:"))
-        #expect(a != AskpassVaultKey(host: "h2", kind: "sudo", prompt: "[sudo] password for ana:"))
-        #expect(a != AskpassVaultKey(host: "h1", kind: "ssh", prompt: "[sudo] password for ana:"))
-        #expect(!a.account.contains("ana"))
-        #expect(a.account.hasPrefix("askpass.") && a.account.count == "askpass.".count + 32)
+        let key = AskpassVaultKey(host: "h1", kind: "sudo", prompt: "[sudo] password for ana:")
+        #expect(key == AskpassVaultKey(host: "h1", kind: "sudo", prompt: "[sudo] password for ana:"))
+        #expect(key != AskpassVaultKey(host: "h2", kind: "sudo", prompt: "[sudo] password for ana:"))
+        #expect(key != AskpassVaultKey(host: "h1", kind: "ssh", prompt: "[sudo] password for ana:"))
+        #expect(!key.account.contains("ana"))
+        #expect(key.account.hasPrefix("askpass.") && key.account.count == "askpass.".count + 32)
     }
 
     @Test func memoryVaultSavesReadsAndForgets() async throws {

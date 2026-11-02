@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// Project colours (Safari and Chrome tab groups): the theme's own ANSI hues, barely softened
-/// toward the foreground (less than the state colours: a project's colour is how it is told
-/// apart, so hues stay distinct), kept legible on the sidebar.
+/// Project colours: the theme's own ANSI hues, barely softened toward the foreground (less than
+/// the state colours: a project's colour is how it is told apart, so hues stay distinct), kept
+/// legible on the sidebar.
 nonisolated public enum ProjectColor {
     public static let names = ["Blue", "Purple", "Cyan", "Green", "Yellow", "Red", "Orange", "Grey"]
 
@@ -15,21 +15,21 @@ nonisolated public enum ProjectColor {
     static let mix = 0.12
 
     public static func color(_ index: Int, theme: TerminalTheme, chrome: ChromePalette) -> ThemeColor {
-        let fg = chrome.foreground
-        let surfaces = [chrome.background, chrome.background.blended(with: fg, ChromePalette.sidebarStrength)]
+        let foreground = chrome.foreground
+        let surfaces = [chrome.background, chrome.background.blended(with: foreground, ChromePalette.sidebarStrength)]
         func hue(_ slot: Int) -> ThemeColor {
             let (ansi, reference) = slots[slot]
-            let ref = ThemeColor(hex: reference)!
-            let raw = theme.ansiRGB(ansi)
-            return raw.chroma < 12 || ChromePalette.hueDistance(raw.hue, ref.hue) > 60 ? ref : raw
+            let referenceHue = ThemeColor(hex: reference)!
+            let themeHue = theme.ansiRGB(ansi)
+            return themeHue.chroma < 12 || ChromePalette.hueDistance(themeHue.hue, referenceHue.hue) > 60 ? referenceHue : themeHue
         }
         let base: ThemeColor = switch ((index % names.count) + names.count) % names.count {
         case 6: hue(5).blended(with: hue(4), 0.5)
-        case 7: chrome.background.blended(with: fg, 0.5)
+        case 7: chrome.background.blended(with: foreground, 0.5)
         case let slot: hue(slot)
         }
-        let mixed = fg.blended(with: base, 1 - mix)
-        return ChromePalette.legible(mixed, on: surfaces, toward: fg, minimum: ChromePalette.minimumGlyphContrast)
+        let mixed = foreground.blended(with: base, 1 - mix)
+        return ChromePalette.legible(mixed, on: surfaces, toward: foreground, minimum: ChromePalette.minimumGlyphContrast)
     }
 }
 

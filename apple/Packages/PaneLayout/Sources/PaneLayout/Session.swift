@@ -93,12 +93,12 @@ public struct Session: Hashable, Sendable, Codable {
     }
 
     public init(from decoder: any Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        tabs = try c.decode([Tab].self, forKey: .tabs)
-        activeTabId = try c.decodeIfPresent(TabId.self, forKey: .activeTabId)
-        floats = try c.decodeIfPresent([FloatWindow].self, forKey: .floats) ?? []
-        lastId = try c.decode(UInt64.self, forKey: .lastId)
-        lastFloat = try c.decodeIfPresent(UInt64.self, forKey: .lastFloat) ?? 0
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        tabs = try container.decode([Tab].self, forKey: .tabs)
+        activeTabId = try container.decodeIfPresent(TabId.self, forKey: .activeTabId)
+        floats = try container.decodeIfPresent([FloatWindow].self, forKey: .floats) ?? []
+        lastId = try container.decode(UInt64.self, forKey: .lastId)
+        lastFloat = try container.decodeIfPresent(UInt64.self, forKey: .lastFloat) ?? 0
     }
 
     /// A session with one tab holding one pane.
@@ -128,7 +128,6 @@ public struct Session: Hashable, Sendable, Codable {
 
     // MARK: Floating windows
 
-    /// The window holding `pane`.
     public func window(containing pane: PaneId) -> FloatWindow? {
         floats.first { $0.panes.contains(pane) }
     }
@@ -159,7 +158,6 @@ public struct Session: Hashable, Sendable, Codable {
 
     private var topZ: UInt32 { floats.last?.z ?? 0 }
 
-    /// Brings window `index` to the front.
     private mutating func raise(_ index: Int) {
         guard index != floats.count - 1 else { return }
         var window = floats.remove(at: index)
@@ -178,7 +176,6 @@ public struct Session: Hashable, Sendable, Codable {
         floats[index].panes += panes
     }
 
-    /// Takes `pane` out of the window holding it.
     private mutating func release(_ pane: PaneId) {
         for index in floats.indices { floats[index].panes.removeAll { $0 == pane } }
     }
@@ -253,13 +250,13 @@ public struct Session: Hashable, Sendable, Codable {
 
     private mutating func split(_ pane: PaneId, _ axis: Axis) {
         guard let tab = tab(containing: pane) else { return }
-        let new = PaneId(nextId())
+        let newPane = PaneId(nextId())
         updateTab(tab.id) {
-            $0.root = $0.root.replacing(pane, with: .split(axis: axis, ratio: 0.5, first: .leaf(pane), second: .leaf(new)))
-            $0.focused = new
+            $0.root = $0.root.replacing(pane, with: .split(axis: axis, ratio: 0.5, first: .leaf(pane), second: .leaf(newPane)))
+            $0.focused = newPane
             $0.zoomed = nil
         }
-        adopt(pane, [new])
+        adopt(pane, [newPane])
         activeTabId = tab.id
     }
 
@@ -319,12 +316,12 @@ public struct Session: Hashable, Sendable, Codable {
         let order = layer.panes
         let target = frames
             .filter { $0.key != tab.focused && gap($0.value) > -epsilon && overlap($0.value) > epsilon }
-            .min { a, b in
-                let (gapA, gapB) = (gap(a.value), gap(b.value))
-                if abs(gapA - gapB) > epsilon { return gapA < gapB }
-                let (overlapA, overlapB) = (overlap(a.value), overlap(b.value))
-                if abs(overlapA - overlapB) > epsilon { return overlapA > overlapB }
-                return order.firstIndex(of: a.key)! < order.firstIndex(of: b.key)!
+            .min { lhs, rhs in
+                let (gapL, gapR) = (gap(lhs.value), gap(rhs.value))
+                if abs(gapL - gapR) > epsilon { return gapL < gapR }
+                let (overlapL, overlapR) = (overlap(lhs.value), overlap(rhs.value))
+                if abs(overlapL - overlapR) > epsilon { return overlapL > overlapR }
+                return order.firstIndex(of: lhs.key)! < order.firstIndex(of: rhs.key)!
             }?.key
         guard let target else { return }
         updateTab(tab.id) {
@@ -379,9 +376,9 @@ public struct Session: Hashable, Sendable, Codable {
 
     private mutating func movePaneToNewTab(_ pane: PaneId) {
         guard let tab = tab(containing: pane), let index = tabs.firstIndex(of: tab), detach(pane, from: tab.id) else { return }
-        let new = Tab(id: TabId(nextId()), root: .leaf(pane), focused: pane)
-        tabs.insert(new, at: index + 1)
-        activeTabId = new.id
+        let newTab = Tab(id: TabId(nextId()), root: .leaf(pane), focused: pane)
+        tabs.insert(newTab, at: index + 1)
+        activeTabId = newTab.id
         release(pane)
         tidyFloats()
     }
@@ -413,16 +410,16 @@ public struct Session: Hashable, Sendable, Codable {
             }
             // Torn out of a shared window: its own, just below and right of the old one.
             guard windows(in: tab.id).count < Self.maxFloatsPerTab else { return }
-            var from = floats[index].frame
-            from.x += 0.04
-            from.y += 0.04
+            var offsetFrame = floats[index].frame
+            offsetFrame.x += 0.04
+            offsetFrame.y += 0.04
             release(pane)
             _ = detach(pane, from: tab.id)
             updateTab(tab.id) {
                 $0.root = .split(axis: .horizontal, ratio: 0.5, first: $0.root, second: .leaf(pane))
                 $0.focused = pane
             }
-            openWindow([pane], frame: frame ?? from.clamped ?? .standard)
+            openWindow([pane], frame: frame ?? offsetFrame.clamped ?? .standard)
         } else {
             guard let tiled = tiledRoot(of: tab), tiled.panes.count > 1,
                   windows(in: tab.id).count < Self.maxFloatsPerTab else { return }
@@ -434,17 +431,17 @@ public struct Session: Hashable, Sendable, Codable {
 
     private mutating func newFloat(beside anchor: PaneId, frame: FloatFrame?, focus: Bool) {
         guard let tab = tab(containing: anchor), windows(in: tab.id).count < Self.maxFloatsPerTab else { return }
-        let new = PaneId(nextId())
+        let newPane = PaneId(nextId())
         let spot = frame ?? freeFrame(in: tab)
         updateTab(tab.id) {
-            $0.root = .split(axis: .horizontal, ratio: 0.5, first: $0.root, second: .leaf(new))
+            $0.root = .split(axis: .horizontal, ratio: 0.5, first: $0.root, second: .leaf(newPane))
             if focus {
-                $0.focused = new
+                $0.focused = newPane
                 $0.zoomed = nil
             }
         }
         if focus { activeTabId = tab.id }
-        openWindow([new], frame: spot)
+        openWindow([newPane], frame: spot)
     }
 
     private mutating func setFloat(_ pane: PaneId, frame: FloatFrame?, minimized: Bool?, pinned: Bool?) {

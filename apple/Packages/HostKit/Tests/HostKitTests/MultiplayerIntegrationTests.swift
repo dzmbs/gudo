@@ -24,9 +24,9 @@ import GudoCore
         let owner = makeModel()
         let ownerHost = try await owner.pair(try PairingTicket(try await daemon.ticket()), name: "local")
         let ownerConnection = try #require(owner.connection(ownerHost) as? DaemonConnection)
-        let mp = ownerConnection.multiplayer
-        try await eventually("owner identity") { mp.me != nil }
-        #expect(mp.isOwner && !mp.isGuest)
+        let ownerSession = ownerConnection.multiplayer
+        try await eventually("owner identity") { ownerSession.me != nil }
+        #expect(ownerSession.isOwner && !ownerSession.isGuest)
         let pane = try #require(ownerConnection.layout.session.activeTab?.focused)
         let ownerBackend = try ownerConnection.makeBackend(for: pane)
         let ownerSink = EventSink()
@@ -38,7 +38,7 @@ import GudoCore
         draft.name = "Vic"
         draft.scope = .session
         draft.uses = .five
-        let viewerInvite = try await mp.createInvite(draft.options(
+        let viewerInvite = try await ownerSession.createInvite(draft.options(
             inviter: "Alex", session: ownerConnection.layout.sessionId, tab: nil, pane: nil))
         #expect(viewerInvite.link.hasPrefix("gudo://join/"))
         #expect(viewerInvite.qrPayload == viewerInvite.link.uppercased())
@@ -52,10 +52,10 @@ import GudoCore
         #expect(viewer.record(viewerHost)?.name == "Alex’s host")
         let viewerConnection = try #require(viewer.connection(viewerHost) as? DaemonConnection)
         try await eventually("viewer identity") { viewerConnection.multiplayer.me != nil }
-        let vmp = viewerConnection.multiplayer
-        #expect(vmp.isGuest && vmp.isViewOnly && vmp.roles == [.viewer])
-        #expect(vmp.inputGate.all)
-        try await eventually("owner sees the viewer") { mp.others.contains { $0.name == "Vic" } }
+        let viewerSession = viewerConnection.multiplayer
+        #expect(viewerSession.isGuest && viewerSession.isViewOnly && viewerSession.roles == [.viewer])
+        #expect(viewerSession.inputGate.all)
+        try await eventually("owner sees the viewer") { ownerSession.others.contains { $0.name == "Vic" } }
 
         // The viewer sees output…
         let viewerBackend = try viewerConnection.makeBackend(for: pane)
@@ -67,7 +67,7 @@ import GudoCore
         }
         // …its keys never leave the device (gated, with a nudge)…
         Array("echo viewer-typed\r".utf8).withUnsafeBytes { viewerBackend.write($0) }
-        try await eventually("view-only nudge") { if case .viewOnly = vmp.notice?.kind { true } else { false } }
+        try await eventually("view-only nudge") { if case .viewOnly = viewerSession.notice?.kind { true } else { false } }
         // …and the daemon refuses them too when a client sends them anyway (same device key).
         let raw = ClientEventCollector()
         let viewerKey = try DeviceIdentity.load(from: viewer.secrets)
@@ -92,53 +92,53 @@ import GudoCore
         draft.roles = [.driver]
         draft.uses = .once
         draft.scope = .host
-        let driverInvite = try await mp.createInvite(draft.options(inviter: "Alex", session: nil, tab: nil, pane: nil))
+        let driverInvite = try await ownerSession.createInvite(draft.options(inviter: "Alex", session: nil, tab: nil, pane: nil))
         let driver = makeModel()
         let driverHost = try await driver.join(invite: driverInvite.link, name: "Alex (shared)")
         let driverConnection = try #require(driver.connection(driverHost) as? DaemonConnection)
-        let dmp = driverConnection.multiplayer
-        try await eventually("driver identity") { dmp.me != nil }
-        #expect(dmp.canDrive && !dmp.isOwner)
+        let driverSession = driverConnection.multiplayer
+        try await eventually("driver identity") { driverSession.me != nil }
+        #expect(driverSession.canDrive && !driverSession.isOwner)
         let driverBackend = try driverConnection.makeBackend(for: pane)
         let driverSink = EventSink()
         driverBackend.start(events: driverSink.handler)
 
         // The owner holds the lease by typing.
         Array("echo lease-$((1+1))\r".utf8).withUnsafeBytes { ownerBackend.write($0) }
-        try await eventually("owner holds the lease", timeout: .seconds(10)) { dmp.holder(of: pane.rawValue) == mp.myPrincipal }
-        #expect(dmp.isDrivenByOther(pane.rawValue))
-        #expect(dmp.inputGate.panes.contains(pane.rawValue))
-        let outcome = await dmp.takeControl(pane.rawValue)
+        try await eventually("owner holds the lease", timeout: .seconds(10)) { driverSession.holder(of: pane.rawValue) == ownerSession.myPrincipal }
+        #expect(driverSession.isDrivenByOther(pane.rawValue))
+        #expect(driverSession.inputGate.panes.contains(pane.rawValue))
+        let outcome = await driverSession.takeControl(pane.rawValue)
         guard case .pending = outcome else {
             Issue.record("expected a pending request, got \(String(describing: outcome))")
             return
         }
-        #expect(dmp.pendingTakes[pane.rawValue] != nil)
-        try await eventually("owner is asked", timeout: .seconds(5)) { mp.leaseRequests.contains { $0.name == "Dee" } }
-        let request = try #require(mp.leaseRequests.first)
-        await mp.answer(request, give: true)
-        try await eventually("driver drives", timeout: .seconds(10)) { dmp.isDriving(pane.rawValue) }
-        #expect(dmp.inputGate == .open)
-        #expect(dmp.notice?.kind == .controlGranted(pane: pane.rawValue))
-        try await eventually("owner's gate closes", timeout: .seconds(5)) { mp.inputGate.panes.contains(pane.rawValue) }
+        #expect(driverSession.pendingTakes[pane.rawValue] != nil)
+        try await eventually("owner is asked", timeout: .seconds(5)) { ownerSession.leaseRequests.contains { $0.name == "Dee" } }
+        let request = try #require(ownerSession.leaseRequests.first)
+        await ownerSession.answer(request, give: true)
+        try await eventually("driver drives", timeout: .seconds(10)) { driverSession.isDriving(pane.rawValue) }
+        #expect(driverSession.inputGate == .open)
+        #expect(driverSession.notice?.kind == .controlGranted(pane: pane.rawValue))
+        try await eventually("owner's gate closes", timeout: .seconds(5)) { ownerSession.inputGate.panes.contains(pane.rawValue) }
         Array("echo driver-$((3*3))\r".utf8).withUnsafeBytes { driverBackend.write($0) }
         try await eventually("driver's keys arrive", timeout: .seconds(10)) { ownerConnection.paneText(pane)?.contains("driver-9") == true }
 
         // Owner: grants list both invites; revoke the driver's grant.
-        await mp.refreshGrants()
-        #expect(mp.grants.count >= 2)
-        let driverGrant = try #require(mp.grants.first { $0.grant.label == "Dee" })
+        await ownerSession.refreshGrants()
+        #expect(ownerSession.grants.count >= 2)
+        let driverGrant = try #require(ownerSession.grants.first { $0.grant.label == "Dee" })
         #expect(driverGrant.bound.count == 1 && !driverGrant.revoked)
-        let result = await mp.revoke(.grant(grantId: driverGrant.grant.grantId))
+        let result = await ownerSession.revoke(.grant(grantId: driverGrant.grant.grantId))
         // (`disconnected` may be 0: the daemon's 500 ms validity tick can close it first.)
         #expect(result?.grants.contains(driverGrant.grant.grantId) == true)
-        try await eventually("driver is told", timeout: .seconds(10)) { dmp.isRevoked || !driverConnection.status.isLive }
-        try await eventually("driver gone from presence", timeout: .seconds(10)) { !mp.others.contains { $0.name == "Dee" } }
-        #expect(mp.grants.first { $0.grant.grantId == driverGrant.grant.grantId }?.revoked == true)
+        try await eventually("driver is told", timeout: .seconds(10)) { driverSession.isRevoked || !driverConnection.status.isLive }
+        try await eventually("driver gone from presence", timeout: .seconds(10)) { !ownerSession.others.contains { $0.name == "Dee" } }
+        #expect(ownerSession.grants.first { $0.grant.grantId == driverGrant.grant.grantId }?.revoked == true)
 
         // The audit log: both joins, the lease moving, the revocation; the chain verifies.
-        await mp.loadAudit()
-        let audit = try #require(mp.auditPage)
+        await ownerSession.loadAudit()
+        let audit = try #require(ownerSession.auditPage)
         #expect(audit.chainOk)
         let kinds = Set(audit.records.map(\.kind))
         #expect(kinds.isSuperset(of: [.join, .grantRedeemed, .lease, .revoked]))
@@ -156,46 +156,46 @@ extension MultiplayerIntegrationTests {
         let owner = makeModel()
         let ownerHost = try await owner.pair(try PairingTicket(try await daemon.ticket()), name: "local")
         let ownerConnection = try #require(owner.connection(ownerHost) as? DaemonConnection)
-        let mp = ownerConnection.multiplayer
-        try await eventually("owner identity") { mp.me != nil }
+        let ownerSession = ownerConnection.multiplayer
+        try await eventually("owner identity") { ownerSession.me != nil }
 
         var draft = InviteDraft()
         draft.knock = true
         draft.scope = .host
         draft.uses = .unlimited
-        let invite = try await mp.createInvite(draft.options(inviter: "Alex", session: nil, tab: nil, pane: nil))
+        let invite = try await ownerSession.createInvite(draft.options(inviter: "Alex", session: nil, tab: nil, pane: nil))
         let card = try inspectInvite(invite: invite.link)
         #expect(card.knock && card.sinceJoin)
 
         let guest = makeModel()
         let asked = Mutex(false)
         let joining = Task { try await guest.knock(invite: invite.link, name: "Kim Lee") { asked.withLock { $0 = true } } }
-        try await eventually("owner sees the knock", timeout: .seconds(10)) { mp.knocks.contains { $0.name == "Kim Lee" } }
+        try await eventually("owner sees the knock", timeout: .seconds(10)) { ownerSession.knocks.contains { $0.name == "Kim Lee" } }
         #expect(asked.withLock { $0 })
-        let knock = try #require(mp.knocks.first)
-        await mp.admit(knock, roles: [.viewer, .driver], sinceJoin: true)
+        let knock = try #require(ownerSession.knocks.first)
+        await ownerSession.admit(knock, roles: [.viewer, .driver], sinceJoin: true)
         let guestHost = try await joining.value
         let guestConnection = try #require(guest.connection(guestHost) as? DaemonConnection)
-        let gmp = guestConnection.multiplayer
-        try await eventually("guest identity") { gmp.me != nil }
-        #expect(gmp.canDrive && !gmp.isOwner)
-        #expect(gmp.me?.name == "Kim Lee")
-        try await eventually("knock cleared") { mp.knocks.isEmpty }
+        let guestSession = guestConnection.multiplayer
+        try await eventually("guest identity") { guestSession.me != nil }
+        #expect(guestSession.canDrive && !guestSession.isOwner)
+        #expect(guestSession.me?.name == "Kim Lee")
+        try await eventually("knock cleared") { ownerSession.knocks.isEmpty }
 
         // Turned away: the knock throws, nothing is saved.
         let other = makeModel()
         let refused = Task { try await other.knock(invite: invite.link, name: "Lou") }
-        try await eventually("lou knocks", timeout: .seconds(10)) { mp.knocks.contains { $0.name == "Lou" } }
-        await mp.turnAway(try #require(mp.knocks.first { $0.name == "Lou" }))
+        try await eventually("lou knocks", timeout: .seconds(10)) { ownerSession.knocks.contains { $0.name == "Lou" } }
+        await ownerSession.turnAway(try #require(ownerSession.knocks.first { $0.name == "Lou" }))
         await #expect(throws: PairingError.turnedAway) { try await refused.value }
         #expect(other.records.isEmpty)
 
         // Session rules: set by the owner, heard by the guest.
         let session = try #require(ownerConnection.layout.sessionId)
         let rules = ApprovalPolicy(mode: .twoPerson, maxRisk: .edits)
-        await mp.setApprovalPolicy(rules, session: session)
-        try await eventually("guest hears the rules", timeout: .seconds(10)) { gmp.approvalPolicy == rules }
-        #expect(gmp.approvalBlock(requestId: 1, risk: .any) != nil)
+        await ownerSession.setApprovalPolicy(rules, session: session)
+        try await eventually("guest hears the rules", timeout: .seconds(10)) { guestSession.approvalPolicy == rules }
+        #expect(guestSession.approvalBlock(requestId: 1, risk: .any) != nil)
     }
 }
 
@@ -208,19 +208,19 @@ extension MultiplayerIntegrationTests {
         let owner = makeModel()
         let ownerHost = try await owner.pair(try PairingTicket(try await daemon.ticket()), name: "local")
         let ownerConnection = try #require(owner.connection(ownerHost) as? DaemonConnection)
-        let mp = ownerConnection.multiplayer
-        try await eventually("owner identity") { mp.me != nil }
+        let ownerSession = ownerConnection.multiplayer
+        try await eventually("owner identity") { ownerSession.me != nil }
 
         var draft = InviteDraft()
         draft.name = "Gus"
         draft.scope = .session
         draft.uses = .five
-        let invite = try await mp.createInvite(draft.options(inviter: "Alex", session: ownerConnection.layout.sessionId, tab: nil, pane: nil))
+        let invite = try await ownerSession.createInvite(draft.options(inviter: "Alex", session: ownerConnection.layout.sessionId, tab: nil, pane: nil))
         let guest = makeModel()
         let guestHost = try await guest.join(invite: invite.link)
         let guestConnection = try #require(guest.connection(guestHost) as? DaemonConnection)
-        let gmp = guestConnection.multiplayer
-        try await eventually("guest follows the owner", timeout: .seconds(10)) { gmp.following != nil && gmp.following == mp.myPrincipal }
+        let guestSession = guestConnection.multiplayer
+        try await eventually("guest follows the owner", timeout: .seconds(10)) { guestSession.following != nil && guestSession.following == ownerSession.myPrincipal }
 
         let second = makeModel()
         let secondHost = try await second.pair(try PairingTicket(try await daemon.ticket()), name: "local")
@@ -231,7 +231,7 @@ extension MultiplayerIntegrationTests {
         #expect(try inspectInvite(invite: link).label == "Gus")
         let person = try #require(smp.guests.first)
         #expect(await smp.remove(person) != nil)
-        try await eventually("guest removed", timeout: .seconds(10)) { gmp.isRevoked || !guestConnection.status.isLive }
+        try await eventually("guest removed", timeout: .seconds(10)) { guestSession.isRevoked || !guestConnection.status.isLive }
         try await eventually("summary: the link only", timeout: .seconds(10)) { smp.sharingSummary == "Shared · 1 link" }
     }
 }

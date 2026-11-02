@@ -69,25 +69,25 @@ private func twoTabs() -> LocalLayoutStore {
 
     @Test func windowsSelectTabsIndependently() {
         let base = twoTabs()
-        let a = WindowLayoutStore(base: base)
-        let b = WindowLayoutStore(base: base)
-        #expect(a.session.activeTabId == TabId(2))
-        b.select(tab: TabId(4))
-        #expect(b.session.activeTabId == TabId(4))
-        #expect(a.session.activeTabId == TabId(2))
+        let windowA = WindowLayoutStore(base: base)
+        let windowB = WindowLayoutStore(base: base)
+        #expect(windowA.session.activeTabId == TabId(2))
+        windowB.select(tab: TabId(4))
+        #expect(windowB.session.activeTabId == TabId(4))
+        #expect(windowA.session.activeTabId == TabId(2))
         // The base heard the last focus (a daemon keeps it for other devices).
         #expect(base.session.activeTabId == TabId(4))
     }
 
     @Test func focusInATabIsPerWindow() {
         let base = twoTabs()
-        let a = WindowLayoutStore(base: base)
-        let b = WindowLayoutStore(base: base)
-        a.apply(.focus(PaneId(5)))
-        #expect(a.session.activeTab?.focused == PaneId(5))
-        b.apply(.focus(PaneId(1)))
-        #expect(b.session.activeTab?.focused == PaneId(1))
-        #expect(a.session.activeTab?.focused == PaneId(5))
+        let windowA = WindowLayoutStore(base: base)
+        let windowB = WindowLayoutStore(base: base)
+        windowA.apply(.focus(PaneId(5)))
+        #expect(windowA.session.activeTab?.focused == PaneId(5))
+        windowB.apply(.focus(PaneId(1)))
+        #expect(windowB.session.activeTab?.focused == PaneId(1))
+        #expect(windowA.session.activeTab?.focused == PaneId(5))
     }
 
     @Test func aWindowOpensOnTheTabItAsksFor() {
@@ -100,26 +100,26 @@ private func twoTabs() -> LocalLayoutStore {
 
     @Test func aNewTabIsSelectedOnlyInTheWindowThatOpenedIt() {
         let base = twoTabs()
-        let a = WindowLayoutStore(base: base)
-        let b = WindowLayoutStore(base: base)
-        b.select(tab: TabId(4))
-        a.apply(.newTab)
+        let windowA = WindowLayoutStore(base: base)
+        let windowB = WindowLayoutStore(base: base)
+        windowB.select(tab: TabId(4))
+        windowA.apply(.newTab)
         let new = try! #require(base.session.tabs.map(\.id).first { ![TabId(2), TabId(4)].contains($0) })
-        #expect(a.session.activeTabId == new)
-        #expect(b.session.activeTabId == TabId(4))
-        // After a's tab, not after b's (the base was aligned with a first).
+        #expect(windowA.session.activeTabId == new)
+        #expect(windowB.session.activeTabId == TabId(4))
+        // After windowA's tab, not windowB's (the base was aligned with windowA first).
         #expect(base.session.tabs.map(\.id) == [TabId(2), new, TabId(4)])
     }
 
     @Test func aSplitFocusesTheNewPaneInThatWindow() {
         let base = twoTabs()
-        let a = WindowLayoutStore(base: base)
-        let b = WindowLayoutStore(base: base)
-        b.apply(.focus(PaneId(1)))
-        a.apply(.split(PaneId(5), .horizontal))
+        let windowA = WindowLayoutStore(base: base)
+        let windowB = WindowLayoutStore(base: base)
+        windowB.apply(.focus(PaneId(1)))
+        windowA.apply(.split(PaneId(5), .horizontal))
         let new = try! #require(base.session.panes.subtracting([PaneId(1), PaneId(3), PaneId(5)]).first)
-        #expect(a.session.activeTab?.focused == new)
-        #expect(b.session.activeTab?.focused == PaneId(1))
+        #expect(windowA.session.activeTab?.focused == new)
+        #expect(windowB.session.activeTab?.focused == PaneId(1))
     }
 
     @Test func remoteOpsAreAdoptedWhenTheirAnswerArrives() async {
@@ -138,56 +138,56 @@ private func twoTabs() -> LocalLayoutStore {
 
     @Test func aTabClosedElsewhereHandsOverToItsNeighbour() async {
         let base = twoTabs()
-        let a = WindowLayoutStore(base: base)
-        let b = WindowLayoutStore(base: base)
-        a.select(tab: TabId(2))
-        b.apply(.closeTab(TabId(2)))
-        #expect(a.session.activeTabId == TabId(4))
+        let windowA = WindowLayoutStore(base: base)
+        let windowB = WindowLayoutStore(base: base)
+        windowA.select(tab: TabId(2))
+        windowB.apply(.closeTab(TabId(2)))
+        #expect(windowA.session.activeTabId == TabId(4))
         await settle()
-        #expect(a.activeTabId == TabId(4))
+        #expect(windowA.activeTabId == TabId(4))
     }
 
     @Test func aFocusedPaneClosedElsewhereFallsBackToTheTabsFocus() async {
         let base = twoTabs()
-        let a = WindowLayoutStore(base: base)
-        let b = WindowLayoutStore(base: base)
-        a.apply(.focus(PaneId(5)))
-        b.apply(.close(PaneId(5)))
-        #expect(a.session.activeTab?.focused == PaneId(1))
+        let windowA = WindowLayoutStore(base: base)
+        let windowB = WindowLayoutStore(base: base)
+        windowA.apply(.focus(PaneId(5)))
+        windowB.apply(.close(PaneId(5)))
+        #expect(windowA.session.activeTab?.focused == PaneId(1))
         await settle()
-        #expect(a.focusedPanes[TabId(2)] == nil)
+        #expect(windowA.focusedPanes[TabId(2)] == nil)
     }
 
     @Test func directionalFocusUsesTheWindowsOwnFocus() {
         let base = twoTabs()
-        let a = WindowLayoutStore(base: base)
-        let b = WindowLayoutStore(base: base)
-        a.apply(.focus(PaneId(1)))
-        b.apply(.focus(PaneId(5)))
-        a.apply(.focusDirection(.down))
-        #expect(a.session.activeTab?.focused == PaneId(5))
-        b.apply(.focusDirection(.up))
-        #expect(b.session.activeTab?.focused == PaneId(1))
+        let windowA = WindowLayoutStore(base: base)
+        let windowB = WindowLayoutStore(base: base)
+        windowA.apply(.focus(PaneId(1)))
+        windowB.apply(.focus(PaneId(5)))
+        windowA.apply(.focusDirection(.down))
+        #expect(windowA.session.activeTab?.focused == PaneId(5))
+        windowB.apply(.focusDirection(.up))
+        #expect(windowB.session.activeTab?.focused == PaneId(1))
     }
 
     @Test func zoomActsOnTheWindowsPane() {
         let base = twoTabs()
-        let a = WindowLayoutStore(base: base)
-        let b = WindowLayoutStore(base: base)
-        a.apply(.focus(PaneId(5)))
-        b.select(tab: TabId(4))
-        a.apply(.toggleZoom)
+        let windowA = WindowLayoutStore(base: base)
+        let windowB = WindowLayoutStore(base: base)
+        windowA.apply(.focus(PaneId(5)))
+        windowB.select(tab: TabId(4))
+        windowA.apply(.toggleZoom)
         #expect(base.session.tabs.first?.zoomed == PaneId(5))
-        #expect(a.session.activeTab?.zoomed == PaneId(5))
-        #expect(a.view.visible == [PaneId(5)])
-        #expect(b.session.activeTabId == TabId(4))
+        #expect(windowA.session.activeTab?.zoomed == PaneId(5))
+        #expect(windowA.view.visible == [PaneId(5)])
+        #expect(windowB.session.activeTabId == TabId(4))
     }
 
     @Test func viewNamesTheWindowsVisiblePanes() {
         let base = twoTabs()
-        let a = WindowLayoutStore(base: base)
-        a.apply(.focus(PaneId(5)))
-        #expect(a.view.focused == PaneId(5))
-        #expect(Set(a.view.visible) == [PaneId(1), PaneId(5)])
+        let windowA = WindowLayoutStore(base: base)
+        windowA.apply(.focus(PaneId(5)))
+        #expect(windowA.view.focused == PaneId(5))
+        #expect(Set(windowA.view.visible) == [PaneId(1), PaneId(5)])
     }
 }

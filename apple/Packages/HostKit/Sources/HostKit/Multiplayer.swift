@@ -39,6 +39,7 @@ nonisolated public protocol MultiplayerClientAPI: AnyObject, Sendable {
     func approvalStatuses() -> [ApprovalStatus]
     func setApprovalPolicy(sessionId: UInt64, policy: ApprovalPolicy) async throws -> ApprovalPolicy
     func claimApproval(requestId: UInt64, claim: Bool) async throws -> ApprovalStatus
+    // Live presence: drafts, viewports, following.
     func hasLivePresence() -> Bool
     func setDraft(paneId: UInt64, source: DraftSource, text: String, caret: UInt32)
     func clearDraft()
@@ -194,7 +195,6 @@ public final class MultiplayerSession {
     public private(set) var me: JoinInfo?
     /// Everyone connected, one entry per device, this device included.
     public private(set) var participants: [GudoCore.Participant] = []
-    /// Control leases by pane.
     public private(set) var leases: [UInt64: Lease] = [:]
     /// Someone asked for a lease this principal holds (the holder's accept/keep prompt).
     public private(set) var leaseRequests: [LeaseRequest] = []
@@ -291,15 +291,12 @@ public final class MultiplayerSession {
             case viewOnly(pane: UInt64)
             /// A request was refused by policy.
             case forbidden(what: String, reason: String)
-            /// A lease came to this device.
             case controlGranted(pane: UInt64)
-            /// The holder kept it.
             case controlKept(pane: UInt64, holder: String)
             /// This device lost the lease to someone.
             case controlLost(pane: UInt64, to: String)
             /// Another device decided first.
             case alreadyDecided(by: String)
-            /// Revoked: the connection closes.
             case revoked
             /// Another device paired with this host (the new device's key).
             case devicePaired(String)
@@ -308,7 +305,6 @@ public final class MultiplayerSession {
             /// People came or went (by person, not device).
             case arrived([String])
             case left([String])
-            /// A request failed.
             case failed(String)
             /// This device's own navigation ended following someone (principal).
             case stoppedFollowing(String)
@@ -316,11 +312,10 @@ public final class MultiplayerSession {
         public let id = UUID()
         public var kind: Kind
 
-        /// The sentence to show.
         public var message: String
         public var isFailure: Bool
 
-        public static func == (a: Notice, b: Notice) -> Bool { a.id == b.id }
+        public static func == (lhs: Notice, rhs: Notice) -> Bool { lhs.id == rhs.id }
     }
 
     /// The panes input is gated on (`PaneRouter`), recomputed on every role or lease change.
@@ -337,7 +332,6 @@ public final class MultiplayerSession {
 
     // MARK: Wiring
 
-    /// Starts following a client's multiplayer pushes (called once per dial).
     func attach(_ client: any MultiplayerClientAPI) {
         self.client = client
         pump?.cancel()
@@ -582,7 +576,6 @@ public final class MultiplayerSession {
         otherPeers.filter { $0.typing == pane }
     }
 
-    /// Others looking at a pane.
     public func viewers(of pane: UInt64) -> [Peer] {
         otherPeers.filter { $0.focus == pane && $0.state != .away }
     }
@@ -593,10 +586,8 @@ public final class MultiplayerSession {
         return theirs.filter { $0.state != .away }.max { $0.rev < $1.rev } ?? theirs.max { $0.rev < $1.rev }
     }
 
-    /// The device this one follows now.
     public var leaderPeer: Peer? { following.flatMap(leader) }
 
-    /// People following this person.
     public var followers: [Peer] {
         guard let me = myPrincipal else { return [] }
         return otherPeers.filter { $0.following == me }
@@ -635,8 +626,8 @@ public final class MultiplayerSession {
         setFollowing(leader)
     }
 
-    /// Own navigation (a scroll, a tab or pane change, typing) ends following, as in Zed and
-    /// Figma; the notice offers to follow again.
+    /// Own navigation (a scroll, a tab or pane change, typing) ends following; the notice offers
+    /// to follow again.
     public func breakFollow() {
         guard let leader = following else { return }
         follow(nil)
@@ -867,19 +858,21 @@ public final class MultiplayerSession {
     /// device, then the rest by pairing time, newest first; removed ones last.
     public var ownerDevices: [DeviceInfo] {
         let fresh = freshPairings, mine = me?.actor.device
-        return devices.filter { $0.kind == .owner }.sorted { a, b in
-            func rank(_ d: DeviceInfo) -> Int { d.revoked ? 3 : fresh[d.device] != nil ? 0 : d.device == mine ? 1 : 2 }
-            let (ra, rb) = (rank(a), rank(b))
-            return ra != rb ? ra < rb : a.firstSeenMs > b.firstSeenMs
+        return devices.filter { $0.kind == .owner }.sorted { lhs, rhs in
+            func rank(_ device: DeviceInfo) -> Int {
+                device.revoked ? 3 : fresh[device.device] != nil ? 0 : device.device == mine ? 1 : 2
+            }
+            let (lhsRank, rhsRank) = (rank(lhs), rank(rhs))
+            return lhsRank != rhsRank ? lhsRank < rhsRank : lhs.firstSeenMs > rhs.firstSeenMs
         }
     }
 
     /// Guest devices: connected first, then newest first; removed ones last.
     public var guestDevices: [DeviceInfo] {
-        devices.filter { $0.kind == .guest }.sorted { a, b in
-            func rank(_ d: DeviceInfo) -> Int { d.revoked ? 2 : d.connected > 0 ? 0 : 1 }
-            let (ra, rb) = (rank(a), rank(b))
-            return ra != rb ? ra < rb : a.firstSeenMs > b.firstSeenMs
+        devices.filter { $0.kind == .guest }.sorted { lhs, rhs in
+            func rank(_ device: DeviceInfo) -> Int { device.revoked ? 2 : device.connected > 0 ? 0 : 1 }
+            let (lhsRank, rhsRank) = (rank(lhs), rank(rhs))
+            return lhsRank != rhsRank ? lhsRank < rhsRank : lhs.firstSeenMs > rhs.firstSeenMs
         }
     }
 
@@ -939,7 +932,6 @@ public final class MultiplayerSession {
         }
     }
 
-    /// Turns someone away.
     public func turnAway(_ knock: Knock) async {
         guard let client else { return }
         do {
@@ -1019,13 +1011,13 @@ public final class MultiplayerSession {
         postThrottled(.viewOnly(pane: pane), message)
     }
 
-    /// "Kim joined", "Kim and Rex left": once per person, not per device, and not for the
+    /// "Kim joined", "Kim and Lee left": once per person, not per device, and not for the
     /// list that arrives on (re)connecting.
     private func announceArrivals(from old: [GudoCore.Participant], to new: [GudoCore.Participant]) {
         defer { hasRoster = true }
         guard hasRoster, let me = myPrincipal else { return }
         func people(_ list: [GudoCore.Participant]) -> [String: String] {
-            Dictionary(list.filter { $0.actor.principal != me }.map { ($0.actor.principal, $0.name) }, uniquingKeysWith: { a, _ in a })
+            Dictionary(list.filter { $0.actor.principal != me }.map { ($0.actor.principal, $0.name) }, uniquingKeysWith: { first, _ in first })
         }
         let before = people(old), after = people(new)
         let came = after.filter { before[$0.key] == nil }.map(\.value).sorted()
@@ -1160,7 +1152,6 @@ nonisolated private extension PresenceState {
     }
 }
 
-/// Forwards multiplayer pushes from the runtime thread.
 nonisolated final class MultiplayerRelay: MultiplayerListener {
     private let handler: @Sendable (MultiplayerEvent) -> Void
 
@@ -1192,7 +1183,6 @@ public final class WorkspaceEventHub {
 
     public init() {}
 
-    /// Adds an observer; keep the token to remove it.
     @discardableResult
     public func observe(_ handler: @escaping (WorkspaceEvent) -> Void) -> UUID {
         let token = UUID()

@@ -9,7 +9,6 @@ public protocol LayoutStore: AnyObject, Observable {
     func apply(_ op: LayoutOp)
 }
 
-/// In-memory store: ops apply locally and immediately.
 @MainActor
 @Observable
 public final class LocalLayoutStore: LayoutStore {

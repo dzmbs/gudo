@@ -16,87 +16,87 @@ enum Sprite: Hashable, CaseIterable {
 enum SpriteFace {
     /// Whether `cp` is drawn here instead of taken from a font. Like Ghostty, the sprite face has
     /// priority over every font face for these codepoints.
-    static func covers(_ cp: UInt32) -> Bool {
-        switch cp {
+    static func covers(_ codepoint: UInt32) -> Bool {
+        switch codepoint {
         case 0x2500...0x259F, 0x2800...0x28FF, 0xF5D0...0xF60D,
              0x25E2...0x25E5, 0x25F8...0x25FA, 0x25FF:
             true
-        case 0xE0B0...0xE0D4: Powerline.codepoints.contains(cp)
-        case 0x1FB00...0x1FBFF: LegacyComputing.covers(cp)
-        case 0x1CC00...0x1CEBF: LegacyComputingSupplement.covers(cp)
+        case 0xE0B0...0xE0D4: Powerline.codepoints.contains(codepoint)
+        case 0x1FB00...0x1FBFF: LegacyComputing.covers(codepoint)
+        case 0x1CC00...0x1CEBF: LegacyComputingSupplement.covers(codepoint)
         default: false
         }
     }
 
     /// Draws a codepoint into a fresh canvas `span` cells wide. Nil when the glyph is empty.
-    static func render(_ cp: UInt32, metrics m: CellMetrics, span: Int) -> SpriteCanvas? {
-        guard covers(cp) else { return nil }
-        let width = m.cellWidth * max(1, span), height = m.cellHeight
+    static func render(_ codepoint: UInt32, metrics: CellMetrics, span: Int) -> SpriteCanvas? {
+        guard covers(codepoint) else { return nil }
+        let width = metrics.cellWidth * max(1, span), height = metrics.cellHeight
         let canvas = SpriteCanvas(width: width, height: height)
-        switch cp {
-        case 0x2500...0x257F: BoxDrawing.draw(cp, canvas, m)
-        case 0x2580...0x259F: BlockElements.draw(cp, canvas, m)
-        case 0x2800...0x28FF: Braille.draw(cp, canvas, width: width, height: height)
-        case 0x25E2...0x25FF: GeometricShapes.draw(cp, canvas, m)
-        case 0xE0B0...0xE0D4: Powerline.draw(cp, canvas, width: width, height: height, m)
-        case 0xF5D0...0xF60D: BranchDrawing.draw(cp, canvas, m)
-        case 0x1FB00...0x1FBFF: LegacyComputing.draw(cp, canvas, width: width, height: height, m)
-        case 0x1CC00...0x1CEBF: LegacyComputingSupplement.draw(cp, canvas, width: width, height: height, m)
+        switch codepoint {
+        case 0x2500...0x257F: BoxDrawing.draw(codepoint, canvas, metrics)
+        case 0x2580...0x259F: BlockElements.draw(codepoint, canvas, metrics)
+        case 0x2800...0x28FF: Braille.draw(codepoint, canvas, width: width, height: height)
+        case 0x25E2...0x25FF: GeometricShapes.draw(codepoint, canvas, metrics)
+        case 0xE0B0...0xE0D4: Powerline.draw(codepoint, canvas, width: width, height: height, metrics)
+        case 0xF5D0...0xF60D: BranchDrawing.draw(codepoint, canvas, metrics)
+        case 0x1FB00...0x1FBFF: LegacyComputing.draw(codepoint, canvas, width: width, height: height, metrics)
+        case 0x1CC00...0x1CEBF: LegacyComputingSupplement.draw(codepoint, canvas, width: width, height: height, metrics)
         default: break
         }
         return canvas
     }
 
     /// Draws a cursor or decoration sprite `span` cells wide.
-    static func render(_ sprite: Sprite, metrics m: CellMetrics, span: Int) -> SpriteCanvas {
-        let width = m.cellWidth * max(1, span), height = m.cellHeight
-        let c = SpriteCanvas(width: width, height: height)
+    static func render(_ sprite: Sprite, metrics: CellMetrics, span: Int) -> SpriteCanvas {
+        let width = metrics.cellWidth * max(1, span), height = metrics.cellHeight
+        let canvas = SpriteCanvas(width: width, height: height)
         // Decorations may hang below the cell, but never past the canvas margin.
-        let underlineY = min(m.underlinePosition, height + c.paddingY - m.underlineThickness)
+        let underlineY = min(metrics.underlinePosition, height + canvas.paddingY - metrics.underlineThickness)
         switch sprite {
         case .cursorRect:
-            c.rect(x: 0, y: 0, width: width, height: height)
+            canvas.rect(x: 0, y: 0, width: width, height: height)
         case .cursorHollowRect:
-            c.rect(x: 0, y: 0, width: width, height: height)
-            c.rect(
-                x: m.cursorThickness, y: m.cursorThickness,
-                width: sat(width, m.cursorThickness * 2), height: sat(height, m.cursorThickness * 2), Shade.off)
+            canvas.rect(x: 0, y: 0, width: width, height: height)
+            canvas.rect(
+                x: metrics.cursorThickness, y: metrics.cursorThickness,
+                width: sat(width, metrics.cursorThickness * 2), height: sat(height, metrics.cursorThickness * 2), Shade.off)
         case .cursorBar:
             // Half its thickness over the left edge, so it sits between characters.
-            c.rect(x: -((m.cursorThickness + 1) / 2), y: 0, width: m.cursorThickness, height: height)
+            canvas.rect(x: -((metrics.cursorThickness + 1) / 2), y: 0, width: metrics.cursorThickness, height: height)
         case .cursorUnderline:
-            c.rect(x: 0, y: underlineY, width: width, height: m.cursorThickness)
+            canvas.rect(x: 0, y: underlineY, width: width, height: metrics.cursorThickness)
         case .underline:
-            c.rect(x: 0, y: underlineY, width: width, height: m.underlineThickness)
+            canvas.rect(x: 0, y: underlineY, width: width, height: metrics.underlineThickness)
         case .underlineDouble:
             // One line above the single-underline position and one below it.
-            let y = min(m.underlinePosition, height + c.paddingY - 2 * m.underlineThickness)
-            c.rect(x: 0, y: sat(y, m.underlineThickness), width: width, height: m.underlineThickness)
-            c.rect(x: 0, y: y + m.underlineThickness, width: width, height: m.underlineThickness)
+            let y = min(metrics.underlinePosition, height + canvas.paddingY - 2 * metrics.underlineThickness)
+            canvas.rect(x: 0, y: sat(y, metrics.underlineThickness), width: width, height: metrics.underlineThickness)
+            canvas.rect(x: 0, y: y + metrics.underlineThickness, width: width, height: metrics.underlineThickness)
         case .underlineDotted:
-            dotted(c, m, width: width, height: height)
+            dotted(canvas, metrics, width: width, height: height)
         case .underlineDashed:
             let dashWidth = width / 3 + 1
             let dashCount = width / dashWidth + 1
             for i in stride(from: 0, to: dashCount, by: 2) {
-                c.rect(x: i * dashWidth, y: underlineY, width: dashWidth, height: m.underlineThickness)
+                canvas.rect(x: i * dashWidth, y: underlineY, width: dashWidth, height: metrics.underlineThickness)
             }
         case .underlineCurly:
-            curly(c, m, width: width, height: height)
+            curly(canvas, metrics, width: width, height: height)
         case .strikethrough:
-            c.rect(x: 0, y: m.strikethroughPosition, width: width, height: m.strikethroughThickness)
+            canvas.rect(x: 0, y: metrics.strikethroughPosition, width: width, height: metrics.strikethroughThickness)
         case .overline:
-            c.rect(x: 0, y: max(m.overlinePosition, -c.paddingY), width: width, height: m.overlineThickness)
+            canvas.rect(x: 0, y: max(metrics.overlinePosition, -canvas.paddingY), width: width, height: metrics.overlineThickness)
         }
-        return c
+        return canvas
     }
 
-    private static func dotted(_ c: SpriteCanvas, _ m: CellMetrics, width: Int, height: Int) {
+    private static func dotted(_ canvas: SpriteCanvas, _ metrics: CellMetrics, width: Int, height: Int) {
         let w = Double(width), h = Double(height)
-        let thick = Double(m.underlineThickness)
+        let thick = Double(metrics.underlineThickness)
         // Dots √2 × the underline thickness across; thinner looks anaemic.
         let radius = 0.5.squareRoot() * thick
-        let y = min(Double(m.underlinePosition) + 0.5 * thick, h + Double(c.paddingY) - radius.rounded(.up))
+        let y = min(Double(metrics.underlinePosition) + 0.5 * thick, h + Double(canvas.paddingY) - radius.rounded(.up))
         let dotCount = max(
             min((w / (4 * radius)).rounded(.up), (w / (3 * radius)).rounded(.down), (w / (2 * radius + 1)).rounded(.down)),
             1)
@@ -106,14 +106,14 @@ enum SpriteFace {
             path.addEllipse(in: CGRect(x: x - radius, y: y - radius, width: 2 * radius, height: 2 * radius))
             x += w / dotCount
         }
-        c.fill(path)
+        canvas.fill(path)
     }
 
-    private static func curly(_ c: SpriteCanvas, _ m: CellMetrics, width: Int, height: Int) {
+    private static func curly(_ canvas: SpriteCanvas, _ metrics: CellMetrics, width: Int, height: Int) {
         let w = Double(width), h = Double(height)
-        let lineWidth = Double(m.underlineThickness)
+        let lineWidth = Double(metrics.underlineThickness)
         let amplitude = w / .pi
-        let top = min(Double(m.underlinePosition), h + Double(c.paddingY) - amplitude - lineWidth)
+        let top = min(Double(metrics.underlinePosition), h + Double(canvas.paddingY) - amplitude - lineWidth)
         let bottom = top + amplitude
         let r = 0.4
         let center = 0.5 * w
@@ -122,6 +122,6 @@ enum SpriteFace {
         path.move(to: CGPoint(0, bottom))
         path.addCurve(to: CGPoint(center, top), control1: CGPoint(center * r, bottom), control2: CGPoint(center - center * r, top))
         path.addCurve(to: CGPoint(w, bottom), control1: CGPoint(center + center * r, top), control2: CGPoint(w - center * r, bottom))
-        c.stroke(path, lineWidth: lineWidth, cap: .round)
+        canvas.stroke(path, lineWidth: lineWidth, cap: .round)
     }
 }

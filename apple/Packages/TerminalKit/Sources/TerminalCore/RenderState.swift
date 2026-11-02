@@ -111,20 +111,20 @@ public final class RenderState {
     }
 
     public var cursor: Cursor {
-        var c = GhosttyRenderStateCursor()
-        c.size = MemoryLayout<GhosttyRenderStateCursor>.size
-        ghostty_render_state_get(state, GHOSTTY_RENDER_STATE_DATA_CURSOR, &c)
-        let style: CursorStyle = switch c.visual_style {
+        var cursor = GhosttyRenderStateCursor()
+        cursor.size = MemoryLayout<GhosttyRenderStateCursor>.size
+        ghostty_render_state_get(state, GHOSTTY_RENDER_STATE_DATA_CURSOR, &cursor)
+        let style: CursorStyle = switch cursor.visual_style {
         case GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR: .bar
         case GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE: .underline
         case GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK_HOLLOW: .blockHollow
         default: .block
         }
         return Cursor(
-            position: c.viewport_has_value ? (c.viewport_x, c.viewport_y) : nil,
-            onWideTail: c.viewport_has_value && c.wide_tail,
-            visible: c.visible,
-            blinking: c.blinking,
+            position: cursor.viewport_has_value ? (cursor.viewport_x, cursor.viewport_y) : nil,
+            onWideTail: cursor.viewport_has_value && cursor.wide_tail,
+            visible: cursor.visible,
+            blinking: cursor.blinking,
             style: style
         )
     }
@@ -142,8 +142,8 @@ public final class RenderState {
 /// Stable identity of a row across updates (`GHOSTTY_RENDER_STATE_ROW_DATA_ID`). Never reused, so it
 /// is a safe cache key for per-row GPU data.
 public struct RowID: Hashable, Sendable {
-    let a: UInt64
-    let b: UInt64
+    let high: UInt64
+    let low: UInt64
 }
 
 /// One row of a `RenderState`, valid only during `RenderState.forEachRow`.
@@ -154,7 +154,7 @@ public struct Row {
     public var id: RowID {
         var id = GhosttyRenderStateRowId()
         ghostty_render_state_row_get(iterator, GHOSTTY_RENDER_STATE_ROW_DATA_ID, &id)
-        return RowID(a: id.bits.0, b: id.bits.1)
+        return RowID(high: id.bits.0, low: id.bits.1)
     }
 
     public var isDirty: Bool {
@@ -165,11 +165,11 @@ public struct Row {
 
     /// The selected columns of this row (inclusive), or nil when the selection misses it.
     public var selection: ClosedRange<Int>? {
-        var s = GhosttyRenderStateRowSelection()
-        s.size = MemoryLayout<GhosttyRenderStateRowSelection>.size
-        guard ghostty_render_state_row_get(iterator, GHOSTTY_RENDER_STATE_ROW_DATA_SELECTION, &s) == GHOSTTY_SUCCESS,
-              s.start_x <= s.end_x else { return nil }
-        return Int(s.start_x)...Int(s.end_x)
+        var rowSelection = GhosttyRenderStateRowSelection()
+        rowSelection.size = MemoryLayout<GhosttyRenderStateRowSelection>.size
+        guard ghostty_render_state_row_get(iterator, GHOSTTY_RENDER_STATE_ROW_DATA_SELECTION, &rowSelection) == GHOSTTY_SUCCESS,
+              rowSelection.start_x <= rowSelection.end_x else { return nil }
+        return Int(rowSelection.start_x)...Int(rowSelection.end_x)
     }
 
     /// Position relative to the top of the viewport (negative for overscan rows above it).
@@ -275,10 +275,10 @@ public struct Cell {
         var hasStyling = false
         ghostty_render_state_row_cells_get(cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_HAS_STYLING, &hasStyling)
         guard hasStyling else { return nil }
-        var s = GhosttyStyle()
-        s.size = MemoryLayout<GhosttyStyle>.size
-        ghostty_render_state_row_cells_get(cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE, &s)
-        let underline: Underline = switch s.underline {
+        var style = GhosttyStyle()
+        style.size = MemoryLayout<GhosttyStyle>.size
+        ghostty_render_state_row_cells_get(cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE, &style)
+        let underline: Underline = switch style.underline {
         case Int32(GHOSTTY_SGR_UNDERLINE_SINGLE.rawValue): .single
         case Int32(GHOSTTY_SGR_UNDERLINE_DOUBLE.rawValue): .double
         case Int32(GHOSTTY_SGR_UNDERLINE_CURLY.rawValue): .curly
@@ -286,15 +286,15 @@ public struct Cell {
         case Int32(GHOSTTY_SGR_UNDERLINE_DASHED.rawValue): .dashed
         default: .none
         }
-        let underlineColor: StyleColor = switch s.underline_color.tag {
-        case GHOSTTY_STYLE_COLOR_PALETTE: .palette(s.underline_color.value.palette)
-        case GHOSTTY_STYLE_COLOR_RGB: .rgb(RGB(s.underline_color.value.rgb))
+        let underlineColor: StyleColor = switch style.underline_color.tag {
+        case GHOSTTY_STYLE_COLOR_PALETTE: .palette(style.underline_color.value.palette)
+        case GHOSTTY_STYLE_COLOR_RGB: .rgb(RGB(style.underline_color.value.rgb))
         default: .none
         }
         return Style(
-            bold: s.bold, italic: s.italic, faint: s.faint, inverse: s.inverse,
-            invisible: s.invisible, strikethrough: s.strikethrough, underline: underline,
-            underlineColor: underlineColor, overline: s.overline, blink: s.blink
+            bold: style.bold, italic: style.italic, faint: style.faint, inverse: style.inverse,
+            invisible: style.invisible, strikethrough: style.strikethrough, underline: underline,
+            underlineColor: underlineColor, overline: style.overline, blink: style.blink
         )
     }
 

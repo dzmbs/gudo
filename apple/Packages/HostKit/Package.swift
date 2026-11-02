@@ -3,7 +3,7 @@ import PackageDescription
 
 // The app's data and control layer (docs/APP-ARCHITECTURE.md): hosts, pairing, daemon and
 // plain-SSH connections, the layout store and pane backends over GudoCore, connection
-// lifecycle (04-mobile-ux R1–R12), secrets. No views: the UI binds to its @Observable models.
+// lifecycle, secrets. No views: the UI binds to its @Observable models.
 let package = Package(
     name: "HostKit",
     platforms: [.macOS(.v26), .iOS(.v26)],

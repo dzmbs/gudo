@@ -4,7 +4,7 @@ import os
 import PaneLayout
 import GudoCore
 
-/// One row of the host list, ready to show (04-mobile-ux C2).
+/// One row of the host list, ready to show.
 public struct HostEntry: Identifiable, Equatable, Sendable {
     public var id: String
     public var name: String
@@ -36,19 +36,17 @@ public struct HostEntry: Identifiable, Equatable, Sendable {
 
 /// Everything about hosts the UI binds to: the saved hosts, their live connections, pairing,
 /// "just ssh", the helper install, ssh_config import, and the app lifecycle hooks that keep
-/// connections healthy (04-mobile-ux R1–R12).
+/// connections healthy.
 @MainActor
 @Observable
 public final class HostsModel {
     public private(set) var records: [HostRecord]
-    /// Live connections by host id. Views hold the host id, never a socket (R7).
+    /// Live connections by host id. Views hold the host id, never a socket.
     public internal(set) var connections: [String: any HostConnection] = [:]
-    /// Helper installs in progress, by host id.
     public private(set) var installs: [String: InstallProgress] = [:]
     /// What the last helper install said the user may want to know (e.g. lingering is off), by
     /// host id; cleared with `dismissNotes`.
     public private(set) var installNotes: [String: [String]] = [:]
-    /// Helper updates in progress, by host id.
     public private(set) var helperUpdates: [String: HelperUpdateProgress] = [:]
     public let keys: KeyStore
     public let hostKeyPrompts = HostKeyPrompts()
@@ -109,12 +107,12 @@ public final class HostsModel {
 
     /// Hosts sorted for Home: "Needs you" first, then pinned, then most recently used.
     public var entries: [HostEntry] {
-        records.map(entry).sorted { a, b in
-            if (a.needsYou != nil) != (b.needsYou != nil) { return a.needsYou != nil }
-            if a.pinned != b.pinned { return a.pinned }
-            let (da, db) = (a.lastConnected ?? .distantPast, b.lastConnected ?? .distantPast)
-            if da != db { return da > db }
-            return a.name.localizedStandardCompare(b.name) == .orderedAscending
+        records.map(entry).sorted { lhs, rhs in
+            if (lhs.needsYou != nil) != (rhs.needsYou != nil) { return lhs.needsYou != nil }
+            if lhs.pinned != rhs.pinned { return lhs.pinned }
+            let (lhsDate, rhsDate) = (lhs.lastConnected ?? .distantPast, rhs.lastConnected ?? .distantPast)
+            if lhsDate != rhsDate { return lhsDate > rhsDate }
+            return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
         }
     }
 
@@ -169,7 +167,6 @@ public final class HostsModel {
 
     // MARK: Connections
 
-    /// The live connection for a host, connecting it if needed.
     @discardableResult
     public func open(_ id: String) throws -> any HostConnection {
         if let existing = connections[id] { return existing }
@@ -190,8 +187,8 @@ public final class HostsModel {
     }
 
     private func openDaemon(_ record: HostRecord) throws -> DaemonConnection {
-        let key = record.isGuest ? record.inviteKey : record.ticketKey
-        guard let ticket = try secrets.string(for: key) else {
+        let secretKey = record.isGuest ? record.inviteKey : record.ticketKey
+        guard let ticket = try secrets.string(for: secretKey) else {
             throw HostError.missingSecret("\(record.isGuest ? "invite" : "pairing ticket") for \(record.name)")
         }
         let connection = DaemonConnection(
@@ -677,13 +674,11 @@ public final class HostsModel {
         installNotes[id] = nil
     }
 
-    /// Dismisses the import list.
     public func clearSSHConfigAliases() {
         sshConfigAliases = []
     }
 
     #if os(macOS)
-    /// macOS reads the user's config directly.
     public func loadUserSSHConfig() throws {
         let url = URL(fileURLWithPath: Self.homeDirectory).appending(path: ".ssh/config")
         try loadSSHConfig(String(contentsOf: url, encoding: .utf8))
@@ -699,7 +694,7 @@ public final class HostsModel {
         #endif
     }
 
-    // MARK: Lifecycle (R1, R3, R5, R10)
+    // MARK: Lifecycle
 
     public func foreground() {
         network.start()
@@ -754,12 +749,10 @@ public final class HostsModel {
     }
 }
 
-/// A helper install's progress.
 public struct InstallProgress: Equatable, Sendable {
     public var step: BootstrapStep
     public var report: BootstrapReport?
 
-    /// One line for the progress row.
     public var summary: String {
         switch step {
         case .probing: "Checking the host…"
@@ -771,7 +764,6 @@ public struct InstallProgress: Equatable, Sendable {
     }
 }
 
-/// A helper update's progress.
 public struct HelperUpdateProgress: Equatable, Sendable {
     public enum Step: Equatable, Sendable {
         case preparing

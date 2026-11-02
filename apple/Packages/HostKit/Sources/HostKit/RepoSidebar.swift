@@ -35,6 +35,7 @@ nonisolated public protocol DaemonRepoTrustAPI: AnyObject, Sendable {
 
 extension DaemonClient: DaemonRepoTrustAPI {}
 
+/// A pull request's checks at a glance (any failure fails; else anything
 /// running is pending; else passing).
 nonisolated public enum ChecksSummary: Equatable, Sendable {
     case none
@@ -65,12 +66,12 @@ nonisolated public enum ChecksSummary: Equatable, Sendable {
     public var words: String {
         switch self {
         case .none: return "No checks"
-        case .passing(let n): return n == 1 ? "1 successful check" : "\(n) successful checks"
-        case .pending(let f, let r, let p), .failing(let f, let r, let p):
+        case .passing(let passed): return passed == 1 ? "1 successful check" : "\(passed) successful checks"
+        case .pending(let failed, let running, let passed), .failing(let failed, let running, let passed):
             var parts: [String] = []
-            if f > 0 { parts.append("\(f) failed") }
-            if r > 0 { parts.append("\(r) in progress") }
-            if p > 0 { parts.append("\(p) successful") }
+            if failed > 0 { parts.append("\(failed) failed") }
+            if running > 0 { parts.append("\(running) in progress") }
+            if passed > 0 { parts.append("\(passed) successful") }
             return parts.joined(separator: ", ")
         }
     }
@@ -86,7 +87,8 @@ extension WorktreeState: Identifiable {
         return "detached"
     }
 
-    /// subtitle equal to the branch's last component). The main worktree has none.
+    /// The worktree's name under the branch, unless it equals the
+    /// branch's last component. The main worktree has none.
     nonisolated public var subtitle: String? {
         if main { return nil }
         let last = branch.map { $0.split(separator: "/").last.map(String.init) ?? $0 }
@@ -208,8 +210,8 @@ nonisolated public struct RepoSidebar: Equatable, Sendable {
             let tabs = tabsByWorktree[state.path] ?? []
             if tabs.isEmpty && !includeIdle { continue }
             let entry = Worktree(state: state, tabs: tabs)
-            if let i = index[state.repo] {
-                repos[i].worktrees.append(entry)
+            if let repoIndex = index[state.repo] {
+                repos[repoIndex].worktrees.append(entry)
             } else {
                 index[state.repo] = repos.count
                 repos.append(Repo(id: state.repo, name: state.repoName, worktrees: [entry]))

@@ -2,16 +2,11 @@ import Foundation
 import PushCrypto
 import UserNotifications
 
-/// The notification categories the app registers (docs/PUSH.md §3, §5). Pushes and local
-/// notifications use the same identifiers, so one action handler serves both.
+/// Pushes and local notifications use the same identifiers, so one action handler serves both.
 public enum NotificationCategories {
-    /// An agent asks to run something: Approve, Deny, Open.
     public static let approval = PushKind.approval.categoryIdentifier
-    /// An agent waits in the terminal (a question, a menu): Open.
     public static let blocked = PushKind.blocked.categoryIdentifier
-    /// An agent finished or failed: Open.
     public static let agentDone = PushKind.done.categoryIdentifier
-    /// A long command finished while nobody looked: Open.
     public static let commandDone = PushKind.command.categoryIdentifier
 
     /// Approve and Deny need Face ID / the passcode before the handler runs (a locked phone
@@ -40,16 +35,14 @@ public enum NotificationCategories {
     }
 }
 
-/// Which kinds of notification the user wants (Settings ▸ Notifications). The same choices go
-/// to every daemon as `PushPrefs` when push is registered, and gate local notifications.
+/// The same choices go to every daemon as `PushPrefs` when push is registered, and gate local
+/// notifications.
 public struct NotificationPrefs: Codable, Equatable, Sendable {
     public var approvals = true
     public var blocked = true
     public var done = true
     public var failed = true
     public var commands = true
-    /// Local notifications only while the app is in the background (never over the terminal
-    /// the user is looking at).
     public var onlyInBackground = true
 
     public init() {}
@@ -66,7 +59,6 @@ public struct NotificationPrefs: Codable, Equatable, Sendable {
 
     static let key = "notification-prefs"
 
-    /// Loads from `defaults` (the app group's when the extension needs them too).
     public static func load(from defaults: UserDefaults = .standard) -> NotificationPrefs {
         guard let data = defaults.data(forKey: key),
               let prefs = try? JSONDecoder().decode(NotificationPrefs.self, from: data)

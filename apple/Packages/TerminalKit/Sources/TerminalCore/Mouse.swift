@@ -81,8 +81,8 @@ extension Terminal {
     }
 
     private func encodeMouseUnchecked(_ event: MouseEvent, geometry: MouseGeometry, anyButtonPressed: Bool) -> [UInt8] {
-        withHandle { t in
-            ghostty_mouse_encoder_setopt_from_terminal(mouseEncoder, t)
+        withHandle { handle in
+            ghostty_mouse_encoder_setopt_from_terminal(mouseEncoder, handle)
             var size = GhosttyMouseEncoderSize(
                 size: MemoryLayout<GhosttyMouseEncoderSize>.size,
                 screen_width: geometry.screenWidth, screen_height: geometry.screenHeight,

@@ -46,11 +46,10 @@ nonisolated public struct HostGroup: Identifiable, Equatable, Sendable {
     public func ref(_ tab: TabId) -> TabRef { TabRef(hostId: id, tab: tab) }
 }
 
-/// Every host a window shows at once (owner, 2026-10-18: "hosts are isolated — I always have to
-/// click Hosts and connect to switch"): this device first, then each open host in the order it
+/// Every host a window shows at once: this device first, then each open host in the order it
 /// was opened. Open hosts keep their `HostConnection` (HostsModel) for as long as they are open,
 /// so switching to any tab on any host is a selection, never a reconnect. The iOS lifecycle
-/// (suspend in the background, resume every host on foreground: R3/R5/R1) stays in
+/// (suspend in the background, resume every host on foreground) stays in
 /// `HostsModel.background()/foreground()`, which covers every connection.
 ///
 /// It also owns the unified tab order the shortcuts use: ⌘1…⌘8 index it across hosts, ⌘9 is the
@@ -184,7 +183,6 @@ public final class HostGroups {
     /// Projects of tabs without a daemon that keeps them (this device, plain SSH, window tabs,
     /// older daemons), by host id. Persisted with the window.
     public var windowProjects: [String: HostProjects] = [:]
-    /// Projects the user collapsed in this window.
     public var collapsedProjects: Set<String> = []
     /// Suggestions the user dismissed (their shared roots).
     public var dismissedSuggestions: Set<String> = []
@@ -197,7 +195,6 @@ public final class HostGroups {
     /// run, so their memberships are only restored within the run that made them.
     nonisolated public static let launch = UUID().uuidString
 
-    /// What a window saves of its projects.
     public struct ProjectsState: Codable, Equatable, Sendable {
         public var windowProjects: [String: HostProjects]
         public var collapsed: [String]
@@ -284,16 +281,15 @@ public final class HostGroups {
         apply(planner().ungroup(id))
     }
 
-    /// Moves a project among the projects.
     public func moveProject(_ id: String, to index: Int) {
         let planner = planner()
         apply(planner.moveProject(id, to: index))
         // Empty projects have no host to keep their order: set it here.
         var order = planner.projects.filter { $0.id != id }
         if let moving = planner.project(id) { order.insert(moving, at: min(max(index, 0), order.count)) }
-        for (i, project) in order.enumerated() {
-            if let e = emptyProjects.firstIndex(where: { $0.id == project.id }) {
-                emptyProjects[e].order = Int64(i) * ProjectPlanner.rankStep
+        for (position, project) in order.enumerated() {
+            if let emptyIndex = emptyProjects.firstIndex(where: { $0.id == project.id }) {
+                emptyProjects[emptyIndex].order = Int64(position) * ProjectPlanner.rankStep
             }
         }
     }
@@ -381,7 +377,6 @@ public final class HostGroups {
         return connection.layoutStore.session.tabs
     }
 
-    /// Brings every hidden tab back.
     public func restoreHiddenTabs() {
         hiddenTabs = []
         restoreDismissed = false
@@ -416,14 +411,14 @@ public final class HostGroups {
         if let index = closed.hostIndex, let store = layoutStore(ref.hostId), let count = sessionTabs(of: ref.hostId)?.count, count > 0 {
             store.apply(.moveTab(ref.tab, to: min(index, count - 1)))
         }
-        guard let was = closed.project else { return }
+        guard let closedProject = closed.project else { return }
         let index = closed.projectIndex ?? .max
-        if let project = project(was.id) ?? project(named: was.name) {
+        if let project = project(closedProject.id) ?? project(named: closedProject.name) {
             apply(planner().move(ref, into: project.id, at: index))
         } else {
             let id = UUID().uuidString
-            apply(planner().create([ref], name: uniqueProjectName(was.name), id: id))
-            updateProject(id, color: was.color)
+            apply(planner().create([ref], name: uniqueProjectName(closedProject.name), id: id))
+            updateProject(id, color: closedProject.color)
         }
     }
 
@@ -608,7 +603,6 @@ public final class HostGroups {
         if !isOpenElsewhere(id) { hosts.disconnect(id) }
     }
 
-    /// Forgets a host that was removed from the saved hosts.
     public func forget(_ id: String) {
         composites.dropHost(id)
         openHosts.removeAll { $0 == id }
@@ -623,8 +617,8 @@ public final class HostGroups {
 
     // MARK: The unified tab order
 
-    /// ⌘`number`: 1…8 is the tab at that position across all hosts, 9 the last tab (Ghostty and
-    /// browsers). Nil when there is no such tab.
+    /// ⌘`number`: 1…8 is the tab at that position across all hosts, 9 the last tab. Nil when
+    /// there is no such tab.
     public func tab(forShortcut number: Int) -> TabRef? {
         let all = tabs
         if number == 9 { return all.last }
@@ -638,7 +632,6 @@ public final class HostGroups {
         return index + 1
     }
 
-    /// The position of a tab in the unified list (0-based).
     public func index(of ref: TabRef) -> Int? {
         tabs.firstIndex(of: ref)
     }

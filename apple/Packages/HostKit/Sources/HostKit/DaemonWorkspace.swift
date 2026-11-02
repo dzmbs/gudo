@@ -3,6 +3,7 @@ import Observation
 import os
 import GudoCore
 
+/// The developer-workflow half of `GudoCore.DaemonClient` the app uses (docs/DAEMON.md §5,
 /// docs/APPLE-FFI.md "Workspace", "Editor"), so the screens' models can be tested against a
 /// fake. The names are the generated ones: `DaemonClient` conforms as is.
 nonisolated public protocol DaemonWorkspaceAPI: AnyObject, Sendable {
@@ -58,7 +59,8 @@ nonisolated public protocol DaemonWorkspaceAPI: AnyObject, Sendable {
 
 extension DaemonClient: DaemonWorkspaceAPI {}
 
-/// of `DaemonWorkspaceAPI`'s list so fakes that do not care need nothing.
+/// Agent plan usage (daemons whose `DaemonInfo.agentUsage` is true). Kept out of
+/// `DaemonWorkspaceAPI`'s list so fakes that do not care need nothing.
 nonisolated public protocol DaemonUsageAPI: AnyObject, Sendable {
     func usageWatch() async throws -> AgentUsageReport
     func usageUnwatch() async throws
@@ -182,13 +184,11 @@ public final class DaemonWorkspace {
         if let hubToken { hub?.remove(hubToken) }
     }
 
-    /// The client of the moment.
     public var api: (any DaemonWorkspaceAPI)? {
         install()
         return resolve()
     }
 
-    /// The client or `HostError.notConnected`.
     public func client() throws -> any DaemonWorkspaceAPI {
         guard let api else { throw HostError.notConnected }
         return api
@@ -216,7 +216,6 @@ public final class DaemonWorkspace {
         return id
     }
 
-    /// Calls `handler` with every attention update.
     @discardableResult
     public func observeAttention(_ handler: @escaping (AttentionUpdate) -> Void) -> UUID {
         let id = UUID()
@@ -301,7 +300,6 @@ public final class DaemonWorkspace {
 
     // MARK: Repositories (git-native workspace)
 
-    /// The repository API of the client of the moment, or `HostError.notConnected`.
     public func repoClient() throws -> any DaemonRepoAPI {
         guard let api = api as? any DaemonRepoAPI else { throw HostError.notConnected }
         return api
@@ -318,13 +316,11 @@ public final class DaemonWorkspace {
         }
     }
 
-    /// The worktree a pane is in.
     public func worktree(ofPane pane: UInt64) -> WorktreeState? {
         guard let repos, let path = repos.panes.first(where: { $0.paneId == pane })?.worktree else { return nil }
         return repos.worktrees.first { $0.path == path }
     }
 
-    /// A worktree by path.
     public func worktree(_ path: String) -> WorktreeState? {
         repos?.worktrees.first { $0.path == path }
     }
@@ -385,8 +381,8 @@ public final class DaemonWorkspace {
 
     /// Applies a pull request a request returned, so the UI shows it before the next push.
     public func applyPR(_ pr: PullRequest?, to path: String) {
-        guard var snapshot = repos, let i = snapshot.worktrees.firstIndex(where: { $0.path == path }) else { return }
-        snapshot.worktrees[i].pr = pr
+        guard var snapshot = repos, let index = snapshot.worktrees.firstIndex(where: { $0.path == path }) else { return }
+        snapshot.worktrees[index].pr = pr
         repos = snapshot
     }
 

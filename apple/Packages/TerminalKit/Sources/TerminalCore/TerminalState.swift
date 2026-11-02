@@ -30,7 +30,7 @@ public struct GridPoint: Hashable, Sendable, Comparable {
         self.y = y
     }
 
-    public static func < (a: Self, b: Self) -> Bool { (a.y, a.x) < (b.y, b.x) }
+    public static func < (lhs: Self, rhs: Self) -> Bool { (lhs.y, lhs.x) < (rhs.y, rhs.x) }
 }
 
 extension Terminal {
@@ -49,26 +49,26 @@ extension Terminal {
     /// `text` with control and format characters (bidi controls, zero-width and tag
     /// characters) dropped, whitespace runs collapsed to one space, at most `max` characters.
     static func printable(_ text: String, max: Int) -> String {
-        var out = String.UnicodeScalarView()
+        var cleaned = String.UnicodeScalarView()
         var count = 0
         var space = false
         for scalar in text.unicodeScalars where scalar.properties.generalCategory != .format {
             if scalar.properties.generalCategory == .control || scalar.properties.isWhitespace {
-                space = !out.isEmpty
+                space = !cleaned.isEmpty
                 continue
             }
             if count == max {
-                out.append("…")
+                cleaned.append("…")
                 break
             }
             if space {
-                out.append(" ")
+                cleaned.append(" ")
                 space = false
             }
-            out.append(scalar)
+            cleaned.append(scalar)
             count += 1
         }
-        return String(out)
+        return String(cleaned)
     }
 
     private static func isPrintable(_ text: String) -> Bool {
@@ -76,95 +76,95 @@ extension Terminal {
     }
 
     private func string(_ data: GhosttyTerminalData) -> String {
-        withHandle { t in
-            var s = GhosttyString()
-            guard ghostty_terminal_get(t, data, &s) == GHOSTTY_SUCCESS, let ptr = s.ptr, s.len > 0 else { return "" }
-            return String(decoding: UnsafeBufferPointer(start: ptr, count: s.len), as: UTF8.self)
+        withHandle { handle in
+            var string = GhosttyString()
+            guard ghostty_terminal_get(handle, data, &string) == GHOSTTY_SUCCESS, let ptr = string.ptr, string.len > 0 else { return "" }
+            return String(decoding: UnsafeBufferPointer(start: ptr, count: string.len), as: UTF8.self)
         }
     }
 
     public var modes: TerminalModes {
-        withHandle { t in
+        withHandle { handle in
             var modes = TerminalModes()
             var tracking = false
-            ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_MOUSE_TRACKING, &tracking)
+            ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_MOUSE_TRACKING, &tracking)
             modes.mouseTracking = tracking
             var screen = GHOSTTY_TERMINAL_SCREEN_PRIMARY
-            ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN, &screen)
+            ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN, &screen)
             modes.altScreen = screen == GHOSTTY_TERMINAL_SCREEN_ALTERNATE
-            modes.bracketedPaste = Self.mode(t, 2004)
-            modes.alternateScroll = Self.mode(t, 1007)
-            modes.focusEvents = Self.mode(t, 1004)
-            modes.cursorKeysApplication = Self.mode(t, 1)
+            modes.bracketedPaste = Self.mode(handle, 2004)
+            modes.alternateScroll = Self.mode(handle, 1007)
+            modes.focusEvents = Self.mode(handle, 1004)
+            modes.cursorKeysApplication = Self.mode(handle, 1)
             return modes
         }
     }
 
-    private static func mode(_ t: GhosttyTerminal, _ value: UInt16, ansi: Bool = false) -> Bool {
+    private static func mode(_ handle: GhosttyTerminal, _ value: UInt16, ansi: Bool = false) -> Bool {
         var config = GhosttyTerminalModeConfig(mode: ghostty_mode_new(value, ansi), value: false)
-        ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_MODE, &config)
+        ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_MODE, &config)
         return config.value
     }
 
     /// Whether the cursor is in a shell prompt or its input area per OSC 133 marks (false without
     /// shell integration or on the alt screen).
     public var cursorAtPrompt: Bool {
-        withHandle { t in
+        withHandle { handle in
             var value = false
-            ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_CURSOR_AT_PROMPT, &value)
+            ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_CURSOR_AT_PROMPT, &value)
             return value
         }
     }
 
     /// Cursor position in the active area (the bottom `rows` rows), regardless of scrolling.
     public var cursorPosition: GridPoint {
-        withHandle { t in
+        withHandle { handle in
             var x: UInt16 = 0, y: UInt16 = 0
-            ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_CURSOR_X, &x)
-            ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_CURSOR_Y, &y)
+            ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_CURSOR_X, &x)
+            ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_CURSOR_Y, &y)
             return GridPoint(x: Int(x), y: Int(y))
         }
     }
 
     public var size: (cols: Int, rows: Int) {
-        withHandle { t in
+        withHandle { handle in
             var cols: UInt16 = 0, rows: UInt16 = 0
-            ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_COLS, &cols)
-            ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_ROWS, &rows)
+            ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_COLS, &cols)
+            ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_ROWS, &rows)
             return (Int(cols), Int(rows))
         }
     }
 
     /// Scrollback position: total rows, the viewport's offset into them and its height.
     public var scrollbar: (total: Int, offset: Int, visible: Int) {
-        withHandle { t in
+        withHandle { handle in
             var bar = GhosttyTerminalScrollbar()
-            ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_SCROLLBAR, &bar)
+            ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_SCROLLBAR, &bar)
             return (Int(bar.total), Int(bar.offset), Int(bar.len))
         }
     }
 
     /// Whether the viewport follows the active area (not scrolled into history).
     public var viewportAtBottom: Bool {
-        withHandle { t in
+        withHandle { handle in
             var value = true
-            ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_VIEWPORT_ACTIVE, &value)
+            ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_VIEWPORT_ACTIVE, &value)
             return value
         }
     }
 
     /// The grapheme cluster in a cell of the active area ("" for an empty cell or a wide tail).
     public func text(atActive point: GridPoint) -> String {
-        withHandle { t in
-            guard let ref = Self.gridRef(t, point, GHOSTTY_POINT_TAG_ACTIVE) else { return "" }
+        withHandle { handle in
+            guard let ref = Self.gridRef(handle, point, GHOSTTY_POINT_TAG_ACTIVE) else { return "" }
             return Self.graphemes(ref)
         }
     }
 
     /// Whether a cell of the active area holds the first half of a wide character.
     public func isWide(atActive point: GridPoint) -> Bool {
-        withHandle { t in
-            guard var ref = Self.gridRef(t, point, GHOSTTY_POINT_TAG_ACTIVE) else { return false }
+        withHandle { handle in
+            guard var ref = Self.gridRef(handle, point, GHOSTTY_POINT_TAG_ACTIVE) else { return false }
             var cell: GhosttyCell = 0
             guard ghostty_grid_ref_cell(&ref, &cell) == GHOSTTY_SUCCESS else { return false }
             var wide = GHOSTTY_CELL_WIDE_NARROW
@@ -173,14 +173,14 @@ extension Terminal {
         }
     }
 
-    static func gridRef(_ t: GhosttyTerminal, _ point: GridPoint, _ tag: GhosttyPointTag) -> GhosttyGridRef? {
+    static func gridRef(_ handle: GhosttyTerminal, _ point: GridPoint, _ tag: GhosttyPointTag) -> GhosttyGridRef? {
         guard point.x >= 0, point.y >= 0 else { return nil }
         var ref = GhosttyGridRef()
         ref.size = MemoryLayout<GhosttyGridRef>.size
-        var p = GhosttyPoint()
-        p.tag = tag
-        p.value.coordinate = GhosttyPointCoordinate(x: UInt16(clamping: point.x), y: UInt32(clamping: point.y))
-        return ghostty_terminal_grid_ref(t, p, &ref) == GHOSTTY_SUCCESS ? ref : nil
+        var gridPoint = GhosttyPoint()
+        gridPoint.tag = tag
+        gridPoint.value.coordinate = GhosttyPointCoordinate(x: UInt16(clamping: point.x), y: UInt32(clamping: point.y))
+        return ghostty_terminal_grid_ref(handle, gridPoint, &ref) == GHOSTTY_SUCCESS ? ref : nil
     }
 
     static func graphemes(_ ref: GhosttyGridRef) -> String {
@@ -188,22 +188,22 @@ extension Terminal {
         var buffer = [UInt32](repeating: 0, count: 16)
         var count = 0
         guard ghostty_grid_ref_graphemes(&ref, &buffer, buffer.count, &count) == GHOSTTY_SUCCESS else { return "" }
-        var s = ""
-        s.unicodeScalars.append(contentsOf: buffer.prefix(count).compactMap(Unicode.Scalar.init))
-        return s
+        var text = ""
+        text.unicodeScalars.append(contentsOf: buffer.prefix(count).compactMap(Unicode.Scalar.init))
+        return text
     }
 
     /// The viewport as plain text, one line per row with trailing blanks trimmed (accessibility).
     public func visibleText() -> String {
-        withHandle { t in
+        withHandle { handle in
             var cols: UInt16 = 0, rows: UInt16 = 0
-            ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_COLS, &cols)
-            ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_ROWS, &rows)
+            ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_COLS, &cols)
+            ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_ROWS, &rows)
             var lines: [String] = []
             for y in 0..<Int(rows) {
                 var line = ""
                 for x in 0..<Int(cols) {
-                    guard var ref = Self.gridRef(t, GridPoint(x: x, y: y), GHOSTTY_POINT_TAG_VIEWPORT) else { continue }
+                    guard var ref = Self.gridRef(handle, GridPoint(x: x, y: y), GHOSTTY_POINT_TAG_VIEWPORT) else { continue }
                     // The second half of a wide character (and the padding before one that
                     // wrapped) is part of that character, not a blank: "你好", not "你 好".
                     var cell = GhosttyCell()
@@ -212,8 +212,8 @@ extension Terminal {
                         ghostty_cell_get(cell, GHOSTTY_CELL_DATA_WIDE, &wide)
                         if wide == GHOSTTY_CELL_WIDE_SPACER_TAIL || wide == GHOSTTY_CELL_WIDE_SPACER_HEAD { continue }
                     }
-                    let g = Self.graphemes(ref)
-                    line += g.isEmpty ? " " : g
+                    let grapheme = Self.graphemes(ref)
+                    line += grapheme.isEmpty ? " " : grapheme
                 }
                 while line.last == " " { line.removeLast() }
                 lines.append(line)
@@ -225,8 +225,8 @@ extension Terminal {
 
     /// The OSC 8 hyperlink URI of a viewport cell, if any.
     public func hyperlink(atViewport point: GridPoint) -> String? {
-        withHandle { t in
-            guard var ref = Self.gridRef(t, point, GHOSTTY_POINT_TAG_VIEWPORT) else { return nil }
+        withHandle { handle in
+            guard var ref = Self.gridRef(handle, point, GHOSTTY_POINT_TAG_VIEWPORT) else { return nil }
             var buffer = [UInt8](repeating: 0, count: 2048)
             var length = 0
             guard ghostty_grid_ref_hyperlink_uri(&ref, &buffer, buffer.count, &length) == GHOSTTY_SUCCESS, length > 0 else { return nil }

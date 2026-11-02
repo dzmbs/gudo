@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// Shortcut glyphs shown right-aligned in palette rows and menus (Ghostty `ShortcutSymbolsView`):
-/// adjacent symbols, no separators, secondary.
+/// Shortcut glyphs for palette rows and menus: adjacent symbols, no separators.
 public struct ShortcutLabel: View {
     let symbols: [String]
 
@@ -23,8 +22,6 @@ public struct ShortcutLabel: View {
     }
 }
 
-/// A single key cap (Ghostty SurfaceView.swift `KeyCap`): 12 pt rounded medium, radius 4,
-/// control background, 0.5 pt primary 15 % stroke and a half-point drop shadow.
 public struct KeyCap: View {
     let text: String
 

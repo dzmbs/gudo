@@ -14,6 +14,7 @@ let package = Package(
             name: "DesignSystem",
             resources: [
                 .copy("Resources/ghostty-themes.json"),
+                // Official program logos, switched on one by one in `ProgramCatalog.logos`.
                 .process("Resources/ProgramLogos.xcassets"),
             ],
             swiftSettings: [.defaultIsolation(MainActor.self)]

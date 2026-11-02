@@ -79,7 +79,6 @@ nonisolated extension PaneBackend {
     public func foreground() -> PaneForeground? { nil }
 }
 
-/// What runs in a pane right now.
 nonisolated public struct PaneForeground: Equatable, Sendable {
     /// Executable name, e.g. `zsh`, `nvim`, `claude`.
     public var program: String
@@ -104,8 +103,7 @@ nonisolated public struct PaneForeground: Equatable, Sendable {
         return directory
     }
 
-    /// Ghostty's default title with shell integration: the directory at a prompt, the command
-    /// while one runs.
+    /// The directory at a prompt, the command while one runs.
     public var title: String {
         if isShell { return shortDirectory ?? program }
         return program
@@ -114,7 +112,6 @@ nonisolated public struct PaneForeground: Equatable, Sendable {
 
 /// Everything a backend tells its pane, in stream order.
 nonisolated public enum PaneEvent: Sendable, Equatable {
-
     /// Raw output for the VT.
     case output(Data)
     /// Replace the VT with this Ghostty snapshot's READY section (resume after a gap, first
@@ -126,7 +123,7 @@ nonisolated public enum PaneEvent: Sendable, Equatable {
     /// its host lays kitty images out in (0 when unknown).
     case resized(cols: UInt16, rows: UInt16, cellWidth: UInt32, cellHeight: UInt32)
     /// Whether the pane is live, or showing stale content while its connection recovers
-    /// (dimmed, never blank: 04-mobile-ux C3, R12).
+    /// (dimmed, never blank).
     case connection(PaneConnection)
     /// The pane's process ended (local backends; remote panes leave the layout instead).
     case exited
@@ -140,6 +137,7 @@ nonisolated public enum PaneConnection: Sendable, Equatable {
     case stale(reason: String)
 }
 
+/// A backend that can feed the client's echo predictor: the daemon
 /// reads ECHO/ICANON from the PTY master, knows the OSC 133 prompt state and the alt screen, acks
 /// inputs and measures RTT. Optional: panes of backends without it never predict.
 nonisolated public protocol PredictionFeed: PaneBackend {

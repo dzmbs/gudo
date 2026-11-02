@@ -10,16 +10,16 @@ import Testing
 @MainActor @Suite struct RendererStressTests {
     /// A screen of distinct CJK ideographs starting at `first`.
     private func cjkScreen(from first: UInt32, cols: Int, rows: Int) -> String {
-        var s = "\u{1b}[H"
+        var screen = "\u{1b}[H"
         var cp = first
         for row in 0..<rows {
             for _ in 0..<(cols / 2) {
-                s.unicodeScalars.append(Unicode.Scalar(cp)!)
+                screen.unicodeScalars.append(Unicode.Scalar(cp)!)
                 cp += 1
             }
-            if row < rows - 1 { s += "\r\n" }
+            if row < rows - 1 { screen += "\r\n" }
         }
-        return s
+        return screen
     }
 
     /// Glyph instances (not the cursor) whose atlas regions must match what the grid now holds.
@@ -131,8 +131,8 @@ import Testing
         #expect(frame.text.filter { $0.flags == 0 }.count == 6)
     }
 
-    /// A screen of new large emoji used to stall the main thread for about 2 s in one frame;
-    /// now each frame spends a bounded time and the glyphs fill in over the next frames.
+    /// A screen of new large emoji must not stall the main thread in one frame: each frame
+    /// spends a bounded time and the glyphs fill in over the next frames.
     @Test func newGlyphsNeverStallAFrame() throws {
         let terminal = Terminal(cols: 40, rows: 10) { _ in }
         let surface = try TerminalSurface(terminal: terminal, fontSize: 40)
@@ -230,8 +230,8 @@ import Testing
         #expect(fonts.cacheEntryCounts.resolved <= 500 && fonts.cacheEntryCounts.fast <= 500)
     }
 
-    /// A view whose drawable would pass Metal's 16384 limit used to stay blank (the layer
-    /// refused the size and handed out no drawable); it now draws at a lower scale.
+    /// A view whose drawable would pass Metal's 16384 limit draws at a lower scale (at full
+    /// scale the layer refuses the size and hands out no drawable).
     @Test func oversizedViewStillDraws() throws {
         let terminal = Terminal(cols: 80, rows: 24) { _ in }
         let surface = try TerminalSurface(terminal: terminal, fontSize: 13)

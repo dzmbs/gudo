@@ -51,8 +51,8 @@ public struct AccountBook: Equatable, Sendable {
         let find = { (project: String?) in
             report.defaults.first { $0.agent == agent && $0.project == project }?.account
         }
-        let id = project.flatMap(find) ?? find(nil) ?? systemAccount
-        return account(agent, id) == nil ? systemAccount : id
+        let accountId = project.flatMap(find) ?? find(nil) ?? systemAccount
+        return account(agent, accountId) == nil ? systemAccount : accountId
     }
 
     /// What a new agent tab runs under: the tab's own pick, else the project's default, else
@@ -62,7 +62,6 @@ public struct AccountBook: Equatable, Sendable {
         return defaultAccount(agent, project: project)
     }
 
-    /// The account of a daemon-launched agent pane.
     public func account(ofPane pane: UInt64) -> AgentAccount? {
         guard let entry = report.panes.first(where: { $0.paneId == pane }) else { return nil }
         return account(entry.agent, entry.account)
@@ -75,7 +74,6 @@ public struct AccountBook: Equatable, Sendable {
         return (account.label, account.color)
     }
 
-    /// An account's usage.
     public func usage(_ agent: AgentKind, _ id: String) -> AgentUsage? {
         usage.accounts.first { $0.account == id && $0.usage.agent == agent }?.usage
     }
@@ -115,7 +113,6 @@ public struct LimitHint: Equatable, Sendable {
     public var action: String { "New Tab with \(alternative.label)" }
 }
 
-/// An account's sign-in, in words.
 public enum AccountText {
     public static func status(_ status: AccountStatus) -> String {
         switch status {

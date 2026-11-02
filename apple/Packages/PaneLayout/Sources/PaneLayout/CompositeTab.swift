@@ -100,13 +100,11 @@ public struct CompositeTab: Identifiable, Hashable, Sendable, Codable {
     /// The arrangement. Its id is the composite's id in the window
     /// (`TabRef(hostId: HostGroups.mixedId, tab: id)`).
     public private(set) var layout: Tab
-    /// The host pane each leaf shows.
     public private(set) var members: [PaneId: HostPane]
     /// The editor each editor leaf shows (leaves not in `members`).
     public private(set) var editors: [PaneId: EditorMember] = [:]
     /// The page each browser leaf shows (leaves in neither of the above).
     public private(set) var browsers: [PaneId: BrowserMember] = [:]
-    /// The tool each tool leaf shows.
     public private(set) var tools: [PaneId: ToolMember] = [:]
     /// The tab on each host that holds this composite's panes there.
     public internal(set) var carriers: [String: TabId]
@@ -119,7 +117,7 @@ public struct CompositeTab: Identifiable, Hashable, Sendable, Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         layout = try container.decode(Tab.self, forKey: .layout)
         members = try container.decode([PaneId: HostPane].self, forKey: .members)
-        // Saved before editors were leaves.
+        // Absent from older saves.
         editors = try container.decodeIfPresent([PaneId: EditorMember].self, forKey: .editors) ?? [:]
         browsers = try container.decodeIfPresent([PaneId: BrowserMember].self, forKey: .browsers) ?? [:]
         tools = try container.decodeIfPresent([PaneId: ToolMember].self, forKey: .tools) ?? [:]
@@ -128,22 +126,16 @@ public struct CompositeTab: Identifiable, Hashable, Sendable, Codable {
 
     public var id: TabId { layout.id }
     public var title: String? { layout.title }
-    /// Leaves in reading order.
     public var leaves: [PaneId] { layout.root.panes }
     public var focusedLeaf: PaneId { layout.focused }
     public var focusedMember: HostPane? { members[layout.focused] }
-    /// The focused leaf's editor, when an editor has the focus.
     public var focusedEditor: EditorMember? { editors[layout.focused] }
     /// Only editors: a VS Code tab (the sidebar lists it under VS Code, not Mixed).
     public var isEditorOnly: Bool { members.isEmpty && browsers.isEmpty && tools.isEmpty && !editors.isEmpty }
-    /// The focused leaf's page, when a browser has the focus.
     public var focusedBrowser: BrowserMember? { browsers[layout.focused] }
-    /// Only browser pages: a browser tab.
     public var isBrowserOnly: Bool { members.isEmpty && editors.isEmpty && tools.isEmpty && !browsers.isEmpty }
-    /// The focused leaf's tool, when a tool has the focus.
     public var focusedTool: ToolMember? { tools[layout.focused] }
 
-    /// The leaf showing a tool, if any.
     public func leaf(forTool id: UUID) -> PaneId? {
         tools.first { $0.value.id == id }?.key
     }
@@ -153,12 +145,10 @@ public struct CompositeTab: Identifiable, Hashable, Sendable, Codable {
         leaves.first { tools[$0]?.tool == tool }
     }
 
-    /// The leaf showing a page, if any.
     public func leaf(forBrowser id: UUID) -> PaneId? {
         browsers.first { $0.value.id == id }?.key
     }
 
-    /// The leaf showing an editor, if any.
     public func leaf(forEditor id: UUID) -> PaneId? {
         editors.first { $0.value.id == id }?.key
     }
@@ -193,7 +183,6 @@ public struct CompositeTab: Identifiable, Hashable, Sendable, Codable {
         return copy
     }
 
-    /// A tab of one editor (Open in VS Code in a new tab).
     public init(id: TabId, editor: EditorMember) {
         let leaf = PaneId(1)
         layout = Tab(id: id, root: .leaf(leaf), focused: leaf)
@@ -202,7 +191,6 @@ public struct CompositeTab: Identifiable, Hashable, Sendable, Codable {
         carriers = [:]
     }
 
-    /// A tab of one browser page.
     public init(id: TabId, browser: BrowserMember) {
         let leaf = PaneId(1)
         layout = Tab(id: id, root: .leaf(leaf), focused: leaf)
@@ -211,7 +199,6 @@ public struct CompositeTab: Identifiable, Hashable, Sendable, Codable {
         carriers = [:]
     }
 
-    /// A tab of one tool.
     public init(id: TabId, tool: ToolMember) {
         let leaf = PaneId(1)
         layout = Tab(id: id, root: .leaf(leaf), focused: leaf)
@@ -224,27 +211,26 @@ public struct CompositeTab: Identifiable, Hashable, Sendable, Codable {
     /// its panes a leaf, the tab its host's carrier.
     public init(id: TabId, hostId: String, tab: Tab) {
         var members: [PaneId: HostPane] = [:]
-        var next: UInt64 = 0
-        var mapping: [PaneId: PaneId] = [:]
+        var lastLeaf: UInt64 = 0
+        var leafForPane: [PaneId: PaneId] = [:]
         func map(_ node: Node) -> Node {
             switch node {
             case .leaf(let pane):
-                next += 1
-                let leaf = PaneId(next)
+                lastLeaf += 1
+                let leaf = PaneId(lastLeaf)
                 members[leaf] = HostPane(hostId: hostId, pane: pane)
-                mapping[pane] = leaf
+                leafForPane[pane] = leaf
                 return .leaf(leaf)
             case .split(let axis, let ratio, let first, let second):
                 return .split(axis: axis, ratio: ratio, first: map(first), second: map(second))
             }
         }
         let root = map(tab.root)
-        layout = Tab(id: id, title: tab.title, root: root, focused: mapping[tab.focused] ?? root.panes[0])
+        layout = Tab(id: id, title: tab.title, root: root, focused: leafForPane[tab.focused] ?? root.panes[0])
         self.members = members
         carriers = [hostId: tab.id]
     }
 
-    /// The leaf that shows `member`, if any.
     public func leaf(for member: HostPane) -> PaneId? {
         members.first { $0.value == member }?.key
     }
@@ -271,33 +257,30 @@ public struct CompositeTab: Identifiable, Hashable, Sendable, Codable {
     /// Adds `member` beside `leaf` (right of it for `.horizontal`, below for `.vertical`), focused.
     @discardableResult
     public mutating func insert(_ member: HostPane, beside leaf: PaneId, axis: Axis) -> PaneId? {
-        guard let new = splitLeaf(leaf, axis: axis) else { return nil }
-        members[new] = member
-        return new
+        guard let newLeaf = splitLeaf(leaf, axis: axis) else { return nil }
+        members[newLeaf] = member
+        return newLeaf
     }
 
-    /// Adds an editor beside `leaf`, focused.
     @discardableResult
     public mutating func insert(editor: EditorMember, beside leaf: PaneId, axis: Axis) -> PaneId? {
-        guard let new = splitLeaf(leaf, axis: axis) else { return nil }
-        editors[new] = editor
-        return new
+        guard let newLeaf = splitLeaf(leaf, axis: axis) else { return nil }
+        editors[newLeaf] = editor
+        return newLeaf
     }
 
-    /// Adds a browser page beside `leaf`, focused.
     @discardableResult
     public mutating func insert(browser: BrowserMember, beside leaf: PaneId, axis: Axis) -> PaneId? {
-        guard let new = splitLeaf(leaf, axis: axis) else { return nil }
-        browsers[new] = browser
-        return new
+        guard let newLeaf = splitLeaf(leaf, axis: axis) else { return nil }
+        browsers[newLeaf] = browser
+        return newLeaf
     }
 
-    /// Adds a tool beside `leaf`, focused.
     @discardableResult
     public mutating func insert(tool: ToolMember, beside leaf: PaneId, axis: Axis) -> PaneId? {
-        guard let new = splitLeaf(leaf, axis: axis) else { return nil }
-        tools[new] = tool
-        return new
+        guard let newLeaf = splitLeaf(leaf, axis: axis) else { return nil }
+        tools[newLeaf] = tool
+        return newLeaf
     }
 
     /// The page a browser leaf shows now (it navigated).
@@ -310,9 +293,9 @@ public struct CompositeTab: Identifiable, Hashable, Sendable, Codable {
         var session = Session(tabs: [layout], activeTabId: layout.id)
         let before = Set(leaves)
         session.apply(.split(leaf, axis))
-        guard let tab = session.tabs.first, let new = tab.root.panes.first(where: { !before.contains($0) }) else { return nil }
+        guard let tab = session.tabs.first, let newLeaf = tab.root.panes.first(where: { !before.contains($0) }) else { return nil }
         layout = tab
-        return new
+        return newLeaf
     }
 
     /// Removes a leaf; its sibling takes its place. False when it was the last leaf (the
@@ -399,37 +382,30 @@ public final class CompositeTabs {
         tabs.first { $0.id == id }
     }
 
-    /// The composite showing a host pane, if any.
     public func tab(containing member: HostPane) -> CompositeTab? {
         tabs.first { $0.leaf(for: member) != nil }
     }
 
-    /// The composite showing an editor, if any.
     public func tab(containingEditor id: UUID) -> CompositeTab? {
         tabs.first { $0.leaf(forEditor: id) != nil }
     }
 
-    /// The composite showing a browser page, if any.
     public func tab(containingBrowser id: UUID) -> CompositeTab? {
         tabs.first { $0.leaf(forBrowser: id) != nil }
     }
 
-    /// The composite showing a tool, if any.
     public func tab(containingTool id: UUID) -> CompositeTab? {
         tabs.first { $0.leaf(forTool: id) != nil }
     }
 
-    /// Every tool open in the window, in tab order.
     public var tools: [ToolMember] {
         tabs.flatMap { tab in tab.leaves.compactMap { tab.tools[$0] } }
     }
 
-    /// Every browser page open in the window, in tab order.
     public var browsers: [BrowserMember] {
         tabs.flatMap { tab in tab.leaves.compactMap { tab.browsers[$0] } }
     }
 
-    /// Every editor open in the window, in tab order.
     public var editors: [EditorMember] {
         tabs.flatMap { tab in tab.leaves.compactMap { tab.editors[$0] } }
     }
@@ -450,7 +426,6 @@ public final class CompositeTabs {
         return result
     }
 
-    /// Whether a split was asked of a host and not answered yet.
     public func isWaiting(_ id: TabId) -> Bool {
         pending.contains { $0.composite == id }
     }
@@ -510,7 +485,6 @@ public final class CompositeTabs {
 
     // MARK: Browser pages
 
-    /// A browser page in a new tab.
     @discardableResult
     public func openBrowser(_ browser: BrowserMember) -> TabId {
         let id = nextId()
@@ -518,7 +492,6 @@ public final class CompositeTabs {
         return id
     }
 
-    /// A browser page beside the focused leaf of a composite.
     @discardableResult
     public func addBrowser(_ browser: BrowserMember, to id: TabId, axis: Axis = .horizontal) -> PaneId? {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return nil }
@@ -546,7 +519,6 @@ public final class CompositeTabs {
 
     // MARK: Tools
 
-    /// A tool in a new tab.
     @discardableResult
     public func openTool(_ tool: ToolMember) -> TabId {
         let id = nextId()
@@ -554,7 +526,6 @@ public final class CompositeTabs {
         return id
     }
 
-    /// A tool beside the focused leaf of a composite.
     @discardableResult
     public func addTool(_ tool: ToolMember, to id: TabId, axis: Axis = .horizontal) -> PaneId? {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return nil }
@@ -654,7 +625,6 @@ public final class CompositeTabs {
         return nil
     }
 
-    /// Closes the whole tab: each host closes its carrier.
     /// Undo of closing a window-owned tab: editors and pages only (host panes end with their
     /// tab). It comes back as it was, under a new id.
     @discardableResult
@@ -665,6 +635,7 @@ public final class CompositeTabs {
         return id
     }
 
+    /// Each host closes its carrier.
     public func closeTab(_ id: TabId) {
         guard let tab = tab(id) else { return }
         for (host, carrier) in tab.carriers { _ = send(host, .closeTab(carrier)) }

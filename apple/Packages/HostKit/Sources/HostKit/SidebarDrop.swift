@@ -77,8 +77,8 @@ nonisolated public enum SidebarDrop: Hashable, Sendable {
             section.rows.removeAll { $0 == ref }
             return section
         }
-        if let i = result.firstIndex(where: { $0.container == container }) {
-            result[i].rows.insert(ref, at: min(max(index, 0), result[i].rows.count))
+        if let sectionIndex = result.firstIndex(where: { $0.container == container }) {
+            result[sectionIndex].rows.insert(ref, at: min(max(index, 0), result[sectionIndex].rows.count))
         } else {
             result.append(SidebarSection(container, rows: [ref]))
         }

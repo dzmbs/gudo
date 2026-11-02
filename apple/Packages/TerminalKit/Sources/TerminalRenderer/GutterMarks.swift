@@ -15,6 +15,7 @@ public struct GutterMark: Equatable, Sendable {
     public var tint: Tint
     /// 0…1.
     public var opacity: Double
+    /// A tint over the mark's rows across the whole grid (for a failed command: the stripe's
     /// colour at a few percent), 0 for none.
     public var rowTint: Double
 

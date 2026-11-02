@@ -63,17 +63,17 @@ private func placeholder(_ sealed: String) -> UNMutableNotificationContent {
         let key = try vectors.deviceKey()
         let nse = ServiceExtensionCore(deviceKey: { key }, pairedDaemons: { [vectors.daemon] })
         for payload in vectors.payloads {
-            let out = nse.process(placeholder(payload.sealed))
+            let processed = nse.process(placeholder(payload.sealed))
             let expected = try JSONDecoder().decode(PushNotification.self, from: Data(payload.json.utf8))
-            #expect(out.title == expected.title, "\(payload.name)")
-            #expect(out.subtitle == expected.host)
-            #expect(out.body == expected.body)
-            #expect(out.categoryIdentifier == payload.category)
-            #expect(out.threadIdentifier == expected.daemon)
+            #expect(processed.title == expected.title, "\(payload.name)")
+            #expect(processed.subtitle == expected.host)
+            #expect(processed.body == expected.body)
+            #expect(processed.categoryIdentifier == payload.category)
+            #expect(processed.threadIdentifier == expected.daemon)
             // The handler reads the opened payload back; the sealed blob is gone.
-            #expect(out.userInfo[PushContent.sealedKey] == nil)
-            #expect(PushContent.payload(from: out.userInfo) == expected)
-            #expect(NotificationTarget(userInfo: out.userInfo, remote: true) == .push(expected))
+            #expect(processed.userInfo[PushContent.sealedKey] == nil)
+            #expect(PushContent.payload(from: processed.userInfo) == expected)
+            #expect(NotificationTarget(userInfo: processed.userInfo, remote: true) == .push(expected))
         }
     }
 
@@ -91,9 +91,9 @@ private func placeholder(_ sealed: String) -> UNMutableNotificationContent {
         // Rejected payloads: wrong key, bit flip, wrong signer.
         let nse = ServiceExtensionCore(deviceKey: { key }, pairedDaemons: { [vectors.daemon] })
         for reject in vectors.rejects {
-            let out = nse.process(placeholder(reject.sealed))
-            #expect(out.title == "Approval needed", "\(reject.name)")
-            #expect(out.categoryIdentifier == "RELAY_SAYS_SOMETHING_ELSE")
+            let processed = nse.process(placeholder(reject.sealed))
+            #expect(processed.title == "Approval needed", "\(reject.name)")
+            #expect(processed.categoryIdentifier == "RELAY_SAYS_SOMETHING_ELSE")
         }
         // A good payload from a daemon that is not paired here.
         let stranger = ServiceExtensionCore(deviceKey: { key }, pairedDaemons: { [] })
@@ -112,7 +112,6 @@ private func placeholder(_ sealed: String) -> UNMutableNotificationContent {
     }
 }
 
-/// Records what the handler asked for.
 private final class FakeClient: NotificationActionClient {
     enum Call: Equatable {
         case decide(host: String, pane: UInt64, request: UInt64, option: UInt32)
@@ -161,9 +160,9 @@ private final class FakeClient: NotificationActionClient {
     @Test func localApproveAndDenyDecideWithTheMatchingOption() async {
         let client = FakeClient()
         let handler = NotificationActionHandler(client: client)
-        let info = LocalNotifications.content(for: note).userInfo
-        #expect(await handler.handle(actionIdentifier: PushAction.approve, userInfo: info, remote: false) == .decided(approve: true))
-        #expect(await handler.handle(actionIdentifier: PushAction.deny, userInfo: info, remote: false) == .decided(approve: false))
+        let userInfo = LocalNotifications.content(for: note).userInfo
+        #expect(await handler.handle(actionIdentifier: PushAction.approve, userInfo: userInfo, remote: false) == .decided(approve: true))
+        #expect(await handler.handle(actionIdentifier: PushAction.deny, userInfo: userInfo, remote: false) == .decided(approve: false))
         // Each answer marks the item seen, so the badge clears.
         #expect(client.recorded == [
             .decide(host: "h1", pane: 7, request: 31, option: 1), .seen(host: "h1", daemon: nil, item: 9),
@@ -174,33 +173,33 @@ private final class FakeClient: NotificationActionClient {
     @Test func openAndDefaultTapShowThePane() async {
         let client = FakeClient()
         let handler = NotificationActionHandler(client: client)
-        let info = LocalNotifications.content(for: note).userInfo
-        #expect(await handler.handle(actionIdentifier: PushAction.open, userInfo: info, remote: false) == .opened)
-        #expect(await handler.handle(actionIdentifier: UNNotificationDefaultActionIdentifier, userInfo: info, remote: false) == .opened)
-        #expect(await handler.handle(actionIdentifier: UNNotificationDismissActionIdentifier, userInfo: info, remote: false) == .ignored)
+        let userInfo = LocalNotifications.content(for: note).userInfo
+        #expect(await handler.handle(actionIdentifier: PushAction.open, userInfo: userInfo, remote: false) == .opened)
+        #expect(await handler.handle(actionIdentifier: UNNotificationDefaultActionIdentifier, userInfo: userInfo, remote: false) == .opened)
+        #expect(await handler.handle(actionIdentifier: UNNotificationDismissActionIdentifier, userInfo: userInfo, remote: false) == .ignored)
         #expect(client.recorded == [.open(host: "h1", daemon: nil, pane: 7), .open(host: "h1", daemon: nil, pane: 7)])
     }
 
     /// What the extension stores for an approval payload signed by `daemon`.
-    private func signedApproval(_ daemon: Curve25519.Signing.PrivateKey, token: Data) throws -> (info: [AnyHashable: Any], id: String) {
-        let id = daemon.publicKey.rawRepresentation.map { String(format: "%02x", $0) }.joined()
+    private func signedApproval(_ daemon: Curve25519.Signing.PrivateKey, token: Data) throws -> (userInfo: [AnyHashable: Any], daemonId: String) {
+        let daemonId = daemon.publicKey.rawRepresentation.map { String(format: "%02x", $0) }.joined()
         let expires = UInt64((Date.now.timeIntervalSince1970 + 600) * 1000)
         let json = Data("""
-            {"v":1,"daemon":"\(id)","host":"studio","kind":"approval","item":42,"pane":7,"session":1,
+            {"v":1,"daemon":"\(daemonId)","host":"studio","kind":"approval","item":42,"pane":7,"session":1,
              "title":"t","body":"b","at":0,
              "action":{"token":"\(Base64URL.encode(token))","approve":"Yes","deny":"No","expires":\(expires)}}
             """.utf8)
         let signature = try daemon.signature(for: PushCrypto.payloadDomain + json)
-        return ([PushContent.payloadKey: String(decoding: json, as: UTF8.self), PushContent.signatureKey: signature.base64EncodedString()], id)
+        return ([PushContent.payloadKey: String(decoding: json, as: UTF8.self), PushContent.signatureKey: signature.base64EncodedString()], daemonId)
     }
 
     @Test func pushApproveSendsTheTokenOnAOneShotConnection() async throws {
         let token = Data([1, 2, 3, 4])
-        let (info, daemon) = try signedApproval(Curve25519.Signing.PrivateKey(), token: token)
+        let (userInfo, daemon) = try signedApproval(Curve25519.Signing.PrivateKey(), token: token)
         let client = FakeClient()
         let handler = NotificationActionHandler(client: client)
-        #expect(await handler.handle(actionIdentifier: PushAction.deny, userInfo: info, remote: true) == .decided(approve: false))
-        #expect(await handler.handle(actionIdentifier: PushAction.open, userInfo: info, remote: true) == .opened)
+        #expect(await handler.handle(actionIdentifier: PushAction.deny, userInfo: userInfo, remote: true) == .decided(approve: false))
+        #expect(await handler.handle(actionIdentifier: PushAction.open, userInfo: userInfo, remote: true) == .opened)
         #expect(client.recorded == [
             .push(daemon: daemon, token: token, approve: false), .seen(host: nil, daemon: daemon, item: 42),
             .open(host: nil, daemon: daemon, pane: 7),
@@ -210,9 +209,9 @@ private final class FakeClient: NotificationActionClient {
     @Test func aPushThatSkipsTheExtensionCannotForgeAPayload() async throws {
         // Without `mutable-content` the extension never runs and `userInfo` is the relay's.
         let daemon = Curve25519.Signing.PrivateKey()
-        let (info, id) = try signedApproval(daemon, token: Data([1, 2, 3, 4]))
-        let json = try #require(info[PushContent.payloadKey] as? String)
-        let signature = try #require(info[PushContent.signatureKey] as? String)
+        let (userInfo, daemonId) = try signedApproval(daemon, token: Data([1, 2, 3, 4]))
+        let json = try #require(userInfo[PushContent.payloadKey] as? String)
+        let signature = try #require(userInfo[PushContent.signatureKey] as? String)
         let (other, _) = try signedApproval(Curve25519.Signing.PrivateKey(), token: Data([1, 2, 3, 4]))
         let forgeries: [[AnyHashable: Any]] = [
             [PushContent.payloadKey: json],
@@ -226,7 +225,7 @@ private final class FakeClient: NotificationActionClient {
             #expect(await NotificationActionHandler(client: client).handle(actionIdentifier: PushAction.approve, userInfo: forged, remote: true) == .ignored)
         }
         #expect(client.recorded.isEmpty)
-        #expect(PushContent.payload(from: info)?.daemon == id)
+        #expect(PushContent.payload(from: userInfo)?.daemon == daemonId)
     }
 
     @Test func expiredTokensAndRefusalsBecomeFailures() async throws {
@@ -243,15 +242,15 @@ private final class FakeClient: NotificationActionClient {
 
         // The host refuses (already decided elsewhere).
         let refusing = FakeClient(fail: true)
-        let info = LocalNotifications.content(for: note).userInfo
-        #expect(await NotificationActionHandler(client: refusing).handle(actionIdentifier: PushAction.approve, userInfo: info, remote: false)
+        let userInfo = LocalNotifications.content(for: note).userInfo
+        #expect(await NotificationActionHandler(client: refusing).handle(actionIdentifier: PushAction.approve, userInfo: userInfo, remote: false)
             == .failed("rejected: already decided"))
         // A blocked item without options cannot be approved in place.
         var blocked = note
         blocked.kind = .approval(requestId: 5, approve: nil, deny: nil)
-        let none = await NotificationActionHandler(client: client).handle(
+        let withoutOptions = await NotificationActionHandler(client: client).handle(
             actionIdentifier: PushAction.approve, userInfo: LocalNotifications.content(for: blocked).userInfo, remote: false)
-        #expect(none == .failed("This request has no approve option."))
+        #expect(withoutOptions == .failed("This request has no approve option."))
     }
 
     @Test func aPushCannotPoseAsALocalApproval() async throws {
@@ -263,7 +262,7 @@ private final class FakeClient: NotificationActionClient {
         #expect(client.recorded.isEmpty)
         // Even if the extension timed out and delivered the push as it came.
         let content = placeholder("AAAA")
-        content.userInfo = content.userInfo.merging(forged) { a, _ in a }
+        content.userInfo = content.userInfo.merging(forged) { current, _ in current }
         let delivered = ServiceExtensionCore.placeholder(content)
         #expect(NotificationTarget(userInfo: delivered.userInfo, remote: false) == nil)
     }
@@ -345,9 +344,8 @@ private final class FakeClient: NotificationActionClient {
     }
 }
 
-/// The agents Live Activity's content state (docs/PUSH.md §6): the shared activity vector
-/// opens to its host's row, other hosts' rows are kept and summed, stale and foreign ones are
-/// not.
+/// The shared activity vector opens to its host's row; other hosts' rows are kept and summed,
+/// stale and foreign ones are not.
 @Suite struct AgentsActivityTests {
     final class Rows: @unchecked Sendable {
         let value = Mutex<[AgentsBoard.Host]>([])

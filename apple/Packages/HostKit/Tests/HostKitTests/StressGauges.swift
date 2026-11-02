@@ -80,11 +80,11 @@ nonisolated final class Peaks: Sendable {
                 }
                 let lag = (ran.at.withLock { $0 } ?? .now) - posted
                 let (footprint, threads, fds) = (Gauge.footprint(), Gauge.threads(), Gauge.fds())
-                values.withLock { v in
-                    v.footprint = max(v.footprint, footprint)
-                    v.threads = max(v.threads, threads)
-                    v.fds = max(v.fds, fds)
-                    v.hangMs = max(v.hangMs, lag / .milliseconds(1))
+                values.withLock { peak in
+                    peak.footprint = max(peak.footprint, footprint)
+                    peak.threads = max(peak.threads, threads)
+                    peak.fds = max(peak.fds, fds)
+                    peak.hangMs = max(peak.hangMs, lag / .milliseconds(1))
                 }
             }
         }
@@ -94,10 +94,10 @@ nonisolated final class Peaks: Sendable {
 
     func stop() -> Values {
         running.store(false, ordering: .relaxed)
-        var v = values.withLock { $0 }
+        var measured = values.withLock { $0 }
         let wall = (ContinuousClock.now - started) / .seconds(1)
-        v.cpuPercent = (Gauge.cpu() - cpuStart) / wall * 100
-        return v
+        measured.cpuPercent = (Gauge.cpu() - cpuStart) / wall * 100
+        return measured
     }
 }
 
@@ -151,10 +151,10 @@ nonisolated final class MirrorPane: Sendable {
             case .history(let records, _):
                 _ = try? terminal.appendHistory(records)
                 self.state.withLock { $0.histories += 1 }
-            case .resized(let cols, let rows, let w, let h):
-                terminal.resize(cols: cols, rows: rows, cellWidth: max(w, 8), cellHeight: max(h, 16))
-            case .connection(let c):
-                self.state.withLock { $0.connection = c }
+            case .resized(let cols, let rows, let cellWidth, let cellHeight):
+                terminal.resize(cols: cols, rows: rows, cellWidth: max(cellWidth, 8), cellHeight: max(cellHeight, 16))
+            case .connection(let connection):
+                self.state.withLock { $0.connection = connection }
             case .exited:
                 break
             }

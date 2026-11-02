@@ -1,10 +1,8 @@
 import SwiftUI
 
-/// A popover that opens on pointer hover (Mac, iPad with a pointer) and closes 150 ms after the
-///
-/// Content gets the system's popover padding and spacing (O3): give it `.padding()` and the
-/// default `VStack` spacing, one fixed width and at most 400 tall, scrolling past that
-/// (`hoverPopoverFrame()`).
+/// A popover that opens on pointer hover and closes shortly after the pointer leaves both the
+/// anchor and the popover; a click or tap toggles it. On iPhone it is a sheet at the medium detent.
+/// Lay its content out with `hoverPopoverFrame()`.
 public struct HoverPopover<Label: View, Content: View>: View {
     @Binding var isPresented: Bool
     let onClick: (() -> Void)?
@@ -14,7 +12,6 @@ public struct HoverPopover<Label: View, Content: View>: View {
     @State private var overPopover = false
     @State private var closing: Task<Void, Never>?
 
-    /// The grace after the pointer leaves anchor and popover.
     public static var grace: Duration { .milliseconds(150) }
 
     public init(
@@ -64,7 +61,6 @@ public struct HoverPopover<Label: View, Content: View>: View {
 }
 
 public extension DS.Size {
-    /// Popovers: at most 400 tall, then they scroll.
     static let popoverMaxHeight: CGFloat = 400
     /// One width for content that changes while open, so a longer line never widens it.
     static let popoverWidth: CGFloat = 360

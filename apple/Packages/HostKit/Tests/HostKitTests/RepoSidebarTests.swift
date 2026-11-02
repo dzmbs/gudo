@@ -21,8 +21,8 @@ import GudoCore
         PullRequest(
             number: 7, title: "T", state: state, draft: false, url: "https://github.com/o/r/pull/7",
             headRef: "b", additions: 3, deletions: 1, mergeState: merge,
-            checks: checks.enumerated().map { i, s in
-                PrCheck(name: "c\(i)", status: s, url: "https://github.com/o/r/actions/runs/\(i)/job/1", workflow: nil)
+            checks: checks.enumerated().map { index, status in
+                PrCheck(name: "c\(index)", status: status, url: "https://github.com/o/r/actions/runs/\(index)/job/1", workflow: nil)
             },
             fetchedAtMs: 0)
     }
@@ -77,7 +77,7 @@ import GudoCore
         #expect(Self.worktree("/w/x", branch: nil).displayBranch == "detached at abcdef1")
     }
 
-    @Test func checksSummaryFollowsSupacodesRule() {
+    @Test func checksSummaryFailsOnAnyFailure() {
         #expect(ChecksSummary(statuses: []) == .none)
         #expect(ChecksSummary(statuses: [.success, .success]) == .passing(2))
         #expect(ChecksSummary(statuses: [.success, .pending]) == .pending(failed: 0, running: 1, passed: 1))

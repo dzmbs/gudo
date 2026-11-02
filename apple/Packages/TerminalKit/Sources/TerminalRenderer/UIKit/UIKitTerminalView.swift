@@ -7,6 +7,7 @@ import UIKit
 /// - hardware keys (`UIPress`, HID usages through the shared `PhysicalKey` table) with our own
 ///   hold-to-repeat, Option-as-Meta per side, and ⌘ chords left to the app's key commands;
 /// - the software keyboard and IMEs through `UITextInput`. Marked text is drawn inline at the
+///   cursor by the renderer and never sent; committed text goes to the PTY at once;
 /// - touch: tap focuses (or clicks, or opens a link after confirmation), double/triple tap and
 ///   long-press select a word/line with drag handles and the edit menu, one-finger drag scrolls
 ///   with momentum (alt screen: arrow keys; mouse mode: drag events), two fingers send the wheel;
@@ -218,7 +219,7 @@ public final class TerminalView: UIView {
         if !bytes.isEmpty { emit(bytes) }
     }
 
-    /// Sends text written in a composer (04-mobile-ux C5): as a paste (bracketed when the program
+    /// Sends text written in a composer: as a paste (bracketed when the program
     /// asked for it, so a multi-line prompt arrives as one), then Return when `submit`.
     public func sendComposedText(_ text: String, submit: Bool = true) {
         _ = surface.paste(text, source: .text, allowUnsafe: true)
@@ -437,6 +438,7 @@ public final class TerminalView: UIView {
             // Inside the selection or on an image: keep it (a drag carries it out).
             pressKeepsSelection = isSelected(point) || surface.kittyImage(at: point) != nil
             if pressKeepsSelection { return }
+            // Long-press selects even when the program tracks the mouse.
             if surface.terminal.selectLinkOrWord(atViewport: surface.cell(at: point)) != nil {
                 UISelectionFeedbackGenerator().selectionChanged()
                 selectionChanged(showMenu: false)
@@ -617,9 +619,9 @@ public final class TerminalView: UIView {
 
     private var presenter: UIViewController? {
         var responder: UIResponder? = self
-        while let r = responder {
-            if let vc = r as? UIViewController { return vc.presentedViewController ?? vc }
-            responder = r.next
+        while let current = responder {
+            if let vc = current as? UIViewController { return vc.presentedViewController ?? vc }
+            responder = current.next
         }
         return window?.rootViewController
     }
@@ -1041,9 +1043,9 @@ extension TerminalView: UITextInput {
     }
 
     public func compare(_ position: UITextPosition, to other: UITextPosition) -> ComparisonResult {
-        let a = (position as? TextPosition)?.offset ?? 0
-        let b = (other as? TextPosition)?.offset ?? 0
-        return a < b ? .orderedAscending : a > b ? .orderedDescending : .orderedSame
+        let lhs = (position as? TextPosition)?.offset ?? 0
+        let rhs = (other as? TextPosition)?.offset ?? 0
+        return lhs < rhs ? .orderedAscending : lhs > rhs ? .orderedDescending : .orderedSame
     }
 
     public func offset(from: UITextPosition, to toPosition: UITextPosition) -> Int {

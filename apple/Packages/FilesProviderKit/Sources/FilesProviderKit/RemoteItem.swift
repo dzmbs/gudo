@@ -3,7 +3,6 @@ import Foundation
 import UniformTypeIdentifiers
 import GudoCore
 
-/// A file or folder on the host as Files sees it.
 nonisolated public final class RemoteItem: NSObject, NSFileProviderItem, @unchecked Sendable {
     public let itemIdentifier: NSFileProviderItemIdentifier
     public let parentItemIdentifier: NSFileProviderItemIdentifier
@@ -14,7 +13,6 @@ nonisolated public final class RemoteItem: NSObject, NSFileProviderItem, @unchec
     public let itemVersion: NSFileProviderItemVersion
     public let capabilities: NSFileProviderItemCapabilities
     public let fileSystemFlags: NSFileProviderFileSystemFlags
-    /// The host's path (not shown; for the provider and tests).
     public let path: String
 
     /// Nil for what Files cannot show: sockets, FIFOs, devices, dangling links.

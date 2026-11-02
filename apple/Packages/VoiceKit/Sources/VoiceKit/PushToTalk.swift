@@ -6,11 +6,10 @@ import Observation
 /// The API the key bar's mic button (and the ⌃⌥Space hold shortcut) calls:
 ///
 /// ```swift
-/// let voice = PushToTalk.shared            // the app's instance (VoiceDictation wires it)
-/// voice.start()                            // finger down: listen; the transcript shows at the cursor
-/// await voice.stop()                       // finger up: commit the words (no Return), then idle
-/// voice.cancel()                           // dragged off / Escape: drop everything, commit nothing
-/// for await t in voice.transcripts() { … } // live `Transcript` updates (empty when a session ends)
+/// voice.start()                                     // finger down: listen; the transcript shows at the cursor
+/// await voice.stop()                                // finger up: commit the words (no Return), then idle
+/// voice.cancel()                                    // dragged off / Escape: drop everything, commit nothing
+/// for await transcript in voice.transcripts() { … } // live updates (empty when a session ends)
 /// ```
 ///
 /// Observable state: `phase` (`idle`, `starting`, `listening`, `finishing`, `failed(VoiceError)`),
@@ -25,7 +24,7 @@ import Observation
 public final class PushToTalk {
     public enum Phase: Equatable, Sendable {
         case idle
-        /// Asking for permission / starting the microphone.
+        /// Asking for permission, starting the microphone.
         case starting
         case listening
         /// Released: waiting for the last words.
@@ -33,7 +32,6 @@ public final class PushToTalk {
         case failed(VoiceError)
     }
 
-    /// What `stop()` did.
     public enum Outcome: Equatable, Sendable {
         case committed(String, DictationRoute)
         /// Nothing was heard, or no session was running.
@@ -43,10 +41,9 @@ public final class PushToTalk {
 
     public private(set) var phase: Phase = .idle
     public private(set) var transcript = Transcript()
-    /// The settings read at the last start (on/off, language).
+    /// Read at each start.
     public private(set) var settings: VoiceSettings
 
-    /// Listening, or about to, or finishing: the mic button shows as held.
     public var isActive: Bool {
         switch phase {
         case .starting, .listening, .finishing: true
@@ -78,15 +75,14 @@ public final class PushToTalk {
         self.settings = settings()
     }
 
-    /// Live transcript updates for as long as the caller iterates. Every change while listening,
-    /// and an empty transcript when a session ends (committed, cancelled or failed).
+    /// Every change while listening, and an empty transcript when a session ends.
     public func transcripts() -> AsyncStream<Transcript> {
-        let id = UUID()
+        let listenerId = UUID()
         let (stream, continuation) = AsyncStream.makeStream(of: Transcript.self, bufferingPolicy: .bufferingNewest(8))
-        listeners[id] = continuation
+        listeners[listenerId] = continuation
         continuation.yield(transcript)
         continuation.onTermination = { [weak self] _ in
-            Task { @MainActor in self?.listeners[id] = nil }
+            Task { @MainActor in self?.listeners[listenerId] = nil }
         }
         return stream
     }
@@ -111,7 +107,7 @@ public final class PushToTalk {
             return false
         }
         session += 1
-        let id = session
+        let sessionId = session
         stopRequested = false
         self.target = target
         transcript = Transcript()
@@ -120,20 +116,19 @@ public final class PushToTalk {
         self.recognizer = recognizer
         let locale = settings.locale
         sessionTask = Task { [weak self] in
-            await self?.run(recognizer, locale: locale, session: id)
+            await self?.run(recognizer, locale: locale, session: sessionId)
         }
         return true
     }
 
-    /// Stops listening and commits what was heard (no Return). Waits for the last words up to
-    /// `finishTimeout`.
+    /// Commits what was heard (no Return), waiting up to `finishTimeout` for the last words.
     @discardableResult
     public func stop() async -> Outcome {
         guard isActive, let task = sessionTask else {
             if case .failed(let error) = phase { return .failed(error) }
             return .nothing
         }
-        let id = session
+        let sessionId = session
         stopRequested = true
         if phase == .listening {
             phase = .finishing
@@ -150,15 +145,14 @@ public final class PushToTalk {
         }
         await task.value
         watchdog.cancel()
-        guard id == session else {
+        guard sessionId == session else {
             // The session ended while finishing: a recognizer error (in `phase`) or a cancel.
             if case .failed(let error) = phase { return .failed(error) }
             return .nothing
         }
-        return commit(session: id)
+        return commit(session: sessionId)
     }
 
-    /// Stops at once; nothing is committed.
     public func cancel() {
         guard isActive else {
             if case .failed = phase { phase = .idle }

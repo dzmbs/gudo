@@ -36,35 +36,32 @@ public extension Color {
 
 public extension DS {
     /// Chrome colours. Every one resolves from the window's `ChromePalette` (the active terminal
-    /// under Solarized and Dracula's under Dracula. Chrome is otherwise monochrome: hue is for
-    /// is for state").
+    /// theme) when it is drawn: `DS.Palette.done` is Solarized's green under Solarized and
+    /// Dracula's under Dracula. Chrome is otherwise monochrome: hue is for state, the accent for
+    /// focus, selection and the one primary action.
     nonisolated enum Palette {
-        /// The theme's accent: its cursor colour when that is a real colour, else its bright blue
-        /// (or the bright magenta or cyan farthest from background and foreground). Ghostty's
-        /// default theme gives #7AA6DA. Focus, selection and the single primary action only.
+        /// The theme's cursor colour when that is a real colour, else its bright blue (or the
+        /// bright magenta or cyan farthest from background and foreground).
         public static let accent = ChromeStyle(.accent)
-        /// The selected row (palette, lists): the accent as a soft tint under normal text
-        /// (`onSelection`, ≥ 4.5:1), Spotlight's and Raycast's selection.
+        /// The accent as a soft tint under normal text (`onSelection`, ≥ 4.5:1).
         public static let selection = ChromeStyle(.selection)
         public static let onSelection = ChromeStyle(.onSelection)
-        /// The one primary action: the accent deepened until `onProminent` reads on it at 4.5:1.
+        /// The accent deepened until `onProminent` reads on it at 4.5:1.
         public static let prominent = ChromeStyle(.prominent)
         public static let onProminent = ChromeStyle(.onProminent)
 
         /// Your turn: an agent waiting for input, a slow or reconnecting link (the theme's
+        /// yellow). Amber, not red: red means broken.
         public static let attention = ChromeStyle(.attention)
-        /// Agent working (the theme's magenta). In rows a working agent is a neutral spinner.
+        /// The theme's magenta. In rows a working agent is a neutral spinner.
         public static let working = ChromeStyle(.working)
-        /// Agent blocked / needs you.
         public static let blocked = attention
         /// Done, git added, connected (the theme's green).
         public static let done = ChromeStyle(.done)
         /// Failed, git deleted, unreachable (the theme's red).
         public static let error = ChromeStyle(.error)
-        /// Informational (the theme's blue).
         public static let info = ChromeStyle(.info)
 
-        /// Ghostty's bell border: #FFCC00 at 50 %.
         public static let bell = Color(red: 1, green: 0.8, blue: 0).opacity(0.5)
 
         /// Text: the theme's foreground at 90 / 60 / 40 / 20 %. Window and sheet roots set the
@@ -75,7 +72,7 @@ public extension DS {
         public static let textTertiary = ChromeStyle(.textTertiary)
         public static let textQuaternary = ChromeStyle(.textQuaternary)
 
-        /// control-hover 5 %).
+        /// Row hover / selected / pressed fills: the foreground at 5 / 10 / 15 %.
         public static let hoverFill = ChromeStyle(.hoverFill)
         public static let selectedFill = ChromeStyle(.selectedFill)
         public static let pressedFill = ChromeStyle(.pressedFill)
@@ -113,11 +110,8 @@ nonisolated public struct ChromeStyle: ShapeStyle, Hashable, Sendable {
         case hoverFill, selectedFill, pressedFill
         case hairline, separator, border
         case base, sidebar, raised, overlay, groupedPage, groupedRow, terminal
-        /// The ink itself (the foreground at full strength), for one-off opacities.
         case ink
-        /// One of the theme's 16 ANSI colours as the terminal draws it (presence hues, previews).
         case ansi(Int)
-        /// A project's colour (`ProjectColor`).
         case project(Int)
     }
 
@@ -137,7 +131,6 @@ nonisolated public struct ChromeStyle: ShapeStyle, Hashable, Sendable {
 }
 
 nonisolated public extension ChromePalette {
-    /// The colour for a token.
     func color(_ token: ChromeStyle.Token) -> Color {
         switch token {
         case .accent: accentColor

@@ -4,6 +4,7 @@ import Testing
 import GudoCore
 
 /// Agent plan usage: the meter's words and colours, the detail rows, and watching only while
+/// something shows it.
 @MainActor
 struct AgentUsageTests {
     private var calendar: Calendar {
@@ -27,15 +28,15 @@ struct AgentUsageTests {
     }
 
     @Test func compactMeterReadsLikeTheSpec() throws {
-        let u = usage([window("5h", 300, 620, resetIn: 2 * 3600 + 20 * 60), window("weekly", 10_080, 410, resetIn: 3 * 86_400)])
-        let meter = try #require(UsageMeter.compact(u, now: now, calendar: calendar, locale: locale))
+        let agentUsage = usage([window("5h", 300, 620, resetIn: 2 * 3600 + 20 * 60), window("weekly", 10_080, 410, resetIn: 3 * 86_400)])
+        let meter = try #require(UsageMeter.compact(agentUsage, now: now, calendar: calendar, locale: locale))
         #expect(meter.text == "Claude · 62% of 5h · resets 14:20")
         #expect(meter.tone == .quiet)
     }
 
     @Test func theFullestWindowWinsAndColourOnlyAbove80() throws {
-        let u = usage([window("5h", 300, 300, resetIn: 3600), window("weekly", 10_080, 920, resetIn: 2 * 86_400)], agent: .codex)
-        let meter = try #require(UsageMeter.compact(u, now: now, calendar: calendar, locale: locale))
+        let agentUsage = usage([window("5h", 300, 300, resetIn: 3600), window("weekly", 10_080, 920, resetIn: 2 * 86_400)], agent: .codex)
+        let meter = try #require(UsageMeter.compact(agentUsage, now: now, calendar: calendar, locale: locale))
         #expect(meter.text == "Codex · 92% of weekly · resets Wed")
         #expect(meter.tone == .attention)
         let edge = usage([window("5h", 300, 800, resetIn: 60)])
@@ -43,8 +44,8 @@ struct AgentUsageTests {
     }
 
     @Test func limitedIsRedAndComesFirst() throws {
-        let u = usage([window("5h", 300, 1000, resetIn: 600, limited: true), window("weekly", 10_080, 990, resetIn: 86_400 * 9)])
-        let meter = try #require(UsageMeter.compact(u, now: now, calendar: calendar, locale: locale))
+        let agentUsage = usage([window("5h", 300, 1000, resetIn: 600, limited: true), window("weekly", 10_080, 990, resetIn: 86_400 * 9)])
+        let meter = try #require(UsageMeter.compact(agentUsage, now: now, calendar: calendar, locale: locale))
         #expect(meter.text == "Claude · 100% of 5h · resets 12:10")
         #expect(meter.tone == .limited)
     }
@@ -57,10 +58,10 @@ struct AgentUsageTests {
     }
 
     @Test func detailListsEveryWindowWithItsSourceAndReason() {
-        let u = usage(
+        let agentUsage = usage(
             [window("5h", 300, 850, resetIn: -60), window("weekly", 10_080, 410, resetIn: 9 * 86_400), window("weekly Opus", 10_080, 4, resetIn: 9 * 86_400)],
             plan: "max", source: .cli, asOf: -30)
-        let detail = UsageDetail(u, now: now, calendar: calendar, locale: locale)
+        let detail = UsageDetail(agentUsage, now: now, calendar: calendar, locale: locale)
         #expect(detail.title == "Claude Code · Max")
         #expect(detail.rows.map(\.name) == ["5h", "weekly", "weekly Opus"])
         #expect(detail.rows[0].isPast)

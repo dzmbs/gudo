@@ -17,10 +17,10 @@ public final class FrameStats: Sendable {
         public var instancesMax: Int
 
         public var description: String {
-            func f(_ v: Double) -> String { String(format: "%.2f", v) }
-            return "frames=\(frames) build avg/p99/max=\(f(buildAvg))/\(f(buildP99))/\(f(buildMax))ms "
-                + "encode avg/max=\(f(encodeAvg))/\(f(encodeMax))ms gpu avg/max=\(f(gpuAvg))/\(f(gpuMax))ms "
-                + "interval avg/max=\(f(intervalAvg))/\(f(intervalMax))ms "
+            func format(_ value: Double) -> String { String(format: "%.2f", value) }
+            return "frames=\(frames) build avg/p99/max=\(format(buildAvg))/\(format(buildP99))/\(format(buildMax))ms "
+                + "encode avg/max=\(format(encodeAvg))/\(format(encodeMax))ms gpu avg/max=\(format(gpuAvg))/\(format(gpuMax))ms "
+                + "interval avg/max=\(format(intervalAvg))/\(format(intervalMax))ms "
                 + "rows rebuilt/reused=\(rowsRebuilt)/\(rowsReused) instances<=\(instancesMax)"
         }
     }
@@ -58,23 +58,23 @@ public final class FrameStats: Sendable {
 
     /// Returns the stats since the previous call, or nil if nothing was rendered.
     public func drain() -> Summary? {
-        let w = window.withLock { w in
-            defer { w = Window(lastPresent: w.lastPresent) }
-            return w
+        let stats = window.withLock { stats in
+            defer { stats = Window(lastPresent: stats.lastPresent) }
+            return stats
         }
-        guard !w.build.isEmpty else { return nil }
-        func avg(_ v: [Double]) -> Double { v.isEmpty ? 0 : v.reduce(0, +) / Double(v.count) }
-        let sortedBuild = w.build.sorted()
+        guard !stats.build.isEmpty else { return nil }
+        func avg(_ values: [Double]) -> Double { values.isEmpty ? 0 : values.reduce(0, +) / Double(values.count) }
+        let sortedBuild = stats.build.sorted()
         return Summary(
-            frames: w.build.count,
-            buildAvg: avg(w.build),
+            frames: stats.build.count,
+            buildAvg: avg(stats.build),
             buildP99: sortedBuild[min(sortedBuild.count - 1, Int(Double(sortedBuild.count) * 0.99))],
             buildMax: sortedBuild.last!,
-            encodeAvg: avg(w.encode), encodeMax: w.encode.max()!,
-            gpuAvg: avg(w.gpu), gpuMax: w.gpu.max() ?? 0,
-            intervalAvg: avg(w.intervals), intervalMax: w.intervals.max() ?? 0,
-            rowsRebuilt: w.rowsRebuilt, rowsReused: w.rowsReused,
-            instancesMax: w.instancesMax
+            encodeAvg: avg(stats.encode), encodeMax: stats.encode.max()!,
+            gpuAvg: avg(stats.gpu), gpuMax: stats.gpu.max() ?? 0,
+            intervalAvg: avg(stats.intervals), intervalMax: stats.intervals.max() ?? 0,
+            rowsRebuilt: stats.rowsRebuilt, rowsReused: stats.rowsReused,
+            instancesMax: stats.instancesMax
         )
     }
 }

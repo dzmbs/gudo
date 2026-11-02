@@ -69,7 +69,7 @@ nonisolated final class EventSink: Sendable {
     }
 
     var lastConnection: PaneConnection? {
-        all.reversed().lazy.compactMap { if case .connection(let c) = $0 { c } else { nil } }.first
+        all.reversed().lazy.compactMap { if case .connection(let connection) = $0 { connection } else { nil } }.first
     }
 }
 

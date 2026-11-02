@@ -2,6 +2,7 @@ import Foundation
 import Synchronization
 import GudoCore
 
+/// Input assistance for a pane's line editor and smart row: the
 /// daemon's prompt state, atomic submit, completion and the blocked agent's options. Panes on a
 /// daemon implement it; local and plain-SSH panes don't (the key bar stays in direct mode).
 public protocol LineAssist: AnyObject, Sendable {

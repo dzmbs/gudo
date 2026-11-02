@@ -23,11 +23,9 @@ import UserNotifications
 /// Everything else in a push's `userInfo` came from the relay and is dropped, success or not:
 /// the action handler must only ever see a payload this device opened and verified.
 public enum PushContent {
-    /// `userInfo` key of the sealed payload.
     public static let sealedKey = "s"
-    /// `userInfo` key the decrypted payload JSON is stored under.
     public static let payloadKey = "push"
-    /// `userInfo` key of the daemon's signature over that JSON, base64.
+    /// The daemon's signature over the payload JSON, base64.
     public static let signatureKey = "push-sig"
 
     public static func decrypt(
@@ -58,7 +56,6 @@ public enum PushContent {
         userInfo["aps"].map { ["aps": $0] } ?? [:]
     }
 
-    /// Fills `content` from a decrypted notification.
     public static func apply(
         _ note: PushNotification,
         opened: Opened,
@@ -76,10 +73,10 @@ public enum PushContent {
         case .done, .failed, .command:
             content.interruptionLevel = .active
         }
-        var info = trusted(content.userInfo)
-        info[payloadKey] = String(decoding: opened.json, as: UTF8.self)
-        info[signatureKey] = opened.signature.base64EncodedString()
-        content.userInfo = info
+        var userInfo = trusted(content.userInfo)
+        userInfo[payloadKey] = String(decoding: opened.json, as: UTF8.self)
+        userInfo[signatureKey] = opened.signature.base64EncodedString()
+        content.userInfo = userInfo
     }
 
     /// The decrypted notification stored by ``decrypt(_:deviceKey:isPairedDaemon:)``, for the

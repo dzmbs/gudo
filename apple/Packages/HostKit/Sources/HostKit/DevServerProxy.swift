@@ -1,14 +1,14 @@
 import Foundation
 import Network
 
-// S-BR1: a dev server on a host keeps its origin in the in-app browser.
+// A dev server on a host keeps its origin in the in-app browser.
 //
 // The page loads at exactly the URL the server printed (`http://localhost:3000`,
 // `http://app.localhost:5173`), so cookies, OAuth callbacks, CORS and HMR websockets see the
 // origin they expect. Two pieces, because WebKit does not send loopback literals through a
-// proxy whatever `proxyConfigurations`, `matchDomains` or `excludedDomains` say (checked
-// 2026-10-21: macOS 26 connects `localhost`, `127.0.0.1` and `[::1]` directly; the iOS 27
-// simulator proxies `localhost` but not `127.0.0.1` or `[::1]`); `*.localhost` is always proxied:
+// proxy whatever `proxyConfigurations`, `matchDomains` or `excludedDomains` say (macOS 26
+// connects `localhost`, `127.0.0.1` and `[::1]` directly; the iOS 27 simulator proxies
+// `localhost` but not `127.0.0.1` or `[::1]`); `*.localhost` is always proxied:
 //
 // - `DevServerSocksProxy`: one per host, set as its `WKWebsiteDataStore.proxyConfigurations`
 //   (SOCKS5). `*.localhost:<port>` (and loopback literals, should WebKit ever send them) go to
@@ -47,21 +47,21 @@ public nonisolated enum DevServerProxyError: Error, Equatable {
 /// Copies bytes both ways; each direction's end is passed on as a half-close, and both
 /// connections are cancelled once both directions ended or either failed.
 nonisolated final class Splice: @unchecked Sendable {
-    private let a: NWConnection
-    private let b: NWConnection
+    private let first: NWConnection
+    private let second: NWConnection
     private let queue: DispatchQueue
     private var open = 2
     private var done = false
 
-    init(_ a: NWConnection, _ b: NWConnection, queue: DispatchQueue) {
-        self.a = a
-        self.b = b
+    init(_ first: NWConnection, _ second: NWConnection, queue: DispatchQueue) {
+        self.first = first
+        self.second = second
         self.queue = queue
     }
 
     func start() {
-        copy(from: a, to: b)
-        copy(from: b, to: a)
+        copy(from: first, to: second)
+        copy(from: second, to: first)
     }
 
     private func copy(from source: NWConnection, to sink: NWConnection) {
@@ -94,8 +94,8 @@ nonisolated final class Splice: @unchecked Sendable {
         queue.async { [self] in
             guard !done else { return }
             done = true
-            a.cancel()
-            b.cancel()
+            first.cancel()
+            second.cancel()
         }
     }
 }
@@ -261,29 +261,29 @@ public nonisolated final class DevServerSocksProxy: @unchecked Sendable {
     }
 
     /// `VER CMD RSV ATYP DST.ADDR DST.PORT` → (command, host, port), or nil while incomplete.
-    static func parseRequest(_ b: [UInt8]) -> (UInt8, String, UInt16)? {
-        guard b.count >= 5, b[0] == 5 else { return nil }
+    static func parseRequest(_ bytes: [UInt8]) -> (UInt8, String, UInt16)? {
+        guard bytes.count >= 5, bytes[0] == 5 else { return nil }
         let host: String
         let end: Int
-        switch b[3] {
+        switch bytes[3] {
         case 1:
             end = 8
-            guard b.count >= end + 2 else { return nil }
-            host = b[4..<8].map(String.init).joined(separator: ".")
+            guard bytes.count >= end + 2 else { return nil }
+            host = bytes[4..<8].map(String.init).joined(separator: ".")
         case 3:
-            let length = Int(b[4])
+            let length = Int(bytes[4])
             end = 5 + length
-            guard b.count >= end + 2 else { return nil }
-            host = String(decoding: b[5..<end], as: UTF8.self)
+            guard bytes.count >= end + 2 else { return nil }
+            host = String(decoding: bytes[5..<end], as: UTF8.self)
         case 4:
             end = 20
-            guard b.count >= end + 2 else { return nil }
-            host = stride(from: 4, to: 20, by: 2).map { String(UInt16(b[$0]) << 8 | UInt16(b[$0 + 1]), radix: 16) }
+            guard bytes.count >= end + 2 else { return nil }
+            host = stride(from: 4, to: 20, by: 2).map { String(UInt16(bytes[$0]) << 8 | UInt16(bytes[$0 + 1]), radix: 16) }
                 .joined(separator: ":")
         default:
             return nil
         }
-        return (b[1], host, UInt16(b[end]) << 8 | UInt16(b[end + 1]))
+        return (bytes[1], host, UInt16(bytes[end]) << 8 | UInt16(bytes[end + 1]))
     }
 }
 

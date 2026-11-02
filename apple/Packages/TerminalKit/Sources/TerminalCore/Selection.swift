@@ -35,76 +35,76 @@ extension Terminal {
 
     /// Converts a viewport cell to screen coordinates (nil when outside the grid).
     public func screenPoint(fromViewport point: GridPoint) -> GridPoint? {
-        withHandle { t in
-            guard var ref = Self.gridRef(t, point, GHOSTTY_POINT_TAG_VIEWPORT) else { return nil }
-            return Self.point(t, &ref, GHOSTTY_POINT_TAG_SCREEN)
+        withHandle { handle in
+            guard var ref = Self.gridRef(handle, point, GHOSTTY_POINT_TAG_VIEWPORT) else { return nil }
+            return Self.point(handle, &ref, GHOSTTY_POINT_TAG_SCREEN)
         }
     }
 
     /// Converts a screen cell to the viewport (nil when scrolled out of view).
     public func viewportPoint(fromScreen point: GridPoint) -> GridPoint? {
-        withHandle { t in
-            guard var ref = Self.gridRef(t, point, GHOSTTY_POINT_TAG_SCREEN) else { return nil }
-            return Self.point(t, &ref, GHOSTTY_POINT_TAG_VIEWPORT)
+        withHandle { handle in
+            guard var ref = Self.gridRef(handle, point, GHOSTTY_POINT_TAG_SCREEN) else { return nil }
+            return Self.point(handle, &ref, GHOSTTY_POINT_TAG_VIEWPORT)
         }
     }
 
-    static func point(_ t: GhosttyTerminal, _ ref: inout GhosttyGridRef, _ tag: GhosttyPointTag) -> GridPoint? {
-        var out = GhosttyPointCoordinate()
-        guard ghostty_terminal_point_from_grid_ref(t, &ref, tag, &out) == GHOSTTY_SUCCESS else { return nil }
-        return GridPoint(x: Int(out.x), y: Int(out.y))
+    static func point(_ handle: GhosttyTerminal, _ ref: inout GhosttyGridRef, _ tag: GhosttyPointTag) -> GridPoint? {
+        var coordinate = GhosttyPointCoordinate()
+        guard ghostty_terminal_point_from_grid_ref(handle, &ref, tag, &coordinate) == GHOSTTY_SUCCESS else { return nil }
+        return GridPoint(x: Int(coordinate.x), y: Int(coordinate.y))
     }
 
     // MARK: Active selection
 
     /// The terminal's current selection, or nil.
     public var selection: Selection? {
-        withHandle { t in
-            var s = GhosttySelection()
-            s.size = MemoryLayout<GhosttySelection>.size
-            guard ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_SELECTION, &s) == GHOSTTY_SUCCESS else { return nil }
-            return Self.selection(t, s)
+        withHandle { handle in
+            var rawSelection = GhosttySelection()
+            rawSelection.size = MemoryLayout<GhosttySelection>.size
+            guard ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_SELECTION, &rawSelection) == GHOSTTY_SUCCESS else { return nil }
+            return Self.selection(handle, rawSelection)
         }
     }
 
-    static func selection(_ t: GhosttyTerminal, _ s: GhosttySelection) -> Selection? {
-        var start = s.start, end = s.end
-        guard let a = point(t, &start, GHOSTTY_POINT_TAG_SCREEN), let b = point(t, &end, GHOSTTY_POINT_TAG_SCREEN) else { return nil }
-        return Selection(anchor: a, head: b, rectangle: s.rectangle)
+    static func selection(_ handle: GhosttyTerminal, _ rawSelection: GhosttySelection) -> Selection? {
+        var start = rawSelection.start, end = rawSelection.end
+        guard let anchor = point(handle, &start, GHOSTTY_POINT_TAG_SCREEN), let head = point(handle, &end, GHOSTTY_POINT_TAG_SCREEN) else { return nil }
+        return Selection(anchor: anchor, head: head, rectangle: rawSelection.rectangle)
     }
 
     /// Installs (or with nil clears) the selection. Out-of-range points are clamped to the grid.
     public func setSelection(_ selection: Selection?) {
-        withHandle { t in
+        withHandle { handle in
             guard let selection else {
-                ghostty_terminal_set(t, GHOSTTY_TERMINAL_OPT_SELECTION, nil)
+                ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_SELECTION, nil)
                 return
             }
-            guard var s = Self.ghosttySelection(t, selection) else { return }
-            ghostty_terminal_set(t, GHOSTTY_TERMINAL_OPT_SELECTION, &s)
+            guard var rawSelection = Self.ghosttySelection(handle, selection) else { return }
+            ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_SELECTION, &rawSelection)
         }
     }
 
-    static func ghosttySelection(_ t: GhosttyTerminal, _ selection: Selection) -> GhosttySelection? {
-        let (cols, total) = screenExtent(t)
-        func clamp(_ p: GridPoint) -> GridPoint {
-            GridPoint(x: min(max(p.x, 0), cols - 1), y: min(max(p.y, 0), total - 1))
+    static func ghosttySelection(_ handle: GhosttyTerminal, _ selection: Selection) -> GhosttySelection? {
+        let (cols, total) = screenExtent(handle)
+        func clamp(_ point: GridPoint) -> GridPoint {
+            GridPoint(x: min(max(point.x, 0), cols - 1), y: min(max(point.y, 0), total - 1))
         }
-        guard let a = gridRef(t, clamp(selection.anchor), GHOSTTY_POINT_TAG_SCREEN),
-              let b = gridRef(t, clamp(selection.head), GHOSTTY_POINT_TAG_SCREEN) else { return nil }
-        var s = GhosttySelection()
-        s.size = MemoryLayout<GhosttySelection>.size
-        s.start = a
-        s.end = b
-        s.rectangle = selection.rectangle
-        return s
+        guard let startRef = gridRef(handle, clamp(selection.anchor), GHOSTTY_POINT_TAG_SCREEN),
+              let endRef = gridRef(handle, clamp(selection.head), GHOSTTY_POINT_TAG_SCREEN) else { return nil }
+        var rawSelection = GhosttySelection()
+        rawSelection.size = MemoryLayout<GhosttySelection>.size
+        rawSelection.start = startRef
+        rawSelection.end = endRef
+        rawSelection.rectangle = selection.rectangle
+        return rawSelection
     }
 
-    static func screenExtent(_ t: GhosttyTerminal) -> (cols: Int, rows: Int) {
+    static func screenExtent(_ handle: GhosttyTerminal) -> (cols: Int, rows: Int) {
         var cols: UInt16 = 0
         var total = 0
-        ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_COLS, &cols)
-        ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_TOTAL_ROWS, &total)
+        ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_COLS, &cols)
+        ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_TOTAL_ROWS, &total)
         return (max(1, Int(cols)), max(1, total))
     }
 
@@ -113,16 +113,16 @@ extension Terminal {
     /// Selects the word under a viewport cell (Ghostty's word boundaries) and installs it.
     @discardableResult
     public func selectWord(atViewport point: GridPoint) -> Selection? {
-        withHandle { t in
-            guard let ref = Self.gridRef(t, point, GHOSTTY_POINT_TAG_VIEWPORT) else { return nil }
+        withHandle { handle in
+            guard let ref = Self.gridRef(handle, point, GHOSTTY_POINT_TAG_VIEWPORT) else { return nil }
             var options = GhosttyTerminalSelectWordOptions()
             options.size = MemoryLayout<GhosttyTerminalSelectWordOptions>.size
             options.ref = ref
-            var s = GhosttySelection()
-            s.size = MemoryLayout<GhosttySelection>.size
-            guard ghostty_terminal_select_word(t, &options, &s) == GHOSTTY_SUCCESS else { return nil }
-            ghostty_terminal_set(t, GHOSTTY_TERMINAL_OPT_SELECTION, &s)
-            return Self.selection(t, s)
+            var rawSelection = GhosttySelection()
+            rawSelection.size = MemoryLayout<GhosttySelection>.size
+            guard ghostty_terminal_select_word(handle, &options, &rawSelection) == GHOSTTY_SUCCESS else { return nil }
+            ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_SELECTION, &rawSelection)
+            return Self.selection(handle, rawSelection)
         }
     }
 
@@ -142,35 +142,35 @@ extension Terminal {
     /// Selects the (soft-wrapped) line under a viewport cell, trimmed, and installs it.
     @discardableResult
     public func selectLine(atViewport point: GridPoint) -> Selection? {
-        withHandle { t in
-            guard let ref = Self.gridRef(t, point, GHOSTTY_POINT_TAG_VIEWPORT) else { return nil }
+        withHandle { handle in
+            guard let ref = Self.gridRef(handle, point, GHOSTTY_POINT_TAG_VIEWPORT) else { return nil }
             var options = GhosttyTerminalSelectLineOptions()
             options.size = MemoryLayout<GhosttyTerminalSelectLineOptions>.size
             options.ref = ref
             options.semantic_prompt_boundary = true
-            var s = GhosttySelection()
-            s.size = MemoryLayout<GhosttySelection>.size
-            guard ghostty_terminal_select_line(t, &options, &s) == GHOSTTY_SUCCESS else { return nil }
-            ghostty_terminal_set(t, GHOSTTY_TERMINAL_OPT_SELECTION, &s)
-            return Self.selection(t, s)
+            var rawSelection = GhosttySelection()
+            rawSelection.size = MemoryLayout<GhosttySelection>.size
+            guard ghostty_terminal_select_line(handle, &options, &rawSelection) == GHOSTTY_SUCCESS else { return nil }
+            ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_SELECTION, &rawSelection)
+            return Self.selection(handle, rawSelection)
         }
     }
 
     @discardableResult
     public func selectAll() -> Selection? {
-        withHandle { t in
-            var s = GhosttySelection()
-            s.size = MemoryLayout<GhosttySelection>.size
-            guard ghostty_terminal_select_all(t, &s) == GHOSTTY_SUCCESS else { return nil }
-            ghostty_terminal_set(t, GHOSTTY_TERMINAL_OPT_SELECTION, &s)
-            return Self.selection(t, s)
+        withHandle { handle in
+            var rawSelection = GhosttySelection()
+            rawSelection.size = MemoryLayout<GhosttySelection>.size
+            guard ghostty_terminal_select_all(handle, &rawSelection) == GHOSTTY_SUCCESS else { return nil }
+            ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_SELECTION, &rawSelection)
+            return Self.selection(handle, rawSelection)
         }
     }
 
     /// The selected text as plain text: soft-wrapped rows joined, trailing blanks trimmed, rows of a
     /// block selection separated by newlines. nil without a selection.
     public func selectionText() -> String? {
-        withHandle { t in
+        withHandle { handle in
             var options = GhosttyTerminalSelectionFormatOptions()
             options.size = MemoryLayout<GhosttyTerminalSelectionFormatOptions>.size
             options.emit = GHOSTTY_FORMATTER_FORMAT_PLAIN
@@ -179,7 +179,7 @@ extension Terminal {
             options.selection = nil
             var ptr: UnsafeMutablePointer<UInt8>?
             var len = 0
-            guard ghostty_terminal_selection_format_alloc(t, nil, options, &ptr, &len) == GHOSTTY_SUCCESS, let ptr else { return nil }
+            guard ghostty_terminal_selection_format_alloc(handle, nil, options, &ptr, &len) == GHOSTTY_SUCCESS, let ptr else { return nil }
             defer { ghostty_free(nil, ptr, len) }
             return String(decoding: UnsafeBufferPointer(start: ptr, count: len), as: UTF8.self)
         }
@@ -252,8 +252,8 @@ public final class SelectionGesture {
     /// - Parameter time: monotonic seconds, for click counting.
     @discardableResult
     public func press(cell: GridPoint, x: Double, y: Double, time: Double) -> Selection? {
-        terminal.withHandle { t in
-            guard var ref = Terminal.gridRef(t, cell, GHOSTTY_POINT_TAG_VIEWPORT) else { return nil }
+        terminal.withHandle { handle in
+            guard var ref = Terminal.gridRef(handle, cell, GHOSTTY_POINT_TAG_VIEWPORT) else { return nil }
             var position = GhosttySurfacePosition(x: x, y: y)
             var ns = UInt64(max(0, time) * 1e9)
             var interval = UInt64(repeatInterval * 1e9)
@@ -263,15 +263,15 @@ public final class SelectionGesture {
             ghostty_selection_gesture_event_set(press, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_TIME_NS, &ns)
             ghostty_selection_gesture_event_set(press, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_REPEAT_INTERVAL_NS, &interval)
             ghostty_selection_gesture_event_set(press, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_REPEAT_DISTANCE, &distance)
-            return apply(t, press)
+            return apply(handle, press)
         }
     }
 
     /// Pointer moved with the button held. `rectangle` (Option held) makes a block selection.
     @discardableResult
     public func drag(cell: GridPoint, x: Double, y: Double, rectangle: Bool, geometry: Geometry) -> Selection? {
-        terminal.withHandle { t in
-            guard var ref = Terminal.gridRef(t, cell, GHOSTTY_POINT_TAG_VIEWPORT) else { return nil }
+        terminal.withHandle { handle in
+            guard var ref = Terminal.gridRef(handle, cell, GHOSTTY_POINT_TAG_VIEWPORT) else { return nil }
             var position = GhosttySurfacePosition(x: x, y: y)
             var rect = rectangle
             var geo = geometry.ghostty
@@ -279,26 +279,26 @@ public final class SelectionGesture {
             ghostty_selection_gesture_event_set(drag, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_POSITION, &position)
             ghostty_selection_gesture_event_set(drag, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_RECTANGLE, &rect)
             ghostty_selection_gesture_event_set(drag, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_GEOMETRY, &geo)
-            return apply(t, drag)
+            return apply(handle, drag)
         }
     }
 
     public func release(cell: GridPoint?) {
-        terminal.withHandle { t in
-            if let cell, var ref = Terminal.gridRef(t, cell, GHOSTTY_POINT_TAG_VIEWPORT) {
+        terminal.withHandle { handle in
+            if let cell, var ref = Terminal.gridRef(handle, cell, GHOSTTY_POINT_TAG_VIEWPORT) {
                 ghostty_selection_gesture_event_set(release, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_REF, &ref)
             } else {
                 ghostty_selection_gesture_event_set(release, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_REF, nil)
             }
-            _ = ghostty_selection_gesture_event(gesture, t, release, nil)
+            _ = ghostty_selection_gesture_event(gesture, handle, release, nil)
         }
     }
 
     /// Whether the last drag left the view vertically and wants autoscroll ticks.
     public var autoscroll: Autoscroll {
-        terminal.withHandle { t in
+        terminal.withHandle { handle in
             var value = GHOSTTY_SELECTION_GESTURE_AUTOSCROLL_NONE
-            ghostty_selection_gesture_get(gesture, t, GHOSTTY_SELECTION_GESTURE_DATA_AUTOSCROLL, &value)
+            ghostty_selection_gesture_get(gesture, handle, GHOSTTY_SELECTION_GESTURE_DATA_AUTOSCROLL, &value)
             return switch value {
             case GHOSTTY_SELECTION_GESTURE_AUTOSCROLL_UP: .up
             case GHOSTTY_SELECTION_GESTURE_AUTOSCROLL_DOWN: .down
@@ -309,17 +309,17 @@ public final class SelectionGesture {
 
     /// Whether the current/last press was dragged (a click without a drag is a plain click).
     public var dragged: Bool {
-        terminal.withHandle { t in
+        terminal.withHandle { handle in
             var value = false
-            ghostty_selection_gesture_get(gesture, t, GHOSTTY_SELECTION_GESTURE_DATA_DRAGGED, &value)
+            ghostty_selection_gesture_get(gesture, handle, GHOSTTY_SELECTION_GESTURE_DATA_DRAGGED, &value)
             return value
         }
     }
 
     public var clickCount: Int {
-        terminal.withHandle { t in
+        terminal.withHandle { handle in
             var value: UInt8 = 0
-            ghostty_selection_gesture_get(gesture, t, GHOSTTY_SELECTION_GESTURE_DATA_CLICK_COUNT, &value)
+            ghostty_selection_gesture_get(gesture, handle, GHOSTTY_SELECTION_GESTURE_DATA_CLICK_COUNT, &value)
             return Int(value)
         }
     }
@@ -328,7 +328,7 @@ public final class SelectionGesture {
     /// pointer's cell in the new viewport.
     @discardableResult
     public func autoscrollTick(cell: GridPoint, x: Double, y: Double, rectangle: Bool, geometry: Geometry) -> Selection? {
-        terminal.withHandle { t in
+        terminal.withHandle { handle in
             var viewport = GhosttyPointCoordinate(x: UInt16(clamping: max(0, cell.x)), y: UInt32(clamping: max(0, cell.y)))
             var position = GhosttySurfacePosition(x: x, y: y)
             var rect = rectangle
@@ -337,7 +337,7 @@ public final class SelectionGesture {
             ghostty_selection_gesture_event_set(tick, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_POSITION, &position)
             ghostty_selection_gesture_event_set(tick, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_RECTANGLE, &rect)
             ghostty_selection_gesture_event_set(tick, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_GEOMETRY, &geo)
-            return apply(t, tick)
+            return apply(handle, tick)
         }
     }
 
@@ -345,12 +345,12 @@ public final class SelectionGesture {
         terminal.withHandle { ghostty_selection_gesture_reset(gesture, $0) }
     }
 
-    private func apply(_ t: GhosttyTerminal, _ event: GhosttySelectionGestureEvent) -> Selection? {
-        var s = GhosttySelection()
-        s.size = MemoryLayout<GhosttySelection>.size
-        guard ghostty_selection_gesture_event(gesture, t, event, &s) == GHOSTTY_SUCCESS else { return nil }
-        ghostty_terminal_set(t, GHOSTTY_TERMINAL_OPT_SELECTION, &s)
-        return Terminal.selection(t, s)
+    private func apply(_ handle: GhosttyTerminal, _ event: GhosttySelectionGestureEvent) -> Selection? {
+        var rawSelection = GhosttySelection()
+        rawSelection.size = MemoryLayout<GhosttySelection>.size
+        guard ghostty_selection_gesture_event(gesture, handle, event, &rawSelection) == GHOSTTY_SUCCESS else { return nil }
+        ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_SELECTION, &rawSelection)
+        return Terminal.selection(handle, rawSelection)
     }
 }
 

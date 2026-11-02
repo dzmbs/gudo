@@ -45,9 +45,9 @@ nonisolated private final class RelayStub: URLProtocol {
             stream.open()
             var buffer = [UInt8](repeating: 0, count: 4096)
             while stream.hasBytesAvailable {
-                let n = stream.read(&buffer, maxLength: buffer.count)
-                if n <= 0 { break }
-                body.append(buffer, count: n)
+                let bytesRead = stream.read(&buffer, maxLength: buffer.count)
+                if bytesRead <= 0 { break }
+                body.append(buffer, count: bytesRead)
             }
             stream.close()
         }

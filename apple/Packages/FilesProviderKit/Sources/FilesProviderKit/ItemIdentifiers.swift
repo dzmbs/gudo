@@ -15,19 +15,18 @@ nonisolated public final class ItemIdentifiers: Sendable {
 
     private struct State {
         var saved: Saved
-        var ids: [String: String]
+        var identifiersByPath: [String: String]
 
         init(_ saved: Saved) {
             self.saved = saved
-            ids = Dictionary(saved.paths.map { ($0.value, $0.key) }, uniquingKeysWith: { a, _ in a })
+            identifiersByPath = Dictionary(saved.paths.map { ($0.value, $0.key) }, uniquingKeysWith: { first, _ in first })
         }
 
         mutating func rebuild() {
-            ids = Dictionary(saved.paths.map { ($0.value, $0.key) }, uniquingKeysWith: { a, _ in a })
+            identifiersByPath = Dictionary(saved.paths.map { ($0.value, $0.key) }, uniquingKeysWith: { first, _ in first })
         }
     }
 
-    /// Directories the working set follows.
     static let visitedLimit = 64
 
     private let file: URL?
@@ -40,28 +39,28 @@ nonisolated public final class ItemIdentifiers: Sendable {
         state = Mutex(State(saved ?? Saved()))
     }
 
-    /// The path's identifier, minted on first sight.
+    /// Minted on first sight.
     public func identifier(for path: String) -> String {
-        let (id, minted) = state.withLock { state -> (String, Bool) in
-            if let id = state.ids[path] { return (id, false) }
-            let id = UUID().uuidString
-            state.saved.paths[id] = path
-            state.ids[path] = id
-            return (id, true)
+        let (identifier, minted) = state.withLock { state -> (String, Bool) in
+            if let existing = state.identifiersByPath[path] { return (existing, false) }
+            let identifier = UUID().uuidString
+            state.saved.paths[identifier] = path
+            state.identifiersByPath[path] = identifier
+            return (identifier, true)
         }
         if minted { save() }
-        return id
+        return identifier
     }
 
     public func path(for identifier: String) -> String? {
         state.withLock { $0.saved.paths[identifier] }
     }
 
-    /// A rename or move: the item and everything under it keep their identifiers.
+    /// The item and everything under it keep their identifiers.
     public func moved(from old: String, to new: String) {
         state.withLock { state in
-            for (id, path) in state.saved.paths where RemotePath.isWithin(path, old) {
-                state.saved.paths[id] = new + path.dropFirst(old.count)
+            for (identifier, path) in state.saved.paths where RemotePath.isWithin(path, old) {
+                state.saved.paths[identifier] = new + path.dropFirst(old.count)
             }
             state.saved.visited = state.saved.visited.map {
                 RemotePath.isWithin($0, old) ? new + $0.dropFirst(old.count) : $0
@@ -71,7 +70,7 @@ nonisolated public final class ItemIdentifiers: Sendable {
         save()
     }
 
-    /// The item and everything under it are gone.
+    /// Forgets the item and everything under it.
     public func removed(_ path: String) {
         state.withLock { state in
             state.saved.paths = state.saved.paths.filter { !RemotePath.isWithin($0.value, path) }
@@ -81,7 +80,6 @@ nonisolated public final class ItemIdentifiers: Sendable {
         save()
     }
 
-    /// A directory was listed.
     public func visited(_ directory: String) {
         let changed = state.withLock { state in
             guard state.saved.visited.last != directory else { return false }
@@ -94,7 +92,7 @@ nonisolated public final class ItemIdentifiers: Sendable {
         if changed { save() }
     }
 
-    /// Directories listed lately, newest first.
+    /// Newest first.
     public var visitedDirectories: [String] {
         state.withLock { $0.saved.visited.reversed() }
     }

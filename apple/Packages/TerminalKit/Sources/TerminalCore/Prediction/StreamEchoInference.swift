@@ -1,6 +1,7 @@
 import Synchronization
 
 /// Echo-prediction facts for a byte-stream backend that cannot read the remote PTY's termios or
+/// acknowledge inputs: a plain-SSH pane (the daemon's rules, inferred instead of read).
 ///
 /// The daemon tells the predictor whether the pane echoes (`tcgetattr` on the PTY master); over
 /// plain SSH nobody can. So echo is *observed*: a keystroke counts as echoed when the output that
@@ -70,57 +71,57 @@ public final class StreamEchoInference: Sendable {
     /// A user keystroke about to be sent. Returns updates for the predictor (deliver them before
     /// the keystroke is predicted, so an Enter stops prediction first).
     public func input(_ bytes: [UInt8]) -> [PredictionUpdate] {
-        let t = now()
-        return state.withLock { s in
-            expire(&s, at: t)
+        let time = now()
+        return state.withLock { state in
+            expire(&state, at: time)
             switch PredictedInput(bytes: bytes) {
             case .text:
                 // One printable character (ASCII echoes byte for byte; anything wider is
                 // checked by its last byte, which no escape sequence ends with).
-                s.pending.append(Pending(byte: bytes.last!, sentAt: t))
+                state.pending.append(Pending(byte: bytes.last!, sentAt: time))
             case .backspace, .cursorLeft, .cursorRight:
                 // Echoed as cursor motion and erases, not as the key: not judged. Earlier
                 // keystrokes stay pending, but their echo may now come mixed with this one's.
-                s.pending.removeAll()
+                state.pending.removeAll()
             case .other:
-                s.pending.removeAll()
-                s.streak = 0
+                state.pending.removeAll()
+                state.streak = 0
             }
-            return changes(&s)
+            return changes(&state)
         }
     }
 
     /// Output from the remote, in order. Returns updates to deliver after it.
     public func output(_ bytes: some Sequence<UInt8>) -> [PredictionUpdate] {
-        let t = now()
-        return state.withLock { s in
+        let time = now()
+        return state.withLock { state in
             var updates: [PredictionUpdate] = []
             var matched = false
-            for event in s.escape.scan(bytes) {
+            for event in state.escape.scan(bytes) {
                 switch event {
                 case .printable(let byte):
                     // In order, other text in between allowed (a line editor's redraw).
-                    guard let first = s.pending.first else { continue }
+                    guard let first = state.pending.first else { continue }
                     if byte == first.byte {
                         matched = true
-                        s.pending.removeFirst()
-                        s.streak += 1
-                        if s.prompt == .editing, s.streak >= configuration.verifiedEchoes { s.shellEchoes = true }
-                        let sample = t - first.sentAt
-                        s.rtt = s.rtt.map { 0.875 * $0 + 0.125 * sample } ?? sample
-                        updates.append(.rtt(s.rtt!))
+                        state.pending.removeFirst()
+                        state.streak += 1
+                        if state.prompt == .editing, state.streak >= configuration.verifiedEchoes { state.shellEchoes = true }
+                        let sample = time - first.sentAt
+                        state.rtt = state.rtt.map { 0.875 * $0 + 0.125 * sample } ?? sample
+                        updates.append(.rtt(state.rtt!))
                     }
                 case .prompt(let mark):
                     switch mark {
                     case "A", "B":
-                        s.prompt = .editing
-                        if mark == "B", s.shellEchoes { s.streak = max(s.streak, configuration.verifiedEchoes) }
+                        state.prompt = .editing
+                        if mark == "B", state.shellEchoes { state.streak = max(state.streak, configuration.verifiedEchoes) }
                     case "C":
-                        s.prompt = .running
-                        s.streak = 0
-                        s.pending.removeAll()
+                        state.prompt = .running
+                        state.streak = 0
+                        state.pending.removeAll()
                     case "D":
-                        s.prompt = .running
+                        state.prompt = .running
                     default:
                         break
                     }
@@ -129,13 +130,13 @@ public final class StreamEchoInference: Sendable {
             // Text arrived a round trip after a keystroke, and the keystroke is not in it: the
             // program printed something else instead of echoing. (Sooner, the text may be an
             // earlier keystroke's doing; a wrong call here only pauses prediction.)
-            if !matched, s.escape.sawPrintable, let first = s.pending.first, let rtt = s.rtt, t - first.sentAt >= rtt {
-                if s.prompt == .editing { s.shellEchoes = false }
-                s.streak = 0
-                s.pending.removeAll()
+            if !matched, state.escape.sawPrintable, let first = state.pending.first, let rtt = state.rtt, time - first.sentAt >= rtt {
+                if state.prompt == .editing { state.shellEchoes = false }
+                state.streak = 0
+                state.pending.removeAll()
             }
-            expire(&s, at: t)
-            return updates + changes(&s)
+            expire(&state, at: time)
+            return updates + changes(&state)
         }
     }
 
@@ -146,33 +147,33 @@ public final class StreamEchoInference: Sendable {
 
     /// Judges keystrokes whose echo never came.
     public func tick() -> [PredictionUpdate] {
-        let t = now()
-        return state.withLock { s in
-            expire(&s, at: t)
-            return changes(&s)
+        let time = now()
+        return state.withLock { state in
+            expire(&state, at: time)
+            return changes(&state)
         }
     }
 
-    private func expire(_ s: inout State, at t: Double) {
-        let limit = max(configuration.echoTimeout, 3 * (s.rtt ?? 0))
-        guard let first = s.pending.first, t - first.sentAt > limit else { return }
-        s.pending.removeAll()
-        s.streak = 0
-        if s.prompt == .editing { s.shellEchoes = false }
+    private func expire(_ state: inout State, at time: Double) {
+        let limit = max(configuration.echoTimeout, 3 * (state.rtt ?? 0))
+        guard let first = state.pending.first, time - first.sentAt > limit else { return }
+        state.pending.removeAll()
+        state.streak = 0
+        if state.prompt == .editing { state.shellEchoes = false }
     }
 
-    private func changes(_ s: inout State) -> [PredictionUpdate] {
-        let hint = Self.hint(s, configuration)
-        if case .some(let last) = s.lastHint, last == hint { return [] }
-        s.lastHint = .some(hint)
+    private func changes(_ state: inout State) -> [PredictionUpdate] {
+        let hint = Self.hint(state, configuration)
+        if case .some(let last) = state.lastHint, last == hint { return [] }
+        state.lastHint = .some(hint)
         return [.hint(hint)]
     }
 
-    private static func hint(_ s: State, _ configuration: Configuration) -> EchoHint? {
-        guard s.streak >= configuration.verifiedEchoes, s.prompt != .running else { return nil }
+    private static func hint(_ state: State, _ configuration: Configuration) -> EchoHint? {
+        guard state.streak >= configuration.verifiedEchoes, state.prompt != .running else { return nil }
         // Raw mode at a prompt being edited (zsh ZLE, readline, fish) when the shell marks its
         // prompts; otherwise "cooked with echo", the only other state prediction allows.
-        return s.prompt == .editing
+        return state.prompt == .editing
             ? EchoHint(echo: true, canonical: false, atPrompt: true, altScreen: false)
             : EchoHint(echo: true, canonical: true, atPrompt: false, altScreen: false)
     }

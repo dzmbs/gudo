@@ -3,7 +3,7 @@ import Network
 import Observation
 
 /// The device's network path (NWPathMonitor), for the offline banner and for redialling on
-/// path changes (04-mobile-ux R10: retry budgets reset on network change).
+/// path changes (retry budgets reset on network change).
 @MainActor
 @Observable
 public final class NetworkMonitor {

@@ -52,6 +52,7 @@ func programNamesNormalize(name: String, id: String) {
     for (id, logo) in ProgramCatalog.logos {
         #expect(ProgramCatalog.entry(id: id)?.logo == logo, "logo for \(id)")
     }
+    // The agents' and runtimes' official marks ship.
     for id in ["claude", "codex", "gemini", "copilot", "vim", "emacs", "htop", "docker", "kubectl", "python", "node",
                "bun", "deno", "go", "rustc", "cargo", "psql"] {
         #expect(ProgramCatalog.entry(id: id)?.logo != nil, "\(id) ships its logo")
@@ -78,6 +79,7 @@ func programNamesNormalize(name: String, id: String) {
         }
         #expect(logo.retrieved.wholeMatch(of: date) != nil, "\(id) records its retrieval date: \(logo.retrieved)")
     }
+    // Shipped while permission is requested.
     let risky = ProgramCatalog.logos.filter { $0.value.clearance == .ownerApprovedRisk }.keys
     #expect(Set(risky) == ["claude", "codex", "gemini", "copilot", "docker", "kubectl", "python", "node", "go", "rustc", "cargo", "psql"])
 }

@@ -15,7 +15,6 @@ import Foundation
 /// where the signature is the daemon's (its iroh key) over `"push-payload/v1\0" || JSON`. The
 /// JSON names the daemon; callers must check it is a host they paired with.
 public enum PushCrypto {
-    /// HPKE `info`.
     public static let sealInfo = Data("push-seal/v1".utf8)
     /// Domain prefix of the daemon's payload signature.
     public static let payloadDomain = Data("push-payload/v1\0".utf8)
@@ -31,18 +30,18 @@ public enum PushCrypto {
         _ sealed: String,
         deviceKey: Curve25519.KeyAgreement.PrivateKey
     ) throws(PushCryptoError) -> Opened {
-        guard let raw = Base64URL.decode(sealed), raw.count >= 32 + 16 else {
+        guard let sealedBytes = Base64URL.decode(sealed), sealedBytes.count >= 32 + 16 else {
             throw .malformed
         }
-        let enc = raw.prefix(32)
-        let ciphertext = raw.dropFirst(32)
+        let encapsulatedKey = sealedBytes.prefix(32)
+        let ciphertext = sealedBytes.dropFirst(32)
         let plaintext: Data
         do {
             var recipient = try HPKE.Recipient(
                 privateKey: deviceKey,
                 ciphersuite: ciphersuite,
                 info: sealInfo,
-                encapsulatedKey: Data(enc)
+                encapsulatedKey: Data(encapsulatedKey)
             )
             plaintext = try recipient.open(Data(ciphertext), authenticating: Data())
         } catch {
@@ -51,10 +50,10 @@ public enum PushCrypto {
         guard plaintext.first == envelopeV1, plaintext.count >= 1 + 64 else {
             throw .malformed
         }
-        let body = plaintext.dropFirst()
+        let signedJSON = plaintext.dropFirst()
         return Opened(
-            signature: Data(body.prefix(64)),
-            json: Data(body.dropFirst(64))
+            signature: Data(signedJSON.prefix(64)),
+            json: Data(signedJSON.dropFirst(64))
         )
     }
 
@@ -80,12 +79,9 @@ public enum PushCrypto {
 
 /// A decrypted payload whose signature has not been checked yet.
 public struct Opened: Sendable {
-    /// The daemon's signature.
     public let signature: Data
-    /// The JSON.
     public let json: Data
 
-    /// Checks the signature against a daemon key.
     public func verify(daemonKey: Curve25519.Signing.PublicKey) throws(PushCryptoError) {
         var message = PushCrypto.payloadDomain
         message.append(json)
@@ -101,7 +97,6 @@ public struct Opened: Sendable {
         return note
     }
 
-    /// Parses a Live Activity state and verifies its signature.
     public func activity() throws(PushCryptoError) -> ActivityState {
         let state: ActivityState = try decode()
         try verify(daemonKey: try Self.key(hex: state.daemon))
@@ -136,7 +131,6 @@ public enum PushCryptoError: Error, Equatable, Sendable {
     case json
 }
 
-/// Approve or deny, from a notification action.
 public enum Decision: String, Sendable {
     case approve
     case deny
@@ -161,7 +155,6 @@ public enum PushKind: String, Codable, Sendable {
     }
 }
 
-/// Notification action identifiers.
 public enum PushAction {
     public static let approve = "APPROVE"
     public static let deny = "DENY"
@@ -195,7 +188,6 @@ public struct ActionOffer: Codable, Equatable, Sendable {
     /// Unix ms.
     public var expires: UInt64
 
-    /// The token's bytes.
     public var tokenData: Data? { Base64URL.decode(token) }
 }
 
@@ -214,10 +206,10 @@ public struct ActivityState: Codable, Equatable, Sendable {
 /// Unpadded base64url (RFC 4648 §5).
 public enum Base64URL {
     public static func decode(_ text: String) -> Data? {
-        var s = text.replacingOccurrences(of: "-", with: "+")
+        var base64 = text.replacingOccurrences(of: "-", with: "+")
             .replacingOccurrences(of: "_", with: "/")
-        while s.count % 4 != 0 { s.append("=") }
-        return Data(base64Encoded: s)
+        while base64.count % 4 != 0 { base64.append("=") }
+        return Data(base64Encoded: base64)
     }
 
     public static func encode(_ data: Data) -> String {
@@ -231,14 +223,14 @@ public enum Base64URL {
 enum Hex {
     static func decode(_ text: String) -> Data? {
         guard text.count % 2 == 0 else { return nil }
-        var out = Data(capacity: text.count / 2)
+        var bytes = Data(capacity: text.count / 2)
         var index = text.startIndex
         while index < text.endIndex {
             let next = text.index(index, offsetBy: 2)
             guard let byte = UInt8(text[index..<next], radix: 16) else { return nil }
-            out.append(byte)
+            bytes.append(byte)
             index = next
         }
-        return out
+        return bytes
     }
 }

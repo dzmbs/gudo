@@ -1,6 +1,7 @@
 // swift-tools-version: 6.2
 import PackageDescription
 
+// Drawing in the terminal (docs/DAEMON.md §7.11) without UI: the overlay's anchor math
 // (Excalidraw scene px ↔ cells ↔ view points), PencilKit strokes → Excalidraw `freedraw`
 // elements, and the row tracker that pins anchored rows in the app's own terminal.
 let package = Package(

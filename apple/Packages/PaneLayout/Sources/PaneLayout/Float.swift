@@ -1,6 +1,5 @@
 import CoreGraphics
 
-/// Identifies a floating window within its session.
 public struct FloatId: Hashable, Comparable, Sendable, Codable, CustomStringConvertible {
     public let rawValue: UInt64
 
@@ -34,14 +33,13 @@ public struct FloatFrame: Hashable, Sendable, Codable {
 
     /// `rect` (in `bounds`) as fractions of `bounds`.
     public init(_ rect: CGRect, in bounds: CGRect) {
-        let w = max(bounds.width, 1)
-        let h = max(bounds.height, 1)
+        let boundsWidth = max(bounds.width, 1)
+        let boundsHeight = max(bounds.height, 1)
         self.init(
-            x: (rect.minX - bounds.minX) / w, y: (rect.minY - bounds.minY) / h,
-            width: rect.width / w, height: rect.height / h)
+            x: (rect.minX - bounds.minX) / boundsWidth, y: (rect.minY - bounds.minY) / boundsHeight,
+            width: rect.width / boundsWidth, height: rect.height / boundsHeight)
     }
 
-    /// The frame in points within `bounds`.
     public func rect(in bounds: CGRect) -> CGRect {
         CGRect(
             x: bounds.minX + x * bounds.width, y: bounds.minY + y * bounds.height,
@@ -51,9 +49,11 @@ public struct FloatFrame: Hashable, Sendable, Codable {
     /// Moved and sized to lie wholly inside the tab; nil when a value is not finite.
     public var clamped: FloatFrame? {
         guard [x, y, width, height].allSatisfy(\.isFinite) else { return nil }
-        let w = min(max(width, Self.minimumSide), 1)
-        let h = min(max(height, Self.minimumSide), 1)
-        return FloatFrame(x: min(max(x, 0), 1 - w), y: min(max(y, 0), 1 - h), width: w, height: h)
+        let clampedWidth = min(max(width, Self.minimumSide), 1)
+        let clampedHeight = min(max(height, Self.minimumSide), 1)
+        return FloatFrame(
+            x: min(max(x, 0), 1 - clampedWidth), y: min(max(y, 0), 1 - clampedHeight),
+            width: clampedWidth, height: clampedHeight)
     }
 }
 
@@ -88,13 +88,11 @@ public struct FloatWindow: Identifiable, Hashable, Sendable, Codable {
 }
 
 extension Node {
-    /// Whether this node's leaves are exactly `panes`.
     func isExactly(_ panes: [PaneId]) -> Bool {
-        let all = self.panes
-        return all.count == panes.count && Set(all) == Set(panes)
+        let leaves = self.panes
+        return leaves.count == panes.count && Set(leaves) == Set(panes)
     }
 
-    /// The subtree whose leaves are exactly `panes`.
     public func subtree(of panes: [PaneId]) -> Node? {
         if isExactly(panes) { return self }
         guard case .split(_, _, let first, let second) = self else { return nil }
@@ -108,8 +106,8 @@ extension Node {
             return floating(pane) ? nil : self
         case .split(let axis, let ratio, let first, let second):
             switch (first.removing(where: floating), second.removing(where: floating)) {
-            case (let a?, let b?): return .split(axis: axis, ratio: ratio, first: a, second: b)
-            case (let a, let b): return a ?? b
+            case (let keptFirst?, let keptSecond?): return .split(axis: axis, ratio: ratio, first: keptFirst, second: keptSecond)
+            case (let keptFirst, let keptSecond): return keptFirst ?? keptSecond
             }
         }
     }
@@ -131,11 +129,11 @@ extension Node {
 
     /// The leaves of the largest subtree around `pane` whose leaves all lie in `within`.
     func contiguous(around pane: PaneId, within: Set<PaneId>) -> [PaneId] {
-        let all = panes
-        guard all.contains(pane) else { return [] }
-        if all.allSatisfy(within.contains) { return all }
+        let leaves = panes
+        guard leaves.contains(pane) else { return [] }
+        if leaves.allSatisfy(within.contains) { return leaves }
         guard case .split(_, _, let first, let second) = self else { return [] }
-        let a = first.contiguous(around: pane, within: within)
-        return a.isEmpty ? second.contiguous(around: pane, within: within) : a
+        let inFirst = first.contiguous(around: pane, within: within)
+        return inFirst.isEmpty ? second.contiguous(around: pane, within: within) : inFirst
     }
 }

@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// agent vocabulary): the one state vocabulary every screen uses.
+/// What a program in a pane reports about itself (OSC 7501 states): the one state vocabulary
+/// every screen uses.
 nonisolated public enum AgentState: String, CaseIterable, Codable, Hashable, Sendable {
     case idle, working, blocked, done, error
     /// Contact with the host is lost; the last known state is stale.
@@ -31,7 +32,6 @@ nonisolated public enum AgentState: String, CaseIterable, Codable, Hashable, Sen
         }
     }
 
-    /// The state's colour, from the theme (`ChromePalette`): resolved where it is drawn.
     public var color: ChromeStyle {
         switch self {
         case .idle, .unknown: DS.Palette.textSecondary
@@ -55,7 +55,7 @@ nonisolated public enum AgentState: String, CaseIterable, Codable, Hashable, Sen
     }
 }
 
-/// well as color: spinner, exclamation, check, cross, ring, dashed ring.
+/// The small status glyph. Shape carries the meaning as well as colour.
 public struct StatusIndicator: View {
     let state: AgentState
     var size: CGFloat
@@ -86,7 +86,8 @@ public struct StatusIndicator: View {
 }
 
 /// A 3/4 arc that turns once per second; a still arc under Reduce Motion so it still says
-/// a sidebar of working agents costs the main thread nothing per frame, and it stops off screen.
+/// "working". The turn is a Core Animation on the arc's layer: a sidebar of working agents costs
+/// the main thread nothing per frame, and it stops off screen.
 public struct Spinner: View {
     private let color: @Sendable (EnvironmentValues) -> Color.Resolved
     var lineWidth: CGFloat
@@ -109,6 +110,7 @@ public struct Spinner: View {
     }
 }
 
+/// A status chip: glyph, state name and optional detail ("Working · 4m").
 public struct StatusPill: View {
     let state: AgentState
     let detail: String?

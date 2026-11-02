@@ -40,16 +40,16 @@ import Testing
 
     @Test func farFromEveryLineNothingSnaps() {
         let rect = CGRect(x: 150, y: 150, width: 210, height: 150)
-        let (out, guides) = G.snap(rect, in: bounds, others: [])
-        #expect(out == rect)
+        let (snapped, guides) = G.snap(rect, in: bounds, others: [])
+        #expect(snapped == rect)
         #expect(guides.isEmpty)
     }
 
     @Test func resizingSnapsOnlyTheEdgesItMoves() {
         let rect = CGRect(x: 300, y: 300, width: 300, height: 200)
-        let (out, _) = G.snap(CGRect(x: 300, y: 300, width: 895, height: 200), in: bounds, others: [], moving: .right)
-        #expect(out.minX == 300)
-        #expect(out.maxX == 1200 - G.edgeMargin)
+        let (snapped, _) = G.snap(CGRect(x: 300, y: 300, width: 895, height: 200), in: bounds, others: [], moving: .right)
+        #expect(snapped.minX == 300)
+        #expect(snapped.maxX == 1200 - G.edgeMargin)
         let (top, _) = G.snap(CGRect(x: 300, y: 13, width: 300, height: 487), in: bounds, others: [], moving: .top)
         #expect(top.minY == G.edgeMargin && top.maxY == rect.maxY)
     }

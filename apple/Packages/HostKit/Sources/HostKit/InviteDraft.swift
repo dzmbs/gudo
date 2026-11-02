@@ -84,6 +84,7 @@ nonisolated public struct InviteDraft: Equatable, Sendable {
     /// Joining asks the owner first (knock to join): for links posted where anyone may see
     /// them.
     public var knock = false
+    /// The guest sees scrollback only from when they join (the default for links).
     public var sinceJoin = true
 
     public init() {}

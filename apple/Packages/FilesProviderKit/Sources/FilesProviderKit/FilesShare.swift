@@ -45,8 +45,8 @@ nonisolated public struct FilesShare: Sendable {
             if try secrets.string(for: host.ticketKey) != ticket { try secrets.set(ticket, for: host.ticketKey) }
             shared.append(host)
         }
-        let key = try DeviceIdentity.load(from: appSecrets)
-        if try secrets.data(for: Self.deviceKey) != key { try secrets.set(key, for: Self.deviceKey) }
+        let deviceKey = try DeviceIdentity.load(from: appSecrets)
+        if try secrets.data(for: Self.deviceKey) != deviceKey { try secrets.set(deviceKey, for: Self.deviceKey) }
         for old in repository.load() where !shared.contains(where: { $0.id == old.id }) {
             try secrets.remove(old.ticketKey)
             try? FileManager.default.removeItem(at: hostDirectory(old.id))
@@ -62,27 +62,25 @@ nonisolated public struct FilesShare: Sendable {
         repository.load()
     }
 
-    /// One host's own folder: its identifier map, its downloads.
+    /// Holds the host's identifier map and downloads.
     public func hostDirectory(_ hostId: String) -> URL {
         directory.appending(path: "hosts/\(hostId)")
     }
 
-    /// The host's identifier map, kept across launches of the extension.
     public func identifiers(for hostId: String) -> ItemIdentifiers {
         let folder = hostDirectory(hostId)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         return ItemIdentifiers(file: folder.appending(path: "identifiers.json"))
     }
 
-    /// Dials a shared host as this device, with the app's relay settings.
     /// - Parameter relayBase: `.disabled` for tests on loopback daemons.
     public func connect(hostId: String, listener: any ClientEventListener, relayBase: RelayMode = .default) throws -> DaemonClient {
         guard let host = hosts().first(where: { $0.id == hostId }),
               let ticket = try secrets.string(for: host.ticketKey),
-              let key = try secrets.data(for: Self.deviceKey)
+              let deviceKey = try secrets.data(for: Self.deviceKey)
         else { throw FilesShareError.notShared(hostId) }
         let relay = RelaySettings.load(directory: directory, secrets: secrets)
-        let config = ClientConfig(secretKey: key, relay: relay.clientRelay(base: relayBase), mirrorVt: false)
+        let config = ClientConfig(secretKey: deviceKey, relay: relay.clientRelay(base: relayBase), mirrorVt: false)
         return try DaemonClient.connectWith(
             ticket: ticket, config: config, options: relay.connectOptions(askpass: false), listener: listener)
     }
@@ -114,7 +112,7 @@ nonisolated public enum DomainPlan {
     public static func plan(existing: [Domain], hosts: [HostRecord]) -> (add: [Domain], remove: [String]) {
         let wanted = hosts.map { Domain(id: $0.id, name: $0.name) }
         let add = wanted.filter { !existing.contains($0) }
-        let remove = existing.map(\.id).filter { id in !wanted.contains { $0.id == id } }
+        let remove = existing.map(\.id).filter { domainId in !wanted.contains { $0.id == domainId } }
         return (add, remove)
     }
 }

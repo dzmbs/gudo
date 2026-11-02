@@ -14,7 +14,7 @@ public extension DS {
         public static let attention = SensoryFeedback.warning
         /// A connection failed.
         public static let failure = SensoryFeedback.error
-        /// A full swipe armed: letting go now runs the action (Mail's tick).
+        /// A full swipe armed: letting go now runs the action.
         public static let armed = SensoryFeedback.impact(flexibility: .rigid, intensity: 0.6)
     }
 }

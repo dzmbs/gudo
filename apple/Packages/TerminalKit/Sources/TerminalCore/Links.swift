@@ -84,7 +84,7 @@ public enum LinkDetector {
     public static func matches(in line: String) -> [Match] {
         let ns = line as NSString
         let full = NSRange(location: 0, length: ns.length)
-        var out: [Match] = []
+        var matches: [Match] = []
         var taken = IndexSet()
         for result in url.matches(in: line, range: full) {
             var text = ns.substring(with: result.range)
@@ -93,9 +93,9 @@ public enum LinkDetector {
             taken.insert(integersIn: result.range.location..<result.range.location + (text as NSString).length)
             // A printed `file://` URL is a path, opened the way paths are.
             if let url = URL(string: text), url.isFileURL {
-                out.append(Match(kind: .path, range: range, text: text, target: url.path))
+                matches.append(Match(kind: .path, range: range, text: text, target: url.path))
             } else {
-                out.append(Match(kind: .url, range: range, text: text, target: text))
+                matches.append(Match(kind: .url, range: range, text: text, target: text))
             }
         }
         for result in path.matches(in: line, range: full) {
@@ -105,9 +105,9 @@ public enum LinkDetector {
             guard let match = pathMatch(text), match.target.count > 1,
                   let range = characterRange(line, NSRange(location: result.range.location, length: (text as NSString).length))
             else { continue }
-            out.append(Match(kind: .path, range: range, text: text, target: match.target, line: match.line, column: match.column))
+            matches.append(Match(kind: .path, range: range, text: text, target: match.target, line: match.line, column: match.column))
         }
-        return out.sorted { $0.range.lowerBound < $1.range.lowerBound }
+        return matches.sorted { $0.range.lowerBound < $1.range.lowerBound }
     }
 
     /// Ghostty's URL rules: no trailing `.`/`,`, and a trailing `)` only when the URL opened one.
@@ -131,8 +131,8 @@ public enum LinkDetector {
         var path = Substring(text)
         var numbers: [Int] = []
         for _ in 0..<2 {
-            guard let colon = path.lastIndex(of: ":"), let n = Int(path[path.index(after: colon)...]) else { break }
-            numbers.insert(n, at: 0)
+            guard let colon = path.lastIndex(of: ":"), let number = Int(path[path.index(after: colon)...]) else { break }
+            numbers.insert(number, at: 0)
             path = path[..<colon]
         }
         guard path.contains(where: \.isLetter) else { return nil }
@@ -146,24 +146,24 @@ public enum LinkDetector {
     }
 
     private static func characterRange(_ line: String, _ range: NSRange) -> Range<Int>? {
-        guard let r = Range(range, in: line) else { return nil }
-        let lower = line.distance(from: line.startIndex, to: r.lowerBound)
-        return lower..<(lower + line.distance(from: r.lowerBound, to: r.upperBound))
+        guard let stringRange = Range(range, in: line) else { return nil }
+        let lower = line.distance(from: line.startIndex, to: stringRange.lowerBound)
+        return lower..<(lower + line.distance(from: stringRange.lowerBound, to: stringRange.upperBound))
     }
 }
 
 extension Terminal {
     /// The link under a viewport cell: its OSC 8 hyperlink, else a URL or path printed there.
     public func link(atViewport point: GridPoint) -> TerminalLink? {
-        withHandle { t in
-            guard let ref = Self.gridRef(t, point, GHOSTTY_POINT_TAG_VIEWPORT) else { return nil }
-            let top = TerminalSearch.viewportTop(t)
-            let cells = Self.logicalLine(t, screenRow: top + point.y)
+        withHandle { handle in
+            guard let ref = Self.gridRef(handle, point, GHOSTTY_POINT_TAG_VIEWPORT) else { return nil }
+            let top = TerminalSearch.viewportTop(handle)
+            let cells = Self.logicalLine(handle, screenRow: top + point.y)
             if let uri = Self.hyperlinkURI(ref) {
                 // The run of cells on this row that carry the same URI.
-                let row = cells.filter { $0.point.y == top + point.y && Self.hyperlinkAt(t, $0.point) == uri }
+                let row = cells.filter { $0.point.y == top + point.y && Self.hyperlinkAt(handle, $0.point) == uri }
                 let columns = (row.map(\.point.x).min() ?? point.x)...(row.map(\.point.x).max() ?? point.x)
-                let label = Self.seenText(t, cells.filter { Self.hyperlinkAt(t, $0.point) == uri })
+                let label = Self.seenText(handle, cells.filter { Self.hyperlinkAt(handle, $0.point) == uri })
                 if let url = URL(string: uri), url.isFileURL {
                     let suffix = url.fragment.flatMap { Int($0.drop { !$0.isNumber }) }
                     return TerminalLink(
@@ -180,7 +180,7 @@ extension Terminal {
             let onRow = cells[match.range].filter { $0.point.y == screen.y }.map(\.point.x)
             return TerminalLink(
                 kind: match.kind, text: match.text, target: match.target, line: match.line, column: match.column,
-                label: Self.seenText(t, Array(cells[match.range])), row: point.y,
+                label: Self.seenText(handle, Array(cells[match.range])), row: point.y,
                 columns: (onRow.min() ?? point.x)...(onRow.max() ?? point.x))
         }
     }
@@ -189,26 +189,26 @@ extension Terminal {
 
     /// The soft-wrapped line through a screen row: one entry per character (a wide character's
     /// spacer cells left out, an empty cell as a space), with its screen cell.
-    private static func logicalLine(_ t: GhosttyTerminal, screenRow: Int) -> [LineCell] {
-        let (cols, total) = screenExtent(t)
+    private static func logicalLine(_ handle: GhosttyTerminal, screenRow: Int) -> [LineCell] {
+        let (cols, total) = screenExtent(handle)
         var first = screenRow
-        while first > 0, first > screenRow - 64, rowFlag(t, first - 1, GHOSTTY_ROW_DATA_WRAP) { first -= 1 }
+        while first > 0, first > screenRow - 64, rowFlag(handle, first - 1, GHOSTTY_ROW_DATA_WRAP) { first -= 1 }
         var last = screenRow
-        while last + 1 < total, last < screenRow + 64, rowFlag(t, last, GHOSTTY_ROW_DATA_WRAP) { last += 1 }
+        while last + 1 < total, last < screenRow + 64, rowFlag(handle, last, GHOSTTY_ROW_DATA_WRAP) { last += 1 }
         var cells: [LineCell] = []
         for y in first...last {
             var row: [LineCell] = []
             for x in 0..<cols {
-                guard var ref = gridRef(t, GridPoint(x: x, y: y), GHOSTTY_POINT_TAG_SCREEN) else { continue }
+                guard var ref = gridRef(handle, GridPoint(x: x, y: y), GHOSTTY_POINT_TAG_SCREEN) else { continue }
                 var cell = GhosttyCell()
                 if ghostty_grid_ref_cell(&ref, &cell) == GHOSTTY_SUCCESS {
                     var wide = GHOSTTY_CELL_WIDE_NARROW
                     ghostty_cell_get(cell, GHOSTTY_CELL_DATA_WIDE, &wide)
                     if wide == GHOSTTY_CELL_WIDE_SPACER_TAIL || wide == GHOSTTY_CELL_WIDE_SPACER_HEAD { continue }
                 }
-                let g = graphemes(ref)
+                let grapheme = graphemes(ref)
                 // One Character per entry, so character offsets index cells.
-                row.append((g.isEmpty ? " " : String(g.first!), GridPoint(x: x, y: y)))
+                row.append((grapheme.isEmpty ? " " : String(grapheme.first!), GridPoint(x: x, y: y)))
             }
             // Trailing blanks of the last row are not part of the line.
             if y == last { while row.last?.text == " " { row.removeLast() } }
@@ -217,8 +217,8 @@ extension Terminal {
         return cells
     }
 
-    private static func rowFlag(_ t: GhosttyTerminal, _ y: Int, _ flag: GhosttyRowData) -> Bool {
-        guard var ref = gridRef(t, GridPoint(x: 0, y: y), GHOSTTY_POINT_TAG_SCREEN) else { return false }
+    private static func rowFlag(_ handle: GhosttyTerminal, _ y: Int, _ flag: GhosttyRowData) -> Bool {
+        guard var ref = gridRef(handle, GridPoint(x: 0, y: y), GHOSTTY_POINT_TAG_SCREEN) else { return false }
         var row: GhosttyRow = 0
         guard ghostty_grid_ref_row(&ref, &row) == GHOSTTY_SUCCESS else { return false }
         var value = false
@@ -233,16 +233,16 @@ extension Terminal {
         return String(decoding: buffer.prefix(length), as: UTF8.self)
     }
 
-    private static func hyperlinkAt(_ t: GhosttyTerminal, _ point: GridPoint) -> String? {
-        gridRef(t, point, GHOSTTY_POINT_TAG_SCREEN).flatMap(hyperlinkURI)
+    private static func hyperlinkAt(_ handle: GhosttyTerminal, _ point: GridPoint) -> String? {
+        gridRef(handle, point, GHOSTTY_POINT_TAG_SCREEN).flatMap(hyperlinkURI)
     }
 
     /// The cells' text a person could read: concealed (SGR 8) cells and cells drawn in their own
     /// background colour are left out, so they cannot make a longer address look seen.
-    private static func seenText(_ t: GhosttyTerminal, _ cells: [LineCell]) -> String {
-        let colors = CellColors(t)
+    private static func seenText(_ handle: GhosttyTerminal, _ cells: [LineCell]) -> String {
+        let colors = CellColors(handle)
         return cells.filter { cell in
-            guard var ref = gridRef(t, cell.point, GHOSTTY_POINT_TAG_SCREEN) else { return true }
+            guard var ref = gridRef(handle, cell.point, GHOSTTY_POINT_TAG_SCREEN) else { return true }
             var style = GhosttyStyle()
             style.size = MemoryLayout<GhosttyStyle>.size
             guard ghostty_grid_ref_style(&ref, &style) == GHOSTTY_SUCCESS else { return true }
@@ -257,12 +257,12 @@ private struct CellColors {
     var background: GhosttyColorRgb?
     var palette: [GhosttyColorRgb]?
 
-    init(_ t: GhosttyTerminal) {
+    init(_ handle: GhosttyTerminal) {
         var fg = GhosttyColorRgb(), bg = GhosttyColorRgb()
-        if ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_COLOR_FOREGROUND, &fg) == GHOSTTY_SUCCESS { foreground = fg }
-        if ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_COLOR_BACKGROUND, &bg) == GHOSTTY_SUCCESS { background = bg }
+        if ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_COLOR_FOREGROUND, &fg) == GHOSTTY_SUCCESS { foreground = fg }
+        if ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_COLOR_BACKGROUND, &bg) == GHOSTTY_SUCCESS { background = bg }
         var colors = [GhosttyColorRgb](repeating: GhosttyColorRgb(), count: 256)
-        let got = colors.withUnsafeMutableBufferPointer { ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_COLOR_PALETTE, $0.baseAddress) }
+        let got = colors.withUnsafeMutableBufferPointer { ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_COLOR_PALETTE, $0.baseAddress) }
         if got == GHOSTTY_SUCCESS { palette = colors }
     }
 

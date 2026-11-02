@@ -30,7 +30,7 @@ nonisolated public struct Toast: Identifiable, Equatable, Sendable {
         self.action = action
     }
 
-    public static func == (a: Toast, b: Toast) -> Bool { a.id == b.id }
+    public static func == (lhs: Toast, rhs: Toast) -> Bool { lhs.id == rhs.id }
 
     var duration: Duration {
         if action != nil { return .seconds(5) }
@@ -108,13 +108,13 @@ private struct ToastObstacle: ViewModifier {
     }
 }
 
-/// address bar, an editor's bar, pane headers). The style's symbol sits in a small tinted disc
-/// so it reads on any background; the action is the accent's word after a hairline. A tap, or a
-/// flick down, dismisses it; taps beside it reach what is under it.
+/// One line in a glass capsule that rises from the bottom, clear of every pane's top bar. The
+/// style's symbol sits in a small tinted disc so it reads on any background. A tap, or a flick
+/// down, dismisses it; taps beside it reach what is under it.
 public struct Banner: View {
     let toast: Toast
     let dismiss: () -> Void
-    @State private var drag: CGFloat = 0
+    @State private var dragOffset: CGFloat = 0
 
     public init(_ toast: Toast, dismiss: @escaping () -> Void) {
         self.toast = toast
@@ -163,17 +163,17 @@ public struct Banner: View {
         .floatingCapsule(interactive: true)
         // As wide as its words, up to a line a glance takes in.
         .frame(maxWidth: 560)
-        .offset(y: max(0, drag))
+        .offset(y: max(0, dragOffset))
         // A tap dismisses; with a button only the button takes taps.
         .gesture(TapGesture().onEnded { dismiss() }, including: toast.action == nil ? .all : .subviews)
         .simultaneousGesture(
             DragGesture(minimumDistance: 8)
-                .onChanged { drag = $0.translation.height }
+                .onChanged { dragOffset = $0.translation.height }
                 .onEnded { value in
                     if value.translation.height > 16 || value.velocity.height > 300 {
                         dismiss()
                     } else {
-                        withAnimation(DS.Motion.banner) { drag = 0 }
+                        withAnimation(DS.Motion.banner) { dragOffset = 0 }
                     }
                 })
         .accessibilityElement(children: .contain)

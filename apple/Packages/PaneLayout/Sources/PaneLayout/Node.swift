@@ -57,18 +57,16 @@ public indirect enum Node: Hashable, Sendable, Codable {
         }
     }
 
-    /// Each pane's rectangle when the tree fills `rect`.
     public func frames(in rect: CGRect) -> [PaneId: CGRect] {
         switch self {
         case .leaf(let pane):
             return [pane: rect]
         case .split(let axis, let ratio, let first, let second):
-            let (a, b) = Self.divide(rect, axis: axis, ratio: ratio)
-            return first.frames(in: a).merging(second.frames(in: b)) { lhs, _ in lhs }
+            let (firstRect, secondRect) = Self.divide(rect, axis: axis, ratio: ratio)
+            return first.frames(in: firstRect).merging(second.frames(in: secondRect)) { lhs, _ in lhs }
         }
     }
 
-    /// Splits `rect` along `axis`, giving `ratio` of it to the first part.
     public static func divide(_ rect: CGRect, axis: Axis, ratio: Double) -> (first: CGRect, second: CGRect) {
         let (slice, remainder) = switch axis {
         case .horizontal: rect.divided(atDistance: rect.width * ratio, from: .minXEdge)
@@ -77,7 +75,6 @@ public indirect enum Node: Hashable, Sendable, Codable {
         return (slice, remainder)
     }
 
-    /// Replaces the leaf for `pane` with `node`.
     func replacing(_ pane: PaneId, with node: Node) -> Node {
         switch self {
         case .leaf(let leaf):
@@ -103,7 +100,6 @@ public indirect enum Node: Hashable, Sendable, Codable {
         return nil
     }
 
-    /// One step from a split towards a pane.
     struct Step {
         var axis: Axis
         var inFirst: Bool

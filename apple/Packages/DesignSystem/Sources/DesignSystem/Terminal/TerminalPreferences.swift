@@ -93,6 +93,7 @@ nonisolated public enum TerminalPreferences {
         }
     }
 
+    /// Flush panes with hairline dividers, or inset
     /// rounded panes with gaps.
     public enum PaneStyle: String, CaseIterable, Identifiable, Sendable {
         case compact, comfortable

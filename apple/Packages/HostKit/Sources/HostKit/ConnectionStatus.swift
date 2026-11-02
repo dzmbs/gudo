@@ -1,8 +1,8 @@
 import Foundation
 
-/// A host connection's health as the UI shows it, derived from the object that sends input
-/// (04-mobile-ux R8): "connected" means the transport answered recently, never a socket flag
-/// (R2). Every non-live state offers retry (R9).
+/// A host connection's health as the UI shows it, derived from the object that sends input:
+/// "connected" means the transport answered recently, never a socket flag. Every non-live
+/// state offers retry.
 nonisolated public enum ConnectionStatus: Sendable, Equatable {
     /// Not started (a saved host nobody opened yet).
     case idle
@@ -14,7 +14,7 @@ nonisolated public enum ConnectionStatus: Sendable, Equatable {
     /// Lost; redialling with backoff. Content stays on screen, dimmed.
     case reconnecting(attempt: UInt32, reason: String)
     /// Background with the retry budget spent, or the device has no network; resumes on
-    /// foreground or network change (R10).
+    /// foreground or network change.
     case offline(reason: String)
     /// Paused by the app (iOS background); resumes on foreground.
     case suspended
@@ -31,6 +31,7 @@ nonisolated public enum ConnectionStatus: Sendable, Equatable {
     }
 
     /// Live but slow: the last keystroke round trip took longer than
+    /// [`ConnectionStatus.slowRoundTrip`].
     public var isSlow: Bool {
         if case .connected(let rtt?) = self { rtt > Self.slowRoundTrip } else { false }
     }
@@ -46,7 +47,7 @@ nonisolated public enum ConnectionStatus: Sendable, Equatable {
         }
     }
 
-    /// One line for a status row (A22: health in words, not a spinner).
+    /// Health in words, not a spinner.
     public var summary: String {
         switch self {
         case .idle: "Not connected"
