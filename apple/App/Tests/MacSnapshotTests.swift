@@ -99,7 +99,9 @@ final class MacSnapshotTests: XCTestCase {
     /// (dimmed as `UnfocusedDim` dims them), then each window back to front as captured, with
     /// its shadow, and its panes in it; then what floats above the panes, as captured.
     private func terminalsDrawn(over image: CGImage, in frameView: NSView) -> CGImage? {
-        guard let model = currentModel, let workspace = model.workspace, let layout = model.arrangement.layout else { return nil }
+        guard let model = currentModel, let workspace = model.workspace, let target = model.arrangement.layout else { return nil }
+        // As drawn: part way through a scrubbed change, too.
+        let layout = model.arrangement.scrub.map { target.blended(from: $0.from, progress: $0.progress) } ?? target
         let scale = CGFloat(image.width) / frameView.bounds.width
         let height = CGFloat(image.height)
         guard let ctx = CGContext(
@@ -118,20 +120,25 @@ final class MacSnapshotTests: XCTestCase {
         let theme = ThemeCatalog.theme(named: mode == "light" ? "Apple System Colors Light" : "Ghostty Default")
         let dark = mode != "light"
         // Canvas points to window points, from a pane's terminal and its leaf.
-        guard let (anchorPane, anchor) = workspace.panes.first(where: { pane, _ in layout.leaves.contains { $0.pane == pane && $0.visible } }),
+        guard let (anchorPane, anchor) = workspace.panes.first(where: { pane, _ in
+                  model.arrangement.still(of: pane) == nil && layout.leaves.contains { $0.pane == pane && $0.visible && $0.window == nil } }),
               let anchorLeaf = layout.leaves.first(where: { $0.pane == anchorPane })
         else { return nil }
         let anchorRect = anchor.view.convert(anchor.view.bounds, to: nil)
         let canvas = CGPoint(x: anchorRect.minX - anchorLeaf.frame.minX, y: (frameView.bounds.height - anchorRect.minY) - anchorLeaf.frame.maxY)
         func window(_ rect: CGRect) -> CGRect { rect.offsetBy(dx: canvas.x, dy: canvas.y) }
 
-        func drawTerminal(_ pane: PaneId) {
+        // Each terminal where it is on screen now (part way through a motion, too).
+        func onScreen(_ pane: PaneId) -> CGRect? {
             guard let terminal = workspace.panes[pane], model.arrangement.still(of: pane) == nil,
-                  !terminal.view.isHiddenOrHasHiddenAncestor else { return }
-            _ = terminal.view.surface.renderIfDirty(offscreen: true)
-            guard let still = terminal.view.surface.snapshot() else { return }
+                  terminal.view.window != nil, !terminal.view.isHiddenOrHasHiddenAncestor else { return nil }
             let inWindow = terminal.view.convert(terminal.view.bounds, to: nil)
-            let rect = CGRect(x: inWindow.minX, y: frameView.bounds.height - inWindow.maxY, width: inWindow.width, height: inWindow.height)
+            return CGRect(x: inWindow.minX, y: frameView.bounds.height - inWindow.maxY, width: inWindow.width, height: inWindow.height)
+        }
+        func drawTerminal(_ pane: PaneId) {
+            guard let rect = onScreen(pane), let surface = workspace.panes[pane]?.view.surface else { return }
+            _ = surface.renderIfDirty(offscreen: true)
+            guard let still = surface.snapshot() else { return }
             ctx.saveGState()
             ctx.clip(to: pixels(rect))
             ctx.draw(still, in: CGRect(x: pixels(rect).minX, y: pixels(rect).maxY - CGFloat(still.height), width: CGFloat(still.width), height: CGFloat(still.height)))
@@ -141,16 +148,27 @@ final class MacSnapshotTests: XCTestCase {
         let dim = NSColor(theme.background).withAlphaComponent(1 - TerminalPreferences.Default.unfocusedSplitOpacity).cgColor
         let tiled = layout.leaves.filter { $0.window == nil && $0.visible }
         for leaf in tiled {
+            guard let rect = onScreen(leaf.pane) else { continue }
             drawTerminal(leaf.pane)
             if leaf.pane != focused, tiled.count + layout.cards.count > 1 {
                 ctx.setFillColor(dim)
-                ctx.fill(pixels(window(leaf.frame)))
-                // The header keeps its own look (it is dimmed with the pane, as captured).
-                restore(window(CGRect(x: leaf.frame.minX, y: leaf.frame.minY, width: leaf.frame.width, height: PaneHeader.height)))
+                ctx.fill(pixels(rect))
             }
         }
-        for card in layout.cards.filter(\.visible).sorted(by: { $0.z < $1.z }) {
-            let rect = window(card.frame)
+        // Windows back to front, from where their panes are now: as captured (header, rim,
+        // backdrop) with the panel shadow, then their terminals.
+        let windows = Dictionary(grouping: layout.leaves.filter { $0.window != nil && $0.opacity > 0.01 }, by: { $0.window! })
+        for (id, leaves) in windows.sorted(by: { ($0.value.first?.z ?? 0) < ($1.value.first?.z ?? 0) }) {
+            // Where the window is drawn: its panes' frames, shrunk as the tray shrinks them.
+            let drawn = leaves.map { leaf -> CGRect in
+                let f = leaf.frame
+                let p = CGPoint(x: f.minX + leaf.hiddenAnchor.x * f.width, y: f.minY + leaf.hiddenAnchor.y * f.height)
+                let s = leaf.scale
+                return CGRect(x: p.x + (f.minX - p.x) * s, y: p.y + (f.minY - p.y) * s, width: f.width * s, height: f.height * s)
+            }
+            guard var rect = drawn.first.map(window) else { continue }
+            for other in drawn.dropFirst() { rect = rect.union(window(other)) }
+            if layout.card(id)?.multi == true { rect = rect.insetBy(dx: -1, dy: 0); rect.origin.y -= CanvasLayout.grip; rect.size.height += CanvasLayout.grip + 1 }
             let shape = CGPath(roundedRect: pixels(rect), cornerWidth: CanvasLayout.radius * scale, cornerHeight: CanvasLayout.radius * scale, transform: nil)
             ctx.saveGState()
             ctx.setShadow(offset: CGSize(width: 0, height: -DS.Shadow.panel.y * scale), blur: DS.Shadow.panel.radius * scale,
@@ -164,7 +182,7 @@ final class MacSnapshotTests: XCTestCase {
             ctx.saveGState()
             ctx.addPath(shape)
             ctx.clip()
-            for pane in card.panes { drawTerminal(pane) }
+            for leaf in leaves { drawTerminal(leaf.pane) }
             ctx.restoreGState()
         }
         // Above the panes, as captured: the tray, a drag's region, chip and Float target, guides.
@@ -716,14 +734,15 @@ final class MacSnapshotTests: XCTestCase {
             guard let from = arrangement.layout else { return }
             // The grids hold through the motion, as they do while it animates, with no
             // cols × rows overlay; the canvas's own animation stays off while it is scrubbed.
-            TerminalSurface.holdGrids(for: .milliseconds(2500))
-            PaneArrangement.stillDuration = 2.5
+            let start = ContinuousClock.now
+            TerminalSurface.holdGrids(for: .seconds(6))
+            PaneArrangement.stillDuration = 6
             defer { PaneArrangement.stillDuration = DS.Motion.liftDuration }
-            model.workspace?.layoutChangeUntil = .now + .seconds(6)
+            model.workspace?.layoutChangeUntil = .now + .seconds(8)
             arrangement.scrub = .init(from: from, progress: 0)
             change()
             await pump(0.1)
-            model.workspace?.layoutChangeUntil = .now + .seconds(6)
+            model.workspace?.layoutChangeUntil = .now + .seconds(8)
             let spring = Spring(duration: 0.42, bounce: 0.12)
             for (index, time) in [0, 0.03, 0.06, 0.1, 0.15, 0.22, 0.3, 0.5].enumerated() {
                 arrangement.scrub = .init(from: from, progress: spring.value(target: 1.0, time: time))
@@ -732,7 +751,7 @@ final class MacSnapshotTests: XCTestCase {
                 try? capture(window, "\(name)-\(index)")
             }
             arrangement.scrub = nil
-            await pump(1.2)
+            try? await Task.sleep(until: start + .seconds(6.3), clock: .continuous)
         }
         // At rest the grids reflow once and the programs redraw at their new size.
         await pump(0.8)
