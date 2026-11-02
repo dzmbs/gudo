@@ -16,7 +16,7 @@ struct JoinSheet: View {
     @State private var knocking: Task<Void, Never>?
     @State private var progress = KnockProgress()
 
-    enum Phase: Equatable {
+    enum Phase: Hashable {
         case idle
         case joining
         /// Knocked; waiting for the owner (`KnockProgress.asked` once they have the request).
@@ -34,6 +34,15 @@ struct JoinSheet: View {
     private var card: Result<InviteInfo, Error>? {
         guard !trimmed.isEmpty else { return nil }
         return Result { try inspectInvite(invite: trimmed) }
+    }
+
+    /// 0 no link, 1 an invite, 2 something else.
+    private var cardKind: Int {
+        switch card {
+        case nil: 0
+        case .success: 1
+        case .failure: 2
+        }
     }
 
     var body: some View {
@@ -108,7 +117,8 @@ struct JoinSheet: View {
             }
             .formStyle(.grouped)
             .chromeGrouped()
-            .macFittedForm(maxHeight: 560)
+            // Resizes for the user's steps (a link pasted, a knock sent), never in between.
+            .macFittedForm(maxHeight: 560, step: [AnyHashable(cardKind), AnyHashable(phase)])
             .onDisappear { knocking?.cancel() }
             .animation(DS.Motion.snappy, value: trimmed)
         }

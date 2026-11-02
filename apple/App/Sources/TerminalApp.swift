@@ -98,18 +98,34 @@ struct TerminalApp: App {
 /// the last-focused tab are restored per window. The window publishes what it shows for Handoff
 /// and continues other devices' (and dragged-out tabs') activities.
 ///
-/// The window's model is made once per scene, in the scene's first update, so the window's
-/// first frame is its content. SwiftUI rebuilds this struct (and re-runs a `@State` initial
-/// value) several times per scene: the state holds a cheap box that makes the model on first
-/// use, since a spare model would have its own sources and terminals and could be picked as
-/// the active window.
+/// The window's model is made once per scene. SwiftUI rebuilds this struct (and re-runs a
+/// `@State` initial value) several times per scene, and a spare model would have its own
+/// sources and terminals and could be picked as the active window, so the state holds a cheap
+/// box that makes the model on first use. On the Mac that is the scene's first update, so the
+/// window's first frame is its content. On iOS the launch screen (the terminal background)
+/// covers that frame, and a scene's first update comes before its window can present: a sheet
+/// asked for at once would be lost, so the model is made as the scene appears.
 struct WindowRoot: View {
     /// What this window was opened for (New Window, Open in New Window), if anything.
     var request: WindowRequest?
     @State private var box = WindowModelBox()
+    #if os(iOS)
+    @State private var appeared = false
+    @AppStorage(TerminalPreferences.Key.theme) private var themeName = TerminalPreferences.Default.theme
+    #endif
 
     var body: some View {
+        #if os(iOS)
+        if appeared {
+            WindowContent(request: request, model: box.model)
+        } else {
+            ThemeCatalog.theme(named: themeName).background
+                .ignoresSafeArea()
+                .onAppear { appeared = true }
+        }
+        #else
         WindowContent(request: request, model: box.model)
+        #endif
     }
 }
 

@@ -23,14 +23,31 @@ struct SessionReplaysSheet: View {
     let request: ReplayRequest
     @State private var store = ReplayStore.shared
     @State private var path: [UUID] = []
+    /// The session open in place (a leaf, the Mac), with a way back to the list.
+    @State private var selected: UUID?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.isToolWindow) private var isToolWindow
+    @Environment(\.toolLeaf) private var leaf
+
+    /// A push from a leaf lands in the window's navigation, not the leaf's, and Mac tools have no
+    /// back gesture to keep: both show a session in place instead (as Files does).
+    private var opensInPlace: Bool {
+        #if os(macOS)
+        true
+        #else
+        leaf != nil
+        #endif
+    }
 
     var body: some View {
         NavigationStack(path: $path) {
             Group {
                 if case .session(let id) = request, let session = store.session(id) {
                     SessionReplayView(session: session)
+                } else if opensInPlace, let selected, let session = store.session(selected) {
+                    SessionReplayView(session: session)
+                        .environment(\.toolNavigation, ToolNavigation(back: { self.selected = nil }))
+                        .id(selected)
                 } else {
                     list
                 }
@@ -52,8 +69,12 @@ struct SessionReplaysSheet: View {
         .onAppear {
             // One session of a page or pane opens straight away.
             if case .session = request { return }
-            if sessions.count == 1, let only = sessions.first { path = [only.id] }
+            if sessions.count == 1, let only = sessions.first { open(only.id) }
         }
+    }
+
+    private func open(_ id: UUID) {
+        if opensInPlace { selected = id } else { path = [id] }
     }
 
     private var sessions: [ReplaySession] {
@@ -67,9 +88,16 @@ struct SessionReplaysSheet: View {
     private var list: some View {
         List {
             ForEach(sessions) { session in
-                NavigationLink(value: session.id) { ReplaySessionRow(session: session) }
-                    .accessibilityIdentifier("replay-session-\(session.id.uuidString.prefix(8))")
-                    .chromeRows()
+                Group {
+                    if opensInPlace {
+                        Button { open(session.id) } label: { ReplaySessionRow(session: session).contentShape(.rect) }
+                            .buttonStyle(.plain)
+                    } else {
+                        NavigationLink(value: session.id) { ReplaySessionRow(session: session) }
+                    }
+                }
+                .accessibilityIdentifier("replay-session-\(session.id.uuidString.prefix(8))")
+                .chromeRows()
             }
             .onDelete { offsets in
                 for index in offsets { store.delete(sessions[index].id) }
@@ -117,6 +145,7 @@ struct SessionReplayView: View {
     @State private var exported: ExportedTest?
     @State private var confirmDelete = false
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.toolNavigation) private var navigation
     @Environment(WindowModel.self) private var model
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
@@ -160,7 +189,8 @@ struct SessionReplayView: View {
         .confirmationDialog("Delete this replay?", isPresented: $confirmDelete) {
             Button("Delete Replay", role: .destructive) {
                 ReplayStore.shared.delete(session.id)
-                dismiss()
+                // Back to the list where it opened in place; else close the pushed screen.
+                if let back = navigation?.back { back() } else { dismiss() }
             }
         }
     }

@@ -330,6 +330,29 @@ final class InstantStartTests: XCTestCase {
         XCTAssertTrue(shown.contains { $0.surface.terminal.visibleText().contains("audit_logs_login") }, "drawn in that frame")
     }
 
+    /// A sheet asked for as the window's content first appears (a link that opened the app)
+    /// still comes up, with the model made in the scene's first update.
+    func testASheetAskedForAtOnceShows() async throws {
+        let before = Set(AppModel.shared.openWindows.map(ObjectIdentifier.init))
+        let window = OffscreenWindow(
+            contentRect: NSRect(x: -30000, y: -30000, width: 900, height: 600),
+            styleMask: [.titled, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentViewController = NSHostingController(rootView: WindowRoot(request: nil).environment(AppModel.shared))
+        window.contentView?.layoutSubtreeIfNeeded()
+        let model = try XCTUnwrap(AppModel.shared.openWindows.first { !before.contains(ObjectIdentifier($0)) })
+        defer {
+            window.close()
+            model.close()
+        }
+        model.sheet = .join
+        window.orderFrontRegardless()
+        for _ in 0..<40 where window.attachedSheet == nil { try await Task.sleep(for: .milliseconds(50)) }
+        XCTAssertNotNil(window.attachedSheet)
+        model.sheet = nil
+        for _ in 0..<40 where window.attachedSheet != nil { try await Task.sleep(for: .milliseconds(50)) }
+    }
+
     /// A pane saved scrolled back stays at that position when the host's screen replaces the
     /// saved one, its older scrollback fetched to get there.
     func testAScrolledBackPaneKeepsItsPositionWhenItGoesLive() async throws {
