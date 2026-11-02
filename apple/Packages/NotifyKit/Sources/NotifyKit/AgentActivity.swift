@@ -1,8 +1,7 @@
 import Foundation
 
-/// One agent run on the Lock Screen and in the Dynamic Island: which agent, on which host and
-/// pane, doing what. Updated locally by the app while it is alive (the daemon does not send
-/// Live Activity pushes yet; docs/PUSH.md §6 keeps a sealed `ContentState` for that).
+/// One agent run on the Lock Screen and in the Dynamic Island, updated locally by the app while
+/// it is alive.
 public struct AgentRunState: Codable, Hashable, Sendable {
     public enum Phase: String, Codable, Hashable, Sendable {
         case working, blocked, done, failed
@@ -16,7 +15,7 @@ public struct AgentRunState: Codable, Hashable, Sendable {
             }
         }
 
-        /// SF Symbol for the phase (shape carries meaning, not only color).
+        /// Shape carries the meaning, not only colour.
         public var systemImage: String {
             switch self {
             case .working: "circle.dotted"
@@ -30,9 +29,8 @@ public struct AgentRunState: Codable, Hashable, Sendable {
     }
 
     public var phase: Phase
-    /// The one line that matters: the tool and command it waits on, the last message.
+    /// The tool and command it waits on, or the last message.
     public var headline: String
-    /// When the run started (the timer counts from here while working).
     public var startedAt: Date
     public var updatedAt: Date
 
@@ -47,7 +45,6 @@ public struct AgentRunState: Codable, Hashable, Sendable {
 #if canImport(ActivityKit) && os(iOS)
 import ActivityKit
 
-/// ActivityKit attributes of an agent run (static for the activity's life).
 public struct AgentRunAttributes: ActivityAttributes {
     public typealias ContentState = AgentRunState
 
@@ -67,7 +64,7 @@ public struct AgentRunAttributes: ActivityAttributes {
         self.task = task
     }
 
-    /// `gudo://open/<host>/<pane>`-style deep link the activity opens.
+    /// `<scheme>://open/<host>/<pane>`.
     public func openURL(scheme: String) -> URL? {
         URL(string: "\(scheme)://open/\(hostId)/\(paneId)")
     }

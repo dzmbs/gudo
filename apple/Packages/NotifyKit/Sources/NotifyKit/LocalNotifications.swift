@@ -2,11 +2,10 @@ import Foundation
 import PushCrypto
 import UserNotifications
 
-/// One attention item as the notifier sees it (the app maps the daemon's `AttentionItem` and
-/// the pane's agent options into this; NotifyKit does not link the core).
+/// An attention item, mapped by the app from the daemon's `AttentionItem` (NotifyKit doesn't
+/// link the core).
 public struct AttentionNote: Equatable, Sendable {
     public enum Kind: Equatable, Sendable {
-        /// An agent asks to run something. Options let Approve / Deny answer it in place.
         case approval(requestId: UInt64, approve: Option?, deny: Option?)
         /// An agent waits in the terminal (a question, a menu).
         case blocked
@@ -16,7 +15,6 @@ public struct AttentionNote: Equatable, Sendable {
         case command
     }
 
-    /// An option of the agent's request (`AgentOption`).
     public struct Option: Equatable, Sendable {
         public var id: UInt32
         public var label: String
@@ -33,7 +31,6 @@ public struct AttentionNote: Equatable, Sendable {
     public var kind: Kind
     public var title: String
     public var body: String
-    /// The agent ("Claude Code"), for the subtitle.
     public var agent: String?
 
     public init(hostId: String, hostName: String, itemId: UInt64, paneId: UInt64, kind: Kind, title: String, body: String, agent: String? = nil) {
@@ -47,9 +44,8 @@ public struct AttentionNote: Equatable, Sendable {
         self.agent = agent
     }
 
-    /// The push kind it corresponds to (category, preferences). An approval whose summary was
-    /// cut (`…`) is Open only, as the daemon's push: Approve from the lock screen only what the
-    /// notification shows in full.
+    /// An approval whose summary was cut (`…`) is Open only, matching the daemon's push: approve
+    /// from the lock screen only what the notification shows in full.
     public var pushKind: PushKind {
         switch kind {
         case .approval(_, let approve, let deny):
@@ -62,14 +58,13 @@ public struct AttentionNote: Equatable, Sendable {
     }
 }
 
-/// Builds local notifications from the attention feed (the app is alive in the background;
-/// pushes cover the rest). The `userInfo` carries what the action handler needs.
+/// Local notifications from the attention feed while the app is alive in the background;
+/// pushes cover the rest.
 public enum LocalNotifications {
-    /// `userInfo` key of the local payload (a `[String: Any]` plist dictionary).
     public static let localKey = "local"
 
-    /// The request identifier: one per pane, so a newer note for the same pane replaces the
-    /// older one in Notification Center (as the daemon's push collapse id does).
+    /// One per pane, so a newer note for the same pane replaces the older one in Notification
+    /// Center, matching the daemon's push collapse id.
     public static func identifier(hostId: String, paneId: UInt64) -> String {
         "pane.\(hostId).\(paneId)"
     }
@@ -111,19 +106,17 @@ public enum LocalNotifications {
         }
     }
 
-    /// Whether to post now: the preferences allow the kind, and (by default) the app is not
-    /// active (a visible terminal alerts by itself).
+    /// A visible terminal alerts by itself, so by default only post while the app isn't active.
     public static func shouldPost(_ note: AttentionNote, prefs: NotificationPrefs, appIsActive: Bool) -> Bool {
         guard prefs.allows(note.pushKind) else { return false }
         return !(prefs.onlyInBackground && appIsActive)
     }
 }
 
-/// What an action on a notification refers to, read back from `userInfo`.
 public enum NotificationTarget: Equatable, Sendable {
-    /// A local notification: the host's live connection answers.
+    /// Answered over the host's live connection.
     case local(hostId: String, paneId: UInt64, itemId: UInt64, requestId: UInt64?, approve: UInt32?, deny: UInt32?)
-    /// A push opened by the NSE: a one-shot, device-signed connection answers.
+    /// Answered on a one-shot, device-signed connection.
     case push(PushNotification)
 
     /// `remote`: the notification came through APNs. Its `userInfo` is then only trusted as a
@@ -134,11 +127,11 @@ public enum NotificationTarget: Equatable, Sendable {
             guard let push = PushContent.payload(from: userInfo) else { return nil }
             self = .push(push)
         } else if let local = userInfo[LocalNotifications.localKey] as? [String: Any],
-           let host = local["host"] as? String,
-           let pane = (local["pane"] as? NSNumber)?.uint64Value
+           let hostId = local["host"] as? String,
+           let paneId = (local["pane"] as? NSNumber)?.uint64Value
         {
             self = .local(
-                hostId: host, paneId: pane,
+                hostId: hostId, paneId: paneId,
                 itemId: (local["item"] as? NSNumber)?.uint64Value ?? 0,
                 requestId: (local["request"] as? NSNumber)?.uint64Value,
                 approve: (local["approve"] as? NSNumber)?.uint32Value,

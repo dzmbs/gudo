@@ -6,7 +6,7 @@ import UserNotifications
 public struct DevicePairedNote: Equatable, Sendable {
     public var hostId: String
     public var hostName: String
-    /// The new device's key (hex).
+    /// Hex key.
     public var device: String
     public var deviceName: String
     public var pairedAt: Date
@@ -20,11 +20,11 @@ public struct DevicePairedNote: Equatable, Sendable {
     }
 }
 
-/// Something a host says its owner must act on (the grant store was reset, …).
+/// Something a host says its owner must act on (for example, the grant store was reset).
 public struct HostAlertNote: Equatable, Sendable {
     public var hostId: String
     public var hostName: String
-    /// Identifies the alert across connections (kind and time).
+    /// Stable across connections (kind and time).
     public var key: String
     public var title: String
     public var body: String
@@ -49,7 +49,7 @@ public struct HostAlertLedger {
         self.defaults = defaults
     }
 
-    /// True the first time an alert is seen for a host (and records it); false after.
+    /// True only the first time an alert is seen for a host.
     public func claim(hostId: String, key: String) -> Bool {
         let entry = "\(hostId)|\(key)"
         var seen = defaults.stringArray(forKey: storageKey) ?? []
@@ -61,7 +61,6 @@ public struct HostAlertLedger {
 }
 
 public enum DeviceNotifications {
-    /// `userInfo` key naming the host whose Devices screen a tap opens.
     public static let hostKey = "devicesHost"
     public static let category = "device-paired"
     public static let reviewAction = "review-devices"
@@ -91,7 +90,6 @@ public enum DeviceNotifications {
         "alert.\(note.hostId).\(note.key)"
     }
 
-    /// A host alert (the daemon's own words), opening the host's Devices screen like a pairing.
     public static func content(for note: HostAlertNote) -> UNMutableNotificationContent {
         let content = UNMutableNotificationContent()
         content.title = note.title
@@ -104,12 +102,10 @@ public enum DeviceNotifications {
         return content
     }
 
-    /// The host a tapped device notification is about.
     public static func hostId(from userInfo: [AnyHashable: Any]) -> String? {
         userInfo[hostKey] as? String
     }
 
-    /// Review Devices opens the app on the host's Devices screen.
     static var notificationCategory: UNNotificationCategory {
         let review = UNNotificationAction(
             identifier: reviewAction, title: "Review Devices", options: [.foreground],

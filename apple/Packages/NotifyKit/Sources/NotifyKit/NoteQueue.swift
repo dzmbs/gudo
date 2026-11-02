@@ -11,7 +11,6 @@ public final class NoteQueue<Note> {
         self.deliver = deliver
     }
 
-    /// Notes waiting (at most one per key).
     public var count: Int { pending.count }
 
     public func enqueue(_ note: Note, key: String) {

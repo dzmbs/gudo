@@ -4,14 +4,13 @@ import PushCrypto
 import Security
 import UserNotifications
 
-/// The Notification Service Extension's work, testable without the extension: open the sealed
-/// payload with the device's X25519 key, check the daemon is a paired host and its signature,
-/// then set title, subtitle, body, thread and category from the payload (never the relay's).
-/// On any failure the relay's placeholder text stays.
+/// The Notification Service Extension's work, testable without the extension. Title, subtitle,
+/// body, thread and category come from the verified payload, never the relay's; on any failure
+/// the relay's placeholder text stays.
 public struct ServiceExtensionCore: Sendable {
-    /// The device's sealing key (shared Keychain group; `nil` without the push entitlement).
+    /// `nil` without the push entitlement.
     public var deviceKey: @Sendable () -> Curve25519.KeyAgreement.PrivateKey?
-    /// Daemon ids (hex) of paired hosts (shared app group; empty without it).
+    /// Hex daemon ids; empty without the shared app group.
     public var pairedDaemons: @Sendable () -> Set<String>
 
     public init(
@@ -22,9 +21,6 @@ public struct ServiceExtensionCore: Sendable {
         self.pairedDaemons = pairedDaemons
     }
 
-    /// The extension's store: the Keychain access group and app group named in its Info.plist
-    /// (`PushKeychainGroup`, `PushAppGroup`), both set only when the build has the push
-    /// entitlement.
     public static func shared(bundle: Bundle = .main) -> ServiceExtensionCore {
         let store = SharedPushStore(bundle: bundle)
         return ServiceExtensionCore(deviceKey: { store.sealKey() }, pairedDaemons: { store.pairedDaemons() })
@@ -35,7 +31,7 @@ public struct ServiceExtensionCore: Sendable {
         return PushContent.decrypt(content, deviceKey: deviceKey()) { paired.contains($0.lowercased()) }
     }
 
-    /// What to deliver when time runs out: the relay's text, none of its other `userInfo`.
+    /// For when time runs out: the relay's text, none of its other `userInfo`.
     public static func placeholder(_ content: UNNotificationContent) -> UNNotificationContent {
         PushContent.placeholder(content)
     }
@@ -62,7 +58,6 @@ public struct SharedPushStore: Sendable {
             appGroup: bundle.object(forInfoDictionaryKey: "PushAppGroup") as? String)
     }
 
-    /// Whether this build can share anything with the extension.
     public var isAvailable: Bool { keychainGroup != nil && appGroup != nil }
 
     private var defaults: UserDefaults? { appGroup.flatMap(UserDefaults.init(suiteName:)) }
@@ -71,8 +66,8 @@ public struct SharedPushStore: Sendable {
         Set((defaults?.stringArray(forKey: Self.pairedKey) ?? []).map { $0.lowercased() })
     }
 
-    public func setPairedDaemons(_ ids: Set<String>) {
-        defaults?.set(ids.sorted(), forKey: Self.pairedKey)
+    public func setPairedDaemons(_ daemonIds: Set<String>) {
+        defaults?.set(daemonIds.sorted(), forKey: Self.pairedKey)
     }
 
     private func query() -> [String: Any] {
@@ -88,14 +83,13 @@ public struct SharedPushStore: Sendable {
 
     public func sealKey() -> Curve25519.KeyAgreement.PrivateKey? {
         guard keychainGroup != nil else { return nil }
-        var item = query()
-        item[kSecReturnData as String] = true
+        var lookup = query()
+        lookup[kSecReturnData as String] = true
         var result: CFTypeRef?
-        guard SecItemCopyMatching(item as CFDictionary, &result) == errSecSuccess, let data = result as? Data else { return nil }
+        guard SecItemCopyMatching(lookup as CFDictionary, &result) == errSecSuccess, let data = result as? Data else { return nil }
         return try? Curve25519.KeyAgreement.PrivateKey(rawRepresentation: data)
     }
 
-    /// Stores the sealing secret for the extension (the app, after `generatePushSealKey`).
     @discardableResult
     public func setSealKey(_ secret: Data) -> Bool {
         guard keychainGroup != nil else { return false }

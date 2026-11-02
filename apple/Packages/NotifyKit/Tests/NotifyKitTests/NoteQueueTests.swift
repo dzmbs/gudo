@@ -19,7 +19,7 @@ import Testing
         log.delivered.append(note)
         log.inFlight -= 1
     }
-    for n in 0..<10_000 { queue.enqueue(n, key: "pane-\(n % 20)") }
+    for note in 0..<10_000 { queue.enqueue(note, key: "pane-\(note % 20)") }
     #expect(queue.count <= 20)
     for _ in 0..<200 where queue.count > 0 || log.inFlight > 0 { try await Task.sleep(for: .milliseconds(10)) }
     #expect(log.maxInFlight == 1)
