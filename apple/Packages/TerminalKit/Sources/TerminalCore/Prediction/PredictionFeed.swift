@@ -1,3 +1,4 @@
+/// What a backend tells the client's echo predictor. The daemon backend sends these from
 /// `EchoHint`/`InputAck` control messages and its RTT estimate; local backends send nothing, so
 /// nothing is predicted.
 public enum PredictionUpdate: Sendable, Equatable {
@@ -5,14 +6,13 @@ public enum PredictionUpdate: Sendable, Equatable {
     case hint(EchoHint?)
     /// The backend has written every input up to `seq` to the PTY and the output those inputs
     /// produced has been delivered before this update. `hint` is the state read just before the
-    /// last write (S6 §4 mitigation).
+    /// last write, which closes the race with a program that just turned echo off.
     case acknowledged(upTo: UInt64, hint: EchoHint?)
     /// A new round-trip estimate in seconds.
     case rtt(Double)
 }
 
 extension EchoPredictor {
-    /// Applies one backend update.
     public func apply(_ update: PredictionUpdate) {
         switch update {
         case .hint(let hint): self.update(hint: hint)
@@ -26,8 +26,8 @@ extension EchoPredictor {
 extension Terminal: PredictionScreen {
     public var cols: Int { size.cols }
     public var cursor: (x: Int, y: Int) {
-        let p = cursorPosition
-        return (p.x, p.y)
+        let position = cursorPosition
+        return (position.x, position.y)
     }
     public var isAlternateScreen: Bool { modes.altScreen }
     public func text(atX x: Int, y: Int) -> String { text(atActive: GridPoint(x: x, y: y)) }

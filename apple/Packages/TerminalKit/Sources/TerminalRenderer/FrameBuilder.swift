@@ -154,8 +154,8 @@ final class FrameBuilder {
         }
         // Search matches per row: (columns, selected).
         var highlightRows: [Int: [(ClosedRange<Int>, Bool)]] = [:]
-        for h in overlay.searchHighlights where h.row >= 0 && h.row < Int(rows) {
-            highlightRows[h.row, default: []].append((h.columns, h.selected))
+        for highlight in overlay.searchHighlights where highlight.row >= 0 && highlight.row < Int(rows) {
+            highlightRows[highlight.row, default: []].append((highlight.columns, highlight.selected))
         }
 
         var stats = BuildStats()
@@ -246,7 +246,7 @@ final class FrameBuilder {
     }
 
     private func buildRow(_ row: Row, cols: Int, colors: RenderState.Colors, fonts: FontGrid, blinkOn: Bool) -> CachedRow {
-        var out = CachedRow(
+        var cached = CachedRow(
             bg: .init(repeating: .zero, count: cols),
             text: [],
             wide: .init(repeating: false, count: cols),
@@ -294,17 +294,17 @@ final class FrameBuilder {
                 bg = self.style.selectionBackground ?? fg
                 fg = self.style.selectionForeground ?? cellBg
             }
-            if let bg { out.bg[x] = rgba(bg) }
-            out.fg[x] = rgba(bg ?? colors.background)
+            if let bg { cached.bg[x] = rgba(bg) }
+            cached.fg[x] = rgba(bg ?? colors.background)
 
             let width = info.width
             guard width == .narrow || width == .wide, style?.invisible != true else { continue }
             let span = width == .wide ? 2 : 1
-            out.wide[x] = width == .wide
+            cached.wide[x] = width == .wide
             var color = rgba(fg)
             if style?.faint == true { color.w = self.style.faintAlpha }
 
-            if style?.blink == true { out.hasBlink = true }
+            if style?.blink == true { cached.hasBlink = true }
             let blinkHidden = style?.blink == true && !blinkOn
             if !info.scalars.isEmpty, info.scalars != [0x20], !blinkHidden {
                 // Ghostty lets a narrow symbol (Nerd Font icon) grow into a following blank cell.
@@ -317,7 +317,7 @@ final class FrameBuilder {
                     style: FontStyle(bold: style?.bold ?? false, italic: style?.italic ?? false),
                     span: span, maxSpan: maxSpan)
                 {
-                    out.text.append(instance(glyph, x: x, color: color))
+                    cached.text.append(instance(glyph, x: x, color: color))
                 }
             }
             guard let style else { continue }
@@ -328,18 +328,18 @@ final class FrameBuilder {
                 case .rgb(let rgb): rgba(rgb)
                 }
                 if let sprite = fonts.sprite(Self.sprite(for: style.underline), span: span) {
-                    out.text.append(instance(sprite, x: x, color: underlineColor))
+                    cached.text.append(instance(sprite, x: x, color: underlineColor))
                 }
             }
             if style.overline, let sprite = fonts.sprite(.overline, span: span) {
-                out.text.append(instance(sprite, x: x, color: color))
+                cached.text.append(instance(sprite, x: x, color: color))
             }
             if style.strikethrough, let sprite = fonts.sprite(.strikethrough, span: span) {
-                out.text.append(instance(sprite, x: x, color: color))
+                cached.text.append(instance(sprite, x: x, color: color))
             }
         }
-        out.complete = fonts.deferrals == deferrals
-        return out
+        cached.complete = fonts.deferrals == deferrals
+        return cached
     }
 
     private static func isBlank(_ info: CellInfo) -> Bool {
@@ -362,14 +362,14 @@ final class FrameBuilder {
         for cell in overlay.cells where cell.x < cols {
             let scalars = cell.text.unicodeScalars.map(\.value)
             if !scalars.isEmpty, scalars != [0x20], let glyph = fonts.glyph(for: scalars, style: .regular, span: cell.span, maxSpan: cell.span) {
-                var g = instance(glyph, x: cell.x, color: color)
-                g.gridPos.y = UInt16(cell.y)
-                frame.text.append(g)
+                var textInstance = instance(glyph, x: cell.x, color: color)
+                textInstance.gridPos.y = UInt16(cell.y)
+                frame.text.append(textInstance)
             }
             if cell.underline != .none, let sprite = fonts.sprite(Self.sprite(for: cell.underline), span: cell.span) {
-                var u = instance(sprite, x: cell.x, color: color)
-                u.gridPos.y = UInt16(cell.y)
-                frame.text.append(u)
+                var underlineInstance = instance(sprite, x: cell.x, color: color)
+                underlineInstance.gridPos.y = UInt16(cell.y)
+                frame.text.append(underlineInstance)
             }
         }
     }
@@ -430,5 +430,5 @@ final class FrameBuilder {
         )
     }
 
-    private func rgba(_ c: RGB) -> SIMD4<UInt8> { SIMD4(c.r, c.g, c.b, 255) }
+    private func rgba(_ color: RGB) -> SIMD4<UInt8> { SIMD4(color.r, color.g, color.b, 255) }
 }

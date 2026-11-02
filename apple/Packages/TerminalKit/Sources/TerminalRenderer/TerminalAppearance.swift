@@ -43,13 +43,13 @@ public struct TerminalAppearance: Sendable, Equatable {
 
     /// The VT-side part of the appearance.
     public var terminalConfiguration: Terminal.Configuration {
-        var c = Terminal.Configuration()
-        c.background = background
-        c.foreground = foreground
-        c.palette = palette
-        c.cursorColor = cursorColor
-        c.cursorStyle = cursorStyle
-        c.cursorBlink = cursorBlink
-        return c
+        var configuration = Terminal.Configuration()
+        configuration.background = background
+        configuration.foreground = foreground
+        configuration.palette = palette
+        configuration.cursorColor = cursorColor
+        configuration.cursorStyle = cursorStyle
+        configuration.cursorBlink = cursorBlink
+        return configuration
     }
 }

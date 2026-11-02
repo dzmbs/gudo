@@ -3,9 +3,9 @@ import Testing
 @testable import TerminalCore
 
 private func rows(_ state: RenderState) -> [(id: RowID, dirty: Bool)] {
-    var out: [(RowID, Bool)] = []
-    state.forEachRow { out.append(($0.id, $0.isDirty)) }
-    return out
+    var rows: [(RowID, Bool)] = []
+    state.forEachRow { rows.append(($0.id, $0.isDirty)) }
+    return rows
 }
 
 private func text(_ state: RenderState, row y: Int) -> String {
@@ -91,8 +91,8 @@ private func text(_ state: RenderState, row y: Int) -> String {
     terminal.write(Array("\u{1b}[?1h".utf8))  // DECCKM: application cursor keys
     #expect(terminal.encode(up) == Array("\u{1b}OA".utf8))
 
-    let a = KeyEvent(key: PhysicalKey(macKeyCode: 0x00)!, action: .press, mods: [], text: "a", unshiftedCodepoint: 0x61)
-    #expect(terminal.encode(a) == Array("a".utf8))
+    let keyA = KeyEvent(key: PhysicalKey(macKeyCode: 0x00)!, action: .press, mods: [], text: "a", unshiftedCodepoint: 0x61)
+    #expect(terminal.encode(keyA) == Array("a".utf8))
 }
 
 @Test func encodesSoftKeyboardInputLikeHardwareChords() {

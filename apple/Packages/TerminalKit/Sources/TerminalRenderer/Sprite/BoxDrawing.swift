@@ -14,26 +14,26 @@ enum BoxDrawing {
     }
 
     // swiftlint:disable:next cyclomatic_complexity function_body_length
-    static func draw(_ cp: UInt32, _ c: SpriteCanvas, _ m: CellMetrics) {
-        let light = Thickness.light.px(m.boxThickness)
-        let heavy = Thickness.heavy.px(m.boxThickness)
+    static func draw(_ codepoint: UInt32, _ canvas: SpriteCanvas, _ metrics: CellMetrics) {
+        let light = Thickness.light.px(metrics.boxThickness)
+        let heavy = Thickness.heavy.px(metrics.boxThickness)
         let dashGap = max(4, light)
         func l(up: Lines.Style = .none, right: Lines.Style = .none, down: Lines.Style = .none, left: Lines.Style = .none) {
-            linesChar(m, c, Lines(up: up, right: right, down: down, left: left))
+            linesChar(metrics, canvas, Lines(up: up, right: right, down: down, left: left))
         }
-        switch cp {
+        switch codepoint {
         case 0x2500: l(right: .light, left: .light)
         case 0x2501: l(right: .heavy, left: .heavy)
         case 0x2502: l(up: .light, down: .light)
         case 0x2503: l(up: .heavy, down: .heavy)
-        case 0x2504: dashHorizontal(m, c, 3, light, dashGap)
-        case 0x2505: dashHorizontal(m, c, 3, heavy, dashGap)
-        case 0x2506: dashVertical(m, c, 3, light, dashGap)
-        case 0x2507: dashVertical(m, c, 3, heavy, dashGap)
-        case 0x2508: dashHorizontal(m, c, 4, light, dashGap)
-        case 0x2509: dashHorizontal(m, c, 4, heavy, dashGap)
-        case 0x250A: dashVertical(m, c, 4, light, dashGap)
-        case 0x250B: dashVertical(m, c, 4, heavy, dashGap)
+        case 0x2504: dashHorizontal(metrics, canvas, 3, light, dashGap)
+        case 0x2505: dashHorizontal(metrics, canvas, 3, heavy, dashGap)
+        case 0x2506: dashVertical(metrics, canvas, 3, light, dashGap)
+        case 0x2507: dashVertical(metrics, canvas, 3, heavy, dashGap)
+        case 0x2508: dashHorizontal(metrics, canvas, 4, light, dashGap)
+        case 0x2509: dashHorizontal(metrics, canvas, 4, heavy, dashGap)
+        case 0x250A: dashVertical(metrics, canvas, 4, light, dashGap)
+        case 0x250B: dashVertical(metrics, canvas, 4, heavy, dashGap)
         case 0x250C: l(right: .light, down: .light)
         case 0x250D: l(right: .heavy, down: .light)
         case 0x250E: l(right: .light, down: .heavy)
@@ -98,10 +98,10 @@ enum BoxDrawing {
         case 0x2549: l(up: .heavy, right: .light, down: .heavy, left: .heavy)
         case 0x254A: l(up: .heavy, right: .heavy, down: .heavy, left: .light)
         case 0x254B: l(up: .heavy, right: .heavy, down: .heavy, left: .heavy)
-        case 0x254C: dashHorizontal(m, c, 2, light, light)
-        case 0x254D: dashHorizontal(m, c, 2, heavy, heavy)
-        case 0x254E: dashVertical(m, c, 2, light, heavy)
-        case 0x254F: dashVertical(m, c, 2, heavy, heavy)
+        case 0x254C: dashHorizontal(metrics, canvas, 2, light, light)
+        case 0x254D: dashHorizontal(metrics, canvas, 2, heavy, heavy)
+        case 0x254E: dashVertical(metrics, canvas, 2, light, heavy)
+        case 0x254F: dashVertical(metrics, canvas, 2, heavy, heavy)
         case 0x2550: l(right: .double, left: .double)
         case 0x2551: l(up: .double, down: .double)
         case 0x2552: l(right: .double, down: .light)
@@ -131,13 +131,13 @@ enum BoxDrawing {
         case 0x256A: l(up: .light, right: .double, down: .light, left: .double)
         case 0x256B: l(up: .double, right: .light, down: .double, left: .light)
         case 0x256C: l(up: .double, right: .double, down: .double, left: .double)
-        case 0x256D: arc(m, c, .br, .light)
-        case 0x256E: arc(m, c, .bl, .light)
-        case 0x256F: arc(m, c, .tl, .light)
-        case 0x2570: arc(m, c, .tr, .light)
-        case 0x2571: lightDiagonalUpperRightToLowerLeft(m, c)
-        case 0x2572: lightDiagonalUpperLeftToLowerRight(m, c)
-        case 0x2573: lightDiagonalCross(m, c)
+        case 0x256D: arc(metrics, canvas, .br, .light)
+        case 0x256E: arc(metrics, canvas, .bl, .light)
+        case 0x256F: arc(metrics, canvas, .tl, .light)
+        case 0x2570: arc(metrics, canvas, .tr, .light)
+        case 0x2571: lightDiagonalUpperRightToLowerLeft(metrics, canvas)
+        case 0x2572: lightDiagonalUpperLeftToLowerRight(metrics, canvas)
+        case 0x2573: lightDiagonalCross(metrics, canvas)
         case 0x2574: l(left: .light)
         case 0x2575: l(up: .light)
         case 0x2576: l(right: .light)
@@ -155,20 +155,20 @@ enum BoxDrawing {
     }
 
     // swiftlint:disable:next function_body_length
-    static func linesChar(_ m: CellMetrics, _ c: SpriteCanvas, _ lines: Lines) {
-        let lightPx = Thickness.light.px(m.boxThickness)
-        let heavyPx = Thickness.heavy.px(m.boxThickness)
+    static func linesChar(_ metrics: CellMetrics, _ canvas: SpriteCanvas, _ lines: Lines) {
+        let lightPx = Thickness.light.px(metrics.boxThickness)
+        let heavyPx = Thickness.heavy.px(metrics.boxThickness)
 
-        let hLightTop = sat(m.cellHeight, lightPx) / 2
+        let hLightTop = sat(metrics.cellHeight, lightPx) / 2
         let hLightBottom = hLightTop + lightPx
-        let hHeavyTop = sat(m.cellHeight, heavyPx) / 2
+        let hHeavyTop = sat(metrics.cellHeight, heavyPx) / 2
         let hHeavyBottom = hHeavyTop + heavyPx
         let hDoubleTop = sat(hLightTop, lightPx)
         let hDoubleBottom = hLightBottom + lightPx
 
-        let vLightLeft = sat(m.cellWidth, lightPx) / 2
+        let vLightLeft = sat(metrics.cellWidth, lightPx) / 2
         let vLightRight = vLightLeft + lightPx
-        let vHeavyLeft = sat(m.cellWidth, heavyPx) / 2
+        let vHeavyLeft = sat(metrics.cellWidth, heavyPx) / 2
         let vHeavyRight = vHeavyLeft + heavyPx
         let vDoubleLeft = sat(vLightLeft, lightPx)
         let vDoubleRight = vLightRight + lightPx
@@ -215,76 +215,76 @@ enum BoxDrawing {
 
         switch lines.up {
         case .none: break
-        case .light: c.box(vLightLeft, 0, vLightRight, upBottom)
-        case .heavy: c.box(vHeavyLeft, 0, vHeavyRight, upBottom)
+        case .light: canvas.box(vLightLeft, 0, vLightRight, upBottom)
+        case .heavy: canvas.box(vHeavyLeft, 0, vHeavyRight, upBottom)
         case .double:
             let leftBottom = lines.left == .double ? hLightTop : upBottom
             let rightBottom = lines.right == .double ? hLightTop : upBottom
-            c.box(vDoubleLeft, 0, vLightLeft, leftBottom)
-            c.box(vLightRight, 0, vDoubleRight, rightBottom)
+            canvas.box(vDoubleLeft, 0, vLightLeft, leftBottom)
+            canvas.box(vLightRight, 0, vDoubleRight, rightBottom)
         }
 
         switch lines.right {
         case .none: break
-        case .light: c.box(rightLeft, hLightTop, m.cellWidth, hLightBottom)
-        case .heavy: c.box(rightLeft, hHeavyTop, m.cellWidth, hHeavyBottom)
+        case .light: canvas.box(rightLeft, hLightTop, metrics.cellWidth, hLightBottom)
+        case .heavy: canvas.box(rightLeft, hHeavyTop, metrics.cellWidth, hHeavyBottom)
         case .double:
             let topLeft = lines.up == .double ? vLightRight : rightLeft
             let bottomLeft = lines.down == .double ? vLightRight : rightLeft
-            c.box(topLeft, hDoubleTop, m.cellWidth, hLightTop)
-            c.box(bottomLeft, hLightBottom, m.cellWidth, hDoubleBottom)
+            canvas.box(topLeft, hDoubleTop, metrics.cellWidth, hLightTop)
+            canvas.box(bottomLeft, hLightBottom, metrics.cellWidth, hDoubleBottom)
         }
 
         switch lines.down {
         case .none: break
-        case .light: c.box(vLightLeft, downTop, vLightRight, m.cellHeight)
-        case .heavy: c.box(vHeavyLeft, downTop, vHeavyRight, m.cellHeight)
+        case .light: canvas.box(vLightLeft, downTop, vLightRight, metrics.cellHeight)
+        case .heavy: canvas.box(vHeavyLeft, downTop, vHeavyRight, metrics.cellHeight)
         case .double:
             let leftTop = lines.left == .double ? hLightBottom : downTop
             let rightTop = lines.right == .double ? hLightBottom : downTop
-            c.box(vDoubleLeft, leftTop, vLightLeft, m.cellHeight)
-            c.box(vLightRight, rightTop, vDoubleRight, m.cellHeight)
+            canvas.box(vDoubleLeft, leftTop, vLightLeft, metrics.cellHeight)
+            canvas.box(vLightRight, rightTop, vDoubleRight, metrics.cellHeight)
         }
 
         switch lines.left {
         case .none: break
-        case .light: c.box(0, hLightTop, leftRight, hLightBottom)
-        case .heavy: c.box(0, hHeavyTop, leftRight, hHeavyBottom)
+        case .light: canvas.box(0, hLightTop, leftRight, hLightBottom)
+        case .heavy: canvas.box(0, hHeavyTop, leftRight, hHeavyBottom)
         case .double:
             let topRight = lines.up == .double ? vLightLeft : leftRight
             let bottomRight = lines.down == .double ? vLightLeft : leftRight
-            c.box(0, hDoubleTop, topRight, hLightTop)
-            c.box(0, hLightBottom, bottomRight, hDoubleBottom)
+            canvas.box(0, hDoubleTop, topRight, hLightTop)
+            canvas.box(0, hLightBottom, bottomRight, hDoubleBottom)
         }
     }
 
-    static func lightDiagonalUpperRightToLowerLeft(_ m: CellMetrics, _ c: SpriteCanvas) {
-        let w = Double(m.cellWidth), h = Double(m.cellHeight)
+    static func lightDiagonalUpperRightToLowerLeft(_ metrics: CellMetrics, _ canvas: SpriteCanvas) {
+        let w = Double(metrics.cellWidth), h = Double(metrics.cellHeight)
         // Overshoot the corners slightly, keeping the slope, so diagonals join across cells.
         let sx = min(1, w / h), sy = min(1, h / w)
-        c.line(CGPoint(w + 0.5 * sx, -0.5 * sy), CGPoint(-0.5 * sx, h + 0.5 * sy),
-               thickness: CGFloat(Thickness.light.px(m.boxThickness)))
+        canvas.line(CGPoint(w + 0.5 * sx, -0.5 * sy), CGPoint(-0.5 * sx, h + 0.5 * sy),
+               thickness: CGFloat(Thickness.light.px(metrics.boxThickness)))
     }
 
-    static func lightDiagonalUpperLeftToLowerRight(_ m: CellMetrics, _ c: SpriteCanvas) {
-        let w = Double(m.cellWidth), h = Double(m.cellHeight)
+    static func lightDiagonalUpperLeftToLowerRight(_ metrics: CellMetrics, _ canvas: SpriteCanvas) {
+        let w = Double(metrics.cellWidth), h = Double(metrics.cellHeight)
         let sx = min(1, w / h), sy = min(1, h / w)
-        c.line(CGPoint(-0.5 * sx, -0.5 * sy), CGPoint(w + 0.5 * sx, h + 0.5 * sy),
-               thickness: CGFloat(Thickness.light.px(m.boxThickness)))
+        canvas.line(CGPoint(-0.5 * sx, -0.5 * sy), CGPoint(w + 0.5 * sx, h + 0.5 * sy),
+               thickness: CGFloat(Thickness.light.px(metrics.boxThickness)))
     }
 
-    static func lightDiagonalCross(_ m: CellMetrics, _ c: SpriteCanvas) {
-        lightDiagonalUpperRightToLowerLeft(m, c)
-        lightDiagonalUpperLeftToLowerRight(m, c)
+    static func lightDiagonalCross(_ metrics: CellMetrics, _ canvas: SpriteCanvas) {
+        lightDiagonalUpperRightToLowerLeft(metrics, canvas)
+        lightDiagonalUpperLeftToLowerRight(metrics, canvas)
     }
 
     /// A rounded corner joining the centre lines of two edges. `corner` names the quadrant the
     /// arc bends towards.
-    static func arc(_ m: CellMetrics, _ c: SpriteCanvas, _ corner: Corner, _ thickness: Thickness) {
-        let t = thickness.px(m.boxThickness)
-        let w = Double(m.cellWidth), h = Double(m.cellHeight), ft = Double(t)
-        let cx = Double(sat(m.cellWidth, t) / 2) + ft / 2
-        let cy = Double(sat(m.cellHeight, t) / 2) + ft / 2
+    static func arc(_ metrics: CellMetrics, _ canvas: SpriteCanvas, _ corner: Corner, _ thickness: Thickness) {
+        let t = thickness.px(metrics.boxThickness)
+        let w = Double(metrics.cellWidth), h = Double(metrics.cellHeight), ft = Double(t)
+        let cx = Double(sat(metrics.cellWidth, t) / 2) + ft / 2
+        let cy = Double(sat(metrics.cellHeight, t) / 2) + ft / 2
         let r = min(w, h) / 2
         let s = 0.25
 
@@ -311,18 +311,18 @@ enum BoxDrawing {
             path.addCurve(to: CGPoint(cx + r, cy), control1: CGPoint(cx, cy + s * r), control2: CGPoint(cx + s * r, cy))
             path.addLine(to: CGPoint(w, cy))
         }
-        c.stroke(path, lineWidth: CGFloat(ft))
+        canvas.stroke(path, lineWidth: CGFloat(ft))
     }
 
     /// `count` dashes with half gaps at both ends, so the pattern tiles evenly across cells.
-    static func dashHorizontal(_ m: CellMetrics, _ c: SpriteCanvas, _ count: Int, _ thick: Int, _ desiredGap: Int) {
+    static func dashHorizontal(_ metrics: CellMetrics, _ canvas: SpriteCanvas, _ count: Int, _ thick: Int, _ desiredGap: Int) {
         let gapCount = count
-        guard m.cellWidth >= count + gapCount else { return hlineMiddle(m, c, .light) }
-        let gapWidth = min(desiredGap, m.cellWidth / (2 * count))
-        let totalDash = m.cellWidth - gapCount * gapWidth
+        guard metrics.cellWidth >= count + gapCount else { return hlineMiddle(metrics, canvas, .light) }
+        let gapWidth = min(desiredGap, metrics.cellWidth / (2 * count))
+        let totalDash = metrics.cellWidth - gapCount * gapWidth
         let dashWidth = totalDash / count
         var extra = totalDash % count
-        let y = sat(m.cellHeight, thick) / 2
+        let y = sat(metrics.cellHeight, thick) / 2
         var x = gapWidth / 2
         for _ in 0..<count {
             var x1 = x + dashWidth
@@ -330,20 +330,20 @@ enum BoxDrawing {
                 extra -= 1
                 x1 += 1
             }
-            hline(c, x, x1, y, thick)
+            hline(canvas, x, x1, y, thick)
             x = x1 + gapWidth
         }
     }
 
     /// `count` dashes with a full gap at the bottom, so the pattern tiles evenly down a column.
-    static func dashVertical(_ m: CellMetrics, _ c: SpriteCanvas, _ count: Int, _ thick: Int, _ desiredGap: Int) {
+    static func dashVertical(_ metrics: CellMetrics, _ canvas: SpriteCanvas, _ count: Int, _ thick: Int, _ desiredGap: Int) {
         let gapCount = count
-        guard m.cellHeight >= count + gapCount else { return vlineMiddle(m, c, .light) }
-        let gapHeight = min(desiredGap, m.cellHeight / (2 * count))
-        let totalDash = m.cellHeight - gapCount * gapHeight
+        guard metrics.cellHeight >= count + gapCount else { return vlineMiddle(metrics, canvas, .light) }
+        let gapHeight = min(desiredGap, metrics.cellHeight / (2 * count))
+        let totalDash = metrics.cellHeight - gapCount * gapHeight
         let dashHeight = totalDash / count
         var extra = totalDash % count
-        let x = sat(m.cellWidth, thick) / 2
+        let x = sat(metrics.cellWidth, thick) / 2
         var y = 0
         for _ in 0..<count {
             var y1 = y + dashHeight
@@ -351,7 +351,7 @@ enum BoxDrawing {
                 extra -= 1
                 y1 += 1
             }
-            vline(c, y, y1, x, thick)
+            vline(canvas, y, y1, x, thick)
             y = y1 + gapHeight
         }
     }

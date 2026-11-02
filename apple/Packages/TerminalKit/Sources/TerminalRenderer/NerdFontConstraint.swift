@@ -71,8 +71,8 @@ struct NerdFontConstraint: Equatable {
         var lo = 0, hi = ranges.count - 1
         while lo <= hi {
             let mid = (lo + hi) / 2
-            let r = ranges[mid]
-            if cp < r.first { hi = mid - 1 } else if cp > r.last { lo = mid + 1 } else { return table[Int(r.index)] }
+            let range = ranges[mid]
+            if cp < range.first { hi = mid - 1 } else if cp > range.last { lo = mid + 1 } else { return table[Int(range.index)] }
         }
         return nil
     }
@@ -135,21 +135,21 @@ struct NerdFontConstraint: Equatable {
         guard doesAnything else { return glyph }
         guard size == .stretch else { return constrainInner(glyph, metrics, constraintWidth) }
         // Stretched glyphs align to the grid, not the face, and need no negative padding.
-        var m = metrics
-        m.faceWidth = m.cellWidth
-        m.faceHeight = m.cellHeight
-        m.faceY = 0
-        var c = self
-        c.padBottom = max(0, c.padBottom)
-        c.padTop = max(0, c.padTop)
-        c.padLeft = max(0, c.padLeft)
-        c.padRight = max(0, c.padRight)
-        return c.constrainInner(glyph, m, constraintWidth)
+        var cellMetrics = metrics
+        cellMetrics.faceWidth = cellMetrics.cellWidth
+        cellMetrics.faceHeight = cellMetrics.cellHeight
+        cellMetrics.faceY = 0
+        var padded = self
+        padded.padBottom = max(0, padded.padBottom)
+        padded.padTop = max(0, padded.padTop)
+        padded.padLeft = max(0, padded.padLeft)
+        padded.padRight = max(0, padded.padRight)
+        return padded.constrainInner(glyph, cellMetrics, constraintWidth)
     }
 
-    private func constrainInner(_ glyph: GlyphBox, _ m: Metrics, _ constraintWidth: Int) -> GlyphBox {
+    private func constrainInner(_ glyph: GlyphBox, _ metrics: Metrics, _ constraintWidth: Int) -> GlyphBox {
         // Never stretch across two cells for extra-wide faces (as font_patcher).
-        let width = size == .stretch && m.faceWidth > 0.9 * m.faceHeight ? 1 : min(maxConstraintWidth, constraintWidth)
+        let width = size == .stretch && metrics.faceWidth > 0.9 * metrics.faceHeight ? 1 : min(maxConstraintWidth, constraintWidth)
 
         let groupWidth = glyph.width / relativeWidth
         let groupHeight = glyph.height / relativeHeight
@@ -157,7 +157,7 @@ struct NerdFontConstraint: Equatable {
             width: groupWidth, height: groupHeight,
             x: glyph.x - groupWidth * relativeX, y: glyph.y - groupHeight * relativeY)
 
-        let (wf, hf) = scaleFactors(group, m, width)
+        let (wf, hf) = scaleFactors(group, metrics, width)
         let centerX = group.x + group.width / 2
         let centerY = group.y + group.height / 2
         group.width *= wf
@@ -165,19 +165,19 @@ struct NerdFontConstraint: Equatable {
         group.x = centerX - group.width / 2
         group.y = centerY - group.height / 2
 
-        group.y = alignedY(group, m)
-        group.x = alignedX(group, m, width)
+        group.y = alignedY(group, metrics)
+        group.x = alignedX(group, metrics, width)
 
         return GlyphBox(
             width: wf * glyph.width, height: hf * glyph.height,
             x: group.x + group.width * relativeX, y: group.y + group.height * relativeY)
     }
 
-    private func scaleFactors(_ group: GlyphBox, _ m: Metrics, _ width: Int) -> (Double, Double) {
+    private func scaleFactors(_ group: GlyphBox, _ metrics: Metrics, _ width: Int) -> (Double, Double) {
         guard size != .none else { return (1, 1) }
         let multiCell = width > 1
-        let targetWidth = (Double(width) - (padLeft + padRight)) * m.faceWidth
-        let targetHeight = (1 - (padBottom + padTop)) * (height == .cell ? m.faceHeight : multiCell ? m.iconHeight : m.iconHeightSingle)
+        let targetWidth = (Double(width) - (padLeft + padRight)) * metrics.faceWidth
+        let targetHeight = (1 - (padBottom + padTop)) * (height == .cell ? metrics.faceHeight : multiCell ? metrics.iconHeight : metrics.iconHeightSingle)
         var wf = targetWidth / group.width
         var hf = targetHeight / group.height
         switch size {
@@ -192,7 +192,7 @@ struct NerdFontConstraint: Equatable {
             hf = min(wf, hf)
             if multiCell, hf > 1 {
                 // As large as for a single cell, never shrinking when a space opens up after it.
-                hf = max(1, scaleFactors(group, m, 1).1)
+                hf = max(1, scaleFactors(group, metrics, 1).1)
             }
             wf = hf
         case .stretch: break
@@ -203,10 +203,10 @@ struct NerdFontConstraint: Equatable {
         return (wf, hf)
     }
 
-    private func alignedY(_ group: GlyphBox, _ m: Metrics) -> Double {
+    private func alignedY(_ group: GlyphBox, _ metrics: Metrics) -> Double {
         if size == .none, alignVertical == .none { return group.y }
-        let startY = m.faceY + padBottom * m.faceHeight
-        let endY = m.faceY + (m.faceHeight - group.height - padTop * m.faceHeight)
+        let startY = metrics.faceY + padBottom * metrics.faceHeight
+        let endY = metrics.faceY + (metrics.faceHeight - group.height - padTop * metrics.faceHeight)
         let centerY = (startY + endY) / 2
         return switch alignVertical {
         case .none: endY < startY ? centerY : max(startY, min(group.y, endY))
@@ -216,17 +216,17 @@ struct NerdFontConstraint: Equatable {
         }
     }
 
-    private func alignedX(_ group: GlyphBox, _ m: Metrics, _ width: Int) -> Double {
+    private func alignedX(_ group: GlyphBox, _ metrics: Metrics, _ width: Int) -> Double {
         if size == .none, alignHorizontal == .none { return group.x }
-        let fullFaceSpan = m.faceWidth + Double(width - 1) * m.cellWidth
-        let startX = padLeft * m.faceWidth
-        let endX = fullFaceSpan - group.width - padRight * m.faceWidth
+        let fullFaceSpan = metrics.faceWidth + Double(width - 1) * metrics.cellWidth
+        let startX = padLeft * metrics.faceWidth
+        let endX = fullFaceSpan - group.width - padRight * metrics.faceWidth
         return switch alignHorizontal {
         case .none: max(startX, min(group.x, endX))
         case .start: startX
         case .end: max(startX, endX)
         case .center: max(startX, (startX + endX) / 2)
-        case .center1: max(startX, (startX + (m.faceWidth - group.width - padRight * m.faceWidth)) / 2)
+        case .center1: max(startX, (startX + (metrics.faceWidth - group.width - padRight * metrics.faceWidth)) / 2)
         }
     }
 }

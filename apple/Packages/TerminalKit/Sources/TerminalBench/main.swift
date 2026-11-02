@@ -6,6 +6,7 @@ import Synchronization
 import TerminalCore
 import TerminalRenderer
 
+/// Headless benchmark: drives the same `TerminalSurface` render path as the demo window,
 /// with frames paced at 120 Hz by a sleep loop instead of a display link (so it runs with the
 /// screen locked or in CI), and writes a rendered PNG. `cat` runs as a real child process on a PTY.
 ///
@@ -92,10 +93,10 @@ final class Bench {
                 case 0:
                     // Braille graph scrolling one dot column per frame.
                     for col in 0..<cols {
-                        let a = Int((sin(Double(col * 2 + frame) / 5) + 1) * 1.99)
-                        let b = Int((sin(Double(col * 2 + 1 + frame) / 5) + 1) * 1.99)
+                        let leftDots = Int((sin(Double(col * 2 + frame) / 5) + 1) * 1.99)
+                        let rightDots = Int((sin(Double(col * 2 + 1 + frame) / 5) + 1) * 1.99)
                         let left: [UInt32] = [0x40, 0x04, 0x02, 0x01], right: [UInt32] = [0x80, 0x20, 0x10, 0x08]
-                        line.unicodeScalars.append(Unicode.Scalar(0x2800 + left[a] + right[b])!)
+                        line.unicodeScalars.append(Unicode.Scalar(0x2800 + left[leftDots] + right[rightDots])!)
                     }
                 case 1:
                     for col in 0..<cols { line.append(ramp[(col + frame) % ramp.count]) }
@@ -168,8 +169,8 @@ final class Bench {
     }
 
     private func report(_ name: String) {
-        guard let s = surface.stats.drain() else { return print("\(name): no frames") }
-        print("\(name): \(s)")
+        guard let summary = surface.stats.drain() else { return print("\(name): no frames") }
+        print("\(name): \(summary)")
     }
 
     static let showcaseText = [
@@ -178,7 +179,7 @@ final class Bench {
         "\u{1b}[9mstrike\u{1b}[0m \u{1b}[7minverse\u{1b}[0m \u{1b}[2mfaint\u{1b}[0m\r\n",
         (0..<16).map { "\u{1b}[48;5;\($0)m   " }.joined() + "\u{1b}[0m\r\n",
         (0..<16).map { "\u{1b}[38;5;\($0)mc\(String($0).padding(toLength: 3, withPad: " ", startingAt: 0))" }.joined() + "\u{1b}[0m\r\n",
-        (0..<96).map { i in let r = i * 255 / 95; return "\u{1b}[48;2;\(r);\(255 - r);160m " }.joined() + "\u{1b}[0m\r\n",
+        (0..<96).map { i in let red = i * 255 / 95; return "\u{1b}[48;2;\(red);\(255 - red);160m " }.joined() + "\u{1b}[0m\r\n",
         "emoji: 😀 👍🏽 🇩🇪 👨‍👩‍👧   cjk: 漢字かな   symbols: ✓ → ≠ λ ∑   nerd: \u{e0b0} \u{f09b} \u{e7a8} \u{f120}\r\n",
         "box: ┌─┬─┐ │ │ │ └─┴─┘ ═║╔╗ ▀▄█░▒▓ ⣿⠿   ligature-free: -> => != === <= >= :: |||\r\n",
         "\u{1b}[38;2;255;128;0mtruecolor orange\u{1b}[0m \u{1b}[38;2;97;175;239mblue\u{1b}[0m \u{1b}[4;31mred underline\u{1b}[0m\r\n",

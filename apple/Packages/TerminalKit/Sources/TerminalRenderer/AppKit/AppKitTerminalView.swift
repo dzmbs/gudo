@@ -195,37 +195,37 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
 
     override public func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
-        let p = point(event)
+        let location = point(event)
         let flags = event.modifierFlags
         mouseReporting = surface.reportsMouse(shift: flags.contains(.shift))
         if mouseReporting {
-            emit(surface.mouse(.press, button: .left, at: p, mods: KeyModifiers(flags)))
+            emit(surface.mouse(.press, button: .left, at: location, mods: KeyModifiers(flags)))
             return
         }
-        if flags.contains(.command), let link = surface.link(at: p) {
+        if flags.contains(.command), let link = surface.link(at: location) {
             return openLink(link)
         }
         if flags.contains(.shift), let selection = surface.terminal.selection,
-           let head = surface.terminal.screenPoint(fromViewport: surface.cell(at: p))
+           let head = surface.terminal.screenPoint(fromViewport: surface.cell(at: location))
         {
             surface.terminal.setSelection(Selection(anchor: selection.anchor, head: head, rectangle: selection.rectangle))
             surface.setNeedsRender()
             return
         }
-        if event.clickCount == 1, surface.terminal.selection == nil, let image = surface.kittyImage(at: p) {
+        if event.clickCount == 1, surface.terminal.selection == nil, let image = surface.kittyImage(at: location) {
             dragOutStart = event
             dragOutImage = image
             return
         }
         if event.clickCount == 1, let selection = surface.terminal.selection,
-           let cell = surface.terminal.screenPoint(fromViewport: surface.cell(at: p)), selection.contains(cell)
+           let cell = surface.terminal.screenPoint(fromViewport: surface.cell(at: location)), selection.contains(cell)
         {
             dragOutStart = event
             return
         }
         surface.terminal.clearSelection()
-        let px = surface.pixels(p)
-        let cell = surface.cell(at: p)
+        let px = surface.pixels(location)
+        let cell = surface.cell(at: location)
         if selectionGesture.press(cell: cell, x: px.x, y: px.y, time: event.timestamp) != nil, selectionGesture.clickCount == 2 {
             surface.terminal.selectLinkOrWord(atViewport: cell)
         }
@@ -233,14 +233,14 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
     }
 
     override public func mouseDragged(with event: NSEvent) {
-        let p = point(event)
+        let location = point(event)
         if mouseReporting {
-            emit(surface.mouse(.motion, button: .left, at: p, mods: KeyModifiers(event.modifierFlags)))
+            emit(surface.mouse(.motion, button: .left, at: location, mods: KeyModifiers(event.modifierFlags)))
             return
         }
         if let start = dragOutStart, let image = dragOutImage {
             let origin = point(start)
-            guard hypot(p.x - origin.x, p.y - origin.y) > 4 else { return }
+            guard hypot(location.x - origin.x, location.y - origin.y) > 4 else { return }
             dragOutStart = nil
             dragOutImage = nil
             guard let png = surface.terminal.kittyPNG(image.placement) else { return }
@@ -253,25 +253,25 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         }
         if let start = dragOutStart {
             let origin = point(start)
-            guard hypot(p.x - origin.x, p.y - origin.y) > 4, let text = surface.terminal.selectionText() else { return }
+            guard hypot(location.x - origin.x, location.y - origin.y) > 4, let text = surface.terminal.selectionText() else { return }
             dragOutStart = nil
             let item = NSDraggingItem(pasteboardWriter: text as NSString)
             item.setDraggingFrame(CGRect(origin: origin, size: CGSize(width: 1, height: 1)), contents: nil)
             beginDraggingSession(with: [item], event: start, source: self)
             return
         }
-        lastDragPoint = p
+        lastDragPoint = location
         dragRectangle = event.modifierFlags.contains(.option)
-        let px = surface.pixels(p)
-        selectionGesture.drag(cell: surface.cell(at: p), x: px.x, y: px.y, rectangle: dragRectangle, geometry: surface.selectionGeometry)
+        let px = surface.pixels(location)
+        selectionGesture.drag(cell: surface.cell(at: location), x: px.x, y: px.y, rectangle: dragRectangle, geometry: surface.selectionGeometry)
         surface.setNeedsRender()
         updateAutoscroll()
     }
 
     override public func mouseUp(with event: NSEvent) {
-        let p = point(event)
+        let location = point(event)
         if mouseReporting {
-            emit(surface.mouse(.release, button: .left, at: p, mods: KeyModifiers(event.modifierFlags)))
+            emit(surface.mouse(.release, button: .left, at: location, mods: KeyModifiers(event.modifierFlags)))
             mouseReporting = false
             return
         }
@@ -289,7 +289,7 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
             surface.setNeedsRender()
             return
         }
-        selectionGesture.release(cell: surface.cell(at: p))
+        selectionGesture.release(cell: surface.cell(at: location))
         stopAutoscroll()
     }
 
@@ -339,12 +339,12 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
     }
 
     override public func mouseMoved(with event: NSEvent) {
-        let p = point(event)
-        lastMousePoint = p
-        onPointerMoved?(p)
-        updateHoverLink(at: p, flags: event.modifierFlags)
+        let location = point(event)
+        lastMousePoint = location
+        onPointerMoved?(location)
+        updateHoverLink(at: location, flags: event.modifierFlags)
         if surface.reportsMouse(shift: event.modifierFlags.contains(.shift)) {
-            emit(surface.mouse(.motion, button: nil, at: p, mods: KeyModifiers(event.modifierFlags)))
+            emit(surface.mouse(.motion, button: nil, at: location, mods: KeyModifiers(event.modifierFlags)))
         }
     }
 
@@ -357,13 +357,13 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
     override public func flagsChanged(with event: NSEvent) {
         super.flagsChanged(with: event)
         // Pressing ⌘ over a printed URL underlines it.
-        if let p = lastMousePoint { updateHoverLink(at: p, flags: event.modifierFlags) }
+        if let location = lastMousePoint { updateHoverLink(at: location, flags: event.modifierFlags) }
     }
 
     /// Ghostty: an OSC 8 hyperlink underlines on hover; a URL or path printed as text only
     /// while ⌘ is held, since only a ⌘-click opens it.
-    private func updateHoverLink(at p: CGPoint, flags: NSEvent.ModifierFlags) {
-        var link = surface.reportsMouse(shift: flags.contains(.shift)) && !flags.contains(.command) ? nil : surface.link(at: p)
+    private func updateHoverLink(at location: CGPoint, flags: NSEvent.ModifierFlags) {
+        var link = surface.reportsMouse(shift: flags.contains(.shift)) && !flags.contains(.command) ? nil : surface.link(at: location)
         if link?.isHyperlink == false, !flags.contains(.command) { link = nil }
         setHoverLink(link)
         if link != nil { NSCursor.pointingHand.set() } else { NSCursor.iBeam.set() }

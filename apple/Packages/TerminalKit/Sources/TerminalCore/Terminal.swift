@@ -13,8 +13,8 @@ public struct RGB: Hashable, Sendable {
         self.b = b
     }
 
-    init(_ c: GhosttyColorRgb) {
-        self.init(r: c.r, g: c.g, b: c.b)
+    init(_ color: GhosttyColorRgb) {
+        self.init(r: color.r, g: color.g, b: color.b)
     }
 
     var ghostty: GhosttyColorRgb { GhosttyColorRgb(r: r, g: g, b: b) }

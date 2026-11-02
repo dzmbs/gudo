@@ -7,8 +7,8 @@ public enum GlyphFixture {
         let esc = "\u{1b}["
         func sgr(_ codes: String) -> String { esc + codes + "m" }
         let reset = sgr("0")
-        func fg(_ n: Int) -> String { sgr("38;5;\(n)") }
-        func bg(_ n: Int) -> String { sgr("48;5;\(n)") }
+        func fg(_ color: Int) -> String { sgr("38;5;\(color)") }
+        func bg(_ color: Int) -> String { sgr("48;5;\(color)") }
 
         var lines: [String] = []
         lines.append(sgr("1") + "Glyph fixture" + reset + sgr("2") + "  box · blocks · powerline · braille · legacy · icons · emoji · CJK" + reset)
@@ -68,7 +68,7 @@ public enum GlyphFixture {
     private static func brailleWave(columns: Int, phase: Double) -> String {
         // Dot bits by (column 0/1, row 0...3).
         let bits: [[UInt32]] = [[0x01, 0x02, 0x04, 0x40], [0x08, 0x10, 0x20, 0x80]]
-        var out = ""
+        var text = ""
         for column in 0..<columns {
             var pattern: UInt32 = 0
             for sub in 0..<2 {
@@ -76,9 +76,9 @@ public enum GlyphFixture {
                 let y = Int(((sin(x / 6 + phase) + 1) / 2 * 3.99).rounded(.down))
                 pattern |= bits[sub][3 - y]
             }
-            out.unicodeScalars.append(Unicode.Scalar(0x2800 + pattern)!)
+            text.unicodeScalars.append(Unicode.Scalar(0x2800 + pattern)!)
         }
-        return out
+        return text
     }
 }
 

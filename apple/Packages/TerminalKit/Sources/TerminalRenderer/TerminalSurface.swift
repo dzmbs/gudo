@@ -193,13 +193,13 @@ public final class TerminalSurface {
         try self.init(terminal: terminal, appearance: appearance)
     }
 
-    private static func frameStyle(_ a: TerminalAppearance) -> FrameStyle {
+    private static func frameStyle(_ appearance: TerminalAppearance) -> FrameStyle {
         FrameStyle(
-            selectionBackground: a.selectionBackground, selectionForeground: a.selectionForeground,
-            faintAlpha: UInt8(clamping: Int((a.faintOpacity * 255).rounded())),
+            selectionBackground: appearance.selectionBackground, selectionForeground: appearance.selectionForeground,
+            faintAlpha: UInt8(clamping: Int((appearance.faintOpacity * 255).rounded())),
             search: SearchColors(
-                background: a.searchBackground, foreground: a.searchForeground,
-                selectedBackground: a.searchSelectedBackground, selectedForeground: a.searchSelectedForeground))
+                background: appearance.searchBackground, foreground: appearance.searchForeground,
+                selectedBackground: appearance.searchSelectedBackground, selectedForeground: appearance.searchSelectedForeground))
     }
 
     /// Seconds spent compiling shaders.metal at startup.
@@ -424,11 +424,11 @@ public final class TerminalSurface {
 
     /// The whole cells that fit a drawable of `pixels`, the remainder becoming padding.
     private func gridFitting(_ pixels: CGSize) -> Grid? {
-        guard let m = fonts?.metrics else { return nil }
+        guard let metrics = fonts?.metrics else { return nil }
         let pad = Int((appearance.padding * layer.contentsScale).rounded())
-        let cols = max(1, (Int(pixels.width) - 2 * pad) / m.cellWidth)
-        let rows = max(1, (Int(pixels.height) - 2 * pad) / m.cellHeight)
-        return Grid(cols: UInt16(cols), rows: UInt16(rows), cellWidth: UInt32(m.cellWidth), cellHeight: UInt32(m.cellHeight))
+        let cols = max(1, (Int(pixels.width) - 2 * pad) / metrics.cellWidth)
+        let rows = max(1, (Int(pixels.height) - 2 * pad) / metrics.cellHeight)
+        return Grid(cols: UInt16(cols), rows: UInt16(rows), cellWidth: UInt32(metrics.cellWidth), cellHeight: UInt32(metrics.cellHeight))
     }
 
     /// `window-padding-balance`: split the space left over after whole cells evenly, so the grid
@@ -527,9 +527,9 @@ public final class TerminalSurface {
         return motion.regridded || motionPixelSize != pixelSize
     }
 
-    private static func isClose(_ a: CGSize, _ b: CGSize, scale: CGFloat) -> Bool {
+    private static func isClose(_ lhs: CGSize, _ rhs: CGSize, scale: CGFloat) -> Bool {
         let tolerance = arrivalTolerance * scale
-        return abs(a.width - b.width) <= tolerance && abs(a.height - b.height) <= tolerance
+        return abs(lhs.width - rhs.width) <= tolerance && abs(lhs.height - rhs.height) <= tolerance
     }
 
     private func scheduleMotionEnd() {
@@ -872,20 +872,20 @@ public final class TerminalSurface {
         inlineImageFrames.reversed().filter { $0.rect.contains(point) }.map(\.placement)
     }
 
-    private func imageDraws(_ placements: [InlineImagePlacement], metrics m: CellMetrics) -> [ImageDraw] {
+    private func imageDraws(_ placements: [InlineImagePlacement], metrics: CellMetrics) -> [ImageDraw] {
         var draws: [ImageDraw] = []
         var frames: [(placement: InlineImagePlacement, rect: CGRect)] = []
         let gridRows = Int(grid?.rows ?? 0)
         let scale = layer.contentsScale
-        for p in placements {
-            guard let texture = imageTextures[p.key], p.cols > 0, p.rows > 0, p.row + p.rows > 0, p.row < gridRows else { continue }
-            let size = SIMD2(Float(p.cols * m.cellWidth), Float(p.rows * m.cellHeight))
+        for placement in placements {
+            guard let texture = imageTextures[placement.key], placement.cols > 0, placement.rows > 0, placement.row + placement.rows > 0, placement.row < gridRows else { continue }
+            let size = SIMD2(Float(placement.cols * metrics.cellWidth), Float(placement.rows * metrics.cellHeight))
             draws.append(ImageDraw(texture: texture, vertex: ImageVertex(
-                gridPos: SIMD2(Float(p.col), Float(p.row)), cellOffset: .zero,
+                gridPos: SIMD2(Float(placement.col), Float(placement.row)), cellOffset: .zero,
                 sourceRect: SIMD4(0, 0, Float(texture.width), Float(texture.height)), destSize: size)))
-            frames.append((p, CGRect(
-                x: (CGFloat(paddingPx.w) + CGFloat(p.col * m.cellWidth)) / scale,
-                y: (CGFloat(paddingPx.x) + CGFloat(p.row * m.cellHeight)) / scale,
+            frames.append((placement, CGRect(
+                x: (CGFloat(paddingPx.w) + CGFloat(placement.col * metrics.cellWidth)) / scale,
+                y: (CGFloat(paddingPx.x) + CGFloat(placement.row * metrics.cellHeight)) / scale,
                 width: CGFloat(size.x) / scale, height: CGFloat(size.y) / scale)))
         }
         inlineImageFrames = frames
@@ -915,15 +915,15 @@ public final class TerminalSurface {
         let changed = placements != kittyPlacements || !placements.isEmpty
         kittyPlacements = placements
         var shown = Set<UInt32>()
-        for p in placements {
-            shown.insert(p.imageID)
-            guard kittyTextures[p.imageID]?.generation != p.generation else { continue }
+        for placement in placements {
+            shown.insert(placement.imageID)
+            guard kittyTextures[placement.imageID]?.generation != placement.generation else { continue }
             // Pixels still on the way (after a restore) or replaced since the update: the
             // image appears, at its final size, once a later frame finds them.
-            guard let pixels = terminal.kittyImage(id: p.imageID), pixels.generation == p.generation,
+            guard let pixels = terminal.kittyImage(id: placement.imageID), pixels.generation == placement.generation,
                   let texture = KittyTexture(pixels, renderer: renderer)
             else { continue }
-            kittyTextures[p.imageID] = texture
+            kittyTextures[placement.imageID] = texture
         }
         kittyTextures = kittyTextures.filter { shown.contains($0.key) }
         return changed || full
@@ -931,38 +931,38 @@ public final class TerminalSurface {
 
     /// The placements as quads in their layers, lowest z first, scaled from the terminal's cell
     /// pixels to the renderer's (a remote pane lays images out in the host's cells).
-    private func kittyImageDraws(metrics m: CellMetrics) -> KittyDraws {
+    private func kittyImageDraws(metrics: CellMetrics) -> KittyDraws {
         var draws = KittyDraws()
         kittyImageFrames = []
         guard !kittyPlacements.isEmpty, let grid else { return draws }
         let vtCell = terminal.cellPixelSize
         guard vtCell.width > 0, vtCell.height > 0 else { return draws }
-        let sx = Float(m.cellWidth) / Float(vtCell.width), sy = Float(m.cellHeight) / Float(vtCell.height)
+        let sx = Float(metrics.cellWidth) / Float(vtCell.width), sy = Float(metrics.cellHeight) / Float(vtCell.height)
         let sorted = kittyPlacements.sorted { ($0.layer, $0.z) < ($1.layer, $1.z) }
         let scale = layer.contentsScale
         let gridRect = CGRect(
             x: CGFloat(paddingPx.w), y: CGFloat(paddingPx.x),
-            width: CGFloat(Int(grid.cols) * m.cellWidth), height: CGFloat(Int(grid.rows) * m.cellHeight))
-        for p in sorted {
-            guard let image = kittyTextures[p.imageID], image.generation == p.generation else { continue }
-            let top = Float(p.row) * Float(m.cellHeight) + Float(p.offsetY) * sy
-            let height = Float(p.height) * sy
-            guard top + height > 0, top < Float(Int(grid.rows) * m.cellHeight) else { continue }
-            let left = Float(p.col) * Float(m.cellWidth) + Float(p.offsetX) * sx
+            width: CGFloat(Int(grid.cols) * metrics.cellWidth), height: CGFloat(Int(grid.rows) * metrics.cellHeight))
+        for placement in sorted {
+            guard let image = kittyTextures[placement.imageID], image.generation == placement.generation else { continue }
+            let top = Float(placement.row) * Float(metrics.cellHeight) + Float(placement.offsetY) * sy
+            let height = Float(placement.height) * sy
+            guard top + height > 0, top < Float(Int(grid.rows) * metrics.cellHeight) else { continue }
+            let left = Float(placement.col) * Float(metrics.cellWidth) + Float(placement.offsetX) * sx
             let drawn = CGRect(
                 x: gridRect.minX + CGFloat(left), y: gridRect.minY + CGFloat(top),
-                width: CGFloat(Float(p.width) * sx), height: CGFloat(height)).intersection(gridRect)
+                width: CGFloat(Float(placement.width) * sx), height: CGFloat(height)).intersection(gridRect)
             if !drawn.isNull, !drawn.isEmpty {
-                kittyImageFrames.append((p, CGRect(
+                kittyImageFrames.append((placement, CGRect(
                     x: drawn.minX / scale, y: drawn.minY / scale, width: drawn.width / scale, height: drawn.height / scale)))
             }
-            let t = image.scale
+            let imageScale = image.scale
             let draw = ImageDraw(texture: image.texture, vertex: ImageVertex(
-                gridPos: SIMD2(Float(p.col), Float(p.row)),
-                cellOffset: SIMD2(Float(p.offsetX) * sx, Float(p.offsetY) * sy),
-                sourceRect: SIMD4(Float(p.sourceX) * t, Float(p.sourceY) * t, Float(p.sourceWidth) * t, Float(p.sourceHeight) * t),
-                destSize: SIMD2(Float(p.width) * sx, height)))
-            switch p.layer {
+                gridPos: SIMD2(Float(placement.col), Float(placement.row)),
+                cellOffset: SIMD2(Float(placement.offsetX) * sx, Float(placement.offsetY) * sy),
+                sourceRect: SIMD4(Float(placement.sourceX) * imageScale, Float(placement.sourceY) * imageScale, Float(placement.sourceWidth) * imageScale, Float(placement.sourceHeight) * imageScale),
+                destSize: SIMD2(Float(placement.width) * sx, height)))
+            switch placement.layer {
             case .belowBackground: draws.belowBackground.append(draw)
             case .belowText: draws.belowText.append(draw)
             case .aboveText: draws.aboveText.append(draw)
@@ -1005,7 +1005,7 @@ public final class TerminalSurface {
         gutterMarkFrames.last { $0.rect.minY <= point.y && point.y < $0.rect.maxY }?.mark
     }
 
-    private func gutterDraws(_ marks: [GutterMark], colors: RenderState.Colors, metrics m: CellMetrics) -> [ImageDraw] {
+    private func gutterDraws(_ marks: [GutterMark], colors: RenderState.Colors, metrics: CellMetrics) -> [ImageDraw] {
         var draws: [ImageDraw] = []
         var frames: [(mark: GutterMark, rect: CGRect)] = []
         let gridRows = Int(grid?.rows ?? 0)
@@ -1015,16 +1015,16 @@ public final class TerminalSurface {
         // Right-aligned towards the text with 2 pt of air when the padding allows, else at
         // the pane's edge.
         let x = max(0, left - width - Int((2 * scale).rounded()))
-        let inset = Self.gutterInset(cellHeight: m.cellHeight, scale: scale)
+        let inset = Self.gutterInset(cellHeight: metrics.cellHeight, scale: scale)
         for mark in marks {
             let top = max(mark.row, 0), bottom = min(mark.row + mark.rows, gridRows)
             guard mark.rows > 0, bottom > top else { continue }
             frames.append((mark, CGRect(
-                x: 0, y: (CGFloat(paddingPx.x) + CGFloat(top * m.cellHeight)) / scale,
-                width: pixelSize.width / scale, height: CGFloat((bottom - top) * m.cellHeight) / scale)))
+                x: 0, y: (CGFloat(paddingPx.x) + CGFloat(top * metrics.cellHeight)) / scale,
+                width: pixelSize.width / scale, height: CGFloat((bottom - top) * metrics.cellHeight) / scale)))
             guard let texture = gutterTextures.texture(mark.color(colors), opacity: mark.opacity, device: renderer.device) else { continue }
             // The whole stripe (its ends may be off screen; the clip trims them).
-            let height = mark.rows * m.cellHeight - 2 * inset
+            let height = mark.rows * metrics.cellHeight - 2 * inset
             guard height > 0 else { continue }
             draws.append(ImageDraw(texture: texture, vertex: ImageVertex(
                 gridPos: SIMD2(0, Float(mark.row)), cellOffset: SIMD2(Float(x - left), Float(inset)),
@@ -1036,16 +1036,16 @@ public final class TerminalSurface {
 
     /// Tints across the grid over marks that ask for one (a failed command's rows), drawn in
     /// the image pass under any inline image and clipped to the grid.
-    private func rowTintDraws(_ marks: [GutterMark], colors: RenderState.Colors, metrics m: CellMetrics) -> [ImageDraw] {
+    private func rowTintDraws(_ marks: [GutterMark], colors: RenderState.Colors, metrics: CellMetrics) -> [ImageDraw] {
         guard let grid, marks.contains(where: { $0.rowTint > 0 }) else { return [] }
-        let width = Int(grid.cols) * m.cellWidth
+        let width = Int(grid.cols) * metrics.cellWidth
         return marks.compactMap { mark in
             guard mark.rowTint > 0, mark.rows > 0,
                   let texture = gutterTextures.texture(mark.color(colors), opacity: mark.rowTint, device: renderer.device)
             else { return nil }
             return ImageDraw(texture: texture, vertex: ImageVertex(
                 gridPos: SIMD2(0, Float(mark.row)), cellOffset: SIMD2(0, 0),
-                sourceRect: SIMD4(0, 0, 1, 1), destSize: SIMD2(Float(width), Float(mark.rows * m.cellHeight))))
+                sourceRect: SIMD4(0, 0, 1, 1), destSize: SIMD2(Float(width), Float(mark.rows * metrics.cellHeight))))
         }
     }
 
@@ -1134,13 +1134,13 @@ public final class TerminalSurface {
     /// East Asian wide and emoji presentation characters take two cells (preedit only; the grid
     /// uses libghostty-vt's widths).
     static func isWide(_ character: Character) -> Bool {
-        guard let v = character.unicodeScalars.first?.value else { return false }
+        guard let scalar = character.unicodeScalars.first?.value else { return false }
         if character.unicodeScalars.count > 1, character.unicodeScalars.contains(where: { $0.properties.isEmojiPresentation }) { return true }
-        return (0x1100...0x115F).contains(v) || (0x2E80...0x303E).contains(v) || (0x3041...0x33FF).contains(v)
-            || (0x3400...0x4DBF).contains(v) || (0x4E00...0x9FFF).contains(v) || (0xA000...0xA4CF).contains(v)
-            || (0xAC00...0xD7A3).contains(v) || (0xF900...0xFAFF).contains(v) || (0xFE30...0xFE4F).contains(v)
-            || (0xFF00...0xFF60).contains(v) || (0xFFE0...0xFFE6).contains(v) || (0x1F300...0x1F64F).contains(v)
-            || (0x1F900...0x1F9FF).contains(v) || (0x20000...0x3FFFD).contains(v)
+        return (0x1100...0x115F).contains(scalar) || (0x2E80...0x303E).contains(scalar) || (0x3041...0x33FF).contains(scalar)
+            || (0x3400...0x4DBF).contains(scalar) || (0x4E00...0x9FFF).contains(scalar) || (0xA000...0xA4CF).contains(scalar)
+            || (0xAC00...0xD7A3).contains(scalar) || (0xF900...0xFAFF).contains(scalar) || (0xFE30...0xFE4F).contains(scalar)
+            || (0xFF00...0xFF60).contains(scalar) || (0xFFE0...0xFFE6).contains(scalar) || (0x1F300...0x1F64F).contains(scalar)
+            || (0x1F900...0x1F9FF).contains(scalar) || (0x20000...0x3FFFD).contains(scalar)
     }
 
     /// Main-thread time per display frame that all surfaces together may spend rasterizing new
@@ -1318,16 +1318,16 @@ public final class TerminalSurface {
             provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
     }
 
-    private func cursorRect(_ cursor: RenderState.Cursor, metrics m: CellMetrics) -> CGRect? {
+    private func cursorRect(_ cursor: RenderState.Cursor, metrics: CellMetrics) -> CGRect? {
         guard cursor.visible, let position = cursor.position else { return nil }
         let scale = layer.contentsScale
         let x = Int(position.x) - (cursor.onWideTail ? 1 : 0)
         // paddingPx is (top, right, bottom, left), as in Ghostty's uniforms.
         return CGRect(
-            x: (CGFloat(paddingPx.w) + CGFloat(x * m.cellWidth)) / scale,
-            y: (CGFloat(paddingPx.x) + CGFloat(Int(position.y) * m.cellHeight)) / scale,
-            width: CGFloat(m.cellWidth) / scale,
-            height: CGFloat(m.cellHeight) / scale)
+            x: (CGFloat(paddingPx.w) + CGFloat(x * metrics.cellWidth)) / scale,
+            y: (CGFloat(paddingPx.x) + CGFloat(Int(position.y) * metrics.cellHeight)) / scale,
+            width: CGFloat(metrics.cellWidth) / scale,
+            height: CGFloat(metrics.cellHeight) / scale)
     }
 
     private func offscreenTarget() -> MTLTexture? {
@@ -1342,13 +1342,13 @@ public final class TerminalSurface {
         return offscreenTexture
     }
 
-    private func uniforms(_ m: CellMetrics) -> Uniforms {
+    private func uniforms(_ metrics: CellMetrics) -> Uniforms {
         let screen = SIMD2(Float(pixelSize.width), Float(pixelSize.height))
         let cursor = frame.blockCursor
         return Uniforms(
             projectionMatrix: Uniforms.projection(screen: screen, padding: paddingPx),
             screenSize: screen,
-            cellSize: SIMD2(Float(m.cellWidth), Float(m.cellHeight)),
+            cellSize: SIMD2(Float(metrics.cellWidth), Float(metrics.cellHeight)),
             gridSize: SIMD2(UInt16(frame.cols), UInt16(frame.rows)),
             gridPadding: paddingPx,
             paddingExtend: 0,

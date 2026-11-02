@@ -17,10 +17,10 @@ import TerminalCore
     /// Panes with the same font share one set of glyph atlases and their GPU textures: a new
     /// pane must not rasterize and keep its own copy of every glyph.
     @Test func surfacesWithTheSameFontShareAtlases() throws {
-        let a = try surface(text: "hello ✓ 日本 😀\r\n")
-        let b = try surface(text: "world\r\n")
-        let grid = try #require(a.fonts)
-        #expect(grid === b.fonts)
+        let first = try surface(text: "hello ✓ 日本 😀\r\n")
+        let second = try surface(text: "world\r\n")
+        let grid = try #require(first.fonts)
+        #expect(grid === second.fonts)
         #expect(grid.grayscaleTexture != nil && grid.colorTexture != nil)
         let other = try surface(fontSize: 15, text: "x")
         #expect(other.fonts !== grid)
@@ -31,9 +31,9 @@ import TerminalCore
         weak var grid: FontGrid?
         weak var surf: TerminalSurface?
         try autoreleasepool {
-            let a = try surface(fontSize: 17, text: "a")
-            grid = a.fonts
-            surf = a
+            let first = try surface(fontSize: 17, text: "a")
+            grid = first.fonts
+            surf = first
             #expect(grid != nil)
         }
         // Pending main-actor work (render wakeups, grid commits) lets go of the surface first.

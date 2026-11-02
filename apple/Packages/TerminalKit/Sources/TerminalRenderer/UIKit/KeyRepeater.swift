@@ -1,6 +1,6 @@
 #if os(iOS)
 /// Hold-to-repeat with iOS keyboard timing: the first repeat fires 400 ms after the press, then one
-/// every 45 ms (04-mobile-ux A1.4). UIKit sends no repeats for hardware keys handled in
+/// every 45 ms. UIKit sends no repeats for hardware keys handled in
 /// `pressesBegan`, so the terminal view uses this as well as the key bar.
 @MainActor
 public final class KeyRepeater {

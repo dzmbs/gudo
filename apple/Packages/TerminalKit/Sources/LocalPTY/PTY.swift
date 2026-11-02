@@ -61,10 +61,10 @@ public final class PTY: Sendable {
         let master = fd
         let buffer = UnsafeMutableRawBufferPointer.allocate(byteCount: 64 * 1024, alignment: 1)
         reader.setEventHandler { [reader] in
-            let n = read(master, buffer.baseAddress, buffer.count)
-            if n > 0 {
-                onOutput(UnsafeRawBufferPointer(rebasing: buffer[0..<n]))
-            } else if n == 0 || (errno != EAGAIN && errno != EINTR) {
+            let count = read(master, buffer.baseAddress, buffer.count)
+            if count > 0 {
+                onOutput(UnsafeRawBufferPointer(rebasing: buffer[0..<count]))
+            } else if count == 0 || (errno != EAGAIN && errno != EINTR) {
                 reader.cancel()
             }
         }
@@ -79,12 +79,12 @@ public final class PTY: Sendable {
     public func write(_ bytes: UnsafeRawBufferPointer) {
         var offset = 0
         while offset < bytes.count {
-            let n = Darwin.write(fd, bytes.baseAddress! + offset, bytes.count - offset)
-            if n < 0 {
+            let count = Darwin.write(fd, bytes.baseAddress! + offset, bytes.count - offset)
+            if count < 0 {
                 if errno == EINTR || errno == EAGAIN { continue }
                 return
             }
-            offset += n
+            offset += count
         }
     }
 

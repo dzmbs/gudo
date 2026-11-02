@@ -174,7 +174,7 @@ final class FontGrid {
     }
 
     /// The bundled faces' descriptors, read from disk once: every new font size creates its
-    /// own grid, and reading and parsing four font files each time stalled it.
+    /// own grid, and reading and parsing four font files each time would stall it.
     /// Immutable once made; CoreText descriptors are thread-safe.
     nonisolated(unsafe) private static let bundledDescriptors: [CTFontDescriptor] = FontStyle.allCases.map { style in
         guard let url = Bundle.module.url(forResource: fontFiles[style], withExtension: "ttf", subdirectory: "Fonts"),

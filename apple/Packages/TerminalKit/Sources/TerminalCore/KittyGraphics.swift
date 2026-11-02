@@ -84,10 +84,10 @@ extension KittyImagePixels {
                   provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent),
               let cropped = image.cropping(to: crop.integral)
         else { return nil }
-        let out = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(out, "public.png" as CFString, 1, nil) else { return nil }
+        let png = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(png, "public.png" as CFString, 1, nil) else { return nil }
         CGImageDestinationAddImage(destination, cropped, nil)
-        return CGImageDestinationFinalize(destination) ? out as Data : nil
+        return CGImageDestinationFinalize(destination) ? png as Data : nil
     }
 }
 
@@ -176,8 +176,8 @@ extension Terminal {
     }
 
     private static func expand(_ count: Int, _ pixel: (Int) -> (UInt8, UInt8, UInt8, UInt8)) -> Data {
-        var out = Data(count: count * 4)
-        out.withUnsafeMutableBytes { raw in
+        var pixels = Data(count: count * 4)
+        pixels.withUnsafeMutableBytes { raw in
             let bytes = raw.bindMemory(to: UInt8.self)
             for i in 0..<count {
                 let (r, g, b, a) = pixel(i)
@@ -187,7 +187,7 @@ extension Terminal {
                 bytes[4 * i + 3] = a
             }
         }
-        return out
+        return pixels
     }
 }
 
@@ -199,7 +199,7 @@ public struct ImagePlacement: Equatable, Sendable {
     public enum Layer: Int, Comparable, Sendable {
         case belowBackground, belowText, aboveText
 
-        public static func < (a: Self, b: Self) -> Bool { a.rawValue < b.rawValue }
+        public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
     }
 
     public var imageID: UInt32

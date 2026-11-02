@@ -1,4 +1,6 @@
-/// whenever it changes. The daemon reads `echo`/`canonical` from the PTY master with `tcgetattr`
+/// What the backend knows about how the pane's program treats input, pushed whenever it
+/// changes. The daemon reads `echo`/`canonical` from the PTY master with `tcgetattr`, `atPrompt`
+/// from OSC 133 marks, and `altScreen` from the terminal state.
 public struct EchoHint: Sendable, Equatable {
     /// termios `ECHO`.
     public var echo: Bool
@@ -23,6 +25,7 @@ public struct EchoHint: Sendable, Equatable {
     /// `-echo icanon`: `read -s`, `getpass`, `sudo`, `ssh` passphrases. Never predicted.
     public var isHiddenInput: Bool { !echo && canonical }
 
+    /// When to predict:
     /// - hidden input (`-echo icanon`): never;
     /// - alt screen: never (TUIs get no prediction in v1);
     /// - raw mode (`-icanon`, which is how zsh ZLE, readline and fish run): only at a prompt being

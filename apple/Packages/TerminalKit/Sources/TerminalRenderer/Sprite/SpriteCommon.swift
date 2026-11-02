@@ -95,18 +95,18 @@ struct Fraction {
 }
 
 /// Fills the part of the cell between two horizontal and two vertical fractions.
-func fill(_ m: CellMetrics, _ canvas: SpriteCanvas, _ x0: Fraction, _ x1: Fraction, _ y0: Fraction, _ y1: Fraction) {
-    canvas.box(x0.min(m.cellWidth), y0.min(m.cellHeight), x1.max(m.cellWidth), y1.max(m.cellHeight), Shade.on)
+func fill(_ metrics: CellMetrics, _ canvas: SpriteCanvas, _ x0: Fraction, _ x1: Fraction, _ y0: Fraction, _ y1: Fraction) {
+    canvas.box(x0.min(metrics.cellWidth), y0.min(metrics.cellHeight), x1.max(metrics.cellWidth), y1.max(metrics.cellHeight), Shade.on)
 }
 
-func vlineMiddle(_ m: CellMetrics, _ canvas: SpriteCanvas, _ thickness: Thickness) {
-    let t = thickness.px(m.boxThickness)
-    vline(canvas, 0, m.cellHeight, sat(m.cellWidth, t) / 2, t)
+func vlineMiddle(_ metrics: CellMetrics, _ canvas: SpriteCanvas, _ thickness: Thickness) {
+    let t = thickness.px(metrics.boxThickness)
+    vline(canvas, 0, metrics.cellHeight, sat(metrics.cellWidth, t) / 2, t)
 }
 
-func hlineMiddle(_ m: CellMetrics, _ canvas: SpriteCanvas, _ thickness: Thickness) {
-    let t = thickness.px(m.boxThickness)
-    hline(canvas, 0, m.cellWidth, sat(m.cellHeight, t) / 2, t)
+func hlineMiddle(_ metrics: CellMetrics, _ canvas: SpriteCanvas, _ thickness: Thickness) {
+    let t = thickness.px(metrics.boxThickness)
+    hline(canvas, 0, metrics.cellWidth, sat(metrics.cellHeight, t) / 2, t)
 }
 
 /// Vertical line with its left edge at `x`, from `y1` to `y2`.

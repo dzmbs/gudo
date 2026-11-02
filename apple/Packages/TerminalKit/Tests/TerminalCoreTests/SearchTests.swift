@@ -190,9 +190,9 @@ private func lines(_ texts: [String]) -> [UInt8] {
         #expect(search.viewportHighlights(rows: 10, cols: 30).contains { $0.selected })
     }
 
-    /// With a match selected, streaming output used to re-read and sort every match on every
+    /// With a match selected, streaming output must not re-read and sort every match on every
     /// frame (375k matches for "e" over a full scrollback: tens of ms each); the selected index
-    /// now refreshes at most every `recountInterval`, and is exact once output pauses.
+    /// refreshes at most every `recountInterval`, and is exact once output pauses.
     @Test func streamingOutputDoesNotRecountEveryFrame() async throws {
         let terminal = terminal()
         let search = TerminalSearch(terminal: terminal)

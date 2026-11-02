@@ -30,19 +30,19 @@ public final class RowPin: @unchecked Sendable {
 extension Terminal {
     /// Rows on the active screen including scrollback.
     public var totalRows: Int {
-        withHandle { t in Self.totalRows(t) }
+        withHandle { handle in Self.totalRows(handle) }
     }
 
     /// Pins row `screenRow` of the active screen (0 = the oldest retained row). Nil for a row
     /// outside the screen.
     public func pinRow(screenRow: Int) -> RowPin? {
         guard screenRow >= 0 else { return nil }
-        return withHandle { t in
+        return withHandle { handle in
             var point = GhosttyPoint()
             point.tag = GHOSTTY_POINT_TAG_SCREEN
             point.value.coordinate = GhosttyPointCoordinate(x: 0, y: UInt32(clamping: screenRow))
             var ref: GhosttyTrackedGridRef?
-            guard ghostty_terminal_grid_ref_track(t, point, &ref) == GHOSTTY_SUCCESS, let ref else { return nil }
+            guard ghostty_terminal_grid_ref_track(handle, point, &ref) == GHOSTTY_SUCCESS, let ref else { return nil }
             return RowPin(ref: ref, owner: self)
         }
     }
@@ -56,7 +56,7 @@ extension Terminal {
 
     /// Pins a row of the viewport (0 = its top row).
     public func pinRow(viewportRow: Int) -> RowPin? {
-        let top = withHandle { t in Self.viewportTop(t) }
+        let top = withHandle { handle in Self.viewportTop(handle) }
         return pinRow(screenRow: top + viewportRow)
     }
 
@@ -67,7 +67,7 @@ extension Terminal {
 
     /// How many rows the pin is above the bottom row of the screen (the anchor convention).
     public func fromBottom(of pin: RowPin) -> Int? {
-        withHandle { t in Self.screenRow(pin).map { Self.totalRows(t) - 1 - $0 } }
+        withHandle { handle in Self.screenRow(pin).map { Self.totalRows(handle) - 1 - $0 } }
     }
 
     /// Each pin's row in screen coordinates, read under one lock (so differences between pins
@@ -80,15 +80,15 @@ extension Terminal {
     /// lock with reading the reference. Nil when the reference has no value or the row is
     /// outside the screen.
     public func pinRow(relativeTo reference: RowPin, offset: Int) -> RowPin? {
-        withHandle { t in
+        withHandle { handle in
             guard let base = Self.screenRow(reference) else { return nil }
             let y = base + offset
-            guard y >= 0, y < Self.totalRows(t) else { return nil }
+            guard y >= 0, y < Self.totalRows(handle) else { return nil }
             var point = GhosttyPoint()
             point.tag = GHOSTTY_POINT_TAG_SCREEN
             point.value.coordinate = GhosttyPointCoordinate(x: 0, y: UInt32(y))
             var ref: GhosttyTrackedGridRef?
-            guard ghostty_terminal_grid_ref_track(t, point, &ref) == GHOSTTY_SUCCESS, let ref else { return nil }
+            guard ghostty_terminal_grid_ref_track(handle, point, &ref) == GHOSTTY_SUCCESS, let ref else { return nil }
             return RowPin(ref: ref, owner: self)
         }
     }
@@ -96,8 +96,8 @@ extension Terminal {
     /// Each pin's row relative to the viewport's top row (negative above it, `>= rows` below
     /// it), read under one lock for a consistent frame; nil for pins without a value.
     public func viewportRows(of pins: [RowPin]) -> [Int?] {
-        withHandle { t in
-            let top = Self.viewportTop(t)
+        withHandle { handle in
+            let top = Self.viewportTop(handle)
             return pins.map { pin in Self.screenRow(pin).map { $0 - top } }
         }
     }
@@ -120,7 +120,7 @@ extension Terminal {
 
     /// The viewport's top row in screen coordinates (0 = the oldest retained row).
     public var viewportTopRow: Int {
-        withHandle { t in Self.viewportTop(t) }
+        withHandle { handle in Self.viewportTop(handle) }
     }
 
     /// Scrolls so screen row `screenRow` is the viewport's top row (clamped so the viewport
@@ -129,7 +129,7 @@ extension Terminal {
         var scroll = GhosttyTerminalScrollViewport()
         scroll.tag = GHOSTTY_SCROLL_VIEWPORT_ROW
         scroll.value.row = max(0, screenRow)
-        withHandle { t in ghostty_terminal_scroll_viewport(t, scroll) }
+        withHandle { handle in ghostty_terminal_scroll_viewport(handle, scroll) }
     }
 
     /// Scrolls by `prompts` shell prompts (negative: back towards history) using the rows the
@@ -138,25 +138,25 @@ extension Terminal {
         var scroll = GhosttyTerminalScrollViewport()
         scroll.tag = GHOSTTY_SCROLL_VIEWPORT_DELTA_PROMPT
         scroll.value.delta_prompt = prompts
-        withHandle { t in ghostty_terminal_scroll_viewport(t, scroll) }
+        withHandle { handle in ghostty_terminal_scroll_viewport(handle, scroll) }
     }
 
     private static func screenRow(_ pin: RowPin) -> Int? {
-        var out = GhosttyPointCoordinate()
-        guard ghostty_tracked_grid_ref_point(pin.ref, GHOSTTY_POINT_TAG_SCREEN, &out) == GHOSTTY_SUCCESS else { return nil }
-        return Int(out.y)
+        var coordinate = GhosttyPointCoordinate()
+        guard ghostty_tracked_grid_ref_point(pin.ref, GHOSTTY_POINT_TAG_SCREEN, &coordinate) == GHOSTTY_SUCCESS else { return nil }
+        return Int(coordinate.y)
     }
 
-    private static func totalRows(_ t: GhosttyTerminal) -> Int {
+    private static func totalRows(_ handle: GhosttyTerminal) -> Int {
         var total = 0
-        ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_TOTAL_ROWS, &total)
+        ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_TOTAL_ROWS, &total)
         return total
     }
 
     /// The viewport's top row in screen coordinates.
-    private static func viewportTop(_ t: GhosttyTerminal) -> Int {
+    private static func viewportTop(_ handle: GhosttyTerminal) -> Int {
         var bar = GhosttyTerminalScrollbar()
-        ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_SCROLLBAR, &bar)
+        ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_SCROLLBAR, &bar)
         return Int(bar.offset)
     }
 }

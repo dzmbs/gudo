@@ -7,9 +7,9 @@ private final class PtySink: Sendable {
     let bytes = Mutex<[UInt8]>([])
     var string: String { String(decoding: bytes.withLock { $0 }, as: UTF8.self) }
     func take() -> String {
-        let out = string
+        let written = string
         bytes.withLock { $0.removeAll() }
-        return out
+        return written
     }
 }
 

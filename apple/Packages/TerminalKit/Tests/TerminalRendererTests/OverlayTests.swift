@@ -29,8 +29,8 @@ import Testing
         #expect(frame.bgCells[0] == SIMD4(255, 255, 255, 255))
         #expect(frame.bgCells[4] == SIMD4(255, 255, 255, 255))
         #expect(frame.bgCells[5].w == 0)
-        let h = glyphs(frame, row: 0).first { $0.gridPos.x == 0 }
-        #expect(h?.color == SIMD4(0x28, 0x2C, 0x34, 255))
+        let highlight = glyphs(frame, row: 0).first { $0.gridPos.x == 0 }
+        #expect(highlight?.color == SIMD4(0x28, 0x2C, 0x34, 255))
     }
 
     @Test func underlineStylesUseDistinctSpritesAndUnderlineColor() {
