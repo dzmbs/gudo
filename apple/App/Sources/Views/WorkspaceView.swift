@@ -325,7 +325,12 @@ private struct SidebarDivider: View {
             .ignoresSafeArea()
             .overlay {
                 Color.clear
+                    // The split dividers' hit widths (docs/DESIGN.md): 1 + 6 for a pointer, 20 for a finger.
+                    #if os(iOS)
+                    .frame(width: 20)
+                    #else
                     .frame(width: 7)
+                    #endif
                     .contentShape(.rect)
                     #if os(macOS)
                     .onHover { inside in if inside { NSCursor.columnResize.push() } else { NSCursor.pop() } }
@@ -340,8 +345,16 @@ private struct SidebarDivider: View {
                             .onEnded { _ in start = nil })
                     .onTapGesture(count: 2) { width = SidebarWidth.standard }
                     .ignoresSafeArea()
+                    // VoiceOver resizes the sidebar by swiping up or down on it.
+                    .accessibilityElement()
+                    .accessibilityLabel("Sidebar Width")
+                    .accessibilityValue("\(Int(width)) points")
+                    .accessibilityAdjustableAction { direction in
+                        let step = direction == .increment ? 20.0 : direction == .decrement ? -20.0 : 0
+                        width = min(max(width + step, SidebarWidth.range.lowerBound), SidebarWidth.range.upperBound)
+                    }
+                    .accessibilityIdentifier("sidebar-divider")
             }
-            .accessibilityHidden(true)
     }
 }
 

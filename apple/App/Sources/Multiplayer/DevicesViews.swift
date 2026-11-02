@@ -282,8 +282,22 @@ private struct DeviceRow: View {
         }
         .padding(.vertical, 2)
         .opacity(device.revoked ? 0.6 : 1)
-        .accessibilityElement(children: .contain)
+        // One element in words (not the glyph and the hex key), Remove as its action.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityActions {
+            if let onRemove { Button("Remove…", action: onRemove) }
+        }
         .accessibilityIdentifier("device-\(device.device.prefix(8))")
+    }
+
+    private var accessibilityLabel: String {
+        var parts = [name]
+        if isMe { parts.append("this device") }
+        if pairedNow != nil { parts.append("new") }
+        parts.append(Self.when(device))
+        if device.revoked { parts.append("removed") } else if device.connected > 0 { parts.append("connected") }
+        return parts.joined(separator: ", ")
     }
 
     private var symbol: String {

@@ -159,6 +159,15 @@ enum DesignFixtures {
             if let session = workspace.multiplayer {
                 model.toasts.show(PresenceNotices.toast(arrived: ["Mira Holt"], in: session))
             }
+        case "stopped-following":
+            // The banner rises above Mira's draft at the bottom of the zoomed agent pane
+            // (`-mockPresence YES`).
+            workspace.apply(.focus(PaneId(3)))
+            workspace.apply(.toggleZoom)
+            try? await Task.sleep(for: .seconds(1))
+            var toast = Toast("Stopped following Mira", systemImage: "eye.slash")
+            toast.action = Toast.Action("Follow Again") {}
+            model.toasts.show(toast)
         case "port-offer":
             // The dev-server offer with a banner over it: both clear of the panes' top bars.
             try? await Task.sleep(for: .seconds(1))
@@ -176,8 +185,11 @@ enum DesignFixtures {
                 workspace.notices[panes[0]] = PaneNotice(secureInput: true)
             }
         case "file-preview": model.sheet = .files
+        case "editor-licence":
+            // VS Code's first use on a host: Microsoft's terms (`-mockEditorPhase licence`).
+            model.openEditor()
         default:
-            if screen == "ticket" { model.addHost(mode: .ticket) } else if screen == "themes" { model.sheet = .settings } else if let route = SheetRoute(rawValue: screen) { model.sheet = route }
+            if screen == "ticket" { model.addHost(mode: .ticket) } else if screen == "themes" || screen == "devices" { model.sheet = .settings } else if let route = SheetRoute(rawValue: screen) { model.sheet = route }
         }
     }
 

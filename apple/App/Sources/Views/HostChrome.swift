@@ -257,7 +257,17 @@ struct SavedScreenOverlay: View {
         .animation(DS.Motion.overlay, value: pane.heldInput)
         .allowsHitTesting(false)
         .accessibilityElement(children: .combine)
+        // VoiceOver hears that the text is the saved screen, not the host's yet.
+        .accessibilityLabel(spoken)
+        .accessibilityHidden(spoken.isEmpty)
         .accessibilityIdentifier(pane.showsSavedScreen ? "saved-\(pane.id)" : "")
+    }
+
+    private var spoken: String {
+        var parts: [String] = []
+        if pane.showsSavedScreen { parts.append("Saved screen, connecting") }
+        if case .holding = pane.heldInput { parts.append("What you type sends when connected") }
+        return parts.joined(separator: ". ")
     }
 }
 
