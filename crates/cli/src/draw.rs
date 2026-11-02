@@ -1,3 +1,4 @@
+//! `gudo draw`: list, show, export and send drawings and images.
 //!
 //! `show` prints the PNG with the kitty graphics protocol when the terminal supports it
 //! (kitty, Ghostty, WezTerm: detected from the environment, else by an `a=q` query), and a
@@ -98,9 +99,9 @@ pub(crate) enum Format {
     Excalidraw,
 }
 
-pub(crate) async fn run(conn: &mut Conn, cmd: DrawCmd) -> Result<()> {
+pub(crate) async fn run(conn: &mut Conn, action: DrawCmd) -> Result<()> {
     let session = conn.layout().session_id;
-    match cmd {
+    match action {
         DrawCmd::List => {
             let list = conn.client.artifacts(session).await?;
             if list.is_empty() {
@@ -133,19 +134,19 @@ pub(crate) async fn run(conn: &mut Conn, cmd: DrawCmd) -> Result<()> {
                 return Ok(());
             }
             let pure_ink = scene.info.kind == ArtifactKind::Drawing
-                && conn.client.artifact_scene(id).is_some_and(|(_, s)| {
-                    s.elements()
+                && conn.client.artifact_scene(id).is_some_and(|(_, ink)| {
+                    ink.elements()
                         .iter()
-                        .all(|e| matches!(e.kind, ElementKind::Stroke(_)))
+                        .all(|element| matches!(element.kind, ElementKind::Stroke(_)))
                 });
             if pure_ink {
-                let (_, s) = conn.client.artifact_scene(id).context("scene")?;
-                if version.is_some_and(|v| v != s.version) {
+                let (_, ink) = conn.client.artifact_scene(id).context("scene")?;
+                if version.is_some_and(|version| version != ink.version) {
                     bail!("past versions are shown with --mode kitty, or `gudo draw export`");
                 }
-                print!("{}", summary(&s));
-                let img = drawing::rasterize(
-                    &s,
+                print!("{}", summary(&ink));
+                let image = drawing::rasterize(
+                    &ink,
                     scene.info.space,
                     drawing::RasterOptions {
                         scale: if scene.info.space == CoordSpace::Cells {
@@ -156,7 +157,7 @@ pub(crate) async fn run(conn: &mut Conn, cmd: DrawCmd) -> Result<()> {
                         ..drawing::RasterOptions::default()
                     },
                 );
-                print!("{}", drawing::braille(&img, width));
+                print!("{}", drawing::braille(&image, width));
             } else {
                 // Shapes, arrows and text read best as box glyphs (agents read this too).
                 let (_, text) = conn
@@ -171,17 +172,17 @@ pub(crate) async fn run(conn: &mut Conn, cmd: DrawCmd) -> Result<()> {
             if history.is_empty() {
                 println!("no finished versions yet");
             }
-            for v in history {
-                let restored = v
+            for entry in history {
+                let restored = entry
                     .restored_from
-                    .map(|r| format!(", restored v{r}"))
+                    .map(|from| format!(", restored v{from}"))
                     .unwrap_or_default();
-                let render = v.image.map_or("no render".to_owned(), |i| {
-                    format!("{}×{} render", i.width, i.height)
+                let render = entry.image.map_or("no render".to_owned(), |image| {
+                    format!("{}×{} render", image.width, image.height)
                 });
                 println!(
                     "v{:<4} {:>3} elements  {render}  at {} ms{restored}",
-                    v.version, v.elements, v.at.0
+                    entry.version, entry.elements, entry.at.0
                 );
             }
         }
@@ -197,10 +198,10 @@ pub(crate) async fn run(conn: &mut Conn, cmd: DrawCmd) -> Result<()> {
         }
         DrawCmd::Place { id, pane, version } => {
             let pane = match pane {
-                Some(p) => PaneId(p),
+                Some(pane) => PaneId(pane),
                 None => conn.tab()?.focused,
             };
-            let p = conn
+            let placed = conn
                 .client
                 .place(client_core::proto::PlaceRequest {
                     pane_id: pane,
@@ -216,24 +217,24 @@ pub(crate) async fn run(conn: &mut Conn, cmd: DrawCmd) -> Result<()> {
                 .await?;
             println!(
                 "placed artifact {} v{} in pane {pane} at the cursor row: {}×{} cells (placement {})",
-                p.artifact_id, p.version, p.cols, p.rows, p.placement_id
+                placed.artifact_id, placed.version, placed.cols, placed.rows, placed.placement_id
             );
         }
         DrawCmd::Import { file, pane } => {
             let pane = match pane {
-                Some(p) => PaneId(p),
+                Some(pane) => PaneId(pane),
                 None => conn.tab()?.focused,
             };
             let bytes =
                 std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
             let name = file
                 .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
+                .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            let p = conn.client.import_to_pane(pane, name, bytes).await?;
+            let placed = conn.client.import_to_pane(pane, name, bytes).await?;
             println!(
                 "imported as artifact {} and placed in pane {pane}: {}×{} cells",
-                p.artifact_id, p.cols, p.rows
+                placed.artifact_id, placed.cols, placed.rows
             );
         }
         DrawCmd::Export {
@@ -248,7 +249,7 @@ pub(crate) async fn run(conn: &mut Conn, cmd: DrawCmd) -> Result<()> {
                 Format::Ascii => Some(ExportFormat::Ascii),
                 Format::Excalidraw => None,
             };
-            let (v, data) = match format {
+            let (exported_version, data) = match format {
                 Some(format) => {
                     conn.client
                         .artifact_export(ArtifactId(id), version, format)
@@ -259,15 +260,15 @@ pub(crate) async fn run(conn: &mut Conn, cmd: DrawCmd) -> Result<()> {
                         bail!("--version is for PNG, SVG and ASCII (restore it first)");
                     }
                     let data = conn.client.excalidraw_file(ArtifactId(id)).await?;
-                    let v = conn.client.artifact_get(ArtifactId(id), u64::MAX).await?;
-                    (v.info.version, data)
+                    let current = conn.client.artifact_get(ArtifactId(id), u64::MAX).await?;
+                    (current.info.version, data)
                 }
             };
             match output {
                 Some(path) => {
                     std::fs::write(&path, &data)?;
                     eprintln!(
-                        "wrote {} (version {v}, {} bytes)",
+                        "wrote {} (version {exported_version}, {} bytes)",
                         path.display(),
                         data.len()
                     );
@@ -282,7 +283,7 @@ pub(crate) async fn run(conn: &mut Conn, cmd: DrawCmd) -> Result<()> {
             version,
         } => {
             let pane = match pane {
-                Some(p) => PaneId(p),
+                Some(pane) => PaneId(pane),
                 None => conn.tab()?.focused,
             };
             let sent = match file {
@@ -326,18 +327,21 @@ fn line(info: &ArtifactInfo) -> String {
         ArtifactKind::Excalidraw => "diagram",
     };
     let place = match (&info.anchor, info.canvas_panes.as_slice()) {
-        (Some(a), _) => match a.state {
+        (Some(anchor), _) => match anchor.state {
             AnchorState::Live => format!(
                 "ink on pane {} ({} rows up{})",
-                a.pane_id,
-                a.from_bottom,
-                a.command_id
-                    .map(|c| format!(", command {c}"))
+                anchor.pane_id,
+                anchor.from_bottom,
+                anchor
+                    .command_id
+                    .map(|command| format!(", command {command}"))
                     .unwrap_or_default()
             ),
-            AnchorState::Detached(r) => format!("loose (was on pane {}: {r:?})", a.pane_id),
+            AnchorState::Detached(reason) => {
+                format!("loose (was on pane {}: {reason:?})", anchor.pane_id)
+            }
         },
-        (None, [p, ..]) => format!("canvas pane {p}"),
+        (None, [pane, ..]) => format!("canvas pane {pane}"),
         (None, []) => "loose".into(),
     };
     format!(
@@ -356,8 +360,8 @@ fn line(info: &ArtifactInfo) -> String {
 fn summary(scene: &drawing::Scene) -> String {
     let (mut strokes, mut shapes, mut texts, mut images) = (0, 0, 0, 0);
     let mut labels = Vec::new();
-    for e in scene.elements() {
-        match &e.kind {
+    for element in scene.elements() {
+        match &element.kind {
             ElementKind::Stroke(_) => strokes += 1,
             ElementKind::Shape { .. } => shapes += 1,
             ElementKind::Text { text, .. } => {
@@ -368,8 +372,8 @@ fn summary(scene: &drawing::Scene) -> String {
         }
     }
     let mut out = format!("{strokes} strokes, {shapes} shapes, {texts} texts, {images} images\n");
-    for l in labels {
-        out.push_str(&format!("  text: {l}\n"));
+    for label in labels {
+        out.push_str(&format!("  text: {label}\n"));
     }
     out
 }
@@ -377,7 +381,7 @@ fn summary(scene: &drawing::Scene) -> String {
 /// kitty graphics: from the environment, else by asking the terminal (`a=q`, then DA1 so a
 /// terminal without graphics still answers something).
 fn kitty_supported() -> bool {
-    let env = |k: &str| std::env::var(k).unwrap_or_default();
+    let env = |name: &str| std::env::var(name).unwrap_or_default();
     if !env("KITTY_WINDOW_ID").is_empty()
         || env("TERM").contains("kitty")
         || env("TERM").contains("ghostty")
@@ -401,13 +405,13 @@ fn kitty_supported() -> bool {
         let mut buf = [0u8; 256];
         let mut seen = Vec::new();
         let mut stdin = std::io::stdin();
-        while let Ok(n) = stdin.read(&mut buf) {
-            if n == 0 {
+        while let Ok(read) = stdin.read(&mut buf) {
+            if read == 0 {
                 break;
             }
-            seen.extend_from_slice(&buf[..n]);
+            seen.extend_from_slice(&buf[..read]);
             // DA1 answer ends the exchange.
-            if seen.windows(2).any(|w| w[0] == b'?') && seen.ends_with(b"c") {
+            if seen.windows(2).any(|pair| pair[0] == b'?') && seen.ends_with(b"c") {
                 break;
             }
         }
@@ -427,16 +431,19 @@ fn kitty_supported() -> bool {
 /// placement).
 fn print_kitty(png: &[u8], width: usize) -> Result<()> {
     let term_cols = rustix::termios::tcgetwinsize(rustix::stdio::stdout())
-        .map(|w| usize::from(w.ws_col))
+        .map(|size| usize::from(size.ws_col))
         .unwrap_or(80)
         .max(1);
-    let (w, h) = drawing::sniff(png).map_or((1, 1), |(_, w, h)| (w.max(1), h));
+    let (image_w, image_h) =
+        drawing::sniff(png).map_or((1, 1), |(_, width, height)| (width.max(1), height));
     // Images are 2× renders; a cell is about 9×18 points.
-    let cols = (w as usize / 18).clamp(1, width.min(term_cols));
-    let rows = ((cols as f64 * 9.0 * f64::from(h) / f64::from(w) / 18.0).round() as usize).max(1);
-    let b64 = data_encoding::BASE64.encode(png);
+    let cols = (image_w as usize / 18).clamp(1, width.min(term_cols));
+    let rows = ((cols as f64 * 9.0 * f64::from(image_h) / f64::from(image_w) / 18.0).round()
+        as usize)
+        .max(1);
+    let encoded = data_encoding::BASE64.encode(png);
     let mut out = std::io::stdout().lock();
-    let chunks: Vec<&[u8]> = b64.as_bytes().chunks(4096).collect();
+    let chunks: Vec<&[u8]> = encoded.as_bytes().chunks(4096).collect();
     for (i, chunk) in chunks.iter().enumerate() {
         let more = u8::from(i + 1 < chunks.len());
         if i == 0 {

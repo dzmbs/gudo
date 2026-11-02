@@ -127,26 +127,29 @@ pub(crate) enum TunnelCmd {
     Open { target: String },
 }
 
-fn print_tunnel(s: &client_core::proto::VsCodeTunnelStatus) {
+fn print_tunnel(status: &client_core::proto::VsCodeTunnelStatus) {
     use client_core::proto::TunnelState;
-    match &s.cli {
-        Some(c) => println!(
+    match &status.cli {
+        Some(cli) => println!(
             "cli: {} {} {}{}",
-            c.path,
-            c.version.as_deref().unwrap_or("?"),
-            c.commit.as_deref().unwrap_or(""),
-            if c.managed {
+            cli.path,
+            cli.version.as_deref().unwrap_or("?"),
+            cli.commit.as_deref().unwrap_or(""),
+            if cli.managed {
                 " (installed by the daemon)"
             } else {
                 ""
             }
         ),
-        None => println!("cli: not installed (downloadable: {})", s.cli_downloadable),
+        None => println!(
+            "cli: not installed (downloadable: {})",
+            status.cli_downloadable
+        ),
     }
-    match &s.state {
-        TunnelState::NeedsLogin(l) => println!(
+    match &status.state {
+        TunnelState::NeedsLogin(login) => println!(
             "sign in ({:?}): open {} and enter {}",
-            l.provider, l.verification_url, l.user_code
+            login.provider, login.verification_url, login.user_code
         ),
         TunnelState::Running {
             name,
@@ -282,7 +285,7 @@ pub(crate) enum FsCmd {
 impl Conn {
     /// The focused pane's working directory (from its metadata), else `~`.
     async fn focused_cwd(&mut self) -> String {
-        let Ok(pane) = self.tab().map(|t| t.focused) else {
+        let Ok(pane) = self.tab().map(|tab| tab.focused) else {
             return "~".into();
         };
         let _ = tokio::time::timeout(Duration::from_secs(2), async {
@@ -298,36 +301,36 @@ impl Conn {
 }
 
 fn print_diff(diff: &GitDiff, stat: bool) {
-    for f in &diff.files {
-        let name = match &f.old_path {
-            Some(old) => format!("{old} → {}", f.path),
-            None => f.path.clone(),
+    for file in &diff.files {
+        let name = match &file.old_path {
+            Some(old) => format!("{old} → {}", file.path),
+            None => file.path.clone(),
         };
-        let counts = if f.binary {
+        let counts = if file.binary {
             "binary".to_owned()
         } else {
-            format!("+{} -{}", f.additions, f.deletions)
+            format!("+{} -{}", file.additions, file.deletions)
         };
-        println!("{:?} {name} ({counts})", f.change);
+        println!("{:?} {name} ({counts})", file.change);
         if stat {
             continue;
         }
-        if f.hunks_omitted {
+        if file.hunks_omitted {
             println!("  (hunks omitted: too large)");
         }
-        for h in &f.hunks {
+        for hunk in &file.hunks {
             println!(
                 "@@ -{},{} +{},{} @@ {}",
-                h.old_start, h.old_lines, h.new_start, h.new_lines, h.header
+                hunk.old_start, hunk.old_lines, hunk.new_start, hunk.new_lines, hunk.header
             );
-            for l in &h.lines {
-                let mark = match l.kind {
+            for line in &hunk.lines {
+                let mark = match line.kind {
                     LineKind::Context => ' ',
                     LineKind::Added => '+',
                     LineKind::Removed => '-',
                     LineKind::NoNewline => '\\',
                 };
-                println!("{mark}{}", l.text);
+                println!("{mark}{}", line.text);
             }
         }
     }
@@ -340,11 +343,11 @@ fn print_diff(diff: &GitDiff, stat: bool) {
 fn split_target(target: &str) -> (String, Option<u32>, Option<u32>) {
     let mut parts = target.rsplitn(3, ':').collect::<Vec<_>>();
     parts.reverse();
-    let nums: Vec<Option<u32>> = parts.iter().map(|p| p.parse().ok()).collect();
-    match (parts.len(), nums.as_slice()) {
-        (3, [_, Some(l), Some(c)]) => (parts[0].to_owned(), Some(*l), Some(*c)),
-        (3, [_, _, Some(l)]) => (format!("{}:{}", parts[0], parts[1]), Some(*l), None),
-        (2, [_, Some(l)]) => (parts[0].to_owned(), Some(*l), None),
+    let numbers: Vec<Option<u32>> = parts.iter().map(|part| part.parse().ok()).collect();
+    match (parts.len(), numbers.as_slice()) {
+        (3, [_, Some(line), Some(col)]) => (parts[0].to_owned(), Some(*line), Some(*col)),
+        (3, [_, _, Some(line)]) => (format!("{}:{}", parts[0], parts[1]), Some(*line), None),
+        (2, [_, Some(line)]) => (parts[0].to_owned(), Some(*line), None),
         _ => (target.to_owned(), None, None),
     }
 }
@@ -354,10 +357,10 @@ fn parse_note(spec: &str) -> Result<ReviewNote> {
     let (path, rest) = spec.split_once(':').context("note needs path:LINE:text")?;
     let (lines, note) = rest.split_once(':').context("note needs path:LINE:text")?;
     let (start, end) = match lines.split_once('-') {
-        Some((a, b)) => (a.parse()?, b.parse()?),
+        Some((start, end)) => (start.parse()?, end.parse()?),
         None => {
-            let l = lines.parse()?;
-            (l, l)
+            let line = lines.parse()?;
+            (line, line)
         }
     };
     Ok(ReviewNote {
@@ -370,13 +373,13 @@ fn parse_note(spec: &str) -> Result<ReviewNote> {
     })
 }
 
-pub(crate) async fn run(conn: &mut Conn, cmd: WsCmd) -> Result<()> {
-    let c = &conn.client;
-    match cmd {
+pub(crate) async fn run(conn: &mut Conn, command: WsCmd) -> Result<()> {
+    let client = &conn.client;
+    match command {
         WsCmd::Ports { watch } => {
             let (listener, mut events) = WorkspaceEventQueue::channel();
-            c.set_workspace_listener(listener);
-            let ports = c.list_ports().await?;
+            client.set_workspace_listener(listener);
+            let ports = client.list_ports().await?;
             print_ports(&ports, conn.json);
             while watch && let Some(event) = events.recv().await {
                 if let WorkspaceEvent::PortsChanged { ports } = event {
@@ -389,21 +392,21 @@ pub(crate) async fn run(conn: &mut Conn, cmd: WsCmd) -> Result<()> {
         }
         WsCmd::Editor { action } => match action {
             EditorCmd::Status => {
-                let list = c.editor_status().await?;
-                for a in &list.available {
+                let list = client.editor_status().await?;
+                for available in &list.available {
                     println!(
                         "{:?}: installed {} downloadable {} {} {}",
-                        a.kind,
-                        a.installed,
-                        a.downloadable,
-                        a.path.as_deref().unwrap_or(""),
-                        a.note.as_deref().unwrap_or("")
+                        available.kind,
+                        available.installed,
+                        available.downloadable,
+                        available.path.as_deref().unwrap_or(""),
+                        available.note.as_deref().unwrap_or("")
                     );
                 }
-                for r in &list.running {
+                for running in &list.running {
                     println!(
                         "running {:?} :{} {} (pid {})",
-                        r.kind, r.port, r.folder, r.pid
+                        running.kind, running.port, running.folder, running.pid
                     );
                 }
             }
@@ -414,42 +417,42 @@ pub(crate) async fn run(conn: &mut Conn, cmd: WsCmd) -> Result<()> {
                 local,
             } => {
                 let folder = match folder {
-                    Some(f) => f,
+                    Some(folder) => folder,
                     None => conn.focused_cwd().await,
                 };
-                let c = &conn.client;
+                let client = &conn.client;
                 let choice = match kind {
                     None => EditorChoice::Auto,
                     Some(Editor::Vscode) => EditorChoice::Only(EditorKind::VsCode),
                     Some(Editor::Openvscode) => EditorChoice::Only(EditorKind::OpenVsCode),
                     Some(Editor::Vscodium) => EditorChoice::Only(EditorKind::Vscodium),
                 };
-                let e = c
+                let editor = client
                     .editor_launch(EditorLaunch {
                         folder,
                         choice,
                         accept_vscode_license: accept_license,
                     })
                     .await?;
-                let port = c.forward(
+                let port = client.forward(
                     local,
-                    client_core::proto::ForwardTarget::Tcp { port: e.port },
+                    client_core::proto::ForwardTarget::Tcp { port: editor.port },
                 )?;
                 println!(
                     "{:?} serving {} on the host's :{}",
-                    e.kind, e.folder, e.port
+                    editor.kind, editor.folder, editor.port
                 );
                 println!(
                     "open http://localhost:{port}{} (Ctrl-C to stop forwarding)",
-                    e.url_path
+                    editor.url_path
                 );
                 tokio::signal::ctrl_c().await?;
             }
-            EditorCmd::Stop { folder } => c.editor_stop(folder).await?,
+            EditorCmd::Stop { folder } => client.editor_stop(folder).await?,
             EditorCmd::Tunnel { action } => match action {
-                TunnelCmd::Status => print_tunnel(&c.vscode_tunnel_status().await?),
+                TunnelCmd::Status => print_tunnel(&client.vscode_tunnel_status().await?),
                 TunnelCmd::Install { accept_license } => {
-                    print_tunnel(&c.vscode_cli_install(accept_license).await?);
+                    print_tunnel(&client.vscode_cli_install(accept_license).await?);
                 }
                 TunnelCmd::Start {
                     accept_license,
@@ -458,13 +461,13 @@ pub(crate) async fn run(conn: &mut Conn, cmd: WsCmd) -> Result<()> {
                 } => {
                     use client_core::proto::{TunnelProvider, TunnelState, VsCodeTunnelStart};
                     let (listener, mut events) = WorkspaceEventQueue::channel();
-                    c.set_workspace_listener(listener);
+                    client.set_workspace_listener(listener);
                     let provider = if microsoft {
                         TunnelProvider::Microsoft
                     } else {
                         TunnelProvider::GitHub
                     };
-                    let mut status = c
+                    let mut status = client
                         .vscode_tunnel_start(VsCodeTunnelStart {
                             accept_server_license: accept_license,
                             provider,
@@ -485,16 +488,18 @@ pub(crate) async fn run(conn: &mut Conn, cmd: WsCmd) -> Result<()> {
                             break;
                         }
                         match events.recv().await {
-                            Some(WorkspaceEvent::VsCodeTunnel { status: s }) => status = s,
+                            Some(WorkspaceEvent::VsCodeTunnel { status: update }) => {
+                                status = update
+                            }
                             Some(_) => continue,
                             None => break,
                         }
                     }
                 }
-                TunnelCmd::Stop => print_tunnel(&c.vscode_tunnel_stop().await?),
+                TunnelCmd::Stop => print_tunnel(&client.vscode_tunnel_stop().await?),
                 TunnelCmd::Open { target } => {
                     let (path, line, column) = split_target(&target);
-                    let o = c
+                    let opened = client
                         .vscode_tunnel_open(client_core::proto::VsCodeTunnelOpen {
                             folder: None,
                             path,
@@ -502,16 +507,16 @@ pub(crate) async fn run(conn: &mut Conn, cmd: WsCmd) -> Result<()> {
                             column,
                         })
                         .await?;
-                    println!("web:     {}", o.web_url);
-                    println!("desktop: {}", o.desktop_uri);
-                    if o.in_window {
+                    println!("web:     {}", opened.web_url);
+                    println!("desktop: {}", opened.desktop_uri);
+                    if opened.in_window {
                         println!("opened in the connected window");
                     }
                 }
             },
             EditorCmd::Open { target } => {
                 let (path, line, col) = split_target(&target);
-                let opened = c.editor_open(None, path, line, col).await?;
+                let opened = client.editor_open(None, path, line, col).await?;
                 if opened.in_window {
                     println!("opened in the editor window");
                 } else {
@@ -525,28 +530,31 @@ pub(crate) async fn run(conn: &mut Conn, cmd: WsCmd) -> Result<()> {
         WsCmd::Git { action } => match action {
             GitCmd::Status { path } => {
                 let path = match path {
-                    Some(p) => p,
+                    Some(path) => path,
                     None => conn.focused_cwd().await,
                 };
-                let s = conn.client.git_status(path).await?;
+                let status = conn.client.git_status(path).await?;
                 if conn.json {
-                    return crate::json::print("git.status", &crate::json::Git::from(&s));
+                    return crate::json::print("git.status", &crate::json::Git::from(&status));
                 }
                 println!(
                     "{} on {} (upstream {}, +{} -{})",
-                    s.root,
-                    s.branch.as_deref().unwrap_or("(detached)"),
-                    s.upstream.as_deref().unwrap_or("-"),
-                    s.ahead,
-                    s.behind
+                    status.root,
+                    status.branch.as_deref().unwrap_or("(detached)"),
+                    status.upstream.as_deref().unwrap_or("-"),
+                    status.ahead,
+                    status.behind
                 );
-                for f in &s.files {
-                    let orig = f
+                for file in &status.files {
+                    let orig = file
                         .orig_path
                         .as_ref()
-                        .map(|o| format!(" (from {o})"))
+                        .map(|orig| format!(" (from {orig})"))
                         .unwrap_or_default();
-                    println!("  {:?}/{:?} {}{orig}", f.staged, f.unstaged, f.path);
+                    println!(
+                        "  {:?}/{:?} {}{orig}",
+                        file.staged, file.unstaged, file.path
+                    );
                 }
             }
             GitCmd::Diff {
@@ -560,17 +568,17 @@ pub(crate) async fn run(conn: &mut Conn, cmd: WsCmd) -> Result<()> {
                 files,
             } => {
                 let path = match path {
-                    Some(p) => p,
+                    Some(path) => path,
                     None => conn.focused_cwd().await,
                 };
                 let base = if staged {
                     DiffBase::Staged
                 } else if index {
                     DiffBase::Index
-                } else if let Some(r) = rev {
-                    DiffBase::Rev(r)
-                } else if let Some(b) = merge_base {
-                    DiffBase::MergeBase(b)
+                } else if let Some(rev) = rev {
+                    DiffBase::Rev(rev)
+                } else if let Some(merge_base) = merge_base {
+                    DiffBase::MergeBase(merge_base)
                 } else {
                     DiffBase::Head
                 };
@@ -592,19 +600,19 @@ pub(crate) async fn run(conn: &mut Conn, cmd: WsCmd) -> Result<()> {
             match diff {
                 Some(turn) => {
                     let turn = (turn != 0).then_some(turn);
-                    let d = c.turn_diff(pane_id, turn, 3, !stat).await?;
-                    print_diff(&d, stat);
+                    let turn_diff = client.turn_diff(pane_id, turn, 3, !stat).await?;
+                    print_diff(&turn_diff, stat);
                 }
                 None => {
-                    for t in c.list_turns(pane_id).await? {
-                        let state = if t.end_tree.is_some() {
+                    for turn in client.list_turns(pane_id).await? {
+                        let state = if turn.end_tree.is_some() {
                             "done"
                         } else {
                             "running"
                         };
                         println!(
                             "turn {} {state} in {} ({}..{:?})",
-                            t.turn, t.root, t.started_at, t.ended_at
+                            turn.turn, turn.root, turn.started_at, turn.ended_at
                         );
                     }
                 }
@@ -617,9 +625,9 @@ pub(crate) async fn run(conn: &mut Conn, cmd: WsCmd) -> Result<()> {
         } => {
             let notes = notes
                 .iter()
-                .map(|n| parse_note(n))
+                .map(|note| parse_note(note))
                 .collect::<Result<Vec<_>>>()?;
-            let prompt = c
+            let prompt = client
                 .send_review(ReviewRequest {
                     pane_id: PaneId(pane),
                     preamble: None,
@@ -632,10 +640,10 @@ pub(crate) async fn run(conn: &mut Conn, cmd: WsCmd) -> Result<()> {
         WsCmd::Worktree { action } => match action {
             WorktreeCmd::Create { repo, branch, base } => {
                 let repo = match repo {
-                    Some(r) => r,
+                    Some(repo) => repo,
                     None => conn.focused_cwd().await,
                 };
-                let w = conn
+                let worktree = conn
                     .client
                     .worktree_create(WorktreeCreate {
                         repo,
@@ -646,23 +654,23 @@ pub(crate) async fn run(conn: &mut Conn, cmd: WsCmd) -> Result<()> {
                     .await?;
                 println!(
                     "{} on {} (PORT={})",
-                    w.path,
-                    w.branch.as_deref().unwrap_or("?"),
-                    w.port.map_or("-".into(), |p| p.to_string())
+                    worktree.path,
+                    worktree.branch.as_deref().unwrap_or("?"),
+                    worktree.port.map_or("-".into(), |port| port.to_string())
                 );
             }
             WorktreeCmd::List { repo } => {
                 let repo = match repo {
-                    Some(r) => r,
+                    Some(repo) => repo,
                     None => conn.focused_cwd().await,
                 };
-                for w in conn.client.worktree_list(repo).await? {
+                for worktree in conn.client.worktree_list(repo).await? {
                     println!(
                         "{}{} {} PORT={}",
-                        if w.main { "* " } else { "  " },
-                        w.path,
-                        w.branch.as_deref().unwrap_or("(detached)"),
-                        w.port.map_or("-".into(), |p| p.to_string())
+                        if worktree.main { "* " } else { "  " },
+                        worktree.path,
+                        worktree.branch.as_deref().unwrap_or("(detached)"),
+                        worktree.port.map_or("-".into(), |port| port.to_string())
                     );
                 }
             }
@@ -670,14 +678,14 @@ pub(crate) async fn run(conn: &mut Conn, cmd: WsCmd) -> Result<()> {
                 path,
                 force,
                 delete_branch,
-            } => c.worktree_remove(path, force, delete_branch).await?,
+            } => client.worktree_remove(path, force, delete_branch).await?,
             WorktreeCmd::Launch {
                 path,
                 agent,
                 vertical,
             } => {
                 let pane = conn.tab()?.focused;
-                let agent = agent.map(|a| match a {
+                let agent = agent.map(|agent| match agent {
                     crate::Agent::Claude => AgentKind::Claude,
                     crate::Agent::Codex => AgentKind::Codex,
                 });
@@ -686,23 +694,24 @@ pub(crate) async fn run(conn: &mut Conn, cmd: WsCmd) -> Result<()> {
                 } else {
                     Axis::Horizontal
                 };
-                let new = conn.client.worktree_launch(path, pane, axis, agent).await?;
-                println!("pane {new}");
+                let new_pane = conn.client.worktree_launch(path, pane, axis, agent).await?;
+                println!("pane {new_pane}");
             }
         },
         WsCmd::Fs { action } => fs(conn, action).await?,
         WsCmd::Inbox { seen, watch } => {
             let (listener, mut events) = WorkspaceEventQueue::channel();
-            c.set_workspace_listener(listener);
+            client.set_workspace_listener(listener);
             let list = if seen {
-                c.attention_seen(AttentionSeen {
-                    ids: vec![],
-                    up_to: Some(u64::MAX),
-                    pane_id: None,
-                })
-                .await?
+                client
+                    .attention_seen(AttentionSeen {
+                        ids: vec![],
+                        up_to: Some(u64::MAX),
+                        pane_id: None,
+                    })
+                    .await?
             } else {
-                c.attention_list().await?
+                client.attention_list().await?
             };
             if conn.json {
                 let items = list.items.iter().map(crate::json::Item::from).collect();
@@ -727,24 +736,27 @@ pub(crate) async fn run(conn: &mut Conn, cmd: WsCmd) -> Result<()> {
 fn print_ports(ports: &[client_core::proto::PortInfo], json: bool) {
     if json {
         let ports = ports.iter().map(crate::json::Port::from).collect();
-        if let Err(e) = crate::json::print("ports", &crate::json::Ports { ports }) {
-            eprintln!("{e}");
+        if let Err(error) = crate::json::print("ports", &crate::json::Ports { ports }) {
+            eprintln!("{error}");
         }
         return;
     }
     if ports.is_empty() {
         println!("no listening ports in panes");
     }
-    for p in ports {
+    for port in ports {
         println!(
             ":{:<6} {:<8?} pane {:<4} {} (pid {}){}{}",
-            p.port,
-            p.kind,
-            p.pane_id.map_or("-".into(), |p| p.to_string()),
-            p.process,
-            p.pid,
-            if p.loopback_only { " loopback" } else { "" },
-            p.url.as_ref().map(|u| format!(" {u}")).unwrap_or_default()
+            port.port,
+            port.kind,
+            port.pane_id.map_or("-".into(), |pane| pane.to_string()),
+            port.process,
+            port.pid,
+            if port.loopback_only { " loopback" } else { "" },
+            port.url
+                .as_ref()
+                .map(|url| format!(" {url}"))
+                .unwrap_or_default()
         );
     }
 }
@@ -768,32 +780,35 @@ fn print_item(item: &client_core::proto::AttentionItem) {
 }
 
 async fn fs(conn: &mut Conn, action: FsCmd) -> Result<()> {
-    let c = &conn.client;
+    let client = &conn.client;
     match action {
         FsCmd::Ls { path, all } => {
-            let dir = c.fs_list(path, all).await?;
-            for e in &dir.entries {
-                let kind = match e.kind {
+            let dir = client.fs_list(path, all).await?;
+            for entry in &dir.entries {
+                let kind = match entry.kind {
                     FileKind::Dir => "d",
                     FileKind::Symlink => "l",
                     FileKind::File => "-",
                     FileKind::Other => "?",
                 };
-                let link = e
+                let link = entry
                     .link_target
                     .as_ref()
-                    .map(|t| format!(" -> {t}"))
+                    .map(|target| format!(" -> {target}"))
                     .unwrap_or_default();
-                println!("{kind} {:o} {:>10} {}{link}", e.mode, e.size, e.name);
+                println!(
+                    "{kind} {:o} {:>10} {}{link}",
+                    entry.mode, entry.size, entry.name
+                );
             }
             if dir.truncated {
                 println!("(truncated)");
             }
         }
-        FsCmd::Stat { path } => println!("{:#?}", c.fs_stat(path).await?),
+        FsCmd::Stat { path } => println!("{:#?}", client.fs_stat(path).await?),
         FsCmd::Cat { path, offset, len } => {
             use std::io::Write;
-            let chunk = c.fs_read(path, offset, len).await?;
+            let chunk = client.fs_read(path, offset, len).await?;
             std::io::stdout().write_all(&chunk.data)?;
         }
         FsCmd::Put {
@@ -803,7 +818,7 @@ async fn fs(conn: &mut Conn, action: FsCmd) -> Result<()> {
             new,
         } => {
             let start = std::time::Instant::now();
-            let stat = c
+            let stat = client
                 .upload_file(
                     local,
                     WriteTarget {
@@ -826,7 +841,7 @@ async fn fs(conn: &mut Conn, action: FsCmd) -> Result<()> {
         }
         FsCmd::Get { remote, local } => {
             let start = std::time::Instant::now();
-            let stat = c.download_file(remote, local, 0, None, None).await?;
+            let stat = client.download_file(remote, local, 0, None, None).await?;
             let secs = start.elapsed().as_secs_f64();
             println!(
                 "{} bytes in {secs:.2}s ({:.1} MB/s)",
@@ -835,10 +850,10 @@ async fn fs(conn: &mut Conn, action: FsCmd) -> Result<()> {
             );
         }
         FsCmd::Mkdir { path, parents } => {
-            c.fs_mkdir(path, parents).await?;
+            client.fs_mkdir(path, parents).await?;
         }
         FsCmd::Mv { from, to, force } => {
-            c.fs_rename(from, to, force).await?;
+            client.fs_rename(from, to, force).await?;
         }
         FsCmd::Rm {
             path,
@@ -850,22 +865,22 @@ async fn fs(conn: &mut Conn, action: FsCmd) -> Result<()> {
             } else {
                 DeleteMode::Trash
             };
-            c.fs_delete(path, mode, recursive).await?;
+            client.fs_delete(path, mode, recursive).await?;
         }
         FsCmd::Watch { path } => {
             let (listener, mut events) = WorkspaceEventQueue::channel();
-            c.set_workspace_listener(listener);
-            let id = c.fs_watch(path).await?;
+            client.set_workspace_listener(listener);
+            let id = client.fs_watch(path).await?;
             println!("watching (id {id}); Ctrl-C to stop");
             loop {
                 tokio::select! {
-                    e = events.recv() => match e {
+                    event = events.recv() => match event {
                         Some(WorkspaceEvent::FsChanged { change }) => {
                             if change.rescan {
                                 println!("(many changes)");
                             }
-                            for p in change.paths {
-                                println!("{p}");
+                            for path in change.paths {
+                                println!("{path}");
                             }
                         }
                         Some(_) => {}
@@ -888,9 +903,9 @@ mod tests {
         assert_eq!(split_target("a.rs:3:4"), ("a.rs".into(), Some(3), Some(4)));
         assert_eq!(split_target("a.rs:3"), ("a.rs".into(), Some(3), None));
         assert_eq!(split_target("a.rs"), ("a.rs".into(), None, None));
-        let n = parse_note("src/x.rs:3-5:fix this: please").unwrap();
-        assert_eq!((n.start_line, n.end_line), (3, 5));
-        assert_eq!(n.note, "fix this: please");
+        let note = parse_note("src/x.rs:3-5:fix this: please").unwrap();
+        assert_eq!((note.start_line, note.end_line), (3, 5));
+        assert_eq!(note.note, "fix this: please");
         assert!(parse_note("nope").is_err());
     }
 }

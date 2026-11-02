@@ -78,8 +78,8 @@ pub(crate) enum Side {
 }
 
 impl From<Side> for Direction {
-    fn from(s: Side) -> Self {
-        match s {
+    fn from(side: Side) -> Self {
+        match side {
             Side::Left => Self::Left,
             Side::Right => Self::Right,
             Side::Up => Self::Up,
@@ -89,26 +89,26 @@ impl From<Side> for Direction {
 }
 
 /// `x,y,w,h` as fractions of the tab.
-fn parse_frame(s: &str) -> Result<FloatFrame, String> {
-    let v: Vec<f32> = s
+fn parse_frame(text: &str) -> Result<FloatFrame, String> {
+    let numbers: Vec<f32> = text
         .split(',')
-        .map(|p| p.trim().parse::<f32>())
+        .map(|part| part.trim().parse::<f32>())
         .collect::<Result<_, _>>()
-        .map_err(|e| format!("{s:?}: {e}"))?;
-    let [x, y, w, h] = v[..] else {
-        return Err(format!("{s:?}: want x,y,w,h"));
+        .map_err(|error| format!("{text:?}: {error}"))?;
+    let [x, y, w, h] = numbers[..] else {
+        return Err(format!("{text:?}: want x,y,w,h"));
     };
     FloatFrame { x, y, w, h }
         .clamped()
-        .ok_or_else(|| format!("{s:?}: not numbers"))
+        .ok_or_else(|| format!("{text:?}: not numbers"))
 }
 
 /// `p12` or `12`.
-fn pane(s: &str) -> Result<PaneId> {
-    s.trim_start_matches('p')
+fn parse_pane(text: &str) -> Result<PaneId> {
+    text.trim_start_matches('p')
         .parse()
         .map(PaneId)
-        .with_context(|| format!("{s:?} is not a pane id"))
+        .with_context(|| format!("{text:?} is not a pane id"))
 }
 
 /// One shell line from words: a single word is a line already; more are quoted one by one.
@@ -118,28 +118,29 @@ fn shell_line(words: &[String]) -> String {
     }
     words
         .iter()
-        .map(|w| {
-            if !w.is_empty()
-                && w.chars()
+        .map(|word| {
+            if !word.is_empty()
+                && word
+                    .chars()
                     .all(|c| c.is_ascii_alphanumeric() || "-_./=:,@+%".contains(c))
             {
-                w.clone()
+                word.clone()
             } else {
-                format!("'{}'", w.replace('\'', r"'\''"))
+                format!("'{}'", word.replace('\'', r"'\''"))
             }
         })
         .collect::<Vec<_>>()
         .join(" ")
 }
 
-pub(crate) async fn run(conn: &mut Conn, cmd: FloatCmd) -> Result<()> {
+pub(crate) async fn run(conn: &mut Conn, action: FloatCmd) -> Result<()> {
     let set = |pane_id, frame, minimized, pinned| LayoutOp::SetFloat {
         pane_id,
         frame,
         minimized,
         pinned,
     };
-    match cmd {
+    match action {
         FloatCmd::Run {
             close_when_done,
             frame,
@@ -149,7 +150,7 @@ pub(crate) async fn run(conn: &mut Conn, cmd: FloatCmd) -> Result<()> {
             command,
         } => {
             let over = match over {
-                Some(p) => pane(&p)?,
+                Some(over) => parse_pane(&over)?,
                 None => conn.tab()?.focused,
             };
             // A shell that runs the command, so its output stays to read and the command's
@@ -177,8 +178,10 @@ pub(crate) async fn run(conn: &mut Conn, cmd: FloatCmd) -> Result<()> {
                 // Acknowledged once the shell echoes it; give it a moment rather than wait.
                 let _ = tokio::time::timeout(
                     std::time::Duration::from_millis(1500),
-                    conn.answer(|e| match e {
-                        ClientEvent::InputAck { pane_id: p, .. } if p == pane_id => Some(()),
+                    conn.answer(|event| match event {
+                        ClientEvent::InputAck { pane_id: acked, .. } if acked == pane_id => {
+                            Some(())
+                        }
                         _ => None,
                     }),
                 )
@@ -186,74 +189,78 @@ pub(crate) async fn run(conn: &mut Conn, cmd: FloatCmd) -> Result<()> {
             }
             println!("p{}", pane_id.0);
         }
-        FloatCmd::Pane { pane: p, frame } => {
+        FloatCmd::Pane { pane, frame } => {
             conn.op(LayoutOp::FloatPane {
-                pane_id: pane(&p)?,
+                pane_id: parse_pane(&pane)?,
                 frame,
             })
             .await?;
         }
-        FloatCmd::Move { pane: p, frame } => {
-            conn.op(set(pane(&p)?, Some(frame), None, None)).await?;
+        FloatCmd::Move { pane, frame } => {
+            conn.op(set(parse_pane(&pane)?, Some(frame), None, None))
+                .await?;
         }
-        FloatCmd::Dock {
-            pane: p,
-            beside,
-            side,
-        } => {
+        FloatCmd::Dock { pane, beside, side } => {
             let beside = beside
-                .map(|b| {
-                    pane(&b).map(|pane_id| DockTarget {
+                .map(|beside| {
+                    parse_pane(&beside).map(|pane_id| DockTarget {
                         pane_id,
                         side: side.into(),
                     })
                 })
                 .transpose()?;
             conn.op(LayoutOp::DockPane {
-                pane_id: pane(&p)?,
+                pane_id: parse_pane(&pane)?,
                 beside,
             })
             .await?;
         }
-        FloatCmd::Min { pane: p } => {
-            conn.op(set(pane(&p)?, None, Some(true), None)).await?;
+        FloatCmd::Min { pane } => {
+            conn.op(set(parse_pane(&pane)?, None, Some(true), None))
+                .await?;
         }
-        FloatCmd::Restore { pane: p } => {
-            conn.op(set(pane(&p)?, None, Some(false), None)).await?;
+        FloatCmd::Restore { pane } => {
+            conn.op(set(parse_pane(&pane)?, None, Some(false), None))
+                .await?;
         }
-        FloatCmd::Pin { pane: p, off } => {
-            conn.op(set(pane(&p)?, None, None, Some(!off))).await?;
+        FloatCmd::Pin { pane, off } => {
+            conn.op(set(parse_pane(&pane)?, None, None, Some(!off)))
+                .await?;
         }
         FloatCmd::List => {
-            conn.wait("floating windows (the daemon may predate them)", |c| {
-                c.floats.is_some()
+            conn.wait("floating windows (the daemon may predate them)", |conn| {
+                conn.floats.is_some()
             })
             .await?;
             let floats = conn.floats.as_ref().expect("waited for");
             if floats.floats.is_empty() {
                 println!("no floating windows");
             }
-            for w in &floats.floats {
-                let panes: Vec<String> = w.panes.iter().map(|p| format!("p{}", p.0)).collect();
-                let f = w.frame;
+            for window in &floats.floats {
+                let panes: Vec<String> = window
+                    .panes
+                    .iter()
+                    .map(|pane| format!("p{}", pane.0))
+                    .collect();
+                let frame = window.frame;
                 let mut flags = Vec::new();
-                if w.minimized {
+                if window.minimized {
                     flags.push("minimized");
                 }
-                if w.pinned {
+                if window.pinned {
                     flags.push("pinned");
                 }
-                if w.close == CloseWhen::Done {
+                if window.close == CloseWhen::Done {
                     flags.push("closes when done");
                 }
                 println!(
                     "w{:<4} {:<16} {:.2},{:.2} {:.2}×{:.2}  {}",
-                    w.id.0,
+                    window.id.0,
                     panes.join(","),
-                    f.x,
-                    f.y,
-                    f.w,
-                    f.h,
+                    frame.x,
+                    frame.y,
+                    frame.w,
+                    frame.h,
                     flags.join(", ")
                 );
             }
