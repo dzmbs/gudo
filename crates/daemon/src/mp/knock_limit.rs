@@ -59,8 +59,8 @@ impl KnockLimits {
     /// Takes a knock from `invite`'s budget; false if it has none left.
     pub fn admit(&mut self, invite: GrantId, now: Instant) -> bool {
         let l = self.limit(invite, now);
-        l.tokens = (l.tokens + now.duration_since(l.at).as_secs_f64() / EVERY.as_secs_f64())
-            .min(BURST);
+        l.tokens =
+            (l.tokens + now.duration_since(l.at).as_secs_f64() / EVERY.as_secs_f64()).min(BURST);
         l.at = now;
         if l.tokens < 1.0 {
             return false;
@@ -72,7 +72,9 @@ impl KnockLimits {
     /// Whether a refusal of `invite`'s knock goes to the audit log now.
     pub fn refused(&mut self, invite: GrantId, now: Instant) -> Refusal {
         let l = self.limit(invite, now);
-        if l.audited.is_some_and(|t| now.duration_since(t) < AUDIT_EVERY) {
+        if l.audited
+            .is_some_and(|t| now.duration_since(t) < AUDIT_EVERY)
+        {
             l.unaudited += 1;
             return Refusal::Quiet;
         }

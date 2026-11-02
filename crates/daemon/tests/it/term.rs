@@ -646,3 +646,64 @@ async fn reads_of_a_pane_a_guest_can_type_into_say_so() {
         .await;
     assert_eq!(source(&waited), daemon::TERM_SOURCE_SHARED, "{waited}");
 }
+
+/// Each pane an agent opened split its own pane again, nesting one level deeper; past the
+/// layout's 16 levels every `cmd_run` without a pane failed with "too many nested splits",
+/// long before the 32-pane budget. Those panes open in a background tab instead.
+#[tokio::test(flavor = "multi_thread")]
+async fn panes_past_the_nesting_limit_open_in_a_tab() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start_with(dir.path(), |_| {}).await;
+    let mut user = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let me = user.attach_and_follow().await;
+    let agent = Caller {
+        socket: daemon.hook_socket().to_owned(),
+        token: std::fs::read_to_string(dir.path().join("hook.token")).unwrap(),
+        pane: me.0.to_string(),
+    };
+    for _ in 0..20 {
+        agent.ok("pane_split", json!({})).await;
+    }
+    user.until("a second tab", |c| {
+        c.layout.as_ref().is_some_and(|l| l.tabs.len() > 1)
+    })
+    .await;
+    assert_eq!(user.focused(), me, "the user's tab stays in front");
+}
+
+/// Parallel calls all passed the open-pane count before any pane existed, so an agent asking
+/// for many panes at once ended up with more than its 32.
+#[tokio::test(flavor = "multi_thread")]
+async fn parallel_opens_stay_within_the_pane_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start_with(dir.path(), |_| {}).await;
+    let mut user = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let me = user.attach_and_follow().await;
+    let token = std::fs::read_to_string(dir.path().join("hook.token")).unwrap();
+    let socket = daemon.hook_socket().to_owned();
+    let TermReply::Ok(first) = call(&socket, &token, &me.0.to_string(), "tab_new", json!({})).await
+    else {
+        panic!("no first tab")
+    };
+    let worker = first["pane"]["id"]
+        .as_str()
+        .unwrap()
+        .trim_start_matches('p')
+        .to_owned();
+    // The agent and its worker both ask, more at once than one pane may call.
+    let calls: Vec<_> = [me.0.to_string(), worker]
+        .into_iter()
+        .flat_map(|pane| std::iter::repeat_n(pane, 32))
+        .map(|pane| {
+            let (socket, token) = (socket.clone(), token.clone());
+            tokio::spawn(async move { call(&socket, &token, &pane, "tab_new", json!({})).await })
+        })
+        .collect();
+    let mut opened = 1;
+    for c in calls {
+        if matches!(c.await.unwrap(), TermReply::Ok(_)) {
+            opened += 1;
+        }
+    }
+    assert_eq!(opened, 32);
+}

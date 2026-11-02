@@ -142,6 +142,9 @@ type Result<T> = std::result::Result<T, ToolError>;
 pub(crate) struct Term {
     creators: Mutex<HashMap<PaneId, PaneId>>,
     calls: Mutex<HashMap<PaneId, usize>>,
+    /// Held from counting an agent's panes to opening one, so parallel calls cannot all
+    /// pass the count and overshoot the cap.
+    opening: Mutex<()>,
 }
 
 /// A call in progress, counted against its pane until dropped.
@@ -768,7 +771,14 @@ impl Ctx {
         launch: PaneLaunch,
         focus: bool,
     ) -> Result<PaneId> {
+        let _opening = lock(&self.core.term.opening);
         self.may_open()?;
+        // Splits nested as deep as layouts go: the pane opens in a tab of its own instead.
+        if lock(&self.core.layout).check_split(of).is_err() {
+            return self
+                .open_tab(String::new(), launch, focus)
+                .map(|(_, pane)| pane);
+        }
         let focused = self.focused_in_tab_of(of);
         let axis = match direction {
             Direction::Right => Axis::Horizontal,
@@ -793,15 +803,27 @@ impl Ctx {
     }
 
     async fn tab_new(&self, a: TabArgs) -> Result<Value> {
+        let (tab, pane) = {
+            let _opening = lock(&self.core.term.opening);
+            self.may_open()?;
+            let launch = Self::launch(a.command, None, a.cwd);
+            self.open_tab(a.title.unwrap_or_default(), launch, a.focus)?
+        };
+        let entry = self.core.pane(pane).ok_or_else(closed)?;
+        Ok(json!({ "tab": tab_ref(tab), "pane": self.pane_info(pane, &entry) }))
+    }
+
+    /// Opens a tab in the caller's session; the tab the user was on stays selected unless
+    /// `focus`.
+    fn open_tab(&self, name: String, launch: PaneLaunch, focus: bool) -> Result<(TabId, PaneId)> {
         let session = self.session().ok_or_else(closed)?;
-        self.may_open()?;
         let before = lock(&self.core.layout)
             .snapshot(session)
             .and_then(|l| l.active_tab);
         let (tab, pane) = match self.core.apply_op(LayoutOp::NewTab {
             session_id: session,
-            name: a.title.unwrap_or_default(),
-            launch: Self::launch(a.command, None, a.cwd),
+            name,
+            launch,
         }) {
             OpOutcome::TabCreated { tab_id, pane_id } => (tab_id, pane_id),
             OpOutcome::Failed { message, .. } => {
@@ -810,13 +832,10 @@ impl Ctx {
             other => return Err(ToolError::new(ErrorCode::Failed, format!("{other:?}"))),
         };
         self.core.term.created(self.caller, pane);
-        if !a.focus
-            && let Some(before) = before
-        {
+        if !focus && let Some(before) = before {
             self.core.apply_op(LayoutOp::SelectTab { tab_id: before });
         }
-        let entry = self.core.pane(pane).ok_or_else(closed)?;
-        Ok(json!({ "tab": tab_ref(tab), "pane": self.pane_info(pane, &entry) }))
+        Ok((tab, pane))
     }
 
     fn pane_close(&self, a: PaneArg) -> Result<Value> {
@@ -849,10 +868,8 @@ impl Ctx {
                 _ => break,
             }
         }
-        Ok((
-            output::render(&bytes, entry.pane.size().cols),
-            position(&sub),
-        ))
+        let cols = entry.pane.size().cols;
+        Ok((output::render_bounded(bytes, cols).await, position(&sub)))
     }
 
     /// The last `lines` lines, scrollback included.
@@ -1059,12 +1076,7 @@ impl Ctx {
             if let Some(re) = re.as_ref().filter(|_| fresh && due) {
                 // Rendering is the costly part: off the async workers, and at most every
                 // MATCH_EVERY however fast the pane prints.
-                let input = bytes.clone();
-                let rendered = tokio::task::spawn_blocking(move || {
-                    output::visible(&output::render(&input, cols))
-                })
-                .await
-                .map_err(|e| ToolError::new(ErrorCode::Failed, e.to_string()))?;
+                let rendered = output::visible(&output::render_bounded(bytes.clone(), cols).await);
                 fresh = false;
                 matched_at = Some(Instant::now());
                 if let Some(found) = rendered.lines().find_map(|l| {
@@ -1092,16 +1104,18 @@ impl Ctx {
                     .as_str()
                     .is_some_and(|s| a.status.iter().any(|w| w == s))
                 {
-                    let mut done = self.waited(
-                        pane,
-                        "status",
-                        text.clone(),
-                        &bytes,
-                        cols,
-                        max,
-                        position(&sub),
-                        None,
-                    )?;
+                    let mut done = self
+                        .waited(
+                            pane,
+                            "status",
+                            text.clone(),
+                            &bytes,
+                            cols,
+                            max,
+                            position(&sub),
+                            None,
+                        )
+                        .await?;
                     done["programStatus"] = now;
                     return Ok(done);
                 }
@@ -1114,16 +1128,18 @@ impl Ctx {
                     .commands
                     .last()
                     .map(|c| CommandInfo::of(&c.mark));
-                return self.waited(
-                    pane,
-                    "prompt",
-                    text,
-                    &bytes,
-                    cols,
-                    max,
-                    position(&sub),
-                    last,
-                );
+                return self
+                    .waited(
+                        pane,
+                        "prompt",
+                        text,
+                        &bytes,
+                        cols,
+                        max,
+                        position(&sub),
+                        last,
+                    )
+                    .await;
             }
             if let Some(id) = a.exit {
                 let mark = entry
@@ -1135,16 +1151,18 @@ impl Ctx {
                     .find(|m| m.command_id == id);
                 match mark {
                     Some(m) if m.finished.is_some() => {
-                        return self.waited(
-                            pane,
-                            "exited",
-                            text,
-                            &bytes,
-                            cols,
-                            max,
-                            position(&sub),
-                            Some(CommandInfo::of(&m)),
-                        );
+                        return self
+                            .waited(
+                                pane,
+                                "exited",
+                                text,
+                                &bytes,
+                                cols,
+                                max,
+                                position(&sub),
+                                Some(CommandInfo::of(&m)),
+                            )
+                            .await;
                     }
                     None => {
                         return Err(ToolError::new(
@@ -1158,32 +1176,38 @@ impl Ctx {
             if let Some(quiet) = a.quiet_ms
                 && last_output.elapsed() >= Duration::from_millis(quiet)
             {
-                return self.waited(pane, "quiet", text, &bytes, cols, max, position(&sub), None);
+                return self
+                    .waited(pane, "quiet", text, &bytes, cols, max, position(&sub), None)
+                    .await;
             }
             if self.core.pane_meta(pane).and_then(|m| m.exit).is_some() {
-                return self.waited(
-                    pane,
-                    "closed",
-                    text,
-                    &bytes,
-                    cols,
-                    max,
-                    position(&sub),
-                    None,
-                );
+                return self
+                    .waited(
+                        pane,
+                        "closed",
+                        text,
+                        &bytes,
+                        cols,
+                        max,
+                        position(&sub),
+                        None,
+                    )
+                    .await;
             }
             let now = Instant::now();
             if now >= deadline {
-                return self.waited(
-                    pane,
-                    "timeout",
-                    text,
-                    &bytes,
-                    cols,
-                    max,
-                    position(&sub),
-                    None,
-                );
+                return self
+                    .waited(
+                        pane,
+                        "timeout",
+                        text,
+                        &bytes,
+                        cols,
+                        max,
+                        position(&sub),
+                        None,
+                    )
+                    .await;
             }
             match tokio::time::timeout(TICK.min(deadline - now), sub.recv()).await {
                 Ok(Ok(chunk)) => {
@@ -1209,7 +1233,7 @@ impl Ctx {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn waited(
+    async fn waited(
         &self,
         pane: PaneId,
         status: &str,
@@ -1220,7 +1244,10 @@ impl Ctx {
         at: Seq,
         command: Option<CommandInfo>,
     ) -> Result<Value> {
-        let text = text.unwrap_or_else(|| output::render(bytes, cols));
+        let text = match text {
+            Some(text) => text,
+            None => output::render_bounded(bytes.to_vec(), cols).await,
+        };
         Ok(
             json!({ "status": status, "output": Output::new(text, max, at).shared(self.shared(pane)), "command": command }),
         )
@@ -1696,7 +1723,10 @@ mod tests {
             .map(|_| term.enter(PaneId(1)).expect("a slot"))
             .collect();
         assert!(term.enter(PaneId(1)).is_none());
-        assert!(term.enter(PaneId(2)).is_some(), "other panes are not held up");
+        assert!(
+            term.enter(PaneId(2)).is_some(),
+            "other panes are not held up"
+        );
         drop(slots);
         assert!(term.enter(PaneId(1)).is_some());
         assert!(lock(&term.calls).len() <= 1);

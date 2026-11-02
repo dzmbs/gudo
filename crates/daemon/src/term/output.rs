@@ -79,6 +79,17 @@ pub fn visible(text: &str) -> String {
         .collect()
 }
 
+/// Renders running at once: rendering a megabyte of output takes tens of ms and tens of MB.
+static RENDERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+
+/// [`render`] off the async workers, a few at a time however many calls want one.
+pub async fn render_bounded(bytes: Vec<u8>, cols: u16) -> String {
+    let _permit = RENDERS.acquire().await;
+    tokio::task::spawn_blocking(move || render(&bytes, cols))
+        .await
+        .unwrap_or_default()
+}
+
 /// Renders PTY output on a terminal `cols` wide.
 pub fn render(bytes: &[u8], cols: u16) -> String {
     let Ok(mut term) = Terminal::new(cols.max(20), SCRATCH_ROWS) else {
@@ -145,6 +156,34 @@ pub fn grep(text: &str, pattern: &regex::Regex, context: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "probe: prints the cost of rendering"]
+    fn probe_render_cost() {
+        let rss = || {
+            let out = std::process::Command::new("ps")
+                .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout)
+                .trim()
+                .parse::<u64>()
+                .unwrap()
+                / 1024
+        };
+        for kb in [64usize, 256, 1024] {
+            let bytes = b"y\n".repeat(kb * 512);
+            let before = rss();
+            let t = std::time::Instant::now();
+            let text = render(&bytes, 80);
+            println!(
+                "{kb} KiB of short lines: {:?}, rss +{} MB, {} lines",
+                t.elapsed(),
+                rss().saturating_sub(before),
+                text.lines().count()
+            );
+        }
+    }
 
     #[test]
     fn carriage_returns_and_erases_render_as_seen() {
