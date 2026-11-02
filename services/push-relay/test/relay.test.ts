@@ -694,7 +694,7 @@ describe("attacks on the relay", () => {
     expect(addressKey("::ffff:203.0.113.9")).toBe("203.0.113.9");
     expect(addressKey("::FFFF:198.51.100.1")).toBe("198.51.100.1");
     expect(addressKey("0:0:0:0:0:ffff:203.0.113.9")).toBe("203.0.113.9");
-    expect(addressKey("2001:DB8:1:2::5")).toBe(addressKey("2001:db8:1:2:a:b:c:host"));
+    expect(addressKey("2001:DB8:1:2::5")).toBe(addressKey("2001:db8:1:2:a:b:c:d"));
     // Mapped clients do not all share one budget.
     const host = await daemon();
     const registerFrom = (ip: string) =>
