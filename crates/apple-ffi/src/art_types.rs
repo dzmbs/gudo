@@ -1,3 +1,4 @@
+//! FFI mirrors of the drawing wire types (`proto::artifact`; docs/DAEMON.md §7).
 //!
 //! Same rules as [`crate::types`]: ids are `u64`, times are Unix milliseconds (`*_ms`),
 //! payloads (packed ink points, PNGs, SVG text) are [`Bytes`]. Blob hashes are 64 lowercase
@@ -8,23 +9,15 @@ use client_core::proto;
 use crate::bytes::Bytes;
 use crate::mp::Actor;
 
-// --- errors ---------------------------------------------------------------------------------
-
 /// Why a drawing or image request failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, uniffi::Error)]
 pub enum ArtifactError {
     /// No such artifact, session, pane, blob or version (or outside the grant's scope).
     #[error("not found: {message}")]
-    NotFound {
-        /// What.
-        message: String,
-    },
+    NotFound { message: String },
     /// The grant's roles do not allow it; the text names the role needed.
     #[error("not allowed: {message}")]
-    Forbidden {
-        /// Why.
-        message: String,
-    },
+    Forbidden { message: String },
     /// Over a size cap; the text names it.
     #[error("too large: {message}")]
     TooLarge {
@@ -33,28 +26,21 @@ pub enum ArtifactError {
     },
     /// Malformed (not a PNG, bad points, wrong kind, a bad hash).
     #[error("invalid: {message}")]
-    Invalid {
-        /// Why.
-        message: String,
-    },
+    Invalid { message: String },
     /// "Send to agent" into a pane that runs no agent.
     #[error("the pane runs no agent")]
     NotAgentPane,
-    /// Anything else.
     #[error("{message}")]
-    Failed {
-        /// Why.
-        message: String,
-    },
+    Failed { message: String },
     /// The connection dropped before the daemon answered.
     #[error("disconnected before the daemon answered")]
     Disconnected,
 }
 
 impl From<proto::ArtifactError> for ArtifactError {
-    fn from(e: proto::ArtifactError) -> Self {
+    fn from(artifact_error: proto::ArtifactError) -> Self {
         use proto::ArtifactError as E;
-        match e {
+        match artifact_error {
             E::NotFound(message) => Self::NotFound { message },
             E::Forbidden(message) => Self::Forbidden { message },
             E::TooLarge(message) => Self::TooLarge { message },
@@ -73,8 +59,6 @@ pub(crate) fn blob_hash(hex: &str) -> Result<proto::BlobHash, ArtifactError> {
     })
 }
 
-// --- small enums ----------------------------------------------------------------------------
-
 macro_rules! mirror_enum {
     ($(#[$doc:meta])* $name:ident = $p:ident { $($(#[$vdoc:meta])* $v:ident),* $(,)? }) => {
         $(#[$doc])*
@@ -84,16 +68,16 @@ macro_rules! mirror_enum {
         }
 
         impl From<proto::$p> for $name {
-            fn from(v: proto::$p) -> Self {
-                match v {
+            fn from(value: proto::$p) -> Self {
+                match value {
                     $(proto::$p::$v => Self::$v,)*
                 }
             }
         }
 
         impl From<$name> for proto::$p {
-            fn from(v: $name) -> Self {
-                match v {
+            fn from(value: $name) -> Self {
+                match value {
                     $($name::$v => Self::$v,)*
                 }
             }
@@ -107,7 +91,6 @@ mirror_enum! {
     ArtifactKind = ArtifactKind {
         /// Vector strokes, shapes, text and placed images.
         Drawing,
-        /// One image.
         Image,
         /// An Excalidraw scene (elements as Excalidraw's JSON).
         Excalidraw,
@@ -127,9 +110,7 @@ mirror_enum! {
 mirror_enum! {
     /// Image encodings the daemon stores.
     MediaType = MediaType {
-        /// PNG.
         Png,
-        /// JPEG.
         Jpeg,
     }
 }
@@ -153,7 +134,6 @@ mirror_enum! {
         Rect,
         /// Ellipse inscribed in that rectangle.
         Ellipse,
-        /// Straight line.
         Line,
         /// Line with an arrow head at `to`.
         Arrow,
@@ -206,31 +186,24 @@ mirror_enum! {
     }
 }
 
-// --- records --------------------------------------------------------------------------------
-
-/// A stored image blob.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, uniffi::Record)]
 pub struct ImageRef {
     /// SHA-256, 64 lowercase hex digits.
     pub hash: String,
-    /// Encoding.
     pub media: MediaType,
-    /// Size in bytes.
     pub size: u64,
-    /// Pixel width.
     pub width: u32,
-    /// Pixel height.
     pub height: u32,
 }
 
 impl From<proto::ImageRef> for ImageRef {
-    fn from(i: proto::ImageRef) -> Self {
+    fn from(image_ref: proto::ImageRef) -> Self {
         Self {
-            hash: i.hash.to_hex(),
-            media: i.media.into(),
-            size: i.size,
-            width: i.width,
-            height: i.height,
+            hash: image_ref.hash.to_hex(),
+            media: image_ref.media.into(),
+            size: image_ref.size,
+            width: image_ref.width,
+            height: image_ref.height,
         }
     }
 }
@@ -238,13 +211,13 @@ impl From<proto::ImageRef> for ImageRef {
 impl TryFrom<ImageRef> for proto::ImageRef {
     type Error = ArtifactError;
 
-    fn try_from(i: ImageRef) -> Result<Self, ArtifactError> {
+    fn try_from(image_ref: ImageRef) -> Result<Self, ArtifactError> {
         Ok(Self {
-            hash: blob_hash(&i.hash)?,
-            media: i.media.into(),
-            size: i.size,
-            width: i.width,
-            height: i.height,
+            hash: blob_hash(&image_ref.hash)?,
+            media: image_ref.media.into(),
+            size: image_ref.size,
+            width: image_ref.width,
+            height: image_ref.height,
         })
     }
 }
@@ -259,19 +232,19 @@ pub struct DrawStyle {
 }
 
 impl From<proto::Style> for DrawStyle {
-    fn from(s: proto::Style) -> Self {
+    fn from(style: proto::Style) -> Self {
         Self {
-            color: s.color,
-            width: s.width,
+            color: style.color,
+            width: style.width,
         }
     }
 }
 
 impl From<DrawStyle> for proto::Style {
-    fn from(s: DrawStyle) -> Self {
+    fn from(draw_style: DrawStyle) -> Self {
         Self {
-            color: s.color,
-            width: s.width,
+            color: draw_style.color,
+            width: draw_style.width,
         }
     }
 }
@@ -279,37 +252,38 @@ impl From<DrawStyle> for proto::Style {
 /// A point in the drawing's units.
 #[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
 pub struct Pt {
-    /// x.
     pub x: f32,
-    /// y.
     pub y: f32,
 }
 
 impl From<proto::Pt> for Pt {
-    fn from(p: proto::Pt) -> Self {
-        Self { x: p.x, y: p.y }
+    fn from(point: proto::Pt) -> Self {
+        Self {
+            x: point.x,
+            y: point.y,
+        }
     }
 }
 
 impl From<Pt> for proto::Pt {
-    fn from(p: Pt) -> Self {
-        Self { x: p.x, y: p.y }
+    fn from(point: Pt) -> Self {
+        Self {
+            x: point.x,
+            y: point.y,
+        }
     }
 }
 
-/// What an element is.
 #[derive(Debug, Clone, PartialEq, uniffi::Enum)]
 pub enum DrawElementKind {
     /// Freehand ink; `points` are packed (`pack_ink_points`).
     Stroke {
-        /// The pen.
         tool: InkTool,
         /// Packed points.
         points: Bytes,
     },
     /// A shape from `from` to `to`.
     Shape {
-        /// The shape.
         shape: ShapeKind,
         /// First corner or start.
         from: Pt,
@@ -320,16 +294,13 @@ pub enum DrawElementKind {
     },
     /// A text box; `at` is the top-left of the first line.
     Text {
-        /// Position.
         at: Pt,
-        /// The text.
         text: String,
         /// Font size in the drawing's units.
         size: f32,
     },
     /// An image blob placed in `from`..`to`.
     Image {
-        /// The image.
         image: ImageRef,
         /// Top-left.
         from: Pt,
@@ -339,12 +310,12 @@ pub enum DrawElementKind {
 }
 
 impl From<proto::ElementKind> for DrawElementKind {
-    fn from(k: proto::ElementKind) -> Self {
+    fn from(element_kind: proto::ElementKind) -> Self {
         use proto::ElementKind as K;
-        match k {
-            K::Stroke(s) => Self::Stroke {
-                tool: s.tool.into(),
-                points: s.points.0.into(),
+        match element_kind {
+            K::Stroke(stroke) => Self::Stroke {
+                tool: stroke.tool.into(),
+                points: stroke.points.0.into(),
             },
             K::Shape {
                 shape,
@@ -374,8 +345,8 @@ impl From<proto::ElementKind> for DrawElementKind {
 impl TryFrom<DrawElementKind> for proto::ElementKind {
     type Error = ArtifactError;
 
-    fn try_from(k: DrawElementKind) -> Result<Self, ArtifactError> {
-        Ok(match k {
+    fn try_from(draw_element_kind: DrawElementKind) -> Result<Self, ArtifactError> {
+        Ok(match draw_element_kind {
             DrawElementKind::Stroke { tool, points } => Self::Stroke(proto::Stroke {
                 tool: tool.into(),
                 points: proto::PackedPoints(points.0),
@@ -414,17 +385,16 @@ pub struct DrawElement {
     pub z: i32,
     /// Colour and width.
     pub style: DrawStyle,
-    /// What it is.
     pub kind: DrawElementKind,
 }
 
 impl From<proto::Element> for DrawElement {
-    fn from(e: proto::Element) -> Self {
+    fn from(element: proto::Element) -> Self {
         Self {
-            id: e.id.0,
-            z: e.z,
-            style: e.style.into(),
-            kind: e.kind.into(),
+            id: element.id.0,
+            z: element.z,
+            style: element.style.into(),
+            kind: element.kind.into(),
         }
     }
 }
@@ -432,12 +402,12 @@ impl From<proto::Element> for DrawElement {
 impl TryFrom<DrawElement> for proto::Element {
     type Error = ArtifactError;
 
-    fn try_from(e: DrawElement) -> Result<Self, ArtifactError> {
+    fn try_from(draw_element: DrawElement) -> Result<Self, ArtifactError> {
         Ok(Self {
-            id: proto::ElementId(e.id),
-            z: e.z,
-            style: e.style.into(),
-            kind: e.kind.try_into()?,
+            id: proto::ElementId(draw_element.id),
+            z: draw_element.z,
+            style: draw_element.style.into(),
+            kind: draw_element.kind.try_into()?,
         })
     }
 }
@@ -447,50 +417,38 @@ impl TryFrom<DrawElement> for proto::Element {
 pub enum DrawOp {
     /// Adds an element (replacing one with the same id).
     Add {
-        /// The element.
         element: DrawElement,
     },
     /// Moves an element by `(dx, dy)`.
     Move {
-        /// The element.
         id: u64,
         /// Offset x.
         dx: f32,
         /// Offset y.
         dy: f32,
     },
-    /// Changes an element's style.
     Restyle {
-        /// The element.
         id: u64,
-        /// New style.
         style: DrawStyle,
     },
     /// Changes an element's stacking order.
     SetZ {
-        /// The element.
         id: u64,
-        /// New z.
         z: i32,
     },
-    /// Removes an element.
     Delete {
-        /// The element.
         id: u64,
     },
-    /// Removes every element.
     Clear,
-    /// Renames the artifact.
     SetTitle {
-        /// The title.
         title: String,
     },
 }
 
 impl From<proto::DrawOp> for DrawOp {
-    fn from(op: proto::DrawOp) -> Self {
+    fn from(draw_op: proto::DrawOp) -> Self {
         use proto::DrawOp as O;
-        match op {
+        match draw_op {
             O::Add(element) => Self::Add {
                 element: element.into(),
             },
@@ -510,9 +468,9 @@ impl From<proto::DrawOp> for DrawOp {
 impl TryFrom<DrawOp> for proto::DrawOp {
     type Error = ArtifactError;
 
-    fn try_from(op: DrawOp) -> Result<Self, ArtifactError> {
+    fn try_from(draw_op: DrawOp) -> Result<Self, ArtifactError> {
         use proto::ElementId as Id;
-        Ok(match op {
+        Ok(match draw_op {
             DrawOp::Add { element } => Self::Add(element.try_into()?),
             DrawOp::Move { id, dx, dy } => Self::Move { id: Id(id), dx, dy },
             DrawOp::Restyle { id, style } => Self::Restyle {
@@ -540,17 +498,16 @@ pub struct OpBatch {
     pub actor: Actor,
     /// When the daemon accepted it.
     pub at_ms: u64,
-    /// The ops.
     pub ops: Vec<DrawOp>,
 }
 
 impl From<proto::OpBatch> for OpBatch {
-    fn from(b: proto::OpBatch) -> Self {
+    fn from(op_batch: proto::OpBatch) -> Self {
         Self {
-            version: b.version,
-            actor: b.actor.into(),
-            at_ms: b.at.0,
-            ops: b.ops.into_iter().map(Into::into).collect(),
+            version: op_batch.version,
+            actor: op_batch.actor.into(),
+            at_ms: op_batch.at.0,
+            ops: op_batch.ops.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -568,11 +525,11 @@ pub struct AnchorRequest {
 }
 
 impl From<AnchorRequest> for proto::AnchorRequest {
-    fn from(a: AnchorRequest) -> Self {
+    fn from(anchor_request: AnchorRequest) -> Self {
         Self {
-            pane_id: proto::PaneId(a.pane_id),
-            at_seq: proto::Seq(a.at_seq),
-            from_bottom: a.from_bottom,
+            pane_id: proto::PaneId(anchor_request.pane_id),
+            at_seq: proto::Seq(anchor_request.at_seq),
+            from_bottom: anchor_request.from_bottom,
         }
     }
 }
@@ -583,15 +540,12 @@ pub enum AnchorState {
     /// Glued to its row.
     Live,
     /// Lost its row; the drawing moved to the pane's loose tray.
-    Detached {
-        /// Why.
-        reason: DetachReason,
-    },
+    Detached { reason: DetachReason },
 }
 
 impl From<proto::AnchorState> for AnchorState {
-    fn from(s: proto::AnchorState) -> Self {
-        match s {
+    fn from(anchor_state: proto::AnchorState) -> Self {
+        match anchor_state {
             proto::AnchorState::Live => Self::Live,
             proto::AnchorState::Detached(reason) => Self::Detached {
                 reason: reason.into(),
@@ -604,7 +558,6 @@ impl From<proto::AnchorState> for AnchorState {
 /// `at_seq`, pin the row `from_bottom` rows above the bottom and track it from then on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, uniffi::Record)]
 pub struct RowAnchor {
-    /// The pane.
     pub pane_id: u64,
     /// Which screen.
     pub screen: AnchorScreen,
@@ -619,14 +572,14 @@ pub struct RowAnchor {
 }
 
 impl From<proto::RowAnchor> for RowAnchor {
-    fn from(a: proto::RowAnchor) -> Self {
+    fn from(row_anchor: proto::RowAnchor) -> Self {
         Self {
-            pane_id: a.pane_id.0,
-            screen: a.screen.into(),
-            at_seq: a.at_seq.0,
-            from_bottom: a.from_bottom,
-            command_id: a.command_id,
-            state: a.state.into(),
+            pane_id: row_anchor.pane_id.0,
+            screen: row_anchor.screen.into(),
+            at_seq: row_anchor.at_seq.0,
+            from_bottom: row_anchor.from_bottom,
+            command_id: row_anchor.command_id,
+            state: row_anchor.state.into(),
         }
     }
 }
@@ -634,17 +587,16 @@ impl From<proto::RowAnchor> for RowAnchor {
 /// A rendered PNG of a drawing at one version.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, uniffi::Record)]
 pub struct ArtifactPreview {
-    /// The PNG.
     pub image: ImageRef,
     /// The drawing version it shows.
     pub version: u64,
 }
 
 impl From<proto::Preview> for ArtifactPreview {
-    fn from(p: proto::Preview) -> Self {
+    fn from(preview: proto::Preview) -> Self {
         Self {
-            image: p.image.into(),
-            version: p.version,
+            image: preview.image.into(),
+            version: preview.version,
         }
     }
 }
@@ -652,9 +604,7 @@ impl From<proto::Preview> for ArtifactPreview {
 /// Everything a client lists about an artifact.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct ArtifactInfo {
-    /// The artifact.
     pub artifact_id: u64,
-    /// Its session.
     pub session_id: u64,
     /// Drawing, image or Excalidraw scene.
     pub kind: ArtifactKind,
@@ -662,9 +612,7 @@ pub struct ArtifactInfo {
     pub title: String,
     /// DrawElement coordinates.
     pub space: CoordSpace,
-    /// Who created it.
     pub created_by: Actor,
-    /// When.
     pub created_at_ms: u64,
     /// Last change.
     pub updated_at_ms: u64,
@@ -700,14 +648,14 @@ pub struct ArtifactVersion {
 }
 
 impl From<proto::ArtifactVersion> for ArtifactVersion {
-    fn from(v: proto::ArtifactVersion) -> Self {
+    fn from(artifact_version: proto::ArtifactVersion) -> Self {
         Self {
-            version: v.version,
-            at_ms: v.at.0,
-            by: v.by.into(),
-            image: v.image.map(Into::into),
-            elements: v.elements,
-            restored_from: v.restored_from,
+            version: artifact_version.version,
+            at_ms: artifact_version.at.0,
+            by: artifact_version.by.into(),
+            image: artifact_version.image.map(Into::into),
+            elements: artifact_version.elements,
+            restored_from: artifact_version.restored_from,
         }
     }
 }
@@ -722,34 +670,36 @@ pub struct RestoredVersion {
 }
 
 impl From<proto::ArtifactInfo> for ArtifactInfo {
-    fn from(i: proto::ArtifactInfo) -> Self {
+    fn from(artifact_info: proto::ArtifactInfo) -> Self {
         Self {
-            artifact_id: i.artifact_id.0,
-            session_id: i.session_id.0,
-            kind: i.kind.into(),
-            title: i.title,
-            space: i.space.into(),
-            created_by: i.created_by.into(),
-            created_at_ms: i.created_at.0,
-            updated_at_ms: i.updated_at.0,
-            version: i.version,
-            elements: i.elements,
-            image: i.image.map(Into::into),
-            preview: i.preview.map(Into::into),
-            anchor: i.anchor.map(Into::into),
-            canvas_panes: i.canvas_panes.into_iter().map(|p| p.0).collect(),
+            artifact_id: artifact_info.artifact_id.0,
+            session_id: artifact_info.session_id.0,
+            kind: artifact_info.kind.into(),
+            title: artifact_info.title,
+            space: artifact_info.space.into(),
+            created_by: artifact_info.created_by.into(),
+            created_at_ms: artifact_info.created_at.0,
+            updated_at_ms: artifact_info.updated_at.0,
+            version: artifact_info.version,
+            elements: artifact_info.elements,
+            image: artifact_info.image.map(Into::into),
+            preview: artifact_info.preview.map(Into::into),
+            anchor: artifact_info.anchor.map(Into::into),
+            canvas_panes: artifact_info
+                .canvas_panes
+                .into_iter()
+                .map(|p| p.0)
+                .collect(),
         }
     }
 }
 
-/// Creates an artifact.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct ArtifactCreate {
     /// The session it belongs to.
     pub session_id: u64,
     /// Drawing, image or Excalidraw scene.
     pub kind: ArtifactKind,
-    /// Title.
     #[uniffi(default = "")]
     pub title: String,
     /// Coordinate space (`cells` for ink over a terminal).
@@ -768,15 +718,19 @@ pub struct ArtifactCreate {
 impl TryFrom<ArtifactCreate> for proto::ArtifactCreate {
     type Error = ArtifactError;
 
-    fn try_from(c: ArtifactCreate) -> Result<Self, ArtifactError> {
+    fn try_from(artifact_create: ArtifactCreate) -> Result<Self, ArtifactError> {
         Ok(Self {
-            session_id: proto::SessionId(c.session_id),
-            kind: c.kind.into(),
-            title: c.title,
-            space: c.space.into(),
-            anchor: c.anchor.map(Into::into),
-            image: c.image.as_deref().map(blob_hash).transpose()?,
-            ops: ops_to_proto(c.ops)?,
+            session_id: proto::SessionId(artifact_create.session_id),
+            kind: artifact_create.kind.into(),
+            title: artifact_create.title,
+            space: artifact_create.space.into(),
+            anchor: artifact_create.anchor.map(Into::into),
+            image: artifact_create
+                .image
+                .as_deref()
+                .map(blob_hash)
+                .transpose()?,
+            ops: ops_to_proto(artifact_create.ops)?,
         })
     }
 }
@@ -794,11 +748,13 @@ pub struct ArtifactScene {
 }
 
 impl From<proto::ArtifactScene> for ArtifactScene {
-    fn from(s: proto::ArtifactScene) -> Self {
+    fn from(artifact_scene: proto::ArtifactScene) -> Self {
         Self {
-            info: s.info.into(),
-            elements: s.elements.map(|e| e.into_iter().map(Into::into).collect()),
-            batches: s.batches.into_iter().map(Into::into).collect(),
+            info: artifact_scene.info.into(),
+            elements: artifact_scene
+                .elements
+                .map(|elements| elements.into_iter().map(Into::into).collect()),
+            batches: artifact_scene.batches.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -814,10 +770,8 @@ pub struct CachedScene {
     pub elements: Vec<DrawElement>,
 }
 
-/// Exported content.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct ExportedFile {
-    /// Format.
     pub format: ExportFormat,
     /// The version it shows.
     pub version: u64,
@@ -841,13 +795,13 @@ pub struct SentToAgent {
 }
 
 impl From<proto::Sent> for SentToAgent {
-    fn from(s: proto::Sent) -> Self {
+    fn from(sent: proto::Sent) -> Self {
         Self {
-            artifact_id: s.artifact_id.0,
-            version: s.version,
-            path: s.path,
-            pasted: s.pasted,
-            bracketed: s.bracketed,
+            artifact_id: sent.artifact_id.0,
+            version: sent.version,
+            path: sent.path,
+            pasted: sent.pasted,
+            bracketed: sent.bracketed,
         }
     }
 }
@@ -868,25 +822,25 @@ pub struct ExElement {
 }
 
 impl From<proto::ExElement> for ExElement {
-    fn from(e: proto::ExElement) -> Self {
+    fn from(element: proto::ExElement) -> Self {
         Self {
-            id: e.id,
-            version: e.version,
-            version_nonce: e.version_nonce,
-            deleted: e.deleted,
-            json: e.json,
+            id: element.id,
+            version: element.version,
+            version_nonce: element.version_nonce,
+            deleted: element.deleted,
+            json: element.json,
         }
     }
 }
 
 impl From<ExElement> for proto::ExElement {
-    fn from(e: ExElement) -> Self {
+    fn from(element: ExElement) -> Self {
         Self {
-            id: e.id,
-            version: e.version,
-            version_nonce: e.version_nonce,
-            deleted: e.deleted,
-            json: e.json,
+            id: element.id,
+            version: element.version,
+            version_nonce: element.version_nonce,
+            deleted: element.deleted,
+            json: element.json,
         }
     }
 }
@@ -901,10 +855,10 @@ pub struct ExFile {
 }
 
 impl From<proto::ExFile> for ExFile {
-    fn from(f: proto::ExFile) -> Self {
+    fn from(file: proto::ExFile) -> Self {
         Self {
-            file_id: f.file_id,
-            image: f.image.into(),
+            file_id: file.file_id,
+            image: file.image.into(),
         }
     }
 }
@@ -912,10 +866,10 @@ impl From<proto::ExFile> for ExFile {
 impl TryFrom<ExFile> for proto::ExFile {
     type Error = ArtifactError;
 
-    fn try_from(f: ExFile) -> Result<Self, ArtifactError> {
+    fn try_from(file: ExFile) -> Result<Self, ArtifactError> {
         Ok(Self {
-            file_id: f.file_id,
-            image: f.image.try_into()?,
+            file_id: file.file_id,
+            image: file.image.try_into()?,
         })
     }
 }
@@ -934,12 +888,16 @@ pub struct ExcalidrawScene {
 }
 
 impl From<proto::ExcalidrawScene> for ExcalidrawScene {
-    fn from(s: proto::ExcalidrawScene) -> Self {
+    fn from(excalidraw_scene: proto::ExcalidrawScene) -> Self {
         Self {
-            info: s.info.into(),
-            elements: s.elements.into_iter().map(Into::into).collect(),
-            app_state: s.app_state,
-            files: s.files.into_iter().map(Into::into).collect(),
+            info: excalidraw_scene.info.into(),
+            elements: excalidraw_scene
+                .elements
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            app_state: excalidraw_scene.app_state,
+            files: excalidraw_scene.files.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -958,12 +916,12 @@ pub struct CachedExcalidraw {
 }
 
 impl From<client_core::drawing::ExScene> for CachedExcalidraw {
-    fn from(s: client_core::drawing::ExScene) -> Self {
+    fn from(scene: client_core::drawing::ExScene) -> Self {
         Self {
-            revision: s.revision,
-            elements: s.changed_since(0).into_iter().map(Into::into).collect(),
-            app_state: s.app_state.clone(),
-            files: s.files.into_values().map(Into::into).collect(),
+            revision: scene.revision,
+            elements: scene.changed_since(0).into_iter().map(Into::into).collect(),
+            app_state: scene.app_state.clone(),
+            files: scene.files.into_values().map(Into::into).collect(),
         }
     }
 }
@@ -983,7 +941,6 @@ pub struct ExcalidrawApplied {
 pub struct Placement {
     /// Daemon-assigned id, never reused.
     pub placement_id: u64,
-    /// The pane.
     pub pane_id: u64,
     /// What is shown.
     pub artifact_id: u64,
@@ -991,7 +948,6 @@ pub struct Placement {
     pub version: u64,
     /// The image drawn (fetch with `blob_download`, cache by hash).
     pub image: ImageRef,
-    /// The row.
     pub anchor: RowAnchor,
     /// First column.
     pub col: u16,
@@ -1001,24 +957,23 @@ pub struct Placement {
     pub rows: u16,
     /// Who placed it.
     pub source: PlacementSource,
-    /// When.
     pub at_ms: u64,
 }
 
 impl From<proto::Placement> for Placement {
-    fn from(p: proto::Placement) -> Self {
+    fn from(placement: proto::Placement) -> Self {
         Self {
-            placement_id: p.placement_id,
-            pane_id: p.pane_id.0,
-            artifact_id: p.artifact_id.0,
-            version: p.version,
-            image: p.image.into(),
-            anchor: p.anchor.into(),
-            col: p.col,
-            cols: p.cols,
-            rows: p.rows,
-            source: p.source.into(),
-            at_ms: p.at.0,
+            placement_id: placement.placement_id,
+            pane_id: placement.pane_id.0,
+            artifact_id: placement.artifact_id.0,
+            version: placement.version,
+            image: placement.image.into(),
+            anchor: placement.anchor.into(),
+            col: placement.col,
+            cols: placement.cols,
+            rows: placement.rows,
+            source: placement.source.into(),
+            at_ms: placement.at.0,
         }
     }
 }
@@ -1026,9 +981,7 @@ impl From<proto::Placement> for Placement {
 /// Places an artifact inline in a pane.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct PlaceRequest {
-    /// The pane.
     pub pane_id: u64,
-    /// The artifact.
     pub artifact_id: u64,
     /// The version (`nil` = current).
     #[uniffi(default = None)]
@@ -1051,17 +1004,17 @@ pub struct PlaceRequest {
 }
 
 impl From<PlaceRequest> for proto::PlaceRequest {
-    fn from(r: PlaceRequest) -> Self {
+    fn from(place_request: PlaceRequest) -> Self {
         Self {
-            pane_id: proto::PaneId(r.pane_id),
-            artifact_id: proto::ArtifactId(r.artifact_id),
-            version: r.version,
-            anchor: r.anchor.map(Into::into),
-            col: r.col,
-            cols: r.cols,
-            rows: r.rows,
+            pane_id: proto::PaneId(place_request.pane_id),
+            artifact_id: proto::ArtifactId(place_request.artifact_id),
+            version: place_request.version,
+            anchor: place_request.anchor.map(Into::into),
+            col: place_request.col,
+            cols: place_request.cols,
+            rows: place_request.rows,
             png: None,
-            replace: r.replace,
+            replace: place_request.replace,
         }
     }
 }
@@ -1075,9 +1028,7 @@ pub struct InkChunk {
     pub stroke_id: u64,
     /// Chunk number within the stroke, from 0.
     pub chunk: u32,
-    /// The pen.
     pub tool: InkTool,
-    /// DrawStyle.
     pub style: DrawStyle,
     /// New points only, packed (`pack_ink_points`; deltas restart in every chunk).
     pub points: Bytes,
@@ -1088,7 +1039,6 @@ pub struct InkChunk {
 /// Someone else's live stroke chunk (`ArtifactEvent.ink`).
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct InkLive {
-    /// The drawing.
     pub artifact_id: u64,
     /// The element the stroke becomes.
     pub stroke_id: u64,
@@ -1096,9 +1046,7 @@ pub struct InkLive {
     pub actor: Actor,
     /// Chunk number within the stroke.
     pub chunk: u32,
-    /// The pen.
     pub tool: InkTool,
-    /// DrawStyle.
     pub style: DrawStyle,
     /// New points, packed.
     pub points: Bytes,
@@ -1107,16 +1055,16 @@ pub struct InkLive {
 }
 
 impl From<proto::InkLive> for InkLive {
-    fn from(i: proto::InkLive) -> Self {
+    fn from(ink_live: proto::InkLive) -> Self {
         Self {
-            artifact_id: i.artifact_id.0,
-            stroke_id: i.stroke_id.0,
-            actor: i.actor.into(),
-            chunk: i.chunk,
-            tool: i.tool.into(),
-            style: i.style.into(),
-            points: i.points.0.into(),
-            done: i.done,
+            artifact_id: ink_live.artifact_id.0,
+            stroke_id: ink_live.stroke_id.0,
+            actor: ink_live.actor.into(),
+            chunk: ink_live.chunk,
+            tool: ink_live.tool.into(),
+            style: ink_live.style.into(),
+            points: ink_live.points.0.into(),
+            done: ink_live.done,
         }
     }
 }
@@ -1131,10 +1079,10 @@ pub struct CanvasPane {
 }
 
 impl From<proto::CanvasPane> for CanvasPane {
-    fn from(c: proto::CanvasPane) -> Self {
+    fn from(canvas_pane: proto::CanvasPane) -> Self {
         Self {
-            pane_id: c.pane_id.0,
-            artifact_id: c.artifact_id.0,
+            pane_id: canvas_pane.pane_id.0,
+            artifact_id: canvas_pane.artifact_id.0,
         }
     }
 }
@@ -1142,16 +1090,13 @@ impl From<proto::CanvasPane> for CanvasPane {
 /// A push about the attached session's drawings and images.
 #[derive(Debug, Clone, PartialEq, uniffi::Enum)]
 pub enum ArtifactEvent {
-    /// A new artifact.
     Created {
-        /// It.
         info: ArtifactInfo,
     },
     /// A batch was committed (the cache already applied it).
     Changed {
         /// The artifact after the batch.
         info: ArtifactInfo,
-        /// The batch.
         batch: OpBatch,
     },
     /// Metadata changed without a batch (anchor moved or detached, preview, canvas panes).
@@ -1159,28 +1104,22 @@ pub enum ArtifactEvent {
         /// The artifact now.
         info: ArtifactInfo,
     },
-    /// Deleted.
     Deleted {
-        /// Its session.
         session_id: u64,
-        /// The artifact.
         artifact_id: u64,
     },
     /// Someone else's live stroke.
     Ink {
-        /// The chunk.
         ink: InkLive,
     },
     /// The session's canvas panes (whole list).
     Canvases {
-        /// The session.
         session_id: u64,
         /// Every canvas pane in it.
         canvases: Vec<CanvasPane>,
     },
     /// Excalidraw elements someone else changed: `applyRemote` them.
     Excalidraw {
-        /// The scene.
         artifact_id: u64,
         /// Its revision after the change.
         version: u64,
@@ -1193,20 +1132,16 @@ pub enum ArtifactEvent {
     },
     /// An inline placement was made, replaced or changed (its anchor detached).
     Placed {
-        /// It.
         placement: Placement,
     },
     /// An inline placement was removed.
     Unplaced {
-        /// The pane.
         pane_id: u64,
-        /// The placement.
         placement_id: u64,
     },
     /// The cached scene of an artifact was (re)fetched (a gap, a reconnect, a first sight)
     /// and is now at `version`; redraw it from `artifact_scene` / `excalidraw_scene`.
     Synced {
-        /// The artifact.
         artifact_id: u64,
         /// Its version now.
         version: u64,
@@ -1214,9 +1149,9 @@ pub enum ArtifactEvent {
 }
 
 impl From<client_core::ArtifactUpdate> for ArtifactEvent {
-    fn from(u: client_core::ArtifactUpdate) -> Self {
+    fn from(artifact_update: client_core::ArtifactUpdate) -> Self {
         use proto::ArtifactEvent as E;
-        let event = match u {
+        let event = match artifact_update {
             client_core::ArtifactUpdate::Synced {
                 artifact_id,
                 version,
@@ -1263,8 +1198,8 @@ impl From<client_core::ArtifactUpdate> for ArtifactEvent {
                 app_state,
                 files: files.into_iter().map(Into::into).collect(),
             },
-            E::Placed(p) => Self::Placed {
-                placement: p.into(),
+            E::Placed(placement) => Self::Placed {
+                placement: placement.into(),
             },
             E::Unplaced {
                 pane_id,
@@ -1277,14 +1212,11 @@ impl From<client_core::ArtifactUpdate> for ArtifactEvent {
     }
 }
 
-// --- on-device drawing helpers -------------------------------------------------------------
-
 /// One sampled pen position (for `pack_ink_points` / `simplify_ink_points`).
 #[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
 pub struct InkPoint {
     /// x, in the drawing's units.
     pub x: f32,
-    /// y.
     pub y: f32,
     /// Force, 0…1 (1 for a mouse or finger).
     #[uniffi(default = 1.0)]
@@ -1300,27 +1232,27 @@ pub struct InkPoint {
 }
 
 impl From<client_core::drawing::InkPoint> for InkPoint {
-    fn from(p: client_core::drawing::InkPoint) -> Self {
+    fn from(ink_point: client_core::drawing::InkPoint) -> Self {
         Self {
-            x: p.x,
-            y: p.y,
-            pressure: p.pressure,
-            altitude: p.altitude,
-            azimuth: p.azimuth,
-            t_ms: p.t_ms,
+            x: ink_point.x,
+            y: ink_point.y,
+            pressure: ink_point.pressure,
+            altitude: ink_point.altitude,
+            azimuth: ink_point.azimuth,
+            t_ms: ink_point.t_ms,
         }
     }
 }
 
 impl From<InkPoint> for client_core::drawing::InkPoint {
-    fn from(p: InkPoint) -> Self {
+    fn from(ink_point: InkPoint) -> Self {
         Self {
-            x: p.x,
-            y: p.y,
-            pressure: p.pressure,
-            altitude: p.altitude,
-            azimuth: p.azimuth,
-            t_ms: p.t_ms,
+            x: ink_point.x,
+            y: ink_point.y,
+            pressure: ink_point.pressure,
+            altitude: ink_point.altitude,
+            azimuth: ink_point.azimuth,
+            t_ms: ink_point.t_ms,
         }
     }
 }
@@ -1330,8 +1262,6 @@ impl From<InkPoint> for client_core::drawing::InkPoint {
 pub struct ImageInfo {
     /// PNG or JPEG.
     pub media: MediaType,
-    /// Pixel width.
     pub width: u32,
-    /// Pixel height.
     pub height: u32,
 }

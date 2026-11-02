@@ -23,31 +23,24 @@ pub enum AskpassError {
     Gone,
     /// The connection's roles or scope do not allow it.
     #[error("not allowed: {message}")]
-    Denied {
-        /// Why.
-        message: String,
-    },
+    Denied { message: String },
     /// The pane does not exist or is outside the grant's scope.
     #[error("no such pane")]
     UnknownPane,
     /// The pane echoes input now; nothing was typed.
     #[error("the pane is not at a hidden-input prompt")]
     NotHidden,
-    /// Anything else.
     #[error("{message}")]
-    Failed {
-        /// Why.
-        message: String,
-    },
+    Failed { message: String },
     /// The connection dropped before the daemon answered.
     #[error("disconnected before the daemon answered")]
     Disconnected,
 }
 
 impl From<proto::AskpassError> for AskpassError {
-    fn from(e: proto::AskpassError) -> Self {
+    fn from(askpass_error: proto::AskpassError) -> Self {
         use proto::AskpassError as E;
-        match e {
+        match askpass_error {
             E::Gone => Self::Gone,
             E::Denied(message) => Self::Denied { message },
             E::UnknownPane => Self::UnknownPane,
@@ -69,7 +62,6 @@ mirror_enum! {
         Git,
         /// `gpg`.
         Gpg,
-        /// Anything else.
         Other,
     }
 }
@@ -100,16 +92,16 @@ pub struct SecretPrompt {
 }
 
 impl From<proto::SecretPrompt> for SecretPrompt {
-    fn from(p: proto::SecretPrompt) -> Self {
+    fn from(secret_prompt: proto::SecretPrompt) -> Self {
         Self {
-            id: p.id.0,
-            pane_id: p.pane_id.0,
-            source: p.source.into(),
-            prompt: p.prompt,
-            program: p.program,
-            echo: p.echo,
-            retry: p.retry,
-            expires_at_ms: p.expires_at.0,
+            id: secret_prompt.id.0,
+            pane_id: secret_prompt.pane_id.0,
+            source: secret_prompt.source.into(),
+            prompt: secret_prompt.prompt,
+            program: secret_prompt.program,
+            echo: secret_prompt.echo,
+            retry: secret_prompt.retry,
+            expires_at_ms: secret_prompt.expires_at.0,
             guest_driving: None,
         }
     }
@@ -122,19 +114,12 @@ fn driven(prompt: proto::SecretPrompt, guest: Option<String>) -> SecretPrompt {
     }
 }
 
-/// Why a prompt closed.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum AskpassCloseReason {
     /// Someone answered it (`by` is their principal id, 16 bytes hex).
-    Answered {
-        /// Who.
-        by: String,
-    },
+    Answered { by: String },
     /// Someone cancelled it (empty `by`: the daemon).
-    Cancelled {
-        /// Who.
-        by: String,
-    },
+    Cancelled { by: String },
     /// Nobody answered in time.
     TimedOut,
     /// The program went away.
@@ -143,14 +128,14 @@ pub enum AskpassCloseReason {
     MovedToTerminal,
 }
 
-fn hex(p: proto::PrincipalId) -> String {
-    p.0.iter().map(|b| format!("{b:02x}")).collect()
+fn hex(principal: proto::PrincipalId) -> String {
+    principal.0.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 impl From<proto::CloseReason> for AskpassCloseReason {
-    fn from(r: proto::CloseReason) -> Self {
+    fn from(close_reason: proto::CloseReason) -> Self {
         use proto::CloseReason as R;
-        match r {
+        match close_reason {
             R::Answered { by } => Self::Answered { by: hex(by) },
             R::Cancelled { by } => Self::Cancelled {
                 by: by.map(hex).unwrap_or_default(),
@@ -165,20 +150,18 @@ impl From<proto::CloseReason> for AskpassCloseReason {
 /// A password prompt a program printed itself, with echo off.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct DetectedPrompt {
-    /// The pane.
     pub pane_id: u64,
-    /// The prompt line.
     pub prompt: String,
     /// Output offset at which it was seen.
     pub at_seq: u64,
 }
 
 impl From<proto::DetectedPrompt> for DetectedPrompt {
-    fn from(d: proto::DetectedPrompt) -> Self {
+    fn from(detected_prompt: proto::DetectedPrompt) -> Self {
         Self {
-            pane_id: d.pane_id.0,
-            prompt: d.prompt,
-            at_seq: d.at_seq.0,
+            pane_id: detected_prompt.pane_id.0,
+            prompt: detected_prompt.prompt,
+            at_seq: detected_prompt.at_seq.0,
         }
     }
 }
@@ -187,39 +170,29 @@ impl From<proto::DetectedPrompt> for DetectedPrompt {
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum AskpassEvent {
     /// A program asks for a secret: show the secure prompt.
-    Prompt {
-        /// The prompt.
-        prompt: SecretPrompt,
-    },
+    Prompt { prompt: SecretPrompt },
     /// A prompt is over: close its sheet.
     Closed {
-        /// The prompt.
         id: u64,
-        /// Its pane.
         pane_id: u64,
-        /// Why.
         reason: AskpassCloseReason,
     },
     /// The pane shows a password prompt with echo off: offer "Enter password securely".
-    Detected {
-        /// The prompt.
-        prompt: DetectedPrompt,
-    },
+    Detected { prompt: DetectedPrompt },
     /// The detected prompt is gone.
-    DetectedGone {
-        /// The pane.
-        pane_id: u64,
-    },
+    DetectedGone { pane_id: u64 },
     /// The connection dropped: forget every prompt. Prompts still open come again with the
     /// same ids after reconnecting.
     Reset,
 }
 
 impl From<client_core::AskpassEvent> for AskpassEvent {
-    fn from(e: client_core::AskpassEvent) -> Self {
+    fn from(askpass_event: client_core::AskpassEvent) -> Self {
         use client_core::AskpassEvent as E;
-        match e {
-            E::Prompt(p) => Self::Prompt { prompt: p.into() },
+        match askpass_event {
+            E::Prompt(secret_prompt) => Self::Prompt {
+                prompt: secret_prompt.into(),
+            },
             E::PromptWhileGuestDrives { prompt, guest } => Self::Prompt {
                 prompt: driven(prompt, Some(guest)),
             },
@@ -232,7 +205,9 @@ impl From<client_core::AskpassEvent> for AskpassEvent {
                 pane_id: pane_id.0,
                 reason: reason.into(),
             },
-            E::Detected(d) => Self::Detected { prompt: d.into() },
+            E::Detected(detected) => Self::Detected {
+                prompt: detected.into(),
+            },
             E::DetectedGone { pane_id } => Self::DetectedGone { pane_id: pane_id.0 },
             E::Reset => Self::Reset,
         }
@@ -244,7 +219,6 @@ impl From<client_core::AskpassEvent> for AskpassEvent {
 /// Called on a runtime thread, in order, one at a time per client. Return quickly.
 #[uniffi::export(foreign)]
 pub trait AskpassListener: Send + Sync {
-    /// One event.
     fn on_askpass_event(&self, event: AskpassEvent);
 }
 
@@ -283,9 +257,9 @@ impl DaemonClient {
         self.inner
             .open_askpass()
             .into_iter()
-            .map(|p| {
-                let guest = self.inner.askpass_guest(p.id);
-                driven(p, guest)
+            .map(|prompt| {
+                let guest = self.inner.askpass_guest(prompt.id);
+                driven(prompt, guest)
             })
             .collect()
     }

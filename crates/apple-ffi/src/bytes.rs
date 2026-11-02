@@ -12,8 +12,8 @@ use uniffi::{FfiConverter, MetadataBuffer, metadata::codes};
 pub struct Bytes(pub Vec<u8>);
 
 impl From<Vec<u8>> for Bytes {
-    fn from(v: Vec<u8>) -> Self {
-        Self(v)
+    fn from(bytes: Vec<u8>) -> Self {
+        Self(bytes)
     }
 }
 
@@ -26,8 +26,8 @@ impl std::ops::Deref for Bytes {
 }
 
 impl From<Bytes> for Vec<u8> {
-    fn from(b: Bytes) -> Self {
-        b.0
+    fn from(bytes: Bytes) -> Self {
+        bytes.0
     }
 }
 

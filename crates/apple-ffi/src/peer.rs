@@ -1,3 +1,4 @@
+//! Live presence on [`DaemonClient`] (`proto::peer`): drafts being typed,
 //! viewports, following, idle and away.
 
 use client_core::proto;
@@ -10,19 +11,16 @@ use crate::mp::{Actor, MultiplayerError, PresenceState, Role, hex, roles_to_ffi,
 pub enum DeviceClass {
     /// Not said (older apps).
     Unknown,
-    /// iPhone.
     Phone,
-    /// iPad.
     Tablet,
-    /// Mac.
     Desktop,
     /// A command-line client.
     Terminal,
 }
 
 impl From<proto::DeviceClass> for DeviceClass {
-    fn from(d: proto::DeviceClass) -> Self {
-        match d {
+    fn from(device_class: proto::DeviceClass) -> Self {
+        match device_class {
             proto::DeviceClass::Unknown => Self::Unknown,
             proto::DeviceClass::Phone => Self::Phone,
             proto::DeviceClass::Tablet => Self::Tablet,
@@ -33,8 +31,8 @@ impl From<proto::DeviceClass> for DeviceClass {
 }
 
 impl From<DeviceClass> for proto::DeviceClass {
-    fn from(d: DeviceClass) -> Self {
-        match d {
+    fn from(device_class: DeviceClass) -> Self {
+        match device_class {
             DeviceClass::Unknown => Self::Unknown,
             DeviceClass::Phone => Self::Phone,
             DeviceClass::Tablet => Self::Tablet,
@@ -47,7 +45,6 @@ impl From<DeviceClass> for proto::DeviceClass {
 /// The rows of a pane on screen, counted from the live screen up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, uniffi::Record)]
 pub struct PeerViewport {
-    /// The pane.
     pub pane_id: u64,
     /// Rows scrolled back; 0 is the live screen.
     pub from_bottom: u32,
@@ -56,21 +53,21 @@ pub struct PeerViewport {
 }
 
 impl From<proto::PeerViewport> for PeerViewport {
-    fn from(v: proto::PeerViewport) -> Self {
+    fn from(peer_viewport: proto::PeerViewport) -> Self {
         Self {
-            pane_id: v.pane_id.0,
-            from_bottom: v.from_bottom,
-            rows: v.rows,
+            pane_id: peer_viewport.pane_id.0,
+            from_bottom: peer_viewport.from_bottom,
+            rows: peer_viewport.rows,
         }
     }
 }
 
 impl From<PeerViewport> for proto::PeerViewport {
-    fn from(v: PeerViewport) -> Self {
+    fn from(peer_viewport: PeerViewport) -> Self {
         Self {
-            pane_id: proto::PaneId(v.pane_id),
-            from_bottom: v.from_bottom,
-            rows: v.rows,
+            pane_id: proto::PaneId(peer_viewport.pane_id),
+            from_bottom: peer_viewport.from_bottom,
+            rows: peer_viewport.rows,
         }
     }
 }
@@ -87,8 +84,8 @@ pub enum DraftSource {
 }
 
 impl From<proto::DraftSource> for DraftSource {
-    fn from(s: proto::DraftSource) -> Self {
-        match s {
+    fn from(draft_source: proto::DraftSource) -> Self {
+        match draft_source {
             proto::DraftSource::LineEditor => Self::LineEditor,
             proto::DraftSource::Composer => Self::Composer,
             proto::DraftSource::Prompt => Self::Prompt,
@@ -97,8 +94,8 @@ impl From<proto::DraftSource> for DraftSource {
 }
 
 impl From<DraftSource> for proto::DraftSource {
-    fn from(s: DraftSource) -> Self {
-        match s {
+    fn from(draft_source: DraftSource) -> Self {
+        match draft_source {
             DraftSource::LineEditor => Self::LineEditor,
             DraftSource::Composer => Self::Composer,
             DraftSource::Prompt => Self::Prompt,
@@ -109,7 +106,6 @@ impl From<DraftSource> for proto::DraftSource {
 /// Text someone is composing for a pane.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, uniffi::Record)]
 pub struct Draft {
-    /// The pane.
     pub pane_id: u64,
     /// Where it is typed.
     pub source: DraftSource,
@@ -120,63 +116,56 @@ pub struct Draft {
 }
 
 impl From<proto::Draft> for Draft {
-    fn from(d: proto::Draft) -> Self {
+    fn from(draft: proto::Draft) -> Self {
         Self {
-            pane_id: d.pane_id.0,
-            source: d.source.into(),
-            text: d.text,
-            caret: d.caret,
+            pane_id: draft.pane_id.0,
+            source: draft.source.into(),
+            text: draft.text,
+            caret: draft.caret,
         }
     }
 }
 
-/// One connection's live presence.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct Peer {
     /// The connection (one device may hold several).
     pub peer: u64,
     /// The daemon's revision; newer replaces older.
     pub rev: u64,
-    /// Who.
     pub actor: Actor,
-    /// Display name.
     pub name: String,
-    /// Effective roles.
     pub roles: Vec<Role>,
-    /// The device kind.
     pub device: DeviceClass,
     /// Connected since, Unix ms.
     pub since_ms: u64,
     /// Active, idle or away.
     pub state: PresenceState,
-    /// Focused pane.
     pub focus: Option<u64>,
     /// What it sees of the focused pane.
     pub viewport: Option<PeerViewport>,
     /// The pane it is typing in right now.
     pub typing: Option<u64>,
-    /// Its draft.
     pub draft: Option<Draft>,
     /// The principal it follows (hex).
     pub following: Option<String>,
 }
 
 impl From<proto::Peer> for Peer {
-    fn from(p: proto::Peer) -> Self {
+    fn from(peer: proto::Peer) -> Self {
         Self {
-            peer: p.peer.0,
-            rev: p.rev,
-            actor: p.actor.into(),
-            name: p.name,
-            roles: roles_to_ffi(p.roles),
-            device: p.device.into(),
-            since_ms: p.since.0,
-            state: p.state.into(),
-            focus: p.focus.map(|f| f.0),
-            viewport: p.viewport.map(Into::into),
-            typing: p.typing.map(|t| t.0),
-            draft: p.draft.map(Into::into),
-            following: p.following.map(|f| hex(&f.0)),
+            peer: peer.peer.0,
+            rev: peer.rev,
+            actor: peer.actor.into(),
+            name: peer.name,
+            roles: roles_to_ffi(peer.roles),
+            device: peer.device.into(),
+            since_ms: peer.since.0,
+            state: peer.state.into(),
+            focus: peer.focus.map(|f| f.0),
+            viewport: peer.viewport.map(Into::into),
+            typing: peer.typing.map(|t| t.0),
+            draft: peer.draft.map(Into::into),
+            following: peer.following.map(|f| hex(&f.0)),
         }
     }
 }
@@ -230,7 +219,6 @@ impl DaemonClient {
         Ok(())
     }
 
-    /// This device's kind.
     pub fn set_device_class(&self, device: DeviceClass) {
         self.inner.set_device_class(device.into());
     }

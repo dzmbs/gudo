@@ -18,34 +18,19 @@ use crate::types::PaneSize;
 pub enum SshError {
     /// Socket-level failure (DNS, connect, read, write).
     #[error("{message}")]
-    Io {
-        /// What failed.
-        message: String,
-    },
-    /// The SSH protocol failed.
+    Io { message: String },
     #[error("ssh: {message}")]
-    Protocol {
-        /// Detail.
-        message: String,
-    },
+    Protocol { message: String },
     /// A step did not finish in time.
     #[error("timed out {message}")]
-    Timeout {
-        /// Which step.
-        message: String,
-    },
+    Timeout { message: String },
     /// The connection is gone.
     #[error("connection closed: {message}")]
-    Disconnected {
-        /// Why.
-        message: String,
-    },
+    Disconnected { message: String },
     /// Every authentication method was refused.
     #[error("authentication failed for {user}@{host} (tried: {tried}; server allows: {allowed})")]
     AuthFailed {
-        /// User.
         user: String,
-        /// Host.
         host: String,
         /// Methods tried, comma-separated.
         tried: String,
@@ -72,26 +57,15 @@ pub enum SshError {
     },
     /// A private key could not be decoded.
     #[error("bad private key: {message}")]
-    Key {
-        /// Why.
-        message: String,
-    },
+    Key { message: String },
     /// The private key is encrypted and no passphrase was given.
     #[error("the private key is encrypted; a passphrase is needed")]
     KeyEncrypted,
-    /// An external signer failed.
     #[error("signer: {message}")]
-    Signer {
-        /// Why.
-        message: String,
-    },
+    Signer { message: String },
     /// ssh_config or a destination could not be parsed.
     #[error("config: {message}")]
-    Config {
-        /// Why.
-        message: String,
-    },
-    /// A remote command failed.
+    Config { message: String },
     #[error("remote command failed ({status}): {stderr}")]
     Remote {
         /// Exit status or signal.
@@ -102,7 +76,6 @@ pub enum SshError {
     /// An upload arrived corrupted.
     #[error("upload checksum mismatch for {path}")]
     ChecksumMismatch {
-        /// Remote path.
         path: String,
         /// SHA-256 sent.
         expected: String,
@@ -111,10 +84,7 @@ pub enum SshError {
     },
     /// Bootstrap could not proceed.
     #[error("bootstrap: {message}")]
-    Bootstrap {
-        /// Why.
-        message: String,
-    },
+    Bootstrap { message: String },
     /// The session was closed.
     #[error("the session is closed")]
     Closed,
@@ -129,10 +99,10 @@ impl SshError {
 }
 
 impl From<ssh::SshError> for SshError {
-    fn from(e: ssh::SshError) -> Self {
+    fn from(ssh_error: ssh::SshError) -> Self {
         use ssh::SshError as E;
-        match e {
-            E::Io { .. } => Self::io(e.to_string()),
+        match ssh_error {
+            E::Io { .. } => Self::io(ssh_error.to_string()),
             E::Protocol(message) => Self::Protocol { message },
             E::Timeout(what) => Self::Timeout {
                 message: what.to_owned(),
@@ -179,19 +149,13 @@ impl From<ssh::SshError> for SshError {
     }
 }
 
-// ---------------------------------------------------------------------------------------------
-// Destinations and ~/.ssh/config
-// ---------------------------------------------------------------------------------------------
-
 /// One hop: where to connect and as whom.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct SshHostSpec {
     /// Host name or address.
     pub host: String,
-    /// Port.
     #[uniffi(default = 22)]
     pub port: u16,
-    /// User.
     pub user: String,
     /// Name host keys are stored under instead of `host` (`HostKeyAlias`).
     #[uniffi(default = None)]
@@ -199,23 +163,23 @@ pub struct SshHostSpec {
 }
 
 impl From<ssh::HostSpec> for SshHostSpec {
-    fn from(h: ssh::HostSpec) -> Self {
+    fn from(host_spec: ssh::HostSpec) -> Self {
         Self {
-            host: h.host,
-            port: h.port,
-            user: h.user,
-            host_key_alias: h.host_key_alias,
+            host: host_spec.host,
+            port: host_spec.port,
+            user: host_spec.user,
+            host_key_alias: host_spec.host_key_alias,
         }
     }
 }
 
 impl From<SshHostSpec> for ssh::HostSpec {
-    fn from(h: SshHostSpec) -> Self {
+    fn from(ssh_host_spec: SshHostSpec) -> Self {
         Self {
-            host: h.host,
-            port: h.port,
-            user: h.user,
-            host_key_alias: h.host_key_alias,
+            host: ssh_host_spec.host,
+            port: ssh_host_spec.port,
+            user: ssh_host_spec.user,
+            host_key_alias: ssh_host_spec.host_key_alias,
         }
     }
 }
@@ -226,24 +190,23 @@ pub struct SshTarget {
     /// Jump hosts, outermost first.
     #[uniffi(default = [])]
     pub jumps: Vec<SshHostSpec>,
-    /// The destination.
     pub host: SshHostSpec,
 }
 
 impl From<ssh::Target> for SshTarget {
-    fn from(t: ssh::Target) -> Self {
+    fn from(target: ssh::Target) -> Self {
         Self {
-            jumps: t.jumps.into_iter().map(Into::into).collect(),
-            host: t.host.into(),
+            jumps: target.jumps.into_iter().map(Into::into).collect(),
+            host: target.host.into(),
         }
     }
 }
 
 impl From<SshTarget> for ssh::Target {
-    fn from(t: SshTarget) -> Self {
+    fn from(ssh_target: SshTarget) -> Self {
         Self {
-            jumps: t.jumps.into_iter().map(Into::into).collect(),
-            host: t.host.into(),
+            jumps: ssh_target.jumps.into_iter().map(Into::into).collect(),
+            host: ssh_target.host.into(),
         }
     }
 }
@@ -266,20 +229,17 @@ pub struct SshDestination {
 /// [`SshError::Config`] if it is not a destination.
 #[uniffi::export]
 pub fn parse_ssh_destination(text: String) -> Result<SshDestination, SshError> {
-    let d: ssh::Destination = text.parse()?;
+    let destination: ssh::Destination = text.parse()?;
     Ok(SshDestination {
-        user: d.user,
-        host: d.host,
-        port: d.port,
+        user: destination.user,
+        host: destination.host,
+        port: destination.port,
     })
 }
 
-/// An environment variable.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct EnvVar {
-    /// Name.
     pub name: String,
-    /// Value.
     pub value: String,
 }
 
@@ -314,42 +274,46 @@ pub struct SshHostConfig {
     pub ignored: Vec<String>,
 }
 
-fn destination_text(d: &ssh::Destination) -> String {
-    let host = if d.host.contains(':') {
-        format!("[{}]", d.host)
+fn destination_text(destination: &ssh::Destination) -> String {
+    let host = if destination.host.contains(':') {
+        format!("[{}]", destination.host)
     } else {
-        d.host.clone()
+        destination.host.clone()
     };
-    let mut out = match &d.user {
+    let mut out = match &destination.user {
         Some(user) => format!("{user}@{host}"),
         None => host,
     };
-    if let Some(port) = d.port {
+    if let Some(port) = destination.port {
         out.push_str(&format!(":{port}"));
     }
     out
 }
 
 impl From<ssh::HostConfig> for SshHostConfig {
-    fn from(c: ssh::HostConfig) -> Self {
+    fn from(host_config: ssh::HostConfig) -> Self {
         Self {
-            proxy_jump: c.proxy_jump.iter().map(destination_text).collect(),
-            alias: c.alias,
-            host_name: c.host_name,
-            user: c.user,
-            port: c.port,
-            identity_files: c.identity_files,
-            server_alive_interval: c.server_alive_interval,
-            server_alive_count_max: c.server_alive_count_max,
-            connect_timeout: c.connect_timeout,
-            host_key_alias: c.host_key_alias,
-            forward_agent: c.forward_agent,
-            set_env: c
+            proxy_jump: host_config
+                .proxy_jump
+                .iter()
+                .map(destination_text)
+                .collect(),
+            alias: host_config.alias,
+            host_name: host_config.host_name,
+            user: host_config.user,
+            port: host_config.port,
+            identity_files: host_config.identity_files,
+            server_alive_interval: host_config.server_alive_interval,
+            server_alive_count_max: host_config.server_alive_count_max,
+            connect_timeout: host_config.connect_timeout,
+            host_key_alias: host_config.host_key_alias,
+            forward_agent: host_config.forward_agent,
+            set_env: host_config
                 .set_env
                 .into_iter()
                 .map(|(name, value)| EnvVar { name, value })
                 .collect(),
-            ignored: c.ignored,
+            ignored: host_config.ignored,
         }
     }
 }
@@ -410,10 +374,6 @@ impl SshConfigFile {
         self.inner.warnings().to_vec()
     }
 }
-
-// ---------------------------------------------------------------------------------------------
-// Keys
-// ---------------------------------------------------------------------------------------------
 
 /// A new key pair for the Keychain. `Debug` leaves the private key out.
 #[derive(Clone, uniffi::Record)]
@@ -500,15 +460,14 @@ pub enum SignerError {
     Cancelled,
     /// Anything else (key missing, Secure Enclave error).
     #[error("{message}")]
-    Failed {
-        /// Why.
-        message: String,
-    },
+    Failed { message: String },
 }
 
 impl From<uniffi::UnexpectedUniFFICallbackError> for SignerError {
-    fn from(e: uniffi::UnexpectedUniFFICallbackError) -> Self {
-        Self::Failed { message: e.reason }
+    fn from(error: uniffi::UnexpectedUniFFICallbackError) -> Self {
+        Self::Failed {
+            message: error.reason,
+        }
     }
 }
 
@@ -542,7 +501,6 @@ impl ssh::ExternalSigner for SignerAdapter {
     }
 }
 
-/// One keyboard-interactive prompt.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct InteractivePrompt {
     /// The prompt, e.g. `Verification code: `.
@@ -575,9 +533,9 @@ impl ssh::InteractiveResponder for ResponderAdapter {
     ) -> Option<Vec<String>> {
         let prompts = prompts
             .into_iter()
-            .map(|p| InteractivePrompt {
-                prompt: p.prompt,
-                echo: p.echo,
+            .map(|prompt| InteractivePrompt {
+                prompt: prompt.prompt,
+                echo: prompt.echo,
             })
             .collect();
         self.0.respond(name, instructions, prompts)
@@ -588,13 +546,9 @@ impl ssh::InteractiveResponder for ResponderAdapter {
 #[derive(Clone, uniffi::Enum)]
 pub enum SshAuth {
     /// A password (then keyboard-interactive answering password prompts with it).
-    Password {
-        /// The password.
-        password: String,
-    },
+    Password { password: String },
     /// A private key file (desktop; on iOS keys live in the Keychain, use `KeyData`).
     KeyFile {
-        /// Path.
         path: String,
         /// Passphrase if encrypted.
         passphrase: Option<String>,
@@ -607,15 +561,9 @@ pub enum SshAuth {
         passphrase: Option<String>,
     },
     /// A key held by the app (Secure Enclave).
-    Signer {
-        /// The signer.
-        signer: Arc<dyn SshSigner>,
-    },
+    Signer { signer: Arc<dyn SshSigner> },
     /// Every identity of an ssh-agent (`nil`: `$SSH_AUTH_SOCK`). macOS only.
-    Agent {
-        /// Socket path.
-        socket_path: Option<String>,
-    },
+    Agent { socket_path: Option<String> },
     /// Keyboard-interactive with arbitrary prompts.
     Interactive {
         /// Answers the prompts.
@@ -646,10 +594,6 @@ fn credentials(auth: Vec<SshAuth>) -> Result<ssh::Credentials, SshError> {
     Ok(creds)
 }
 
-// ---------------------------------------------------------------------------------------------
-// Host keys
-// ---------------------------------------------------------------------------------------------
-
 /// A host key as shown to the user.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct HostKeyInfo {
@@ -664,12 +608,12 @@ pub struct HostKeyInfo {
 }
 
 impl From<ssh::HostKeyInfo> for HostKeyInfo {
-    fn from(k: ssh::HostKeyInfo) -> Self {
+    fn from(host_key_info: ssh::HostKeyInfo) -> Self {
         Self {
-            host: k.host,
-            algorithm: k.algorithm,
-            fingerprint: k.fingerprint,
-            public_key: k.public_key,
+            host: host_key_info.host,
+            algorithm: host_key_info.algorithm,
+            fingerprint: host_key_info.fingerprint,
+            public_key: host_key_info.public_key,
         }
     }
 }
@@ -709,15 +653,12 @@ pub enum HostKeyPolicy {
     /// Record and continue (`accept-new`).
     AcceptNew,
     /// Ask the delegate (new hosts and changed keys).
-    Ask {
-        /// The delegate.
-        delegate: Arc<dyn HostKeyDelegate>,
-    },
+    Ask { delegate: Arc<dyn HostKeyDelegate> },
 }
 
 impl From<HostKeyPolicy> for ssh::HostKeyPolicy {
-    fn from(p: HostKeyPolicy) -> Self {
-        match p {
+    fn from(host_key_policy: HostKeyPolicy) -> Self {
+        match host_key_policy {
             HostKeyPolicy::Strict => Self::Strict,
             HostKeyPolicy::AcceptNew => Self::AcceptNew,
             HostKeyPolicy::Ask { delegate } => Self::Ask(Arc::new(PromptAdapter(delegate))),
@@ -841,14 +782,10 @@ impl KnownHostsStore {
     ///
     /// Never for an in-memory store.
     pub fn remove(&self, host: String, port: u16) -> Result<u32, SshError> {
-        let n = self.inner.remove(&host, port)?;
-        Ok(u32::try_from(n).unwrap_or(u32::MAX))
+        let removed = self.inner.remove(&host, port)?;
+        Ok(u32::try_from(removed).unwrap_or(u32::MAX))
     }
 }
-
-// ---------------------------------------------------------------------------------------------
-// Sessions
-// ---------------------------------------------------------------------------------------------
 
 /// Connection tuning (docs/SSH.md §2). Every field defaults to the documented value, so
 /// `SshOptions()` in Swift is the normal choice.
@@ -883,16 +820,16 @@ pub struct SshOptions {
 
 impl Default for SshOptions {
     fn default() -> Self {
-        let ms = |d: Duration| u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
-        let k = ssh::Keepalive::default();
-        let t = ssh::Timeouts::default();
+        let millis = |d: Duration| u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
+        let keepalive = ssh::Keepalive::default();
+        let timeouts = ssh::Timeouts::default();
         Self {
-            keepalive_interval_ms: ms(k.interval),
-            keepalive_count_max: k.count_max,
-            probe_timeout_ms: ms(k.probe_timeout),
-            connect_timeout_ms: ms(t.connect),
-            handshake_timeout_ms: ms(t.handshake),
-            auth_timeout_ms: ms(t.auth),
+            keepalive_interval_ms: millis(keepalive.interval),
+            keepalive_count_max: keepalive.count_max,
+            probe_timeout_ms: millis(keepalive.probe_timeout),
+            connect_timeout_ms: millis(timeouts.connect),
+            handshake_timeout_ms: millis(timeouts.handshake),
+            auth_timeout_ms: millis(timeouts.auth),
             compression: false,
             background_attempts: ssh::ReconnectPolicy::default().background_attempts,
         }
@@ -935,17 +872,15 @@ pub enum SshConnectionState {
     },
     /// Needs the user (credentials, host key); not retried until `reconnect_now`.
     NeedsAttention {
-        /// The error.
         error: SshError,
     },
-    /// Closed.
     Closed,
 }
 
 impl From<ssh::ConnectionState> for SshConnectionState {
-    fn from(s: ssh::ConnectionState) -> Self {
+    fn from(connection_state: ssh::ConnectionState) -> Self {
         use ssh::ConnectionState as S;
-        match s {
+        match connection_state {
             S::Connecting { attempt } => Self::Connecting { attempt },
             S::Connected { generation } => Self::Connected { generation },
             S::Reconnecting {
@@ -970,7 +905,6 @@ impl From<ssh::ConnectionState> for SshConnectionState {
 /// thread, in order; return quickly.
 #[uniffi::export(foreign)]
 pub trait SshSessionListener: Send + Sync {
-    /// The new state.
     fn on_state(&self, state: SshConnectionState);
 }
 
@@ -982,14 +916,10 @@ impl ssh::SessionListener for SessionAdapter {
     }
 }
 
-/// A command's result.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct SshExecOutput {
-    /// Standard output.
     pub stdout: Bytes,
-    /// Standard error.
     pub stderr: Bytes,
-    /// Exit status.
     pub exit_status: Option<u32>,
     /// Signal name, if killed.
     pub exit_signal: Option<String>,
@@ -1000,11 +930,7 @@ pub struct SshExecOutput {
 #[derive(Debug, Clone, uniffi::Enum)]
 pub enum HostdBinary {
     /// A file (e.g. in the app bundle).
-    File {
-        /// Path.
-        path: String,
-    },
-    /// The bytes.
+    File { path: String },
     Data {
         /// The binary or its gzip.
         data: Bytes,
@@ -1053,14 +979,12 @@ pub struct HostdBinaries {
     pub macos_x86_64: Option<HostdBinary>,
 }
 
-/// Bootstrap progress.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum BootstrapStep {
     /// Detecting the platform and any existing install.
     Probing,
     /// Uploading (`size` bytes of binary, `sent` on the wire so far).
     Uploading {
-        /// Binary size.
         size: u64,
         /// Compressed bytes sent.
         sent: u64,
@@ -1074,7 +998,6 @@ pub enum BootstrapStep {
 /// Receives [`BootstrapStep`]s; implemented in Swift. Called on a Rust runtime thread.
 #[uniffi::export(foreign)]
 pub trait BootstrapListener: Send + Sync {
-    /// A step started.
     fn on_step(&self, step: BootstrapStep);
 }
 
@@ -1091,16 +1014,11 @@ impl ssh::BootstrapListener for BootstrapAdapter {
     }
 }
 
-/// An OS and CPU.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum HostPlatform {
-    /// Linux arm64.
     LinuxAarch64,
-    /// Linux x86-64.
     LinuxX86_64,
-    /// macOS Apple silicon.
     MacosAarch64,
-    /// macOS Intel.
     MacosX86_64,
 }
 
@@ -1131,7 +1049,6 @@ pub enum ServiceMode {
 /// The outcome of [`SshSession::bootstrap`].
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct BootstrapReport {
-    /// The host's platform.
     pub platform: HostPlatform,
     /// What happened to the binary.
     pub action: InstallAction,
@@ -1150,30 +1067,30 @@ pub struct BootstrapReport {
 }
 
 impl From<ssh::BootstrapReport> for BootstrapReport {
-    fn from(r: ssh::BootstrapReport) -> Self {
+    fn from(bootstrap_report: ssh::BootstrapReport) -> Self {
         Self {
-            platform: match r.platform {
+            platform: match bootstrap_report.platform {
                 ssh::HostPlatform::LinuxAarch64 => HostPlatform::LinuxAarch64,
                 ssh::HostPlatform::LinuxX86_64 => HostPlatform::LinuxX86_64,
                 ssh::HostPlatform::MacosAarch64 => HostPlatform::MacosAarch64,
                 ssh::HostPlatform::MacosX86_64 => HostPlatform::MacosX86_64,
             },
-            action: match r.action {
+            action: match bootstrap_report.action {
                 ssh::InstallAction::Installed => InstallAction::Installed,
                 ssh::InstallAction::Upgraded => InstallAction::Upgraded,
                 ssh::InstallAction::Reused => InstallAction::Reused,
                 ssh::InstallAction::KeptNewer => InstallAction::KeptNewer,
             },
-            service: match r.service {
+            service: match bootstrap_report.service {
                 ssh::ServiceMode::Service => ServiceMode::Service,
                 ssh::ServiceMode::Detached => ServiceMode::Detached,
                 ssh::ServiceMode::AlreadyRunning => ServiceMode::AlreadyRunning,
             },
-            install_path: r.install_path,
-            sha256: r.sha256,
-            ticket: r.ticket,
-            daemon_id: r.daemon_id,
-            notes: r.notes,
+            install_path: bootstrap_report.install_path,
+            sha256: bootstrap_report.sha256,
+            ticket: bootstrap_report.ticket,
+            daemon_id: bootstrap_report.daemon_id,
+            notes: bootstrap_report.notes,
         }
     }
 }
@@ -1183,7 +1100,6 @@ impl From<ssh::BootstrapReport> for BootstrapReport {
 pub struct SshPaneOptions {
     /// The id its events carry; pick one that cannot clash with daemon panes.
     pub pane_id: u64,
-    /// Initial size.
     pub size: PaneSize,
     /// `TERM` on the remote side.
     #[uniffi(default = "xterm-256color")]
@@ -1255,12 +1171,10 @@ impl SshSession {
         Ok(Arc::new(Self { inner }))
     }
 
-    /// The route.
     pub fn target(&self) -> SshTarget {
         self.inner.target().clone().into()
     }
 
-    /// The current state.
     pub fn state(&self) -> SshConnectionState {
         self.inner.state().into()
     }
@@ -1377,7 +1291,11 @@ impl SshSession {
         let mut pane =
             client_core::SshPaneOptions::new(PaneId(options.pane_id), options.size.into());
         pane.term = options.term;
-        pane.env = options.env.into_iter().map(|v| (v.name, v.value)).collect();
+        pane.env = options
+            .env
+            .into_iter()
+            .map(|var| (var.name, var.value))
+            .collect();
         pane.command = options.command;
         pane.tmux_session = options.tmux_session;
         let _guard = runtime().enter();

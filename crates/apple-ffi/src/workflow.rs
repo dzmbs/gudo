@@ -9,24 +9,20 @@ use client_core::proto;
 use crate::client::DaemonClient;
 use crate::ws_types::WorkspaceError;
 
-/// One workflow.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct Workflow {
     /// Stable while its file stays put (the path, `#n` for a file holding a list).
     pub id: String,
-    /// The title.
     pub name: String,
     /// The command line with `{{name}}` placeholders.
     pub command: String,
     /// What it does.
     pub description: Option<String>,
-    /// Tags.
     pub tags: Vec<String>,
     /// One per placeholder, in order.
     pub arguments: Vec<WorkflowArgument>,
     /// Shells it is written for; empty for any.
     pub shells: Vec<String>,
-    /// Who wrote it.
     pub author: Option<String>,
     /// Where it came from.
     pub source_url: Option<String>,
@@ -36,10 +32,8 @@ pub struct Workflow {
     pub path: String,
 }
 
-/// A placeholder's argument.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct WorkflowArgument {
-    /// The placeholder's name.
     pub name: String,
     /// What to fill in.
     pub description: Option<String>,
@@ -49,7 +43,6 @@ pub struct WorkflowArgument {
     pub raw: bool,
 }
 
-/// Where a workflow lives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, uniffi::Enum)]
 pub enum WorkflowScope {
     /// `~/.config/<product>/workflows`.
@@ -73,12 +66,9 @@ pub struct WorkflowList {
     pub problems: Vec<WorkflowProblem>,
 }
 
-/// A skipped workflow file.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct WorkflowProblem {
-    /// The file.
     pub path: String,
-    /// Why.
     pub message: String,
 }
 
@@ -91,26 +81,23 @@ pub struct WorkflowDraft {
     pub command: String,
     /// What it does.
     pub description: Option<String>,
-    /// Tags.
     pub tags: Vec<String>,
     /// Arguments (placeholders not listed get one on reading).
     pub arguments: Vec<WorkflowArgument>,
-    /// Shells.
     pub shells: Vec<String>,
 }
 
 /// A value typed into the argument form.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct WorkflowValue {
-    /// The argument.
     pub name: String,
     /// What was typed.
     pub value: String,
 }
 
 impl From<proto::WorkflowScope> for WorkflowScope {
-    fn from(s: proto::WorkflowScope) -> Self {
-        match s {
+    fn from(workflow_scope: proto::WorkflowScope) -> Self {
+        match workflow_scope {
             proto::WorkflowScope::Global => Self::Global,
             proto::WorkflowScope::Repo => Self::Repo,
         }
@@ -118,8 +105,8 @@ impl From<proto::WorkflowScope> for WorkflowScope {
 }
 
 impl From<WorkflowScope> for proto::WorkflowScope {
-    fn from(s: WorkflowScope) -> Self {
-        match s {
+    fn from(workflow_scope: WorkflowScope) -> Self {
+        match workflow_scope {
             WorkflowScope::Global => Self::Global,
             WorkflowScope::Repo => Self::Repo,
         }
@@ -127,58 +114,62 @@ impl From<WorkflowScope> for proto::WorkflowScope {
 }
 
 impl From<proto::WorkflowArgument> for WorkflowArgument {
-    fn from(a: proto::WorkflowArgument) -> Self {
+    fn from(workflow_argument: proto::WorkflowArgument) -> Self {
         Self {
-            name: a.name,
-            description: a.description,
-            default_value: a.default_value,
-            raw: a.raw,
+            name: workflow_argument.name,
+            description: workflow_argument.description,
+            default_value: workflow_argument.default_value,
+            raw: workflow_argument.raw,
         }
     }
 }
 
 impl From<WorkflowArgument> for proto::WorkflowArgument {
-    fn from(a: WorkflowArgument) -> Self {
+    fn from(workflow_argument: WorkflowArgument) -> Self {
         Self {
-            name: a.name,
-            description: a.description,
-            default_value: a.default_value,
-            raw: a.raw,
+            name: workflow_argument.name,
+            description: workflow_argument.description,
+            default_value: workflow_argument.default_value,
+            raw: workflow_argument.raw,
         }
     }
 }
 
 impl From<proto::Workflow> for Workflow {
-    fn from(w: proto::Workflow) -> Self {
+    fn from(workflow: proto::Workflow) -> Self {
         Self {
-            id: w.id,
-            name: w.name,
-            command: w.command,
-            description: w.description,
-            tags: w.tags,
-            arguments: w.arguments.into_iter().map(Into::into).collect(),
-            shells: w.shells,
-            author: w.author,
-            source_url: w.source_url,
-            scope: w.scope.into(),
-            path: w.path,
+            id: workflow.id,
+            name: workflow.name,
+            command: workflow.command,
+            description: workflow.description,
+            tags: workflow.tags,
+            arguments: workflow.arguments.into_iter().map(Into::into).collect(),
+            shells: workflow.shells,
+            author: workflow.author,
+            source_url: workflow.source_url,
+            scope: workflow.scope.into(),
+            path: workflow.path,
         }
     }
 }
 
 impl From<proto::WorkflowList> for WorkflowList {
-    fn from(l: proto::WorkflowList) -> Self {
+    fn from(workflow_list: proto::WorkflowList) -> Self {
         Self {
-            rev: l.rev,
-            repo: l.repo,
-            repo_name: l.repo_name,
-            workflows: l.workflows.into_iter().map(Into::into).collect(),
-            problems: l
+            rev: workflow_list.rev,
+            repo: workflow_list.repo,
+            repo_name: workflow_list.repo_name,
+            workflows: workflow_list
+                .workflows
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            problems: workflow_list
                 .problems
                 .into_iter()
-                .map(|p| WorkflowProblem {
-                    path: p.path,
-                    message: p.message,
+                .map(|problem| WorkflowProblem {
+                    path: problem.path,
+                    message: problem.message,
                 })
                 .collect(),
         }
@@ -186,14 +177,18 @@ impl From<proto::WorkflowList> for WorkflowList {
 }
 
 impl From<WorkflowDraft> for proto::WorkflowDraft {
-    fn from(d: WorkflowDraft) -> Self {
+    fn from(workflow_draft: WorkflowDraft) -> Self {
         Self {
-            name: d.name,
-            command: d.command,
-            description: d.description,
-            tags: d.tags,
-            arguments: d.arguments.into_iter().map(Into::into).collect(),
-            shells: d.shells,
+            name: workflow_draft.name,
+            command: workflow_draft.command,
+            description: workflow_draft.description,
+            tags: workflow_draft.tags,
+            arguments: workflow_draft
+                .arguments
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            shells: workflow_draft.shells,
         }
     }
 }
@@ -210,7 +205,7 @@ pub fn workflow_render(
     let arguments: Vec<proto::WorkflowArgument> = arguments.into_iter().map(Into::into).collect();
     let values: Vec<(&str, &str)> = values
         .iter()
-        .map(|v| (v.name.as_str(), v.value.as_str()))
+        .map(|var| (var.name.as_str(), var.value.as_str()))
         .collect();
     proto::render(&command, &arguments, &values)
 }
@@ -236,7 +231,7 @@ impl DaemonClient {
         &self,
         pane_id: Option<u64>,
     ) -> Result<WorkflowList, WorkspaceError> {
-        self.ws_call(|c| async move { c.workflow_list(pane_id.map(proto::PaneId)).await })
+        self.ws_call(|client| async move { client.workflow_list(pane_id.map(proto::PaneId)).await })
             .await
     }
 
@@ -258,7 +253,7 @@ impl DaemonClient {
             pane_id: pane_id.map(proto::PaneId),
             workflow: workflow.into(),
         };
-        self.ws_call(|c| async move { c.workflow_save(save).await })
+        self.ws_call(|client| async move { client.workflow_save(save).await })
             .await
     }
 }

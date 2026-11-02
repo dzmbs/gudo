@@ -20,19 +20,13 @@ pub enum ApprovalError {
     NotFound,
     /// The connection's roles or scope do not allow it.
     #[error("not allowed: {message}")]
-    Forbidden {
-        /// Why.
-        message: String,
-    },
+    Forbidden { message: String },
     /// The agent cannot take an edited request.
     #[error("this agent cannot take an edited request")]
     NotEditable,
     /// The rule is wider or longer than the daemon allows, or the edit is empty.
     #[error("{message}")]
-    Invalid {
-        /// Why.
-        message: String,
-    },
+    Invalid { message: String },
     /// Someone else answered first.
     #[error("someone else answered first")]
     AlreadyDecided,
@@ -42,9 +36,9 @@ pub enum ApprovalError {
 }
 
 impl From<proto::ApprovalError> for ApprovalError {
-    fn from(e: proto::ApprovalError) -> Self {
+    fn from(approval_error: proto::ApprovalError) -> Self {
         use proto::ApprovalError as E;
-        match e {
+        match approval_error {
             E::NotFound => Self::NotFound,
             E::Forbidden(message) => Self::Forbidden { message },
             E::NotEditable => Self::NotEditable,
@@ -65,19 +59,19 @@ pub struct ApprovalRuleMatch {
 }
 
 impl From<proto::RuleMatch> for ApprovalRuleMatch {
-    fn from(m: proto::RuleMatch) -> Self {
+    fn from(rule_match: proto::RuleMatch) -> Self {
         Self {
-            tool: m.tool,
-            prefix: m.prefix,
+            tool: rule_match.tool,
+            prefix: rule_match.prefix,
         }
     }
 }
 
 impl From<ApprovalRuleMatch> for proto::RuleMatch {
-    fn from(m: ApprovalRuleMatch) -> Self {
+    fn from(approval_rule_match: ApprovalRuleMatch) -> Self {
         Self {
-            tool: m.tool,
-            prefix: m.prefix,
+            tool: approval_rule_match.tool,
+            prefix: approval_rule_match.prefix,
         }
     }
 }
@@ -85,7 +79,6 @@ impl From<ApprovalRuleMatch> for proto::RuleMatch {
 /// What may be done with the request a pane is blocked on, beyond approve and deny.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct ApprovalInfo {
-    /// The pane.
     pub pane_id: u64,
     /// The request (compare with the pane's blocked request: this may be stale).
     pub request_id: u64,
@@ -98,13 +91,13 @@ pub struct ApprovalInfo {
 }
 
 impl From<proto::ApprovalInfo> for ApprovalInfo {
-    fn from(i: proto::ApprovalInfo) -> Self {
+    fn from(approval_info: proto::ApprovalInfo) -> Self {
         Self {
-            pane_id: i.pane_id.0,
-            request_id: i.request_id.0,
-            tool: i.tool,
-            editable_input: i.input,
-            like: i.like.map(Into::into),
+            pane_id: approval_info.pane_id.0,
+            request_id: approval_info.request_id.0,
+            tool: approval_info.tool,
+            editable_input: approval_info.input,
+            like: approval_info.like.map(Into::into),
         }
     }
 }
@@ -114,7 +107,6 @@ impl From<proto::ApprovalInfo> for ApprovalInfo {
 pub struct AutoApproveRule {
     /// The rule (32 hex digits), for revoking.
     pub id: String,
-    /// The agent's pane.
     pub pane_id: u64,
     /// What it approves.
     pub matcher: ApprovalRuleMatch,
@@ -146,31 +138,26 @@ fn rule_id(hex: &str) -> Option<proto::RuleId> {
 }
 
 impl From<proto::ActiveRule> for AutoApproveRule {
-    fn from(r: proto::ActiveRule) -> Self {
+    fn from(active_rule: proto::ActiveRule) -> Self {
         Self {
-            id: hex(&r.rule.rule_id.0),
-            pane_id: r.rule.pane_id.0,
-            matcher: r.rule.matcher.into(),
-            expires_at_ms: r.rule.expires_at.0,
-            max_turns: r.rule.max_turns,
-            turns_used: r.turns_used,
-            uses: r.uses,
-            granted_by: r.granted_by,
+            id: hex(&active_rule.rule.rule_id.0),
+            pane_id: active_rule.rule.pane_id.0,
+            matcher: active_rule.rule.matcher.into(),
+            expires_at_ms: active_rule.rule.expires_at.0,
+            max_turns: active_rule.rule.max_turns,
+            turns_used: active_rule.turns_used,
+            uses: active_rule.uses,
+            granted_by: active_rule.granted_by,
         }
     }
 }
 
-/// A change in approvals.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum ApprovalEvent {
     /// A pane is blocked on a request: what may be done with it.
-    Request {
-        /// The extras.
-        info: ApprovalInfo,
-    },
+    Request { info: ApprovalInfo },
     /// The rules in force on a pane (empty when none are left).
     Rules {
-        /// The pane.
         pane_id: u64,
         /// Its rules, oldest first.
         rules: Vec<AutoApproveRule>,
@@ -178,21 +165,15 @@ pub enum ApprovalEvent {
     /// The connection dropped: forget everything; the daemon says it again on reconnect.
     Reset,
     /// An agent asks to drive one of the user's panes (owner devices only).
-    DriveOpened {
-        /// The request.
-        ask: DriveAsk,
-    },
+    DriveOpened { ask: DriveAsk },
     /// A drive request was answered, expired or withdrawn.
-    DriveClosed {
-        /// The request.
-        request_id: u64,
-    },
+    DriveClosed { request_id: u64 },
 }
 
 impl From<client_core::ApprovalEvent> for ApprovalEvent {
-    fn from(e: client_core::ApprovalEvent) -> Self {
+    fn from(approval_event: client_core::ApprovalEvent) -> Self {
         use client_core::ApprovalEvent as E;
-        match e {
+        match approval_event {
             E::Request(info) => Self::Request { info: info.into() },
             E::Rules { pane_id, rules } => Self::Rules {
                 pane_id: pane_id.0,
@@ -252,7 +233,6 @@ pub enum DriveKind {
 pub struct DriveOption {
     /// The option id for `decide`.
     pub id: u32,
-    /// Its label.
     pub label: String,
 }
 
@@ -287,7 +267,6 @@ impl From<proto::DriveAsk> for DriveAsk {
 /// Called on a runtime thread, in order, one at a time per client. Return quickly.
 #[uniffi::export(foreign)]
 pub trait ApprovalListener: Send + Sync {
-    /// One event.
     fn on_approval_event(&self, event: ApprovalEvent);
 }
 
@@ -420,8 +399,8 @@ mod tests {
 
     #[test]
     fn like_this_is_the_daemons_rule() {
-        let m = approval_like_this("Bash".into(), "cargo test -p x".into()).unwrap();
-        assert_eq!(m.prefix, "cargo test");
+        let rule_match = approval_like_this("Bash".into(), "cargo test -p x".into()).unwrap();
+        assert_eq!(rule_match.prefix, "cargo test");
         assert_eq!(approval_like_this("Bash".into(), "a; b".into()), None);
     }
 }

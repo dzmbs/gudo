@@ -12,7 +12,6 @@ use crate::workspace::{TransferProgress, progress_adapter};
 /// What a daemon said about itself (`ClientEvent::DaemonInfo`).
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct DaemonInfo {
-    /// Semantic version.
     pub version: String,
     /// Commit id (with `-dirty`), or `dev`.
     pub build: String,
@@ -34,6 +33,7 @@ pub struct DaemonInfo {
     pub arch: String,
     /// It answers `usage_watch` (agent plan usage).
     pub agent_usage: bool,
+    /// Knock invites, scrollback since joining, approval rules.
     #[uniffi(default = false)]
     pub multiplayer2: bool,
     /// It moves panes between tabs and merges tabs (`LayoutOp::BreakPane` …).
@@ -58,26 +58,38 @@ pub struct DaemonInfo {
 }
 
 impl From<proto::DaemonInfo> for DaemonInfo {
-    fn from(i: proto::DaemonInfo) -> Self {
+    fn from(daemon_info: proto::DaemonInfo) -> Self {
         Self {
-            version: i.version,
-            build: i.build,
-            built_unix: i.built_unix,
-            protocol: i.protocol,
-            min_client_protocol: i.min_client_protocol,
-            self_upgrade: i.features.contains(proto::DaemonFeatures::SELF_UPGRADE),
-            hostname: i.hostname,
-            os: i.os,
-            os_name: i.os_name,
-            arch: i.arch,
-            agent_usage: i.features.contains(proto::DaemonFeatures::AGENT_USAGE),
-            multiplayer2: i.features.contains(proto::DaemonFeatures::MP2),
-            pane_moves: i.features.contains(proto::DaemonFeatures::PANE_MOVES),
-            projects: i.features.contains(proto::DaemonFeatures::PROJECTS),
-            floats: i.features.contains(proto::DaemonFeatures::FLOATS),
-            agent_mcp: i.features.contains(proto::DaemonFeatures::AGENT_MCP),
-            reopen: i.features.contains(proto::DaemonFeatures::REOPEN),
-            accounts: i.features.contains(proto::DaemonFeatures::ACCOUNTS),
+            version: daemon_info.version,
+            build: daemon_info.build,
+            built_unix: daemon_info.built_unix,
+            protocol: daemon_info.protocol,
+            min_client_protocol: daemon_info.min_client_protocol,
+            self_upgrade: daemon_info
+                .features
+                .contains(proto::DaemonFeatures::SELF_UPGRADE),
+            hostname: daemon_info.hostname,
+            os: daemon_info.os,
+            os_name: daemon_info.os_name,
+            arch: daemon_info.arch,
+            agent_usage: daemon_info
+                .features
+                .contains(proto::DaemonFeatures::AGENT_USAGE),
+            multiplayer2: daemon_info.features.contains(proto::DaemonFeatures::MP2),
+            pane_moves: daemon_info
+                .features
+                .contains(proto::DaemonFeatures::PANE_MOVES),
+            projects: daemon_info
+                .features
+                .contains(proto::DaemonFeatures::PROJECTS),
+            floats: daemon_info.features.contains(proto::DaemonFeatures::FLOATS),
+            agent_mcp: daemon_info
+                .features
+                .contains(proto::DaemonFeatures::AGENT_MCP),
+            reopen: daemon_info.features.contains(proto::DaemonFeatures::REOPEN),
+            accounts: daemon_info
+                .features
+                .contains(proto::DaemonFeatures::ACCOUNTS),
         }
     }
 }
@@ -114,8 +126,8 @@ pub enum UpgradeFailureCode {
 }
 
 impl From<proto::UpgradeFailure> for UpgradeFailureCode {
-    fn from(f: proto::UpgradeFailure) -> Self {
-        match f {
+    fn from(upgrade_failure: proto::UpgradeFailure) -> Self {
+        match upgrade_failure {
             proto::UpgradeFailure::Forbidden => Self::Forbidden,
             proto::UpgradeFailure::Unsupported => Self::Unsupported,
             proto::UpgradeFailure::Busy => Self::Busy,
@@ -135,26 +147,19 @@ pub enum UpgradeError {
     Daemon {
         /// Why, as a code.
         code: UpgradeFailureCode,
-        /// Why, in words.
         message: String,
     },
     /// The build could not be read or decoded on this device.
     #[error("{message}")]
-    Local {
-        /// Why.
-        message: String,
-    },
+    Local { message: String },
     /// The connection failed; the host may or may not have the new build.
     #[error("{message}")]
-    Connection {
-        /// Why.
-        message: String,
-    },
+    Connection { message: String },
 }
 
 impl From<client_core::UpgradeError> for UpgradeError {
-    fn from(e: client_core::UpgradeError) -> Self {
-        match e {
+    fn from(upgrade_error: client_core::UpgradeError) -> Self {
+        match upgrade_error {
             client_core::UpgradeError::Daemon { code, message } => Self::Daemon {
                 code: code.into(),
                 message,

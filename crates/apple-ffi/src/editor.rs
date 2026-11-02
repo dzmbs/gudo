@@ -1,5 +1,6 @@
 //! The editor on [`DaemonClient`] (docs/DAEMON.md §5.3) and desktop VS Code links.
 //!
+//! **Default path, never a sign-in**: [`DaemonClient::open_editor`]
 //! makes sure the host has Microsoft's `code` CLI (installing it from Microsoft's update
 //! service only with the user's licence acceptance from the app), starts `code serve-web` on
 //! the host's `127.0.0.1` with a random connection token, forwards a local port to it over
@@ -48,8 +49,8 @@ fn local_url(local_port: u16, url_path: &str) -> String {
     format!("http://localhost:{local_port}{url_path}")
 }
 
-fn error_message(e: &WorkspaceError) -> String {
-    match e {
+fn error_message(error: &WorkspaceError) -> String {
+    match error {
         WorkspaceError::Denied { message }
         | WorkspaceError::NotFound { message }
         | WorkspaceError::Conflict { message }
@@ -178,8 +179,8 @@ impl DaemonClient {
         let existing = self
             .forwards()
             .into_iter()
-            .find(|f| f.target == target)
-            .map(|f| f.local_port);
+            .find(|forward| forward.target == target)
+            .map(|forward| forward.local_port);
         let local_port = match existing {
             Some(port) => port,
             None => self
@@ -245,7 +246,7 @@ impl DaemonClient {
     ///
     /// The daemon's [`WorkspaceError`].
     pub async fn editor_status(&self) -> Result<EditorList, WorkspaceError> {
-        self.ws_call(|c| async move { c.editor_status().await })
+        self.ws_call(|client| async move { client.editor_status().await })
             .await
     }
 
@@ -259,7 +260,7 @@ impl DaemonClient {
         &self,
         launch: EditorLaunch,
     ) -> Result<EditorInstance, WorkspaceError> {
-        self.ws_call(|c| async move { c.editor_launch(launch.into()).await })
+        self.ws_call(|client| async move { client.editor_launch(launch.into()).await })
             .await
     }
 
@@ -269,7 +270,7 @@ impl DaemonClient {
     ///
     /// The daemon's [`WorkspaceError`].
     pub async fn editor_stop(&self, folder: String) -> Result<(), WorkspaceError> {
-        self.ws_call(|c| async move { c.editor_stop(folder).await })
+        self.ws_call(|client| async move { client.editor_stop(folder).await })
             .await
     }
 
@@ -286,11 +287,9 @@ impl DaemonClient {
         line: Option<u32>,
         column: Option<u32>,
     ) -> Result<EditorOpened, WorkspaceError> {
-        self.ws_call(|c| async move { c.editor_open(folder, path, line, column).await })
+        self.ws_call(|client| async move { client.editor_open(folder, path, line, column).await })
             .await
     }
-
-    // --- VS Code tunnel: opt-in fallback --------------------------------------------------
 
     /// The host's VS Code tunnel and `code` CLI.
     ///
@@ -298,7 +297,7 @@ impl DaemonClient {
     ///
     /// The daemon's [`WorkspaceError`].
     pub async fn vscode_tunnel_status(&self) -> Result<VsCodeTunnelStatus, WorkspaceError> {
-        self.ws_call(|c| async move { c.vscode_tunnel_status().await })
+        self.ws_call(|client| async move { client.vscode_tunnel_status().await })
             .await
     }
 
@@ -312,7 +311,7 @@ impl DaemonClient {
         &self,
         accept_license: bool,
     ) -> Result<VsCodeTunnelStatus, WorkspaceError> {
-        self.ws_call(|c| async move { c.vscode_cli_install(accept_license).await })
+        self.ws_call(|client| async move { client.vscode_cli_install(accept_license).await })
             .await
     }
 
@@ -332,7 +331,7 @@ impl DaemonClient {
             provider: start.provider.into(),
             name: start.name,
         };
-        self.ws_call(|c| async move { c.vscode_tunnel_start(start).await })
+        self.ws_call(|client| async move { client.vscode_tunnel_start(start).await })
             .await
     }
 
@@ -342,7 +341,7 @@ impl DaemonClient {
     ///
     /// The daemon's [`WorkspaceError`].
     pub async fn vscode_tunnel_stop(&self) -> Result<VsCodeTunnelStatus, WorkspaceError> {
-        self.ws_call(|c| async move { c.vscode_tunnel_stop().await })
+        self.ws_call(|client| async move { client.vscode_tunnel_stop().await })
             .await
     }
 
@@ -361,32 +360,28 @@ impl DaemonClient {
             line: open.line,
             column: open.column,
         };
-        self.ws_call(|c| async move { c.vscode_tunnel_open(open).await })
+        self.ws_call(|client| async move { client.vscode_tunnel_open(open).await })
             .await
     }
 }
-
-// --- desktop links (client_core::vscode) ------------------------------------------------------
 
 /// A Remote - SSH host for desktop VS Code links.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct VsCodeSshHost {
     /// Host name, address or `~/.ssh/config` alias.
     pub host: String,
-    /// Login name.
     #[uniffi(default = None)]
     pub user: Option<String>,
-    /// Port.
     #[uniffi(default = None)]
     pub port: Option<u16>,
 }
 
 impl From<VsCodeSshHost> for client_core::vscode::SshHost {
-    fn from(h: VsCodeSshHost) -> Self {
+    fn from(host_config: VsCodeSshHost) -> Self {
         Self {
-            host: h.host,
-            user: h.user,
-            port: h.port,
+            host: host_config.host,
+            user: host_config.user,
+            port: host_config.port,
         }
     }
 }

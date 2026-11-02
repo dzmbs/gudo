@@ -1,3 +1,4 @@
+//! The developer-workflow API on [`DaemonClient`] (docs/DAEMON.md §5): git, worktrees,
 //! files and transfers, ports, attention, and the agent-pane launcher. Forwards are in
 //! `client.rs`, the editor in `editor.rs`.
 //!
@@ -25,7 +26,6 @@ use crate::ws_types::{
 /// Called on a runtime thread, in order, one at a time per client. Return quickly.
 #[uniffi::export(foreign)]
 pub trait WorkspaceListener: Send + Sync {
-    /// One event.
     fn on_workspace_event(&self, event: WorkspaceEvent);
 }
 
@@ -62,11 +62,8 @@ pub(crate) fn progress_adapter(
 /// What [`DaemonClient::launch_agent_pane`] starts.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct AgentLaunch {
-    /// The pane to split.
     pub split_from: u64,
-    /// Claude Code or Codex.
     pub agent: AgentKind,
-    /// Split direction.
     pub axis: Axis,
     /// Run in this worktree (with its `PORT`); see `worktree_create`. Takes precedence over
     /// `cwd`.
@@ -116,16 +113,13 @@ pub(crate) fn created_pane(outcome: OpOutcome) -> Result<u64, WorkspaceError> {
 /// The tab [`DaemonClient::reopen_tab`] made.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
 pub struct ReopenedTab {
-    /// The new tab.
     pub tab_id: u64,
-    /// Its pane.
     pub pane_id: u64,
 }
 
 /// What [`DaemonClient::launch_agent_pane`] did.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct AgentLaunched {
-    /// The new pane.
     pub pane_id: u64,
     /// Characters of the prompt sent, if one was given and sent.
     pub prompt_chars: Option<u32>,
@@ -156,9 +150,10 @@ impl DaemonClient {
                 let notified = tap.meta_changed.notified();
                 tokio::pin!(notified);
                 notified.as_mut().enable();
-                let idle = lock(&tap.agents).get(&pane_id).is_some_and(|a| {
-                    a.as_ref()
-                        .is_some_and(|a| matches!(a.state, proto::AgentState::Idle))
+                let idle = lock(&tap.agents).get(&pane_id).is_some_and(|agent| {
+                    agent
+                        .as_ref()
+                        .is_some_and(|agent| matches!(agent.state, proto::AgentState::Idle))
                 });
                 if idle {
                     return true;
@@ -181,8 +176,6 @@ impl DaemonClient {
             .set_workspace_listener(Arc::new(WsForward(listener)));
     }
 
-    // --- ports ----------------------------------------------------------------------------
-
     /// The last port list the daemon pushed (no round trip).
     pub fn ports(&self) -> Vec<PortInfo> {
         self.inner.ports().into_iter().map(Into::into).collect()
@@ -195,12 +188,10 @@ impl DaemonClient {
     /// The daemon's [`WorkspaceError`].
     pub async fn list_ports(&self) -> Result<Vec<PortInfo>, WorkspaceError> {
         let ports: Vec<proto::PortInfo> = self
-            .ws_call(|c| async move { c.list_ports().await })
+            .ws_call(|client| async move { client.list_ports().await })
             .await?;
         Ok(ports.into_iter().map(Into::into).collect())
     }
-
-    // --- git ------------------------------------------------------------------------------
 
     /// Branch, upstream, ahead/behind and changed files of the repository containing `path`.
     ///
@@ -208,7 +199,7 @@ impl DaemonClient {
     ///
     /// The daemon's [`WorkspaceError`] (`NotFound` outside a repository).
     pub async fn git_status(&self, path: String) -> Result<GitStatus, WorkspaceError> {
-        self.ws_call(|c| async move { c.git_status(path).await })
+        self.ws_call(|client| async move { client.git_status(path).await })
             .await
     }
 
@@ -218,7 +209,7 @@ impl DaemonClient {
     ///
     /// The daemon's [`WorkspaceError`].
     pub async fn git_diff(&self, request: GitDiffRequest) -> Result<GitDiff, WorkspaceError> {
-        self.ws_call(|c| async move { c.git_diff(request.into()).await })
+        self.ws_call(|client| async move { client.git_diff(request.into()).await })
             .await
     }
 
@@ -229,7 +220,7 @@ impl DaemonClient {
     /// The daemon's [`WorkspaceError`].
     pub async fn list_turns(&self, pane_id: u64) -> Result<Vec<TurnInfo>, WorkspaceError> {
         let turns: Vec<proto::TurnInfo> = self
-            .ws_call(|c| async move { c.list_turns(proto::PaneId(pane_id)).await })
+            .ws_call(|client| async move { client.list_turns(proto::PaneId(pane_id)).await })
             .await?;
         Ok(turns.into_iter().map(Into::into).collect())
     }
@@ -247,8 +238,9 @@ impl DaemonClient {
         context: u32,
         hunks: bool,
     ) -> Result<GitDiff, WorkspaceError> {
-        self.ws_call(|c| async move {
-            c.turn_diff(proto::PaneId(pane_id), turn, context, hunks)
+        self.ws_call(|client| async move {
+            client
+                .turn_diff(proto::PaneId(pane_id), turn, context, hunks)
                 .await
         })
         .await
@@ -261,11 +253,9 @@ impl DaemonClient {
     ///
     /// The daemon's [`WorkspaceError`].
     pub async fn send_review(&self, review: ReviewRequest) -> Result<String, WorkspaceError> {
-        self.ws_call(|c| async move { c.send_review(review.into()).await })
+        self.ws_call(|client| async move { client.send_review(review.into()).await })
             .await
     }
-
-    // --- worktrees ------------------------------------------------------------------------
 
     /// Creates a worktree on a new branch (with its own `PORT`).
     ///
@@ -276,7 +266,7 @@ impl DaemonClient {
         &self,
         create: WorktreeCreate,
     ) -> Result<WorktreeInfo, WorkspaceError> {
-        self.ws_call(|c| async move { c.worktree_create(create.into()).await })
+        self.ws_call(|client| async move { client.worktree_create(create.into()).await })
             .await
     }
 
@@ -287,7 +277,7 @@ impl DaemonClient {
     /// The daemon's [`WorkspaceError`].
     pub async fn worktree_list(&self, repo: String) -> Result<Vec<WorktreeInfo>, WorkspaceError> {
         let all: Vec<proto::WorktreeInfo> = self
-            .ws_call(|c| async move { c.worktree_list(repo).await })
+            .ws_call(|client| async move { client.worktree_list(repo).await })
             .await?;
         Ok(all.into_iter().map(Into::into).collect())
     }
@@ -303,8 +293,10 @@ impl DaemonClient {
         force: bool,
         delete_branch: bool,
     ) -> Result<(), WorkspaceError> {
-        self.ws_call(|c| async move { c.worktree_remove(path, force, delete_branch).await })
-            .await
+        self.ws_call(
+            |client| async move { client.worktree_remove(path, force, delete_branch).await },
+        )
+        .await
     }
 
     /// Splits a pane and starts a shell or an agent in a worktree; returns the new pane.
@@ -314,20 +306,19 @@ impl DaemonClient {
     /// The daemon's [`WorkspaceError`].
     pub async fn worktree_launch(&self, launch: WorktreeLaunch) -> Result<u64, WorkspaceError> {
         let pane: proto::PaneId = self
-            .ws_call(|c| async move {
-                c.worktree_launch(
-                    launch.path,
-                    proto::PaneId(launch.split_from),
-                    launch.axis.into(),
-                    launch.agent.map(Into::into),
-                )
-                .await
+            .ws_call(|client| async move {
+                client
+                    .worktree_launch(
+                        launch.path,
+                        proto::PaneId(launch.split_from),
+                        launch.axis.into(),
+                        launch.agent.map(Into::into),
+                    )
+                    .await
             })
             .await?;
         Ok(pane.0)
     }
-
-    // --- agents ---------------------------------------------------------------------------
 
     /// Starts Claude Code or Codex in a new pane or tab (in a worktree, a directory, or
     /// resuming a session) and, if `prompt` is set, types it through the composer path once the agent
@@ -404,7 +395,7 @@ impl DaemonClient {
         }
         match self.prompt(pane_id, text, launch.submit).await {
             Ok(chars) => launched.prompt_chars = Some(chars),
-            Err(e) => launched.prompt_error = Some(e.to_string()),
+            Err(error) => launched.prompt_error = Some(error.to_string()),
         }
         Ok(launched)
     }
@@ -455,8 +446,6 @@ impl DaemonClient {
         }
     }
 
-    // --- files ----------------------------------------------------------------------------
-
     /// Lists a directory (directories first).
     ///
     /// # Errors
@@ -467,7 +456,7 @@ impl DaemonClient {
         path: String,
         show_hidden: bool,
     ) -> Result<DirListing, WorkspaceError> {
-        self.ws_call(|c| async move { c.fs_list(path, show_hidden).await })
+        self.ws_call(|client| async move { client.fs_list(path, show_hidden).await })
             .await
     }
 
@@ -477,7 +466,8 @@ impl DaemonClient {
     ///
     /// The daemon's [`WorkspaceError`].
     pub async fn fs_stat(&self, path: String) -> Result<FileStat, WorkspaceError> {
-        self.ws_call(|c| async move { c.fs_stat(path).await }).await
+        self.ws_call(|client| async move { client.fs_stat(path).await })
+            .await
     }
 
     /// Reads up to 1 MiB of a file (use [`download_file`](Self::download_file) for more).
@@ -491,7 +481,7 @@ impl DaemonClient {
         offset: u64,
         len: u32,
     ) -> Result<FileChunk, WorkspaceError> {
-        self.ws_call(|c| async move { c.fs_read(path, offset, len).await })
+        self.ws_call(|client| async move { client.fs_read(path, offset, len).await })
             .await
     }
 
@@ -505,7 +495,7 @@ impl DaemonClient {
         target: WriteTarget,
         data: Bytes,
     ) -> Result<FileStat, WorkspaceError> {
-        self.ws_call(|c| async move { c.fs_write(target.into(), data.into()).await })
+        self.ws_call(|client| async move { client.fs_write(target.into(), data.into()).await })
             .await
     }
 
@@ -515,7 +505,7 @@ impl DaemonClient {
     ///
     /// The daemon's [`WorkspaceError`].
     pub async fn fs_mkdir(&self, path: String, parents: bool) -> Result<FileStat, WorkspaceError> {
-        self.ws_call(|c| async move { c.fs_mkdir(path, parents).await })
+        self.ws_call(|client| async move { client.fs_mkdir(path, parents).await })
             .await
     }
 
@@ -530,7 +520,7 @@ impl DaemonClient {
         to: String,
         overwrite: bool,
     ) -> Result<FileStat, WorkspaceError> {
-        self.ws_call(|c| async move { c.fs_rename(from, to, overwrite).await })
+        self.ws_call(|client| async move { client.fs_rename(from, to, overwrite).await })
             .await
     }
 
@@ -545,7 +535,7 @@ impl DaemonClient {
         mode: DeleteMode,
         recursive: bool,
     ) -> Result<(), WorkspaceError> {
-        self.ws_call(|c| async move { c.fs_delete(path, mode.into(), recursive).await })
+        self.ws_call(|client| async move { client.fs_delete(path, mode.into(), recursive).await })
             .await
     }
 
@@ -557,7 +547,7 @@ impl DaemonClient {
     ///
     /// The daemon's [`WorkspaceError`].
     pub async fn fs_watch(&self, path: String) -> Result<u64, WorkspaceError> {
-        self.ws_call(|c| async move { c.fs_watch(path).await })
+        self.ws_call(|client| async move { client.fs_watch(path).await })
             .await
     }
 
@@ -567,7 +557,7 @@ impl DaemonClient {
     ///
     /// The daemon's [`WorkspaceError`].
     pub async fn fs_unwatch(&self, watch_id: u64) -> Result<(), WorkspaceError> {
-        self.ws_call(|c| async move { c.fs_unwatch(watch_id).await })
+        self.ws_call(|client| async move { client.fs_unwatch(watch_id).await })
             .await
     }
 
@@ -584,8 +574,12 @@ impl DaemonClient {
         progress: Option<Arc<dyn TransferProgress>>,
     ) -> Result<FileStat, WorkspaceError> {
         let progress = progress_adapter(progress);
-        self.ws_call(|c| async move { c.upload_file(local_path, target.into(), progress).await })
-            .await
+        self.ws_call(|client| async move {
+            client
+                .upload_file(local_path, target.into(), progress)
+                .await
+        })
+        .await
     }
 
     /// Uploads bytes held in memory (see [`upload_file`](Self::upload_file)).
@@ -598,7 +592,7 @@ impl DaemonClient {
         data: Bytes,
         target: WriteTarget,
     ) -> Result<FileStat, WorkspaceError> {
-        self.ws_call(|c| async move { c.upload_bytes(data.into(), target.into()).await })
+        self.ws_call(|client| async move { client.upload_bytes(data.into(), target.into()).await })
             .await
     }
 
@@ -617,14 +611,13 @@ impl DaemonClient {
         progress: Option<Arc<dyn TransferProgress>>,
     ) -> Result<FileStat, WorkspaceError> {
         let progress = progress_adapter(progress);
-        self.ws_call(|c| async move {
-            c.download_file(remote_path, local_path, offset, len, progress)
+        self.ws_call(|client| async move {
+            client
+                .download_file(remote_path, local_path, offset, len, progress)
                 .await
         })
         .await
     }
-
-    // --- attention ------------------------------------------------------------------------
 
     /// The attention feed (the inbox) and this host's unseen count.
     ///
@@ -632,7 +625,7 @@ impl DaemonClient {
     ///
     /// The daemon's [`WorkspaceError`].
     pub async fn attention_list(&self) -> Result<AttentionList, WorkspaceError> {
-        self.ws_call(|c| async move { c.attention_list().await })
+        self.ws_call(|client| async move { client.attention_list().await })
             .await
     }
 
@@ -645,7 +638,7 @@ impl DaemonClient {
         &self,
         seen: AttentionSeen,
     ) -> Result<AttentionList, WorkspaceError> {
-        self.ws_call(|c| async move { c.attention_seen(seen.into()).await })
+        self.ws_call(|client| async move { client.attention_seen(seen.into()).await })
             .await
     }
 }

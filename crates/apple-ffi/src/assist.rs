@@ -1,4 +1,5 @@
-//! Input assistance for the mobile line editor on [`DaemonClient`] (docs/DAEMON.md §8,
+//! Input assistance for the mobile line editor on [`DaemonClient`] (docs/DAEMON.md §8): a
+//! pane's foreground program and profile, its shell's prompt state and
 //! input line, atomic submit, the host's history, completion, fuzzy file search for `@`
 //! mentions, and a blocked agent's options.
 //!
@@ -19,17 +20,12 @@ use crate::client::DaemonClient;
 use crate::on_runtime;
 use crate::ws_types::FileKind;
 
-// --- errors ---------------------------------------------------------------------------------
-
 /// Why an input-assistance request failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, uniffi::Error)]
 pub enum AssistError {
     /// The connection's roles or scope do not allow it; the text names the role needed.
     #[error("not allowed: {message}")]
-    Denied {
-        /// Why.
-        message: String,
-    },
+    Denied { message: String },
     /// The pane does not exist or is outside the grant's scope.
     #[error("no such pane")]
     UnknownPane,
@@ -43,31 +39,21 @@ pub enum AssistError {
     },
     /// The request was malformed.
     #[error("invalid request: {message}")]
-    Invalid {
-        /// Why.
-        message: String,
-    },
+    Invalid { message: String },
     /// The path, dialog or option does not exist (any more).
     #[error("not found: {message}")]
-    NotFound {
-        /// What.
-        message: String,
-    },
-    /// Anything else.
+    NotFound { message: String },
     #[error("{message}")]
-    Failed {
-        /// Why.
-        message: String,
-    },
+    Failed { message: String },
     /// The connection dropped before the daemon answered.
     #[error("disconnected before the daemon answered")]
     Disconnected,
 }
 
 impl From<proto::AssistError> for AssistError {
-    fn from(e: proto::AssistError) -> Self {
+    fn from(assist_error: proto::AssistError) -> Self {
         use proto::AssistError as E;
-        match e {
+        match assist_error {
             E::Denied(message) => Self::Denied { message },
             E::UnknownPane => Self::UnknownPane,
             E::NotAtPrompt(state) => Self::NotAtPrompt {
@@ -80,8 +66,6 @@ impl From<proto::AssistError> for AssistError {
         }
     }
 }
-
-// --- types ----------------------------------------------------------------------------------
 
 mirror_enum! {
     /// The kind of program in a pane's foreground, for picking a key-bar profile.
@@ -98,11 +82,8 @@ mirror_enum! {
         Tmux,
         /// Interactive interpreters and database shells started without a script.
         Repl,
-        /// Claude Code.
         Claude,
-        /// Codex.
         Codex,
-        /// Anything else.
         Other,
     }
 }
@@ -130,25 +111,18 @@ mirror_enum! {
 mirror_enum! {
     /// Which shell runs at the prompt.
     ShellKind = ShellKind {
-        /// zsh.
         Zsh,
-        /// bash.
         Bash,
-        /// fish.
         Fish,
-        /// Another shell.
         Other,
     }
 }
 
 mirror_enum! {
-    /// A line editor keymap.
     Keymap = Keymap {
-        /// Emacs bindings.
         Emacs,
         /// vi insert or command mode.
         Vi,
-        /// Not reported.
         Unknown,
     }
 }
@@ -168,9 +142,7 @@ mirror_enum! {
         GitPath,
         /// An executable on `$PATH`, or a subcommand.
         Command,
-        /// An option.
         Flag,
-        /// A snippet.
         Snippet,
     }
 }
@@ -182,7 +154,6 @@ mirror_enum! {
         AllowOnce,
         /// Allow and stop asking for the session.
         AllowSession,
-        /// Refuse.
         Deny,
         /// Something else (an answer to a question).
         Other,
@@ -202,7 +173,6 @@ mirror_enum! {
 /// The process group in the foreground of a pane's terminal.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct Foreground {
-    /// The pane.
     pub pane_id: u64,
     /// Process id of the group leader.
     pub pid: u32,
@@ -217,14 +187,14 @@ pub struct Foreground {
 }
 
 impl From<proto::Foreground> for Foreground {
-    fn from(f: proto::Foreground) -> Self {
+    fn from(foreground: proto::Foreground) -> Self {
         Self {
-            pane_id: f.pane_id.0,
-            pid: f.pid,
-            name: f.name,
-            argv: f.argv,
-            profile: f.profile.into(),
-            since_ms: f.since.0,
+            pane_id: foreground.pane_id.0,
+            pid: foreground.pid,
+            name: foreground.name,
+            argv: foreground.argv,
+            profile: foreground.profile.into(),
+            since_ms: foreground.since.0,
         }
     }
 }
@@ -245,26 +215,24 @@ pub struct PromptInput {
     pub suggestion: Option<String>,
     /// A right-hand prompt was recognised and left out.
     pub right_prompt: bool,
-    /// The shell.
     pub shell: ShellKind,
     /// Bracketed paste is on, so multi-line text can be submitted.
     pub bracketed_paste: bool,
-    /// The line editor's keymap.
     pub keymap: Keymap,
 }
 
 impl From<proto::PromptInput> for PromptInput {
-    fn from(i: proto::PromptInput) -> Self {
+    fn from(prompt_input: proto::PromptInput) -> Self {
         Self {
-            text: i.text,
-            cursor: i.cursor,
-            confident: i.confident,
-            doubt: i.doubt.map(Into::into),
-            suggestion: i.suggestion,
-            right_prompt: i.right_prompt,
-            shell: i.shell.into(),
-            bracketed_paste: i.bracketed_paste,
-            keymap: i.keymap.into(),
+            text: prompt_input.text,
+            cursor: prompt_input.cursor,
+            confident: prompt_input.confident,
+            doubt: prompt_input.doubt.map(Into::into),
+            suggestion: prompt_input.suggestion,
+            right_prompt: prompt_input.right_prompt,
+            shell: prompt_input.shell.into(),
+            bracketed_paste: prompt_input.bracketed_paste,
+            keymap: prompt_input.keymap.into(),
         }
     }
 }
@@ -273,10 +241,7 @@ impl From<proto::PromptInput> for PromptInput {
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum PromptPhase {
     /// Editing a command line at its prompt.
-    AtPrompt {
-        /// The input line.
-        input: PromptInput,
-    },
+    AtPrompt { input: PromptInput },
     /// A command started from the prompt runs.
     Running {
         /// The command (as in `CommandMark`).
@@ -287,8 +252,8 @@ pub enum PromptPhase {
 }
 
 impl From<proto::PromptPhase> for PromptPhase {
-    fn from(p: proto::PromptPhase) -> Self {
-        match p {
+    fn from(prompt_phase: proto::PromptPhase) -> Self {
+        match prompt_phase {
             proto::PromptPhase::AtPrompt(input) => Self::AtPrompt {
                 input: input.into(),
             },
@@ -301,7 +266,6 @@ impl From<proto::PromptPhase> for PromptPhase {
 /// A pane's shell prompt state.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct PromptState {
-    /// The pane.
     pub pane_id: u64,
     /// The prompt instance: changes whenever a command starts. Pass it to `submit_line`.
     pub prompt_id: u64,
@@ -312,12 +276,12 @@ pub struct PromptState {
 }
 
 impl From<proto::PromptState> for PromptState {
-    fn from(s: proto::PromptState) -> Self {
+    fn from(prompt_state: proto::PromptState) -> Self {
         Self {
-            pane_id: s.pane_id.0,
-            prompt_id: s.prompt_id,
-            at_seq: s.at_seq.0,
-            phase: s.phase.into(),
+            pane_id: prompt_state.pane_id.0,
+            prompt_id: prompt_state.prompt_id,
+            at_seq: prompt_state.at_seq.0,
+            phase: prompt_state.phase.into(),
         }
     }
 }
@@ -327,20 +291,18 @@ impl From<proto::PromptState> for PromptState {
 pub struct PaneAssist {
     /// The foreground program, if it could be read.
     pub foreground: Option<Foreground>,
-    /// The prompt state.
     pub prompt: PromptState,
 }
 
 impl From<proto::PaneAssist> for PaneAssist {
-    fn from(a: proto::PaneAssist) -> Self {
+    fn from(pane_assist: proto::PaneAssist) -> Self {
         Self {
-            foreground: a.foreground.map(Into::into),
-            prompt: a.prompt.into(),
+            foreground: pane_assist.foreground.map(Into::into),
+            prompt: pane_assist.prompt.into(),
         }
     }
 }
 
-/// A history query.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct HistoryQuery {
     /// Rank commands used in this directory (and its relatives) higher.
@@ -361,13 +323,13 @@ pub struct HistoryQuery {
 }
 
 impl From<HistoryQuery> for proto::HistoryQuery {
-    fn from(q: HistoryQuery) -> Self {
+    fn from(history_query: HistoryQuery) -> Self {
         Self {
-            cwd: q.cwd,
-            prefix: q.prefix,
-            contains: q.contains,
-            since: q.since_ms.map(proto::UnixMillis),
-            limit: q.limit,
+            cwd: history_query.cwd,
+            prefix: history_query.prefix,
+            contains: history_query.contains,
+            since: history_query.since_ms.map(proto::UnixMillis),
+            limit: history_query.limit,
         }
     }
 }
@@ -375,7 +337,6 @@ impl From<HistoryQuery> for proto::HistoryQuery {
 /// One distinct command from the host's history.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct HistoryEntry {
-    /// The command line.
     pub command: String,
     /// Directory of its last run, if known.
     pub cwd: Option<String>,
@@ -390,14 +351,14 @@ pub struct HistoryEntry {
 }
 
 impl From<proto::HistoryEntry> for HistoryEntry {
-    fn from(e: proto::HistoryEntry) -> Self {
+    fn from(history_entry: proto::HistoryEntry) -> Self {
         Self {
-            command: e.command,
-            cwd: e.cwd,
-            exit: e.exit,
-            duration_ms: e.duration_ms,
-            last_at_ms: e.last_at.0,
-            count: e.count,
+            command: history_entry.command,
+            cwd: history_entry.cwd,
+            exit: history_entry.exit,
+            duration_ms: history_entry.duration_ms,
+            last_at_ms: history_entry.last_at.0,
+            count: history_entry.count,
         }
     }
 }
@@ -420,14 +381,14 @@ pub struct Completion {
 }
 
 impl From<proto::Completion> for Completion {
-    fn from(c: proto::Completion) -> Self {
+    fn from(completion: proto::Completion) -> Self {
         Self {
-            text: c.text,
-            display: c.display,
-            kind: c.kind.into(),
-            detail: c.detail,
-            start: c.start,
-            end: c.end,
+            text: completion.text,
+            display: completion.display,
+            kind: completion.kind.into(),
+            detail: completion.detail,
+            start: completion.start,
+            end: completion.end,
         }
     }
 }
@@ -437,36 +398,33 @@ impl From<proto::Completion> for Completion {
 pub struct Completions {
     /// The directory paths were completed in.
     pub cwd: Option<String>,
-    /// The candidates.
     pub items: Vec<Completion>,
 }
 
 impl From<proto::Completions> for Completions {
-    fn from(c: proto::Completions) -> Self {
+    fn from(completions: proto::Completions) -> Self {
         Self {
-            cwd: c.cwd,
-            items: c.items.into_iter().map(Into::into).collect(),
+            cwd: completions.cwd,
+            items: completions.items.into_iter().map(Into::into).collect(),
         }
     }
 }
 
-/// One file search match.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct FileMatch {
     /// Path relative to the root, `/`-separated.
     pub path: String,
-    /// File or directory.
     pub kind: FileKind,
     /// Positions in `path` (Unicode scalars) of the matched characters, for highlighting.
     pub positions: Vec<u32>,
 }
 
 impl From<proto::FileMatch> for FileMatch {
-    fn from(m: proto::FileMatch) -> Self {
+    fn from(file_match: proto::FileMatch) -> Self {
         Self {
-            path: m.path,
-            kind: m.kind.into(),
-            positions: m.positions,
+            path: file_match.path,
+            kind: file_match.kind.into(),
+            positions: file_match.positions,
         }
     }
 }
@@ -476,7 +434,6 @@ impl From<proto::FileMatch> for FileMatch {
 pub struct FileMatches {
     /// The root searched, resolved.
     pub root: String,
-    /// The matches.
     pub matches: Vec<FileMatch>,
     /// Paths considered.
     pub scanned: u32,
@@ -485,12 +442,12 @@ pub struct FileMatches {
 }
 
 impl From<proto::FileMatches> for FileMatches {
-    fn from(m: proto::FileMatches) -> Self {
+    fn from(file_matches: proto::FileMatches) -> Self {
         Self {
-            root: m.root,
-            matches: m.matches.into_iter().map(Into::into).collect(),
-            scanned: m.scanned,
-            truncated: m.truncated,
+            root: file_matches.root,
+            matches: file_matches.matches.into_iter().map(Into::into).collect(),
+            scanned: file_matches.scanned,
+            truncated: file_matches.truncated,
         }
     }
 }
@@ -498,7 +455,6 @@ impl From<proto::FileMatches> for FileMatches {
 /// One answer to a [`BlockedPrompt`].
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct BlockedOption {
-    /// Button label.
     pub label: String,
     /// What the answer means.
     pub choice: BlockedChoice,
@@ -512,13 +468,13 @@ pub struct BlockedOption {
 }
 
 impl From<proto::BlockedOption> for BlockedOption {
-    fn from(o: proto::BlockedOption) -> Self {
+    fn from(blocked_option: proto::BlockedOption) -> Self {
         Self {
-            label: o.label,
-            choice: o.choice.into(),
-            option_id: o.option_id.map(|id| id.0),
-            keys: o.keys.into(),
-            selected: o.selected,
+            label: blocked_option.label,
+            choice: blocked_option.choice.into(),
+            option_id: blocked_option.option_id.map(|id| id.0),
+            keys: blocked_option.keys.into(),
+            selected: blocked_option.selected,
         }
     }
 }
@@ -526,7 +482,6 @@ impl From<proto::BlockedOption> for BlockedOption {
 /// A decision an agent is waiting for, with a way to give each answer.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct BlockedPrompt {
-    /// The agent pane.
     pub pane_id: u64,
     /// The request to answer with `decide`, when the agent's hook holds it open.
     pub request_id: Option<u64>,
@@ -539,13 +494,13 @@ pub struct BlockedPrompt {
 }
 
 impl From<proto::BlockedPrompt> for BlockedPrompt {
-    fn from(b: proto::BlockedPrompt) -> Self {
+    fn from(blocked_prompt: proto::BlockedPrompt) -> Self {
         Self {
-            pane_id: b.pane_id.0,
-            request_id: b.request_id.map(|r| r.0),
-            summary: b.summary,
-            options: b.options.into_iter().map(Into::into).collect(),
-            source: b.source.into(),
+            pane_id: blocked_prompt.pane_id.0,
+            request_id: blocked_prompt.request_id.map(|r| r.0),
+            summary: blocked_prompt.summary,
+            options: blocked_prompt.options.into_iter().map(Into::into).collect(),
+            source: blocked_prompt.source.into(),
         }
     }
 }
@@ -554,20 +509,14 @@ impl From<proto::BlockedPrompt> for BlockedPrompt {
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum AssistEvent {
     /// A pane's foreground program changed (panes of the attached session).
-    Foreground {
-        /// The new foreground program.
-        foreground: Foreground,
-    },
+    Foreground { foreground: Foreground },
     /// A watched pane's prompt state or input line changed.
-    Prompt {
-        /// The new state.
-        state: PromptState,
-    },
+    Prompt { state: PromptState },
 }
 
 impl From<client_core::AssistEvent> for AssistEvent {
-    fn from(e: client_core::AssistEvent) -> Self {
-        match e {
+    fn from(assist_event: client_core::AssistEvent) -> Self {
+        match assist_event {
             client_core::AssistEvent::Foreground { foreground } => Self::Foreground {
                 foreground: foreground.into(),
             },
@@ -583,7 +532,6 @@ impl From<client_core::AssistEvent> for AssistEvent {
 /// Called on a runtime thread, in order, one at a time per client. Return quickly.
 #[uniffi::export(foreign)]
 pub trait AssistListener: Send + Sync {
-    /// One event.
     fn on_assist_event(&self, event: AssistEvent);
 }
 
@@ -601,8 +549,6 @@ impl client_core::AssistListener for AssistForward {
 pub fn classify_program(name: String, argv: Vec<String>) -> ProgramProfile {
     proto::ProgramProfile::classify(&name, &argv).into()
 }
-
-// --- requests -------------------------------------------------------------------------------
 
 impl DaemonClient {
     /// Runs a client-core assist request on the runtime and converts its answer.
@@ -647,8 +593,10 @@ impl DaemonClient {
     ///
     /// The daemon's [`AssistError`].
     pub async fn watch_prompt(&self, pane_id: u64, watch: bool) -> Result<PaneAssist, AssistError> {
-        self.assist_call(|c| async move { c.watch_prompt(proto::PaneId(pane_id), watch).await })
-            .await
+        self.assist_call(|client| async move {
+            client.watch_prompt(proto::PaneId(pane_id), watch).await
+        })
+        .await
     }
 
     /// The pane's foreground program and prompt state now.
@@ -657,7 +605,7 @@ impl DaemonClient {
     ///
     /// The daemon's [`AssistError`].
     pub async fn pane_assist(&self, pane_id: u64) -> Result<PaneAssist, AssistError> {
-        self.assist_call(|c| async move { c.pane_assist(proto::PaneId(pane_id)).await })
+        self.assist_call(|client| async move { client.pane_assist(proto::PaneId(pane_id)).await })
             .await
     }
 
@@ -677,8 +625,9 @@ impl DaemonClient {
         run: bool,
     ) -> Result<u64, AssistError> {
         let seq: proto::Seq = self
-            .assist_call(|c| async move {
-                c.submit_line(proto::PaneId(pane_id), prompt_id, text, run)
+            .assist_call(|client| async move {
+                client
+                    .submit_line(proto::PaneId(pane_id), prompt_id, text, run)
                     .await
             })
             .await?;
@@ -692,7 +641,7 @@ impl DaemonClient {
     /// The daemon's [`AssistError`] (`Denied` without the driver role).
     pub async fn history(&self, query: HistoryQuery) -> Result<Vec<HistoryEntry>, AssistError> {
         let entries: Vec<proto::HistoryEntry> = self
-            .assist_call(|c| async move { c.history(query.into()).await })
+            .assist_call(|client| async move { client.history(query.into()).await })
             .await?;
         Ok(entries.into_iter().map(Into::into).collect())
     }
@@ -710,8 +659,9 @@ impl DaemonClient {
         cursor: u32,
         limit: u32,
     ) -> Result<Completions, AssistError> {
-        self.assist_call(|c| async move {
-            c.complete(proto::PaneId(pane_id), line, cursor, limit)
+        self.assist_call(|client| async move {
+            client
+                .complete(proto::PaneId(pane_id), line, cursor, limit)
                 .await
         })
         .await
@@ -729,7 +679,7 @@ impl DaemonClient {
         root: String,
         limit: u32,
     ) -> Result<FileMatches, AssistError> {
-        self.assist_call(|c| async move { c.file_search(root, query, limit).await })
+        self.assist_call(|client| async move { client.file_search(root, query, limit).await })
             .await
     }
 
@@ -743,7 +693,9 @@ impl DaemonClient {
         pane_id: u64,
     ) -> Result<Option<BlockedPrompt>, AssistError> {
         let blocked: Option<proto::BlockedPrompt> = self
-            .assist_call(|c| async move { c.blocked_options(proto::PaneId(pane_id)).await })
+            .assist_call(
+                |client| async move { client.blocked_options(proto::PaneId(pane_id)).await },
+            )
             .await?;
         Ok(blocked.map(Into::into))
     }
@@ -761,9 +713,11 @@ impl DaemonClient {
         index: u32,
         label: String,
     ) -> Result<(), AssistError> {
-        self.assist_call(
-            |c| async move { c.answer_blocked(proto::PaneId(pane_id), index, label).await },
-        )
+        self.assist_call(|client| async move {
+            client
+                .answer_blocked(proto::PaneId(pane_id), index, label)
+                .await
+        })
         .await
     }
 }

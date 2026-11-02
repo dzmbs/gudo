@@ -21,30 +21,24 @@ use crate::{on_runtime, runtime};
 pub enum ClientError {
     /// The ticket could not be parsed.
     #[error("bad ticket: {message}")]
-    Ticket {
-        /// Why.
-        message: String,
-    },
+    Ticket { message: String },
     /// The device key is not 32 bytes.
     #[error("the device key must be 32 bytes")]
     Key,
     /// A local I/O error (binding a forwarded port).
     #[error("{message}")]
-    Io {
-        /// Why.
-        message: String,
-    },
+    Io { message: String },
 }
 
 impl From<client_core::ClientError> for ClientError {
-    fn from(e: client_core::ClientError) -> Self {
-        match e {
-            client_core::ClientError::Ticket(e) => Self::Ticket {
-                message: e.to_string(),
+    fn from(client_error: client_core::ClientError) -> Self {
+        match client_error {
+            client_core::ClientError::Ticket(client_error) => Self::Ticket {
+                message: client_error.to_string(),
             },
             client_core::ClientError::Key => Self::Key,
-            client_core::ClientError::Io(e) => Self::Io {
-                message: e.to_string(),
+            client_core::ClientError::Io(client_error) => Self::Io {
+                message: client_error.to_string(),
             },
         }
     }
@@ -111,7 +105,6 @@ pub enum ClientEvent {
     /// to update it (`upgrade_daemon`); daemons that predate this refuse instead (`refused`
     /// follows).
     Incompatible {
-        /// Why, in words.
         reason: String,
     },
     /// Connected (or reconnected) and authenticated; for an SSH pane, a shell is open.
@@ -123,23 +116,17 @@ pub enum ClientEvent {
     },
     /// The connection dropped; redialling.
     Disconnected {
-        /// Why.
         reason: String,
     },
     /// Refused (bad grant, version mismatch; SSH: auth or host key needs the user). No
     /// redial until `reconnect` (SSH: `SshSession::reconnect_now`).
     Refused {
-        /// Why.
         reason: String,
     },
-    /// The session list.
     Sessions {
-        /// Sessions.
         sessions: Vec<SessionSummary>,
     },
-    /// Attached to a session.
     Attached {
-        /// The session.
         session_id: u64,
         /// How the daemon chose it.
         via: AttachVia,
@@ -148,112 +135,86 @@ pub enum ClientEvent {
     },
     /// Nothing to attach to (a guest whose session closed), or no session could be created.
     AttachFailed {
-        /// Machine-readable reason.
         code: OpErrorCode,
-        /// Why, in words.
         message: String,
     },
     /// The attached session's layout.
     Layout {
-        /// The layout.
         layout: SessionLayout,
     },
-    /// A pane's metadata.
     PaneMeta {
-        /// The metadata.
         meta: PaneMeta,
     },
-    /// A pane closed.
     PaneClosed {
-        /// The pane.
         pane_id: u64,
     },
     /// What the program in a pane reports about itself (`ConnectOptions.program_status`);
     /// `None` once cleared, and for every known pane when the connection drops.
     ProgramStatus {
-        /// The pane.
         pane_id: u64,
-        /// The report.
         status: Option<ProgramReport>,
     },
     /// A session's projects, after each `layout` from daemons with `projects`, on owner
     /// connections.
     Projects {
-        /// The projects.
         projects: crate::types::DaemonProjects,
     },
     /// A session's floating windows, after each `layout` from daemons with `floats`.
     Floats {
-        /// The windows.
         floats: crate::types::DaemonFloats,
     },
     /// A program in the pane wrote to the clipboard (OSC 52) after this device typed into it
     /// (`ConnectOptions.clipboard`): put it on this device's clipboard, local only, and say
     /// so. Programs can never read the clipboard.
     Clipboard {
-        /// The pane.
         pane_id: u64,
-        /// The text.
         text: String,
     },
     /// Raw output to feed the pane's VT, continuing from the previous event.
     PaneBytes {
-        /// The pane.
         pane_id: u64,
         /// Offset of `data[0]`.
         seq: u64,
-        /// The bytes.
         data: Bytes,
     },
     /// Replace the pane's VT with this Ghostty snapshot (READY section, decompressed).
     PaneSnapshot {
-        /// The pane.
         pane_id: u64,
         /// Offset the snapshot reflects.
         seq: u64,
-        /// The snapshot.
         data: Bytes,
     },
     /// Resize the pane's VT at this point of the stream.
     PaneResized {
-        /// The pane.
         pane_id: u64,
         /// Offset of the resize.
         seq: u64,
-        /// New size.
         size: PaneSize,
     },
     /// Input `input_seq` is reflected at or after output offset `at_seq`.
     InputAck {
-        /// The pane.
         pane_id: u64,
-        /// The input.
         input_seq: u64,
         /// Output offset.
         at_seq: u64,
     },
-    /// Echo prediction facts.
     EchoHint {
-        /// The hint.
         hint: EchoHint,
     },
+    /// An agent event as JSON.
     AgentEvent {
-        /// The pane.
         pane_id: u64,
-        /// The event.
         json: String,
     },
     /// The result of [`DaemonClient::op`].
     OpResult {
         /// The id `op` returned.
         op_id: u64,
-        /// What happened.
         outcome: OpOutcome,
     },
     /// Older scrollback (Ghostty snapshot history records) from
     /// [`DaemonClient::fetch_history`].
     PaneHistory {
-        /// The pane.
         pane_id: u64,
         /// `seq` of the snapshot the records extend.
         snapshot_seq: u64,
@@ -266,76 +227,62 @@ pub enum ClientEvent {
     },
     /// The daemon dropped the history of the pane's snapshot; fetch again after the next.
     PaneHistoryGone {
-        /// The pane.
         pane_id: u64,
     },
     /// A command started or finished in the attached session.
     CommandMark {
-        /// The mark.
         mark: CommandMark,
     },
     /// A long command finished while no client showed its pane.
     CommandFinishedUnseen {
-        /// The mark.
         mark: CommandMark,
     },
     /// The answer to [`DaemonClient::search`]: `page` or `error`.
     SearchResult {
         /// The id `search` returned.
         req_id: u64,
-        /// The pane.
         pane_id: u64,
-        /// Matches.
         page: Option<SearchPage>,
-        /// Failure.
         error: Option<RpcError>,
     },
     /// The answer to [`DaemonClient::links`]: `links` or `error`.
     Links {
         /// The id `links` returned.
         req_id: u64,
-        /// The pane.
         pane_id: u64,
         /// What was found.
         links: Option<Links>,
-        /// Failure.
         error: Option<RpcError>,
     },
     /// The answer to [`DaemonClient::commands`]: `commands` or `error`.
     Commands {
         /// The id `commands` returned.
         req_id: u64,
-        /// The pane.
         pane_id: u64,
-        /// The commands.
         commands: Option<CommandList>,
-        /// Failure.
         error: Option<RpcError>,
     },
     /// The answer to [`DaemonClient::command_output`]: `output` or `error`.
     CommandOutput {
         /// The id `command_output` returned.
         req_id: u64,
-        /// The pane.
         pane_id: u64,
-        /// The output.
         output: Option<CommandOutput>,
-        /// Failure.
         error: Option<RpcError>,
     },
 }
 
 fn split<T, U: From<T>>(r: Result<T, proto::RpcError>) -> (Option<U>, Option<RpcError>) {
     match r {
-        Ok(v) => (Some(v.into()), None),
-        Err(e) => (None, Some(e.into())),
+        Ok(value) => (Some(value.into()), None),
+        Err(error) => (None, Some(error.into())),
     }
 }
 
 impl From<client_core::ClientEvent> for ClientEvent {
-    fn from(e: client_core::ClientEvent) -> Self {
+    fn from(client_event: client_core::ClientEvent) -> Self {
         use client_core::ClientEvent as E;
-        match e {
+        match client_event {
             E::DaemonInfo { info } => Self::DaemonInfo {
                 info: info.map(Into::into),
             },
@@ -490,7 +437,6 @@ impl From<client_core::ClientEvent> for ClientEvent {
 /// actor or a renderer queue and return. Blocking here stalls the connection.
 #[uniffi::export(foreign)]
 pub trait ClientEventListener: Send + Sync {
-    /// One event.
     fn on_event(&self, event: ClientEvent);
 }
 
@@ -555,7 +501,6 @@ pub(crate) fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 pub struct ClientStats {
     /// Successful connections, the first included.
     pub connections: u64,
-    /// Snapshots received.
     pub snapshots: u64,
     /// `Bytes` frames received.
     pub byte_frames: u64,
@@ -612,15 +557,19 @@ impl std::fmt::Debug for ConnectOptions {
 }
 
 impl From<ConnectOptions> for client_core::ConnectOptions {
-    fn from(o: ConnectOptions) -> Self {
+    fn from(connect_options: ConnectOptions) -> Self {
         Self {
-            relay_ca_der: o.relay_ca_der.into_iter().map(Into::into).collect(),
-            relay_urls: o.relay_urls,
-            relay_auth_token: o.relay_auth_token.filter(|t| !t.is_empty()),
-            askpass: o.askpass,
-            browser: o.browser,
-            program_status: o.program_status,
-            clipboard: o.clipboard,
+            relay_ca_der: connect_options
+                .relay_ca_der
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            relay_urls: connect_options.relay_urls,
+            relay_auth_token: connect_options.relay_auth_token.filter(|t| !t.is_empty()),
+            askpass: connect_options.askpass,
+            browser: connect_options.browser,
+            program_status: connect_options.program_status,
+            clipboard: connect_options.clipboard,
             extra_caps: proto::Caps::EMPTY,
         }
     }
@@ -792,7 +741,6 @@ impl DaemonClient {
         self.inner.subscribe(PaneId(pane_id));
     }
 
-    /// Stops following a pane.
     pub fn unsubscribe(&self, pane_id: u64) {
         self.inner.unsubscribe(PaneId(pane_id));
     }
@@ -978,7 +926,7 @@ impl DaemonClient {
                 target: target.into(),
             })
             .collect();
-        all.sort_by_key(|f| f.local_port);
+        all.sort_by_key(|forward| forward.local_port);
         all
     }
 
@@ -991,13 +939,12 @@ impl DaemonClient {
     pub async fn perform(&self, op: LayoutOp) -> Result<OpOutcome, WorkspaceError> {
         self.await_op(op.into()).await
     }
-    /// Counters.
     pub fn stats(&self) -> ClientStats {
-        let s = self.inner.stats();
+        let stats = self.inner.stats();
         ClientStats {
-            connections: s.connections,
-            snapshots: s.snapshots,
-            byte_frames: s.byte_frames,
+            connections: stats.connections,
+            snapshots: stats.snapshots,
+            byte_frames: stats.byte_frames,
         }
     }
 }
@@ -1005,7 +952,6 @@ impl DaemonClient {
 /// Timings from [`bench_pane_bytes`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
 pub struct PaneBytesBench {
-    /// Events delivered.
     pub events: u32,
     /// Nanoseconds to deliver them all through the listener: payload allocation and copy,
     /// conversion, the call into Swift and whatever the listener does.
@@ -1041,11 +987,11 @@ pub fn bench_pane_bytes(
         client_core::ClientListener::on_event(&forward, event(seq));
     }
     let ffi = start.elapsed();
-    let ns = |d: Duration| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX);
+    let nanos = |d: Duration| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX);
     PaneBytesBench {
         events: count,
-        ffi_ns: ns(ffi),
-        rust_ns: ns(rust),
+        ffi_ns: nanos(ffi),
+        rust_ns: nanos(rust),
     }
 }
 
