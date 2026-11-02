@@ -124,6 +124,14 @@ public final class DaemonWorkspace {
     public private(set) var usage: AgentUsageReport?
     /// Whether the daemon answers usage requests (its `DaemonInfo.agentUsage`).
     @ObservationIgnored public var supportsUsage: () -> Bool = { false }
+    /// The host's agent accounts (`Accounts.swift`), as last pushed or read; nil until then,
+    /// for guests and for daemons without accounts.
+    public internal(set) var accounts: AccountsReport?
+    /// Usage per account, while usage is watched.
+    public internal(set) var accountUsage: AccountUsageReport?
+    /// Whether the daemon keeps accounts (its `DaemonInfo.accounts`).
+    @ObservationIgnored public var supportsAccounts: () -> Bool = { false }
+    @ObservationIgnored var accountsLoading = false
     @ObservationIgnored private var usageViewers = 0
     @ObservationIgnored private var usageTask: Task<Void, Never>?
     /// A watch was sent on this connection (so stopping must say so).
@@ -278,6 +286,10 @@ public final class DaemonWorkspace {
             for observer in tunnelObservers.values { observer(status) }
         case .agentUsage(let report):
             if usageViewers > 0 { usage = report }
+        case .accounts(let report):
+            accounts = report
+        case .accountUsage(let report):
+            if usageViewers > 0 { accountUsage = report }
         case .repos(let snapshot):
             repos = snapshot
             loadWorktreePortsIfNeeded()
@@ -625,6 +637,7 @@ extension DaemonConnection {
         if let existing = existingWorkspace { return existing }
         let hub = DaemonWorkspace(hostId: hostId, events: workspaceEvents) { [weak self] in self?.client as? any DaemonWorkspaceAPI }
         hub.supportsUsage = { [weak self] in self?.daemonInfo?.agentUsage ?? false }
+        hub.supportsAccounts = { [weak self] in self?.daemonInfo?.accounts ?? false }
         DaemonWorkspaceRegistry.hubs = DaemonWorkspaceRegistry.hubs.filter { $0.value.connection != nil }
         DaemonWorkspaceRegistry.hubs[ObjectIdentifier(self)] = .init(hub: hub, connection: self)
         let previous = onEvent

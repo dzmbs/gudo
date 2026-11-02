@@ -174,6 +174,8 @@ nonisolated struct AgentLaunchRequest: Hashable, Sendable {
     var repo: String?
     /// Open a shell instead of starting `agent`.
     var shell = false
+    /// The host account the agent runs under (`AgentAccount.id`); nil is the host's default.
+    var account: String?
 }
 
 /// What Approve can do beyond yes, for a permission request.

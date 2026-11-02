@@ -542,7 +542,7 @@ final class LiveAgentFeed: AgentFeed {
             splitFrom: splitFrom.rawValue, agent: request.agent == .codex ? .codex : .claude, axis: .horizontal,
             worktree: worktree, cwd: worktree == nil ? directory : nil, resume: nil,
             prompt: nil, submit: true, readyTimeoutMs: 30_000,
-            newTabIn: daemon.layout.sessionId))
+            newTabIn: daemon.layout.sessionId, account: request.account))
         log.info("launched \(request.agent.rawValue, privacy: .public) pane=\(launched.paneId) in \((ContinuousClock.now - started) / .milliseconds(1), format: .fixed(precision: 0)) ms")
         window?.reveal(host: request.hostId, pane: launched.paneId)
         if let prompt = request.prompt.nonEmpty {

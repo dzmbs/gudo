@@ -48,6 +48,8 @@ struct NewTaskSheet: View {
     @State private var worktree = true
     @State private var isStarting = false
     @State private var failure: String?
+    /// The account picked per host and agent; unpicked follows the project's or host's default.
+    @State private var accountPicks: [String: String] = [:]
     /// The chosen host's agents, by what launching would find; nil until it answers.
     @State private var installs: [AgentKind: InstallState]?
     @FocusState private var isPromptFocused: Bool
@@ -55,6 +57,21 @@ struct NewTaskSheet: View {
     private var hosts: [LaunchHost] { feed.launchHosts }
     private var host: LaunchHost? { hosts.first { $0.id == hostID } }
     private var daemon: DaemonConnection? { hostID.flatMap { model.app.hosts.connection($0) as? DaemonConnection } }
+    private var accountAgent: AccountAgent? {
+        switch runner {
+        case .claude: .claude
+        case .codex: .codex
+        case .shell: nil
+        }
+    }
+    private var accountBook: AccountBook? { hostID.flatMap { model.accountBook(onGroup: $0) } }
+    private var accountKey: String { "\(hostID ?? "")/\(runner.rawValue)" }
+    /// The account the agent will run under: the pick, else the current project's default,
+    /// else the host's.
+    private var account: String? {
+        guard let agent = accountAgent, let book = accountBook else { return nil }
+        return book.resolve(agent, project: model.currentProjectId, override: accountPicks[accountKey])
+    }
 
     private var status: LaunchStatus {
         guard host != nil else { return .noHost }
@@ -167,6 +184,24 @@ struct NewTaskSheet: View {
                     }
                     .disabled(repo == nil && host?.directory == nil)
                     .accessibilityIdentifier("task-worktree")
+                    if let agent = accountAgent, let book = accountBook, book.hasChoice(agent) {
+                        if worktree {
+                            // A new task's tab follows the host's default.
+                            LabeledContent("Account") {
+                                Text(book.account(agent, book.defaultAccount(agent, project: nil))?.label ?? "")
+                            }
+                        } else {
+                            Picker("Account", selection: Binding(
+                                get: { account ?? systemAccount },
+                                set: { accountPicks[accountKey] = $0 })) {
+                                ForEach(book.accounts(of: agent), id: \.id) { option in
+                                    Text(AccountText.isSignedIn(option.status) ? option.label : "\(option.label) (not signed in)")
+                                        .tag(option.id)
+                                }
+                            }
+                            .accessibilityIdentifier("task-account")
+                        }
+                    }
                 }
                 .chromeRows()
                 if worktree {
@@ -312,7 +347,7 @@ struct NewTaskSheet: View {
             prompt: runner == .shell ? "" : prompt.trimmingCharacters(in: .whitespacesAndNewlines),
             worktree: worktree, branch: branch.trimmingCharacters(in: .whitespaces).nonEmpty,
             name: worktree ? name.trimmingCharacters(in: .whitespaces) : nil,
-            repo: repoPath, shell: runner == .shell)
+            repo: repoPath, shell: runner == .shell, account: worktree ? nil : account)
         Task {
             do {
                 let note = try await feed.launch(request)

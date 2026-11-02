@@ -443,6 +443,7 @@ private struct PaneHeader: View {
     var body: some View {
         let state = model.paneStatus.state(of: id.description)
         let program = model.programIdentity(ofPane: id, onGroup: workspace.groupId)
+        let accounts = program.isShell ? nil : model.accountBook(onGroup: workspace.groupId)
         HStack(spacing: DS.Space.row) {
             ProgramMark(program, size: 12)
                 .foregroundStyle(isFocused ? DS.Palette.text : DS.Palette.textSecondary)
@@ -452,6 +453,10 @@ private struct PaneHeader: View {
                 .foregroundStyle(isFocused ? DS.Palette.text : DS.Palette.textSecondary)
                 .lineLimit(1)
                 .layoutPriority(1)
+            // "Claude Code · Work": only where the host has more than one account for it.
+            if let label = accounts?.paneLabel(id.rawValue) {
+                PaneAccountLabel(name: label.name, color: label.color, emphasized: isFocused)
+            }
             if namesHost, let group = model.groups.group(workspace.groupId) {
                 HostChip(group: group, emphasized: isFocused)
             }
@@ -472,6 +477,11 @@ private struct PaneHeader: View {
                 }
             }
             Spacer(minLength: 0)
+            if let hint = accounts?.limitHint(forPane: id.rawValue) {
+                LimitHintMenu(hint: hint) {
+                    model.startAgent(onGroup: workspace.groupId, agent: hint.alternative.agent, account: hint.alternative.id, from: id)
+                }
+            }
             PanePresence(workspace: workspace, pane: id)
             Menu {
                 PaneMenuItems(workspace: workspace, model: model, pane: id, focusPane: focus)
@@ -502,6 +512,54 @@ private struct PaneHeader: View {
         .contentShape(.rect)
         .onTapGesture { focus() }
         .onHover { isHovered = $0 }
+        .task(id: workspace.groupId) { model.loadAccounts(onGroup: workspace.groupId) }
+    }
+}
+
+/// The account an agent pane runs under, after its name: "· ● Work".
+struct PaneAccountLabel: View {
+    let name: String
+    let color: UInt8
+    var emphasized = false
+
+    var body: some View {
+        HStack(spacing: DS.Space.xxs) {
+            Text(verbatim: "·")
+                .foregroundStyle(DS.Palette.textTertiary)
+            AccountDot(color: color, size: 6)
+            Text(name)
+                .foregroundStyle(emphasized ? DS.Palette.text : DS.Palette.textSecondary)
+                .lineLimit(1)
+        }
+        .font(.caption)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Account: \(name)")
+        .help("Runs under the \(name) account")
+    }
+}
+
+/// A pane's account is at a plan limit: a quiet mark whose menu offers a new tab under another
+/// signed-in account. Nothing switches by itself.
+struct LimitHintMenu: View {
+    let hint: LimitHint
+    let start: () -> Void
+
+    var body: some View {
+        Menu {
+            Text(hint.message())
+            Button(hint.action, systemImage: "plus.rectangle.on.rectangle", action: start)
+        } label: {
+            Label("At Limit", systemImage: "gauge.with.dots.needle.100percent")
+                .labelStyle(.titleAndIcon)
+                .font(.caption)
+                .foregroundStyle(DS.Palette.attention)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(hint.message())
+        .accessibilityIdentifier("pane-limit-hint")
     }
 }
 
