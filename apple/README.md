@@ -50,7 +50,7 @@ macOS:
 ```sh
 cd apple
 xcodebuild -project App.xcodeproj -scheme App -destination 'platform=macOS' -derivedDataPath build/DerivedData build
-open build/DerivedData/Build/Products/Debug/gudo.app
+open build/DerivedData/Build/Products/Debug/Gudo.app
 ```
 
 iPad simulator (any Apple silicon simulator; the xcframework has no x86_64 simulator slice):
@@ -60,7 +60,7 @@ cd apple
 DEVICE=$(xcrun simctl list devices available | grep -m1 'iPad Pro 13-inch' | grep -oE '[0-9A-F-]{36}')
 xcrun simctl boot "$DEVICE"; open -a Simulator
 xcodebuild -project App.xcodeproj -scheme App -destination "platform=iOS Simulator,id=$DEVICE" -derivedDataPath build/DerivedData build
-xcrun simctl install "$DEVICE" build/DerivedData/Build/Products/Debug-iphonesimulator/gudo.app
+xcrun simctl install "$DEVICE" build/DerivedData/Build/Products/Debug-iphonesimulator/Gudo.app
 xcrun simctl launch "$DEVICE" dev.gudo.app
 ```
 
@@ -186,7 +186,7 @@ Every screen opens directly with mock data: `-screen <name> -mock` (names in `do
 e.g. `splits`, `inbox`, `palette`, `diff`). Screenshots in light and dark:
 
 ```sh
-scripts/mac-screenshots.sh build/DerivedData/Build/Products/Debug/gudo.app out  # Mac, works while locked
+scripts/mac-screenshots.sh build/DerivedData/Build/Products/Debug/Gudo.app out  # Mac, works while locked
 ```
 
 The Mac script uses the Debug-only `-snapshot <png>` switch (the app draws its own window; glass and

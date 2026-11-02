@@ -130,8 +130,8 @@ xcrun notarytool store-credentials gudo-notary --apple-id <apple id> --team-id <
 Then for each release:
 
 ```sh
-ditto -c -k --keepParent "$app" build/release/gudo.zip
-xcrun notarytool submit build/release/gudo.zip --keychain-profile gudo-notary --wait
+ditto -c -k --keepParent "$app" build/release/Gudo.zip
+xcrun notarytool submit build/release/Gudo.zip --keychain-profile gudo-notary --wait
 xcrun notarytool log <submission id> --keychain-profile gudo-notary   # when it says Invalid
 xcrun stapler staple "$app"
 xcrun stapler validate "$app"
@@ -139,8 +139,8 @@ spctl --assess --type execute --verbose=4 "$app"            # accepted, source=N
 ```
 
 For a disk image: put the stapled app in the image, sign it
-(`codesign --sign "Developer ID Application" --timestamp gudo.dmg`), submit it the same
-way, then `xcrun stapler staple gudo.dmg`.
+(`codesign --sign "Developer ID Application" --timestamp Gudo.dmg`), submit it the same
+way, then `xcrun stapler staple Gudo.dmg`.
 
 ## After installing
 

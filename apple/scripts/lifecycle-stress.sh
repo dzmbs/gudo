@@ -43,7 +43,7 @@ test_pid=$!
 (
   while kill -0 "$test_pid" 2>/dev/null; do
     xcrun simctl spawn "$sim" notifyutil -p dev.gudo.debug.memorywarning 2>/dev/null || true
-    pid="$(pgrep -f "Devices/$sim/.*/gudo.app/gudo" | head -1 || true)"
+    pid="$(pgrep -f "Devices/$sim/.*/Gudo.app/Gudo" | head -1 || true)"
     if [[ -n "$pid" ]]; then
       echo "$(date +%T) $(footprint "$pid" 2>/dev/null | grep -m1 -E 'Footprint:' | tr -s ' ')" >>"$state/footprint.log"
     fi
@@ -60,5 +60,5 @@ head -1 "$state/footprint.log" 2>/dev/null || true
 tail -1 "$state/footprint.log" 2>/dev/null || true
 [[ -n "${LOG_DIR:-}" ]] && cp "$state/footprint.log" "$log" "$LOG_DIR/" 2>/dev/null || true
 echo "crash reports since start:"
-find ~/Library/Logs/DiagnosticReports -name 'gudo*' -newer "$state/started" 2>/dev/null || true
+find ~/Library/Logs/DiagnosticReports -name 'Gudo*' -newer "$state/started" 2>/dev/null || true
 exit "$status"
