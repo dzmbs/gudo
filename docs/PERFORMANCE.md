@@ -181,7 +181,72 @@ workspace) → the shown host live, and the `app` category the moment This Mac's
 Not measured yet: a real cold launch of a release build with the login-item helper (the Mac app
 is not launched by agents).
 
-## 4. What is left (estimated gains)
+## 4. Data-oriented pass on the hot paths
+
+Profiled first (`sample(1)` of the TerminalKit probes and of the daemon under the stress
+scenarios), then each candidate was measured A/B against the commit before it, runs interleaved,
+same machine load, 3 runs each; ranges are min-max. A change was kept only if it was clearly
+faster with nothing slower elsewhere.
+
+Renderer probes (release; `GUDO_STRESS=1 swift test -c release -Xswiftc -enable-testing --filter StressProbeTests`):
+- `probeTinyFont6K`: 6K window at 4 pt (1201×306 cells, colored ASCII), full redraw every frame.
+- `probeTinyFont6KNonASCII`: the same with box drawing, Greek and CJK.
+- `probeSixteenPanes6K`: a 6K window split into 16 panes at 7 pt (187×46 each), all flooding colored output.
+- `probeGlyphLookup`: one cached glyph lookup.
+
+Build time is the CPU side of a frame: render-state update, row rebuild and instance assembly.
+
+| Candidate | Measure | Before | After | Kept |
+|---|---|---|---|---|
+| Gather each row's cells into flat per-column arrays (codepoints, widths, styles, colors; clusters in one side buffer) from libghostty's bulk raw-cell view, instead of 8 calls and a nested `[UInt32]` per cell | 6K tiny build avg | 24.7-24.8 ms | 16.8-16.9 ms | yes |
+| | 16 panes, per pane frame | 0.53-0.57 ms | 0.33-0.34 ms | |
+| Reuse a style across a run of cells with the same style id; read arrays and the frame style from locals | 6K tiny | 16.6-17.0 ms | 13.4-13.6 ms | yes |
+| Direct-mapped glyph cache (4096 slots, key packed into a u64: codepoint, style, span, constraint width) in front of the dictionary for non-ASCII codepoints | cached non-ASCII lookup | 39-40 ns | 9.1 ns | yes |
+| | 6K non-ASCII build avg | 20.7-21.1 ms | 11.5-11.7 ms | |
+| ASCII table and glyph cache as plain memory behind a `let` (no exclusivity or uniqueness check per cell) | lookup ASCII / non-ASCII | 6.4 / 9.1 ns | 2.5 / 5.6 ns | yes |
+| | 6K tiny / 6K non-ASCII / 16 panes | 13.4 / 11.3 / 0.31 ms | 11.0 / 9.5 / 0.26 ms | |
+| Copy a cached row's instances in bulk, then patch y | 6K tiny / 6K non-ASCII / 16 panes | 11.0 / 9.7 / 0.26-0.31 ms | 10.0 / 8.7 / 0.24 ms | yes |
+| One `ghostty_cell_get_multi` per cell instead of four `ghostty_cell_get` | 6K tiny / 6K non-ASCII / 16 panes | 10.9-11.1 / 9.4-9.7 / 0.257-0.262 ms | 11.0-11.1 / 9.6-9.7 / 0.262-0.266 ms | no |
+
+Overall the 6K full redraw went from 24.8 to 10.0 ms per frame, the non-ASCII one from 21 to
+8.7 ms, and a pane of the 16-pane flood from 0.55 to 0.24 ms.
+
+Daemon (release; stress scenarios from docs/STRESS.md plus an `#[ignore]`d timing test):
+
+| Candidate | Measure | Before | After | Kept |
+|---|---|---|---|---|
+| Walk split trees without boxing an iterator per node (`has_leaf` recursive, `leaves()` with a stack that one pane never allocates). Every event a client is sent asks which session and tab hold its pane, under the layout lock | `session_of_pane` + `tab_of_pane`, 402 panes (`layout::tests::pane_lookup_cost`) | 3540-3607 ns | 235-237 ns | yes |
+| | 400 panes setting their title twice a second, 20 clients, daemon CPU over 20 s | 38.3-39.2 s | 27.6-37.1 s | |
+| | same, samples of threads blocked on a mutex (the layout lock) | 5705-8166 | 149-247 | |
+| Resize count in an atomic, so a stream's per-chunk resize check skips the VT lock the parser holds | 100 guests on a `yes` pane: daemon CPU per MB delivered | 0.198-0.213 s | 0.201-0.212 s | no |
+| | 4 `yes` panes, one client: MB delivered in 30 s; echo p50/p99 | 890-907 MB; 0.27/0.41 ms | 905-913 MB; 0.27/0.41 ms | |
+
+The atomic resize count cut the samples of tokio workers blocked on the VT lock from 1366 to 128
+(100 guests), but nothing a client sees moved, so it was not kept.
+
+What the profiles showed, and so was not changed:
+- **Fan-out to many clients** is socket syscalls: with 100 guests on a flood, `sendmsg`/`recvmsg`
+  are 78 % of the active samples, QUIC 5 %, libghostty 4 %, and the daemon's own code (stream
+  bookkeeping, frame encoding, the per-client copy of each chunk and snapshot) 1.6 %.
+- **Floods** are libghostty parsing (out of scope); the OSC scanner is 0.15 % of active samples.
+- **Pane registry** (`HashMap<PaneId, …>` in `Core`) and the attention and approval tables did not
+  appear in any profile. A flat pane → (session, tab) index on top of the cheaper walk would save
+  about 0.2 µs per lookup, under 1 % of a core at 20 clients and 800 events/s.
+
+Not tried (low expected value against the profiles above): generational slot indices for panes,
+borrowed serialization of `Bytes`/`SnapshotZstd` frames to skip the per-client copy, reused
+snapshot and history encode buffers, client-core resume and stream bookkeeping per pane (not
+profiled), per-row arrays in the frame builder's row cache, and writing instances straight into
+the Metal buffer.
+
+Guards: `RendererStressTests.fullRebuildOfA6KGridStaysWithinBudget` (a full 6K rebuild within
+0.6 s in debug and 40 ms in release; now 235 ms and about 10 ms, before 408 and 25 ms),
+`gatheredRowsMatchTheCellByCellReads` (the row gather equals the per-cell API on styles, colors,
+wide characters and clusters), `DirectGlyphCacheTests` (misses, "draws nothing", collisions never
+answering for another key, same glyphs with and without the cache), and
+`leaves_walk_left_to_right_and_find_each_pane`.
+
+## 5. What is left (estimated gains)
 
 Daemon:
 - **Floods are bounded by libghostty parsing (inherent).** A cheaper path for panes nobody watches would help:
@@ -210,7 +275,7 @@ App (not measured end to end, because the Mac app is not launched in the foregro
 - **Keystroke latency and frame pacing under load** were not measured. This needs instrumentation in the
   client (input → echo applied → frame presented).
 
-## 5. Approach and references
+## 6. Approach and references
 
 The rules followed: delete work before optimizing it; every change is backed by a measurement and
 a known technique; no speculative caches, custom allocators or thread pools.

@@ -154,3 +154,38 @@ private func text(_ state: RenderState, row y: Int) -> String {
     #expect(state.colors.foreground == light.foreground)
     #expect(state.colors.palette == builtIn.colors.palette)
 }
+
+@Test func gatheredRowsMatchTheCellByCellReads() {
+    let terminal = Terminal(cols: 24, rows: 4) { _ in }
+    let state = RenderState()
+    terminal.write(Array("plain \u{1b}[1;31mbold red\u{1b}[0m \u{1b}[44m  \u{1b}[0m\r\n".utf8))
+    terminal.write(Array("\u{1b}[4:3;58;5;2mcurl\u{1b}[0m 日本 👍🏽 e\u{301} \u{1b}[7minv\u{1b}[0m\r\n".utf8))
+    terminal.write(Array("\u{1b}[48;2;1;2;3m\u{1b}[K\u{1b}[0m\r\n".utf8))
+    state.update(from: terminal)
+    let gathered = RowCells()
+    var rowsChecked = 0
+    state.forEachRow { row in
+        var expected: [(codepoint: UInt32, scalars: [UInt32], width: Cell.Width, style: String, fg: RGB?, bg: RGB?)] = []
+        row.forEachCell { cell in
+            expected.append((
+                cell.codepoint, cell.graphemes, cell.width, String(describing: cell.style),
+                cell.foreground, cell.background))
+        }
+        row.gather(into: gathered, limit: 24)
+        #expect(gathered.count == expected.count)
+        for (x, cell) in expected.enumerated() {
+            #expect(gathered.codepoints[x] == cell.codepoint, "x=\(x)")
+            #expect(gathered.scalars(at: x) == cell.scalars, "x=\(x)")
+            #expect(gathered.widths[x] == cell.width, "x=\(x)")
+            #expect(String(describing: gathered.styles[x]) == cell.style, "x=\(x)")
+            #expect(gathered.foregrounds[x] == cell.fg, "x=\(x)")
+            #expect(gathered.backgrounds[x] == cell.bg, "x=\(x)")
+        }
+        rowsChecked += 1
+    }
+    #expect(rowsChecked == 4)
+    state.forEachRow { row in
+        row.gather(into: gathered, limit: 5)
+        #expect(gathered.count == 5)
+    }
+}

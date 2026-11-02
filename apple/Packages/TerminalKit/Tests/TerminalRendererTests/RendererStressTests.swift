@@ -260,4 +260,33 @@ import Testing
         #expect(surface.renderIfDirty(offscreen: true))
         #expect(surface.kittyTextures.count == 1)
     }
+
+    /// A full rebuild of a 6K window at a 4 pt font (1201×306 colored cells, every row dirty)
+    /// stays within a budget with headroom for a loaded machine: about 10 ms in release and
+    /// 235 ms in debug now, against 25 and 410 ms before the data-oriented pass (docs/PERFORMANCE.md).
+    @Test func fullRebuildOfA6KGridStaysWithinBudget() {
+        let terminal = Terminal(cols: 1201, rows: 306) { _ in }
+        let fonts = FontGrid(pixelSize: 8)
+        let builder = FrameBuilder()
+        let state = RenderState()
+        var frame = FrameContents()
+        let line = String((0..<1201).map { i in Character(Unicode.Scalar(UInt8(0x21 + i % 94))) })
+        var durations: [Double] = []
+        for i in 0..<12 {
+            terminal.write(Array(("\u{1b}[3\(i % 8)m" + String(repeating: line, count: 320)).utf8))
+            state.update(from: terminal)
+            let start = CACurrentMediaTime()
+            _ = builder.build(state, fonts: fonts, overlay: FrameOverlay(), into: &frame)
+            durations.append(CACurrentMediaTime() - start)
+            state.markClean()
+        }
+        #expect(frame.text.count > 1201 * 300)
+        let median = durations.dropFirst(2).sorted()[5]
+        #if DEBUG
+        let budget = 0.6
+        #else
+        let budget = 0.04
+        #endif
+        #expect(median < budget, "a full 6K rebuild took \(median * 1000) ms")
+    }
 }

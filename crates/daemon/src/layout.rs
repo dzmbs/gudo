@@ -1175,7 +1175,10 @@ fn append_right(root: &mut LayoutNode, pane: PaneId) {
 }
 
 fn has_leaf(node: &LayoutNode, pane: PaneId) -> bool {
-    leaves(node).any(|leaf| leaf == pane)
+    match node {
+        LayoutNode::Leaf(leaf) => *leaf == pane,
+        LayoutNode::Split { first, second, .. } => has_leaf(first, pane) || has_leaf(second, pane),
+    }
 }
 
 /// Whether `node`'s leaves are exactly `panes`.
@@ -1275,10 +1278,33 @@ fn detach_leaf(tab: &mut TabLayout, pane: PaneId) {
 }
 
 /// Leaves of a tree, left to right / top to bottom.
-pub(crate) fn leaves(node: &LayoutNode) -> Box<dyn Iterator<Item = PaneId> + '_> {
-    match node {
-        LayoutNode::Leaf(pane) => Box::new(std::iter::once(*pane)),
-        LayoutNode::Split { first, second, .. } => Box::new(leaves(first).chain(leaves(second))),
+pub(crate) fn leaves(node: &LayoutNode) -> Leaves<'_> {
+    Leaves {
+        next: Some(node),
+        later: Vec::new(),
+    }
+}
+
+/// A tree's panes, left to right. A single pane allocates nothing.
+pub(crate) struct Leaves<'a> {
+    next: Option<&'a LayoutNode>,
+    later: Vec<&'a LayoutNode>,
+}
+
+impl Iterator for Leaves<'_> {
+    type Item = PaneId;
+
+    fn next(&mut self) -> Option<PaneId> {
+        let mut node = self.next.take().or_else(|| self.later.pop())?;
+        loop {
+            match node {
+                LayoutNode::Leaf(pane) => return Some(*pane),
+                LayoutNode::Split { first, second, .. } => {
+                    self.later.push(second);
+                    node = first;
+                }
+            }
+        }
     }
 }
 
@@ -2342,5 +2368,71 @@ mod tests {
         }
         let loaded: Layout = serde_json::from_value(json).unwrap();
         assert_eq!(loaded, layout);
+    }
+
+    #[test]
+    fn leaves_walk_left_to_right_and_find_each_pane() {
+        let mut layout = Layout::default();
+        let (session, _, p1) = session_with(&mut layout);
+        let p2 = layout.alloc_pane();
+        layout.split(p1, Axis::Horizontal, p2).unwrap();
+        let p3 = layout.alloc_pane();
+        layout.split(p1, Axis::Vertical, p3).unwrap();
+        let p4 = layout.alloc_pane();
+        layout.split(p2, Axis::Vertical, p4).unwrap();
+        let tab = &layout.session(session).unwrap().tabs[0];
+        assert_eq!(leaves(&tab.root).collect::<Vec<_>>(), vec![p1, p3, p2, p4]);
+        for pane in [p1, p2, p3, p4] {
+            assert!(has_leaf(&tab.root, pane));
+            assert_eq!(layout.session_of_pane(pane), Some(session));
+        }
+        assert!(!has_leaf(&tab.root, PaneId(999)));
+        assert_eq!(layout.session_of_pane(PaneId(999)), None);
+    }
+
+    /// Cost of the pane lookups every event pays per client, with 400 panes: 300 one-pane tabs
+    /// and 25 tabs of four splits, in two sessions. `cargo test --release -p daemon
+    /// layout::tests::pane_lookup_cost -- --ignored --nocapture`
+    #[test]
+    #[ignore = "timing; run by hand"]
+    fn pane_lookup_cost() {
+        let mut layout = Layout::default();
+        let (first, _, _) = session_with(&mut layout);
+        let second_pane = layout.alloc_pane();
+        let (second, _) = layout.create_session("second".into(), second_pane).unwrap();
+        let mut panes = Vec::new();
+        for i in 0..300 {
+            let pane = layout.alloc_pane();
+            let session = if i % 2 == 0 { first } else { second };
+            layout.new_tab(session, String::new(), pane).unwrap();
+            panes.push(pane);
+        }
+        for _ in 0..25 {
+            let pane = layout.alloc_pane();
+            layout.new_tab(first, String::new(), pane).unwrap();
+            panes.push(pane);
+            let mut last = pane;
+            for axis in [Axis::Horizontal, Axis::Vertical, Axis::Horizontal] {
+                let next = layout.alloc_pane();
+                layout.split(last, axis, next).unwrap();
+                panes.push(next);
+                last = next;
+            }
+        }
+        let lookups = 200_000;
+        let start = std::time::Instant::now();
+        let mut found = 0;
+        for i in 0..lookups {
+            let pane = panes[(i * 7919) % panes.len()];
+            if layout.session_of_pane(pane).is_some() {
+                found += 1;
+            }
+            if layout.tab_of_pane(pane).is_some() {
+                found += 1;
+            }
+        }
+        assert_eq!(found, lookups * 2);
+        let nanos = start.elapsed().as_nanos() as f64 / (lookups * 2) as f64;
+        println!("pane lookup with {} panes: {nanos:.0} ns", panes.len() + 2);
     }
 }
