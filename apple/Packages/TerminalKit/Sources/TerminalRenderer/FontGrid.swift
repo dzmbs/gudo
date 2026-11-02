@@ -211,20 +211,24 @@ final class FontGrid {
     ///     that is not a symbol; nil means `span`.
     func glyph(for scalars: [UInt32], style: FontStyle, span: Int, maxSpan: Int? = nil) -> RenderedGlyph? {
         guard let base = scalars.first else { return nil }
+        if scalars.count == 1 { return glyph(codepoint: base, style: style, span: span, maxSpan: maxSpan) }
+        return slowGlyph(for: scalars, base: base, style: style, span: span, maxSpan: maxSpan)
+    }
+
+    /// `glyph(for:)` for a cell holding one codepoint.
+    func glyph(codepoint: UInt32, style: FontStyle, span: Int, maxSpan: Int? = nil) -> RenderedGlyph? {
         // Hottest path: narrow ASCII, by index (most cells of most screens; ASCII is never a symbol,
         // so `maxSpan` does not change its glyph).
-        let asciiIndex = scalars.count == 1 && base < 128 && span == 1 ? style.rawValue << 7 | Int(base) : nil
+        let asciiIndex = codepoint < 128 && span == 1 ? style.rawValue << 7 | Int(codepoint) : nil
         if let asciiIndex, let cached = asciiGlyphs[asciiIndex] { return cached }
-        // Hot path: one codepoint, already resolved and rasterized (no String key to build).
-        let fastKey = scalars.count == 1
-            ? FastKey(codepoint: base, style: style, span: span, maxSpan: maxSpan ?? 1) : nil
-        if let fastKey, let cached = fastGlyphs[fastKey] { return cached }
+        let fastKey = FastKey(codepoint: codepoint, style: style, span: span, maxSpan: maxSpan ?? 1)
+        if asciiIndex == nil, let cached = fastGlyphs[fastKey] { return cached }
         let deferred = deferrals
-        let result = slowGlyph(for: scalars, base: base, style: style, span: span, maxSpan: maxSpan)
+        let result = slowGlyph(for: [codepoint], base: codepoint, style: style, span: span, maxSpan: maxSpan)
         if deferrals == deferred {
             if let asciiIndex {
                 asciiGlyphs[asciiIndex] = .some(result)
-            } else if let fastKey {
+            } else {
                 if fastGlyphs.count >= maxCacheEntries { fastGlyphs.removeAll() }
                 fastGlyphs[fastKey] = result
             }

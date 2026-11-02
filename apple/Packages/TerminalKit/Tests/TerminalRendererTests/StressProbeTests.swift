@@ -122,6 +122,37 @@ struct StressProbeTests {
         print("PROBE 120 surfaces freed: +\((footprint() - start) >> 20) MB")
     }
 
+    /// A 6K window split into 16 panes at a small font, every pane flooding colored output.
+    @Test func probeSixteenPanes6K() throws {
+        var surfaces: [TerminalSurface] = []
+        for _ in 0..<16 {
+            let terminal = Terminal(cols: 80, rows: 24) { _ in }
+            let surface = try TerminalSurface(terminal: terminal, fontSize: 7)
+            surface.layout(size: CGSize(width: 3008 / 4, height: 1692 / 4), scale: 2)
+            surfaces.append(surface)
+        }
+        let lines = (0..<64).map { i in
+            "\u{1b}[3\(i % 8)mcompiling\u{1b}[0m crate_\(i) v0.\(i).0 \u{1b}[1m(src/lib.rs:\(i * 7))\u{1b}[0m "
+                + "warning: unused variable `value_\(i)` ✓ λ → ─│┼ 日本 "
+                + String(repeating: "abcdefghijklmnopqrstuvwxyz", count: 6) + "\r\n"
+        }
+        for surface in surfaces { _ = surface.stats.drain() }
+        var rounds: [Double] = []
+        for round in 0..<200 {
+            let roundStart = CACurrentMediaTime()
+            for (index, surface) in surfaces.enumerated() {
+                let text = (0..<30).map { lines[($0 + round + index) % lines.count] }.joined()
+                surface.terminal.write(Array(text.utf8))
+                surface.renderIfDirty()
+            }
+            rounds.append((CACurrentMediaTime() - roundStart) * 1000)
+        }
+        let builds = surfaces.compactMap { $0.stats.drain() }
+        let buildAvg = builds.map(\.buildAvg).reduce(0, +) / Double(builds.count)
+        rounds.sort()
+        print("PROBE 16 panes 6K: grid \(String(describing: surfaces[0].grid)) round median \(rounds[rounds.count / 2]) ms p99 \(rounds[rounds.count * 99 / 100]) ms; build avg per pane frame \(buildAvg) ms")
+    }
+
     @Test func probeFontSizeStorm() throws {
         let terminal = Terminal(cols: 80, rows: 24) { _ in }
         let surface = try TerminalSurface(terminal: terminal, fontSize: 13)

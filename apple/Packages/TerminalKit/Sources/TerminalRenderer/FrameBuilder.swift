@@ -94,17 +94,8 @@ final class FrameBuilder {
         var complete = true
     }
 
-    /// One cell's data, gathered in a first pass so the second can look at neighbours.
-    private struct CellInfo {
-        var scalars: [UInt32] = []
-        var style: Cell.Style?
-        var width: Cell.Width = .narrow
-        var fg: RGB?
-        var bg: RGB?
-    }
-
     private var cache: [RowID: CachedRow] = [:]
-    private var infos: [CellInfo] = []
+    private let cells = RowCells()
     var style = FrameStyle() {
         // Cached rows carry the old selection and search colors.
         didSet { cache.removeAll(keepingCapacity: true) }
@@ -255,36 +246,17 @@ final class FrameBuilder {
             fg: .init(repeating: rgba(colors.background), count: cols)
         )
         let deferrals = fonts.deferrals
-        // Pass 1: gather cells.
-        // Work on a local copy (moved out, not copied): class-property access costs an exclusivity
-        // check and a uniqueness check per cell.
-        var infos: [CellInfo] = []
-        swap(&infos, &self.infos)
-        defer { swap(&infos, &self.infos) }
-        if infos.count < cols { infos = .init(repeating: CellInfo(), count: cols) }
-        var x = 0
-        row.forEachCell { cell in
-            defer { x += 1 }
-            guard x < cols else { return }
-            let count = cell.graphemeCount
-            // Reuse each slot's array storage: no allocation per cell on the common path.
-            infos[x].scalars.removeAll(keepingCapacity: true)
-            if count == 1 { infos[x].scalars.append(cell.codepoint) } else if count > 1 { infos[x].scalars.append(contentsOf: cell.graphemes) }
-            infos[x].style = cell.style
-            infos[x].width = cell.width
-            infos[x].fg = cell.foreground
-            infos[x].bg = cell.background
-        }
-        let filled = min(x, cols)
+        let cells = cells
+        row.gather(into: cells, limit: cols)
+        let filled = cells.count
+        let codepoints = cells.codepoints
         let selection = row.selection
 
-        // Pass 2: emit backgrounds, glyphs and decorations.
         let defaultFg = colors.foreground
         for x in 0..<filled {
-            let info = infos[x]
-            let style = info.style
-            var fg = info.fg ?? defaultFg
-            var bg = info.bg
+            let style = cells.styles[x]
+            var fg = cells.foregrounds[x] ?? defaultFg
+            var bg = cells.backgrounds[x]
             if style?.inverse == true {
                 (fg, bg) = (bg ?? colors.background, fg)
             }
@@ -297,7 +269,7 @@ final class FrameBuilder {
             if let bg { cached.bg[x] = rgba(bg) }
             cached.fg[x] = rgba(bg ?? colors.background)
 
-            let width = info.width
+            let width = cells.widths[x]
             guard width == .narrow || width == .wide, style?.invisible != true else { continue }
             let span = width == .wide ? 2 : 1
             cached.wide[x] = width == .wide
@@ -306,17 +278,19 @@ final class FrameBuilder {
 
             if style?.blink == true { cached.hasBlink = true }
             let blinkHidden = style?.blink == true && !blinkOn
-            if !info.scalars.isEmpty, info.scalars != [0x20], !blinkHidden {
+            let codepoint = codepoints[x]
+            let isCluster = cells.isCluster(at: x)
+            if codepoint != 0, codepoint != 0x20 || isCluster, !blinkHidden {
                 // Ghostty lets a narrow symbol (Nerd Font icon) grow into a following blank cell.
                 let maxSpan = NerdFontConstraint.constraintWidth(
-                    codepoint: info.scalars[0], span: span,
-                    previous: x > 0 ? infos[x - 1].scalars.first ?? 0 : nil,
-                    next: x + 1 < cols ? (x + 1 < filled ? infos[x + 1].scalars.first ?? 0 : 0) : nil)
-                if let glyph = fonts.glyph(
-                    for: info.scalars,
-                    style: FontStyle(bold: style?.bold ?? false, italic: style?.italic ?? false),
-                    span: span, maxSpan: maxSpan)
-                {
+                    codepoint: codepoint, span: span,
+                    previous: x > 0 ? codepoints[x - 1] : nil,
+                    next: x + 1 < cols ? (x + 1 < filled ? codepoints[x + 1] : 0) : nil)
+                let fontStyle = FontStyle(bold: style?.bold ?? false, italic: style?.italic ?? false)
+                let glyph = isCluster
+                    ? fonts.glyph(for: cells.scalars(at: x), style: fontStyle, span: span, maxSpan: maxSpan)
+                    : fonts.glyph(codepoint: codepoint, style: fontStyle, span: span, maxSpan: maxSpan)
+                if let glyph {
                     cached.text.append(instance(glyph, x: x, color: color))
                 }
             }
@@ -340,10 +314,6 @@ final class FrameBuilder {
         }
         cached.complete = fonts.deferrals == deferrals
         return cached
-    }
-
-    private static func isBlank(_ info: CellInfo) -> Bool {
-        info.width == .narrow && (info.scalars.isEmpty || info.scalars == [0x20])
     }
 
     static func sprite(for underline: Cell.Underline) -> Sprite {

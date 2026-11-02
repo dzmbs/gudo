@@ -148,8 +148,8 @@ public struct RowID: Hashable, Sendable {
 
 /// One row of a `RenderState`, valid only during `RenderState.forEachRow`.
 public struct Row {
-    fileprivate let iterator: GhosttyRenderStateRowIterator
-    fileprivate let cells: GhosttyRenderStateRowCells
+    let iterator: GhosttyRenderStateRowIterator
+    let cells: GhosttyRenderStateRowCells
 
     public var id: RowID {
         var id = GhosttyRenderStateRowId()
@@ -226,7 +226,7 @@ public struct Cell {
         public var blink: Bool
     }
 
-    fileprivate let cells: GhosttyRenderStateRowCells
+    let cells: GhosttyRenderStateRowCells
 
     private var raw: GhosttyCell {
         var raw: GhosttyCell = 0
@@ -262,12 +262,7 @@ public struct Cell {
     public var width: Width {
         var wide = GHOSTTY_CELL_WIDE_NARROW
         ghostty_cell_get(raw, GHOSTTY_CELL_DATA_WIDE, &wide)
-        switch wide {
-        case GHOSTTY_CELL_WIDE_WIDE: return .wide
-        case GHOSTTY_CELL_WIDE_SPACER_TAIL: return .spacerTail
-        case GHOSTTY_CELL_WIDE_SPACER_HEAD: return .spacerHead
-        default: return .narrow
-        }
+        return Width(wide)
     }
 
     /// The cell's SGR flags, or nil for an unstyled cell.
@@ -278,24 +273,7 @@ public struct Cell {
         var style = GhosttyStyle()
         style.size = MemoryLayout<GhosttyStyle>.size
         ghostty_render_state_row_cells_get(cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE, &style)
-        let underline: Underline = switch style.underline {
-        case Int32(GHOSTTY_SGR_UNDERLINE_SINGLE.rawValue): .single
-        case Int32(GHOSTTY_SGR_UNDERLINE_DOUBLE.rawValue): .double
-        case Int32(GHOSTTY_SGR_UNDERLINE_CURLY.rawValue): .curly
-        case Int32(GHOSTTY_SGR_UNDERLINE_DOTTED.rawValue): .dotted
-        case Int32(GHOSTTY_SGR_UNDERLINE_DASHED.rawValue): .dashed
-        default: .none
-        }
-        let underlineColor: StyleColor = switch style.underline_color.tag {
-        case GHOSTTY_STYLE_COLOR_PALETTE: .palette(style.underline_color.value.palette)
-        case GHOSTTY_STYLE_COLOR_RGB: .rgb(RGB(style.underline_color.value.rgb))
-        default: .none
-        }
-        return Style(
-            bold: style.bold, italic: style.italic, faint: style.faint, inverse: style.inverse,
-            invisible: style.invisible, strikethrough: style.strikethrough, underline: underline,
-            underlineColor: underlineColor, overline: style.overline, blink: style.blink
-        )
+        return Style(style)
     }
 
     /// The cell carries an OSC 8 hyperlink.
@@ -315,5 +293,42 @@ public struct Cell {
         var rgb = GhosttyColorRgb()
         guard ghostty_render_state_row_cells_get(cells, data, &rgb) == GHOSTTY_SUCCESS else { return nil }
         return RGB(rgb)
+    }
+}
+
+extension Cell.Style {
+    init(_ style: GhosttyStyle) {
+        underline = switch style.underline {
+        case Int32(GHOSTTY_SGR_UNDERLINE_SINGLE.rawValue): .single
+        case Int32(GHOSTTY_SGR_UNDERLINE_DOUBLE.rawValue): .double
+        case Int32(GHOSTTY_SGR_UNDERLINE_CURLY.rawValue): .curly
+        case Int32(GHOSTTY_SGR_UNDERLINE_DOTTED.rawValue): .dotted
+        case Int32(GHOSTTY_SGR_UNDERLINE_DASHED.rawValue): .dashed
+        default: .none
+        }
+        underlineColor = switch style.underline_color.tag {
+        case GHOSTTY_STYLE_COLOR_PALETTE: .palette(style.underline_color.value.palette)
+        case GHOSTTY_STYLE_COLOR_RGB: .rgb(RGB(style.underline_color.value.rgb))
+        default: .none
+        }
+        bold = style.bold
+        italic = style.italic
+        faint = style.faint
+        inverse = style.inverse
+        invisible = style.invisible
+        strikethrough = style.strikethrough
+        overline = style.overline
+        blink = style.blink
+    }
+}
+
+extension Cell.Width {
+    init(_ wide: GhosttyCellWide) {
+        self = switch wide {
+        case GHOSTTY_CELL_WIDE_WIDE: .wide
+        case GHOSTTY_CELL_WIDE_SPACER_TAIL: .spacerTail
+        case GHOSTTY_CELL_WIDE_SPACER_HEAD: .spacerHead
+        default: .narrow
+        }
     }
 }
