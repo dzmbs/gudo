@@ -16,7 +16,7 @@ public final class RowCells {
     public private(set) var foregrounds = UnsafeMutablePointer<RGB?>.allocate(capacity: 0)
     public private(set) var backgrounds = UnsafeMutablePointer<RGB?>.allocate(capacity: 0)
     /// Start of a multi-codepoint cluster in `clusterScalars`, or -1 for a single codepoint.
-    fileprivate var clusterStarts = UnsafeMutablePointer<Int32>.allocate(capacity: 0)
+    public fileprivate(set) var clusterStarts = UnsafeMutablePointer<Int32>.allocate(capacity: 0)
     private var clusterScalars: [UInt32] = []
 
     public init() {}

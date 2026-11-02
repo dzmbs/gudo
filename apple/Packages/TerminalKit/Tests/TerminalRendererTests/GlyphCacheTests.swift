@@ -16,7 +16,7 @@ struct DirectGlyphCacheTests {
     }
 
     @Test func missesUntilInsertedAndRemembersDrawsNothing() {
-        var cache = DirectGlyphCache(slotsLog2: 4)
+        let cache = DirectGlyphCache(slotsLog2: 4)
         let key = DirectGlyphCache.key(codepoint: 0x4E00, style: .regular, span: 2, maxSpan: 2)
         #expect(cache.lookup(key) == nil)
         cache.insert(glyph(7), for: key)
@@ -30,7 +30,7 @@ struct DirectGlyphCacheTests {
     }
 
     @Test func aCollidingKeyReplacesTheSlotAndNeverAnswersForAnother() {
-        var cache = DirectGlyphCache(slotsLog2: 2)
+        let cache = DirectGlyphCache(slotsLog2: 2)
         let keys = (UInt32(0x2500)..<0x2540).map { DirectGlyphCache.key(codepoint: $0, style: .regular, span: 1, maxSpan: 1) }
         for (i, key) in keys.enumerated() { cache.insert(glyph(i), for: key) }
         var hits = 0

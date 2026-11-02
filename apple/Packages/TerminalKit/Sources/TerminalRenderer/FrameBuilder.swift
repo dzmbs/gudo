@@ -254,6 +254,7 @@ final class FrameBuilder {
         let foregrounds = cells.foregrounds
         let backgrounds = cells.backgrounds
         let widths = cells.widths
+        let clusterStarts = cells.clusterStarts
         let selection = row.selection
         let frameStyle = style
 
@@ -284,7 +285,7 @@ final class FrameBuilder {
             if style?.blink == true { cached.hasBlink = true }
             let blinkHidden = style?.blink == true && !blinkOn
             let codepoint = codepoints[x]
-            let isCluster = cells.isCluster(at: x)
+            let isCluster = clusterStarts[x] >= 0
             if codepoint != 0, codepoint != 0x20 || isCluster, !blinkHidden {
                 // Ghostty lets a narrow symbol (Nerd Font icon) grow into a following blank cell.
                 let maxSpan = NerdFontConstraint.constraintWidth(

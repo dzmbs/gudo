@@ -163,6 +163,10 @@ final class FontGrid {
     ///   - pixelSize: font size in device pixels (points x display scale).
     ///   - family: a font family installed on the system, or nil for the bundled JetBrains Mono
     ///     Nerd Font. An unknown family falls back to the bundled font.
+    deinit {
+        asciiGlyphs.deallocate()
+    }
+
     init(pixelSize: CGFloat, family: String? = nil, maxAtlasSize: Int? = nil) {
         grayscale = Atlas(format: .grayscale, maxSize: maxAtlasSize)
         color = Atlas(format: .color, maxSize: maxAtlasSize)
@@ -243,7 +247,13 @@ final class FontGrid {
     }
 
     /// Narrow ASCII glyphs by `style << 7 | codepoint`; `.some(nil)` caches "draws nothing".
-    private var asciiGlyphs = [RenderedGlyph??](repeating: nil, count: FontStyle.allCases.count << 7)
+    /// Plain memory held by a `let`: no exclusivity or uniqueness check per cell.
+    private let asciiGlyphs: UnsafeMutablePointer<RenderedGlyph??> = {
+        let table = UnsafeMutablePointer<RenderedGlyph??>.allocate(capacity: FontGrid.asciiTableSize)
+        table.initialize(repeating: nil, count: FontGrid.asciiTableSize)
+        return table
+    }()
+    private static let asciiTableSize = FontStyle.allCases.count << 7
 
     /// False (and counted as deferred) once the frame's rasterization time is used up.
     private func mayRasterize() -> Bool {
@@ -261,7 +271,7 @@ final class FontGrid {
 
     private var fastGlyphs: [FastKey: RenderedGlyph?] = [:]
     /// In front of `fastGlyphs`: the non-ASCII glyphs a screen shows (box drawing, CJK) without hashing.
-    private var directGlyphs = DirectGlyphCache()
+    private let directGlyphs = DirectGlyphCache()
 
     var cacheEntryCounts: (resolved: Int, fast: Int) { (resolved.count, fastGlyphs.count) }
 
@@ -347,7 +357,7 @@ final class FontGrid {
         colorTexture = nil
         fastGlyphs.removeAll()
         directGlyphs.removeAll()
-        asciiGlyphs = asciiGlyphs.map { _ in nil }
+        asciiGlyphs.update(repeating: nil, count: Self.asciiTableSize)
         glyphs.removeAll()
         spriteGlyphs.removeAll()
         sprites.removeAll()
