@@ -218,6 +218,7 @@ async fn run(
     }
     // Everyone here and what they are doing, before any change to it.
     client.forward(Event::Participants);
+    client.forward(Event::Accounts);
     let mut tasks = JoinSet::new();
     tasks.spawn(write_ctl(
         conn.clone(),
@@ -288,7 +289,8 @@ pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {
         | DaemonFeatures::INVITE_LINKS
         | DaemonFeatures::PROGRAM_STATUS
         | DaemonFeatures::REPO_TRUST
-        | DaemonFeatures::REOPEN;
+        | DaemonFeatures::REOPEN
+        | DaemonFeatures::ACCOUNTS;
     if core.cfg.push.enabled && core.cfg.push.live_activity {
         features |= DaemonFeatures::LIVE_ACTIVITY;
     }
@@ -1105,6 +1107,11 @@ impl Client {
             Event::Repos => {
                 if let Some(snapshot) = self.scoped_repos() {
                     self.send(ServerCtl::Repos(snapshot));
+                }
+            }
+            Event::Accounts => {
+                if self.caps.contains(Caps::ACCOUNTS) && is_owner(&self.core, &self.authz) {
+                    self.send(ServerCtl::Accounts(self.core.accounts_report()));
                 }
             }
             Event::Knock(update) => {
@@ -2193,7 +2200,17 @@ impl Client {
             }
             ClientCtl::Op { op_id, mut op } => {
                 let (need, target) = policy::op(&op);
-                let outcome = match self.allow(need, target) {
+                let allowed = self.allow(need, target).and_then(|()| {
+                    // A delegated owner role is still a guest: the sign-ins are the owner's.
+                    if policy::chooses_account(&op) && !is_owner(&self.core, &self.authz) {
+                        Err(MpError::Forbidden(
+                            "only the host's owner chooses its agent accounts".into(),
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                });
+                let outcome = match allowed {
                     Ok(()) => match self.prepare_canvas(&mut op) {
                         Ok(created) => {
                             let outcome = Arc::clone(&self.core).apply_op(op);

@@ -59,6 +59,10 @@ pub(crate) struct Ws {
     pub hook_trust: trust::HookTrust,
     worktree_root: PathBuf,
     pub usage: Arc<crate::usage::Usage>,
+    /// Agent accounts (`proto::account`).
+    pub accounts: Arc<crate::accounts::Accounts>,
+    /// How the agents' own commands run for an account.
+    pub tools: crate::accounts::Tools,
     /// Workflow files (`proto::workflow`).
     pub workflows: Arc<workflows::Workflows>,
     /// `PATH` as the user's terminal panes see it.
@@ -68,6 +72,7 @@ pub(crate) struct Ws {
 impl Ws {
     pub fn new(cfg: &Config, events: tokio::sync::broadcast::Sender<Event>) -> Self {
         let home = cfg.home();
+        let accounts = Arc::new(crate::accounts::Accounts::load(&cfg.state_dir));
         Self {
             policy: Policy::new(&home, &cfg.fs_allow).deny(&cfg.state_dir),
             ports: ports::Ports::new(),
@@ -83,7 +88,9 @@ impl Ws {
                 .worktree_root
                 .clone()
                 .unwrap_or_else(|| home.join(format!(".{}", brand::DIR_NAME)).join("worktrees")),
-            usage: Arc::new(crate::usage::Usage::new(cfg)),
+            usage: Arc::new(crate::usage::Usage::new(cfg, Arc::clone(&accounts))),
+            accounts,
+            tools: crate::accounts::Tools::new(cfg),
             terminal_path: installs::TerminalPath::default(),
         }
     }
@@ -149,6 +156,24 @@ pub(crate) async fn handle(
     let ws = &core.ws;
     let policy = ws.policy.clone();
     match req {
+        R::Accounts
+        | R::AccountAdd(_)
+        | R::AccountEdit { .. }
+        | R::AccountRemove { .. }
+        | R::AccountCheck { .. }
+        | R::AccountSetDefault { .. }
+            if !conn.owner =>
+        {
+            Err(WsError::Denied(
+                "only the host's owner sees or changes its agent accounts".into(),
+            ))
+        }
+        req @ (R::Accounts
+        | R::AccountAdd(_)
+        | R::AccountEdit { .. }
+        | R::AccountRemove { .. }
+        | R::AccountCheck { .. }
+        | R::AccountSetDefault { .. }) => accounts(core, req).await,
         R::ListPorts => Ok(A::Ports(ports::scan(core).await)),
         R::EditorStatus => Ok(A::Editors(ws.editors.status(&core.cfg).await)),
         R::EditorLaunch(launch) => {
@@ -454,10 +479,98 @@ pub(crate) async fn handle(
         }
         R::AgentMcpCommands { register } => {
             let path = ws.terminal_path.cached(&core.cfg).await;
+            let accounts: Vec<_> = ws
+                .accounts
+                .list()
+                .into_iter()
+                .filter(|a| !a.is_system())
+                .map(|a| (a.agent, ws.accounts.dir(a.agent, &a.id)))
+                .collect();
             Ok(A::AgentMcpCommands(installs::mcp_commands(
-                &core.cfg, path, register,
+                &core.cfg, path, register, &accounts,
             )))
         }
+    }
+}
+
+/// Answers an `Account*` request from the owner.
+async fn accounts(core: &Arc<Core>, req: WorkspaceRequest) -> Result<WorkspaceResponse, WsError> {
+    use WorkspaceRequest as R;
+    use WorkspaceResponse as A;
+    let ws = &core.ws;
+    let changed = |core: &Core| {
+        core.emit(Event::Accounts);
+        Ok(A::Accounts(core.accounts_report()))
+    };
+    match req {
+        R::Accounts => {
+            // Accounts nobody asked about yet are asked about now; clients hear the answer.
+            for account in ws.accounts.list() {
+                if account.status == proto::AccountStatus::Unknown {
+                    core.check_account(account.agent, account.id);
+                }
+            }
+            Ok(A::Accounts(core.accounts_report()))
+        }
+        R::AccountAdd(add) => {
+            let account = ws.accounts.add(&add).map_err(WsError::Invalid)?;
+            core.emit(Event::Accounts);
+            Ok(A::Account(account))
+        }
+        R::AccountEdit {
+            agent,
+            account,
+            label,
+            color,
+        } => {
+            ws.accounts
+                .edit(agent, &account, &label, color)
+                .map_err(WsError::Invalid)?;
+            changed(core)
+        }
+        R::AccountRemove { agent, account } => {
+            let in_use = core
+                .accounts_report()
+                .panes
+                .iter()
+                .filter(|p| p.agent == agent && p.account == account)
+                .count();
+            if in_use > 0 {
+                return Err(WsError::Conflict(format!(
+                    "{in_use} agent pane{} still run{} under this account; close {} first",
+                    if in_use == 1 { "" } else { "s" },
+                    if in_use == 1 { "s" } else { "" },
+                    if in_use == 1 { "it" } else { "them" },
+                )));
+            }
+            ws.accounts
+                .remove(&ws.tools, agent, &account)
+                .await
+                .map_err(WsError::Failed)?;
+            changed(core)
+        }
+        R::AccountCheck { agent, account } => {
+            let (account, updated) = ws
+                .accounts
+                .check(&ws.tools, agent, &account)
+                .await
+                .map_err(WsError::NotFound)?;
+            if updated {
+                core.emit(Event::Accounts);
+            }
+            Ok(A::Account(account))
+        }
+        R::AccountSetDefault {
+            agent,
+            project,
+            account,
+        } => {
+            ws.accounts
+                .set_default(agent, project, account)
+                .map_err(WsError::Invalid)?;
+            changed(core)
+        }
+        _ => unreachable!("only account requests come here"),
     }
 }
 

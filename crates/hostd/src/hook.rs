@@ -109,7 +109,8 @@ fn relay(args: &[String], raw: &[u8], status_line: bool) -> Result<(), Box<dyn s
 }
 
 /// Runs the status line the user configured (`statusLine.command` in the project's
-/// `.claude/settings.local.json`, `.claude/settings.json`, then `~/.claude/settings.json`,
+/// `.claude/settings.local.json`, `.claude/settings.json`, then the account's
+/// `settings.json`, by default `~/.claude/settings.json`,
 /// Claude's own precedence) with the same input, its output going straight to Claude.
 fn user_status_line(raw: &[u8]) {
     let input: Value = serde_json::from_slice(raw).unwrap_or(Value::Null);
@@ -132,6 +133,26 @@ fn user_status_line(raw: &[u8]) {
     let _ = child.wait();
 }
 
+/// The pane's Claude configuration directory: its account's (`UN_ACCOUNT_DIR`, which Claude's
+/// subprocess scrub leaves alone), else `CLAUDE_CONFIG_DIR`; `None` means `~/.claude`.
+fn user_config_dir() -> Option<PathBuf> {
+    config_dir_from(
+        std::env::var_os(brand::env_var("ACCOUNT_DIR")),
+        std::env::var_os("CLAUDE_CONFIG_DIR"),
+    )
+}
+
+fn config_dir_from(
+    account: Option<std::ffi::OsString>,
+    claude: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    account
+        .filter(|d| !d.is_empty())
+        .or(claude)
+        .filter(|d| !d.is_empty())
+        .map(PathBuf::from)
+}
+
 fn user_status_command(input: &Value) -> Option<String> {
     let mut files = Vec::new();
     for key in ["/workspace/project_dir", "/workspace/current_dir", "/cwd"] {
@@ -141,8 +162,7 @@ fn user_status_command(input: &Value) -> Option<String> {
             files.push(dir.join("settings.json"));
         }
     }
-    let config = std::env::var_os("CLAUDE_CONFIG_DIR")
-        .map(PathBuf::from)
+    let config = user_config_dir()
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude")));
     if let Some(config) = config {
         files.push(config.join("settings.json"));
@@ -160,6 +180,19 @@ fn user_status_command(input: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The account's directory wins over `CLAUDE_CONFIG_DIR`, which Claude may scrub from
+    /// hook environments or a startup file may point elsewhere.
+    #[test]
+    fn the_accounts_dir_names_the_status_line_settings() {
+        let dir = |s: &str| Some(std::ffi::OsString::from(s));
+        assert_eq!(
+            config_dir_from(dir("/s/accounts/claude/a1"), dir("/h/.claude")),
+            Some(PathBuf::from("/s/accounts/claude/a1"))
+        );
+        assert_eq!(config_dir_from(None, dir("/h/.claude")), Some(PathBuf::from("/h/.claude")));
+        assert_eq!(config_dir_from(dir(""), None), None);
+    }
 
     #[test]
     fn finds_the_users_status_line_in_claudes_order() {

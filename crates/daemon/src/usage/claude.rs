@@ -181,9 +181,18 @@ fn reset(v: Option<&Value>) -> Option<UnixMillis> {
     }
 }
 
-/// The last status-line snapshot saved in `dir`.
-pub(crate) fn load(dir: &Path) -> Option<AgentUsage> {
-    let text = std::fs::read_to_string(dir.join(STATE_FILE)).ok()?;
+/// The snapshot file of `account` in the usage directory.
+fn state_file(dir: &Path, account: &str) -> std::path::PathBuf {
+    if account == proto::SYSTEM_ACCOUNT {
+        dir.join(STATE_FILE)
+    } else {
+        dir.join(format!("claude-status-line-{account}.json"))
+    }
+}
+
+/// The last status-line snapshot of `account` saved in `dir`.
+pub(crate) fn load(dir: &Path, account: &str) -> Option<AgentUsage> {
+    let text = std::fs::read_to_string(state_file(dir, account)).ok()?;
     let v: Value = serde_json::from_str(&text).ok()?;
     let mut usage = from_status_line(&v["payload"], v["at"].as_u64()?)?;
     usage.plan = v["plan"].as_str().map(str::to_owned);
@@ -192,7 +201,7 @@ pub(crate) fn load(dir: &Path) -> Option<AgentUsage> {
 
 /// Saves a status-line snapshot in `dir` (as the status line's own shape, so [`load`] reads it
 /// back the same way).
-pub(crate) fn save(dir: &Path, usage: &AgentUsage) {
+pub(crate) fn save(dir: &Path, account: &str, usage: &AgentUsage) {
     let mut limits = serde_json::Map::new();
     for w in &usage.windows {
         let key = match w.minutes {
@@ -213,7 +222,7 @@ pub(crate) fn save(dir: &Path, usage: &AgentUsage) {
         "plan": usage.plan,
         "payload": { "rate_limits": limits },
     });
-    if let Err(e) = crate::fsutil::write_atomic(&dir.join(STATE_FILE), doc.to_string().as_bytes()) {
+    if let Err(e) = crate::fsutil::write_atomic(&state_file(dir, account), doc.to_string().as_bytes()) {
         tracing::debug!("saving the Claude usage snapshot: {e}");
     }
 }
@@ -269,8 +278,12 @@ mod tests {
         )
         .unwrap();
         let u = from_status_line(&v, 77).unwrap();
-        save(dir.path(), &u);
-        assert_eq!(load(dir.path()), Some(u));
+        save(dir.path(), "system", &u);
+        assert_eq!(load(dir.path(), "system"), Some(u.clone()));
+        // Each account keeps its own snapshot.
+        assert_eq!(load(dir.path(), "a1b2c3d4"), None);
+        save(dir.path(), "a1b2c3d4", &u);
+        assert_eq!(load(dir.path(), "a1b2c3d4"), Some(u));
         assert_eq!(
             plan_from_auth_status(r#"{"loggedIn":true,"subscriptionType":"max"}"#).as_deref(),
             Some("max")

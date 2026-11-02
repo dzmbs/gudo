@@ -90,6 +90,9 @@ pub(crate) enum Event {
     Approval(proto::ApprovalPush),
     /// A watched workflow directory changed (the new revision).
     Workflows(u64),
+    /// The agent accounts or the panes' accounts changed (read them with
+    /// `Core::accounts_report`).
+    Accounts,
     /// For connection `conn` only: open a URL or run a browser tool (`browser`).
     Browser {
         conn: ConnId,
@@ -125,6 +128,10 @@ pub(crate) struct AgentRecord {
     pub kind: AgentKind,
     /// The agent's own session id, once known.
     pub session_id: Option<String>,
+    /// The account it runs under (`proto::account`); `None` in records written before
+    /// accounts, which ran under the system account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
 }
 
 /// A pane that closed, kept so a recently closed tab can come back (`PaneLaunch::Reopen`).
@@ -978,6 +985,12 @@ impl Core {
                 self.mp.forget_pane(*id);
                 if !self.shutting_down.load(Ordering::Acquire) {
                     self.remember_closed(*id, &lock(&entry.record));
+                    if let Some((agent, account)) = self.ws.accounts.sign_in_closed(*id) {
+                        self.check_account(agent, account);
+                    }
+                    if lock(&entry.record).agent.is_some() {
+                        self.emit(Event::Accounts);
+                    }
                 }
                 entry.pane.hang_up();
                 kill_if_lingering(Arc::clone(&entry.pane));
@@ -1036,8 +1049,10 @@ impl Core {
             Some(AgentRecord {
                 kind,
                 session_id: Some(id),
-            }) => PaneLaunch::Agent {
+                account,
+            }) => PaneLaunch::AccountAgent {
                 agent: kind,
+                account,
                 resume: Some(id),
                 cwd,
             },
@@ -1070,10 +1085,27 @@ impl Core {
         let (launch, restored) = match launch {
             PaneLaunch::Reopen { pane_id, cwd } => {
                 let launch = self.reopen_launch(pane_id, cwd);
-                let resumed = matches!(launch, PaneLaunch::Agent { .. });
+                let resumed = matches!(launch, PaneLaunch::AccountAgent { .. });
                 (launch, restored || resumed)
             }
             launch => (launch, restored),
+        };
+        // An agent is recorded as `Agent`, its account beside it.
+        let (launch, asked_account) = match launch {
+            PaneLaunch::AccountAgent {
+                agent,
+                account,
+                resume,
+                cwd,
+            } => (
+                PaneLaunch::Agent {
+                    agent,
+                    resume,
+                    cwd,
+                },
+                account,
+            ),
+            launch => (launch, None),
         };
         let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_owned());
         let launch_cwd = match &launch {
@@ -1081,6 +1113,8 @@ impl Core {
             | PaneLaunch::Command { cwd, .. }
             | PaneLaunch::Agent { cwd, .. }
             | PaneLaunch::Reopen { cwd, .. } => cwd.clone(),
+            PaneLaunch::AccountSignIn { .. } => None,
+            PaneLaunch::AccountAgent { .. } => unreachable!("recorded as Agent above"),
             PaneLaunch::Canvas { artifact_id } => {
                 let artifact = artifact_id.ok_or((
                     OpError::Invalid,
@@ -1174,12 +1208,72 @@ impl Core {
                 let pre = pre.as_deref().unwrap_or_default();
                 cmd.args(["-l", "-c", &format!("{pre}exec {line}")]);
             }
+            PaneLaunch::AccountSignIn {
+                agent,
+                account: account_id,
+                device_code,
+            } => {
+                let account = self
+                    .ws
+                    .accounts
+                    .context(*agent, account_id)
+                    .ok_or((OpError::NotFound, "no such account".to_owned()))?;
+                let ctx = self
+                    .hooks
+                    .launch_context(id, PathBuf::from(&cwd), account);
+                let spec = match agent {
+                    AgentKind::Claude => agents::ClaudeCode::sign_in(&ctx),
+                    AgentKind::Codex => agents::Codex::sign_in(&ctx, *device_code),
+                };
+                // The shim tells the daemon the sign-in ended, so it checks the account.
+                let done = format!(
+                    "{} {} {} </dev/null",
+                    shell_quote(&ctx.hook_bin.to_string_lossy()),
+                    crate::agent::ACCOUNT_HOOK,
+                    crate::agent::SIGN_IN_EVENT
+                );
+                cmd.args([
+                    "-i",
+                    "-l",
+                    "-c",
+                    &format!("{}; {done}; {}", spec.shell_line(), then_shell()),
+                ]);
+                for (k, v) in &spec.env {
+                    cmd.env(k, v);
+                }
+                for k in &spec.env_remove {
+                    cmd.env_remove(k);
+                }
+                self.ws.accounts.signing_in(id, *agent, account_id);
+            }
+            PaneLaunch::AccountAgent { .. } => unreachable!("recorded as Agent above"),
             PaneLaunch::Agent {
                 agent: kind,
                 resume,
                 ..
             } => {
-                let ctx = self.hooks.launch_context(id, PathBuf::from(&cwd));
+                let project = lock(&self.layout).project_of_pane(id);
+                let account = self
+                    .ws
+                    .accounts
+                    .resolve(
+                        *kind,
+                        asked_account.as_deref(),
+                        resume.as_deref(),
+                        project.as_deref(),
+                    )
+                    .map_err(|e| (OpError::Invalid, e))?;
+                if let Some(dir) = &account.dir
+                    && !dir.is_dir()
+                {
+                    return Err((
+                        OpError::SpawnFailed,
+                        "the account's directory is missing; sign in again".to_owned(),
+                    ));
+                }
+                let ctx = self
+                    .hooks
+                    .launch_context(id, PathBuf::from(&cwd), account.clone());
                 let adapter = crate::agent::adapter(*kind);
                 let session_id = resume.clone().or_else(|| match kind {
                     // Claude accepts a pinned id, which makes resume work without waiting
@@ -1207,11 +1301,10 @@ impl Core {
                         ));
                     }
                 }
-                let line = std::iter::once(&spec.program)
-                    .chain(&spec.args)
-                    .map(|a| shell_quote(&a.to_string_lossy()))
-                    .collect::<Vec<_>>()
-                    .join(" ");
+                let line = spec.shell_line();
+                if let Some(session) = &session_id {
+                    self.ws.accounts.pin(*kind, session, &account.id);
+                }
                 // integration for that shell. Interactive, so rc files set `PATH` as in any
                 // pane and the install check holds.
                 let pre = pre.as_deref().unwrap_or_default();
@@ -1219,9 +1312,13 @@ impl Core {
                 for (k, v) in &spec.env {
                     cmd.env(k, v);
                 }
+                for k in &spec.env_remove {
+                    cmd.env_remove(k);
+                }
                 agent = Some((
                     *kind,
                     session_id,
+                    account.id,
                     AgentRuntime::new(*kind, id, adapter, restored),
                 ));
             }
@@ -1284,14 +1381,24 @@ impl Core {
         )
         .map_err(|e| (OpError::SpawnFailed, e.to_string()))?;
         let record = PaneRecord {
-            launch: launch.clone(),
+            // A sign-in is not run again after a restart.
+            launch: match &launch {
+                PaneLaunch::AccountSignIn { .. } => PaneLaunch::Shell {
+                    cwd: Some(cwd.clone()),
+                },
+                launch => launch.clone(),
+            },
             cwd: Some(cwd.clone()),
-            agent: agent.as_ref().map(|(kind, session_id, _)| AgentRecord {
-                kind: *kind,
-                session_id: session_id.clone(),
-            }),
+            agent: agent
+                .as_ref()
+                .map(|(kind, session_id, account, _)| AgentRecord {
+                    kind: *kind,
+                    session_id: session_id.clone(),
+                    account: Some(account.clone()),
+                }),
             worktree,
         };
+        let accounts_changed = agent.is_some();
         let entry = Arc::new(PaneEntry {
             pane,
             meta: Mutex::new(MetaState {
@@ -1299,7 +1406,7 @@ impl Core {
                 ..MetaState::default()
             }),
             record: Mutex::new(record),
-            agent: Mutex::new(agent.map(|(_, _, rt)| rt)),
+            agent: Mutex::new(agent.map(|(_, _, _, rt)| rt)),
             agent_attached: Notify::new(),
             ticks: AtomicU64::new(0),
             task: Mutex::new(None),
@@ -1308,7 +1415,60 @@ impl Core {
         let task = tokio::spawn(pane_task(Arc::clone(self), Arc::clone(&entry), vt_events));
         *lock(&entry.task) = Some(task.abort_handle());
         lock(&self.panes).insert(id, entry);
+        if accounts_changed {
+            self.emit(Event::Accounts);
+        }
         Ok(())
+    }
+
+    // --- accounts ---------------------------------------------------------------------------
+
+    /// The accounts report, with the account of every agent pane.
+    pub fn accounts_report(&self) -> proto::AccountsReport {
+        let mut panes: Vec<proto::PaneAccount> = self
+            .pane_entries()
+            .into_iter()
+            .filter_map(|(id, entry)| {
+                let record = lock(&entry.record);
+                let agent = record.agent.as_ref()?;
+                Some(proto::PaneAccount {
+                    pane_id: id,
+                    agent: agent.kind,
+                    account: agent
+                        .account
+                        .clone()
+                        .unwrap_or_else(|| proto::SYSTEM_ACCOUNT.into()),
+                })
+            })
+            .collect();
+        panes.sort_by_key(|p| p.pane_id.0);
+        self.ws.accounts.report(panes)
+    }
+
+    /// The account a daemon-launched agent pane runs under.
+    pub fn pane_account(&self, pane: PaneId) -> Option<(AgentKind, String)> {
+        let entry = self.pane(pane)?;
+        let record = lock(&entry.record);
+        let agent = record.agent.as_ref()?;
+        Some((
+            agent.kind,
+            agent
+                .account
+                .clone()
+                .unwrap_or_else(|| proto::SYSTEM_ACCOUNT.into()),
+        ))
+    }
+
+    /// Asks the agent about an account in the background; clients hear of a change.
+    pub fn check_account(&self, agent: AgentKind, id: String) {
+        let accounts = Arc::clone(&self.ws.accounts);
+        let tools = self.ws.tools.clone();
+        let events = self.events.clone();
+        tokio::spawn(async move {
+            if let Ok((_, true)) = accounts.check(&tools, agent, &id).await {
+                let _ = events.send(Event::Accounts);
+            }
+        });
     }
 
     // --- agents -----------------------------------------------------------------------------
@@ -1326,6 +1486,8 @@ impl Core {
             if let (Some(agent), Some(native)) = (record.agent.as_mut(), native)
                 && agent.session_id.as_deref() != Some(native.as_str())
             {
+                let account = agent.account.as_deref().unwrap_or(proto::SYSTEM_ACCOUNT);
+                self.ws.accounts.pin(agent.kind, &native, account);
                 agent.session_id = Some(native);
                 self.mark_dirty();
             }
@@ -1820,10 +1982,18 @@ fn capture_codex_session(core: &Arc<Core>, entry: &Arc<PaneEntry>, busy: &Arc<At
         .filter_map(|(_, e)| lock(&e.record).agent.as_ref()?.session_id.clone())
         .collect();
     let cwd = lock(&entry.record).cwd.clone().unwrap_or_default();
+    let account = lock(&entry.record)
+        .agent
+        .as_ref()
+        .and_then(|a| a.account.clone())
+        .unwrap_or_else(|| proto::SYSTEM_ACCOUNT.into());
+    // Rollouts are under the pane's account's home.
     let codex_home = core
-        .cfg
-        .pane_var("CODEX_HOME")
-        .map(PathBuf::from)
+        .ws
+        .accounts
+        .context(AgentKind::Codex, &account)
+        .and_then(|a| a.dir)
+        .or_else(|| core.cfg.pane_var("CODEX_HOME").map(PathBuf::from))
         .or_else(|| {
             core.cfg
                 .pane_var("HOME")
@@ -1843,6 +2013,9 @@ fn capture_codex_session(core: &Arc<Core>, entry: &Arc<PaneEntry>, busy: &Arc<At
                 && agent.session_id.is_none()
             {
                 tracing::info!(pane = %entry.pane.id, %session_id, "codex session found");
+                core.ws
+                    .accounts
+                    .pin(AgentKind::Codex, &session_id, &account);
                 agent.session_id = Some(session_id);
                 core.mark_dirty();
             }
@@ -1941,7 +2114,17 @@ pub(crate) fn restore(
             (PaneLaunch::Agent { resume, cwd, .. }, Some(agent)) => {
                 *resume = agent.session_id.clone();
                 *cwd = record.cwd.clone().or(cwd.take());
-                agent.session_id.is_some()
+                let resumed = agent.session_id.is_some();
+                // Back under the account it ran under.
+                if let PaneLaunch::Agent { agent: kind, resume, cwd } = &launch {
+                    launch = PaneLaunch::AccountAgent {
+                        agent: *kind,
+                        account: agent.account.clone(),
+                        resume: resume.clone(),
+                        cwd: cwd.clone(),
+                    };
+                }
+                resumed
             }
             (PaneLaunch::Shell { cwd }, _) => {
                 *cwd = record.cwd.clone();

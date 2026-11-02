@@ -103,6 +103,23 @@ pub(crate) fn check(core: &Core, authz: &Authz, need: Need, target: Target) -> R
     }
 }
 
+/// Whether a layout op chooses one of the owner's agent accounts: an agent under a named
+/// account other than the system one, or a sign-in. Only the owner's own devices may.
+pub(crate) fn chooses_account(op: &LayoutOp) -> bool {
+    let launch = match op {
+        LayoutOp::Split { launch, .. } | LayoutOp::NewTab { launch, .. } => launch,
+        _ => return false,
+    };
+    match launch {
+        PaneLaunch::AccountAgent {
+            account: Some(account),
+            ..
+        } => account != proto::SYSTEM_ACCOUNT,
+        PaneLaunch::AccountSignIn { .. } => true,
+        _ => false,
+    }
+}
+
 /// What a layout op needs.
 pub(crate) fn op(op: &LayoutOp) -> (Need, Target) {
     use LayoutOp as O;
@@ -119,6 +136,10 @@ pub(crate) fn op(op: &LayoutOp) -> (Need, Target) {
             launch: PaneLaunch::Reopen { .. },
             ..
         } => (Need::Own, Target::Session(*session_id)),
+        O::Split { pane_id, .. } if chooses_account(op) => (Need::Own, Target::SessionOf(*pane_id)),
+        O::NewTab { session_id, .. } if chooses_account(op) => {
+            (Need::Own, Target::Session(*session_id))
+        }
         O::Split { pane_id, .. } | O::BreakPane { pane_id } | O::MovePane { pane_id, .. } => {
             (Need::Drive, Target::SessionOf(*pane_id))
         }
@@ -241,6 +262,13 @@ pub(crate) fn workspace(req: &WorkspaceRequest) -> (Need, Target) {
         R::AgentInstalls => (Need::Drive, Target::Host),
         // Changes the owner's agent configuration.
         R::AgentMcpCommands { .. } => (Need::Own, Target::Daemon),
+        // The owner's sign-ins: a guest neither sees nor switches them.
+        R::Accounts
+        | R::AccountAdd(_)
+        | R::AccountEdit { .. }
+        | R::AccountRemove { .. }
+        | R::AccountCheck { .. }
+        | R::AccountSetDefault { .. } => (Need::Own, Target::Daemon),
     }
 }
 
