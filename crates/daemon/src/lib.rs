@@ -127,9 +127,10 @@ impl Daemon {
         limits::raise_fd_limit();
         config.apply_user_file()?;
         let identity = Arc::new(Identity::load_or_create(&config.state_dir)?);
-        let (layout, records, closed) = persist::load(&config.state_dir)?
-            .map(persist::Saved::into_parts)
-            .unwrap_or_default();
+        let (creators, (layout, records, closed)) = match persist::load(&config.state_dir)? {
+            Some(mut saved) => (saved.take_creators(), saved.into_parts()),
+            None => Default::default(),
+        };
         let hooks = HookServer::new(&config.state_dir, config.hook_bin())?;
         let shell = match shell::ShellIntegration::install(&config.state_dir) {
             Ok(si) => Some(si),
@@ -147,6 +148,7 @@ impl Daemon {
         let core = Core::new(config, identity, layout, hooks, shell, mp);
         let mut tasks = vec![HookServer::listen(&core)?];
         core::restore(&core, records, closed);
+        core.term.restore(creators, |p| core.pane(p).is_some());
 
         let endpoint = bind(&core).await?;
         let info = endpoint_info_of(&endpoint, &core.cfg.relay);

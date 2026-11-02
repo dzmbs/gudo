@@ -3,10 +3,13 @@
 //! call; the daemon answers one [`TermReply`] line. The caller is the pane named in the call,
 //! proven by its own token (`UN_TOKEN`), and omitted targets mean that pane.
 //!
-//! What a caller may do: read any pane of its own session; type into, run in and close only
-//! the panes it created (or that those created), never its own; split and open tabs next to
-//! itself. Nothing it opens takes focus from the user. Input is refused at a password prompt.
+//! What a caller may do: read any pane of its own session; type into, run in and close the
+//! panes it created (or that those created), never its own; split and open tabs next to
+//! itself. Driving any other pane of its session (the user's) needs the owner's yes
+//! ([`ask`]). Nothing it opens takes focus from the user. Input is refused at a password
+//! prompt, whoever allowed it.
 
+pub(crate) mod ask;
 mod output;
 
 use std::collections::HashMap;
@@ -14,8 +17,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use proto::{
-    AgentKind, Axis, CommandMark, InputPayload, KeyAction, KeyEvent, LayoutOp, OpOutcome, PaneId,
-    PaneLaunch, Seq, SessionId, TabId,
+    AgentKind, Axis, CommandMark, DriveAction, DriveAsk, DrivePush, InputPayload, KeyAction,
+    KeyEvent, LayoutOp, OpOutcome, PaneId, PaneLaunch, Seq, SessionId, TabId,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -23,7 +26,7 @@ use serde_json::{Value, json};
 use tokio::time::Instant;
 
 use crate::assist::marks::Phase;
-use crate::core::{Core, PaneEntry, lock};
+use crate::core::{Core, Event, PaneEntry, lock};
 
 pub(crate) use output::visible;
 pub use output::{Output, SOURCE_SHARED};
@@ -131,10 +134,12 @@ impl ToolError {
 
 type Result<T> = std::result::Result<T, ToolError>;
 
-/// Which pane created which, for ownership.
+/// Which pane created which, for ownership, and the owner's answers to drive requests.
 #[derive(Default)]
 pub(crate) struct Term {
     creators: Mutex<HashMap<PaneId, PaneId>>,
+    /// Requests to drive the user's panes, and the panes the owner let an agent drive.
+    pub asks: ask::Asks,
 }
 
 impl Term {
@@ -177,13 +182,45 @@ impl Term {
         lock(&self.creators).insert(pane, caller);
     }
 
+    /// Forgets a closed pane. Panes it created pass to its own creator, so an agent keeps
+    /// what its closed worker opened; a top-level agent's go back to the user.
     pub fn forget(&self, pane: PaneId) {
-        lock(&self.creators).remove(&pane);
+        let mut creators = lock(&self.creators);
+        match creators.remove(&pane) {
+            Some(parent) => creators
+                .values_mut()
+                .filter(|c| **c == pane)
+                .for_each(|c| *c = parent),
+            None => creators.retain(|_, c| *c != pane),
+        }
+        drop(creators);
+        self.asks.forget_pane(pane);
+    }
+
+    /// The ownership map as `(pane, creator)` pairs, to save across restarts.
+    pub fn creators(&self) -> Vec<(PaneId, PaneId)> {
+        lock(&self.creators).iter().map(|(&p, &c)| (p, c)).collect()
+    }
+
+    /// Restores the ownership map, keeping only pairs whose panes are both `live`.
+    pub fn restore(
+        &self,
+        saved: impl IntoIterator<Item = (PaneId, PaneId)>,
+        live: impl Fn(PaneId) -> bool,
+    ) {
+        lock(&self.creators)
+            .extend(saved.into_iter().filter(|&(p, c)| p != c && live(p) && live(c)));
     }
 }
 
-/// Answers one call.
-pub(crate) async fn serve(core: &Arc<Core>, call: TermCall, peer_uid: Option<u32>) -> TermReply {
+/// Answers one call. A caller that hangs up (`hangup` ends) abandons it: a wait stops, and
+/// an open drive request is withdrawn.
+pub(crate) async fn serve(
+    core: &Arc<Core>,
+    call: TermCall,
+    peer_uid: Option<u32>,
+    hangup: impl tokio::io::AsyncRead + Unpin,
+) -> TermReply {
     if !core.hooks.verify(&call.token, &call.pane) {
         tracing::warn!("term call with a bad token");
         return TermReply::Error(ToolError::new(ErrorCode::Forbidden, "bad token"));
@@ -214,9 +251,36 @@ pub(crate) async fn serve(core: &Arc<Core>, call: TermCall, peer_uid: Option<u32
         core: Arc::clone(core),
         caller,
     };
-    match ctx.call(&call.term.tool, call.term.args).await {
-        Ok(value) => TermReply::Ok(value),
-        Err(e) => TermReply::Error(e),
+    tokio::select! {
+        result = ctx.call(&call.term.tool, call.term.args) => match result {
+            Ok(value) => TermReply::Ok(value),
+            Err(e) => TermReply::Error(e),
+        },
+        () = hung_up(hangup) => {
+            TermReply::Error(ToolError::new(ErrorCode::Failed, "the caller hung up"))
+        }
+    }
+}
+
+/// Returns once the caller closes its end of the connection.
+async fn hung_up(mut from: impl tokio::io::AsyncRead + Unpin) {
+    use tokio::io::AsyncReadExt;
+    let mut buf = [0; 256];
+    while matches!(from.read(&mut buf).await, Ok(n) if n > 0) {}
+}
+
+/// Withdraws an unanswered drive request when the call waiting on it ends.
+struct Withdraw<'a> {
+    core: &'a Core,
+    request_id: proto::RequestId,
+    caller: PaneId,
+}
+
+impl Drop for Withdraw<'_> {
+    fn drop(&mut self) {
+        if self.core.term.asks.withdraw(self.request_id) {
+            ask::closed(self.core, self.request_id, self.caller);
+        }
     }
 }
 
@@ -485,7 +549,7 @@ impl Ctx {
             "pane_list" => self.pane_list(args(value)?),
             "pane_split" => self.pane_split(args(value)?).await,
             "tab_new" => self.tab_new(args(value)?).await,
-            "pane_close" => self.pane_close(args(value)?),
+            "pane_close" => self.pane_close(args(value)?).await,
             "cmd_run" => self.cmd_run(args(value)?).await,
             "pane_read" => self.pane_read(args(value)?).await,
             "pane_wait" => self.pane_wait(args(value)?).await,
@@ -544,20 +608,128 @@ impl Ctx {
         ))
     }
 
-    fn may_drive(&self, pane: PaneId) -> Result<()> {
+    /// Whether the caller may drive `pane` without asking: it opened it (or one of its
+    /// workers did), or the owner let it drive that pane until it closes.
+    fn drives(&self, pane: PaneId) -> bool {
+        pane != self.caller
+            && (self.core.term.owns(self.caller, pane)
+                || self.core.term.asks.granted(self.caller, pane))
+    }
+
+    /// Lets the caller do `action` in `pane`: at once in a pane it drives; never in its own
+    /// pane, another session's or at a password prompt; in the user's panes only once the
+    /// owner allows exactly this action.
+    async fn may_drive(&self, pane: PaneId, entry: &PaneEntry, action: DriveAction) -> Result<()> {
         if pane == self.caller {
             return Err(
                 ToolError::new(ErrorCode::Forbidden, "that is your own pane")
                     .hint("run commands in a pane of your own: cmd_run without a pane opens one"),
             );
         }
-        if self.core.term.owns(self.caller, pane) {
+        if self.drives(pane) {
             return Ok(());
         }
-        Err(
-            ToolError::new(ErrorCode::Forbidden, format!("{} is the user's", pane_ref(pane)))
-                .hint("you may read it; to run something, open your own pane (pane_split or cmd_run without a pane)"),
-        )
+        self.may_read(pane)?;
+        if !matches!(action, DriveAction::Close) && entry.pane.echo().is_hidden_input() {
+            return Err(secret_prompt(pane));
+        }
+        self.ask(pane, entry, action).await
+    }
+
+    /// Asks the owner to allow `action` in the user's pane `target` and waits for the answer.
+    async fn ask(&self, target: PaneId, entry: &PaneEntry, action: DriveAction) -> Result<()> {
+        let wait = self.core.cfg.drive_ask_wait;
+        let (agent, kind) = self.caller_names();
+        let target_label = self.label(entry);
+        let title = format!("{agent} wants to {} {target_label}", ask::verb(&action));
+        let request_id = crate::agent::next_request_id();
+        let request = DriveAsk {
+            request_id,
+            pane_id: self.caller,
+            target,
+            agent,
+            target_label,
+            action,
+            expires_at: proto::UnixMillis(
+                crate::identity::now_millis() + wait.as_millis() as u64,
+            ),
+        };
+        let answer = self.core.term.asks.open(request.clone(), title);
+        let _withdraw = Withdraw {
+            core: &self.core,
+            request_id,
+            caller: self.caller,
+        };
+        tracing::info!(caller = %self.caller, %target, "asking the owner to drive a pane");
+        self.core.emit(Event::Approval(proto::ApprovalPush::Drive(
+            DrivePush::Open(request),
+        )));
+        self.core.emit(Event::PaneMeta(self.caller));
+        if let Some((title, body, _)) = self.core.term.asks.notice(request_id) {
+            crate::ws::drive_notice(&self.core, self.caller, kind, request_id, title, body);
+        }
+        match tokio::time::timeout(wait, answer).await {
+            Ok(Ok(ask::Answer::Once | ask::Answer::Pane)) => Ok(()),
+            Ok(Ok(ask::Answer::Deny)) => Err(ToolError::new(
+                ErrorCode::Forbidden,
+                format!("the user said no to driving {}", pane_ref(target)),
+            )
+            .hint("do it in a pane of your own, or ask the user what they want")),
+            Ok(Err(_)) => Err(closed()),
+            Err(_) => Err(ToolError {
+                retryable: true,
+                ..ToolError::new(
+                    ErrorCode::Forbidden,
+                    format!("the user did not answer about {}", pane_ref(target)),
+                )
+                .hint("they may be away: use a pane of your own, or try again later")
+            }),
+        }
+    }
+
+    /// The caller for display (`Claude`) and for the attention feed (`claude`).
+    fn caller_names(&self) -> (String, String) {
+        let Some(entry) = self.core.pane(self.caller) else {
+            return ("A program".into(), "program".into());
+        };
+        let agent = lock(&entry.agent).as_ref().map(|rt| rt.kind());
+        if let Some(kind) = agent {
+            let name = crate::agent::program(kind);
+            let mut display = name.to_owned();
+            if let Some(first) = display.get_mut(..1) {
+                first.make_ascii_uppercase();
+            }
+            return (display, name.to_owned());
+        }
+        match self.core.assist.foreground(&entry) {
+            Some(f) => (f.name.clone(), f.name),
+            None => ("A program".into(), "program".into()),
+        }
+    }
+
+    /// A pane for display: its directory and program, `~/api · zsh`.
+    fn label(&self, entry: &PaneEntry) -> String {
+        let meta = self.core.pane_meta(entry.pane.id);
+        let cwd = meta.as_ref().and_then(|m| m.cwd.clone()).map(|cwd| {
+            let home = self.core.cfg.home();
+            match std::path::Path::new(&cwd).strip_prefix(&home) {
+                _ if home == std::path::Path::new("/") => cwd,
+                Ok(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
+                Ok(rest) => format!("~/{}", rest.display()),
+                Err(_) => cwd,
+            }
+        });
+        let program = self
+            .core
+            .assist
+            .foreground(entry)
+            .map(|f| f.name)
+            .or_else(|| meta.map(|m| m.title).filter(|t| !t.is_empty()));
+        match (cwd, program) {
+            (Some(cwd), Some(program)) => format!("{cwd} · {program}"),
+            (Some(one), None) | (None, Some(one)) => one,
+            (None, None) => pane_ref(entry.pane.id),
+        }
     }
 
     /// Refuses a new pane once the caller's agent (with all its workers) has
@@ -604,8 +776,10 @@ impl Ctx {
         });
         let owned = self.core.term.owns(self.caller, id);
         let mut scopes = vec!["read"];
-        if owned {
+        if self.drives(id) {
             scopes.extend(["input", "manage"]);
+        } else if id != self.caller {
+            scopes.push("ask");
         }
         json!({
             "id": pane_ref(id),
@@ -772,11 +946,11 @@ impl Ctx {
         Ok(json!({ "tab": tab_ref(tab), "pane": self.pane_info(pane, &entry) }))
     }
 
-    fn pane_close(&self, a: PaneArg) -> Result<Value> {
-        let Ok((pane, _)) = self.resolve(Some(&a.pane)) else {
+    async fn pane_close(&self, a: PaneArg) -> Result<Value> {
+        let Ok((pane, entry)) = self.resolve(Some(&a.pane)) else {
             return Ok(json!({ "closed": false, "alreadyClosed": true }));
         };
-        self.may_drive(pane)?;
+        self.may_drive(pane, &entry, DriveAction::Close).await?;
         match self.core.apply_op(LayoutOp::ClosePane { pane_id: pane }) {
             OpOutcome::Failed { message, .. } => Err(ToolError::new(ErrorCode::Failed, message)),
             _ => {
@@ -871,10 +1045,22 @@ impl Ctx {
         if a.command.trim().is_empty() {
             return Err(ToolError::new(ErrorCode::InvalidArgs, "no command"));
         }
+        // Waiting for the owner counts against the call's time.
+        let deadline = Instant::now() + wait_for(a.timeout_ms);
+        let mut line = a.command.clone();
+        if let Some(cwd) = a.cwd.as_deref().filter(|_| a.pane.is_some()) {
+            line = format!("cd {} && {line}", crate::core::shell_quote(cwd));
+        }
         let (pane, entry) = match &a.pane {
             Some(target) => {
                 let (pane, entry) = self.resolve(Some(target))?;
-                self.may_drive(pane)?;
+                if !self.drives(pane) && Self::busy(&entry) {
+                    return Err(pane_busy(pane));
+                }
+                let action = DriveAction::Run {
+                    command: line.clone(),
+                };
+                self.may_drive(pane, &entry, action).await?;
                 (pane, entry)
             }
             None => {
@@ -883,22 +1069,16 @@ impl Ctx {
                 (pane, self.core.pane(pane).ok_or_else(closed)?)
             }
         };
-        let deadline = Instant::now() + wait_for(a.timeout_ms);
         // A new shell first draws its prompt; typing before that lands in its startup.
         let prompt_by = Instant::now() + PROMPT_WAIT.min(wait_for(a.timeout_ms));
         while entry.pane.line_snapshot().view.phase == Phase::Idle && Instant::now() < prompt_by {
             tokio::time::sleep(TICK).await;
         }
-        match entry.pane.line_snapshot().view.phase {
-            Phase::Running(_) => {
-                return Err(ToolError::new(
-                    ErrorCode::PaneBusy,
-                    format!("{} is running a command", pane_ref(pane)),
-                )
-                .hint("wait for it with pane_wait {prompt: true}, or run in a new pane"));
-            }
-            _ if entry.pane.echo().is_hidden_input() => return Err(secret_prompt(pane)),
-            _ => {}
+        if Self::busy(&entry) {
+            return Err(pane_busy(pane));
+        }
+        if entry.pane.echo().is_hidden_input() {
+            return Err(secret_prompt(pane));
         }
         let before = entry
             .pane
@@ -907,10 +1087,6 @@ impl Ctx {
             .last()
             .map(|c| c.mark.command_id);
         let start = entry.pane.head();
-        let mut line = a.command.clone();
-        if let Some(cwd) = a.cwd.as_deref().filter(|_| a.pane.is_some()) {
-            line = format!("cd {} && {line}", crate::core::shell_quote(cwd));
-        }
         write(&entry, entry.pane.encode_input(InputPayload::Paste(line))).await?;
         tokio::time::sleep(Duration::from_millis(30)).await;
         write(&entry, b"\r".to_vec()).await?;
@@ -954,6 +1130,10 @@ impl Ctx {
             "status": if finished { "exited" } else { "timeout" },
             "output": output,
         }))
+    }
+
+    fn busy(entry: &PaneEntry) -> bool {
+        matches!(entry.pane.line_snapshot().view.phase, Phase::Running(_))
     }
 
     async fn pane_wait(&self, a: WaitArgs) -> Result<Value> {
@@ -1236,8 +1416,12 @@ impl Ctx {
     }
 
     async fn agent_prompt(&self, a: PromptArgs) -> Result<Value> {
+        let deadline = Instant::now() + wait_for(a.timeout_ms);
         let (pane, entry) = self.resolve(Some(&a.pane))?;
-        self.may_drive(pane)?;
+        let action = DriveAction::Prompt {
+            text: a.text.clone(),
+        };
+        self.may_drive(pane, &entry, action).await?;
         if entry.pane.echo().is_hidden_input() {
             return Err(secret_prompt(pane));
         }
@@ -1259,7 +1443,6 @@ impl Ctx {
         if !a.wait {
             return Ok(json!({ "delivered": true, "agent": self.agent_info(pane, &entry) }));
         }
-        let deadline = Instant::now() + wait_for(a.timeout_ms);
         loop {
             let info = self.agent_info(pane, &entry);
             let finished = lock(&entry.meta).turns > turns;
@@ -1379,16 +1562,21 @@ impl Ctx {
 
     async fn pane_send(&self, a: SendArgs) -> Result<Value> {
         let (pane, entry) = self.resolve(Some(&a.pane))?;
-        self.may_drive(pane)?;
-        if entry.pane.echo().is_hidden_input() {
-            return Err(secret_prompt(pane));
-        }
-        // Every key is checked before anything is written.
+        // Every key is checked before anything is asked or written.
         let keys = a
             .keys
             .iter()
             .map(|k| parse_key(k))
             .collect::<Result<Vec<_>>>()?;
+        let action = DriveAction::Type {
+            text: a.text.clone().filter(|t| !t.is_empty()),
+            keys: a.keys.clone(),
+            submit: a.submit,
+        };
+        self.may_drive(pane, &entry, action).await?;
+        if entry.pane.echo().is_hidden_input() {
+            return Err(secret_prompt(pane));
+        }
         let mut written = 0;
         if let Some(text) = a.text.filter(|t| !t.is_empty()) {
             written += write(&entry, entry.pane.encode_input(InputPayload::Paste(text))).await?;
@@ -1472,6 +1660,14 @@ fn agent_blocked(pane: PaneId, info: &Value) -> ToolError {
 
 fn closed() -> ToolError {
     ToolError::new(ErrorCode::Closed, "the pane has exited")
+}
+
+fn pane_busy(pane: PaneId) -> ToolError {
+    ToolError::new(
+        ErrorCode::PaneBusy,
+        format!("{} is running a command", pane_ref(pane)),
+    )
+    .hint("wait for it with pane_wait {prompt: true}, or run in a new pane")
 }
 
 fn secret_prompt(pane: PaneId) -> ToolError {

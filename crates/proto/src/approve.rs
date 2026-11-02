@@ -169,6 +169,11 @@ pub enum ApprovalPush {
         /// Its rules, oldest first.
         rules: Vec<ActiveRule>,
     },
+    /// An agent's request to drive one of the user's panes opened or closed (see
+    /// [`crate::drive`]). Only to owner devices that also announced
+    /// [`Caps::DRIVE_ASKS`](crate::Caps::DRIVE_ASKS) and are attached to the asking pane's
+    /// session; open requests are sent again after attaching.
+    Drive(crate::drive::DrivePush),
 }
 
 /// The bytes a device signs to add an auto-approve rule ([`AutoApproveRule::sig`]).

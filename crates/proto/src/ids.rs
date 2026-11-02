@@ -316,6 +316,10 @@ bitset! {
         /// Understands `AskpassPush::PromptWhileGuestDrives` (a password prompt asked while
         /// a guest holds the pane's lease).
         ASKPASS_DRIVER = 20;
+        /// With `APPROVALS`, wants `ApprovalPush::Drive`: the exact action of an agent's request to drive one of
+        /// the user's panes, to show it and offer all three answers (see `proto::drive`).
+        /// Bit 21 is the floating panes' `FLOATS`.
+        DRIVE_ASKS = 22;
     }
 }
 
@@ -364,5 +368,8 @@ bitset! {
         /// Remembers closed panes (directory, agent session) and starts
         /// `PaneLaunch::Reopen`.
         REOPEN = 15;
+        /// Asks the owner before an agent drives one of the user's panes (`proto::drive`),
+        /// instead of refusing. Bit 16 is the floating panes' `FLOATS`.
+        DRIVE_ASKS = 17;
     }
 }

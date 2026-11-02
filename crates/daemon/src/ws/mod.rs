@@ -602,6 +602,29 @@ pub(crate) fn agent_notice(core: &Core, pane: PaneId, agent: AgentKind, notice: 
     core.emit(Event::Attention(update));
 }
 
+/// An agent asks to drive one of the user's panes (`term::ask`): an approval item on its pane.
+pub(crate) fn drive_notice(
+    core: &Core,
+    pane: PaneId,
+    agent: String,
+    request_id: proto::RequestId,
+    title: String,
+    body: String,
+) {
+    let update = core.ws.attention.add(NewItem {
+        pane_id: pane,
+        session_id: lock(&core.layout).session_of_pane(pane),
+        kind: AttentionKind::AgentBlocked {
+            agent,
+            request_id: Some(request_id),
+        },
+        title,
+        body,
+        while_viewed: core.pane_seen(pane),
+    });
+    core.emit(Event::Attention(update));
+}
+
 /// The agent left the blocked state: its blocked items are no longer actionable.
 pub(crate) fn agent_unblocked(core: &Core, pane: PaneId) {
     if let Some(update) = core.ws.attention.resolve_blocked(pane) {

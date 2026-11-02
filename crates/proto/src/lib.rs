@@ -60,6 +60,9 @@
 //!   [`ServerCtl::ProgramStatus`] to clients with [`Caps::PROGRAM_STATUS`]; see [`program`].
 //! - Projects (named, coloured groups of tabs) are pushed as [`ServerCtl::Projects`] to owner
 //!   clients with [`Caps::PROJECTS`], changed with layout ops; see [`project`].
+//! - Asking the owner before an agent drives one of the user's panes: an ordinary approval
+//!   request answered with [`ClientCtl::Decide`], plus [`ApprovalPush::Drive`] for clients with
+//!   [`Caps::DRIVE_ASKS`]; see [`drive`].
 //! - Pushed without a request: [`ServerCtl::CommandMark`] (shell-integration command start and
 //!   end, for the attached session) and [`ServerCtl::CommandFinishedUnseen`] (any session).
 //! - Input: [`InputPayload::KeyFull`], [`InputPayload::Mouse`] and [`InputPayload::Paste`] are
@@ -85,6 +88,7 @@ pub mod artifact;
 pub mod askpass;
 pub mod assist;
 pub mod browser;
+pub mod drive;
 pub mod frame;
 mod ids;
 pub mod info;
@@ -95,6 +99,7 @@ pub mod peer;
 pub mod program;
 pub mod project;
 pub mod repo;
+pub mod script;
 mod serde_bytes;
 mod ticket;
 pub mod usage;
@@ -106,6 +111,7 @@ pub use artifact::*;
 pub use askpass::*;
 pub use assist::*;
 pub use browser::*;
+pub use drive::*;
 pub use frame::{FrameDecoder, FrameError, MAX_FRAME_LEN, WIRE_VERSION};
 pub use ids::{
     Actor, Caps, DaemonFeatures, DaemonId, DeviceId, GrantId, InputSeq, OptionId, PaneId,
@@ -123,6 +129,7 @@ pub use peer::*;
 pub use program::*;
 pub use project::*;
 pub use repo::*;
+pub use script::*;
 pub use ticket::{PairingSecret, Ticket, TicketError, TicketExtras, TicketRelays};
 pub use usage::*;
 pub use workflow::*;
