@@ -217,7 +217,7 @@ private struct HeaderButton: View {
                 .frame(width: 22, height: 20)
                 .background {
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(lit ? AnyShapeStyle(DS.Palette.accent.opacity(0.14)) : AnyShapeStyle(hovered ? DS.Palette.hoverFill : DS.Palette.clear))
+                        .fill(lit ? AnyShapeStyle(DS.Palette.accent.opacity(0.14)) : (hovered ? AnyShapeStyle(DS.Palette.hoverFill) : AnyShapeStyle(Color.clear)))
                 }
                 .contentShape(.rect)
                 .opacity(isEnabled ? 1 : 0.35)

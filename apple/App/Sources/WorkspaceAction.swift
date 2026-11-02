@@ -41,7 +41,7 @@ enum WorkspaceAction: Hashable {
     case shortcuts
     /// The last closed tab (or tabs closed together) back where it was (⇧⌘T, browsers).
     case reopenClosedTab
-    /// Floating windows (docs/APP-ARCHITECTURE.md §25): float or dock the focused pane, send
+    /// Floating windows (docs/APP-ARCHITECTURE.md §27): float or dock the focused pane, send
     /// its window to the tray, bring the next window forward, look under them all.
     case toggleFloat, minimizeFloat, cycleFloats, toggleFloatsHidden
     case focusNextPane, focusPreviousPane
@@ -53,8 +53,8 @@ enum WorkspaceAction: Hashable {
     static let fileActions: [Self] = [.newTab, .newTabOnHost, .newAgent, .newProject, .splitRight, .splitDown, .splitWithHost, .closePane]
     static let paneActions: [Self] = [.toggleZoom, .splitBestFit, .movePaneToNewTab] + Direction.allCases.map(Self.focus)
         + [.focusNextPane, .focusPreviousPane] + Direction.allCases.map(Self.movePane) + Direction.allCases.map(Self.resize)
-    static let floatActions: [Self] = [.toggleFloat, .minimizeFloat, .cycleFloats, .toggleFloatsHidden]
         + [.previousPrompt, .nextPrompt, .returnToTerminal, .fullScreenEditor]
+    static let floatActions: [Self] = [.toggleFloat, .minimizeFloat, .cycleFloats, .toggleFloatsHidden]
     static let drawActions: [Self] = [.draw, .newCanvas]
     static let tabActions: [Self] = [.previousTab, .nextTab] + (1...8).map(Self.selectTab) + [.lastTab, .goToTab, .moveTabUp, .moveTabDown]
     static let hostActions: [Self] = (1...9).map(Self.selectHost)

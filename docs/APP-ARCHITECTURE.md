@@ -1433,3 +1433,60 @@ workspace at once, live in place, early input sent; prints the times); App `Inst
 (the first frame is the saved workspace with no host connected, drawn by the renderer, then
 swapped in place; input before live; first-frame times); snapshots
 `MacSnapshotTests.testInstantStart` (`instant-start-{cached,live}[-ipad]-{dark,light}`).
+
+## 27. Floating panes (windows over a tab), rearranging by drag, zoom
+
+The host keeps the model (DAEMON.md "Floating windows", `proto::float`): a floating window is a
+subtree of its tab's tree with a frame in fractions of the tab, a z order, minimized and pinned
+flags. The tree on the wire is unchanged, so a client without `Caps::FLOATS` shows the panes as
+a split. Every change is a `LayoutOp` (`NewFloat`, `FloatPane`, `SetFloat`, `DockPane`,
+`MovePaneToEdge`), so every device shows the same windows.
+
+**Model (PaneLayout).** `Session` mirrors the daemon's rules for the app's own shells and for
+optimistic updates: `floats` back to front, `tiledRoot(of:)` (the tree without its windows),
+`root(of:)` (a window's subtree), raise on focus, cascade (`freeFrame`), a tab always keeps a
+tiled pane, resizes only move dividers in the pane's own layer, a split inside a window joins
+it (`adopt`), and `tidyFloats` restores the invariants after any change. `FloatGeometry` is the
+arithmetic in points: snapping with guides, flick projection, resize limits, drop zones, the
+tray's chips, picture-in-picture corners that avoid the fold. `DaemonLayoutStore` holds a
+layout until its `Floats` push arrives so a new window never flashes as a split; float,
+set-float and dock in place apply optimistically.
+
+**Canvas (App, `Views/PaneCanvas.swift`, `Views/SplitTreeView.swift`).** `SplitTreeView` draws a
+tab as one flat `ForEach` of panes keyed by pane id; `CanvasLayout` turns the session (tiled
+tree, `FloatScene`, zoom, the canvas size, cell size and padding) into a frame, z, corner radii
+and visibility per pane, divider frames per layer, window cards and tray chips. Because the
+views never change identity, floating, docking, zooming, a drop and the tray are frame changes
+animated by one `DS.Motion.lift` spring; `ShapeMemo` picks `lift` or `split` by what changed
+and calls `TerminalSurface.holdGrids` before the first frame, so terminals keep their grid
+through the motion and reflow once at rest. A minimized window's panes sit hidden inside their
+chip's frame, so restoring grows them out of it.
+
+**Arranging (`PaneArrangement`, one per window: `WindowModel.arrangement`).** Live state only:
+frames of windows following the hand (`live`, not animated), snap `guides`, the dragged pane
+(`paneDrag`: point, drop, lit region), a held window's dock offer (`dockPreview`, after a
+0.38 s dwell over a pane's outer quarter) and the `landing` region kept lit until the pane
+arrives. The lit region is computed, not guessed: `region(of:after:)` applies the drop's op
+to a copy of the session and lays it out with the canvas's metrics (`CanvasLayout.after`), so
+the region is the pane's frame after the drop. Gestures end in one op each: `movePane`,
+`movePaneToEdge`, `float` (centred where let go), `dock`, `setFloat`.
+
+**Actions (`Model/FloatActions.swift`, `WorkspaceAction`).** Float/Dock ⌥⌘↩, Minimize ⇧⌘M, Next
+Window ⌥⌘], Hide/Show Windows ⌥⌘F (per window, the host keeps them), Focus Next/Previous Pane
+⌘] / ⌘[ (tiled panes in reading order, then windows front to back), Move Pane ⌥⇧⌘ arrows,
+Split Best Fit ⌘↩; ⌃⌘ arrows resize a window. In the Pane menu, the palette's Pane section and
+the iPad ⌘-hold overlay. A host whose helper predates floats says so in a toast.
+
+**iPhone (`Views/PictureInPicture.swift`).** Compact width shows the focused pane alone; other
+windows become picture-in-picture miniatures drawn at half scale at their own grid (never
+resized, so the program and other devices keep their layout), resting in corners from
+`FloatGeometry.pipCorners`, which on a foldable keeps them to one side of the fold.
+
+**Not covered.** Mixed tabs (panes from several hosts) do not float: their layout is the app's
+own composite and has no windows. A dragged pane cannot leave its host's session.
+
+Tests: PaneLayout `FloatTests`, `FloatGeometryTests`; App `PaneArrangementTests` (the lit
+region is exactly where the pane lands, edges, the Float target, snapping, dock after a dwell,
+resize limits, the tray); daemon `layout` unit tests and `tests/it/floats.rs`; snapshots
+`MacSnapshotTests.testFloating*`, `TouchSnapshotTests.testFloating` (DESIGN.md "Floating
+panes").

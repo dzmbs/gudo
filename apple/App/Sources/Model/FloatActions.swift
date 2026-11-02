@@ -4,7 +4,7 @@ import PaneLayout
 import SwiftUI
 import TerminalRenderer
 
-/// Floating windows (docs/APP-ARCHITECTURE.md §25): what the header buttons, menus, palette and
+/// Floating windows (docs/APP-ARCHITECTURE.md §27): what the header buttons, menus, palette and
 /// keys do. Every change is a layout op, so a daemon keeps it for every device; a host whose
 /// helper predates floats says so instead of doing nothing.
 extension Workspace {

@@ -89,7 +89,11 @@ struct FloatScene: Equatable {
     /// The windows over the active tab of `workspace`.
     @MainActor
     init(workspace: Workspace, tab: Tab, hidden: Bool) {
-        let session = workspace.session
+        self.init(session: workspace.session, tab: tab, hidden: hidden)
+    }
+
+    /// The windows over `tab` of `session`.
+    init(session: Session, tab: Tab, hidden: Bool) {
         let own = Set(session.windows(in: tab.id).map(\.id))
         windows = session.floats.compactMap { window in
             guard own.contains(window.id) || window.pinned, let root = session.root(of: window) else { return nil }
@@ -120,7 +124,12 @@ struct SplitTreeView: View {
 
     @AppStorage(TerminalPreferences.Key.paneStyle) private var paneStyle = TerminalPreferences.PaneStyle.compact
     @State private var lastShape = ShapeMemo()
-    @State private var arrangement = PaneArrangement()
+    @State private var ownArrangement = PaneArrangement()
+    @Environment(WindowModel.self) private var model
+
+    /// The window's arrangement for the tree it arranges (so its keys and tests reach it); a
+    /// tree that only shows panes keeps its own.
+    private var arrangement: PaneArrangement { tree.arranges != nil ? model.arrangement : ownArrangement }
 
     init(node: Node, tree: any PaneTree, isSplit: Bool, animated: Bool = true, floats: FloatScene = .none, zoomed: PaneId? = nil) {
         self.node = node
@@ -157,7 +166,7 @@ struct SplitTreeView: View {
                 node: node, floats: floats, zoomed: zoomed, focused: tree.focusedLeaf,
                 size: geometry.size, gap: paneStyle == .comfortable ? DS.Space.row : DS.Size.dividerVisible,
                 header: PaneHeader.height, cell: tree.cellSize, padding: tree.padding, live: arrangement.live)
-            let _ = arrangement.update(layout: layout, tree: tree)
+            let _ = arrangement.update(layout: layout, tree: tree, hidden: floats.hidden)
             ZStack(alignment: .topLeading) {
                 ForEach(layout.cards, id: \.id) { card in
                     FloatCardBackdrop(card: card)
@@ -167,6 +176,7 @@ struct SplitTreeView: View {
                     PaneLeaf(leaf: leaf.pane, tree: tree, isSplit: isSplit || leaf.window != nil)
                         .floatingChrome(leaf, dragging: arrangement.paneDrag?.pane == leaf.pane)
                         .frame(width: leaf.frame.width, height: leaf.frame.height)
+                        .liftBeat(floating: leaf.window != nil)
                         .scaleEffect(leaf.visible ? 1 : leaf.hiddenScale, anchor: leaf.hiddenAnchor)
                         .opacity(leaf.visible ? 1 : 0)
                         .allowsHitTesting(leaf.visible)

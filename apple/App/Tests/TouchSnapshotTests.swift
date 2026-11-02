@@ -150,6 +150,41 @@ final class TouchSnapshotTests: XCTestCase {
         model.close()
     }
 
+    /// Floating panes on touch: htop over two panes, several windows, the tray (iPad); picture
+    /// in picture over the focused pane (iPhone).
+    func testFloating() async throws {
+        let theme = mode == "light" ? "Apple System Colors Light" : "Ghostty Default"
+        var arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        arguments[TerminalPreferences.Key.theme] = theme
+        UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
+        defer {
+            MockPaneStatus.fixture = nil
+            MockPaneStatus.details = [:]
+        }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let pad = UIDevice.current.userInterfaceIdiom == .pad
+        for screen in pad ? ["floating", "floating-multi", "floating-tray"] : ["floating-multi"] {
+            let model = WindowModel(app: .shared)
+            model.start()
+            let window = UIWindow(windowScene: scene)
+            window.frame = scene.screen.bounds
+            window.rootViewController = UIHostingController(rootView: WindowContent(request: nil, model: model).environment(AppModel.shared))
+            window.isHidden = false
+            for _ in 0..<50 where model.workspace?.focusedPane == nil { await pump(0.1) }
+            model.isSidebarShown = pad
+            let workspace = try XCTUnwrap(model.workspace)
+            for tab in workspace.session.tabs { workspace.apply(.closeTab(tab.id)) }
+            workspace.apply(.newTab)
+            for _ in 0..<20 where workspace.focusedPane == nil { await pump(0.1) }
+            let panes = await FloatingFixtures.apply(screen, workspace: workspace, model: model)
+            if !pad, let panes { workspace.apply(.focus(panes.tests)) }
+            await pump(1.5)
+            try capture(window, pad ? screen : "pip")
+            window.isHidden = true
+            model.close()
+        }
+    }
+
     /// Making projects on touch: the first-run hint, New Project named in place, what a drop
     /// says it will do, the window after a terminal joined from its project.
     func testProjectsUX() async throws {

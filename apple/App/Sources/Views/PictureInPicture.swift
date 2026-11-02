@@ -52,6 +52,7 @@ private struct PictureInPictureWindow: View {
     @Environment(\.terminalTheme) private var theme
     @State private var rest: CGRect?
     @State private var drag = CGSize.zero
+    @State private var taps = 0
 
     var body: some View {
         let pane = window.panes[0]
@@ -90,10 +91,10 @@ private struct PictureInPictureWindow: View {
                         rest = corner ?? frame
                         drag = .zero
                     }
-                    DS.Haptics.select.play()
+                    taps += 1
                 })
         .onTapGesture {
-            DS.Haptics.select.play()
+            taps += 1
             withAnimation(DS.Motion.lift) { workspace.apply(.focus(pane)) }
         }
         .contextMenu {
@@ -103,6 +104,7 @@ private struct PictureInPictureWindow: View {
             Divider()
             Button("Close Pane", systemImage: "xmark", role: .destructive) { workspace.apply(.close(pane)) }
         }
+        .sensoryFeedback(DS.Haptic.select, trigger: taps)
         .transition(.scale(scale: 0.7).combined(with: .opacity))
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(program.displayName), picture in picture")

@@ -625,8 +625,8 @@ struct ActiveTabView: View {
                 // alone and the windows become picture in picture.
                 let tiled = workspace.session.tiledRoot(of: tab) ?? tab.root
                 let floats = compact ? FloatScene.none : FloatScene(workspace: workspace, tab: tab, hidden: model.floatsHidden)
-                let zoomedTiled = tab.zoomed.map(tiled.contains) ?? false
-                let isSplit = !compact && !zoomedTiled && tiled.panes.count > 1
+                // A zoomed pane keeps its header: its lit Zoom button is the way back.
+                let isSplit = !compact && (tiled.panes.count > 1 || !floats.windows.isEmpty)
                 SplitTreeView(
                     node: compact ? .leaf(tab.focused) : tiled, workspace: workspace, isSplit: isSplit, animated: !compact,
                     floats: floats, zoomed: compact ? nil : tab.zoomed)

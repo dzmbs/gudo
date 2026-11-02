@@ -537,6 +537,108 @@ final class MacSnapshotTests: XCTestCase {
         window.close()
     }
 
+    // MARK: Floating panes
+
+    /// The Mac's width and an iPad's (the same canvas at 1024 × 768).
+    private static let floatingSizes: [(String, CGSize)] = [("", CGSize(width: 1180, height: 760)), ("-ipad", CGSize(width: 1024, height: 768))]
+
+    /// Draws every pane's latest frame: a window off screen gets no display-link ticks.
+    private func present(_ model: WindowModel) {
+        for pane in model.workspace.map({ Array($0.panes.values) }) ?? [] { _ = pane.view.surface.renderIfDirty() }
+    }
+
+    /// Captures `name-0…` at the given gaps after `change` starts.
+    private func frames(_ name: String, _ model: WindowModel, gaps: [Double] = [0, 0.04, 0.05, 0.06, 0.08, 0.1, 0.15, 0.4], _ change: () -> Void) async {
+        change()
+        for (index, gap) in gaps.enumerated() {
+            await pump(gap)
+            present(model)
+            try? capture(current!, "\(name)-\(index)")
+        }
+    }
+
+    /// inside one, the tray, and a zoomed pane with its way back.
+    func testFloatingStills() async throws {
+        defer { MockPaneStatus.fixture = nil; MockPaneStatus.details = [:] }
+        for (suffix, size) in Self.floatingSizes {
+            for screen in ["floating", "floating-multi", "floating-tray", "floating-zoom"] {
+                try await window(screen + suffix, screen: screen, size: size) { model in
+                    await self.pump(0.6)
+                    self.present(model)
+                }
+            }
+        }
+    }
+
+    /// Snap guides while a window is held against another's edge and the tab's middle.
+    func testFloatingGuides() async throws {
+        defer { MockPaneStatus.fixture = nil; MockPaneStatus.details = [:] }
+        for (suffix, size) in Self.floatingSizes {
+            try await window("floating-guides" + suffix, screen: "floating-multi", size: size) { model in
+                await self.pump(0.8)
+                let arrangement = model.arrangement
+                guard let layout = arrangement.layout, let card = layout.cards.first(where: { $0.panes.count == 1 }) else { return XCTFail("no window") }
+                // Its left edge 4 pt off the tab's middle: it snaps there and the guide shows.
+                let dx = layout.bounds.midX + 4 - card.frame.minX
+                arrangement.move(card.id, by: CGSize(width: dx, height: 30), at: CGPoint(x: card.frame.midX + dx, y: card.frame.minY + 12))
+                await self.pump(0.4)
+                self.present(model)
+                XCTAssertFalse(arrangement.guides.isEmpty, "a snap guide shows")
+            }
+        }
+    }
+
+    /// A tiled pane dragged by its header onto another's right half: the chip follows, the
+    /// region lights, and on drop the panes move into place in one spring.
+    func testFloatingDragSequence() async throws {
+        defer { MockPaneStatus.fixture = nil; MockPaneStatus.details = [:] }
+        try await window("floating-drag-end", screen: "floating-tiled") { model in
+            await self.pump(0.8)
+            let arrangement = model.arrangement
+            guard let workspace = model.workspace, let layout = arrangement.layout, layout.tiled.count == 3 else { return XCTFail("three tiled panes") }
+            let (dragged, from) = layout.tiled[0]
+            let (_, onto) = layout.tiled[2]
+            let start = CGPoint(x: from.midX, y: from.minY + 12)
+            let end = CGPoint(x: onto.maxX - onto.width / 6, y: onto.midY)
+            for step in 0...8 {
+                let t = CGFloat(step) / 8
+                arrangement.drag(dragged, to: CGPoint(x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t))
+                await self.pump(0.05)
+                self.present(model)
+                try? self.capture(self.current!, "floating-drag-\(step)")
+            }
+            XCTAssertNotNil(arrangement.paneDrag?.preview, "the drop region is lit")
+            await self.frames("floating-drop", model) { arrangement.endDrag(dragged, at: end) }
+            XCTAssertEqual(workspace.session.activeTab.flatMap { workspace.session.tiledRoot(of: $0) }?.panes.last, dragged)
+        }
+    }
+
+    /// Float, then dock, then minimize and restore, then a split inside the window: each as
+    /// frames, so the motion can be reviewed one step at a time.
+    func testFloatingSequences() async throws {
+        defer { MockPaneStatus.fixture = nil; MockPaneStatus.details = [:] }
+        try await window("floating-split-end", screen: "floating-tiled") { model in
+            await self.pump(0.8)
+            guard let workspace = model.workspace, let htop = workspace.focusedPane else { return XCTFail("no pane") }
+            await self.frames("floating-lift", model) { model.toggleFloat(htop, in: workspace) }
+            XCTAssertTrue(workspace.session.isFloating(htop))
+            await self.pump(0.5)
+            await self.frames("floating-dock", model) { model.toggleFloat(htop, in: workspace) }
+            XCTAssertFalse(workspace.session.isFloating(htop))
+            await self.pump(0.5)
+            model.toggleFloat(htop, in: workspace)
+            await self.pump(0.8)
+            await self.frames("floating-minimize", model) { model.toggleMinimized(htop, in: workspace) }
+            XCTAssertEqual(workspace.window(of: htop)?.minimized, true)
+            await self.pump(0.5)
+            await self.frames("floating-restore", model) { model.toggleMinimized(htop, in: workspace) }
+            XCTAssertEqual(workspace.window(of: htop)?.minimized, false)
+            await self.pump(0.5)
+            await self.frames("floating-split", model) { WorkspaceAction.splitDown.perform(on: workspace, window: model) }
+            XCTAssertEqual(workspace.window(of: htop)?.panes.count, 2, "the new pane joins the window")
+        }
+    }
+
     private func settings(_ name: String, _ navigation: SettingsNavigation = SettingsNavigation()) async throws {
         guard wanted(name) else { return }
         let window = makeWindow(ThemedRoot { SettingsView(navigation: navigation) }, size: CGSize(width: 820, height: 560))
