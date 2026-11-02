@@ -13,16 +13,12 @@ import UIKit
 import AppKit
 #endif
 
-/// Shell commands in one daemon pane (OSC 133 marks, docs/DAEMON.md "Shell integration"): a
-/// thin stripe in the left gutter beside each command's rows (ANSI red for a non-zero exit,
-/// faint otherwise), drawn by the renderer pinned to the rows so it scrolls with the output;
-/// a menu on a command's rows (long-press, secondary click, right-click) with Copy Command,
-/// Copy Output, Re-run and Ask Agent; and ⌘↑/⌘↓ between prompts.
+/// Shell commands in one daemon pane (OSC 133 marks): a gutter stripe beside each command's rows,
+/// a context menu on them, and ⌘↑/⌘↓ between prompts.
 ///
-/// The rows come from the daemon (`Commands`: rows from the bottom at an output offset), so
-/// they survive a resume: after a snapshot the list is read again and pinned in the restored
-/// terminal. Attached once per pane by `Workspace`; local and plain-SSH panes have none (⌘↑
-/// there uses the prompts libghostty-vt saw).
+/// The rows come from the daemon as rows from the bottom at an output offset, so they survive a
+/// resume: after a snapshot the list is read again and pinned in the restored terminal. Local and
+/// plain-SSH panes have none; ⌘↑ there uses the prompts libghostty-vt saw.
 @MainActor
 final class PaneCommandMarks: NSObject {
     let paneId: UInt64
@@ -77,14 +73,14 @@ final class PaneCommandMarks: NSObject {
             guard snapshot || pending.value.load(ordering: .relaxed) else { return }
             Task { @MainActor in
                 guard let self else { return }
-                // A snapshot replaced the terminal (attach, resume): its pins are gone.
+                // A snapshot replaced the terminal, so its pins are gone.
                 if snapshot { self.scheduleReload(after: .zero) } else { self.repin() }
             }
         }
         markToken = daemon.workspace.observeCommandMarks { [weak self] mark in
             guard let self, mark.paneId == self.paneId else { return }
-            // A start or an end: read the rows again once the shell drew what follows (the
-            // next prompt decides where a finished command's rows end).
+            // Read the rows again once the shell drew what follows: the next prompt decides
+            // where a finished command's rows end.
             self.scheduleReload(after: .milliseconds(mark.finished == nil ? 60 : 150))
         }
 
@@ -108,19 +104,18 @@ final class PaneCommandMarks: NSObject {
         }
     }
 
+    // MARK: Hover result and sticky header
 
-    /// The pointer over the pane, for the hovered command's result.
     private var pointer: CGPoint?
     private lazy var resultBadge = CommandBadge(identifier: "command-result")
     private lazy var stickyHeader = CommandBadge(identifier: "command-sticky", sticky: true)
 
-    /// ✗ and run time at the right of its prompt row, and the command whose output fills the
-    /// top of the pane pinned there while you scroll through it.
+    /// The hovered command's result at the right of its prompt row, and a sticky header for the
+    /// command whose output fills the top of the pane.
     private func updateOverlays() {
         guard let view = pane?.view, let surface else { return }
         let frames = surface.gutterMarkFrames
         let palette = Self.palette()
-        // The hovered command's result, on its first (prompt) row when that row is on screen.
         var shownResult = false
         if let pointer, let hit = frames.last(where: { $0.rect.minY <= pointer.y && pointer.y < $0.rect.maxY }),
            hit.mark.row >= 0, let block = entries.first(where: { $0.block.id == hit.mark.id })?.block,
@@ -132,8 +127,6 @@ final class PaneCommandMarks: NSObject {
             shownResult = true
         }
         if !shownResult { resultBadge.hide() }
-        // The sticky header: a command whose prompt scrolled above the top while its output
-        // still fills it.
         if let top = frames.first(where: { $0.mark.row < 0 && $0.rect.maxY > 24 }),
            let block = entries.first(where: { $0.block.id == top.mark.id })?.block, let command = block.mark.command
         {
@@ -145,7 +138,7 @@ final class PaneCommandMarks: NSObject {
         }
     }
 
-    /// The chrome's palette for the user's theme, derived once per theme (this runs per frame).
+    /// Cached per theme because overlays update every frame.
     private static var cachedPalette: (key: String, palette: ChromePalette)?
 
     private static func palette() -> ChromePalette {
@@ -210,8 +203,7 @@ final class PaneCommandMarks: NSObject {
         surface?.invalidateGutterMarks()
     }
 
-    /// Each command's rows as screen rows (first, last), read under one lock per call. Nil
-    /// for commands whose rows are not pinned (yet).
+    /// Each pinned command's first and last screen rows, read under one lock per call.
     private func screenRows() -> [(entry: Entry, first: Int, last: Int)] {
         guard let terminal = pane?.view.surface.terminal, !terminal.isAlternateScreen else { return [] }
         let pins = entries.flatMap { [$0.first, $0.last] }
@@ -256,7 +248,6 @@ final class PaneCommandMarks: NSObject {
 
     static let failedRowTint = 0.06
 
-    /// faintly for a success, a little stronger while it runs.
     static func style(_ status: CommandStatus) -> (GutterMark.Tint, Double) {
         switch status {
         case .failed: (.palette(1), 0.95)
@@ -285,7 +276,7 @@ final class PaneCommandMarks: NSObject {
         }
         if let target = CommandBlocks.promptTarget(prompts: prompts, viewportTop: terminal.viewportTopRow, direction: direction) {
             terminal.scrollViewport(toScreenRow: target)
-            // Reaching the top of what this terminal holds asks the host for older scrollback.
+            // Reaching the top asks the host for older scrollback.
             if terminal.viewportTopRow == 0 { surface.onScroll?(-1) }
         } else if direction > 0 {
             terminal.scrollToBottom()
@@ -345,20 +336,20 @@ final class PaneCommandMarks: NSObject {
     /// The agent to ask: one in this pane's tab first, then anywhere in the window.
     private func agentPane() -> (pane: UInt64, name: String)? {
         guard let workspace else { return nil }
-        func name(_ id: PaneId) -> String? {
+        func agentName(_ id: PaneId) -> String? {
             daemon.meta[id]?.agent.map { AgentKind($0.kind).title }
         }
-        let me = PaneId(paneId)
-        let tab = workspace.session.tabs.first { $0.root.panes.contains(me) }
+        let thisPane = PaneId(paneId)
+        let tab = workspace.session.tabs.first { $0.root.panes.contains(thisPane) }
         let order = (tab?.root.panes ?? []) + workspace.session.tabs.flatMap(\.root.panes)
-        for id in order where id != me {
-            if let agent = name(id) { return (id.rawValue, agent) }
+        for id in order where id != thisPane {
+            if let agent = agentName(id) { return (id.rawValue, agent) }
         }
         return nil
     }
 
-    /// Hands the command and its output to an agent: typed into the agent running in this
-    /// window (not sent, so you add your question), else New Agent with it as the prompt.
+    /// Types the command and its output into an agent in this window without submitting, so the
+    /// user adds a question; else starts a new agent with it as the prompt.
     func askAgent(_ block: CommandBlock) {
         let hub = daemon.workspace
         let pane = paneId
@@ -430,8 +421,7 @@ final class PaneCommandMarks: NSObject {
         }
     }
 
-    /// The command's actions, the likeliest next step first (the touch edit menu shows three
-    /// before it pages): after a failure, asking an agent; after a success, running it again.
+    /// The likeliest next step first, because the touch edit menu shows only three before it pages.
     static func actions(for block: CommandBlock) -> [Action] {
         let order: [Action] = block.status.isFailure
             ? [.copyOutput, .askAgent, .rerun, .copyCommand]
@@ -450,8 +440,7 @@ final class PaneCommandMarks: NSObject {
 
     // MARK: Accessibility
 
-    /// An element beside each command's rows on screen ("Command: false", "Failed, exit 1"),
-    /// for VoiceOver and UI tests; it takes no touches.
+    /// An accessibility element beside each command's rows on screen, for VoiceOver and UI tests.
     private func updateMarkers() {
         guard let surface, let view = pane?.view else { return }
         var seen: Set<UInt64> = []
@@ -478,7 +467,6 @@ final class PaneCommandMarks: NSObject {
 }
 
 extension CommandStatus {
-    /// In words, for accessibility.
     var words: String {
         switch self {
         case .running: "Running"
@@ -548,7 +536,6 @@ final class MenuAction: NSObject {
 #endif
 
 /// A small label over the grid: the hovered command's result, or the sticky command header.
-/// Takes no touches; on the theme's raised surface with a hairline, like the chrome.
 #if os(iOS)
 @MainActor
 final class CommandBadge {
