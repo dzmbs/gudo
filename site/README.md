@@ -37,7 +37,7 @@ This serves `_headers`, clean URLs and `404.html` the way Pages does. Use https:
 | `install.sh` | The Linux host installer behind `curl -fsSL https://gudo.dev/install.sh \| sh` |
 | `_headers` | CSP, HSTS, nosniff, no referrer, no framing; content types for AASA, appcast and the script |
 | `assets/` | `site.css`, small scripts, JetBrains Mono (subset, SIL OFL 1.1, `assets/fonts/OFL.txt`) |
-| `assets/hero.js` | Home page only: the iPad demo (a canned shell, Claude Code, the approval card, palette, splits), the scroll tilt fallback and the card spotlight. All local; nothing typed leaves the page |
+| `assets/hero.js` | Home page only: the iPad and iPhone demo (a canned shell, Claude Code, the approval card, palette, splits, floating windows and the tray, projects by drag, the Agents and Hosts screens, share, diff review, a web pane, the ⌘-hold shortcuts; on iPhone the key bar, switcher and banner), the scroll tilt fallback and the card spotlight. All local; nothing typed leaves the page |
 
 The home hero is the app drawn in HTML inside an iPad frame (an iPhone under 700 px wide). It
 tilts flat on scroll with a CSS scroll-driven animation; `theme.js` marks browsers without one
