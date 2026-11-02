@@ -3,7 +3,6 @@ import DrawingKit
 import Observation
 import SwiftUI
 
-/// What the draw overlay's toolbar shows.
 @Observable
 final class OverlayModel {
     var tool: DrawTool = .pen
@@ -11,19 +10,16 @@ final class OverlayModel {
     var busy = false
     var readOnly = false
     var isReopened = false
-    /// Write (handwriting at the prompt) is offered (iPad).
+    /// Handwriting at the prompt is offered (iPad).
     var canWrite = false
-    /// The pane is narrow: tools fold into one menu.
+    /// Folds the tools into one menu in a narrow pane.
     var compact = false
-    /// Agent panes the drawing can go to, on every host the window shows.
     var destinations: [AgentDestination] = []
-    /// The agent in this pane or its tab: the primary button sends there.
+    /// The agent in this pane or its tab, which the primary button sends to.
     var primary: AgentDestination?
-    /// Claude Code / Codex can be started with the drawing.
     var canStart = false
-    /// The one-line "what is this for" hint (until the first drawing is finished).
     var showsHint = false
-    /// The editor holds the scene (VoiceOver and UI tests read it as the toolbar's value).
+    /// VoiceOver and UI tests read it as the toolbar's value.
     var loaded = false
     @ObservationIgnored var onAction: (DrawingAction) -> Void = { _ in }
     @ObservationIgnored var onCancel: () -> Void = {}
@@ -41,19 +37,15 @@ final class OverlayModel {
         return "Sketch over the output, then send it to an agent as an image, copy or share it, or keep it here."
     }
 
-    /// The hint shows until a first drawing is finished (sent, kept, copied, shared).
+    /// The hint shows until a first drawing is finished.
     static var hintSeen: Bool {
         get { UserDefaults.standard.bool(forKey: "drawingHintSeen") }
         set { UserDefaults.standard.set(newValue, forKey: "drawingHintSeen") }
     }
 }
 
-/// The draw overlay's one toolbar: a quiet glass capsule at the bottom of the pane, never over
-/// the first rows (Excalidraw's own tool island is hidden). Tools on the left; then Cancel (esc),
-/// Keep (⌘↩: the drawing stays in the terminal output) and the primary action, which names where
-/// the drawing goes: Send to Claude Code / Codex when an agent runs in the pane or its tab (⇧⌘↩,
-/// with a menu of every other destination), else a Send To… menu (agents on any host in the
-/// window, Start Claude Code / Codex with it, Copy Image, Share / Save, Keep in Terminal).
+/// The draw overlay's toolbar, at the bottom of the pane so it never covers the first rows
+/// (Excalidraw's own tool island is hidden).
 struct OverlayToolbar: View {
     @Bindable var model: OverlayModel
 
@@ -216,7 +208,6 @@ struct OverlayToolbar: View {
     }
 }
 
-/// A `DrawingMenu` as SwiftUI menu content.
 struct DrawingMenuContent: View {
     let menu: DrawingMenu
     let perform: (DrawingAction) -> Void
@@ -251,8 +242,7 @@ struct DrawingMenuContent: View {
     }
 }
 
-/// One tool in the strip: an SF Symbol, the selected one on a quiet fill (no tint: colour is for
-/// state, DESIGN.md).
+/// The selected tool sits on a quiet fill, not a tint: colour is reserved for state.
 private struct ToolButton: View {
     let tool: DrawTool
     let selected: Bool
@@ -278,9 +268,7 @@ private struct ToolButton: View {
     }
 }
 
-/// After a drawing is finished: says where it went and what it is for now (it stays in the
-/// output; tap it to send, copy or edit), with Send to Claude/Codex when it was only kept and an
-/// agent runs nearby. Shown for a few seconds at the bottom of the pane, where the toolbar was.
+/// Says where a finished drawing went, shown for a few seconds where the toolbar was.
 @Observable
 final class PlacedNoticeModel {
     enum Phase: Equatable {
@@ -290,7 +278,7 @@ final class PlacedNoticeModel {
     }
 
     var phase = Phase.done(.kept)
-    /// The agent the notice offers to send to (only after Keep).
+    /// The agent the notice offers to send to, only after Keep.
     var agentName: String?
     @ObservationIgnored var onSend: () -> Void = {}
     @ObservationIgnored var onDismiss: () -> Void = {}
@@ -377,8 +365,8 @@ struct PlacedNotice: View {
     }
 }
 
-/// Drawings whose row is gone (cleared, evicted from the scrollback ring, a daemon restart):
-/// never dropped silently, they wait here to be placed again at the cursor or removed.
+/// Drawings whose row is gone (cleared, evicted from scrollback, a daemon restart): never dropped
+/// silently, they wait here to be placed again or removed.
 @Observable
 final class LooseTrayModel {
     struct Item: Identifiable, Equatable {

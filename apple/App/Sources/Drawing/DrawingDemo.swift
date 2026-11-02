@@ -7,10 +7,8 @@ import PencilKit
 import UIKit
 #endif
 
-/// `-drawingDemo overlay|done|canvas` (Debug): scripted drawing on the first daemon pane, for
-/// overlay over it, circles the failure with Pencil ink (synthesized PencilKit strokes that go
-/// through the real conversion path), adds an Excalidraw rectangle and arrow, and with `done`
-/// places it; `canvas` splits a canvas pane instead.
+/// `-drawingDemo overlay|done|canvas`: scripted drawing on the first daemon pane, for screenshots.
+/// The Pencil ink is synthesized PencilKit strokes, so it goes through the real conversion path.
 @MainActor
 enum DrawingDemo {
     private static var started = false
@@ -63,16 +61,15 @@ enum DrawingDemo {
             let row = max(0, surface.terminal.cursorPosition.y - 9)
             drawing.beginDrawing(at: surface.rect(for: GridPoint(x: 0, y: row)).origin)
             try? await Task.sleep(for: .seconds(2.5))
-            guard let overlay = drawing.overlay, let g = overlay.currentGeometry else { return }
+            guard let overlay = drawing.overlay, let geometry = overlay.currentGeometry else { return }
             _ = grid
-            // Shapes: a box around the assertion and an arrow to it.
-            let col = g.sceneColumnWidth
+            let col = geometry.sceneColumnWidth
             overlay.addShapes(rect: CGRect(x: col * 1, y: 20 * 3.85, width: col * 46, height: 20 * 2.3), arrowFrom: CGPoint(x: col * 60, y: 20 * 1.2), arrowTo: CGPoint(x: col * 47.5, y: 20 * 4.6))
-            // Ink: a loop around FAILED and a handwritten-ish underline.
             let center = CGPoint(x: col * 34, y: 10)
             let loop = (0...64).map { i -> InkSample in
-                let t = Double(i) / 64 * 2 * .pi * 1.08
-                return InkSample(x: center.x + cos(t) * col * 8.5, y: center.y + sin(t) * 16, width: 3.2 + 1.2 * sin(t * 3), time: Double(i) / 120)
+                let angle = Double(i) / 64 * 2 * .pi * 1.08
+                return InkSample(
+                    x: center.x + cos(angle) * col * 8.5, y: center.y + sin(angle) * 16, width: 3.2 + 1.2 * sin(angle * 3), time: Double(i) / 120)
             }
             let underline = (0...30).map { i -> InkSample in
                 InkSample(x: col * (2 + Double(i) * 1.3), y: 20 * 7.75 + sin(Double(i) / 3) * 1.5, width: 2.5 + Double(i % 5) * 0.3, time: Double(i) / 120)
@@ -87,7 +84,6 @@ enum DrawingDemo {
                     try? await Task.sleep(for: .seconds(2.5))
                     overlay.commit()
                 }
-                // More output: the placement scrolls with its rows.
                 try? await Task.sleep(for: .seconds(mode == "scroll" ? 3 : 1_000_000))
                 Array("seq 1 57\r".utf8).withUnsafeBytes { drawing.backend.write($0) }
             }
@@ -110,20 +106,21 @@ extension DrawOverlay {
     /// Debug: Pencil strokes converted like real ones (`Freedraw.element`).
     func injectInk(_ strokes: [InkStroke]) {
         #if os(iOS)
-        // Through PencilKit, as a Pencil stroke would arrive (conversion, hand-off timing).
-        if let ink, let g = currentGeometry {
-            let pk = strokes.map { stroke -> PKStroke in
-                let points = stroke.samples.map { s in
+        // Through PencilKit, as a Pencil stroke would arrive.
+        if let ink, let geometry = currentGeometry {
+            let pencilStrokes = strokes.map { stroke -> PKStroke in
+                let points = stroke.samples.map { sample in
                     PKStrokePoint(
-                        location: g.view(fromScene: CGPoint(x: s.x, y: s.y)), timeOffset: s.time,
-                        size: CGSize(width: s.width * g.zoom, height: s.width * g.zoom), opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2)
+                        location: geometry.view(fromScene: CGPoint(x: sample.x, y: sample.y)), timeOffset: sample.time,
+                        size: CGSize(width: sample.width * geometry.zoom, height: sample.width * geometry.zoom),
+                        opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2)
                 }
                 let rgb = stroke.color.dropFirst()
                 let value = Int(rgb, radix: 16) ?? 0
                 let color = UIColor(red: CGFloat((value >> 16) & 0xFF) / 255, green: CGFloat((value >> 8) & 0xFF) / 255, blue: CGFloat(value & 0xFF) / 255, alpha: 1)
                 return PKStroke(ink: PKInk(.pen, color: color), path: PKStrokePath(controlPoints: points, creationDate: Date()))
             }
-            ink.canvas.drawing = PKDrawing(strokes: ink.canvas.drawing.strokes + pk)
+            ink.canvas.drawing = PKDrawing(strokes: ink.canvas.drawing.strokes + pencilStrokes)
             return
         }
         #endif

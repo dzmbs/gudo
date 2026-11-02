@@ -7,8 +7,8 @@ import UIKit
 import AppKit
 #endif
 
-/// Other people's live strokes (`ArtifactEvent.ink`) over a pane, in their presence colour,
-/// following the drawing's anchor row; they fade once the stroke is committed to the scene.
+/// Other people's live strokes over a pane, in their presence colour; they fade once the stroke
+/// is committed to the scene.
 final class PeerInkView: PlatformView {
     private struct Stroke {
         var artifactId: UInt64
@@ -21,14 +21,14 @@ final class PeerInkView: PlatformView {
 
     private var strokes: [String: Stroke] = [:]
 
-    /// Presence hues are the terminal's ANSI hues (DesignSystem `PresenceAvatar`).
+    /// Must match `PresenceAvatar`'s hues.
     static func color(for principal: String) -> CGColor {
         let hues: [(CGFloat, CGFloat, CGFloat)] = [
             (0x81, 0xA2, 0xBE), (0xB2, 0x94, 0xBB), (0x8A, 0xBE, 0xB7), (0xB5, 0xBD, 0x68), (0xF0, 0xC6, 0x74),
         ]
         let index = abs(principal.unicodeScalars.reduce(0) { ($0 &* 31) &+ Int($1.value) }) % hues.count
-        let h = hues[index]
-        return CGColor(srgbRed: h.0 / 255, green: h.1 / 255, blue: h.2 / 255, alpha: 0.95)
+        let hue = hues[index]
+        return CGColor(srgbRed: hue.0 / 255, green: hue.1 / 255, blue: hue.2 / 255, alpha: 0.95)
     }
 
     override init(frame: CGRect) {
@@ -73,7 +73,7 @@ final class PeerInkView: PlatformView {
         redraw(key)
     }
 
-    /// The scene has the committed strokes now: fade the live ones.
+    /// Fades the live strokes once the scene has the committed ones.
     func finish(artifactId: UInt64) {
         for (key, stroke) in strokes where stroke.artifactId == artifactId && stroke.finished {
             let layer = stroke.layer
@@ -98,9 +98,9 @@ final class PeerInkView: PlatformView {
     private func redraw(_ key: String) {
         guard let stroke = strokes[key], let geometry = stroke.geometry() else { return }
         let path = CGMutablePath()
-        for (i, p) in stroke.points.enumerated() {
-            let v = geometry.view(fromScene: p)
-            if i == 0 { path.move(to: v) } else { path.addLine(to: v) }
+        for (index, scenePoint) in stroke.points.enumerated() {
+            let point = geometry.view(fromScene: scenePoint)
+            if index == 0 { path.move(to: point) } else { path.addLine(to: point) }
         }
         let pressure = stroke.pressure.isEmpty ? 0.5 : stroke.pressure.reduce(0, +) / CGFloat(stroke.pressure.count)
         CATransaction.begin()
