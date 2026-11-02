@@ -1466,10 +1466,15 @@ chip's frame, so restoring grows them out of it.
 frames of windows following the hand (`live`, not animated), snap `guides`, the dragged pane
 (`paneDrag`: point, drop, lit region), a held window's dock offer (`dockPreview`, after a
 0.38 s dwell over a pane's outer quarter) and the `landing` region kept lit until the pane
-arrives. The lit region is computed, not guessed: `region(of:after:)` applies the drop's op
-to a copy of the session and lays it out with the canvas's metrics (`CanvasLayout.after`), so
-the region is the pane's frame after the drop. Gestures end in one op each: `movePane`,
+arrives (until the host has moved the pane). Gestures end in one op each: `movePane`,
 `movePaneToEdge`, `float` (centred where let go), `dock`, `setFloat`.
+
+**Stills.** A platform view (the Metal terminal) neither scales nor fades with its SwiftUI
+parents, so a pane that changes layer or goes in or out of sight is drawn, for the length of
+the motion, as a still of its last frame (`TerminalSurface.snapshot`, `PaneArrangement.stills`,
+the `paneStill` environment value), with the live view hidden under it. The tray never resizes
+a pane: its leaf keeps its window frame and is drawn shrunk onto its chip
+(`CanvasLayout.shrink`), so no grid, and no program, sees a resize.
 
 **Actions (`Model/FloatActions.swift`, `WorkspaceAction`).** Float/Dock ⌥⌘↩, Minimize ⇧⌘M, Next
 Window ⌥⌘], Hide/Show Windows ⌥⌘F (per window, the host keeps them), Focus Next/Previous Pane
@@ -1485,8 +1490,8 @@ resized, so the program and other devices keep their layout), resting in corners
 **Not covered.** Mixed tabs (panes from several hosts) do not float: their layout is the app's
 own composite and has no windows. A dragged pane cannot leave its host's session.
 
-Tests: PaneLayout `FloatTests`, `FloatGeometryTests`; App `PaneArrangementTests` (the lit
-region is exactly where the pane lands, edges, the Float target, snapping, dock after a dwell,
-resize limits, the tray); daemon `layout` unit tests and `tests/it/floats.rs`; snapshots
+Tests: PaneLayout `FloatTests`, `FloatGeometryTests`; App `PaneArrangementTests` (drop
+regions and their ops, edges, the Float target, snapping, dock after a dwell, resize limits,
+the tray keeping a pane's size); daemon `layout` unit tests and `tests/it/floats.rs`; snapshots
 `MacSnapshotTests.testFloating*`, `TouchSnapshotTests.testFloating` (DESIGN.md "Floating
 panes").
