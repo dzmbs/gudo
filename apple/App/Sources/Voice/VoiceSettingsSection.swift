@@ -10,7 +10,7 @@ struct VoiceSettingsSection: View {
     @AppStorage(VoiceSettings.localeKey) private var localeIdentifier = ""
     @State private var locales: [Locale] = []
     @State private var availability: SystemSpeechRecognizer.Availability?
-    @State private var download: Double?
+    @State private var downloadProgress: Double?
     @State private var downloadError: String?
 
     private var locale: Locale { VoiceSettings(localeIdentifier: localeIdentifier).locale }
@@ -45,9 +45,9 @@ struct VoiceSettingsSection: View {
         case .installed:
             LabeledContent("Speech Model", value: "On this device")
         case .downloadable(let fallback):
-            if let download {
+            if let downloadProgress {
                 LabeledContent("Speech Model") {
-                    ProgressView(value: download).frame(maxWidth: 140)
+                    ProgressView(value: downloadProgress).frame(maxWidth: 140)
                 }
             } else {
                 LabeledContent {
@@ -84,10 +84,10 @@ struct VoiceSettingsSection: View {
     }
 
     private func fetch() async {
-        download = 0
-        defer { download = nil }
+        downloadProgress = 0
+        defer { downloadProgress = nil }
         do {
-            try await SystemSpeechRecognizer.download(locale) { download = $0 }
+            try await SystemSpeechRecognizer.download(locale) { downloadProgress = $0 }
         } catch {
             downloadError = "Download failed: \(error.localizedDescription)"
         }

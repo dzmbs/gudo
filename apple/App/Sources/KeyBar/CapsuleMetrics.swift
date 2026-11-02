@@ -1,7 +1,8 @@
 #if os(iOS)
 import UIKit
 
-/// height class, never by device: a foldable's inner screen or an iPad split behaves by its size.
+/// The capsule bar's numbers, chosen by the bar's width and the window's height class, never by
+/// device: a foldable's inner screen or an iPad split behaves by its size.
 struct CapsuleMetrics: Equatable {
     /// The area reserved above the keyboard; transparent, the terminal shows through.
     var bandHeight: CGFloat
@@ -18,14 +19,13 @@ struct CapsuleMetrics: Equatable {
     var showsAlt: Bool
     /// Capsule C (`← ↓ ↑ →`) is shown.
     var showsArrowKeys: Bool
-    /// Hardware keyboard: the slim `esc ⌃ ⋯` pill.
+    /// Height of the slim `esc ⌃ ⋯` pill shown with a hardware keyboard.
     var pillHeight: CGFloat = 28
 
     /// Width buckets: compact < 500 pt, medium 500–900, wide ≥ 900 (iPad landscape gets arrows
     /// from 1000).
     static func `for`(width: CGFloat, compactHeight: Bool, isPad: Bool) -> CapsuleMetrics {
         if compactHeight, !isPad {
-            // iPhone landscape: shorter, the same words.
             return CapsuleMetrics(
                 bandHeight: 44, capsuleHeight: 34, padding: 6, minimumSlot: 32, slotPadding: 16,
                 fontSize: 13, gap: 8, margin: 12, showsAlt: true, showsArrowKeys: false)
@@ -47,7 +47,6 @@ struct CapsuleMetrics: Equatable {
         UIImage.SymbolConfiguration(pointSize: fontSize, weight: .medium)
     }
 
-    /// A slot for `title` (or a symbol): the label plus padding, never under the minimum.
     func slotWidth(title: String?, symbol: String?) -> CGFloat {
         let label: CGFloat = if let title {
             ceil((title as NSString).size(withAttributes: [.font: font]).width)

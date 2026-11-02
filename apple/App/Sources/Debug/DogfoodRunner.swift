@@ -21,9 +21,9 @@ final class DogfoodRunner {
 
     static func startIfRequested(workspace: Workspace) {
         guard current == nil, let path = LaunchArguments().string(forKey: "dogfood"), !path.isEmpty else { return }
-        let out = UserDefaults.standard.string(forKey: "dogfoodOut")
+        let outPath = UserDefaults.standard.string(forKey: "dogfoodOut")
             ?? NSTemporaryDirectory() + "dogfood-\(Int(Date().timeIntervalSince1970))"
-        let runner = DogfoodRunner(scenarioURL: URL(fileURLWithPath: path), outDir: URL(fileURLWithPath: out), workspace: workspace)
+        let runner = DogfoodRunner(scenarioURL: URL(fileURLWithPath: path), outDir: URL(fileURLWithPath: outPath), workspace: workspace)
         current = runner
         Task { await runner.run() }
     }
@@ -118,15 +118,15 @@ final class DogfoodRunner {
 
     /// The workspace action bound to `event`'s shortcut, run as its menu item would run it.
     private func performWorkspaceShortcut(_ event: NSEvent) -> Bool {
-        var mods: EventModifiers = []
+        var modifiers: EventModifiers = []
         let flags = event.modifierFlags
-        if flags.contains(.command) { mods.insert(.command) }
-        if flags.contains(.shift) { mods.insert(.shift) }
-        if flags.contains(.option) { mods.insert(.option) }
-        if flags.contains(.control) { mods.insert(.control) }
+        if flags.contains(.command) { modifiers.insert(.command) }
+        if flags.contains(.shift) { modifiers.insert(.shift) }
+        if flags.contains(.option) { modifiers.insert(.option) }
+        if flags.contains(.control) { modifiers.insert(.control) }
         let actions = WorkspaceAction.fileActions + WorkspaceAction.paneActions + WorkspaceAction.tabActions
         guard let action = actions.first(where: {
-            $0.shortcut.modifiers == mods && DogfoodEvents.keyCode(for: $0.shortcut.key.character) == event.keyCode
+            $0.shortcut.modifiers == modifiers && DogfoodEvents.keyCode(for: $0.shortcut.key.character) == event.keyCode
         }) else { return false }
         action.perform(on: workspace, window: ActiveWindow.model(for: workspace))
         return true
@@ -203,8 +203,8 @@ final class DogfoodRunner {
             NSApp.activate()
             window.makeKeyAndOrderFront(nil)
         }
-        if let size = scenario["window"] as? [String: Any], let w = size["width"] as? Double, let h = size["height"] as? Double {
-            setWindowSize(window, width: w, height: h)
+        if let size = scenario["window"] as? [String: Any], let width = size["width"] as? Double, let height = size["height"] as? Double {
+            setWindowSize(window, width: width, height: height)
         }
         try? await Task.sleep(for: .milliseconds(300))
         report.environment = [
@@ -228,7 +228,7 @@ final class DogfoodRunner {
             let action = step["do"] as? String ?? "?"
             var stepReport = StepReport(index: index, action: action, name: step["name"] as? String, passed: true, ms: 0)
             _ = watchdog?.takeMaxStall()
-            let t0 = ProcessInfo.processInfo.systemUptime
+            let stepStart = ProcessInfo.processInfo.systemUptime
             do {
                 var metrics: [String: Double] = [:]
                 stepReport.detail = try await perform(action, step, report: &stepReport, metrics: &metrics)
@@ -242,7 +242,7 @@ final class DogfoodRunner {
                 }
                 stepReport.error = message
             }
-            stepReport.ms = (ProcessInfo.processInfo.systemUptime - t0) * 1000
+            stepReport.ms = (ProcessInfo.processInfo.systemUptime - stepStart) * 1000
             let stall = (watchdog?.takeMaxStall() ?? 0) * 1000
             // A screenshot blocks the main thread by design (cacheDisplay + GPU readback): not the app's stall.
             if action != "screenshot" { report.maxMainThreadStallMs = max(report.maxMainThreadStallMs, stall) }
@@ -308,11 +308,11 @@ final class DogfoodRunner {
     private func summary() -> String {
         var lines = ["dogfood: \(report.passed ? "PASSED" : "FAILED") \(report.casesPassed)/\(report.cases.count) cases in \(Int(report.durationMs / 1000)) s"]
         if let error = report.error { lines.append("  error: \(error)") }
-        if let l = report.keystrokeToEcho {
-            lines.append(String(format: "  keystroke→echo: p50 %.1f ms, p95 %.1f ms, max %.1f ms (n=%d)", l.p50Ms, l.p95Ms, l.maxMs, l.count))
+        if let latency = report.keystrokeToEcho {
+            lines.append(String(format: "  keystroke→echo: p50 %.1f ms, p95 %.1f ms, max %.1f ms (n=%d)", latency.p50Ms, latency.p95Ms, latency.maxMs, latency.count))
         }
-        if let l = report.keystrokeToFrame {
-            lines.append(String(format: "  keystroke→frame: p50 %.1f ms, p95 %.1f ms, max %.1f ms (n=%d)", l.p50Ms, l.p95Ms, l.maxMs, l.count))
+        if let latency = report.keystrokeToFrame {
+            lines.append(String(format: "  keystroke→frame: p50 %.1f ms, p95 %.1f ms, max %.1f ms (n=%d)", latency.p50Ms, latency.p95Ms, latency.maxMs, latency.count))
         }
         if !report.leakedProcesses.isEmpty {
             lines.append("  leaked processes: \(report.leakedProcesses.map { "\($0.name)(\($0.pid))" }.joined(separator: ", "))")
@@ -582,7 +582,7 @@ final class DogfoodRunner {
         }
         if step["detailFillsWindow"] as? Bool == true {
             // Whatever the screen shows, the detail column runs from the sidebar to the window's
-            // right edge (an empty Inbox once shrank and centred the whole window).
+            // right edge.
             guard let window, let content = window.contentView, let frame = ActiveWindow.model?.detailFrame else {
                 return (false, "no window or detail frame")
             }
@@ -651,7 +651,7 @@ final class DogfoodRunner {
     private struct Matcher {
         var description: String
         var test: (String) -> Bool
-        func callAsFunction(_ s: String) -> Bool { test(s) }
+        func callAsFunction(_ text: String) -> Bool { test(text) }
     }
 
     private func textMatcher(_ step: [String: Any]) throws -> Matcher {
@@ -661,8 +661,8 @@ final class DogfoodRunner {
         }
         if let pattern = step["regex"] as? String {
             let regex = try NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines])
-            return Matcher(description: "/\(pattern)/") { s in
-                regex.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil
+            return Matcher(description: "/\(pattern)/") { screen in
+                regex.firstMatch(in: screen, range: NSRange(screen.startIndex..., in: screen)) != nil
             }
         }
         throw Failure("waitText needs \"text\" or \"regex\"")
@@ -699,16 +699,16 @@ final class DogfoodRunner {
         // The cursor moves even when the echo only replaces an autosuggestion (same text).
         func screen() -> String { "\(terminal.cursorPosition.x),\(terminal.cursorPosition.y)|" + terminal.visibleText() }
         let before = screen()
-        let t0 = ProcessInfo.processInfo.systemUptime
+        let postedAt = ProcessInfo.processInfo.systemUptime
         await pump.post(DogfoodEvents.keyEvents(key, window: window), window: window)
-        let deadline = t0 + 2
+        let deadline = postedAt + 2
         while screen() == before {
             if ProcessInfo.processInfo.systemUptime > deadline { throw Failure("no echo for \"\(key.characters)\" within 2 s; screen tail:\n\(tail(pane))") }
             try? await Task.sleep(for: .milliseconds(1))
         }
-        let echo = (ProcessInfo.processInfo.systemUptime - t0) * 1000
+        let echo = (ProcessInfo.processInfo.systemUptime - postedAt) * 1000
         let rendered = await nextFrame(pane.view.surface)
-        return (echo, rendered ? (ProcessInfo.processInfo.systemUptime - t0) * 1000 : nil)
+        return (echo, rendered ? (ProcessInfo.processInfo.systemUptime - postedAt) * 1000 : nil)
     }
 
     /// Waits for the surface's next rendered frame; false if none came within 150 ms.
@@ -744,7 +744,7 @@ final class DogfoodRunner {
         let last = surface.rect(for: GridPoint(x: column + text.count - 1, y: row))
         let start = CGPoint(x: first.minX + 1, y: first.midY)
         let end = CGPoint(x: last.maxX - 1, y: last.midY)
-        func windowPoint(_ p: CGPoint) -> CGPoint { pane.view.convert(p, to: nil) }
+        func windowPoint(_ point: CGPoint) -> CGPoint { pane.view.convert(point, to: nil) }
         // The view AppKit's hit test (as in `NSWindow.sendEvent`) gives the press to.
         if let root = window.contentView?.superview, let hit = root.hitTest(root.convert(windowPoint(start), from: nil)), hit !== pane.view {
             throw Failure("a press on \"\(text)\" at window \(windowPoint(start)) hits \(type(of: hit)) (frame \(hit.convert(hit.bounds, to: nil))), not the terminal (frame \(pane.view.convert(pane.view.bounds, to: nil)))")
@@ -752,9 +752,9 @@ final class DogfoodRunner {
         var events: [NSEvent] = []
         if let down = DogfoodEvents.mouse(.leftMouseDown, at: windowPoint(start), window: window) { events.append(down) }
         for i in 1...8 {
-            let t = CGFloat(i) / 8
-            let p = CGPoint(x: start.x + (end.x - start.x) * t, y: start.y)
-            if let drag = DogfoodEvents.mouse(.leftMouseDragged, at: windowPoint(p), window: window) { events.append(drag) }
+            let progress = CGFloat(i) / 8
+            let point = CGPoint(x: start.x + (end.x - start.x) * progress, y: start.y)
+            if let drag = DogfoodEvents.mouse(.leftMouseDragged, at: windowPoint(point), window: window) { events.append(drag) }
         }
         if let up = DogfoodEvents.mouse(.leftMouseUp, at: windowPoint(end), window: window) { events.append(up) }
         await pump.sendMouse(events, window: window)
