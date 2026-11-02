@@ -12,8 +12,8 @@ use crate::event::{
 };
 use crate::hook::{self, Common};
 use crate::launch::{
-    LaunchContext, LaunchMode, LaunchSpec, SupportFile, mcp_args, mcp_server_name, pane_env,
-    shell_quote, user_mcp_server,
+    CLAUDE_DIR_VAR, LaunchContext, LaunchMode, LaunchSpec, SupportFile, account_env, mcp_args,
+    mcp_server_name, pane_env, shell_quote, user_mcp_server,
 };
 use crate::manifest::Manifest;
 use crate::signal::{Claim, Signal};
@@ -88,13 +88,55 @@ impl ClaudeCode {
             .into()
     }
 
-    /// Whether the user's configuration under `home` registers server `name`.
-    pub fn user_mcp_registered(home: &Path, name: &str) -> bool {
-        std::fs::read(home.join(".claude.json"))
+    /// Claude Code's user configuration file (account details, user MCP servers):
+    /// `<dir>/.claude.json` with a configuration directory, else `~/.claude.json`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::path::Path;
+    /// use agents::ClaudeCode;
+    ///
+    /// assert_eq!(ClaudeCode::user_config_file(Path::new("/h"), None), Path::new("/h/.claude.json"));
+    /// assert_eq!(
+    ///     ClaudeCode::user_config_file(Path::new("/h"), Some(Path::new("/s/a1"))),
+    ///     Path::new("/s/a1/.claude.json"),
+    /// );
+    /// ```
+    pub fn user_config_file(home: &Path, config_dir: Option<&Path>) -> PathBuf {
+        config_dir.unwrap_or(home).join(".claude.json")
+    }
+
+    /// Whether the user configuration file `config` ([`Self::user_config_file`]) registers
+    /// server `name`.
+    pub fn user_mcp_registered(config: &Path, name: &str) -> bool {
+        std::fs::read(config)
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
             .is_some_and(|config| config["mcpServers"].get(name).is_some())
     }
+
+    /// Claude Code's own sign-in for the context's account: `claude auth login`, with only that
+    /// account's directory in the environment. The user completes it in the pane.
+    pub fn sign_in(ctx: &LaunchContext) -> LaunchSpec {
+        let (env_remove, env_pinned) = account_env(&ctx.account, CLAUDE_DIR_VAR);
+        LaunchSpec {
+            program: "claude".into(),
+            args: vec!["auth".into(), "login".into()],
+            env: pane_env(ctx),
+            cwd: ctx.cwd.clone(),
+            files: Vec::new(),
+            env_remove,
+            env_pinned,
+        }
+    }
+
+    /// Arguments that sign an account out (`claude auth logout`).
+    pub const SIGN_OUT: &[&str] = &["auth", "logout"];
+
+    /// Arguments that report an account's sign-in as JSON (`claude auth status --json`; exit
+    /// status 0 when signed in).
+    pub const STATUS: &[&str] = &["auth", "status", "--json"];
 
     /// Returns where the hook settings file for this context lives.
     pub fn settings_path(ctx: &LaunchContext) -> PathBuf {
@@ -459,11 +501,14 @@ impl AgentAdapter for ClaudeCode {
         let pretty = |v: &Value| {
             serde_json::to_string_pretty(v).expect("serializing a JSON value cannot fail")
         };
+        let (env_remove, env_pinned) = account_env(&ctx.account, CLAUDE_DIR_VAR);
         LaunchSpec {
             program: "claude".into(),
             args,
             env: pane_env(ctx),
             cwd: ctx.cwd.clone(),
+            env_remove,
+            env_pinned,
             files: vec![
                 SupportFile {
                     path: settings,
@@ -717,6 +762,35 @@ mod tests {
             "AskUserQuestion"
         );
         assert_eq!(settings["permissions"]["allow"], json!(["mcp__unnamed"]));
+    }
+
+    #[test]
+    fn launch_runs_under_the_account() {
+        use crate::launch::work_context;
+        let mode = LaunchMode::Resume {
+            session_id: NativeSessionId::new("s1"),
+        };
+        let spec = ClaudeCode::new().launch(&work_context(), &mode);
+        assert!(
+            spec.env_pinned
+                .iter()
+                .any(|(k, v)| k == "CLAUDE_CONFIG_DIR" && v == "/state/accounts/claude/a1b2")
+        );
+        assert!(spec.env_remove.iter().any(|v| v == "ANTHROPIC_API_KEY"));
+        assert!(spec.env_remove.iter().any(|v| v == "CODEX_HOME"));
+        // Nothing secret is pinned: pinned values are on the shell's command line.
+        assert!(!spec.env_pinned.iter().any(|(k, _)| k.contains("TOKEN")));
+        // The system account inherits the user's own directory.
+        let spec = ClaudeCode::new().launch(&test_context(), &mode);
+        assert!(!spec.env_pinned.iter().any(|(k, _)| k == "CLAUDE_CONFIG_DIR"));
+        assert!(spec.env_remove.iter().any(|v| v == "CLAUDE_CODE_OAUTH_TOKEN"));
+    }
+
+    #[test]
+    fn sign_in_is_claudes_own_login_in_the_accounts_dir() {
+        let spec = ClaudeCode::sign_in(&crate::launch::work_context());
+        assert_eq!(spec.display_argv(), ["claude", "auth", "login"]);
+        assert!(spec.shell_line().contains("export CLAUDE_CONFIG_DIR="));
     }
 
     #[test]

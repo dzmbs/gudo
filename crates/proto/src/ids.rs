@@ -316,6 +316,10 @@ bitset! {
         /// Understands `AskpassPush::PromptWhileGuestDrives` (a password prompt asked while
         /// a guest holds the pane's lease).
         ASKPASS_DRIVER = 20;
+        /// On an owner device, wants `ServerCtl::Accounts` and, while watching usage,
+        /// `ServerCtl::AccountUsage` (see `proto::account`). Bit 21 is taken by floating
+        /// panes.
+        ACCOUNTS = 22;
     }
 }
 
@@ -364,5 +368,9 @@ bitset! {
         /// Remembers closed panes (directory, agent session) and starts
         /// `PaneLaunch::Reopen`.
         REOPEN = 15;
+        /// Keeps agent accounts: answers the `Account*` workspace requests, launches
+        /// `PaneLaunch::AccountAgent` and `AccountSignIn` (see `proto::account`). Bit 16 is
+        /// taken by floating panes.
+        ACCOUNTS = 17;
     }
 }
