@@ -17,8 +17,8 @@
   },
   "vars": {
     // Fill in from the Apple Developer account (Keys → the APNs key).
-    "APNS_TEAM_ID": "TEAMID0000",
-    "APNS_KEY_ID": "KEYID00000",
+    "APNS_TEAM_ID": "8SP2H5J666",
+    "APNS_KEY_ID": "B9AP48BM4N",
     // The app's bundle id (`apple/Brand.xcconfig`: $(BRAND_BUNDLE_ID_PREFIX).app).
     "APNS_TOPIC": "dev.gudo.app",
     "CAP_TTL_DAYS": "180"
