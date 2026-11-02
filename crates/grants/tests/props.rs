@@ -14,12 +14,12 @@ fn roles() -> impl Strategy<Value = Roles> {
 
 /// A non-empty subset of `of` (owner expanded).
 fn subset(of: Roles, mask: u8) -> Roles {
-    let r = Roles(of.effective().0 & mask & !Roles::OWNER.0);
-    if r == Roles::EMPTY {
+    let narrowed = Roles(of.effective().0 & mask & !Roles::OWNER.0);
+    if narrowed == Roles::EMPTY {
         // Fall back to one role `of` confers.
         Roles(1 << of.effective().0.trailing_zeros())
     } else {
-        r
+        narrowed
     }
 }
 
@@ -62,14 +62,18 @@ fn build(root_roles: Roles, steps: &[Step]) -> (GrantChain, DeviceKey, DeviceKey
     spec.bind = Some(holders[0].device_id());
     let mut chain = issue(&owner, DAEMON, &spec, NOW);
     let mut level = 0;
-    for (i, s) in steps.iter().enumerate() {
+    for (i, step) in steps.iter().enumerate() {
         let parent = chain.leaf().unwrap().clone();
-        if s.narrow_scope {
+        if step.narrow_scope {
             level = 1;
         }
-        let mut child = GrantSpec::new(subset(parent.roles, s.mask), scope_for(level));
-        child.expires = parent.expires.map(|e| UnixMillis(e.0 - s.expiry_cut));
-        child.max_uses = parent.max_uses.map(|u| u.saturating_sub(s.uses_cut).max(1));
+        let mut child = GrantSpec::new(subset(parent.roles, step.mask), scope_for(level));
+        child.expires = parent
+            .expires
+            .map(|expiry| UnixMillis(expiry.0 - step.expiry_cut));
+        child.max_uses = parent
+            .max_uses
+            .map(|uses| uses.saturating_sub(step.uses_cut).max(1));
         child.delegate = true;
         child.bind = Some(holders[i + 1].device_id());
         chain = attenuate(&chain, &holders[i], &child, NOW).expect("narrowing child");
@@ -78,7 +82,7 @@ fn build(root_roles: Roles, steps: &[Step]) -> (GrantChain, DeviceKey, DeviceKey
     (chain, owner, presenter)
 }
 
-fn auth(owner: &DeviceKey) -> SimpleAuthority {
+fn owner_authority(owner: &DeviceKey) -> SimpleAuthority {
     SimpleAuthority::new([owner.device_id()])
 }
 
@@ -88,11 +92,11 @@ proptest! {
     #[test]
     fn narrowing_chains_verify(root in roles(), steps in prop::collection::vec(step(), 0..6)) {
         let (chain, owner, presenter) = build(root, &steps);
-        let v = verify(&chain, DAEMON, presenter.device_id(), NOW, &auth(&owner)).unwrap();
+        let verified = verify(&chain, DAEMON, presenter.device_id(), NOW, &owner_authority(&owner)).unwrap();
         // Effective roles never exceed the root's, and equal the leaf's.
-        prop_assert!(root.covers(v.roles));
-        prop_assert_eq!(v.roles, chain.leaf().unwrap().roles.effective());
-        prop_assert_eq!(v.ids.len(), chain.links.len());
+        prop_assert!(root.covers(verified.roles));
+        prop_assert_eq!(verified.roles, chain.leaf().unwrap().roles.effective());
+        prop_assert_eq!(verified.ids.len(), chain.links.len());
     }
 
     #[test]
@@ -104,18 +108,18 @@ proptest! {
         flip in 1u8..=255,
     ) {
         let (mut chain, owner, presenter) = build(root, &steps);
-        let i = link.index(chain.links.len());
-        let auth = auth(&owner);
+        let index = link.index(chain.links.len());
+        let authority = owner_authority(&owner);
         // Flip a byte either in the signature or in a field the signature covers.
         if byte.index(2) == 0 {
-            let sig = &mut chain.links[i].sig;
-            let j = byte.index(sig.len());
-            sig[j] ^= flip;
+            let sig = &mut chain.links[index].sig;
+            let position = byte.index(sig.len());
+            sig[position] ^= flip;
         } else {
-            let g = &mut chain.links[i].grant;
-            g.label.push(char::from(b'a' + flip % 26));
+            let grant = &mut chain.links[index].grant;
+            grant.label.push(char::from(b'a' + flip % 26));
         }
-        prop_assert!(verify(&chain, DAEMON, presenter.device_id(), NOW, &auth).is_err());
+        prop_assert!(verify(&chain, DAEMON, presenter.device_id(), NOW, &authority).is_err());
     }
 
     #[test]
@@ -135,8 +139,8 @@ proptest! {
         // …and a hand-signed escalation fails verification.
         let forged = force_child(&chain, &presenter, &child);
         let next = DeviceKey::generate();
-        let r = verify(&forged, DAEMON, child.bind.unwrap_or(next.device_id()), NOW, &auth(&owner));
-        prop_assert_eq!(r.unwrap_err(), GrantError::Escalation(chain.links.len()));
+        let result = verify(&forged, DAEMON, child.bind.unwrap_or(next.device_id()), NOW, &owner_authority(&owner));
+        prop_assert_eq!(result.unwrap_err(), GrantError::Escalation(chain.links.len()));
     }
 
     #[test]
@@ -155,8 +159,8 @@ proptest! {
         };
         prop_assert_eq!(attenuate(&chain, &presenter, &child, NOW).unwrap_err(), want);
         let forged = force_child(&chain, &presenter, &child);
-        let r = verify(&forged, DAEMON, presenter.device_id(), NOW, &auth(&owner));
-        prop_assert_eq!(r.unwrap_err(), want);
+        let result = verify(&forged, DAEMON, presenter.device_id(), NOW, &owner_authority(&owner));
+        prop_assert_eq!(result.unwrap_err(), want);
     }
 
     #[test]
@@ -166,35 +170,35 @@ proptest! {
         link in any::<prop::sample::Index>(),
     ) {
         let (chain, owner, presenter) = build(root, &steps);
-        let i = link.index(chain.links.len());
-        let mut a = auth(&owner);
+        let index = link.index(chain.links.len());
+        let mut authority = owner_authority(&owner);
         // Past the earliest expiry.
-        let late = chain.links.iter().filter_map(|l| l.grant.expires).min().unwrap();
+        let late = chain.links.iter().filter_map(|link| link.grant.expires).min().unwrap();
         prop_assert!(matches!(
-            verify(&chain, DAEMON, presenter.device_id(), late, &a),
+            verify(&chain, DAEMON, presenter.device_id(), late, &authority),
             Err(GrantError::Expired(_))
         ));
         // Another device presenting a bound chain.
         prop_assert_eq!(
-            verify(&chain, DAEMON, DeviceKey::generate().device_id(), NOW, &a).unwrap_err(),
+            verify(&chain, DAEMON, DeviceKey::generate().device_id(), NOW, &authority).unwrap_err(),
             GrantError::BoundElsewhere
         );
         // Wrong daemon.
         prop_assert_eq!(
-            verify(&chain, DaemonId([1; 32]), presenter.device_id(), NOW, &a).unwrap_err(),
+            verify(&chain, DaemonId([1; 32]), presenter.device_id(), NOW, &authority).unwrap_err(),
             GrantError::WrongDaemon(0)
         );
         // Revoking any link revokes the chain.
-        a.revoked.insert(chain.links[i].grant.grant_id);
+        authority.revoked.insert(chain.links[index].grant.grant_id);
         prop_assert_eq!(
-            verify(&chain, DAEMON, presenter.device_id(), NOW, &a).unwrap_err(),
-            GrantError::Revoked(i)
+            verify(&chain, DAEMON, presenter.device_id(), NOW, &authority).unwrap_err(),
+            GrantError::Revoked(index)
         );
         // Revoking any issuer's device does too.
-        let mut b = auth(&owner);
-        b.revoked_devices.insert(chain.links[i].grant.issuer, NOW);
+        let mut device_revoked = owner_authority(&owner);
+        device_revoked.revoked_devices.insert(chain.links[index].grant.issuer, NOW);
         prop_assert_eq!(
-            verify(&chain, DAEMON, presenter.device_id(), NOW, &b).unwrap_err(),
+            verify(&chain, DAEMON, presenter.device_id(), NOW, &device_revoked).unwrap_err(),
             GrantError::DeviceRevoked
         );
     }
@@ -214,7 +218,7 @@ proptest! {
         child.max_uses = parent.max_uses;
         let forged = force_child(&chain, &stranger, &child);
         prop_assert_eq!(
-            verify(&forged, DAEMON, presenter.device_id(), NOW, &auth(&owner)).unwrap_err(),
+            verify(&forged, DAEMON, presenter.device_id(), NOW, &owner_authority(&owner)).unwrap_err(),
             GrantError::NotHolder(1)
         );
     }
@@ -228,16 +232,18 @@ fn unbound_parent_needs_a_recorded_binding_and_delegation() {
     spec.delegate = true;
     let chain = issue(&owner, DAEMON, &spec, NOW);
     let child = GrantSpec::new(Roles::VIEWER, Scope::Session(SessionId(1)));
-    let sub = attenuate(&chain, &guest, &child, NOW).unwrap();
+    let delegated = attenuate(&chain, &guest, &child, NOW).unwrap();
     let third = DeviceKey::generate();
-    let mut a = SimpleAuthority::new([owner.device_id()]);
+    let mut authority = SimpleAuthority::new([owner.device_id()]);
     assert_eq!(
-        verify(&sub, DAEMON, third.device_id(), NOW, &a).unwrap_err(),
+        verify(&delegated, DAEMON, third.device_id(), NOW, &authority).unwrap_err(),
         GrantError::NotHolder(1)
     );
-    a.bindings.insert((chain.grant_id(), guest.device_id()));
-    let v = verify(&sub, DAEMON, third.device_id(), NOW, &a).unwrap();
-    assert_eq!(v.roles, Roles::VIEWER);
+    authority
+        .bindings
+        .insert((chain.grant_id(), guest.device_id()));
+    let verified = verify(&delegated, DAEMON, third.device_id(), NOW, &authority).unwrap();
+    assert_eq!(verified.roles, Roles::VIEWER);
 
     // Without `delegate` the child is refused even by its holder.
     let fixed = issue(
@@ -246,14 +252,16 @@ fn unbound_parent_needs_a_recorded_binding_and_delegation() {
         &GrantSpec::new(Roles::DRIVER, Scope::Daemon),
         NOW,
     );
-    a.bindings.insert((fixed.grant_id(), guest.device_id()));
+    authority
+        .bindings
+        .insert((fixed.grant_id(), guest.device_id()));
     assert_eq!(
         attenuate(&fixed, &guest, &child, NOW).unwrap_err(),
         GrantError::NotDelegable(1)
     );
     let forged = force_child(&fixed, &guest, &child);
     assert_eq!(
-        verify(&forged, DAEMON, third.device_id(), NOW, &a).unwrap_err(),
+        verify(&forged, DAEMON, third.device_id(), NOW, &authority).unwrap_err(),
         GrantError::NotDelegable(1)
     );
 }
@@ -322,8 +330,8 @@ proptest! {
         words in prop::collection::vec("[a-z][a-z0-9.]{0,6}", 1..4),
     ) {
         let input = format!("{program} {}", words.join(" "));
-        if let Some(m) = grants::like_this("Bash", &input) {
-            prop_assert!(grants::rule_matches(&m, "Bash", &input));
+        if let Some(matcher) = grants::like_this("Bash", &input) {
+            prop_assert!(grants::rule_matches(&matcher, "Bash", &input));
         }
     }
 }
@@ -341,9 +349,9 @@ fn non_canonical_signatures_are_refused() {
     assert!(grants::verify_signature(key.device_id(), b"grant", &sig));
     let mut forged = sig.clone();
     let mut carry = 0u16;
-    for (s, l) in forged[32..].iter_mut().zip(L) {
-        let sum = u16::from(*s) + u16::from(l) + carry;
-        *s = sum as u8;
+    for (scalar_byte, order_byte) in forged[32..].iter_mut().zip(L) {
+        let sum = u16::from(*scalar_byte) + u16::from(order_byte) + carry;
+        *scalar_byte = sum as u8;
         carry = sum >> 8;
     }
     assert_eq!(carry, 0);
@@ -384,30 +392,31 @@ fn removal_voids_older_chains_only() {
     let mut child = GrantSpec::new(Roles::VIEWER, Scope::Daemon);
     child.max_uses = None;
     let future = UnixMillis(NOW.0 + 10_000_000);
-    let sub = attenuate(&root, &delegate, &child, future).unwrap();
+    let delegated = attenuate(&root, &delegate, &child, future).unwrap();
 
-    let mut a = auth(&owner);
-    a.revoked_devices
+    let mut authority = owner_authority(&owner);
+    authority
+        .revoked_devices
         .insert(delegate.device_id(), UnixMillis(NOW.0 + 1));
     let later = UnixMillis(NOW.0 + 20_000_000);
     assert_eq!(
-        verify(&root, DAEMON, delegate.device_id(), later, &a).unwrap_err(),
+        verify(&root, DAEMON, delegate.device_id(), later, &authority).unwrap_err(),
         GrantError::DeviceRevoked
     );
     assert_eq!(
-        verify(&sub, DAEMON, third.device_id(), later, &a).unwrap_err(),
+        verify(&delegated, DAEMON, third.device_id(), later, &authority).unwrap_err(),
         GrantError::DeviceRevoked
     );
     // The owner re-invites the delegate after the removal.
     let again = issue(&owner, DAEMON, &spec, UnixMillis(NOW.0 + 2));
-    assert!(verify(&again, DAEMON, delegate.device_id(), later, &a).is_ok());
+    assert!(verify(&again, DAEMON, delegate.device_id(), later, &authority).is_ok());
 
     // A reset store voids every chain up to its time.
-    let mut b = auth(&owner);
-    b.void_before = Some(NOW);
+    let mut reset = owner_authority(&owner);
+    reset.void_before = Some(NOW);
     assert_eq!(
-        verify(&root, DAEMON, delegate.device_id(), later, &b).unwrap_err(),
+        verify(&root, DAEMON, delegate.device_id(), later, &reset).unwrap_err(),
         GrantError::Revoked(0)
     );
-    assert!(verify(&again, DAEMON, delegate.device_id(), later, &b).is_ok());
+    assert!(verify(&again, DAEMON, delegate.device_id(), later, &reset).is_ok());
 }
