@@ -25,6 +25,9 @@
 //! un who [--watch]            un take-control [--force] [--wait]   un release-control
 //! un prompt <text>            un grants [--devices]   un revoke <grant>|--device K   un audit
 //! un draft <text> [--cps N] [--then-focus PANE] [--hold S]   a live draft others watch
+//! un float run [--close-when-done] [--frame x,y,w,h] [--focus] [--over P] -- <command…>
+//! un float pane|min|restore|pin [--off] <P>   un float move <P> <x,y,w,h>
+//! un float dock <P> [--beside P --side left|right|up|down]   un float list
 //! un events [--type T]…       what happens in the session, as it happens
 //! ```
 //!
@@ -48,6 +51,7 @@ use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 mod draw;
+mod float;
 mod json;
 mod mp;
 mod ws;
@@ -184,6 +188,11 @@ enum Cmd {
     Ws(ws::WsCmd),
     #[command(flatten)]
     Mp(mp::MpCmd),
+    /// Floating windows: run a command in one, move, minimize, pin, dock, list.
+    Float {
+        #[command(subcommand)]
+        action: float::FloatCmd,
+    },
     /// Drawings and images: list, show, export, send to an agent.
     Draw {
         #[command(subcommand)]
@@ -397,6 +406,8 @@ struct Conn {
     sessions: Vec<SessionSummary>,
     /// Working directories from pane metadata.
     cwds: std::collections::HashMap<PaneId, String>,
+    /// The attached session's floating windows, once the daemon has sent them.
+    floats: Option<client_core::proto::SessionFloats>,
     /// Authenticated at least once.
     connected: bool,
     /// Why the last dial or connection failed, for the timeout message.
@@ -425,6 +436,7 @@ impl Conn {
             layout: None,
             sessions: Vec::new(),
             cwds: std::collections::HashMap::new(),
+            floats: None,
             connected: false,
             last_error: None,
             direct_only: cli.no_relay,
@@ -465,6 +477,7 @@ impl Conn {
     fn apply(&mut self, event: &ClientEvent) -> Result<()> {
         match event {
             ClientEvent::Layout { layout } => self.layout = Some(layout.clone()),
+            ClientEvent::Floats { floats } => self.floats = Some(floats.clone()),
             ClientEvent::Connected { .. } => self.connected = true,
             ClientEvent::Disconnected { reason } => self.last_error = Some(reason.clone()),
             ClientEvent::Sessions { sessions } => self.sessions.clone_from(sessions),
@@ -619,6 +632,7 @@ async fn run(cli: Cli) -> Result<()> {
         }
         Cmd::Mp(cmd) => return mp::run(&mut conn, cmd).await,
         Cmd::Draw { action } => return draw::run(&mut conn, action).await,
+        Cmd::Float { action } => return float::run(&mut conn, action).await,
         Cmd::Attach => return attach(conn).await,
         Cmd::Events { types } => return events(conn, &types).await,
         Cmd::SshProxy { port } => {

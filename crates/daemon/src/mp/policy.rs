@@ -63,6 +63,8 @@ pub(crate) enum Target {
     Session(SessionId),
     /// The whole session a pane belongs to (structural changes like a split).
     SessionOf(PaneId),
+    /// The tab a pane belongs to (arranging its floating windows).
+    TabOf(PaneId),
     /// The host beyond the terminal (files, git, forwards): a daemon- or session-wide grant.
     Host,
     /// The daemon itself (grants, audit, host services): a daemon-wide grant.
@@ -91,6 +93,9 @@ pub(crate) fn check(core: &Core, authz: &Authz, need: Need, target: Target) -> R
         Target::SessionOf(p) => core
             .session_of_pane(p)
             .is_some_and(|s| core.scope_within(Scope::Session(s), scope)),
+        Target::TabOf(p) => core
+            .tab_of_pane(p)
+            .is_some_and(|t| core.scope_within(Scope::Tab(t), scope)),
         Target::Host => matches!(scope, Scope::Daemon | Scope::Session(_)),
         Target::Daemon => scope == Scope::Daemon,
     };
@@ -162,6 +167,14 @@ pub(crate) fn op(op: &LayoutOp) -> (Need, Target) {
         O::SetTabProject { tab_id, .. } => (Need::Own, Target::Tab(*tab_id)),
         O::PutProject { session_id, .. } | O::RemoveProject { session_id, .. } => {
             (Need::Own, Target::Session(*session_id))
+        }
+        // A new float, and docking (which can move a window into another tab), change the
+        // session's tree like a split; moving, chipping and pinning arrange one tab.
+        O::NewFloat { pane_id, .. }
+        | O::DockPane { pane_id, .. }
+        | O::MovePaneToEdge { pane_id, .. } => (Need::Drive, Target::SessionOf(*pane_id)),
+        O::FloatPane { pane_id, .. } | O::SetFloat { pane_id, .. } => {
+            (Need::Drive, Target::TabOf(*pane_id))
         }
     }
 }

@@ -286,6 +286,12 @@ pub enum ClientEvent {
         /// The session's projects, as far as this connection sees.
         projects: proto::SessionProjects,
     },
+    /// A session's floating windows, after each [`ClientEvent::Layout`] from daemons with
+    /// `DaemonFeatures::FLOATS`.
+    Floats {
+        /// The session's floats, as far as this connection sees.
+        floats: proto::SessionFloats,
+    },
     /// A program in the pane wrote to the clipboard (OSC 52) after this device typed into it,
     /// with [`ConnectOptions::clipboard`]. Put it on this device's clipboard, local only, and
     /// say so.

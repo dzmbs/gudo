@@ -28,6 +28,9 @@ use crate::pane::{Pane, VtEvent};
 use crate::persist;
 use crate::shell::ShellIntegration;
 
+/// How long a float that closes when its work is done stays to show the outcome.
+const FLOAT_LINGER: std::time::Duration = std::time::Duration::from_millis(2500);
+
 /// Identifies one client connection for the daemon's lifetime.
 pub(crate) type ConnId = u64;
 
@@ -275,6 +278,8 @@ pub(crate) struct Core {
     >,
     /// Signalled when a client connects or knocks, so work done only for clients resumes.
     pub client_arrived: Notify,
+    /// This core, for work it schedules on itself (closing finished floats).
+    me: std::sync::Weak<Core>,
 }
 
 impl Core {
@@ -288,7 +293,8 @@ impl Core {
     ) -> Arc<Self> {
         let (events, _) = broadcast::channel(1024);
         let ws = crate::ws::Ws::new(&cfg, events.clone());
-        Arc::new(Self {
+        Arc::new_cyclic(|me| Self {
+            me: me.clone(),
             epoch: SessionEpoch(crate::identity::now_millis()),
             identity,
             layout: Mutex::new(layout),
@@ -591,8 +597,56 @@ impl Core {
         Some(all)
     }
 
+    /// A session's floating windows cut down to `scope`: a tab-scoped guest sees its tab's,
+    /// a pane-scoped one none (it sees its pane alone, tiled).
+    pub fn floats_for(&self, session: SessionId, scope: Scope) -> Option<proto::SessionFloats> {
+        let layout = lock(&self.layout);
+        let mut all = layout.floats(session)?;
+        match scope {
+            Scope::Daemon | Scope::Session(_) => {}
+            Scope::Tab(t) => all
+                .floats
+                .retain(|w| layout.tab_of_pane(w.panes[0]) == Some(t)),
+            Scope::Pane(_) => all.floats.clear(),
+        }
+        Some(all)
+    }
+
     pub fn session_of_pane(&self, pane: PaneId) -> Option<SessionId> {
         lock(&self.layout).session_of_pane(pane)
+    }
+
+    pub fn tab_of_pane(&self, pane: PaneId) -> Option<proto::TabId> {
+        lock(&self.layout).tab_of_pane(pane)
+    }
+
+    /// `pane`'s work is done (its agent's turn ended, its program reported done or failed, or
+    /// its command finished): a float opened to close then closes after [`FLOAT_LINGER`], so
+    /// the outcome can be read first.
+    pub fn work_done(&self, pane: PaneId) {
+        let wanted = lock(&self.layout)
+            .window_of(pane)
+            .is_some_and(|w| w.close == proto::CloseWhen::Done);
+        let Ok(rt) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        if !wanted {
+            return;
+        }
+        let me = self.me.clone();
+        rt.spawn(async move {
+            tokio::time::sleep(FLOAT_LINGER).await;
+            let Some(core) = me.upgrade() else {
+                return;
+            };
+            let still = lock(&core.layout)
+                .window_of(pane)
+                .is_some_and(|w| w.close == proto::CloseWhen::Done);
+            if still {
+                core.term.finished(&core, pane);
+                core.apply_op(LayoutOp::ClosePane { pane_id: pane });
+            }
+        });
     }
 
     /// The pane whose agent asked approval request `id`.
@@ -689,6 +743,7 @@ impl Core {
         status.msg = clean(status.msg);
         status.title = clean(status.title);
         let status = (status.state != agents::ProgramState::Clear).then_some(status);
+        let status_state = status.as_ref().map(|s| s.state);
         let mut meta = lock(&entry.meta);
         let changed = meta.program.as_ref().and_then(program_report)
             != status.as_ref().and_then(program_report);
@@ -696,6 +751,12 @@ impl Core {
         drop(meta);
         if changed {
             self.emit(Event::ProgramStatus(entry.pane.id));
+            if matches!(
+                status_state,
+                Some(agents::ProgramState::Done | agents::ProgramState::Error)
+            ) {
+                self.work_done(entry.pane.id);
+            }
         }
     }
 
@@ -913,6 +974,50 @@ impl Core {
                 self.layout_changed(session_id, false);
                 OpOutcome::Done
             }
+            LayoutOp::NewFloat {
+                pane_id,
+                launch,
+                frame,
+                focus,
+                close,
+            } => {
+                let session = lock(&self.layout)
+                    .session_of_pane(pane_id)
+                    .ok_or(fail(OpError::NotFound))?;
+                let cwd_hint = self.pane(pane_id).and_then(|e| lock(&e.meta).cwd.clone());
+                let new = lock(&self.layout).alloc_pane();
+                self.spawn_pane(new, launch, cwd_hint, false)?;
+                let result = lock(&self.layout).new_float(pane_id, new, frame, focus, close);
+                if let Err(e) = result {
+                    self.kill_panes(&[new]);
+                    return Err(fail(e));
+                }
+                self.layout_changed(session, false);
+                OpOutcome::PaneCreated { pane_id: new }
+            }
+            LayoutOp::FloatPane { pane_id, frame } => self
+                .simple(self.session_of_pane(pane_id), |l| {
+                    l.float_pane(pane_id, frame).map(drop)
+                })?,
+            LayoutOp::SetFloat {
+                pane_id,
+                frame,
+                minimized,
+                pinned,
+            } => self.simple(self.session_of_pane(pane_id), |l| {
+                l.set_float(pane_id, frame, minimized, pinned).map(drop)
+            })?,
+            LayoutOp::DockPane { pane_id, beside } => self
+                .simple(self.session_of_pane(pane_id), |l| {
+                    l.dock_pane(pane_id, beside).map(drop)
+                })?,
+            LayoutOp::MovePaneToEdge {
+                pane_id,
+                tab_id,
+                side,
+            } => self.simple(self.session_of_pane(pane_id), |l| {
+                l.move_pane_to_edge(pane_id, tab_id, side).map(drop)
+            })?,
         };
         Ok(outcome)
     }
@@ -1563,6 +1668,7 @@ impl Core {
                 self.ws
                     .turns
                     .record(crate::ws::turns::Boundary::End { pane: id });
+                self.work_done(id);
                 if event.kind == EventKind::SessionEnded {
                     crate::approve::session_over(self, id);
                 }
@@ -1985,6 +2091,9 @@ fn handle_command(core: &Core, entry: &PaneEntry, update: CommandUpdate) {
             // A command starting or ending is when servers come and go.
             core.ws.ports.trigger.notify_one();
             crate::assist::command_finished(core, entry, &mark);
+            if mark.finished.is_some() {
+                core.work_done(mark.pane_id);
+            }
             core.emit(Event::Command(mark));
         }
     }

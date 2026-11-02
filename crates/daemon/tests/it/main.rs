@@ -11,6 +11,7 @@ mod browser;
 mod codex;
 mod drive;
 mod e2e;
+mod floats;
 mod history;
 mod hostile_output;
 mod installs;

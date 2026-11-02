@@ -41,10 +41,20 @@ enum WorkspaceAction: Hashable {
     case shortcuts
     /// The last closed tab (or tabs closed together) back where it was (⇧⌘T, browsers).
     case reopenClosedTab
+    /// Floating windows (docs/APP-ARCHITECTURE.md §28): float or dock the focused pane, send
+    /// its window to the tray, bring the next window forward, look under them all.
+    case toggleFloat, minimizeFloat, cycleFloats, toggleFloatsHidden
+    case focusNextPane, focusPreviousPane
+    /// The focused pane trades places past its neighbour; a floating window steps that way.
+    case movePane(Direction)
+    /// A split along the focused pane's longer side.
+    case splitBestFit
 
     static let fileActions: [Self] = [.newTab, .newTabOnHost, .newAgent, .newProject, .splitRight, .splitDown, .splitWithHost, .closePane]
-    static let paneActions: [Self] = [.toggleZoom, .movePaneToNewTab] + Direction.allCases.map(Self.focus) + Direction.allCases.map(Self.resize)
+    static let paneActions: [Self] = [.toggleZoom, .splitBestFit, .movePaneToNewTab] + Direction.allCases.map(Self.focus)
+        + [.focusNextPane, .focusPreviousPane] + Direction.allCases.map(Self.movePane) + Direction.allCases.map(Self.resize)
         + [.previousPrompt, .nextPrompt, .returnToTerminal, .fullScreenEditor]
+    static let floatActions: [Self] = [.toggleFloat, .minimizeFloat, .cycleFloats, .toggleFloatsHidden]
     static let drawActions: [Self] = [.draw, .newCanvas]
     static let tabActions: [Self] = [.previousTab, .nextTab] + (1...8).map(Self.selectTab) + [.lastTab, .goToTab, .moveTabUp, .moveTabDown]
     static let hostActions: [Self] = (1...9).map(Self.selectHost)
@@ -53,7 +63,7 @@ enum WorkspaceAction: Hashable {
     /// Every app shortcut. The terminal answers these itself while it has the keyboard (iPad):
     /// UIKit asks the first responder first, so they never depend on the responder chain reaching
     /// the scene's menu commands, which it can miss right after the window switched hosts.
-    static let allShortcutActions: [Self] = fileActions + paneActions + drawActions + tabActions + hostActions + windowActions + historyActions + [.newWindow]
+    static let allShortcutActions: [Self] = fileActions + paneActions + drawActions + tabActions + hostActions + windowActions + historyActions + floatActions + [.newWindow]
 
     /// Whether the shortcut stays the app's while a VS Code pane has the keyboard
     /// (docs/APP-ARCHITECTURE.md §20): ⌘1–⌘9 switch tabs (VS Code's own ⌘1–⌘8 focus editor
@@ -107,6 +117,14 @@ enum WorkspaceAction: Hashable {
         case .toggleSidebar: "Toggle Sidebar"
         case .shortcuts: "Keyboard Shortcuts"
         case .reopenClosedTab: "Reopen Closed Tab"
+        case .toggleFloat: "Float or Dock Pane"
+        case .minimizeFloat: "Minimize Floating Window"
+        case .cycleFloats: "Next Floating Window"
+        case .toggleFloatsHidden: "Hide or Show Floating Windows"
+        case .focusNextPane: "Focus Next Pane"
+        case .focusPreviousPane: "Focus Previous Pane"
+        case .movePane(let direction): "Move Pane \(direction.moveName)"
+        case .splitBestFit: "Split Pane Best Fit"
         }
     }
 
@@ -163,6 +181,17 @@ enum WorkspaceAction: Hashable {
         case .toggleSidebar: KeyboardShortcut("b")
         case .shortcuts: KeyboardShortcut("/")
         case .reopenClosedTab: KeyboardShortcut("t", modifiers: [.command, .shift])
+        case .toggleFloat: KeyboardShortcut(.return, modifiers: [.command, .option])
+        // ⌘M and ⌥⌘M are the system's own window minimize.
+        case .minimizeFloat: KeyboardShortcut("m", modifiers: [.command, .shift])
+        // ⌘] / ⌘[ walk every pane (Ghostty's goto_split next/previous); ⌥ keeps to windows.
+        case .cycleFloats: KeyboardShortcut("]", modifiers: [.command, .option])
+        // ⌥⌘H is the Mac's Hide Others; F for floating, free in the app and the systems.
+        case .toggleFloatsHidden: KeyboardShortcut("f", modifiers: [.command, .option])
+        case .focusNextPane: KeyboardShortcut("]")
+        case .focusPreviousPane: KeyboardShortcut("[")
+        case .movePane(let direction): KeyboardShortcut(direction.arrow, modifiers: [.command, .option, .shift])
+        case .splitBestFit: KeyboardShortcut(.return, modifiers: .command)
         }
     }
 
@@ -202,6 +231,15 @@ enum WorkspaceAction: Hashable {
         case .toggleSidebar: perform(window: window)
         case .shortcuts: window.sheet = window.sheet == .shortcuts ? nil : .shortcuts
         case .reopenClosedTab: window.reopenLastClosed()
+        case .toggleFloat: window.toggleFloat()
+        case .minimizeFloat: window.toggleMinimized()
+        case .cycleFloats: window.cycleFloats()
+        case .toggleFloatsHidden: window.toggleFloatsHidden()
+        case .focusNextPane: window.focusPane(offset: 1)
+        case .focusPreviousPane: window.focusPane(offset: -1)
+        case .movePane(let direction): window.movePane(direction)
+        case .splitBestFit: window.splitBestFit()
+        case .resize(let direction) where window.focusedFloats: _ = window.resizeFloat(direction)
         case .closePane: window.closeFocusedPaneOrTab()
         case .returnToTerminal: window.returnToTerminal()
         case .fullScreenEditor: window.toggleEditorFullScreen()
@@ -228,6 +266,11 @@ enum WorkspaceAction: Hashable {
         case .selectTab(let number): workspace.selectTab(at: number - 1)
         case .lastTab: workspace.selectTab(at: nil)
         case .goToTab, .moveTabUp, .moveTabDown, .newWindow, .newAgent, .newProject, .splitWithHost, .returnToTerminal, .fullScreenEditor, .selectHost, .reopenClosedTab: break
+        // Windows and pane moves need the window's view of the tab.
+        case .toggleFloat, .minimizeFloat, .cycleFloats, .toggleFloatsHidden, .movePane: break
+        case .focusNextPane: workspace.apply(.focusDirection(.right))
+        case .focusPreviousPane: workspace.apply(.focusDirection(.left))
+        case .splitBestFit: workspace.split(.horizontal)
         case .draw: DrawingCommands.toggleDrawing(in: workspace)
         case .newCanvas: DrawingCommands.newCanvas(in: workspace)
         // Window screens need a window.
@@ -277,6 +320,15 @@ extension EventModifiers {
 #endif
 
 private extension Direction {
+    var moveName: String {
+        switch self {
+        case .left: "Left"
+        case .right: "Right"
+        case .up: "Up"
+        case .down: "Down"
+        }
+    }
+
     var name: String {
         switch self {
         case .left: "Left"

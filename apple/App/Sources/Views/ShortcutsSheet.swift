@@ -15,6 +15,7 @@ struct ShortcutsSheet: View {
             ("Tabs", [.newTab, .newTabOnHost] + WorkspaceAction.tabActions),
             ("Hosts", WorkspaceAction.hostActions),
             ("Panes", [.splitRight, .splitDown, .splitWithHost, .closePane] + WorkspaceAction.paneActions),
+            ("Floating Windows", WorkspaceAction.floatActions),
             ("Drawing", WorkspaceAction.drawActions),
         ]
     }

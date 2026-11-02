@@ -54,6 +54,8 @@ enum PaletteCommands {
             ) { action.perform(on: workspace, window: model) })
         }
 
+        commands += paneCommands(workspace: workspace, model: model)
+
         let tools: [(String, String, String, [String]?, () -> Void)] = [
             ("find", "Find in Scrollback", "magnifyingglass", ["⌘", "F"], { model.isSearchShown = true }),
             ("links", "Links & Paths", "link", ["⇧", "⌘", "L"], { model.sheet = .links }),
@@ -128,6 +130,40 @@ enum PaletteCommands {
                 shortcut: index == 0 ? WorkspaceAction.reopenClosedTab.shortcut.symbols : nil
             ) { model.reopenClosed(entry.id) })
         }
+        return commands
+    }
+
+    static func paneCommands(workspace: Workspace, model: WindowModel) -> [PaletteCommand] {
+        let floating = model.focusedFloats
+        var actions: [(WorkspaceAction, String, String)] = [
+            (.toggleFloat, floating ? "Dock Pane" : "Float Pane", "square.on.square"),
+            (.splitBestFit, WorkspaceAction.splitBestFit.title, "rectangle.split.2x1"),
+            (.focusNextPane, WorkspaceAction.focusNextPane.title, "arrow.right.to.line"),
+            (.focusPreviousPane, WorkspaceAction.focusPreviousPane.title, "arrow.left.to.line"),
+        ]
+        for (direction, image) in [(PaneLayout.Direction.up, "arrow.up"), (.down, "arrow.down"), (.left, "arrow.left"), (.right, "arrow.right")] {
+            let focus = WorkspaceAction.focus(direction)
+            actions.append((focus, "Focus Pane \(direction.rawValue.capitalized)", image))
+            actions.append((.movePane(direction), WorkspaceAction.movePane(direction).title, "arrow.up.and.down.and.arrow.left.and.right"))
+        }
+        if floating { actions.append((.minimizeFloat, WorkspaceAction.minimizeFloat.title, "minus.rectangle")) }
+        if !(workspace.session.floats.isEmpty) {
+            actions.append((.cycleFloats, WorkspaceAction.cycleFloats.title, "square.stack"))
+            actions.append((.toggleFloatsHidden, model.floatsHidden ? "Show Floating Windows" : "Hide Floating Windows", "eye.slash"))
+        }
+        var commands = actions.map { action, title, image in
+            PaletteCommand(id: "pane-\(action.title)", title: title, section: "Pane", systemImage: image, shortcut: action.shortcut.symbols) {
+                action.perform(on: workspace, window: model)
+            }
+        }
+        if let pane = workspace.focusedPane {
+            commands.append(PaletteCommand(id: "pane-copy-id", title: "Copy Pane ID", section: "Pane", systemImage: "number") { model.copyPaneId(pane) })
+        }
+        #if os(macOS)
+        commands.append(PaletteCommand(id: "pane-full-screen", title: "Enter Full Screen", section: "Pane", systemImage: "arrow.up.left.and.arrow.down.right.rectangle", shortcut: ["⌃", "⌘", "F"]) {
+            NSApp.keyWindow?.toggleFullScreen(nil)
+        })
+        #endif
         return commands
     }
 

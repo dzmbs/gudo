@@ -49,6 +49,9 @@ pub struct DaemonInfo {
     /// It reopens closed panes, resuming their agents (`reopen_tab`).
     #[uniffi(default = false)]
     pub reopen: bool,
+    /// It keeps floating windows (`LayoutOp::NewFloat` …, `ClientEvent::Floats`).
+    #[uniffi(default = false)]
+    pub floats: bool,
     /// It keeps agent accounts (`accounts`, `account_sign_in`, `AgentLaunch.account`).
     #[uniffi(default = false)]
     pub accounts: bool,
@@ -71,6 +74,7 @@ impl From<proto::DaemonInfo> for DaemonInfo {
             multiplayer2: i.features.contains(proto::DaemonFeatures::MP2),
             pane_moves: i.features.contains(proto::DaemonFeatures::PANE_MOVES),
             projects: i.features.contains(proto::DaemonFeatures::PROJECTS),
+            floats: i.features.contains(proto::DaemonFeatures::FLOATS),
             agent_mcp: i.features.contains(proto::DaemonFeatures::AGENT_MCP),
             reopen: i.features.contains(proto::DaemonFeatures::REOPEN),
             accounts: i.features.contains(proto::DaemonFeatures::ACCOUNTS),

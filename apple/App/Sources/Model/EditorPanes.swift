@@ -582,6 +582,13 @@ extension WindowModel {
 
     /// ⌃⌘F, the More menu, the palette: the focused editor full screen, or back.
     func toggleEditorFullScreen() {
+        #if os(macOS)
+        // Without an editor in front, ⌃⌘F is the window's own full screen, as everywhere on the Mac.
+        if !isEditorFullScreen, destination != .terminal || activeMixed?.focusedEditor == nil {
+            NSApp.keyWindow?.toggleFullScreen(nil)
+            return
+        }
+        #endif
         if isEditorFullScreen {
             fullScreenEditor = nil
             fullScreenHints.dismiss()

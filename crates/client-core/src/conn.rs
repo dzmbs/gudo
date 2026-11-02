@@ -371,6 +371,7 @@ async fn handshake(inner: &Arc<Inner>, conn: Connection, v: u16) -> Result<Live,
             | Caps::WORKFLOWS
             | Caps::PRESENCE
             | Caps::PROJECTS
+            | Caps::FLOATS
             | if crate::askpass::announces(&inner.options, crate::mp::is_guest(inner)) {
                 Caps::ASKPASS | Caps::ASKPASS_DRIVER
             } else {
@@ -739,6 +740,7 @@ async fn read_ctl(inner: Arc<Inner>, mut rx: RecvStream) -> String {
                 ClientEvent::ProgramStatus { pane_id, status }
             }
             ServerCtl::Projects(projects) => ClientEvent::Projects { projects },
+            ServerCtl::Floats(floats) => ClientEvent::Floats { floats },
             // Only what this connection asked for; a daemon is not trusted to honour it.
             ServerCtl::Clipboard { pane_id, text } if inner.options.clipboard => {
                 ClientEvent::Clipboard { pane_id, text }

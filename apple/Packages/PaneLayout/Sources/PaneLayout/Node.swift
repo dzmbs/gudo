@@ -107,6 +107,8 @@ public indirect enum Node: Hashable, Sendable, Codable {
     struct Step {
         var axis: Axis
         var inFirst: Bool
+        /// The split's other child.
+        var sibling: Node
     }
 
     /// The splits from the root down to `pane`, or nil if it is not in this tree.
@@ -115,8 +117,8 @@ public indirect enum Node: Hashable, Sendable, Codable {
         case .leaf(let leaf):
             return leaf == pane ? [] : nil
         case .split(let axis, _, let first, let second):
-            if let rest = first.path(to: pane) { return [Step(axis: axis, inFirst: true)] + rest }
-            if let rest = second.path(to: pane) { return [Step(axis: axis, inFirst: false)] + rest }
+            if let rest = first.path(to: pane) { return [Step(axis: axis, inFirst: true, sibling: second)] + rest }
+            if let rest = second.path(to: pane) { return [Step(axis: axis, inFirst: false, sibling: first)] + rest }
             return nil
         }
     }

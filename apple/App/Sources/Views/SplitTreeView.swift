@@ -26,12 +26,16 @@ protocol PaneTree {
     func browser(_ leaf: PaneId) -> BrowserMember?
     /// The tool a leaf shows, when it is a tool leaf.
     func tool(_ leaf: PaneId) -> ToolMember?
+    /// The host workspace whose panes this tree arranges by dragging (nil: a mixed tab, whose
+    /// panes stay where they are).
+    var arranges: Workspace? { get }
 }
 
 extension PaneTree {
     func editor(_ leaf: PaneId) -> EditorMember? { nil }
     func browser(_ leaf: PaneId) -> BrowserMember? { nil }
     func tool(_ leaf: PaneId) -> ToolMember? { nil }
+    var arranges: Workspace? { nil }
 }
 
 /// A host's tab: the window's active one, or (Two Columns) another tab of the same window.
@@ -64,13 +68,49 @@ struct HostTabTree: PaneTree {
     var cellSize: CGSize? { workspace.cellSize }
     var padding: CGFloat { workspace.appearance.padding }
     var namesHosts: Bool { false }
+    var arranges: Workspace? { isActive ? workspace : nil }
 }
 
-/// Renders a split tree as one flat stack of panes keyed by pane id, each placed at the frame the
-/// tree gives it, with the dividers on top. Flat, so a pane keeps its view (terminal, header,
-/// program mark) when the tree changes shape around it: a split, a close or a zoom only moves and
-/// resizes it, with one spring, while the new pane fades in where it lands. Compact (default) is
-/// Ghostty's look: flush panes, a 1 pt divider in the background darkened 40 %, unfocused panes
+/// The floating windows over a tab, as its canvas draws them.
+struct FloatScene: Equatable {
+    struct Window: Equatable {
+        let window: FloatWindow
+        /// The window's own layout (its subtree of its tab's tree).
+        let root: Node
+    }
+
+    /// Back to front: the tab's own windows and the ones pinned over every tab.
+    var windows: [Window] = []
+    /// Out of sight for a moment (⌥⌘F): kept alive, drawn nowhere.
+    var hidden = false
+
+    static let none = FloatScene()
+
+    /// The windows over the active tab of `workspace`.
+    @MainActor
+    init(workspace: Workspace, tab: Tab, hidden: Bool) {
+        self.init(session: workspace.session, tab: tab, hidden: hidden)
+    }
+
+    /// The windows over `tab` of `session`.
+    init(session: Session, tab: Tab, hidden: Bool) {
+        let own = Set(session.windows(in: tab.id).map(\.id))
+        windows = session.floats.compactMap { window in
+            guard own.contains(window.id) || window.pinned, let root = session.root(of: window) else { return nil }
+            return Window(window: window, root: root)
+        }
+        self.hidden = hidden
+    }
+
+    init() {}
+}
+
+/// Renders a tab as one flat stack of panes keyed by pane id: its tiled split tree, and the
+/// floating windows over it, each pane placed at the frame the layout gives it. Flat, so a
+/// pane keeps its view (terminal, header, program mark) whatever the layout does around it: a
+/// split, a close, a zoom, or lifting out into a window and docking back only move and resize
+/// it, in one spring with the panes making room, while the grids hold until it settles.
+/// Compact (default) is Ghostty's look: flush panes, a 1 pt divider in the background darkened
 struct SplitTreeView: View {
     let node: Node
     let tree: any PaneTree
@@ -78,74 +118,175 @@ struct SplitTreeView: View {
     let isSplit: Bool
     /// Animate changes of shape (off where the tree swaps to another pane, the iPhone's one pane).
     var animated = true
+    var floats: FloatScene = .none
+    /// The zoomed pane: it fills the tab (or, in a window of several panes, its window).
+    var zoomed: PaneId?
 
     @AppStorage(TerminalPreferences.Key.paneStyle) private var paneStyle = TerminalPreferences.PaneStyle.compact
     @State private var lastShape = ShapeMemo()
+    @State private var lastLayout = LayoutMemo()
+    @State private var ownArrangement = PaneArrangement()
+    @Environment(WindowModel.self) private var model
 
-    init(node: Node, tree: any PaneTree, isSplit: Bool, animated: Bool = true) {
+    /// The window's arrangement for the tree it arranges (so its keys and tests reach it); a
+    /// tree that only shows panes keeps its own.
+    private var arrangement: PaneArrangement { tree.arranges != nil ? model.arrangement : ownArrangement }
+
+    init(node: Node, tree: any PaneTree, isSplit: Bool, animated: Bool = true, floats: FloatScene = .none, zoomed: PaneId? = nil) {
         self.node = node
         self.tree = tree
         self.isSplit = isSplit
         self.animated = animated
+        self.floats = floats
+        self.zoomed = zoomed
     }
 
     /// A host's active tab.
-    init(node: Node, workspace: Workspace, isSplit: Bool, animated: Bool = true) {
-        self.init(node: node, tree: HostTabTree(workspace: workspace), isSplit: isSplit, animated: animated)
+    init(node: Node, workspace: Workspace, isSplit: Bool, animated: Bool = true, floats: FloatScene = .none, zoomed: PaneId? = nil) {
+        self.init(node: node, tree: HostTabTree(workspace: workspace), isSplit: isSplit, animated: animated, floats: floats, zoomed: zoomed)
     }
 
     var body: some View {
-        let shape = SplitShape(node)
+        let shape = CanvasShape(node: node, floats: floats, zoomed: zoomed)
         // Here rather than in `onChange`: the hold must start before the animation's first
         // frame resizes a terminal.
-        if lastShape.update(shape) {
-            if animated { TerminalSurface.holdGrids(for: .seconds(DS.Motion.splitDuration)) }
+        let change = lastShape.update(shape)
+        if change != .none {
+            if animated {
+                TerminalSurface.holdGrids(for: .milliseconds(Int((change == .float ? DS.Motion.liftDuration : DS.Motion.splitDuration) * 1000)))
+            }
             // The grids change with the layout, not by a resize the user makes: no cols × rows
             // overlay (a window tab's tree changes without `Workspace.apply`).
-            for leaf in node.panes {
+            for leaf in node.panes + floats.windows.flatMap(\.window.panes) {
                 tree.resolve(leaf)?.workspace.layoutChangeUntil = .now + .milliseconds(700)
             }
         }
+        let motion: Animation? = animated ? (lastShape.lastChange == .float ? DS.Motion.lift : DS.Motion.split) : nil
         return GeometryReader { geometry in
-            let layout = SplitLayout(
-                node: node, size: geometry.size,
-                gap: paneStyle == .comfortable ? DS.Space.row : DS.Size.dividerVisible,
-                header: PaneHeader.height, cell: tree.cellSize, padding: tree.padding)
+            let target = CanvasLayout(
+                node: node, floats: floats, zoomed: zoomed, focused: tree.focusedLeaf,
+                size: geometry.size, gap: paneStyle == .comfortable ? DS.Space.row : DS.Size.dividerVisible,
+                header: PaneHeader.height, cell: tree.cellSize, padding: tree.padding, live: arrangement.live)
+            let _ = arrangement.update(layout: target, tree: tree)
+            let layout = arrangement.scrub.map { target.blended(from: $0.from, progress: $0.progress) } ?? target
+            let _ = takeStills(before: lastLayout.layout, after: target, animated: change == .float && animated)
+            let _ = lastLayout.layout = target
+            let _ = arrangement.stillsVersion
             ZStack(alignment: .topLeading) {
+                ForEach(layout.cards, id: \.id) { card in
+                    FloatCardBackdrop(card: card)
+                        .zIndex(card.z)
+                }
                 ForEach(layout.leaves, id: \.pane) { leaf in
-                    PaneLeaf(leaf: leaf.pane, tree: tree, isSplit: isSplit)
+                    PaneLeaf(leaf: leaf.pane, tree: tree, isSplit: isSplit || leaf.window != nil)
+                        .environment(\.paneStill, arrangement.still(of: leaf.pane))
+                        .floatingChrome(leaf, dragging: arrangement.paneDrag?.pane == leaf.pane)
                         .frame(width: leaf.frame.width, height: leaf.frame.height)
+                        .liftBeat(floating: leaf.window != nil)
+                        .scaleEffect(leaf.scale, anchor: leaf.hiddenAnchor)
+                        // Going: it stays solid while it shrinks and fades at the end. Coming
+                        // back: solid at once, then it grows.
+                        .animation(arrangement.scrub == nil ? (leaf.visible ? .easeOut(duration: 0.12) : .easeIn(duration: 0.18).delay(0.16)) : nil) {
+                            $0.opacity(leaf.opacity)
+                        }
+                        .allowsHitTesting(leaf.visible)
+                        .accessibilityHidden(!leaf.visible)
                         .offset(x: leaf.frame.minX, y: leaf.frame.minY)
+                        .zIndex(leaf.z)
                         .transition(.opacity)
                 }
                 ForEach(layout.dividers, id: \.id) { divider in
-                    SplitDivider(divider: divider, tree: tree)
-                        .frame(width: divider.frame.width, height: divider.frame.height)
-                        .offset(x: divider.frame.minX, y: divider.frame.minY)
+                    SplitDivider(divider: divider.divider, tree: tree)
+                        .frame(width: divider.divider.frame.width, height: divider.divider.frame.height)
+                        .opacity(divider.visible ? 1 : 0)
+                        .allowsHitTesting(divider.visible)
+                        .offset(x: divider.divider.frame.minX, y: divider.divider.frame.minY)
+                        .zIndex(divider.z)
                         // A new divider lands where the panes are heading: it shows as they arrive.
                         .transition(.asymmetric(insertion: .opacity.animation(.easeIn(duration: 0.12).delay(0.16)), removal: .opacity))
                 }
+                if tree.arranges != nil {
+                    ForEach(layout.cards.filter(\.visible), id: \.id) { card in
+                        FloatCardHandles(card: card)
+                            .zIndex(card.z + 3)
+                    }
+                    FloatTray(layout: layout)
+                        .zIndex(CanvasLayout.trayZ)
+                    ArrangementOverlay(layout: layout)
+                        .zIndex(CanvasLayout.overlayZ)
+                }
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+            .coordinateSpace(.named(PaneArrangement.space))
         }
-        // Only shape changes animate: a divider drag must track the pointer frame for frame.
-        .animation(animated ? DS.Motion.split : nil, value: shape)
+        .environment(arrangement)
+        // Only shape changes animate: a divider drag or a moving window must track the pointer
+        // frame for frame.
+        .animation(arrangement.scrub == nil ? motion : nil, value: shape)
     }
 }
 
-/// The shape a tree view last showed (not state SwiftUI observes).
+/// The canvas's last layout (not state SwiftUI observes).
+private final class LayoutMemo {
+    var layout: CanvasLayout?
+}
+
+extension SplitTreeView {
+    /// Stills of the panes a lift, dock or trip to the tray moves between layers or in and out
+    /// of sight, taken from their last frame before the motion starts.
+    fileprivate func takeStills(before: CanvasLayout?, after: CanvasLayout, animated: Bool) {
+        guard animated, let before else { return }
+        let moving = after.leaves.filter { leaf in
+            guard let old = before.leaves.first(where: { $0.pane == leaf.pane }) else { return false }
+            return old.window != leaf.window || old.visible != leaf.visible
+        }.map(\.pane)
+        arrangement.holdStills(of: moving) { leaf in
+            guard let (workspace, pane) = tree.resolve(leaf) else { return nil }
+            return workspace.panes[pane]?.view.surface.snapshot()
+        }
+    }
+}
+
+/// What a canvas last showed (not state SwiftUI observes), and which kind of change it was.
 private final class ShapeMemo {
-    private var shape: SplitShape?
+    enum Change { case none, split, float }
+    private var shape: CanvasShape?
+    private(set) var lastChange = Change.split
 
-    /// Records `shape`; true when it is new: a change, or a tree just shown (a tab turning
-    /// into a window tab swaps the whole view, and its panes move with it).
-    func update(_ shape: SplitShape) -> Bool {
+    /// Records `shape`; a change, or a tree just shown (a tab turning into a window tab swaps
+    /// the whole view, and its panes move with it).
+    func update(_ shape: CanvasShape) -> Change {
         defer { self.shape = shape }
-        return self.shape != shape
+        guard let old = self.shape else { return .split }
+        guard old != shape else { return .none }
+        lastChange = old.windows != shape.windows || old.hidden != shape.hidden ? .float : .split
+        return lastChange
     }
 }
 
-/// A tree without its ratios: what changes when panes split, close, move or zoom.
+/// A canvas without ratios and frames: what changes when panes split, close, move, zoom, float
+/// or dock. Moving or resizing a window is not a change of shape (it follows the hand).
+private struct CanvasShape: Hashable {
+    struct Window: Hashable {
+        let id: FloatId
+        let root: SplitShape
+        let minimized: Bool
+    }
+
+    let tiled: SplitShape
+    let windows: [Window]
+    let hidden: Bool
+    let zoomed: PaneId?
+
+    init(node: Node, floats: FloatScene, zoomed: PaneId?) {
+        tiled = SplitShape(node)
+        windows = floats.windows.map { Window(id: $0.window.id, root: SplitShape($0.root), minimized: $0.window.minimized) }
+        hidden = floats.hidden
+        self.zoomed = zoomed
+    }
+}
+
+/// A tree without its ratios.
 private struct SplitShape: Hashable {
     let node: Node
 
@@ -176,7 +317,7 @@ struct SplitLayout {
         let ratio: Double
         let first: Node
         /// The visible line.
-        let frame: CGRect
+        var frame: CGRect
         /// The split's length along its axis, for turning drags into ratios.
         let extent: CGFloat
     }
@@ -185,7 +326,11 @@ struct SplitLayout {
     private(set) var dividers: [Divider] = []
 
     init(node: Node, size: CGSize, gap: CGFloat, header: CGFloat, cell: CGSize?, padding: CGFloat) {
-        place(node, in: CGRect(origin: .zero, size: size), gap: gap, header: header, cell: cell, padding: padding)
+        self.init(node: node, in: CGRect(origin: .zero, size: size), gap: gap, header: header, cell: cell, padding: padding)
+    }
+
+    init(node: Node, in rect: CGRect, gap: CGFloat, header: CGFloat, cell: CGSize?, padding: CGFloat) {
+        place(node, in: rect, gap: gap, header: header, cell: cell, padding: padding)
     }
 
     private mutating func place(_ node: Node, in rect: CGRect, gap: CGFloat, header: CGFloat, cell: CGSize?, padding: CGFloat) {
@@ -338,6 +483,8 @@ struct PaneSlot: View {
 
     @Environment(\.terminalTheme) private var theme
     @Environment(WindowModel.self) private var model
+    @Environment(\.paneStill) private var still
+    @Environment(\.displayScale) private var displayScale
     @AppStorage(TerminalPreferences.Key.unfocusedSplitOpacity) private var unfocusedOpacity = TerminalPreferences.Default.unfocusedSplitOpacity
     @AppStorage(TerminalPreferences.Key.resizeOverlay) private var resizeOverlay = TerminalPreferences.ResizeOverlay.afterFirst
     @AppStorage(TerminalPreferences.Key.paneStyle) private var paneStyle = TerminalPreferences.PaneStyle.compact
@@ -400,6 +547,18 @@ struct PaneSlot: View {
             TerminalHost(pane: pane, isFocused: isFocused, workspace: workspace)
                 // Per host and pane: pane ids repeat across hosts.
                 .id(HostPane(hostId: workspace.groupId, pane: id))
+                // In motion between layers: its still moves instead (a platform view neither
+                // scales nor fades with its SwiftUI parents).
+                .opacity(still == nil ? 1 : 0)
+                .overlay(alignment: .topLeading) {
+                    if let still {
+                        Image(decorative: still, scale: displayScale)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                            .background(theme.background)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .clipped()
                 .saturation(pane.showsSavedScreen ? 0.5 : 1)
                 .overlay { SavedScreenOverlay(pane: pane) }
                 .overlay {
@@ -415,151 +574,6 @@ struct PaneSlot: View {
         } else {
             theme.background
         }
-    }
-}
-
-/// It sits on the terminal background so the pane still reads as one surface.
-private struct PaneHeader: View {
-    /// The pane menu's opacity on an unfocused, unhovered header: hidden on the Mac (hover shows
-    /// it), quiet on touch, where there is no hover.
-    #if os(macOS)
-    static let restingMenuOpacity = 0.0
-    #else
-    static let restingMenuOpacity = DS.Opacity.mutedGlyph
-    #endif
-    static let height: CGFloat = 24
-
-    let id: PaneId
-    let workspace: Workspace
-    let isFocused: Bool
-    /// A mixed tab: name the pane's host after its program.
-    var namesHost = false
-    let focus: () -> Void
-
-    @Environment(\.terminalTheme) private var theme
-    @Environment(WindowModel.self) private var model
-    @State private var isHovered = false
-
-    var body: some View {
-        let state = model.paneStatus.state(of: id.description)
-        let program = model.programIdentity(ofPane: id, onGroup: workspace.groupId)
-        let accounts = program.isShell ? nil : model.accountBook(onGroup: workspace.groupId)
-        HStack(spacing: DS.Space.row) {
-            ProgramMark(program, size: 12)
-                .foregroundStyle(isFocused ? DS.Palette.text : DS.Palette.textSecondary)
-            // Shells keep their own word ("zsh", "canvas"); programs their display name.
-            Text(program.isShell ? workspace.programName(of: id) : program.displayName)
-                .font(.caption.weight(isFocused ? .semibold : .regular))
-                .foregroundStyle(isFocused ? DS.Palette.text : DS.Palette.textSecondary)
-                .lineLimit(1)
-                .layoutPriority(1)
-            // "Claude Code · Work": only where the host has more than one account for it.
-            if let label = accounts?.paneLabel(id.rawValue) {
-                PaneAccountLabel(name: label.name, color: label.color, emphasized: isFocused)
-            }
-            if namesHost, let group = model.groups.group(workspace.groupId) {
-                HostChip(group: group, emphasized: isFocused)
-            }
-            if let state, state != .idle {
-                StatusIndicator(state, size: 10)
-                Text(state.title)
-                    .font(.caption)
-                    .foregroundStyle(state.color)
-                    .layoutPriority(1)
-                // The program's own words ("Which framework? · 40%"): they take the squeeze.
-                if let detail = model.paneStatus.detail(of: id.description) {
-                    Text(verbatim: detail)
-                        .font(.caption)
-                        .foregroundStyle(DS.Palette.textSecondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .help(detail)
-                }
-            }
-            Spacer(minLength: 0)
-            if let hint = accounts?.limitHint(forPane: id.rawValue) {
-                LimitHintMenu(hint: hint) {
-                    model.startAgent(onGroup: workspace.groupId, agent: hint.alternative.agent, account: hint.alternative.id, from: id)
-                }
-            }
-            PanePresence(workspace: workspace, pane: id)
-            Menu {
-                PaneMenuItems(workspace: workspace, model: model, pane: id, focusPane: focus)
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(DS.Palette.textSecondary)
-                    .frame(width: 24, height: 20)
-                    .contentShape(.rect)
-            }
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .opacity(isFocused || isHovered ? 1 : Self.restingMenuOpacity)
-            .help("Pane Menu: split, zoom, find, share, close")
-            .accessibilityLabel("Pane Menu")
-        }
-        .padding(.leading, DS.Space.s)
-        .padding(.trailing, DS.Space.xxs)
-        // A fixed 24 pt band over the grid: its caption text grows only so far.
-        .dynamicTypeSize(...DynamicTypeSize.xLarge)
-        .frame(height: Self.height)
-        .background(theme.background, ignoresSafeAreaEdges: [])
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(theme.splitDivider).frame(height: 1)
-        }
-        .contentShape(.rect)
-        .onTapGesture { focus() }
-        .onHover { isHovered = $0 }
-        .task(id: workspace.groupId) { model.loadAccounts(onGroup: workspace.groupId) }
-    }
-}
-
-/// The account an agent pane runs under, after its name: "· ● Work".
-struct PaneAccountLabel: View {
-    let name: String
-    let color: UInt8
-    var emphasized = false
-
-    var body: some View {
-        HStack(spacing: DS.Space.xxs) {
-            Text(verbatim: "·")
-                .foregroundStyle(DS.Palette.textTertiary)
-            AccountDot(color: color, size: 6)
-            Text(name)
-                .foregroundStyle(emphasized ? DS.Palette.text : DS.Palette.textSecondary)
-                .lineLimit(1)
-        }
-        .font(.caption)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Account: \(name)")
-        .help("Runs under the \(name) account")
-    }
-}
-
-/// A pane's account is at a plan limit: a quiet mark whose menu offers a new tab under another
-/// signed-in account. Nothing switches by itself.
-struct LimitHintMenu: View {
-    let hint: LimitHint
-    let start: () -> Void
-
-    var body: some View {
-        Menu {
-            Text(hint.message())
-            Button(hint.action, systemImage: "plus.rectangle.on.rectangle", action: start)
-        } label: {
-            Label("At Limit", systemImage: "gauge.with.dots.needle.100percent")
-                .labelStyle(.titleAndIcon)
-                .font(.caption)
-                .foregroundStyle(DS.Palette.attention)
-        }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help(hint.message())
-        .accessibilityIdentifier("pane-limit-hint")
     }
 }
 
@@ -582,6 +596,9 @@ struct PaneMenuItems: View {
         // One title for both directions, like Ghostty's "Zoom Split" toggle.
         Button("Zoom Pane", systemImage: "arrow.up.left.and.arrow.down.right") {
             focusThen { WorkspaceAction.toggleZoom.perform(on: workspace, window: model) }
+        }
+        if model.activeMixedTab == nil, let target = pane ?? workspace.focusedPane {
+            FloatMenuItems(workspace: workspace, model: model, pane: target)
         }
         moveItems
         Divider()
@@ -624,6 +641,11 @@ struct PaneMenuItems: View {
         }
         action()
     }
+}
+
+extension EnvironmentValues {
+    /// The still a pane shows instead of its live terminal while it moves between layers.
+    @Entry var paneStill: CGImage?
 }
 
 extension Node {

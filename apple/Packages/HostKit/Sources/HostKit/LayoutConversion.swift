@@ -49,8 +49,9 @@ nonisolated enum LayoutConversion {
             guard let tab = session.activeTab else { return nil }
             return .focusDirection(tabId: tab.id.rawValue, direction: UnnamedCore.Direction(direction))
         case .resize(let pane, let direction, let amount):
+            let own = session.window(containing: pane)?.id
             guard let tab = session.tab(containing: pane),
-                  let inFirst = nearestSplitSide(of: pane, in: tab.root, along: direction.axis)
+                  let inFirst = nearestSplitSide(of: pane, in: tab.root, along: direction.axis, sameLayer: { session.window(containing: $0)?.id == own })
             else { return nil }
             // Local semantics move the divider towards `direction`; the daemon grows or shrinks
             // the pane by moving its nearest divider on that axis. The divider moves forward
@@ -75,16 +76,30 @@ nonisolated enum LayoutConversion {
             return .movePane(paneId: pane.rawValue, target: target.rawValue, side: UnnamedCore.Direction(side))
         case .mergeTab(let tab, let target, let side):
             return .mergeTab(tabId: tab.rawValue, target: target.rawValue, side: UnnamedCore.Direction(side))
+        case .float(let pane, let frame):
+            return .floatPane(paneId: pane.rawValue, frame: frame.map(UnnamedCore.FloatFrame.init))
+        case .newFloat(let pane, let frame, let focus):
+            return .newFloat(paneId: pane.rawValue, launch: shell, frame: frame.map(UnnamedCore.FloatFrame.init), focus: focus, closeWhenDone: false)
+        case .setFloat(let pane, let frame, let minimized, let pinned):
+            return .setFloat(paneId: pane.rawValue, frame: frame.map(UnnamedCore.FloatFrame.init), minimized: minimized, pinned: pinned)
+        case .dock(let pane, let target, let side):
+            return .dockPane(paneId: pane.rawValue, target: target?.rawValue, side: UnnamedCore.Direction(side))
+        case .movePaneToEdge(let pane, let tab, let side):
+            return .movePaneToEdge(paneId: pane.rawValue, tabId: tab.rawValue, side: UnnamedCore.Direction(side))
         }
     }
 
-    /// Whether `pane` is in the first child of the deepest split along `axis` on its path.
-    static func nearestSplitSide(of pane: PaneId, in node: Node, along axis: PaneLayout.Axis) -> Bool? {
+    /// Whether `pane` is in the first child of the deepest split along `axis` on its path whose
+    /// other side holds a pane of its layer (the daemon resizes that one).
+    static func nearestSplitSide(
+        of pane: PaneId, in node: Node, along axis: PaneLayout.Axis, sameLayer: (PaneId) -> Bool = { _ in true }
+    ) -> Bool? {
         guard case .split(let splitAxis, _, let first, let second) = node else { return nil }
         let inFirst = first.contains(pane)
         guard inFirst || second.contains(pane) else { return nil }
-        if let deeper = nearestSplitSide(of: pane, in: inFirst ? first : second, along: axis) { return deeper }
-        return splitAxis == axis ? inFirst : nil
+        if let deeper = nearestSplitSide(of: pane, in: inFirst ? first : second, along: axis, sameLayer: sameLayer) { return deeper }
+        let other = inFirst ? second : first
+        return splitAxis == axis && other.panes.contains(where: sameLayer) ? inFirst : nil
     }
 
     /// Whether a local op can be applied optimistically before the daemon answers: it moves
@@ -92,8 +107,12 @@ nonisolated enum LayoutConversion {
     static func isOptimistic(_ op: PaneLayout.LayoutOp) -> Bool {
         switch op {
         case .focus, .focusDirection, .resize, .toggleZoom, .moveTab, .rename: true
+        // A window lifting out, moving, going to the tray or docking in place: at once, so it
+        // follows the hand; nothing is created and no pane changes tab.
+        case .float, .setFloat: true
+        case .dock(_, let target, _): target == nil
         // Moves wait for the daemon: an older one refuses them, and the answer is the truth.
-        case .split, .close, .newTab, .closeTab, .movePaneToNewTab, .movePane, .mergeTab: false
+        case .split, .close, .newTab, .closeTab, .movePaneToNewTab, .movePane, .mergeTab, .newFloat, .movePaneToEdge: false
         }
     }
 
@@ -101,7 +120,8 @@ nonisolated enum LayoutConversion {
     /// sets a state (focus, position, name) rather than stepping one (a resize, a zoom toggle).
     static func isReplayable(_ op: PaneLayout.LayoutOp) -> Bool {
         switch op {
-        case .focus, .moveTab, .rename: true
+        case .focus, .moveTab, .rename, .float, .setFloat: true
+        case .dock(_, let target, _): target == nil
         default: false
         }
     }
@@ -118,6 +138,15 @@ nonisolated enum LayoutConversion {
         }
     }
 
+    static func floats(_ report: DaemonFloats) -> [FloatWindow] {
+        report.floats.map {
+            FloatWindow(
+                id: FloatId($0.id), panes: $0.panes.map(PaneId.init),
+                frame: FloatFrame(x: Double($0.frame.x), y: Double($0.frame.y), width: Double($0.frame.w), height: Double($0.frame.h)),
+                z: $0.z, minimized: $0.minimized, pinned: $0.pinned, closesWhenDone: $0.closeWhenDone)
+        }
+    }
+
     static func projects(_ report: DaemonProjects) -> HostProjects {
         HostProjects(
             projects: Dictionary(report.projects.map {
@@ -126,6 +155,12 @@ nonisolated enum LayoutConversion {
             members: Dictionary(report.tabs.map {
                 (TabId($0.tabId), Membership(project: $0.projectId, rank: $0.rank))
             }, uniquingKeysWith: { a, _ in a }))
+    }
+}
+
+nonisolated extension UnnamedCore.FloatFrame {
+    init(_ frame: PaneLayout.FloatFrame) {
+        self.init(x: Float(frame.x), y: Float(frame.y), w: Float(frame.width), h: Float(frame.height))
     }
 }
 

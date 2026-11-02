@@ -108,6 +108,17 @@ public final class WindowLayoutStore: LayoutStore {
             follow(tab.focused, current)
             base.apply(op)
             adoptIfReady()
+        case .float, .setFloat:
+            base.apply(op)
+        case .newFloat(_, _, let focus):
+            if focus { expectNewPanes(.split(PaneId(0), .horizontal), before: base.session) }
+            base.apply(op)
+            adoptIfReady()
+        case .dock(let pane, _, _), .movePaneToEdge(let pane, _, _):
+            follow(pane, current)
+            base.apply(op)
+            if case .dock(_, nil, _) = op, let tab = base.session.tab(containing: pane) { select(tab: tab.id, pane: pane) }
+            adoptIfReady()
         }
     }
 
@@ -141,7 +152,7 @@ public final class WindowLayoutStore: LayoutStore {
         } else {
             active = shared.activeTabId
         }
-        return Session(tabs: tabs, activeTabId: active)
+        return Session(tabs: tabs, activeTabId: active, floats: shared.floats)
     }
 
     private func select(tab: TabId, pane: PaneId) {

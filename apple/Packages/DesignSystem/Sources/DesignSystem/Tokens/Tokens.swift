@@ -167,6 +167,13 @@ public extension DS {
         public static let springOpenDelay = Duration.milliseconds(600)
         /// A control's pressed state.
         public static let press = Animation.spring(response: 0.2, dampingFraction: 0.7)
+        /// A pane lifting out of its tab into a floating window, docking back, going to the
+        /// tray and coming back: one spring for the window and the panes making room, a breath
+        /// of bounce on the card only it shows. Grids hold for `liftDuration`, then reflow once.
+        public static let lift = Animation.spring(duration: 0.42, bounce: 0.12)
+        public static let liftDuration = 0.5
+        /// A floating window let go: carried by its flick, coming to rest on the line it snaps to.
+        public static let settle = Animation.spring(response: 0.34, dampingFraction: 0.86)
         /// Errors stay longer than confirmations: they are read, not glanced at.
         public static let bannerErrorDuration = Duration.seconds(4)
     }
@@ -182,15 +189,15 @@ public extension DS {
         /// The palette and the host switcher: the top of the stack.
         case panel
 
-        func opacity(dark: Bool) -> Double {
+        public func opacity(dark: Bool) -> Double {
             switch self {
             case .float: dark ? 0.35 : 0.12
             case .panel: dark ? 0.45 : 0.16
             }
         }
 
-        var radius: CGFloat { self == .float ? 16 : 28 }
-        var y: CGFloat { self == .float ? 6 : 12 }
+        public var radius: CGFloat { self == .float ? 16 : 28 }
+        public var y: CGFloat { self == .float ? 6 : 12 }
     }
 }
 

@@ -60,6 +60,8 @@
 //!   [`ServerCtl::ProgramStatus`] to clients with [`Caps::PROGRAM_STATUS`]; see [`program`].
 //! - Projects (named, coloured groups of tabs) are pushed as [`ServerCtl::Projects`] to owner
 //!   clients with [`Caps::PROJECTS`], changed with layout ops; see [`project`].
+//! - Floating panes (cards over a tab's split tree) are pushed as [`ServerCtl::Floats`] to
+//!   clients with [`Caps::FLOATS`], changed with layout ops; see [`float`].
 //! - Asking the owner before an agent drives one of the user's panes: an ordinary approval
 //!   request answered with [`ClientCtl::Decide`], plus [`ApprovalPush::Drive`] for clients with
 //!   [`Caps::DRIVE_ASKS`]; see [`drive`].
@@ -92,6 +94,7 @@ pub mod askpass;
 pub mod assist;
 pub mod browser;
 pub mod drive;
+pub mod float;
 pub mod frame;
 mod ids;
 pub mod info;
@@ -116,6 +119,7 @@ pub use askpass::*;
 pub use assist::*;
 pub use browser::*;
 pub use drive::*;
+pub use float::*;
 pub use frame::{FrameDecoder, FrameError, MAX_FRAME_LEN, WIRE_VERSION};
 pub use ids::{
     Actor, Caps, DaemonFeatures, DaemonId, DeviceId, GrantId, InputSeq, OptionId, PaneId,

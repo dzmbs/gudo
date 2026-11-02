@@ -1,4 +1,3 @@
-#if !os(macOS)
 import Dispatch
 import Foundation
 import PaneLayout
@@ -6,13 +5,15 @@ import Synchronization
 import TerminalCore
 import TerminalRenderer
 
-/// Stand-in for a remote shell on iOS until the daemon connection exists: a line editor that
+/// Stand-in for a shell on iOS (and on the Mac under `-mock`): a line editor that
 /// echoes input and answers each line, so the renderer, keyboard and key bar can be exercised.
 /// Output is delivered asynchronously from its own queue, like network bytes.
 nonisolated final class EchoBackend: PaneBackend {
     private struct State {
         var line: [UInt8] = []
         var onOutput: (@Sendable (UnsafeRawBufferPointer) -> Void)?
+        /// A screen `show` was given before the pane started, drawn after its greeting.
+        var shown: [UInt8] = []
     }
 
     private let pane: PaneId
@@ -41,6 +42,16 @@ nonisolated final class EchoBackend: PaneBackend {
         // `-echoFixture glyphs` (launch argument) prints the renderer's glyph test screen first.
         if LaunchArguments().string(forKey: "echoFixture") == "glyphs" { banner = GlyphFixture.text + "\r\n" }
         emit(Array((banner + Self.prompt).utf8))
+        emit(state.withLock { state in defer { state.shown = [] }; return state.shown })
+    }
+
+    /// Draws `text` as if the shell had printed it (design fixtures), after the greeting.
+    func show(_ text: String) {
+        let started = state.withLock { state in
+            if state.onOutput == nil { state.shown = Array(text.utf8) }
+            return state.onOutput != nil
+        }
+        if started { emit(Array(text.utf8)) }
     }
 
     func write(_ bytes: UnsafeRawBufferPointer) {
@@ -128,4 +139,3 @@ extension EchoBackend: PredictionFeed {
         writeInput(bytes, inputSeq: Optional(inputSeq))
     }
 }
-#endif

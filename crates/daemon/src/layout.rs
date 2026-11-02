@@ -7,8 +7,9 @@
 //! them.
 
 use proto::{
-    Axis, Direction, LayoutNode, OpError, PaneId, Project, SessionId, SessionLayout,
-    SessionProjects, SessionSummary, TabId, TabLayout, TabProject,
+    Axis, CloseWhen, Direction, DockTarget, FloatFrame, FloatId, FloatWindow, LayoutNode, OpError,
+    PaneId, Project, SessionFloats, SessionId, SessionLayout, SessionProjects, SessionSummary,
+    TabId, TabLayout, TabProject,
 };
 use serde::{Deserialize, Serialize};
 
@@ -33,6 +34,12 @@ pub(crate) struct Session {
     /// Which tabs belong to which project.
     #[serde(default)]
     pub tab_projects: Vec<TabProject>,
+    /// Floating windows over the tabs, back to front.
+    #[serde(default)]
+    pub floats: Vec<FloatWindow>,
+    /// The last floating window id handed out.
+    #[serde(default)]
+    pub next_float: u64,
 }
 
 impl Session {
@@ -59,6 +66,128 @@ impl Session {
         let left = self.tab_projects.remove(i).project;
         if !self.tab_projects.iter().any(|m| m.project == left) {
             self.projects.retain(|p| p.id != left);
+        }
+    }
+
+    fn to_floats(&self) -> SessionFloats {
+        SessionFloats {
+            session_id: self.id,
+            revision: self.revision,
+            floats: self.floats.clone(),
+        }
+    }
+
+    /// The index of the window holding `pane`.
+    fn window_of(&self, pane: PaneId) -> Option<usize> {
+        self.floats.iter().position(|w| w.panes.contains(&pane))
+    }
+
+    fn is_floating(&self, pane: PaneId) -> bool {
+        self.window_of(pane).is_some()
+    }
+
+    /// The tab's leaves that are not in a floating window.
+    fn tiled<'a>(&'a self, tab: &'a TabLayout) -> impl Iterator<Item = PaneId> + 'a {
+        leaves(&tab.root).filter(|&p| !self.is_floating(p))
+    }
+
+    fn windows_in(&self, tab: &TabLayout) -> usize {
+        self.floats
+            .iter()
+            .filter(|w| has_leaf(&tab.root, w.panes[0]))
+            .count()
+    }
+
+    fn top_z(&self) -> u32 {
+        self.floats.last().map_or(0, |w| w.z)
+    }
+
+    /// Brings window `w` to the front; whether it moved.
+    fn raise(&mut self, w: usize) -> bool {
+        if w + 1 == self.floats.len() {
+            return false;
+        }
+        let mut window = self.floats.remove(w);
+        window.z = self.top_z() + 1;
+        self.floats.push(window);
+        true
+    }
+
+    /// Opens a window in front holding `panes`.
+    fn open_window(&mut self, panes: Vec<PaneId>, frame: FloatFrame, close: CloseWhen) {
+        self.next_float += 1;
+        let z = self.top_z() + 1;
+        self.floats.push(FloatWindow {
+            id: FloatId(self.next_float),
+            panes,
+            frame,
+            z,
+            minimized: false,
+            pinned: false,
+            close,
+        });
+    }
+
+    /// Panes just put beside `target` join its window, if it is in one.
+    fn adopt(&mut self, target: PaneId, panes: impl IntoIterator<Item = PaneId>) {
+        if let Some(w) = self.window_of(target) {
+            self.floats[w].panes.extend(panes);
+        }
+    }
+
+    /// Takes `pane` out of the window holding it.
+    fn release(&mut self, pane: PaneId) {
+        for w in &mut self.floats {
+            w.panes.retain(|&p| p != pane);
+        }
+    }
+
+    /// Restores the windows' invariants after any change to the trees: a window's panes are
+    /// one subtree of one tab, in tree order; empty windows go; and a tab left with no tiled
+    /// pane docks its frontmost window.
+    fn tidy_floats(&mut self) {
+        let tabs = &self.tabs;
+        for w in &mut self.floats {
+            let Some(tab) = w
+                .panes
+                .iter()
+                .find_map(|&p| tabs.iter().find(|t| has_leaf(&t.root, p)))
+            else {
+                w.panes.clear();
+                continue;
+            };
+            let order: Vec<PaneId> = leaves(&tab.root).collect();
+            w.panes.retain(|p| order.contains(p));
+            w.panes
+                .sort_by_key(|p| order.iter().position(|o| o == p).unwrap_or(usize::MAX));
+            if let Some(&first) = w.panes.first() {
+                w.panes = contiguous(&tab.root, first, &w.panes);
+            }
+        }
+        self.floats.retain(|w| !w.panes.is_empty());
+        for t in 0..self.tabs.len() {
+            while self.tiled(&self.tabs[t]).next().is_none() {
+                let tab = &self.tabs[t];
+                let Some(front) = self
+                    .floats
+                    .iter()
+                    .rposition(|w| has_leaf(&tab.root, w.panes[0]))
+                else {
+                    break;
+                };
+                self.floats.remove(front);
+            }
+        }
+    }
+
+    /// A spot for a new window in `tab`: the default frame, stepped down and right for each
+    /// window already there so none hides another exactly.
+    fn free_frame(&self, tab: &TabLayout) -> FloatFrame {
+        let step = 0.04 * (self.windows_in(tab) % 5) as f32;
+        FloatFrame {
+            x: FloatFrame::DEFAULT.x + step,
+            y: FloatFrame::DEFAULT.y + step,
+            ..FloatFrame::DEFAULT
         }
     }
 
@@ -270,6 +399,8 @@ impl Layout {
             tabs: vec![tab],
             projects: Vec::new(),
             tab_projects: Vec::new(),
+            floats: Vec::new(),
+            next_float: 0,
         });
         self.touch(id);
         Ok((id, tab_id))
@@ -331,6 +462,7 @@ impl Layout {
                 .map(|t| t.tab_id);
         }
         s.leave_project(tab.tab_id);
+        s.tidy_floats();
         s.revision += 1;
         Removed {
             panes,
@@ -396,6 +528,7 @@ impl Layout {
         debug_assert!(replaced);
         tab.focused = new;
         tab.zoomed = None;
+        s.adopt(pane, [new]);
         s.revision += 1;
         Ok(s.id)
     }
@@ -408,7 +541,9 @@ impl Layout {
         }
         // Focus moves to the closed pane's sibling subtree (its first leaf), like tmux.
         detach_leaf(tab, pane);
-        self.sessions[si].revision += 1;
+        let s = &mut self.sessions[si];
+        s.tidy_floats();
+        s.revision += 1;
         Ok(Removed {
             panes: vec![pane],
             session: None,
@@ -433,6 +568,14 @@ impl Layout {
             s.active_tab = Some(tab_id);
             changed = true;
         }
+        // A window focused comes to the front, and back from the tray.
+        if let Some(w) = s.window_of(pane) {
+            if s.floats[w].minimized {
+                s.floats[w].minimized = false;
+                changed = true;
+            }
+            changed |= s.raise(w);
+        }
         if changed {
             s.revision += 1;
         }
@@ -441,8 +584,15 @@ impl Layout {
 
     pub fn focus_direction(&mut self, tab: TabId, direction: Direction) -> OpResult<()> {
         let (si, ti) = self.locate_tab(tab).ok_or(OpError::NotFound)?;
-        let t = &self.sessions[si].tabs[ti];
-        match neighbor(&t.root, t.focused, direction) {
+        let s = &self.sessions[si];
+        let t = &s.tabs[ti];
+        // Focus moves within the focused pane's own layer: the tiled panes or its window.
+        let layer = match s.window_of(t.focused) {
+            Some(w) => subtree(&t.root, &s.floats[w].panes).cloned(),
+            None => tiled_tree(&t.root, |p| s.is_floating(p)),
+        };
+        let all = layer.as_ref().map(rects).unwrap_or_default();
+        match neighbor(&all, t.focused, direction) {
             Some(next) => self.focus(next),
             None => Ok(()),
         }
@@ -454,7 +604,14 @@ impl Layout {
         }
         let (si, ti) = self.locate(pane).ok_or(OpError::NotFound)?;
         let s = &mut self.sessions[si];
-        if resize_in(&mut s.tabs[ti].root, pane, axis, delta) == Resize::Changed {
+        // Only a divider the pane's own layer shows moves: a split whose other side is all in
+        // other layers (a floating window over the tiled panes, or the tiled panes around a
+        // window) is not on screen.
+        let layer = |p: PaneId| s.window_of(p).map(|w| s.floats[w].id);
+        let own = layer(pane);
+        let layers: Vec<(PaneId, Option<FloatId>)> = s.panes().map(|p| (p, layer(p))).collect();
+        let same = |p: PaneId| layers.iter().any(|&(q, l)| q == p && l == own);
+        if resize_in(&mut s.tabs[ti].root, pane, axis, delta, &same) == Resize::Changed {
             s.revision += 1;
         }
         Ok(())
@@ -487,7 +644,9 @@ impl Layout {
         let tab = self.new_tab_layout(String::new(), pane);
         let tab_id = tab.tab_id;
         let s = &mut self.sessions[si];
+        s.release(pane);
         s.tabs.insert(ti + 1, tab);
+        s.tidy_floats();
         s.active_tab = Some(tab_id);
         s.revision += 1;
         Ok((s.id, tab_id))
@@ -507,12 +666,14 @@ impl Layout {
             return Err(OpError::Invalid);
         }
         self.check_insert(target, &LayoutNode::Leaf(pane))?;
+        self.sessions[si].release(pane);
         if self.sessions[si].tabs[ti].root == LayoutNode::Leaf(pane) {
             self.take_tab(si, ti);
         } else {
             detach_leaf(&mut self.sessions[si].tabs[ti], pane);
         }
         self.insert_beside(si, target, LayoutNode::Leaf(pane), side, pane);
+        self.sessions[si].tidy_floats();
         Ok(self.sessions[si].id)
     }
 
@@ -531,7 +692,12 @@ impl Layout {
         }
         self.check_insert(target, &self.sessions[si].tabs[ti].root)?;
         let merged = self.take_tab(si, ti);
+        // Its windows dock as they merge: one window never sits inside another.
+        self.sessions[si]
+            .floats
+            .retain(|w| !has_leaf(&merged.root, w.panes[0]));
         self.insert_beside(si, target, merged.root, side, merged.focused);
+        self.sessions[si].tidy_floats();
         Ok(self.sessions[si].id)
     }
 
@@ -569,7 +735,9 @@ impl Layout {
         side: Direction,
         focus: PaneId,
     ) {
+        let moved: Vec<PaneId> = leaves(&node).collect();
         let s = &mut self.sessions[si];
+        s.adopt(target, moved);
         let Some(tab) = s
             .tabs
             .iter_mut()
@@ -676,6 +844,353 @@ impl Layout {
     }
 }
 
+impl Layout {
+    /// Opens `new` in a window of its own over `anchor`'s tab, at `frame` or a free spot. In
+    /// the tree it goes right of the whole tab. Focused only when asked.
+    pub fn new_float(
+        &mut self,
+        anchor: PaneId,
+        new: PaneId,
+        frame: Option<FloatFrame>,
+        focus: bool,
+        close: CloseWhen,
+    ) -> OpResult<SessionId> {
+        let frame = clamp_frame(frame)?;
+        let (si, ti) = self.locate(anchor).ok_or(OpError::NotFound)?;
+        let s = &mut self.sessions[si];
+        if s.windows_in(&s.tabs[ti]) >= proto::MAX_FLOATS_PER_TAB {
+            return Err(OpError::Invalid);
+        }
+        let frame = frame.unwrap_or_else(|| s.free_frame(&s.tabs[ti]));
+        let tab = &mut s.tabs[ti];
+        append_right(&mut tab.root, new);
+        if focus {
+            tab.focused = new;
+            tab.zoomed = None;
+            s.active_tab = Some(tab.tab_id);
+        }
+        s.open_window(vec![new], frame, close);
+        s.revision += 1;
+        Ok(s.id)
+    }
+
+    /// Floats a tiled pane in a window of its own (its leaf stays where it docks back to),
+    /// tears a pane out of a window it shares, or moves a window that is just this pane. A
+    /// tab's last tiled pane stays (`Invalid`).
+    pub fn float_pane(&mut self, pane: PaneId, frame: Option<FloatFrame>) -> OpResult<SessionId> {
+        let frame = clamp_frame(frame)?;
+        let (si, ti) = self.locate(pane).ok_or(OpError::NotFound)?;
+        let s = &mut self.sessions[si];
+        match s.window_of(pane) {
+            Some(w) if s.floats[w].panes.len() == 1 => {
+                let window = &mut s.floats[w];
+                let mut changed = frame.is_some_and(|f| f != window.frame);
+                window.frame = frame.unwrap_or(window.frame);
+                changed |= s.raise(w);
+                if changed {
+                    s.revision += 1;
+                }
+                return Ok(s.id);
+            }
+            Some(w) => {
+                if s.windows_in(&s.tabs[ti]) >= proto::MAX_FLOATS_PER_TAB {
+                    return Err(OpError::Invalid);
+                }
+                let from = s.floats[w].frame;
+                let frame = frame.unwrap_or(FloatFrame {
+                    x: from.x + 0.04,
+                    y: from.y + 0.04,
+                    ..from
+                });
+                let frame = frame.clamped().unwrap_or(FloatFrame::DEFAULT);
+                s.release(pane);
+                let tab = &mut s.tabs[ti];
+                detach_leaf(tab, pane);
+                append_right(&mut tab.root, pane);
+                tab.focused = pane;
+                s.open_window(vec![pane], frame, CloseWhen::Never);
+            }
+            None => {
+                if s.tiled(&s.tabs[ti]).count() < 2
+                    || s.windows_in(&s.tabs[ti]) >= proto::MAX_FLOATS_PER_TAB
+                {
+                    return Err(OpError::Invalid);
+                }
+                let frame = frame.unwrap_or_else(|| s.free_frame(&s.tabs[ti]));
+                let tab = &mut s.tabs[ti];
+                if tab.zoomed == Some(pane) {
+                    tab.zoomed = None;
+                }
+                s.open_window(vec![pane], frame, CloseWhen::Never);
+            }
+        }
+        s.tidy_floats();
+        s.revision += 1;
+        Ok(s.id)
+    }
+
+    /// Changes the window holding `pane`; `None` keeps each value. Restoring it from the tray
+    /// raises it; minimizing the window with the focus hands the focus to the tiled panes.
+    pub fn set_float(
+        &mut self,
+        pane: PaneId,
+        frame: Option<FloatFrame>,
+        minimized: Option<bool>,
+        pinned: Option<bool>,
+    ) -> OpResult<SessionId> {
+        let frame = clamp_frame(frame)?;
+        let (si, ti) = self.locate(pane).ok_or(OpError::NotFound)?;
+        let s = &mut self.sessions[si];
+        let w = s.window_of(pane).ok_or(OpError::Invalid)?;
+        let window = &mut s.floats[w];
+        let before = window.clone();
+        window.frame = frame.unwrap_or(window.frame);
+        window.minimized = minimized.unwrap_or(window.minimized);
+        window.pinned = pinned.unwrap_or(window.pinned);
+        let after = window.clone();
+        let mut changed = after != before;
+        // Restoring raises, even a window already out: the way to bring one forward without
+        // touching the keyboard's focus.
+        if minimized == Some(false) {
+            changed |= s.raise(w);
+        }
+        let focused = s.tabs[ti].focused;
+        if after.minimized && after.panes.contains(&focused) {
+            let next = s
+                .tiled(&s.tabs[ti])
+                .next()
+                .expect("a tab keeps a tiled pane");
+            let tab = &mut s.tabs[ti];
+            tab.focused = next;
+            tab.zoomed = None;
+            changed = true;
+        }
+        if changed {
+            s.revision += 1;
+        }
+        Ok(s.id)
+    }
+
+    /// Docks the window holding `pane`, splits and all: where it is, or beside a tiled pane
+    /// of the same session. Focuses `pane`.
+    pub fn dock_pane(&mut self, pane: PaneId, beside: Option<DockTarget>) -> OpResult<SessionId> {
+        let (si, ti) = self.locate(pane).ok_or(OpError::NotFound)?;
+        let w = self.sessions[si].window_of(pane).ok_or(OpError::Invalid)?;
+        let Some(DockTarget {
+            pane_id: target,
+            side,
+        }) = beside
+        else {
+            self.sessions[si].floats.remove(w);
+            self.focus(pane)?;
+            self.sessions[si].revision += 1;
+            return Ok(self.sessions[si].id);
+        };
+        let s = &self.sessions[si];
+        if !s.session_has(target) || s.is_floating(target) {
+            return Err(OpError::Invalid);
+        }
+        let mut probe = s.tabs[ti].root.clone();
+        let node = take_subtree(&mut probe, &s.floats[w].panes).ok_or(OpError::Invalid)?;
+        self.check_insert(target, &node)?;
+        let s = &mut self.sessions[si];
+        let window = s.floats.remove(w);
+        let tab = &mut s.tabs[ti];
+        let node = take_subtree(&mut tab.root, &window.panes).ok_or(OpError::Invalid)?;
+        if window.panes.contains(&tab.focused) || tab.zoomed.is_some() {
+            tab.focused = first_leaf(&tab.root);
+            tab.zoomed = None;
+        }
+        self.insert_beside(si, target, node, side, pane);
+        self.sessions[si].tidy_floats();
+        Ok(self.sessions[si].id)
+    }
+
+    /// Moves `pane` along the whole `side` edge of `tab`'s tiled panes (same session),
+    /// focused; its old tab closes when it was its only pane.
+    pub fn move_pane_to_edge(
+        &mut self,
+        pane: PaneId,
+        tab: TabId,
+        side: Direction,
+    ) -> OpResult<SessionId> {
+        let (si, ti) = self.locate(pane).ok_or(OpError::NotFound)?;
+        let (target_si, _) = self.locate_tab(tab).ok_or(OpError::NotFound)?;
+        if si != target_si {
+            return Err(OpError::Invalid);
+        }
+        let source = self.sessions[si].tabs[ti].tab_id;
+        if source == tab && self.sessions[si].tabs[ti].root == LayoutNode::Leaf(pane) {
+            return Ok(self.sessions[si].id);
+        }
+        let target_tab = self.sessions[si].tabs.iter().find(|t| t.tab_id == tab);
+        if target_tab.is_some_and(|t| depth(&t.root) + 1 > MAX_SPLIT_DEPTH) {
+            return Err(OpError::Invalid);
+        }
+        self.sessions[si].release(pane);
+        if self.sessions[si].tabs[ti].root == LayoutNode::Leaf(pane) {
+            self.take_tab(si, ti);
+        } else {
+            detach_leaf(&mut self.sessions[si].tabs[ti], pane);
+        }
+        let s = &mut self.sessions[si];
+        let t = s
+            .tabs
+            .iter_mut()
+            .find(|t| t.tab_id == tab)
+            .expect("the tab is in this session");
+        let (axis, before) = match side {
+            Direction::Left => (Axis::Horizontal, true),
+            Direction::Right => (Axis::Horizontal, false),
+            Direction::Up => (Axis::Vertical, true),
+            Direction::Down => (Axis::Vertical, false),
+        };
+        let rest = std::mem::replace(&mut t.root, LayoutNode::Leaf(pane));
+        let (first, second) = if before {
+            (LayoutNode::Leaf(pane), rest)
+        } else {
+            (rest, LayoutNode::Leaf(pane))
+        };
+        // A third of the edge: the pane joins the tab's panes rather than halving them.
+        let ratio = if before { 1.0 / 3.0 } else { 2.0 / 3.0 };
+        t.root = LayoutNode::Split {
+            axis,
+            ratio,
+            first: Box::new(first),
+            second: Box::new(second),
+        };
+        t.focused = pane;
+        t.zoomed = None;
+        s.active_tab = Some(tab);
+        s.tidy_floats();
+        s.revision += 1;
+        Ok(s.id)
+    }
+
+    pub fn floats(&self, session: SessionId) -> Option<SessionFloats> {
+        self.session(session).map(Session::to_floats)
+    }
+
+    /// The window holding `pane`, if it floats.
+    pub fn window_of(&self, pane: PaneId) -> Option<FloatWindow> {
+        let (si, _) = self.locate(pane)?;
+        let s = &self.sessions[si];
+        s.window_of(pane).map(|w| s.floats[w].clone())
+    }
+}
+
+impl Session {
+    fn session_has(&self, pane: PaneId) -> bool {
+        self.panes().any(|p| p == pane)
+    }
+}
+
+fn clamp_frame(frame: Option<FloatFrame>) -> OpResult<Option<FloatFrame>> {
+    frame
+        .map(|f| f.clamped().ok_or(OpError::Invalid))
+        .transpose()
+}
+
+/// Puts `pane` right of everything in `root`.
+fn append_right(root: &mut LayoutNode, pane: PaneId) {
+    let old = std::mem::replace(root, LayoutNode::Leaf(pane));
+    *root = LayoutNode::Split {
+        axis: Axis::Horizontal,
+        ratio: 0.5,
+        first: Box::new(old),
+        second: Box::new(LayoutNode::Leaf(pane)),
+    };
+}
+
+fn has_leaf(node: &LayoutNode, pane: PaneId) -> bool {
+    leaves(node).any(|p| p == pane)
+}
+
+/// Whether `node`'s leaves are exactly `panes`.
+fn is_exactly(node: &LayoutNode, panes: &[PaneId]) -> bool {
+    let all: Vec<PaneId> = leaves(node).collect();
+    all.len() == panes.len() && all.iter().all(|p| panes.contains(p))
+}
+
+/// The subtree whose leaves are exactly `panes`.
+pub(crate) fn subtree<'a>(node: &'a LayoutNode, panes: &[PaneId]) -> Option<&'a LayoutNode> {
+    if is_exactly(node, panes) {
+        return Some(node);
+    }
+    match node {
+        LayoutNode::Leaf(_) => None,
+        LayoutNode::Split { first, second, .. } => {
+            subtree(first, panes).or_else(|| subtree(second, panes))
+        }
+    }
+}
+
+/// Takes out the subtree (never the root) whose leaves are exactly `panes`, collapsing its
+/// parent into the sibling.
+fn take_subtree(node: &mut LayoutNode, panes: &[PaneId]) -> Option<LayoutNode> {
+    let LayoutNode::Split { first, second, .. } = node else {
+        return None;
+    };
+    let in_first = is_exactly(first, panes);
+    if in_first || is_exactly(second, panes) {
+        let keep = if in_first {
+            &mut **second
+        } else {
+            &mut **first
+        };
+        let keep = std::mem::replace(keep, LayoutNode::Leaf(PaneId(0)));
+        let LayoutNode::Split { first, second, .. } = std::mem::replace(node, keep) else {
+            unreachable!("matched a split above");
+        };
+        return Some(if in_first { *first } else { *second });
+    }
+    take_subtree(first, panes).or_else(|| take_subtree(second, panes))
+}
+
+/// The leaves of the largest subtree around `pane` whose leaves all lie in `within`.
+fn contiguous(root: &LayoutNode, pane: PaneId, within: &[PaneId]) -> Vec<PaneId> {
+    fn walk(node: &LayoutNode, pane: PaneId, within: &[PaneId]) -> Option<Vec<PaneId>> {
+        let all: Vec<PaneId> = leaves(node).collect();
+        if !all.contains(&pane) {
+            return None;
+        }
+        if all.iter().all(|p| within.contains(p)) {
+            return Some(all);
+        }
+        match node {
+            LayoutNode::Leaf(_) => None,
+            LayoutNode::Split { first, second, .. } => {
+                walk(first, pane, within).or_else(|| walk(second, pane, within))
+            }
+        }
+    }
+    walk(root, pane, within).unwrap_or_default()
+}
+
+/// The tree without the leaves `floating` names, or `None` if every leaf floats.
+pub(crate) fn tiled_tree(
+    node: &LayoutNode,
+    floating: impl Fn(PaneId) -> bool + Copy,
+) -> Option<LayoutNode> {
+    match node {
+        LayoutNode::Leaf(p) => (!floating(*p)).then(|| node.clone()),
+        LayoutNode::Split {
+            axis,
+            ratio,
+            first,
+            second,
+        } => match (tiled_tree(first, floating), tiled_tree(second, floating)) {
+            (Some(a), Some(b)) => Some(LayoutNode::Split {
+                axis: *axis,
+                ratio: *ratio,
+                first: Box::new(a),
+                second: Box::new(b),
+            }),
+            (a, b) => a.or(b),
+        },
+    }
+}
+
 /// Takes leaf `pane` (not the root) out of `tab`, moving focus and zoom off it.
 fn detach_leaf(tab: &mut TabLayout, pane: PaneId) {
     let sibling = remove_leaf(&mut tab.root, pane).expect("pane is in this tab");
@@ -778,7 +1293,15 @@ enum Resize {
     Unchanged,
 }
 
-fn resize_in(node: &mut LayoutNode, pane: PaneId, axis: Axis, delta: f32) -> Resize {
+/// Moves the divider of the nearest split on `axis` around `pane` whose other side holds a
+/// pane `same` accepts.
+fn resize_in(
+    node: &mut LayoutNode,
+    pane: PaneId,
+    axis: Axis,
+    delta: f32,
+    same: &dyn Fn(PaneId) -> bool,
+) -> Resize {
     match node {
         LayoutNode::Leaf(p) if *p == pane => Resize::Pending { in_first: true },
         LayoutNode::Leaf(_) => Resize::NotFound,
@@ -788,12 +1311,13 @@ fn resize_in(node: &mut LayoutNode, pane: PaneId, axis: Axis, delta: f32) -> Res
             first,
             second,
         } => {
-            let (child, in_first) = match resize_in(first, pane, axis, delta) {
-                Resize::NotFound => (resize_in(second, pane, axis, delta), false),
+            let (child, in_first) = match resize_in(first, pane, axis, delta, same) {
+                Resize::NotFound => (resize_in(second, pane, axis, delta, same), false),
                 other => (other, true),
             };
+            let other = if in_first { &**second } else { &**first };
             match child {
-                Resize::Pending { .. } if *split_axis == axis => {
+                Resize::Pending { .. } if *split_axis == axis && leaves(other).any(same) => {
                     let signed = if in_first { delta } else { -delta };
                     let next = (*ratio + signed).clamp(MIN_RATIO, 1.0 - MIN_RATIO);
                     if (next - *ratio).abs() > f32::EPSILON {
@@ -875,9 +1399,8 @@ pub(crate) fn rects(node: &LayoutNode) -> Vec<(PaneId, Rect)> {
 
 /// The nearest pane in `direction` from `from`: it must start where `from` ends on that axis
 /// and overlap it on the other one. Ties go to the larger overlap, then the earlier pane.
-fn neighbor(root: &LayoutNode, from: PaneId, direction: Direction) -> Option<PaneId> {
+fn neighbor(all: &[(PaneId, Rect)], from: PaneId, direction: Direction) -> Option<PaneId> {
     const EPS: f32 = 1e-4;
-    let all = rects(root);
     let (_, f) = *all.iter().find(|(p, _)| *p == from)?;
     let overlap = |a0: f32, a1: f32, b0: f32, b1: f32| (a1.min(b1) - a0.max(b0)).max(0.0);
     all.iter()
@@ -1074,7 +1597,7 @@ mod tests {
     #[test]
     fn nesting_is_capped_so_saved_layouts_load() {
         let mut l = Layout::default();
-        let (s, _, mut pane) = session_with(&mut l);
+        let (s, t1, mut pane) = session_with(&mut l);
         for _ in 0..MAX_SPLIT_DEPTH {
             let new = l.alloc_pane();
             l.split(pane, Axis::Horizontal, new).unwrap();
@@ -1092,6 +1615,19 @@ mod tests {
         assert_eq!(l.move_pane(q, pane, Direction::Down), Err(OpError::Invalid));
         assert_eq!(
             l.merge_tab(t2, pane, Direction::Down),
+            Err(OpError::Invalid)
+        );
+        // So are docking a window beside it and adding a pane along the full tab's edge, and
+        // the refused window stays as it was.
+        l.float_pane(q, None).unwrap();
+        let beside = DockTarget {
+            pane_id: pane,
+            side: Direction::Down,
+        };
+        assert_eq!(l.dock_pane(q, Some(beside)), Err(OpError::Invalid));
+        assert!(l.window_of(q).is_some());
+        assert_eq!(
+            l.move_pane_to_edge(p, t1, Direction::Left),
             Err(OpError::Invalid)
         );
 
@@ -1273,6 +1809,383 @@ mod tests {
         assert_eq!(l.projects(s).unwrap().tabs, []);
     }
 
+    /// Every window is one subtree of one tab, in tree order, and every tab keeps a tiled
+    /// pane.
+    fn check_floats(l: &Layout) {
+        for s in &l.sessions {
+            for w in &s.floats {
+                let tab = s
+                    .tabs
+                    .iter()
+                    .find(|t| has_leaf(&t.root, w.panes[0]))
+                    .expect("in a tab");
+                let node = subtree(&tab.root, &w.panes).expect("one subtree");
+                assert_eq!(leaves(node).collect::<Vec<_>>(), w.panes, "tree order");
+            }
+            for t in &s.tabs {
+                assert!(
+                    s.tiled(t).next().is_some(),
+                    "{:?} has no tiled pane",
+                    t.tab_id
+                );
+            }
+            let zs: Vec<u32> = s.floats.iter().map(|w| w.z).collect();
+            assert!(zs.windows(2).all(|p| p[0] < p[1]), "back to front: {zs:?}");
+        }
+    }
+
+    fn windows(l: &Layout, s: SessionId) -> Vec<Vec<PaneId>> {
+        l.floats(s)
+            .unwrap()
+            .floats
+            .into_iter()
+            .map(|w| w.panes)
+            .collect()
+    }
+
+    fn tiled_leaves(l: &Layout, s: SessionId) -> Vec<PaneId> {
+        let session = l.session(s).unwrap();
+        let tab = session
+            .tabs
+            .iter()
+            .find(|t| Some(t.tab_id) == session.active_tab)
+            .unwrap();
+        session.tiled(tab).collect()
+    }
+
+    /// p1 | p2 | p3, left to right.
+    fn three(l: &mut Layout) -> (SessionId, TabId, [PaneId; 3]) {
+        let (s, t, p1) = session_with(l);
+        let p2 = l.alloc_pane();
+        l.split(p1, Axis::Horizontal, p2).unwrap();
+        let p3 = l.alloc_pane();
+        l.split(p2, Axis::Horizontal, p3).unwrap();
+        (s, t, [p1, p2, p3])
+    }
+
+    #[test]
+    fn a_pane_floats_and_docks_back_where_it_was() {
+        let mut l = Layout::default();
+        let (s, _, [p1, p2, p3]) = three(&mut l);
+        let before = l.snapshot(s).unwrap().tabs[0].root.clone();
+        l.float_pane(p2, None).unwrap();
+        assert_eq!(windows(&l, s), [vec![p2]]);
+        assert_eq!(tiled_leaves(&l, s), [p1, p3]);
+        assert_eq!(
+            l.snapshot(s).unwrap().tabs[0].root,
+            before,
+            "older clients see the same tree"
+        );
+        check_floats(&l);
+
+        l.dock_pane(p2, None).unwrap();
+        assert!(windows(&l, s).is_empty());
+        assert_eq!(l.focused_pane(s), Some(p2));
+        assert_eq!(l.snapshot(s).unwrap().tabs[0].root, before);
+
+        l.float_pane(p1, None).unwrap();
+        l.float_pane(p2, None).unwrap();
+        assert_eq!(
+            l.float_pane(p3, None),
+            Err(OpError::Invalid),
+            "a tab keeps a tiled pane"
+        );
+        check_floats(&l);
+    }
+
+    #[test]
+    fn new_floats_open_right_of_the_tab_without_taking_focus() {
+        let mut l = Layout::default();
+        let (s, _, [p1, p2, p3]) = three(&mut l);
+        l.focus(p1).unwrap();
+        let a = l.alloc_pane();
+        l.new_float(p3, a, None, false, CloseWhen::Done).unwrap();
+        let b = l.alloc_pane();
+        l.new_float(p1, b, None, false, CloseWhen::Never).unwrap();
+        assert_eq!(l.focused_pane(s), Some(p1), "no focus stealing");
+        let tab = &l.snapshot(s).unwrap().tabs[0];
+        assert_eq!(leaves(&tab.root).collect::<Vec<_>>(), [p1, p2, p3, a, b]);
+        let floats = l.floats(s).unwrap().floats;
+        assert_eq!(floats[0].close, CloseWhen::Done);
+        assert_ne!(
+            floats[0].frame, floats[1].frame,
+            "cascaded, never stacked exactly"
+        );
+        check_floats(&l);
+
+        // Focusing the back window raises it and brings it out of the tray.
+        l.set_float(a, None, Some(true), None).unwrap();
+        l.focus(a).unwrap();
+        assert_eq!(windows(&l, s), [vec![b], vec![a]]);
+        assert!(!l.floats(s).unwrap().floats[1].minimized);
+        let c = l.alloc_pane();
+        l.new_float(p1, c, None, true, CloseWhen::Never).unwrap();
+        assert_eq!(l.focused_pane(s), Some(c));
+        check_floats(&l);
+    }
+
+    #[test]
+    fn windows_hold_splits_and_panes_move_in_and_out() {
+        let mut l = Layout::default();
+        let (s, _, [p1, p2, p3]) = three(&mut l);
+        let f = l.alloc_pane();
+        l.new_float(p1, f, None, false, CloseWhen::Never).unwrap();
+        // A split inside the window stays in it.
+        let g = l.alloc_pane();
+        l.split(f, Axis::Vertical, g).unwrap();
+        assert_eq!(windows(&l, s), [vec![f, g]]);
+        // A tiled pane dropped beside a window's pane joins the window...
+        l.move_pane(p2, g, Direction::Right).unwrap();
+        assert_eq!(windows(&l, s), [vec![f, g, p2]]);
+        assert_eq!(tiled_leaves(&l, s), [p1, p3]);
+        check_floats(&l);
+        // ...and one dropped beside a tiled pane leaves it.
+        l.move_pane(f, p1, Direction::Down).unwrap();
+        assert_eq!(windows(&l, s), [vec![g, p2]]);
+        assert_eq!(tiled_leaves(&l, s), [p1, f, p3]);
+        check_floats(&l);
+        // Floating a pane of a shared window tears it off into its own.
+        l.float_pane(p2, None).unwrap();
+        assert_eq!(windows(&l, s), [vec![g], vec![p2]]);
+        let frames: Vec<FloatFrame> = l
+            .floats(s)
+            .unwrap()
+            .floats
+            .iter()
+            .map(|w| w.frame)
+            .collect();
+        assert!(frames[1].x > frames[0].x, "offset from the window it left");
+        check_floats(&l);
+    }
+
+    #[test]
+    fn docking_beside_a_pane_keeps_the_window_splits() {
+        let mut l = Layout::default();
+        let (s, _, [p1, _, p3]) = three(&mut l);
+        let f = l.alloc_pane();
+        l.new_float(p1, f, None, false, CloseWhen::Never).unwrap();
+        let g = l.alloc_pane();
+        l.split(f, Axis::Vertical, g).unwrap();
+        // Into another tab, below its pane.
+        let q = l.alloc_pane();
+        l.new_tab(s, String::new(), q).unwrap();
+        l.dock_pane(
+            g,
+            Some(DockTarget {
+                pane_id: q,
+                side: Direction::Down,
+            }),
+        )
+        .unwrap();
+        let snap = l.snapshot(s).unwrap();
+        assert!(windows(&l, s).is_empty());
+        assert_eq!(snap.active_tab, Some(snap.tabs[1].tab_id));
+        assert_eq!(
+            snap.tabs[1].root,
+            LayoutNode::Split {
+                axis: Axis::Vertical,
+                ratio: 0.5,
+                first: Box::new(LayoutNode::Leaf(q)),
+                second: Box::new(LayoutNode::Split {
+                    axis: Axis::Vertical,
+                    ratio: 0.5,
+                    first: Box::new(LayoutNode::Leaf(f)),
+                    second: Box::new(LayoutNode::Leaf(g)),
+                }),
+            }
+        );
+        assert_eq!(snap.tabs[1].focused, g);
+        assert!(!leaves(&snap.tabs[0].root).any(|p| p == f || p == g));
+        // Never beside a float, nor a pane that does not float.
+        l.float_pane(p3, None).unwrap();
+        assert_eq!(
+            l.dock_pane(
+                p3,
+                Some(DockTarget {
+                    pane_id: p3,
+                    side: Direction::Left
+                })
+            ),
+            Err(OpError::Invalid)
+        );
+        assert_eq!(l.dock_pane(p1, None), Err(OpError::Invalid));
+        check_floats(&l);
+    }
+
+    #[test]
+    fn the_last_tiled_pane_closing_docks_the_front_window() {
+        let mut l = Layout::default();
+        let (s, _, p1) = session_with(&mut l);
+        let a = l.alloc_pane();
+        l.new_float(p1, a, None, false, CloseWhen::Never).unwrap();
+        let b = l.alloc_pane();
+        l.new_float(p1, b, None, false, CloseWhen::Never).unwrap();
+        l.close_pane(p1).unwrap();
+        assert_eq!(windows(&l, s), [vec![a]], "b was in front");
+        assert_eq!(tiled_leaves(&l, s), [b]);
+        l.close_pane(a).unwrap();
+        assert!(windows(&l, s).is_empty());
+        check_floats(&l);
+    }
+
+    #[test]
+    fn minimizing_hands_focus_to_the_tiled_panes_and_frames_stay_inside() {
+        let mut l = Layout::default();
+        let (s, _, [p1, p2, _]) = three(&mut l);
+        l.float_pane(p2, None).unwrap();
+        l.focus(p2).unwrap();
+        let rev = revision(&l, s);
+        l.set_float(p2, None, Some(true), Some(true)).unwrap();
+        assert_eq!(l.focused_pane(s), Some(p1));
+        assert!(revision(&l, s) > rev);
+        let w = &l.floats(s).unwrap().floats[0];
+        assert!(w.minimized && w.pinned);
+        let rev = revision(&l, s);
+        l.set_float(p2, None, Some(true), None).unwrap();
+        assert_eq!(revision(&l, s), rev, "no change, no bump");
+
+        let frame = FloatFrame {
+            x: 0.95,
+            y: -1.0,
+            w: 0.5,
+            h: 0.01,
+        };
+        l.set_float(p2, Some(frame), None, None).unwrap();
+        let w = &l.floats(s).unwrap().floats[0];
+        assert_eq!(
+            w.frame,
+            FloatFrame {
+                x: 0.5,
+                y: 0.0,
+                w: 0.5,
+                h: proto::MIN_FLOAT_SIDE
+            }
+        );
+        let nan = FloatFrame {
+            w: f32::NAN,
+            ..frame
+        };
+        assert_eq!(
+            l.set_float(p2, Some(nan), None, None),
+            Err(OpError::Invalid)
+        );
+        assert_eq!(
+            l.set_float(p1, None, Some(true), None),
+            Err(OpError::Invalid)
+        );
+    }
+
+    #[test]
+    fn focus_moves_within_its_own_layer() {
+        let mut l = Layout::default();
+        let (s, t, [p1, p2, p3]) = three(&mut l);
+        l.float_pane(p2, None).unwrap();
+        l.focus(p1).unwrap();
+        l.focus_direction(t, Direction::Right).unwrap();
+        assert_eq!(l.focused_pane(s), Some(p3), "over the floated pane's slot");
+        let g = l.alloc_pane();
+        l.split(p2, Axis::Vertical, g).unwrap();
+        l.focus_direction(t, Direction::Up).unwrap();
+        assert_eq!(l.focused_pane(s), Some(p2));
+        l.focus_direction(t, Direction::Left).unwrap();
+        assert_eq!(l.focused_pane(s), Some(p2), "the window's edge");
+    }
+
+    #[test]
+    fn merging_a_tab_docks_its_windows_and_breaking_out_leaves_one() {
+        let mut l = Layout::default();
+        let (s, _, [p1, p2, _]) = three(&mut l);
+        let q = l.alloc_pane();
+        let t2 = l.new_tab(s, String::new(), q).unwrap();
+        let r = l.alloc_pane();
+        l.new_float(q, r, None, false, CloseWhen::Never).unwrap();
+        l.float_pane(p2, None).unwrap();
+        l.merge_tab(t2, p1, Direction::Down).unwrap();
+        assert_eq!(windows(&l, s), [vec![p2]]);
+        let g = l.alloc_pane();
+        l.split(p2, Axis::Vertical, g).unwrap();
+        l.break_pane(g).unwrap();
+        assert_eq!(windows(&l, s), [vec![p2]]);
+        check_floats(&l);
+    }
+
+    #[test]
+    fn panes_move_to_a_whole_edge_of_the_tiled_panes() {
+        let mut l = Layout::default();
+        let (s, t, [p1, p2, p3]) = three(&mut l);
+        let f = l.alloc_pane();
+        l.new_float(p1, f, None, false, CloseWhen::Never).unwrap();
+        l.move_pane_to_edge(f, t, Direction::Down).unwrap();
+        assert!(windows(&l, s).is_empty(), "out of its window");
+        let root = l.snapshot(s).unwrap().tabs[0].root.clone();
+        let LayoutNode::Split {
+            axis: Axis::Vertical,
+            second,
+            ..
+        } = &root
+        else {
+            panic!("{root:?}")
+        };
+        assert_eq!(**second, LayoutNode::Leaf(f));
+        assert_eq!(tiled_leaves(&l, s), [p1, p2, p3, f]);
+        l.move_pane_to_edge(p3, t, Direction::Left).unwrap();
+        assert_eq!(tiled_leaves(&l, s)[0], p3);
+        assert_eq!(l.focused_pane(s), Some(p3));
+        assert_eq!(
+            l.move_pane_to_edge(p3, TabId(99), Direction::Left),
+            Err(OpError::NotFound)
+        );
+        check_floats(&l);
+    }
+
+    #[test]
+    fn dividers_move_only_within_the_panes_own_layer() {
+        let mut l = Layout::default();
+        // (p1 | p2) | p3, with p2 floating: on screen p1 | p3.
+        let (s, _, p1) = session_with(&mut l);
+        let p3 = l.alloc_pane();
+        l.split(p1, Axis::Horizontal, p3).unwrap();
+        let p2 = l.alloc_pane();
+        l.split(p1, Axis::Horizontal, p2).unwrap();
+        l.float_pane(p2, None).unwrap();
+        l.resize(p1, Axis::Horizontal, 0.1).unwrap();
+        let root = l.snapshot(s).unwrap().tabs[0].root.clone();
+        let LayoutNode::Split { ratio, first, .. } = &root else {
+            panic!()
+        };
+        assert!(
+            (ratio - 0.6).abs() < 1e-6,
+            "the divider on screen moved: {ratio}"
+        );
+        let LayoutNode::Split { ratio: hidden, .. } = **first else {
+            panic!()
+        };
+        assert!(
+            (hidden - 0.5).abs() < 1e-6,
+            "the floated pane's split stays"
+        );
+        // Inside a window its own splits move.
+        let g = l.alloc_pane();
+        l.split(p2, Axis::Horizontal, g).unwrap();
+        l.resize(p2, Axis::Horizontal, 0.2).unwrap();
+        let w = l.window_of(p2).unwrap();
+        let tab = &l.snapshot(s).unwrap().tabs[0];
+        let LayoutNode::Split { ratio, .. } = subtree(&tab.root, &w.panes).unwrap() else {
+            panic!()
+        };
+        assert!((ratio - 0.7).abs() < 1e-6);
+    }
+
+    #[test]
+    fn floats_survive_a_save_and_load() {
+        let mut l = Layout::default();
+        let (_, _, [_, p2, _]) = three(&mut l);
+        l.float_pane(p2, None).unwrap();
+        let json = serde_json::to_string(&l).unwrap();
+        let loaded: Layout = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded, l);
+    }
+
     #[test]
     fn layouts_saved_before_projects_still_load() {
         let mut l = Layout::default();
@@ -1280,7 +2193,9 @@ mod tests {
         let mut json = serde_json::to_value(&l).unwrap();
         for s in json["sessions"].as_array_mut().unwrap() {
             let s = s.as_object_mut().unwrap();
-            assert!(s.remove("projects").is_some() && s.remove("tab_projects").is_some());
+            for key in ["projects", "tab_projects", "floats", "next_float"] {
+                assert!(s.remove(key).is_some(), "{key}");
+            }
         }
         let loaded: Layout = serde_json::from_value(json).unwrap();
         assert_eq!(loaded, l);

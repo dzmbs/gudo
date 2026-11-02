@@ -269,6 +269,10 @@ pub const ACTING_TOOLS: &[&str] = &[
     "pane_close",
     "agent_spawn",
     "agent_prompt",
+    "pane_float",
+    "pane_dock",
+    "pane_minimize",
+    "pane_raise",
 ];
 
 /// Returns the hook shim's arguments that run the MCP server for this pane:

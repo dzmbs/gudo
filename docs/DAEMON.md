@@ -49,6 +49,25 @@ Tab  = { tab_id, name, root, focused: PaneId, zoomed: Option<PaneId> }
   when its last tab leaves, closes or merges away; a broken-out pane's new tab is ungrouped.
   Owner-only (§6.3). Clients with `Caps::PROJECTS` and the owner role get `ServerCtl::Projects`
   (same revision) right after every `LayoutChanged`, cut down to the tabs their scope shows.
+- Floating windows (offered as `DaemonFeatures::FLOATS`; `proto::float`): cards over a tab that
+  hold one or more panes, split like a tab. A window's panes stay one subtree of the tab's tree,
+  so the tree is unchanged on the wire and clients without `Caps::FLOATS` keep showing them as
+  splits; the tab's tiled layout is the tree without its windows. Each session keeps its windows
+  back to front (`FloatWindow { id, panes, frame, z, minimized, pinned, close }`, frames in
+  fractions of the tab, clamped inside it), persisted in `layout.json`. `NewFloat` opens a pane
+  in a new window (in the tree right of the whole tab; focused only when asked; frames cascade
+  so none hides another exactly); `FloatPane` floats a tiled pane where it is, tears a pane out
+  of a shared window, or moves a one-pane window; `SetFloat` moves, sends to the tray, restores
+  (raising) or pins it over every tab of the session; `DockPane` docks the whole window, splits
+  and all, where it is or beside a tiled pane of the session. Panes join a window by any split
+  or move beside one of its panes and leave by a move beside a tiled pane. Focusing a pane of a
+  window raises it and brings it back from the tray; directional focus stays within the focused
+  pane's layer. A tab always keeps a tiled pane: floating the last one is `Invalid`, and when it
+  closes the frontmost window docks. A window opened with `close: Done` closes 2.5 s after its
+  work ends (the agent's turn, a done or failed OSC 7501 report, or a finished command), and
+  keeps an agent's result for `agent_result`. Clients with `Caps::FLOATS` get
+  `ServerCtl::Floats` (same revision) right after every `LayoutChanged`, cut down to their
+  scope (a tab-scoped guest sees its tab's windows, a pane-scoped one none).
 - The daemon is the source of truth. Every change bumps the session's `revision` and is
   view is the truth"). A client applies a layout only if its revision is not older than the
   one it has. `OpResult` is sent after the requesting client's `LayoutChanged`.
@@ -1220,6 +1239,8 @@ with an id get the error in their answer (`OpError::Forbidden`, `WsError::Denied
 | `Op`: `ClosePane`, `CloseTab`, `CloseSession` | **owner** | in scope |
 | `Op`: `SetTabProject` | **owner** | tab in scope |
 | `Op`: `PutProject`, `RemoveProject` | **owner** | session in scope |
+| `Op`: `NewFloat`, `DockPane` | driver | the pane's whole session in scope |
+| `Op`: `FloatPane`, `SetFloat` | driver | the pane's tab in scope |
 | `Op`: `CreateSession`; `Attach` that would create a session | **owner** | daemon |
 | `Workspace`: `ListPorts`, `AttentionList`, `AttentionSeen` | any role | answers filtered to scope |
 | `Workspace`: `ListTurns`, `TurnDiff` | prompter, driver or approver | pane in scope |
@@ -2175,7 +2196,7 @@ Agents drive the terminal they run in through `un-hook mcp`: one `TermCall {v, t
   holds at most 1 MiB of output.
 - **Tools.** `whoami`, `pane_list`, `pane_split`, `tab_new`, `pane_close`, `cmd_run`, `pane_read`,
   `pane_wait`, `pane_send`, `status_set`, `agent_spawn`, `agent_prompt`, `agent_wait`, `agent_result`,
-  `events_wait`. Ids are `p12`, `t3`; `self` (or no pane) is the caller. `pane_list` scopes:
+  `events_wait`, `pane_float`, `pane_dock`, `pane_minimize`, `pane_raise`. Ids are `p12`, `t3`; `self` (or no pane) is the caller. `pane_list` scopes:
   `read`, plus `input` and `manage` where it drives, or `ask` on the user's panes.
 - **Rules.** Read any pane of the caller's session; type into, run in and close the panes it
   created (or that those created) at once, never its own; the user's panes (any other pane of
@@ -2233,6 +2254,24 @@ Agents drive the terminal they run in through `un-hook mcp`: one `TermCall {v, t
   pane in their scope that has one on joining; and for every pane of the session on attaching
   (`None` included, so a report cleared while they looked elsewhere goes). A blocked report is a
   status, never an approval request: approvals stay in `PaneMeta.agent`.
+- **Floating windows.** `pane_split`, `tab_new` and `agent_spawn` take `float: true` to open
+  the pane as a floating window over the tab (`tab_new`: over the caller's tab, no title), with
+  an optional `frame {x, y, w, h}` (fractions of the tab) and `closeWhenDone: true`: the daemon
+  closes the window 2.5 s after its work ends (an agent's turn, a done or error status, the first
+  command run in it), so a script can pop a window for a run's output and have it go when the run
+  is done; a worker's answer stays readable with `agent_result` after its window closed. Such a
+  window opens without the focus in the same change (`LayoutOp::NewFloat { focus: false }`), so
+  the user's focus never flickers. On panes the caller created: `pane_float {pane, frame?,
+  pinned?}` floats one (or moves its window; `pinned` shows it over every tab), `pane_dock {pane,
+  beside?, side?}` docks its window where it was or beside a pane (`side` left, right (default),
+  up or down) and gives the user's focus back, `pane_minimize {pane, minimized = true}` sends it
+  to the tab's tray or restores it, and `pane_raise {pane}` brings it to the front and out of the
+  tray. There is no tool that focuses a pane: the keyboard is the user's. Every pane listing
+  carries `float` (the window's id, panes, frame, `minimized`, `pinned`, `closeWhenDone`, or
+  `null`). From a shell, `un float run [--close-when-done] [--frame x,y,w,h] [--focus] [--over P]
+  -- <command…>` opens a shell in a window and runs the command in it (so its output stays to
+  read, and its end closes the window); `un float pane|move|dock|min|restore|pin|list` arrange
+  and list windows.
 - **Workers.** `agent_spawn` starts Claude or Codex in a pane beside the caller (owned, no
   focus) and gives it its first prompt once it is idle and its screen has settled; a worker on
   a dialog (folder trust, an approval) is reported blocked instead. `agent_prompt` refuses a

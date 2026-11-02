@@ -149,6 +149,9 @@ tab strip at XXL, pane headers and the iPhone bar at XL.
 | `swipe` | spring 0.32 / 0.86 | a row settling open or shut after a swipe | iOS Mail |
 | `reorder` | spring 0.3 / 0.84 | sidebar rows making room for a dragged tab, a drop settling; a collapsed project springs open after 0.6 s | Finder, Safari's sidebar |
 | `press` | spring 0.2 / 0.7 | a quiet button's press (scale 0.97) | — |
+| `lift` | spring 0.42 s, bounce 0.12 | a pane floating out of its tab or docking back, a window to the tray and back, a dragged pane dropping into place, zoom: the pane and every neighbour making room move in this one spring; the grids hold for `liftDuration` (0.5 s) and reflow once at rest | — |
+| lift beat | keyframes: 1.03 (snappy 0.16 s) → 1 (smooth 0.36 s) floating; 0.985 → 1 docking | the pane coming towards you as it lifts, pressed in as it docks; off under Reduce Motion | macOS window drag-out |
+| `settle` | spring 0.34 / 0.86 | a floating window let go, carried by its flick onto the line it snaps to; a keyboard move or resize; picture in picture settling in a corner | iOS PiP |
 
 Only the working spinner and the working shimmer loop; under Reduce Motion both stand still (and still reads as
 "working"), and the secure-input gradient stops. Both loops are Core Animation on a layer (`LayerAnimations.swift`):
@@ -348,6 +351,71 @@ tabs to reorder.
   moves, so it only answers user resizes); process-exited bar at the bottom (red 50 % on failure,
   hides under the pointer); secure-input badge top-right; bell border; hovered URL bottom-left;
   scrollback search bar top-right (draggable to any corner).
+
+
+docs/APP-ARCHITECTURE.md §28 has the model. One canvas per tab (`PaneCanvas.swift`): every pane,
+tiled or floating, is one view keyed by its id, so floating, docking, zooming, dropping and
+minimizing only move and resize views in one `lift` spring, and no terminal is ever rebuilt.
+
+- **Header buttons** (every pane while more than one shows, the zoomed one included): Split
+  Right, Split Down, Float/Dock (lit in the accent while floating), Minimize (windows only),
+  Zoom (lit while zoomed: the way back), Close, then ⋯ with the pane menu. Quiet: hidden until
+  hover or focus on the Mac, 0.6 on touch. Each has its shortcut in the tooltip. Double-click
+  the header zooms. Right-click: Reset Terminal, splits, Float/Dock, Minimize, Pin Across Tabs,
+  Zoom, Pop Out to Window, Copy Pane ID, Close.
+- **Drag to rearrange.** The header is the handle (6 pt to start). The pane dims to 45 %, a
+  glass chip with its mark, name and directory follows the hand, and a region in the accent at
+  20 % with a 1.5 pt rim (radius `pane`, inset 4) shows where the pane will go. Over a pane:
+  the half on the side nearest the pointer by the diagonals; along the tab's edge (28 pt): the
+  whole edge, a third deep; on the Float target (a glass capsule at the top centre, below the
+  pane headers, prominent while over it) or outside the tab: a window where it was let go. Over
+  itself: nothing. On drop the panes move into place in the `lift` spring and the region stays
+  lit until the host has moved the pane, then fades as it settles there. (Tried and dropped:
+  lighting the pane's exact frame after the drop; when the pane leaves its own place the
+  others reflow, so that frame rarely lines up with what is under the hand.)
+- **Floating windows.** A card over the tab: corners `pane` (10), the glass rim, the `panel`
+  shadow, an accent rim at 70 % while it has the focus; a window of several panes draws its
+  panes on a divider-coloured backdrop with a 14 pt grip on top. The header of a one-pane
+  window moves it; edges and corners resize it (system resize pointers, 6/14 pt on the Mac,
+  14/28 on touch, never under 240 × 140). It snaps (10 pt) to the tab's edges at an 8 pt
+  margin, its halves and thirds and other windows' edges (aligned or 8 pt apart), with a 1 pt
+  accent guide per snapped edge; a flick carries it as far as a scroll view would and it
+  `settle`s. Held 0.38 s over a pane's outer quarter, it offers to dock there (the same exact
+  region); letting go docks it. Focus raises; new windows cascade 4 % down and right.
+- **Float transition.** The pane lifts out of the tree to its window frame while the panes
+  beside it expand into its space in the same spring, the lift beat and the shadow growing
+  with it. Docking runs it backwards. The pane that changes layer travels as a still of its
+  last frame (a platform view neither scales nor fades with SwiftUI), crisp, at its own
+  pixel size; the panes making room keep their grids through the motion (their last frame
+  stays, clipped or padded). Everything reflows once at rest: no flicker, no cols × rows
+  overlay.
+- **Tray.** Minimize (⇧⌘M, the header's –) sends a window to a row of glass capsules at the
+  tab's bottom right (188 × 28 Mac, 204 × 36 touch, 6 apart, wrapping upwards): its mark, name,
+  `+N` for more panes, its live state glyph. Going, the window shrinks onto its chip, solid
+  until the end; a click brings it back the same way, growing out of the chip to where it was,
+  to the front (macOS's genie, without the bend). A window in the tray keeps its size, so its
+  terminals keep their grids: the program, and every other device, sees no resize. ⌥⌘F hides
+  every window for a look underneath.
+- **Zoom** (⇧⌘↩, the header's button, double-click): the pane takes the tab (or its window,
+  in a window of several) in the `lift` spring and the windows step aside; its header stays,
+  with Zoom lit as the way back, and the title's subtitle says "Zoomed".
+- **Keys** (Pane menu, palette section "Pane", the ⌘-hold overlay): Float/Dock ⌥⌘↩, Minimize
+  ⇧⌘M, Next Window ⌥⌘], Hide/Show Windows ⌥⌘F, Focus Next/Previous Pane ⌘] / ⌘[, Move Pane
+  ⌥⇧⌘ arrows (a tiled pane trades places past its neighbour, a window steps a twelfth), Resize
+  ⌃⌘ arrows (a window grows a twenty-fourth), Split Best Fit ⌘↩, Zoom ⇧⌘↩.
+- **iPhone: picture in picture.** In compact width the focused pane shows alone and each other
+  window is a 176 × 120 live miniature (the grid drawn at half size, never resized) resting in
+  a corner, radius `searchPanel`, glass edge, `panel` shadow, its mark and state on top. Drag
+  or flick it to any corner; tap brings it full screen. On a foldable no corner crosses the
+  fold: they sit in the half the window's centre is on.
+
+Screenshots: `MacSnapshotTests.testFloating*` (`floating`, `-multi`, `-tray`, `-zoom`, `-guides`;
+`-ipad` at 1024 × 768; frame sequences `floating-{drag,drop,lift,dock,minimize,restore,split}-N`,
+the last of each at rest after the reflow) and `TouchSnapshotTests.testFloating` (iPad, iPhone
+picture in picture), fixtures `-screen floating|floating-tiled|floating-multi|floating-tray|
+floating-zoom` (`Model/FloatingFixtures.swift`). Off a display (a locked Mac) the sequences are
+drawn at points along the `lift` spring (`CanvasLayout.blended`) and each terminal is drawn into
+the capture from its own frame, since such a window gets no animation or display-link frames.
 
 ### Key bar (iPad, iPhone)
 

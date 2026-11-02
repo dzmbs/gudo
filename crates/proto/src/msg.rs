@@ -713,6 +713,9 @@ pub enum ServerCtl {
     /// usage, after each [`ServerCtl::AgentUsage`] and on its own when only a non-system
     /// account changed.
     AccountUsage(crate::account::AccountUsageReport),
+    /// A session's floating panes, right after each [`ServerCtl::LayoutChanged`], to clients
+    /// with [`Caps::FLOATS`], cut down to the panes they see (see [`crate::float`]).
+    Floats(crate::float::SessionFloats),
 }
 
 /// Longest clipboard write a program may make (OSC 52), in bytes of decoded text.

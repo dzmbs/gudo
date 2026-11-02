@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use client_core::ClientConfig;
+use client_core::proto::{LayoutOp, OpOutcome, PaneLaunch};
 use daemon::{TERM_VERSION, TermAsk, TermCall, TermErrorCode, TermReply};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -514,6 +515,238 @@ async fn an_agent_runs_a_worker_agent_and_reads_its_answers() {
         answered["result"]["message"], "Lint is clean.",
         "{answered}"
     );
+}
+
+/// The floating windows of `pane`'s session as the user last heard them, by their panes.
+fn user_floats(user: &TestClient) -> Vec<(Vec<u64>, bool)> {
+    user.floats
+        .last()
+        .map(|f| {
+            f.floats
+                .iter()
+                .map(|w| (w.panes.iter().map(|p| p.0).collect(), w.minimized))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn id_of(pane: &Value) -> u64 {
+    pane["id"]
+        .as_str()
+        .unwrap()
+        .trim_start_matches('p')
+        .parse()
+        .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_agent_floats_its_panes_and_never_takes_the_users_focus() {
+    let Some(zsh) = zsh() else {
+        eprintln!("skipping: zsh not installed");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start_with(dir.path(), |c| c.shell = Some(zsh)).await;
+    let mut user = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let me = user.attach_and_follow().await;
+    let agent = Caller {
+        socket: daemon.hook_socket().to_owned(),
+        token: std::fs::read_to_string(dir.path().join("hook.token")).unwrap(),
+        pane: me.0.to_string(),
+    };
+
+    // A log window over the tab, where the agent asked for it.
+    let opened = agent
+        .ok(
+            "pane_split",
+            json!({ "float": true, "frame": { "x": 0.55, "y": 0.05, "w": 0.4, "h": 0.5 } }),
+        )
+        .await;
+    let log = id_of(&opened["pane"]);
+    assert_eq!(opened["pane"]["float"]["panes"], json!([format!("p{log}")]));
+    assert_eq!(opened["pane"]["float"]["frame"]["x"], 0.55);
+    user.until("the float", |c| user_floats(c) == [(vec![log], false)])
+        .await;
+    assert_eq!(user.focused(), me, "the float did not take focus");
+
+    // Its frame and closing only make sense on a float.
+    assert_eq!(
+        agent
+            .refused("pane_split", json!({ "closeWhenDone": true }))
+            .await,
+        TermErrorCode::InvalidArgs
+    );
+    // The user's panes, and its own, are not its to float.
+    assert_eq!(
+        agent.refused("pane_float", json!({ "pane": "self" })).await,
+        TermErrorCode::Forbidden
+    );
+    let OpOutcome::PaneCreated { pane_id: theirs } = user
+        .op(LayoutOp::Split {
+            pane_id: me,
+            axis: client_core::proto::Axis::Vertical,
+            launch: PaneLaunch::Shell { cwd: None },
+        })
+        .await
+    else {
+        panic!("no split");
+    };
+    user.op(LayoutOp::Focus { pane_id: me }).await;
+    assert_eq!(
+        agent
+            .refused("pane_float", json!({ "pane": format!("p{}", theirs.0) }))
+            .await,
+        TermErrorCode::Forbidden
+    );
+    assert_eq!(
+        agent
+            .refused("pane_minimize", json!({ "pane": format!("p{}", theirs.0) }))
+            .await,
+        TermErrorCode::Forbidden
+    );
+
+    // To the tray and back to the front, the keyboard staying with the user.
+    let log_ref = format!("p{log}");
+    agent.ok("pane_minimize", json!({ "pane": log_ref })).await;
+    user.until("the chip", |c| user_floats(c) == [(vec![log], true)])
+        .await;
+    let raised = agent.ok("pane_raise", json!({ "pane": log_ref })).await;
+    assert_eq!(raised["pane"]["float"]["minimized"], false, "{raised}");
+    user.until("restored", |c| user_floats(c) == [(vec![log], false)])
+        .await;
+    assert_eq!(user.focused(), me);
+
+    // Docked beside the user's pane: in the layout, the user's focus where it was.
+    let docked = agent
+        .ok(
+            "pane_dock",
+            json!({ "pane": log_ref, "beside": format!("p{}", theirs.0), "side": "down" }),
+        )
+        .await;
+    assert!(docked["pane"]["float"].is_null(), "{docked}");
+    user.until("docked", |c| user_floats(c).is_empty()).await;
+    assert_eq!(user.focused(), me, "docking gave the focus back");
+    assert_eq!(
+        agent
+            .refused("pane_raise", json!({ "pane": log_ref }))
+            .await,
+        TermErrorCode::InvalidArgs,
+        "not floating any more"
+    );
+
+    // tab_new with float opens over the agent's own tab.
+    let over = agent.ok("tab_new", json!({ "float": true })).await;
+    assert_eq!(over["tab"], format!("t{}", user.tab().tab_id.0), "{over}");
+    assert!(!over["pane"]["float"].is_null());
+
+    // A run window closes by itself once its command finishes.
+    let run = agent
+        .ok(
+            "pane_split",
+            json!({ "float": true, "closeWhenDone": true }),
+        )
+        .await;
+    let runner = id_of(&run["pane"]);
+    assert_eq!(run["pane"]["float"]["closeWhenDone"], true);
+    let gone = |c: &TestClient| {
+        !crate::support::leaves(&c.tab().root).contains(&client_core::proto::PaneId(runner))
+    };
+    user.until("the run window", |c| !gone(c)).await;
+    let ran = agent
+        .ok(
+            "cmd_run",
+            json!({ "pane": format!("p{runner}"), "command": "echo built" }),
+        )
+        .await;
+    assert_eq!(ran["status"], "exited", "{ran}");
+    let ended = std::time::Instant::now();
+    user.until("the run window closing", gone).await;
+    assert!(
+        ended.elapsed() >= std::time::Duration::from_secs(2),
+        "it stays a moment to be read"
+    );
+    assert_eq!(user.focused(), me);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_floating_worker_closes_when_its_turn_ends_and_leaves_its_answer() {
+    let Some(zsh) = zsh() else {
+        eprintln!("skipping: zsh not installed");
+        return;
+    };
+    let bin = tempfile::tempdir().unwrap();
+    let fake = bin.path().join("claude");
+    std::fs::write(
+        &fake,
+        "#!/bin/sh\nwhile IFS= read -r line; do echo \"got: $line\"; done\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let path = format!("{}:/usr/bin:/bin", bin.path().display());
+    let home = tempfile::tempdir().unwrap();
+    let home_dir = home.path().to_string_lossy().into_owned();
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start_with(dir.path(), |c| {
+        c.shell = Some(zsh);
+        c.pane_env.push(("PATH".into(), path));
+        c.pane_env.push(("HOME".into(), home_dir));
+    })
+    .await;
+    let mut user = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let me = user.attach_and_follow().await;
+    let lead = Caller {
+        socket: daemon.hook_socket().to_owned(),
+        token: std::fs::read_to_string(dir.path().join("hook.token")).unwrap(),
+        pane: me.0.to_string(),
+    };
+
+    let spawned = lead
+        .ok(
+            "agent_spawn",
+            json!({ "kind": "claude", "float": true, "closeWhenDone": true }),
+        )
+        .await;
+    let worker = spawned["agent"]["pane"]
+        .as_str()
+        .unwrap()
+        .trim_start_matches('p')
+        .to_owned();
+    let worker_id: u64 = worker.parse().unwrap();
+    user.until("the worker's window", |c| {
+        user_floats(c) == [(vec![worker_id], false)]
+    })
+    .await;
+    assert_eq!(user.focused(), me);
+
+    let (socket, token) = (lead.socket.clone(), lead.token.clone());
+    for (seq, event, extra) in [
+        (1, "SessionStart", json!({ "source": "startup" })),
+        (2, "UserPromptSubmit", json!({ "prompt": "fix it" })),
+        (
+            3,
+            "Stop",
+            json!({ "stop_hook_active": false, "last_assistant_message": "Fixed." }),
+        ),
+    ] {
+        claude_hook(
+            &socket,
+            &token,
+            &worker,
+            event,
+            seq,
+            hook_payload(event, extra),
+        )
+        .await;
+    }
+    user.until("the worker's window closing", |c| {
+        !crate::support::leaves(&c.tab().root).contains(&client_core::proto::PaneId(worker_id))
+    })
+    .await;
+    let result = lead
+        .ok("agent_result", json!({ "pane": format!("p{worker}") }))
+        .await;
+    assert_eq!(result["result"]["message"], "Fixed.", "{result}");
+    assert_eq!(result["agent"]["state"], "exited");
 }
 
 /// What a program in a pane can reach with what its environment holds (a guest Driver, a

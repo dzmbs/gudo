@@ -74,6 +74,7 @@ fn pane_schema() -> Value {
             "lastCommand": { "anyOf": [command_schema(), { "type": "null" }] },
             "cursor": { "type": "string" },
             "status": status_schema(),
+            "float": float_schema(),
         },
         "required": ["id", "kind", "isSelf", "createdByYou", "scopes", "atPrompt", "altScreen", "cursor"],
     })
@@ -90,6 +91,36 @@ fn status_schema() -> Value {
             "message": { "type": ["string", "null"] },
             "progress": { "type": ["integer", "null"] },
         },
+    })
+}
+
+fn float_schema() -> Value {
+    json!({
+        "type": ["object", "null"],
+        "description": "The floating window holding the pane; null when it sits in the tab's layout.",
+        "properties": {
+            "window": { "type": "string" },
+            "panes": { "type": "array", "items": { "type": "string" } },
+            "frame": frame_schema(),
+            "minimized": { "type": "boolean", "description": "In the tab's tray." },
+            "pinned": { "type": "boolean", "description": "Shown over every tab." },
+            "closeWhenDone": { "type": "boolean" },
+        },
+    })
+}
+
+fn frame_schema() -> Value {
+    json!({
+        "type": "object",
+        "description": "Fractions of the tab: x, y from its top left, w, h its size (at least 0.1).",
+        "properties": {
+            "x": { "type": "number", "minimum": 0, "maximum": 1 },
+            "y": { "type": "number", "minimum": 0, "maximum": 1 },
+            "w": { "type": "number", "minimum": 0.1, "maximum": 1 },
+            "h": { "type": "number", "minimum": 0.1, "maximum": 1 },
+        },
+        "required": ["x", "y", "w", "h"],
+        "additionalProperties": false,
     })
 }
 
@@ -124,6 +155,10 @@ fn tools_list() -> Vec<Tool> {
     let timeout = json!({ "type": "integer", "description": "Give up after this long (default 30000, at most 240000); the result says timeout and the work goes on." });
     let max_bytes =
         json!({ "type": "integer", "description": "Cap on the output text (default 16384)." });
+    let float = json!({ "type": "boolean", "description": "Open it as a floating window over the tab instead, without taking the user's focus." });
+    let close_when_done = json!({ "type": "boolean", "description": "Close the floating window by itself 2.5 s after its work ends: an agent's turn, a done or error status, or the first command run in it." });
+    let pane_result =
+        json!({ "type": "object", "properties": { "pane": pane_schema() }, "required": ["pane"] });
     vec![
         Tool {
             name: "whoami",
@@ -278,7 +313,7 @@ fn tools_list() -> Vec<Tool> {
         Tool {
             name: "pane_split",
             title: "Open a terminal pane",
-            description: "Open a new terminal pane beside or below a pane (default this one) without taking the user's focus: a shell, a command, or a coding agent (claude, codex). Returns the pane to use with cmd_run, pane_send and pane_wait.",
+            description: "Open a new terminal pane beside or below a pane (default this one), or as a floating window over its tab (float), without taking the user's focus: a shell, a command, or a coding agent (claude, codex). Returns the pane to use with cmd_run, pane_send and pane_wait.",
             input: object(
                 json!({
                     "of": pane_ref("Default: this pane."),
@@ -287,6 +322,9 @@ fn tools_list() -> Vec<Tool> {
                     "command": { "type": "string", "description": "Run this instead of a shell." },
                     "agent": { "type": "string", "enum": ["claude", "codex"] },
                     "focus": { "type": "boolean", "description": "Move the user's focus there (only when asked)." },
+                    "float": float.clone(),
+                    "frame": frame_schema(),
+                    "closeWhenDone": close_when_done.clone(),
                 }),
                 &[],
             ),
@@ -298,13 +336,16 @@ fn tools_list() -> Vec<Tool> {
         Tool {
             name: "tab_new",
             title: "Open a terminal tab",
-            description: "Open a new terminal tab in this session without switching the user to it: a shell or a command. Returns the tab and its pane.",
+            description: "Open a new terminal tab in this session without switching the user to it: a shell or a command. With float, the pane opens as a floating window over your own tab instead (no title). Returns the tab and its pane.",
             input: object(
                 json!({
                     "cwd": { "type": "string" },
                     "command": { "type": "string" },
                     "title": { "type": "string" },
                     "focus": { "type": "boolean" },
+                    "float": float.clone(),
+                    "frame": frame_schema(),
+                    "closeWhenDone": close_when_done.clone(),
                 }),
                 &[],
             ),
@@ -333,7 +374,7 @@ fn tools_list() -> Vec<Tool> {
         Tool {
             name: "agent_spawn",
             title: "Start a worker agent",
-            description: "Start a coding agent (claude or codex) as a worker in a new terminal pane beside you, without taking the user's focus, and optionally give it its first prompt once it is ready. The user watches it in the app. Follow it with agent_wait and agent_result.",
+            description: "Start a coding agent (claude or codex) as a worker in a new terminal pane beside you, or in a floating window (float; closeWhenDone closes it when its turn ends, and agent_result still answers), without taking the user's focus, and optionally give it its first prompt once it is ready. The user watches it in the app. Follow it with agent_wait and agent_result.",
             input: object(
                 json!({
                     "kind": { "type": "string", "enum": ["claude", "codex"] },
@@ -342,6 +383,9 @@ fn tools_list() -> Vec<Tool> {
                     "of": pane_ref("Open beside this pane; default yours."),
                     "direction": { "type": "string", "enum": ["right", "down"], "default": "right" },
                     "timeoutMs": { "type": "integer", "description": "How long to wait for it to be ready for the prompt (default 60000)." },
+                    "float": float.clone(),
+                    "frame": frame_schema(),
+                    "closeWhenDone": close_when_done.clone(),
                 }),
                 &["kind"],
             ),
@@ -451,6 +495,69 @@ fn tools_list() -> Vec<Tool> {
             read_only: true,
             destructive: false,
             idempotent: false,
+        },
+        Tool {
+            name: "pane_float",
+            title: "Float a terminal pane",
+            description: "Float a terminal pane you created as a window over its tab (or move its window to `frame`), optionally pinned over every tab. A tab keeps at least one pane in place. Does not take the user's focus.",
+            input: object(
+                json!({
+                    "pane": pane_ref("A pane you created."),
+                    "frame": frame_schema(),
+                    "pinned": { "type": "boolean", "description": "Show it over every tab of the session." },
+                }),
+                &["pane"],
+            ),
+            output: pane_result.clone(),
+            read_only: false,
+            destructive: false,
+            idempotent: true,
+        },
+        Tool {
+            name: "pane_dock",
+            title: "Dock a floating terminal pane",
+            description: "Put the floating window holding a terminal pane you created back into the tab's layout: where it was, or beside another pane (`beside`, on `side`). The user keeps their focus.",
+            input: object(
+                json!({
+                    "pane": pane_ref("A floating pane you created."),
+                    "beside": pane_ref("Dock beside this pane (not floating); default its own place."),
+                    "side": { "type": "string", "enum": ["left", "right", "up", "down"], "default": "right" },
+                }),
+                &["pane"],
+            ),
+            output: pane_result.clone(),
+            read_only: false,
+            destructive: false,
+            idempotent: false,
+        },
+        Tool {
+            name: "pane_minimize",
+            title: "Minimize a floating terminal pane",
+            description: "Send the floating window holding a terminal pane you created to the tab's tray, or restore it (minimized: false), without taking the user's focus.",
+            input: object(
+                json!({
+                    "pane": pane_ref("A floating pane you created."),
+                    "minimized": { "type": "boolean", "default": true },
+                }),
+                &["pane"],
+            ),
+            output: pane_result.clone(),
+            read_only: false,
+            destructive: false,
+            idempotent: true,
+        },
+        Tool {
+            name: "pane_raise",
+            title: "Show a floating terminal pane",
+            description: "Bring the floating window holding a terminal pane you created to the front and out of the tray, so the user sees it. The keyboard stays where the user has it.",
+            input: object(
+                json!({ "pane": pane_ref("A floating pane you created.") }),
+                &["pane"],
+            ),
+            output: pane_result,
+            read_only: false,
+            destructive: false,
+            idempotent: true,
         },
         Tool {
             name: "status_set",

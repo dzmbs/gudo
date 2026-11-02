@@ -37,6 +37,9 @@ enum DesignFixtures {
                 if let second = workspace.focusedPane { workspace.apply(.split(second, .vertical)) }
             }
             return
+        case _ where FloatingFixtures.screens.contains(screen):
+            await FloatingFixtures.apply(screen, workspace: workspace, model: model)
+            return
         default:
             break
         }

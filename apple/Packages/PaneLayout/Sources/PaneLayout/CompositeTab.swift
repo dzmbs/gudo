@@ -262,7 +262,8 @@ public struct CompositeTab: Identifiable, Hashable, Sendable, Codable {
             var session = Session(tabs: [layout], activeTabId: layout.id)
             session.apply(op)
             if let tab = session.tabs.first { layout = tab }
-        case .split, .close, .newTab, .closeTab, .moveTab, .movePaneToNewTab, .movePane, .mergeTab:
+        case .split, .close, .newTab, .closeTab, .moveTab, .movePaneToNewTab, .movePane, .mergeTab,
+             .float, .newFloat, .setFloat, .dock, .movePaneToEdge:
             break
         }
     }
