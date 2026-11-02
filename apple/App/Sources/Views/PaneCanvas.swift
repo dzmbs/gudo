@@ -27,9 +27,10 @@ struct CanvasLayout {
         let hiddenAnchor: UnitPoint
         /// Part way between shown and hidden (a layout blended for review).
         var fade: Double?
+        var growth: Double?
 
         var opacity: Double { fade ?? (visible ? 1 : 0) }
-        var scale: CGFloat { hiddenScale + (1 - hiddenScale) * opacity }
+        var scale: CGFloat { hiddenScale + (1 - hiddenScale) * (growth ?? (visible ? 1 : 0)) }
     }
 
     struct Divider {
@@ -129,10 +130,13 @@ struct CanvasLayout {
             let radius = fillsTab ? 0 : Self.radius
             for leaf in inner.leaves {
                 let radii = Self.radii(of: leaf.frame, in: rect, radius: radius, topSquare: multi)
+                // In the tray a pane keeps its size (its grid, and so the program's, never
+                // changes) and is drawn shrunk into its chip: restoring grows it back out.
+                let (scale, anchor) = chip.map { Self.shrink(rect, into: $0) } ?? (0.96, .center)
                 leaves.append(Leaf(
-                    pane: leaf.pane, frame: chip ?? leaf.frame, z: fillsTab ? Self.trayZ - 1 : z + 1, radii: radii,
+                    pane: leaf.pane, frame: leaf.frame, z: fillsTab ? Self.trayZ - 1 : z + 1, radii: radii,
                     window: window.id, lifted: single && !fillsTab, focusedWindow: hasFocus, visible: visible,
-                    hiddenScale: chip != nil ? 1 : 0.96, hiddenAnchor: .center))
+                    hiddenScale: scale, hiddenAnchor: Self.anchor(anchor, of: rect, in: leaf.frame)))
                 if visible { front.append((leaf.pane, leaf.frame)) }
             }
             dividers += inner.dividers.map {
@@ -144,6 +148,22 @@ struct CanvasLayout {
     }
 
     static let gripInsets = EdgeInsets(top: grip, leading: 1, bottom: 1, trailing: 1)
+
+    /// The scale that fits `window` to `chip`'s width, and the point of `window` (as a unit
+    /// point) that stays still while it scales: so it shrinks onto the chip.
+    static func shrink(_ window: CGRect, into chip: CGRect) -> (CGFloat, UnitPoint) {
+        let scale = max(min(chip.width / max(window.width, 1), 1), 0.05)
+        // The fixed point p of a scale s about p that maps the window's centre onto the chip's.
+        let p = CGPoint(
+            x: (chip.midX - scale * window.midX) / (1 - scale), y: (chip.midY - scale * window.midY) / (1 - scale))
+        return (scale, UnitPoint(x: (p.x - window.minX) / max(window.width, 1), y: (p.y - window.minY) / max(window.height, 1)))
+    }
+
+    /// `point`, a unit point of `outer`, as a unit point of `inner` (a pane in its window).
+    static func anchor(_ point: UnitPoint, of outer: CGRect, in inner: CGRect) -> UnitPoint {
+        let x = outer.minX + point.x * outer.width, y = outer.minY + point.y * outer.height
+        return UnitPoint(x: (x - inner.minX) / max(inner.width, 1), y: (y - inner.minY) / max(inner.height, 1))
+    }
 
     /// Rounded where the pane meets its card's corners.
     static func radii(of frame: CGRect, in card: CGRect, radius: CGFloat, topSquare: Bool) -> RectangleCornerRadii {
@@ -172,7 +192,11 @@ struct CanvasLayout {
             var leaf = leaf
             if let old = from.leaves.first(where: { $0.pane == leaf.pane }) {
                 leaf.frame = mix(old.frame, leaf.frame)
-                leaf.fade = old.opacity + (leaf.opacity - old.opacity) * t
+                // As drawn: solid while it shrinks, fading at the end; solid at once coming back.
+                let going = leaf.opacity < old.opacity
+                leaf.fade = old.opacity + (leaf.opacity - old.opacity) * (going ? t * t : 1 - (1 - t) * (1 - t))
+                let (from, to): (Double, Double) = (old.visible ? 1 : 0, leaf.visible ? 1 : 0)
+                leaf.growth = from + (to - from) * t
             }
             return leaf
         }
@@ -233,6 +257,32 @@ final class PaneArrangement {
     struct Scrub {
         var from: CanvasLayout
         var progress: Double
+    }
+
+    /// Panes drawn as a still of their last frame while they lift, dock, go to the tray or
+    /// come back: a picture scales and fades with the motion, crisp, and the terminal under
+    /// it reflows once, at rest.
+    @ObservationIgnored private var stills: [PaneId: CGImage] = [:]
+    /// Bumped when the stills are taken away.
+    private(set) var stillsVersion = 0
+
+    func still(of pane: PaneId) -> CGImage? { stills[pane] }
+    /// How long stills stand in: the motion's length (design review stretches it).
+    static var stillDuration = DS.Motion.liftDuration
+
+    /// Takes stills of `panes` (`image` draws one) for the length of the `lift` motion.
+    func holdStills(of panes: [PaneId], image: (PaneId) -> CGImage?) {
+        for pane in panes where stills[pane] == nil {
+            if let still = image(pane) { stills[pane] = still }
+        }
+        guard !panes.isEmpty else { return }
+        let version = stillsVersion
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(Int(Self.stillDuration * 1000)))
+            guard let self, self.stillsVersion == version else { return }
+            self.stills.removeAll()
+            self.stillsVersion += 1
+        }
     }
 
     /// Windows being moved or resized, where the hand has them.
@@ -499,7 +549,8 @@ private struct FloatingChrome: ViewModifier {
     func body(content: Content) -> some View {
         let dark = chrome.scheme == .dark
         let shape = UnevenRoundedRectangle(cornerRadii: leaf.radii, style: .continuous)
-        let lifted = leaf.lifted && leaf.visible
+        // Its rim and shadow go with it into the tray, fading as it does.
+        let lifted = leaf.lifted
         content
             .clipShape(shape)
             .overlay {

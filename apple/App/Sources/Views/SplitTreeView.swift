@@ -124,6 +124,7 @@ struct SplitTreeView: View {
 
     @AppStorage(TerminalPreferences.Key.paneStyle) private var paneStyle = TerminalPreferences.PaneStyle.compact
     @State private var lastShape = ShapeMemo()
+    @State private var lastLayout = LayoutMemo()
     @State private var ownArrangement = PaneArrangement()
     @Environment(WindowModel.self) private var model
 
@@ -168,6 +169,9 @@ struct SplitTreeView: View {
                 header: PaneHeader.height, cell: tree.cellSize, padding: tree.padding, live: arrangement.live)
             let _ = arrangement.update(layout: target, tree: tree)
             let layout = arrangement.scrub.map { target.blended(from: $0.from, progress: $0.progress) } ?? target
+            let _ = takeStills(before: lastLayout.layout, after: target, animated: change == .float && animated)
+            let _ = lastLayout.layout = target
+            let _ = arrangement.stillsVersion
             ZStack(alignment: .topLeading) {
                 ForEach(layout.cards, id: \.id) { card in
                     FloatCardBackdrop(card: card)
@@ -175,11 +179,16 @@ struct SplitTreeView: View {
                 }
                 ForEach(layout.leaves, id: \.pane) { leaf in
                     PaneLeaf(leaf: leaf.pane, tree: tree, isSplit: isSplit || leaf.window != nil)
+                        .environment(\.paneStill, arrangement.still(of: leaf.pane))
                         .floatingChrome(leaf, dragging: arrangement.paneDrag?.pane == leaf.pane)
                         .frame(width: leaf.frame.width, height: leaf.frame.height)
                         .liftBeat(floating: leaf.window != nil)
                         .scaleEffect(leaf.scale, anchor: leaf.hiddenAnchor)
-                        .opacity(leaf.opacity)
+                        // Going: it stays solid while it shrinks and fades at the end. Coming
+                        // back: solid at once, then it grows.
+                        .animation(arrangement.scrub == nil ? (leaf.visible ? .easeOut(duration: 0.12) : .easeIn(duration: 0.18).delay(0.16)) : nil) {
+                            $0.opacity(leaf.opacity)
+                        }
                         .allowsHitTesting(leaf.visible)
                         .accessibilityHidden(!leaf.visible)
                         .offset(x: leaf.frame.minX, y: leaf.frame.minY)
@@ -213,7 +222,28 @@ struct SplitTreeView: View {
         .environment(arrangement)
         // Only shape changes animate: a divider drag or a moving window must track the pointer
         // frame for frame.
-        .animation(motion, value: shape)
+        .animation(arrangement.scrub == nil ? motion : nil, value: shape)
+    }
+}
+
+/// The canvas's last layout (not state SwiftUI observes).
+private final class LayoutMemo {
+    var layout: CanvasLayout?
+}
+
+extension SplitTreeView {
+    /// Stills of the panes a lift, dock or trip to the tray moves between layers or in and out
+    /// of sight, taken from their last frame before the motion starts.
+    fileprivate func takeStills(before: CanvasLayout?, after: CanvasLayout, animated: Bool) {
+        guard animated, let before else { return }
+        let moving = after.leaves.filter { leaf in
+            guard let old = before.leaves.first(where: { $0.pane == leaf.pane }) else { return false }
+            return old.window != leaf.window || old.visible != leaf.visible
+        }.map(\.pane)
+        arrangement.holdStills(of: moving) { leaf in
+            guard let (workspace, pane) = tree.resolve(leaf) else { return nil }
+            return workspace.panes[pane]?.view.surface.snapshot()
+        }
     }
 }
 
@@ -453,6 +483,8 @@ struct PaneSlot: View {
 
     @Environment(\.terminalTheme) private var theme
     @Environment(WindowModel.self) private var model
+    @Environment(\.paneStill) private var still
+    @Environment(\.displayScale) private var displayScale
     @AppStorage(TerminalPreferences.Key.unfocusedSplitOpacity) private var unfocusedOpacity = TerminalPreferences.Default.unfocusedSplitOpacity
     @AppStorage(TerminalPreferences.Key.resizeOverlay) private var resizeOverlay = TerminalPreferences.ResizeOverlay.afterFirst
     @AppStorage(TerminalPreferences.Key.paneStyle) private var paneStyle = TerminalPreferences.PaneStyle.compact
@@ -515,6 +547,18 @@ struct PaneSlot: View {
             TerminalHost(pane: pane, isFocused: isFocused, workspace: workspace)
                 // Per host and pane: pane ids repeat across hosts.
                 .id(HostPane(hostId: workspace.groupId, pane: id))
+                // In motion between layers: its still moves instead (a platform view neither
+                // scales nor fades with its SwiftUI parents).
+                .opacity(still == nil ? 1 : 0)
+                .overlay(alignment: .topLeading) {
+                    if let still {
+                        Image(decorative: still, scale: displayScale)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                            .background(theme.background)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .clipped()
                 .saturation(pane.showsSavedScreen ? 0.5 : 1)
                 .overlay { SavedScreenOverlay(pane: pane) }
                 .overlay {
@@ -597,6 +641,11 @@ struct PaneMenuItems: View {
         }
         action()
     }
+}
+
+extension EnvironmentValues {
+    /// The still a pane shows instead of its live terminal while it moves between layers.
+    @Entry var paneStill: CGImage?
 }
 
 extension Node {

@@ -2,7 +2,9 @@
 import AppKit
 import DesignSystem
 import HostKit
+import PaneLayout
 import SwiftUI
+import TerminalCore
 import TerminalRenderer
 import XCTest
 @testable import App
@@ -73,7 +75,7 @@ final class MacSnapshotTests: XCTestCase {
         if env["SNAPSHOT_DRAW"] == nil, let image = Self.windowImage(window.windowNumber) {
             // The window server's picture of our own window (no recording permission needed):
             // glass and vibrancy included, which `cacheDisplay` draws as white slabs.
-            rep = NSBitmapImageRep(cgImage: image)
+            rep = NSBitmapImageRep(cgImage: drawsTerminals ? terminalsDrawn(over: image, in: frameView) ?? image : image)
         } else {
             guard let cached = frameView.bitmapImageRepForCachingDisplay(in: bounds) else { return XCTFail("no bitmap") }
             frameView.cacheDisplay(in: bounds, to: cached)
@@ -84,6 +86,104 @@ final class MacSnapshotTests: XCTestCase {
         let url = dir.appendingPathComponent("mac-\(name)-\(mode).png")
         try rep.representation(using: .png, properties: [:])?.write(to: url)
         print("snapshot: \(url.path)")
+    }
+
+    /// The floating-pane fixtures: their terminals are drawn into the capture from each
+    /// surface's own frame (see `terminalsDrawn`).
+    private var drawsTerminals = false
+    private var currentModel: WindowModel?
+
+    /// `image` with every terminal drawn in from its surface's own complete frame. A window off
+    /// every display presents Metal frames only when it gets drawables, so the window server's
+    /// picture can show an older frame, or one with glyphs still missing. Tiled panes first
+    /// (dimmed as `UnfocusedDim` dims them), then each window back to front as captured, with
+    /// its shadow, and its panes in it; then what floats above the panes, as captured.
+    private func terminalsDrawn(over image: CGImage, in frameView: NSView) -> CGImage? {
+        guard let model = currentModel, let workspace = model.workspace, let layout = model.arrangement.layout else { return nil }
+        let scale = CGFloat(image.width) / frameView.bounds.width
+        let height = CGFloat(image.height)
+        guard let ctx = CGContext(
+            data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+        ) else { return nil }
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        // Top-left window points to the bitmap's bottom-left pixels, and to crops of `image`.
+        func pixels(_ rect: CGRect) -> CGRect {
+            CGRect(x: rect.minX * scale, y: height - rect.maxY * scale, width: rect.width * scale, height: rect.height * scale)
+        }
+        func restore(_ rect: CGRect) {
+            let crop = CGRect(x: rect.minX * scale, y: rect.minY * scale, width: rect.width * scale, height: rect.height * scale)
+            if let part = image.cropping(to: crop) { ctx.draw(part, in: pixels(rect)) }
+        }
+        let theme = ThemeCatalog.theme(named: mode == "light" ? "Apple System Colors Light" : "Ghostty Default")
+        let dark = mode != "light"
+        // Canvas points to window points, from a pane's terminal and its leaf.
+        guard let (anchorPane, anchor) = workspace.panes.first(where: { pane, _ in layout.leaves.contains { $0.pane == pane && $0.visible } }),
+              let anchorLeaf = layout.leaves.first(where: { $0.pane == anchorPane })
+        else { return nil }
+        let anchorRect = anchor.view.convert(anchor.view.bounds, to: nil)
+        let canvas = CGPoint(x: anchorRect.minX - anchorLeaf.frame.minX, y: (frameView.bounds.height - anchorRect.minY) - anchorLeaf.frame.maxY)
+        func window(_ rect: CGRect) -> CGRect { rect.offsetBy(dx: canvas.x, dy: canvas.y) }
+
+        func drawTerminal(_ pane: PaneId) {
+            guard let terminal = workspace.panes[pane], model.arrangement.still(of: pane) == nil,
+                  !terminal.view.isHiddenOrHasHiddenAncestor else { return }
+            _ = terminal.view.surface.renderIfDirty(offscreen: true)
+            guard let still = terminal.view.surface.snapshot() else { return }
+            let inWindow = terminal.view.convert(terminal.view.bounds, to: nil)
+            let rect = CGRect(x: inWindow.minX, y: frameView.bounds.height - inWindow.maxY, width: inWindow.width, height: inWindow.height)
+            ctx.saveGState()
+            ctx.clip(to: pixels(rect))
+            ctx.draw(still, in: CGRect(x: pixels(rect).minX, y: pixels(rect).maxY - CGFloat(still.height), width: CGFloat(still.width), height: CGFloat(still.height)))
+            ctx.restoreGState()
+        }
+        let focused = workspace.focusedPane
+        let dim = NSColor(theme.background).withAlphaComponent(1 - TerminalPreferences.Default.unfocusedSplitOpacity).cgColor
+        let tiled = layout.leaves.filter { $0.window == nil && $0.visible }
+        for leaf in tiled {
+            drawTerminal(leaf.pane)
+            if leaf.pane != focused, tiled.count + layout.cards.count > 1 {
+                ctx.setFillColor(dim)
+                ctx.fill(pixels(window(leaf.frame)))
+                // The header keeps its own look (it is dimmed with the pane, as captured).
+                restore(window(CGRect(x: leaf.frame.minX, y: leaf.frame.minY, width: leaf.frame.width, height: PaneHeader.height)))
+            }
+        }
+        for card in layout.cards.filter(\.visible).sorted(by: { $0.z < $1.z }) {
+            let rect = window(card.frame)
+            let shape = CGPath(roundedRect: pixels(rect), cornerWidth: CanvasLayout.radius * scale, cornerHeight: CanvasLayout.radius * scale, transform: nil)
+            ctx.saveGState()
+            ctx.setShadow(offset: CGSize(width: 0, height: -DS.Shadow.panel.y * scale), blur: DS.Shadow.panel.radius * scale,
+                          color: CGColor(gray: 0, alpha: DS.Shadow.panel.opacity(dark: dark)))
+            ctx.beginTransparencyLayer(auxiliaryInfo: nil)
+            ctx.addPath(shape)
+            ctx.clip()
+            restore(rect)
+            ctx.endTransparencyLayer()
+            ctx.restoreGState()
+            ctx.saveGState()
+            ctx.addPath(shape)
+            ctx.clip()
+            for pane in card.panes { drawTerminal(pane) }
+            ctx.restoreGState()
+        }
+        // Above the panes, as captured: the tray, a drag's region, chip and Float target, guides.
+        for chip in layout.chips { restore(window(chip.frame).insetBy(dx: -2, dy: -2)) }
+        let arrangement = model.arrangement
+        for region in [arrangement.paneDrag?.preview, arrangement.dockPreview, arrangement.landing].compactMap(\.self) {
+            restore(window(region))
+        }
+        if let drag = arrangement.paneDrag {
+            restore(window(layout.floatTarget).insetBy(dx: -8, dy: -8))
+            restore(window(CGRect(x: drag.point.x - 20, y: drag.point.y - 8, width: 420, height: 60)))
+        }
+        for guide in arrangement.guides {
+            let line = guide.axis == .vertical
+                ? CGRect(x: guide.position - 2, y: guide.from, width: 4, height: guide.to - guide.from)
+                : CGRect(x: guide.from, y: guide.position - 2, width: guide.to - guide.from, height: 4)
+            restore(window(line))
+        }
+        return ctx.makeImage()
     }
 
     /// `CGWindowListCreateImage`, looked up at run time: the SDK marks it unavailable, and it is
@@ -106,6 +206,7 @@ final class MacSnapshotTests: XCTestCase {
         model.start()
         let window = makeWindow(WindowContent(request: nil, model: model).environment(AppModel.shared), size: size)
         current = window
+        currentModel = model
         for _ in 0..<50 where model.workspace?.focusedPane == nil { await pump(0.1) }
         model.isSidebarShown = true
         if let workspace = model.workspace {
@@ -543,25 +644,45 @@ final class MacSnapshotTests: XCTestCase {
     /// The Mac's width and an iPad's (the same canvas at 1024 × 768).
     private static let floatingSizes: [(String, CGSize)] = [("", CGSize(width: 1180, height: 760)), ("-ipad", CGSize(width: 1024, height: 768))]
 
-    /// Repaints the fixture's screens at the grids the panes settled at.
+    /// Repaints the fixture's screens at the grids the panes settled at, until every pane
+    /// shows its screen (a pane made late greets after an earlier paint).
     private func repaint(_ model: WindowModel) async {
         guard let workspace = model.workspace, let panes = FloatingFixtures.last else { return }
-        FloatingFixtures.paint(workspace, panes)
-        await pump(0.4)
+        let marks: [(PaneId?, String)] = [
+            (panes.shell, "git log"), (panes.tests, "cargo test"), (panes.htop, "PID"), (panes.agent, "dock a floating"), (panes.logs, "hostd:"),
+        ]
+        for _ in 0..<10 {
+            FloatingFixtures.paint(workspace, panes)
+            await pump(0.4)
+            let shown = marks.allSatisfy { pane, mark in
+                guard let pane, let terminal = workspace.panes[pane]?.view.surface.terminal else { return true }
+                return terminal.visibleText().contains(mark)
+            }
+            if shown { break }
+        }
         await present(model)
     }
 
-    /// Draws every pane's latest frame: a window off screen gets no display-link ticks. Glyphs
-    /// are drawn a frame's budget at a time, so it draws frame by frame until all are done.
+    /// Draws every pane's latest frame: a window off screen gets no display-link ticks. New
+    /// glyphs are drawn a frame's budget at a time, so it draws frame by frame until done.
     private func present(_ model: WindowModel) async {
         if let current, current.level.rawValue < 0 { return }
         let surfaces = model.workspace.map { $0.panes.values.map(\.view.surface) } ?? []
-        for _ in 0..<60 {
-            var drew = false
-            for surface in surfaces { drew = surface.renderIfDirty() || drew }
-            guard drew else { return }
-            await pump(1.0 / 60)
+        for round in 0..<2 {
+            for _ in 0..<120 {
+                var drew = false
+                for surface in surfaces { drew = surface.renderIfDirty() || drew }
+                CATransaction.flush()
+                guard drew else { break }
+                await pump(1.0 / 60)
+            }
+            // Once more from scratch: rows built while glyphs were still on their way.
+            if round == 0 {
+                for surface in surfaces { surface.outputArrived() }
+                await pump(0.1)
+            }
         }
+        await pump(0.1)
     }
 
     /// Puts the fixture's window on the main display below the desktop picture: invisible to
@@ -593,10 +714,16 @@ final class MacSnapshotTests: XCTestCase {
         } else {
             let arrangement = model.arrangement
             guard let from = arrangement.layout else { return }
-            // The grids hold through the motion, as they do while it animates.
-            TerminalSurface.holdGrids(for: .milliseconds(1300))
+            // The grids hold through the motion, as they do while it animates, with no
+            // cols × rows overlay; the canvas's own animation stays off while it is scrubbed.
+            TerminalSurface.holdGrids(for: .milliseconds(2500))
+            PaneArrangement.stillDuration = 2.5
+            defer { PaneArrangement.stillDuration = DS.Motion.liftDuration }
+            model.workspace?.layoutChangeUntil = .now + .seconds(6)
+            arrangement.scrub = .init(from: from, progress: 0)
             change()
             await pump(0.1)
+            model.workspace?.layoutChangeUntil = .now + .seconds(6)
             let spring = Spring(duration: 0.42, bounce: 0.12)
             for (index, time) in [0, 0.03, 0.06, 0.1, 0.15, 0.22, 0.3, 0.5].enumerated() {
                 arrangement.scrub = .init(from: from, progress: spring.value(target: 1.0, time: time))
@@ -605,6 +732,7 @@ final class MacSnapshotTests: XCTestCase {
                 try? capture(window, "\(name)-\(index)")
             }
             arrangement.scrub = nil
+            await pump(1.2)
         }
         // At rest the grids reflow once and the programs redraw at their new size.
         await pump(0.8)
@@ -614,6 +742,8 @@ final class MacSnapshotTests: XCTestCase {
 
     /// inside one, the tray, and a zoomed pane with its way back.
     func testFloatingStills() async throws {
+        drawsTerminals = true
+        defer { drawsTerminals = false }
         defer { MockPaneStatus.fixture = nil; MockPaneStatus.details = [:] }
         for (suffix, size) in Self.floatingSizes {
             for screen in ["floating", "floating-multi", "floating-tray", "floating-zoom"] {
@@ -628,6 +758,8 @@ final class MacSnapshotTests: XCTestCase {
     /// A tiled pane dragged by its header onto another's right half: the chip follows, the
     /// region lights, and on drop the panes move into place in one spring.
     func testFloatingDragSequence() async throws {
+        drawsTerminals = true
+        defer { drawsTerminals = false }
         defer { MockPaneStatus.fixture = nil; MockPaneStatus.details = [:] }
         try await window("floating-drag-end", screen: "floating-tiled") { model in
             await self.pump(0.8)
@@ -655,6 +787,8 @@ final class MacSnapshotTests: XCTestCase {
     /// Float, then dock, then minimize and restore, then a split inside the window: each as
     /// frames, so the motion can be reviewed one step at a time.
     func testFloatingSequences() async throws {
+        drawsTerminals = true
+        defer { drawsTerminals = false }
         defer { MockPaneStatus.fixture = nil; MockPaneStatus.details = [:] }
         try await window("floating-split-end", screen: "floating-tiled") { model in
             await self.pump(0.8)

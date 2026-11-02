@@ -165,7 +165,15 @@ final class PaneArrangementTests: XCTestCase {
         XCTAssertEqual(layout.chips.count, 1)
         let leaf = layout.leaves.first { $0.pane == below }!
         XCTAssertFalse(leaf.visible)
-        XCTAssertEqual(leaf.frame, layout.chips[0].frame, "hidden in its chip, so restoring grows out of it")
+        let window = FloatGeometry.rect(of: workspace.window(of: below!)!.frame, in: layout.bounds)
+        XCTAssertEqual(leaf.frame, window, "its size, and so its grid, stays as it was")
+        // Drawn shrunk onto its chip, so restoring grows it out of the chip.
+        let chip = layout.chips[0].frame
+        let anchor = CGPoint(x: leaf.frame.minX + leaf.hiddenAnchor.x * leaf.frame.width, y: leaf.frame.minY + leaf.hiddenAnchor.y * leaf.frame.height)
+        let centre = CGPoint(x: anchor.x + (leaf.frame.midX - anchor.x) * leaf.scale, y: anchor.y + (leaf.frame.midY - anchor.y) * leaf.scale)
+        XCTAssertEqual(centre.x, chip.midX, accuracy: 0.5)
+        XCTAssertEqual(centre.y, chip.midY, accuracy: 0.5)
+        XCTAssertEqual(leaf.frame.width * leaf.scale, chip.width, accuracy: 0.5)
         XCTAssertEqual(layout.chips[0].frame.maxX, size.width - FloatGeometry.edgeMargin)
     }
 }
