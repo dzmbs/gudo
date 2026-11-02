@@ -153,9 +153,33 @@ Guard: `SharedFontGridTests` checks the grid is shared and freed with its last s
 |---|---|
 | Every daemon workspace re-read every pane's metadata once a second, forever, also in the background | Follows the daemon's metadata through Observation, coalesced to at most 2 refreshes/s. No timer. |
 | Every SSH pane ran a 250 ms timer for echo inference for as long as it was open | The timer runs only while keystrokes wait for their echo |
-| The agent `Spinner` was a `TimelineView(.animation)`: every working agent's indicator rebuilt its view on every frame (120 Hz on ProMotion) | A repeating rotation animation. No body evaluation per frame. |
+| The agent `Spinner` was a `TimelineView(.animation)`: every working agent's indicator rebuilt its view on every frame (120 Hz on ProMotion). A SwiftUI repeating animation then still ran on the main thread every frame | A Core Animation rotation on the arc's layer: the render server turns it, the main thread does nothing |
+| The working-title shimmer was a 30 Hz `TimelineView` rebuilding a per-glyph gradient: about 30 % of the main thread in Debug with 10 working titles, and XCUITest never saw the app idle (60 s stalls) | A gradient layer slid by Core Animation, masked by the text; same band, same phase. A sidebar of 12 working rows woke the main run loop 8299 times in 1 s before, under 15 after (`LayerAnimationTests`) |
 | The daemon re-sent a pane's metadata on every title set or agent event, and the app assigned it even when equal, which invalidated every view reading `meta` | Sent and assigned only when it changed |
 | Every terminal's display link asked for 60–120 Hz | 120 Hz only for the focused terminal; others stream output at up to 60 Hz. Every link still pauses when nothing changes. |
+
+### Instant start (2026-10-31, M5 Max, debug builds; docs/APP-ARCHITECTURE.md §26)
+
+A window opens on the workspace this device saved of each host, before the host answers.
+
+| | Time |
+|---|---|
+| Saved workspace read, decoded and seeded into its connection (`model.open`, local daemon) | 1.0 ms median of 5 (cache file 1.4 KB, one pane) |
+| …then connected / daemon layout / the focused pane's live screen on it (local daemon, loopback) | 7.1 / 8.4 / 8.1 ms median of 5 (the screen comes before the layout: panes subscribe before attaching) |
+| First frame of a window on the saved workspace, no host connected (seed + window model + 3 panes + layout + draw, in-process offscreen) | 0.37–0.86 s first window of a test process; 0.17–0.36 s warm (three runs, machine shared with other builds) |
+| The same window on this device's plain shell, for comparison | 0.14–0.24 s warm |
+
+So the saved workspace costs about 1 ms to show and 0.03–0.1 s of drawing over an empty window
+(three Metal surfaces and the host's sidebar rows, debug build); the rest is the window itself.
+Before, the window showed "Connecting to This Mac…" until the host's layout arrived. Reproduce:
+`UN_HOSTD_BIN=… swift test --filter instantStartShowsTheSavedWorkspaceThenGoesLive` (HostKit) and
+`AppTests/InstantStartTests` (`testFirstFrameTimesWarm` prints both window times).
+
+In the app, the `launch` log category (`log stream --predicate 'subsystem == "<bundle id>" AND
+category == "launch"'`) records process start → first frame (and whether it was a saved
+workspace) → the shown host live, and the `app` category the moment This Mac's helper is dialled.
+Not measured yet: a real cold launch of a release build with the login-item helper (the Mac app
+is not launched by agents).
 
 ## 4. What is left (estimated gains)
 

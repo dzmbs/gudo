@@ -28,15 +28,31 @@ enum KeyboardSettings {
 /// own tab and pane selection (`WindowLayoutStore`), and this window's live panes. Two windows on
 /// the same host share the host's layout store and its pane streams but each has its own
 /// `Workspace`, so each has its own terminals, renderers and views (docs/APP-ARCHITECTURE.md
-/// "Windows"). Views read `session` and `panes`; every change goes through `apply`, which keeps
+/// "Windows"). Views read `session` and `pane(_:)`; every change goes through `apply`, which keeps
 /// the pane set in step with the layout (creating panes for new leaves, terminating closed ones).
+///
+/// Panes are made in stages: the window's tab (and any pane a view asks for) at once, the rest a
+/// few at a time between frames. Each pane is observed on its own (`PaneHolder`), so making one
+/// redraws only the views that show it: a host with 500 tabs opens without freezing the window.
 @Observable
 final class Workspace {
     /// The window's view of the host's layout.
     let layout: WindowLayoutStore
     /// The host's layout store, shared by every window on the host.
     var sharedLayout: any LayoutStore { layout.base }
-    private(set) var panes: [PaneId: Pane] = [:]
+    /// Every pane made so far. Reading it follows the whole set (it changes once per stage);
+    /// views showing one pane read `pane(_:)`, which follows that pane only.
+    var panes: [PaneId: Pane] {
+        _ = madeStages
+        return made
+    }
+    @ObservationIgnored private var made: [PaneId: Pane] = [:]
+    @ObservationIgnored private var slots: [PaneId: PaneHolder] = [:]
+    /// Bumped once per stage of panes made (what `panes` readers follow).
+    private var madeStages = 0
+    /// Live panes still to make: those views asked for first, then in the sidebar's order.
+    @ObservationIgnored private var unmade = PaneQueue()
+    @ObservationIgnored private var makingUnmade = false
     /// Panes whose terminal or backend failed to start, with the reason.
     private(set) var failures: [PaneId: String] = [:]
     /// The tab whose rename prompt is showing.
@@ -68,7 +84,7 @@ final class Workspace {
     private(set) var keyboardTop: CGFloat?
 
     private func keyboardTop(screenFrame: CGRect?) -> CGFloat? {
-        guard let screenFrame, let window = panes.values.lazy.compactMap({ $0.view.window }).first
+        guard let screenFrame, let window = made.values.lazy.compactMap({ $0.view.window }).first
             ?? UIApplication.shared.connectedScenes.lazy.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first
         else { return nil }
         let frame = window.convert(screenFrame, from: window.screen.coordinateSpace)
@@ -77,7 +93,7 @@ final class Workspace {
     #endif
     /// Terminal appearance for every pane (the design layer may replace it).
     @ObservationIgnored var appearance = TerminalAppearance.fromPreferences() {
-        didSet { for pane in panes.values { pane.view.surface.appearance = appearance } }
+        didSet { for pane in made.values { pane.view.surface.appearance = appearance } }
     }
     /// One terminal cell in points, once a pane has laid out: split sizes snap to whole cells so
     /// panes waste no partial cells (the remainder becomes padding).
@@ -149,10 +165,31 @@ final class Workspace {
     func close(ending: Bool = false) {
         guard !isClosed else { return }
         isClosed = true
-        for pane in panes.values {
+        for pane in made.values {
             if ending { pane.terminate() } else { pane.detach() }
         }
-        panes = [:]
+        made = [:]
+        unmade = PaneQueue()
+        for slot in slots.values { slot.pane = nil }
+        slots = [:]
+        madeStages += 1
+    }
+
+    /// The pane `id`, observed on its own. A live pane not made yet is made on the next turn
+    /// (it is about to show), and the view asking redraws then.
+    func pane(_ id: PaneId) -> Pane? {
+        let slot = slot(id)
+        if slot.pane == nil, !isClosed, unmade.prioritize(id) {
+            makeUnmadeSoon()
+        }
+        return slot.pane
+    }
+
+    private func slot(_ id: PaneId) -> PaneHolder {
+        if let slot = slots[id] { return slot }
+        let slot = PaneHolder()
+        slots[id] = slot
+        return slot
     }
 
     /// Set by `close()`: a closed workspace creates no panes.
@@ -227,6 +264,13 @@ final class Workspace {
     var isLayoutLive: Bool { host?.status.isLive ?? true }
     /// What a layout change does while the host is not live: say so (never a silent no-op).
     @ObservationIgnored var onLayoutUnavailable: (() -> Void)?
+    /// Input typed over a saved screen was not sent (the host's screen had changed).
+    @ObservationIgnored var onHeldInputDropped: (() -> Void)?
+    /// Whether any of this window's panes on the host still shows its saved screen, or the
+    /// layout itself is the saved one (instant start): "Connecting…" in the header.
+    var showsSavedWorkspace: Bool {
+        host?.showsCachedLayout == true || panes.values.contains(where: \.showsSavedScreen)
+    }
     /// A pane's terminal took the keyboard (a click or tap in it): its window follows, which
     /// matters when the pane is not in the window's own tab on this host (a mixed tab's pane,
     /// the other column).
@@ -259,13 +303,13 @@ final class Workspace {
     func title(of tab: Tab) -> String {
         if let title = tab.title {
             if UserDefaults.standard.bool(forKey: TabNaming.titleFromShell), FriendlyName.isGenerated(title),
-               let shell = panes[tab.focused]?.title, !shell.isEmpty
+               let shell = pane(tab.focused)?.title, !shell.isEmpty
             {
                 return shell
             }
             return title
         }
-        if let title = panes[tab.focused]?.title, !title.isEmpty { return title }
+        if let title = pane(tab.focused)?.title, !title.isEmpty { return title }
         if let foreground = foregrounds[tab.focused], !foreground.title.isEmpty { return foreground.title }
         return "Shell"
     }
@@ -289,12 +333,12 @@ final class Workspace {
             let words = report.detail ?? report.state.title
             return report.program.map { "\($0): \(words)" } ?? words
         }
-        if let program = panes[pane]?.foregroundProgram ?? foregrounds[pane]?.program, !program.isEmpty,
+        if let program = self.pane(pane)?.foregroundProgram ?? foregrounds[pane]?.program, !program.isEmpty,
            !PaneForeground.shells.contains(program)
         {
             return program
         }
-        if let shellTitle = panes[pane]?.title, !shellTitle.isEmpty, shellTitle != name { return shellTitle }
+        if let shellTitle = self.pane(pane)?.title, !shellTitle.isEmpty, shellTitle != name { return shellTitle }
         if !isRemote, let directory = absoluteDirectory(of: tab), let repo = GitContext.repoBranch(at: directory) { return repo }
         if let directory = directory(of: tab), directory != name { return directory }
         let count = tab.root.panes.count
@@ -307,21 +351,27 @@ final class Workspace {
         let unnamed = session.tabs.filter { $0.title == nil && !namingRequested.contains($0.id) }
         guard !unnamed.isEmpty else { return }
         var used = Set(session.tabs.compactMap(\.title))
+        var names: [(TabId, String)] = []
         for tab in unnamed {
             namingRequested.insert(tab.id)
             let name = FriendlyName.make(avoiding: used)
             used.insert(name)
-            // After this turn: `reconcilePanes` runs inside `apply`.
-            Task { @MainActor [weak self] in
-                guard let self, !self.isClosed, let current = self.session.tabs.first(where: { $0.id == tab.id }), current.title == nil else { return }
-                self.layout.apply(.rename(tab.id, name))
+            names.append((tab.id, name))
+        }
+        // After this turn (`reconcilePanes` runs inside `apply`), all at once: the session is
+        // composed once, not once per tab.
+        Task { @MainActor [weak self] in
+            guard let self, !self.isClosed else { return }
+            let untitled = Set(self.session.tabs.filter { $0.title == nil }.map(\.id))
+            for (tab, name) in names where untitled.contains(tab) {
+                self.layout.apply(.rename(tab, name))
             }
         }
     }
 
     /// The focused pane's directory (OSC 7, else the PTY's cwd), with ~ for home.
     func directory(of tab: Tab) -> String? {
-        if let pwd = panes[tab.focused]?.workingDirectory, !pwd.isEmpty {
+        if let pwd = pane(tab.focused)?.workingDirectory, !pwd.isEmpty {
             return PaneForeground(program: "", directory: pwd).shortDirectory
         }
         return foregrounds[tab.focused]?.shortDirectory
@@ -331,25 +381,26 @@ final class Workspace {
     /// else "shell". Never the pane id, which UI tests use as the terminal's identifier.
     func programName(of pane: PaneId) -> String {
         if PaneDrawing.of(pane)?.canvas != nil { return "canvas" }
-        if let program = panes[pane]?.foregroundProgram { return program }
+        if let program = self.pane(pane)?.foregroundProgram { return program }
         if let program = foregrounds[pane]?.program, !program.isEmpty { return program }
         return "shell"
     }
 
     /// The focused pane's absolute directory, for the window's represented folder.
     func absoluteDirectory(of tab: Tab) -> String? {
-        if let pwd = panes[tab.focused]?.workingDirectory, !pwd.isEmpty { return pwd }
+        if let pwd = pane(tab.focused)?.workingDirectory, !pwd.isEmpty { return pwd }
         return foregrounds[tab.focused]?.directory
     }
 
     /// Refreshes the foregrounds after the daemon's pane metadata changed, at most once per
     /// `metaCoalescing`: agents retitle their panes many times a second.
     private func followMeta(of daemon: DaemonConnection) {
-        withObservationTracking { _ = daemon.meta } onChange: { [weak self, weak daemon] in
-            Task { @MainActor in
-                guard let self, let daemon, !self.metaRefreshPending else { return }
-                self.metaRefreshPending = true
+        withObservationTracking { _ = daemon.meta.all } onChange: { [weak self, weak daemon] in
+            Task { @MainActor [weak self] in
+                guard self?.beginMetaRefresh() == true else { return }
+                // Weak across the sleep: a busy host must not keep a closed window's workspace.
                 try? await Task.sleep(for: Self.metaCoalescing)
+                guard let self, let daemon, !self.isClosed else { return }
                 self.metaRefreshPending = false
                 self.refreshForegrounds()
                 self.followMeta(of: daemon)
@@ -359,11 +410,17 @@ final class Workspace {
     }
 
     @ObservationIgnored private var metaRefreshPending = false
+
+    private func beginMetaRefresh() -> Bool {
+        guard !isClosed, !metaRefreshPending else { return false }
+        metaRefreshPending = true
+        return true
+    }
     private static let metaCoalescing = Duration.milliseconds(500)
 
     private func refreshForegrounds() {
         let daemon = host as? DaemonConnection
-        for (id, pane) in panes {
+        for (id, pane) in made {
             // Local panes ask the kernel; daemon panes take what the daemon reports (the agent
             // running there, the shell's cwd) until it reports the foreground program itself.
             let current = pane.foreground() ?? daemon?.meta[id].flatMap { meta in
@@ -443,7 +500,7 @@ final class Workspace {
         #if os(iOS)
         // `-noAutoFocus YES` (screenshots): never raise the software keyboard by itself.
         if UserDefaults.standard.bool(forKey: "noAutoFocus") { return false }
-        return GCKeyboard.coalesced != nil || inheritsKeyboardFocus || panes.values.contains { $0.view.isFirstResponder }
+        return GCKeyboard.coalesced != nil || inheritsKeyboardFocus || made.values.contains { $0.view.isFirstResponder }
         #else
         true
         #endif
@@ -476,35 +533,88 @@ final class Workspace {
     ) { [weak self] _ in
         MainActor.assumeIsolated {
             guard let self else { return }
-            for pane in self.panes.values { self.applyKeyboardSettings(to: pane) }
+            for pane in self.made.values { self.applyKeyboardSettings(to: pane) }
         }
     }
 
     // MARK: Panes
 
+    /// Keeps the panes in step with the layout: closed leaves end, the window's tab is made at
+    /// once and every other new leaf joins `unmade`, made in stages between frames.
     private func reconcilePanes() {
         guard !isClosed else { return }
         nameNewTabs()
         let live = session.panes
-        for (id, pane) in panes where !live.contains(id) {
+        var changed = false
+        for (id, pane) in made where !live.contains(id) {
             pane.terminate()
-            panes[id] = nil
-            grids[id] = nil
-            notices[id] = nil
-            foregrounds[id] = nil
+            made[id] = nil
+            slots.removeValue(forKey: id)?.pane = nil
+            if grids[id] != nil { grids[id] = nil }
+            if notices[id] != nil { notices[id] = nil }
+            if foregrounds[id] != nil { foregrounds[id] = nil }
+            changed = true
         }
-        failures = failures.filter { live.contains($0.key) }
-        for id in live where panes[id] == nil && failures[id] == nil {
-            do {
-                let signpost = Self.signposter.beginInterval("Make pane")
-                let start = ContinuousClock.now
-                panes[id] = try makePane(id)
-                Self.signposter.endInterval("Make pane", signpost)
-                Pane.log.info("pane \(id.description, privacy: .public) made in \((ContinuousClock.now - start).formatted(.units(allowed: [.milliseconds])), privacy: .public)")
-            } catch {
-                failures[id] = ScreenError.describe(error)
+        if failures.keys.contains(where: { !live.contains($0) }) { failures = failures.filter { live.contains($0.key) } }
+        let shown = Set(session.activeTab?.root.panes ?? [])
+        unmade.keep { live.contains($0) && made[$0] == nil && !shown.contains($0) }
+        // In the sidebar's order, so the rows people see first get their panes first.
+        for id in session.tabs.flatMap(\.root.panes) where made[id] == nil && failures[id] == nil {
+            if shown.contains(id) {
+                changed = makePaneNow(id) || changed
+            } else {
+                unmade.append(id)
             }
         }
+        if changed { madeStages += 1 }
+        makeUnmadeSoon()
+    }
+
+    /// Makes `id` now; false if it failed (the reason is in `failures`).
+    private func makePaneNow(_ id: PaneId) -> Bool {
+        do {
+            let signpost = Self.signposter.beginInterval("Make pane")
+            let start = ContinuousClock.now
+            let pane = try makePane(id)
+            made[id] = pane
+            slot(id).pane = pane
+            Self.signposter.endInterval("Make pane", signpost)
+            Pane.log.debug("pane \(id.description, privacy: .public) made in \((ContinuousClock.now - start).formatted(.units(allowed: [.milliseconds])), privacy: .public)")
+            return true
+        } catch {
+            failures[id] = ScreenError.describe(error)
+            return false
+        }
+    }
+
+    /// How long one stage of background pane making may hold the main thread.
+    static let stageBudget = Duration.milliseconds(8)
+
+    /// Makes the unmade panes a stage at a time, with a frame's worth of the main thread in
+    /// between, until none is left. Weak across the pause: a closed window stops it.
+    private func makeUnmadeSoon() {
+        guard !makingUnmade, !unmade.isEmpty, !isClosed else { return }
+        makingUnmade = true
+        Task { @MainActor [weak self] in
+            while self?.makeStage() == true {
+                try? await Task.sleep(for: .milliseconds(1))
+            }
+            self?.makingUnmade = false
+        }
+    }
+
+    /// One stage: unmade panes until the budget is spent. Returns whether any are left.
+    private func makeStage() -> Bool {
+        guard !isClosed else { return false }
+        let deadline = ContinuousClock.now + Self.stageBudget
+        let live = session.panes
+        var changed = false
+        while ContinuousClock.now < deadline, let id = unmade.next() {
+            guard made[id] == nil, failures[id] == nil, live.contains(id) else { continue }
+            changed = makePaneNow(id) || changed
+        }
+        if changed { madeStages += 1 }
+        return !unmade.isEmpty
     }
 
     /// Ghostty's `bell-features = border` (Settings ▸ Notifications): the pane's border lights up
@@ -519,7 +629,8 @@ final class Workspace {
     }
 
     private func makePane(_ id: PaneId) throws -> Pane {
-        let pane = try Pane(id: id, backend: makeBackend(id), appearance: appearance) { [weak self] in
+        let saved = (host as? DaemonConnection)?.cachedScreen(for: id)
+        let pane = try Pane(id: id, backend: makeBackend(id), appearance: appearance, saved: saved) { [weak self] in
             // The process exited: close its pane, as Ghostty does.
             Task { @MainActor in self?.apply(.close(id)) }
         }
@@ -528,6 +639,7 @@ final class Workspace {
             if self?.grids[id] != size { self?.grids[id] = size }
         }
         pane.isFocusedPane = { [weak self] in self?.focusedPane == id }
+        pane.onHeldInputDropped = { [weak self] in self?.onHeldInputDropped?() }
         pane.onBell = { [weak self] in self?.ringBell(id) }
         pane.onCellSize = { [weak self] size in
             if self?.cellSize != size { self?.cellSize = size }
@@ -578,7 +690,7 @@ final class Workspace {
         #if DEBUG
         // `-demoPreedit <text>` shows IME marked text in the first pane, for screenshots and UI
         // tests (the simulator's software keyboard cannot be switched to an IME from a test).
-        if let preedit = UserDefaults.standard.string(forKey: "demoPreedit"), !preedit.isEmpty, panes.isEmpty {
+        if let preedit = UserDefaults.standard.string(forKey: "demoPreedit"), !preedit.isEmpty, made.isEmpty {
             Task { @MainActor [weak pane] in
                 try? await Task.sleep(for: .seconds(1.5))
                 pane?.view.setMarkedText(preedit, selectedRange: NSRange(location: preedit.utf16.count, length: 0))
@@ -600,6 +712,61 @@ final class Workspace {
         #endif
         return pane
     }
+}
+
+/// Panes waiting to be made: the ones views asked for first, then the rest in order. Every
+/// operation is O(1) amortized, so a sidebar of 500 rows asking costs nothing quadratic.
+struct PaneQueue {
+    private var asked: [PaneId] = []
+    private var rest: [PaneId] = []
+    private var restStart = 0
+    private var members: Set<PaneId> = []
+    private var promoted: Set<PaneId> = []
+
+    var isEmpty: Bool { members.isEmpty }
+
+    mutating func append(_ id: PaneId) {
+        if members.insert(id).inserted { rest.append(id) }
+    }
+
+    /// Moves a waiting pane to the front; false if it is not waiting.
+    mutating func prioritize(_ id: PaneId) -> Bool {
+        guard members.contains(id) else { return false }
+        if promoted.insert(id).inserted { asked.append(id) }
+        return true
+    }
+
+    mutating func next() -> PaneId? {
+        while let id = asked.popLast() ?? nextOfRest() {
+            if members.remove(id) != nil {
+                promoted.remove(id)
+                return id
+            }
+        }
+        return nil
+    }
+
+    private mutating func nextOfRest() -> PaneId? {
+        guard restStart < rest.count else { return nil }
+        defer { restStart += 1 }
+        return rest[restStart]
+    }
+
+    /// Drops the waiting panes `keep` rejects.
+    mutating func keep(_ keep: (PaneId) -> Bool) {
+        members = members.filter(keep)
+        promoted = promoted.intersection(members)
+        rest = rest[restStart...].filter { members.contains($0) }
+        restStart = 0
+        asked = asked.filter { promoted.contains($0) }
+    }
+}
+
+/// One pane of a workspace, observed on its own (`Workspace.pane(_:)`): making it redraws only
+/// the views that show it.
+@Observable
+final class PaneHolder {
+    var pane: Pane?
 }
 
 /// What Ghostty draws over a surface besides the grid.

@@ -75,7 +75,7 @@ does not report the foreground program yet, so `ForegroundProgramReporting` is n
 
 | Rule | Where |
 |---|---|
-| R1 keepalive + probe on foreground | SSH: `SshSession` keepalives (15 s × 3); `HostsModel.foreground()` → `SshSession.setForeground(true)` (probe) and `DaemonClient.reconnect()` for daemons not live |
+| R1 keepalive + probe on foreground | SSH: `SshSession` keepalives (15 s × 3); `HostsModel.foreground()` → `SshSession.setForeground(true)` (probe), `DaemonClient.reconnect()` for daemons not live and `DaemonClient.probe()` for daemons that say they are. Daemon links: QUIC keep-alive 3 s and idle timeout 12 s on both sides (`proto::KEEP_ALIVE`, `proto::IDLE_TIMEOUT`); `probe()` pings and drops a link with no pong in 3 s (10 s while packets still arrive: slow, not dead), also when a keystroke gets no ack within 1 s (`PaneRouter.onInputStalled`, at most every 5 s) |
 | R2 "connected" = answered recently | `ConnectionStatus` comes from client-core / ssh session states, never a socket flag |
 | R3/R5 suspend → resume | iOS `scenePhase == .background` → `DaemonClient.suspend()` (resume state kept), `.active` → `reconnect()`; panes resume from the ring or a snapshot |
 | R7 stable handle | `HostConnection` per host id; transports swap underneath; `Workspace` holds the connection, views hold ids |
@@ -348,7 +348,11 @@ every daemon's `DaemonConnection.workspaceEvents` (`WorkspaceEventHub`, one
 `WorkspaceListener` fanned out; other features can `observe` it too), posts
 `.attention(.added)` items that are unseen and not `whileViewed` when the app is not active
 (approval options from `PaneMeta.agent`), clears a host's delivered notes and sets the badge
-from `unseen`. Permission is asked the first time something would be posted. Settings ▸
+from `unseen`. Permission is asked right after the user pairs a new host (`HostsModel.onFirstPairing`;
+Apple's "ask in context"), never when a note fires while the app is away (it is then just not
+posted). `-notificationPrompt NO` skips the ask; runs with the UI tests' pairing hooks skip it
+unless `-notificationPrompt YES`. Approve / Deny from a notification also marks the item seen
+(`NotificationActionClient.markSeen`), so the badge takes the daemon's new count at once. Settings ▸
 Notifications edits the prefs. `AgentLiveActivities` (iOS) starts an activity per agent run,
 updates it on blocked / done and ends it ten minutes after; `AgentActivityWidget` draws it.
 `<scheme>://open/<host>/<pane>` (activity, notification tap) focuses the pane.
@@ -500,8 +504,8 @@ the compact line ("Claude · 62% of 5h · resets 14:20": the limited, else fulle
 not reset) and its tone (quiet ≤ 80 %, amber above, red limited); `UsageDetail` the popover rows.
 Views (`UsageViews.swift`): one line per agent under each daemon host's name in the sidebar, the
 detail popover (also from the host menu's Agent Usage), and a quiet strip at the bottom of the
-Inbox. Unknown means absent; the reason is in the popover. Settings › Agents › Check Usage with
-Your Claude and Codex Sign-In (`AgentUsageSettings.apiFallbackKey`, off) re-watches every host.
+Inbox. Unknown means absent; the reason is in the popover. There is no setting: the daemon uses
+only the tools' own data and documented commands, never the host's sign-ins.
 Tests: `AgentUsageTests` (HostKit), `UsageFeedTests` (AppTests), `UsageUITests`.
 
 ## 17. Windows (iPad scenes, Stage Manager, external displays, Mac windows; Handoff; width buckets)
@@ -1350,3 +1354,82 @@ App `TabHistoryWindowTests` (what a close keeps, bulk close as one batch, clicks
 selection, "A New Terminal" and Restore, ⌘W and ⇧⌘T); snapshots `MacSnapshotTests.testTabHistory`
 and `TouchSnapshotTests.testTabHistory`. The History menu is the system's menu and is not
 captured by the in-process snapshots; the palette list shows the same entries.
+
+## 26. Instant start: the saved workspace before the host answers
+
+empty window waiting for the host (ARCHITECTURE.md §4 "Resume", §5 "Never a blank screen").
+
+**What is saved, per daemon host** (`CachedWorkspace`, HostKit `WorkspaceCache.swift`): the layout
+(tabs, split trees, names, zoom, the active tab and each tab's focus), the session id and name,
+the projects, each pane's title, directory and size, and each pane's screen: the READY section
+of a Ghostty snapshot of the app's own terminal (the same format the daemon sends, images left
+out) plus the newest 32 KiB of scrollback records and how far the viewport was scrolled back.
+Bounds: a screen over 256 KiB is not kept; 2 MiB of screens per host, the active tab's panes
+first (focused first), then the other tabs in order; panes the layout no longer has go. Names
+and the layout always stay.
+
+**Where and how.** One file per host in Caches/<bundle id>/Workspaces (tests: the isolated
+`AppData` folder): binary plist, LZFSE-compressed, behind a magic and a version. The folder is
+0700 and excluded from backups, files are 0600, and on iOS written with
+`completeUntilFirstUserAuthentication`. App Lock's cover hides the window as before, so a saved
+screen is never shown while locked. A file is dropped when it is not the host's any more: another
+daemon id (paired again), another session than the record's, an older format, older than 14 days,
+unreadable; forgetting a host deletes it. **Guests:** a guest's view of someone else's host is
+never saved or shown from disk (`HostsModel.openDaemon` skips guests; the writer skips them), so
+nothing of the owner's terminals outlives the invite on the guest's device.
+
+**When.** `WorkspaceCacheWriter` (App) saves a live, owned host 2 s after its layout, names,
+projects or status change, every 30 s while its screens changed (`Pane.outputGeneration`), and
+at once on background (scene phase) and quit (`applicationWillTerminate`). It never saves a host
+while one of its panes still shows a saved screen. Screens are encoded off the main actor.
+
+**Showing it.** `HostsModel.openDaemon` seeds the new `DaemonConnection` before dialling
+(`seed`): `DaemonLayoutStore.isCached` holds the saved session (ops wait: there is no session to
+send them to yet), `meta` the saved titles, and `cachedScreen(for:)` each pane's screen until the
+daemon sends its own. `HostConnection.showsCachedLayout` lets `HostGroups` list the saved tabs
+(`HostGroup.isCached`; `isReady` stays false, so New Terminal waits for the host). `Workspace`
+makes its panes at once; `Pane` restores the saved screen into its terminal before the stream
+starts, so the renderer draws it in the first frame. The panes are quietly marked: a wash of the
+terminal background and half saturation (`SavedScreenOverlay`), "Connecting…" at the end of the
+header's subtitle, the host's spinner after its 1 s grace; the connection overlay adds its notice
+only after 2 s and never dims saved screens while connecting. Reconnecting, unreachable and
+failure states are the existing ones (notice, dim, card at 40 s): a host that cannot be reached
+keeps showing its saved workspace under them. A restored focused tab is selected synchronously
+when the saved layout has it.
+
+**Going live.** Panes subscribe before the attach, so the daemon's snapshot usually arrives with
+or before its layout. Each snapshot replaces the terminal in place (same `Pane`, view and
+surface: no layout change, no blank frame) and drops the wash with a short fade. The daemon's
+layout replaces the saved one wholesale: tabs closed elsewhere vanish (the window's selection
+hands over to a neighbour as for any closed tab), their saved titles and screens are dropped
+(`DaemonConnection.reconcileCache`); saved projects stay until the daemon's own report, which
+follows its layout, so they never blink out.
+
+**Input before live.** Keys, pastes and mouse reports typed over a saved screen are held per pane
+(`DaemonPaneBackend.holdInputUntilLive`), never queued in the core. When the daemon's screen for
+that pane is on the terminal, the held input is sent as if typed then only if the screen reads
+the same as the saved one the user typed at (visible text); otherwise, or after 30 s, or past
+4 KiB, it is dropped and a toast says so ("What you typed while connecting wasn't sent: the
+screen had changed."). A pane holding input shows "Sends when connected". So an approval prompt
+that changed while connecting never receives the "y" meant for another.
+
+**This Mac.** The helper usually already runs as a login item: `AppModel.connectEarly` dials it
+in `AppModel.init`, before any window, when its `endpoint.json` names a live process with the
+paired daemon id; the helper's own start (login item checks, pairing) runs as before and retries
+an early dial that failed. `LaunchTimeline` logs process start → first frame → live (category
+`launch`). Numbers: docs/PERFORMANCE.md "Instant start".
+
+**Not covered.** Plain-SSH hosts and this device's own shells (nothing outlives the app to come
+back to; they start as before). A pane scrolled back when saved shows that position, then the
+live screen at the bottom (the daemon's snapshot has no older scrollback until it is paged in).
+The window's very first frame on the Mac is still the terminal background for one frame while
+`WindowRoot` makes its model.
+
+Tests: HostKit `WorkspaceCacheTests` (round trip incl. scrollback and scroll position, file
+protection, bounds, invalidation, seeding and reconciliation with a changed layout, saved tabs in
+`HostGroups`, guests, held input sent / dropped / overflow / a second window),
+`DaemonIntegrationTests.instantStartShowsTheSavedWorkspaceThenGoesLive` (real daemon: saved
+workspace at once, live in place, early input sent; prints the times); App `InstantStartTests`
+(the first frame is the saved workspace with no host connected, drawn by the renderer, then
+swapped in place; input before live; first-frame times); snapshots
+`MacSnapshotTests.testInstantStart` (`instant-start-{cached,live}[-ipad]-{dark,light}`).

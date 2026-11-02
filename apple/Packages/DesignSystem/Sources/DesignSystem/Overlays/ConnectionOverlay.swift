@@ -160,6 +160,9 @@ struct GraceSpinner: View {
 private struct ConnectionOverlayModifier: ViewModifier {
     let state: ConnectionState
     let hostName: String
+    /// The panes show the screens this device saved (instant start), already marked quietly
+    /// on each pane and in the header: while connecting, no dim and no notice for the grace.
+    let showsSavedState: Bool
     let onRetry: () -> Void
     let onDisconnect: () -> Void
 
@@ -175,10 +178,10 @@ private struct ConnectionOverlayModifier: ViewModifier {
             content
                 .saturation(presentation.dimmed ? 0.25 : 1)
                 .opacity(presentation.dimmed ? 0.55 : 1)
-                .allowsHitTesting(state.isLive || state == .paused || state == .disconnected)
+                .allowsHitTesting(state.isLive || state == .paused || state == .disconnected || savedAndConnecting)
                 .overlay(alignment: .topTrailing) {
                     if let notice = presentation.notice {
-                        ConnectionNotice(state: state, text: notice)
+                        ConnectionNotice(state: state, copy: notice)
                             .padding(DS.Space.s)
                             .transition(.opacity)
                     }
@@ -196,9 +199,14 @@ private struct ConnectionOverlayModifier: ViewModifier {
         }
     }
 
+    /// Saved screens on the way to live take clicks and scrolls; typed input waits (held).
+    private var savedAndConnecting: Bool {
+        if case .connecting = state { showsSavedState } else { false }
+    }
+
     private struct Presentation: Equatable {
         var dimmed = false
-        var notice: String?
+        var notice: NoticeCopy?
         var card: CardCopy?
     }
 
@@ -208,8 +216,12 @@ private struct ConnectionOverlayModifier: ViewModifier {
         switch state {
         case .connected, .slow, .paused, .disconnected:
             result.dimmed = false
+        case .connecting where showsSavedState:
+            result.dimmed = false
+            if down >= Self.dimAfter { result.notice = NoticeCopy(before: "Connecting to ", host: hostName, after: "…") }
         case .connecting(let phase):
-            result.notice = phase.map { "\($0.trimmingCharacters(in: ["…"])) on \(hostName)…" } ?? "Connecting to \(hostName)…"
+            result.notice = phase.map { NoticeCopy(before: "\($0.trimmingCharacters(in: ["…"])) on ", host: hostName, after: "…") }
+                ?? NoticeCopy(before: "Connecting to ", host: hostName, after: "…")
         case .reconnecting(_, let since):
             let gone = now.timeIntervalSince(since)
             if gone >= Self.cardAfter {
@@ -218,10 +230,10 @@ private struct ConnectionOverlayModifier: ViewModifier {
                     detail: "Sessions keep running on the host. Reconnecting automatically.",
                     action: "Reconnect Now")
             } else {
-                result.notice = "Reconnecting to \(hostName)… · last contact \(Self.ago(gone))"
+                result.notice = NoticeCopy.reconnecting(to: hostName, ago: Self.ago(gone))
             }
         case .offline:
-            result.notice = "Offline · waiting for network"
+            result.notice = NoticeCopy(before: "Offline · waiting for network")
         case .needsAttention(let reason, let action):
             result.card = CardCopy(title: "Can't connect to \(hostName)", detail: reason, action: action ?? "Retry")
         case .unreachable(let reason, let hint):
@@ -244,17 +256,48 @@ struct CardCopy: Equatable {
     var action: String
 }
 
-private struct ConnectionNotice: View {
+/// A notice's words, in parts that give way in order when the line is short: first "last
+/// contact" goes, then the host's name shortens (its domain, then its middle). The time stays.
+struct NoticeCopy: Equatable {
+    var before: String
+    var host: String?
+    var after = ""
+    /// `after` for a short line ("… · 12s ago").
+    var compactAfter: String?
+
+    static func reconnecting(to host: String, ago: String) -> NoticeCopy {
+        NoticeCopy(before: "Reconnecting to ", host: host, after: "… · last contact \(ago)", compactAfter: "… · \(ago)")
+    }
+
+    var text: String { before + (host ?? "") + after }
+
+    /// A host name for a short line: without its domain ("studio.local", "box.tail1234.ts.net").
+    static func shortHost(_ name: String) -> String {
+        guard let dot = name.firstIndex(of: "."), dot > name.startIndex,
+              name.rangeOfCharacter(from: .letters) != nil, !name.allSatisfy({ $0.isNumber || $0 == "." })
+        else { return name }
+        return String(name[..<dot])
+    }
+}
+
+/// narrow pane (iPhone) the words shorten by priority (`NoticeCopy`), never cutting the time.
+struct ConnectionNotice: View {
     let state: ConnectionState
-    let text: String
+    let copy: NoticeCopy
 
     var body: some View {
         HStack(spacing: DS.Space.row) {
             ConnectionGlyph(state)
                 .font(.caption)
-            Text(text)
-                .monospacedDigit()
-                .lineLimit(1)
+            ViewThatFits(in: .horizontal) {
+                line(host: copy.host, after: copy.after)
+                if let compact = copy.compactAfter {
+                    line(host: copy.host, after: compact)
+                }
+                line(host: copy.host.map(NoticeCopy.shortHost), after: copy.compactAfter ?? copy.after, squeezes: true)
+            }
+            .monospacedDigit()
+            .accessibilityLabel(copy.text)
         }
         .font(DS.Font.overlay)
         .foregroundStyle(DS.Palette.textSecondary)
@@ -263,6 +306,22 @@ private struct ConnectionNotice: View {
         .floatingCapsule()
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("connection-notice")
+    }
+
+    /// The words on one line; `squeezes`: the host's name gives way (middle first) so the rest
+    /// fits whole.
+    private func line(host: String?, after: String, squeezes: Bool = false) -> some View {
+        HStack(spacing: 0) {
+            Text(copy.before).fixedSize()
+            if let host {
+                Text(host)
+                    .truncationMode(.middle)
+                    .layoutPriority(squeezes ? -1 : 0)
+                    .fixedSize(horizontal: !squeezes, vertical: false)
+            }
+            Text(after).fixedSize()
+        }
+        .lineLimit(1)
     }
 }
 
@@ -304,8 +363,10 @@ private struct ConnectionCard: View {
 
 public extension View {
     func connectionOverlay(
-        _ state: ConnectionState, hostName: String, onRetry: @escaping () -> Void, onDisconnect: @escaping () -> Void
+        _ state: ConnectionState, hostName: String, showsSavedState: Bool = false,
+        onRetry: @escaping () -> Void, onDisconnect: @escaping () -> Void
     ) -> some View {
-        modifier(ConnectionOverlayModifier(state: state, hostName: hostName, onRetry: onRetry, onDisconnect: onDisconnect))
+        modifier(ConnectionOverlayModifier(
+            state: state, hostName: hostName, showsSavedState: showsSavedState, onRetry: onRetry, onDisconnect: onDisconnect))
     }
 }

@@ -58,34 +58,31 @@ nonisolated public enum ShimmerMath {
 
 /// "Working" on a title: the text sits at the secondary level and a band of full-strength ink
 /// sweeps across it every 3 s. Under Reduce Motion (or when inactive) it is plain text at the
-/// level the caller gave it.
+/// level the caller gave it. The band is a gradient layer moved by Core Animation and masked by
+/// the text: no body runs per frame, and it stops off screen.
 private struct Shimmering: ViewModifier {
     let active: Bool
     let glyphs: Int
     @Environment(\.chrome) private var chrome
+    @Environment(\.self) private var environment
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
         if active, !reduceMotion, glyphs > 0 {
-            TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
-                content.foregroundStyle(gradient(at: context.date.timeIntervalSinceReferenceDate))
-            }
+            let ink = chrome.foreground.color
+            content
+                .foregroundStyle(ink.opacity(ChromePalette.textLevels.secondary))
+                .overlay {
+                    // Ink at the band's strength over ink at the secondary level is exactly the
+                    // per-glyph mix the band stands for.
+                    ShimmerBandLayer(ink: ink.resolve(in: environment).cgColor, glyphs: glyphs)
+                        .mask { content.foregroundStyle(.black) }
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
         } else {
             content
         }
-    }
-
-    private func gradient(at time: Double) -> LinearGradient {
-        let center = ShimmerMath.center(glyphs: glyphs, elapsed: time)
-        let ink = chrome.foreground.color
-        let base = ChromePalette.textLevels.secondary
-        let lit = 1.0
-        // One stop per glyph centre; the gradient spans the text's own bounds.
-        let stops = (0..<glyphs).map { index in
-            let strength = base + (lit - base) * ShimmerMath.intensity(at: index, center: center)
-            return Gradient.Stop(color: ink.opacity(strength), location: (Double(index) + 0.5) / Double(glyphs))
-        }
-        return LinearGradient(stops: stops, startPoint: .leading, endPoint: .trailing)
     }
 }
 

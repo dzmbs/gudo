@@ -118,6 +118,7 @@ private final class FakeClient: NotificationActionClient {
         case decide(host: String, pane: UInt64, request: UInt64, option: UInt32)
         case push(daemon: String, token: Data, approve: Bool)
         case open(host: String?, daemon: String?, pane: UInt64)
+        case seen(host: String?, daemon: String?, item: UInt64)
     }
     struct Refused: LocalizedError {
         var errorDescription: String? { "rejected: already decided" }
@@ -145,6 +146,10 @@ private final class FakeClient: NotificationActionClient {
     func open(hostId: String?, daemonId: String?, paneId: UInt64) async {
         calls.withLock { $0.append(.open(host: hostId, daemon: daemonId, pane: paneId)) }
     }
+
+    func markSeen(hostId: String?, daemonId: String?, itemId: UInt64) async {
+        calls.withLock { $0.append(.seen(host: hostId, daemon: daemonId, item: itemId)) }
+    }
 }
 
 @Suite struct ActionHandlerTests {
@@ -159,9 +164,10 @@ private final class FakeClient: NotificationActionClient {
         let info = LocalNotifications.content(for: note).userInfo
         #expect(await handler.handle(actionIdentifier: PushAction.approve, userInfo: info, remote: false) == .decided(approve: true))
         #expect(await handler.handle(actionIdentifier: PushAction.deny, userInfo: info, remote: false) == .decided(approve: false))
+        // Each answer marks the item seen, so the badge clears.
         #expect(client.recorded == [
-            .decide(host: "h1", pane: 7, request: 31, option: 1),
-            .decide(host: "h1", pane: 7, request: 31, option: 3),
+            .decide(host: "h1", pane: 7, request: 31, option: 1), .seen(host: "h1", daemon: nil, item: 9),
+            .decide(host: "h1", pane: 7, request: 31, option: 3), .seen(host: "h1", daemon: nil, item: 9),
         ])
     }
 
@@ -195,7 +201,10 @@ private final class FakeClient: NotificationActionClient {
         let handler = NotificationActionHandler(client: client)
         #expect(await handler.handle(actionIdentifier: PushAction.deny, userInfo: info, remote: true) == .decided(approve: false))
         #expect(await handler.handle(actionIdentifier: PushAction.open, userInfo: info, remote: true) == .opened)
-        #expect(client.recorded == [.push(daemon: daemon, token: token, approve: false), .open(host: nil, daemon: daemon, pane: 7)])
+        #expect(client.recorded == [
+            .push(daemon: daemon, token: token, approve: false), .seen(host: nil, daemon: daemon, item: 42),
+            .open(host: nil, daemon: daemon, pane: 7),
+        ])
     }
 
     @Test func aPushThatSkipsTheExtensionCannotForgeAPayload() async throws {
@@ -331,7 +340,8 @@ private final class FakeClient: NotificationActionClient {
         #expect(approval?.actions[1].options.contains(.destructive) == true)
         #expect(approval?.actions[2].options.contains(.foreground) == true)
         #expect(categories["AGENT_BLOCKED"]?.actions.map(\.identifier) == ["OPEN"])
-        #expect(categories.keys.sorted() == ["AGENT_APPROVAL", "AGENT_BLOCKED", "AGENT_DONE", "COMMAND_DONE"])
+        #expect(categories[DeviceNotifications.category]?.actions.map(\.identifier) == [DeviceNotifications.reviewAction])
+        #expect(categories.keys.sorted() == ["AGENT_APPROVAL", "AGENT_BLOCKED", "AGENT_DONE", "COMMAND_DONE", DeviceNotifications.category])
     }
 }
 

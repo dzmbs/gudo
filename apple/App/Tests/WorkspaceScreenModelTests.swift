@@ -310,7 +310,7 @@ final class WorkspaceScreenModelTests: XCTestCase {
         let context = try fakeContext(client)
         client.send(.paneMeta(meta: meta(4, cwd: "/home/me/proj/src", agent: AgentStatus(kind: "claude", state: .idle))))
         client.send(.paneMeta(meta: meta(5, cwd: "/elsewhere", agent: AgentStatus(kind: "codex", state: .idle))))
-        for _ in 0..<100 where context.daemon.meta.count < 2 { try await Task.sleep(for: .milliseconds(10)) }
+        for _ in 0..<100 where context.daemon.meta.all.count < 2 { try await Task.sleep(for: .milliseconds(10)) }
         source.contextOverride = { context }
 
         let repository = try await source.repository()

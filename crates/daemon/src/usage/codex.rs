@@ -7,8 +7,8 @@
 //! - **`codex app-server`** (documented JSON-RPC, labelled experimental):
 //!   `account/rateLimits/read` → `rateLimits` with `usedPercent`, `windowDurationMins`,
 //!   `resetsAt`.
-//! - **`wham/usage`** (undocumented, [`super::api`]): `rate_limit.primary_window` with
-//!   `used_percent`, `limit_window_seconds`, `reset_at`.
+//!
+//! The daemon never reads Codex's sign-in (`auth.json`) or calls the undocumented `wham/usage`.
 //!
 //! Windows are named by their length, never by position: a Pro account's primary window can be
 //! the weekly one.
@@ -108,25 +108,19 @@ fn last_snapshot(path: &Path) -> Option<AgentUsage> {
     })
 }
 
-/// A rate-limit snapshot in any of Codex's spellings (rollout snake_case, app-server
-/// camelCase, `wham/usage`) as [`AgentUsage`]; `None` when it holds no window or belongs to
+/// A rate-limit snapshot in either of Codex's spellings (rollout snake_case, app-server
+/// camelCase) as [`AgentUsage`]; `None` when it holds no window or belongs to
 /// another limit than the plan's main `codex` one.
 pub(crate) fn snapshot(v: &Value, at: Option<u64>, source: UsageSource) -> Option<AgentUsage> {
     let str_of = |keys: &[&str]| keys.iter().find_map(|k| v.get(*k)?.as_str());
     if str_of(&["limit_id", "limitId"]).is_some_and(|id| !id.is_empty() && id != "codex") {
         return None;
     }
-    let mut windows: Vec<UsageWindow> = [
-        ["primary", "primary_window"],
-        ["secondary", "secondary_window"],
-    ]
-    .iter()
-    .filter_map(|keys| {
-        keys.iter()
-            .find_map(|k| v.get(*k).filter(|w| w.is_object()))
-    })
-    .filter_map(|w| window(w, at))
-    .collect();
+    let mut windows: Vec<UsageWindow> = ["primary", "secondary"]
+        .iter()
+        .filter_map(|k| v.get(*k).filter(|w| w.is_object()))
+        .filter_map(|w| window(w, at))
+        .collect();
     if windows.is_empty() {
         return None;
     }
@@ -148,17 +142,16 @@ fn window(w: &Value, at: Option<u64>) -> Option<UsageWindow> {
     let num = |keys: &[&str]| keys.iter().find_map(|k| w.get(*k)?.as_f64());
     let used = num(&["used_percent", "usedPercent"])?;
     let minutes = num(&["window_minutes", "windowDurationMins"])
-        .or_else(|| num(&["limit_window_seconds"]).map(|s| s / 60.0))
         .map_or(0, |m| m.clamp(0.0, f64::from(u32::MAX)) as u32);
-    let absolute = ["resets_at", "resetsAt", "reset_at"]
+    let absolute = ["resets_at", "resetsAt"]
         .iter()
         .find_map(|k| match w.get(*k)? {
             Value::Number(n) => n.as_f64().map(|s| (s.max(0.0) * 1000.0) as u64),
             Value::String(s) => rfc3339_millis(s),
             _ => None,
         });
-    let relative = num(&["resets_in_seconds", "reset_after_seconds"])
-        .and_then(|s| Some(at? + (s.max(0.0) * 1000.0) as u64));
+    let relative =
+        num(&["resets_in_seconds"]).and_then(|s| Some(at? + (s.max(0.0) * 1000.0) as u64));
     Some(UsageWindow {
         name: window_name(minutes, None),
         minutes,
@@ -218,7 +211,7 @@ mod tests {
     }
 
     #[test]
-    fn app_server_and_wham_shapes() {
+    fn app_server_shape() {
         let app: Value = serde_json::from_str(r#"{"limitId":"codex","primary":{"usedPercent":42,"windowDurationMins":10080,"resetsAt":1735689720},"secondary":{"usedPercent":5,"windowDurationMins":300,"resetsAt":1735693200},"planType":"pro"}"#).unwrap();
         let u = snapshot(&app, Some(1), UsageSource::Cli).unwrap();
         // Ordered by length, not position.
@@ -226,10 +219,7 @@ mod tests {
         assert_eq!(u.windows[1].name, "weekly");
         assert_eq!(u.windows[1].used_permille, 420);
         assert_eq!(u.plan.as_deref(), Some("pro"));
-        let wham: Value = serde_json::from_str(r#"{"plan_type":"plus","rate_limit":{"primary_window":{"used_percent":42,"limit_window_seconds":18000,"reset_after_seconds":120,"reset_at":1735689720}}}"#).unwrap();
-        let u = snapshot(&wham["rate_limit"], Some(1), UsageSource::Api).unwrap();
-        assert_eq!(u.windows[0].name, "5h");
-        assert_eq!(u.windows[0].resets_at, Some(UnixMillis(1_735_689_720_000)));
+        assert_eq!(u.windows[1].resets_at, Some(UnixMillis(1_735_689_720_000)));
         let other: Value =
             serde_json::from_str(r#"{"limitId":"codex_other","primary":{"usedPercent":88}}"#)
                 .unwrap();

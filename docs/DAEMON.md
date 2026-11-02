@@ -897,7 +897,7 @@ URLs with token and private CA, local-only) and how pairing tickets carry them:
 
 
 `crates/daemon/src/usage/` reports Claude Code's and Codex's plan windows (5h, weekly, per-model)
-to owner connections that watch: `WorkspaceRequest::UsageWatch { api_fallback }` answers with the
+to owner connections that watch: `WorkspaceRequest::UsageWatch` answers with the
 report at once, then `ServerCtl::AgentUsage` pushes changes (clients with `Caps::AGENT_USAGE`);
 `UsageUnwatch` stops. Offered as `DaemonFeatures::AGENT_USAGE`.
 
@@ -906,13 +906,16 @@ input (Claude panes launched by the daemon run `un-hook claude StatusLine` as th
 which forwards the JSON as hook event `StatusLine` and then runs the user's own status line);
 when those are missing or older than 10 min, `claude -p /usage --output-format stream-json`
 (+ `claude auth status --json` for the plan) and `codex app-server` → `account/rateLimits/read`,
-in the background, at most every 5 min per agent; only for a watcher that opted in, the
-providers' undocumented usage endpoints with the host's sign-in (`~/.claude/.credentials.json`,
-`~/.codex/auth.json`), at most every 5 min. The report refreshes at most once a minute and only
+in the background, at most every 5 min per agent. The daemon never reads the tools' sign-ins or
+calls the providers' undocumented usage endpoints: that is closest to what Anthropic's and
+OpenAI's terms forbid. `UsageWatch::api_fallback` and `UsageSource::Api` stay on the wire for
+compatibility; clients send `false`, the daemon ignores the flag and never reports `Api`. The
+report refreshes at most once a minute and only
 while a connection watches; the last status-line snapshot survives restarts
 (`<state>/usage/claude-status-line.json`). Tools are found through the panes' `PATH` (plus
 `~/.local/bin`), `CODEX_HOME` and `CLAUDE_CONFIG_DIR`. Tests: `cargo test -p daemon --test it usage`
-(fixture rollouts, status-line hook, fake `claude` / `codex`, a local HTTP endpoint).
+(fixture rollouts, status-line hook, fake `claude` / `codex`; a client that still sends
+`api_fallback` gets no sign-in-based answer).
 ### 5.12 Git-native workspace (`proto::repo`)
 
 The sidebar's picture of the host's repositories, pushed whole as `ServerCtl::Repos(RepoSnapshot)`

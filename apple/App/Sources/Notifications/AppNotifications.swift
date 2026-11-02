@@ -30,10 +30,13 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
 
     private var hosts: HostsModel { AppModel.shared.hosts }
     private var subscriptions: [String: (connection: ObjectIdentifier, token: UUID)] = [:]
-    private var unseen: [String: UInt32] = [:]
-    private var authorization: UNAuthorizationStatus?
+    private(set) var unseen: [String: UInt32] = [:]
     private var installed = false
-    private lazy var security = HostSecurityNotifier { [weak self] in await self?.ensureAuthorized() ?? false }
+    /// Where permission is read and asked for (a fake in tests).
+    var authorizer: any NotificationAuthorizing = SystemNotificationAuthorizer()
+    /// Attention notes, posted one at a time, newest per pane (a burst is not a task per item).
+    private lazy var notes = NoteQueue<AttentionNote> { [weak self] note in await self?.post(note) }
+    private lazy var security = HostSecurityNotifier { [weak self] in await self?.isAuthorized() ?? false }
 
     /// Registers categories and the delegate (before launch finishes, so actions on a cold
     /// start reach the handler) and starts following the hosts' attention feeds.
@@ -43,25 +46,28 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
         let center = UNUserNotificationCenter.current()
         center.delegate = self
         center.setNotificationCategories(NotificationCategories.all)
+        hosts.onFirstPairing = { [weak self] _ in
+            Task { await self?.askAfterPairing() }
+        }
         follow()
-        Task { await refreshAuthorization() }
     }
 
-    /// Asks for permission the first time something would be posted (never at launch).
-    private func ensureAuthorized() async -> Bool {
-        await refreshAuthorization()
-        switch authorization {
-        case .authorized, .provisional, .ephemeral: return true
-        case .denied: return false
-        default:
-            let granted = (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge, .timeSensitive])) ?? false
-            await refreshAuthorization()
-            return granted
+    /// Whether notes may be posted. Never asks: a note fires while the app is away, where a
+    /// permission prompt would come out of nowhere.
+    private func isAuthorized() async -> Bool {
+        switch await authorizer.status() {
+        case .authorized, .provisional, .ephemeral: true
+        default: false
         }
     }
 
-    private func refreshAuthorization() async {
-        authorization = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+    /// Asks for permission right after the first host is paired, Apple's "ask in context": the
+    /// user has just set up the thing that will notify them. Asked once (only while undecided);
+    /// `-notificationPrompt NO` (and the UI tests' own pairing hooks) skip it.
+    func askAfterPairing(allowed: Bool = LaunchOptions.asksNotificationPermission) async {
+        guard allowed, await authorizer.status() == .notDetermined else { return }
+        let granted = await authorizer.request()
+        Self.log.info("notification permission asked after pairing: \(granted ? "granted" : "not granted", privacy: .public)")
     }
 
     // MARK: Following the attention feeds
@@ -107,8 +113,16 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
         case .added(let item, let count):
             unseen[hostId] = count
             updateBadge()
-            guard !item.seen, !item.whileViewed, let note = note(for: item, hostId: hostId, daemon: daemon) else { return }
-            Task { await post(note) }
+            guard !item.seen, !item.whileViewed else { return }
+            Task {
+                // The pane's agent state comes on another stream and can land just after the
+                // item: an approval waits for its options, or it would lose Approve / Deny.
+                if case .agentBlocked(_, let request?) = item.kind {
+                    await Self.settle { Self.blockedOptions(daemon.meta[PaneId(item.paneId)]?.agent, request: request) != nil }
+                }
+                guard let note = note(for: item, hostId: hostId, daemon: daemon) else { return }
+                notes.enqueue(note, key: LocalNotifications.identifier(hostId: note.hostId, paneId: note.paneId))
+            }
         case .seen(_, let count):
             unseen[hostId] = count
             updateBadge()
@@ -144,8 +158,24 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
         case .commandFinished:
             kind = .command
         }
+        // An agent's item is titled by its kind ("Approval needed"); the agent's name is in the
+        // subtitle already, where the daemon's title would repeat it lowercased ("claude needs you").
         return AttentionNote(hostId: hostId, hostName: hostName, itemId: item.id, paneId: item.paneId, kind: kind,
-                             title: item.title, body: item.body, agent: agent)
+                             title: agent == nil ? item.title : "", body: item.body, agent: agent)
+    }
+
+    /// The options of the request an agent is blocked on, once its state says so.
+    static func blockedOptions(_ agent: AgentStatus?, request: UInt64) -> [DecisionOption]? {
+        guard case .blocked(request, _, let options)? = agent?.state, !options.isEmpty else { return nil }
+        return options
+    }
+
+    /// Waits until `ready` holds, checking every 50 ms for at most `limit`.
+    static func settle(limit: Duration = .seconds(2), _ ready: () -> Bool) async {
+        let deadline = ContinuousClock.now + limit
+        while !ready(), ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
     }
 
     static func isAllow(_ label: String) -> Bool {
@@ -158,9 +188,9 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
         return ["deny", "no", "reject", "decline", "cancel"].contains { lower.hasPrefix($0) || lower.contains(" \($0)") }
     }
 
-    /// Posts a note if the preferences allow it and the app is not in front.
+    /// Posts a note if the preferences and the permission allow it and the app is not in front.
     func post(_ note: AttentionNote) async {
-        guard LocalNotifications.shouldPost(note, prefs: prefs, appIsActive: appIsActive), await ensureAuthorized() else { return }
+        guard LocalNotifications.shouldPost(note, prefs: prefs, appIsActive: appIsActive), await isAuthorized() else { return }
         let request = UNNotificationRequest(
             identifier: LocalNotifications.identifier(hostId: note.hostId, paneId: note.paneId),
             content: LocalNotifications.content(for: note), trigger: nil)
@@ -175,7 +205,7 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
     /// Someone knocks on a host this device owns: a time-sensitive note that opens the Inbox,
     /// where they are let in or turned away. In front, the banner over the terminal says it.
     func postKnock(_ knock: Knock, hostId: String) async {
-        guard !appIsActive, await ensureAuthorized() else { return }
+        guard !appIsActive, await isAuthorized() else { return }
         let content = UNMutableNotificationContent()
         content.title = "\(knock.name) wants to join"
         content.body = "\(hosts.record(hostId)?.name ?? "Your host") · their link offers \(roleWords(knock.roles)). Open to let them in or turn them away."
@@ -203,6 +233,23 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
         UNUserNotificationCenter.current().setBadgeCount(total)
     }
 
+    /// An item answered from its notification is seen on every device, and the badge takes the
+    /// daemon's new count. A push's host is found by its daemon id; without a live connection
+    /// the feed catches up when it is back.
+    func markAnswered(hostId: String?, daemonId: String?, itemId: UInt64) async {
+        let id = hostId ?? hosts.records.first { $0.daemonId?.lowercased() == daemonId?.lowercased() }?.id
+        guard let id, let daemon = hosts.connection(id) as? DaemonConnection, daemon.status.isLive else { return }
+        await daemon.workspace.markSeen([itemId])
+        setUnseen(UInt32(max(0, daemon.workspace.unseen)), hostId: id)
+    }
+
+    /// A host's unseen count from the daemon's own answer (after marking items seen).
+    func setUnseen(_ count: UInt32, hostId: String) {
+        unseen[hostId] = count
+        updateBadge()
+        if count == 0 { clearDelivered(hostId: hostId) }
+    }
+
     // MARK: UNUserNotificationCenterDelegate
 
     nonisolated func userNotificationCenter(
@@ -212,27 +259,36 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
         [.list]
     }
 
-    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+    /// The completion handler goes back on the main thread: UIKit asserts it there (it updates
+    /// the app switcher snapshot), and the `async` form of this method would call it from the
+    /// concurrency pool once the action's work is done, aborting the app.
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping @Sendable () -> Void
+    ) {
         let action = response.actionIdentifier
-        let userInfo = response.notification.request.content.userInfo
-        if userInfo[Self.knockHostKey] is String {
-            await MainActor.run { ActiveWindow.model?.destination = .inbox }
-            return
-        }
-        if let host = DeviceNotifications.hostId(from: userInfo) {
-            if action != UNNotificationDismissActionIdentifier {
-                await MainActor.run { SettingsLink.shared.open(.hostDevices(host)) }
-            }
-            return
-        }
-        let thread = response.notification.request.content.threadIdentifier
-        let handler = NotificationActionHandler(client: AppActionClient())
+        let content = response.notification.request.content
+        let isKnock = content.userInfo[Self.knockHostKey] is String
+        let deviceHost = DeviceNotifications.hostId(from: content.userInfo)
+        let thread = content.threadIdentifier
         let remote = response.notification.request.trigger is UNPushNotificationTrigger
-        let result = await handler.handle(actionIdentifier: action, target: NotificationTarget(userInfo: userInfo, remote: remote))
-        Self.log.info("action \(action, privacy: .public): \(String(describing: result), privacy: .public)")
-        if case .failed(let message) = result {
-            let content = NotificationActionHandler.failureContent(message, threadIdentifier: thread)
-            try? await center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+        let target = NotificationTarget(userInfo: content.userInfo, remote: remote)
+        Task { @MainActor in
+            defer { completionHandler() }
+            if isKnock {
+                ActiveWindow.model?.destination = .inbox
+                return
+            }
+            if let deviceHost {
+                if action != UNNotificationDismissActionIdentifier { SettingsLink.shared.open(.hostDevices(deviceHost)) }
+                return
+            }
+            let result = await NotificationActionHandler(client: AppActionClient()).handle(actionIdentifier: action, target: target)
+            Self.log.info("action \(action, privacy: .public): \(String(describing: result), privacy: .public)")
+            if case .failed(let message) = result {
+                let failure = NotificationActionHandler.failureContent(message, threadIdentifier: thread)
+                try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: failure, trigger: nil))
+            }
         }
     }
 
@@ -309,6 +365,10 @@ struct AppActionClient: NotificationActionClient {
         _ = try await AppModel.shared.hosts.sendPushDecision(daemonId: daemonId, token: token, approve: approve)
     }
 
+    func markSeen(hostId: String?, daemonId: String?, itemId: UInt64) async {
+        await AppNotifications.shared.markAnswered(hostId: hostId, daemonId: daemonId, itemId: itemId)
+    }
+
     func open(hostId: String?, daemonId: String?, paneId: UInt64) async {
         await MainActor.run {
             let hosts = AppModel.shared.hosts
@@ -316,6 +376,22 @@ struct AppActionClient: NotificationActionClient {
             guard let id else { return }
             AppNotifications.openPane(hostId: id, pane: paneId)
         }
+    }
+}
+
+/// Notification permission: read it, and ask for it.
+protocol NotificationAuthorizing: Sendable {
+    func status() async -> UNAuthorizationStatus
+    func request() async -> Bool
+}
+
+struct SystemNotificationAuthorizer: NotificationAuthorizing {
+    func status() async -> UNAuthorizationStatus {
+        await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+    }
+
+    func request() async -> Bool {
+        (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge, .timeSensitive])) ?? false
     }
 }
 

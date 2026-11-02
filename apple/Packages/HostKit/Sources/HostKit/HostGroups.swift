@@ -38,6 +38,8 @@ nonisolated public struct HostGroup: Identifiable, Equatable, Sendable {
     public var isReady: Bool
     /// Why the host could not be opened (a missing secret, a bad ticket), if it could not.
     public var failure: String?
+    /// The tabs are the ones this device saved, until the host's layout arrives.
+    public var isCached = false
 
     public var isLocal: Bool { kind == .local }
 
@@ -113,14 +115,15 @@ public final class HostGroups {
             guard let record = hosts.record(id) else { continue }
             let connection = hosts.connection(id)
             let ready = connection?.isReady ?? false
-            let session = ready ? connection?.layoutStore.session : nil
+            let cached = !ready && connection?.showsCachedLayout == true
+            let session = ready || cached ? connection?.layoutStore.session : nil
             var status = connection?.status ?? .idle
             if connection == nil, let failure = failures[id] { status = .needsAttention(reason: failure) }
             result.append(HostGroup(
                 id: id, name: record.name, kind: record.kind == .daemon ? .daemon : .ssh, status: status,
                 tabs: (session?.tabs ?? []).filter { !(carriers[id]?.contains($0.id) ?? false) && !hiddenTabs.contains(TabRef(hostId: id, tab: $0.id)) },
                 activeTabId: session?.activeTabId, isReady: ready,
-                failure: connection == nil ? failures[id] : nil))
+                failure: connection == nil ? failures[id] : nil, isCached: cached))
         }
         return result
     }

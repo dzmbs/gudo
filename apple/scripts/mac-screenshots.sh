@@ -3,6 +3,10 @@
 # (works on a locked Mac): the Debug app draws its own window with `-snapshot`.
 #   apple/scripts/mac-screenshots.sh <app> <out-dir> [screen ...]
 set -eu
+# An interrupted run leaves no app behind.
+pid=
+trap '[ -n "$pid" ] && kill "$pid" 2>/dev/null; true' EXIT
+trap 'exit 130' INT TERM
 
 app=$1
 out=$2

@@ -151,7 +151,8 @@ tab strip at XXL, pane headers and the iPhone bar at XL.
 | `press` | spring 0.2 / 0.7 | a quiet button's press (scale 0.97) | — |
 
 Only the working spinner and the working shimmer loop; under Reduce Motion both stand still (and still reads as
-"working"), and the secure-input gradient stops. Anything that slides or grows in (sidebar, tab strip, toasts,
+"working"), and the secure-input gradient stops. Both loops are Core Animation on a layer (`LayerAnimations.swift`):
+the render server draws them, no view body runs per frame, they stop off screen, and the app reaches idle. Anything that slides or grows in (sidebar, tab strip, toasts,
 agent toasts, notices, banners, the exit bar) uses `movingTransition(_:)` / `scalingTransition(_:)`: under Reduce
 Motion it only fades.
 
@@ -725,6 +726,7 @@ Return. Canvas panes show the same editor full size on the terminal background. 
 - [x] Context menus on tabs, panes, hosts, inbox items, files, links; swipe actions on lists.
 - [x] Optimistic UI: approve/deny/mark done move rows immediately; no spinners under 200 ms.
 - [x] Words not spinners for connection state; never a blank pane.
+- [x] Instant start: a window opens on the saved workspace (washed, "Connecting…" in the subtitle) and swaps to live in place (APP-ARCHITECTURE §26).
 - [x] One accent, used only for focus/selection/primary; state hues from the terminal palette.
 - [x] SF Symbols only; SF Pro chrome; SF Mono literals; JetBrains Mono grid.
 - [x] Light and dark everywhere; Dynamic Type through text styles on iOS; VoiceOver labels on

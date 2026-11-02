@@ -168,7 +168,9 @@ private struct TabChip: View {
                     model.focus(ref)
                     workspace.renamingTab = tab.id
                 }
-                Button("Open in New Window", systemImage: "macwindow.badge.plus") { model.openInNewWindow(ref) }
+                if WindowRequest.isSupported {
+                    Button("Open in New Window", systemImage: "macwindow.badge.plus") { model.openInNewWindow(ref) }
+                }
                 MergeIntoTabMenu(workspace: workspace, tab: tab.id)
                 ProjectMenuItems(model: model, ref: ref)
                 Button("Close Tab", systemImage: "xmark", role: .destructive) { model.closeTab(ref, undoable: false) }
@@ -185,9 +187,10 @@ private struct TabChip: View {
             }
         }
         .tabDrag(ref, model: model)
-        .dropDestination(for: String.self) { _, _ in
-            // Takes the dragged tab's place in this tab's section (its project or host).
-            guard let dragged = model.draggedTab, dragged != ref,
+        .dropDestination(for: String.self) { items, _ in
+            // Takes the dragged tab's place in this tab's section (its project or host); only
+            // that tab's own drag, not text that happens to arrive while it is remembered.
+            guard let dragged = model.draggedTab, dragged != ref, items == [dragged.description],
                   let section = model.groups.sections.first(where: { $0.rows.contains(ref) }),
                   SidebarDrop.accepts(section.container, dragged),
                   let index = section.rows.firstIndex(of: ref)

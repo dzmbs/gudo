@@ -48,6 +48,9 @@ nonisolated final class PaneRouter: Sendable {
         var lastApplied: UInt64?
         /// `seq` of the last snapshot, whose history `.history` events extend.
         var snapshotSeq: UInt64?
+        /// The daemon sent this pane's state (a snapshot or bytes) on this connection: the taps
+        /// show the host's screen, not a saved one.
+        var live = false
         /// Inputs not acknowledged yet, in send order (the daemon acks each input frame once):
         /// when it was sent, the predictor's sequence number for keystrokes, and whose it was.
         var unacked: [(sent: ContinuousClock.Instant, predicted: UInt64?, tap: UInt64)] = []
@@ -81,12 +84,20 @@ nonisolated final class PaneRouter: Sendable {
     private let blocked = Mutex<(@Sendable (UInt64) -> Void)?>(nil)
     /// Keystroke-to-echo round trips (for the host's latency readout).
     let onEchoRoundTrip: @Sendable (Duration) -> Void
+    /// Input went unacknowledged for `stallAfter` (the link may be dead while it looks up).
+    let onInputStalled: @Sendable () -> Void
+    /// How long the oldest input may wait for the daemon's ack before the link is checked.
+    static let stallAfter = DispatchTimeInterval.seconds(1)
     /// How long an ack waits for the echo it implies before it is delivered anyway (input that
     /// prints nothing).
     static let ackGrace = DispatchTimeInterval.milliseconds(40)
 
-    init(onEchoRoundTrip: @escaping @Sendable (Duration) -> Void = { _ in }) {
+    init(
+        onEchoRoundTrip: @escaping @Sendable (Duration) -> Void = { _ in },
+        onInputStalled: @escaping @Sendable () -> Void = {}
+    ) {
         self.onEchoRoundTrip = onEchoRoundTrip
+        self.onInputStalled = onInputStalled
     }
 
     /// A new tap on `pane` (output buffers from now on, until a tap starts). Returns its id.
@@ -172,6 +183,9 @@ nonisolated final class PaneRouter: Sendable {
 
     var panes: [UInt64] { routes.withLock { Array($0.keys) } }
 
+    /// Whether the daemon has sent the pane's state (see `Route.live`).
+    func isLive(_ pane: UInt64) -> Bool { routes.withLock { $0[pane]?.live ?? false } }
+
     /// Running taps of a pane (tests, diagnostics).
     func tapCount(_ pane: UInt64) -> Int { routes.withLock { $0[pane]?.taps.count ?? 0 } }
 
@@ -234,9 +248,15 @@ nonisolated final class PaneRouter: Sendable {
     /// Records an input frame about to be sent (`predicted`: the predictor's sequence number).
     func noteInput(_ pane: UInt64, tap id: UInt64, predicted: UInt64? = nil) {
         let now = ContinuousClock.now
-        routes.withLock { routes in
+        let first = routes.withLock { routes in
             routes[pane]?.unacked.append((now, predicted, id))
             if routes[pane]?.echoPending == nil { routes[pane]?.echoPending = now }
+            return routes[pane]?.unacked.count == 1
+        }
+        guard first else { return }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + Self.stallAfter) { [self] in
+            let stalled = routes.withLock { $0[pane]?.unacked.first?.sent == now }
+            if stalled { onInputStalled() }
         }
     }
 
@@ -255,10 +275,14 @@ nonisolated final class PaneRouter: Sendable {
                 }
             }
             if let echo { onEchoRoundTrip(echo) }
+            routes.withLock { $0[pane]?.live = true }
             deliver(pane, .output(data), applied: Offset(seq: seq + UInt64(data.count), snapshot: false))
             flushAck(pane, through: seq + UInt64(data.count))
         case .paneSnapshot(let pane, let seq, let data):
-            routes.withLock { $0[pane]?.snapshotSeq = seq }
+            routes.withLock {
+                $0[pane]?.snapshotSeq = seq
+                $0[pane]?.live = true
+            }
             deliver(pane, .snapshot(data), applied: Offset(seq: seq, snapshot: true))
             flushAck(pane, through: seq)
         case .paneHistory(let pane, let snapshotSeq, let data, _, let done):
@@ -417,6 +441,11 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap 
     let router: PaneRouter
     /// This window's tap on the pane's stream.
     let tap: UInt64
+    /// Input typed while the pane shows a saved screen (instant start), until the host's.
+    private let held = Mutex<HeldInput?>(nil)
+    /// How long held input stays worth sending, and how much is held at most.
+    static let holdLimit = Duration.seconds(30)
+    static let holdBytes = 4096
     /// Bytes requested per history page.
     static let historyPageBytes: UInt32 = 256 * 1024
 
@@ -432,7 +461,14 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap 
     }
 
     public func start(events: @escaping @Sendable (PaneEvent) -> Void, seed: (@Sendable () -> [PaneEvent])?) {
-        if router.start(pane.rawValue, tap: tap, sink: events, seed: seed) {
+        let sink: @Sendable (PaneEvent) -> Void = { [weak self] event in
+            events(event)
+            switch event {
+            case .snapshot, .output: self?.releaseHeldInput()
+            default: break
+            }
+        }
+        if router.start(pane.rawValue, tap: tap, sink: sink, seed: seed) {
             client.subscribe(paneId: pane.rawValue)
         }
     }
@@ -446,21 +482,21 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap 
     }
 
     public func write(_ bytes: UnsafeRawBufferPointer) {
-        guard !bytes.isEmpty, router.admitsInput(pane.rawValue) else { return }
+        guard !bytes.isEmpty, !hold(.bytes(Data(bytes))), router.admitsInput(pane.rawValue) else { return }
         claimSize()
         router.noteInput(pane.rawValue, tap: tap)
         client.sendInput(paneId: pane.rawValue, data: Data(bytes))
     }
 
     public func writeInput(_ bytes: UnsafeRawBufferPointer, inputSeq: UInt64) {
-        guard !bytes.isEmpty, router.admitsInput(pane.rawValue) else { return }
+        guard !bytes.isEmpty, !hold(.bytes(Data(bytes))), router.admitsInput(pane.rawValue) else { return }
         claimSize()
         router.noteInput(pane.rawValue, tap: tap, predicted: inputSeq)
         client.sendInput(paneId: pane.rawValue, data: Data(bytes))
     }
 
     public func paste(_ text: String) {
-        guard router.admitsInput(pane.rawValue) else { return }
+        guard !hold(.paste(text)), router.admitsInput(pane.rawValue) else { return }
         claimSize()
         router.noteInput(pane.rawValue, tap: tap)
         client.sendPaste(paneId: pane.rawValue, text: text)
@@ -478,6 +514,95 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap 
 
     public func requestHistory() -> Bool {
         client.fetchHistory(paneId: pane.rawValue, maxBytes: Self.historyPageBytes)
+    }
+
+    // MARK: Input before the host's screen
+
+    /// What happened to input typed over a saved screen.
+    public enum HeldInputState: Sendable, Equatable {
+        /// Waiting for the host's screen (`count` inputs so far).
+        case holding(Int)
+        /// The host's screen was the one typed at: sent.
+        case sent
+        /// The host's screen had changed (or it took too long, or too much was typed): not
+        /// sent, so no keystroke lands in a state the user never saw.
+        case dropped
+    }
+
+    private enum Held: Sendable {
+        case bytes(Data)
+        case paste(String)
+    }
+
+    private struct HeldInput {
+        let screen: String
+        let current: @Sendable () -> String
+        let onChange: @Sendable (HeldInputState) -> Void
+        let since = ContinuousClock.now
+        var inputs: [Held] = []
+        var bytes = 0
+        var overflowed = false
+    }
+
+    /// Whether the daemon has sent this pane's state on this connection.
+    public var isLive: Bool { router.isLive(pane.rawValue) }
+
+    /// The pane shows a saved screen: input waits for the host's. When the host's screen
+    /// arrives and reads the same as the saved one (`screen()`, read again then), the input is
+    /// sent as if typed now; otherwise it is dropped and `onChange` says so.
+    public func holdInputUntilLive(
+        screen: @escaping @Sendable () -> String, onChange: @escaping @Sendable (HeldInputState) -> Void
+    ) {
+        guard !isLive else { return }
+        held.withLock { $0 = HeldInput(screen: screen(), current: screen, onChange: onChange) }
+    }
+
+    /// Keeps `input` while holding; false when it should be sent now.
+    private func hold(_ input: Held) -> Bool {
+        let update = held.withLock { held -> (@Sendable (HeldInputState) -> Void, Int)? in
+            guard var current = held else { return nil }
+            let size = switch input {
+            case .bytes(let data): data.count
+            case .paste(let text): text.utf8.count
+            }
+            if current.bytes + size > Self.holdBytes {
+                current.overflowed = true
+            } else {
+                current.inputs.append(input)
+                current.bytes += size
+            }
+            held = current
+            return (current.onChange, current.inputs.count)
+        }
+        guard let (onChange, count) = update else { return false }
+        onChange(.holding(count))
+        return true
+    }
+
+    /// The host's screen is on the terminal now: send or drop what was held.
+    private func releaseHeldInput() {
+        guard isLive else { return }
+        held.withLock { held in
+            guard let current = held else { return }
+            held = nil
+            guard !current.inputs.isEmpty || current.overflowed else { return }
+            let fresh = ContinuousClock.now - current.since < Self.holdLimit
+            guard fresh, !current.overflowed, current.current() == current.screen,
+                  router.admitsInput(pane.rawValue)
+            else {
+                current.onChange(.dropped)
+                return
+            }
+            claimSize()
+            for input in current.inputs {
+                router.noteInput(pane.rawValue, tap: tap)
+                switch input {
+                case .bytes(let data): client.sendInput(paneId: pane.rawValue, data: data)
+                case .paste(let text): client.sendPaste(paneId: pane.rawValue, text: text)
+                }
+            }
+            current.onChange(.sent)
+        }
     }
 
     public func terminate() {

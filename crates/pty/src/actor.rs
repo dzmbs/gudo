@@ -23,7 +23,7 @@ use std::{fmt, thread};
 
 use bytes::Bytes;
 use rustix::process::Pid;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{Semaphore, mpsc, watch};
 
 use crate::foreground::{self, ForegroundProcess};
 use crate::ring::{Chunk, DEFAULT_RING_CAPACITY, OutputRing, ReadError, Seq};
@@ -34,6 +34,9 @@ use crate::termios::{self, EchoState, WinSize};
 const MAX_SUBSCRIBER_CHUNK: usize = 64 * 1024;
 /// Queued input writes before [`PtyActor::write`] waits.
 const INPUT_QUEUE: usize = 256;
+/// Input bytes accepted but not yet taken by the child before [`PtyActor::write`] waits: a
+/// program that stops reading its input (or is stopped) holds at most this much.
+pub const MAX_QUEUED_INPUT: usize = 8 << 20;
 
 /// A callback run on the I/O thread with each run of output before subscribers see it.
 ///
@@ -192,6 +195,9 @@ struct Shared {
     output: watch::Sender<OutputState>,
     echo: watch::Sender<EchoState>,
     shutdown: AtomicBool,
+    /// One permit per input byte that may still be queued ([`MAX_QUEUED_INPUT`]); the I/O
+    /// thread gives them back as the child takes the bytes.
+    input_budget: Semaphore,
 }
 
 impl Shared {
@@ -242,8 +248,19 @@ pub struct PtyActor {
     master: Arc<OwnedFd>,
     shared: Arc<Shared>,
     process: Arc<Process>,
-    input: mpsc::Sender<Bytes>,
+    input: mpsc::Sender<Input>,
     waker: io_loop::Waker,
+}
+
+/// Queued input and the budget permits it holds.
+struct Input {
+    data: Bytes,
+    permits: u32,
+}
+
+/// Permits a write of `len` bytes takes: all of them, or the whole budget for a bigger one.
+fn permits_for(len: usize) -> u32 {
+    len.min(MAX_QUEUED_INPUT) as u32
 }
 
 impl PtyActor {
@@ -282,6 +299,7 @@ impl PtyActor {
             }),
             echo: watch::Sender::new(initial_echo),
             shutdown: AtomicBool::new(false),
+            input_budget: Semaphore::new(MAX_QUEUED_INPUT),
         });
 
         thread::Builder::new()
@@ -364,7 +382,8 @@ impl PtyActor {
         Ok(subscriber)
     }
 
-    /// Queues `data` to be written to the child's input, waiting while the queue is full.
+    /// Queues `data` to be written to the child's input, waiting while the queue is full
+    /// ([`MAX_QUEUED_INPUT`] bytes the child has not taken yet).
     ///
     /// Writes are applied in order. The bytes are written without blocking the I/O thread even if
     /// the child is not reading.
@@ -373,7 +392,19 @@ impl PtyActor {
     ///
     /// Returns [`Closed`] if the I/O thread has stopped.
     pub async fn write(&self, data: impl Into<Bytes>) -> Result<(), Closed> {
-        self.input.send(data.into()).await.map_err(|_| Closed)?;
+        let data = data.into();
+        let permits = permits_for(data.len());
+        self.shared
+            .input_budget
+            .acquire_many(permits)
+            .await
+            .map_err(|_| Closed)?
+            .forget();
+        let input = Input { data, permits };
+        if let Err(err) = self.input.send(input).await {
+            self.shared.input_budget.add_permits(err.0.permits as usize);
+            return Err(Closed);
+        }
         self.waker.wake();
         Ok(())
     }
@@ -385,10 +416,27 @@ impl PtyActor {
     /// Returns [`TryWriteError::Full`] if the input queue is full and
     /// [`TryWriteError::Closed`] if the I/O thread has stopped.
     pub fn try_write(&self, data: impl Into<Bytes>) -> Result<(), TryWriteError> {
-        self.input.try_send(data.into()).map_err(|err| match err {
-            mpsc::error::TrySendError::Full(data) => TryWriteError::Full(data),
-            mpsc::error::TrySendError::Closed(data) => TryWriteError::Closed(data),
-        })?;
+        let data = data.into();
+        let permits = permits_for(data.len());
+        match self.shared.input_budget.try_acquire_many(permits) {
+            Ok(p) => p.forget(),
+            Err(tokio::sync::TryAcquireError::NoPermits) => return Err(TryWriteError::Full(data)),
+            Err(tokio::sync::TryAcquireError::Closed) => return Err(TryWriteError::Closed(data)),
+        }
+        self.input
+            .try_send(Input { data, permits })
+            .map_err(|err| {
+                let (input, full) = match err {
+                    mpsc::error::TrySendError::Full(input) => (input, true),
+                    mpsc::error::TrySendError::Closed(input) => (input, false),
+                };
+                self.shared.input_budget.add_permits(input.permits as usize);
+                if full {
+                    TryWriteError::Full(input.data)
+                } else {
+                    TryWriteError::Closed(input.data)
+                }
+            })?;
         self.waker.wake();
         Ok(())
     }
@@ -429,6 +477,22 @@ impl PtyActor {
             return Err(SignalError::Exited);
         }
         rustix::process::kill_process(self.process.pid, signal.into()).map_err(io::Error::from)?;
+        Ok(())
+    }
+
+    /// Sends `signal` to the child's process group: the child leads its own session and group,
+    /// so this reaches what it runs in the foreground of that group too.
+    ///
+    /// # Errors
+    ///
+    /// As for [`signal`](Self::signal).
+    pub fn signal_group(&self, signal: Signal) -> Result<(), SignalError> {
+        let reaped = self.process.reaped();
+        if *reaped {
+            return Err(SignalError::Exited);
+        }
+        rustix::process::kill_process_group(self.process.pid, signal.into())
+            .map_err(io::Error::from)?;
         Ok(())
     }
 

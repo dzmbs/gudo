@@ -27,7 +27,7 @@ struct WorkspaceCommands: Commands {
         // window then goes its own way. The Mac's File ▸ New Window does the same through
         // `WindowGroup(for:)` with no request (it restores the last window's hosts).
         CommandGroup(replacing: .newItem) {
-            buttons([.newWindow])
+            if WindowRequest.isSupported { buttons([.newWindow]) }
             buttons(WorkspaceAction.fileActions)
         }
         #else

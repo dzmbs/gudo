@@ -114,6 +114,10 @@ targets:
             UTTypeTagSpecification:
               public.filename-extension: [unreplay]
               public.mime-type: [application/vnd.unnamed.unreplay+json]
+          # A tab or project dragged in the app (TabDrag); never leaves the process.
+          - UTTypeIdentifier: dev.unnamed.tab
+            UTTypeDescription: Tab
+            UTTypeConformsTo: [public.data]
         CFBundleDocumentTypes:
           - CFBundleTypeName: Session Replay
             CFBundleTypeRole: Viewer

@@ -197,10 +197,20 @@ final class GitUITests: XCTestCase {
         element("worktree-open-port").tap()
         XCTAssertTrue(text(containing: "Directory listing").waitForExistence(timeout: 30), "localhost:\(port) loads through the forward")
         shot("worktree-port-browser")
-        element("browser-done").tap()
-        // Back to the ports list, which lists it; then close the sheet.
-        XCTAssertTrue(element("port-\(port)").waitForExistence(timeout: 5), "the ports list shows it")
-        app.buttons["Done"].firstMatch.tap()
+        // Close the page: its leaf beside the pane (regular width), else the browser sheet,
+        // which goes back to the ports list. The ports list shows it.
+        let closeLeaf = element("browser-close")
+        if closeLeaf.exists {
+            closeLeaf.tap()
+            XCTAssertTrue(closeLeaf.waitForNonExistence(timeout: 5), "the page closes")
+            palette("Dev Servers & Ports")
+            XCTAssertTrue(element("port-\(port)").waitForExistence(timeout: 5), "the ports list shows it")
+            app.buttons["tool-close"].firstMatch.tap()
+        } else {
+            element("browser-done").tap()
+            XCTAssertTrue(element("port-\(port)").waitForExistence(timeout: 5), "the ports list shows it")
+            app.buttons["Done"].firstMatch.tap()
+        }
 
         // Archive from the sidebar: it has an untracked file, so it asks.
         row.press(forDuration: 1.2)

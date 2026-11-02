@@ -1,6 +1,8 @@
 import Foundation
 @testable import HostKit
 import PaneLayout
+import Synchronization
+import TerminalCore
 import Testing
 import UnnamedCore
 
@@ -61,7 +63,13 @@ nonisolated final class LocalDaemon {
         self.process = process
     }
 
+    /// Sends `signal` to the daemon (SIGSTOP/SIGCONT: a host that freezes and comes back).
+    func send(_ signal: Int32) {
+        if let pid = process?.processIdentifier { Darwin.kill(pid, signal) }
+    }
+
     func kill() {
+        send(SIGCONT)  // a stopped daemon would never see the SIGTERM
         process?.terminate()
         process?.waitUntilExit()
         process = nil
@@ -207,6 +215,84 @@ nonisolated final class LocalDaemon {
         try await eventually("reconnected by saved ticket", timeout: .seconds(15)) { again.isReady && again.status.isLive }
     }
 
+    /// Instant start against a real daemon: a host opened again shows its saved workspace at
+    /// once (before any packet), then the daemon's layout and screens replace it in place;
+    /// what was typed before is sent once the screen is the daemon's and reads the same.
+    /// Prints the times (docs/PERFORMANCE.md "Instant start").
+    @Test func instantStartShowsTheSavedWorkspaceThenGoesLive() async throws {
+        let daemon = try LocalDaemon()
+        let model = makeModel()
+        let store = WorkspaceCacheStore(directory: temporaryDirectory())
+        model.workspaceCache = store
+        let hostId = try await model.pair(try PairingTicket(try await daemon.ticket()), name: "local")
+        let first = try #require(model.connection(hostId) as? DaemonConnection)
+        let pane = try #require(first.layout.session.activeTab?.focused)
+        let terminal = Terminal(cols: 80, rows: 24) { _ in }
+        let backend = try first.makeBackend(for: pane)
+        backend.start { event in
+            switch event {
+            case .snapshot(let data): try? terminal.restore(snapshot: data)
+            case .output(let data): terminal.write(Array(data))
+            default: break
+            }
+        }
+        backend.resize(cols: 80, rows: 24, cellWidth: 8, cellHeight: 16)
+        Array("clear; echo saved-$((6*7))\r".utf8).withUnsafeBytes { backend.write($0) }
+        try await eventually("output", timeout: .seconds(10)) { terminal.visibleText().contains("saved-42") }
+        try await Task.sleep(for: .milliseconds(300))
+        let draft = try #require(first.workspaceToSave(daemonId: model.record(hostId)?.daemonId))
+        let saved = draft.capturingScreens([pane.rawValue: terminal])
+        try store.save(saved)
+        let bytes = try Data(contentsOf: store.file(for: hostId)).count
+        backend.terminate()
+
+        var samples: [(cached: Duration, connected: Duration, layout: Duration, screen: Duration)] = []
+        for round in 0..<5 {
+            model.disconnect(hostId)
+            let started = ContinuousClock.now
+            let connection = try #require(try model.open(hostId) as? DaemonConnection)
+            let cached = ContinuousClock.now - started
+            #expect(connection.showsCachedLayout)
+            #expect(connection.layout.session.panes.contains(pane))
+            let screen = try #require(connection.cachedScreen(for: pane)?.screen)
+            let view = Terminal(cols: 80, rows: 24) { _ in }
+            try view.restore(snapshot: screen)
+            #expect(view.visibleText().contains("saved-42"))
+
+            let live = try #require(try connection.makeBackend(for: pane) as? DaemonPaneBackend)
+            let states = HeldStates()
+            live.holdInputUntilLive(screen: { view.visibleText() }) { states.append($0) }
+            let shown = Mutex<ContinuousClock.Instant?>(nil)
+            live.start { event in
+                switch event {
+                case .snapshot(let data):
+                    try? view.restore(snapshot: data)
+                    shown.withLock { $0 = $0 ?? .now }
+                case .output(let data): view.write(Array(data))
+                default: break
+                }
+            }
+            live.resize(cols: 80, rows: 24, cellWidth: 8, cellHeight: 16)
+            // Typed over the saved screen, before the daemon answered.
+            if round == 0 { Array("echo early-$((1+1))\r".utf8).withUnsafeBytes { live.write($0) } }
+            try await eventually("live", timeout: .seconds(15)) {
+                connection.isReady && connection.status.isLive && shown.withLock { $0 } != nil
+            }
+            let timings = connection.timings
+            samples.append((
+                cached, timings.connected ?? .zero, timings.firstLayout ?? .zero,
+                try #require(shown.withLock { $0 }) - started))
+            #expect(!connection.showsCachedLayout)
+            if round == 0 {
+                try await eventually("held input sent", timeout: .seconds(10)) { view.visibleText().contains("early-2") }
+                #expect(states.all.last == .sent)
+            }
+            live.terminate()
+        }
+        func median(_ values: [Duration]) -> Duration { values.sorted()[values.count / 2] }
+        print("instant start (local daemon, \(bytes) B cache): saved workspace \(median(samples.map(\.cached))), connected \(median(samples.map(\.connected))), layout \(median(samples.map(\.layout))), live screen \(median(samples.map(\.screen)))")
+    }
+
     /// Projects live on the daemon: what one connection groups, a fresh connection is told, and
     /// a reorder never shows the old order in between.
     @Test func projectsComeBackFromTheDaemon() async throws {
@@ -281,12 +367,19 @@ nonisolated final class LocalDaemon {
     @Test func freshTicketsPairAndAUsedOneLeavesNothingBehind() async throws {
         let daemon = try LocalDaemon()
         let first = makeModel()
+        var announced: [String] = []
+        first.onFirstPairing = { announced.append($0) }
         let used = try PairingTicket(try await daemon.ticket())
         let hostId = try await first.pair(used, name: "local")
         #expect(first.connection(hostId)?.status.isLive == true)
+        #expect(announced == [hostId], "a new host is announced once (notification permission asks then)")
+        _ = try await first.pair(try PairingTicket(try await daemon.ticket()), name: "local")
+        #expect(announced == [hostId], "re-pairing a known host is not a first pairing")
 
         let other = makeModel()
+        other.onFirstPairing = { announced.append($0) }
         await #expect(throws: PairingError.self) { try await other.pair(used, name: "local") }
+        #expect(announced.count == 1, "a refused pairing is not announced")
         #expect(other.records.isEmpty)
         #expect(other.connections.isEmpty)
 

@@ -23,9 +23,7 @@ public struct ResizeOverlay: View {
     /// Resizes the user did not ask for (the software keyboard sliding in) show nothing.
     var isSuppressed: () -> Bool
 
-    @State private var lastSize: GridSize?
-    @State private var ready = false
-    @State private var visible = false
+    @State private var state = ResizeOverlayState()
 
     public init(size: GridSize?, mode: TerminalPreferences.ResizeOverlay = .afterFirst, isSuppressed: @escaping () -> Bool = { false }) {
         self.size = size
@@ -48,24 +46,37 @@ public struct ResizeOverlay: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .allowsHitTesting(false)
-        .opacity(visible ? 1 : 0)
+        .opacity(state.visible ? 1 : 0)
         .accessibilityHidden(true)
         .task {
             try? await Task.sleep(for: .milliseconds(500))
-            ready = true
+            state.ready = true
         }
         .task(id: size) {
-            defer { lastSize = size }
-            guard ready, size != nil, !isSuppressed() else { return }
-            switch mode {
-            case .never: return
-            case .afterFirst where lastSize == nil: return
-            default: break
-            }
-            visible = true
+            guard state.change(to: size, mode: mode, suppressed: isSuppressed()) else { return }
             guard (try? await Task.sleep(for: DS.Motion.resizeOverlayDuration)) != nil else { return }
-            visible = false
+            state.visible = false
         }
+    }
+}
+
+/// When the resize overlay shows. A change that shows nothing also hides what an earlier one
+/// showed: its timer was cancelled by this change, so nothing else would.
+nonisolated struct ResizeOverlayState: Equatable {
+    var ready = false
+    var visible = false
+    var lastSize: GridSize?
+
+    /// A new grid size; true when the overlay now shows it.
+    mutating func change(to size: GridSize?, mode: TerminalPreferences.ResizeOverlay, suppressed: Bool) -> Bool {
+        defer { lastSize = size }
+        let shows = switch mode {
+        case .never: false
+        case .afterFirst: ready && size != nil && !suppressed && lastSize != nil
+        case .always: ready && size != nil && !suppressed
+        }
+        visible = shows
+        return shows
     }
 }
 

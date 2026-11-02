@@ -72,7 +72,7 @@ final class VoiceDictation {
     private static var workspaces: [Workspace] { AppModel.shared.openWorkspaces }
 
     private static func workspace(of pane: Pane) -> Workspace? {
-        workspaces.first { $0.panes[pane.id] === pane }
+        workspaces.first { $0.pane(pane.id) === pane }
     }
 
     /// The terminal that holds the keyboard; else the key window's focused pane.
@@ -83,7 +83,7 @@ final class VoiceDictation {
             }
         }
         for workspace in workspaces {
-            guard let id = workspace.focusedPane, let pane = workspace.panes[id], pane.view.isInKeyWindow else { continue }
+            guard let id = workspace.focusedPane, let pane = workspace.pane(id), pane.view.isInKeyWindow else { continue }
             return PaneDictationTarget(pane: pane, workspace: workspace)
         }
         return nil

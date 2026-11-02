@@ -295,7 +295,7 @@ final class PaneCommandMarks: NSObject {
 
     /// ⌘↑/⌘↓ on a workspace's focused pane: its marks, else libghostty-vt's own prompts.
     static func jumpToPrompt(_ direction: Int, in workspace: Workspace) {
-        guard let id = workspace.focusedPane, let pane = workspace.panes[id] else { return }
+        guard let id = workspace.focusedPane, let pane = workspace.pane(id) else { return }
         if let marks = of(id) {
             marks.jumpToPrompt(direction)
         } else {

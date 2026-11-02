@@ -206,6 +206,7 @@ async fn run(
         peers: presence.then(Arc::default),
     });
     core.client_connected(true);
+    core.device_connected(device, client.id, conn.clone());
     core.askpass.register(client.id, &client.authz, client.caps);
     core.browser.register(client.id, &client.authz, client.caps);
     client.approvals_state();
@@ -218,17 +219,24 @@ async fn run(
     // Everyone here and what they are doing, before any change to it.
     client.forward(Event::Participants);
     let mut tasks = JoinSet::new();
-    tasks.spawn(write_ctl(ctl_tx, ctl_out, client.peers.clone()));
+    tasks.spawn(write_ctl(
+        conn.clone(),
+        ctl_tx,
+        ctl_out,
+        client.peers.clone(),
+    ));
     tasks.spawn(forward_events(Arc::clone(&client), core.events.subscribe()));
     tasks.spawn(accept_uni(Arc::clone(&client)));
     tasks.spawn(accept_bi(Arc::clone(&client)));
 
     // Resume: stream the panes the client already holds right away, in its order (focused
     let mut first = true;
+    let mut seen = std::collections::HashSet::new();
     for point in hello
         .resume
         .into_iter()
-        .filter(|p| client.pane_allowed(p.pane_id))
+        .filter(|p| client.pane_allowed(p.pane_id) && seen.insert(p.pane_id))
+        .take(MAX_RESUME_POINTS)
     {
         lock(&client.state).resume.insert(point.pane_id, point);
         if first {
@@ -249,6 +257,7 @@ async fn run(
     core.detach(client.id);
     core.mp.leave(&core, client.id);
     core.client_connected(false);
+    core.device_disconnected(device, client.id);
     if repo_watch {
         core.ws.repos.watch(false);
     }
@@ -380,7 +389,7 @@ async fn serve_knock(
     mut knocker: Knocker,
 ) -> Result<(), NetError> {
     let (ctl, ctl_out) = mpsc::unbounded_channel();
-    let writer = tokio::spawn(write_ctl(ctl_tx, ctl_out, None));
+    let writer = tokio::spawn(write_ctl(conn.clone(), ctl_tx, ctl_out, None));
     // The knocker says who it is right after `Hello`; wait a moment for it, so the owner (and
     // the audit log) see the name rather than a placeholder.
     let first = tokio::time::timeout(
@@ -514,7 +523,18 @@ async fn serve_upgrade_only(
 /// Writes `ctl`. Live presence comes from `peers` rather than the queue: while a write is
 /// stuck on a slow link it keeps only the newest state per peer, so the link catches up with
 /// the present instead of replaying every keystroke.
+/// Panes a reconnecting client may resume at once; the rest it subscribes to as usual.
+const MAX_RESUME_POINTS: usize = 256;
+/// `ctl` messages waiting for a client beyond which it is disconnected: it has stopped reading,
+/// and holding everything for it would grow without bound. It resumes on reconnect.
+const MAX_CTL_BACKLOG: usize = 8192;
+/// A `ctl` write that has not finished after this long ends the connection the same way.
+const CTL_STALL: Duration = Duration::from_secs(60);
+/// Most bytes coalesced into one `ctl` write.
+const MAX_CTL_BATCH: usize = 256 * 1024;
+
 async fn write_ctl(
+    conn: Connection,
     mut send: SendStream,
     mut out: mpsc::UnboundedReceiver<ServerCtl>,
     peers: Option<Arc<Mailbox>>,
@@ -535,20 +555,52 @@ async fn write_ctl(
         };
         buf.clear();
         let mut next = first;
-        // Coalesce whatever is queued into one write.
+        // Coalesce what is queued into one write, up to a bound: a producer that never pauses
+        // must not keep this loop (and its buffer) growing.
         while let Some(msg) = next {
             if let Err(e) = proto::frame::encode(&msg, &mut buf) {
                 tracing::warn!("encoding ctl message: {e}");
             }
-            next = out.try_recv().ok();
+            next = if buf.len() < MAX_CTL_BATCH {
+                out.try_recv().ok()
+            } else {
+                None
+            };
         }
         for msg in peers.iter().flat_map(|p| p.take()) {
             if let Err(e) = proto::frame::encode(&msg, &mut buf) {
                 tracing::warn!("encoding ctl message: {e}");
             }
         }
-        if !buf.is_empty() && send.write_all(&buf).await.is_err() {
-            return;
+        if buf.is_empty() {
+            continue;
+        }
+        let started = tokio::time::Instant::now();
+        let write = send.write_all(&buf);
+        tokio::pin!(write);
+        let mut check = tokio::time::interval(Duration::from_millis(250));
+        loop {
+            tokio::select! {
+                written = &mut write => {
+                    if written.is_err() {
+                        // A client without its `ctl` stream cannot work; let it reconnect.
+                        conn.close(3u32.into(), b"ctl stream lost");
+                        return;
+                    }
+                    break;
+                }
+                _ = check.tick() => {
+                    if out.len() > MAX_CTL_BACKLOG || started.elapsed() > CTL_STALL {
+                        tracing::info!(
+                            remote = %conn.remote_id(),
+                            backlog = out.len(),
+                            "client stopped reading; disconnecting it"
+                        );
+                        conn.close(3u32.into(), b"too slow");
+                        return;
+                    }
+                }
+            }
         }
     }
 }
@@ -744,9 +796,17 @@ async fn read_input(client: &Arc<Client>, mut stream: RecvStream) -> Result<(), 
                 .core
                 .apply_client_size(&entry, client.id, client.actor.principal, size, true);
         }
-        let Ok(at_seq) = entry.pane.write(bytes).await else {
-            client.send(reject(InputRejectReason::UnknownPane));
-            continue;
+        let at_seq = match entry.pane.write(bytes).await {
+            Ok(at_seq) => at_seq,
+            Err(crate::pane::InputError::Closed) => {
+                client.send(reject(InputRejectReason::UnknownPane));
+                continue;
+            }
+            Err(e @ crate::pane::InputError::Stalled) => {
+                tracing::debug!(pane = %input.pane_id, "input refused: {e}");
+                client.send(reject(InputRejectReason::Blocked));
+                continue;
+            }
         };
         lock(&entry.meta).typed_by = Some(client.id);
         client.core.mp.typed(&client.core, client.id, input.pane_id);

@@ -13,6 +13,9 @@ public protocol HostConnection: AnyObject, Observable {
     var layoutStore: any LayoutStore { get }
     /// False until there is a layout to show (a daemon host before its first `LayoutChanged`).
     var isReady: Bool { get }
+    /// Showing the layout this device saved last, not yet the host's (instant start): its
+    /// tabs and panes show, ops wait.
+    var showsCachedLayout: Bool { get }
     func makeBackend(for pane: PaneId) throws -> any PaneBackend
     /// User asked to retry (R9); also resets backoff (R10).
     func retry()
@@ -25,6 +28,10 @@ public protocol HostConnection: AnyObject, Observable {
     func close()
 }
 
+public extension HostConnection {
+    var showsCachedLayout: Bool { false }
+}
+
 /// A paired daemon: one `DaemonClient` (iroh), its layout and its panes.
 @MainActor
 @Observable
@@ -32,14 +39,14 @@ public final class DaemonConnection: HostConnection {
     public let hostId: String
     public private(set) var status: ConnectionStatus = .idle
     public let layout: DaemonLayoutStore
-    /// Pane metadata (title, cwd, agent) by pane.
-    public private(set) var meta: [PaneId: PaneMeta] = [:]
+    /// Pane metadata (title, cwd, agent) by pane, observed per pane.
+    public let meta = PaneTable<PaneMeta>()
     /// What any program in a pane last reported about itself (OSC 7501, `status_set`), by pane.
     /// A blocked report is a status only: approvals stay in `meta[pane].agent`.
-    public private(set) var programs: [PaneId: ProgramReport] = [:]
+    public let programs = PaneTable<ProgramReport>()
     /// Panes whose agent waits for a decision.
     public var blockedAgents: [PaneId: AgentStatus] {
-        meta.compactMapValues { meta in
+        meta.all.compactMapValues { meta in
             guard let agent = meta.agent, case .blocked = agent.state else { return nil }
             return agent
         }
@@ -93,6 +100,9 @@ public final class DaemonConnection: HostConnection {
 
     public var layoutStore: any LayoutStore { layout }
     public var isReady: Bool { layout.hasLayout }
+    public var showsCachedLayout: Bool { layout.isCached }
+    /// Saved screens of panes the daemon has not sent yet (instant start).
+    @ObservationIgnored private var cachedPanes: [PaneId: CachedPane] = [:]
 
     @ObservationIgnored private let ticket: String
     @ObservationIgnored private let dialer: DaemonDialer
@@ -101,6 +111,14 @@ public final class DaemonConnection: HostConnection {
     @ObservationIgnored let router: PaneRouter
     @ObservationIgnored private var events: AsyncStream<ClientEvent>.Continuation?
     @ObservationIgnored private var pump: Task<Void, Never>?
+    /// Metadata and program reports held back, newest per pane (`paneStatus`).
+    @ObservationIgnored private var pendingMeta: [PaneId: PaneMeta] = [:]
+    @ObservationIgnored private var pendingPrograms: [PaneId: ProgramReport?] = [:]
+    @ObservationIgnored private lazy var paneStatus = UpdateThrottle(interval: Self.paneStatusInterval) { [weak self] in
+        self?.applyPaneStatus()
+    }
+    /// The most often pane metadata reaches views while it keeps changing.
+    static let paneStatusInterval = Duration.milliseconds(50)
     /// The daemon run (changes when the daemon restarts).
     public private(set) var epoch: UInt64?
     @ObservationIgnored private var attachSession: UInt64?
@@ -124,7 +142,10 @@ public final class DaemonConnection: HostConnection {
         var sendOp: ((UnnamedCore.LayoutOp) -> UInt64)?
         layout = DaemonLayoutStore { op in sendOp?(op) ?? 0 }
         let echo = AsyncStream<Duration>.makeStream()
-        router = PaneRouter { echo.continuation.yield($0) }
+        let stalls = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        router = PaneRouter(
+            onEchoRoundTrip: { echo.continuation.yield($0) },
+            onInputStalled: { stalls.continuation.yield() })
         sendOp = { [weak self] op in self?.client?.op(op: op) ?? 0 }
         Task { [weak self] in
             var recent: [Duration] = []
@@ -135,6 +156,11 @@ public final class DaemonConnection: HostConnection {
                 echoRoundTrip = recent.sorted()[recent.count / 2]
                 if case .connected = status { status = .connected(rtt: echoRoundTrip) }
                 Self.log.debug("echo rtt \(rtt / .milliseconds(1), format: .fixed(precision: 1)) ms host=\(self.hostId, privacy: .public)")
+            }
+        }
+        Task { [weak self] in
+            for await _ in stalls.stream {
+                self?.probeLink()
             }
         }
         observeView()
@@ -154,9 +180,17 @@ public final class DaemonConnection: HostConnection {
         events = continuation
         let router = router
         let listener = ClosureListener { event in
-            router.route(event)
-            if case .paneBytes = event { return }
-            continuation.yield(event)
+            guard router.route(event) else {
+                continuation.yield(event)
+                return
+            }
+            // Pane-stream events are applied here; the main actor only notes the first paint,
+            // so snapshots and history pages are not queued for it.
+            switch event {
+            case .paneSnapshot(let pane, let seq, _): continuation.yield(.paneSnapshot(paneId: pane, seq: seq, data: Data()))
+            case .paneResized: continuation.yield(event)
+            default: break
+            }
         }
         status = .connecting(.dialing)
         dials += 1
@@ -203,6 +237,42 @@ public final class DaemonConnection: HostConnection {
         return try? await client.paneAssist(paneId: pane.rawValue)
     }
 
+    /// Shows what this device saved of the host until the daemon answers: the layout, names,
+    /// projects and each pane's last screen (docs/APP-ARCHITECTURE.md §26).
+    public func seed(_ cached: CachedWorkspace) {
+        guard !layout.hasLayout else { return }
+        layout.seed(cached.session, name: cached.sessionName, projects: cached.projects)
+        for (id, pane) in cached.panes {
+            meta.set(PaneMeta(
+                paneId: id, title: pane.title, cwd: pane.cwd, exit: nil, agent: nil,
+                size: PaneSize(cols: pane.cols, rows: pane.rows, widthPx: 0, heightPx: 0),
+                sizePolicy: .lastInput, sizedBy: nil), for: PaneId(id))
+        }
+        cachedPanes = Dictionary(uniqueKeysWithValues: cached.panes.map { (PaneId($0.key), $0.value) })
+    }
+
+    /// What to save of this host now (no screens yet: `CachedWorkspace.capturingScreens` adds
+    /// them off the main actor). Nil until the daemon's own layout is here.
+    public func workspaceToSave(daemonId: String?) -> CachedWorkspace? {
+        guard layout.hasLayout else { return nil }
+        let session = layout.session
+        var panes: [UInt64: CachedPane] = [:]
+        for pane in session.panes {
+            let meta = meta[pane]
+            panes[pane.rawValue] = CachedPane(
+                title: meta?.title ?? "", cwd: meta?.cwd, cols: meta?.size.cols ?? 0, rows: meta?.size.rows ?? 0)
+        }
+        return CachedWorkspace(
+            hostId: hostId, daemonId: daemonId, sessionId: layout.sessionId, sessionName: layout.sessionName,
+            session: session, projects: layout.projects, panes: panes)
+    }
+
+    /// A pane's saved screen while the daemon has not sent its own.
+    public func cachedScreen(for pane: PaneId) -> CachedPane? {
+        guard let cached = cachedPanes[pane], !router.isLive(pane.rawValue) else { return nil }
+        return cached
+    }
+
     public func makeBackend(for pane: PaneId) throws -> any PaneBackend {
         guard let client else { throw HostError.notConnected }
         return DaemonPaneBackend(pane: pane, client: client, router: router)
@@ -220,11 +290,16 @@ public final class DaemonConnection: HostConnection {
     }
 
     /// Back in the foreground: a connection that is not up (suspended, or lost meanwhile) is
-    /// redialled now; one up or already dialling is left alone.
+    /// redialled now; one that says it is up is probed (the link may have died while the app was
+    /// away, and would otherwise look connected until the idle timeout); one dialling is left
+    /// alone.
     public func foreground() {
         guard let client else { return }
         switch status {
-        case .connected, .connecting: return
+        case .connected:
+            probeLink(force: true)
+            return
+        case .connecting: return
         default: break
         }
         Self.log.info("foreground: resuming host=\(self.hostId, privacy: .public)")
@@ -233,6 +308,21 @@ public final class DaemonConnection: HostConnection {
         timings.dialStarted = .now
         client.reconnect()
     }
+
+    /// Pings a link that says it is up (back in the foreground, typing that got no answer): a
+    /// half-open or frozen one is dropped by the client within seconds and shows as
+    /// reconnecting. Typing probes at most every `probeSpacing`.
+    func probeLink(force: Bool = false) {
+        guard case .connected = status, let client = client as? any LivenessClient else { return }
+        let now = ContinuousClock.now
+        if !force, let last = lastProbe, now - last < Self.probeSpacing { return }
+        lastProbe = now
+        Self.log.info("probing the link host=\(self.hostId, privacy: .public)")
+        client.probe()
+    }
+
+    @ObservationIgnored private var lastProbe: ContinuousClock.Instant?
+    static let probeSpacing = Duration.seconds(5)
 
     public func background() {
         guard let client else { return }
@@ -277,6 +367,11 @@ public final class DaemonConnection: HostConnection {
         browser.detach()
         pump?.cancel()
         events?.finish()
+        // Pane backends still on screen hold the client: stop it rather than only letting go,
+        // or it keeps streaming and redialling for panes of a host the user disconnected.
+        client?.suspend()
+        router.broadcast(.stale(reason: "Disconnected"))
+        paneStatus.cancel()
         client = nil
         status = .idle
     }
@@ -320,7 +415,29 @@ public final class DaemonConnection: HostConnection {
 
     // MARK: Events (main actor, in order)
 
+    private func applyPaneStatus() {
+        guard !pendingMeta.isEmpty || !pendingPrograms.isEmpty else { return }
+        let metas = pendingMeta, reports = pendingPrograms
+        pendingMeta = [:]
+        pendingPrograms = [:]
+        for (pane, value) in metas { meta.set(value, for: pane) }
+        for (pane, report) in reports { programs.set(report, for: pane) }
+    }
+
     func handle(_ event: ClientEvent) {
+        switch event {
+        case .paneMeta(let meta):
+            pendingMeta[PaneId(meta.paneId)] = meta
+            paneStatus.note()
+            return
+        case .programStatus(let pane, let status):
+            pendingPrograms[PaneId(pane)] = .some(status)
+            paneStatus.note()
+            return
+        default:
+            // Everything else keeps its order after the pane updates before it.
+            applyPaneStatus()
+        }
         switch event {
         case .daemonInfo(let info):
             daemonInfo = info
@@ -371,21 +488,20 @@ public final class DaemonConnection: HostConnection {
             Self.log.error("attach failed host=\(self.hostId, privacy: .public): \(message, privacy: .public)")
             status = .needsAttention(reason: Self.attachFailure(code, message))
         case .layout(let layout):
+            let wasCached = self.layout.isCached
             self.layout.receive(layout)
+            if wasCached { reconcileCache() }
             if timings.firstLayout == nil, let start = timings.dialStarted { timings.firstLayout = .now - start }
             if attaching {
                 attaching = false
                 status = .connected(rtt: echoRoundTrip)
             }
             pushView()
-        case .paneMeta(let meta):
-            // Assigning an equal value still invalidates every view that reads `meta`.
-            if self.meta[PaneId(meta.paneId)] != meta { self.meta[PaneId(meta.paneId)] = meta }
-        case .programStatus(let pane, let status):
-            if programs[PaneId(pane)] != status { programs[PaneId(pane)] = status }
+        case .paneMeta, .programStatus:
+            break
         case .paneClosed(let pane):
-            meta[PaneId(pane)] = nil
-            programs[PaneId(pane)] = nil
+            meta.set(nil, for: PaneId(pane))
+            programs.set(nil, for: PaneId(pane))
         case .sessions(let sessions):
             // The attached session was closed elsewhere (another device, the CLI): drop its tabs
             // at once and attach to what the host has now, never keeping panes that are gone.
@@ -407,12 +523,24 @@ public final class DaemonConnection: HostConnection {
             layout.receive(report)
         case .clipboard(let pane, let text):
             onClipboard?(PaneId(pane), text)
-        case .paneSnapshot, .paneResized:
+        case .paneSnapshot(let pane, _, _):
+            cachedPanes[PaneId(pane)] = nil
+            noteOutput()
+        case .paneResized:
             noteOutput()
         default:
             break
         }
         onEvent?(event)
+    }
+
+    /// The daemon's layout replaced the saved one: what it no longer has goes (tabs closed
+    /// elsewhere); its own metadata follows for the rest.
+    private func reconcileCache() {
+        let live = layout.session.panes
+        for pane in meta.all.keys where !live.contains(pane) { meta.set(nil, for: pane) }
+        cachedPanes = cachedPanes.filter { live.contains($0.key) }
+        Self.log.info("saved workspace replaced by the host's host=\(self.hostId, privacy: .public)")
     }
 
     private func noteOutput() {
@@ -434,15 +562,19 @@ public final class DaemonConnection: HostConnection {
         }
     }
 
-    /// What each window shows of this host (`setWindowView`), most recent last. Empty: the
-    /// layout's own active tab stands in (a single window that never reported).
+    /// What each window shows of this host (`setWindowView`), most recent last. Until a window
+    /// reports, the layout's own active tab stands in.
     @ObservationIgnored private var windowViews: [(owner: ObjectIdentifier, focused: UInt64?, visible: [UInt64])] = []
+    /// A window has reported: from then on no entry means nothing of this host is on screen
+    /// (the app in the background, another host in front), so the daemon notifies.
+    @ObservationIgnored private var windowsReported = false
 
     /// A window shows `visible` of this host with `focused` taking keys (nil focused and empty
     /// visible: the window does not show the host now). The daemon hears the union of every
     /// window's panes and the focus of the window that reported last.
     public func setWindowView(_ window: AnyObject, focused: PaneId?, visible: [PaneId]) {
         let owner = ObjectIdentifier(window)
+        windowsReported = true
         windowViews.removeAll { $0.owner == owner }
         if focused != nil || !visible.isEmpty {
             windowViews.append((owner, focused?.rawValue, visible.map(\.rawValue)))
@@ -454,7 +586,7 @@ public final class DaemonConnection: HostConnection {
     public var reportedView: (focused: UInt64?, visible: [UInt64])? { lastView.map { ($0.0, $0.1) } }
 
     private var combinedView: (focused: UInt64?, visible: [UInt64]) {
-        guard !windowViews.isEmpty else { return layout.view }
+        guard windowsReported else { return layout.view }
         var visible: [UInt64] = []
         for view in windowViews { for pane in view.visible where !visible.contains(pane) { visible.append(pane) } }
         let focused = windowViews.last { $0.focused != nil }?.focused

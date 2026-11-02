@@ -510,7 +510,9 @@ private struct GroupMenu: View {
                 Button("Retry Now", systemImage: "arrow.clockwise") { model.hosts.retry(group.id) }
             }
             Divider()
-            Button("Open in New Window", systemImage: "macwindow.badge.plus") { model.openInNewWindow(host: group.id) }
+            if WindowRequest.isSupported {
+                Button("Open in New Window", systemImage: "macwindow.badge.plus") { model.openInNewWindow(host: group.id) }
+            }
             if group.kind == .daemon {
                 Button("Agent Usage", systemImage: "gauge.with.dots.needle.33percent") { model.usageDetailHost = group.id }
             }
@@ -661,8 +663,10 @@ struct TabRow: View {
                 // A row of a selection: what applies to all of it.
                 TabSelectionMenuItems(model: model)
             } else {
-                Button(RowAction.openInNewWindow.title, systemImage: RowAction.openInNewWindow.systemImage) { model.openInNewWindow(ref) }
-                    .accessibilityIdentifier("open-in-new-window")
+                if WindowRequest.isSupported {
+                    Button(RowAction.openInNewWindow.title, systemImage: RowAction.openInNewWindow.systemImage) { model.openInNewWindow(ref) }
+                        .accessibilityIdentifier("open-in-new-window")
+                }
                 if let workspace { MergeIntoTabMenu(workspace: workspace, tab: tab.id) }
                 Divider()
                 ProjectMenuItems(model: model, ref: ref)
@@ -728,7 +732,8 @@ struct GroupAgents: View {
             }
         }
         if !rows.isEmpty {
-            VStack(spacing: 0) {
+            // One row per agent, and a host can run hundreds: only the rows in view are built.
+            LazyVStack(spacing: 0) {
                 header
                 ForEach(rows) { row in
                     Button {
@@ -924,6 +929,7 @@ struct CompactTerminalView: View {
             }
             Button("Command Palette", systemImage: "command") { model.isPaletteShown = true }
                 .help("Command Palette (⌘K)")
+                .accessibilityIdentifier("open-palette")
             NewTabButton(workspace: workspace)
         }
         .buttonStyle(.bar)
@@ -966,6 +972,13 @@ struct CompactTerminalView: View {
                 {
                     ForEach(project.tabs, id: \.self) { ref in switcherItem(ref) }
                     Button("New Terminal in \(project.name)", systemImage: "plus") { model.newTab(inProject: project.id) }
+                    // The sidebar header's menu: there is no header to hold it here.
+                    Menu {
+                        ProjectMenu(project: project, collapsed: nil) { model.namingProject = project.id }
+                    } label: {
+                        Label("Project", systemImage: "folder")
+                    }
+                    .accessibilityIdentifier("switcher-project-\(project.name)")
                 }
             }
             if !windowTabs.isEmpty {
@@ -1120,8 +1133,10 @@ struct TabMenu: View {
 
     var body: some View {
         Button("Rename…", systemImage: "pencil") { workspace.renamingTab = tab.id }
-        Button("Open in New Window", systemImage: "macwindow.badge.plus") {
-            model.openInNewWindow(TabRef(hostId: workspace.hostId ?? HostGroups.localId, tab: tab.id))
+        if WindowRequest.isSupported {
+            Button("Open in New Window", systemImage: "macwindow.badge.plus") {
+                model.openInNewWindow(TabRef(hostId: workspace.hostId ?? HostGroups.localId, tab: tab.id))
+            }
         }
         MergeIntoTabMenu(workspace: workspace, tab: tab.id)
         ProjectMenuItems(model: model, ref: TabRef(hostId: workspace.groupId, tab: tab.id))

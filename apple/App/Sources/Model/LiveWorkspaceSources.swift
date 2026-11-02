@@ -42,8 +42,8 @@ struct HostContext {
             // then the tab's other panes say where the work is.
             let tabPanes = workspace.session.activeTab?.root.panes ?? []
             let directory = pane.flatMap { daemon.meta[$0]?.cwd?.nonEmpty }
-                ?? pane.flatMap { workspace.panes[$0]?.workingDirectory.nonEmpty }
-                ?? tabPanes.lazy.compactMap { daemon.meta[$0]?.cwd?.nonEmpty ?? workspace.panes[$0]?.workingDirectory.nonEmpty }.first
+                ?? pane.flatMap { workspace.pane($0)?.workingDirectory.nonEmpty }
+                ?? tabPanes.lazy.compactMap { daemon.meta[$0]?.cwd?.nonEmpty ?? workspace.pane($0)?.workingDirectory.nonEmpty }.first
             return HostContext(
                 hostId: id, name: app.hosts.record(id)?.name ?? id, daemon: daemon, pane: pane?.rawValue,
                 directory: directory?.nonEmpty)
@@ -227,19 +227,46 @@ final class LiveAgentFeed: AgentFeed {
     }
 
     var items: [AgentItem] {
+        let sources = daemons.map { hostId, hostName, daemon in
+            Source(
+                hostId: hostId, hostName: hostName, meta: daemon.meta.all, programs: daemon.programs.all,
+                attention: daemon.existingWorkspace?.attention ?? [])
+        }
+        let key = ItemsKey(sources: sources, answered: answered, dismissed: dismissed)
+        // The Inbox, the sidebar's badge and the toasts all read the feed in one render; unchanged
+        // inputs compare by identity, so only the first read builds it.
+        if let cached, cached.key == key { return cached.items }
         var result: [AgentItem] = []
-        for (hostId, hostName, daemon) in daemons {
+        for source in sources {
             result += Self.items(
-                hostId: hostId, hostName: hostName, meta: daemon.meta, programs: daemon.programs,
-                attention: daemon.existingWorkspace?.attention ?? [], answered: answered
+                hostId: source.hostId, hostName: source.hostName, meta: source.meta, programs: source.programs,
+                attention: source.attention, answered: answered
             ).filter { dismissed[$0.id] != $0.state }
         }
-        return result.map { item in
+        let items = result.map { item in
             var item = item
             item.since = entered(item.id, item.state, at: item.since)
             return item
         }.sorted { ($0.state.urgency, $1.since) < ($1.state.urgency, $0.since) }
+        cached = (key, items)
+        return items
     }
+
+    private struct Source: Equatable {
+        var hostId: String
+        var hostName: String
+        var meta: [PaneId: PaneMeta]
+        var programs: [PaneId: ProgramReport]
+        var attention: [AttentionItem]
+    }
+
+    private struct ItemsKey: Equatable {
+        var sources: [Source]
+        var answered: [AgentItem.ID: UInt64]
+        var dismissed: [AgentItem.ID: DesignSystem.AgentState]
+    }
+
+    @ObservationIgnored private var cached: (key: ItemsKey, items: [AgentItem])?
 
     /// A directory's last component, "~" for a home directory (not the user's name).
     static func folder(_ path: String) -> String {
@@ -547,19 +574,19 @@ final class LiveAgentFeed: AgentFeed {
         _ = try await daemon.workspace.client().prompt(paneId: pane, text: prompt, submit: true)
     }
 
+    /// The item's host and pane, read from its id ("host/pane", history "host/a<attention>"):
+    /// every Inbox row asks, so it must not rebuild the whole feed (that made a render
+    /// O(items²)).
     private func target(_ id: AgentItem.ID) throws -> (DaemonConnection, UInt64) {
-        guard let item = items.first(where: { $0.id == id }) ?? historyItem(id),
-              let hostId = item.hostId, let pane = item.paneId,
-              let daemon = hosts.connection(hostId) as? DaemonConnection
+        guard let slash = id.lastIndex(of: "/"),
+              let daemon = hosts.connection(String(id[..<slash])) as? DaemonConnection
         else { throw HostError.notConnected }
-        return (daemon, pane)
-    }
-
-    private func historyItem(_ id: AgentItem.ID) -> AgentItem? {
-        let parts = id.split(separator: "/")
-        guard parts.count == 2, let raw = UInt64(parts[1]) else { return nil }
-        return AgentItem(id: id, agent: .other, hostName: "", sessionTitle: "", state: .idle, since: .now, prompt: "",
-                         hostId: String(parts[0]), paneId: raw)
+        let rest = id[id.index(after: slash)...]
+        if let pane = UInt64(rest) { return (daemon, pane) }
+        guard rest.first == "a", let attention = UInt64(rest.dropFirst()),
+              let item = daemon.existingWorkspace?.attention.first(where: { $0.id == attention })
+        else { throw HostError.notConnected }
+        return (daemon, item.paneId)
     }
 
     private func decide(_ id: AgentItem.ID, allow: Bool) {
@@ -934,7 +961,7 @@ final class LiveDiffSource: DiffSource {
     /// Agent panes on this host whose directory is in the repository.
     private func agentPanes() -> [(pane: UInt64, agent: String)] {
         guard let daemon = context?.daemon else { return [] }
-        return daemon.meta.compactMap { pane, meta in
+        return daemon.meta.all.compactMap { pane, meta in
             guard let agent = meta.agent else { return nil }
             if let root, let cwd = meta.cwd, !PathMatch.isInside(cwd, root) { return nil }
             return (pane.rawValue, AgentKind(agent.kind).title)
@@ -1067,7 +1094,7 @@ final class LivePortSource: PortSource {
 
     var ports: [DetectedPort] {
         guard let context else { return [] }
-        return Self.ports(servers(context.hub.ports, on: context), meta: context.daemon.meta)
+        return Self.ports(servers(context.hub.ports, on: context), meta: context.daemon.meta.all)
     }
 
     /// The host's ports but its agents' own (`DetectedPort.isAgentListener`): a helper that
@@ -1117,7 +1144,7 @@ final class LivePortSource: PortSource {
         guard context?.hostId == hostId else { return }
         let fresh = ports.filter { !before.contains($0.port) && ($0.kind == .http || $0.kind == .https) }
             .filter { info in context.map { !isAgentListener(info, on: $0) } ?? true }
-        if let new = fresh.first, let port = Self.ports([new], meta: context?.daemon.meta ?? [:]).first {
+        if let new = fresh.first, let port = Self.ports([new], meta: context?.daemon.meta.all ?? [:]).first {
             offer = port
         } else if let offer, !ports.contains(where: { $0.port == offer.port }) {
             self.offer = nil
@@ -1224,7 +1251,7 @@ final class LiveLinkSource: LinkSource {
 
     /// A local pane: URLs and paths in its visible text.
     private func localLinks() -> [DetectedLink] {
-        guard let workspace = window?.workspace, let id = workspace.focusedPane, let pane = workspace.panes[id] else { return [] }
+        guard let workspace = window?.workspace, let id = workspace.focusedPane, let pane = workspace.pane(id) else { return [] }
         return Self.scan(pane.view.surface.terminal.visibleText())
     }
 

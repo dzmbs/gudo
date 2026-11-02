@@ -204,6 +204,7 @@ final class MixedTabsUITests: XCTestCase {
     /// View ▸ Two Columns: two tabs side by side, each taking typing; focus moves between the
     /// columns without moving them; off again, one tab. This iPad's own shell (no daemon).
     func testTwoColumnsShowTwoTabsSideBySide() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .phone, "Two Columns needs a regular width")
         let app = XCUIApplication()
         app.launchArguments += [
             "-localEcho", "YES", "-restoreLastTarget", "NO", "-sidebarShown", "YES", "-resetWindows", "YES",

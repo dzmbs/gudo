@@ -84,7 +84,7 @@ struct TabletopDeck: View {
     /// The focused pane takes the keyboard, which comes up over the deck.
     private func typeInTerminal() {
         guard let id = workspace.focusedPane else { return }
-        _ = workspace.panes[id]?.view.becomeFirstResponder()
+        _ = workspace.pane(id)?.view.becomeFirstResponder()
     }
 }
 #endif

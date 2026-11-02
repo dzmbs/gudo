@@ -16,11 +16,12 @@ export PORT="${PORT:-47013}"
 daemon() { "$apple/scripts/local-daemon.sh" "$@" "$state"; }
 
 ticket="$(daemon start)"
-trap 'daemon stop; rm -rf "$state"' EXIT
+. "$apple/scripts/lib/cleanup.sh"
+on_exit 'daemon stop; rm -rf "$state"'
 
 log="$state/xcodebuild.log"
 status=0
-TEST_RUNNER_PAIR_TICKET="$ticket" xcodebuild -project "$apple/App.xcodeproj" -scheme App \
+TEST_RUNNER_PAIR_TICKET="$ticket" xcodebuild -collect-test-diagnostics never -project "$apple/App.xcodeproj" -scheme App \
   -destination "platform=iOS Simulator,id=$sim" -derivedDataPath "$apple/build/DerivedData" \
   -only-testing:AppUITests/AskpassUITests test >"$log" 2>&1 || status=$?
 grep -E "Test Case|error:|passed|failed|TEST (SUCCEEDED|FAILED)" "$log" | tail -20

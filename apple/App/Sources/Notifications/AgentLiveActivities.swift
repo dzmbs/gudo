@@ -36,7 +36,7 @@ final class AgentLiveActivities {
         for (hostId, connection) in hosts.connections {
             guard let daemon = connection as? DaemonConnection else { continue }
             let hostName = hosts.record(hostId)?.name ?? "Host"
-            for (pane, meta) in daemon.meta {
+            for (pane, meta) in daemon.meta.all {
                 guard let agent = meta.agent else { continue }
                 let key = "\(hostId)/\(pane.rawValue)"
                 seen.insert(key)

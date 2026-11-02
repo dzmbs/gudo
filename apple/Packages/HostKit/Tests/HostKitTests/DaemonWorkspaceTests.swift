@@ -31,6 +31,28 @@ struct DaemonWorkspaceTests {
         #expect(hub.attention.first { $0.id == 1 }?.seen == true)
     }
 
+    /// A flood of attention items: every one reaches the observers (notifications), the list
+    /// the views read changes at a bounded rate and ends with the newest 500.
+    @Test func anAttentionFloodIsPacedForTheViews() async throws {
+        let (connection, client) = try connected()
+        let hub = connection.workspace
+        var heard = 0
+        hub.observeAttention { _ in heard += 1 }
+        let renders = Invalidations()
+        renders.watch { _ = hub.attention }
+        let start = ContinuousClock.now
+        for id in 1...2_000 as ClosedRange<UInt64> {
+            client.push(.attention(update: .added(item: item(id), unseen: UInt32(id))))
+            if id % 100 == 0 { try await Task.sleep(for: .milliseconds(10)) }
+        }
+        try await eventually("the last item") { hub.attention.first?.id == 2_000 }
+        let windows = Int((ContinuousClock.now - start) / DaemonConnection.paneStatusInterval) + 3
+        #expect(heard == 2_000)
+        #expect(renders.count <= windows, "\(renders.count) renders")
+        #expect(hub.attention.count == 500)
+        #expect(hub.unseen == 2_000)
+    }
+
     @Test func markSeenAsksTheDaemonUpToTheNewest() async throws {
         let (connection, client) = try connected()
         client.state.withLock { $0.attention = AttentionList(items: [item(3), item(4)], unseen: 2) }
@@ -145,8 +167,8 @@ nonisolated final class FakeWorkspaceAPI: DaemonClientAPI, DaemonWorkspaceAPI, W
         var asked: Set<UInt64> = []
         var watched: [String] = []
         var nextWatch: UInt64 = 1
-        /// `usageWatch` calls (their `apiFallback`), `usageUnwatch` calls, and the report.
-        var usageWatches: [Bool] = []
+        /// `usageWatch` calls, `usageUnwatch` calls, and the report.
+        var usageWatches = 0
         var usageUnwatches = 0
         var usage = AgentUsageReport(agents: [])
         /// `worktreeList` answers by repository, and the repositories asked.
@@ -232,9 +254,9 @@ nonisolated final class FakeWorkspaceAPI: DaemonClientAPI, DaemonWorkspaceAPI, W
 }
 
 extension FakeWorkspaceAPI: DaemonUsageAPI {
-    func usageWatch(apiFallback: Bool) async throws -> AgentUsageReport {
+    func usageWatch() async throws -> AgentUsageReport {
         state.withLock { state in
-            state.usageWatches.append(apiFallback)
+            state.usageWatches += 1
             return state.usage
         }
     }

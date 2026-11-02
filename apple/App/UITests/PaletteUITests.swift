@@ -32,6 +32,11 @@ final class PaletteUITests: XCTestCase {
         shot(app, "palette-query")
         app.typeKey("1", modifierFlags: .command)
         XCTAssertTrue(field.waitForNonExistence(timeout: 5), "⌘1 runs the first match and closes the palette")
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            // A phone shows one pane of a split; the bar's pane switcher says there are two.
+            XCTAssertTrue(app.buttons["Panes"].waitForExistence(timeout: 10), "the split happened")
+            return
+        }
         let panes = app.descendants(matching: .any).matching(NSPredicate(format: "identifier MATCHES 'pane-[0-9]+'"))
         expectation(for: NSPredicate(format: "count == 2"), evaluatedWith: panes)
         waitForExpectations(timeout: 10)
@@ -39,6 +44,7 @@ final class PaletteUITests: XCTestCase {
 
     /// Control: an app shortcut the terminal answers (⌘D splits).
     func testCommandDSplits() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .phone, "a phone shows one pane of a split")
         let app = XCUIApplication()
         app.launchArguments += ["-restoreLastTarget", "NO", "-localEcho", "YES", "-keyBar.fullWithHardwareKeyboard", "YES"]
         app.launch()

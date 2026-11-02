@@ -99,6 +99,7 @@ final class TerminalInputUITests: XCTestCase {
     /// prompt); text copied in this app at once.
     @MainActor
     func testKeyBarPasteKey() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .phone, "a phone's shell key set has no room for the paste key (the edit menu pastes)")
         let app = launchFocused(fullKeyBar: true)
         UIPasteboard.general.string = "pasted-from-key-bar"
         let key = element(app, "keybar-paste")
@@ -162,6 +163,8 @@ final class TerminalInputUITests: XCTestCase {
         let copy = app.menuItems["Copy"].firstMatch
         XCTAssertTrue(copy.waitForExistence(timeout: 5))
         copy.tap()
+        // A key sent while the edit menu is still going away does not reach the terminal.
+        XCTAssertTrue(copy.waitForNonExistence(timeout: 5))
         app.typeKey("v", modifierFlags: .command)
         expectScreen(app, containing: "❯ unnamed · pane-1")
     }

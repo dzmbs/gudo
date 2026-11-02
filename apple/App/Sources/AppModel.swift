@@ -33,6 +33,9 @@ final class AppModel {
     let localHelper: LocalHelper?
     #endif
 
+    /// Saves daemon hosts' workspaces for instant start (nil for design fixtures and `-mock`).
+    @ObservationIgnored private(set) var cacheWriter: WorkspaceCacheWriter?
+
     /// Pane streams shared by windows, for backends that are one process or channel per pane
     /// (local PTYs, plain SSH, the echo stand-in). Daemon panes share their connection's router.
     @ObservationIgnored private var sharedPanes: [SharedPaneKey: SharedPaneBackend] = [:]
@@ -75,6 +78,10 @@ final class AppModel {
         configuration.bundledDaemons = { bundled }
         hosts = HostsModel(secrets: secrets, repository: repository, configuration: configuration)
         hosts.hostKeyPrompts.trustNewHostsAutomatically = defaults.bool(forKey: "testTrustHostKeys")
+        // Instant start: each daemon host opens on what this device saved of it.
+        if !LaunchOptions.mock, LaunchOptions.screen == nil {
+            hosts.workspaceCache = WorkspaceCacheStore.appDefault(isolated: isolated)
+        }
         #if os(macOS)
         let helper = LaunchOptions.mock || LaunchOptions.screen != nil ? nil : LocalHelper.app(hosts: hosts)
         localHelper = helper
@@ -92,7 +99,13 @@ final class AppModel {
         helper?.onReady = { [weak self] id in self?.thisDeviceReady(id) }
         helper?.onUnavailable = { [weak self] in self?.thisDeviceUnavailable() }
         helper?.start()
+        if let helper { connectEarly(helper) }
         #endif
+        if let store = hosts.workspaceCache {
+            let writer = WorkspaceCacheWriter(store: store, hosts: hosts) { [weak self] in self?.openWorkspaces ?? [] }
+            writer.start()
+            cacheWriter = writer
+        }
         #if os(iOS) && FILES_PROVIDER_YES
         if isolated == nil { FilesLocations.start(hosts) }
         #endif
@@ -185,8 +198,26 @@ final class AppModel {
     // MARK: This Mac's helper
 
     #if os(macOS)
+    /// Dials This Mac's helper before any window exists when it already runs (a login item)
+    /// and is the one paired: the first frame then shows its saved workspace and the link is
+    /// on its way. The helper's own start (login item checks, pairing) follows as before.
+    private func connectEarly(_ helper: LocalHelper) {
+        guard helper.isEnabled, let id = hosts.thisDeviceId,
+              let endpoint = LocalHelper.runningEndpoint(in: helper.stateDirectory),
+              hosts.record(id)?.daemonId == endpoint.daemonId
+        else { return }
+        do {
+            try hosts.open(id)
+            Self.log.info("this Mac's helper: dialing at launch, \(LaunchTimeline.sinceStart(), privacy: .public) after process start")
+        } catch {
+            Self.log.error("this Mac's helper: \(String(describing: error), privacy: .public)")
+        }
+    }
+
     /// Every window shows This Mac's helper in place of an empty local workspace.
     private func thisDeviceReady(_ id: String) {
+        // Dialled early, maybe before the helper was up: retry now rather than after a backoff.
+        if let connection = hosts.connection(id), case .reconnecting = connection.status { connection.retry() }
         for window in openWindows { window.openThisDevice(id) }
     }
 
@@ -290,6 +321,43 @@ final class AppModel {
             return .host(id)
         }
         return nil
+    }
+}
+
+/// When a launch reached its milestones, logged (category `launch`) so a slow start can be
+/// told apart: process start → first frame of a window → its host live (docs/PERFORMANCE.md
+/// "Instant start").
+@MainActor
+enum LaunchTimeline {
+    private static var firstFrameLogged = false
+    private static var liveLogged = false
+    private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app", category: "launch")
+
+    /// When the kernel started this process.
+    nonisolated static let processStart: Date? = {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.size
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0 else { return nil }
+        let start = info.kp_proc.p_un.__p_starttime
+        return Date(timeIntervalSince1970: TimeInterval(start.tv_sec) + TimeInterval(start.tv_usec) / 1_000_000)
+    }()
+
+    /// Milliseconds since the process started, as words for the log.
+    nonisolated static func sinceStart(_ now: Date = .now) -> String {
+        processStart.map { "\(Int(now.timeIntervalSince($0) * 1000)) ms" } ?? "?"
+    }
+
+    static func firstFrame(savedWorkspace: Bool) {
+        guard !firstFrameLogged else { return }
+        firstFrameLogged = true
+        log.info("first frame \(sinceStart(), privacy: .public) after process start (saved workspace: \(savedWorkspace))")
+    }
+
+    static func live(_ host: String) {
+        guard !liveLogged else { return }
+        liveLogged = true
+        log.info("live on \(host, privacy: .public) \(sinceStart(), privacy: .public) after process start")
     }
 }
 

@@ -202,6 +202,11 @@ final class WindowModel {
                 guard let self else { return }
                 toasts.show(Toast(layoutUnavailableHelp, systemImage: "network.slash", style: .neutral))
             }
+            workspace?.onHeldInputDropped = { [weak self] in
+                self?.toasts.show(Toast(
+                    "What you typed while connecting wasn't sent: the screen had changed.",
+                    systemImage: "keyboard", style: .neutral))
+            }
         }
     }
     /// The design fixtures' stand-in connection state (`-screen reconnect`).
@@ -302,7 +307,8 @@ final class WindowModel {
     /// The size of the area the active tab's panes fill (the external display scales to it).
     var terminalArea = CGSize.zero
 
-    init(app: AppModel, isPresentation: Bool = false) {
+    /// `agents` replaces the mock feed under `-mock` (in-process tests of the live feed).
+    init(app: AppModel, isPresentation: Bool = false, agents mockAgents: (any AgentFeed)? = nil) {
         self.app = app
         self.isPresentation = isPresentation
         Self.made += 1
@@ -319,7 +325,7 @@ final class WindowModel {
         }
         if LaunchOptions.mock {
             hosts = MockHostDirectory()
-            agents = MockAgentFeed()
+            agents = mockAgents ?? MockAgentFeed()
             paneStatus = MockPaneStatus()
             files = MockFileSource()
             diffs = MockDiffSource()
@@ -711,6 +717,12 @@ final class WindowModel {
         }
         show(ref.hostId == HostGroups.localId ? .local : .host(ref.hostId))
         pendingFocus = ref
+        // A saved workspace has the tab already: selected before the first frame.
+        if let workspace = workspaces[ref.hostId], workspace.session.tabs.contains(where: { $0.id == ref.tab }),
+           currentGroupId == ref.hostId, pane == nil
+        {
+            workspace.selectTab(ref.tab)
+        }
         Task { [weak self] in
             for _ in 0..<300 {
                 guard let self, let pending = self.pendingFocus, pending == ref else { return }
@@ -810,7 +822,7 @@ final class WindowModel {
             let start = ContinuousClock.now
             while !Task.isCancelled, ContinuousClock.now - start < .seconds(40) {
                 let settled = ContinuousClock.now - start > .seconds(3)
-                if let paneDrawing = PaneDrawing.of(pane), self?.workspace?.panes[pane] != nil,
+                if let paneDrawing = PaneDrawing.of(pane), self?.workspace?.pane(pane) != nil,
                    paneDrawing.continueDrawing(drawing, settled: settled)
                 {
                     self?.continuedDrawing = "\(drawing.canvas ? "canvas" : "draw"):\(drawing.artifact)"
@@ -945,8 +957,9 @@ final class WindowModel {
         withObservationTracking {
             _ = observed?.layout.view
             _ = screenViews()
-        } onChange: { [weak self] in
-            Task { @MainActor [weak self] in
+        } onChange: { [weak self, weak observed] in
+            // Weak: a pending observation must not keep a workspace the window has left.
+            Task { @MainActor [weak self, weak observed] in
                 guard let self, self.workspace === observed else { return }
                 self.followView()
             }
@@ -984,6 +997,7 @@ final class WindowModel {
         // No host: this device's own shell is "connected"; an iPhone or iPad without one is not.
         let next = status.map { ConnectionState($0, since: downSince ?? .now) } ?? (LaunchOptions.hasLocalShell ? .connected : .disconnected)
         if next != liveConnection { liveConnection = next }
+        if next.isLive, workspace?.host != nil { LaunchTimeline.live(hostName) }
         guard let host = workspace?.host else { return }
         let observed = workspace
         let daemon = host as? DaemonConnection
@@ -994,8 +1008,9 @@ final class WindowModel {
         withObservationTracking {
             _ = host.status
             _ = daemon?.notice
-        } onChange: { [weak self] in
-            Task { @MainActor [weak self] in
+        } onChange: { [weak self, weak observed] in
+            // Weak: the host's status may not change for days after the window leaves it.
+            Task { @MainActor [weak self, weak observed] in
                 // Only the host on screen drives the window's state.
                 guard let self, self.workspace === observed else { return }
                 self.followConnection()
@@ -1045,6 +1060,15 @@ enum LaunchOptions {
     static let screen: String? = LaunchArguments().string(forKey: "screen")
     /// Every host header and the Inbox show a fixed usage report (`FakeUsageFeed`): UI tests.
     static let fakeUsage = LaunchArguments().bool(forKey: "fakeUsage")
+    /// Whether pairing a host asks for notification permission. `-notificationPrompt NO` turns
+    /// it off; runs with the UI tests' pairing hooks (`-testTicket`, `-testTickets`, `-testSSH`)
+    /// leave it off unless `-notificationPrompt YES`, so a system alert never covers a test.
+    static var asksNotificationPermission: Bool {
+        let arguments = LaunchArguments()
+        if arguments.string(forKey: "notificationPrompt") != nil { return arguments.bool(forKey: "notificationPrompt") }
+        let testHooks = ["testTicket", "testTickets", "testSSH"].contains { arguments.string(forKey: $0) != nil }
+        return !testHooks && !mock && !isTesting
+    }
     /// Whether this device offers a local shell: always on the Mac; on iPhone and iPad only the
     /// echo stand-in, so only for UI tests (`-localEcho YES`), `-mock` and design fixtures. A real
     /// iOS install starts on the welcome and Hosts screens, never in a fake shell.

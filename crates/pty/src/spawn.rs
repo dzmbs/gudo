@@ -23,7 +23,10 @@ pub(crate) struct Spawned {
 /// Opens a PTY of `size` and spawns `cmd` on it as a new session whose controlling terminal is
 /// the PTY. Only the master fd stays open in the parent.
 pub(crate) fn spawn(mut cmd: Command, size: WinSize) -> io::Result<Spawned> {
-    let master = open_master()?;
+    // Say which step failed: running out of PTYs (a system-wide limit on macOS) or of
+    // descriptors reads very differently from a missing program.
+    let master = open_master()
+        .map_err(|e| io::Error::new(e.kind(), format!("cannot open a pseudo-terminal: {e}")))?;
     let slave_name = pty::ptsname(&master, Vec::new())?;
     let slave = open_slave(&slave_name)?;
     termios::set_size(&slave, size)?;

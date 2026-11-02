@@ -146,7 +146,9 @@ struct DevicesSections: View {
             onRemove: session.canRemove(device) ? { removing = device } : nil)
             .swipeActions {
                 if session.canRemove(device) {
-                    Button("Remove", role: .destructive) { removing = device }
+                    // Red, not `.destructive`: the row stays until the removal is confirmed.
+                    Button("Remove") { removing = device }
+                        .tint(.red)
                 }
             }
             .contextMenu {

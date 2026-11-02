@@ -74,10 +74,10 @@ private struct TabDropTarget: ViewModifier {
         let source: () -> TabId?
         let merge: (Direction) -> Void
 
-        func validateDrop(info: DropInfo) -> Bool { source() != nil }
+        func validateDrop(info: DropInfo) -> Bool { info.isTabDrag && source() != nil }
 
         func dropUpdated(info: DropInfo) -> DropProposal? {
-            guard source() != nil else { return DropProposal(operation: .forbidden) }
+            guard info.isTabDrag, source() != nil else { return DropProposal(operation: .forbidden) }
             side = Self.edge(of: info.location, in: size)
             return DropProposal(operation: .move)
         }
@@ -86,7 +86,7 @@ private struct TabDropTarget: ViewModifier {
 
         func performDrop(info: DropInfo) -> Bool {
             side = nil
-            guard source() != nil else { return false }
+            guard info.isTabDrag, source() != nil else { return false }
             merge(Self.edge(of: info.location, in: size))
             return true
         }

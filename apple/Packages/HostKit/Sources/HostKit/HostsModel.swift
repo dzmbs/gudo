@@ -85,9 +85,14 @@ public final class HostsModel {
     @ObservationIgnored var knocker: Knocker?
     /// A URL a host's pane opened, or a browser tool its agent called (the host's id).
     @ObservationIgnored public var onBrowserPush: ((String, BrowserPush) -> Void)?
+    /// A new host was paired by the user (not re-paired, not this Mac's own helper): the moment
+    /// to ask for notification permission, in context. Called with the host id.
+    @ObservationIgnored public var onFirstPairing: ((String) -> Void)?
     /// A program in a pane of a host copied text (OSC 52) after this device typed into it:
     /// the host, the pane and the text.
     @ObservationIgnored public var onClipboard: ((String, PaneId, String) -> Void)?
+    /// Where daemon hosts' workspaces are saved for instant start (nil: not saved).
+    @ObservationIgnored public var workspaceCache: WorkspaceCacheStore?
     private static let log = Logger(subsystem: Log.subsystem, category: "hosts")
 
     public init(secrets: any SecretStore, repository: HostRepository, configuration: Configuration = .init()) {
@@ -196,6 +201,12 @@ public final class HostsModel {
         connection.onDaemonInfo = { [weak self] info in self?.daemonReported(record.id, info) }
         connection.browser.onPush = { [weak self] push in self?.onBrowserPush?(record.id, push) }
         connection.onClipboard = { [weak self] pane, text in self?.onClipboard?(record.id, pane, text) }
+        // A guest's view of someone else's host is never kept on this device.
+        if !record.isGuest,
+           let cached = workspaceCache?.load(hostId: record.id, daemonId: record.daemonId, sessionId: record.sessionId)
+        {
+            connection.seed(cached)
+        }
         connections[record.id] = connection
         do {
             try connection.connect()
@@ -329,6 +340,7 @@ public final class HostsModel {
 
     public func remove(_ id: String) {
         disconnect(id)
+        workspaceCache?.remove(hostId: id)
         if let record = record(id) {
             try? secrets.remove(record.ticketKey)
             try? secrets.remove(record.passwordKey)
@@ -381,7 +393,7 @@ public final class HostsModel {
     @discardableResult
     public func pairThisDevice(_ ticket: PairingTicket, name: String) async throws -> String {
         let stale = records.filter { $0.isThisDevice && $0.daemonId != ticket.info.daemonId }.map(\.id)
-        let id = try await pair(ticket, name: name)
+        let id = try await pair(ticket, name: name, announcing: false)
         update(id) { $0.thisDevice = true }
         for old in stale where old != id { remove(old) }
         return id
@@ -394,6 +406,10 @@ public final class HostsModel {
     /// the device (`connected`), or throws if it refused.
     @discardableResult
     public func pair(_ ticket: PairingTicket, name: String? = nil, replacing hostId: String? = nil) async throws -> String {
+        try await pair(ticket, name: name, replacing: hostId, announcing: true)
+    }
+
+    private func pair(_ ticket: PairingTicket, name: String?, replacing hostId: String? = nil, announcing: Bool) async throws -> String {
         let existing = hostId.flatMap(record) ?? records.first { $0.daemonId == ticket.info.daemonId }
         var record = existing ?? HostRecord(name: name ?? ticket.defaultName, kind: .daemon, daemonId: ticket.info.daemonId)
         if existing == nil { record.nameSource = .placeholder }
@@ -434,6 +450,7 @@ public final class HostsModel {
         previous?.close()
         touch(record.id)
         Self.log.info("paired host=\(record.id, privacy: .public) daemon=\(ticket.info.daemonId.prefix(12), privacy: .public)")
+        if existing == nil, announcing { onFirstPairing?(record.id) }
         return record.id
     }
 
@@ -801,6 +818,8 @@ public enum PairingError: Error, Equatable, LocalizedError {
 
     public var errorDescription: String? {
         switch self {
+        case .refused(let reason) where reason.contains("InvalidGrant"):
+            "This ticket was already used or has expired. Ask the host for a new one (its helper's `pair` command)."
         case .refused(let reason): "The host refused this device (\(reason)). Ask it for a new ticket (its helper's `pair` command)."
         case .timedOut: "The host did not answer. Check that it is running and reachable."
         case .turnedAway: "The owner didn't let you in."

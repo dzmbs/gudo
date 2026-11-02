@@ -60,7 +60,7 @@ extension DaemonClient: DaemonWorkspaceAPI {}
 
 /// of `DaemonWorkspaceAPI`'s list so fakes that do not care need nothing.
 nonisolated public protocol DaemonUsageAPI: AnyObject, Sendable {
-    func usageWatch(apiFallback: Bool) async throws -> AgentUsageReport
+    func usageWatch() async throws -> AgentUsageReport
     func usageUnwatch() async throws
 }
 
@@ -269,7 +269,9 @@ public final class DaemonWorkspace {
         case .fsChanged(let change):
             watches[change.watchId]?.handler(change)
         case .attention(let update):
-            apply(update)
+            // Observers (notifications) hear every item; the views get them paced.
+            pendingAttention.append(update)
+            attentionPacing.note()
             for observer in attentionObservers.values { observer(update) }
         case .vsCodeTunnel(let status):
             vsCodeTunnel = status
@@ -376,6 +378,17 @@ public final class DaemonWorkspace {
         repos = snapshot
     }
 
+    @ObservationIgnored private var pendingAttention: [AttentionUpdate] = []
+    @ObservationIgnored private lazy var attentionPacing = UpdateThrottle(interval: DaemonConnection.paneStatusInterval) { [weak self] in
+        self?.applyPendingAttention()
+    }
+
+    private func applyPendingAttention() {
+        let updates = pendingAttention
+        pendingAttention = []
+        for update in updates { apply(update) }
+    }
+
     func apply(_ update: AttentionUpdate) {
         switch update {
         case .added(let item, let unseen):
@@ -474,26 +487,13 @@ public final class DaemonWorkspace {
         Task { try? await api?.usageUnwatch() }
     }
 
-    /// Watches again with the current setting (Settings › Agents changed).
-    public func usageSettingsChanged() {
-        if usageViewers > 0 { watchUsage() }
-    }
-
-    /// Every host's hub re-watches with the current setting.
-    public static func usageSettingsChanged() {
-        for entry in DaemonWorkspaceRegistry.hubs.values where entry.connection != nil {
-            entry.hub.usageSettingsChanged()
-        }
-    }
-
     private func watchUsage() {
         guard supportsUsage(), let api = resolve() as? any DaemonUsageAPI else { return }
-        let fallback = AgentUsageSettings.apiFallback
         usageWatchSent = true
         usageTask?.cancel()
         usageTask = Task { [weak self] in
             do {
-                let report = try await api.usageWatch(apiFallback: fallback)
+                let report = try await api.usageWatch()
                 guard !Task.isCancelled, let self, self.usageViewers > 0 else { return }
                 self.usage = report
             } catch {

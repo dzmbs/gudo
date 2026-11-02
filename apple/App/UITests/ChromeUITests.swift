@@ -32,6 +32,12 @@ final class ChromeUITests: XCTestCase {
         add(attachment)
     }
 
+    /// A hidden sidebar may stay in the accessibility tree, off screen (iOS 27 keeps the column).
+    private func waitSidebar(_ sidebar: XCUIElement, shown: Bool) -> Bool {
+        let predicate = NSPredicate(format: shown ? "exists == true AND hittable == true" : "exists == false OR hittable == false")
+        return XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: sidebar)], timeout: 5) == .completed
+    }
+
     /// Safari's model: the sidebar button is always in the toolbar, ⌘B does the same, and the
     /// tabs move to a strip on top while the sidebar is hidden. The toolbar's buttons keep their
     /// size, order and place either way.
@@ -56,7 +62,7 @@ final class ChromeUITests: XCTestCase {
         attach(app, "sidebar-shown")
 
         press(toggle)
-        XCTAssertTrue(sidebar.waitForNonExistence(timeout: 5), "the button hides the sidebar")
+        XCTAssertTrue(waitSidebar(sidebar, shown: false), "the button hides the sidebar")
         XCTAssertTrue(element(app, "tab-bar").waitForExistence(timeout: 5), "the tabs move to the strip")
         sleep(1)
         let hiddenFrames = ids.map { element(app, $0).frame }
@@ -78,12 +84,12 @@ final class ChromeUITests: XCTestCase {
         // drops that event (a real keyboard is attached long before): a harmless key first.
         app.typeKey(XCUIKeyboardKey.shift, modifierFlags: [])
         app.typeKey("b", modifierFlags: .command)
-        XCTAssertTrue(sidebar.waitForExistence(timeout: 5), "⌘B shows the sidebar")
+        XCTAssertTrue(waitSidebar(sidebar, shown: true), "⌘B shows the sidebar")
         XCTAssertTrue(element(app, "tab-bar").waitForNonExistence(timeout: 5))
         app.typeKey("b", modifierFlags: .command)
-        XCTAssertTrue(sidebar.waitForNonExistence(timeout: 5), "⌘B hides it again")
+        XCTAssertTrue(waitSidebar(sidebar, shown: false), "⌘B hides it again")
         app.typeKey("b", modifierFlags: .command)
-        XCTAssertTrue(sidebar.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitSidebar(sidebar, shown: true))
 
         // ⌘/ lists every shortcut, ⌘B among them.
         pane.tap()

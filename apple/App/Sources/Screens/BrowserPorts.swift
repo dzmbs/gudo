@@ -58,9 +58,10 @@ struct PortsList: View {
                 list
             }
         }
+        // On the content only: over the chrome it would rename the leaf's own Close button.
+        .accessibilityIdentifier("ports-list")
         .toolChrome("Ports", subtitle: model.ports.hostName)
         .animation(DS.Motion.snappy, value: ports)
-        .accessibilityIdentifier("ports-list")
     }
 
     private var list: some View {

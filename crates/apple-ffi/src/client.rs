@@ -926,6 +926,13 @@ impl DaemonClient {
         self.inner.network_changed();
     }
 
+    /// Checks the live connection with a ping (app foregrounded, input that got no answer);
+    /// a link that does not answer in a few seconds is dropped and redialled, which arrives as
+    /// `Disconnected`. Returns at once.
+    pub fn probe(&self) {
+        self.inner.probe();
+    }
+
     /// Drops the connection and stays offline until [`reconnect`](Self::reconnect),
     /// keeping all resume state (app suspended).
     pub fn suspend(&self) {

@@ -413,6 +413,9 @@ final class KeyBar: UIInputView {
 
     /// The panels above the capsules share one glass card.
     private func layoutPanelCard() {
+        // The panels' frames are the column's to set: lay it out first, or the card is drawn
+        // where they were before a panel came or went.
+        column.layoutIfNeeded()
         let panels: [UIView] = [composer, lineEditor.decisionStrip, snippetScroll, arrowPadRow, lineEditor.smartRow, lineEditor.editorRow]
         let frames = panels.filter { !$0.isHidden && $0.superview != nil && $0.bounds.height > 0 && $0 !== arrowPadRow }
             .map { $0.convert($0.bounds, to: self) }

@@ -38,6 +38,71 @@ const MAX_OUTPUT: usize = 2 << 20;
 /// Cell size in pixels for clients that report none: kitty images need one to have a size.
 const DEFAULT_CELL_PX: (u16, u16) = (10, 20);
 
+/// How long input waits for room while the program is not taking it (`pty::MAX_QUEUED_INPUT`
+/// is queued) before it is refused: one stuck pane must not hold up a client's input to the
+/// others, which shares its stream.
+const INPUT_STALL: Duration = Duration::from_secs(2);
+
+/// Why input could not be queued for a pane.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum InputError {
+    #[error("the pane has closed")]
+    Closed,
+    #[error("the program has not been reading its input")]
+    Stalled,
+}
+
+/// Events queued for the pane's task beyond which new ones are dropped: a program printing
+/// shell-integration marks, notifications or terminal queries faster than they can be handled
+/// must not grow the daemon. Titles and directories are kept as the latest value instead.
+const MAX_VT_EVENTS: usize = 1024;
+
+/// The pane task's inbox, filled on the PTY's I/O thread without ever blocking it (it holds
+/// the ring and VT locks there).
+#[derive(Clone)]
+pub(crate) struct VtEvents {
+    tx: mpsc::Sender<VtEvent>,
+    latest: Arc<LatestMeta>,
+}
+
+impl VtEvents {
+    fn send(&self, event: VtEvent) {
+        match event {
+            VtEvent::Osc(Osc::Title(title)) => self.latest.set(|m| m.title = Some(title)),
+            VtEvent::Osc(Osc::Cwd(cwd)) => self.latest.set(|m| m.cwd = Some(cwd)),
+            // Dropped when full: the pane's state stays in the VT and command log, only the
+            // notification is lost.
+            event => drop(self.tx.try_send(event)),
+        }
+    }
+}
+
+/// The newest title and directory a program set, not yet picked up by the pane's task.
+#[derive(Debug, Default)]
+pub(crate) struct LatestMeta {
+    slot: Mutex<Latest>,
+    /// Signalled when the slot gains a value.
+    pub changed: tokio::sync::Notify,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct Latest {
+    pub title: Option<String>,
+    pub cwd: Option<String>,
+}
+
+impl LatestMeta {
+    fn set(&self, f: impl FnOnce(&mut Latest)) {
+        f(&mut lock(&self.slot));
+        self.changed.notify_one();
+    }
+
+    /// Takes what changed since the last call.
+    pub fn take(&self) -> Latest {
+        std::mem::take(&mut lock(&self.slot))
+    }
+}
+
 /// What the output hook reports to the pane's task.
 #[derive(Debug)]
 pub(crate) enum VtEvent {
@@ -76,7 +141,7 @@ struct Vt {
     commands: CommandLog,
     keys: KeyEncoder,
     mouse: MouseEncoder,
-    events: mpsc::UnboundedSender<VtEvent>,
+    events: VtEvents,
     /// Rows scrolled per output chunk, for resolving client row positions.
     scroll: ScrollLog,
     anchors: Anchors,
@@ -124,18 +189,17 @@ impl Vt {
                 .commands
                 .apply(&mut self.term, self.pane, Seq(self.seq), prompts);
             for update in updates {
-                let _ = self.events.send(VtEvent::Command(update));
+                self.events.send(VtEvent::Command(update));
             }
         }
         self.commands.after_output(&mut self.term);
         let events = &self.events;
-        self.scanner.feed(data, |osc| {
-            let _ = events.send(VtEvent::Osc(osc));
-        });
+        self.scanner
+            .feed(data, |osc| events.send(VtEvent::Osc(osc)));
         let alt = self.term.active_screen() == Screen::Alternate;
         if alt != self.alt {
             self.alt = alt;
-            let _ = self.events.send(VtEvent::AltScreen);
+            self.events.send(VtEvent::AltScreen);
         }
         self.scroll.observe(&mut self.term, self.seq);
         let now = Instant::now();
@@ -144,7 +208,7 @@ impl Vt {
             .is_none_or(|t| now.duration_since(t) >= ACTIVITY_INTERVAL)
         {
             self.last_activity = Some(now);
-            let _ = self.events.send(VtEvent::Activity);
+            self.events.send(VtEvent::Activity);
         }
     }
 
@@ -208,6 +272,7 @@ pub(crate) struct Pane {
     history: Mutex<VecDeque<Arc<Snapshot>>>,
     text_cache: Mutex<Option<TextCache>>,
     resized: watch::Sender<u64>,
+    latest: Arc<LatestMeta>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -227,13 +292,18 @@ impl Pane {
         size: PaneSize,
         ring_capacity: usize,
         limits: VtLimits,
-    ) -> io::Result<(Arc<Self>, mpsc::UnboundedReceiver<VtEvent>)> {
-        let (events, events_rx) = mpsc::unbounded_channel();
+    ) -> io::Result<(Arc<Self>, mpsc::Receiver<VtEvent>)> {
+        let (tx, events_rx) = mpsc::channel(MAX_VT_EVENTS);
+        let latest = Arc::new(LatestMeta::default());
+        let events = VtEvents {
+            tx,
+            latest: Arc::clone(&latest),
+        };
         let size = with_pixels(size);
         let mut term = new_terminal(size, limits).map_err(io::Error::other)?;
         let replies = events.clone();
         term.set_reply_sink(Box::new(move |bytes| {
-            let _ = replies.send(VtEvent::Reply(bytes.to_vec()));
+            replies.send(VtEvent::Reply(bytes.to_vec()));
         }))
         .map_err(io::Error::other)?;
         term.record_semantic_prompts().map_err(io::Error::other)?;
@@ -271,12 +341,18 @@ impl Pane {
             history: Mutex::new(VecDeque::new()),
             text_cache: Mutex::new(None),
             resized: watch::Sender::new(0),
+            latest,
         });
         Ok((pane, events_rx))
     }
 
     pub fn pty(&self) -> &PtyActor {
         &self.pty
+    }
+
+    /// The newest title and directory the program set.
+    pub fn latest_meta(&self) -> &LatestMeta {
+        &self.latest
     }
 
     pub fn head(&self) -> Seq {
@@ -412,13 +488,20 @@ impl Pane {
     pub fn snapshot(&self) -> Result<Arc<Snapshot>, SnapshotError> {
         let (full, seq, resize_count) = {
             let vt = lock(&self.vt);
-            if let Some(cached) = lock(&self.cache).as_ref()
+            let cache = lock(&self.cache);
+            if let Some(cached) = cache.as_ref()
                 && cached.seq.0 == vt.seq
                 && cached.resize_count == vt.resize_count
             {
                 return Ok(Arc::clone(cached));
             }
-            (vt.term.encode_snapshot()?, Seq(vt.seq), vt.resize_count)
+            let hint = cache.as_deref().map_or(0, Snapshot::size_hint);
+            drop(cache);
+            (
+                vt.term.encode_snapshot_sized(hint)?,
+                Seq(vt.seq),
+                vt.resize_count,
+            )
         };
         let snapshot = Arc::new(Snapshot::compress(full, seq, resize_count)?);
         *lock(&self.cache) = Some(Arc::clone(&snapshot));
@@ -444,7 +527,12 @@ impl Pane {
             {
                 return Ok(Arc::clone(cached));
             }
-            (view.term.encode_snapshot()?, Seq(vt.seq), vt.resize_count)
+            let hint = view.snapshots.back().map_or(0, |s| s.size_hint());
+            (
+                view.term.encode_snapshot_sized(hint)?,
+                Seq(vt.seq),
+                vt.resize_count,
+            )
         };
         let snapshot = Arc::new(Snapshot::compress(full, seq, resize_count)?);
         if let Some(view) = lock(&self.vt)
@@ -772,10 +860,13 @@ impl Pane {
 
     /// Queues input for the child. Returns the output offset at the time of writing, which
     /// the input's echo (if any) follows.
-    pub async fn write(&self, data: Vec<u8>) -> Result<Seq, pty::Closed> {
+    pub async fn write(&self, data: Vec<u8>) -> Result<Seq, InputError> {
         let at = self.head();
         if !data.is_empty() {
-            self.pty.write(data).await?;
+            tokio::time::timeout(INPUT_STALL, self.pty.write(data))
+                .await
+                .map_err(|_| InputError::Stalled)?
+                .map_err(|_| InputError::Closed)?;
         }
         Ok(at)
     }
@@ -835,6 +926,13 @@ impl Pane {
 }
 
 impl Snapshot {
+    /// Room for the next snapshot of the same pane. Encoding a large one (kitty images) into a
+    /// growing buffer leaves a chain of freed large blocks the allocator keeps resident; with a
+    /// client watching an image-heavy pane that grew the daemon by gigabytes.
+    fn size_hint(&self) -> usize {
+        self.full.len() + self.full.len() / 8
+    }
+
     /// Compresses the screen prefix of a full encoding for the wire.
     fn compress(full: Vec<u8>, seq: Seq, resize_count: u64) -> Result<Self, SnapshotError> {
         let ready = ghostty_vt::screen_len(&full).ok_or(ghostty_vt::Error::InvalidValue)?;
@@ -945,6 +1043,42 @@ mod tests {
     use base64::engine::general_purpose::STANDARD;
 
     use super::*;
+
+    /// A program printing marks and titles faster than the pane's task handles them used to
+    /// queue every event: an OSC 133 flood grew the daemon by 130 MB/s.
+    #[tokio::test]
+    async fn an_event_flood_is_bounded_and_keeps_the_last_title() {
+        let mut cmd = Command::new("/bin/sh");
+        cmd.args([
+            "-c",
+            "i=0; while [ $i -lt 5000 ]; do printf '\\033]133;A\\007\\033]0;t%d\\007\\033]9;n\\007' $i; \
+             i=$((i+1)); done",
+        ]);
+        let size = PaneSize {
+            cols: 80,
+            rows: 24,
+            width_px: 0,
+            height_px: 0,
+        };
+        let limits = VtLimits {
+            scrollback_bytes: 1 << 20,
+            image_storage_bytes: 1 << 20,
+        };
+        let (pane, events) =
+            Pane::spawn(PaneId(1), SnapGen(1), cmd, size, 1 << 20, limits).unwrap();
+        tokio::time::timeout(Duration::from_secs(60), pane.pty().wait())
+            .await
+            .unwrap()
+            .unwrap();
+        // Let the I/O thread read the last output.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            events.len() <= MAX_VT_EVENTS,
+            "{} events queued",
+            events.len()
+        );
+        assert_eq!(pane.latest_meta().take().title.as_deref(), Some("t4999"));
+    }
 
     fn terminal() -> (Terminal, Arc<Mutex<Vec<u8>>>) {
         let size = with_pixels(PaneSize {

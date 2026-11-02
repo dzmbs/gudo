@@ -57,11 +57,14 @@ final class PaneResizeTests: XCTestCase {
         let text = pane.view.surface.terminal.visibleText()
 
         // What `SplitTreeView` does as the tree changes shape, then the animation's frames.
+        let held = ContinuousClock.now + .milliseconds(280)
         TerminalSurface.holdGrids(for: .milliseconds(280))
         for frame in 1...34 {
             let t = Double(frame) / 34
             setWidth(800 - 400 * (1 - pow(1 - t, 3)))
             spin(0.008)
+            // A loaded machine can run the frames past the hold; only frames inside it count.
+            guard ContinuousClock.now < held else { break }
             XCTAssertEqual(pane.view.surface.terminal.size.cols, Int(cols), "reflowed mid-animation")
             XCTAssertEqual(pane.view.surface.terminal.visibleText(), text)
         }

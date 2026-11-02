@@ -82,8 +82,26 @@ final class W3UITests: XCTestCase {
         if leaf.exists { leaf.tap() } else { app.buttons.matching(NSPredicate(format: "identifier == 'sheet-done' OR label == 'Done'")).firstMatch.tap() }
     }
 
+    /// Closes the page a port opened: its leaf beside the pane (regular width), else the
+    /// browser sheet.
+    private func closePage() {
+        let leaf = element("browser-close").firstMatch
+        if leaf.waitForExistence(timeout: 3) {
+            leaf.tap()
+            XCTAssertTrue(leaf.waitForNonExistence(timeout: 5), "the page closes")
+        } else {
+            element("browser-done").firstMatch.tap()
+        }
+    }
+
     /// The navigation back button of the pushed screen (not the sheet's Done).
     private func back() {
+        // A tool leaf beside the pane (regular width) has its own Back.
+        let leaf = app.buttons["tool-back"].firstMatch
+        if leaf.exists, leaf.isEnabled {
+            leaf.tap()
+            return
+        }
         let button = app.buttons["BackButton"].firstMatch
         if button.waitForExistence(timeout: 3) {
             button.tap()
@@ -127,8 +145,9 @@ final class W3UITests: XCTestCase {
         field.tap()
         field.typeText("made-by-test")
         app.alerts.buttons["Create"].tap()
-        let folder = element("file-made-by-test")
+        let folder = element("file-made-by-test").firstMatch
         XCTAssertTrue(folder.waitForExistence(timeout: 10), "the new folder shows")
+        shot("files-new-folder")
         XCTAssertTrue(FileManager.default.fileExists(atPath: repo + "/made-by-test"), "and exists on the host")
 
         // Move to the host's trash.
@@ -207,17 +226,18 @@ final class W3UITests: XCTestCase {
     func testZAgentLaunchApproveReplyAndTurnReview() throws {
         try launch()
         palette("New Agent")
-        let prompt = app.descendants(matching: .any).matching(identifier: "launch-prompt").firstMatch
-        XCTAssertTrue(prompt.waitForExistence(timeout: 5))
-        prompt.tap()
-        prompt.typeText("please ask permission")
-        // In this checkout, in a tab of its own (a new worktree is the Git suite's case).
+        // In this checkout, in a tab of its own (a new worktree is the Git suite's case). The
+        // worktree's name rows go with it, which brings the prompt into view.
         let worktree = app.switches["task-worktree"].firstMatch
         XCTAssertTrue(worktree.waitForExistence(timeout: 5))
         if worktree.value as? String == "1" {
             worktree.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
         }
         XCTAssertEqual(worktree.value as? String, "0", "no worktree")
+        let prompt = app.descendants(matching: .any).matching(identifier: "launch-prompt").firstMatch
+        XCTAssertTrue(prompt.waitForExistence(timeout: 5))
+        prompt.tap()
+        prompt.typeText("please ask permission")
         let before = panes.allElementsBoundByIndex.map(\.identifier)
         element("launch-start").tap()
         XCTAssertTrue(prompt.waitForNonExistence(timeout: 20), "the sheet closes once the pane exists")
@@ -394,7 +414,8 @@ final class W3UITests: XCTestCase {
         offer.tap()
         XCTAssertTrue(text(containing: "Directory listing").waitForExistence(timeout: 20), "the page loads through the forward")
         shot("browser")
-        element("browser-done").tap()
+        closePage()
+        palette("Dev Servers & Ports")
         XCTAssertTrue(element("port-18765").waitForExistence(timeout: 5), "the ports list shows it")
         shot("ports")
         closeTool()
@@ -424,8 +445,7 @@ final class W3UITests: XCTestCase {
             XCTAssertGreaterThan(Int(routed.value as? String ?? "0") ?? 0, 0, "the page went through the host's proxy")
             XCTAssertTrue(element("browser-address").label.contains("\(name):\(port)"), element("browser-address").label)
             shot("browser-origin-\(name)")
-            element("browser-done").tap()
-            closeTool()
+            closePage()
             type(inPane: "")
             app.typeKey("c", modifierFlags: .control)
         }

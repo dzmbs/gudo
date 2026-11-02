@@ -46,8 +46,28 @@ public final class WindowLayoutStore: LayoutStore {
     }
 
     public var session: Session {
-        compose(base.session)
+        let shared = base.session
+        let key = Composed.Key(shared: shared, active: activeTabId, focused: focusedPanes)
+        // Views read this once per sidebar row: composing each time made a render O(tabs²).
+        // Unchanged arrays and dictionaries compare by identity, so a hit costs next to nothing.
+        if let composed, composed.key == key { return composed.session }
+        let session = compose(shared)
+        composed = Composed(key: key, session: session)
+        return session
     }
+
+    private struct Composed {
+        struct Key: Equatable {
+            var shared: Session
+            var active: TabId?
+            var focused: [TabId: PaneId]
+        }
+        var key: Key
+        var session: Session
+    }
+
+    /// The last composition and what it was made from.
+    @ObservationIgnored private var composed: Composed?
 
     /// What this window shows of the host: the focused pane and every visible pane.
     public var view: (focused: PaneId?, visible: [PaneId]) {
@@ -56,7 +76,9 @@ public final class WindowLayoutStore: LayoutStore {
     }
 
     public func apply(_ op: LayoutOp) {
-        let current = session
+        // Composed only by the ops that read it: a burst of renames (naming a host's new tabs)
+        // must not compose the whole session once per tab.
+        var current: Session { session }
         switch op {
         case .focus(let pane):
             guard let tab = current.tab(containing: pane) else { return }

@@ -23,7 +23,18 @@ use crate::mirror::{Applied, Mirror};
 use crate::{ClientEvent, Inner, Outgoing, RelayMode, device_id, lock};
 
 const MAX_BACKOFF: Duration = Duration::from_secs(5);
+/// How long a connection must stay up for its end to count as a drop, redialled at once,
+/// rather than a failure, backed off (a daemon that welcomes and then drops every connection
+/// must not be redialled in a tight loop).
+const STABLE_FOR: Duration = Duration::from_secs(5);
 const ACK_INTERVAL: Duration = Duration::from_millis(5);
+/// How long [`Client::probe`](crate::Client::probe) waits for its pong on a link that has
+/// gone quiet: a live peer's QUIC stack acknowledges the ping at once, even when the daemon is
+/// busy.
+pub const PROBE_DEADLINE: Duration = Duration::from_secs(3);
+/// How long it waits on a link that still carries packets but answers slowly (a congested
+/// mobile network) before calling it dead.
+pub const PROBE_SLOW_DEADLINE: Duration = Duration::from_secs(10);
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ConnError {
@@ -156,6 +167,13 @@ pub(crate) fn endpoint_builder(
             Endpoint::builder(presets::Minimal).relay_mode(iroh::RelayMode::Custom(map))
         }
     };
+    let idle = iroh::endpoint::IdleTimeout::try_from(proto::IDLE_TIMEOUT).map_err(net)?;
+    builder = builder.transport_config(
+        iroh::endpoint::QuicTransportConfig::builder()
+            .keep_alive_interval(proto::KEEP_ALIVE)
+            .max_idle_timeout(Some(idle))
+            .build(),
+    );
     if !options.relay_ca_der.is_empty() {
         let roots = options
             .relay_ca_der
@@ -218,7 +236,7 @@ pub(crate) async fn supervise(inner: Arc<Inner>) {
         }
         match connect_once(&inner, &endpoint).await {
             Ok(conn) => {
-                backoff = Duration::from_millis(100);
+                let up = tokio::time::Instant::now();
                 let reason = run(&inner, conn).await;
                 *lock(&inner.connection) = None;
                 inner.ws.fail_pending();
@@ -232,8 +250,10 @@ pub(crate) async fn supervise(inner: Arc<Inner>) {
                 if *lock(&inner.paused) {
                     continue;
                 }
-                // A dropped connection is retried at once; backoff only applies to failures.
-                continue;
+                if up.elapsed() >= STABLE_FOR {
+                    backoff = Duration::from_millis(100);
+                    continue;
+                }
             }
             Err(ConnError::Refused(reason)) => {
                 inner.emit(ClientEvent::Refused {
@@ -613,6 +633,35 @@ async fn write_ctl(
     "ctl writer closed".into()
 }
 
+/// Pings the daemon on `conn` and closes `conn` if the answer does not come back in time
+/// (see [`Client::probe`](crate::Client::probe)).
+pub(crate) async fn probe(inner: Arc<Inner>, conn: Connection) {
+    let nonce = inner.next_ping.fetch_add(1, Ordering::Relaxed) + 1;
+    let mut pongs = inner.pong.subscribe();
+    let received = |conn: &Connection| conn.stats().udp_rx.datagrams;
+    let before = received(&conn);
+    inner.send(ClientCtl::Ping { nonce });
+    let mut answered =
+        std::pin::pin!(async move { pongs.wait_for(|&last| last >= nonce).await.is_ok() });
+    let alive = match tokio::time::timeout(PROBE_DEADLINE, &mut answered).await {
+        Ok(alive) => alive,
+        // Packets arrived meanwhile: the link is slow, not gone.
+        Err(_) if received(&conn) > before => {
+            tokio::time::timeout(PROBE_SLOW_DEADLINE - PROBE_DEADLINE, answered)
+                .await
+                .unwrap_or(false)
+        }
+        Err(_) => false,
+    };
+    let current = lock(&inner.connection)
+        .as_ref()
+        .is_some_and(|c| c.stable_id() == conn.stable_id());
+    if !alive && current && conn.close_reason().is_none() {
+        tracing::info!("no answer to a ping: dropping the connection");
+        conn.close(0u32.into(), b"no answer");
+    }
+}
+
 async fn read_ctl(inner: Arc<Inner>, mut rx: RecvStream) -> String {
     loop {
         let msg = match recv::<ServerCtl>(&mut rx).await {
@@ -645,6 +694,14 @@ async fn read_ctl(inner: Arc<Inner>, mut rx: RecvStream) -> String {
             continue;
         };
         let event = match msg {
+            ServerCtl::Pong { nonce } => {
+                inner.pong.send_if_modified(|last| {
+                    let newer = nonce > *last;
+                    *last = (*last).max(nonce);
+                    newer
+                });
+                continue;
+            }
             ServerCtl::Sessions { sessions } => ClientEvent::Sessions { sessions },
             ServerCtl::Attached { session_id } => {
                 lock(&inner.wanted).session = Some(session_id);
@@ -782,6 +839,10 @@ async fn accept_panes(
                     while let Ok(Some(out)) = recv::<PaneOutput>(&mut stream).await {
                         apply_output(&inner, pane_id, out, &ctl);
                         acks.notify_one();
+                        // A flooding stream always has the next frame ready, so its reads
+                        // never yield: let other panes' output and the input writer run
+                        // between frames, as the listener's terminal work is slow.
+                        tokio::task::yield_now().await;
                     }
                 }
                 Ok(Some(StreamHeader::Bulk)) => {
@@ -805,9 +866,19 @@ fn apply_output(
     let event = match out {
         PaneOutput::Bytes { seq, data } => {
             lock(&inner.stats).byte_frames += 1;
-            let applied = lock(&inner.mirrors)
-                .get_mut(&pane_id)
-                .map_or(Applied::Gap, |m| m.apply(seq.0, &data));
+            let mut mirrors = lock(&inner.mirrors);
+            // No mirror: the pane is not followed (any more). Output that was in flight when
+            // it was unsubscribed or closed is dropped, never a reason to follow it again.
+            let Some(mirror) = mirrors.get_mut(&pane_id) else {
+                return;
+            };
+            let applied = mirror.apply(seq.0, &data);
+            if applied == Applied::Gap {
+                // Start over from a snapshot, once: the frames still in flight behind this
+                // one find no mirror and are dropped.
+                mirrors.remove(&pane_id);
+            }
+            drop(mirrors);
             match applied {
                 Applied::New { seq, start } => ClientEvent::PaneBytes {
                     pane_id,
@@ -838,7 +909,10 @@ fn apply_output(
             raw_len,
             data,
         } => match inflate(&data, raw_len) {
-            Ok(raw) => snapshot_event(inner, pane_id, seq, snap_gen, raw, keep_vt),
+            Ok(raw) => match snapshot_event(inner, pane_id, seq, snap_gen, raw, keep_vt) {
+                Some(event) => event,
+                None => return,
+            },
             Err(e) => {
                 tracing::warn!(%pane_id, "bad snapshot: {e}");
                 return;
@@ -848,7 +922,10 @@ fn apply_output(
             seq,
             snap_gen,
             data,
-        } => snapshot_event(inner, pane_id, seq, snap_gen, data, keep_vt),
+        } => match snapshot_event(inner, pane_id, seq, snap_gen, data, keep_vt) {
+            Some(event) => event,
+            None => return,
+        },
         PaneOutput::Resized { seq, size } => {
             if let Some(m) = lock(&inner.mirrors).get_mut(&pane_id) {
                 m.resize(size);
@@ -943,15 +1020,19 @@ fn snapshot_event(
     snap_gen: proto::SnapGen,
     raw: Vec<u8>,
     keep_vt: bool,
-) -> ClientEvent {
+) -> Option<ClientEvent> {
     lock(&inner.stats).snapshots += 1;
+    // A snapshot that was in flight when the pane was unsubscribed starts nothing.
+    if !lock(&inner.wanted).subscribed.contains(&pane_id) {
+        return None;
+    }
     let mirror = Mirror::from_snapshot(snap_gen, seq.0, &raw, keep_vt);
     lock(&inner.mirrors).insert(pane_id, mirror);
-    ClientEvent::PaneSnapshot {
+    Some(ClientEvent::PaneSnapshot {
         pane_id,
         seq: seq.0,
         data: raw,
-    }
+    })
 }
 
 async fn send_acks(

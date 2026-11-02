@@ -20,7 +20,8 @@ bin="${UN_HOSTD_BIN:-$repo/target/debug/unnamed-hostd}"
 daemon() { "$apple/scripts/local-daemon.sh" "$@" "$state"; }
 mint() { "$bin" --state-dir "$state" pair --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["ticket"])'; }
 
-trap 'daemon stop; rm -rf "$state"' EXIT
+. "$apple/scripts/lib/cleanup.sh"
+on_exit 'daemon stop; rm -rf "$state"'
 paste_ticket="$(daemon start)"
 link_ticket="$(mint)"
 relay_ticket="$(mint)"
@@ -29,7 +30,7 @@ log="$state/xcodebuild.log"
 status=0
 TEST_RUNNER_PAIR_TICKET_PASTE="$paste_ticket" TEST_RUNNER_PAIR_TICKET_LINK="$link_ticket" \
 TEST_RUNNER_PAIR_TICKET_RELAY="$relay_ticket" \
-  xcodebuild -project "$apple/App.xcodeproj" -scheme App \
+  xcodebuild -collect-test-diagnostics never -project "$apple/App.xcodeproj" -scheme App \
   -destination "platform=iOS Simulator,id=$sim" -derivedDataPath "${DERIVED_DATA:-$apple/build/DerivedData}" \
   -resultBundlePath "$state/result.xcresult" \
   -only-testing:AppUITests/PairingUITests test >"$log" 2>&1 || status=$?

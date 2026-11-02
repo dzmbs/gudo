@@ -11,7 +11,7 @@ struct ShortcutsSheet: View {
         let agents: [WorkspaceAction] = [.newAgent, .inbox, .jumpToWaitingAgent]
         return [
             ("Agents", agents),
-            ("Window", WorkspaceAction.windowActions.filter { !agents.contains($0) } + [.newWindow]),
+            ("Window", WorkspaceAction.windowActions.filter { !agents.contains($0) } + (WindowRequest.isSupported ? [.newWindow] : [])),
             ("Tabs", [.newTab, .newTabOnHost] + WorkspaceAction.tabActions),
             ("Hosts", WorkspaceAction.hostActions),
             ("Panes", [.splitRight, .splitDown, .splitWithHost, .closePane] + WorkspaceAction.paneActions),

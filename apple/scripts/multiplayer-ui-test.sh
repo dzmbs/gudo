@@ -19,7 +19,8 @@ un="${UN_BIN:-$repo/target/debug/un}"
 daemon() { "$apple/scripts/local-daemon.sh" "$@" "$state"; }
 
 watch_pid=
-trap '[[ -n $watch_pid ]] && kill $watch_pid 2>/dev/null; daemon stop; rm -rf "$state"' EXIT
+. "$apple/scripts/lib/cleanup.sh"
+on_exit 'daemon stop; rm -rf "$state"'
 ticket_app="$(daemon start)"
 
 # A second owner device (the CLI) signs the guest's invite; the guest joins with its own key.
@@ -36,7 +37,7 @@ unset XDG_CONFIG_HOME
 
 log="$state/xcodebuild.log"
 status=0
-TEST_RUNNER_PAIR_TICKET="$ticket_app" xcodebuild -project "$apple/App.xcodeproj" -scheme App \
+TEST_RUNNER_PAIR_TICKET="$ticket_app" xcodebuild -collect-test-diagnostics never -project "$apple/App.xcodeproj" -scheme App \
   -destination "platform=iOS Simulator,id=$sim" -derivedDataPath "${DERIVED_DATA:-$apple/build/DerivedData}" \
   -resultBundlePath "$state/result.xcresult" \
   -only-testing:AppUITests/MultiplayerUITests test >"$log" 2>&1 || status=$?

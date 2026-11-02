@@ -87,7 +87,7 @@ extension WindowModel {
 
     /// Esc or ✕: the bar closes, the highlights go and the terminal has the keyboard again.
     func closeSearch() {
-        let pane = searchPane ?? workspace?.focusedPane.flatMap { workspace?.panes[$0] }
+        let pane = searchPane ?? workspace?.focusedPane.flatMap { workspace?.pane($0) }
         isSearchShown = false
         detachSearch(pane)
         guard let view = pane?.view else { return }
@@ -103,7 +103,7 @@ extension WindowModel {
             // ⌘G with the bar closed brings it back with the last needle.
             isSearchShown = true
         }
-        if searchPane == nil { attachSearch(workspace?.focusedPane.flatMap { workspace?.panes[$0] }) }
+        if searchPane == nil { attachSearch(workspace?.focusedPane.flatMap { workspace?.pane($0) }) }
         guard let pane = searchPane, !searchNeedle.isEmpty else { return }
         let surface = pane.view.surface
         searchHistoryTask?.cancel()

@@ -16,7 +16,8 @@ export PORT="${PORT:-47015}"
 daemon() { "$apple/scripts/local-daemon.sh" "$@" "$state"; }
 
 ticket="$(daemon start)"
-trap 'daemon stop; rm -rf "$state"' EXIT
+. "$apple/scripts/lib/cleanup.sh"
+on_exit 'daemon stop; rm -rf "$state"'
 bin="${UN_HOSTD_BIN:-$repo/target/debug/unnamed-hostd}"
 peer_ticket="$("$bin" --state-dir "$state" pair --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["ticket"])')"
 
@@ -28,7 +29,7 @@ peer=$!
 
 log="$state/xcodebuild.log"
 status=0
-TEST_RUNNER_PAIR_TICKET="$ticket" xcodebuild -project "$apple/App.xcodeproj" -scheme App \
+TEST_RUNNER_PAIR_TICKET="$ticket" xcodebuild -collect-test-diagnostics never -project "$apple/App.xcodeproj" -scheme App \
   -destination "platform=iOS Simulator,id=$sim" -derivedDataPath "$apple/build/DerivedData" \
   -only-testing:AppUITests/CanvasPeersUITests test >"$log" 2>&1 || status=$?
 peer_status=0

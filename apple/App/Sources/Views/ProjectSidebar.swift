@@ -193,7 +193,9 @@ struct SidebarTabList: View {
         let (items, sections) = model.sidebarItems(drop: drag.plan, projectMove: drag.projectMove, showsIntro: !introDismissed)
         let numbers = Dictionary(model.groups.tabs.enumerated().map { ($1, $0 + 1) }, uniquingKeysWith: { a, _ in a })
         let _ = geometry.record(items, sections)
-        VStack(alignment: .leading, spacing: 0) {
+        // Lazy: a host with hundreds of tabs lays out the rows in view, not every row on every
+        // status change.
+        LazyVStack(alignment: .leading, spacing: 0) {
             ForEach(items) { item in
                 SidebarItemView(item: item, numbers: numbers)
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.space)) } action: { geometry.frames[item.id] = $0 }
@@ -375,7 +377,7 @@ private struct SidebarDropDelegate: DropDelegate {
     let drag: SidebarDragState
     let geometry: SidebarGeometry
 
-    func validateDrop(info: DropInfo) -> Bool { model.draggedTab != nil || drag.draggedProject != nil }
+    func validateDrop(info: DropInfo) -> Bool { info.isTabDrag && (model.draggedTab != nil || drag.draggedProject != nil) }
 
     func dropEntered(info: DropInfo) {
         drag.dragging = drag.draggedProject == nil ? model.draggedTab : nil
@@ -538,7 +540,7 @@ private struct ProjectHeader: View {
         .onDrag {
             drag.draggedProject = project.id
             model.draggedTab = nil
-            return NSItemProvider(object: "project:\(project.id)" as NSString)
+            return TabDrag.provider(forProject: project.id, in: model)
         } preview: {
             DragLiftPreview(title: project.name, systemImage: "circle.fill")
         }
@@ -591,10 +593,11 @@ private struct ProjectHeader: View {
     }
 }
 
-/// A project's menu: Rename, Colour, New Terminal, Collapse, Ungroup, Close All Tabs.
-private struct ProjectMenu: View {
+/// A project's menu: Rename, Colour, New Terminal, Collapse, Ungroup, Close All Tabs. Without
+/// `collapsed` (the compact switcher, which has nothing to collapse) there is no Collapse.
+struct ProjectMenu: View {
     let project: Project
-    let collapsed: Bool
+    let collapsed: Bool?
     let rename: () -> Void
     @Environment(WindowModel.self) private var model
 
@@ -615,8 +618,10 @@ private struct ProjectMenu: View {
             }
         }
         Button("New Terminal", systemImage: "terminal") { model.newTab(inProject: project.id) }
-        Button(collapsed ? "Expand" : "Collapse", systemImage: collapsed ? "chevron.down" : "chevron.right") {
-            withAnimation(DS.Motion.snappy) { model.groups.toggleCollapsed(project: project.id) }
+        if let collapsed {
+            Button(collapsed ? "Expand" : "Collapse", systemImage: collapsed ? "chevron.down" : "chevron.right") {
+                withAnimation(DS.Motion.snappy) { model.groups.toggleCollapsed(project: project.id) }
+            }
         }
         Divider()
         if project.tabs.isEmpty {

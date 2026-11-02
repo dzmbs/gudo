@@ -28,8 +28,11 @@ final class AppDataTests: XCTestCase {
     }
 
     func testTestRunnersAreIsolated() {
-        XCTAssertNotNil(directory(environment: ["XCTestConfigurationFilePath": "/x.xctestconfiguration"]))
-        XCTAssertNotNil(directory(environment: ["XCTestSessionIdentifier": "1"]))
+        let unit = temporary.appending(path: "dev.x.app.unit-test-data").path
+        XCTAssertEqual(directory(environment: ["XCTestConfigurationFilePath": "/x.xctestconfiguration"])?.path, unit)
+        XCTAssertEqual(directory(environment: ["XCTestSessionIdentifier": "1"])?.path, unit)
+        // Hosts that UI tests paired never reach the hosted unit tests.
+        XCTAssertNotEqual(unit, directory(["testTicket": "t"])?.path)
     }
 
     func testThisRunIsIsolated() {

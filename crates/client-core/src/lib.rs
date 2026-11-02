@@ -33,6 +33,7 @@ mod askpass;
 mod assist;
 mod browser;
 mod conn;
+pub use conn::{PROBE_DEADLINE, PROBE_SLOW_DEADLINE};
 pub mod knock;
 mod listen;
 mod mirror;
@@ -529,6 +530,9 @@ pub(crate) struct Inner {
     pub daemon_info: Mutex<Option<proto::DaemonInfo>>,
     /// The last connection was for an upgrade only.
     pub incompatible: Mutex<bool>,
+    /// The nonce of the last `Pong`, for [`Client::probe`].
+    pub pong: watch::Sender<u64>,
+    pub next_ping: AtomicU64,
 }
 
 /// How a client authenticates: as a paired device (pairing ticket) or a guest (invite).
@@ -710,6 +714,8 @@ impl Client {
             programs: Mutex::new(HashMap::new()),
             daemon_info: Mutex::new(None),
             incompatible: Mutex::new(false),
+            pong: watch::Sender::new(0),
+            next_ping: AtomicU64::new(0),
         });
         let supervisor = runtime.spawn(conn::supervise(Arc::clone(&inner)));
         Ok(Self {
@@ -786,8 +792,16 @@ impl Client {
     }
 
     /// Sends input to a pane. Queued while disconnected and delivered after reconnecting.
+    /// Input larger than one frame allows is sent in 1 MiB pieces.
     pub fn send_input(&self, pane_id: PaneId, data: Vec<u8>) {
-        self.send_payload(pane_id, InputPayload::Bytes(data));
+        const PIECE: usize = 1 << 20;
+        if data.len() <= PIECE {
+            self.send_payload(pane_id, InputPayload::Bytes(data));
+            return;
+        }
+        for piece in data.chunks(PIECE) {
+            self.send_payload(pane_id, InputPayload::Bytes(piece.to_vec()));
+        }
     }
 
     /// Sends a key event; the daemon encodes it for the program's current keyboard modes
@@ -805,8 +819,25 @@ impl Client {
     /// Pastes text: bracketed if the program enabled bracketed paste, with control bytes that
     /// could end the paste early replaced. Confirming a multi-line paste is up to the caller
     /// (see `ghostty_vt::paste_is_safe`).
+    ///
+    /// A paste larger than one input frame allows goes as consecutive pastes of at most
+    /// 1 MiB each, cut at character boundaries; the program receives the same text.
     pub fn send_paste(&self, pane_id: PaneId, text: String) {
-        self.send_payload(pane_id, InputPayload::Paste(text));
+        const PIECE: usize = 1 << 20;
+        if text.len() <= PIECE {
+            self.send_payload(pane_id, InputPayload::Paste(text));
+            return;
+        }
+        let mut rest = text.as_str();
+        while !rest.is_empty() {
+            let mut end = rest.len().min(PIECE);
+            while !rest.is_char_boundary(end) {
+                end -= 1;
+            }
+            let (piece, tail) = rest.split_at(end);
+            self.send_payload(pane_id, InputPayload::Paste(piece.to_owned()));
+            rest = tail;
+        }
     }
 
     fn send_payload(&self, pane_id: PaneId, payload: InputPayload) {
@@ -1015,6 +1046,20 @@ impl Client {
             self.handle
                 .spawn(async move { endpoint.network_change().await });
         }
+    }
+
+    /// Checks that the live connection still reaches the daemon (app foregrounded, typing that
+    /// got no answer): a ping must come back within [`PROBE_DEADLINE`], or within
+    /// [`PROBE_SLOW_DEADLINE`] while the link still carries packets (slow, not dead). Otherwise
+    /// the connection is dropped and redialled, so a half-open link shows as reconnecting in
+    /// seconds rather than at the idle timeout. Without a live connection it does nothing (one
+    /// is already being dialled). Returns at once.
+    pub fn probe(&self) {
+        let Some(conn) = lock(&self.inner.connection).clone() else {
+            return;
+        };
+        let inner = Arc::clone(&self.inner);
+        self.handle.spawn(conn::probe(inner, conn));
     }
 
     /// Drops the connection and stays offline until [`reconnect`](Self::reconnect), keeping
