@@ -78,7 +78,7 @@ public final class RowCells {
 
 extension Row {
     /// Reads up to `limit` cells into `row`: the row's raw cells in one call, then per-cell calls
-    /// only for cells with styling, a background color or several codepoints.
+    /// only for cells with a new style, a background color or several codepoints.
     public func gather(into row: RowCells, limit: Int) {
         var view = GhosttyCellsView()
         ghostty_render_state_row_get(iterator, GHOSTTY_RENDER_STATE_ROW_DATA_CELLS_RAW, &view)
@@ -87,35 +87,58 @@ extension Row {
         let count = min(view.len, max(0, limit))
         row.reset(count: count)
         guard let rawCells = view.ptr else { return }
+        let codepoints = row.codepoints
+        let widths = row.widths
+        let styles = row.styles
+        let foregrounds = row.foregrounds
+        let backgrounds = row.backgrounds
+        let clusterStarts = row.clusterStarts
+        // A row lives in one page, where a style id names one style: runs of a style share it.
+        var lastStyleID: UInt16 = 0
+        var lastStyle: (style: Cell.Style, foreground: RGB?, background: RGB?)?
         for x in 0..<count {
             let raw = rawCells[x]
             var codepoint: UInt32 = 0
             var tag = GHOSTTY_CELL_CONTENT_CODEPOINT
             var wide = GHOSTTY_CELL_WIDE_NARROW
-            var styled = false
+            var styleID: UInt16 = 0
             ghostty_cell_get(raw, GHOSTTY_CELL_DATA_CODEPOINT, &codepoint)
             ghostty_cell_get(raw, GHOSTTY_CELL_DATA_CONTENT_TAG, &tag)
             ghostty_cell_get(raw, GHOSTTY_CELL_DATA_WIDE, &wide)
-            ghostty_cell_get(raw, GHOSTTY_CELL_DATA_HAS_STYLING, &styled)
-            row.codepoints[x] = codepoint
-            row.widths[x] = Cell.Width(wide)
-            row.styles[x] = nil
-            row.foregrounds[x] = nil
-            row.backgrounds[x] = nil
-            row.clusterStarts[x] = -1
+            ghostty_cell_get(raw, GHOSTTY_CELL_DATA_STYLE_ID, &styleID)
+            codepoints[x] = codepoint
+            widths[x] = Cell.Width(wide)
+            styles[x] = nil
+            foregrounds[x] = nil
+            backgrounds[x] = nil
+            clusterStarts[x] = -1
             let hasBackground = tag == GHOSTTY_CELL_CONTENT_BG_COLOR_PALETTE || tag == GHOSTTY_CELL_CONTENT_BG_COLOR_RGB
             let isCluster = tag == GHOSTTY_CELL_CONTENT_CODEPOINT_GRAPHEME
-            guard styled || hasBackground || isCluster else { continue }
+            if styleID != 0, !hasBackground, styleID == lastStyleID, let lastStyle {
+                styles[x] = lastStyle.style
+                foregrounds[x] = lastStyle.foreground
+                backgrounds[x] = lastStyle.background
+                if isCluster {
+                    ghostty_render_state_row_cells_select(cells, UInt16(x))
+                    row.appendCluster(cells, at: x)
+                }
+                continue
+            }
+            guard styleID != 0 || hasBackground || isCluster else { continue }
             ghostty_render_state_row_cells_select(cells, UInt16(x))
             let cell = Cell(cells: cells)
-            if styled {
+            if styleID != 0 {
                 var style = GhosttyStyle()
                 style.size = MemoryLayout<GhosttyStyle>.size
                 ghostty_render_state_row_cells_get(cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE, &style)
-                row.styles[x] = Cell.Style(style)
-                row.foregrounds[x] = cell.foreground
+                styles[x] = Cell.Style(style)
+                foregrounds[x] = cell.foreground
             }
-            if styled || hasBackground { row.backgrounds[x] = cell.background }
+            if styleID != 0 || hasBackground { backgrounds[x] = cell.background }
+            if styleID != 0, !hasBackground {
+                lastStyleID = styleID
+                lastStyle = (styles[x]!, foregrounds[x], backgrounds[x])
+            }
             if isCluster { row.appendCluster(cells, at: x) }
         }
     }

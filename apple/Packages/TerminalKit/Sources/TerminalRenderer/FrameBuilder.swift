@@ -250,31 +250,36 @@ final class FrameBuilder {
         row.gather(into: cells, limit: cols)
         let filled = cells.count
         let codepoints = cells.codepoints
+        let styles = cells.styles
+        let foregrounds = cells.foregrounds
+        let backgrounds = cells.backgrounds
+        let widths = cells.widths
         let selection = row.selection
+        let frameStyle = style
 
         let defaultFg = colors.foreground
         for x in 0..<filled {
-            let style = cells.styles[x]
-            var fg = cells.foregrounds[x] ?? defaultFg
-            var bg = cells.backgrounds[x]
+            let style = styles[x]
+            var fg = foregrounds[x] ?? defaultFg
+            var bg = backgrounds[x]
             if style?.inverse == true {
                 (fg, bg) = (bg ?? colors.background, fg)
             }
             if let selection, selection.contains(x) {
                 // Ghostty without selection colors configured: swap the cell's colors.
                 let cellBg = bg ?? colors.background
-                bg = self.style.selectionBackground ?? fg
-                fg = self.style.selectionForeground ?? cellBg
+                bg = frameStyle.selectionBackground ?? fg
+                fg = frameStyle.selectionForeground ?? cellBg
             }
             if let bg { cached.bg[x] = rgba(bg) }
             cached.fg[x] = rgba(bg ?? colors.background)
 
-            let width = cells.widths[x]
+            let width = widths[x]
             guard width == .narrow || width == .wide, style?.invisible != true else { continue }
             let span = width == .wide ? 2 : 1
             cached.wide[x] = width == .wide
             var color = rgba(fg)
-            if style?.faint == true { color.w = self.style.faintAlpha }
+            if style?.faint == true { color.w = frameStyle.faintAlpha }
 
             if style?.blink == true { cached.hasBlink = true }
             let blinkHidden = style?.blink == true && !blinkOn
