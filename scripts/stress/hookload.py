@@ -4,6 +4,7 @@
   hookload.py hooks <un-hook> <threads> <secs>    real un-hook processes, PreToolUse/PostToolUse
   hookload.py perm <un-hook> <threads> <secs>     real un-hook PermissionRequests, each new one
                                                   replacing the one held open
+  hookload.py perm-every <un-hook> <gap> <secs>   a new PermissionRequest every <gap> seconds
   hookload.py term <threads> <secs> <tool> <json> terminal-tool calls (what `un-hook mcp` sends)
 
 Prints calls, rate, latency percentiles and failures to stdout and to $HOOKLOAD_OUT if set.
@@ -40,12 +41,18 @@ def record(seconds, failure):
             fails.append(failure)
 
 
-def un_hook(binary, event, payload, n):
+def un_hook(binary, event, payload, n, end):
     env = dict(os.environ, UN_HOOK_DEBUG="1")
     started = time.monotonic()
-    p = subprocess.run([binary, "claude", event], input=json.dumps(payload).encode(),
-                       capture_output=True, env=env)
-    record(time.monotonic() - started, p.stderr.decode().strip()[:120] or None)
+    try:
+        # A held PermissionRequest returns once a newer one replaces it; the last one is
+        # still held when the run ends.
+        p = subprocess.run([binary, "claude", event], input=json.dumps(payload).encode(),
+                           capture_output=True, env=env, timeout=max(1.0, end - started + 1))
+        failure = p.stderr.decode().strip()[:120] or None
+    except subprocess.TimeoutExpired:
+        failure = "still held when the run ended"
+    record(time.monotonic() - started, failure)
 
 
 def term_call(tool, args):
@@ -73,17 +80,44 @@ def term_call(tool, args):
     record(time.monotonic() - started, failure)
 
 
+def perm_every(binary, gap, secs):
+    """One agent asking for a new approval every `gap` seconds (the newest replaces the one
+    held open), as a looping agent would."""
+    env = dict(os.environ, UN_HOOK_DEBUG="1")
+    end = time.monotonic() + secs
+    held = []
+    while time.monotonic() < end:
+        p = subprocess.Popen([binary, "claude", "PermissionRequest"], stdin=subprocess.PIPE,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+        p.stdin.write(json.dumps(PERM).encode())
+        p.stdin.close()
+        held.append(p)
+        time.sleep(gap)
+    for p in held:
+        p.kill()
+        p.wait()
+    report = f"perm-every: {len(held)} requests, one every {gap} s\n"
+    sys.stdout.write(report)
+    out = os.environ.get("HOOKLOAD_OUT")
+    if out:
+        with open(out, "a") as f:
+            f.write(report)
+
+
 def main():
     mode = sys.argv[1]
+    if mode == "perm-every":
+        perm_every(sys.argv[2], float(sys.argv[3]), float(sys.argv[4]))
+        return
     if mode == "term":
         threads, secs, tool, args = int(sys.argv[2]), float(sys.argv[3]), sys.argv[4], json.loads(sys.argv[5])
         work = lambda n: term_call(tool, args)
     else:
         binary, threads, secs = sys.argv[2], int(sys.argv[3]), float(sys.argv[4])
         if mode == "hooks":
-            work = lambda n: un_hook(binary, "PreToolUse" if n % 2 else "PostToolUse", PRE, n)
+            work = lambda n: un_hook(binary, "PreToolUse" if n % 2 else "PostToolUse", PRE, n, end)
         else:
-            work = lambda n: un_hook(binary, "PermissionRequest", PERM, n)
+            work = lambda n: un_hook(binary, "PermissionRequest", PERM, n, end)
     end = time.monotonic() + secs
 
     def worker(i):

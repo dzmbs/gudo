@@ -81,8 +81,8 @@ struct Budget {
 }
 
 /// Alerts the relay accepts (docs/PUSH.md §9): per daemon 30 at once then one every 3 s, per
-/// device 30 then one every 12 s. Past them it only refuses, so an agent asking for approval in
-/// a loop is pushed within them and the rest wait in the inbox.
+/// device 30 then one every 12 s. Past them it only refuses (and retries pile up), so pushes
+/// past them wait their turn instead.
 const DAEMON_ALERTS: Budget = Budget {
     burst: 30,
     every: Duration::from_secs(3),
@@ -113,6 +113,15 @@ impl Bucket {
         self.tokens = (self.tokens + earned).min(f64::from(budget.burst));
         self.at = now;
     }
+
+    /// How long until a whole push is available (after [`refill`](Self::refill)).
+    fn wait(&self, budget: Budget) -> Duration {
+        if self.tokens >= 1.0 {
+            Duration::ZERO
+        } else {
+            budget.every.mul_f64(1.0 - self.tokens)
+        }
+    }
 }
 
 /// The relay's alert budgets as this daemon has spent them.
@@ -133,23 +142,27 @@ impl Budgets {
         }
     }
 
-    /// Takes one alert to `device` from both budgets, or nothing if either is spent.
-    fn spend(&mut self, device: &str, now: Instant) -> bool {
-        if self.paused_until.is_some_and(|until| now < until) {
-            return false;
-        }
+    /// Takes one alert to `device` from both budgets; if either is spent, how long until
+    /// both have one again.
+    fn spend(&mut self, device: &str, now: Instant) -> Result<(), Duration> {
+        let paused = self
+            .paused_until
+            .map_or(Duration::ZERO, |until| until.saturating_duration_since(now));
         self.daemon.refill(DAEMON_ALERTS, now);
         let own = self
             .devices
             .entry(device.to_owned())
             .or_insert_with(|| Bucket::full(DEVICE_ALERTS, now));
         own.refill(DEVICE_ALERTS, now);
-        if self.daemon.tokens < 1.0 || own.tokens < 1.0 {
-            return false;
+        let wait = paused
+            .max(self.daemon.wait(DAEMON_ALERTS))
+            .max(own.wait(DEVICE_ALERTS));
+        if !wait.is_zero() {
+            return Err(wait);
         }
         self.daemon.tokens -= 1.0;
         own.tokens -= 1.0;
-        true
+        Ok(())
     }
 }
 
@@ -529,18 +542,19 @@ fn wants(prefs: &PushPrefs, kind: push::Kind) -> bool {
     }
 }
 
+/// Debounce: not seen meanwhile (a client focused the pane, the blocker went away), and no
+/// newer item for the same pane that will be pushed instead.
+fn still_due(core: &Core, item: &AttentionItem) -> bool {
+    core.ws.attention.get(item.id).is_some_and(|i| !i.seen)
+        && !core.ws.attention.superseded(item.id, item.pane_id)
+}
+
 async fn deliver(core: Arc<Core>, item: AttentionItem) {
     if !core.cfg.push.enabled || lock(&core.push.regs).is_empty() {
         return;
     }
     tokio::time::sleep(core.cfg.push.delay).await;
-    // Debounce: seen meanwhile (a client focused the pane, the blocker went away), or a newer
-    // item for the same pane will be pushed instead.
-    match core.ws.attention.get(item.id) {
-        Some(current) if !current.seen => {}
-        _ => return,
-    }
-    if core.ws.attention.superseded(item.id, item.pane_id) {
+    if !still_due(&core, &item) {
         return;
     }
     let (kind, buttons) = classify(&core, &item);
@@ -556,16 +570,20 @@ async fn deliver(core: Arc<Core>, item: AttentionItem) {
             tracing::debug!(item = item.id, "device is looking at this host; no push");
             continue;
         }
-        if !lock(&core.push.budgets).spend(&reg.device, Instant::now()) {
-            tracing::debug!(
-                item = item.id,
-                "push budget spent; the item stays in the inbox"
-            );
-            continue;
-        }
         let core = Arc::clone(&core);
         let (item, host, buttons) = (item.clone(), host.clone(), buttons.clone());
         tokio::spawn(async move {
+            // Past the relay's budget a push waits its turn, and goes only if still due.
+            loop {
+                let wait = match lock(&core.push.budgets).spend(&reg.device, Instant::now()) {
+                    Ok(()) => break,
+                    Err(wait) => wait,
+                };
+                tokio::time::sleep(wait).await;
+                if !still_due(&core, &item) || core.device_active(device) {
+                    return;
+                }
+            }
             let result = send(&core, &reg, device, &item, kind, buttons.as_ref(), &host).await;
             match result {
                 Ok(()) => {
@@ -806,23 +824,24 @@ mod tests {
     fn alerts_stay_within_the_relays_budgets() {
         let t0 = Instant::now();
         let mut b = Budgets::new(t0);
-        let sent = (0..100).filter(|_| b.spend("a", t0)).count();
+        let sent = (0..100).filter(|_| b.spend("a", t0).is_ok()).count();
         assert_eq!(sent, 30, "a burst stops at the budget");
-        assert!(!b.spend("a", t0 + Duration::from_secs(11)));
+        let wait = b.spend("a", t0 + Duration::from_secs(11)).unwrap_err();
         assert!(
-            b.spend("a", t0 + Duration::from_secs(12)),
-            "one more every 12 s"
+            wait.abs_diff(Duration::from_secs(1)) < Duration::from_millis(1),
+            "the next one is due a second later, not {wait:?}"
         );
+        assert_eq!(b.spend("a", t0 + Duration::from_secs(12)), Ok(()));
         // The daemon's budget earned 4 in those 12 s, one of them spent above.
         let other = (0..100)
-            .filter(|_| b.spend("b", t0 + Duration::from_secs(12)))
+            .filter(|_| b.spend("b", t0 + Duration::from_secs(12)).is_ok())
             .count();
         assert_eq!(other, 3);
         // A 429 holds everything back until its retry-after.
         let later = t0 + Duration::from_secs(600);
         b.paused_until = Some(later + Duration::from_secs(5));
-        assert!(!b.spend("c", later));
-        assert!(b.spend("c", later + Duration::from_secs(5)));
+        assert_eq!(b.spend("c", later), Err(Duration::from_secs(5)));
+        assert_eq!(b.spend("c", later + Duration::from_secs(5)), Ok(()));
     }
 
     #[test]

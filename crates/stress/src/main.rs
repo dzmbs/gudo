@@ -140,6 +140,10 @@ enum Cmd {
         secs: u64,
         #[arg(long, default_value_t = 200)]
         status: u16,
+        /// Pair a device of its own with the ticket in this file (a device that is looking at
+        /// the host gets no pushes, and the other commands share one key).
+        #[arg(long)]
+        ticket_file: Option<PathBuf>,
     },
     /// Fresh devices knocking on the knock invite in `invite_file`, `parallel` at a time.
     Knocks {
@@ -362,7 +366,18 @@ async fn run(cli: Cli, handle: tokio::runtime::Handle) -> Result<()> {
         Cmd::Paste { mb } => paste(&handle, key, &ticket, mb).await,
         Cmd::Layout { rate, secs } => layout_storm(&handle, key, &ticket, rate, secs).await,
         Cmd::Projects { rate, secs } => projects(&handle, key, &ticket, rate, secs).await,
-        Cmd::PushSink { secs, status } => {
+        Cmd::PushSink {
+            secs,
+            status,
+            ticket_file,
+        } => {
+            let (key, ticket) = match ticket_file {
+                Some(f) => (
+                    ClientConfig::generate_key(),
+                    std::fs::read_to_string(f)?.trim().to_owned(),
+                ),
+                None => (key, ticket),
+            };
             sink::push_sink(&handle, key, &ticket, secs, status).await
         }
         Cmd::Knocks {
