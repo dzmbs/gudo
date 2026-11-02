@@ -275,6 +275,7 @@ struct InboxView: View {
             deny: { deny(item) },
             approveEdited: { input in approveEdited(item, input: input) },
             approveAll: { approveAll(item) },
+            allowForPane: { allowForPane(item) },
             revoke: { rule in revoke(item, rule: rule) },
             setTyping: { isTyping in
                 if isTyping { typing.insert(item.id) } else { typing.remove(item.id) }
@@ -338,6 +339,11 @@ struct InboxView: View {
         advance(from: item)
         withAnimation(DS.Motion.snappy) { feed.approve(item.id) }
         model.agentToasts.dismiss(item: item.id)
+    }
+
+    private func allowForPane(_ item: AgentItem) {
+        approvedCount += 1
+        withAnimation(DS.Motion.snappy) { feed.allowForPane(item.id) }
     }
 
     private func deny(_ item: AgentItem) {
@@ -613,6 +619,8 @@ private struct InboxRow: View {
     let deny: () -> Void
     let approveEdited: (String) -> Void
     let approveAll: () -> Void
+    /// A drive request: let the agent drive that pane until it closes.
+    let allowForPane: () -> Void
     let revoke: (AgentAutoApproval) -> Void
     /// The row's text field took or gave up the keyboard.
     let setTyping: (Bool) -> Void
@@ -815,12 +823,28 @@ private struct InboxRow: View {
                 .accessibilityIdentifier("inbox-deny-\(item.id)")
             HStack(spacing: 1) {
                 Button(action: approve) {
-                    verb(approval?.approvedAlready == true ? "Approved" : "Approve", key: "↩")
+                    verb(approval?.approvedAlready == true ? "Approved" : item.drive ? "Allow Once" : "Approve", key: "↩")
                 }
                     .buttonStyle(.primaryGlass)
                     .disabled(!mayApprove)
-                    .help("Approve (↩)")
+                    .help(item.drive ? "Allow this one action (↩)" : "Approve (↩)")
                     .accessibilityIdentifier("inbox-approve-\(item.id)")
+                if item.drive, mayApprove {
+                    Menu {
+                        Button("Allow for This Pane Until It Closes", systemImage: "rectangle.badge.checkmark", action: allowForPane)
+                            .accessibilityIdentifier("inbox-allow-pane-\(item.id)")
+                        Text("It may type, run commands and close it without asking again. Password prompts stay yours.")
+                    } label: {
+                        Image(systemName: "chevron.down")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .menuIndicator(.hidden)
+                    .buttonStyle(.glass)
+                    .fixedSize()
+                    .help("Allow for this pane until it closes")
+                    .accessibilityLabel("More Allow Options")
+                    .accessibilityIdentifier("inbox-allow-menu-\(item.id)")
+                }
                 if let like = options?.likeThis, mayApprove {
                     Menu {
                         Button("Approve All Like This for This Task", systemImage: "checkmark.seal", action: approveAll)

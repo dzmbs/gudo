@@ -1,0 +1,28 @@
+{
+  "attached": "s1",
+  "kind": "ls",
+  "sessions": [
+    {
+      "clients": 1,
+      "id": "s1",
+      "name": "main",
+      "panes": 2,
+      "tabs": 1
+    }
+  ],
+  "tabs": [
+    {
+      "active": true,
+      "focused": "p4",
+      "id": "t3",
+      "index": 1,
+      "name": "api",
+      "panes": [
+        "p4",
+        "p5"
+      ],
+      "zoomed": null
+    }
+  ],
+  "v": 1
+}

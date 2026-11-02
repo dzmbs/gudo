@@ -1,0 +1,17 @@
+{
+  "items": [
+    {
+      "at": 1700000000000,
+      "body": "Type “npm test”, then Return",
+      "id": 9,
+      "kind": "blocked",
+      "pane": "p5",
+      "seen": false,
+      "session": "s1",
+      "title": "Claude wants to type into ~/api · zsh"
+    }
+  ],
+  "kind": "inbox",
+  "unseen": 1,
+  "v": 1
+}

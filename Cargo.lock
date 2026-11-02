@@ -3670,6 +3670,7 @@ dependencies = [
  "postcard",
  "proptest",
  "serde",
+ "serde_json",
  "zeroize",
 ]
 
@@ -5232,6 +5233,8 @@ dependencies = [
  "data-encoding",
  "qrcode",
  "rustix",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 

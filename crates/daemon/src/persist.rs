@@ -24,6 +24,10 @@ pub(crate) struct Saved {
     /// Recently closed panes, oldest first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     closed: Vec<ClosedPane>,
+    /// Which pane created which (`[pane, creator]`), so agents keep driving the panes they
+    /// opened after a restart.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    creators: Vec<(u64, u64)>,
 }
 
 impl Saved {
@@ -33,7 +37,23 @@ impl Saved {
             layout,
             panes,
             closed,
+            creators: Vec::new(),
         }
+    }
+
+    /// With the ownership map of the terminal tools.
+    pub fn with_creators(mut self, creators: impl IntoIterator<Item = (PaneId, PaneId)>) -> Self {
+        self.creators = creators.into_iter().map(|(p, c)| (p.0, c.0)).collect();
+        self.creators.sort_unstable();
+        self
+    }
+
+    /// Takes the ownership map out.
+    pub fn take_creators(&mut self) -> Vec<(PaneId, PaneId)> {
+        std::mem::take(&mut self.creators)
+            .into_iter()
+            .map(|(p, c)| (PaneId(p), PaneId(c)))
+            .collect()
     }
 
     pub fn into_parts(self) -> (Layout, HashMap<PaneId, PaneRecord>, Vec<ClosedPane>) {

@@ -145,6 +145,11 @@ pub(crate) fn new_uuid() -> String {
 static NEXT_REQUEST: std::sync::LazyLock<AtomicU64> =
     std::sync::LazyLock::new(|| AtomicU64::new(first_request_id()));
 
+/// A new wire request id, unique for this run.
+pub(crate) fn next_request_id() -> RequestId {
+    RequestId(NEXT_REQUEST.fetch_add(1, Ordering::Relaxed))
+}
+
 /// A random id in `[2^32, 2^52)`: far from any earlier run's, and exact as a JSON number.
 fn first_request_id() -> u64 {
     let mut b = [0; 8];
@@ -225,7 +230,7 @@ impl AgentRuntime {
         if let Some((wire, _)) = self.requests.iter().find(|(_, r)| r == id) {
             return *wire;
         }
-        let wire = RequestId(NEXT_REQUEST.fetch_add(1, Ordering::Relaxed));
+        let wire = next_request_id();
         self.requests.push((wire, id.clone()));
         // Old dialogs are never answered again; keep the table short.
         if self.requests.len() > 32 {
@@ -787,7 +792,7 @@ async fn serve_hook(core: &Arc<Core>, stream: UnixStream) -> io::Result<()> {
     }
     // So do the terminal tools.
     if let Ok(call) = serde_json::from_str::<crate::term::TermCall>(&line) {
-        let reply = crate::term::serve(core, call, peer_uid).await;
+        let reply = crate::term::serve(core, call, peer_uid, reader).await;
         let mut out = serde_json::to_vec(&reply).map_err(io::Error::other)?;
         out.push(b'\n');
         write.write_all(&out).await?;

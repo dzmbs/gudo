@@ -8,6 +8,7 @@ mod askpass;
 mod assist;
 mod browser;
 mod codex;
+mod drive;
 mod e2e;
 mod history;
 mod hostile_output;

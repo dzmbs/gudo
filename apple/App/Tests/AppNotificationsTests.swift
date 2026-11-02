@@ -1,3 +1,4 @@
+import HostKit
 import NotifyKit
 import UnnamedCore
 import UserNotifications
@@ -33,6 +34,33 @@ final class AppNotificationsTests: XCTestCase {
         let start = ContinuousClock.now
         await AppNotifications.settle(limit: .milliseconds(200)) { false }
         XCTAssertGreaterThanOrEqual(ContinuousClock.now - start, .milliseconds(200), "gives up after the limit")
+    }
+
+    // MARK: Drive requests
+
+    /// An agent asking to type into the user's pane: the note says what it wants and exactly
+    /// what it would type, and Approve on it allows once, never "for this pane".
+    func testADriveRequestNoteShowsTheActionAndAllowsOnce() {
+        let drive = DriveRequestInfo(id: 41, paneId: 3, target: 2, title: "Claude wants to type into ~/api · zsh",
+                                     action: "Type “npm test”, then Return")
+        let item = AttentionItem(
+            id: 9, atMs: 0, paneId: 3, sessionId: nil, kind: .agentBlocked(agent: "claude", requestId: 41),
+            title: drive.title, body: drive.action, seen: false, whileViewed: false)
+        let blocked = AgentStatus(kind: "claude", state: .blocked(
+            requestId: 41, summary: "\(drive.title): \(drive.action)",
+            options: [DecisionOption(id: 0, label: "Allow once"),
+                      DecisionOption(id: 1, label: "Allow for this pane until it closes"),
+                      DecisionOption(id: 2, label: "Deny")]))
+        let note = AppNotifications.note(for: item, hostId: "h", hostName: "studio", agentState: blocked, drive: drive)
+        XCTAssertEqual(note.title, "Claude wants to type into ~/api · zsh")
+        XCTAssertEqual(note.body, "Type “npm test”, then Return")
+        guard case .approval(let request, let approve, let deny) = note.kind else {
+            return XCTFail("not an approval: \(note.kind)")
+        }
+        XCTAssertEqual(request, 41)
+        XCTAssertEqual(approve?.id, 0)
+        XCTAssertEqual(approve?.label, "Allow once")
+        XCTAssertEqual(deny?.id, 2)
     }
 
     // MARK: Permission

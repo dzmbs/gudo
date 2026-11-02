@@ -103,7 +103,9 @@ private struct AgentToastCard: View {
     private var headline: String {
         switch card.kind {
         case .needsYou:
-            if case .question? = item.request { "\(item.title) has a question" } else { "\(item.title) needs you" }
+            if item.drive, case .permission(let want, _)? = item.request {
+                want
+            } else if case .question? = item.request { "\(item.title) has a question" } else { "\(item.title) needs you" }
         case .finished: "\(item.title) finished"
         case .failed: "\(item.title) failed"
         }
@@ -161,10 +163,16 @@ private struct AgentToastCard: View {
                     .keyboardShortcut(isHovered ? .cancelAction : nil)
                     .help("Deny (Esc)")
                     .accessibilityIdentifier("agent-toast-deny-\(item.id)")
-                Button("Approve") { decide(allow: true) }
+                if item.drive {
+                    Button("This Pane") { allowForPane() }
+                        .buttonStyle(.glass)
+                        .help("Allow for this pane until it closes")
+                        .accessibilityIdentifier("agent-toast-allow-pane-\(item.id)")
+                }
+                Button(item.drive ? "Allow Once" : "Approve") { decide(allow: true) }
                     .buttonStyle(.primaryGlass)
                     .keyboardShortcut(isHovered ? .defaultAction : nil)
-                    .help("Approve (↩)")
+                    .help(item.drive ? "Allow this one action (↩)" : "Approve (↩)")
                     .accessibilityIdentifier("agent-toast-approve-\(item.id)")
             } else {
                 Button("Open") { open() }
@@ -189,6 +197,13 @@ private struct AgentToastCard: View {
     private func decide(allow: Bool) {
         withAnimation(DS.Motion.snappy) {
             if allow { model.agents.approve(item.id) } else { model.agents.deny(item.id) }
+            model.agentToasts.dismiss(card.id)
+        }
+    }
+
+    private func allowForPane() {
+        withAnimation(DS.Motion.snappy) {
+            model.agents.allowForPane(item.id)
             model.agentToasts.dismiss(card.id)
         }
     }

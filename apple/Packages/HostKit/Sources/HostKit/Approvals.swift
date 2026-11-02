@@ -80,6 +80,42 @@ nonisolated public struct ApprovalRequestInfo: Hashable, Sendable {
     }
 }
 
+/// An agent asking to drive one of the user's panes (docs/DAEMON.md, "Terminal tools"): the
+/// exact action, and the three answers. Only owner devices are told.
+nonisolated public struct DriveRequestInfo: Identifiable, Hashable, Sendable {
+    /// The request, as the asking pane's `AgentState.blocked` names it.
+    public var id: UInt64
+    /// The asking agent's pane.
+    public var paneId: UInt64
+    /// The pane it wants to drive.
+    public var target: UInt64
+    /// "Claude wants to type into ~/api · zsh".
+    public var title: String
+    /// Exactly what happens once allowed: "Run $ npm test".
+    public var action: String
+    public var allowOnce: UInt32
+    /// "Allow for this pane until it closes".
+    public var allowPane: UInt32
+    public var deny: UInt32
+
+    public init(id: UInt64, paneId: UInt64, target: UInt64, title: String, action: String,
+                allowOnce: UInt32 = 0, allowPane: UInt32 = 1, deny: UInt32 = 2) {
+        self.id = id
+        self.paneId = paneId
+        self.target = target
+        self.title = title
+        self.action = action
+        self.allowOnce = allowOnce
+        self.allowPane = allowPane
+        self.deny = deny
+    }
+
+    init(_ a: DriveAsk) {
+        self.init(id: a.requestId, paneId: a.paneId, target: a.target, title: a.title, action: a.action,
+                  allowOnce: a.allowOnce.id, allowPane: a.allowPane.id, deny: a.deny.id)
+    }
+}
+
 /// An auto-approve rule in force on a pane.
 nonisolated public struct AutoApproveRuleInfo: Identifiable, Hashable, Sendable {
     /// For `ApprovalSession.revoke`.
@@ -121,6 +157,8 @@ public final class ApprovalSession {
     public private(set) var requests: [UInt64: ApprovalRequestInfo] = [:]
     /// The rules in force, by pane id, oldest first.
     public private(set) var rules: [UInt64: [AutoApproveRuleInfo]] = [:]
+    /// Agents' open requests to drive the user's panes, by request id (owner devices only).
+    public private(set) var drives: [UInt64: DriveRequestInfo] = [:]
 
     @ObservationIgnored private var client: (any ApprovalClientAPI)?
     @ObservationIgnored private var pump: Task<Void, Never>?
@@ -151,6 +189,7 @@ public final class ApprovalSession {
         client = nil
         requests = [:]
         rules = [:]
+        drives = [:]
     }
 
     /// The extras for `pane`'s request `requestId`, if the daemon sent them for that request.
@@ -170,6 +209,12 @@ public final class ApprovalSession {
         case .reset:
             requests = [:]
             rules = [:]
+            drives = [:]
+        case .driveOpened(let ask):
+            drives[ask.requestId] = DriveRequestInfo(ask)
+            Self.log.info("pane \(ask.paneId) asks to drive pane \(ask.target)")
+        case .driveClosed(let id):
+            drives[id] = nil
         }
     }
 
