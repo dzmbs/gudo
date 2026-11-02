@@ -23,7 +23,6 @@ struct Ring {
     events: VecDeque<(Option<SessionId>, ScriptEvent)>,
     /// The `seq` the next event gets.
     next: u64,
-    /// Each known pane's session.
     panes: HashMap<PaneId, SessionId>,
     /// Each pane's last reported state, `(state, kind, app)`.
     states: HashMap<PaneId, (String, Option<String>, Option<String>)>,
@@ -47,23 +46,20 @@ impl Ring {
     }
 }
 
-/// The stream.
 #[derive(Default)]
 pub(crate) struct Feed {
     ring: Mutex<Ring>,
     arrived: Notify,
 }
 
-/// A page of events for one subscriber.
 pub(crate) struct Page {
     pub events: Vec<ScriptEvent>,
-    /// Where to read on from.
     pub cursor: u64,
 }
 
 impl Feed {
-    fn record(&self, f: impl FnOnce(&mut Ring)) {
-        f(&mut lock(&self.ring));
+    fn record(&self, update: impl FnOnce(&mut Ring)) {
+        update(&mut lock(&self.ring));
         self.arrived.notify_waiters();
     }
 
@@ -99,7 +95,10 @@ impl Feed {
         max: usize,
     ) -> Page {
         let ring = lock(&self.ring);
-        let oldest = ring.events.front().map_or(ring.next, |(_, e)| e.seq);
+        let oldest = ring
+            .events
+            .front()
+            .map_or(ring.next, |(_, event)| event.seq);
         let mut events = Vec::new();
         if *since < oldest {
             events.push(ScriptEvent {
@@ -116,7 +115,7 @@ impl Feed {
         }
         let from = (*since).max(oldest).min(ring.next);
         let mut cursor = from;
-        for (scope, event) in ring.events.iter().filter(|(_, e)| e.seq >= from) {
+        for (scope, event) in ring.events.iter().filter(|(_, event)| event.seq >= from) {
             if events.len() >= max {
                 break;
             }
@@ -130,7 +129,6 @@ impl Feed {
     }
 }
 
-/// The `type` of an event.
 pub(crate) fn type_name(kind: &ScriptEventKind) -> &'static str {
     match kind {
         ScriptEventKind::PaneOpened { .. } => "pane.opened",
@@ -143,7 +141,6 @@ pub(crate) fn type_name(kind: &ScriptEventKind) -> &'static str {
     }
 }
 
-/// Feeds the stream from the core's events for the daemon's lifetime.
 pub(crate) async fn run(core: Arc<Core>) {
     let mut events = core.events.subscribe();
     let feed = &core.term.events;
@@ -206,30 +203,30 @@ fn on_event(core: &Core, event: Event) {
                     command: mark.command,
                     cwd: mark.cwd,
                 },
-                Some(f) => ScriptEventKind::CommandFinished {
+                Some(finished) => ScriptEventKind::CommandFinished {
                     id: mark.command_id,
                     command: mark.command,
-                    exit_code: f.exit,
-                    duration_ms: f.duration_ms,
+                    exit_code: finished.exit,
+                    duration_ms: finished.duration_ms,
                 },
             };
             feed.record(|ring| ring.push(session, Some(mark.pane_id), kind));
         }
         Event::PaneMeta(pane) | Event::ProgramStatus(pane) => {
-            let now = state_of(core, pane);
+            let current = state_of(core, pane);
             let session = core.session_of_pane(pane);
             feed.record(|ring| {
-                let changed = match &now {
-                    Some(now) => ring.states.get(&pane) != Some(now),
+                let changed = match &current {
+                    Some(current) => ring.states.get(&pane) != Some(current),
                     None => ring.states.contains_key(&pane),
                 };
                 if !changed {
                     return;
                 }
-                let (state, kind, app) = match &now {
-                    Some(now) => {
-                        ring.states.insert(pane, now.clone());
-                        now.clone()
+                let (state, kind, app) = match &current {
+                    Some(current) => {
+                        ring.states.insert(pane, current.clone());
+                        current.clone()
                     }
                     None => {
                         ring.states.remove(&pane);
@@ -251,7 +248,12 @@ fn on_event(core: &Core, event: Event) {
 fn state_of(core: &Core, pane: PaneId) -> Option<(String, Option<String>, Option<String>)> {
     let entry = core.pane(pane)?;
     let status = super::status(core, pane, &entry);
-    let text = |key: &str| status.get(key).and_then(|v| v.as_str()).map(str::to_owned);
+    let text = |key: &str| {
+        status
+            .get(key)
+            .and_then(|value| value.as_str())
+            .map(str::to_owned)
+    };
     Some((text("state")?, text("kind"), text("app")))
 }
 
@@ -259,10 +261,10 @@ fn state_of(core: &Core, pane: PaneId) -> Option<(String, Option<String>, Option
 mod tests {
     use super::*;
 
-    fn feed_with(n: u64, session: SessionId) -> Feed {
+    fn feed_with(count: u64, session: SessionId) -> Feed {
         let feed = Feed::default();
         feed.record(|ring| {
-            for _ in 0..n {
+            for _ in 0..count {
                 ring.push(Some(session), None, ScriptEventKind::LayoutChanged);
             }
         });

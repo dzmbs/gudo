@@ -1,3 +1,4 @@
+//! Agents driving the terminal they run in.
 //!
 //! `gudo-hook mcp` (and `gudo-hook term`) send one [`TermCall`] line on the hook socket per tool
 //! call; the daemon answers one [`TermReply`] line. The caller is the pane named in the call,
@@ -33,7 +34,6 @@ use crate::core::{Core, Event, PaneEntry, lock};
 pub(crate) use output::visible;
 pub use output::{Output, SOURCE_SHARED};
 
-/// The protocol version in [`TermCall::v`].
 pub const TERM_VERSION: u32 = 1;
 
 const DEFAULT_WAIT: Duration = Duration::from_secs(30);
@@ -63,15 +63,12 @@ const MAX_BATCH: usize = 16;
 pub struct TermCall {
     /// [`TERM_VERSION`].
     pub v: u32,
-    /// The pane's token.
     pub token: String,
     /// The calling pane's id from its environment.
     pub pane: String,
-    /// The tool and its arguments.
     pub term: TermAsk,
 }
 
-/// One tool call.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TermAsk {
     /// `pane_split`, `cmd_run`, …
@@ -85,9 +82,7 @@ pub struct TermAsk {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TermReply {
-    /// The tool's structured result.
     Ok(Value),
-    /// Why it did nothing.
     Error(ToolError),
 }
 
@@ -115,7 +110,6 @@ pub enum ErrorCode {
     SecretPrompt,
     /// The output asked for has left the pane's buffer.
     CursorExpired,
-    /// The pane has exited.
     Closed,
     /// The agent waits on the user (an approval, a question, a sign-in).
     AgentBlocked,
@@ -155,7 +149,7 @@ pub(crate) struct Term {
     results: Mutex<std::collections::VecDeque<(PaneId, PaneId, Value)>>,
     /// Requests to drive the user's panes, and the panes the owner let an agent drive.
     pub asks: ask::Asks,
-    /// The event stream (`events_wait`).
+    /// The `events_wait` stream.
     pub events: events::Feed,
     calls: Mutex<HashMap<PaneId, usize>>,
     /// Held from counting an agent's panes to opening one, so parallel calls cannot all
@@ -172,9 +166,9 @@ struct CallSlot<'a> {
 impl Drop for CallSlot<'_> {
     fn drop(&mut self) {
         let mut calls = lock(&self.term.calls);
-        if let Some(n) = calls.get_mut(&self.pane) {
-            *n -= 1;
-            if *n == 0 {
+        if let Some(running) = calls.get_mut(&self.pane) {
+            *running -= 1;
+            if *running == 0 {
                 calls.remove(&self.pane);
             }
         }
@@ -185,12 +179,12 @@ impl Term {
     /// Whether `caller` created `pane`, directly or through panes it created.
     fn owns(&self, caller: PaneId, pane: PaneId) -> bool {
         let creators = lock(&self.creators);
-        let mut at = pane;
+        let mut current = pane;
         // A chain is at most as long as there are panes; the bound guards a cycle.
         for _ in 0..=creators.len() {
-            match creators.get(&at) {
+            match creators.get(&current) {
                 Some(&creator) if creator == caller => return true,
-                Some(&creator) => at = creator,
+                Some(&creator) => current = creator,
                 None => return false,
             }
         }
@@ -201,19 +195,19 @@ impl Term {
     /// through any of its workers.
     fn opened_by_tree(&self, caller: PaneId, live: impl Fn(PaneId) -> bool) -> usize {
         let creators = lock(&self.creators);
-        let top = |mut at: PaneId| {
+        let top = |mut current: PaneId| {
             for _ in 0..=creators.len() {
-                match creators.get(&at) {
-                    Some(&creator) => at = creator,
+                match creators.get(&current) {
+                    Some(&creator) => current = creator,
                     None => break,
                 }
             }
-            at
+            current
         };
         let root = top(caller);
         creators
             .keys()
-            .filter(|&&p| live(p) && top(p) == root)
+            .filter(|&&pane| live(pane) && top(pane) == root)
             .count()
     }
 
@@ -228,9 +222,9 @@ impl Term {
         match creators.remove(&pane) {
             Some(parent) => creators
                 .values_mut()
-                .filter(|c| **c == pane)
-                .for_each(|c| *c = parent),
-            None => creators.retain(|_, c| *c != pane),
+                .filter(|creator| **creator == pane)
+                .for_each(|creator| *creator = parent),
+            None => creators.retain(|_, creator| *creator != pane),
         }
         drop(creators);
         self.asks.forget_pane(pane);
@@ -238,7 +232,10 @@ impl Term {
 
     /// The ownership map as `(pane, creator)` pairs, to save across restarts.
     pub fn creators(&self) -> Vec<(PaneId, PaneId)> {
-        lock(&self.creators).iter().map(|(&p, &c)| (p, c)).collect()
+        lock(&self.creators)
+            .iter()
+            .map(|(&pane, &creator)| (pane, creator))
+            .collect()
     }
 
     /// Restores the ownership map, keeping only pairs whose panes are both `live`.
@@ -250,7 +247,7 @@ impl Term {
         lock(&self.creators).extend(
             saved
                 .into_iter()
-                .filter(|&(p, c)| p != c && live(p) && live(c)),
+                .filter(|&(pane, creator)| pane != creator && live(pane) && live(creator)),
         );
     }
 
@@ -279,19 +276,19 @@ impl Term {
         let (creator, result) = lock(&self.results)
             .iter()
             .rev()
-            .find(|(p, ..)| *p == pane)
-            .map(|(_, c, v)| (*c, v.clone()))?;
+            .find(|(closed, ..)| *closed == pane)
+            .map(|(_, creator, turn)| (*creator, turn.clone()))?;
         (creator == caller || self.owns(caller, creator)).then_some(result)
     }
 
     /// Counts a call from `pane`; `None` past [`MAX_CALLS_PER_PANE`] at once.
     fn enter(&self, pane: PaneId) -> Option<CallSlot<'_>> {
         let mut calls = lock(&self.calls);
-        let n = calls.entry(pane).or_default();
-        if *n >= MAX_CALLS_PER_PANE {
+        let running = calls.entry(pane).or_default();
+        if *running >= MAX_CALLS_PER_PANE {
             return None;
         }
-        *n += 1;
+        *running += 1;
         Some(CallSlot { term: self, pane })
     }
 }
@@ -323,7 +320,7 @@ pub(crate) async fn serve(
         .parse()
         .ok()
         .map(PaneId)
-        .filter(|p| core.pane(*p).is_some())
+        .filter(|pane| core.pane(*pane).is_some())
     else {
         return TermReply::Error(ToolError::new(
             ErrorCode::NotFound,
@@ -341,14 +338,14 @@ pub(crate) async fn serve(
             .hint("wait for some to finish before starting more")
         });
     };
-    let ctx = Ctx {
+    let context = CallContext {
         core: Arc::clone(core),
         caller,
     };
     tokio::select! {
-        result = ctx.call(&call.term.tool, call.term.args) => match result {
+        result = context.call(&call.term.tool, call.term.args) => match result {
             Ok(value) => TermReply::Ok(value),
-            Err(e) => TermReply::Error(e),
+            Err(error) => TermReply::Error(error),
         },
         () = hung_up(hangup) => {
             TermReply::Error(ToolError::new(ErrorCode::Failed, "the caller hung up"))
@@ -356,11 +353,10 @@ pub(crate) async fn serve(
     }
 }
 
-/// Returns once the caller closes its end of the connection.
 async fn hung_up(mut from: impl tokio::io::AsyncRead + Unpin) {
     use tokio::io::AsyncReadExt;
-    let mut buf = [0; 256];
-    while matches!(from.read(&mut buf).await, Ok(n) if n > 0) {}
+    let mut discard = [0; 256];
+    while matches!(from.read(&mut discard).await, Ok(read) if read > 0) {}
 }
 
 /// Withdraws an unanswered drive request when the call waiting on it ends.
@@ -378,14 +374,15 @@ impl Drop for Withdraw<'_> {
     }
 }
 
-struct Ctx {
+struct CallContext {
     core: Arc<Core>,
     caller: PaneId,
 }
 
 fn args<T: for<'de> Deserialize<'de>>(value: Value) -> Result<T> {
     let value = if value.is_null() { json!({}) } else { value };
-    serde_json::from_value(value).map_err(|e| ToolError::new(ErrorCode::InvalidArgs, e.to_string()))
+    serde_json::from_value(value)
+        .map_err(|error| ToolError::new(ErrorCode::InvalidArgs, error.to_string()))
 }
 
 #[derive(Deserialize, Default)]
@@ -445,17 +442,16 @@ struct FrameArg {
 }
 
 impl From<FrameArg> for FloatFrame {
-    fn from(f: FrameArg) -> Self {
+    fn from(frame: FrameArg) -> Self {
         Self {
-            x: f.x,
-            y: f.y,
-            w: f.w,
-            h: f.h,
+            x: frame.x,
+            y: frame.y,
+            w: frame.w,
+            h: frame.h,
         }
     }
 }
 
-/// How a new floating window opens.
 struct FloatOpts {
     frame: Option<FloatFrame>,
     close: CloseWhen,
@@ -479,7 +475,7 @@ fn float_opts(
         return Ok(None);
     }
     let frame = frame.map(FloatFrame::from);
-    if frame.is_some_and(|f| f.clamped().is_none()) {
+    if frame.is_some_and(|frame| frame.clamped().is_none()) {
         return Err(
             ToolError::new(ErrorCode::InvalidArgs, "frame values must be numbers")
                 .hint("fractions of the tab, e.g. {x: 0.55, y: 0.05, w: 0.4, h: 0.5}"),
@@ -516,8 +512,8 @@ enum Side {
 }
 
 impl From<Side> for proto::Direction {
-    fn from(s: Side) -> Self {
-        match s {
+    fn from(side: Side) -> Self {
+        match side {
             Side::Left => Self::Left,
             Side::Right => Self::Right,
             Side::Up => Self::Up,
@@ -730,7 +726,6 @@ struct SendArgs {
     submit: bool,
 }
 
-/// A command as tools report it.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CommandInfo {
@@ -759,29 +754,30 @@ impl CommandInfo {
             } else {
                 "running"
             },
-            exit_code: mark.finished.and_then(|f| f.exit),
-            duration_ms: mark.finished.map(|f| f.duration_ms),
+            exit_code: mark.finished.and_then(|finished| finished.exit),
+            duration_ms: mark.finished.map(|finished| finished.duration_ms),
         }
     }
 }
 
 /// A fraction as an agent wrote it: `0.55`, not the f32's `0.550000011920929`.
-fn tidy(v: f32) -> f64 {
-    (f64::from(v) * 1e4).round() / 1e4
+fn tidy(fraction: f32) -> f64 {
+    (f64::from(fraction) * 1e4).round() / 1e4
 }
 
 /// The floating window holding `pane` as tools report it, `null` for a pane in place.
 fn float_info(core: &Core, pane: PaneId) -> Value {
-    let Some(w) = lock(&core.layout).window_of(pane) else {
+    let Some(window) = lock(&core.layout).window_of(pane) else {
         return Value::Null;
     };
+    let frame = window.frame;
     json!({
-        "window": format!("w{}", w.id.0),
-        "panes": w.panes.iter().map(|&p| pane_ref(p)).collect::<Vec<_>>(),
-        "frame": { "x": tidy(w.frame.x), "y": tidy(w.frame.y), "w": tidy(w.frame.w), "h": tidy(w.frame.h) },
-        "minimized": w.minimized,
-        "pinned": w.pinned,
-        "closeWhenDone": w.close == CloseWhen::Done,
+        "window": format!("w{}", window.id.0),
+        "panes": window.panes.iter().map(|&pane| pane_ref(pane)).collect::<Vec<_>>(),
+        "frame": { "x": tidy(frame.x), "y": tidy(frame.y), "w": tidy(frame.w), "h": tidy(frame.h) },
+        "minimized": window.minimized,
+        "pinned": window.pinned,
+        "closeWhenDone": window.close == CloseWhen::Done,
     })
 }
 
@@ -799,7 +795,7 @@ fn last_turn(entry: &PaneEntry) -> Value {
         },
         "message": turn.message,
         "endedAt": turn.at.0,
-        "transcriptPath": turn.transcript.as_ref().map(|p| p.to_string_lossy()),
+        "transcriptPath": turn.transcript.as_ref().map(|path| path.to_string_lossy()),
     })
 }
 
@@ -821,7 +817,7 @@ fn max_bytes(asked: Option<usize>) -> usize {
     asked.unwrap_or(DEFAULT_MAX_BYTES).clamp(256, MAX_BYTES)
 }
 
-impl Ctx {
+impl CallContext {
     async fn call(&self, tool: &str, value: Value) -> Result<Value> {
         match tool {
             "whoami" => self.whoami(),
@@ -850,19 +846,17 @@ impl Ctx {
         }
     }
 
-    // --- targets and permissions -----------------------------------------------------------
-
     /// `self`, `p12` or `12`.
     fn resolve(&self, target: Option<&str>) -> Result<(PaneId, Arc<PaneEntry>)> {
         let id = match target.map(str::trim) {
             None | Some("" | "self") => self.caller,
-            Some(t) => t
+            Some(target) => target
                 .strip_prefix('p')
-                .unwrap_or(t)
+                .unwrap_or(target)
                 .parse()
                 .map(PaneId)
                 .map_err(|_| {
-                    ToolError::new(ErrorCode::InvalidArgs, format!("{t} is not a pane id"))
+                    ToolError::new(ErrorCode::InvalidArgs, format!("{target} is not a pane id"))
                         .hint("pane ids look like p12; pane_list lists them")
                 })?,
         };
@@ -982,7 +976,7 @@ impl Ctx {
         let Some(entry) = self.core.pane(self.caller) else {
             return ("A program".into(), "program".into());
         };
-        let agent = lock(&entry.agent).as_ref().map(|rt| rt.kind());
+        let agent = lock(&entry.agent).as_ref().map(|runtime| runtime.kind());
         if let Some(kind) = agent {
             let name = crate::agent::program(kind);
             let mut display = name.to_owned();
@@ -995,7 +989,7 @@ impl Ctx {
             .core
             .assist
             .foreground(&entry)
-            .map(|f| proto::clean_prompt_text(&f.name, 40))
+            .map(|foreground| proto::clean_prompt_text(&foreground.name, 40))
             .filter(|name| !name.is_empty())
         {
             Some(name) => (name.clone(), name),
@@ -1006,7 +1000,7 @@ impl Ctx {
     /// A pane for display: its directory and program, `~/api · zsh`.
     fn label(&self, entry: &PaneEntry) -> String {
         let meta = self.core.pane_meta(entry.pane.id);
-        let cwd = meta.as_ref().and_then(|m| m.cwd.clone()).map(|cwd| {
+        let cwd = meta.as_ref().and_then(|meta| meta.cwd.clone()).map(|cwd| {
             let home = self.core.cfg.home();
             match std::path::Path::new(&cwd).strip_prefix(&home) {
                 _ if home == std::path::Path::new("/") => cwd,
@@ -1019,10 +1013,15 @@ impl Ctx {
             .core
             .assist
             .foreground(entry)
-            .map(|f| f.name)
-            .or_else(|| meta.map(|m| m.title).filter(|t| !t.is_empty()));
+            .map(|foreground| foreground.name)
+            .or_else(|| {
+                meta.map(|meta| meta.title)
+                    .filter(|title| !title.is_empty())
+            });
         // Programs set both (OSC 7, titles): shown on an approval card, they must stay plain.
-        let clean = |t: String| Some(proto::clean_prompt_text(&t, 80)).filter(|t| !t.is_empty());
+        let clean = |text: String| {
+            Some(proto::clean_prompt_text(&text, 80)).filter(|text| !text.is_empty())
+        };
         match (cwd.and_then(clean), program.and_then(clean)) {
             (Some(cwd), Some(program)) => format!("{cwd} · {program}"),
             (Some(one), None) | (None, Some(one)) => one,
@@ -1036,7 +1035,7 @@ impl Ctx {
         let open = self
             .core
             .term
-            .opened_by_tree(self.caller, |p| self.core.pane(p).is_some());
+            .opened_by_tree(self.caller, |pane| self.core.pane(pane).is_some());
         if open < MAX_OPEN_PANES {
             return Ok(());
         }
@@ -1047,13 +1046,13 @@ impl Ctx {
         .hint("close panes you no longer need with pane_close"))
     }
 
-    // --- discovery --------------------------------------------------------------------------
-
     fn pane_info(&self, id: PaneId, entry: &PaneEntry) -> Value {
         let meta = self.core.pane_meta(id);
         let line = entry.pane.line_snapshot();
         let commands = entry.pane.commands(None).commands;
-        let last = commands.last().map(|c| CommandInfo::of(&c.mark));
+        let last = commands
+            .last()
+            .map(|command| CommandInfo::of(&command.mark));
         let kind = match &lock(&entry.record).launch {
             PaneLaunch::Agent { .. } => "agent",
             PaneLaunch::Command { .. } => "command",
@@ -1063,14 +1062,15 @@ impl Ctx {
             .core
             .assist
             .foreground(entry)
-            .map(|f| json!({ "pid": f.pid, "name": f.name }));
+            .map(|foreground| json!({ "pid": foreground.pid, "name": foreground.name }));
         let session = self.core.session_of_pane(id).unwrap_or_default();
-        let tab = lock(&self.core.layout).snapshot(session);
-        let tab_id = tab.and_then(|s| {
-            s.tabs
+        let layout = lock(&self.core.layout).snapshot(session);
+        let tab_id = layout.and_then(|layout| {
+            layout
+                .tabs
                 .iter()
-                .find(|t| crate::layout::leaves(&t.root).any(|l| l == id))
-                .map(|t| tab_ref(t.tab_id))
+                .find(|tab| crate::layout::leaves(&tab.root).any(|leaf| leaf == id))
+                .map(|tab| tab_ref(tab.tab_id))
         });
         let owned = self.core.term.owns(self.caller, id);
         let mut scopes = vec!["read"];
@@ -1082,8 +1082,8 @@ impl Ctx {
         json!({
             "id": pane_ref(id),
             "tab": tab_id,
-            "title": meta.as_ref().map(|m| m.title.clone()).unwrap_or_default(),
-            "cwd": meta.as_ref().and_then(|m| m.cwd.clone()),
+            "title": meta.as_ref().map(|meta| meta.title.clone()).unwrap_or_default(),
+            "cwd": meta.as_ref().and_then(|meta| meta.cwd.clone()),
             "kind": kind,
             "isSelf": id == self.caller,
             "createdByYou": owned,
@@ -1091,7 +1091,7 @@ impl Ctx {
             "atPrompt": line.view.phase == Phase::Prompt,
             "altScreen": line.alt,
             "secretPrompt": entry.pane.echo().is_hidden_input(),
-            "exited": meta.as_ref().and_then(|m| m.exit).is_some(),
+            "exited": meta.as_ref().and_then(|meta| meta.exit).is_some(),
             "foreground": foreground,
             "lastCommand": last,
             "status": status(&self.core, id, entry),
@@ -1103,10 +1103,10 @@ impl Ctx {
     fn whoami(&self) -> Result<Value> {
         let (id, entry) = self.resolve(None)?;
         let session = self.session();
-        let layout = session.and_then(|s| lock(&self.core.layout).snapshot(s));
+        let layout = session.and_then(|session| lock(&self.core.layout).snapshot(session));
         Ok(json!({
             "pane": self.pane_info(id, &entry),
-            "session": layout.as_ref().map(|l| json!({ "id": format!("s{}", l.session_id.0), "name": l.name })),
+            "session": layout.as_ref().map(|layout| json!({ "id": format!("s{}", layout.session_id.0), "name": layout.name })),
             "host": crate::info::hostname(),
             "limits": {
                 "maxWaitMs": MAX_WAIT.as_millis() as u64,
@@ -1116,7 +1116,7 @@ impl Ctx {
         }))
     }
 
-    fn pane_list(&self, a: ListArgs) -> Result<Value> {
+    fn pane_list(&self, args: ListArgs) -> Result<Value> {
         let Some(session) = self.session() else {
             return Ok(json!({ "panes": [] }));
         };
@@ -1126,19 +1126,17 @@ impl Ctx {
         let my_tab = layout
             .tabs
             .iter()
-            .find(|t| crate::layout::leaves(&t.root).any(|l| l == self.caller))
-            .map(|t| t.tab_id);
+            .find(|tab| crate::layout::leaves(&tab.root).any(|leaf| leaf == self.caller))
+            .map(|tab| tab.tab_id);
         let panes: Vec<Value> = layout
             .tabs
             .iter()
-            .filter(|t| matches!(a.scope, ListScope::Session) || Some(t.tab_id) == my_tab)
-            .flat_map(|t| crate::layout::leaves(&t.root).collect::<Vec<_>>())
-            .filter_map(|id| self.core.pane(id).map(|e| self.pane_info(id, &e)))
+            .filter(|tab| matches!(args.scope, ListScope::Session) || Some(tab.tab_id) == my_tab)
+            .flat_map(|tab| crate::layout::leaves(&tab.root).collect::<Vec<_>>())
+            .filter_map(|id| self.core.pane(id).map(|entry| self.pane_info(id, &entry)))
             .collect();
         Ok(json!({ "panes": panes }))
     }
-
-    // --- layout -----------------------------------------------------------------------------
 
     fn launch(
         command: Option<String>,
@@ -1170,19 +1168,19 @@ impl Ctx {
         layout
             .tabs
             .iter()
-            .find(|t| crate::layout::leaves(&t.root).any(|l| l == pane))
-            .map(|t| t.focused)
+            .find(|tab| crate::layout::leaves(&tab.root).any(|leaf| leaf == pane))
+            .map(|tab| tab.focused)
     }
 
-    async fn pane_split(&self, a: SplitArgs) -> Result<Value> {
-        let (of, _) = self.resolve(a.of.as_deref())?;
+    async fn pane_split(&self, args: SplitArgs) -> Result<Value> {
+        let (of, _) = self.resolve(args.of.as_deref())?;
         self.may_read(of)?;
-        let float = float_opts(a.float, a.frame, a.close_when_done)?;
+        let float = float_opts(args.float, args.frame, args.close_when_done)?;
         let pane = self.open(
             of,
-            a.direction,
-            Self::launch(a.command, a.agent, a.cwd),
-            a.focus,
+            args.direction,
+            Self::launch(args.command, args.agent, args.cwd),
+            args.focus,
             float,
         )?;
         let entry = self.core.pane(pane).ok_or_else(closed)?;
@@ -1260,10 +1258,10 @@ impl Ctx {
         Ok(pane)
     }
 
-    async fn tab_new(&self, a: TabArgs) -> Result<Value> {
-        if let Some(float) = float_opts(a.float, a.frame, a.close_when_done)? {
+    async fn tab_new(&self, args: TabArgs) -> Result<Value> {
+        if let Some(float) = float_opts(args.float, args.frame, args.close_when_done)? {
             // Over the caller's own tab instead of a tab of its own.
-            if a.title.is_some() {
+            if args.title.is_some() {
                 return Err(ToolError::new(
                     ErrorCode::InvalidArgs,
                     "a floating window has no tab title",
@@ -1272,8 +1270,8 @@ impl Ctx {
             let pane = self.open(
                 self.caller,
                 Direction::Right,
-                Self::launch(a.command, None, a.cwd),
-                a.focus,
+                Self::launch(args.command, None, args.cwd),
+                args.focus,
                 Some(float),
             )?;
             let tab = self.core.tab_of_pane(pane).map(tab_ref);
@@ -1283,8 +1281,8 @@ impl Ctx {
         let (tab, pane) = {
             let _opening = lock(&self.core.term.opening);
             self.may_open()?;
-            let launch = Self::launch(a.command, None, a.cwd);
-            self.open_tab(a.title.unwrap_or_default(), launch, a.focus)?
+            let launch = Self::launch(args.command, None, args.cwd);
+            self.open_tab(args.title.unwrap_or_default(), launch, args.focus)?
         };
         let entry = self.core.pane(pane).ok_or_else(closed)?;
         Ok(json!({ "tab": tab_ref(tab), "pane": self.pane_info(pane, &entry) }))
@@ -1296,7 +1294,7 @@ impl Ctx {
         let session = self.session().ok_or_else(closed)?;
         let before = lock(&self.core.layout)
             .snapshot(session)
-            .and_then(|l| l.active_tab);
+            .and_then(|layout| layout.active_tab);
         let (tab, pane) = match self.core.apply_op(LayoutOp::NewTab {
             session_id: session,
             name,
@@ -1315,8 +1313,8 @@ impl Ctx {
         Ok((tab, pane))
     }
 
-    async fn pane_close(&self, a: PaneArg) -> Result<Value> {
-        let Ok((pane, entry)) = self.resolve(Some(&a.pane)) else {
+    async fn pane_close(&self, args: PaneArg) -> Result<Value> {
+        let Ok((pane, entry)) = self.resolve(Some(&args.pane)) else {
             return Ok(json!({ "closed": false, "alreadyClosed": true }));
         };
         self.may_drive(pane, &entry, DriveAction::Close).await?;
@@ -1329,27 +1327,27 @@ impl Ctx {
         }
     }
 
-    // --- output -----------------------------------------------------------------------------
-
     /// The output from `since` to now, rendered.
     async fn output_since(&self, entry: &PaneEntry, since: Seq) -> Result<(String, Seq)> {
         let head = entry.pane.head();
-        let mut sub = entry.pane.subscribe_from(since).map_err(|e| {
-            ToolError::new(ErrorCode::CursorExpired, e.to_string())
+        let mut subscriber = entry.pane.subscribe_from(since).map_err(|error| {
+            ToolError::new(ErrorCode::CursorExpired, error.to_string())
                 .hint("read the latest with `tail`, then follow with the cursor it returns")
         })?;
         let mut bytes = Vec::new();
-        while sub.position().get() < head.0 {
-            match tokio::time::timeout(Duration::from_secs(1), sub.recv()).await {
+        while subscriber.position().get() < head.0 {
+            match tokio::time::timeout(Duration::from_secs(1), subscriber.recv()).await {
                 Ok(Ok(chunk)) => bytes.extend_from_slice(&chunk.data),
                 _ => break,
             }
         }
         let cols = entry.pane.size().cols;
-        Ok((output::render_bounded(bytes, cols).await, position(&sub)))
+        Ok((
+            output::render_bounded(bytes, cols).await,
+            position(&subscriber),
+        ))
     }
 
-    /// The last `lines` lines, scrollback included.
     async fn tail(&self, entry: &PaneEntry, lines: usize) -> Result<(String, Seq)> {
         let head = entry.pane.head();
         let start = Seq(head.0.saturating_sub(MAX_BYTES as u64 * 4));
@@ -1359,43 +1357,43 @@ impl Ctx {
             Err(_) => head,
         };
         let (text, at) = self.output_since(entry, start).await?;
-        let keep: Vec<&str> = text.lines().collect();
-        let from = keep.len().saturating_sub(lines);
-        Ok((keep[from..].join("\n"), at))
+        let all_lines: Vec<&str> = text.lines().collect();
+        let from = all_lines.len().saturating_sub(lines);
+        Ok((all_lines[from..].join("\n"), at))
     }
 
-    async fn pane_read(&self, a: ReadArgs) -> Result<Value> {
-        let (pane, entry) = self.resolve(a.pane.as_deref())?;
+    async fn pane_read(&self, args: ReadArgs) -> Result<Value> {
+        let (pane, entry) = self.resolve(args.pane.as_deref())?;
         self.may_read(pane)?;
-        let max = max_bytes(a.max_bytes);
+        let max = max_bytes(args.max_bytes);
         let alt = entry.pane.alt_screen();
         let mut command = None;
-        let (mut text, at) = if let Some(since) = &a.since {
+        let (mut text, at) = if let Some(since) = &args.since {
             let since = output::parse_cursor(since).ok_or_else(|| {
                 ToolError::new(ErrorCode::InvalidArgs, "a cursor looks like c1234")
             })?;
             self.output_since(&entry, since).await?
-        } else if let Some(which) = a.command {
+        } else if let Some(which) = args.command {
             let id = match which {
                 CommandRef::Id(id) => Some(id),
                 CommandRef::Name(name) if name == "last" => None,
                 CommandRef::Name(name) => name.trim_start_matches('c').parse().ok(),
             };
-            let out = entry.pane.command_output(None, id).map_err(|_| {
+            let found = entry.pane.command_output(None, id).map_err(|_| {
                 ToolError::new(ErrorCode::NotFound, "no such command")
                     .hint("commands are known where the shell has integration (bash, zsh, fish)")
             })?;
-            command = Some(CommandInfo::of(&out.mark));
-            (out.text, entry.pane.head())
-        } else if a.screen || alt {
+            command = Some(CommandInfo::of(&found.mark));
+            (found.text, entry.pane.head())
+        } else if args.screen || alt {
             (entry.pane.screen_text(), entry.pane.head())
         } else {
-            self.tail(&entry, a.tail.unwrap_or(DEFAULT_TAIL)).await?
+            self.tail(&entry, args.tail.unwrap_or(DEFAULT_TAIL)).await?
         };
-        if let Some(pattern) = &a.grep {
-            let re = Regex::new(pattern)
-                .map_err(|e| ToolError::new(ErrorCode::InvalidArgs, e.to_string()))?;
-            text = output::grep(&text, &re, a.context);
+        if let Some(pattern) = &args.grep {
+            let regex = Regex::new(pattern)
+                .map_err(|error| ToolError::new(ErrorCode::InvalidArgs, error.to_string()))?;
+            text = output::grep(&text, &regex, args.context);
         }
         let line = entry.pane.line_snapshot();
         Ok(json!({
@@ -1406,19 +1404,17 @@ impl Ctx {
         }))
     }
 
-    // --- running and waiting ----------------------------------------------------------------
-
-    async fn cmd_run(&self, a: RunArgs) -> Result<Value> {
-        if a.command.trim().is_empty() {
+    async fn cmd_run(&self, args: RunArgs) -> Result<Value> {
+        if args.command.trim().is_empty() {
             return Err(ToolError::new(ErrorCode::InvalidArgs, "no command"));
         }
         // Waiting for the owner counts against the call's time.
-        let deadline = Instant::now() + wait_for(a.timeout_ms);
-        let mut line = a.command.clone();
-        if let Some(cwd) = a.cwd.as_deref().filter(|_| a.pane.is_some()) {
+        let deadline = Instant::now() + wait_for(args.timeout_ms);
+        let mut line = args.command.clone();
+        if let Some(cwd) = args.cwd.as_deref().filter(|_| args.pane.is_some()) {
             line = format!("cd {} && {line}", crate::core::shell_quote(cwd));
         }
-        let (pane, entry) = match &a.pane {
+        let (pane, entry) = match &args.pane {
             Some(target) => {
                 let (pane, entry) = self.resolve(Some(target))?;
                 if !self.drives(pane) && Self::busy(&entry) {
@@ -1431,13 +1427,15 @@ impl Ctx {
                 (pane, entry)
             }
             None => {
-                let launch = PaneLaunch::Shell { cwd: a.cwd.clone() };
+                let launch = PaneLaunch::Shell {
+                    cwd: args.cwd.clone(),
+                };
                 let pane = self.split(self.caller, Direction::Down, launch, false)?;
                 (pane, self.core.pane(pane).ok_or_else(closed)?)
             }
         };
         // A new shell first draws its prompt; typing before that lands in its startup.
-        let prompt_by = Instant::now() + PROMPT_WAIT.min(wait_for(a.timeout_ms));
+        let prompt_by = Instant::now() + PROMPT_WAIT.min(wait_for(args.timeout_ms));
         while entry.pane.line_snapshot().view.phase == Phase::Idle && Instant::now() < prompt_by {
             tokio::time::sleep(TICK).await;
         }
@@ -1452,18 +1450,22 @@ impl Ctx {
             .commands(None)
             .commands
             .last()
-            .map(|c| c.mark.command_id);
+            .map(|command| command.mark.command_id);
         let start = entry.pane.head();
         write(&entry, entry.pane.encode_input(InputPayload::Paste(line))).await?;
         tokio::time::sleep(Duration::from_millis(30)).await;
         write(&entry, b"\r".to_vec()).await?;
-        let max = max_bytes(a.max_bytes);
+        let max = max_bytes(args.max_bytes);
 
-        // The command's own mark, once the shell reports it.
         let started_by = Instant::now() + START_WAIT;
         let mark = loop {
-            let newest = entry.pane.commands(None).commands.pop().map(|c| c.mark);
-            if let Some(mark) = newest.filter(|m| Some(m.command_id) > before) {
+            let newest = entry
+                .pane
+                .commands(None)
+                .commands
+                .pop()
+                .map(|command| command.mark);
+            if let Some(mark) = newest.filter(|mark| Some(mark.command_id) > before) {
                 if mark.finished.is_some() || Instant::now() >= deadline {
                     break Some(mark);
                 }
@@ -1474,19 +1476,21 @@ impl Ctx {
         };
         let Some(mark) = mark else {
             // No integration: settle on a quiet pane instead.
-            let status = wait_quiet(&entry, Duration::from_millis(500), deadline).await;
+            let settled = wait_quiet(&entry, Duration::from_millis(500), deadline).await;
             let (text, at) = self.output_since(&entry, start).await?;
             return Ok(json!({
                 "pane": pane_ref(pane),
-                "status": if status { "unknown" } else { "timeout" },
+                "status": if settled { "unknown" } else { "timeout" },
                 "output": Output::new(text, max, at).shared(self.shared(pane)),
                 "note": "this shell does not report commands, so there is no exit code",
             }));
         };
         let finished = mark.finished.is_some();
         let output = if finished {
-            let out = entry.pane.command_output(None, Some(mark.command_id)).ok();
-            out.map(|o| Output::new(o.text, max, entry.pane.head()).shared(self.shared(pane)))
+            let found = entry.pane.command_output(None, Some(mark.command_id)).ok();
+            found.map(|found| {
+                Output::new(found.text, max, entry.pane.head()).shared(self.shared(pane))
+            })
         } else {
             let (text, at) = self.output_since(&entry, start).await?;
             Some(Output::new(text, max, at).shared(self.shared(pane)))
@@ -1503,48 +1507,48 @@ impl Ctx {
         matches!(entry.pane.line_snapshot().view.phase, Phase::Running(_))
     }
 
-    async fn pane_wait(&self, a: WaitArgs) -> Result<Value> {
-        let (pane, entry) = self.resolve(a.pane.as_deref())?;
+    async fn pane_wait(&self, args: WaitArgs) -> Result<Value> {
+        let (pane, entry) = self.resolve(args.pane.as_deref())?;
         self.may_read(pane)?;
-        let re = a
+        let regex = args
             .pattern
             .as_deref()
             .map(Regex::new)
             .transpose()
-            .map_err(|e| ToolError::new(ErrorCode::InvalidArgs, e.to_string()))?;
-        if re.is_none()
-            && !a.prompt
-            && a.quiet_ms.is_none()
-            && a.exit.is_none()
-            && a.status.is_empty()
+            .map_err(|error| ToolError::new(ErrorCode::InvalidArgs, error.to_string()))?;
+        if regex.is_none()
+            && !args.prompt
+            && args.quiet_ms.is_none()
+            && args.exit.is_none()
+            && args.status.is_empty()
         {
             return Err(ToolError::new(
                 ErrorCode::InvalidArgs,
                 "wait for what? give match, prompt, quietMs, exit or status",
             ));
         }
-        if let Some(bad) = a
+        if let Some(bad) = args
             .status
             .iter()
-            .find(|s| agents::ProgramState::parse(s).is_none())
+            .find(|state| agents::ProgramState::parse(state).is_none())
         {
             return Err(
                 ToolError::new(ErrorCode::InvalidArgs, format!("no status {bad}"))
                     .hint("statuses are idle, working, done, blocked and error"),
             );
         }
-        let since = match &a.since {
-            Some(c) => output::parse_cursor(c).ok_or_else(|| {
+        let since = match &args.since {
+            Some(cursor) => output::parse_cursor(cursor).ok_or_else(|| {
                 ToolError::new(ErrorCode::InvalidArgs, "a cursor looks like c1234")
             })?,
             None => entry.pane.head(),
         };
-        let deadline = Instant::now() + wait_for(a.timeout_ms);
-        let max = max_bytes(a.max_bytes);
-        let mut sub = entry
+        let deadline = Instant::now() + wait_for(args.timeout_ms);
+        let max = max_bytes(args.max_bytes);
+        let mut subscriber = entry
             .pane
             .subscribe_from(since)
-            .map_err(|e| ToolError::new(ErrorCode::CursorExpired, e.to_string()))?;
+            .map_err(|error| ToolError::new(ErrorCode::CursorExpired, error.to_string()))?;
         let mut bytes = Vec::new();
         let mut last_output = Instant::now();
         let cols = entry.pane.size().cols;
@@ -1554,21 +1558,22 @@ impl Ctx {
         loop {
             // Each condition is checked against the state after the newest output.
             let mut text = None;
-            let due = matched_at.is_none_or(|t| t.elapsed() >= MATCH_EVERY)
+            let due = matched_at.is_none_or(|matched| matched.elapsed() >= MATCH_EVERY)
                 || Instant::now() + TICK >= deadline;
-            if let Some(re) = re.as_ref().filter(|_| fresh && due) {
+            if let Some(regex) = regex.as_ref().filter(|_| fresh && due) {
                 // Rendering is the costly part: off the async workers, and at most every
                 // MATCH_EVERY however fast the pane prints.
                 let rendered = output::visible(&output::render_bounded(bytes.clone(), cols).await);
                 fresh = false;
                 matched_at = Some(Instant::now());
-                if let Some(found) = rendered.lines().find_map(|l| {
-                    re.captures(l).map(|c| {
+                if let Some(found) = rendered.lines().find_map(|line| {
+                    regex.captures(line).map(|captures| {
                         (
-                            l.to_owned(),
-                            c.iter()
+                            line.to_owned(),
+                            captures
+                                .iter()
                                 .skip(1)
-                                .map(|g| g.map(|g| g.as_str().to_owned()))
+                                .map(|group| group.map(|group| group.as_str().to_owned()))
                                 .collect::<Vec<_>>(),
                         )
                     })
@@ -1576,16 +1581,16 @@ impl Ctx {
                     return Ok(json!({
                         "status": "matched",
                         "match": { "line": found.0, "groups": found.1 },
-                        "output": Output::new(rendered, max, position(&sub)).shared(self.shared(pane)),
+                        "output": Output::new(rendered, max, position(&subscriber)).shared(self.shared(pane)),
                     }));
                 }
                 text = Some(rendered);
             }
-            if !a.status.is_empty() {
-                let now = status(&self.core, pane, &entry);
-                if now["state"]
+            if !args.status.is_empty() {
+                let current = status(&self.core, pane, &entry);
+                if current["state"]
                     .as_str()
-                    .is_some_and(|s| a.status.iter().any(|w| w == s))
+                    .is_some_and(|state| args.status.iter().any(|wanted| wanted == state))
                 {
                     let mut done = self
                         .waited(
@@ -1595,22 +1600,22 @@ impl Ctx {
                             &bytes,
                             cols,
                             max,
-                            position(&sub),
+                            position(&subscriber),
                             None,
                         )
                         .await?;
-                    done["programStatus"] = now;
+                    done["programStatus"] = current;
                     return Ok(done);
                 }
             }
             let phase = entry.pane.line_snapshot().view.phase;
-            if a.prompt && phase == Phase::Prompt {
+            if args.prompt && phase == Phase::Prompt {
                 let last = entry
                     .pane
                     .commands(None)
                     .commands
                     .last()
-                    .map(|c| CommandInfo::of(&c.mark));
+                    .map(|command| CommandInfo::of(&command.mark));
                 return self
                     .waited(
                         pane,
@@ -1619,21 +1624,21 @@ impl Ctx {
                         &bytes,
                         cols,
                         max,
-                        position(&sub),
+                        position(&subscriber),
                         last,
                     )
                     .await;
             }
-            if let Some(id) = a.exit {
+            if let Some(id) = args.exit {
                 let mark = entry
                     .pane
                     .commands(None)
                     .commands
                     .into_iter()
-                    .map(|c| c.mark)
-                    .find(|m| m.command_id == id);
+                    .map(|command| command.mark)
+                    .find(|mark| mark.command_id == id);
                 match mark {
-                    Some(m) if m.finished.is_some() => {
+                    Some(mark) if mark.finished.is_some() => {
                         return self
                             .waited(
                                 pane,
@@ -1642,8 +1647,8 @@ impl Ctx {
                                 &bytes,
                                 cols,
                                 max,
-                                position(&sub),
-                                Some(CommandInfo::of(&m)),
+                                position(&subscriber),
+                                Some(CommandInfo::of(&mark)),
                             )
                             .await;
                     }
@@ -1656,14 +1661,28 @@ impl Ctx {
                     _ => {}
                 }
             }
-            if let Some(quiet) = a.quiet_ms
+            if let Some(quiet) = args.quiet_ms
                 && last_output.elapsed() >= Duration::from_millis(quiet)
             {
                 return self
-                    .waited(pane, "quiet", text, &bytes, cols, max, position(&sub), None)
+                    .waited(
+                        pane,
+                        "quiet",
+                        text,
+                        &bytes,
+                        cols,
+                        max,
+                        position(&subscriber),
+                        None,
+                    )
                     .await;
             }
-            if self.core.pane_meta(pane).and_then(|m| m.exit).is_some() {
+            if self
+                .core
+                .pane_meta(pane)
+                .and_then(|meta| meta.exit)
+                .is_some()
+            {
                 return self
                     .waited(
                         pane,
@@ -1672,7 +1691,7 @@ impl Ctx {
                         &bytes,
                         cols,
                         max,
-                        position(&sub),
+                        position(&subscriber),
                         None,
                     )
                     .await;
@@ -1687,18 +1706,18 @@ impl Ctx {
                         &bytes,
                         cols,
                         max,
-                        position(&sub),
+                        position(&subscriber),
                         None,
                     )
                     .await;
             }
-            match tokio::time::timeout(TICK.min(deadline - now), sub.recv()).await {
+            match tokio::time::timeout(TICK.min(deadline - now), subscriber.recv()).await {
                 Ok(Ok(chunk)) => {
                     bytes.extend_from_slice(&chunk.data);
                     fresh = true;
                     // Take what else is ready too, so a flood is checked per batch.
                     for _ in 0..MAX_BATCH {
-                        match tokio::time::timeout(Duration::ZERO, sub.recv()).await {
+                        match tokio::time::timeout(Duration::ZERO, subscriber.recv()).await {
                             Ok(Ok(chunk)) => bytes.extend_from_slice(&chunk.data),
                             _ => break,
                         }
@@ -1736,8 +1755,6 @@ impl Ctx {
         )
     }
 
-    // --- agents -----------------------------------------------------------------------------
-
     /// A worker agent: its pane, kind, state and finished turns.
     fn agent_info(&self, pane: PaneId, entry: &PaneEntry) -> Value {
         let kind = match &lock(&entry.record).launch {
@@ -1745,7 +1762,11 @@ impl Ctx {
             _ => None,
         };
         let turns = lock(&entry.meta).turns;
-        let exited = self.core.pane_meta(pane).and_then(|m| m.exit).is_some();
+        let exited = self
+            .core
+            .pane_meta(pane)
+            .and_then(|meta| meta.exit)
+            .is_some();
         let status = status(&self.core, pane, entry);
         let state = if exited {
             "exited"
@@ -1771,9 +1792,9 @@ impl Ctx {
                 Some("exited") => return Err(closed()),
                 Some("blocked") => return Err(agent_blocked(pane, &info)),
                 Some("idle" | "done") => {
-                    let now = entry.pane.head();
-                    if now != head {
-                        head = now;
+                    let current = entry.pane.head();
+                    if current != head {
+                        head = current;
                         quiet_since = None;
                     }
                     let since = *quiet_since.get_or_insert_with(Instant::now);
@@ -1800,26 +1821,26 @@ impl Ctx {
         Ok(())
     }
 
-    async fn agent_spawn(&self, a: SpawnArgs) -> Result<Value> {
-        let (of, _) = self.resolve(a.of.as_deref())?;
+    async fn agent_spawn(&self, args: SpawnArgs) -> Result<Value> {
+        let (of, _) = self.resolve(args.of.as_deref())?;
         self.may_read(of)?;
-        let launch = Self::launch(None, Some(a.kind), a.cwd);
-        let float = float_opts(a.float, a.frame, a.close_when_done)?;
-        let pane = self.open(of, a.direction, launch, false, float)?;
+        let launch = Self::launch(None, Some(args.kind), args.cwd);
+        let float = float_opts(args.float, args.frame, args.close_when_done)?;
+        let pane = self.open(of, args.direction, launch, false, float)?;
         let entry = self.core.pane(pane).ok_or_else(closed)?;
-        if let Some(prompt) = a.prompt.filter(|p| !p.trim().is_empty()) {
-            let deadline = Instant::now() + wait_for(a.timeout_ms.or(Some(60_000)));
+        if let Some(prompt) = args.prompt.filter(|prompt| !prompt.trim().is_empty()) {
+            let deadline = Instant::now() + wait_for(args.timeout_ms.or(Some(60_000)));
             self.agent_ready(pane, &entry, deadline).await?;
             self.deliver(&entry, prompt).await?;
         }
         Ok(json!({ "agent": self.agent_info(pane, &entry) }))
     }
 
-    async fn agent_prompt(&self, a: PromptArgs) -> Result<Value> {
-        let deadline = Instant::now() + wait_for(a.timeout_ms);
-        let (pane, entry) = self.resolve(Some(&a.pane))?;
+    async fn agent_prompt(&self, args: PromptArgs) -> Result<Value> {
+        let deadline = Instant::now() + wait_for(args.timeout_ms);
+        let (pane, entry) = self.resolve(Some(&args.pane))?;
         let action = DriveAction::Prompt {
-            text: a.text.clone(),
+            text: args.text.clone(),
         };
         self.may_drive(pane, &entry, action).await?;
         if entry.pane.echo().is_hidden_input() {
@@ -1839,8 +1860,8 @@ impl Ctx {
             _ => {}
         }
         let turns = lock(&entry.meta).turns;
-        self.deliver(&entry, a.text).await?;
-        if !a.wait {
+        self.deliver(&entry, args.text).await?;
+        if !args.wait {
             return Ok(json!({ "delivered": true, "agent": self.agent_info(pane, &entry) }));
         }
         loop {
@@ -1860,38 +1881,41 @@ impl Ctx {
         }
     }
 
-    async fn agent_wait(&self, a: AgentWaitArgs) -> Result<Value> {
-        if a.panes.is_empty() {
+    async fn agent_wait(&self, args: AgentWaitArgs) -> Result<Value> {
+        if args.panes.is_empty() {
             return Err(ToolError::new(
                 ErrorCode::InvalidArgs,
                 "no panes to wait for",
             ));
         }
-        let until: Vec<String> = if a.until.is_empty() {
+        let until: Vec<String> = if args.until.is_empty() {
             ["idle", "done", "blocked", "error", "exited"]
                 .map(String::from)
                 .into()
         } else {
-            a.until
+            args.until
         };
-        let agents = a
+        let agents = args
             .panes
             .iter()
-            .map(|p| {
-                let (pane, entry) = self.resolve(Some(p))?;
+            .map(|target| {
+                let (pane, entry) = self.resolve(Some(target))?;
                 self.may_read(pane)?;
                 Ok((pane, entry))
             })
             .collect::<Result<Vec<_>>>()?;
-        let deadline = Instant::now() + wait_for(a.timeout_ms);
+        let deadline = Instant::now() + wait_for(args.timeout_ms);
         loop {
-            let infos: Vec<Value> = agents.iter().map(|(p, e)| self.agent_info(*p, e)).collect();
-            let reached = |i: &Value| {
-                i["state"]
+            let infos: Vec<Value> = agents
+                .iter()
+                .map(|(pane, entry)| self.agent_info(*pane, entry))
+                .collect();
+            let reached = |info: &Value| {
+                info["state"]
                     .as_str()
-                    .is_some_and(|s| until.iter().any(|u| u == s))
+                    .is_some_and(|state| until.iter().any(|wanted| wanted == state))
             };
-            let done = if a.all {
+            let done = if args.all {
                 infos.iter().all(reached)
             } else {
                 infos.iter().any(reached)
@@ -1904,8 +1928,6 @@ impl Ctx {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
-
-    // --- floating windows -------------------------------------------------------------------
 
     /// The window holding `pane`, which the caller must have created.
     fn own_float(&self, pane: &str) -> Result<(PaneId, proto::FloatWindow)> {
@@ -1947,11 +1969,11 @@ impl Ctx {
         Ok(json!({ "pane": self.pane_info(pane, &entry) }))
     }
 
-    fn pane_float(&self, a: FloatPaneArgs) -> Result<Value> {
-        let (pane, _) = self.resolve(Some(&a.pane))?;
+    fn pane_float(&self, args: FloatPaneArgs) -> Result<Value> {
+        let (pane, _) = self.resolve(Some(&args.pane))?;
         self.may_arrange(pane)?;
-        let frame = a.frame.map(FloatFrame::from);
-        if frame.is_some_and(|f| f.clamped().is_none()) {
+        let frame = args.frame.map(FloatFrame::from);
+        if frame.is_some_and(|frame| frame.clamped().is_none()) {
             return Err(ToolError::new(
                 ErrorCode::InvalidArgs,
                 "frame values must be numbers",
@@ -1961,30 +1983,32 @@ impl Ctx {
             pane_id: pane,
             frame,
         })
-        .map_err(|e| {
-            e.hint("a tab keeps at least one pane in place; it holds at most 16 floating windows")
+        .map_err(|error| {
+            error.hint(
+                "a tab keeps at least one pane in place; it holds at most 16 floating windows",
+            )
         })?;
-        if a.pinned.is_some() {
+        if args.pinned.is_some() {
             self.layout_op(LayoutOp::SetFloat {
                 pane_id: pane,
                 frame: None,
                 minimized: None,
-                pinned: a.pinned,
+                pinned: args.pinned,
             })?;
         }
         self.pane_result(pane)
     }
 
     /// Docks the window, then gives the user back the focus docking moves.
-    fn pane_dock(&self, a: DockArgs) -> Result<Value> {
-        let (pane, _) = self.own_float(&a.pane)?;
-        let beside = match a.beside.as_deref() {
-            Some(b) => {
-                let (target, _) = self.resolve(Some(b))?;
+    fn pane_dock(&self, args: DockArgs) -> Result<Value> {
+        let (pane, _) = self.own_float(&args.pane)?;
+        let beside = match args.beside.as_deref() {
+            Some(beside) => {
+                let (target, _) = self.resolve(Some(beside))?;
                 self.may_read(target)?;
                 Some(DockTarget {
                     pane_id: target,
-                    side: a.side.into(),
+                    side: args.side.into(),
                 })
             }
             None => None,
@@ -1994,19 +2018,19 @@ impl Ctx {
             pane_id: pane,
             beside,
         })
-        .map_err(|e| e.hint("dock beside a pane that is not floating"))?;
-        if let Some(focused) = focused.filter(|&f| f != pane) {
+        .map_err(|error| error.hint("dock beside a pane that is not floating"))?;
+        if let Some(focused) = focused.filter(|&focused| focused != pane) {
             self.core.apply_op(LayoutOp::Focus { pane_id: focused });
         }
         self.pane_result(pane)
     }
 
-    fn pane_minimize(&self, a: MinimizeArgs) -> Result<Value> {
-        let (pane, _) = self.own_float(&a.pane)?;
+    fn pane_minimize(&self, args: MinimizeArgs) -> Result<Value> {
+        let (pane, _) = self.own_float(&args.pane)?;
         self.layout_op(LayoutOp::SetFloat {
             pane_id: pane,
             frame: None,
-            minimized: Some(a.minimized),
+            minimized: Some(args.minimized),
             pinned: None,
         })?;
         self.pane_result(pane)
@@ -2014,8 +2038,8 @@ impl Ctx {
 
     /// Brings the window to the front, out of the tray, without the keyboard: the user's
     /// focus is theirs.
-    fn pane_raise(&self, a: PaneArg) -> Result<Value> {
-        let (pane, _) = self.own_float(&a.pane)?;
+    fn pane_raise(&self, args: PaneArg) -> Result<Value> {
+        let (pane, _) = self.own_float(&args.pane)?;
         // Restoring raises it, from the tray or not, and leaves the focus where it is.
         self.layout_op(LayoutOp::SetFloat {
             pane_id: pane,
@@ -2034,22 +2058,22 @@ impl Ctx {
         layout
             .tabs
             .iter()
-            .find(|t| t.tab_id == active)
-            .map(|t| t.focused)
+            .find(|tab| tab.tab_id == active)
+            .map(|tab| tab.focused)
     }
 
-    fn agent_result(&self, a: PaneArg) -> Result<Value> {
-        let (pane, entry) = match self.resolve(Some(&a.pane)) {
+    fn agent_result(&self, args: PaneArg) -> Result<Value> {
+        let (pane, entry) = match self.resolve(Some(&args.pane)) {
             Ok(found) => found,
-            Err(e) => {
+            Err(error) => {
                 // A float that closed when its run ended leaves its result to whoever opened it.
-                let kept = PaneId(a.pane.trim_start_matches('p').parse().unwrap_or(0));
+                let kept = PaneId(args.pane.trim_start_matches('p').parse().unwrap_or(0));
                 return match self.core.term.kept_result(self.caller, kept) {
                     Some(result) => Ok(json!({
                         "agent": { "pane": pane_ref(kept), "state": "exited" },
                         "result": result,
                     })),
-                    _ => Err(e),
+                    _ => Err(error),
                 };
             }
         };
@@ -2062,17 +2086,17 @@ impl Ctx {
     }
 
     /// Reports the caller's own status, as OSC 7501 would, for agents that cannot print it.
-    fn status_set(&self, a: StatusArgs) -> Result<Value> {
-        let state = agents::ProgramState::parse(&a.state).ok_or_else(|| {
-            ToolError::new(ErrorCode::InvalidArgs, format!("no status {}", a.state))
+    fn status_set(&self, args: StatusArgs) -> Result<Value> {
+        let state = agents::ProgramState::parse(&args.state).ok_or_else(|| {
+            ToolError::new(ErrorCode::InvalidArgs, format!("no status {}", args.state))
                 .hint("statuses are idle, working, done, blocked, error, and clear to remove it")
         })?;
-        let kind = a
+        let kind = args
             .kind
             .as_deref()
-            .map(|k| {
-                agents::ProgramKind::parse(k).ok_or_else(|| {
-                    ToolError::new(ErrorCode::InvalidArgs, format!("no kind {k}"))
+            .map(|kind| {
+                agents::ProgramKind::parse(kind).ok_or_else(|| {
+                    ToolError::new(ErrorCode::InvalidArgs, format!("no kind {kind}"))
                         .hint("kinds are permission, question and auth")
                 })
             })
@@ -2083,18 +2107,16 @@ impl Ctx {
             &entry,
             agents::ProgramStatus {
                 kind,
-                progress: a.progress.map(|p| p.min(100)),
-                msg: a.message,
+                progress: args.progress.map(|progress| progress.min(100)),
+                msg: args.message,
                 ..agents::ProgramStatus::new(state)
             },
         );
         Ok(json!({ "status": status(&self.core, self.caller, &entry) }))
     }
 
-    // --- events -----------------------------------------------------------------------------
-
     /// Waits for events of the caller's session after `since` (`proto::script`).
-    async fn events_wait(&self, a: EventsArgs) -> Result<Value> {
+    async fn events_wait(&self, args: EventsArgs) -> Result<Value> {
         const TYPES: [&str; 7] = [
             "pane.opened",
             "pane.closed",
@@ -2104,7 +2126,11 @@ impl Ctx {
             "layout.changed",
             "events.lost",
         ];
-        if let Some(bad) = a.types.iter().find(|t| !TYPES.contains(&t.as_str())) {
+        if let Some(bad) = args
+            .types
+            .iter()
+            .find(|name| !TYPES.contains(&name.as_str()))
+        {
             return Err(
                 ToolError::new(ErrorCode::InvalidArgs, format!("no event type {bad}"))
                     .hint(format!("types are {}", TYPES.join(", "))),
@@ -2113,7 +2139,9 @@ impl Ctx {
         let wanted = |kind: &proto::ScriptEventKind| {
             let name = events::type_name(kind);
             // Losing events is always said: what a subscriber knows may be stale.
-            a.types.is_empty() || name == "events.lost" || a.types.iter().any(|t| t == name)
+            args.types.is_empty()
+                || name == "events.lost"
+                || args.types.iter().any(|wanted| wanted == name)
         };
         let page = self
             .core
@@ -2121,42 +2149,40 @@ impl Ctx {
             .events
             .read(
                 self.session(),
-                a.since,
+                args.since,
                 wanted,
-                a.max.unwrap_or(100).clamp(1, 1000),
-                wait_for(a.timeout_ms),
+                args.max.unwrap_or(100).clamp(1, 1000),
+                wait_for(args.timeout_ms),
             )
             .await;
         Ok(json!({ "events": page.events, "cursor": page.cursor }))
     }
 
-    // --- input ------------------------------------------------------------------------------
-
-    async fn pane_send(&self, a: SendArgs) -> Result<Value> {
-        let (pane, entry) = self.resolve(Some(&a.pane))?;
+    async fn pane_send(&self, args: SendArgs) -> Result<Value> {
+        let (pane, entry) = self.resolve(Some(&args.pane))?;
         // Every key is checked before anything is asked or written.
-        let keys = a
+        let keys = args
             .keys
             .iter()
-            .map(|k| parse_key(k))
+            .map(|key| parse_key(key))
             .collect::<Result<Vec<_>>>()?;
         let action = DriveAction::Type {
-            text: a.text.clone().filter(|t| !t.is_empty()),
-            keys: a.keys.clone(),
-            submit: a.submit,
+            text: args.text.clone().filter(|text| !text.is_empty()),
+            keys: args.keys.clone(),
+            submit: args.submit,
         };
         self.may_drive(pane, &entry, action).await?;
         if entry.pane.echo().is_hidden_input() {
             return Err(secret_prompt(pane));
         }
         let mut written = 0;
-        if let Some(text) = a.text.filter(|t| !t.is_empty()) {
+        if let Some(text) = args.text.filter(|text| !text.is_empty()) {
             written += write(&entry, entry.pane.encode_input(InputPayload::Paste(text))).await?;
         }
         for key in keys {
             written += write(&entry, entry.pane.encode_input(InputPayload::Key(key))).await?;
         }
-        if a.submit {
+        if args.submit {
             // Let a program's input box take a paste before Enter arrives.
             tokio::time::sleep(Duration::from_millis(80)).await;
             written += write(&entry, b"\r".to_vec()).await?;
@@ -2177,7 +2203,7 @@ fn status(core: &Core, id: PaneId, entry: &PaneEntry) -> Value {
             "progress": report.progress,
         });
     }
-    let Some(agent) = core.pane_meta(id).and_then(|m| m.agent) else {
+    let Some(agent) = core.pane_meta(id).and_then(|meta| meta.agent) else {
         return Value::Null;
     };
     let (state, kind) = match agent.state {
@@ -2189,8 +2215,8 @@ fn status(core: &Core, id: PaneId, entry: &PaneEntry) -> Value {
     json!({ "state": state, "kind": kind, "app": agent.kind })
 }
 
-fn position(sub: &pty::Subscriber) -> Seq {
-    Seq(sub.position().get())
+fn position(subscriber: &pty::Subscriber) -> Seq {
+    Seq(subscriber.position().get())
 }
 
 async fn write(entry: &PaneEntry, bytes: Vec<u8>) -> Result<usize> {
@@ -2207,9 +2233,9 @@ async fn wait_quiet(entry: &PaneEntry, quiet: Duration, deadline: Instant) -> bo
     let mut since = Instant::now();
     while Instant::now() < deadline {
         tokio::time::sleep(TICK).await;
-        let now = entry.pane.head();
-        if now != head {
-            head = now;
+        let current = entry.pane.head();
+        if current != head {
+            head = current;
             since = Instant::now();
         } else if since.elapsed() >= quiet {
             return true;
@@ -2260,11 +2286,14 @@ fn parse_key(name: &str) -> Result<KeyEvent> {
     };
     let lower = name.trim().to_ascii_lowercase();
     let mut parts: Vec<&str> = lower.split('+').collect();
-    let base = parts.pop().filter(|b| !b.is_empty()).ok_or_else(bad)?;
+    let base = parts
+        .pop()
+        .filter(|base| !base.is_empty())
+        .ok_or_else(bad)?;
     let mut mods = Mods::NONE;
-    for m in parts {
+    for modifier in parts {
         mods = mods
-            | match m {
+            | match modifier {
                 "ctrl" | "control" => Mods::CTRL,
                 "alt" | "option" | "meta" => Mods::ALT,
                 "shift" => Mods::SHIFT,
@@ -2290,19 +2319,19 @@ fn parse_key(name: &str) -> Result<KeyEvent> {
         "insert" => Some(Key::INSERT),
         _ => base
             .strip_prefix('f')
-            .and_then(|n| n.parse::<u8>().ok())
+            .and_then(|number| number.parse::<u8>().ok())
             .and_then(function_key),
     };
     let (key, text) = match named {
         Some(key) => (key, (base == "space").then(|| " ".to_owned())),
         None => {
             let mut chars = base.chars();
-            let c = chars
+            let ch = chars
                 .next()
                 .filter(|_| chars.next().is_none())
                 .ok_or_else(bad)?;
-            let key = letter_key(c).ok_or_else(bad)?;
-            (key, Some(c.to_string()))
+            let key = letter_key(ch).ok_or_else(bad)?;
+            (key, Some(ch.to_string()))
         }
     };
     let text = text.filter(|_| mods == Mods::NONE || mods == Mods::SHIFT);
@@ -2314,9 +2343,9 @@ fn parse_key(name: &str) -> Result<KeyEvent> {
     })
 }
 
-fn function_key(n: u8) -> Option<ghostty_vt::Key> {
+fn function_key(number: u8) -> Option<ghostty_vt::Key> {
     use ghostty_vt::Key;
-    Some(match n {
+    Some(match number {
         1 => Key::F1,
         2 => Key::F2,
         3 => Key::F3,
@@ -2333,7 +2362,7 @@ fn function_key(n: u8) -> Option<ghostty_vt::Key> {
     })
 }
 
-fn letter_key(c: char) -> Option<ghostty_vt::Key> {
+fn letter_key(ch: char) -> Option<ghostty_vt::Key> {
     use ghostty_vt::Key;
     const LETTERS: [Key; 26] = [
         Key::A,
@@ -2375,9 +2404,9 @@ fn letter_key(c: char) -> Option<ghostty_vt::Key> {
         Key::DIGIT_8,
         Key::DIGIT_9,
     ];
-    match c {
-        'a'..='z' => Some(LETTERS[(c as u8 - b'a') as usize]),
-        '0'..='9' => Some(DIGITS[(c as u8 - b'0') as usize]),
+    match ch {
+        'a'..='z' => Some(LETTERS[(ch as u8 - b'a') as usize]),
+        '0'..='9' => Some(DIGITS[(ch as u8 - b'0') as usize]),
         _ => None,
     }
 }
@@ -2386,8 +2415,8 @@ fn letter_key(c: char) -> Option<ghostty_vt::Key> {
 mod tests {
     use super::*;
 
-    /// 600 waits from one agent took every hook-socket connection, so other agents' hooks
-    /// and approvals queued for minutes.
+    /// Hundreds of waits from one agent must not take every hook-socket connection, or other
+    /// agents' hooks and approvals queue for minutes.
     #[test]
     fn one_pane_cannot_hold_every_call_slot() {
         let term = Term::default();
@@ -2409,11 +2438,11 @@ mod tests {
         let term = Term::default();
         let (lead, worker, other) = (PaneId(1), PaneId(2), PaneId(50));
         term.created(lead, worker);
-        for p in 3..10 {
-            term.created(worker, PaneId(p));
+        for id in 3..10 {
+            term.created(worker, PaneId(id));
         }
         term.created(other, PaneId(51));
-        let live = |p: PaneId| p != PaneId(9);
+        let live = |pane: PaneId| pane != PaneId(9);
         // The worker and its seven panes, one of them closed.
         assert_eq!(term.opened_by_tree(lead, live), 7);
         assert_eq!(
@@ -2426,10 +2455,10 @@ mod tests {
 
     #[test]
     fn keys_parse_with_modifiers() {
-        let c = parse_key("ctrl+c").unwrap();
-        assert_eq!(c.key, ghostty_vt::Key::C.0);
-        assert_eq!(c.mods, ghostty_vt::Mods::CTRL.0);
-        assert_eq!(c.text, None);
+        let ctrl_c = parse_key("ctrl+c").unwrap();
+        assert_eq!(ctrl_c.key, ghostty_vt::Key::C.0);
+        assert_eq!(ctrl_c.mods, ghostty_vt::Mods::CTRL.0);
+        assert_eq!(ctrl_c.text, None);
         assert_eq!(parse_key("Enter").unwrap().key, ghostty_vt::Key::ENTER.0);
         assert_eq!(parse_key("f5").unwrap().key, ghostty_vt::Key::F5.0);
         assert!(parse_key("hyper+x").is_err());
@@ -2457,7 +2486,7 @@ mod tests {
 
         // Restoring keeps only pairs whose panes both came back.
         let restored = Term::default();
-        restored.restore([(shell, lead), (PaneId(9), lead)], |p| p != PaneId(9));
+        restored.restore([(shell, lead), (PaneId(9), lead)], |pane| pane != PaneId(9));
         assert!(restored.owns(lead, shell));
         assert!(!restored.owns(lead, PaneId(9)));
     }
