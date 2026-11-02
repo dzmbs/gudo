@@ -17,9 +17,11 @@ pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
     fs::create_dir_all(dir)?;
     // Unique per process and write: two threads writing the same file must not share one.
     static WRITES: AtomicU64 = AtomicU64::new(0);
-    let tmp = dir.join(format!(
+    let temp_path = dir.join(format!(
         ".{}.tmp{}.{}",
-        path.file_name().and_then(|n| n.to_str()).unwrap_or("state"),
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("state"),
         std::process::id(),
         WRITES.fetch_add(1, Ordering::Relaxed)
     ));
@@ -29,11 +31,11 @@ pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
             .create(true)
             .truncate(true)
             .mode(0o600)
-            .open(&tmp)?;
+            .open(&temp_path)?;
         file.write_all(data)?;
         file.sync_all()?;
     }
-    fs::rename(&tmp, path)?;
+    fs::rename(&temp_path, path)?;
     File::open(dir)?.sync_all()
 }
 
@@ -84,20 +86,18 @@ pub fn create_private_temp_file(prefix: &str, ext: &str) -> io::Result<(PathBuf,
     Ok((path, file))
 }
 
-/// Reads a file, mapping "not found" to `None`.
 pub(crate) fn read_optional(path: &Path) -> io::Result<Option<Vec<u8>>> {
     match fs::read(path) {
         Ok(data) => Ok(Some(data)),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
     }
 }
 
-/// Fills a buffer with OS randomness.
 pub(crate) fn random<const N: usize>() -> [u8; N] {
-    let mut buf = [0; N];
-    getrandom::fill(&mut buf).expect("the OS random source is available");
-    buf
+    let mut bytes = [0; N];
+    getrandom::fill(&mut bytes).expect("the OS random source is available");
+    bytes
 }
 
 /// Compares secrets in time that depends only on their lengths.
@@ -105,15 +105,14 @@ pub(crate) fn constant_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0, |diff, (x, y)| diff | (x ^ y)) == 0
 }
 
-/// Lowercase hex.
 pub(crate) fn hex(bytes: &[u8]) -> String {
     data_encoding::HEXLOWER.encode(bytes)
 }
 
 /// Parses lowercase or uppercase hex into exactly `N` bytes.
-pub(crate) fn unhex<const N: usize>(s: &str) -> Option<[u8; N]> {
+pub(crate) fn unhex<const N: usize>(text: &str) -> Option<[u8; N]> {
     data_encoding::HEXLOWER_PERMISSIVE
-        .decode(s.as_bytes())
+        .decode(text.as_bytes())
         .ok()?
         .try_into()
         .ok()

@@ -12,16 +12,12 @@ import UIKit
 import AppKit
 #endif
 
-/// The draw overlay on a terminal pane (docs/DAEMON.md §7.11, "the primary UX"): a transparent
-/// layer anchored to a row that scrolls with the output, holding one Excalidraw scene — shapes,
-/// arrows and text from the embedded editor, Pen ink from PencilKit converted to `freedraw`
-/// elements — synced live with the daemon.
+/// The draw overlay on a terminal pane: a transparent layer anchored to a row that scrolls with
+/// the output, holding one Excalidraw scene synced live with the daemon.
 ///
-/// Input (iPad, iPhone): one tool for every input (`DrawTool`, `DrawRouting`): one finger and the
-/// Pencil draw with it, the Pencil always draws (with Select it inks), two fingers scroll the
-/// terminal. Done renders a PNG on device and places it in the pane's output (`placePng`,
-/// replacing the placement it was reopened from) and says so; Cancel discards a new drawing and
-/// reverts a reopened one; Send to Claude/Codex places it and attaches it to the agent's prompt.
+/// On touch devices one finger and the Pencil draw with the current tool, the Pencil always
+/// draws, and two fingers scroll the terminal. Finishing renders a PNG on device and places it in
+/// the pane's output; Cancel discards a new drawing and reverts a reopened one.
 @MainActor
 final class DrawOverlay: NSObject {
     let view = OverlayContainer()
@@ -31,7 +27,7 @@ final class DrawOverlay: NSObject {
     private unowned let drawing: PaneDrawing
     private var origin: RowPin
     private let reopened: Placement?
-    /// A drawing that exists but is not placed yet (continued from another device).
+    /// A drawing that exists but is not placed yet, e.g. continued from another device.
     private let existing: UInt64?
     private let web = CanvasWebView()
     private var sync: SceneSync?
@@ -42,15 +38,13 @@ final class DrawOverlay: NSObject {
     private var scrollRemainder: CGFloat = 0
     private let anchorMark = AnchorMark()
     private let firstRow = PlacementMarker(frame: .zero)
-    /// Something was drawn or changed since the overlay opened (asked about before another pane
-    /// takes over draw mode).
+    /// Checked before another pane takes over draw mode.
     private(set) var isEdited = false
-    /// Called once when the overlay closes, with what Done placed (nil: cancelled, emptied).
     private var closeHandlers: [(Placement?) -> Void] = []
     private var placed: Placement?
     /// The tool before a Pencil double tap switched to the eraser.
     private var toolBeforeEraser: DrawTool?
-    /// Re-reads where the drawing can go while the overlay is open (agents start and stop).
+    /// Agents start and stop while the overlay is open.
     private var destinationsTimer: Timer?
     #if os(iOS)
     private(set) var ink: InkCanvasController?
@@ -59,7 +53,7 @@ final class DrawOverlay: NSObject {
     private var toolbar: NSHostingView<ThemedRoot<OverlayToolbar>>?
     #endif
 
-    /// The tool the last overlay closed with (a keyboard-opened overlay starts with it).
+    /// A keyboard-opened overlay starts with the tool the last one closed with.
     static var lastTool: DrawTool = .pen
 
     init(drawing: PaneDrawing, origin: RowPin, reopened: Placement?, tool: DrawTool, existing: UInt64? = nil) {
@@ -101,8 +95,8 @@ final class DrawOverlay: NSObject {
             self.ink = ink
             ink.setTool(tool)
 
-            // Two fingers scroll the terminal, over either layer (the page ignores a second
-            // finger; PencilKit drops the stroke the first one started).
+            // Over either layer: the page ignores a second finger, and PencilKit drops the stroke
+            // the first one started.
             let pan = UIPanGestureRecognizer(target: self, action: #selector(twoFingerPan(_:)))
             pan.minimumNumberOfTouches = 2
             pan.maximumNumberOfTouches = 2
@@ -142,7 +136,7 @@ final class DrawOverlay: NSObject {
         CanvasWebView.log.info("draw: overlay opens on pane \(drawing.paneId) (\(reopened == nil ? "new" : "reopened", privacy: .public), tool \(tool.rawValue, privacy: .public))")
     }
 
-    /// The placement this overlay edits (nil: a new drawing).
+    /// Nil for a new drawing.
     var reopenedPlacementId: UInt64? { reopened?.placementId }
 
     // MARK: Lifecycle
@@ -198,11 +192,11 @@ final class DrawOverlay: NSObject {
     }
 
     private var viewport: [String: Any]? {
-        guard let g = geometry else { return nil }
-        return ["originX": g.origin.x, "originY": g.origin.y, "zoom": g.zoom]
+        guard let geometry else { return nil }
+        return ["originX": geometry.origin.x, "originY": geometry.origin.y, "zoom": geometry.zoom]
     }
 
-    /// The terminal scrolled or re-laid out: move the scene with its row.
+    /// Moves the scene with its row after the terminal scrolled or re-laid out.
     func terminalMoved() {
         let before = geometry
         updateGeometry()
@@ -214,10 +208,10 @@ final class DrawOverlay: NSObject {
               let row = drawing.tracker.terminal.viewportRows(of: [origin]).first ?? nil
         else { return }
         let gridOrigin = surface.rect(for: GridPoint(x: 0, y: 0)).origin
-        let g = OverlayGeometry(cell: cell, gridOrigin: gridOrigin, anchorRow: row)
+        let updated = OverlayGeometry(cell: cell, gridOrigin: gridOrigin, anchorRow: row)
         let first = geometry == nil
-        geometry = g
-        anchorMark.frame = CGRect(x: max(0, g.origin.x - 3), y: g.origin.y + 2, width: 2, height: cell.height - 4)
+        geometry = updated
+        anchorMark.frame = CGRect(x: max(0, updated.origin.x - 3), y: updated.origin.y + 2, width: 2, height: cell.height - 4)
         firstRow.frame = CGRect(x: gridOrigin.x, y: gridOrigin.y, width: max(0, view.bounds.width - 2 * gridOrigin.x), height: cell.height)
         #if os(iOS)
         if first { ink?.convertNew() }
@@ -258,7 +252,7 @@ final class DrawOverlay: NSObject {
         terminalMoved()
     }
 
-    /// Runs `handler` when the overlay closes (with the placement Done made, if any).
+    /// Runs `handler` when the overlay closes, with the placement it made, if any.
     func onClose(_ handler: @escaping (Placement?) -> Void) {
         if closed { handler(placed) } else { closeHandlers.append(handler) }
     }
@@ -279,7 +273,7 @@ final class DrawOverlay: NSObject {
         for handler in handlers { handler(placed) }
     }
 
-    // MARK: Messages from the editor
+    // MARK: Editor messages
 
     private func message(_ body: [String: Any]) {
         switch body["type"] as? String {
@@ -302,7 +296,7 @@ final class DrawOverlay: NSObject {
             ink?.pageLoaded()
             #endif
         case "tool":
-            // The editor changed tool itself (keyboard letters, back to selection after text).
+            // The editor changed tool itself, e.g. back to selection after text.
             guard let type = body["tool"] as? String, let tool = DrawTool(excalidrawType: type), tool != model.tool else { return }
             CanvasWebView.log.info("draw: the editor switched to \(type, privacy: .public)")
             setTool(tool, fromEditor: true)
@@ -317,8 +311,7 @@ final class DrawOverlay: NSObject {
         }
     }
 
-    /// Ink converted from PencilKit, added to the scene as the user's own edit (the page holds
-    /// it until its scene has loaded).
+    /// The page holds the ink until its scene has loaded.
     func addInk(_ elements: [[String: Any]]) {
         isEdited = true
         web.call("addElements", ["elements": elements])
@@ -346,9 +339,9 @@ final class DrawOverlay: NSObject {
     func adoptFirstStroke(_ samples: [PencilSample], from source: UIView) {
         guard let ink else { return }
         let converted = samples.map { sample -> PencilSample in
-            var s = sample
-            s.location = source.convert(sample.location, to: ink.canvas)
-            return s
+            var moved = sample
+            moved.location = source.convert(sample.location, to: ink.canvas)
+            return moved
         }
         ink.adopt(converted)
     }
@@ -365,21 +358,18 @@ final class DrawOverlay: NSObject {
     }
 
     private func debugRect() {
-        // Around the anchor row and the three above it (output, not the live prompt below).
-        let w = (geometry?.sceneColumnWidth ?? 10) * 8
-        web.call("debugRect", ["x": 10, "y": -55, "width": Double(w), "height": 70])
+        // Around the anchor row and the three above it, not the live prompt below.
+        let width = (geometry?.sceneColumnWidth ?? 10) * 8
+        web.call("debugRect", ["x": 10, "y": -55, "width": Double(width), "height": 70])
     }
 
-    /// Keep (⌘↩, ⌃⌘D again): render on device and place in the pane's output.
     func commit() { finish(.keep) }
 
-    /// Agents come and go while drawing: the toolbar's destinations are refreshed when it opens
-    /// and before its menu matters (each finish re-checks the target).
     func refreshDestinations() {
         let list = drawing.agentDestinations()
         let primary = drawing.primaryDestination(in: list)
         let canStart = drawing.canStartAgent
-        // Assigned only on change: the toolbar re-lays out (its width follows the Send label).
+        // Assigned only on change: the toolbar's width follows the Send label, so it re-lays out.
         if model.destinations != list { model.destinations = list }
         if model.primary != primary {
             model.primary = primary
@@ -388,10 +378,8 @@ final class DrawOverlay: NSObject {
         if model.canStart != canStart { model.canStart = canStart }
     }
 
-    /// Every way out but Cancel: the drawing is rendered on device and placed in the pane's
-    /// output (so it can be sent again, copied or edited later), the overlay closes, and the
-    /// pane does `action` with it and says so. A failed placement keeps the overlay (and the
-    /// drawing) open with the reason shown.
+    /// Every way out but Cancel: places the drawing in the pane's output, closes, then does
+    /// `action`. A failed placement keeps the overlay open with the reason shown.
     func finish(_ action: DrawingAction) {
         guard !model.busy, !closed else { return }
         if model.readOnly { return close() }
@@ -412,7 +400,7 @@ final class DrawOverlay: NSObject {
         }
     }
 
-    /// Where the toolbar was (share sheets point there), in the pane's coordinates.
+    /// Where share sheets point, in the pane's coordinates.
     private var toolbarFrame: CGRect {
         #if os(iOS)
         toolbar?.view.frame ?? view.bounds
@@ -421,10 +409,9 @@ final class DrawOverlay: NSObject {
         #endif
     }
 
-    /// What Done did.
     enum PlaceOutcome {
         case placed(Placement, Data)
-        /// Nothing drawn: a new drawing was deleted, a reopened placement removed.
+        /// A new drawing was deleted, or a reopened placement removed.
         case empty
         case failed
     }
@@ -438,8 +425,8 @@ final class DrawOverlay: NSObject {
         }
     }
 
-    /// Cancel: a new drawing is deleted; a reopened one gets its scene back as it was opened
-    /// (edits were synced live, so they are overwritten with the loaded elements).
+    /// A reopened drawing's edits were synced live, so cancelling overwrites them with the
+    /// elements it was opened with.
     func cancel() {
         guard !closed else { return }
         CanvasWebView.log.info("draw: cancel on pane \(self.drawing.paneId)")
@@ -463,8 +450,7 @@ final class DrawOverlay: NSObject {
         }
     }
 
-    /// Write (handwriting at the prompt) from the toolbar: a drawing with content is placed
-    /// first, an empty one closes.
+    /// A drawing with content is placed first; an empty one closes.
     private func switchToWriting() {
         let drawing = drawing
         if isEdited {
@@ -476,8 +462,7 @@ final class DrawOverlay: NSObject {
         }
     }
 
-    /// Renders the covered cells to PNG and places it; `.empty` when the scene is empty (then a
-    /// new drawing is deleted and a reopened placement removed).
+    /// Renders the covered cells to PNG and places it.
     private func place() async -> PlaceOutcome {
         #if os(iOS)
         await ink?.settle()
@@ -488,8 +473,9 @@ final class DrawOverlay: NSObject {
         web.call("flushNow")
         _ = await web.value("1")
         await sync.settle()
-        guard let b = await web.value("canvas.bounds()") as? [String: Any],
-              let x = b["x"] as? Double, let y = b["y"] as? Double, let w = b["width"] as? Double, let h = b["height"] as? Double
+        guard let bounds = await web.value("canvas.bounds()") as? [String: Any],
+              let x = bounds["x"] as? Double, let y = bounds["y"] as? Double,
+              let width = bounds["width"] as? Double, let height = bounds["height"] as? Double
         else {
             if let reopened {
                 try? await drawing.hub.client.unplace(placementId: reopened.placementId)
@@ -500,7 +486,7 @@ final class DrawOverlay: NSObject {
             CanvasWebView.log.info("done: empty scene")
             return .empty
         }
-        let box = geometry.cells(covering: CGRect(x: x, y: y, width: w, height: h), maxCols: Int(grid.cols))
+        let box = geometry.cells(covering: CGRect(x: x, y: y, width: width, height: height), maxCols: Int(grid.cols))
         let scale = geometry.zoom * surface.layer.contentsScale
         guard let png = await web.export(scale: scale, bounds: geometry.sceneRect(of: box))?.data,
               let top = drawing.tracker.terminal.pinRow(relativeTo: origin, offset: box.row)
@@ -520,7 +506,7 @@ final class DrawOverlay: NSObject {
                         col: UInt16(box.col), cols: UInt16(box.cols), rows: UInt16(box.rows), replace: replace),
                     png: png)
             }
-            // Show it at once from this device's own render (no round trip for the blob).
+            // Show it at once from this device's own render, without a round trip for the blob.
             drawing.hub.seed(hash: placement.image.hash, png: png)
             if let pixels = DrawingHub.decode(png) { surface.setInlineImage(pixels, key: placement.image.hash) }
             drawing.hub.noteLocal(placement, replacing: reopened?.placementId)
@@ -531,9 +517,8 @@ final class DrawOverlay: NSObject {
         }
     }
 
-    /// Runs a request naming `pin`'s row. While the pane is being resized (the software keyboard
-    /// coming up, a divider drag) the daemon's grid can briefly differ from ours and refuse the
-    /// row; the request is retried with the anchor taken again once sizes settle.
+    /// While the pane is being resized the daemon's grid can briefly differ from ours and refuse
+    /// the row; the request is retried with the anchor taken again once sizes settle.
     private func anchored<T>(_ pin: RowPin, _ request: (AnchorRequest) async throws -> T) async throws -> T {
         try await drawing.anchored(pin, request)
     }
@@ -584,7 +569,7 @@ extension DrawOverlay: UIGestureRecognizerDelegate, UIPencilInteractionDelegate 
         true
     }
 
-    /// Pencil double tap (squeeze on Pencil Pro): eraser and back.
+    /// Pencil double tap or squeeze toggles the eraser.
     func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveTap tap: UIPencilInteraction.Tap) {
         if model.tool == .eraser {
             setTool(toolBeforeEraser ?? .pen)
@@ -596,11 +581,8 @@ extension DrawOverlay: UIGestureRecognizerDelegate, UIPencilInteractionDelegate 
 }
 #endif
 
-/// Hosts the overlay over the terminal; lays out on resize. While drawing it holds the keyboard
-/// focus: draw mode is modal, so no keystroke reaches the shell underneath (an Esc meant to
-/// leave draw mode used to go to the shell, which rang the bell: the pane flashed white and
-/// faded back to black, and draw mode stayed open). Esc and ⌘. cancel, ⌘↩ keeps, ⇧⌘↩ sends,
-/// the tool letters pick tools; everything else is swallowed (⌘ chords still reach the menus).
+/// Hosts the overlay over the terminal. While drawing it holds the keyboard focus: draw mode is
+/// modal, so no keystroke reaches the shell underneath (⌘ chords still reach the menus).
 final class OverlayContainer: PlatformView {
     var onLayout: (() -> Void)?
     var onEscape: (() -> Void)?
@@ -608,7 +590,7 @@ final class OverlayContainer: PlatformView {
     var onSend: (() -> Void)?
     var onTool: ((DrawTool) -> Void)?
 
-    /// Lays out again once SwiftUI has applied a toolbar change (its size follows its content).
+    /// Lays out again once SwiftUI has applied a toolbar change, since its size follows its content.
     func setNeedsLayoutSoon() {
         DispatchQueue.main.async { [weak self] in
             #if os(iOS)
@@ -632,8 +614,7 @@ final class OverlayContainer: PlatformView {
         onLayout?()
     }
 
-    /// Holds the keyboard while drawing (a hidden text view, like Write mode's field: UIKit and
-    /// a hardware keyboard deliver keys reliably only to a text input).
+    /// A hidden text view, because UIKit delivers hardware keys reliably only to a text input.
     private lazy var keys: DrawKeySink = {
         let sink = DrawKeySink(frame: CGRect(x: 0, y: 0, width: 1, height: 1))
         sink.container = self
@@ -641,8 +622,8 @@ final class OverlayContainer: PlatformView {
         return sink
     }()
 
-    // Presses nobody handled (the editor page's, say) would travel up the responder chain to
-    // the terminal, this view's superview, and on to the shell. ⌘ chords go on to the menus.
+    // Unhandled presses would travel up the responder chain to the terminal and on to the shell.
+    // ⌘ chords go on to the menus.
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         let chords = presses.filter { $0.key?.modifierFlags.contains(.command) == true }
         if !chords.isEmpty { super.pressesBegan(chords, with: event) }
@@ -660,8 +641,7 @@ final class OverlayContainer: PlatformView {
         if !chords.isEmpty { super.pressesCancelled(chords, with: event) }
     }
 
-    /// Takes the keyboard focus from the terminal: its key bar and the software keyboard go away
-    /// while drawing (the overlay gives the focus back when it closes).
+    /// Takes the keyboard focus from the terminal, so its key bar and the software keyboard go away.
     func takeFocus() {
         let taken = keys.becomeFirstResponder()
         CanvasWebView.log.info("draw: overlay \(taken ? "has" : "could not take", privacy: .public) the keyboard focus")
@@ -682,17 +662,16 @@ final class OverlayContainer: PlatformView {
 
     override var acceptsFirstResponder: Bool { onEscape != nil }
 
-    /// Esc and ⌘. (⌘↩ and ⇧⌘↩ are the toolbar's own shortcuts).
     override func cancelOperation(_ sender: Any?) { onEscape?() }
 
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 { return onEscape?() ?? () }
-        let mods = event.modifierFlags.intersection([.command, .control, .option, .shift])
-        if mods.isEmpty, let chars = event.charactersIgnoringModifiers?.lowercased(),
-           let tool = DrawTool.allCases.first(where: { String($0.key) == chars }) {
+        let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        if modifiers.isEmpty, let characters = event.charactersIgnoringModifiers?.lowercased(),
+           let tool = DrawTool.allCases.first(where: { String($0.key) == characters }) {
             onTool?(tool)
         }
-        // Anything else stops here: the next responder is the terminal.
+        // Anything else stops here, since the next responder is the terminal.
     }
 
     func takeFocus() {
@@ -706,9 +685,7 @@ final class OverlayContainer: PlatformView {
 
 #if os(iOS)
 /// Draw mode's keyboard: a hidden, empty text view that is first responder while the overlay is
-/// open. Esc and ⌘. cancel, ⌘↩ keeps, ⇧⌘↩ sends, the tool letters pick tools; anything else typed
-/// goes nowhere (draw mode is modal; the shell underneath never sees it). No software keyboard,
-/// shortcuts bar or key bar while drawing: its input views are empty.
+/// open. Its input views are empty, so no software keyboard, shortcuts bar or key bar shows.
 final class DrawKeySink: UITextView {
     weak var container: OverlayContainer?
 
@@ -739,9 +716,8 @@ final class DrawKeySink: UITextView {
 
     override var canBecomeFirstResponder: Bool { container?.onEscape != nil }
 
-    /// Esc and the ⌘ shortcuts (listed in the hold-⌘ overlay). Typed characters reach a text input
-    /// before key commands, so the tool letters are read in `pressesBegan`; the text system keeps
-    /// Esc from `pressesBegan`, so it is a command.
+    /// Typed characters reach a text input before key commands, so the tool letters are read in
+    /// `pressesBegan`; the text system keeps Esc from `pressesBegan`, so it is a command.
     override var keyCommands: [UIKeyCommand]? {
         let commands = [
             UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(escape)),
@@ -757,28 +733,26 @@ final class DrawKeySink: UITextView {
     @objc private func keep() { container?.onKeep?() }
     @objc private func send() { container?.onSend?() }
 
-    /// Esc cancels, a tool letter picks its tool; ⌘ chords go on to the app's shortcuts; every
-    /// other key stops here.
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         var chords: Set<UIPress> = []
         for press in presses {
             guard let key = press.key else { continue }
             if Self.commandKeys.contains(key.keyCode) { commandHeld = true }
             // A text view's presses can come without the held ⌘ in their flags.
-            var mods = key.modifierFlags.union(event?.modifierFlags ?? []).intersection([.command, .control, .alternate, .shift])
-            if commandHeld { mods.insert(.command) }
-            if key.keyCode == .keyboardPeriod, mods == .command {
+            var modifiers = key.modifierFlags.union(event?.modifierFlags ?? []).intersection([.command, .control, .alternate, .shift])
+            if commandHeld { modifiers.insert(.command) }
+            if key.keyCode == .keyboardPeriod, modifiers == .command {
                 // ⌘. is Esc on iPad keyboards; the terminal up the chain would type it.
                 container?.onEscape?()
-            } else if key.keyCode == .keyboardReturnOrEnter, mods == .command {
+            } else if key.keyCode == .keyboardReturnOrEnter, modifiers == .command {
                 container?.onKeep?()
-            } else if key.keyCode == .keyboardReturnOrEnter, mods == [.command, .shift] {
+            } else if key.keyCode == .keyboardReturnOrEnter, modifiers == [.command, .shift] {
                 container?.onSend?()
-            } else if mods.contains(.command) {
+            } else if modifiers.contains(.command) {
                 chords.insert(press)
             } else if key.keyCode == .keyboardEscape {
                 container?.onEscape?()
-            } else if mods.isEmpty, let tool = DrawTool.allCases.first(where: { String($0.key) == key.charactersIgnoringModifiers.lowercased() }) {
+            } else if modifiers.isEmpty, let tool = DrawTool.allCases.first(where: { String($0.key) == key.charactersIgnoringModifiers.lowercased() }) {
                 container?.onTool?(tool)
             }
         }
@@ -807,7 +781,7 @@ final class DrawKeySink: UITextView {
         return super.resignFirstResponder()
     }
 
-    /// Touches go to the drawing underneath (the sink is one point in the corner).
+    /// Touches go to the drawing underneath.
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? { nil }
 
     override func insertText(_ text: String) {}
@@ -816,7 +790,7 @@ final class DrawKeySink: UITextView {
 }
 #endif
 
-/// A thin accent bar at the anchor row's left edge: where the drawing is pinned.
+/// A thin accent bar at the left edge of the row the drawing is pinned to.
 final class AnchorMark: PlatformView {
     #if os(iOS)
     override init(frame: CGRect) {

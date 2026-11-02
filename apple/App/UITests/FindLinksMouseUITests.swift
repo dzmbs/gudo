@@ -68,20 +68,20 @@ final class FindLinksMouseUITests: XCTestCase {
     /// Pixels in the pane close to `rgb` (the renderer's search colors), from a screenshot.
     private func pixels(near rgb: (Int, Int, Int)) -> Int {
         let image = app.screenshot().image
-        guard let cg = image.cgImage else { return 0 }
-        let width = cg.width, height = cg.height
+        guard let cgImage = image.cgImage else { return 0 }
+        let width = cgImage.width, height = cgImage.height
         var data = [UInt8](repeating: 0, count: width * height * 4)
         let space = CGColorSpace(name: CGColorSpace.sRGB)!
         guard let context = CGContext(data: &data, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
                                       space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return 0 }
-        context.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
         let scale = CGFloat(width) / app.frame.width
         let frame = pane.frame
         var count = 0
         for y in stride(from: Int(frame.minY * scale), to: min(height, Int(frame.maxY * scale)), by: 2) {
             for x in stride(from: Int(frame.minX * scale), to: min(width, Int(frame.maxX * scale)), by: 2) {
-                let i = (y * width + x) * 4
-                if abs(Int(data[i]) - rgb.0) < 14, abs(Int(data[i + 1]) - rgb.1) < 14, abs(Int(data[i + 2]) - rgb.2) < 14 { count += 1 }
+                let offset = (y * width + x) * 4
+                if abs(Int(data[offset]) - rgb.0) < 14, abs(Int(data[offset + 1]) - rgb.1) < 14, abs(Int(data[offset + 2]) - rgb.2) < 14 { count += 1 }
             }
         }
         return count
@@ -112,26 +112,26 @@ final class FindLinksMouseUITests: XCTestCase {
         let field = app.textFields["search-field"]
         XCTAssertTrue(field.waitForExistence(timeout: 5), "⌘F opens the find bar")
         field.typeText("needle")
-        let count = element("search-bar")
+        let searchBar = element("search-bar")
         // Six output lines; the command line itself says "needle" too.
-        wait(count, "value MATCHES '-/[0-9]+'", timeout: 10, "the bar counts the matches")
-        let total = Int(((count.value as? String) ?? "").split(separator: "/").last ?? "") ?? 0
+        wait(searchBar, "value MATCHES '-/[0-9]+'", timeout: 10, "the bar counts the matches")
+        let total = Int(((searchBar.value as? String) ?? "").split(separator: "/").last ?? "") ?? 0
         XCTAssertGreaterThanOrEqual(total, 6)
         XCTAssertGreaterThan(pixels(near: Self.matchColor), 50, "the matches in view are highlighted")
         shot("find-matches")
 
         // Return: the newest match, then the one above it.
         field.typeText("\n")
-        wait(count, "value == '1/\(total)'", "Return selects the newest match")
+        wait(searchBar, "value == '1/\(total)'", "Return selects the newest match")
         XCTAssertGreaterThan(pixels(near: Self.selectedColor), 20, "the selected match has its own color")
         field.typeText("\n")
-        wait(count, "value == '2/\(total)'", "Return again goes up")
+        wait(searchBar, "value == '2/\(total)'", "Return again goes up")
         app.typeKey("g", modifierFlags: [.command, .shift])
-        wait(count, "value == '1/\(total)'", "⇧⌘G goes back down")
+        wait(searchBar, "value == '1/\(total)'", "⇧⌘G goes back down")
 
         // Up to the oldest output match: the pane scrolls to it.
         for _ in 0..<5 { app.typeKey("g", modifierFlags: .command) }
-        wait(count, "value == '6/\(total)'", "⌘G steps up through every match")
+        wait(searchBar, "value == '6/\(total)'", "⌘G steps up through every match")
         wait(screen, "value CONTAINS 'needle 50'", timeout: 5, "the pane scrolled to the oldest match")
         XCTAssertGreaterThan(pixels(near: Self.selectedColor), 20)
         shot("find-oldest")
@@ -140,9 +140,9 @@ final class FindLinksMouseUITests: XCTestCase {
         element("search-case").tap()
         field.tap()
         field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 6) + "Needle")
-        wait(count, "value == '-/0'", timeout: 10, "case-sensitive: no \"Needle\" anywhere")
+        wait(searchBar, "value == '-/0'", timeout: 10, "case-sensitive: no \"Needle\" anywhere")
         element("search-case").tap()
-        wait(count, "value MATCHES '-/[0-9]+' AND NOT value == '-/0'", timeout: 10, "case-insensitive again")
+        wait(searchBar, "value MATCHES '-/[0-9]+' AND NOT value == '-/0'", timeout: 10, "case-insensitive again")
 
         // Esc (⌘. on an iPad keyboard; the simulator never delivers a synthesized Esc) closes; the highlights go.
         field.tap()

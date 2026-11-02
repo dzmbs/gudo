@@ -25,9 +25,9 @@ final class DesignShotsUITests: XCTestCase {
     }
 
     private func save(_ name: String) throws {
-        let dir = URL(fileURLWithPath: env["DESIGN_SHOTS_DIR"]!)
+        let directory = URL(fileURLWithPath: env["DESIGN_SHOTS_DIR"]!)
         let prefix = env["DESIGN_SHOTS_PREFIX"] ?? "shot"
-        try app.screenshot().pngRepresentation.write(to: dir.appendingPathComponent("\(prefix)-\(name)-\(mode).png"))
+        try app.screenshot().pngRepresentation.write(to: directory.appendingPathComponent("\(prefix)-\(name)-\(mode).png"))
     }
 
     private func drag(_ element: XCUIElement, by dx: CGFloat) {

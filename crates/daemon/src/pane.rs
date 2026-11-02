@@ -28,6 +28,7 @@ use crate::scan::{self, LinkCollector, ScreenText};
 
 /// Resize records kept for streams that lag behind; older ones are covered by snapshots.
 const MAX_RESIZES: usize = 64;
+/// zstd level for snapshots, measured as the best speed/size trade-off.
 const ZSTD_LEVEL: i32 = 3;
 /// Output-activity notifications to the pane task are coalesced to this interval.
 const ACTIVITY_INTERVAL: Duration = Duration::from_millis(100);
@@ -50,7 +51,6 @@ const DEFAULT_CELL_PX: (u16, u16) = (10, 20);
 /// others, which shares its stream.
 const INPUT_STALL: Duration = Duration::from_secs(2);
 
-/// Why input could not be queued for a pane.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum InputError {
     #[error("the pane has closed")]
@@ -75,8 +75,8 @@ pub(crate) struct VtEvents {
 impl VtEvents {
     fn send(&self, event: VtEvent) {
         match event {
-            VtEvent::Osc(Osc::Title(title)) => self.latest.set(|m| m.title = Some(title)),
-            VtEvent::Osc(Osc::Cwd(cwd)) => self.latest.set(|m| m.cwd = Some(cwd)),
+            VtEvent::Osc(Osc::Title(title)) => self.latest.set(|latest| latest.title = Some(title)),
+            VtEvent::Osc(Osc::Cwd(cwd)) => self.latest.set(|latest| latest.cwd = Some(cwd)),
             // Dropped when full: the pane's state stays in the VT and command log, only the
             // notification is lost.
             event => drop(self.tx.try_send(event)),
@@ -88,7 +88,6 @@ impl VtEvents {
 #[derive(Debug, Default)]
 pub(crate) struct LatestMeta {
     slot: Mutex<Latest>,
-    /// Signalled when the slot gains a value.
     pub changed: tokio::sync::Notify,
 }
 
@@ -99,8 +98,8 @@ pub(crate) struct Latest {
 }
 
 impl LatestMeta {
-    fn set(&self, f: impl FnOnce(&mut Latest)) {
-        f(&mut lock(&self.slot));
+    fn set(&self, update: impl FnOnce(&mut Latest)) {
+        update(&mut lock(&self.slot));
         self.changed.notify_one();
     }
 
@@ -110,7 +109,6 @@ impl LatestMeta {
     }
 }
 
-/// What the output hook reports to the pane's task.
 #[derive(Debug)]
 pub(crate) enum VtEvent {
     Osc(Osc),
@@ -120,7 +118,6 @@ pub(crate) enum VtEvent {
     Reply(Vec<u8>),
     /// Output arrived (coalesced).
     Activity,
-    /// Shell integration reported a prompt or command step.
     Command(CommandUpdate),
 }
 
@@ -152,7 +149,7 @@ struct Vt {
     /// Rows scrolled per output chunk, for resolving client row positions.
     scroll: ScrollLog,
     anchors: Anchors,
-    /// Scrollback and image storage limits, for views.
+    /// Limits for since-join views' terminals.
     scrollback_bytes: usize,
     image_storage_bytes: u64,
     /// Guests who see only what was written after they joined (multiplayer `since_join`).
@@ -176,7 +173,7 @@ struct View {
 
 impl Vt {
     fn view(&self, principal: PrincipalId) -> Option<&View> {
-        self.views.iter().find(|v| v.principal == principal)
+        self.views.iter().find(|view| view.principal == principal)
     }
 
     /// Rows of the pane's terminal above the view's oldest row: the history the view lacks.
@@ -212,14 +209,13 @@ impl Vt {
         let now = Instant::now();
         if self
             .last_activity
-            .is_none_or(|t| now.duration_since(t) >= ACTIVITY_INTERVAL)
+            .is_none_or(|last| now.duration_since(last) >= ACTIVITY_INTERVAL)
         {
             self.last_activity = Some(now);
             self.events.send(VtEvent::Activity);
         }
     }
 
-    /// Plain text of a region, or empty when it cannot be read.
     fn text(&self, region: TextRegion) -> String {
         self.term
             .text_wrapped(region, Wrap::Join)
@@ -243,7 +239,6 @@ pub(crate) struct Snapshot {
     made: Instant,
 }
 
-/// One page of history records, from [`Pane::history_page`].
 #[derive(Debug)]
 pub(crate) struct HistoryChunk {
     pub next_offset: u64,
@@ -254,9 +249,9 @@ pub(crate) struct HistoryChunk {
     pub zstd: Vec<u8>,
 }
 
-/// Errors creating a snapshot.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum SnapshotError {
+    /// The parser is inside an unencodable sequence; retry after more output.
     #[error("terminal state is not encodable right now: {0}")]
     Encode(#[from] ghostty_vt::Error),
     #[error("compressing snapshot: {0}")]
@@ -283,20 +278,19 @@ pub(crate) struct Pane {
     latest: Arc<LatestMeta>,
 }
 
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn internal(e: impl std::fmt::Display) -> RpcError {
-    RpcError::Internal(e.to_string())
+fn internal(error: impl std::fmt::Display) -> RpcError {
+    RpcError::Internal(error.to_string())
 }
 
 impl Pane {
-    /// Spawns `cmd` in a PTY of `size` and wires its output into a fresh terminal.
     pub fn spawn(
         id: PaneId,
         snap_gen: SnapGen,
-        cmd: Command,
+        command: Command,
         size: PaneSize,
         ring_capacity: usize,
         limits: VtLimits,
@@ -339,7 +333,7 @@ impl Pane {
         let options = SpawnOptions::new(win_size(size))
             .ring_capacity(ring_capacity)
             .output_hook(move |seq, data| lock(&hook_vt).feed(seq, data));
-        let pty = PtyActor::spawn(cmd, options)?;
+        let pty = PtyActor::spawn(command, options)?;
         let pane = Arc::new(Self {
             id,
             snap_gen,
@@ -358,7 +352,6 @@ impl Pane {
         &self.pty
     }
 
-    /// The newest title and directory the program set.
     pub fn latest_meta(&self) -> &LatestMeta {
         &self.latest
     }
@@ -398,19 +391,18 @@ impl Pane {
         if vt.alt {
             return None;
         }
-        let at = vt.term.cursor_point();
+        let cursor = vt.term.cursor_point();
         let cols = vt.term.cols();
         let region = TextRegion::Range {
-            start: ghostty_vt::Point { y: at.y, x: 0 },
+            start: ghostty_vt::Point { y: cursor.y, x: 0 },
             end: ghostty_vt::Point {
-                y: at.y,
+                y: cursor.y,
                 x: cols.saturating_sub(1),
             },
         };
         vt.term.text(region).ok()
     }
 
-    /// A subscriber replaying from `seq`.
     pub fn subscribe_from(&self, seq: Seq) -> Result<Subscriber, ReadError> {
         self.pty.subscribe_from(pty::Seq::new(seq.0))
     }
@@ -432,8 +424,8 @@ impl Pane {
             .resize(size.cols, size.rows, size.cell_px())
             .map_err(io::Error::other)?;
         for view in &mut vt.views {
-            if let Err(e) = view.term.resize(size.cols, size.rows, size.cell_px()) {
-                tracing::warn!(pane = %self.id, "resizing a since-join view: {e}");
+            if let Err(error) = view.term.resize(size.cols, size.rows, size.cell_px()) {
+                tracing::warn!(pane = %self.id, "resizing a since-join view: {error}");
             }
         }
         let vt = &mut *vt;
@@ -456,7 +448,6 @@ impl Pane {
         Ok(true)
     }
 
-    /// Notified whenever a resize is recorded.
     pub fn resize_updates(&self) -> watch::Receiver<u64> {
         self.resized.subscribe()
     }
@@ -465,14 +456,17 @@ impl Pane {
     /// than the retained window are gone; a stream that needs them must take a snapshot.
     pub fn resizes_from(&self, from: u64) -> Result<Vec<ResizeRecord>, u64> {
         let vt = lock(&self.vt);
-        let oldest = vt.resizes.front().map_or(vt.resize_count, |r| r.index);
+        let oldest = vt
+            .resizes
+            .front()
+            .map_or(vt.resize_count, |record| record.index);
         if from < oldest {
             return Err(oldest);
         }
         Ok(vt
             .resizes
             .iter()
-            .filter(|r| r.index >= from)
+            .filter(|record| record.index >= from)
             .copied()
             .collect())
     }
@@ -481,12 +475,14 @@ impl Pane {
     /// replay; re-applying the same size is harmless).
     pub fn resize_index_at(&self, seq: Seq) -> Option<u64> {
         let vt = lock(&self.vt);
-        let first = vt.resizes.iter().find(|r| r.at >= seq);
+        let first = vt.resizes.iter().find(|record| record.at >= seq);
         match first {
-            Some(r) => Some(r.index),
+            Some(record) => Some(record.index),
             // All retained resizes are before `seq`; if the window still covers `seq` the next
             // index is right, otherwise a resize may have been forgotten.
-            None if vt.resizes.front().is_none_or(|r| r.at <= seq) => Some(vt.resize_count),
+            None if vt.resizes.front().is_none_or(|record| record.at <= seq) => {
+                Some(vt.resize_count)
+            }
             None => None,
         }
     }
@@ -539,7 +535,7 @@ impl Pane {
             {
                 return Ok(Arc::clone(cached));
             }
-            let hint = view.snapshots.back().map_or(0, |s| s.size_hint());
+            let hint = view.snapshots.back().map_or(0, |cached| cached.size_hint());
             (
                 view.term.encode_snapshot_sized(hint)?,
                 Seq(vt.seq),
@@ -550,7 +546,7 @@ impl Pane {
         if let Some(view) = lock(&self.vt)
             .views
             .iter_mut()
-            .find(|v| v.principal == principal)
+            .find(|view| view.principal == principal)
         {
             keep_snapshot(&mut view.snapshots, &snapshot);
         }
@@ -572,19 +568,23 @@ impl Pane {
     pub fn view_start(&self, principal: PrincipalId) -> Seq {
         let mut vt = lock(&self.vt);
         match open_view(&mut vt, principal) {
-            Ok(()) => vt.view(principal).map_or(Seq(u64::MAX), |v| v.from),
+            Ok(()) => vt.view(principal).map_or(Seq(u64::MAX), |view| view.from),
             Err(_) => Seq(u64::MAX),
         }
     }
 
-    /// Principals with a since-join view of this pane.
     pub fn view_principals(&self) -> Vec<PrincipalId> {
-        lock(&self.vt).views.iter().map(|v| v.principal).collect()
+        lock(&self.vt)
+            .views
+            .iter()
+            .map(|view| view.principal)
+            .collect()
     }
 
-    /// Drops `principal`'s since-join view (its access ended).
     pub fn close_view(&self, principal: PrincipalId) {
-        lock(&self.vt).views.retain(|v| v.principal != principal);
+        lock(&self.vt)
+            .views
+            .retain(|view| view.principal != principal);
     }
 
     /// History records of the snapshot at `snapshot_seq` from `offset`: whole records up to
@@ -602,12 +602,12 @@ impl Pane {
             snapshots
                 .iter()
                 .rev()
-                .find(|s| s.seq == snapshot_seq)
+                .find(|snapshot| snapshot.seq == snapshot_seq)
                 .cloned()
         };
         let snapshot = match viewer {
             None => find(&lock(&self.history)),
-            Some(p) => find(&lock(&self.vt).view(p)?.snapshots),
+            Some(principal) => find(&lock(&self.vt).view(principal)?.snapshots),
         }?;
         let start = usize::try_from(offset).ok()?;
         if start < snapshot.raw_len as usize {
@@ -637,19 +637,20 @@ impl Pane {
         let encoded = match payload {
             InputPayload::Bytes(bytes) => Ok(bytes),
             InputPayload::Paste(text) => Ok(vt.term.encode_paste(&text)),
-            InputPayload::Key(k) => vt.keys.encode(&vt.term, &crate::input::key(k)),
-            InputPayload::KeyFull(k) => vt.keys.encode(&vt.term, &crate::input::full_key(k)),
-            InputPayload::Mouse(m) => {
+            InputPayload::Key(key) => vt.keys.encode(&vt.term, &crate::input::key(key)),
+            InputPayload::KeyFull(key) => vt.keys.encode(&vt.term, &crate::input::full_key(key)),
+            InputPayload::Mouse(mouse) => {
                 let size = vt.size;
                 let cell_px = (
                     size.width_px / size.cols.max(1),
                     size.height_px / size.rows.max(1),
                 );
-                vt.mouse.encode(&vt.term, &crate::input::mouse(m), cell_px)
+                vt.mouse
+                    .encode(&vt.term, &crate::input::mouse(mouse), cell_px)
             }
         };
-        encoded.unwrap_or_else(|e| {
-            tracing::debug!(pane = %self.id, "encoding input: {e}");
+        encoded.unwrap_or_else(|error| {
+            tracing::debug!(pane = %self.id, "encoding input: {error}");
             Vec::new()
         })
     }
@@ -662,12 +663,12 @@ impl Pane {
         cursor: u32,
         limit: u32,
     ) -> Result<SearchPage, RpcError> {
-        let re = scan::compile(query).map_err(RpcError::BadRequest)?;
+        let pattern = scan::compile(query).map_err(RpcError::BadRequest)?;
         let (text, seq) = match viewer {
             None => self.screen_text_cached()?,
-            Some(p) => self.view_text(p)?,
+            Some(principal) => self.view_text(principal)?,
         };
-        let all = text.search(&re);
+        let all = text.search(&pattern);
         let total = all.len();
         let start = (cursor as usize).min(total);
         let end = start.saturating_add(limit.max(1) as usize).min(total);
@@ -683,11 +684,11 @@ impl Pane {
     fn screen_text_cached(&self) -> Result<(Arc<ScreenText>, u64), RpcError> {
         let (joined, cols, total_rows, seq, resize_count) = {
             let vt = lock(&self.vt);
-            if let Some(c) = lock(&self.text_cache).as_ref()
-                && c.seq == vt.seq
-                && c.resize_count == vt.resize_count
+            if let Some(cached) = lock(&self.text_cache).as_ref()
+                && cached.seq == vt.seq
+                && cached.resize_count == vt.resize_count
             {
-                return Ok((Arc::clone(&c.text), c.seq));
+                return Ok((Arc::clone(&cached.text), cached.seq));
             }
             let joined = vt
                 .term
@@ -735,7 +736,10 @@ impl Pane {
         // Extract under the lock, scan (regexes, file system checks) after releasing it.
         let regions: Vec<(LinkSource, String, String)> = {
             let vt = lock(&self.vt);
-            let since = viewer.map(|p| vt.view(p).map_or(UnixMillis(u64::MAX), |v| v.since));
+            let since = viewer.map(|principal| {
+                vt.view(principal)
+                    .map_or(UnixMillis(u64::MAX), |view| view.since)
+            });
             let mut regions = vec![(
                 LinkSource::Screen,
                 vt.term.vt(TextRegion::Active).unwrap_or_default(),
@@ -744,9 +748,9 @@ impl Pane {
             let ids: Vec<u64> = vt
                 .commands
                 .finished()
-                .filter(|m| since.is_none_or(|s| m.started_at >= s))
+                .filter(|mark| since.is_none_or(|since| mark.started_at >= since))
                 .take(usize::from(commands))
-                .map(|m| m.command_id)
+                .map(|mark| mark.command_id)
                 .collect();
             for id in ids {
                 if let Some((Some(region), _)) = vt.commands.output_range(&vt.term, id) {
@@ -760,11 +764,11 @@ impl Pane {
             regions
         };
         let mut collector = LinkCollector::new(cwd, home);
-        for (source, vt, plain) in &regions {
-            collector.scan(vt, plain, *source);
+        for (source, vt_text, plain) in &regions {
+            collector.scan(vt_text, plain, *source);
         }
         Links {
-            cwd: cwd.map(|c| c.to_string_lossy().into_owned()),
+            cwd: cwd.map(|cwd| cwd.to_string_lossy().into_owned()),
             links: collector.links,
         }
     }
@@ -774,7 +778,7 @@ impl Pane {
     pub fn commands(&self, viewer: Option<PrincipalId>) -> CommandList {
         let vt = lock(&self.vt);
         let all = vt.commands.list(&vt.term);
-        let Some(view) = viewer.map(|p| vt.view(p)) else {
+        let Some(view) = viewer.map(|principal| vt.view(principal)) else {
             return CommandList {
                 at_seq: Seq(vt.seq),
                 total_rows: vt.term.total_rows() as u64,
@@ -789,18 +793,18 @@ impl Pane {
             };
         };
         let hidden = vt.hidden_rows(view);
-        let shift = |row: Option<u64>| row.and_then(|r| r.checked_sub(hidden));
+        let shift = |row: Option<u64>| row.and_then(|row| row.checked_sub(hidden));
         CommandList {
             at_seq: Seq(vt.seq),
             total_rows: view.term.total_rows() as u64,
             commands: all
                 .into_iter()
-                .filter(|c| c.mark.started_at >= view.since)
-                .map(|mut c| {
-                    c.rows.prompt = shift(c.rows.prompt);
-                    c.rows.output = shift(c.rows.output);
-                    c.rows.end = shift(c.rows.end);
-                    c
+                .filter(|command| command.mark.started_at >= view.since)
+                .map(|mut command| {
+                    command.rows.prompt = shift(command.rows.prompt);
+                    command.rows.output = shift(command.rows.output);
+                    command.rows.end = shift(command.rows.end);
+                    command
                 })
                 .collect(),
         }
@@ -814,16 +818,20 @@ impl Pane {
         id: Option<u64>,
     ) -> Result<CommandOutput, RpcError> {
         let vt = lock(&self.vt);
-        let since = viewer.map(|p| vt.view(p).map_or(UnixMillis(u64::MAX), |v| v.since));
-        let visible = |m: &proto::CommandMark| since.is_none_or(|s| m.started_at >= s);
+        let since = viewer.map(|principal| {
+            vt.view(principal)
+                .map_or(UnixMillis(u64::MAX), |view| view.since)
+        });
+        let visible =
+            |mark: &proto::CommandMark| since.is_none_or(|since| mark.started_at >= since);
         let mark = match id {
             Some(id) => vt
                 .commands
                 .list(&vt.term)
                 .into_iter()
-                .map(|c| c.mark)
-                .find(|m| m.command_id == id),
-            None => vt.commands.finished().find(|m| visible(m)).cloned(),
+                .map(|command| command.mark)
+                .find(|mark| mark.command_id == id),
+            None => vt.commands.finished().find(|mark| visible(mark)).cloned(),
         }
         .filter(visible)
         .ok_or(RpcError::NotFound)?;
@@ -831,7 +839,7 @@ impl Pane {
             .commands
             .output_range(&vt.term, mark.command_id)
             .ok_or(RpcError::NotFound)?;
-        let mut text = region.map(|r| vt.text(r)).unwrap_or_default();
+        let mut text = region.map(|region| vt.text(region)).unwrap_or_default();
         drop(vt);
         let trimmed = text.trim_end_matches('\n').len();
         text.truncate(trimmed);
@@ -850,6 +858,7 @@ impl Pane {
         })
     }
 
+    /// The prompt marks and the rows around the input line, read in one go.
     pub fn line_snapshot(&self) -> crate::assist::LineSnapshot {
         let vt = lock(&self.vt);
         let view = vt.commands.line_marks();
@@ -873,14 +882,14 @@ impl Pane {
     /// Queues input for the child. Returns the output offset at the time of writing, which
     /// the input's echo (if any) follows.
     pub async fn write(&self, data: Vec<u8>) -> Result<Seq, InputError> {
-        let at = self.head();
+        let head = self.head();
         if !data.is_empty() {
             tokio::time::timeout(INPUT_STALL, self.pty.write(data))
                 .await
                 .map_err(|_| InputError::Stalled)?
                 .map_err(|_| InputError::Closed)?;
         }
-        Ok(at)
+        Ok(head)
     }
 
     /// Anchors ink `key` to the row `from_bottom` rows above the bottom at `at_seq`; also
@@ -893,21 +902,26 @@ impl Pane {
     ) -> Result<(AnchorPos, Option<u64>), String> {
         let mut guard = lock(&self.vt);
         let vt = &mut *guard;
-        let pos = vt
-            .anchors
-            .create(&mut vt.term, &vt.scroll, vt.seq, key, at_seq, from_bottom)?;
-        let command = match pos {
+        let position =
+            vt.anchors
+                .create(&mut vt.term, &vt.scroll, vt.seq, key, at_seq, from_bottom)?;
+        let command = match position {
             AnchorPos::Live { y: Some(y), .. } if !vt.alt => vt
                 .commands
                 .list(&vt.term)
                 .into_iter()
-                .filter(|c| c.rows.prompt.is_some_and(|p| p <= u64::from(y)))
-                .filter(|c| c.rows.end.is_none_or(|e| e >= u64::from(y)))
-                .map(|c| c.mark.command_id)
+                .filter(|command| {
+                    command
+                        .rows
+                        .prompt
+                        .is_some_and(|prompt| prompt <= u64::from(y))
+                })
+                .filter(|command| command.rows.end.is_none_or(|end| end >= u64::from(y)))
+                .map(|command| command.mark.command_id)
                 .next_back(),
             _ => None,
         };
-        Ok((pos, command))
+        Ok((position, command))
     }
 
     /// Pins the cursor's row under `key`.
@@ -924,14 +938,12 @@ impl Pane {
         vt.anchors.position(&mut vt.term, vt.seq, key)
     }
 
-    /// Forgets anchor `key`.
     pub fn anchor_remove(&self, key: u64) {
         let mut guard = lock(&self.vt);
         let vt = &mut *guard;
         vt.anchors.remove(&mut vt.term, key);
     }
 
-    /// Hangs up the child's session.
     pub fn hang_up(&self) {
         let _ = self.pty.signal(pty::Signal::Hangup);
     }
@@ -939,13 +951,12 @@ impl Pane {
 
 impl Snapshot {
     /// Room for the next snapshot of the same pane. Encoding a large one (kitty images) into a
-    /// growing buffer leaves a chain of freed large blocks the allocator keeps resident; with a
-    /// client watching an image-heavy pane that grew the daemon by gigabytes.
+    /// growing buffer leaves a chain of freed large blocks the allocator keeps resident, which
+    /// for a client watching an image-heavy pane adds up to gigabytes.
     fn size_hint(&self) -> usize {
         self.full.len() + self.full.len() / 8
     }
 
-    /// Compresses the screen prefix of a full encoding for the wire.
     fn compress(full: Vec<u8>, seq: Seq, resize_count: u64) -> Result<Self, SnapshotError> {
         let ready = ghostty_vt::screen_len(&full).ok_or(ghostty_vt::Error::InvalidValue)?;
         let zstd = zstd::bulk::compress(&full[..ready], ZSTD_LEVEL)?;
@@ -970,9 +981,9 @@ fn shareable(snapshot: &Snapshot, oldest: u64) -> bool {
 /// Keeps `snapshot` among the newest few for history paging: older ones only while all kept
 /// stay within [`HISTORY_BYTES`] (a client paging a dropped one starts over from the newest).
 fn keep_snapshot(snapshots: &mut VecDeque<Arc<Snapshot>>, snapshot: &Arc<Snapshot>) {
-    snapshots.retain(|s| s.seq != snapshot.seq);
+    snapshots.retain(|kept| kept.seq != snapshot.seq);
     snapshots.push_back(Arc::clone(snapshot));
-    let mut total: usize = snapshots.iter().map(|s| s.full.len()).sum();
+    let mut total: usize = snapshots.iter().map(|kept| kept.full.len()).sum();
     while snapshots.len() > HISTORY_SNAPSHOTS || (snapshots.len() > 1 && total > HISTORY_BYTES) {
         if let Some(old) = snapshots.pop_front() {
             total -= old.full.len();
@@ -982,6 +993,7 @@ fn keep_snapshot(snapshots: &mut VecDeque<Arc<Snapshot>>, snapshot: &Arc<Snapsho
 
 /// Opens `principal`'s since-join view if it has none: a copy of the terminal as it is now,
 /// screens kept, history erased. If the terminal cannot be encoded at this instant (inside an
+/// unencodable sequence) the view starts blank instead, which only hides more.
 fn open_view(vt: &mut Vt, principal: PrincipalId) -> Result<(), ghostty_vt::Error> {
     if vt.view(principal).is_some() {
         return Ok(());
@@ -1001,8 +1013,8 @@ fn open_view(vt: &mut Vt, principal: PrincipalId) -> Result<(), ghostty_vt::Erro
             term.set_kitty_image_storage_limit(limits.image_storage_bytes)?;
             term
         }
-        Err(e) => {
-            tracing::debug!(pane = %vt.pane, "since-join view starts blank: {e}");
+        Err(error) => {
+            tracing::debug!(pane = %vt.pane, "since-join view starts blank: {error}");
             new_terminal(vt.size, limits)?
         }
     };
@@ -1018,7 +1030,6 @@ fn open_view(vt: &mut Vt, principal: PrincipalId) -> Result<(), ghostty_vt::Erro
     Ok(())
 }
 
-/// What a pane's terminal may hold.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct VtLimits {
     pub scrollback_bytes: usize,
@@ -1084,8 +1095,8 @@ mod tests {
     /// thread, which feeds the VT under the ring's lock.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn snapshots_of_a_flooding_pane_are_shared_without_deadlock() {
-        let mut cmd = Command::new("/bin/sh");
-        cmd.args(["-c", "exec yes"]);
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "exec yes"]);
         let size = PaneSize {
             cols: 80,
             rows: 24,
@@ -1097,7 +1108,7 @@ mod tests {
             image_storage_bytes: 1 << 20,
         };
         let (pane, _events) =
-            Pane::spawn(PaneId(1), SnapGen(1), cmd, size, 1 << 20, limits).unwrap();
+            Pane::spawn(PaneId(1), SnapGen(1), command, size, 1 << 20, limits).unwrap();
         let pane = Arc::new(pane);
         while pane.head().0 < 4 << 20 {
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -1111,8 +1122,8 @@ mod tests {
                 let end = Instant::now() + Duration::from_secs(2);
                 while Instant::now() < end {
                     asked += 1;
-                    if let Ok(s) = pane.snapshot() {
-                        distinct.insert(s.seq);
+                    if let Ok(snapshot) = pane.snapshot() {
+                        distinct.insert(snapshot.seq);
                     }
                 }
                 let _ = tx.send((asked, distinct.len()));
@@ -1120,11 +1131,11 @@ mod tests {
         }
         let (mut asked, mut encoded) = (0, 0);
         for _ in 0..4 {
-            let (a, e) = rx
+            let (thread_asked, thread_encoded) = rx
                 .recv_timeout(Duration::from_secs(30))
                 .expect("snapshots deadlocked with the PTY thread");
-            asked += a;
-            encoded += e;
+            asked += thread_asked;
+            encoded += thread_encoded;
         }
         assert!(
             encoded * 2 < asked,
@@ -1142,27 +1153,36 @@ mod tests {
             keep_snapshot(&mut kept, &snapshot(seq, 1 << 20));
         }
         assert_eq!(
-            kept.iter().map(|s| s.seq.0).collect::<Vec<_>>(),
+            kept.iter()
+                .map(|snapshot| snapshot.seq.0)
+                .collect::<Vec<_>>(),
             [2, 3],
             "small ones: the newest two"
         );
         keep_snapshot(&mut kept, &snapshot(4, 40 << 20));
         keep_snapshot(&mut kept, &snapshot(5, 40 << 20));
-        assert_eq!(kept.iter().map(|s| s.seq.0).collect::<Vec<_>>(), [5]);
+        assert_eq!(
+            kept.iter()
+                .map(|snapshot| snapshot.seq.0)
+                .collect::<Vec<_>>(),
+            [5]
+        );
         keep_snapshot(&mut kept, &snapshot(6, 80 << 20));
         assert_eq!(
-            kept.iter().map(|s| s.seq.0).collect::<Vec<_>>(),
+            kept.iter()
+                .map(|snapshot| snapshot.seq.0)
+                .collect::<Vec<_>>(),
             [6],
             "the newest is kept whatever its size"
         );
     }
 
-    /// A program printing marks and titles faster than the pane's task handles them used to
-    /// queue every event: an OSC 133 flood grew the daemon by 130 MB/s.
+    /// A program printing marks and titles faster than the pane's task handles them must not
+    /// queue every event, or an OSC 133 flood grows the daemon without bound.
     #[tokio::test]
     async fn an_event_flood_is_bounded_and_keeps_the_last_title() {
-        let mut cmd = Command::new("/bin/sh");
-        cmd.args([
+        let mut command = Command::new("/bin/sh");
+        command.args([
             "-c",
             "i=0; while [ $i -lt 5000 ]; do printf '\\033]133;A\\007\\033]0;t%d\\007\\033]9;n\\007' $i; \
              i=$((i+1)); done",
@@ -1178,7 +1198,7 @@ mod tests {
             image_storage_bytes: 1 << 20,
         };
         let (pane, events) =
-            Pane::spawn(PaneId(1), SnapGen(1), cmd, size, 1 << 20, limits).unwrap();
+            Pane::spawn(PaneId(1), SnapGen(1), command, size, 1 << 20, limits).unwrap();
         tokio::time::timeout(Duration::from_secs(60), pane.pty().wait())
             .await
             .unwrap()
@@ -1207,13 +1227,13 @@ mod tests {
         let mut term = new_terminal(size, limits).unwrap();
         let replies = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&replies);
-        term.set_reply_sink(Box::new(move |b| lock(&sink).extend_from_slice(b)))
+        term.set_reply_sink(Box::new(move |bytes| lock(&sink).extend_from_slice(bytes)))
             .unwrap();
         (term, replies)
     }
 
     fn hex(bytes: &[u8]) -> String {
-        bytes.iter().map(|b| format!("{b:02X}")).collect()
+        bytes.iter().map(|byte| format!("{byte:02X}")).collect()
     }
 
     /// Program output must never get its own bytes typed back into the shell (title report,
@@ -1235,8 +1255,8 @@ mod tests {
             // Answered, so the sink is live.
             "\x1b[5n".to_owned(),
         ];
-        for seq in hostile {
-            term.write(seq.as_bytes());
+        for sequence in hostile {
+            term.write(sequence.as_bytes());
         }
         let replies = String::from_utf8_lossy(&lock(&replies)).into_owned();
         assert!(replies.ends_with("\x1b[0n"), "{replies:?}");
@@ -1269,7 +1289,6 @@ mod tests {
             );
         }
         assert!(temp.exists(), "t=t deleted a host file");
-        // Inline pixels still load.
         let data = STANDARD.encode(pixel);
         term.write(format!("\x1b_Ga=t,f=32,s=1,v=1,i=3;{data}\x1b\\").as_bytes());
         assert!(term.kitty_image(3).is_some());

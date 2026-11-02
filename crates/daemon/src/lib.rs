@@ -72,7 +72,7 @@ use std::time::Duration;
 
 use iroh::Endpoint;
 use iroh::endpoint::presets;
-use proto::{DaemonId, Ticket};
+use proto::{DaemonId, DeviceId, Ticket};
 use tokio::task::JoinHandle;
 
 pub use agent::{HookRequest, HookResponse, PERMISSION_WAIT, STATUS_LINE_EVENT};
@@ -138,9 +138,9 @@ impl Daemon {
         };
         let hooks = HookServer::new(&config.state_dir, config.hook_bin())?;
         let shell = match shell::ShellIntegration::install(&config.state_dir) {
-            Ok(si) => Some(si),
-            Err(e) => {
-                tracing::warn!("installing shell integration scripts: {e}");
+            Ok(integration) => Some(integration),
+            Err(error) => {
+                tracing::warn!("installing shell integration scripts: {error}");
                 None
             }
         };
@@ -153,7 +153,8 @@ impl Daemon {
         let core = Core::new(config, identity, layout, hooks, shell, mp);
         let mut tasks = vec![HookServer::listen(&core)?];
         core::restore(&core, records, closed);
-        core.term.restore(creators, |p| core.pane(p).is_some());
+        core.term
+            .restore(creators, |pane| core.pane(pane).is_some());
 
         let endpoint = bind(&core).await?;
         let info = endpoint_info_of(&endpoint, &core.cfg.relay);
@@ -190,7 +191,6 @@ impl Daemon {
         })
     }
 
-    /// The daemon's endpoint id.
     pub fn daemon_id(&self) -> DaemonId {
         self.core.identity.daemon_id()
     }
@@ -211,8 +211,8 @@ impl Daemon {
         if self.core.cfg.relay != RelayMode::Disabled {
             let _ = tokio::time::timeout(timeout, self.endpoint.online()).await;
             let info = endpoint_info_of(&self.endpoint, &self.core.cfg.relay);
-            if let Err(e) = identity::write_endpoint_info(&self.core.cfg.state_dir, &info) {
-                tracing::warn!("recording endpoint: {e}");
+            if let Err(error) = identity::write_endpoint_info(&self.core.cfg.state_dir, &info) {
+                tracing::warn!("recording endpoint: {error}");
             }
         }
     }
@@ -236,7 +236,6 @@ impl Daemon {
         mint_ticket_text(&self.core.cfg.state_dir, ttl)
     }
 
-    /// Number of paired devices.
     pub fn paired_devices(&self) -> usize {
         self.core.identity.device_count()
     }
@@ -261,8 +260,8 @@ impl Daemon {
             task.abort();
         }
         self.core.art.flush();
-        if let Err(e) = persist::save(&self.core).await {
-            tracing::warn!("saving layout on shutdown: {e}");
+        if let Err(error) = persist::save(&self.core).await {
+            tracing::warn!("saving layout on shutdown: {error}");
         }
         self.endpoint.close().await;
         self.core.ws.editors.stop_all().await;
@@ -293,13 +292,13 @@ async fn bind(core: &Core) -> Result<Endpoint, StartError> {
         for addr in &wanted {
             builder = builder
                 .bind_addr(*addr)
-                .map_err(|e| StartError::Bind(e.to_string()))?;
+                .map_err(|error| StartError::Bind(error.to_string()))?;
         }
         match builder.bind().await {
             Ok(endpoint) => return Ok(endpoint),
-            Err(e) => tracing::warn!(
+            Err(error) => tracing::warn!(
                 ?wanted,
-                "binding the previous ports failed, using new ones: {e}"
+                "binding the previous ports failed, using new ones: {error}"
             ),
         }
     }
@@ -307,12 +306,12 @@ async fn bind(core: &Core) -> Result<Endpoint, StartError> {
     if let Some(addr) = core.cfg.bind {
         builder = builder
             .bind_addr(addr)
-            .map_err(|e| StartError::Bind(e.to_string()))?;
+            .map_err(|error| StartError::Bind(error.to_string()))?;
     }
     builder
         .bind()
         .await
-        .map_err(|e| StartError::Bind(e.to_string()))
+        .map_err(|error| StartError::Bind(error.to_string()))
 }
 
 /// The sockets to bind so this run listens where the last one did: for `--bind` with port 0
@@ -322,7 +321,7 @@ fn sticky_binds(bind: Option<SocketAddr>, previous: &[SocketAddr]) -> Vec<Socket
     let port_of = |v4: bool| {
         previous
             .iter()
-            .find(|a| a.is_ipv4() == v4 && a.port() != 0)
+            .find(|addr| addr.is_ipv4() == v4 && addr.port() != 0)
             .map(SocketAddr::port)
     };
     let wanted = match bind {
@@ -360,7 +359,7 @@ fn endpoint_builder(core: &Core) -> Result<iroh::endpoint::Builder, StartError> 
         RelayMode::Disabled => Endpoint::builder(presets::Minimal),
         RelayMode::Custom(custom) => {
             let map = iroh::RelayMap::try_from_iter(custom.urls.iter().map(String::as_str))
-                .map_err(|e| StartError::Bind(format!("relay urls: {e}")))?;
+                .map_err(|error| StartError::Bind(format!("relay urls: {error}")))?;
             let map = match &custom.auth_token {
                 Some(token) => map.with_auth_token(token.clone()),
                 None => map,
@@ -401,14 +400,13 @@ fn transport_config() -> iroh::endpoint::QuicTransportConfig {
         .build()
 }
 
-/// The certificates in a PEM file.
 fn read_pem_certs(
     path: &std::path::Path,
 ) -> Result<Vec<rustls_pki_types::CertificateDer<'static>>, StartError> {
     use rustls_pki_types::pem::PemObject;
     let certs = rustls_pki_types::CertificateDer::pem_file_iter(path)
-        .and_then(|it| it.collect::<Result<Vec<_>, _>>())
-        .map_err(|e| StartError::Bind(format!("relay CA file {}: {e}", path.display())))?;
+        .and_then(|certs| certs.collect::<Result<Vec<_>, _>>())
+        .map_err(|error| StartError::Bind(format!("relay CA file {}: {error}", path.display())))?;
     if certs.is_empty() {
         return Err(StartError::Bind(format!(
             "relay CA file {} has no certificates",
@@ -426,8 +424,8 @@ async fn track_addresses(core: Arc<Core>, endpoint: Endpoint) {
     while watcher.updated().await.is_ok() {
         let info = endpoint_info_of(&endpoint, &core.cfg.relay);
         tracing::debug!(addrs = ?info.addrs, relay = ?info.relay_url, "endpoint address changed");
-        if let Err(e) = identity::write_endpoint_info(&core.cfg.state_dir, &info) {
-            tracing::warn!("recording endpoint: {e}");
+        if let Err(error) = identity::write_endpoint_info(&core.cfg.state_dir, &info) {
+            tracing::warn!("recording endpoint: {error}");
         }
     }
 }
@@ -439,11 +437,11 @@ fn endpoint_info_of(endpoint: &Endpoint, relays: &RelayMode) -> EndpointInfo {
         addrs = endpoint
             .bound_sockets()
             .into_iter()
-            .map(|mut a| {
-                if a.ip().is_unspecified() {
-                    a.set_ip(IpAddr::V4(Ipv4Addr::LOCALHOST));
+            .map(|mut addr| {
+                if addr.ip().is_unspecified() {
+                    addr.set_ip(IpAddr::V4(Ipv4Addr::LOCALHOST));
                 }
-                a
+                addr
             })
             .collect();
     }
@@ -458,8 +456,6 @@ fn endpoint_info_of(endpoint: &Endpoint, relays: &RelayMode) -> EndpointInfo {
     }
 }
 
-use proto::DeviceId;
-
 async fn accept_loop(core: Arc<Core>, endpoint: Endpoint) {
     let gate = preauth::Gate::new(core.cfg.pre_auth);
     while let Some(incoming) = endpoint.accept().await {
@@ -471,7 +467,7 @@ async fn accept_loop(core: Arc<Core>, endpoint: Endpoint) {
             _ => (None, None),
         };
         // A relay names the peer's key up front; the handshake below still proves it.
-        let known = named.is_some_and(|d| core.mp.known_device(d));
+        let known = named.is_some_and(|device| core.mp.known_device(device));
         let Some(slot) = gate.arrive(ip, known) else {
             tracing::debug!(
                 ?ip,
@@ -484,25 +480,27 @@ async fn accept_loop(core: Arc<Core>, endpoint: Endpoint) {
         tokio::spawn(async move {
             // The whole handshake, never 0-RTT: nothing is read before the client's key is
             // proven, so early data cannot be replayed into a request.
-            let conn = match incoming.accept() {
+            let handshake = match incoming.accept() {
                 Ok(connecting) => tokio::time::timeout(core.cfg.hello_timeout, connecting).await,
-                Err(e) => {
-                    tracing::debug!("refusing incoming connection: {e}");
+                Err(error) => {
+                    tracing::debug!("refusing incoming connection: {error}");
                     return;
                 }
             };
-            match conn {
-                Ok(Ok(conn)) => {
-                    let known = core.mp.known_device(DeviceId(*conn.remote_id().as_bytes()));
+            match handshake {
+                Ok(Ok(connection)) => {
+                    let known = core
+                        .mp
+                        .known_device(DeviceId(*connection.remote_id().as_bytes()));
                     match slot.authenticated(known) {
-                        Some(slot) => conn::serve(core, conn, slot).await,
+                        Some(slot) => conn::serve(core, connection, slot).await,
                         None => {
                             tracing::debug!("closing connection: too many unauthenticated");
-                            conn.close(0u32.into(), b"busy");
+                            connection.close(0u32.into(), b"busy");
                         }
                     }
                 }
-                Ok(Err(e)) => tracing::debug!("handshake failed: {e}"),
+                Ok(Err(error)) => tracing::debug!("handshake failed: {error}"),
                 Err(_) => tracing::debug!("handshake timed out"),
             }
         });
@@ -515,7 +513,7 @@ mod tests {
 
     #[test]
     fn rebinds_the_ports_the_last_run_had() {
-        let addr = |s: &str| s.parse::<SocketAddr>().unwrap();
+        let addr = |text: &str| text.parse::<SocketAddr>().unwrap();
         let previous = [addr("0.0.0.0:51482"), addr("[::]:59205")];
         assert_eq!(
             sticky_binds(None, &previous),

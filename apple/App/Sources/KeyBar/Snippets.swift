@@ -1,7 +1,6 @@
 import Foundation
 
-/// A quick command (04-mobile-ux A1.8, A30): one flat list of label + body, optionally without
-/// pressing Return. No folders, no templating.
+/// A quick command: a label and a body, optionally inserted without pressing Return.
 struct Snippet: Codable, Equatable, Identifiable {
     var id = UUID()
     var label: String
@@ -10,7 +9,6 @@ struct Snippet: Codable, Equatable, Identifiable {
     var sendReturn: Bool
 }
 
-/// The user's snippets, persisted as JSON in `UserDefaults`.
 @MainActor
 final class SnippetStore {
     static let shared = SnippetStore()

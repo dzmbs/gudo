@@ -10,9 +10,8 @@ import AppKit
 #endif
 
 extension AppModel {
-    /// OSC 52 from a host, as Ghostty does it: a program in a pane this device typed into last
-    /// (vim's `y`, tmux's copy mode, also over ssh) copied text. The daemon sends it to that
-    /// device only and never forwards a read.
+    /// OSC 52 from a host. The daemon sends it only to the device that typed into the pane last
+    /// and never forwards a read.
     func clipboardWrite(_ hostId: String, _ pane: PaneId, _ text: String) {
         guard !text.isEmpty, text.utf8.count <= HostClipboard.maxBytes else { return }
         HostClipboard.copy(text)
@@ -22,13 +21,11 @@ extension AppModel {
     }
 }
 
-/// The device's clipboard as programs on a host write it.
 enum HostClipboard {
-    /// The daemon's limit (`proto::MAX_CLIPBOARD_BYTES`).
+    /// `proto::MAX_CLIPBOARD_BYTES`.
     static let maxBytes = 1 << 20
 
-    /// Puts `text` on this device's clipboard only: never to the user's other devices through
-    /// Universal Clipboard, since a host's program chose it.
+    /// Local only, never Universal Clipboard: a host's program chose the text.
     static func copy(_ text: String) {
         #if canImport(UIKit)
         UIPasteboard.general.setItems([[UTType.utf8PlainText.identifier: text]], options: [.localOnly: true])
@@ -38,13 +35,13 @@ enum HostClipboard {
     }
 
     #if os(macOS)
-    static func copy(_ text: String, to board: NSPasteboard) {
-        board.prepareForNewContents(with: .currentHostOnly)
-        board.setString(text, forType: .string)
+    static func copy(_ text: String, to pasteboard: NSPasteboard) {
+        pasteboard.prepareForNewContents(with: .currentHostOnly)
+        pasteboard.setString(text, forType: .string)
     }
     #endif
 
-    /// "vim", else the host: what the toast names.
+    /// The pane title ("vim"), else the host.
     static func sourceName(paneTitle: String?, hostName: String?) -> String {
         if let title = paneTitle?.trimmingCharacters(in: .whitespaces), !title.isEmpty {
             return title.count > 40 ? String(title.prefix(39)) + "…" : title

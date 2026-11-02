@@ -5,22 +5,21 @@ import TerminalRenderer
 import SwiftUI
 import TerminalCore
 
-/// Where tabs are listed in regular-width windows, Safari's way: the sidebar holds them while it
-/// is shown; hidden, they show as a strip on top. One button and ⌘B switch between the two, so
-/// there is no separate "tab style" to find.
+/// Where tabs are listed in regular-width windows: the sidebar holds them while it is shown;
+/// hidden, they show as a strip on top.
 enum TabPlacement {
     static let sidebarShownKey = "sidebarShown"
     /// Off: no strip while the sidebar is hidden (the terminal gets the whole window).
     static let showsTabBarKey = "tabBarWithoutSidebar"
 
-    /// The last sidebar choice, which a new window starts with. Reads the old "tabStyle" setting
-    /// once: tabs on top was the sidebar hidden.
+    /// The last sidebar choice, which a new window starts with. Migrates the legacy "tabStyle"
+    /// setting once: "bar" meant the sidebar hidden.
     static var sidebarShown: Bool {
         get {
             let defaults = UserDefaults.standard
-            if let old = defaults.string(forKey: "tabStyle") {
+            if let legacyStyle = defaults.string(forKey: "tabStyle") {
                 defaults.removeObject(forKey: "tabStyle")
-                if old == "bar" { defaults.set(false, forKey: sidebarShownKey) }
+                if legacyStyle == "bar" { defaults.set(false, forKey: sidebarShownKey) }
             }
             return defaults.object(forKey: sidebarShownKey) as? Bool ?? true
         }
@@ -33,9 +32,8 @@ enum TabPlacement {
     }
 }
 
-/// A window: tabs (sidebar, strip, or the compact layout on iPhone) around the active tab's panes,
-/// plus the window-wide overlays (command palette, toasts) and sheets. The workspace is the
-/// window's target (this device or a host, `WindowRoot`); the window model outlives it.
+/// A window: tabs around the active tab's panes, plus the window-wide overlays and sheets. The
+/// workspace is the window's target (this device or a host); the window model outlives it.
 struct WorkspaceView: View {
     let workspace: Workspace
     @Environment(WindowModel.self) private var model
@@ -54,20 +52,19 @@ struct WorkspaceView: View {
     var body: some View {
         @Bindable var model = model
         content
-            // Spotlight's placement: centred on the window, a sixth of the way down, above the
-            // find bar and every other overlay.
+            // Above the find bar and every other overlay.
             .spotlightOverlay(isPresented: model.isPaletteShown, onDismiss: { model.isPaletteShown = false }) {
                 CommandPalette(
                     isPresented: $model.isPaletteShown, commands: PaletteCommands.all(workspace: workspace, model: model),
                     placeholder: PaletteCommands.placeholder(model.paletteMode),
-                    // goes back to every command.
+                    // "/" scopes the palette to workflows; ⌫ on the empty query goes back.
                     onScope: model.paletteMode == .commands ? { query in
                         guard query == "/" else { return false }
                         model.paletteMode = .workflows
                         return true
                     } : nil,
                     onDeleteEmpty: model.paletteMode == .workflows ? { model.paletteMode = .commands } : nil)
-                    // A fresh query and selection per mode (⌘K, ⌘P, ⌥⌘T).
+                    // A fresh query and selection per mode.
                     .id(model.paletteMode)
             }
             .spotlightOverlay(isPresented: model.workflowPanel != nil, onDismiss: { model.workflowPanel = nil }) {
@@ -75,15 +72,12 @@ struct WorkspaceView: View {
                     WorkflowPanelHost(panel: panel).id(panel.id)
                 }
             }
-            // fade on iPad, where the glass needs a frame.
             .animation(DS.Motion.palette, value: model.isPaletteShown)
             .animation(DS.Motion.palette, value: model.workflowPanel?.id)
-            // The host's workflow files changed while the palette lists them: read them again.
             .onChange(of: (workspace.host as? DaemonConnection)?.workspace.workflowsRev) {
                 if model.isPaletteShown { model.loadWorkflows() }
             }
-            // At the bottom, clear of every pane's top bar; over the port offer when it shows,
-            // and over the iPhone's tab bar.
+            // Above the port offer when it shows, and above the iPhone's tab bar.
             .toastHost(model.toasts, bottomInset: PortOfferBanner.bottomInset(model)
                 + (model.ports.offer != nil && !model.editorHasKeys ? PortOfferBanner.height + DS.Space.s : 0))
             .overlay(alignment: model.widthBucket == .compact ? .top : .topTrailing) { AgentToastStack() }
@@ -94,8 +88,7 @@ struct WorkspaceView: View {
                     .environment(model)
                     .environment(model.app)
             }
-            // The whole window follows the terminal theme: surfaces, text, accent and states
-            // (`ChromePalette`), light or dark by `window-theme` (Ghostty `auto`: from the theme).
+            // The whole window follows the terminal theme, light or dark by `window-theme`.
             .chromeTheme(theme, windowTheme: windowTheme)
             .modifier(ThemePairFollower())
             .focusedSceneValue(workspace)
@@ -103,22 +96,20 @@ struct WorkspaceView: View {
             .renameTabPrompt(workspace)
             .modifier(MultiplayerWindowHooks(workspace: workspace))
             .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification).receive(on: RunLoop.main)) { _ in
-                // Settings write UserDefaults; the terminals follow through `TerminalAppearance`.
                 let appearance = TerminalAppearance.fromPreferences()
-                for open in model.workspaces.values where appearance != open.appearance { open.appearance = appearance }
+                for openWorkspace in model.workspaces.values where appearance != openWorkspace.appearance { openWorkspace.appearance = appearance }
             }
             .task {
                 await DesignFixtures.apply(LaunchOptions.screen, workspace: workspace, model: model)
                 if LaunchOptions.screen == "toggle" {
-                    // Regression fixture: strip first, then the sidebar, as a user would switch.
+                    // Fixture: strip first, then the sidebar, as a user would switch.
                     model.isSidebarShown = false
                     try? await Task.sleep(for: .seconds(1))
                     model.isSidebarShown = true
                 }
             }
-            // Closing a host's last tab moves to the nearest tab on another host; on the Mac,
-            // closing the last tab of all closes the window, as in Ghostty (not when a host is
-            // open: its tabs live on the host, and an empty daemon session is still a session).
+            // Closing the last tab of all closes the Mac window, but not while a host is open:
+            // an empty daemon session is still a session.
             .onChange(of: TabsEmptied(workspace: ObjectIdentifier(workspace), isEmpty: workspace.session.tabs.isEmpty)) { old, new in
                 // Only a tab closing here, not switching to a host that has no tabs yet.
                 guard new.isEmpty, old.workspace == new.workspace, LaunchOptions.screen == nil else { return }
@@ -131,15 +122,15 @@ struct WorkspaceView: View {
                 }
             }
             #if DEBUG && os(macOS)
-            // `-dogfood <scenario.json>`: the in-app scenario runner (App/Sources/Debug).
+            // `-dogfood <scenario.json>`: the in-app scenario runner.
             .task { DogfoodRunner.startIfRequested(workspace: workspace) }
             #endif
     }
 
     @ViewBuilder private var content: some View {
         #if os(iOS)
-        // By the window's width, never the device (`WidthBucket`): an iPhone, a foldable, Split
-        // View, Slide Over and Stage Manager windows all get the layout their width fits.
+        // By the window's width, never the device, so Split View, Slide Over and Stage Manager
+        // windows get the layout their width fits.
         if model.widthBucket == .compact {
             CompactRoot(workspace: workspace)
         } else {
@@ -150,14 +141,11 @@ struct WorkspaceView: View {
         #endif
     }
 
-    /// edge, the terminal's own background family, a 1 pt divider; never a floating glass card)
-    /// beside the detail column. Both tab placements share the detail column and its toolbar, so
-    /// the toolbar looks the same in either.
+    /// An integrated sidebar beside the detail column, which both tab placements share.
     ///
-    /// On a foldable the fold places them (`FoldLayout`): opened wide or as a book the sidebar is
-    /// the left page, exactly as wide as it, and the tab the right; half-folded as a laptop the
-    /// tab is the upper screen and the deck (`TabletopDeck`) the lower. Nothing is drawn under the
-    /// fold, and the same views move rather than being rebuilt, so the panes keep their state.
+    /// On a foldable the fold places them (`FoldLayout`): as a book the sidebar is the left page;
+    /// half-folded the tab is the upper screen and the deck the lower. The same views move rather
+    /// than being rebuilt, so the panes keep their state.
     private var regular: some View {
         let layout = model.foldLayout
         // Only a fold that leaves room either side splits the window. The window's frame never
@@ -170,9 +158,8 @@ struct WorkspaceView: View {
         let width = page ?? SidebarWidth.effective(sidebarWidth, for: dynamicTypeSize)
         return VStack(spacing: 0) {
             HStack(spacing: 0) {
-                // Always mounted, laid out at its full width and revealed by one animated width
-                // (Finder, Xcode): inserting it with a transition rebuilt its navigation stack and
-                // toolbar mid-animation, so it slid in, paused, then finished.
+                // Always mounted and revealed by one animated width: inserting it with a
+                // transition rebuilds its navigation stack and toolbar mid-animation, which stutters.
                 SidebarColumn(workspace: workspace)
                     .frame(width: width)
                     .frame(width: shown ? width : 0, alignment: .trailing)
@@ -208,9 +195,7 @@ struct WorkspaceView: View {
         .animation(DS.Motion.panel, value: model.isEditorFullScreen)
         .chromeBackground(DS.Palette.base)
         #if os(macOS)
-        // Ghostty's window title: the directory, with its folder as the proxy icon.
         .background(RepresentedDirectory(path: workspace.isRemote ? nil : workspace.session.activeTab.flatMap(workspace.absoluteDirectory(of:))))
-        // The titlebar is the terminal's and the sidebar's own background, seamless.
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         #endif
     }
@@ -268,8 +253,7 @@ private struct SidebarColumn: View {
     }
 }
 
-/// + : a menu with the two things to start, New Terminal (⌘T) and New Agent (⇧⌘N), then a
-/// terminal on another host and Add Host. Add Host alone where nothing can open a tab yet.
+/// The + menu; Add Host alone where nothing can open a tab yet.
 struct NewTabButton: View {
     let workspace: Workspace
     @Environment(WindowModel.self) private var model
@@ -311,8 +295,8 @@ struct NewTabButton: View {
     private var canOpen: Bool { workspace.canOpenTabs || model.groups.newTabHost(preferred: nil) != nil }
 }
 
-/// The hairline between sidebar and terminal (the theme's ink at 15 %), draggable to resize the
-/// sidebar; double-click/tap restores the default width.
+/// The hairline between sidebar and terminal, draggable to resize the sidebar; a double click
+/// restores the default width.
 private struct SidebarDivider: View {
     @Binding var width: Double
     @Environment(\.displayScale) private var displayScale
@@ -325,7 +309,7 @@ private struct SidebarDivider: View {
             .ignoresSafeArea()
             .overlay {
                 Color.clear
-                    // The split dividers' hit widths (docs/DESIGN.md): 1 + 6 for a pointer, 20 for a finger.
+                    // The split dividers' hit widths: 1 + 6 for a pointer, 20 for a finger.
                     #if os(iOS)
                     .frame(width: 20)
                     #else
@@ -345,7 +329,6 @@ private struct SidebarDivider: View {
                             .onEnded { _ in start = nil })
                     .onTapGesture(count: 2) { width = SidebarWidth.standard }
                     .ignoresSafeArea()
-                    // VoiceOver resizes the sidebar by swiping up or down on it.
                     .accessibilityElement()
                     .accessibilityLabel("Sidebar Width")
                     .accessibilityValue("\(Int(width)) points")
@@ -359,9 +342,8 @@ private struct SidebarDivider: View {
 }
 
 #if os(macOS)
-/// The window's represented folder: the titlebar shows its icon, and ⌘-clicking it shows the path.
-/// Set on the window, not by a modifier applied only while a folder is known: that swapped the
-/// window's whole view tree each time one came or went (a new pane's directory arriving).
+/// The window's represented folder. Set on the window, not by a modifier applied only while a
+/// folder is known, which would swap the window's whole view tree each time one came or went.
 private struct RepresentedDirectory: NSViewRepresentable {
     let path: String?
 
@@ -388,8 +370,7 @@ private struct RepresentedDirectory: NSViewRepresentable {
 }
 #endif
 
-/// The detail column: the tab strip (tabs on top), then the active tab's panes, the Inbox or
-/// Hosts, under one toolbar shared by both tab placements.
+/// The tab strip, then the active tab's panes, the Inbox or Hosts, under one shared toolbar.
 private struct DetailColumn: View {
     let workspace: Workspace
     @Environment(WindowModel.self) private var model
@@ -407,12 +388,10 @@ private struct DetailColumn: View {
             }
             switch model.destination {
             case .terminal:
-                // The active tab, a mixed tab, or Two Columns.
                 TerminalArea(workspace: workspace)
                     // Behind the key bar and keyboard, which float over the terminal.
                     .background(theme.background.ignoresSafeArea(.all, edges: .bottom))
-                    // The ink goes on each destination, under its own toolbar (Inbox and Hosts
-                    // add bar items): never above a toolbar.
+                    // The ink goes on each destination, never above a toolbar.
                     .chromeContent()
             case .inbox:
                 InboxView(feed: model.agents, onLaunch: { model.newAgent() }, onNewTerminal: { model.newTab() })
@@ -420,8 +399,8 @@ private struct DetailColumn: View {
                 HostsScreen()
             }
         }
-        // Every destination fills the column, whatever its content's own size (an empty Inbox
-        // is only as wide as its message, which shrank and centred the whole window).
+        // Every destination fills the column, whatever its content's own size: an empty Inbox
+        // would otherwise shrink the whole window to its message.
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         #if DEBUG
         .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }, action: { model.detailFrame = $0 })
@@ -439,8 +418,8 @@ private struct DetailColumn: View {
         .toolbar(model.isEditorFullScreen ? .hidden : .automatic, for: .windowToolbar)
         #endif
         .modifier(GitDialogs(git: model.git))
-        .onChange(of: model.git.hub?.repos != nil, initial: true) { _, has in
-            if has { model.git.syncAutoDelete() }
+        .onChange(of: model.git.hub?.repos != nil, initial: true) { _, hasRepos in
+            if hasRepos { model.git.syncAutoDelete() }
         }
         .chromeBackground(DS.Palette.base)
     }
@@ -454,8 +433,8 @@ private struct DetailColumn: View {
         }
     }
 
-    /// task, the program, `repo:branch` or the directory) when it says something the title
-    /// does not, then the split state. The host is named once, by the toolbar's host button.
+    /// Under the tab's name: its context when it says something the title does not, then the
+    /// split state. The host is named by the toolbar's host button instead.
     private var subtitle: String {
         if let mixed = model.activeMixed {
             let hosts = mixed.hosts.map(model.groupName).joined(separator: " + ")
@@ -473,15 +452,12 @@ private struct DetailColumn: View {
         if tab.root.panes.count > 1 {
             parts.append(tab.zoomed == nil ? "\(tab.root.panes.count) panes" : "Zoomed")
         }
-        // A saved workspace on screen: quietly not live yet (instant start).
         if workspace.showsSavedWorkspace, !model.connection.isFailure { parts.append("Connecting…") }
         return parts.joined(separator: " · ")
     }
 }
 
-/// The window toolbar, identical with the sidebar shown or hidden: the sidebar toggle leading
-/// (always there, in the same place: Safari, Finder, Xcode); presence, Hosts, Find, the pane
-/// menu and the palette as one monochrome glass group.
+/// The window toolbar, identical with the sidebar shown or hidden.
 private struct TerminalToolbar: ToolbarContent {
     let workspace: Workspace
     @Environment(WindowModel.self) private var model
@@ -492,9 +468,8 @@ private struct TerminalToolbar: ToolbarContent {
 
     var body: some ToolbarContent {
         #if os(macOS)
-        // Xcode's titlebar: over the sidebar the toggle is a bare glyph beside the traffic
-        // lights and the title starts where the detail column does; with the sidebar hidden
-        // the toggle is a toolbar button like any other, right before the title.
+        // Over the sidebar the toggle is a bare glyph beside the traffic lights and the title
+        // starts where the detail column does; with the sidebar hidden it is a regular button.
         ToolbarItem(placement: .navigation) {
             SidebarToggle()
         }
@@ -527,7 +502,6 @@ private struct TerminalToolbar: ToolbarContent {
             HostToolbarButton(workspace: workspace)
         }
         ToolbarSpacer(.fixed, placement: .primaryAction)
-        // The focused pane's worktree: its pull request beside the host, then Open and Run.
         if model.destination == .terminal, let worktree = model.git.worktree {
             ToolbarItem(placement: .primaryAction) {
                 PRToolbarButton(git: model.git, worktree: worktree)
@@ -561,7 +535,7 @@ private struct TerminalToolbar: ToolbarContent {
             .disabled((workspace.focusedPane == nil && model.activeMixed == nil) || model.destination != .terminal)
             .accessibilityIdentifier("pane-menu")
             #if os(iOS)
-            // A Pencil device: drawing stays one tap away. On the Mac it is in the Pane menu.
+            // On the Mac drawing is in the Pane menu.
             Button("Draw", systemImage: "pencil.tip") { DrawingCommands.toggleDrawing(in: workspace) }
                 .help("Draw on Pane (⌃⌘D)")
                 .disabled(!DrawingCommands.canDraw(in: workspace) || model.destination != .terminal)
@@ -618,18 +592,18 @@ private struct CompactRoot: View {
             }
         }
         .tabBarMinimizeBehavior(.onScrollDown)
-        // As in the regular layout: without them a merge, archive or delete from the palette
-        // waited for a confirmation that never showed.
+        // Without them a merge, archive or delete from the palette waits for a confirmation
+        // that never shows.
         .modifier(GitDialogs(git: model.git))
-        .onChange(of: model.git.hub?.repos != nil, initial: true) { _, has in
-            if has { model.git.syncAutoDelete() }
+        .onChange(of: model.git.hub?.repos != nil, initial: true) { _, hasRepos in
+            if hasRepos { model.git.syncAutoDelete() }
         }
     }
 }
 #endif
 
-/// The active tab's panes: its split tree, the zoomed pane alone, or only the focused pane in
-/// compact width (no splits on iPhone, 04-mobile-ux C3). Without tabs: the welcome state.
+/// The active tab's panes: its split tree, or only the focused pane in compact width. Without
+/// tabs: the welcome state.
 struct ActiveTabView: View {
     let workspace: Workspace
     var compact = false
@@ -680,7 +654,7 @@ struct ActiveTabView: View {
     }
 }
 
-/// words, the system spinner only after a 1 s grace, and actions only when something failed
+/// A host's window before there is a session to show, with actions only when something failed.
 private struct ConnectingView: View {
     let hostName: String
     let state: ConnectionState
@@ -759,6 +733,7 @@ private struct ConnectingView: View {
     }
 }
 
+/// No tabs open: the next steps.
 private struct WelcomeView: View {
     let workspace: Workspace
     @Environment(WindowModel.self) private var model
@@ -834,7 +809,6 @@ private struct WelcomeView: View {
 
     private func welcomeRow(_ title: String, systemImage: String, keys: [String]?, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            // The sidebar's row: a 16 pt glyph slot at 0.6, the label leading.
             HStack(spacing: DS.Space.gap10) {
                 Image(systemName: systemImage)
                     .frame(width: 16)

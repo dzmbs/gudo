@@ -1,6 +1,7 @@
 #if os(iOS)
 import XCTest
 
+/// VS Code as panes of the split tree on the iPad, against the shared daemon
 /// fixtures: a local `gudo-hostd` whose `code serve-web` is a stand-in page that counts its
 /// loads and has a text field (nothing is downloaded). Run with
 /// `UI_TEST_CLASS=EditorPanesUITests apple/scripts/w3-ui-test.sh <sim>`; skipped without a ticket.

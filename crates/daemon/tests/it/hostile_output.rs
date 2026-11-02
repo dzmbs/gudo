@@ -8,7 +8,7 @@ use crate::support::{TestClient, start, ticket};
 const MARK: &str = "MARK;touch /tmp/pwned";
 
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// Every query family a terminal answers, each carrying the marker where a careless terminal
@@ -63,16 +63,16 @@ async fn hostile_queries_type_nothing_into_the_shell() {
     let state = tempfile::tempdir().unwrap();
     let files = tempfile::tempdir().unwrap();
     let daemon = start(state.path()).await;
-    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    let pane = c.attach_and_follow().await;
-    c.type_line(pane, "echo ready-$((6*7))");
-    c.wait_text(pane, "ready-42").await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = owner.attach_and_follow().await;
+    owner.type_line(pane, "echo ready-$((6*7))");
+    owner.wait_text(pane, "ready-42").await;
 
     let path = files.path().join("hostile");
     std::fs::write(&path, hostile_queries()).unwrap();
     // Whatever the daemon answered waits in the shell's input: read it raw and print it as hex
     // between computed markers, so the echoed command line never matches.
-    c.type_line(
+    owner.type_line(
         pane,
         &format!(
             "stty -icanon -echo min 0 time 20; cat {}; sleep 1; \
@@ -81,8 +81,8 @@ async fn hostile_queries_type_nothing_into_the_shell() {
             path.display()
         ),
     );
-    c.wait_text(pane, "replied-42").await;
-    let flat = c.flat_text(pane);
+    owner.wait_text(pane, "replied-42").await;
+    let flat = owner.flat_text(pane);
     let start = flat.rfind("HEX<").expect("marker") + 4;
     let end = start + flat[start..].find('>').expect("end marker");
     let digits: String = flat[start..end]
@@ -140,7 +140,7 @@ async fn clipboard_writes_reach_only_the_device_that_typed() {
     let (config, options) = copying();
     let mut ipad = TestClient::connect_with(&ticket(&daemon), config, options.clone());
     ipad.client.attach(None);
-    ipad.until("layout", |c| c.layout.is_some()).await;
+    ipad.until("layout", |client| client.layout.is_some()).await;
     ipad.follow(pane).await;
     let mut spec = GrantSpec::new(Roles::DRIVER, Scope::Daemon);
     spec.label = "bob".into();
@@ -148,7 +148,8 @@ async fn clipboard_writes_reach_only_the_device_that_typed() {
     let invite = mac.client.create_invite(spec, "bob".into()).await.unwrap();
     let mut bob = TestClient::join_options(&invite.to_string(), options);
     bob.client.attach(None);
-    bob.until("guest layout", |c| c.layout.is_some()).await;
+    bob.until("guest layout", |client| client.layout.is_some())
+        .await;
     bob.follow(pane).await;
 
     let copy = |text: &str| {
@@ -156,16 +157,17 @@ async fn clipboard_writes_reach_only_the_device_that_typed() {
         format!("printf '\\033]52;c;%s\\007\\033]52;c;?\\007' {b64}")
     };
     mac.type_line(pane, &copy("from-the-mac"));
-    mac.until("the Mac copied", |c| !c.clipboard.is_empty())
+    mac.until("the Mac copied", |client| !client.clipboard.is_empty())
         .await;
 
     mac.client.release_control(pane).await.unwrap();
     bob.type_line(pane, &copy("from-bob"));
-    bob.until("bob copied", |c| !c.clipboard.is_empty()).await;
+    bob.until("bob copied", |client| !client.clipboard.is_empty())
+        .await;
 
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    for c in [&mut mac, &mut ipad, &mut bob] {
-        c.until("settled", |_| true).await;
+    for client in [&mut mac, &mut ipad, &mut bob] {
+        client.until("settled", |_| true).await;
     }
     assert_eq!(mac.clipboard, [(pane, "from-the-mac".to_owned())]);
     assert_eq!(bob.clipboard, [(pane, "from-bob".to_owned())]);

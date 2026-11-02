@@ -19,8 +19,8 @@ final class DogfoodUITests: XCTestCase {
     func testScenario() throws {
         let environment = ProcessInfo.processInfo.environment
         guard let path = environment["DOGFOOD_SCENARIO"] else { throw XCTSkip("set TEST_RUNNER_DOGFOOD_SCENARIO") }
-        let out = environment["DOGFOOD_OUT"].map { URL(fileURLWithPath: $0) }
-        if let out { try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true) }
+        let outputDirectory = environment["DOGFOOD_OUT"].map { URL(fileURLWithPath: $0) }
+        if let outputDirectory { try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true) }
         let scenario = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: path))) as? [String: Any])
 
         let app = XCUIApplication()
@@ -40,7 +40,7 @@ final class DogfoodUITests: XCTestCase {
                 let action = step["do"] as? String ?? "?"
                 var record: [String: Any] = ["index": index, "action": action]
                 do {
-                    record["detail"] = try perform(action, step, app: app, out: out, caseName: name)
+                    record["detail"] = try perform(action, step, app: app, outputDirectory: outputDirectory, caseName: name)
                     record["passed"] = true
                 } catch {
                     record["passed"] = false
@@ -51,7 +51,7 @@ final class DogfoodUITests: XCTestCase {
                     attachment.name = "FAIL-\(name)"
                     attachment.lifetime = .keepAlways
                     add(attachment)
-                    if let out { try? shot.pngRepresentation.write(to: out.appendingPathComponent("FAIL-\(name).png")) }
+                    if let outputDirectory { try? shot.pngRepresentation.write(to: outputDirectory.appendingPathComponent("FAIL-\(name).png")) }
                     passed = false
                 }
                 steps.append(record)
@@ -60,16 +60,16 @@ final class DogfoodUITests: XCTestCase {
             results.append(["name": name, "passed": passed, "steps": steps])
             XCTAssertTrue(passed, "\(name): \(steps.last?["error"] ?? "")")
         }
-        if let out {
+        if let outputDirectory {
             let report: [String: Any] = ["scenario": path, "platform": "ios-xcuitest", "cases": results,
                                          "passed": results.allSatisfy { $0["passed"] as? Bool == true }]
             try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
-                .write(to: out.appendingPathComponent("report.json"))
+                .write(to: outputDirectory.appendingPathComponent("report.json"))
         }
     }
 
     @MainActor
-    private func perform(_ action: String, _ step: [String: Any], app: XCUIApplication, out: URL?, caseName: String) throws -> String {
+    private func perform(_ action: String, _ step: [String: Any], app: XCUIApplication, outputDirectory: URL?, caseName: String) throws -> String {
         switch action {
         case "type":
             let text = step["text"] as? String ?? ""
@@ -120,7 +120,7 @@ final class DogfoodUITests: XCTestCase {
             attachment.name = name
             attachment.lifetime = .keepAlways
             add(attachment)
-            if let out { try shot.pngRepresentation.write(to: out.appendingPathComponent("\(name).png")) }
+            if let outputDirectory { try shot.pngRepresentation.write(to: outputDirectory.appendingPathComponent("\(name).png")) }
             return name
         default:
             return "\(action): macOS runner only (skipped)"
@@ -144,13 +144,13 @@ final class DogfoodUITests: XCTestCase {
         var parts = spec.split(separator: "+").map(String.init)
         let name = parts.removeLast()
         var flags: XCUIElement.KeyModifierFlags = []
-        for mod in parts {
-            switch mod {
+        for modifier in parts {
+            switch modifier {
             case "cmd": flags.insert(.command)
             case "shift": flags.insert(.shift)
             case "ctrl": flags.insert(.control)
             case "opt", "alt": flags.insert(.option)
-            default: throw Failure(description: "unknown modifier \(mod)")
+            default: throw Failure(description: "unknown modifier \(modifier)")
             }
         }
         let named: [String: XCUIKeyboardKey] = [

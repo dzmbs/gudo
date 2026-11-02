@@ -11,9 +11,10 @@ import UIKit
 import AppKit
 #endif
 
-// Inbox, Files, Diff review, Editor, Browser ports, Links. Each source resolves "where" when it
-// is asked — the window's host and focused pane, else the first connected daemon — so it follows
-// the window without being rebuilt. `MockData.swift` holds the `-mock` stand-ins.
+// The screens over the daemon: Inbox, Files, Diff review, Editor, Browser ports, Links. Each
+// source resolves "where" when it is asked — the window's host and focused pane, else the first
+// connected daemon — so it follows the window without being rebuilt. `MockData.swift` holds the
+// `-mock` stand-ins.
 
 private let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app", category: "screens")
 
@@ -186,8 +187,8 @@ enum ToolProblem: Error, Equatable {
 
 /// The agents of every connected daemon (`PaneMeta.agent`, then other programs' own reports)
 /// merged with each daemon's attention feed (finished turns, failures, long commands, unseen
-/// counts). Approve and Deny are signed
-/// decisions; Reply types through the composer path; New Agent launches a pane.
+/// counts). Approve and Deny are signed decisions; Reply types through the composer path; New
+/// Agent launches a pane.
 @MainActor
 @Observable
 final class LiveAgentFeed: AgentFeed {
@@ -285,13 +286,13 @@ final class LiveAgentFeed: AgentFeed {
         var result: [AgentItem] = []
         let byPane = Dictionary(grouping: attention, by: \.paneId).mapValues { $0.max { $0.id < $1.id }! }
         var livePanes = Set<UInt64>()
-        for (pane, meta) in meta {
-            guard let agent = meta.agent else { continue }
+        for (pane, paneMeta) in meta {
+            guard let agent = paneMeta.agent else { continue }
             livePanes.insert(pane.rawValue)
             let id = "\(hostId)/\(pane.rawValue)"
             var state = DesignSystem.AgentState(agent.state)
             var request: AgentItem.Request?
-            var prompt = meta.title
+            var prompt = paneMeta.title
             var drive = false
             if case .blocked(let requestId, let summary, let options) = agent.state {
                 if answered[id] == requestId {
@@ -306,7 +307,7 @@ final class LiveAgentFeed: AgentFeed {
                         request = .question(summary)
                     }
                     // The title often repeats the request (Claude puts it there): say what it waits for.
-                    let title = meta.title.trimmingCharacters(in: .whitespaces)
+                    let title = paneMeta.title.trimmingCharacters(in: .whitespaces)
                     let repeats = title.isEmpty || summary.contains(title) || title.contains(summary)
                         || title.lowercased() == agent.kind.lowercased() || title == AgentKind(agent.kind).title
                     prompt = repeats ? (options.isEmpty ? "Has a question" : "Waiting for your approval") : title
@@ -331,7 +332,7 @@ final class LiveAgentFeed: AgentFeed {
             }
             result.append(AgentItem(
                 id: id, agent: AgentKind(agent.kind), hostName: hostName,
-                sessionTitle: meta.cwd.map(Self.folder) ?? meta.title,
+                sessionTitle: paneMeta.cwd.map(Self.folder) ?? paneMeta.title,
                 state: state == .idle ? .done : state,
                 since: latest.map { Date(timeIntervalSince1970: Double($0.atMs) / 1000) } ?? .now,
                 prompt: prompt.nonEmpty ?? AgentKind(agent.kind).title,
@@ -581,8 +582,7 @@ final class LiveAgentFeed: AgentFeed {
     }
 
     /// The item's host and pane, read from its id ("host/pane", history "host/a<attention>"):
-    /// every Inbox row asks, so it must not rebuild the whole feed (that made a render
-    /// O(items²)).
+    /// every Inbox row asks, so it must not rebuild the whole feed.
     private func target(_ id: AgentItem.ID) throws -> (DaemonConnection, UInt64) {
         guard let slash = id.lastIndex(of: "/"),
               let daemon = hosts.connection(String(id[..<slash])) as? DaemonConnection
@@ -597,9 +597,9 @@ final class LiveAgentFeed: AgentFeed {
 
     private func decide(_ id: AgentItem.ID, allow: Bool) {
         let parts = id.split(separator: "/")
-        guard parts.count == 2, let raw = UInt64(parts[1]),
+        guard parts.count == 2, let pane = UInt64(parts[1]),
               let daemon = hosts.connection(String(parts[0])) as? DaemonConnection,
-              let agent = daemon.meta[PaneId(raw)]?.agent,
+              let agent = daemon.meta[PaneId(pane)]?.agent,
               case .blocked(let request, _, let options) = agent.state, !options.isEmpty
         else { return }
         // A drive request's answers are fixed ids: Approve is "Allow once", never the wider one.
@@ -612,11 +612,11 @@ final class LiveAgentFeed: AgentFeed {
 
     func allowForPane(_ id: AgentItem.ID) {
         let parts = id.split(separator: "/")
-        guard parts.count == 2, let raw = UInt64(parts[1]),
+        guard parts.count == 2, let pane = UInt64(parts[1]),
               let daemon = hosts.connection(String(parts[0])) as? DaemonConnection,
-              let agent = daemon.meta[PaneId(raw)]?.agent,
+              let agent = daemon.meta[PaneId(pane)]?.agent,
               case .blocked(let request, _, _) = agent.state,
-              let drive = daemon.approvals.drives[request], drive.paneId == raw
+              let drive = daemon.approvals.drives[request], drive.paneId == pane
         else { return }
         answered[id] = request
         daemon.decide(requestId: request, optionId: drive.allowPane)
@@ -628,13 +628,13 @@ final class LiveAgentFeed: AgentFeed {
     /// request's allow option.
     private func blocked(_ id: AgentItem.ID) -> (daemon: DaemonConnection, pane: UInt64, request: UInt64, allow: UInt32)? {
         let parts = id.split(separator: "/")
-        guard parts.count == 2, let raw = UInt64(parts[1]),
+        guard parts.count == 2, let pane = UInt64(parts[1]),
               let daemon = hosts.connection(String(parts[0])) as? DaemonConnection,
-              let agent = daemon.meta[PaneId(raw)]?.agent,
+              let agent = daemon.meta[PaneId(pane)]?.agent,
               case .blocked(let request, _, let options) = agent.state, answered[id] != request,
               let allow = Self.option(options, allow: true)
         else { return nil }
-        return (daemon, raw, request, allow.id)
+        return (daemon, pane, request, allow.id)
     }
 
     func approvalOptions(_ id: AgentItem.ID) -> AgentApprovalOptions? {
@@ -647,10 +647,10 @@ final class LiveAgentFeed: AgentFeed {
 
     func autoApprovals(_ id: AgentItem.ID) -> [AgentAutoApproval] {
         let parts = id.split(separator: "/")
-        guard parts.count == 2, let raw = UInt64(parts[1]),
+        guard parts.count == 2, let pane = UInt64(parts[1]),
               let daemon = hosts.connection(String(parts[0])) as? DaemonConnection
         else { return [] }
-        return (daemon.approvals.rules[raw] ?? []).map { rule in
+        return (daemon.approvals.rules[pane] ?? []).map { rule in
             AgentAutoApproval(id: rule.id, label: rule.match.label, expiresAt: rule.expiresAt,
                               turnsLeft: rule.turnsLeft, uses: rule.uses, grantedBy: rule.grantedBy)
         }
@@ -674,10 +674,10 @@ final class LiveAgentFeed: AgentFeed {
 
     func revokeAutoApproval(_ id: AgentItem.ID, rule: AgentAutoApproval.ID) async throws {
         let parts = id.split(separator: "/")
-        guard parts.count == 2, let raw = UInt64(parts[1]),
+        guard parts.count == 2, let pane = UInt64(parts[1]),
               let daemon = hosts.connection(String(parts[0])) as? DaemonConnection
         else { throw HostError.notConnected }
-        try await daemon.approvals.revoke(paneId: raw, ruleId: rule)
+        try await daemon.approvals.revoke(paneId: pane, ruleId: rule)
     }
 
     /// The option that means yes (or no): by its words, else the first (last).
@@ -856,9 +856,9 @@ final class LiveFileSource: FileSource {
     }
 
     static func numbered(_ name: String, _ number: Int) -> String {
-        let ext = (name as NSString).pathExtension
+        let fileExtension = (name as NSString).pathExtension
         let base = (name as NSString).deletingPathExtension
-        return ext.isEmpty ? "\(base) \(number)" : "\(base) \(number).\(ext)"
+        return fileExtension.isEmpty ? "\(base) \(number)" : "\(base) \(number).\(fileExtension)"
     }
 
     func download(_ path: String, progress: @escaping @MainActor (Double) -> Void) async throws -> URL {
@@ -1165,7 +1165,7 @@ final class LivePortSource: PortSource {
         guard context?.hostId == hostId else { return }
         let fresh = ports.filter { !before.contains($0.port) && ($0.kind == .http || $0.kind == .https) }
             .filter { info in context.map { !isAgentListener(info, on: $0) } ?? true }
-        if let new = fresh.first, let port = Self.ports([new], meta: context?.daemon.meta.all ?? [:]).first {
+        if let added = fresh.first, let port = Self.ports([added], meta: context?.daemon.meta.all ?? [:]).first {
             offer = port
         } else if let offer {
             // The listener is often seen before the URL the server prints, which then comes
@@ -1188,7 +1188,7 @@ final class LivePortSource: PortSource {
         {
             throw AgentPortError(port: port.port, process: info.process)
         }
-        // S-BR1: at the URL the server printed, through the host's proxy and data store.
+        // At the URL the server printed, through the host's proxy and data store.
         let hub = context.hub
         if let url = await DevServerRouting.shared.page(for: port, hostId: context.hostId, client: { try hub.client() }) {
             offer = nil
@@ -1197,7 +1197,7 @@ final class LivePortSource: PortSource {
         // The fallback: a forward on the same port number if free here, else any.
         let api = try context.api()
         let local: UInt16
-        if let existing = api.forwards().first(where: { if case .tcp(let p) = $0.target { p == port.port } else { false } }) {
+        if let existing = api.forwards().first(where: { if case .tcp(let targetPort) = $0.target { targetPort == port.port } else { false } }) {
             local = existing.localPort
         } else {
             do {

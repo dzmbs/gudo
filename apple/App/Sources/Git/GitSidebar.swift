@@ -7,9 +7,6 @@ import GudoCore
 import AppKit
 #endif
 
-/// on the Mac (body 13 / footnote 10, 6 pt insets, title and subtitle touching), one step up on
-/// touch (subheadline 15 / footnote 13, an 18 pt glyph slot), selection a neutral 10 % fill at
-/// radius 8, coloured glyphs muted to 0.6 and dropped to `.secondary` on the selected row.
 enum GitRow {
     #if os(macOS)
     static let title = Font.body
@@ -46,7 +43,7 @@ final class CommandKeyState {
     #if os(macOS)
     @ObservationIgnored private var pending: Task<Void, Never>?
 
-    /// flash them; ⌘ up hides them at once.
+    /// The delay keeps quickly typed ⌘-shortcuts from flashing the hints.
     private func commandChanged(_ down: Bool) {
         pending?.cancel()
         guard down else {
@@ -60,7 +57,6 @@ final class CommandKeyState {
     }
     #endif
 
-    /// How long ⌘ is held before the shortcut hints show.
     static let delay = Duration.milliseconds(750)
 }
 
@@ -90,8 +86,6 @@ private struct GitRowStyle: ViewModifier {
     }
 }
 
-/// A repository's header: its name in the section style, quiet (`.secondary`), sentence case,
-/// no icon, the tab count while collapsed, and + New Agent (on hover on the Mac, at 0.6 on touch).
 struct RepoSectionHeader: View {
     let repo: RepoSidebar.Repo
     let host: String
@@ -131,9 +125,7 @@ struct RepoSectionHeader: View {
     }
 }
 
-/// One worktree: the branch glyph (its pull request's state, checks badge in the corner), the
-/// branch with the worktree's name under it, then `+N −M`, `#PR` and the agent glyph. With one
-/// tab the row is that tab (click focuses it, ⌘N); with none it is quiet and opens a tab.
+/// With one tab the row is that tab; with none it is quiet and opens a tab.
 struct WorktreeRow: View {
     let worktree: WorktreeState
     let host: String
@@ -165,7 +157,6 @@ struct WorktreeRow: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     if worktree.subtitle != nil || port != nil {
-                        // The worktree's name, then its PORT: what `$PORT` is in its panes.
                         HStack(spacing: DS.Space.xs) {
                             if let subtitle = worktree.subtitle {
                                 Text(subtitle).truncationMode(.middle)
@@ -205,7 +196,7 @@ struct WorktreeRow: View {
 
     private func accessibilityLabel(port: UInt16?) -> String {
         var parts = [worktree.displayBranch]
-        if let sub = worktree.subtitle { parts.append(sub) }
+        if let subtitle = worktree.subtitle { parts.append(subtitle) }
         if let port { parts.append("PORT \(port)") }
         if worktree.added > 0 || worktree.removed > 0 { parts.append("+\(worktree.added) −\(worktree.removed)") }
         if let pr = worktree.visiblePR { parts.append("pull request \(pr.number) \(pr.stateWord), \(pr.checksSummary.words)") }
@@ -214,7 +205,6 @@ struct WorktreeRow: View {
     }
 }
 
-/// A tab inside a worktree that has several: indented one level, its name and agent glyph.
 struct WorktreeTabRow: View {
     let tab: Tab
     let host: String
@@ -230,7 +220,6 @@ struct WorktreeTabRow: View {
             withAnimation(DS.Motion.snappy) { model.focus(TabRef(hostId: host, tab: tab.id)) }
         } label: {
             HStack(spacing: 6) {
-                // The program's mark (the agent glyph while it has something to say).
                 TabLeadingMark(program: model.programIdentity(of: tab, onGroup: host), state: isActive ? nil : agent)
                 Text(title)
                     .font(GitRow.subtitle)
@@ -268,8 +257,6 @@ struct WorktreeTabRow: View {
     }
 }
 
-/// The leading glyph: the pull request's state glyph in its colour, or a branch, at 0.6, with
-/// the checks badge (10 pt) at the bottom-right.
 private struct BranchGlyph: View {
     let pr: PullRequest?
     let selected: Bool
@@ -291,8 +278,7 @@ private struct BranchGlyph: View {
     }
 }
 
-/// The trailing cluster, fixed size so the title takes the squeeze; ⌘ held swaps it for the
-/// row's ⌘N in the same slot (opacity only, no reflow).
+/// Fixed size so the title takes the squeeze; ⌘ held swaps it for ⌘N by opacity, without reflow.
 private struct Accessories: View {
     let worktree: WorktreeState
     let pr: PullRequest?
@@ -369,8 +355,7 @@ private struct WorktreeMenu: View {
     }
 }
 
-/// One host's tabs the git way: tabs outside a repository as usual, then each repository with
-/// its worktrees. `looseRow` draws a plain tab row (the sidebar's own).
+/// One host's tabs outside a repository, then each repository with its worktrees.
 struct RepoGroupsView<LooseRow: View>: View {
     let group: HostGroup
     let sidebar: RepoSidebar
@@ -379,18 +364,18 @@ struct RepoGroupsView<LooseRow: View>: View {
     @Environment(WindowModel.self) private var model
 
     var body: some View {
-        let tabs = Dictionary(group.tabs.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let tabs = Dictionary(group.tabs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         VStack(alignment: .leading, spacing: 0) {
             ForEach(sidebar.looseTabs, id: \.self) { id in
                 if let tab = tabs[id] { looseRow(tab) }
             }
             ForEach(sidebar.repos) { repo in
                 RepoSectionHeader(repo: repo, host: group.id)
-                ForEach(repo.worktrees) { wt in
-                    let rowTabs = wt.tabs.compactMap { tabs[$0] }
+                ForEach(repo.worktrees) { worktree in
+                    let rowTabs = worktree.tabs.compactMap { tabs[$0] }
                     let first = rowTabs.first
                     WorktreeRow(
-                        worktree: wt.state, host: group.id, tab: first,
+                        worktree: worktree.state, host: group.id, tab: first,
                         number: first.flatMap { numbers[group.ref($0.id)] },
                         isActive: rowTabs.count == 1 && first.map(isActive) == true,
                         agent: rowTabs.count == 1 ? first.flatMap(agentState) : rowTabs.compactMap(agentState).min { AgentGlyph.priority($0) < AgentGlyph.priority($1) })
@@ -404,7 +389,6 @@ struct RepoGroupsView<LooseRow: View>: View {
                 }
             }
         }
-        // A host that is down keeps its rows, quieter.
         .opacity(group.status.isLive || group.isLocal ? 1 : 0.6)
     }
 
@@ -419,7 +403,7 @@ struct RepoGroupsView<LooseRow: View>: View {
     }
 }
 
-/// Needs you: every tab, on every host, whose agent waits for an answer or failed, hoisted
+/// Every tab, on every host, whose agent waits for an answer or failed, hoisted above the hosts.
 struct NeedsYouSection: View {
     @Environment(WindowModel.self) private var model
 

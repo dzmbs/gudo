@@ -7,8 +7,8 @@ import AppKit
 #endif
 
 /// A light theme and a dark theme that follow the system's appearance (Ghostty's
-/// the system's light/dark choice writes `theme`, so everything that reads the theme (terminals,
-/// chrome, key bar) follows without knowing about the pair.
+/// `theme = light:X,dark:Y`). While it is on, the system's light/dark choice writes `theme`, so
+/// everything that reads the theme follows without knowing about the pair.
 enum ThemePair {
     static let enabledKey = "theme-pair"
     static let lightKey = "theme-light"

@@ -4,8 +4,7 @@ import os
 import PaneLayout
 import TerminalCore
 
-/// Saves each daemon host's workspace for instant start (docs/APP-ARCHITECTURE.md §26): a
-/// moment after its layout, names or projects change, every half minute while its screens
+/// Saves each daemon host's workspace for instant start: a moment after its layout, names or projects change, every half minute while its screens
 /// change, and at once when the app goes to the background or quits. Only hosts that are
 /// live and owned: never a saved screen written back, never a guest's view of someone else's
 /// host.
@@ -125,9 +124,9 @@ final class WorkspaceCacheWriter {
             var terminals: [UInt64: Terminal] = [:]
             var outputs = 0
             for workspace in shown {
-                for (pane, view) in workspace.panes where terminals[pane.rawValue] == nil {
-                    terminals[pane.rawValue] = view.view.surface.terminal
-                    outputs += view.outputGeneration.withLock { $0 }
+                for (paneId, pane) in workspace.panes where terminals[paneId.rawValue] == nil {
+                    terminals[paneId.rawValue] = pane.view.surface.terminal
+                    outputs += pane.outputGeneration.withLock { $0 }
                 }
             }
             let basis = Basis(

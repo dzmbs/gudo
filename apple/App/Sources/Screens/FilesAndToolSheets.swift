@@ -4,8 +4,7 @@ import SwiftUI
 import UIKit
 #endif
 
-/// The sheets of the developer-workflow screens (New Agent, Links, Diff, Files, Browser, and the
-/// editor when a fixture asks for it as a sheet), with what each one opens wired to the window.
+/// The developer-workflow sheets (New Agent, Links, Diff, Files, Browser), wired to the window.
 struct ToolSheet: View {
     let route: SheetRoute
     @Environment(WindowModel.self) private var model

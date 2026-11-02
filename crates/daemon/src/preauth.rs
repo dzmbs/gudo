@@ -62,10 +62,10 @@ enum Stage {
 struct Counts {
     handshakes: usize,
     strangers: usize,
+    /// (handshakes, strangers) per source.
     by_source: HashMap<Source, (usize, usize)>,
 }
 
-/// The daemon's pre-`Hello` accounting.
 #[derive(Debug)]
 pub(crate) struct Gate {
     limits: PreAuthLimits,
@@ -90,18 +90,19 @@ impl Gate {
 
     fn take(self: &Arc<Self>, source: Option<Source>, stage: Stage) -> Option<Slot> {
         let mut counts = self.counts.lock().unwrap_or_else(PoisonError::into_inner);
-        let l = &self.limits;
-        let per = source.map_or((0, 0), |s| {
-            counts.by_source.get(&s).copied().unwrap_or_default()
+        let limits = &self.limits;
+        let (source_handshakes, source_strangers) = source.map_or((0, 0), |source| {
+            counts.by_source.get(&source).copied().unwrap_or_default()
         });
         let fits = match stage {
             Stage::Known => true,
             Stage::Handshake => {
-                counts.handshakes < l.handshakes
-                    && (source.is_none() || per.0 < l.handshakes_per_addr)
+                counts.handshakes < limits.handshakes
+                    && (source.is_none() || source_handshakes < limits.handshakes_per_addr)
             }
             Stage::Stranger => {
-                counts.strangers < l.strangers && (source.is_none() || per.1 < l.strangers_per_addr)
+                counts.strangers < limits.strangers
+                    && (source.is_none() || source_strangers < limits.strangers_per_addr)
             }
         };
         if !fits {
@@ -131,21 +132,21 @@ impl Gate {
 }
 
 impl Counts {
-    fn add(&mut self, source: Option<Source>, stage: Stage, n: isize) {
-        let bump = |v: &mut usize| *v = v.saturating_add_signed(n);
+    fn add(&mut self, source: Option<Source>, stage: Stage, delta: isize) {
+        let bump = |count: &mut usize| *count = count.saturating_add_signed(delta);
         match stage {
             Stage::Known => return,
             Stage::Handshake => bump(&mut self.handshakes),
             Stage::Stranger => bump(&mut self.strangers),
         }
-        if let Some(s) = source {
-            let entry = self.by_source.entry(s).or_default();
+        if let Some(source) = source {
+            let entry = self.by_source.entry(source).or_default();
             match stage {
                 Stage::Handshake => bump(&mut entry.0),
                 _ => bump(&mut entry.1),
             }
             if *entry == (0, 0) {
-                self.by_source.remove(&s);
+                self.by_source.remove(&source);
             }
         }
     }
@@ -189,28 +190,28 @@ mod tests {
         }
     }
 
-    fn ip(s: &str) -> Option<IpAddr> {
-        Some(s.parse().unwrap())
+    fn ip(text: &str) -> Option<IpAddr> {
+        Some(text.parse().unwrap())
     }
 
     #[test]
     fn one_address_cannot_take_every_slot() {
         let gate = Gate::new(limits());
-        let a: Vec<_> = (0..2).map(|_| gate.arrive(ip("10.0.0.1"), false)).collect();
-        assert!(a.iter().all(Option::is_some));
+        let first_host: Vec<_> = (0..2).map(|_| gate.arrive(ip("10.0.0.1"), false)).collect();
+        assert!(first_host.iter().all(Option::is_some));
         assert!(gate.arrive(ip("10.0.0.1"), false).is_none());
         // The same host over IPv4-mapped IPv6 is the same source.
         assert!(gate.arrive(ip("::ffff:10.0.0.1"), false).is_none());
         // Another /64 is not; the same /64 is.
-        let b: Vec<_> = ["2001:db8:0:1::1", "2001:db8:0:1::2"]
+        let one_subnet: Vec<_> = ["2001:db8:0:1::1", "2001:db8:0:1::2"]
             .into_iter()
-            .map(|a| gate.arrive(ip(a), false))
+            .map(|address| gate.arrive(ip(address), false))
             .collect();
-        assert!(b.iter().all(Option::is_some));
+        assert!(one_subnet.iter().all(Option::is_some));
         assert!(gate.arrive(ip("2001:db8:0:1::3"), false).is_none());
         // Global limit.
         assert!(gate.arrive(ip("10.0.0.9"), false).is_none());
-        drop(a);
+        drop(first_host);
         assert!(gate.arrive(ip("10.0.0.1"), false).is_some());
     }
 
@@ -219,9 +220,9 @@ mod tests {
         let gate = Gate::new(limits());
         let strangers: Vec<_> = ["10.0.0.1", "10.0.0.2", "10.0.0.3"]
             .into_iter()
-            .map(|a| {
-                gate.arrive(ip(a), false)
-                    .and_then(|s| s.authenticated(false))
+            .map(|address| {
+                gate.arrive(ip(address), false)
+                    .and_then(|slot| slot.authenticated(false))
                     .expect("room")
             })
             .collect();

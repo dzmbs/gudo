@@ -12,10 +12,9 @@ import AppKit
 
 /// A sign-in URL a program on a host opened or printed (`claude /login`, `codex login`).
 nonisolated enum SignInLink: Equatable, Sendable {
-    /// The provider sends the browser back to `http://localhost:<port><path>` on the host, where
-    /// the program waits (the URL Claude Code hands to `BROWSER`, the one `codex login` prints).
+    /// The provider redirects to `http://localhost:<port><path>` on the host, where the program waits.
     case loopback(port: UInt16, path: String)
-    /// Claude Code's printed URL: the provider's page shows a code the terminal waits for.
+    /// The provider's page shows a code the terminal waits for.
     case pastedCode
 
     init?(_ url: URL) {
@@ -33,8 +32,7 @@ nonisolated enum SignInLink: Equatable, Sendable {
         }
     }
 
-    /// `code#state`, as Claude Code's "Paste code here" takes it, from the page its printed
-    /// sign-in ends on (`https://platform.claude.com/oauth/code/callback?code=…&state=…`).
+    /// `code#state`, as Claude Code's "Paste code here" takes it.
     static func pastedCode(from url: URL) -> String? {
         guard let host = url.host()?.lowercased(), isCodePage(host: host, path: url.path()),
               let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
@@ -49,18 +47,16 @@ nonisolated enum SignInLink: Equatable, Sendable {
         return anthropic && path == "/oauth/code/callback"
     }
 
-    /// Whether `target` (a request's path and query) is the provider's answer on the callback.
+    /// `target` is a request's path and query.
     static func isCallback(_ target: String, path: String) -> Bool {
         guard let components = URLComponents(string: target), components.path == path else { return false }
         return components.queryItems?.contains { $0.name == "code" || $0.name == "error" } ?? false
     }
 }
 
-/// A sign-in for a program on a host, in the system's sign-in sheet (Google refuses embedded
-/// web views). Its callback comes back to this device's `localhost:<port>`, which is forwarded
-/// to the host's for as long as the sign-in lasts, so the program there gets it as if the
-/// browser ran on the host. The sheet closes once the callback went through, or once the
-/// program stops listening (signed in some other way, or gave up).
+/// A sign-in in the system's sign-in sheet (Google refuses embedded web views). This device's
+/// `localhost:<port>` is forwarded to the host's while it lasts, so the program there gets the
+/// callback as if the browser ran on the host.
 @MainActor
 final class HostSignIn: NSObject, ASWebAuthenticationPresentationContextProviding {
     private static var active: [UInt16: HostSignIn] = [:]
@@ -77,7 +73,7 @@ final class HostSignIn: NSObject, ASWebAuthenticationPresentationContextProvidin
     private var called = false
     private var done = false
 
-    /// Starts a sign-in (replacing one waiting on the same port).
+    /// Replaces a sign-in waiting on the same port.
     static func start(_ url: URL, port: UInt16, path: String, hostId: String, in window: WindowModel) {
         active[port]?.finish(message: nil)
         let signIn = HostSignIn(url: url, port: port, path: path, hostId: hostId, window: window)
@@ -125,15 +121,14 @@ final class HostSignIn: NSObject, ASWebAuthenticationPresentationContextProvidin
         watch = Task { [weak self] in await self?.watchHost(api: { try hub.client() }) }
     }
 
-    /// Closes the sheet once the program on the host stops listening (it got its callback, or
-    /// it was signed in or cancelled in the terminal).
+    /// Closes the sheet once the program on the host stops listening.
     private func watchHost(api: @escaping () throws -> any DaemonWorkspaceAPI) async {
         var seen = false
         let deadline = ContinuousClock.now + .seconds(15 * 60)
         while !Task.isCancelled, !done, ContinuousClock.now < deadline {
-            let local = try? Self.forward(api(), to: port)
-            let alive = if let local { await HostPortProbe.answers(localPort: local) } else { false }
-            if alive { seen = true } else if seen || local == nil {
+            let localPort = try? Self.forward(api(), to: port)
+            let alive = if let localPort { await HostPortProbe.answers(localPort: localPort) } else { false }
+            if alive { seen = true } else if seen || localPort == nil {
                 return finish(message: called ? signedIn : nil)
             }
             try? await Task.sleep(for: .seconds(1))
@@ -142,7 +137,7 @@ final class HostSignIn: NSObject, ASWebAuthenticationPresentationContextProvidin
     }
 
     private static func forward(_ api: any DaemonWorkspaceAPI, to hostPort: UInt16) throws -> UInt16 {
-        if let existing = api.forwards().first(where: { if case .tcp(let p) = $0.target { p == hostPort } else { false } }) {
+        if let existing = api.forwards().first(where: { if case .tcp(let port) = $0.target { port == hostPort } else { false } }) {
             return existing.localPort
         }
         return try api.forward(localPort: 0, target: .tcp(port: hostPort))
@@ -197,8 +192,7 @@ final class HostSignIn: NSObject, ASWebAuthenticationPresentationContextProvidin
     }
 }
 
-/// Whether a program on the host still listens on a port: an HTTP request through a forward to
-/// it gets any answer. A refused connection ends the forwarded stream without a byte.
+/// A refused connection ends the forwarded stream without a byte, so any answer means listening.
 nonisolated enum HostPortProbe {
     static func answers(localPort: UInt16) async -> Bool {
         guard let port = NWEndpoint.Port(rawValue: localPort) else { return false }

@@ -1,3 +1,4 @@
+//! Real Microsoft VS Code through a Remote Tunnel.
 //!
 //! The host runs Microsoft's own `code tunnel`, signed in with the user's own GitHub or
 //! Microsoft account (device code), and the app opens `https://vscode.dev/tunnel/<name>/<path>`
@@ -37,13 +38,12 @@ use crate::fsutil;
 /// Microsoft's update service (the CLI's own self-update source).
 pub const DEFAULT_UPDATE_URL: &str = "https://update.code.visualstudio.com";
 /// Longest tunnel machine name the service accepts.
-const MAX_NAME: usize = 20;
+const MAX_NAME_LEN: usize = 20;
 /// Lines of tunnel output kept for failure messages.
-const TAIL: usize = 8;
+const TAIL_LINES: usize = 8;
 /// A run this long resets the restart back-off.
 const HEALTHY_RUN: Duration = Duration::from_secs(60);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
-/// How often an adopted tunnel is checked.
 const ADOPTED_POLL: Duration = Duration::from_secs(30);
 
 /// What survives a daemon restart (`<state>/vscode/tunnel.json`).
@@ -80,7 +80,7 @@ pub(crate) struct Release {
     pub sha256hash: String,
 }
 
-struct St {
+struct Inner {
     state: TunnelState,
     provider: Option<TunnelProvider>,
     /// Bumped whenever the supervisor is replaced: updates from an older one are dropped.
@@ -94,7 +94,7 @@ struct St {
 
 /// The host's VS Code tunnel.
 pub(crate) struct Tunnel {
-    st: Arc<Mutex<St>>,
+    inner: Arc<Mutex<Inner>>,
     events: broadcast::Sender<Event>,
     install: tokio::sync::Mutex<()>,
 }
@@ -102,7 +102,7 @@ pub(crate) struct Tunnel {
 impl Tunnel {
     pub fn new(events: broadcast::Sender<Event>) -> Self {
         Self {
-            st: Arc::new(Mutex::new(St {
+            inner: Arc::new(Mutex::new(Inner {
                 state: TunnelState::Stopped,
                 provider: None,
                 generation: 0,
@@ -115,19 +115,19 @@ impl Tunnel {
         }
     }
 
-    pub async fn status(&self, cfg: &Config) -> VsCodeTunnelStatus {
-        let cli = self.cli_info(cfg).await;
-        let st = lock(&self.st);
+    pub async fn status(&self, config: &Config) -> VsCodeTunnelStatus {
+        let cli = self.cli_info(config).await;
+        let inner = lock(&self.inner);
         VsCodeTunnelStatus {
             cli,
             cli_downloadable: cli_platform().is_some(),
-            state: st.state.clone(),
-            provider: st.provider.or_else(|| load_record(cfg).provider),
+            state: inner.state.clone(),
+            provider: inner.provider.or_else(|| load_record(config).provider),
         }
     }
 
     /// Downloads the CLI from Microsoft (the caller checked the licence was accepted).
-    pub async fn install_cli(&self, cfg: &Config) -> Result<VsCodeTunnelStatus, WsError> {
+    pub async fn install_cli(&self, config: &Config) -> Result<VsCodeTunnelStatus, WsError> {
         let _guard = self.install.lock().await;
         let platform = cli_platform().ok_or_else(|| {
             WsError::Unavailable(format!(
@@ -136,13 +136,13 @@ impl Tunnel {
                 std::env::consts::ARCH
             ))
         })?;
-        let base = cfg.vscode_update_url.clone();
-        let root = cli_root(cfg);
-        tokio::task::spawn_blocking(move || install_cli(&base, platform, &root))
+        let base_url = config.vscode_update_url.clone();
+        let root = cli_root(config);
+        tokio::task::spawn_blocking(move || install_cli(&base_url, platform, &root))
             .await
-            .map_err(|e| WsError::Failed(e.to_string()))??;
-        lock(&self.st).version_cache = None;
-        let status = self.status(cfg).await;
+            .map_err(|error| WsError::Failed(error.to_string()))??;
+        lock(&self.inner).version_cache = None;
+        let status = self.status(config).await;
         let _ = self.events.send(Event::VsCodeTunnel(status.clone()));
         Ok(status)
     }
@@ -150,33 +150,33 @@ impl Tunnel {
     /// Starts the tunnel, or returns the running one (the caller checked the licence).
     pub async fn start(
         &self,
-        cfg: &Config,
-        req: &VsCodeTunnelStart,
+        config: &Config,
+        request: &VsCodeTunnelStart,
     ) -> Result<VsCodeTunnelStatus, WsError> {
-        let code = find_cli(cfg).ok_or_else(|| {
+        let code = find_cli(config).ok_or_else(|| {
             WsError::Unavailable(
                 "the VS Code `code` CLI is not installed (install it first: VsCodeCliInstall)"
                     .into(),
             )
         })?;
-        let mut record = load_record(cfg);
-        let name = match &req.name {
-            Some(n) => valid_name(n)?,
+        let mut record = load_record(config);
+        let name = match &request.name {
+            Some(name) => valid_name(name)?,
             None => record
                 .name
                 .clone()
                 .unwrap_or_else(|| default_name(&hostname())),
         };
         let restart = {
-            let st = lock(&self.st);
-            let alive = st.task.as_ref().is_some_and(|t| !t.is_finished());
+            let inner = lock(&self.inner);
+            let alive = inner.task.as_ref().is_some_and(|task| !task.is_finished());
             let same = record.name.as_deref() == Some(name.as_str())
-                && record.provider == Some(req.provider);
+                && record.provider == Some(request.provider);
             // A failed tunnel that gave up, or a new name or account, starts over.
             !alive
                 || !same
                 || matches!(
-                    st.state,
+                    inner.state,
                     TunnelState::Failed {
                         retrying: false,
                         ..
@@ -185,36 +185,36 @@ impl Tunnel {
         };
         record.enabled = true;
         record.name = Some(name.clone());
-        record.provider = Some(req.provider);
+        record.provider = Some(request.provider);
         record.license_accepted_at = Some(crate::identity::now_millis());
-        save_record(cfg, &record)?;
+        save_record(config, &record)?;
         if restart {
-            self.spawn(cfg, code, name, req.provider, true);
+            self.spawn(config, code, name, request.provider, true);
         }
-        Ok(self.status(cfg).await)
+        Ok(self.status(config).await)
     }
 
     /// Restarts the tunnel at daemon start if the user had it running.
-    pub fn autostart(&self, cfg: &Config) {
-        let record = load_record(cfg);
+    pub fn autostart(&self, config: &Config) {
+        let record = load_record(config);
         if !record.enabled || record.license_accepted_at.is_none() {
             return;
         }
         let (Some(name), Some(provider)) = (record.name, record.provider) else {
             return;
         };
-        match find_cli(cfg) {
-            Some(code) => self.spawn(cfg, code, name, provider, false),
+        match find_cli(config) {
+            Some(code) => self.spawn(config, code, name, provider, false),
             None => tracing::warn!("VS Code tunnel enabled but no `code` CLI found"),
         }
     }
 
-    pub async fn stop(&self, cfg: &Config) -> Result<VsCodeTunnelStatus, WsError> {
-        let mut record = load_record(cfg);
+    pub async fn stop(&self, config: &Config) -> Result<VsCodeTunnelStatus, WsError> {
+        let mut record = load_record(config);
         record.enabled = false;
-        save_record(cfg, &record)?;
+        save_record(config, &record)?;
         self.halt(TunnelState::Stopped);
-        let status = self.status(cfg).await;
+        let status = self.status(config).await;
         let _ = self.events.send(Event::VsCodeTunnel(status.clone()));
         Ok(status)
     }
@@ -225,20 +225,20 @@ impl Tunnel {
     }
 
     fn halt(&self, state: TunnelState) {
-        let mut st = lock(&self.st);
-        st.generation += 1;
-        if let Some(task) = st.task.take() {
+        let mut inner = lock(&self.inner);
+        inner.generation += 1;
+        if let Some(task) = inner.task.take() {
             task.abort();
         }
-        if let Some(pid) = st.pid.take() {
+        if let Some(pid) = inner.pid.take() {
             kill_group(pid);
         }
-        st.state = state;
+        inner.state = state;
     }
 
     fn spawn(
         &self,
-        cfg: &Config,
+        config: &Config,
         code: PathBuf,
         name: String,
         provider: TunnelProvider,
@@ -246,22 +246,22 @@ impl Tunnel {
     ) {
         self.halt(TunnelState::Starting);
         let generation = {
-            let mut st = lock(&self.st);
-            st.provider = Some(provider);
-            st.generation
+            let mut inner = lock(&self.inner);
+            inner.provider = Some(provider);
+            inner.generation
         };
-        let sup = Supervisor {
-            st: Arc::clone(&self.st),
+        let supervisor = Supervisor {
+            inner: Arc::clone(&self.inner),
             events: self.events.clone(),
             generation,
             name,
             provider,
-            log_dir: cfg.state_dir.join("editors"),
-            cli: Some(managed_info(cfg, &code)),
+            log_dir: config.state_dir.join("editors"),
+            cli: Some(managed_info(config, &code)),
             code,
         };
-        let task = tokio::spawn(sup.run(interactive));
-        lock(&self.st).task = Some(task.abort_handle());
+        let task = tokio::spawn(supervisor.run(interactive));
+        lock(&self.inner).task = Some(task.abort_handle());
     }
 
     /// Where `path` opens through the running tunnel. `folder` is the workspace folder.
@@ -273,10 +273,10 @@ impl Tunnel {
         column: Option<u32>,
     ) -> Result<VsCodeTunnelOpened, WsError> {
         let (name, web_url, pid) = {
-            let st = lock(&self.st);
-            match &st.state {
+            let inner = lock(&self.inner);
+            match &inner.state {
                 TunnelState::Running { name, web_url, .. } => {
-                    (name.clone(), web_url.clone(), st.pid)
+                    (name.clone(), web_url.clone(), inner.pid)
                 }
                 _ => {
                     return Err(WsError::Unavailable(
@@ -285,50 +285,51 @@ impl Tunnel {
                 }
             }
         };
-        let base = web_url
+        let base_url = web_url
             .find("/tunnel/")
-            .map_or("https://vscode.dev", |i| &web_url[..i]);
+            .map_or("https://vscode.dev", |index| &web_url[..index]);
         let suffix = match (line, column) {
-            (Some(l), Some(c)) => format!(":{l}:{c}"),
-            (Some(l), None) => format!(":{l}"),
+            (Some(line), Some(column)) => format!(":{line}:{column}"),
+            (Some(line), None) => format!(":{line}"),
             _ => String::new(),
         };
-        let folder_s = folder.to_string_lossy().into_owned();
-        let path_s = path.to_string_lossy().into_owned();
+        let folder_text = folder.to_string_lossy().into_owned();
+        let path_text = path.to_string_lossy().into_owned();
         let in_window = match pid {
             Some(pid) if path.is_file() => {
-                super::editor::open_via_cli(pid, &format!("{path_s}{suffix}")).await
+                super::editor::open_via_cli(pid, &format!("{path_text}{suffix}")).await
             }
             _ => false,
         };
         Ok(VsCodeTunnelOpened {
-            web_url: format!("{base}/tunnel/{name}{}", url_path(&folder_s)),
+            web_url: format!("{base_url}/tunnel/{name}{}", url_path(&folder_text)),
             desktop_uri: format!(
                 "vscode://vscode-remote/tunnel+{name}{}{suffix}",
-                url_path(&path_s)
+                url_path(&path_text)
             ),
             name,
-            folder: folder_s,
+            folder: folder_text,
             in_window,
         })
     }
 
-    async fn cli_info(&self, cfg: &Config) -> Option<VsCodeCli> {
-        let path = find_cli(cfg)?;
-        let info = managed_info(cfg, &path);
+    async fn cli_info(&self, config: &Config) -> Option<VsCodeCli> {
+        let path = find_cli(config)?;
+        let info = managed_info(config, &path);
         if info.managed {
             return Some(info);
         }
-        let cached = lock(&self.st)
+        let cached = lock(&self.inner)
             .version_cache
             .clone()
-            .filter(|(p, _, _)| *p == path);
+            .filter(|(cached_path, _, _)| *cached_path == path);
         let (version, commit) = match cached {
-            Some((_, v, c)) => (v, c),
+            Some((_, version, commit)) => (version, commit),
             None => {
-                let (v, c) = cli_version(&path).await;
-                lock(&self.st).version_cache = Some((path.clone(), v.clone(), c.clone()));
-                (v, c)
+                let (version, commit) = cli_version(&path).await;
+                lock(&self.inner).version_cache =
+                    Some((path.clone(), version.clone(), commit.clone()));
+                (version, commit)
             }
         };
         Some(VsCodeCli {
@@ -347,10 +348,8 @@ impl Drop for Tunnel {
     }
 }
 
-// --- supervisor -------------------------------------------------------------------------------
-
 struct Supervisor {
-    st: Arc<Mutex<St>>,
+    inner: Arc<Mutex<Inner>>,
     events: broadcast::Sender<Event>,
     generation: u64,
     code: PathBuf,
@@ -361,9 +360,9 @@ struct Supervisor {
 }
 
 /// Kills a child's process group when dropped (the tunnel's servers run under it).
-struct Group(Child);
+struct ProcessGroup(Child);
 
-impl Drop for Group {
+impl Drop for ProcessGroup {
     fn drop(&mut self) {
         if let Some(pid) = self.0.id() {
             kill_group(pid);
@@ -379,7 +378,7 @@ fn kill_group(pid: u32) {
 
 /// What a line of CLI output says.
 #[derive(Debug, PartialEq, Eq)]
-enum Said {
+enum CliLine {
     DeviceCode { url: String, code: String },
     Link { name: String, url: String },
 }
@@ -388,11 +387,11 @@ impl Supervisor {
     /// Publishes a state unless a newer supervisor replaced this one.
     fn set(&self, state: TunnelState) {
         let status = {
-            let mut st = lock(&self.st);
-            if st.generation != self.generation {
+            let mut inner = lock(&self.inner);
+            if inner.generation != self.generation {
                 return;
             }
-            st.state = state.clone();
+            inner.state = state.clone();
             VsCodeTunnelStatus {
                 cli: self.cli.clone(),
                 cli_downloadable: cli_platform().is_some(),
@@ -404,14 +403,14 @@ impl Supervisor {
     }
 
     fn set_pid(&self, pid: Option<u32>) {
-        let mut st = lock(&self.st);
-        if st.generation == self.generation {
-            st.pid = pid;
+        let mut inner = lock(&self.inner);
+        if inner.generation == self.generation {
+            inner.pid = pid;
         }
     }
 
     async fn run(mut self, interactive: bool) {
-        if let Some(cli) = self.cli.as_mut().filter(|c| c.version.is_none()) {
+        if let Some(cli) = self.cli.as_mut().filter(|cli| cli.version.is_none()) {
             (cli.version, cli.commit) = cli_version(&self.code).await;
         }
         let mut interactive = interactive;
@@ -468,7 +467,7 @@ impl Supervisor {
     }
 
     async fn logged_in(&self) -> bool {
-        let out = Command::new(&self.code)
+        let status = Command::new(&self.code)
             .args(["tunnel", "user", "show"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -476,8 +475,8 @@ impl Supervisor {
             .kill_on_drop(true)
             .status();
         matches!(
-            tokio::time::timeout(Duration::from_secs(30), out).await,
-            Ok(Ok(s)) if s.success()
+            tokio::time::timeout(Duration::from_secs(30), status).await,
+            Ok(Ok(status)) if status.success()
         )
     }
 
@@ -487,12 +486,12 @@ impl Supervisor {
             TunnelProvider::GitHub => "github",
             TunnelProvider::Microsoft => "microsoft",
         };
-        let mut cmd = Command::new(&self.code);
-        cmd.args(["tunnel", "user", "login", "--provider", provider]);
-        let (mut child, mut lines) = spawn_lines(cmd, &self.log_dir.join("vscode-login.log"))?;
+        let mut command = Command::new(&self.code);
+        command.args(["tunnel", "user", "login", "--provider", provider]);
+        let (mut child, mut lines) = spawn_lines(command, &self.log_dir.join("vscode-login.log"))?;
         let mut tail = Vec::new();
         while let Some(line) = lines.recv().await {
-            if let Some(Said::DeviceCode { url, code }) = parse_line(&line) {
+            if let Some(CliLine::DeviceCode { url, code }) = parse_line(&line) {
                 self.set(TunnelState::NeedsLogin(DeviceLogin {
                     provider: self.provider,
                     verification_url: url,
@@ -503,27 +502,28 @@ impl Supervisor {
             push_tail(&mut tail, line);
         }
         match child.0.wait().await {
-            Ok(s) if s.success() => Ok(()),
-            Ok(s) => Err(format!("sign-in failed ({s}): {}", tail.join(" | "))),
-            Err(e) => Err(format!("sign-in failed: {e}")),
+            Ok(status) if status.success() => Ok(()),
+            Ok(status) => Err(format!("sign-in failed ({status}): {}", tail.join(" | "))),
+            Err(error) => Err(format!("sign-in failed: {error}")),
         }
     }
 
     /// Runs `code tunnel` until it exits; returns why it stopped.
     async fn tunnel(&self) -> String {
-        let mut cmd = Command::new(&self.code);
-        cmd.args(["tunnel", "--accept-server-license-terms", "--name"])
+        let mut command = Command::new(&self.code);
+        command
+            .args(["tunnel", "--accept-server-license-terms", "--name"])
             .arg(&self.name);
-        let (mut child, mut lines) = match spawn_lines(cmd, &self.log_dir.join("vscode-tunnel.log"))
-        {
-            Ok(c) => c,
-            Err(e) => return e,
-        };
+        let (mut child, mut lines) =
+            match spawn_lines(command, &self.log_dir.join("vscode-tunnel.log")) {
+                Ok(spawned) => spawned,
+                Err(error) => return error,
+            };
         self.set_pid(child.0.id());
         let mut tail = Vec::new();
         while let Some(line) = lines.recv().await {
             match parse_line(&line) {
-                Some(Said::DeviceCode { url, code }) => {
+                Some(CliLine::DeviceCode { url, code }) => {
                     self.set(TunnelState::NeedsLogin(DeviceLogin {
                         provider: self.provider,
                         verification_url: url,
@@ -531,7 +531,7 @@ impl Supervisor {
                         at: UnixMillis(crate::identity::now_millis()),
                     }));
                 }
-                Some(Said::Link { name, url }) => {
+                Some(CliLine::Link { name, url }) => {
                     tracing::info!(%name, %url, "VS Code tunnel connected");
                     self.set(TunnelState::Running {
                         name,
@@ -546,7 +546,7 @@ impl Supervisor {
         let status = child.0.wait().await;
         format!(
             "code tunnel exited ({}): {}",
-            status.map_or_else(|e| e.to_string(), |s| s.to_string()),
+            status.map_or_else(|error| error.to_string(), |status| status.to_string()),
             tail.join(" | ")
         )
     }
@@ -555,18 +555,18 @@ impl Supervisor {
 fn push_tail(tail: &mut Vec<String>, line: String) {
     if !line.trim().is_empty() && !line.starts_with('*') {
         tail.push(line);
-        if tail.len() > TAIL {
+        if tail.len() > TAIL_LINES {
             tail.remove(0);
         }
     }
 }
 
-/// Spawns `cmd` in its own process group and streams its stdout and stderr lines (also
+/// Spawns `command` in its own process group and streams its stdout and stderr lines (also
 /// appended to `log`).
 fn spawn_lines(
-    mut cmd: Command,
+    mut command: Command,
     log: &Path,
-) -> Result<(Group, mpsc::UnboundedReceiver<String>), String> {
+) -> Result<(ProcessGroup, mpsc::UnboundedReceiver<String>), String> {
     if let Some(dir) = log.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
@@ -575,28 +575,35 @@ fn spawn_lines(
         .append(true)
         .open(log)
         .ok()
-        .map(|f| Arc::new(Mutex::new(f)));
-    cmd.stdin(Stdio::null())
+        .map(|file| Arc::new(Mutex::new(file)));
+    command
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0)
         .kill_on_drop(true);
-    let mut child = cmd
+    let mut child = command
         .spawn()
-        .map_err(|e| format!("starting the VS Code CLI: {e}"))?;
+        .map_err(|error| format!("starting the VS Code CLI: {error}"))?;
     let (tx, rx) = mpsc::unbounded_channel();
-    let stdout = child.stdout.take().map(|s| Box::new(s) as Box<dyn Reader>);
-    let stderr = child.stderr.take().map(|s| Box::new(s) as Box<dyn Reader>);
-    for out in [stdout, stderr].into_iter().flatten() {
+    let stdout = child
+        .stdout
+        .take()
+        .map(|stream| Box::new(stream) as Box<dyn Reader>);
+    let stderr = child
+        .stderr
+        .take()
+        .map(|stream| Box::new(stream) as Box<dyn Reader>);
+    for stream in [stdout, stderr].into_iter().flatten() {
         let tx = tx.clone();
         let log_file = log_file.clone();
         tokio::spawn(async move {
-            let mut lines = BufReader::new(out).lines();
+            let mut lines = BufReader::new(stream).lines();
             while let Ok(Some(line)) = lines.next_line().await {
                 let line = strip_ansi(&line);
-                if let Some(f) = &log_file {
+                if let Some(file) = &log_file {
                     use std::io::Write;
-                    let _ = writeln!(lock(f), "{line}");
+                    let _ = writeln!(lock(file), "{line}");
                 }
                 if tx.send(line).is_err() {
                     break;
@@ -604,7 +611,7 @@ fn spawn_lines(
             }
         });
     }
-    Ok((Group(child), rx))
+    Ok((ProcessGroup(child), rx))
 }
 
 trait Reader: tokio::io::AsyncRead + Unpin + Send {}
@@ -613,18 +620,18 @@ impl<T: tokio::io::AsyncRead + Unpin + Send> Reader for T {}
 fn strip_ansi(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
     let mut chars = line.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' {
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
             if chars.peek() == Some(&'[') {
                 chars.next();
-                for c in chars.by_ref() {
-                    if c.is_ascii_alphabetic() {
+                for ch in chars.by_ref() {
+                    if ch.is_ascii_alphabetic() {
                         break;
                     }
                 }
             }
-        } else if c != '\r' {
-            out.push(c);
+        } else if ch != '\r' {
+            out.push(ch);
         }
     }
     out
@@ -637,16 +644,16 @@ fn strip_ansi(line: &str) -> String {
 /// - `To sign in, use a web browser to open the page https://login.microsoft.com/device and
 ///   enter the code LW94CRGJT to authenticate.`
 /// - `Open this link in your browser https://vscode.dev/tunnel/<name>/<folder>`
-fn parse_line(line: &str) -> Option<Said> {
+fn parse_line(line: &str) -> Option<CliLine> {
     let urls: Vec<&str> = line
         .split_whitespace()
-        .filter(|w| w.starts_with("https://"))
-        .map(|w| w.trim_end_matches(['.', ',', ')']))
+        .filter(|word| word.starts_with("https://"))
+        .map(|word| word.trim_end_matches(['.', ',', ')']))
         .collect();
-    if let Some(url) = urls.iter().find(|u| u.contains("vscode.dev/tunnel/")) {
+    if let Some(url) = urls.iter().find(|url| url.contains("vscode.dev/tunnel/")) {
         let rest = &url[url.find("/tunnel/")? + "/tunnel/".len()..];
-        let name = rest.split('/').next().filter(|n| !n.is_empty())?;
-        return Some(Said::Link {
+        let name = rest.split('/').next().filter(|name| !name.is_empty())?;
+        return Some(CliLine::Link {
             name: name.to_owned(),
             url: (*url).to_owned(),
         });
@@ -655,10 +662,15 @@ fn parse_line(line: &str) -> Option<Said> {
     let words: Vec<&str> = line.split_whitespace().collect();
     let code = words
         .windows(2)
-        .find(|w| w[0].eq_ignore_ascii_case("code"))
-        .map(|w| w[1].trim_end_matches(['.', ',']))
-        .filter(|c| c.len() >= 4 && c.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))?;
-    Some(Said::DeviceCode {
+        .find(|pair| pair[0].eq_ignore_ascii_case("code"))
+        .map(|pair| pair[1].trim_end_matches(['.', ',']))
+        .filter(|code| {
+            code.len() >= 4
+                && code
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+        })?;
+    Some(CliLine::DeviceCode {
         url: (*url).to_owned(),
         code: code.to_owned(),
     })
@@ -666,17 +678,17 @@ fn parse_line(line: &str) -> Option<Said> {
 
 /// The name of a tunnel already running on this machine (`code tunnel status`).
 async fn running_tunnel(code: &Path) -> Option<String> {
-    let out = Command::new(code)
+    let output = Command::new(code)
         .args(["tunnel", "status"])
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(true)
         .output();
-    let out = tokio::time::timeout(Duration::from_secs(30), out)
+    let output = tokio::time::timeout(Duration::from_secs(30), output)
         .await
         .ok()?
         .ok()?;
-    parse_status(&String::from_utf8_lossy(&out.stdout))
+    parse_status(&String::from_utf8_lossy(&output.stdout))
 }
 
 /// `{"tunnel":null,"service_installed":false}` or `{"tunnel":{"name":"box",…},…}`.
@@ -688,20 +700,20 @@ fn parse_status(text: &str) -> Option<String> {
     }
     tunnel
         .get("name")
-        .and_then(|n| n.as_str())
-        .filter(|n| !n.is_empty())
+        .and_then(|name| name.as_str())
+        .filter(|name| !name.is_empty())
         .map(str::to_owned)
 }
 
 async fn cli_version(code: &Path) -> (Option<String>, Option<String>) {
-    let out = Command::new(code)
+    let output = Command::new(code)
         .arg("--version")
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(true)
         .output();
-    match tokio::time::timeout(Duration::from_secs(15), out).await {
-        Ok(Ok(o)) => parse_version(&String::from_utf8_lossy(&o.stdout)),
+    match tokio::time::timeout(Duration::from_secs(15), output).await {
+        Ok(Ok(output)) => parse_version(&String::from_utf8_lossy(&output.stdout)),
         _ => (None, None),
     }
 }
@@ -715,32 +727,33 @@ fn parse_version(text: &str) -> (Option<String>, Option<String>) {
         let commit = rest
             .split("commit ")
             .nth(1)
-            .map(|c| c.trim_end_matches(')').trim().to_owned());
+            .map(|commit| commit.trim_end_matches(')').trim().to_owned());
         return (version, commit);
     }
     let mut lines = text.lines();
     let version = lines
         .next()
-        .filter(|v| v.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        .filter(|line| line.chars().next().is_some_and(|ch| ch.is_ascii_digit()))
         .map(str::to_owned);
     let commit = lines
         .next()
-        .map(|c| c.trim().to_owned())
+        .map(|line| line.trim().to_owned())
         .filter(|_| version.is_some());
     (version, commit)
 }
 
-// --- names ------------------------------------------------------------------------------------
-
 pub(crate) fn hostname() -> String {
-    let mut buf = [0u8; 256];
+    let mut name = [0u8; 256];
     // SAFETY: the buffer is valid for its length; gethostname NUL-terminates on success.
-    let ok = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } == 0;
+    let ok = unsafe { libc::gethostname(name.as_mut_ptr().cast(), name.len()) } == 0;
     if !ok {
         return String::new();
     }
-    let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
-    String::from_utf8_lossy(&buf[..end]).into_owned()
+    let end = name
+        .iter()
+        .position(|&byte| byte == 0)
+        .unwrap_or(name.len());
+    String::from_utf8_lossy(&name[..end]).into_owned()
 }
 
 /// A tunnel name from a host name: lowercase letters, digits and `-`, at most 20.
@@ -748,15 +761,15 @@ fn default_name(host: &str) -> String {
     let host = host.split('.').next().unwrap_or_default();
     let mut name: String = host
         .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c.to_ascii_lowercase()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
             } else {
                 '-'
             }
         })
         .collect();
-    name.truncate(MAX_NAME);
+    name.truncate(MAX_NAME_LEN);
     let name = name.trim_matches('-').to_owned();
     if name.is_empty() {
         format!("host-{}", fsutil::hex(&fsutil::random::<3>()))
@@ -767,13 +780,15 @@ fn default_name(host: &str) -> String {
 
 fn valid_name(name: &str) -> Result<String, WsError> {
     let ok = !name.is_empty()
-        && name.len() <= MAX_NAME
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+        && name.len() <= MAX_NAME_LEN
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-');
     if ok {
         Ok(name.to_owned())
     } else {
         Err(WsError::Invalid(format!(
-            "tunnel name {name:?}: use at most {MAX_NAME} letters, digits and '-'"
+            "tunnel name {name:?}: use at most {MAX_NAME_LEN} letters, digits and '-'"
         )))
     }
 }
@@ -784,57 +799,57 @@ fn url_path(path: &str) -> String {
     if !path.starts_with('/') {
         out.push('/');
     }
-    for b in path.bytes() {
-        if b.is_ascii_alphanumeric() || b"-_.~/".contains(&b) {
-            out.push(b as char);
+    for byte in path.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-_.~/".contains(&byte) {
+            out.push(byte as char);
         } else {
-            out.push_str(&format!("%{b:02X}"));
+            out.push_str(&format!("%{byte:02X}"));
         }
     }
     out
 }
 
-// --- records ----------------------------------------------------------------------------------
-
-fn record_path(cfg: &Config) -> PathBuf {
-    cfg.state_dir.join("vscode").join("tunnel.json")
+fn record_path(config: &Config) -> PathBuf {
+    config.state_dir.join("vscode").join("tunnel.json")
 }
 
-fn load_record(cfg: &Config) -> Record {
-    fsutil::read_optional(&record_path(cfg))
+fn load_record(config: &Config) -> Record {
+    fsutil::read_optional(&record_path(config))
         .ok()
         .flatten()
-        .and_then(|b| serde_json::from_slice(&b).ok())
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default()
 }
 
-fn save_record(cfg: &Config, record: &Record) -> Result<(), WsError> {
-    let data = serde_json::to_vec_pretty(record).map_err(|e| WsError::Failed(e.to_string()))?;
-    fsutil::write_atomic(&record_path(cfg), &data).map_err(|e| WsError::Failed(e.to_string()))
+fn save_record(config: &Config, record: &Record) -> Result<(), WsError> {
+    let data =
+        serde_json::to_vec_pretty(record).map_err(|error| WsError::Failed(error.to_string()))?;
+    fsutil::write_atomic(&record_path(config), &data)
+        .map_err(|error| WsError::Failed(error.to_string()))
 }
 
-fn cli_root(cfg: &Config) -> PathBuf {
-    cfg.state_dir.join("vscode").join("cli")
+fn cli_root(config: &Config) -> PathBuf {
+    config.state_dir.join("vscode").join("cli")
 }
 
-fn load_installed(cfg: &Config) -> Option<Installed> {
-    let data = fsutil::read_optional(&cli_root(cfg).join("install.json"))
+fn load_installed(config: &Config) -> Option<Installed> {
+    let data = fsutil::read_optional(&cli_root(config).join("install.json"))
         .ok()
         .flatten()?;
     serde_json::from_slice::<Installed>(&data)
         .ok()
-        .filter(|i| i.path.is_file())
+        .filter(|installed| installed.path.is_file())
 }
 
 /// What is known about `path` without running it: everything for a daemon install, else
 /// only the path.
-fn managed_info(cfg: &Config, path: &Path) -> VsCodeCli {
-    match load_installed(cfg).filter(|i| i.path == path) {
-        Some(i) => VsCodeCli {
+fn managed_info(config: &Config, path: &Path) -> VsCodeCli {
+    match load_installed(config).filter(|installed| installed.path == path) {
+        Some(installed) => VsCodeCli {
             path: path.to_string_lossy().into_owned(),
-            version: Some(i.version),
-            commit: Some(i.commit),
-            sha256: Some(i.sha256),
+            version: Some(installed.version),
+            commit: Some(installed.commit),
+            sha256: Some(installed.sha256),
             managed: true,
         },
         None => VsCodeCli {
@@ -848,16 +863,14 @@ fn managed_info(cfg: &Config, path: &Path) -> VsCodeCli {
 }
 
 /// The CLI the daemon installed, if any.
-pub(crate) fn managed_cli(cfg: &Config) -> Option<PathBuf> {
-    load_installed(cfg).map(|i| i.path)
+pub(crate) fn managed_cli(config: &Config) -> Option<PathBuf> {
+    load_installed(config).map(|installed| installed.path)
 }
 
 /// The user's own `code` first, then the one the daemon installed.
-fn find_cli(cfg: &Config) -> Option<PathBuf> {
-    super::editor::find_user_code(cfg).or_else(|| managed_cli(cfg))
+fn find_cli(config: &Config) -> Option<PathBuf> {
+    super::editor::find_user_code(config).or_else(|| managed_cli(config))
 }
-
-// --- install ----------------------------------------------------------------------------------
 
 /// Whether this Linux host's libc is musl (Alpine and the like).
 pub(crate) fn is_musl() -> bool {
@@ -866,7 +879,7 @@ pub(crate) fn is_musl() -> bool {
             && !Path::new("/lib/ld-linux-aarch64.so.1").exists()
             && ["/lib/ld-musl-x86_64.so.1", "/lib/ld-musl-aarch64.so.1"]
                 .iter()
-                .any(|p| Path::new(p).exists()))
+                .any(|loader| Path::new(loader).exists()))
 }
 
 /// Microsoft's name for this host's CLI build.
@@ -896,7 +909,7 @@ pub(crate) fn fetch(url: &str, dest: &Path) -> Result<(), WsError> {
                 .arg(url)
                 .status()
         })
-        .is_ok_and(|s| s.success());
+        .is_ok_and(|status| status.success());
     if ok {
         Ok(())
     } else {
@@ -908,19 +921,19 @@ pub(crate) fn fetch(url: &str, dest: &Path) -> Result<(), WsError> {
 
 /// Asks the update service for the latest stable CLI, downloads it, checks the published
 /// SHA-256, unpacks it and records what was installed.
-fn install_cli(base: &str, platform: &str, root: &Path) -> Result<Installed, WsError> {
-    let failed = |e: std::io::Error| WsError::Failed(e.to_string());
+fn install_cli(base_url: &str, platform: &str, root: &Path) -> Result<Installed, WsError> {
+    let failed = |error: std::io::Error| WsError::Failed(error.to_string());
     std::fs::create_dir_all(root).map_err(failed)?;
     let tag = fsutil::hex(&fsutil::random::<4>());
-    let meta_path = root.join(format!(".release-{tag}.json"));
-    let api = format!("{base}/api/update/{platform}/stable/latest");
+    let release_path = root.join(format!(".release-{tag}.json"));
+    let api = format!("{base_url}/api/update/{platform}/stable/latest");
     tracing::info!(%api, "looking up the VS Code CLI");
-    fetch(&api, &meta_path)?;
-    let meta = std::fs::read(&meta_path).map_err(failed);
-    let _ = std::fs::remove_file(&meta_path);
-    let release: Release = serde_json::from_slice(&meta?)
-        .map_err(|e| WsError::Failed(format!("unexpected update service answer: {e}")))?;
-    if base == DEFAULT_UPDATE_URL && !release.url.starts_with("https://") {
+    fetch(&api, &release_path)?;
+    let release_json = std::fs::read(&release_path).map_err(failed);
+    let _ = std::fs::remove_file(&release_path);
+    let release: Release = serde_json::from_slice(&release_json?)
+        .map_err(|error| WsError::Failed(format!("unexpected update service answer: {error}")))?;
+    if base_url == DEFAULT_UPDATE_URL && !release.url.starts_with("https://") {
         return Err(WsError::Failed(format!(
             "refusing a non-HTTPS download: {}",
             release.url
@@ -931,8 +944,8 @@ fn install_cli(base: &str, platform: &str, root: &Path) -> Result<Installed, WsE
         .clone()
         .or(release.name.clone())
         .unwrap_or_else(|| "unknown".into());
-    let short: String = release.version.chars().take(10).collect();
-    let dir = root.join(format!("{version}-{short}"));
+    let short_commit: String = release.version.chars().take(10).collect();
+    let dir = root.join(format!("{version}-{short_commit}"));
     let archive = root.join(format!(
         ".cli-{tag}{}",
         if release.url.ends_with(".zip") {
@@ -947,15 +960,15 @@ fn install_cli(base: &str, platform: &str, root: &Path) -> Result<Installed, WsE
         let _ = std::fs::remove_dir_all(&staging);
     };
     tracing::info!(url = %release.url, "downloading the VS Code CLI");
-    if let Err(e) = fetch(&release.url, &archive) {
+    if let Err(error) = fetch(&release.url, &archive) {
         cleanup();
-        return Err(e);
+        return Err(error);
     }
-    let sha = super::editor::sha256_file(&archive).map_err(failed)?;
-    if !sha.eq_ignore_ascii_case(&release.sha256hash) {
+    let sha256 = super::editor::sha256_file(&archive).map_err(failed)?;
+    if !sha256.eq_ignore_ascii_case(&release.sha256hash) {
         cleanup();
         return Err(WsError::Failed(format!(
-            "VS Code CLI checksum mismatch: got {sha}, Microsoft published {}",
+            "VS Code CLI checksum mismatch: got {sha256}, Microsoft published {}",
             release.sha256hash
         )));
     }
@@ -975,7 +988,7 @@ fn install_cli(base: &str, platform: &str, root: &Path) -> Result<Installed, WsE
             .arg(&staging)
             .status()
     };
-    if !unpacked.is_ok_and(|s| s.success()) || !staging.join("code").is_file() {
+    if !unpacked.is_ok_and(|status| status.success()) || !staging.join("code").is_file() {
         cleanup();
         return Err(WsError::Failed(
             "unpacking the VS Code CLI failed (no `code` in the archive)".into(),
@@ -986,13 +999,13 @@ fn install_cli(base: &str, platform: &str, root: &Path) -> Result<Installed, WsE
         .arg("--version")
         .stdin(Stdio::null())
         .output();
-    if !runs.as_ref().is_ok_and(|o| o.status.success()) {
+    if !runs.as_ref().is_ok_and(|output| output.status.success()) {
         cleanup();
         return Err(WsError::Failed(format!(
             "the downloaded VS Code CLI does not run on this host: {}",
             runs.map_or_else(
-                |e| e.to_string(),
-                |o| String::from_utf8_lossy(&o.stderr).into_owned()
+                |error| error.to_string(),
+                |output| String::from_utf8_lossy(&output.stderr).into_owned()
             )
         )));
     }
@@ -1003,12 +1016,13 @@ fn install_cli(base: &str, platform: &str, root: &Path) -> Result<Installed, WsE
         path: dir.join("code"),
         version,
         commit: release.version,
-        sha256: sha,
+        sha256,
         url: release.url,
         platform: platform.to_owned(),
         installed_at: crate::identity::now_millis(),
     };
-    let data = serde_json::to_vec_pretty(&installed).map_err(|e| WsError::Failed(e.to_string()))?;
+    let data = serde_json::to_vec_pretty(&installed)
+        .map_err(|error| WsError::Failed(error.to_string()))?;
     fsutil::write_atomic(&root.join("install.json"), &data).map_err(failed)?;
     tracing::info!(version = %installed.version, sha256 = %installed.sha256, "VS Code CLI installed");
     Ok(installed)
@@ -1025,7 +1039,7 @@ mod tests {
                 "To grant access to the server, please log into https://github.com/login/device \
                  and use code 4766-3D57"
             ),
-            Some(Said::DeviceCode {
+            Some(CliLine::DeviceCode {
                 url: "https://github.com/login/device".into(),
                 code: "4766-3D57".into()
             })
@@ -1035,14 +1049,14 @@ mod tests {
                 "To sign in, use a web browser to open the page https://login.microsoft.com/device \
                  and enter the code LW94CRGJT to authenticate."
             ),
-            Some(Said::DeviceCode {
+            Some(CliLine::DeviceCode {
                 url: "https://login.microsoft.com/device".into(),
                 code: "LW94CRGJT".into()
             })
         );
         assert_eq!(
             parse_line("Open this link in your browser https://vscode.dev/tunnel/box/home/me"),
-            Some(Said::Link {
+            Some(CliLine::Link {
                 name: "box".into(),
                 url: "https://vscode.dev/tunnel/box/home/me".into()
             })
@@ -1084,8 +1098,8 @@ mod tests {
     #[test]
     fn names_and_urls() {
         assert_eq!(
-            default_name("Ubuntu-32GB-hel1-2.example.com"),
-            "ubuntu-32gb-hel1-2"
+            default_name("Build-Box-32GB-2.example.com"),
+            "build-box-32gb-2"
         );
         assert_eq!(
             default_name("a_very_long_host_name_indeed"),

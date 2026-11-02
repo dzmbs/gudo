@@ -2,8 +2,8 @@
 
 use ghostty_vt::{Key, KeyAction, KeyEvent, Mods, MouseAction, MouseButton, MouseEvent};
 
-fn action(a: proto::KeyAction) -> KeyAction {
-    match a {
+fn action(key_action: proto::KeyAction) -> KeyAction {
+    match key_action {
         proto::KeyAction::Press => KeyAction::Press,
         proto::KeyAction::Repeat => KeyAction::Repeat,
         proto::KeyAction::Release => KeyAction::Release,
@@ -12,46 +12,46 @@ fn action(a: proto::KeyAction) -> KeyAction {
 
 /// A [`proto::KeyEvent`]: the base key is derived from the text when it is one unshifted
 /// character, which is right for most layouts; [`proto::FullKeyEvent`] says it exactly.
-pub(crate) fn key(k: proto::KeyEvent) -> KeyEvent {
-    let unshifted = k
+pub(crate) fn key(event: proto::KeyEvent) -> KeyEvent {
+    let unshifted = event
         .text
         .as_deref()
-        .and_then(|t| {
-            let mut chars = t.chars();
+        .and_then(|text| {
+            let mut chars = text.chars();
             chars.next().filter(|_| chars.next().is_none())
         })
         .map(|c| c.to_lowercase().next().unwrap_or(c));
     KeyEvent {
-        key: Some(Key(k.key)),
-        mods: Mods(k.mods),
+        key: Some(Key(event.key)),
+        mods: Mods(event.mods),
         consumed_mods: Mods::NONE,
-        action: action(k.action),
-        text: k.text,
+        action: action(event.action),
+        text: event.text,
         unshifted,
         composing: false,
     }
 }
 
-pub(crate) fn full_key(k: proto::FullKeyEvent) -> KeyEvent {
+pub(crate) fn full_key(event: proto::FullKeyEvent) -> KeyEvent {
     KeyEvent {
-        key: Some(Key(k.key)),
-        mods: Mods(k.mods),
-        consumed_mods: Mods(k.consumed_mods),
-        action: action(k.action),
-        text: k.text,
-        unshifted: k.unshifted_codepoint.and_then(char::from_u32),
-        composing: k.composing,
+        key: Some(Key(event.key)),
+        mods: Mods(event.mods),
+        consumed_mods: Mods(event.consumed_mods),
+        action: action(event.action),
+        text: event.text,
+        unshifted: event.unshifted_codepoint.and_then(char::from_u32),
+        composing: event.composing,
     }
 }
 
-pub(crate) fn mouse(m: proto::MouseEvent) -> MouseEvent {
+pub(crate) fn mouse(event: proto::MouseEvent) -> MouseEvent {
     MouseEvent {
-        action: match m.action {
+        action: match event.action {
             proto::MouseAction::Press => MouseAction::Press,
             proto::MouseAction::Release => MouseAction::Release,
             proto::MouseAction::Motion => MouseAction::Motion,
         },
-        button: match m.button {
+        button: match event.button {
             proto::MouseButton::None => None,
             proto::MouseButton::Left => Some(MouseButton::Left),
             proto::MouseButton::Middle => Some(MouseButton::Middle),
@@ -61,8 +61,8 @@ pub(crate) fn mouse(m: proto::MouseEvent) -> MouseEvent {
             proto::MouseButton::WheelLeft => Some(MouseButton::WheelLeft),
             proto::MouseButton::WheelRight => Some(MouseButton::WheelRight),
         },
-        col: m.col,
-        row: m.row,
-        mods: Mods(m.mods),
+        col: event.col,
+        row: event.row,
+        mods: Mods(event.mods),
     }
 }

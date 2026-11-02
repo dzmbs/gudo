@@ -1,3 +1,4 @@
+//! Multiplayer: grant redemption and the live grant table, revocation,
 //! control leases, presence and the audit log. See docs/DAEMON.md §6.
 //!
 //! - Every connection has an [`Authz`]: its actor, roles, scope and grant chain. Paired owner
@@ -40,7 +41,7 @@ use crate::fsutil::{hex, read_optional, unhex, write_atomic};
 use crate::identity::{Identity, now_millis};
 
 const STORE_FILE: &str = "grants.json";
-/// How long a guest admitted from a knock keeps access unless the owner says otherwise
+/// How long a guest admitted from a knock keeps access unless the owner says otherwise.
 const KNOCK_ADMIT_TTL: Duration = Duration::from_secs(7 * 24 * 3600);
 /// How long an answered knock's connection may stay open: the knocker reads the answer and
 /// hangs up itself; closing sooner could drop the answer in flight.
@@ -50,7 +51,8 @@ const MAX_KNOCKS_PER_GRANT: usize = 8;
 /// How long a new owner device has to say its name before its pairing is announced without
 /// one.
 const PAIRING_NAME_WAIT: Duration = Duration::from_secs(3);
-/// Presence updates per connection are coalesced to at most one per this interval
+/// Presence updates per connection are coalesced to at most one per this interval, except
+/// typing changes.
 const PRESENCE_INTERVAL: Duration = Duration::from_millis(100);
 
 /// What a connection may do, fixed at the handshake.
@@ -75,7 +77,6 @@ pub(crate) struct Authz {
 }
 
 impl Authz {
-    /// A paired owner device.
     pub fn owner(actor: Actor) -> Self {
         Self {
             actor,
@@ -124,8 +125,6 @@ impl Authz {
         }
     }
 }
-
-// --- persisted state ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct Store {
@@ -198,7 +197,7 @@ impl Store {
             return Ok(Self::default());
         };
         let mut store: Self = serde_json::from_slice(&bytes)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
         // Revocations from before removal times were kept: void everything up to now.
         let now = now_millis();
         for device in std::mem::take(&mut store.revoked_devices) {
@@ -216,7 +215,7 @@ impl Store {
         let kept = path.with_file_name(format!(
             "{}.unreadable-{now}",
             path.file_name()
-                .and_then(|n| n.to_str())
+                .and_then(|name| name.to_str())
                 .unwrap_or(STORE_FILE)
         ));
         let moved = std::fs::rename(path, &kept);
@@ -227,8 +226,8 @@ impl Store {
                 path.display(),
                 kept.display()
             ),
-            Err(e) => tracing::error!(
-                "{} is unreadable ({error}) and could not be moved aside ({e}); refusing \
+            Err(move_error) => tracing::error!(
+                "{} is unreadable ({error}) and could not be moved aside ({move_error}); refusing \
                  every guest invite issued until now, and leaving the file as it is",
                 path.display()
             ),
@@ -251,14 +250,14 @@ impl Store {
         let result = serde_json::to_vec_pretty(self)
             .map_err(std::io::Error::other)
             .and_then(|bytes| write_atomic(path, &bytes));
-        if let Err(e) = result {
-            tracing::warn!("saving {}: {e}", path.display());
+        if let Err(error) = result {
+            tracing::warn!("saving {}: {error}", path.display());
         }
     }
 
     fn grant(&self, id: GrantId) -> Option<&StoredGrant> {
         let id = hex(&id.0);
-        self.grants.iter().find(|g| g.id == id)
+        self.grants.iter().find(|grant| grant.id == id)
     }
 
     fn grant_revoked(&self, id: GrantId) -> bool {
@@ -274,7 +273,7 @@ impl Store {
     /// Records `chain`'s leaf if new; returns its record.
     fn upsert(&mut self, chain: &GrantChain) -> &mut StoredGrant {
         let id = hex(&chain.grant_id().0);
-        if let Some(i) = self.grants.iter().position(|g| g.id == id) {
+        if let Some(i) = self.grants.iter().position(|grant| grant.id == id) {
             return &mut self.grants[i];
         }
         self.grants.push(StoredGrant {
@@ -292,11 +291,13 @@ impl Store {
     fn terms(&self, ids: &[GrantId]) -> InviteTerms {
         ids.iter()
             .filter_map(|&id| self.grant(id))
-            .fold(InviteTerms::default(), |acc, g| acc.strictest(g.terms))
+            .fold(InviteTerms::default(), |terms, grant| {
+                terms.strictest(grant.terms)
+            })
     }
 
-    fn chain_of(g: &StoredGrant) -> Option<GrantChain> {
-        let bytes = unhex_vec(&g.chain)?;
+    fn chain_of(grant: &StoredGrant) -> Option<GrantChain> {
+        let bytes = unhex_vec(&grant.chain)?;
         GrantChain::from_token(&bytes).ok()
     }
 }
@@ -310,10 +311,10 @@ fn owner_name(name: String) -> String {
     }
 }
 
-fn unhex_vec(s: &str) -> Option<Vec<u8>> {
-    (0..s.len())
+fn unhex_vec(text: &str) -> Option<Vec<u8>> {
+    (0..text.len())
         .step_by(2)
-        .map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok())
+        .map(|i| u8::from_str_radix(text.get(i..i + 2)?, 16).ok())
         .collect()
 }
 
@@ -332,7 +333,7 @@ impl Authority for DaemonAuthority<'_> {
         let device = hex(&device.0);
         self.store
             .grant(grant)
-            .is_some_and(|g| g.bound.contains(&device))
+            .is_some_and(|stored| stored.bound.contains(&device))
     }
 
     fn scope_within(&self, inner: Scope, outer: Scope) -> bool {
@@ -358,8 +359,6 @@ fn removed_at(identity: &Identity, store: &Store, device: DeviceId) -> Option<Un
         .removed_at(device)
         .max(store.guest_removed_at(device))
 }
-
-// --- live state --------------------------------------------------------------------------------
 
 struct Live {
     authz: Authz,
@@ -395,7 +394,7 @@ impl LeaseState {
     fn wire(&self, pane_id: PaneId) -> Lease {
         Lease {
             pane_id,
-            holder: self.holder.map(|a| a.principal),
+            holder: self.holder.map(|holder| holder.principal),
             since: self.since,
             mode: if self.holder.is_some() {
                 LeaseMode::Leased
@@ -440,7 +439,6 @@ struct PendingKnock {
     conn: iroh::endpoint::Connection,
 }
 
-/// Multiplayer state owned by the core.
 pub(crate) struct Mp {
     /// Which owner devices may root a grant chain.
     identity: Arc<Identity>,
@@ -476,13 +474,13 @@ impl Mp {
         let audit = Audit::open(state_dir)?;
         let (mut store, persist) = match Store::load(&store_path) {
             Ok(store) => (store, true),
-            Err(e) => {
-                let (store, persist) = Store::reset(&store_path, &e);
+            Err(error) => {
+                let (store, persist) = Store::reset(&store_path, &error);
                 audit.append(
                     AuditKind::Revoked,
                     AuditEntry {
                         detail: format!(
-                            "{STORE_FILE} was unreadable ({e}); every invite issued until now \
+                            "{STORE_FILE} was unreadable ({error}); every invite issued until now \
                              is refused"
                         ),
                         ..AuditEntry::default()
@@ -548,8 +546,8 @@ impl Mp {
             .identity
             .paired()
             .into_iter()
-            .find(|o| o.device == device)
-            .map(|o| o.name)
+            .find(|owner| owner.device == device)
+            .map(|owner| owner.name)
             .unwrap_or_default();
         core.emit(Event::DevicePaired(DeviceInfo {
             device,
@@ -572,10 +570,14 @@ impl Mp {
         let device_hex = hex(&device.0);
         let store = lock(&self.store);
         let removed = removed_at(&self.identity, &store, device);
-        store.grants.iter().any(|g| {
-            g.bound.contains(&device_hex)
-                && removed
-                    .is_none_or(|t| g.redeemed_at.get(&device_hex).is_some_and(|&at| at > t.0))
+        store.grants.iter().any(|grant| {
+            grant.bound.contains(&device_hex)
+                && removed.is_none_or(|removed| {
+                    grant
+                        .redeemed_at
+                        .get(&device_hex)
+                        .is_some_and(|&at| at > removed.0)
+                })
         })
     }
 
@@ -616,14 +618,16 @@ impl Mp {
         presenter: DeviceId,
         expires: Option<UnixMillis>,
     ) -> bool {
-        expires.is_none_or(|e| e.0 > now_millis())
+        expires.is_none_or(|expires| expires.0 > now_millis())
             && self.chain_trusted(issuers)
-            && store.void_before.is_none_or(|t| root_signed.0 > t)
-            && !ids.iter().any(|&g| store.grant_revoked(g))
-            && issuers
-                .iter()
-                .chain([&presenter])
-                .all(|&d| removed_at(&self.identity, store, d).is_none_or(|t| root_signed > t))
+            && store
+                .void_before
+                .is_none_or(|void_before| root_signed.0 > void_before)
+            && !ids.iter().any(|&grant| store.grant_revoked(grant))
+            && issuers.iter().chain([&presenter]).all(|&device| {
+                removed_at(&self.identity, store, device)
+                    .is_none_or(|removed| root_signed > removed)
+            })
     }
 
     /// Verifies a presented grant chain for `device`, binding an unbound leaf on first use.
@@ -659,31 +663,31 @@ impl Mp {
         let now = UnixMillis(now_millis());
         let mut store = lock(&self.store);
         let verified = {
-            let auth = DaemonAuthority {
+            let authority = DaemonAuthority {
                 core,
                 store: &store,
             };
-            grants::verify(&chain, core.identity.daemon_id(), device, now, &auth)
+            grants::verify(&chain, core.identity.daemon_id(), device, now, &authority)
         };
         let verified = match verified {
-            Ok(v) => v,
-            Err(e) => {
+            Ok(verified) => verified,
+            Err(error) => {
                 drop(store);
-                deny(e.to_string());
-                return Err(match e {
+                deny(error.to_string());
+                return Err(match error {
                     GrantError::Revoked(_) | GrantError::DeviceRevoked => RefuseReason::Revoked,
                     _ => RefuseReason::InvalidGrant,
                 });
             }
         };
         let device_hex = hex(&device.0);
-        let issuers: Vec<DeviceId> = chain.links.iter().map(|l| l.grant.issuer).collect();
+        let issuers: Vec<DeviceId> = chain.links.iter().map(|link| link.grant.issuer).collect();
         let root_signed = chain.links[0].grant.issued_at;
         let leaf = &verified.leaf;
         let terms = store.terms(&verified.ids);
         let admitted = store
             .grant(leaf.grant_id)
-            .is_some_and(|g| g.bound.contains(&device_hex));
+            .is_some_and(|grant| grant.bound.contains(&device_hex));
         if terms.knock && !admitted {
             drop(store);
             if !caps.contains(Caps::KNOCK) {
@@ -727,9 +731,13 @@ impl Mp {
         } else {
             leaf.label.clone()
         };
-        if let Some(g) = store.guests.iter_mut().find(|g| g.device == device_hex) {
-            g.grant = hex(&leaf.grant_id.0);
-            g.joined = now.0;
+        if let Some(guest) = store
+            .guests
+            .iter_mut()
+            .find(|guest| guest.device == device_hex)
+        {
+            guest.grant = hex(&leaf.grant_id.0);
+            guest.joined = now.0;
         } else {
             store.guests.push(GuestRecord {
                 device: device_hex,
@@ -794,8 +802,6 @@ impl Mp {
         })
     }
 
-    // --- participants -----------------------------------------------------------------------
-
     /// A connection joined; `heartbeats` when it announced live presence.
     pub fn join(
         &self,
@@ -855,12 +861,16 @@ impl Mp {
                 let mut leases = lock(&self.leases);
                 leases
                     .iter_mut()
-                    .filter(|(_, l)| l.holder.is_some_and(|h| h.principal == principal))
-                    .map(|(pane, l)| {
-                        l.holder = None;
-                        l.pending = None;
-                        l.since = UnixMillis(now_millis());
-                        l.wire(*pane)
+                    .filter(|(_, lease)| {
+                        lease
+                            .holder
+                            .is_some_and(|holder| holder.principal == principal)
+                    })
+                    .map(|(pane, lease)| {
+                        lease.holder = None;
+                        lease.pending = None;
+                        lease.since = UnixMillis(now_millis());
+                        lease.wire(*pane)
                     })
                     .collect()
             };
@@ -874,7 +884,7 @@ impl Mp {
     fn principal_connected(&self, principal: PrincipalId) -> bool {
         lock(&self.live)
             .values()
-            .any(|l| l.authz.actor.principal == principal)
+            .any(|connection| connection.authz.actor.principal == principal)
     }
 
     /// The participant list as `viewer` may see it: focus and cursor outside its scope are
@@ -882,57 +892,62 @@ impl Mp {
     pub fn participants(&self, core: &Core, viewer: &Authz) -> Vec<Participant> {
         let live: Vec<Participant> = lock(&self.live)
             .values()
-            .map(|l| Participant {
-                actor: l.authz.actor,
-                name: l.name.clone(),
-                roles: l.authz.roles,
-                scope: l.authz.scope,
-                grant_id: l.authz.grant_id(),
-                since: l.since,
-                // Live presence knows better than the old self-reported state.
-                state: if l.peer.rev > 0 {
-                    self.state_of(l)
+            .map(|connection| Participant {
+                actor: connection.authz.actor,
+                name: connection.name.clone(),
+                roles: connection.authz.roles,
+                scope: connection.authz.scope,
+                grant_id: connection.authz.grant_id(),
+                since: connection.since,
+                // Live presence knows better than the self-reported `Presence` state.
+                state: if connection.peer.rev > 0 {
+                    self.state_of(connection)
                 } else {
-                    l.state
+                    connection.state
                 },
-                focus: l.focus,
-                typing: l.typing || l.peer.typing.is_some(),
-                cursor: l.cursor,
+                focus: connection.focus,
+                typing: connection.typing || connection.peer.typing.is_some(),
+                cursor: connection.cursor,
             })
             .collect();
-        let mut out: Vec<Participant> = live
+        let mut participants: Vec<Participant> = live
             .into_iter()
-            .map(|mut p| {
-                if p.focus
-                    .is_some_and(|f| !core.scope_within(Scope::Pane(f), viewer.scope))
+            .map(|mut participant| {
+                if participant
+                    .focus
+                    .is_some_and(|pane| !core.scope_within(Scope::Pane(pane), viewer.scope))
                 {
-                    p.focus = None;
-                    p.typing = false;
+                    participant.focus = None;
+                    participant.typing = false;
                 }
-                if p.cursor
-                    .is_some_and(|c| !core.scope_within(Scope::Pane(c.pane_id), viewer.scope))
-                {
-                    p.cursor = None;
+                if participant.cursor.is_some_and(|cursor| {
+                    !core.scope_within(Scope::Pane(cursor.pane_id), viewer.scope)
+                }) {
+                    participant.cursor = None;
                 }
-                p
+                participant
             })
             .collect();
-        out.sort_by_key(|p| p.since);
-        out
+        participants.sort_by_key(|participant| participant.since);
+        participants
     }
 
     pub fn name_of(&self, id: ConnId) -> String {
         lock(&self.live)
             .get(&id)
-            .map(|l| l.name.clone())
+            .map(|connection| connection.name.clone())
             .unwrap_or_default()
     }
 
     pub fn set_name(&self, core: &Core, id: ConnId, name: String) {
         let name: String = name.trim().chars().take(64).collect();
-        let owner_device = lock(&self.live).get_mut(&id).and_then(|l| {
-            l.name.clone_from(&name);
-            l.authz.grant_ids.is_empty().then_some(l.authz.actor.device)
+        let owner_device = lock(&self.live).get_mut(&id).and_then(|connection| {
+            connection.name.clone_from(&name);
+            connection
+                .authz
+                .grant_ids
+                .is_empty()
+                .then_some(connection.authz.actor.device)
         });
         if let Some(device) = owner_device.filter(|_| !name.is_empty()) {
             self.identity.set_name(device, &name);
@@ -941,15 +956,14 @@ impl Mp {
         core.emit(Event::Participants);
     }
 
-    /// The connection's focused pane changed (from `Focus`).
     pub fn set_focus(&self, core: &Core, id: ConnId, focus: Option<PaneId>) {
-        let changed = lock(&self.live).get_mut(&id).is_some_and(|l| {
-            let changed = l.focus != focus;
-            l.focus = focus;
-            l.state = PresenceState::Active;
-            l.peer.active = Instant::now();
+        let changed = lock(&self.live).get_mut(&id).is_some_and(|connection| {
+            let changed = connection.focus != focus;
+            connection.focus = focus;
+            connection.state = PresenceState::Active;
+            connection.peer.active = Instant::now();
             if changed {
-                self.bump(l);
+                self.bump(connection);
             }
             changed
         });
@@ -959,37 +973,38 @@ impl Mp {
     }
 
     /// A `Presence` from the client. The daemon stamps the actor and the focus it knows.
-    pub fn presence(&self, core: &Core, id: ConnId, p: Presence) {
-        let out = {
+    pub fn presence(&self, core: &Core, id: ConnId, presence: Presence) {
+        let stamped = {
             let mut live = lock(&self.live);
-            let Some(l) = live.get_mut(&id) else { return };
-            let typing_changed = l.typing != p.typing;
+            let Some(connection) = live.get_mut(&id) else {
+                return;
+            };
+            let typing_changed = connection.typing != presence.typing;
             if !typing_changed
-                && l.last_presence
-                    .is_some_and(|t| t.elapsed() < PRESENCE_INTERVAL)
+                && connection
+                    .last_presence
+                    .is_some_and(|last| last.elapsed() < PRESENCE_INTERVAL)
             {
                 return;
             }
-            l.last_presence = Some(Instant::now());
-            l.state = p.state;
-            l.typing = p.typing;
-            l.cursor = p.cursor;
-            if let Some(f) = p.focus {
-                l.focus = Some(f);
+            connection.last_presence = Some(Instant::now());
+            connection.state = presence.state;
+            connection.typing = presence.typing;
+            connection.cursor = presence.cursor;
+            if let Some(focus) = presence.focus {
+                connection.focus = Some(focus);
             }
             Presence {
-                actor: l.authz.actor,
-                state: l.state,
-                focus: l.focus,
-                typing: l.typing,
-                viewport: p.viewport,
-                cursor: l.cursor,
+                actor: connection.authz.actor,
+                state: connection.state,
+                focus: connection.focus,
+                typing: connection.typing,
+                viewport: presence.viewport,
+                cursor: connection.cursor,
             }
         };
-        core.emit(Event::Presence(out));
+        core.emit(Event::Presence(stamped));
     }
-
-    // --- grants -----------------------------------------------------------------------------
 
     /// Records a chain so it is listed and revocable before first use, with `terms` the
     /// daemon enforces on it and its descendants (terms only ever get stricter).
@@ -1013,12 +1028,12 @@ impl Mp {
         let now = UnixMillis(now_millis());
         let mut store = lock(&self.store);
         {
-            let auth = DaemonAuthority {
+            let authority = DaemonAuthority {
                 core,
                 store: &store,
             };
-            grants::verify(chain, core.identity.daemon_id(), presenter, now, &auth)
-                .map_err(|e| MpError::Invalid(e.to_string()))?;
+            grants::verify(chain, core.identity.daemon_id(), presenter, now, &authority)
+                .map_err(|error| MpError::Invalid(error.to_string()))?;
         }
         let record = store.upsert(chain);
         record.terms = record.terms.strictest(terms);
@@ -1062,10 +1077,11 @@ impl Mp {
         let leaf = chain.leaf().cloned().expect("non-empty chain");
         let bound = store
             .grant(leaf.grant_id)
-            .map(|g| {
-                g.bound
+            .map(|grant| {
+                grant
+                    .bound
                     .iter()
-                    .filter_map(|d| unhex(d).map(DeviceId))
+                    .filter_map(|device| unhex(device).map(DeviceId))
                     .collect()
             })
             .unwrap_or_default();
@@ -1078,14 +1094,14 @@ impl Mp {
             revoked: chain
                 .links
                 .iter()
-                .any(|l| store.grant_revoked(l.grant.grant_id))
+                .any(|link| store.grant_revoked(link.grant.grant_id))
                 || !self.chain_live(
                     store,
                     &[],
                     &chain
                         .links
                         .iter()
-                        .map(|l| l.grant.issuer)
+                        .map(|link| link.grant.issuer)
                         .collect::<Vec<_>>(),
                     chain.links[0].grant.issued_at,
                     leaf.issuer,
@@ -1102,7 +1118,7 @@ impl Mp {
             .grants
             .iter()
             .filter_map(Store::chain_of)
-            .map(|c| self.info(&store, &c))
+            .map(|chain| self.info(&store, &chain))
             .collect()
     }
 
@@ -1121,44 +1137,44 @@ impl Mp {
     }
 
     pub fn list_devices(&self, core: &Core) -> Vec<DeviceInfo> {
-        let connected = |d: DeviceId| {
+        let connected = |device: DeviceId| {
             lock(&self.live)
                 .values()
-                .filter(|l| l.authz.actor.device == d)
+                .filter(|connection| connection.authz.actor.device == device)
                 .count() as u32
         };
         let store = lock(&self.store).clone();
-        let mut out: Vec<DeviceInfo> = core
+        let mut devices: Vec<DeviceInfo> = core
             .identity
             .paired()
             .into_iter()
-            .map(|o| DeviceInfo {
-                device: o.device,
-                principal: o.principal,
+            .map(|owner| DeviceInfo {
+                device: owner.device,
+                principal: owner.principal,
                 kind: DeviceKind::Owner,
-                name: owner_name(o.name),
-                first_seen: o.paired_at,
+                name: owner_name(owner.name),
+                first_seen: owner.paired_at,
                 grant_id: None,
                 revoked: false,
-                connected: connected(o.device),
+                connected: connected(owner.device),
             })
             .collect();
-        out.extend(store.guests.iter().filter_map(|g| {
-            let device = DeviceId(unhex(&g.device)?);
+        devices.extend(store.guests.iter().filter_map(|guest| {
+            let device = DeviceId(unhex(&guest.device)?);
             Some(DeviceInfo {
                 device,
                 principal: grants::guest_principal(device),
                 kind: DeviceKind::Guest,
-                name: g.name.clone(),
-                first_seen: UnixMillis(g.first_seen),
-                grant_id: unhex(&g.grant).map(GrantId),
+                name: guest.name.clone(),
+                first_seen: UnixMillis(guest.first_seen),
+                grant_id: unhex(&guest.grant).map(GrantId),
                 revoked: store
                     .guest_removed_at(device)
-                    .is_some_and(|t| g.joined <= t.0),
+                    .is_some_and(|removed| guest.joined <= removed.0),
                 connected: connected(device),
             })
         }));
-        out
+        devices
     }
 
     /// Revokes and disconnects everyone it affects.
@@ -1171,31 +1187,31 @@ impl Mp {
         let mut grants_hit = Vec::new();
         let mut devices_hit = Vec::new();
         match target {
-            RevokeTarget::Grant(g) => grants_hit.push(g),
-            RevokeTarget::Device(d) => devices_hit.push(d),
-            RevokeTarget::Principal(p) => {
+            RevokeTarget::Grant(grant) => grants_hit.push(grant),
+            RevokeTarget::Device(device) => devices_hit.push(device),
+            RevokeTarget::Principal(principal) => {
                 devices_hit.extend(
                     core.identity
                         .paired()
                         .into_iter()
-                        .filter(|o| o.principal == p)
-                        .map(|o| o.device),
+                        .filter(|owner| owner.principal == principal)
+                        .map(|owner| owner.device),
                 );
                 let store = lock(&self.store);
                 devices_hit.extend(
                     store
                         .guests
                         .iter()
-                        .filter_map(|g| unhex(&g.device).map(DeviceId))
-                        .filter(|&d| grants::guest_principal(d) == p),
+                        .filter_map(|guest| unhex(&guest.device).map(DeviceId))
+                        .filter(|&device| grants::guest_principal(device) == principal),
                 );
                 drop(store);
                 devices_hit.extend(
                     lock(&self.live)
                         .values()
-                        .map(|l| l.authz.actor)
-                        .filter(|a| a.principal == p)
-                        .map(|a| a.device),
+                        .map(|connection| connection.authz.actor)
+                        .filter(|actor| actor.principal == principal)
+                        .map(|actor| actor.device),
                 );
                 devices_hit.sort();
                 devices_hit.dedup();
@@ -1217,20 +1233,25 @@ impl Mp {
                 .grants
                 .iter()
                 .filter_map(Store::chain_of)
-                .filter(|c| c.links.iter().any(|l| hit.contains(&l.grant.grant_id)))
-                .map(|c| c.grant_id())
-                .filter(|g| !hit.contains(g))
+                .filter(|chain| {
+                    chain
+                        .links
+                        .iter()
+                        .any(|link| hit.contains(&link.grant.grant_id))
+                })
+                .map(|chain| chain.grant_id())
+                .filter(|grant| !hit.contains(grant))
                 .collect();
-            for g in &grants_hit {
-                store.revoked_grants.insert(hex(&g.0));
+            for grant in &grants_hit {
+                store.revoked_grants.insert(hex(&grant.0));
             }
             grants_hit.extend(descendants);
             // An owner device is unpaired (`unpaired.json` keeps when); a guest's removal
             // is kept here. Either way what it signed or joined with until now stays void.
             let now = now_millis();
-            for &d in &devices_hit {
-                if !core.identity.unpair(d) {
-                    store.removed_devices.insert(hex(&d.0), now);
+            for &device in &devices_hit {
+                if !core.identity.unpair(device) {
+                    store.removed_devices.insert(hex(&device.0), now);
                 }
             }
             self.save(&mut store);
@@ -1242,13 +1263,13 @@ impl Mp {
             grants_hit.len(),
             grants_hit
                 .iter()
-                .map(|g| short(&g.0))
+                .map(|grant| short(&grant.0))
                 .collect::<Vec<_>>()
                 .join(","),
             devices_hit.len(),
             devices_hit
                 .iter()
-                .map(|d| short(&d.0))
+                .map(|device| short(&device.0))
                 .collect::<Vec<_>>()
                 .join(","),
         );
@@ -1275,17 +1296,22 @@ impl Mp {
         )> = {
             let live = lock(&self.live);
             live.values()
-                .filter(|l| !self.still_valid(&l.authz))
-                .map(|l| (l.authz.grant_id(), l.ctl.clone(), l.conn.clone()))
+                .filter(|connection| !self.still_valid(&connection.authz))
+                .map(|connection| {
+                    (
+                        connection.authz.grant_id(),
+                        connection.ctl.clone(),
+                        connection.conn.clone(),
+                    )
+                })
                 .collect()
         };
-        let n = doomed.len() as u32;
+        let kicked = doomed.len() as u32;
         for (grant, ctl, conn) in doomed {
             kick(grant, &ctl, conn);
         }
-        n
+        kicked
     }
-
 
     /// Puts a knock in front of the owners. The same device knocking again replaces its
     /// earlier knock.
@@ -1314,13 +1340,16 @@ impl Mp {
         let mut knocks = lock(&self.knocks);
         let replaced: Vec<KnockId> = knocks
             .iter()
-            .filter(|(_, k)| k.knock.actor.device == knocker.actor.device)
+            .filter(|(_, pending)| pending.knock.actor.device == knocker.actor.device)
             .map(|(id, _)| *id)
             .collect();
         for id in &replaced {
             knocks.remove(id);
         }
-        let waiting = knocks.values().filter(|k| k.knock.grant_id == leaf).count();
+        let waiting = knocks
+            .values()
+            .filter(|pending| pending.knock.grant_id == leaf)
+            .count();
         let now = std::time::Instant::now();
         let mut limits = lock(&self.knock_limits);
         if waiting >= MAX_KNOCKS_PER_GRANT || !limits.admit(leaf, now) {
@@ -1337,7 +1366,7 @@ impl Mp {
             if let knock_limit::Refusal::Audit { left_out } = refusal {
                 let more = match left_out {
                     0 => String::new(),
-                    n => format!(" ({n} more refused since the last record)"),
+                    left_out => format!(" ({left_out} more refused since the last record)"),
                 };
                 self.audit.append(
                     AuditKind::Denied,
@@ -1402,15 +1431,14 @@ impl Mp {
         Ok(knock_id)
     }
 
-    /// The knocker gave their name.
     pub fn rename_knock(&self, core: &Core, id: KnockId, name: &str) {
         let name: String = name.trim().chars().take(64).collect();
         if name.is_empty() {
             return;
         }
-        let updated = lock(&self.knocks).get_mut(&id).map(|k| {
-            k.knock.name = name;
-            k.knock.clone()
+        let updated = lock(&self.knocks).get_mut(&id).map(|pending| {
+            pending.knock.name = name;
+            pending.knock.clone()
         });
         if let Some(knock) = updated {
             core.emit(Event::Knock(KnockUpdate::Added(knock)));
@@ -1442,7 +1470,7 @@ impl Mp {
     pub fn knocks(&self) -> Vec<Knock> {
         lock(&self.knocks)
             .values()
-            .map(|k| k.knock.clone())
+            .map(|pending| pending.knock.clone())
             .collect()
     }
 
@@ -1461,7 +1489,7 @@ impl Mp {
         id: KnockId,
         admit: Option<Admit>,
     ) -> Result<MpResponse, MpError> {
-        if admit.is_some_and(|a| a.roles == Roles::EMPTY) {
+        if admit.is_some_and(|admit| admit.roles == Roles::EMPTY) {
             return Err(MpError::Invalid("admit with at least one role".into()));
         }
         let pending = lock(&self.knocks)
@@ -1528,7 +1556,6 @@ impl Mp {
         Ok(response)
     }
 
-    /// Mints and records the grant an admitted knocker joins with.
     fn admit(
         &self,
         core: &Core,
@@ -1537,7 +1564,7 @@ impl Mp {
         now: UnixMillis,
     ) -> Result<(GrantChain, GrantInfo), MpError> {
         let key = DeviceKey::from_seed(&core.identity.secret.to_bytes())
-            .map_err(|e| MpError::Failed(e.to_string()))?;
+            .map_err(|error| MpError::Failed(error.to_string()))?;
         let mut spec = GrantSpec::new(admit.roles, knock.scope);
         spec.expires = Some(
             admit
@@ -1569,31 +1596,32 @@ impl Mp {
             let mut knocks = lock(&self.knocks);
             let ids: Vec<KnockId> = knocks
                 .iter()
-                .filter(|(_, k)| {
+                .filter(|(_, pending)| {
                     !self.chain_live(
                         &store,
-                        &k.grant_ids,
-                        &k.issuers,
-                        k.root_signed,
-                        k.knock.actor.device,
-                        k.expires,
+                        &pending.grant_ids,
+                        &pending.issuers,
+                        pending.root_signed,
+                        pending.knock.actor.device,
+                        pending.expires,
                     )
                 })
                 .map(|(id, _)| *id)
                 .collect();
             ids.iter().filter_map(|id| knocks.remove(id)).collect()
         };
-        for k in doomed {
-            let _ = k.ctl.send(ServerCtl::KnockAnswer(KnockAnswer::Denied));
-            close_soon(k.conn, KNOCK_LINGER, b"revoked");
+        for pending in doomed {
+            let _ = pending
+                .ctl
+                .send(ServerCtl::KnockAnswer(KnockAnswer::Denied));
+            close_soon(pending.conn, KNOCK_LINGER, b"revoked");
             core.emit(Event::Knock(KnockUpdate::Gone {
-                knock_id: k.knock.knock_id,
+                knock_id: pending.knock.knock_id,
                 outcome: KnockOutcome::Withdrawn,
                 by: None,
             }));
         }
     }
-
 
     /// A session's approval policy (the default: any approver, any risk).
     pub fn policy(&self, session: SessionId) -> ApprovalPolicy {
@@ -1604,10 +1632,9 @@ impl Mp {
             .unwrap_or_default()
     }
 
-    /// The policy of the session a pane belongs to.
     pub fn policy_of_pane(&self, core: &Core, pane: PaneId) -> ApprovalPolicy {
         core.session_of_pane(pane)
-            .map(|s| self.policy(s))
+            .map(|session| self.policy(session))
             .unwrap_or_default()
     }
 
@@ -1650,8 +1677,8 @@ impl Mp {
             return true;
         }
         let store = lock(&self.store);
-        store.guests.iter().any(|g| {
-            let Some(device) = unhex(&g.device).map(DeviceId) else {
+        store.guests.iter().any(|guest| {
+            let Some(device) = unhex(&guest.device).map(DeviceId) else {
                 return false;
             };
             if grants::guest_principal(device) != principal {
@@ -1660,13 +1687,18 @@ impl Mp {
             store
                 .grants
                 .iter()
-                .filter(|s| s.bound.contains(&g.device))
+                .filter(|grant| grant.bound.contains(&guest.device))
                 .filter_map(Store::chain_of)
                 .any(|chain| {
-                    let ids: Vec<GrantId> = chain.links.iter().map(|l| l.grant.grant_id).collect();
+                    let ids: Vec<GrantId> =
+                        chain.links.iter().map(|link| link.grant.grant_id).collect();
                     let issuers: Vec<DeviceId> =
-                        chain.links.iter().map(|l| l.grant.issuer).collect();
-                    let expires = chain.links.iter().filter_map(|l| l.grant.expires).min();
+                        chain.links.iter().map(|link| link.grant.issuer).collect();
+                    let expires = chain
+                        .links
+                        .iter()
+                        .filter_map(|link| link.grant.expires)
+                        .min();
                     self.chain_live(
                         &store,
                         &ids,
@@ -1679,16 +1711,17 @@ impl Mp {
         })
     }
 
-    // --- leases -----------------------------------------------------------------------------
-
     pub fn lease(&self, pane: PaneId) -> Lease {
         lock(&self.leases)
             .get(&pane)
-            .map_or_else(|| LeaseState::free().wire(pane), |l| l.wire(pane))
+            .map_or_else(|| LeaseState::free().wire(pane), |lease| lease.wire(pane))
     }
 
     pub fn leases(&self) -> Vec<Lease> {
-        lock(&self.leases).iter().map(|(p, l)| l.wire(*p)).collect()
+        lock(&self.leases)
+            .iter()
+            .map(|(pane, lease)| lease.wire(*pane))
+            .collect()
     }
 
     /// Whether a connected guest (not an owner device) may type into `pane`: raw input as a
@@ -1696,8 +1729,8 @@ impl Mp {
     pub fn guest_can_type(&self, core: &Core, pane: PaneId) -> bool {
         let guests: Vec<Authz> = lock(&self.live)
             .values()
-            .filter(|l| !l.authz.grant_ids.is_empty())
-            .map(|l| l.authz.clone())
+            .filter(|connection| !connection.authz.grant_ids.is_empty())
+            .map(|connection| connection.authz.clone())
             .collect();
         guests.iter().any(|authz| {
             self.still_valid(authz)
@@ -1711,27 +1744,30 @@ impl Mp {
         let holder = lock(&self.leases).get(&pane)?.holder?;
         lock(&self.live)
             .values()
-            .find(|l| l.authz.actor.principal == holder.principal && !l.authz.grant_ids.is_empty())
-            .map(|l| l.name.clone())
+            .find(|connection| {
+                connection.authz.actor.principal == holder.principal
+                    && !connection.authz.grant_ids.is_empty()
+            })
+            .map(|connection| connection.name.clone())
     }
 
     /// Whether `principal` may size the pane's PTY: nobody holds the lease, or it does.
     pub fn may_size(&self, pane: PaneId, principal: PrincipalId) -> bool {
         lock(&self.leases)
             .get(&pane)
-            .and_then(|l| l.holder)
-            .is_none_or(|h| h.principal == principal)
+            .and_then(|lease| lease.holder)
+            .is_none_or(|holder| holder.principal == principal)
     }
 
     /// Raw input from `actor`: allowed if it holds the lease, or takes a free lease (also one
     /// whose holder left). Otherwise returns the lease so the client can show who drives.
     pub fn input(&self, core: &Core, pane: PaneId, actor: Actor) -> Result<(), Lease> {
-        let holder = lock(&self.leases).get(&pane).and_then(|l| l.holder);
-        let holder_here = holder.is_some_and(|h| self.principal_connected(h.principal));
+        let holder = lock(&self.leases).get(&pane).and_then(|lease| lease.holder);
+        let holder_here = holder.is_some_and(|holder| self.principal_connected(holder.principal));
         let mut leases = lock(&self.leases);
         let state = leases.entry(pane).or_insert_with(LeaseState::free);
         match state.holder {
-            Some(h) if h.principal == actor.principal => {
+            Some(holder) if holder.principal == actor.principal => {
                 state.last_input = Instant::now();
                 Ok(())
             }
@@ -1771,8 +1807,8 @@ impl Mp {
     fn principal_name(&self, principal: PrincipalId) -> String {
         lock(&self.live)
             .values()
-            .find(|l| l.authz.actor.principal == principal)
-            .map(|l| l.name.clone())
+            .find(|connection| connection.authz.actor.principal == principal)
+            .map(|connection| connection.name.clone())
             .unwrap_or_else(|| short(&principal.0))
     }
 
@@ -1790,15 +1826,18 @@ impl Mp {
             .ok_or_else(|| MpError::NotFound(format!("pane {pane}")))?;
         let (holder, idle) = {
             let leases = lock(&self.leases);
-            let l = leases.get(&pane);
+            let lease = leases.get(&pane);
             (
-                l.and_then(|l| l.holder),
-                l.map_or(Duration::MAX, |l| l.last_input.elapsed()),
+                lease.and_then(|lease| lease.holder),
+                lease.map_or(Duration::MAX, |lease| lease.last_input.elapsed()),
             )
         };
         let free = match holder {
             None => true,
-            Some(h) => h.principal == by.actor.principal || !self.principal_connected(h.principal),
+            Some(holder) => {
+                holder.principal == by.actor.principal
+                    || !self.principal_connected(holder.principal)
+            }
         };
         if free || force || idle >= self.lease_idle {
             let why = if force && !free {
@@ -1812,8 +1851,8 @@ impl Mp {
         }
         let holder = holder.expect("not free");
         let name = self.name_of(conn);
-        if let Some(l) = lock(&self.leases).get_mut(&pane) {
-            l.pending = Some((by.actor, name.clone()));
+        if let Some(lease) = lock(&self.leases).get_mut(&pane) {
+            lease.pending = Some((by.actor, name.clone()));
         }
         self.send_to_principal(
             holder.principal,
@@ -1828,7 +1867,6 @@ impl Mp {
         })
     }
 
-    /// The holder answers a pending request.
     pub fn answer_control(
         &self,
         core: &Core,
@@ -1838,12 +1876,12 @@ impl Mp {
     ) -> Result<LeaseOutcome, MpError> {
         let (holder, pending) = {
             let leases = lock(&self.leases);
-            let l = leases
+            let lease = leases
                 .get(&pane)
                 .ok_or_else(|| MpError::NotFound("no lease on that pane".into()))?;
-            (l.holder, l.pending.clone())
+            (lease.holder, lease.pending.clone())
         };
-        if holder.is_none_or(|h| h.principal != by.actor.principal) {
+        if holder.is_none_or(|holder| holder.principal != by.actor.principal) {
             return Err(MpError::Forbidden(
                 "only the lease holder can answer".into(),
             ));
@@ -1859,9 +1897,9 @@ impl Mp {
         } else {
             let lease = {
                 let mut leases = lock(&self.leases);
-                let l = leases.get_mut(&pane).expect("checked");
-                l.pending = None;
-                l.wire(pane)
+                let lease = leases.get_mut(&pane).expect("checked");
+                lease.pending = None;
+                lease.wire(pane)
             };
             self.send_to_principal(asker.principal, &ServerCtl::Lease(lease));
             Ok(LeaseOutcome::Kept(lease))
@@ -1876,18 +1914,18 @@ impl Mp {
         pane: PaneId,
         to: PrincipalId,
     ) -> Result<LeaseOutcome, MpError> {
-        let holder = lock(&self.leases).get(&pane).and_then(|l| l.holder);
-        let holds = holder.is_some_and(|h| h.principal == by.actor.principal);
+        let holder = lock(&self.leases).get(&pane).and_then(|lease| lease.holder);
+        let holds = holder.is_some_and(|holder| holder.principal == by.actor.principal);
         if !holds {
             policy::check(core, by, Need::Own, Target::Pane(pane))?;
         }
         let target = lock(&self.live)
             .values()
-            .find(|l| l.authz.actor.principal == to)
-            .map(|l| l.authz.clone())
+            .find(|connection| connection.authz.actor.principal == to)
+            .map(|connection| connection.authz.clone())
             .ok_or_else(|| MpError::NotFound("that principal is not connected".into()))?;
         policy::check(core, &target, Need::Drive, Target::Pane(pane))
-            .map_err(|e| MpError::Conflict(format!("cannot give control: {e}")))?;
+            .map_err(|error| MpError::Conflict(format!("cannot give control: {error}")))?;
         Ok(LeaseOutcome::Granted(self.transfer(
             core,
             pane,
@@ -1899,18 +1937,21 @@ impl Mp {
     pub fn release_control(&self, core: &Core, by: &Authz, pane: PaneId) -> Result<(), MpError> {
         let lease = {
             let mut leases = lock(&self.leases);
-            let l = leases
+            let lease = leases
                 .get_mut(&pane)
                 .ok_or_else(|| MpError::NotFound("no lease on that pane".into()))?;
-            if l.holder.is_none_or(|h| h.principal != by.actor.principal) {
+            if lease
+                .holder
+                .is_none_or(|holder| holder.principal != by.actor.principal)
+            {
                 return Err(MpError::Forbidden(
                     "only the lease holder can release".into(),
                 ));
             }
-            l.holder = None;
-            l.pending = None;
-            l.since = UnixMillis(now_millis());
-            l.wire(pane)
+            lease.holder = None;
+            lease.pending = None;
+            lease.since = UnixMillis(now_millis());
+            lease.wire(pane)
         };
         self.audit.append(
             AuditKind::Lease,
@@ -1928,10 +1969,10 @@ impl Mp {
         lock(&self.leases).remove(&pane);
     }
 
-    fn send_to_principal(&self, principal: PrincipalId, msg: &ServerCtl) {
-        for l in lock(&self.live).values() {
-            if l.authz.actor.principal == principal {
-                let _ = l.ctl.send(msg.clone());
+    fn send_to_principal(&self, principal: PrincipalId, message: &ServerCtl) {
+        for connection in lock(&self.live).values() {
+            if connection.authz.actor.principal == principal {
+                let _ = connection.ctl.send(message.clone());
             }
         }
     }
@@ -1941,8 +1982,8 @@ impl Mp {
     pub fn tick(&self, core: &Core) {
         let due: Vec<(PaneId, Actor)> = lock(&self.leases)
             .iter()
-            .filter(|(_, l)| l.last_input.elapsed() >= self.lease_idle)
-            .filter_map(|(p, l)| Some((*p, l.pending.as_ref()?.0)))
+            .filter(|(_, lease)| lease.last_input.elapsed() >= self.lease_idle)
+            .filter_map(|(pane, lease)| Some((*pane, lease.pending.as_ref()?.0)))
             .collect();
         for (pane, to) in due {
             self.transfer(core, pane, to, "took control (holder idle)");
@@ -1955,13 +1996,13 @@ impl Mp {
 
 /// What a decision may do under its session's approval policy.
 pub(crate) enum Gate {
-    /// Apply it.
     Proceed,
     /// Counted; the request waits for a second person. The vote is audited (with the
     /// decider's signature) and broadcast; the agent is not answered yet.
     Held,
 }
 
+/// Applies the session's approval policy to a decision on `request` before it
 /// reaches the agent. `signed` is what the decider signed and `sig` its signature, kept in
 /// the audit record of a held vote.
 ///
@@ -1986,13 +2027,16 @@ pub(crate) fn gate_decision(
     let verdict = mp
         .approvals
         .judge(policy, pane, request, risk, allow, ballot)
-        .inspect_err(|e| {
+        .inspect_err(|error| {
             mp.audit.append(
                 AuditKind::Denied,
                 AuditEntry {
                     actor: Some(ballot.actor),
                     pane_id: Some(pane),
-                    detail: format!("{} could not answer {}: {e}", ballot.name, facts.summary),
+                    detail: format!(
+                        "{} could not answer {}: {error}",
+                        ballot.name, facts.summary
+                    ),
                     ..AuditEntry::default()
                 },
             );

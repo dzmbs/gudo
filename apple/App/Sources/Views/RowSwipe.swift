@@ -204,12 +204,12 @@ private struct SwipeContainer: ViewModifier {
         SwipeActionTray.width(for: edge.count, rowHeight: height)
     }
 
-    private func changed(_ x: CGFloat) {
+    private func changed(_ translation: CGFloat) {
         if start == nil {
             start = offset
             shared?.open = id
         }
-        var next = (start ?? 0) + x
+        var next = (start ?? 0) + translation
         if actions.leading.isEmpty { next = min(0, next) }
         if actions.trailing.isEmpty { next = max(0, next) }
         offset = max(-width, min(width, next))
@@ -217,7 +217,7 @@ private struct SwipeContainer: ViewModifier {
         armed = !edge.isEmpty && abs(offset) > width * Self.fullSwipe
     }
 
-    private func ended(_ x: CGFloat, _ velocity: CGFloat) {
+    private func ended(_ translation: CGFloat, _ velocity: CGFloat) {
         defer { start = nil }
         let edge = offset < 0 ? actions.trailing : actions.leading
         if armed, let action = edge.first {

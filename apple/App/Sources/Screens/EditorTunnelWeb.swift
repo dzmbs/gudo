@@ -8,24 +8,19 @@ import UIKit
 import AppKit
 #endif
 
-/// vscode.dev through a VS Code Remote Tunnel, top-level in a `WKWebView` (vscode.dev refuses
-/// framing). Unlike the default editor it opens popups: GitHub and Microsoft sign-in (Settings
-/// Sync, Copilot) and "open in new window" come up as a sheet with their own web view that keeps
-/// the opener link, and close themselves when the page calls `window.close()`. Links to other
-/// apps (`vscode:`, `mailto:`) leave the app.
+/// vscode.dev through a VS Code Remote Tunnel, top-level in a `WKWebView` because vscode.dev
+/// refuses framing. Popups (sign-ins, new windows) come up as a sheet whose web view keeps
+/// `window.opener`, so the page can close them itself.
 @MainActor
 @Observable
 final class TunnelBrowser: NSObject, WKUIDelegate, WKNavigationDelegate {
     @ObservationIgnored let webView: WKWebView
-    /// A window the page opened, shown as a sheet.
     var popup: Popup?
     private(set) var isLoading = false
-    /// The main page finished loading.
     @ObservationIgnored var onLoad: (() -> Void)?
-    /// The main page could not be loaded (the error, in words).
     @ObservationIgnored var onFail: ((String) -> Void)?
-    /// The page cannot go on and must be loaded again: its web content process ended, or the
-    /// workbench gave up reconnecting to its server (the reason, for the log).
+    /// The page must be loaded again: its content process ended or the workbench gave up
+    /// reconnecting. Passes the reason, for the log.
     @ObservationIgnored var onLost: ((String) -> Void)?
 
     struct Popup: Identifiable {
@@ -35,8 +30,6 @@ final class TunnelBrowser: NSObject, WKUIDelegate, WKNavigationDelegate {
 
     static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app", category: "editor")
 
-    /// `dataStore`: where the workbench keeps its state (open editors, sign-ins) like a desktop
-    /// window; the shared store by default.
     init(dataStore: WKWebsiteDataStore = .default()) {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = dataStore
@@ -102,9 +95,8 @@ final class TunnelBrowser: NSObject, WKUIDelegate, WKNavigationDelegate {
         case openExternally
     }
 
-    /// Web content loads in place. vscode:, mailto:, tel: belong to other apps; the workbench
-    /// and its extensions' web views are web content, so only their main frame may hand these
-    /// over, and nothing else (never `file:`, never this app's own links).
+    /// Extensions' web views are untrusted content, so only the main frame may hand links to
+    /// other apps, and only for `externalSchemes` (never `file:` or this app's own links).
     static func decision(for url: URL?, mainFrame: Bool) -> NavigationDecision {
         guard let scheme = url?.scheme?.lowercased() else { return .allow }
         if ["http", "https", "about", "blob", "data"].contains(scheme) { return .allow }
@@ -157,16 +149,14 @@ final class TunnelBrowser: NSObject, WKUIDelegate, WKNavigationDelegate {
     }
 }
 
-/// Hears the workbench give up on its server for good: VS Code's "Cannot reconnect" dialog
-/// (the server lost the session: its grace time ran out, or it was restarted). Weak, so the
-/// content controller does not keep the browser alive.
+/// Notices VS Code's "Cannot reconnect" dialog, shown once the server has lost the session.
+/// `browser` is weak so the content controller does not keep it alive.
 @MainActor
 private final class LostRelay: NSObject, WKScriptMessageHandler {
     static let name = "editorLost"
     weak var browser: TunnelBrowser?
 
-    /// Looks at dialogs only (cheap; the workbench changes the page all the time), once a
-    /// second at most, and says so once per page.
+    /// Checks dialogs only, at most once a second: the workbench mutates the page constantly.
     static let script = WKUserScript(source: """
         (() => {
           let said = false, queued = false;
@@ -194,7 +184,6 @@ private final class LostRelay: NSObject, WKScriptMessageHandler {
     }
 }
 
-/// A `WKWebView` in SwiftUI.
 struct WebViewHost: View {
     let webView: WKWebView
 
@@ -215,8 +204,8 @@ struct WebViewHost: View {
     #endif
 }
 
-/// A window vscode.dev opened (a sign-in, usually): its own web view, Done to close it, and
-/// Open in Browser for pages that refuse to work in an app.
+/// A window vscode.dev opened, usually a sign-in. Open in Browser is for pages that refuse to
+/// work inside an app.
 struct EditorPopupSheet: View {
     let popup: TunnelBrowser.Popup
     var close: () -> Void

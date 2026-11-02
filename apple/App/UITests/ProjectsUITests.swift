@@ -56,9 +56,9 @@ final class ProjectsUITests: XCTestCase {
         let app = try launch()
         let row1 = element(app, "tab-row-1")
         XCTAssertTrue(row1.waitForExistence(timeout: 40), "the daemon's tab")
-        for n in 2...3 {
+        for number in 2...3 {
             app.typeKey("t", modifierFlags: .command)
-            XCTAssertTrue(element(app, "tab-row-\(n)").waitForExistence(timeout: 20), "tab \(n)")
+            XCTAssertTrue(element(app, "tab-row-\(number)").waitForExistence(timeout: 20), "tab \(number)")
         }
 
         menu(app, on: row1, "New Project from Tab")
@@ -94,7 +94,7 @@ final class ProjectsUITests: XCTestCase {
 
         menu(app, on: renamed, "Ungroup")
         XCTAssertTrue(renamed.waitForNonExistence(timeout: 10), "project gone")
-        for n in 1...3 { XCTAssertTrue(element(app, "tab-row-\(n)").exists, "tab \(n) still open") }
+        for number in 1...3 { XCTAssertTrue(element(app, "tab-row-\(number)").exists, "tab \(number) still open") }
         shot(app, "projects-ungrouped")
     }
 

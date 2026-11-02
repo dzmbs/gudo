@@ -2,10 +2,9 @@
 import SwiftUI
 import UIKit
 
-/// Reports the window's fold to its model: the hinge from `UIHingeInteraction` (called with the
-/// first state and on every change) and the division region, read in `updateConstraints()` so
-/// UIKit runs it again whenever the region moves. Fills the window, so its coordinates are the
-/// window's. Off a foldable (and before iOS 27.1) there is no hinge and the fold stays empty.
+/// Reports the window's fold to its model. The division region is read in `updateConstraints()`
+/// so UIKit runs it again whenever the region moves. Fills the window, so its coordinates are the
+/// window's.
 struct FoldProbe: UIViewRepresentable {
     let model: WindowModel
 
@@ -31,7 +30,7 @@ struct FoldProbe: UIViewRepresentable {
     func updateUIView(_ view: ProbeView, context: Context) {
         view.layout = model.foldLayout
         #if DEBUG
-        // Back to the device's own hinge: read it again.
+        // Leaving a simulated posture: read the device's own hinge again.
         if view.debugPosture != model.debugPosture {
             view.debugPosture = model.debugPosture
             view.setNeedsUpdateConstraints()
@@ -40,8 +39,8 @@ struct FoldProbe: UIViewRepresentable {
         #endif
     }
 
-    /// The page holding `view` in screen coordinates while its window lies open across a fold
-    /// (`FoldLayout.pages`); nil otherwise. The key bar, in the keyboard's own window, keeps to it.
+    /// The page holding `view`, in screen coordinates, while its window lies open across a fold.
+    /// Lets the key bar, which lives in the keyboard's window, keep to one page.
     static func page(containing view: UIView) -> CGRect? {
         guard let window = view.window,
               case .pages(let leading, let gutter) = ProbeView.layouts[ObjectIdentifier(window)]
@@ -55,7 +54,6 @@ struct FoldProbe: UIViewRepresentable {
     }
 
     final class ProbeView: UIView {
-        /// Each window's layout, for `page(containing:)`.
         fileprivate static var layouts: [ObjectIdentifier: FoldLayout] = [:]
         var layout = FoldLayout.standard {
             didSet { register() }
@@ -105,7 +103,7 @@ struct FoldProbe: UIViewRepresentable {
             var division: CGRect?
             var active = false
             if #available(iOS 27.1, *) {
-                // Inactive ones too: a flat screen still says where its fold is.
+                // Include inactive regions: a flat screen still says where its fold is.
                 if let region = reservedRegions(kind: .division, options: .includeInactive).first {
                     division = region.frame
                     active = region.isActive
@@ -117,8 +115,8 @@ struct FoldProbe: UIViewRepresentable {
 }
 
 #if DEBUG
-/// Folds the simulator from outside without a prompt: `xcrun simctl spawn <device> notifyutil -p
-/// dev.gudo.debug.posture.<name>` (`real`: the device's own hinge). A URL would ask first.
+/// Folds the simulator from outside: `xcrun simctl spawn <device> notifyutil -p
+/// dev.gudo.debug.posture.<name>` (`real` for the device's own hinge). A URL would prompt first.
 enum DebugPostures {
     private static let prefix = "dev.gudo.debug.posture."
     private static let local = Notification.Name("DebugPosture")
@@ -126,8 +124,8 @@ enum DebugPostures {
 
     static func observe(_ apply: @escaping @MainActor (FoldPosture?) -> Void) -> NSObjectProtocol {
         install()
-        return NotificationCenter.default.addObserver(forName: local, object: nil, queue: .main) { note in
-            let name = note.object as? String
+        return NotificationCenter.default.addObserver(forName: local, object: nil, queue: .main) { notification in
+            let name = notification.object as? String
             MainActor.assumeIsolated { apply(name.flatMap(FoldPosture.init(rawValue:))) }
         }
     }

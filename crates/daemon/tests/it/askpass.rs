@@ -55,26 +55,31 @@ async fn reply(task: tokio::task::JoinHandle<HelperReply>) -> HelperReply {
         .unwrap()
 }
 
-fn prompts(c: &TestClient) -> Vec<SecretPrompt> {
-    c.askpass
+fn prompts(client: &TestClient) -> Vec<SecretPrompt> {
+    client
+        .askpass
         .iter()
-        .filter_map(|e| match e {
-            AskpassEvent::Prompt(p) => Some(p.clone()),
+        .filter_map(|event| match event {
+            AskpassEvent::Prompt(prompt) => Some(prompt.clone()),
             _ => None,
         })
         .collect()
 }
 
-fn closed(c: &TestClient, id: AskpassId) -> Option<CloseReason> {
-    c.askpass.iter().find_map(|e| match e {
-        AskpassEvent::Closed { id: i, reason, .. } if *i == id => Some(*reason),
+fn closed(client: &TestClient, id: AskpassId) -> Option<CloseReason> {
+    client.askpass.iter().find_map(|event| match event {
+        AskpassEvent::Closed {
+            id: closed_id,
+            reason,
+            ..
+        } if *closed_id == id => Some(*reason),
         _ => None,
     })
 }
 
-fn answer_of(r: &HelperReply) -> Option<&str> {
-    match r {
-        HelperReply::Answer(s) => Some(s),
+fn answer_of(helper_reply: &HelperReply) -> Option<&str> {
+    match helper_reply {
+        HelperReply::Answer(answer) => Some(answer),
         _ => None,
     }
 }
@@ -84,21 +89,22 @@ async fn askpass_prompt_goes_to_the_app_and_the_first_answer_wins() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = start(dir.path()).await;
     let socket = daemon.hook_socket().to_owned();
-    let mut a = TestClient::connect_askpass(&ticket(&daemon), ClientConfig::generate_key());
-    let pane = a.attach_and_follow().await;
-    let mut b = TestClient::connect_askpass(&ticket(&daemon), ClientConfig::generate_key());
-    b.attach_and_follow().await;
+    let mut laptop = TestClient::connect_askpass(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = laptop.attach_and_follow().await;
+    let mut tablet = TestClient::connect_askpass(&ticket(&daemon), ClientConfig::generate_key());
+    tablet.attach_and_follow().await;
     // A client that did not ask for prompts (an older app, the CLI) is never sent one.
     let mut plain = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
     plain.attach_and_follow().await;
 
     // Panes carry the helper and the hook socket's coordinates.
-    a.type_line(
+    laptop.type_line(
         pane,
         "printf '%s|%s|%s|%s\\n' \"${SUDO_ASKPASS##*/}\" \"${SSH_ASKPASS##*/}\" \
          \"$SSH_ASKPASS_REQUIRE\" \"${GIT_ASKPASS##*/}\"",
     );
-    a.wait_text(pane, "gudo-askpass|gudo-askpass|prefer|gudo-askpass")
+    laptop
+        .wait_text(pane, "gudo-askpass|gudo-askpass|prefer|gudo-askpass")
         .await;
     let helper_path = dir.path().join("askpass/gudo-askpass");
     let script = std::fs::read_to_string(&helper_path).unwrap();
@@ -113,34 +119,45 @@ async fn askpass_prompt_goes_to_the_app_and_the_first_answer_wins() {
             "sudo -A apt upgrade",
         ),
     );
-    a.until("prompt on a", |c| !prompts(c).is_empty()).await;
-    b.until("prompt on b", |c| !prompts(c).is_empty()).await;
-    let p = prompts(&a)[0].clone();
-    assert_eq!(p.pane_id, pane);
-    assert_eq!(p.source, SecretSource::Sudo);
-    assert_eq!(p.prompt, "[sudo] password for ana:");
-    assert_eq!(p.program, "sudo -A apt upgrade");
-    assert!(!p.echo && !p.retry);
-    assert!(p.expires_at > UnixMillis(now_millis().0));
-    assert_eq!(a.client.open_askpass(), vec![p.clone()]);
+    laptop
+        .until("prompt on a", |client| !prompts(client).is_empty())
+        .await;
+    tablet
+        .until("prompt on b", |client| !prompts(client).is_empty())
+        .await;
+    let prompt = prompts(&laptop)[0].clone();
+    assert_eq!(prompt.pane_id, pane);
+    assert_eq!(prompt.source, SecretSource::Sudo);
+    assert_eq!(prompt.prompt, "[sudo] password for ana:");
+    assert_eq!(prompt.program, "sudo -A apt upgrade");
+    assert!(!prompt.echo && !prompt.retry);
+    assert!(prompt.expires_at > UnixMillis(now_millis().0));
+    assert_eq!(laptop.client.open_askpass(), vec![prompt.clone()]);
 
-    a.client
-        .answer_askpass(p.id, Secret::new(b"hunter2".to_vec()))
+    laptop
+        .client
+        .answer_askpass(prompt.id, Secret::new(b"hunter2".to_vec()))
         .await
         .expect("first answer");
     let got = reply(task).await;
     assert_eq!(answer_of(&got), Some("hunter2"));
     // The other device's sheet closes; its late answer is refused.
-    b.until("closed on b", |c| closed(c, p.id).is_some()).await;
-    let me = a.client.me().unwrap().actor.principal;
-    assert_eq!(closed(&b, p.id), Some(CloseReason::Answered { by: me }));
+    tablet
+        .until("closed on b", |client| closed(client, prompt.id).is_some())
+        .await;
+    let me = laptop.client.me().unwrap().actor.principal;
     assert_eq!(
-        b.client
-            .answer_askpass(p.id, Secret::new(b"other".to_vec()))
+        closed(&tablet, prompt.id),
+        Some(CloseReason::Answered { by: me })
+    );
+    assert_eq!(
+        tablet
+            .client
+            .answer_askpass(prompt.id, Secret::new(b"other".to_vec()))
             .await,
         Err(AskpassError::Gone)
     );
-    assert!(b.client.open_askpass().is_empty());
+    assert!(tablet.client.open_askpass().is_empty());
 
     // The same question again right away is flagged as a retry; Cancel declines it.
     let task = spawn_helper(
@@ -152,26 +169,33 @@ async fn askpass_prompt_goes_to_the_app_and_the_first_answer_wins() {
             "sudo -A apt upgrade",
         ),
     );
-    b.until("second prompt", |c| prompts(c).len() == 2).await;
-    let again = prompts(&b)[1].clone();
+    tablet
+        .until("second prompt", |client| prompts(client).len() == 2)
+        .await;
+    let again = prompts(&tablet)[1].clone();
     assert!(again.retry);
-    b.client.cancel_askpass(again.id).await.unwrap();
+    tablet.client.cancel_askpass(again.id).await.unwrap();
     assert!(matches!(reply(task).await, HelperReply::Cancelled));
-    a.until("cancel seen", |c| closed(c, again.id).is_some())
+    laptop
+        .until("cancel seen", |client| closed(client, again.id).is_some())
         .await;
 
     // Answers with control characters would end the line early or signal: refused.
     let task = spawn_helper(&socket, call(dir.path(), pane, "Password:", "ssh host"));
-    a.until("third prompt", |c| prompts(c).len() == 3).await;
-    let third = prompts(&a)[2].clone();
+    laptop
+        .until("third prompt", |client| prompts(client).len() == 3)
+        .await;
+    let third = prompts(&laptop)[2].clone();
     assert_eq!(third.source, SecretSource::Ssh);
     assert!(matches!(
-        a.client
+        laptop
+            .client
             .answer_askpass(third.id, Secret::new(b"a\nb".to_vec()))
             .await,
         Err(AskpassError::Failed(_))
     ));
-    a.client
+    laptop
+        .client
         .answer_askpass(third.id, Secret::new("pässwörd".as_bytes().to_vec()))
         .await
         .unwrap();
@@ -187,10 +211,13 @@ async fn askpass_prompt_goes_to_the_app_and_the_first_answer_wins() {
             "ssh new-host",
         ),
     );
-    a.until("question", |c| prompts(c).len() == 4).await;
-    let question = prompts(&a)[3].clone();
+    laptop
+        .until("question", |client| prompts(client).len() == 4)
+        .await;
+    let question = prompts(&laptop)[3].clone();
     assert!(question.echo);
-    a.client
+    laptop
+        .client
         .answer_askpass(question.id, Secret::new(b"yes".to_vec()))
         .await
         .unwrap();
@@ -199,7 +226,7 @@ async fn askpass_prompt_goes_to_the_app_and_the_first_answer_wins() {
     plain.until("settled", |_| true).await;
     assert!(plain.askpass.is_empty());
     // Nothing secret reaches the daemon's log of events either.
-    assert!(!a.log.iter().any(|l| l.contains("hunter2")));
+    assert!(!laptop.log.iter().any(|line| line.contains("hunter2")));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -234,16 +261,21 @@ async fn guests_never_see_prompts_and_the_owner_is_told_who_drives() {
     };
     let mut carol = TestClient::join_options(&viewer_invite.to_string(), insist.clone());
     carol.client.attach(None);
-    carol.until("guest layout", |c| c.layout.is_some()).await;
+    carol
+        .until("guest layout", |client| client.layout.is_some())
+        .await;
     carol.follow(pane).await;
     let mut bob = TestClient::join_options(&driver_invite.to_string(), insist);
     bob.client.attach(None);
-    bob.until("guest layout", |c| c.layout.is_some()).await;
+    bob.until("guest layout", |client| client.layout.is_some())
+        .await;
     bob.follow(pane).await;
 
     let task = spawn_helper(&socket, call(dir.path(), pane, "Password:", "sudo -A id"));
-    owner.until("prompt", |c| !prompts(c).is_empty()).await;
-    let p = prompts(&owner)[0].clone();
+    owner
+        .until("prompt", |client| !prompts(client).is_empty())
+        .await;
+    let prompt = prompts(&owner)[0].clone();
 
     // No guest is told, whatever its role, and guessing the id gets it nowhere: a host that
     // is not theirs must never ask for their passwords.
@@ -251,12 +283,12 @@ async fn guests_never_see_prompts_and_the_owner_is_told_who_drives() {
         assert!(matches!(
             guest
                 .client
-                .answer_askpass(p.id, Secret::new(b"guess".to_vec()))
+                .answer_askpass(prompt.id, Secret::new(b"guess".to_vec()))
                 .await,
             Err(AskpassError::Denied(_))
         ));
         assert!(matches!(
-            guest.client.cancel_askpass(p.id).await,
+            guest.client.cancel_askpass(prompt.id).await,
             Err(AskpassError::Denied(_))
         ));
     }
@@ -269,7 +301,7 @@ async fn guests_never_see_prompts_and_the_owner_is_told_who_drives() {
     ));
     owner
         .client
-        .answer_askpass(p.id, Secret::new(b"from-owner".to_vec()))
+        .answer_askpass(prompt.id, Secret::new(b"from-owner".to_vec()))
         .await
         .unwrap();
     assert_eq!(answer_of(&reply(task).await), Some("from-owner"));
@@ -280,9 +312,9 @@ async fn guests_never_see_prompts_and_the_owner_is_told_who_drives() {
     bob.wait_text(pane, "bob-drives").await;
     let task = spawn_helper(&socket, call(dir.path(), pane, "Password:", "sudo -A id"));
     owner
-        .until("the prompt names bob", |c| {
-            c.askpass.iter().any(|e| {
-                matches!(e, AskpassEvent::PromptWhileGuestDrives { guest, .. } if guest == "bob")
+        .until("the prompt names bob", |client| {
+            client.askpass.iter().any(|event| {
+                matches!(event, AskpassEvent::PromptWhileGuestDrives { guest, .. } if guest == "bob")
             })
         })
         .await;
@@ -300,34 +332,42 @@ async fn guests_never_see_prompts_and_the_owner_is_told_who_drives() {
 #[tokio::test(flavor = "multi_thread")]
 async fn unanswered_prompts_time_out_and_abandoned_ones_close() {
     let dir = tempfile::tempdir().unwrap();
-    let daemon = start_with(dir.path(), |c| {
-        c.askpass.timeout = Duration::from_millis(800);
+    let daemon = start_with(dir.path(), |config| {
+        config.askpass.timeout = Duration::from_millis(800);
     })
     .await;
     let socket = daemon.hook_socket().to_owned();
-    let mut a = TestClient::connect_askpass(&ticket(&daemon), ClientConfig::generate_key());
-    let pane = a.attach_and_follow().await;
+    let mut laptop = TestClient::connect_askpass(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = laptop.attach_and_follow().await;
 
     let task = spawn_helper(&socket, call(dir.path(), pane, "Password:", "sudo -A ls"));
-    a.until("prompt", |c| !prompts(c).is_empty()).await;
-    let p = prompts(&a)[0].clone();
+    laptop
+        .until("prompt", |client| !prompts(client).is_empty())
+        .await;
+    let prompt = prompts(&laptop)[0].clone();
     assert!(matches!(reply(task).await, HelperReply::Cancelled));
-    a.until("timed out", |c| closed(c, p.id).is_some()).await;
-    assert_eq!(closed(&a, p.id), Some(CloseReason::TimedOut));
+    laptop
+        .until("timed out", |client| closed(client, prompt.id).is_some())
+        .await;
+    assert_eq!(closed(&laptop, prompt.id), Some(CloseReason::TimedOut));
 
     // The program gives up (Ctrl-C kills sudo and its helper): the prompt closes at once.
     let mut stream = UnixStream::connect(&socket).await.unwrap();
     let mut line = serde_json::to_vec(&call(dir.path(), pane, "Passphrase:", "ssh-add")).unwrap();
     line.push(b'\n');
     stream.write_all(&line).await.unwrap();
-    a.until("second prompt", |c| prompts(c).len() == 2).await;
-    let second = prompts(&a)[1].clone();
-    drop(stream);
-    a.until("abandoned", |c| closed(c, second.id).is_some())
+    laptop
+        .until("second prompt", |client| prompts(client).len() == 2)
         .await;
-    assert_eq!(closed(&a, second.id), Some(CloseReason::Abandoned));
+    let second = prompts(&laptop)[1].clone();
+    drop(stream);
+    laptop
+        .until("abandoned", |client| closed(client, second.id).is_some())
+        .await;
+    assert_eq!(closed(&laptop, second.id), Some(CloseReason::Abandoned));
     assert_eq!(
-        a.client
+        laptop
+            .client
             .answer_askpass(second.id, Secret::new(b"late".to_vec()))
             .await,
         Err(AskpassError::Gone)
@@ -342,8 +382,8 @@ async fn unanswered_prompts_time_out_and_abandoned_ones_close() {
 #[tokio::test(flavor = "multi_thread")]
 async fn without_an_app_the_helper_asks_on_the_terminal() {
     let dir = tempfile::tempdir().unwrap();
-    let daemon = start_with(dir.path(), |c| {
-        c.askpass.grace = Duration::from_millis(500);
+    let daemon = start_with(dir.path(), |config| {
+        config.askpass.grace = Duration::from_millis(500);
     })
     .await;
     let socket = daemon.hook_socket().to_owned();
@@ -362,15 +402,17 @@ async fn without_an_app_the_helper_asks_on_the_terminal() {
     ));
 
     // An app that can answer comes; then it goes away with the prompt open.
-    let mut a = TestClient::connect_askpass(&ticket(&daemon), ClientConfig::generate_key());
-    a.attach_and_follow().await;
+    let mut laptop = TestClient::connect_askpass(&ticket(&daemon), ClientConfig::generate_key());
+    laptop.attach_and_follow().await;
     assert!(matches!(
         helper(&socket, probe).await,
         HelperReply::Available(true)
     ));
     let task = spawn_helper(&socket, call(dir.path(), pane, "Password:", "sudo"));
-    a.until("prompt", |c| !prompts(c).is_empty()).await;
-    drop(a);
+    laptop
+        .until("prompt", |client| !prompts(client).is_empty())
+        .await;
+    drop(laptop);
     assert!(matches!(reply(task).await, HelperReply::Terminal));
 }
 
@@ -378,74 +420,86 @@ async fn without_an_app_the_helper_asks_on_the_terminal() {
 async fn detected_password_prompts_take_a_secret_without_echo() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = start(dir.path()).await;
-    let mut a = TestClient::connect_askpass(&ticket(&daemon), ClientConfig::generate_key());
-    let pane = a.attach_and_follow().await;
+    let mut laptop = TestClient::connect_askpass(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = laptop.attach_and_follow().await;
 
     // At the shell prompt input is echoed: nothing is typed.
-    a.type_line(pane, "echo ready-$((1+1))");
-    a.wait_text(pane, "ready-2").await;
+    laptop.type_line(pane, "echo ready-$((1+1))");
+    laptop.wait_text(pane, "ready-2").await;
     assert_eq!(
-        a.client
+        laptop
+            .client
             .type_secret(pane, Secret::new(b"nope".to_vec()))
             .await,
         Err(AskpassError::NotHidden)
     );
 
     // A program that reads a password itself: echo off, then the prompt.
-    a.type_line(
+    laptop.type_line(
         pane,
         "stty -echo; printf 'Pass''word: '; read pw; stty echo; echo; echo \"len=${#pw} got=$pw\"",
     );
-    a.until("detected", |c| {
-        c.askpass
-            .iter()
-            .any(|e| matches!(e, AskpassEvent::Detected(d) if d.pane_id == pane))
-    })
-    .await;
-    let detected = a.client.detected_prompt(pane).expect("kept");
+    laptop
+        .until("detected", |client| {
+            client.askpass.iter().any(
+                |event| matches!(event, AskpassEvent::Detected(shown) if shown.pane_id == pane),
+            )
+        })
+        .await;
+    let detected = laptop.client.detected_prompt(pane).expect("kept");
     assert_eq!(detected.prompt, "Password:");
 
-    a.client
+    laptop
+        .client
         .type_secret(pane, Secret::new(b"s3cret".to_vec()))
         .await
         .expect("typed while hidden");
-    a.wait_text(pane, "len=6 got=s3cret").await;
-    a.until("gone", |c| {
-        c.askpass
-            .iter()
-            .any(|e| matches!(e, AskpassEvent::DetectedGone { pane_id } if *pane_id == pane))
-    })
-    .await;
-    assert!(a.client.detected_prompt(pane).is_none());
+    laptop.wait_text(pane, "len=6 got=s3cret").await;
+    laptop
+        .until("gone", |client| {
+            client.askpass.iter().any(
+                |event| matches!(event, AskpassEvent::DetectedGone { pane_id } if *pane_id == pane),
+            )
+        })
+        .await;
+    assert!(laptop.client.detected_prompt(pane).is_none());
     // The secret was never echoed: it appears only in the program's own output.
     assert_eq!(
-        a.text(pane).matches("s3cret").count(),
+        laptop.text(pane).matches("s3cret").count(),
         1,
         "{}",
-        a.text(pane)
+        laptop.text(pane)
     );
 
     // A client attaching while a prompt shows is told about it.
-    a.type_line(
+    laptop.type_line(
         pane,
         "stty -echo; printf 'Enter passphrase: '; read pw; stty echo",
     );
-    a.until("detected again", |c| {
-        c.client.detected_prompt(pane).is_some()
-    })
-    .await;
-    let mut b = TestClient::connect_askpass(&ticket(&daemon), ClientConfig::generate_key());
-    b.attach_and_follow().await;
-    b.until("b told", |c| c.client.detected_prompt(pane).is_some())
+    laptop
+        .until("detected again", |client| {
+            client.client.detected_prompt(pane).is_some()
+        })
+        .await;
+    let mut tablet = TestClient::connect_askpass(&ticket(&daemon), ClientConfig::generate_key());
+    tablet.attach_and_follow().await;
+    tablet
+        .until("b told", |client| {
+            client.client.detected_prompt(pane).is_some()
+        })
         .await;
     assert_eq!(
-        b.client.detected_prompt(pane).unwrap().prompt,
+        tablet.client.detected_prompt(pane).unwrap().prompt,
         "Enter passphrase:"
     );
-    b.client
+    tablet
+        .client
         .type_secret(pane, Secret::new(b"x".to_vec()))
         .await
         .unwrap();
-    b.until("gone on b", |c| c.client.detected_prompt(pane).is_none())
+    tablet
+        .until("gone on b", |client| {
+            client.client.detected_prompt(pane).is_none()
+        })
         .await;
 }

@@ -151,7 +151,7 @@ final class AppLock {
     @ObservationIgnored private let now: () -> ContinuousClock.Instant
     /// When the app left the foreground (nil: it is in front, or App Lock is off).
     @ObservationIgnored private var leftAt: ContinuousClock.Instant?
-    /// The prompt was shown on its own since the app came forward; a cancel is not re-asked.
+    /// The prompt was shown since the app came forward; a cancel is not re-asked.
     @ObservationIgnored private var prompted = false
 
     /// `now`: a clock that keeps counting while the device sleeps.
@@ -171,7 +171,6 @@ final class AppLock {
         method = authenticator.method()
     }
 
-    /// The setting's name: "Require Face ID", "Require Touch ID", "Require Passcode".
     var settingTitle: String { "Require \((method ?? .passcode).name)" }
 
     // MARK: Foreground and background
@@ -217,7 +216,7 @@ final class AppLock {
         case .cancelled:
             break
         case .passcodeNotSet:
-            // Without a passcode there is no owner to check (removing it took the passcode).
+            // Without a passcode there is no owner to check.
             isEnabled = false
             isLocked = false
         case .failed(let message):

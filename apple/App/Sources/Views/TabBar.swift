@@ -3,20 +3,13 @@ import HostKit
 import PaneLayout
 import SwiftUI
 
-/// Horizontal tabs, after Ghostty's macOS native tab bar: equal-width tabs across the whole row,
-/// each with a centered title led by the program's mark (the agent glyph instead while an
-/// a close button on hover at the leading edge, hairlines between unselected tabs, the selected tab
-/// a pill of the theme's ink at 10 %, and + at the end. Inactive tabs are the same ink dimmed by
-/// opacity (0.7, 0.85 on hover), so their glyph colours survive. It sits on the window's base,
-/// the terminal's own background, so tabs and terminal read as one surface.
-///
-/// Every host's tabs share the strip in the sidebar's order; with more than one host, each run of
-/// tabs carries its host as a second line (status UX §3.2); a single-host window shows no host.
+/// Equal-width horizontal tabs after Ghostty's macOS tab bar, every host's tabs in sidebar order.
 struct TabBar: View {
     let workspace: Workspace
     @Environment(WindowModel.self) private var model
     @Namespace private var selection
-    /// leaves the strip, so the next close button lands under it.
+    /// After a close under the pointer, tabs keep their width until the pointer leaves the strip,
+    /// so the next close button lands under it.
     @State private var isPointerInside = false
     @State private var frozenWidth: CGFloat?
     @State private var chipWidth: CGFloat = 0
@@ -24,7 +17,7 @@ struct TabBar: View {
     var body: some View {
         let active = model.destination == .terminal ? model.currentTab : nil
         HStack(spacing: 0) {
-            // More tabs than the strip holds scroll (Safari) instead of widening the window.
+            // More tabs than the strip holds scroll instead of widening the window.
             ViewThatFits(in: .horizontal) {
                 chips
                 ScrollView(.horizontal, showsIndicators: false) { chips }
@@ -54,14 +47,12 @@ struct TabBar: View {
 
     @ViewBuilder private var chips: some View {
         let groups = model.groups.groups
-        let all = model.groups.tabs
+        let allTabs = model.groups.tabs
         let active = model.destination == .terminal ? model.currentTab : nil
-        let activeIndex = active.flatMap { all.firstIndex(of: $0) }
+        let activeIndex = active.flatMap { allTabs.firstIndex(of: $0) }
         HStack(spacing: 0) {
-            // Status UX §3.2: no host on a tab while the window is single-host; with tabs from
-            // more than one host, each tab gets the host's name as a second line.
-            let mixed = Set(all.map(\.hostId)).count > 1
-            // Mixed tabs lead, as in the sidebar.
+            // Tabs name their host only while the window holds more than one host.
+            let isMultiHost = Set(allTabs.map(\.hostId)).count > 1
             ForEach(model.composites.ordered) { tab in
                 MixedTabChip(tab: tab, isActive: WindowModel.mixedRef(tab.id) == active)
                     .frame(maxWidth: .infinity)
@@ -70,14 +61,14 @@ struct TabBar: View {
             ForEach(groups) { group in
                 ForEach(group.tabs) { tab in
                     let ref = group.ref(tab.id)
-                    let index = all.firstIndex(of: ref) ?? 0
+                    let index = allTabs.firstIndex(of: ref) ?? 0
                     if index > 0 {
                         // Ghostty/AppKit draw no separator next to the selected tab.
                         Hairline(.vertical, style: DS.Palette.separator)
                             .frame(height: 16)
                             .opacity(index == activeIndex || index - 1 == activeIndex ? 0 : 1)
                     }
-                    TabChip(tab: tab, ref: ref, group: group, isActive: ref == active, showsHost: mixed, namespace: selection)
+                    TabChip(tab: tab, ref: ref, group: group, isActive: ref == active, showsHost: isMultiHost, namespace: selection)
                         .frame(maxWidth: frozenWidth ?? .infinity)
                         .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { if frozenWidth == nil { chipWidth = $0 } }
                 }
@@ -118,11 +109,11 @@ private struct TabChip: View {
             }
 
             HStack(spacing: DS.Space.row) {
-                // §3.4: the program's mark; the agent glyph instead on an unfocused tab.
                 TabLeadingMark(program: program, state: isActive ? nil : state)
                 VStack(spacing: 0) {
                     Text(title)
                         .lineLimit(1)
+                        // A path keeps its end: the directory you are in.
                         .truncationMode(title.hasPrefix("/") || title.hasPrefix("~") ? .head : .middle)
                     if showsHost {
                         Text(group.name)
@@ -131,9 +122,9 @@ private struct TabChip: View {
                             .lineLimit(1)
                     }
                 }
-                // Who else is in this tab.
                 TabPresence(workspace: workspace, panes: tab.root.panes)
             }
+            // Inactive tabs dim by opacity rather than colour, so glyph colours survive.
             .font(DS.Font.tabTitle)
             .foregroundStyle(.primary)
             .opacity((isActive ? 1 : isHovered ? DS.Opacity.inactiveHover : DS.Opacity.inactive) * (group.isLocal || group.status.isLive ? 1 : 0.6))
@@ -176,7 +167,6 @@ private struct TabChip: View {
                 Button("Close Tab", systemImage: "xmark", role: .destructive) { model.closeTab(ref, undoable: false) }
             }
         }
-        // A project's tabs carry its colour along their foot (Chrome's tab groups).
         .overlay(alignment: .bottom) {
             if let project = model.groups.project(of: ref) {
                 Capsule()
@@ -207,7 +197,8 @@ private struct TabChip: View {
         .accessibilityIdentifier("tabbar-\(ref)")
     }
 
-    /// (the context line: branch, program or task), each once.
+    /// The title, then where the tab is (host, directory) and what it is on (branch, program or
+    /// task), each once.
     static func tooltip(title: String, host: String?, directory: String?, context: String?) -> String {
         var lines = [title]
         let place = [host, directory].compactMap(\.self).joined(separator: " · ")

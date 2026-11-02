@@ -1,7 +1,7 @@
 # Apple FFI (`crates/apple-ffi` → `GudoCore`)
 
 Status: working on macOS (Swift tests against a local daemon and the Linux VM), iOS device and
-simulator slices build and link; 2026-10-19. ARCHITECTURE D6: the Swift app talks to the Rust core
+simulator slices build and link. ARCHITECTURE D6: the Swift app talks to the Rust core
 through UniFFI (0.32, proc-macro mode, no UDL). Swift owns UI, rendering, lifecycle, keys and
 persistence; the core owns connections, SSH, resume.
 
@@ -128,6 +128,7 @@ AsyncStream<ClientEvent>`; `SshStateStream` does the same for SSH session states
 | `session.openPane(options:listener:) -> SshPane` | plain-SSH fallback pane: **the same `ClientEvent`s as daemon panes** (`connected`, `paneBytes` with a running `seq`, `paneResized`, `disconnected`, `refused`, `paneClosed`); `sendInput / resize / close`; `tmuxSession` re-attaches after drops |
 | `session.bootstrap(binaries:ticketMinutes:waitSecs:listener:) async throws -> BootstrapReport` | install/upgrade/reuse `gudo-hostd`, start it, mint a ticket (`report.ticket` → `DaemonClient.connect`); `BootstrapListener.onStep` progress; `HostdBinary.file(path:)` or `.data(data:)`, gzip or raw |
 
+### Workspace (DAEMON.md §5)
 
 Requests are `async throws(WorkspaceError)` methods on `DaemonClient`; they run on the core
 runtime and can be awaited from the main actor. Times are Unix ms (`*Ms`), ids `UInt64`,
@@ -139,6 +140,7 @@ payloads `Data`. Pushes go to a separate `WorkspaceListener` (`setWorkspaceListe
 The setter replaces the previous listener, so the app sets exactly one per connection
 (`HostKit.WorkspaceEventHub`, `DaemonConnection.workspaceEvents`) and every feature observes
 that. The generated `errorDescription` of `WorkspaceError` is Swift's reflection of the case;
+the app shows `ScreenError.describe` instead. In the app these calls go through HostKit's
 `DaemonWorkspaceAPI` (the slice of `DaemonClient` the screens use) and `DaemonWorkspace` (ports,
 attention, watches, pane RPC pairing; docs/APP-ARCHITECTURE.md §10).
 
@@ -157,6 +159,7 @@ attention, watches, pane RPC pairing; docs/APP-ARCHITECTURE.md §10).
 
 ### Editor (DAEMON.md §5.3)
 
+**Default path, never a sign-in**: `openEditor(folder:acceptVscodeLicense:) async
 -> EditorSession`:
 
 1. `EditorLaunch(choice: .auto)`: the daemon starts `code serve-web --host 127.0.0.1 --port <free>
@@ -213,6 +216,7 @@ arrives as `ClientEvent.programStatus(paneId:status:)` with `ConnectOptions.prog
 message, progress). `nil` once cleared, and for every known pane when the connection drops. A
 blocked report has nothing to decide; the app lets `PaneMeta.agent` win where both exist.
 
+### Multiplayer (DAEMON.md §6)
 
 Principal, device and grant ids are lowercase hex strings. Errors: `MultiplayerError`
 (`forbidden`, `notFound`, `invalid`, `conflict`, `failed`, `disconnected`).
@@ -223,12 +227,14 @@ Principal, device and grant ids are lowercase hex strings. Errors: `MultiplayerE
 | `inspectInvite(invite:) -> InviteInfo` | join card without dialling: inviter, label, roles, scope, expiry, uses |
 | `createInvite(options: InviteOptions) -> CreatedInvite` | `roles: [Role]` (`.viewer / .prompter / .driver / .approver / .owner`), `scope` (`.daemon / .session / .tab / .pane`), `ttlSecs`, `maxUses`, `delegate`, `label`, `inviter`; returns `link`, `qrPayload` (upper-cased link → QR alphanumeric mode), `grantId`, `expiresMs`. A guest with `delegate` signs a narrower child |
 | `setMultiplayerListener(listener:)` | `MultiplayerEvent.joined / participants / presence / lease / leaseRequested / inputRejected / forbidden / decided / alreadyDecided / revoked / peers / peerChanged` |
+| `hasLivePresence()`, `setDraft(paneId:source:text:caret:)`, `clearDraft()`, `setViewport(viewport:)`, `follow(principal:)`, `setDeviceClass(device:)`, `setPresenceState(state:)`, `peerList()` | live presence: the line editor's and composers' drafts, the focused pane's scroll position (`PeerViewport.fromBottom`), following a person, away in the background; sent at most ~30 Hz and again after a reconnect |
 | `me()`, `participantList()`, `lease(paneId:)` | last pushed state, no round trip |
 | `whoAmI()`, `participants()`, `setName(name:)`, `leases()` | |
 | `takeControl(paneId:force:)`, `giveControl(paneId:to:)`, `answerControl(paneId:give:)`, `releaseControl(paneId:)` | `LeaseOutcome.granted / .pending(holder:) / .kept` |
 | `prompt(paneId:text:submit:) -> UInt32` | composer path (sanitized; the prompter role's only input) |
 | `setTyping(paneId:typing:)` | typing indicator |
 | `listGrants()`, `listDevices()`, `revoke(target:)`, `audit(after:limit:)` | owner only; `RevokeTarget.grant / .device / .principal`; `AuditPage.chainOk` |
+| `InviteOptions.knock`, `.sinceJoin` | Knock and join terms (DAEMON.md §6.9): ask first; earlier output hidden. The link carries them for `InviteInfo.knock / .sinceJoin`. Needs `DaemonInfo.multiplayer2` |
 | `knockInvite(invite:config:options:name:listener:) -> KnockResult` | free function: knock and wait (cancel the Swift task to stop); `KnockListener.onWaiting(knockId:)`; `.admitted(invite:)` is the link to join with, `.denied`; `KnockError.invalid / unreachable / refused` |
 | `pendingKnocks()`, `admitKnock(knockId:roles:sinceJoin:ttlSecs:) -> GrantInfo`, `denyKnock(knockId:)` | owner; events `knockAdded(knock:)`, `knockGone(knockId:outcome:by:)` |
 | `approvalPolicy(sessionId:)`, `setApprovalPolicy(sessionId:policy:)`, `approvalPolicyCached()` | `ApprovalPolicy(mode: .anyApprover / .ownerOnly / .twoPerson / .claim, maxRisk: .readOnly / .edits / .any)`; event `approvalPolicy(sessionId:policy:)` |
@@ -244,6 +250,7 @@ Principal, device and grant ids are lowercase hex strings. Errors: `MultiplayerE
 | `openPushNotification(deviceSecret:sealed:) throws(PushError) -> PushNotification` | NSE: decrypt + verify the daemon's signature (check `daemon` is paired); `category` is the `UNNotificationCategory` id |
 | `pushActionToken(token:)`, `sendPushAction(…) async`, `sendPushActionBlocking(…)` | lock-screen Approve/Deny on a one-shot connection signed with the device key → `Decided`; `PushActionError` |
 
+### Drawings and images (DAEMON.md §7, app contract §7.11)
 
 Requests are `async throws(ArtifactError)` methods on `DaemonClient`; pushes go to an
 `ArtifactListener` (`setArtifactListener`). Ids are `UInt64`, blob hashes 64 hex digits,
@@ -393,18 +400,19 @@ own copy; that couples the renderer to the core's Ghostty pin, which is the same
 | | |
 |---|---|
 | FFI crossing per `PaneBytes` event, Swift release build (`bench_pane_bytes`, no-op listener, Rust-side allocation and conversion subtracted) | 64 B: 3.1 µs · 4 KiB: 3.7 µs · 64 KiB: 14 µs |
-| same, Swift debug build (`swift test`) | 64 B: 1.9–5.6 µs · 4 KiB: 6–15 µs · 64 KiB: 90–215 µs |
+| same, Swift debug build (`swift test`) | 64 B: 1.9-5.6 µs · 4 KiB: 6-15 µs · 64 KiB: 90-215 µs |
 | same with UniFFI's stock `Vec<u8>` converter (debug), before [`Bytes`] | 64 B: 5.5 µs · 4 KiB: 20 µs · 64 KiB: 194 µs |
 | xcframework (3 slices) on disk | 109 MB (gitignored; static archives with symbols for dead-stripping) |
 | per slice (`libGudoCoreFFI.a`) | 36 MB (raw Rust staticlib: 185 MB) |
 | app size delta, iOS arm64 (every UniFFI function referenced, `-dead_strip`, stripped) | 14.5 MB file, 13.7 MB `__TEXT` (macOS: 14.9 MB) |
 | … of which the symbol hiding costs | +0.25 MB `__TEXT` vs. linking the raw archive |
-| `cargo xtask build-xcframework` | cold ≈ 4 min (3 × Zig libghostty-vt + Rust release), warm 20–35 s |
+| `cargo xtask build-xcframework` | cold ≈ 4 min (3 × Zig libghostty-vt + Rust release), warm 20-35 s |
 | `cargo xtask build-hostd-linux` | cold ≈ 6 min; 18.3 → 7.7 MB (aarch64), 20.0 → 8.2 MB (x86_64) |
 
 The fixed ≈3 µs per event is UniFFI's callback path (handle lookup, buffer lift, enum
 construction); the per-byte part is a few bulk copies (Rust buffer → `Data` → `[UInt8]` →
 `Data`). At a 64 KiB frame that is ≈4.5 GB/s, far above any link. The size delta is above the
+12 MB first budgeted; the main contributors are iroh + rustls/ring, russh and
 libghostty-vt.
 
 ## 6. Tests
@@ -428,12 +436,12 @@ source ../../../target/ssh-test/env && swift test --filter SshTests
   blocked CLI download, a `code` that cannot run) and VSCodium asked for explicitly, with a fake
   `codium-server`; push register / status /
   unregister and the relay body.
-- Rust, `tests/drawing_assist.rs` (same in-process daemon): **assist** with zsh — watch a
+- Rust, `tests/drawing_assist.rs` (same in-process daemon): **assist** with zsh: watch a
   pane, the shell's foreground profile, `echo h` typed and pushed, then `echo hi` read back
   (cursor, confident), `submitLine` runs it exactly once, a stale prompt id refused with
   `NotAtPrompt` carrying the new prompt, history has it once with exit 0, `complete("ec")`
   offers echo over `0..<2`, `fileSearch` finds a temp file (and `/etc` is `Denied`), no
-  blocked options in a shell; **drawing** with two clients — create seen by the other, live
+  blocked options in a shell; **drawing** with two clients: create seen by the other, live
   ink (packed points, author actor, no echo to the sender), a stroke + rectangle batch arrives
   as `changed` and in the other client's cache, SVG and ASCII export (plus local ASCII), a
   device-rendered PNG uploaded and downloaded with progress, `placePng` seen as `placed`

@@ -98,21 +98,26 @@ impl CommandLog {
                 }
                 SemanticPromptKind::OutputStart { command } => {
                     let raw = command.or_else(|| self.typed_command(term, event.pin));
-                    let private = raw.as_deref().is_some_and(|c| c.starts_with([' ', '\t']));
+                    let private = raw
+                        .as_deref()
+                        .is_some_and(|line| line.starts_with([' ', '\t']));
                     // `133;C;cmdline=` is forgeable by any program: keep only what prints.
                     let command = raw
-                        .map(|c| {
-                            let c = crate::term::visible(&c);
-                            c.trim().chars().take(MAX_COMMAND_LINE).collect::<String>()
+                        .map(|line| {
+                            let line = crate::term::visible(&line);
+                            line.trim()
+                                .chars()
+                                .take(MAX_COMMAND_LINE)
+                                .collect::<String>()
                         })
-                        .filter(|c| !c.is_empty());
+                        .filter(|line| !line.is_empty());
                     self.next_id += 1;
                     self.line.output_started(term, self.next_id);
                     let mark = CommandMark {
                         pane_id: pane,
                         command_id: self.next_id,
                         command,
-                        cwd: term.pwd().and_then(|p| crate::osc::cwd_path(&p)),
+                        cwd: term.pwd().and_then(|pwd| crate::osc::cwd_path(&pwd)),
                         started_at: UnixMillis(now_millis()),
                         at_seq: seq,
                         finished: None,
@@ -129,25 +134,25 @@ impl CommandLog {
                         end: None,
                     });
                     if self.commands.len() > MAX_COMMANDS
-                        && let Some(old) = self.commands.pop_front()
+                        && let Some(oldest) = self.commands.pop_front()
                     {
-                        old.pins().for_each(|p| term.unpin(p));
+                        oldest.pins().for_each(|pin| term.unpin(pin));
                     }
                 }
                 SemanticPromptKind::CommandEnd { exit } => {
                     match self
                         .commands
                         .back_mut()
-                        .filter(|c| c.mark.finished.is_none())
+                        .filter(|command| command.mark.finished.is_none())
                     {
-                        Some(cmd) => {
-                            cmd.end = event.pin;
-                            cmd.mark.at_seq = seq;
-                            cmd.mark.finished = Some(CommandEnd {
+                        Some(command) => {
+                            command.end = event.pin;
+                            command.mark.at_seq = seq;
+                            command.mark.finished = Some(CommandEnd {
                                 exit,
-                                duration_ms: cmd.started.elapsed().as_millis() as u64,
+                                duration_ms: command.started.elapsed().as_millis() as u64,
                             });
-                            updates.push(CommandUpdate::Mark(cmd.mark.clone()));
+                            updates.push(CommandUpdate::Mark(command.mark.clone()));
                             self.line.command_ended();
                         }
                         // A prompt without a command (empty Enter, the first prompt).
@@ -175,7 +180,7 @@ impl CommandLog {
     pub fn is_private(&self, id: u64) -> bool {
         self.commands
             .iter()
-            .any(|c| c.mark.command_id == id && c.private)
+            .any(|command| command.mark.command_id == id && command.private)
     }
 
     /// The command line as typed: the cells from the input start to just before `output`.
@@ -196,15 +201,18 @@ impl CommandLog {
 
     /// Every remembered command with its current rows, oldest first.
     pub fn list(&self, term: &Terminal) -> Vec<CommandInfo> {
-        let row = |pin: Option<PinId>| pin.and_then(|p| term.pin_point(p)).map(|p| u64::from(p.y));
+        let row = |pin: Option<PinId>| {
+            pin.and_then(|pin| term.pin_point(pin))
+                .map(|point| u64::from(point.y))
+        };
         self.commands
             .iter()
-            .map(|c| CommandInfo {
-                mark: c.mark.clone(),
+            .map(|command| CommandInfo {
+                mark: command.mark.clone(),
                 rows: CommandRows {
-                    prompt: row(c.prompt),
-                    output: row(c.output),
-                    end: row(c.end),
+                    prompt: row(command.prompt),
+                    output: row(command.output),
+                    end: row(command.end),
                 },
             })
             .collect()
@@ -215,18 +223,21 @@ impl CommandLog {
         self.commands
             .iter()
             .rev()
-            .filter(|c| c.mark.finished.is_some())
-            .map(|c| &c.mark)
+            .filter(|command| command.mark.finished.is_some())
+            .map(|command| &command.mark)
     }
 
     /// A command's output region, and whether its start already left scrollback.
     pub fn output_range(&self, term: &Terminal, id: u64) -> Option<(Option<TextRegion>, bool)> {
-        let cmd = self.commands.iter().find(|c| c.mark.command_id == id)?;
-        let start = cmd.output.and_then(|p| term.pin_point(p));
+        let command = self
+            .commands
+            .iter()
+            .find(|command| command.mark.command_id == id)?;
+        let start = command.output.and_then(|pin| term.pin_point(pin));
         let truncated = start.is_none();
         let start = start.unwrap_or(Point { y: 0, x: 0 });
-        let end = match cmd.end {
-            Some(pin) => term.pin_point(pin).and_then(|p| before(term, p)),
+        let end = match command.end {
+            Some(pin) => term.pin_point(pin).and_then(|point| before(term, point)),
             None => before(term, term.cursor_point()),
         };
         let region = end
@@ -236,9 +247,9 @@ impl CommandLog {
     }
 }
 
-/// The cell before `p` in reading order.
-fn before(term: &Terminal, p: Point) -> Option<Point> {
-    match (p.x, p.y) {
+/// The cell before `point` in reading order.
+fn before(term: &Terminal, point: Point) -> Option<Point> {
+    match (point.x, point.y) {
         (0, 0) => None,
         (0, y) => Some(Point {
             y: y - 1,
@@ -294,8 +305,8 @@ mod tests {
         assert_eq!(end.finished.unwrap().exit, Some(1));
         let (region, truncated) = log.output_range(&term, 1).unwrap();
         assert!(!truncated);
-        let out = term.text_wrapped(region.unwrap(), Wrap::Join).unwrap();
-        assert_eq!(out.trim_end(), "a.txt\nb.txt");
+        let output = term.text_wrapped(region.unwrap(), Wrap::Join).unwrap();
+        assert_eq!(output.trim_end(), "a.txt\nb.txt");
         let list = log.list(&term);
         assert_eq!(list[0].rows.prompt, Some(0));
         assert_eq!(list[0].rows.output, Some(1));

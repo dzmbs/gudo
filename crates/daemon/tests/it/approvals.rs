@@ -94,9 +94,9 @@ impl Agent {
     }
 }
 
-fn blocked(c: &TestClient, pane: PaneId) -> Option<Blocker> {
-    match c.metas.get(&pane)?.agent.clone()?.state {
-        AgentState::Blocked(b) => Some(b),
+fn blocked(client: &TestClient, pane: PaneId) -> Option<Blocker> {
+    match client.metas.get(&pane)?.agent.clone()?.state {
+        AgentState::Blocked(blocker) => Some(blocker),
         _ => None,
     }
 }
@@ -111,31 +111,35 @@ async fn answered(waiting: JoinHandle<HookResponse>) -> Value {
 
 /// Waits for the daemon's extras for the open request `request`.
 async fn info(
-    c: &mut TestClient,
+    client: &mut TestClient,
     pane: PaneId,
     request: RequestId,
 ) -> client_core::proto::ApprovalInfo {
-    c.until("approval info", |c| {
-        c.client
-            .approval_info(pane)
-            .is_some_and(|i| i.request_id == request)
-    })
-    .await;
-    c.client.approval_info(pane).unwrap()
+    client
+        .until("approval info", |client| {
+            client
+                .client
+                .approval_info(pane)
+                .is_some_and(|open| open.request_id == request)
+        })
+        .await;
+    client.client.approval_info(pane).unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn an_edited_command_runs_instead_and_is_audited() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = start(dir.path()).await;
-    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    let pane = c.attach_and_follow().await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = owner.attach_and_follow().await;
     let mut agent = Agent::new(dir.path(), &daemon, pane);
 
     let waiting = agent.bash("rm -rf node_modules");
-    c.until("blocked", |c| blocked(c, pane).is_some()).await;
-    let blocker = blocked(&c, pane).unwrap();
-    let info = info(&mut c, pane, blocker.request_id).await;
+    owner
+        .until("blocked", |owner| blocked(owner, pane).is_some())
+        .await;
+    let blocker = blocked(&owner, pane).unwrap();
+    let info = info(&mut owner, pane, blocker.request_id).await;
     assert_eq!(info.tool, "Bash");
     assert_eq!(info.input.as_deref(), Some("rm -rf node_modules"));
     assert_eq!(
@@ -149,26 +153,28 @@ async fn an_edited_command_runs_instead_and_is_audited() {
     // Only the allow option may carry an edit.
     let deny = OptionId(blocker.options.len() as u32 - 1);
     assert!(matches!(
-        c.client
+        owner
+            .client
             .approve_edited(blocker.request_id, deny, "rm -rf build".into())
             .await,
         Err(ApprovalError::Invalid(_))
     ));
-    c.client
+    owner
+        .client
         .approve_edited(blocker.request_id, OptionId(0), "rm -rf build".into())
         .await
         .expect("edited approval");
-    let out = answered(waiting).await;
-    let decision = &out["hookSpecificOutput"]["decision"];
-    assert_eq!(decision["behavior"], "allow", "{out}");
+    let answer = answered(waiting).await;
+    let decision = &answer["hookSpecificOutput"]["decision"];
+    assert_eq!(decision["behavior"], "allow", "{answer}");
     assert_eq!(decision["updatedInput"]["command"], "rm -rf build");
     assert_eq!(decision["updatedInput"]["description"], "a test");
 
-    let page = c.client.audit(None, 100).await.unwrap();
+    let page = owner.client.audit(None, 100).await.unwrap();
     let record = page
         .records
         .iter()
-        .find(|r| r.kind == AuditKind::Approval)
+        .find(|record| record.kind == AuditKind::Approval)
         .expect("audited");
     assert!(
         record.detail.contains("rm -rf node_modules") && record.detail.contains("rm -rf build"),
@@ -178,22 +184,24 @@ async fn an_edited_command_runs_instead_and_is_audited() {
 
     // A tool without editable input says so.
     let waiting = agent.ask("Edit", json!({ "file_path": "/tmp/x", "old_string": "a" }));
-    c.until("blocked on Edit", |c| {
-        blocked(c, pane).is_some_and(|b| b.request_id != blocker.request_id)
-    })
-    .await;
-    let edit = blocked(&c, pane).unwrap();
-    let info = self::info(&mut c, pane, edit.request_id).await;
+    owner
+        .until("blocked on Edit", |owner| {
+            blocked(owner, pane).is_some_and(|held| held.request_id != blocker.request_id)
+        })
+        .await;
+    let edit = blocked(&owner, pane).unwrap();
+    let info = self::info(&mut owner, pane, edit.request_id).await;
     assert_eq!(info.input, None);
     assert_eq!(
-        c.client
+        owner
+            .client
             .approve_edited(edit.request_id, OptionId(0), "x".into())
             .await,
         Err(ApprovalError::NotEditable)
     );
-    c.client.decide(edit.request_id, OptionId(0));
+    owner.client.decide(edit.request_id, OptionId(0));
     answered(waiting).await;
-    drop(c);
+    drop(owner);
     daemon.shutdown().await;
 }
 
@@ -201,20 +209,22 @@ async fn an_edited_command_runs_instead_and_is_audited() {
 async fn a_rule_approves_requests_like_this_until_revoked() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = start(dir.path()).await;
-    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
     let (listener, mut events) = ApprovalEventQueue::channel();
-    c.client.set_approval_listener(listener);
-    let pane = c.attach_and_follow().await;
+    owner.client.set_approval_listener(listener);
+    let pane = owner.attach_and_follow().await;
     let mut agent = Agent::new(dir.path(), &daemon, pane);
 
     // "Approve all like this": the rule answers the open request too.
     let waiting = agent.bash("cargo test -p proto");
-    c.until("blocked", |c| blocked(c, pane).is_some()).await;
-    let first = blocked(&c, pane).unwrap();
-    let info = info(&mut c, pane, first.request_id).await;
+    owner
+        .until("blocked", |owner| blocked(owner, pane).is_some())
+        .await;
+    let first = blocked(&owner, pane).unwrap();
+    let info = info(&mut owner, pane, first.request_id).await;
     let like = info.like.expect("a rule is offered");
     assert_eq!(like.prefix, "cargo test");
-    let rule = c
+    let rule = owner
         .client
         .add_auto_approve(
             pane,
@@ -231,15 +241,20 @@ async fn a_rule_approves_requests_like_this_until_revoked() {
     );
 
     // The next request like it is answered with nobody deciding.
-    let out = answered(agent.bash("cargo test --workspace")).await;
-    assert_eq!(out["hookSpecificOutput"]["decision"]["behavior"], "allow");
-    c.until("two uses", |c| {
-        c.client
-            .auto_approve_rules(pane)
-            .first()
-            .is_some_and(|r| r.uses == 2)
-    })
-    .await;
+    let answer = answered(agent.bash("cargo test --workspace")).await;
+    assert_eq!(
+        answer["hookSpecificOutput"]["decision"]["behavior"],
+        "allow"
+    );
+    owner
+        .until("two uses", |owner| {
+            owner
+                .client
+                .auto_approve_rules(pane)
+                .first()
+                .is_some_and(|rule| rule.uses == 2)
+        })
+        .await;
     let mut saw_rules = false;
     while let Ok(event) = events.try_recv() {
         saw_rules |= matches!(event, ApprovalEvent::Rules { pane_id, rules } if pane_id == pane && !rules.is_empty());
@@ -251,19 +266,22 @@ async fn a_rule_approves_requests_like_this_until_revoked() {
     for command in ["cargo build", "cargo test && rm -rf ~"] {
         let waiting = agent.bash(command);
         // The daemon tells clients about a request only once no rule answered it.
-        c.until("blocked again", |c| {
-            c.client.approval_info(pane).is_some_and(|i| {
-                !seen.contains(&i.request_id)
-                    && blocked(c, pane).is_some_and(|b| b.request_id == i.request_id)
+        owner
+            .until("blocked again", |owner| {
+                owner.client.approval_info(pane).is_some_and(|open| {
+                    !seen.contains(&open.request_id)
+                        && blocked(owner, pane)
+                            .is_some_and(|held| held.request_id == open.request_id)
+                })
             })
-        })
-        .await;
+            .await;
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert!(!waiting.is_finished(), "{command} was approved by the rule");
-        let b = blocked(&c, pane).unwrap();
-        seen.push(b.request_id);
-        c.client
-            .decide(b.request_id, OptionId(b.options.len() as u32 - 1));
+        let held = blocked(&owner, pane).unwrap();
+        seen.push(held.request_id);
+        owner
+            .client
+            .decide(held.request_id, OptionId(held.options.len() as u32 - 1));
         assert_eq!(
             answered(waiting).await["hookSpecificOutput"]["decision"]["behavior"],
             "deny"
@@ -271,11 +289,13 @@ async fn a_rule_approves_requests_like_this_until_revoked() {
     }
 
     // The auto-approvals are in the audit log with the rule's signature.
-    let page = c.client.audit(None, 100).await.unwrap();
+    let page = owner.client.audit(None, 100).await.unwrap();
     let auto = page
         .records
         .iter()
-        .find(|r| r.kind == AuditKind::Approval && r.detail.starts_with("auto-approved"))
+        .find(|record| {
+            record.kind == AuditKind::Approval && record.detail.starts_with("auto-approved")
+        })
         .expect("auto-approval audited");
     let approval = auto.approval.as_ref().unwrap();
     assert!(client_core::grants::verify_signature(
@@ -285,26 +305,35 @@ async fn a_rule_approves_requests_like_this_until_revoked() {
     ));
 
     // Revoked, it approves nothing.
-    c.client.revoke_auto_approve(rule).await.expect("revoked");
-    c.until("no rules", |c| c.client.auto_approve_rules(pane).is_empty())
+    owner
+        .client
+        .revoke_auto_approve(rule)
+        .await
+        .expect("revoked");
+    owner
+        .until("no rules", |owner| {
+            owner.client.auto_approve_rules(pane).is_empty()
+        })
         .await;
     assert_eq!(
-        c.client.revoke_auto_approve(rule).await,
+        owner.client.revoke_auto_approve(rule).await,
         Err(ApprovalError::NotFound)
     );
     let waiting = agent.bash("cargo test");
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert!(!waiting.is_finished(), "a revoked rule approved");
-    c.until("asked again", |c| {
-        c.client
-            .approval_info(pane)
-            .is_some_and(|i| !seen.contains(&i.request_id))
-    })
-    .await;
-    let b = c.client.approval_info(pane).unwrap();
-    c.client.decide(b.request_id, OptionId(0));
+    owner
+        .until("asked again", |owner| {
+            owner
+                .client
+                .approval_info(pane)
+                .is_some_and(|open| !seen.contains(&open.request_id))
+        })
+        .await;
+    let asked = owner.client.approval_info(pane).unwrap();
+    owner.client.decide(asked.request_id, OptionId(0));
     answered(waiting).await;
-    drop(c);
+    drop(owner);
     daemon.shutdown().await;
 }
 
@@ -312,8 +341,8 @@ async fn a_rule_approves_requests_like_this_until_revoked() {
 async fn rules_end_with_their_turns_time_and_session() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = start(dir.path()).await;
-    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    let pane = c.attach_and_follow().await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = owner.attach_and_follow().await;
     let mut agent = Agent::new(dir.path(), &daemon, pane);
     agent.event("UserPromptSubmit").await;
     let ls = RuleMatch {
@@ -322,42 +351,52 @@ async fn rules_end_with_their_turns_time_and_session() {
     };
 
     // One turn: the next prompt ends it.
-    c.client
+    owner
+        .client
         .add_auto_approve(pane, None, ls.clone(), Duration::from_secs(600), 1)
         .await
         .unwrap();
-    c.until("rule", |c| !c.client.auto_approve_rules(pane).is_empty())
+    owner
+        .until("rule", |owner| {
+            !owner.client.auto_approve_rules(pane).is_empty()
+        })
         .await;
     agent.turn().await;
-    c.until("turn limit", |c| {
-        c.client.auto_approve_rules(pane).is_empty()
-    })
-    .await;
+    owner
+        .until("turn limit", |owner| {
+            owner.client.auto_approve_rules(pane).is_empty()
+        })
+        .await;
 
     // Two turns: still there after one more prompt, with the count.
-    c.client
+    owner
+        .client
         .add_auto_approve(pane, None, ls.clone(), Duration::from_secs(600), 2)
         .await
         .unwrap();
     agent.turn().await;
-    c.until("second turn counted", |c| {
-        c.client
-            .auto_approve_rules(pane)
-            .first()
-            .is_some_and(|r| r.turns_used == 2)
-    })
-    .await;
+    owner
+        .until("second turn counted", |owner| {
+            owner
+                .client
+                .auto_approve_rules(pane)
+                .first()
+                .is_some_and(|rule| rule.turns_used == 2)
+        })
+        .await;
     // The agent session ending ends it.
     agent.event("SessionEnd").await;
-    c.until("session over", |c| {
-        c.client.auto_approve_rules(pane).is_empty()
-    })
-    .await;
+    owner
+        .until("session over", |owner| {
+            owner.client.auto_approve_rules(pane).is_empty()
+        })
+        .await;
 
     // Expired, it approves nothing.
     agent.event("SessionStart").await;
     agent.event("UserPromptSubmit").await;
-    c.client
+    owner
+        .client
         .add_auto_approve(pane, None, ls, Duration::from_millis(800), 5)
         .await
         .unwrap();
@@ -365,15 +404,17 @@ async fn rules_end_with_their_turns_time_and_session() {
     let waiting = agent.bash("ls -la");
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert!(!waiting.is_finished(), "an expired rule approved");
-    c.until("asked", |c| c.client.approval_info(pane).is_some())
+    owner
+        .until("asked", |owner| owner.client.approval_info(pane).is_some())
         .await;
-    let b = c.client.approval_info(pane).unwrap();
-    c.client.decide(b.request_id, OptionId(0));
+    let asked = owner.client.approval_info(pane).unwrap();
+    owner.client.decide(asked.request_id, OptionId(0));
     answered(waiting).await;
 
     // Wider than allowed: refused.
     assert!(matches!(
-        c.client
+        owner
+            .client
             .add_auto_approve(
                 pane,
                 None,
@@ -388,7 +429,8 @@ async fn rules_end_with_their_turns_time_and_session() {
         Err(ApprovalError::Invalid(_))
     ));
     assert!(matches!(
-        c.client
+        owner
+            .client
             .add_auto_approve(
                 pane,
                 None,
@@ -402,7 +444,7 @@ async fn rules_end_with_their_turns_time_and_session() {
             .await,
         Err(ApprovalError::Invalid(_))
     ));
-    drop(c);
+    drop(owner);
     daemon.shutdown().await;
 }
 
@@ -423,16 +465,19 @@ async fn a_viewer_cannot_add_or_revoke_rules() {
         .create_invite(spec, "alice".into())
         .await
         .unwrap();
-    let mut vic = TestClient::join(&invite.to_string(), ClientConfig::generate_key());
-    vic.client.attach(None);
-    vic.until("guest layout", |c| c.layout.is_some()).await;
+    let mut viewer = TestClient::join(&invite.to_string(), ClientConfig::generate_key());
+    viewer.client.attach(None);
+    viewer
+        .until("guest layout", |owner| owner.layout.is_some())
+        .await;
 
     let ls = RuleMatch {
         tool: "Bash".into(),
         prefix: "ls".into(),
     };
     assert!(matches!(
-        vic.client
+        viewer
+            .client
             .add_auto_approve(pane, None, ls.clone(), Duration::from_secs(60), 1)
             .await,
         Err(ApprovalError::Forbidden(_))
@@ -443,15 +488,16 @@ async fn a_viewer_cannot_add_or_revoke_rules() {
         .add_auto_approve(pane, None, ls, Duration::from_secs(60), 1)
         .await
         .unwrap();
-    vic.until("rule pushed", |c| {
-        !c.client.auto_approve_rules(pane).is_empty()
-    })
-    .await;
+    viewer
+        .until("rule pushed", |owner| {
+            !owner.client.auto_approve_rules(pane).is_empty()
+        })
+        .await;
     assert!(matches!(
-        vic.client.revoke_auto_approve(rule).await,
+        viewer.client.revoke_auto_approve(rule).await,
         Err(ApprovalError::Forbidden(_))
     ));
     assert_eq!(owner.client.auto_approve_rules(pane).len(), 1);
-    drop((vic, owner));
+    drop((viewer, owner));
     daemon.shutdown().await;
 }

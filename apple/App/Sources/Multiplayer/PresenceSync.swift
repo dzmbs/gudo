@@ -6,10 +6,8 @@ import GudoCore
 import UIKit
 #endif
 
-/// Keeps a window's live presence in step with the host, ten times a second: reports where this
-/// device looks (the focused pane's scroll position), and while following someone moves the
-/// window to their pane and scroll position. Any move of your own (another pane or tab, a scroll,
-/// a key) stops following.
+/// Reports where this device looks and, while following someone, moves the window to their pane
+/// and scroll position. Any move of the user's own stops following.
 @MainActor
 final class PresenceSync {
     private let workspace: Workspace
@@ -41,9 +39,9 @@ final class PresenceSync {
     /// The focused pane's rows on screen, counted from the live screen up.
     private func viewport(of pane: PaneId?) -> PeerViewport? {
         guard let pane, let view = workspace.pane(pane)?.view else { return nil }
-        let bar = view.surface.terminal.scrollbar
-        let fromBottom = max(0, bar.total - bar.offset - bar.visible)
-        return PeerViewport(paneId: pane.rawValue, fromBottom: UInt32(fromBottom), rows: UInt16(clamping: bar.visible))
+        let scrollbar = view.surface.terminal.scrollbar
+        let fromBottom = max(0, scrollbar.total - scrollbar.offset - scrollbar.visible)
+        return PeerViewport(paneId: pane.rawValue, fromBottom: UInt32(fromBottom), rows: UInt16(clamping: scrollbar.visible))
     }
 
     private func follow(_ session: MultiplayerSession) {
@@ -53,7 +51,7 @@ final class PresenceSync {
             appliedViewport = nil
             return
         }
-        // Moved by hand: stop following, as Zed and Figma do.
+        // Moved by hand: stop following.
         if let followedFocus,
            workspace.focusedPane != followedFocus || workspace.pane(followedFocus)?.moves != followedMoves {
             session.breakFollow()
@@ -83,7 +81,6 @@ final class PresenceSync {
     }
 }
 
-/// Runs a window's `PresenceSync` and says when the app leaves the foreground.
 struct PresenceSyncModifier: ViewModifier {
     let workspace: Workspace
     @Environment(\.scenePhase) private var scenePhase

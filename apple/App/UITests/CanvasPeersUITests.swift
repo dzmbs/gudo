@@ -2,7 +2,7 @@
 import XCTest
 
 /// A canvas pane live with another device (apple/scripts/canvas-peers-ui-test.sh: a local
-/// daemon, and `CanvasPeerTests` in HostKit paired as the owner's second device). The app draws
+/// daemon, and `CanvasPeerTests` in HostKit paired as a second device). The app draws
 /// a rectangle with Excalidraw's own tool; the peer waits for it, then adds an ellipse, which
 /// appears here without a reload. Skipped without a ticket.
 @MainActor

@@ -24,7 +24,7 @@ final class LifecycleStressUITests: XCTestCase {
         app.launch()
         let first = app.descendants(matching: .any).matching(NSPredicate(format: "identifier MATCHES 'pane-[0-9]+'")).firstMatch
         XCTAssertTrue(first.waitForExistence(timeout: 30))
-        let id = first.identifier
+        let paneId = first.identifier
         first.tap()
         // A flood that runs until interrupted, in the first pane.
         app.typeText("while :; do seq 1 100000; done\n")
@@ -47,12 +47,12 @@ final class LifecycleStressUITests: XCTestCase {
         XCUIDevice.shared.orientation = .landscapeLeft
 
         // The flooding pane still takes input and draws.
-        let pane = app.descendants(matching: .any)[id].firstMatch
+        let pane = app.descendants(matching: .any)[paneId].firstMatch
         XCTAssertTrue(pane.waitForExistence(timeout: 10))
         pane.tap()
         app.typeKey("c", modifierFlags: .control)
         app.typeText("clear; printf 'INK%.0s' $(seq 1 30)\n")
-        let screen = app.descendants(matching: .any)[id + "-screen"].firstMatch
+        let screen = app.descendants(matching: .any)[paneId + "-screen"].firstMatch
         expectation(for: NSPredicate(format: "value CONTAINS 'INKINKINK'"), evaluatedWith: screen)
         waitForExpectations(timeout: 30)
         Thread.sleep(forTimeInterval: 1.5)

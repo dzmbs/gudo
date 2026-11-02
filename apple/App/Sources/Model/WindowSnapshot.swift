@@ -26,10 +26,10 @@ enum WindowSnapshot {
                 return
             }
             let bounds = frameView.bounds
-            guard let rep = frameView.bitmapImageRepForCachingDisplay(in: bounds) else { return }
-            frameView.cacheDisplay(in: bounds, to: rep)
+            guard let bitmap = frameView.bitmapImageRepForCachingDisplay(in: bounds) else { return }
+            frameView.cacheDisplay(in: bounds, to: bitmap)
             NSGraphicsContext.saveGraphicsState()
-            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
             for view in terminalViews(in: frameView) {
                 _ = view.surface.renderIfDirty(offscreen: true)
                 guard let image = view.surface.snapshot() else { continue }
@@ -37,7 +37,7 @@ enum WindowSnapshot {
                 NSGraphicsContext.current?.cgContext.draw(image, in: rect)
             }
             NSGraphicsContext.restoreGraphicsState()
-            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+            try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
             // Vibrant (sidebar) content does not draw into `cacheDisplay`; list what is there instead.
             var lines: [String] = []
             func visit(_ view: NSView, depth: Int) {

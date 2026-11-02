@@ -11,8 +11,6 @@ final class FoldTests: XCTestCase {
     private let tall = CGSize(width: 669, height: 951)
     private let cover = CGSize(width: 466, height: 678)
 
-    // MARK: Posture
-
     func testPostureComesFromTheHingeAndTheFoldsDirection() {
         XCTAssertEqual(FoldGeometry(windowSize: wide).posture, .none, "no hinge: not a foldable")
         XCTAssertEqual(FoldGeometry.simulated(.folded, in: cover).posture, .folded)
@@ -39,8 +37,6 @@ final class FoldTests: XCTestCase {
         XCTAssertEqual(FoldGeometry(hinge: hinge, windowSize: cover).posture, .folded)
         XCTAssertEqual(FoldGeometry(hinge: hinge, windowSize: wide).posture, .flat)
     }
-
-    // MARK: Layout
 
     func testEachPostureHasItsLayout() {
         // Cover: the phone layout.
@@ -97,8 +93,6 @@ final class FoldTests: XCTestCase {
         XCTAssertNil(pages.deckTop(from: 0))
         XCTAssertEqual(FoldLayout.deck(top: 463.5, gutter: 24).deckTop(from: 24), 439.5)
     }
-
-    // MARK: The window across postures
 
     private func makeModel() -> WindowModel {
         let model = WindowModel(app: .shared)

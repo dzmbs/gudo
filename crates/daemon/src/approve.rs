@@ -35,12 +35,12 @@ impl Approvals {
         let now = now();
         let mut rules = lock(&self.rules);
         let list = rules.entry(pane).or_default();
-        list.retain(|r| r.rule.expires_at > now);
-        let out = list.clone();
+        list.retain(|active| active.rule.expires_at > now);
+        let in_force = list.clone();
         if list.is_empty() {
             rules.remove(&pane);
         }
-        out
+        in_force
     }
 
     /// Every pane with rules or an open request, for a connection that just arrived.
@@ -50,27 +50,23 @@ impl Approvals {
         (open, panes)
     }
 
-    /// The request `pane` is no longer blocked on.
     pub fn clear_request(&self, pane: PaneId) {
         lock(&self.open).remove(&pane);
     }
 
-    /// The pane closed.
     pub fn forget_pane(&self, pane: PaneId) {
         lock(&self.open).remove(&pane);
         lock(&self.rules).remove(&pane);
     }
 
-    /// The pane of rule `id`, if it is in force.
     fn pane_of(&self, id: RuleId) -> Option<PaneId> {
         lock(&self.rules)
             .iter()
-            .find(|(_, list)| list.iter().any(|r| r.rule.rule_id == id))
+            .find(|(_, list)| list.iter().any(|active| active.rule.rule_id == id))
             .map(|(pane, _)| *pane)
     }
 }
 
-/// Tells clients `pane`'s rules.
 fn emit_rules(core: &Core, pane: PaneId) {
     let rules = core.approvals.rules(pane);
     core.emit(Event::Approval(ApprovalPush::Rules {
@@ -85,10 +81,11 @@ pub(crate) fn request_held(core: &Core, pane: PaneId) {
     let Some(held) = core.hooks.held(pane) else {
         return;
     };
-    let Some((wire, _, allow)) = core
-        .pane(pane)
-        .and_then(|e| lock(&e.agent).as_mut().and_then(|rt| rt.blocked_wire()))
-    else {
+    let Some((wire, _, allow)) = core.pane(pane).and_then(|entry| {
+        lock(&entry.agent)
+            .as_mut()
+            .and_then(|agent| agent.blocked_wire())
+    }) else {
         return;
     };
     let input = held.command().unwrap_or_default().to_owned();
@@ -123,11 +120,10 @@ fn auto_approve(
         let Some(list) = rules.get_mut(&pane) else {
             return false;
         };
-        list.retain(|r| r.rule.expires_at > now);
-        let Some(active) = list
-            .iter_mut()
-            .find(|r| grants::permits(&r.rule, pane, tool, input, now, r.turns_used))
-        else {
+        list.retain(|active| active.rule.expires_at > now);
+        let Some(active) = list.iter_mut().find(|active| {
+            grants::permits(&active.rule, pane, tool, input, now, active.turns_used)
+        }) else {
             return false;
         };
         active.uses += 1;
@@ -136,11 +132,11 @@ fn auto_approve(
     let decided = decide_by_rule(core, &rule, wire, allow);
     if !decided {
         // Not answered after all: give the use back.
-        if let Some(r) = lock(&core.approvals.rules)
-            .get_mut(&pane)
-            .and_then(|l| l.iter_mut().find(|r| r.rule.rule_id == rule.rule.rule_id))
-        {
-            r.uses = r.uses.saturating_sub(1);
+        if let Some(active) = lock(&core.approvals.rules).get_mut(&pane).and_then(|list| {
+            list.iter_mut()
+                .find(|active| active.rule.rule_id == rule.rule.rule_id)
+        }) {
+            active.uses = active.uses.saturating_sub(1);
         }
     }
     emit_rules(core, pane);
@@ -183,11 +179,11 @@ fn decide_by_rule(core: &Core, rule: &ActiveRule, wire: RequestId, allow: proto:
         actor,
         sig: rule.rule.sig.clone(),
     };
-    let ok = core.decide(actor, &decide, record).is_ok();
-    if ok {
+    let decided = core.decide(actor, &decide, record).is_ok();
+    if decided {
         core.approvals.clear_request(rule.rule.pane_id);
     }
-    ok
+    decided
 }
 
 fn display_name(name: &str) -> &str {
@@ -195,11 +191,11 @@ fn display_name(name: &str) -> &str {
 }
 
 /// "`cargo test` (Bash)" or "Edit".
-pub(crate) fn describe(m: &proto::RuleMatch) -> String {
-    if m.prefix.is_empty() {
-        m.tool.clone()
+pub(crate) fn describe(matcher: &proto::RuleMatch) -> String {
+    if matcher.prefix.is_empty() {
+        matcher.tool.clone()
     } else {
-        format!("`{}` ({})", m.prefix, m.tool)
+        format!("`{}` ({})", matcher.prefix, matcher.tool)
     }
 }
 
@@ -210,10 +206,10 @@ pub(crate) fn turn_started(core: &Core, pane: PaneId) {
         let Some(list) = rules.get_mut(&pane) else {
             return;
         };
-        for r in list.iter_mut() {
-            r.turns_used += 1;
+        for active in list.iter_mut() {
+            active.turns_used += 1;
         }
-        list.retain(|r| r.turns_used <= r.rule.max_turns);
+        list.retain(|active| active.turns_used <= active.rule.max_turns);
     }
     // Clients show the turns left, so tell them even when no rule lapsed.
     emit_rules(core, pane);
@@ -263,15 +259,17 @@ pub(crate) fn add_rule(
     {
         let mut rules = lock(&core.approvals.rules);
         let list = rules.entry(pane).or_default();
-        list.retain(|r| r.rule.rule_id != active.rule.rule_id);
+        list.retain(|existing| existing.rule.rule_id != active.rule.rule_id);
         list.push(active);
     }
     // "Approve this and all like it": answer the open request now if the rule covers it.
     if let Some(request) = request
         && let Some(held) = core.hooks.held(pane)
-        && let Some((wire, _, Some(allow))) = core
-            .pane(pane)
-            .and_then(|e| lock(&e.agent).as_mut().and_then(|rt| rt.blocked_wire()))
+        && let Some((wire, _, Some(allow))) = core.pane(pane).and_then(|entry| {
+            lock(&entry.agent)
+                .as_mut()
+                .and_then(|agent| agent.blocked_wire())
+        })
         && wire == request
     {
         let input = held.command().unwrap_or_default().to_owned();
@@ -294,7 +292,7 @@ pub(crate) fn revoke(
         let list = rules.get_mut(&pane).ok_or(ApprovalError::NotFound)?;
         let at = list
             .iter()
-            .position(|r| r.rule.rule_id == id)
+            .position(|active| active.rule.rule_id == id)
             .ok_or(ApprovalError::NotFound)?;
         list.remove(at)
     };
@@ -330,7 +328,11 @@ pub(crate) fn editable(
 ) -> Result<(String, proto::OptionId), ApprovalError> {
     let (current, request, allow) = core
         .pane(pane)
-        .and_then(|e| lock(&e.agent).as_mut().and_then(|rt| rt.blocked_wire()))
+        .and_then(|entry| {
+            lock(&entry.agent)
+                .as_mut()
+                .and_then(|agent| agent.blocked_wire())
+        })
         .ok_or(ApprovalError::NotFound)?;
     if current != wire {
         return Err(ApprovalError::NotFound);
@@ -338,7 +340,7 @@ pub(crate) fn editable(
     let held = core
         .hooks
         .held(pane)
-        .filter(|h| h.request == request)
+        .filter(|held| held.request == request)
         .ok_or(ApprovalError::NotEditable)?;
     let original = held
         .editable()

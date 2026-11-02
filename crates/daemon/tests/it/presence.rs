@@ -1,7 +1,8 @@
-//! everyone who can see the pane while they are typed, never touch the terminal, and respect
-//! roles and scope; raw typing says who types; following tracks focus and scroll; silent peers
-//! turn away and then go; a reconnect sends everything again; concurrent approvals have one
-//! winner that everyone sees.
+//! Live presence end to end: an owner and two guests on one daemon. Drafts reach everyone who
+//! can see the pane while they are typed, never touch the terminal, and respect roles and
+//! scope; raw typing says who types; following tracks focus and scroll; silent peers turn away
+//! and then go; a reconnect sends everything again; concurrent approvals have one winner that
+//! everyone sees.
 
 use std::time::{Duration, Instant};
 
@@ -20,7 +21,7 @@ const PERMISSION: &str =
 
 /// Short timings so typing, idleness and silence show within a test.
 async fn daemon(dir: &std::path::Path, times: PresenceTimes) -> Daemon {
-    start_with(dir, |c| c.presence = times).await
+    start_with(dir, |config| config.presence = times).await
 }
 
 fn quick() -> PresenceTimes {
@@ -45,29 +46,30 @@ async fn guest(owner: &TestClient, spec: GrantSpec, pane: PaneId) -> TestClient 
         .create_invite(spec, "alice".into())
         .await
         .expect("invite");
-    let mut g = TestClient::join(&invite.to_string(), ClientConfig::generate_key());
-    g.client.attach(None);
-    g.until("guest layout", |c| c.layout.is_some()).await;
-    g.follow(pane).await;
-    g
+    let mut joined = TestClient::join(&invite.to_string(), ClientConfig::generate_key());
+    joined.client.attach(None);
+    joined.until("guest layout", |c| c.layout.is_some()).await;
+    joined.follow(pane).await;
+    joined
 }
 
-fn principal(c: &TestClient) -> PrincipalId {
-    c.client.me().expect("joined").actor.principal
+fn principal(client: &TestClient) -> PrincipalId {
+    client.client.me().expect("joined").actor.principal
 }
 
 /// `who`'s presence as `c` holds it (their most recent connection).
-fn peer(c: &TestClient, who: PrincipalId) -> Option<Peer> {
-    c.client
+fn peer(client: &TestClient, who: PrincipalId) -> Option<Peer> {
+    client
+        .client
         .peers()
         .1
         .into_iter()
-        .filter(|p| p.actor.principal == who)
-        .max_by_key(|p| p.peer)
+        .filter(|peer| peer.actor.principal == who)
+        .max_by_key(|peer| peer.peer)
 }
 
-fn draft_text(c: &TestClient, who: PrincipalId) -> Option<String> {
-    peer(c, who)?.draft.map(|d| d.text)
+fn draft_text(client: &TestClient, who: PrincipalId) -> Option<String> {
+    peer(client, who)?.draft.map(|draft| draft.text)
 }
 
 fn draft(pane: PaneId, text: &str) -> Draft {
@@ -86,9 +88,9 @@ async fn drafts_reach_everyone_live_and_never_the_terminal() {
     let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
     let pane = owner.attach_and_follow().await;
     let kim = guest(&owner, spec(Roles::DRIVER, "Kim", Scope::Daemon), pane).await;
-    let mut rex = guest(&owner, spec(Roles::VIEWER, "Rex", Scope::Daemon), pane).await;
+    let mut ray = guest(&owner, spec(Roles::VIEWER, "Ray", Scope::Daemon), pane).await;
     assert!(kim.client.has_live_presence());
-    let kim_p = principal(&kim);
+    let kim_principal = principal(&kim);
     owner
         .until("three peers", |c| c.client.peers().1.len() == 3)
         .await;
@@ -103,12 +105,12 @@ async fn drafts_reach_everyone_live_and_never_the_terminal() {
         kim.client.set_draft(Some(draft(pane, typed)));
         owner
             .until("draft on the owner", |c| {
-                draft_text(c, kim_p).as_deref() == Some(typed)
+                draft_text(c, kim_principal).as_deref() == Some(typed)
             })
             .await;
         worst = worst.max(at.elapsed());
-        rex.until("draft on the viewer", |c| {
-            draft_text(c, kim_p).as_deref() == Some(typed)
+        ray.until("draft on the viewer", |c| {
+            draft_text(c, kim_principal).as_deref() == Some(typed)
         })
         .await;
     }
@@ -117,16 +119,16 @@ async fn drafts_reach_everyone_live_and_never_the_terminal() {
         worst < Duration::from_millis(300),
         "draft latency {worst:?}"
     );
-    let seen = peer(&owner, kim_p).unwrap();
+    let seen = peer(&owner, kim_principal).unwrap();
     assert_eq!(seen.typing, Some(pane), "typing while drafting");
     assert_eq!(seen.draft.unwrap().caret, prompt.len() as u32);
 
     // The old participant list says "typing" too, for clients without live presence.
     owner
         .until("old-style typing", |c| {
-            c.mp.iter().any(|e| {
-                matches!(e, MultiplayerEvent::Presence { presence }
-                    if presence.actor.principal == kim_p && presence.typing)
+            c.mp.iter().any(|event| {
+                matches!(event, MultiplayerEvent::Presence { presence }
+                    if presence.actor.principal == kim_principal && presence.typing)
             })
         })
         .await;
@@ -134,33 +136,39 @@ async fn drafts_reach_everyone_live_and_never_the_terminal() {
     // Typing stops: the draft stays, the indicator goes.
     owner
         .until("typing over", |c| {
-            peer(c, kim_p).is_some_and(|p| p.typing.is_none() && p.draft.is_some())
+            peer(c, kim_principal).is_some_and(|peer| peer.typing.is_none() && peer.draft.is_some())
         })
         .await;
 
     // Sent or discarded: gone for everyone. It never reached the terminal or the audit log.
     kim.client.set_draft(None);
-    rex.until("draft cleared", |c| {
-        peer(c, kim_p).is_some_and(|p| p.draft.is_none())
+    ray.until("draft cleared", |c| {
+        peer(c, kim_principal).is_some_and(|peer| peer.draft.is_none())
     })
     .await;
     assert!(!owner.text(pane).contains("refactor"));
     let audit = owner.client.audit(None, 500).await.unwrap();
-    assert!(audit.records.iter().all(|r| !r.detail.contains("refactor")));
+    assert!(
+        audit
+            .records
+            .iter()
+            .all(|record| !record.detail.contains("refactor"))
+    );
 
     // A viewer cannot draft: refused, and nobody sees it.
-    let rex_p = principal(&rex);
-    rex.client.set_draft(Some(draft(pane, "rm -rf")));
-    rex.until("draft refused", |c| {
-        c.mp.iter()
-            .any(|e| matches!(e, MultiplayerEvent::Forbidden { what, .. } if what == "Draft"))
+    let ray_principal = principal(&ray);
+    ray.client.set_draft(Some(draft(pane, "rm -rf")));
+    ray.until("draft refused", |c| {
+        c.mp.iter().any(
+            |event| matches!(event, MultiplayerEvent::Forbidden { what, .. } if what == "Draft"),
+        )
     })
     .await;
     tokio::time::sleep(Duration::from_millis(200)).await;
     owner.until("settled", |_| true).await;
-    assert_eq!(draft_text(&owner, rex_p), None);
+    assert_eq!(draft_text(&owner, ray_principal), None);
 
-    drop((kim, rex, owner));
+    drop((kim, ray, owner));
     daemon.shutdown().await;
 }
 
@@ -171,19 +179,19 @@ async fn typing_in_the_terminal_says_who_types() {
     let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
     let pane = owner.attach_and_follow().await;
     let mut kim = guest(&owner, spec(Roles::VIEWER, "Kim", Scope::Daemon), pane).await;
-    let owner_p = principal(&owner);
-    kim.until("owner listed", |c| peer(c, owner_p).is_some())
+    let owner_principal = principal(&owner);
+    kim.until("owner listed", |c| peer(c, owner_principal).is_some())
         .await;
 
     // The keystrokes themselves arrive as terminal output; presence adds who.
     owner.type_line(pane, "echo typed-by-owner");
     kim.wait_text(pane, "typed-by-owner").await;
     kim.until("owner typing", |c| {
-        peer(c, owner_p).is_some_and(|p| p.typing == Some(pane))
+        peer(c, owner_principal).is_some_and(|peer| peer.typing == Some(pane))
     })
     .await;
     kim.until("typing over", |c| {
-        peer(c, owner_p).is_some_and(|p| p.typing.is_none())
+        peer(c, owner_principal).is_some_and(|peer| peer.typing.is_none())
     })
     .await;
     drop((kim, owner));
@@ -207,15 +215,16 @@ async fn following_tracks_focus_and_scroll() {
         panic!("split failed")
     };
     let mut kim = guest(&owner, spec(Roles::DRIVER, "Kim", Scope::Daemon), first).await;
-    let owner_p = principal(&owner);
-    let kim_p = principal(&kim);
+    let owner_principal = principal(&owner);
+    let kim_principal = principal(&kim);
 
-    kim.client.follow(Some(owner_p));
+    kim.client.follow(Some(owner_principal));
     kim.client.set_device_class(DeviceClass::Tablet);
     owner
         .until("kim follows", |c| {
-            peer(c, kim_p)
-                .is_some_and(|p| p.following == Some(owner_p) && p.device == DeviceClass::Tablet)
+            peer(c, kim_principal).is_some_and(|peer| {
+                peer.following == Some(owner_principal) && peer.device == DeviceClass::Tablet
+            })
         })
         .await;
 
@@ -228,14 +237,15 @@ async fn following_tracks_focus_and_scroll() {
     };
     owner.client.set_viewport(Some(viewport));
     kim.until("leader moved", |c| {
-        peer(c, owner_p).is_some_and(|p| p.focus == Some(second) && p.viewport == Some(viewport))
+        peer(c, owner_principal)
+            .is_some_and(|peer| peer.focus == Some(second) && peer.viewport == Some(viewport))
     })
     .await;
 
     kim.client.follow(None);
     owner
         .until("kim stopped", |c| {
-            peer(c, kim_p).is_some_and(|p| p.following.is_none())
+            peer(c, kim_principal).is_some_and(|peer| peer.following.is_none())
         })
         .await;
     drop((kim, owner));
@@ -258,9 +268,9 @@ async fn a_follower_sees_a_new_tab_and_its_output_live() {
         first,
     )
     .await;
-    let owner_p = principal(&owner);
-    gus.client.follow(Some(owner_p));
-    gus.until("owner listed", |c| peer(c, owner_p).is_some())
+    let owner_principal = principal(&owner);
+    gus.client.follow(Some(owner_principal));
+    gus.until("owner listed", |c| peer(c, owner_principal).is_some())
         .await;
 
     let at = Instant::now();
@@ -286,10 +296,12 @@ async fn a_follower_sees_a_new_tab_and_its_output_live() {
 
     // What the follower's window does: the tab arrives, the leader is on it, so show it.
     gus.until("the new tab and the leader on it", |c| {
-        c.layout
-            .as_ref()
-            .is_some_and(|l| l.tabs.iter().any(|t| leaves(&t.root).contains(&agent)))
-            && peer(c, owner_p).is_some_and(|p| p.focus == Some(agent))
+        c.layout.as_ref().is_some_and(|layout| {
+            layout
+                .tabs
+                .iter()
+                .any(|tab| leaves(&tab.root).contains(&agent))
+        }) && peer(c, owner_principal).is_some_and(|peer| peer.focus == Some(agent))
     })
     .await;
     gus.follow(agent).await;
@@ -303,8 +315,8 @@ async fn a_follower_sees_a_new_tab_and_its_output_live() {
         let text = c.text(agent);
         text.rsplit("frame ")
             .next()
-            .and_then(|s| s.split_whitespace().next())
-            .and_then(|n| n.parse().ok())
+            .and_then(|rest| rest.split_whitespace().next())
+            .and_then(|number| number.parse().ok())
             .unwrap_or(0)
     };
     let seen = frame(&gus);
@@ -327,28 +339,31 @@ async fn silent_peers_turn_away_then_go_and_come_back_whole() {
     let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
     let pane = owner.attach_and_follow().await;
     let kim = guest(&owner, spec(Roles::DRIVER, "Kim", Scope::Daemon), pane).await;
-    let kim_p = principal(&kim);
+    let kim_principal = principal(&kim);
     kim.client.set_draft(Some(draft(pane, "half a thought")));
     owner
-        .until("draft", |c| draft_text(c, kim_p).is_some())
+        .until("draft", |c| draft_text(c, kim_principal).is_some())
         .await;
-    let first = peer(&owner, kim_p).unwrap().peer;
+    let first = peer(&owner, kim_principal).unwrap().peer;
 
     // Kim's app says nothing (its heartbeat is every 10 s): away, then dropped, so no ghost
     // stays. Its client reconnects at once and says everything again, draft included.
     owner
         .until("kim away", |c| {
-            peer(c, kim_p).is_some_and(|p| p.state == PresenceState::Away)
+            peer(c, kim_principal).is_some_and(|peer| peer.state == PresenceState::Away)
         })
         .await;
     owner
         .until("old connection gone, new one whole", |c| {
             let peers = c.client.peers().1;
-            !peers.iter().any(|p| p.peer == first)
-                && peers.iter().any(|p| {
-                    p.actor.principal == kim_p
-                        && p.state == PresenceState::Active
-                        && p.draft.as_ref().is_some_and(|d| d.text == "half a thought")
+            !peers.iter().any(|peer| peer.peer == first)
+                && peers.iter().any(|peer| {
+                    peer.actor.principal == kim_principal
+                        && peer.state == PresenceState::Active
+                        && peer
+                            .draft
+                            .as_ref()
+                            .is_some_and(|draft| draft.text == "half a thought")
                 })
         })
         .await;
@@ -378,7 +393,7 @@ async fn scoped_guest_sees_presence_only_in_its_scope() {
         shared,
     )
     .await;
-    let owner_p = principal(&owner);
+    let owner_principal = principal(&owner);
 
     // In the private pane: Pam sees the owner is here, not where or what.
     owner.client.set_view(Some(private), vec![shared, private]);
@@ -389,9 +404,9 @@ async fn scoped_guest_sees_presence_only_in_its_scope() {
         rows: 30,
     }));
     tokio::time::sleep(Duration::from_millis(300)).await;
-    pam.until("owner listed", |c| peer(c, owner_p).is_some())
+    pam.until("owner listed", |c| peer(c, owner_principal).is_some())
         .await;
-    let seen = peer(&pam, owner_p).unwrap();
+    let seen = peer(&pam, owner_principal).unwrap();
     assert_eq!(seen.focus, None);
     assert_eq!(seen.draft, None);
     assert_eq!(seen.viewport, None);
@@ -401,8 +416,9 @@ async fn scoped_guest_sees_presence_only_in_its_scope() {
     owner.client.set_view(Some(shared), vec![shared, private]);
     owner.client.set_draft(Some(draft(shared, "shared plan")));
     pam.until("owner's shared draft", |c| {
-        peer(c, owner_p).is_some_and(|p| {
-            p.focus == Some(shared) && p.draft.is_some_and(|d| d.text == "shared plan")
+        peer(c, owner_principal).is_some_and(|peer| {
+            peer.focus == Some(shared)
+                && peer.draft.is_some_and(|draft| draft.text == "shared plan")
         })
     })
     .await;
@@ -417,10 +433,11 @@ async fn a_typing_burst_is_coalesced_and_ends_on_the_last_keystroke() {
     let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
     let pane = owner.attach_and_follow().await;
     let mut kim = guest(&owner, spec(Roles::DRIVER, "Kim", Scope::Daemon), pane).await;
-    let mut rex = guest(&owner, spec(Roles::VIEWER, "Rex", Scope::Daemon), pane).await;
-    let owner_p = principal(&owner);
-    for c in [&mut kim, &mut rex] {
-        c.until("owner listed", |c| peer(c, owner_p).is_some())
+    let mut ray = guest(&owner, spec(Roles::VIEWER, "Ray", Scope::Daemon), pane).await;
+    let owner_principal = principal(&owner);
+    for participant in [&mut kim, &mut ray] {
+        participant
+            .until("owner listed", |c| peer(c, owner_principal).is_some())
             .await;
     }
 
@@ -430,31 +447,35 @@ async fn a_typing_burst_is_coalesced_and_ends_on_the_last_keystroke() {
         text.push(char::from(b'a' + (i % 26) as u8));
         owner.client.set_draft(Some(draft(pane, &text)));
     }
-    for c in [&mut kim, &mut rex] {
-        c.until("last keystroke", |c| {
-            draft_text(c, owner_p).is_some_and(|t| t == text)
-        })
-        .await;
-        let changes: Vec<u64> =
-            c.mp.iter()
-                .filter_map(|e| match e {
-                    MultiplayerEvent::PeerChanged { peer } if peer.actor.principal == owner_p => {
-                        Some(peer.rev)
-                    }
-                    _ => None,
-                })
-                .collect();
+    for participant in [&mut kim, &mut ray] {
+        participant
+            .until("last keystroke", |c| {
+                draft_text(c, owner_principal).is_some_and(|shown| shown == text)
+            })
+            .await;
+        let changes: Vec<u64> = participant
+            .mp
+            .iter()
+            .filter_map(|event| match event {
+                MultiplayerEvent::PeerChanged { peer }
+                    if peer.actor.principal == owner_principal =>
+                {
+                    Some(peer.rev)
+                }
+                _ => None,
+            })
+            .collect();
         assert!(
             changes.len() < 200,
             "{} pushes for 2 000 edits",
             changes.len()
         );
         assert!(
-            changes.windows(2).all(|w| w[0] < w[1]),
+            changes.windows(2).all(|pair| pair[0] < pair[1]),
             "revisions only grow"
         );
     }
-    drop((kim, rex, owner));
+    drop((kim, ray, owner));
     daemon.shutdown().await;
 }
 
@@ -500,9 +521,9 @@ async fn concurrent_approvals_have_one_winner_everyone_sees() {
     let blocked = |c: &TestClient| {
         c.metas
             .get(&pane)
-            .and_then(|m| m.agent.clone())
-            .and_then(|a| match a.state {
-                AgentState::Blocked(b) => Some(b),
+            .and_then(|meta| meta.agent.clone())
+            .and_then(|agent| match agent.state {
+                AgentState::Blocked(prompt) => Some(prompt),
                 _ => None,
             })
     };
@@ -520,7 +541,7 @@ async fn concurrent_approvals_have_one_winner_everyone_sees() {
         .expect("hook answered")
         .unwrap();
     let winner = |c: &TestClient| {
-        c.mp.iter().find_map(|e| match e {
+        c.mp.iter().find_map(|event| match event {
             MultiplayerEvent::Decided { decided } if decided.request_id == request => {
                 Some(decided.decided_by)
             }
@@ -530,8 +551,10 @@ async fn concurrent_approvals_have_one_winner_everyone_sees() {
     viv.until("viewer sees who answered", |c| winner(c).is_some())
         .await;
     let won = winner(&viv).unwrap();
-    for c in [&mut ann, &mut owner] {
-        c.until("same winner", |c| winner(c) == Some(won)).await;
+    for participant in [&mut ann, &mut owner] {
+        participant
+            .until("same winner", |c| winner(c) == Some(won))
+            .await;
     }
     let loser = if won.principal == principal(&ann) {
         &mut owner
@@ -540,8 +563,9 @@ async fn concurrent_approvals_have_one_winner_everyone_sees() {
     };
     loser
         .until("loser told", |c| {
-            c.mp.iter()
-                .any(|e| matches!(e, MultiplayerEvent::AlreadyDecided { by, .. } if *by == won))
+            c.mp.iter().any(
+                |event| matches!(event, MultiplayerEvent::AlreadyDecided { by, .. } if *by == won),
+            )
         })
         .await;
     drop((ann, viv, owner));

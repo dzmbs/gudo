@@ -8,6 +8,7 @@ import UIKit
 import GudoCore
 import VoiceKit
 
+/// The keys above the software keyboard: no full-width slab, only
 /// floating Liquid Glass shapes over the terminal, centred on the keyboard.
 ///
 /// ```
@@ -83,7 +84,7 @@ final class KeyBar: UIInputView {
     private(set) var profile = KeyBarProfile.shell
 
     /// The focused pane's repository workflows: first in the snippets row, before the user's
-    /// own snippets (`Model/Workflows.swift`).
+    /// own snippets.
     var workflows: [KeyBarWorkflow] = [] {
         didSet { if workflows != oldValue, snippetsShown { rebuildSnippets() } }
     }
@@ -94,7 +95,7 @@ final class KeyBar: UIInputView {
     var onSnippetsShown: (() -> Void)?
 
     static let hardwareModeKey = "keyBar.hardwareKeyboard"
-    /// The older switch for the full bar with a hardware keyboard (UI tests pass it).
+    /// Forces the full bar with a hardware keyboard (UI tests pass it).
     static let fullWithHardwareKeyboardKey = "keyBar.fullWithHardwareKeyboard"
     /// Menus at least this wide list the key sets inline; narrower ones use a submenu.
     private static let wideWidth: CGFloat = 600
@@ -173,7 +174,6 @@ final class KeyBar: UIInputView {
         super.init(frame: CGRect(x: 0, y: 0, width: 0, height: metrics.bandHeight), inputViewStyle: .default)
         allowsSelfSizing = true
         translatesAutoresizingMaskIntoConstraints = false
-        // Transparent: the terminal shows through around the capsules.
         backgroundColor = .clear
 
         panelCard.isUserInteractionEnabled = false
@@ -310,12 +310,12 @@ final class KeyBar: UIInputView {
 
     /// The latched modifiers for the next key; reading clears one-shot Ctrl and Alt.
     func takeLatchedModifiers() -> KeyModifiers {
-        var mods: KeyModifiers = []
-        if ctrl != .off { mods.insert(.control) }
-        if alt != .off { mods.insert(.alt) }
+        var modifiers: KeyModifiers = []
+        if ctrl != .off { modifiers.insert(.control) }
+        if alt != .off { modifiers.insert(.alt) }
         if ctrl == .oneShot { ctrl = .off }
         if alt == .oneShot { alt = .off }
-        return mods
+        return modifiers
     }
 
     // MARK: State
@@ -401,9 +401,9 @@ final class KeyBar: UIInputView {
 
     /// The keyboard frame includes this bar; anything much taller is the on-screen keyboard
     /// (a hardware keyboard leaves only the bar, or the bar and the shortcuts strip).
-    @objc private func keyboardFrameChanged(_ note: Notification) {
-        guard let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect,
-              let screen = window?.windowScene?.screen ?? (note.object as? UIScreen) ?? window?.screen else { return }
+    @objc private func keyboardFrameChanged(_ notification: Notification) {
+        guard let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect,
+              let screen = window?.windowScene?.screen ?? (notification.object as? UIScreen) ?? window?.screen else { return }
         let visible = frame.intersection(screen.bounds).height
         let shown = visible - bounds.height > 120
         guard shown != softwareKeyboardShown else { return }
@@ -537,37 +537,37 @@ final class KeyBar: UIInputView {
     private func layoutBand() {
         let width = band.bounds.width
         guard width > 0 else { return }
-        let m = metrics
-        let h = m.capsuleHeight
+        let metrics = self.metrics
+        let capsuleHeight = metrics.capsuleHeight
         if compact {
             layoutPill(width: width)
             return
         }
-        let aKeys: [CapsuleKey] = [escKey, ctrlKey] + (m.showsAlt ? [altKey] : []) + [tabKey]
-        let aSlots = aKeys.map { m.slotWidth(title: $0.title, symbol: $0.symbol) }
-        let aWidth = CapsuleView.width(slots: aSlots, metrics: m)
-        let cSlots = capsuleC.keys.map { _ in m.minimumSlot }
-        let cWidth = m.showsArrowKeys ? CapsuleView.width(slots: cSlots, metrics: m) : 0
+        let aKeys: [CapsuleKey] = [escKey, ctrlKey] + (metrics.showsAlt ? [altKey] : []) + [tabKey]
+        let aSlots = aKeys.map { metrics.slotWidth(title: $0.title, symbol: $0.symbol) }
+        let aWidth = CapsuleView.width(slots: aSlots, metrics: metrics)
+        let cSlots = capsuleC.keys.map { _ in metrics.minimumSlot }
+        let cWidth = metrics.showsArrowKeys ? CapsuleView.width(slots: cSlots, metrics: metrics) : 0
         // Hold-to-talk where there is room; narrow iPhones have the keyboard's own mic.
-        let showsMic = m.showsAlt && VoiceSettings.load().isEnabled
+        let showsMic = metrics.showsAlt && VoiceSettings.load().isEnabled
         micCircle.isHidden = !showsMic
-        let circles: [UIView] = (showsMic ? [micCircle] : []) + [joystick, menuCircle] + (m.showsAlt ? [hideCircle] : [])
-        let circlesWidth = CGFloat(circles.count) * h + CGFloat(circles.count - 1) * m.gap
-        let fixed = aWidth + m.gap + (m.showsArrowKeys ? cWidth + m.gap : 0) + m.gap + circlesWidth
-        let budget = width - 2 * m.margin - fixed
+        let circles: [UIView] = (showsMic ? [micCircle] : []) + [joystick, menuCircle] + (metrics.showsAlt ? [hideCircle] : [])
+        let circlesWidth = CGFloat(circles.count) * capsuleHeight + CGFloat(circles.count - 1) * metrics.gap
+        let fixed = aWidth + metrics.gap + (metrics.showsArrowKeys ? cWidth + metrics.gap : 0) + metrics.gap + circlesWidth
+        let budget = width - 2 * metrics.margin - fixed
 
         // Capsule B has one width per width bucket, whatever the profile, so nothing else moves
         // when the keys change: the composer toggle for agents, then the profile's keys by
         // priority while they fit (never fewer than four), spread evenly over the width.
         let nominalSlots: CGFloat = width < 500 ? 5 : width < 900 ? 8 : 10
-        let bWidth = min(budget, CapsuleView.width(slots: Array(repeating: m.minimumSlot + 4, count: Int(nominalSlots)), metrics: m))
-        let inner = bWidth - 2 * m.padding
+        let bWidth = min(budget, CapsuleView.width(slots: Array(repeating: metrics.minimumSlot + 4, count: Int(nominalSlots)), metrics: metrics))
+        let inner = bWidth - 2 * metrics.padding
         let leading: [CapsuleKey] = isAgent || showsComposer(state) ? [composerKey] : []
         var bViews: [CapsuleKey] = leading
-        var natural = leading.map { m.slotWidth(title: $0.title, symbol: $0.symbol) }
+        var natural = leading.map { metrics.slotWidth(title: $0.title, symbol: $0.symbol) }
         var shown = 0
         for (spec, view) in profileKeys {
-            let slot = m.slotWidth(title: spec.title, symbol: spec.symbol)
+            let slot = metrics.slotWidth(title: spec.title, symbol: spec.symbol)
             guard natural.reduce(0, +) + slot <= inner || shown < 4 else { break }
             bViews.append(view)
             natural.append(slot)
@@ -583,64 +583,64 @@ final class KeyBar: UIInputView {
         // profile with fewer keys only narrows capsule B from its trailing side.
         let spare = min(6, max(0, inner - natural.reduce(0, +)) / CGFloat(max(natural.count, 1)))
         let bSlots = natural.map { $0 + spare }
-        let bCapsule = CapsuleView.width(slots: bSlots, metrics: m)
+        let bCapsule = CapsuleView.width(slots: bSlots, metrics: metrics)
 
-        altKey.isHidden = !m.showsAlt
+        altKey.isHidden = !metrics.showsAlt
         capsuleA.setKeys(aKeys)
         capsuleB.setKeys(bViews)
-        capsuleC.isHidden = !m.showsArrowKeys
-        hideCircle.isHidden = !m.showsAlt
+        capsuleC.isHidden = !metrics.showsArrowKeys
+        hideCircle.isHidden = !metrics.showsAlt
         for view in [capsuleA, capsuleB, joystick, menuCircle] as [UIView] { view.isHidden = false }
 
         // Centred on the nominal width, so capsule A and the circles stay put across profiles.
-        let total = aWidth + m.gap + max(bWidth, bCapsule) + (m.showsArrowKeys ? m.gap + cWidth : 0) + m.gap + circlesWidth
-        var x = max(m.margin, (width - total) / 2)
-        let y = (band.bounds.height - h) / 2
+        let total = aWidth + metrics.gap + max(bWidth, bCapsule) + (metrics.showsArrowKeys ? metrics.gap + cWidth : 0) + metrics.gap + circlesWidth
+        var x = max(metrics.margin, (width - total) / 2)
+        let y = (band.bounds.height - capsuleHeight) / 2
         func place(_ view: UIView, width: CGFloat) {
-            view.frame = CGRect(x: x, y: y, width: width, height: h)
-            x += width + m.gap
+            view.frame = CGRect(x: x, y: y, width: width, height: capsuleHeight)
+            x += width + metrics.gap
         }
         place(capsuleA, width: aWidth)
         capsuleA.layout(slots: aSlots)
-        capsuleB.frame = CGRect(x: x, y: y, width: bCapsule, height: h)
+        capsuleB.frame = CGRect(x: x, y: y, width: bCapsule, height: capsuleHeight)
         capsuleB.layout(slots: bSlots)
-        x += max(bWidth, bCapsule) + m.gap
-        if m.showsArrowKeys {
+        x += max(bWidth, bCapsule) + metrics.gap
+        if metrics.showsArrowKeys {
             place(capsuleC, width: cWidth)
             capsuleC.layout(slots: cSlots)
         }
-        for circle in circles { place(circle, width: h) }
+        for circle in circles { place(circle, width: capsuleHeight) }
     }
 
     /// Hardware keyboard: one slim pill at the trailing edge, `esc ⌃` (+ the composer for
     /// agents) and ⋯. The Magic Keyboard has no Esc key; ⌘. sends Esc as well.
     private func layoutPill(width: CGFloat) {
-        let m = metrics
+        let metrics = self.metrics
         for view in [capsuleB, capsuleC, joystick, hideCircle, micCircle] as [UIView] { view.isHidden = true }
         guard hardwareMode == .minimal else {
             capsuleA.isHidden = true
             menuCircle.isHidden = true
             return
         }
-        var pillMetrics = m
-        pillMetrics.capsuleHeight = m.pillHeight
+        var pillMetrics = metrics
+        pillMetrics.capsuleHeight = metrics.pillHeight
         pillMetrics.padding = 4
         pillMetrics.minimumSlot = 30
         let keys: [CapsuleKey] = [escKey, ctrlKey] + (isAgent ? [composerKey] : [])
         altKey.isHidden = true
         let slots = keys.map { pillMetrics.slotWidth(title: $0.title, symbol: $0.symbol) }
         let pillWidth = CapsuleView.width(slots: slots, metrics: pillMetrics)
-        let h = m.pillHeight
-        let y = (band.bounds.height - h) / 2
-        let menuX = width - m.margin - h
+        let pillHeight = metrics.pillHeight
+        let y = (band.bounds.height - pillHeight) / 2
+        let menuX = width - metrics.margin - pillHeight
         menuCircle.isHidden = false
-        menuCircle.frame = CGRect(x: menuX, y: y, width: h, height: h)
+        menuCircle.frame = CGRect(x: menuX, y: y, width: pillHeight, height: pillHeight)
         capsuleA.isHidden = false
         capsuleA.metrics = pillMetrics
         capsuleA.setKeys(keys)
-        capsuleA.frame = CGRect(x: menuX - 6 - pillWidth, y: y, width: pillWidth, height: h)
+        capsuleA.frame = CGRect(x: menuX - 6 - pillWidth, y: y, width: pillWidth, height: pillHeight)
         capsuleA.layout(slots: slots)
-        capsuleA.metrics = m
+        capsuleA.metrics = metrics
     }
 
     // MARK: Keys
@@ -690,7 +690,7 @@ final class KeyBar: UIInputView {
             // Plain characters go into the draft; ^C clears it; anything else is for the shell,
             // so the draft goes back to the shell's line first.
             switch output {
-            case .text(let text, let mods) where mods.isEmpty && ctrl == .off && alt == .off:
+            case .text(let text, let modifiers) where modifiers.isEmpty && ctrl == .off && alt == .off:
                 lineEditor.insert(text)
                 return
             case .text("c", .control) where lineEditor.interrupt():
@@ -802,10 +802,10 @@ final class KeyBar: UIInputView {
             }
             lineEditor.leaveToShell()
         }
-        var mods: KeyModifiers = []
-        if ctrl != .off { mods.insert(.control) }
-        if alt != .off { mods.insert(.alt) }
-        var event = KeyEvent.press(key, mods: mods)
+        var modifiers: KeyModifiers = []
+        if ctrl != .off { modifiers.insert(.control) }
+        if alt != .off { modifiers.insert(.alt) }
+        var event = KeyEvent.press(key, mods: modifiers)
         if isRepeat { event.action = .repeat }
         target.send(event)
     }
@@ -819,14 +819,14 @@ final class KeyBar: UIInputView {
         arrowPadRow.addSubview(arrowPad)
         arrowPadRow.onLayout = { [weak self] in
             guard let self else { return }
-            let m = metrics
+            let metrics = self.metrics
             let slots = arrowPad.keys.map { view in
                 let key = view as? CapsuleKey
-                return max(m.minimumSlot + 4, m.slotWidth(title: key?.title, symbol: key?.symbol))
+                return max(metrics.minimumSlot + 4, metrics.slotWidth(title: key?.title, symbol: key?.symbol))
             }
-            let width = min(CapsuleView.width(slots: slots, metrics: m), arrowPadRow.bounds.width - 2 * m.margin)
-            arrowPad.frame = CGRect(x: (arrowPadRow.bounds.width - width) / 2, y: (48 - m.capsuleHeight) / 2,
-                                    width: width, height: m.capsuleHeight)
+            let width = min(CapsuleView.width(slots: slots, metrics: metrics), arrowPadRow.bounds.width - 2 * metrics.margin)
+            arrowPad.frame = CGRect(x: (arrowPadRow.bounds.width - width) / 2, y: (48 - metrics.capsuleHeight) / 2,
+                                    width: width, height: metrics.capsuleHeight)
             arrowPad.layout(slots: slots)
         }
     }
@@ -865,7 +865,6 @@ final class KeyBar: UIInputView {
         ] + (onDraw.map { draw in
             [UIAction(title: "Draw on Pane", image: UIImage(systemName: "pencil.and.scribble")) { _ in draw() }]
         } ?? []))
-        // Keys that did not fit on this width.
         let hidden = profileKeys.dropFirst(visibleProfileKeys)
         let more = hidden.isEmpty ? [] : [UIMenu(title: "More Keys", image: UIImage(systemName: "keyboard"), children: hidden.map { key, _ in
             UIAction(title: key.title ?? key.accessibilityLabel) { [weak self] _ in self?.send(key) }
@@ -954,7 +953,6 @@ final class KeyBar: UIInputView {
 
     private func send(_ snippet: Snippet) {
         if !composer.isHidden, !snippet.sendReturn {
-            // Into the composer draft, for agent prompts.
             composer.text += snippet.body
             state.draft = composer.text
         } else {
@@ -1006,6 +1004,7 @@ private final class CircleView: UIView {
     }
 }
 
+/// The arrow joystick, a glass circle: drag from wherever the touch starts.
 /// Past an 8 pt dead zone it sends one arrow along the dominant axis, then repeats at 12/s
 /// (8–30 pt), 25/s (30–60 pt) or 50/s (beyond) after 350 ms. A direction change sends one arrow at
 /// once and restarts the repeat. Tracking continues outside the circle; lifting stops before the
@@ -1097,11 +1096,11 @@ private final class JoystickView: UIView {
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let touch = touches.first else { return }
         let point = touch.location(in: self)
-        let dx = point.x - origin.x
-        let dy = point.y - origin.y
-        distance = max(abs(dx), abs(dy))
+        let deltaX = point.x - origin.x
+        let deltaY = point.y - origin.y
+        distance = max(abs(deltaX), abs(deltaY))
         guard distance >= Self.deadZone else { return }
-        let next: PhysicalKey = abs(dx) >= abs(dy) ? (dx > 0 ? .arrowRight : .arrowLeft) : (dy > 0 ? .arrowDown : .arrowUp)
+        let next: PhysicalKey = abs(deltaX) >= abs(deltaY) ? (deltaX > 0 ? .arrowRight : .arrowLeft) : (deltaY > 0 ? .arrowDown : .arrowUp)
         showDot(toward: next)
         guard next != direction else { return }
         direction = next

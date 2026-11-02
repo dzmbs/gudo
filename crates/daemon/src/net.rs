@@ -4,7 +4,6 @@ use iroh::endpoint::{ReadExactError, RecvStream, SendStream};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-/// Errors on a framed stream.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum NetError {
     #[error("frame: {0}")]
@@ -15,10 +14,12 @@ pub(crate) enum NetError {
     Write(#[from] iroh::endpoint::WriteError),
 }
 
-/// Writes one framed message.
-pub(crate) async fn send<T: Serialize>(stream: &mut SendStream, msg: &T) -> Result<(), NetError> {
-    let buf = proto::frame::to_vec(msg)?;
-    stream.write_all(&buf).await?;
+pub(crate) async fn send<T: Serialize>(
+    stream: &mut SendStream,
+    message: &T,
+) -> Result<(), NetError> {
+    let frame = proto::frame::to_vec(message)?;
+    stream.write_all(&frame).await?;
     Ok(())
 }
 
@@ -30,7 +31,7 @@ pub(crate) async fn recv<T: DeserializeOwned>(
     match stream.read_exact(&mut prefix).await {
         Ok(()) => {}
         Err(ReadExactError::FinishedEarly(0)) => return Ok(None),
-        Err(e) => return Err(e.into()),
+        Err(error) => return Err(error.into()),
     }
     let mut body = vec![0; proto::frame::body_len(prefix, proto::MAX_FRAME_LEN)?];
     stream.read_exact(&mut body).await?;

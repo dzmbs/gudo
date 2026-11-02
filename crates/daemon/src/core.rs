@@ -116,6 +116,7 @@ pub(crate) struct PaneRecord {
     /// Last working directory reported by the shell (OSC 7), else the launch directory.
     pub cwd: Option<String>,
     pub agent: Option<AgentRecord>,
+    /// The worktree the pane runs in and the `PORT` it was given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<WorktreeRecord>,
 }
@@ -199,31 +200,31 @@ impl PaneEntry {
         let started = self
             .launched_at
             .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis() as u64);
+            .map_or(0, |since_epoch| since_epoch.as_millis() as u64);
         started <= at.0
     }
 }
 
-/// A report as clients see it; `None` for `Clear`.
 /// Longest message or title kept from a program's own status report, in characters.
 const PROGRAM_TEXT_CHARS: usize = 512;
 
+/// A report as clients see it; `None` for `Clear`.
 fn program_report(status: &agents::ProgramStatus) -> Option<proto::ProgramReport> {
-    use agents::{ProgramKind as K, ProgramState as S};
+    use agents::{ProgramKind, ProgramState};
     let state = match status.state {
-        S::Idle => proto::ProgramState::Idle,
-        S::Working => proto::ProgramState::Working,
-        S::Done => proto::ProgramState::Done,
-        S::Blocked => proto::ProgramState::Blocked,
-        S::Error => proto::ProgramState::Error,
-        S::Clear => return None,
+        ProgramState::Idle => proto::ProgramState::Idle,
+        ProgramState::Working => proto::ProgramState::Working,
+        ProgramState::Done => proto::ProgramState::Done,
+        ProgramState::Blocked => proto::ProgramState::Blocked,
+        ProgramState::Error => proto::ProgramState::Error,
+        ProgramState::Clear => return None,
     };
     Some(proto::ProgramReport {
         state,
-        kind: status.kind.map(|k| match k {
-            K::Permission => proto::ProgramKind::Permission,
-            K::Question => proto::ProgramKind::Question,
-            K::Auth => proto::ProgramKind::Auth,
+        kind: status.kind.map(|kind| match kind {
+            ProgramKind::Permission => proto::ProgramKind::Permission,
+            ProgramKind::Question => proto::ProgramKind::Question,
+            ProgramKind::Auth => proto::ProgramKind::Auth,
         }),
         app: status.app.clone(),
         message: status.msg.clone(),
@@ -231,8 +232,8 @@ fn program_report(status: &agents::ProgramStatus) -> Option<proto::ProgramReport
     })
 }
 
-pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
+pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 pub(crate) struct Core {
@@ -250,8 +251,7 @@ pub(crate) struct Core {
     pub shutting_down: AtomicBool,
     pub hooks: HookServer,
     shell: Option<ShellIntegration>,
-    /// Panes each connection shows (focused and visible), for "finished while unseen".
-    /// Panes each connection shows, with the device it belongs to.
+    /// Panes each connection shows (focused and visible), with the device it belongs to.
     views: Mutex<HashMap<ConnId, (proto::DeviceId, Vec<PaneId>)>>,
     /// Developer-workflow state: ports, attention, turns, editors, worktrees.
     pub ws: crate::ws::Ws,
@@ -259,6 +259,7 @@ pub(crate) struct Core {
     pub push: crate::notifier::Push,
     /// Multiplayer: grants, leases, presence, audit.
     pub mp: crate::mp::Mp,
+    /// Drawings and images.
     pub art: crate::art::Art,
     /// Input assistance: foreground programs, prompt watches, history, completion caches.
     pub assist: crate::assist::Assist,
@@ -281,12 +282,12 @@ pub(crate) struct Core {
     /// Signalled when a client connects or knocks, so work done only for clients resumes.
     pub client_arrived: Notify,
     /// This core, for work it schedules on itself (closing finished floats).
-    me: std::sync::Weak<Core>,
+    weak_self: std::sync::Weak<Core>,
 }
 
 impl Core {
     pub fn new(
-        cfg: Config,
+        config: Config,
         identity: Arc<Identity>,
         layout: Layout,
         hooks: HookServer,
@@ -294,9 +295,9 @@ impl Core {
         mp: crate::mp::Mp,
     ) -> Arc<Self> {
         let (events, _) = broadcast::channel(1024);
-        let ws = crate::ws::Ws::new(&cfg, events.clone());
-        Arc::new_cyclic(|me| Self {
-            me: me.clone(),
+        let ws = crate::ws::Ws::new(&config, events.clone());
+        Arc::new_cyclic(|weak_self| Self {
+            weak_self: weak_self.clone(),
             epoch: SessionEpoch(crate::identity::now_millis()),
             identity,
             layout: Mutex::new(layout),
@@ -311,21 +312,21 @@ impl Core {
             shell,
             views: Mutex::new(HashMap::new()),
             ws,
-            push: crate::notifier::Push::load(&cfg.state_dir),
+            push: crate::notifier::Push::load(&config.state_dir),
             mp,
-            art: crate::art::Art::open(&cfg.state_dir, cfg.artifacts),
-            assist: crate::assist::Assist::new(&cfg),
+            art: crate::art::Art::open(&config.state_dir, config.artifacts),
+            assist: crate::assist::Assist::new(&config),
             term: crate::term::Term::default(),
             upgrade: crate::upgrade::Upgrade::default(),
             inputs: crate::resume::InputStreams::default(),
             askpass: crate::askpass::Askpass::install(
-                &cfg.askpass,
-                &cfg.state_dir,
-                &cfg.hook_bin(),
+                &config.askpass,
+                &config.state_dir,
+                &config.hook_bin(),
             ),
             approvals: crate::approve::Approvals::default(),
-            browser: crate::browser::Browser::install(&cfg.state_dir, &cfg.hook_bin()),
-            cfg,
+            browser: crate::browser::Browser::install(&config.state_dir, &config.hook_bin()),
+            cfg: config,
             connected: AtomicUsize::new(0),
             device_conns: Mutex::default(),
             client_arrived: Notify::new(),
@@ -333,8 +334,8 @@ impl Core {
     }
 
     /// A client connected (`true`) or left.
-    pub fn client_connected(&self, up: bool) {
-        if up {
+    pub fn client_connected(&self, connected: bool) {
+        if connected {
             self.connected.fetch_add(1, Ordering::Relaxed);
             self.ws.ports.trigger.notify_one();
             self.client_arrived.notify_waiters();
@@ -369,14 +370,13 @@ impl Core {
     pub fn device_disconnected(&self, device: proto::DeviceId, id: ConnId) {
         let mut all = lock(&self.device_conns);
         if let Some(conns) = all.get_mut(&device) {
-            conns.retain(|(c, _)| *c != id);
+            conns.retain(|(conn_id, _)| *conn_id != id);
             if conns.is_empty() {
                 all.remove(&device);
             }
         }
     }
 
-    /// Clients currently connected.
     pub fn connected_clients(&self) -> usize {
         self.connected.load(Ordering::Relaxed)
     }
@@ -388,7 +388,9 @@ impl Core {
 
     /// Whether any connected client shows `pane`.
     pub fn pane_seen(&self, pane: PaneId) -> bool {
-        lock(&self.views).values().any(|(_, v)| v.contains(&pane))
+        lock(&self.views)
+            .values()
+            .any(|(_, panes)| panes.contains(&pane))
     }
 
     /// Whether `device` is connected and showing some pane of this host (the app is in the
@@ -396,7 +398,7 @@ impl Core {
     pub fn device_active(&self, device: proto::DeviceId) -> bool {
         lock(&self.views)
             .values()
-            .any(|(d, v)| *d == device && !v.is_empty())
+            .any(|(viewer, panes)| *viewer == device && !panes.is_empty())
     }
 
     pub fn emit(&self, event: Event) {
@@ -445,11 +447,9 @@ impl Core {
     pub fn pane_entries(&self) -> Vec<(PaneId, Arc<PaneEntry>)> {
         lock(&self.panes)
             .iter()
-            .map(|(id, e)| (*id, Arc::clone(e)))
+            .map(|(id, entry)| (*id, Arc::clone(entry)))
             .collect()
     }
-
-    // --- attachment -------------------------------------------------------------------------
 
     pub fn attach(&self, conn: ConnId, session: SessionId) {
         lock(&self.attached).insert(conn, session);
@@ -466,9 +466,9 @@ impl Core {
             let layout = lock(&self.layout);
             sessions
                 .iter()
-                .filter_map(|&s| layout.session(s))
-                .flat_map(|s| &s.tabs)
-                .flat_map(|t| crate::layout::leaves(&t.root))
+                .filter_map(|&id| layout.session(id))
+                .flat_map(|session| &session.tabs)
+                .flat_map(|tab| crate::layout::leaves(&tab.root))
                 .collect()
         };
         let panes = lock(&self.panes);
@@ -485,7 +485,6 @@ impl Core {
             .collect()
     }
 
-    /// The session `conn` is attached to.
     pub fn attached_session(&self, conn: ConnId) -> Option<SessionId> {
         lock(&self.attached).get(&conn).copied()
     }
@@ -501,7 +500,7 @@ impl Core {
         // A departed client no longer sizes anything; the next typist takes over.
         for (_, entry) in self.pane_entries() {
             let mut meta = lock(&entry.meta);
-            if meta.sized_by.is_some_and(|(c, _)| c == conn) {
+            if meta.sized_by.is_some_and(|(sizer, _)| sizer == conn) {
                 meta.sized_by = None;
             }
             if meta.typed_by == Some(conn) {
@@ -512,17 +511,19 @@ impl Core {
 
     pub fn sessions_message(&self, scope: Scope) -> ServerCtl {
         let attached = lock(&self.attached).clone();
-        let all =
-            lock(&self.layout).summaries(|s| attached.values().filter(|&&a| a == s).count() as u32);
+        let all = lock(&self.layout).summaries(|session| {
+            attached
+                .values()
+                .filter(|&&attached_to| attached_to == session)
+                .count() as u32
+        });
         // Filtered after the layout lock is released: `session_visible` takes it again.
         let sessions = all
             .into_iter()
-            .filter(|s| self.session_visible(s.session_id, scope))
+            .filter(|summary| self.session_visible(summary.session_id, scope))
             .collect();
         ServerCtl::Sessions { sessions }
     }
-
-    // --- scopes (multiplayer) ---------------------------------------------------------------
 
     /// Whether `inner` lies within `outer` in the current layout.
     pub fn scope_within(&self, inner: Scope, outer: Scope) -> bool {
@@ -531,9 +532,13 @@ impl Core {
         }
         let layout = lock(&self.layout);
         match (inner, outer) {
-            (Scope::Tab(t), Scope::Session(s)) => layout.session_of_tab(t) == Some(s),
-            (Scope::Pane(p), Scope::Session(s)) => layout.session_of_pane(p) == Some(s),
-            (Scope::Pane(p), Scope::Tab(t)) => layout.tab_of_pane(p) == Some(t),
+            (Scope::Tab(tab), Scope::Session(session)) => {
+                layout.session_of_tab(tab) == Some(session)
+            }
+            (Scope::Pane(pane), Scope::Session(session)) => {
+                layout.session_of_pane(pane) == Some(session)
+            }
+            (Scope::Pane(pane), Scope::Tab(tab)) => layout.tab_of_pane(pane) == Some(tab),
             _ => false,
         }
     }
@@ -543,9 +548,9 @@ impl Core {
         let layout = lock(&self.layout);
         match scope {
             Scope::Daemon => true,
-            Scope::Session(s) => s == session,
-            Scope::Tab(t) => layout.session_of_tab(t) == Some(session),
-            Scope::Pane(p) => layout.session_of_pane(p) == Some(session),
+            Scope::Session(scoped) => scoped == session,
+            Scope::Tab(tab) => layout.session_of_tab(tab) == Some(session),
+            Scope::Pane(pane) => layout.session_of_pane(pane) == Some(session),
         }
     }
 
@@ -554,28 +559,29 @@ impl Core {
         let layout = lock(&self.layout);
         match scope {
             Scope::Daemon => layout.most_recent(),
-            Scope::Session(s) => layout.session(s).map(|_| s),
-            Scope::Tab(t) => layout.session_of_tab(t),
-            Scope::Pane(p) => layout.session_of_pane(p),
+            Scope::Session(session) => layout.session(session).map(|_| session),
+            Scope::Tab(tab) => layout.session_of_tab(tab),
+            Scope::Pane(pane) => layout.session_of_pane(pane),
         }
     }
 
     /// A session's layout cut down to `scope`: a tab-scoped guest sees only its tab, a
+    /// pane-scoped one only its pane (never learn which other panes exist).
     pub fn layout_for(&self, session: SessionId, scope: Scope) -> Option<SessionLayout> {
         let mut layout = lock(&self.layout).snapshot(session)?;
         match scope {
             Scope::Daemon | Scope::Session(_) => {}
-            Scope::Tab(t) => {
-                layout.tabs.retain(|tab| tab.tab_id == t);
+            Scope::Tab(tab_id) => {
+                layout.tabs.retain(|tab| tab.tab_id == tab_id);
                 layout.active_tab = layout.tabs.first().map(|tab| tab.tab_id);
             }
-            Scope::Pane(p) => {
+            Scope::Pane(pane_id) => {
                 layout
                     .tabs
-                    .retain(|tab| crate::layout::leaves(&tab.root).any(|leaf| leaf == p));
+                    .retain(|tab| crate::layout::leaves(&tab.root).any(|leaf| leaf == pane_id));
                 for tab in &mut layout.tabs {
-                    tab.root = proto::LayoutNode::Leaf(p);
-                    tab.focused = p;
+                    tab.root = proto::LayoutNode::Leaf(pane_id);
+                    tab.focused = pane_id;
                     tab.zoomed = None;
                 }
                 layout.active_tab = layout.tabs.first().map(|tab| tab.tab_id);
@@ -591,12 +597,15 @@ impl Core {
         let mut all = layout.projects(session)?;
         let shown = match scope {
             Scope::Daemon | Scope::Session(_) => return Some(all),
-            Scope::Tab(t) => Some(t),
-            Scope::Pane(p) => layout.tab_of_pane(p),
+            Scope::Tab(tab) => Some(tab),
+            Scope::Pane(pane) => layout.tab_of_pane(pane),
         };
         let proto::SessionProjects { projects, tabs, .. } = &mut all;
-        tabs.retain(|m| Some(m.tab_id) == shown);
-        projects.retain(|p| tabs.iter().any(|m| m.project == p.id));
+        tabs.retain(|membership| Some(membership.tab_id) == shown);
+        projects.retain(|project| {
+            tabs.iter()
+                .any(|membership| membership.project == project.id)
+        });
         Some(all)
     }
 
@@ -607,9 +616,9 @@ impl Core {
         let mut all = layout.floats(session)?;
         match scope {
             Scope::Daemon | Scope::Session(_) => {}
-            Scope::Tab(t) => all
+            Scope::Tab(tab) => all
                 .floats
-                .retain(|w| layout.tab_of_pane(w.panes[0]) == Some(t)),
+                .retain(|window| layout.tab_of_pane(window.panes[0]) == Some(tab)),
             Scope::Pane(_) => all.floats.clear(),
         }
         Some(all)
@@ -629,23 +638,23 @@ impl Core {
     pub fn work_done(&self, pane: PaneId) {
         let wanted = lock(&self.layout)
             .window_of(pane)
-            .is_some_and(|w| w.close == proto::CloseWhen::Done);
-        let Ok(rt) = tokio::runtime::Handle::try_current() else {
+            .is_some_and(|window| window.close == proto::CloseWhen::Done);
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             return;
         };
         if !wanted {
             return;
         }
-        let me = self.me.clone();
-        rt.spawn(async move {
+        let weak_core = self.weak_self.clone();
+        runtime.spawn(async move {
             tokio::time::sleep(FLOAT_LINGER).await;
-            let Some(core) = me.upgrade() else {
+            let Some(core) = weak_core.upgrade() else {
                 return;
             };
-            let still = lock(&core.layout)
+            let still_wanted = lock(&core.layout)
                 .window_of(pane)
-                .is_some_and(|w| w.close == proto::CloseWhen::Done);
-            if still {
+                .is_some_and(|window| window.close == proto::CloseWhen::Done);
+            if still_wanted {
                 core.term.finished(&core, pane);
                 core.apply_op(LayoutOp::ClosePane { pane_id: pane });
             }
@@ -660,7 +669,7 @@ impl Core {
         self.pane_entries().into_iter().find_map(|(pane, entry)| {
             lock(&entry.agent)
                 .as_ref()
-                .is_some_and(|rt| rt.knows_request(id))
+                .is_some_and(|agent| agent.knows_request(id))
                 .then_some(pane)
         })
     }
@@ -678,7 +687,7 @@ impl Core {
                 facts.caller,
                 crate::agent::RequestFacts {
                     tool: Some(facts.tool.to_owned()),
-                    allows: option.map(|o| o != proto::DriveAsk::DENY),
+                    allows: option.map(|picked| picked != proto::DriveAsk::DENY),
                     option: chosen.map(str::to_owned),
                     summary: facts.summary,
                     request: crate::term::ask::agent_request(id),
@@ -688,7 +697,7 @@ impl Core {
         self.pane_entries().into_iter().find_map(|(pane, entry)| {
             lock(&entry.agent)
                 .as_ref()
-                .and_then(|rt| rt.request_facts(id, option))
+                .and_then(|agent| agent.request_facts(id, option))
                 .map(|facts| (pane, facts))
         })
     }
@@ -701,12 +710,11 @@ impl Core {
 
     /// Whether an agent runs (or ran) in the pane.
     pub fn is_agent_pane(&self, pane: PaneId) -> bool {
-        self.pane(pane).is_some_and(|e| {
-            lock(&e.agent).is_some() || matches!(lock(&e.record).launch, PaneLaunch::Agent { .. })
+        self.pane(pane).is_some_and(|entry| {
+            lock(&entry.agent).is_some()
+                || matches!(lock(&entry.record).launch, PaneLaunch::Agent { .. })
         })
     }
-
-    // --- pane metadata ----------------------------------------------------------------------
 
     pub fn pane_meta(&self, id: PaneId) -> Option<PaneMeta> {
         let entry = self.pane(id)?;
@@ -714,7 +722,7 @@ impl Core {
         let mut agent = lock(&entry.agent).as_mut().map(AgentRuntime::wire_status);
         // Waiting on the owner to let it drive a pane is a block like any approval.
         if let Some(blocker) = self.term.asks.blocker(id) {
-            let kind = agent.map_or_else(|| "program".to_owned(), |a| a.kind);
+            let kind = agent.map_or_else(|| "program".to_owned(), |status| status.kind);
             agent = Some(crate::term::ask::status(kind, blocker));
         }
         Some(PaneMeta {
@@ -725,7 +733,7 @@ impl Core {
             agent,
             size: entry.pane.size(),
             size_policy: SizePolicy::LastInput,
-            sized_by: meta.sized_by.map(|(_, p)| p),
+            sized_by: meta.sized_by.map(|(_, principal)| principal),
         })
     }
 
@@ -740,13 +748,13 @@ impl Core {
     pub fn set_program(&self, entry: &PaneEntry, mut status: agents::ProgramStatus) {
         // Any program's words, shown in status lines, the Inbox and to agents: as they print.
         let clean = |text: Option<String>| {
-            text.map(|t| proto::clean_prompt_text(&t, PROGRAM_TEXT_CHARS))
-                .filter(|t| !t.is_empty())
+            text.map(|text| proto::clean_prompt_text(&text, PROGRAM_TEXT_CHARS))
+                .filter(|text| !text.is_empty())
         };
         status.msg = clean(status.msg);
         status.title = clean(status.title);
         let status = (status.state != agents::ProgramState::Clear).then_some(status);
-        let status_state = status.as_ref().map(|s| s.state);
+        let status_state = status.as_ref().map(|status| status.state);
         let mut meta = lock(&entry.meta);
         let changed = meta.program.as_ref().and_then(program_report)
             != status.as_ref().and_then(program_report);
@@ -783,15 +791,15 @@ impl Core {
         size: PaneSize,
         force: bool,
     ) {
-        let take = {
+        let apply = {
             let mut meta = lock(&entry.meta);
-            let follows = meta.sized_by.is_none_or(|(c, _)| c == conn);
+            let follows = meta.sized_by.is_none_or(|(sizer, _)| sizer == conn);
             if follows || force {
                 meta.sized_by = Some((conn, principal));
             }
             follows || force
         };
-        if !take {
+        if !apply {
             return;
         }
         match entry.pane.resize(size) {
@@ -800,11 +808,9 @@ impl Core {
                     self.emit(Event::PaneMeta(entry.pane.id));
                 }
             }
-            Err(e) => tracing::debug!(pane = %entry.pane.id, "resize refused: {e}"),
+            Err(error) => tracing::debug!(pane = %entry.pane.id, "resize refused: {error}"),
         }
     }
-
-    // --- layout operations ------------------------------------------------------------------
 
     /// Applies a layout op and broadcasts its effects.
     pub fn apply_op(self: &Arc<Self>, op: LayoutOp) -> OpOutcome {
@@ -825,17 +831,19 @@ impl Core {
                 let session = lock(&self.layout)
                     .session_of_pane(pane_id)
                     .ok_or(fail(OpError::NotFound))?;
-                lock(&self.layout).check_split(pane_id).map_err(|e| {
+                lock(&self.layout).check_split(pane_id).map_err(|error| {
                     let max = crate::layout::MAX_SPLIT_DEPTH;
-                    (e, format!("too many nested splits (at most {max})"))
+                    (error, format!("too many nested splits (at most {max})"))
                 })?;
-                let cwd_hint = self.pane(pane_id).and_then(|e| lock(&e.meta).cwd.clone());
+                let cwd_hint = self
+                    .pane(pane_id)
+                    .and_then(|entry| lock(&entry.meta).cwd.clone());
                 let new = lock(&self.layout).alloc_pane();
                 self.spawn_pane(new, launch, cwd_hint, false)?;
                 let result = lock(&self.layout).split(pane_id, axis, new);
-                if let Err(e) = result {
+                if let Err(error) = result {
                     self.kill_panes(&[new]);
-                    return Err(fail(e));
+                    return Err(fail(error));
                 }
                 self.layout_changed(session, false);
                 OpOutcome::PaneCreated { pane_id: new }
@@ -846,23 +854,25 @@ impl Core {
                 self.after_removal(session, removed);
                 OpOutcome::Done
             }
-            LayoutOp::Focus { pane_id } => {
-                self.simple(self.session_of_pane(pane_id), |l| l.focus(pane_id))?
-            }
+            LayoutOp::Focus { pane_id } => self
+                .simple(self.session_of_pane(pane_id), |layout| {
+                    layout.focus(pane_id)
+                })?,
             LayoutOp::FocusDirection { tab_id, direction } => self
-                .simple(self.session_of_tab(tab_id), |l| {
-                    l.focus_direction(tab_id, direction)
+                .simple(self.session_of_tab(tab_id), |layout| {
+                    layout.focus_direction(tab_id, direction)
                 })?,
             LayoutOp::Resize {
                 pane_id,
                 axis,
                 delta,
-            } => self.simple(self.session_of_pane(pane_id), |l| {
-                l.resize(pane_id, axis, delta)
+            } => self.simple(self.session_of_pane(pane_id), |layout| {
+                layout.resize(pane_id, axis, delta)
             })?,
-            LayoutOp::ToggleZoom { pane_id } => {
-                self.simple(self.session_of_pane(pane_id), |l| l.toggle_zoom(pane_id))?
-            }
+            LayoutOp::ToggleZoom { pane_id } => self
+                .simple(self.session_of_pane(pane_id), |layout| {
+                    layout.toggle_zoom(pane_id)
+                })?,
             LayoutOp::NewTab {
                 session_id,
                 name,
@@ -874,9 +884,9 @@ impl Core {
                 let pane = lock(&self.layout).alloc_pane();
                 self.spawn_pane(pane, launch, None, false)?;
                 let tab = lock(&self.layout).new_tab(session_id, name, pane);
-                let tab_id = tab.map_err(|e| {
+                let tab_id = tab.map_err(|error| {
                     self.kill_panes(&[pane]);
-                    fail(e)
+                    fail(error)
                 })?;
                 self.layout_changed(session_id, false);
                 OpOutcome::TabCreated {
@@ -890,15 +900,18 @@ impl Core {
                 self.after_removal(session, removed);
                 OpOutcome::Done
             }
-            LayoutOp::MoveTab { tab_id, index } => {
-                self.simple(self.session_of_tab(tab_id), |l| l.move_tab(tab_id, index))?
-            }
-            LayoutOp::SelectTab { tab_id } => {
-                self.simple(self.session_of_tab(tab_id), |l| l.select_tab(tab_id))?
-            }
-            LayoutOp::RenameTab { tab_id, name } => {
-                self.simple(self.session_of_tab(tab_id), |l| l.rename_tab(tab_id, name))?
-            }
+            LayoutOp::MoveTab { tab_id, index } => self
+                .simple(self.session_of_tab(tab_id), |layout| {
+                    layout.move_tab(tab_id, index)
+                })?,
+            LayoutOp::SelectTab { tab_id } => self
+                .simple(self.session_of_tab(tab_id), |layout| {
+                    layout.select_tab(tab_id)
+                })?,
+            LayoutOp::RenameTab { tab_id, name } => self
+                .simple(self.session_of_tab(tab_id), |layout| {
+                    layout.rename_tab(tab_id, name)
+                })?,
             LayoutOp::RenameSession { session_id, name } => {
                 lock(&self.layout)
                     .rename_session(session_id, name)
@@ -987,39 +1000,43 @@ impl Core {
                 let session = lock(&self.layout)
                     .session_of_pane(pane_id)
                     .ok_or(fail(OpError::NotFound))?;
-                let cwd_hint = self.pane(pane_id).and_then(|e| lock(&e.meta).cwd.clone());
+                let cwd_hint = self
+                    .pane(pane_id)
+                    .and_then(|entry| lock(&entry.meta).cwd.clone());
                 let new = lock(&self.layout).alloc_pane();
                 self.spawn_pane(new, launch, cwd_hint, false)?;
                 let result = lock(&self.layout).new_float(pane_id, new, frame, focus, close);
-                if let Err(e) = result {
+                if let Err(error) = result {
                     self.kill_panes(&[new]);
-                    return Err(fail(e));
+                    return Err(fail(error));
                 }
                 self.layout_changed(session, false);
                 OpOutcome::PaneCreated { pane_id: new }
             }
             LayoutOp::FloatPane { pane_id, frame } => self
-                .simple(self.session_of_pane(pane_id), |l| {
-                    l.float_pane(pane_id, frame).map(drop)
+                .simple(self.session_of_pane(pane_id), |layout| {
+                    layout.float_pane(pane_id, frame).map(drop)
                 })?,
             LayoutOp::SetFloat {
                 pane_id,
                 frame,
                 minimized,
                 pinned,
-            } => self.simple(self.session_of_pane(pane_id), |l| {
-                l.set_float(pane_id, frame, minimized, pinned).map(drop)
+            } => self.simple(self.session_of_pane(pane_id), |layout| {
+                layout
+                    .set_float(pane_id, frame, minimized, pinned)
+                    .map(drop)
             })?,
             LayoutOp::DockPane { pane_id, beside } => self
-                .simple(self.session_of_pane(pane_id), |l| {
-                    l.dock_pane(pane_id, beside).map(drop)
+                .simple(self.session_of_pane(pane_id), |layout| {
+                    layout.dock_pane(pane_id, beside).map(drop)
                 })?,
             LayoutOp::MovePaneToEdge {
                 pane_id,
                 tab_id,
                 side,
-            } => self.simple(self.session_of_pane(pane_id), |l| {
-                l.move_pane_to_edge(pane_id, tab_id, side).map(drop)
+            } => self.simple(self.session_of_pane(pane_id), |layout| {
+                layout.move_pane_to_edge(pane_id, tab_id, side).map(drop)
             })?,
         };
         Ok(outcome)
@@ -1038,13 +1055,13 @@ impl Core {
         };
         lock(&self.layout)
             .check_session_name(&name)
-            .map_err(|e| (e, format!("session name {name:?}: {e:?}")))?;
+            .map_err(|error| (error, format!("session name {name:?}: {error:?}")))?;
         let pane = lock(&self.layout).alloc_pane();
         self.spawn_pane(pane, launch, None, false)?;
         let created = lock(&self.layout).create_session(name, pane);
-        let (session, tab) = created.map_err(|e| {
+        let (session, tab) = created.map_err(|error| {
             self.kill_panes(&[pane]);
-            (e, format!("{e:?}"))
+            (error, format!("{error:?}"))
         })?;
         self.layout_changed(session, true);
         Ok((session, tab, pane))
@@ -1057,12 +1074,16 @@ impl Core {
     fn simple(
         &self,
         session: Option<SessionId>,
-        f: impl FnOnce(&mut Layout) -> Result<(), OpError>,
+        operation: impl FnOnce(&mut Layout) -> Result<(), OpError>,
     ) -> Result<OpOutcome, (OpError, String)> {
         let session = session.ok_or((OpError::NotFound, "not found".to_owned()))?;
-        let before = lock(&self.layout).session(session).map(|s| s.revision);
-        f(&mut lock(&self.layout)).map_err(|e| (e, format!("{e:?}")))?;
-        let after = lock(&self.layout).session(session).map(|s| s.revision);
+        let before = lock(&self.layout)
+            .session(session)
+            .map(|session| session.revision);
+        operation(&mut lock(&self.layout)).map_err(|error| (error, format!("{error:?}")))?;
+        let after = lock(&self.layout)
+            .session(session)
+            .map(|session| session.revision);
         if before != after {
             self.layout_changed(session, false);
         }
@@ -1084,7 +1105,7 @@ impl Core {
         }
         match (removed.session, session) {
             (Some(_), _) => self.emit(Event::Sessions),
-            (None, Some(s)) => self.emit(Event::Layout(s)),
+            (None, Some(session)) => self.emit(Event::Layout(session)),
             (None, None) => {}
         }
         self.emit(Event::Sessions);
@@ -1167,8 +1188,8 @@ impl Core {
             let mut closed = lock(&self.closed);
             closed
                 .iter()
-                .rposition(|c| c.pane_id == pane)
-                .and_then(|i| closed.remove(i))
+                .rposition(|candidate| candidate.pane_id == pane)
+                .and_then(|index| closed.remove(index))
         };
         let Some(closed) = closed else {
             return PaneLaunch::Shell { cwd };
@@ -1178,12 +1199,12 @@ impl Core {
         match closed.agent {
             Some(AgentRecord {
                 kind,
-                session_id: Some(id),
+                session_id: Some(session_id),
                 account,
             }) => PaneLaunch::AccountAgent {
                 agent: kind,
                 account,
-                resume: Some(id),
+                resume: Some(session_id),
                 cwd,
             },
             _ => PaneLaunch::Shell { cwd },
@@ -1201,8 +1222,6 @@ impl Core {
             self.after_removal(session, removed);
         }
     }
-
-    // --- spawning ---------------------------------------------------------------------------
 
     /// Starts a pane process and its task. `restored` marks an agent resumed after a restart.
     pub fn spawn_pane(
@@ -1238,6 +1257,7 @@ impl Core {
             | PaneLaunch::Reopen { cwd, .. } => cwd.clone(),
             PaneLaunch::AccountSignIn { .. } => None,
             PaneLaunch::AccountAgent { .. } => unreachable!("recorded as Agent above"),
+            // A canvas pane runs nothing: it shows a drawing.
             PaneLaunch::Canvas { artifact_id } => {
                 let artifact = artifact_id.ok_or((
                     OpError::Invalid,
@@ -1248,7 +1268,7 @@ impl Core {
                 let info = self
                     .art
                     .add_canvas(id, artifact)
-                    .map_err(|e| (OpError::NotFound, e.to_string()))?;
+                    .map_err(|error| (OpError::NotFound, error.to_string()))?;
                 self.emit_artifact(
                     info.session_id,
                     proto::ArtifactEvent::Info(info.clone()),
@@ -1267,56 +1287,57 @@ impl Core {
         }
         let cwd = launch_cwd
             .or(cwd_hint)
-            .filter(|c| std::path::Path::new(c).is_dir())
+            .filter(|dir| std::path::Path::new(dir).is_dir())
             .unwrap_or(home);
         let shell = self.cfg.shell();
-        let mut cmd = Command::new(&shell);
+        let mut command = Command::new(&shell);
         let mut agent = None;
         let injection = self
             .shell
             .as_ref()
             .filter(|_| self.cfg.shell_integration)
-            .and_then(|si| si.injection(&shell, |name| self.cfg.pane_var(name)))
-            .map(|mut inj| {
-                self.askpass.wrap_injection(&mut inj);
-                inj
+            .and_then(|integration| integration.injection(&shell, |name| self.cfg.pane_var(name)))
+            .map(|mut injection| {
+                self.askpass.wrap_injection(&mut injection);
+                injection
             });
         let mut inject_env = Vec::new();
         // `exec`s the login shell with shell integration, for panes that run something first.
         let then_shell = || {
             let mut then = vec!["exec".to_owned()];
-            if let Some(inj) = &injection {
+            if let Some(injection) = &injection {
                 then.push("env".into());
                 then.extend(
-                    inj.env
+                    injection
+                        .env
                         .iter()
-                        .map(|(k, v)| shell_quote(&format!("{k}={v}"))),
+                        .map(|(key, value)| shell_quote(&format!("{key}={value}"))),
                 );
             }
             then.push(shell_quote(&shell.to_string_lossy()));
-            if let Some(inj) = &injection {
-                then.extend(inj.args.iter().map(|a| shell_quote(a)));
+            if let Some(injection) = &injection {
+                then.extend(injection.args.iter().map(|arg| shell_quote(arg)));
             }
             then.push("-l".into());
             then.join(" ")
         };
         // A setup or repository script queued for this directory runs first (git workspace).
-        let pre = self
+        let pre_command = self
             .ws
             .repos
             .take_pre_command(std::path::Path::new(&cwd))
-            .map(|c| format!("{c}\n"));
+            .map(|script| format!("{script}\n"));
         match &launch {
-            PaneLaunch::Shell { .. } | PaneLaunch::Reopen { .. } => match &pre {
-                Some(pre) => {
-                    cmd.args(["-l", "-c", &format!("{pre}{}", then_shell())]);
+            PaneLaunch::Shell { .. } | PaneLaunch::Reopen { .. } => match &pre_command {
+                Some(pre_command) => {
+                    command.args(["-l", "-c", &format!("{pre_command}{}", then_shell())]);
                 }
                 None => {
-                    if let Some(inj) = &injection {
-                        cmd.args(&inj.args);
-                        inject_env.clone_from(&inj.env);
+                    if let Some(injection) = &injection {
+                        command.args(&injection.args);
+                        inject_env.clone_from(&injection.env);
                     }
-                    cmd.arg("-l");
+                    command.arg("-l");
                 }
             },
             PaneLaunch::Command { argv, .. } => {
@@ -1325,11 +1346,11 @@ impl Core {
                 }
                 let line = argv
                     .iter()
-                    .map(|a| shell_quote(a))
+                    .map(|arg| shell_quote(arg))
                     .collect::<Vec<_>>()
                     .join(" ");
-                let pre = pre.as_deref().unwrap_or_default();
-                cmd.args(["-l", "-c", &format!("{pre}exec {line}")]);
+                let pre_command = pre_command.as_deref().unwrap_or_default();
+                command.args(["-l", "-c", &format!("{pre_command}exec {line}")]);
             }
             PaneLaunch::AccountSignIn {
                 agent,
@@ -1341,29 +1362,29 @@ impl Core {
                     .accounts
                     .context(*agent, account_id)
                     .ok_or((OpError::NotFound, "no such account".to_owned()))?;
-                let ctx = self.hooks.launch_context(id, PathBuf::from(&cwd), account);
+                let context = self.hooks.launch_context(id, PathBuf::from(&cwd), account);
                 let spec = match agent {
-                    AgentKind::Claude => agents::ClaudeCode::sign_in(&ctx),
-                    AgentKind::Codex => agents::Codex::sign_in(&ctx, *device_code),
+                    AgentKind::Claude => agents::ClaudeCode::sign_in(&context),
+                    AgentKind::Codex => agents::Codex::sign_in(&context, *device_code),
                 };
                 // The shim tells the daemon the sign-in ended, so it checks the account.
                 let done = format!(
                     "{} {} {} </dev/null",
-                    shell_quote(&ctx.hook_bin.to_string_lossy()),
+                    shell_quote(&context.hook_bin.to_string_lossy()),
                     crate::agent::ACCOUNT_HOOK,
                     crate::agent::SIGN_IN_EVENT
                 );
-                cmd.args([
+                command.args([
                     "-i",
                     "-l",
                     "-c",
                     &format!("{}; {done}; {}", spec.shell_line(), then_shell()),
                 ]);
-                for (k, v) in &spec.env {
-                    cmd.env(k, v);
+                for (key, value) in &spec.env {
+                    command.env(key, value);
                 }
-                for k in &spec.env_remove {
-                    cmd.env_remove(k);
+                for key in &spec.env_remove {
+                    command.env_remove(key);
                 }
                 self.ws.accounts.signing_in(id, *agent, account_id);
             }
@@ -1383,7 +1404,7 @@ impl Core {
                         resume.as_deref(),
                         project.as_deref(),
                     )
-                    .map_err(|e| (OpError::Invalid, e))?;
+                    .map_err(|error| (OpError::Invalid, error))?;
                 if let Some(dir) = &account.dir
                     && !dir.is_dir()
                 {
@@ -1392,7 +1413,7 @@ impl Core {
                         "the account's directory is missing; sign in again".to_owned(),
                     ));
                 }
-                let ctx = self
+                let context = self
                     .hooks
                     .launch_context(id, PathBuf::from(&cwd), account.clone());
                 let adapter = crate::agent::adapter(*kind);
@@ -1403,22 +1424,22 @@ impl Core {
                     AgentKind::Codex => None,
                 });
                 let mode = match (resume, &session_id) {
-                    (Some(r), _) => LaunchMode::Resume {
-                        session_id: agents::NativeSessionId::new(r.clone()),
+                    (Some(resume_id), _) => LaunchMode::Resume {
+                        session_id: agents::NativeSessionId::new(resume_id.clone()),
                     },
-                    (None, id) => LaunchMode::Fresh {
-                        session_id: id.clone().map(agents::NativeSessionId::new),
+                    (None, pinned) => LaunchMode::Fresh {
+                        session_id: pinned.clone().map(agents::NativeSessionId::new),
                     },
                 };
-                let spec = adapter.launch(&ctx, &mode);
+                let spec = adapter.launch(&context, &mode);
                 for file in &spec.files {
                     if let Some(dir) = file.path.parent() {
                         let _ = std::fs::create_dir_all(dir);
                     }
-                    if let Err(e) = std::fs::write(&file.path, &file.contents) {
+                    if let Err(error) = std::fs::write(&file.path, &file.contents) {
                         return Err((
                             OpError::SpawnFailed,
-                            format!("{}: {e}", file.path.display()),
+                            format!("{}: {error}", file.path.display()),
                         ));
                     }
                 }
@@ -1426,15 +1447,21 @@ impl Core {
                 if let Some(session) = &session_id {
                     self.ws.accounts.pin(*kind, session, &account.id);
                 }
-                // integration for that shell. Interactive, so rc files set `PATH` as in any
-                // pane and the install check holds.
-                let pre = pre.as_deref().unwrap_or_default();
-                cmd.args(["-i", "-l", "-c", &format!("{pre}{line}; {}", then_shell())]);
-                for (k, v) in &spec.env {
-                    cmd.env(k, v);
+                // Run the agent, then leave the pane as a shell, with shell integration for
+                // that shell. Interactive, so rc files set `PATH` as in any pane and the install
+                // check holds.
+                let pre_command = pre_command.as_deref().unwrap_or_default();
+                command.args([
+                    "-i",
+                    "-l",
+                    "-c",
+                    &format!("{pre_command}{line}; {}", then_shell()),
+                ]);
+                for (key, value) in &spec.env {
+                    command.env(key, value);
                 }
-                for k in &spec.env_remove {
-                    cmd.env_remove(k);
+                for key in &spec.env_remove {
+                    command.env_remove(key);
                 }
                 agent = Some((
                     *kind,
@@ -1453,34 +1480,34 @@ impl Core {
                     path: path.to_string_lossy().into_owned(),
                     port,
                 });
-        if let Some(wt) = &worktree {
-            cmd.env("PORT", wt.port.to_string());
-            cmd.env(brand::env_var("WORKTREE"), &wt.path);
+        if let Some(worktree) = &worktree {
+            command.env("PORT", worktree.port.to_string());
+            command.env(brand::env_var("WORKTREE"), &worktree.path);
         }
-        cmd.current_dir(&cwd);
+        command.current_dir(&cwd);
         // SAFETY: runs between fork and exec and only calls `setrlimit`.
         unsafe {
             std::os::unix::process::CommandExt::pre_exec(
-                &mut cmd,
+                &mut command,
                 crate::limits::restore_for_child,
             );
         }
-        cmd.env("TERM", "xterm-256color");
-        cmd.env("COLORTERM", "truecolor");
-        cmd.env(brand::env_var("PANE_ID"), id.0.to_string());
-        for (k, v) in self
+        command.env("TERM", "xterm-256color");
+        command.env("COLORTERM", "truecolor");
+        command.env(brand::env_var("PANE_ID"), id.0.to_string());
+        for (key, value) in self
             .askpass
             .pane_env(self, id)
             .into_iter()
             .chain(self.browser.pane_env(self, id))
         {
-            cmd.env(k, v);
+            command.env(key, value);
         }
-        for (k, v) in &self.cfg.pane_env {
-            cmd.env(k, OsString::from(v));
+        for (key, value) in &self.cfg.pane_env {
+            command.env(key, OsString::from(value));
         }
-        for (k, v) in &inject_env {
-            cmd.env(k, v);
+        for (key, value) in &inject_env {
+            command.env(key, value);
         }
         let (cols, rows) = self.cfg.default_size;
         let size = PaneSize {
@@ -1492,7 +1519,7 @@ impl Core {
         let (pane, vt_events) = Pane::spawn(
             id,
             SnapGen(self.epoch.0),
-            cmd,
+            command,
             size,
             self.cfg.ring_capacity,
             crate::pane::VtLimits {
@@ -1500,7 +1527,7 @@ impl Core {
                 image_storage_bytes: self.cfg.image_storage_bytes,
             },
         )
-        .map_err(|e| (OpError::SpawnFailed, e.to_string()))?;
+        .map_err(|error| (OpError::SpawnFailed, error.to_string()))?;
         let record = PaneRecord {
             // A sign-in is not run again after a restart.
             launch: match &launch {
@@ -1527,7 +1554,7 @@ impl Core {
                 ..MetaState::default()
             }),
             record: Mutex::new(record),
-            agent: Mutex::new(agent.map(|(_, _, _, rt)| rt)),
+            agent: Mutex::new(agent.map(|(_, _, _, runtime)| runtime)),
             agent_attached: Notify::new(),
             ticks: AtomicU64::new(0),
             task: Mutex::new(None),
@@ -1541,8 +1568,6 @@ impl Core {
         }
         Ok(())
     }
-
-    // --- accounts ---------------------------------------------------------------------------
 
     /// The accounts report, with the account of every agent pane.
     pub fn accounts_report(&self) -> proto::AccountsReport {
@@ -1562,7 +1587,7 @@ impl Core {
                 })
             })
             .collect();
-        panes.sort_by_key(|p| p.pane_id.0);
+        panes.sort_by_key(|account| account.pane_id.0);
         self.ws.accounts.report(panes)
     }
 
@@ -1592,8 +1617,6 @@ impl Core {
         });
     }
 
-    // --- agents -----------------------------------------------------------------------------
-
     /// Broadcasts an agent event and refreshes the pane's metadata and record.
     pub fn agent_event(&self, id: PaneId, event: Option<agents::AgentEvent>) {
         self.agent_attention(id);
@@ -1602,7 +1625,7 @@ impl Core {
         };
         self.agent_turn(id, &event);
         if let Some(entry) = self.pane(id) {
-            let native = event.session.native_id.as_ref().map(|n| n.to_string());
+            let native = event.session.native_id.as_ref().map(|id| id.to_string());
             let mut record = lock(&entry.record);
             if let (Some(agent), Some(native)) = (record.agent.as_mut(), native)
                 && agent.session_id.as_deref() != Some(native.as_str())
@@ -1618,7 +1641,7 @@ impl Core {
                 pane_id: id,
                 json: json.into(),
             }),
-            Err(e) => tracing::warn!("serializing agent event: {e}"),
+            Err(error) => tracing::warn!("serializing agent event: {error}"),
         }
         self.emit(Event::PaneMeta(id));
     }
@@ -1636,11 +1659,11 @@ impl Core {
                     .session
                     .cwd
                     .clone()
-                    .filter(|c| c.is_dir())
+                    .filter(|cwd| cwd.is_dir())
                     .or_else(|| {
-                        self.pane(id).and_then(|e| {
-                            let meta = lock(&e.meta).cwd.clone();
-                            meta.or_else(|| lock(&e.record).cwd.clone())
+                        self.pane(id).and_then(|entry| {
+                            let meta = lock(&entry.meta).cwd.clone();
+                            meta.or_else(|| lock(&entry.record).cwd.clone())
                                 .map(PathBuf::from)
                         })
                     });
@@ -1689,26 +1712,26 @@ impl Core {
         };
         let (kind, notices, blocked, wire) = {
             let mut agent = lock(&entry.agent);
-            let Some(rt) = agent.as_mut() else {
+            let Some(runtime) = agent.as_mut() else {
                 return;
             };
-            let notices = rt.take_notices();
-            let wire = (!notices.is_empty()).then(|| rt.wire_status());
-            (rt.kind(), notices, rt.is_blocked(), wire)
+            let notices = runtime.take_notices();
+            let wire = (!notices.is_empty()).then(|| runtime.wire_status());
+            (runtime.kind(), notices, runtime.is_blocked(), wire)
         };
         for (notify, event) in notices {
             let message = event
                 .as_ref()
-                .and_then(|e| e.turn.as_ref())
-                .and_then(|t| t.last_message.as_deref())
+                .and_then(|agent_event| agent_event.turn.as_ref())
+                .and_then(|turn| turn.last_message.as_deref())
                 .map(notice_text);
             let notice = match notify {
                 agents::Notify::Blocked { .. } => {
                     let (request_id, summary) = match &wire {
                         Some(proto::AgentStatus {
-                            state: proto::AgentState::Blocked(b),
+                            state: proto::AgentState::Blocked(block),
                             ..
-                        }) => (Some(b.request_id), b.summary.clone()),
+                        }) => (Some(block.request_id), block.summary.clone()),
                         _ => (None, String::new()),
                     };
                     AgentNotice::Blocked {
@@ -1776,13 +1799,13 @@ impl Core {
         }
         for (id, entry) in self.pane_entries() {
             let mut agent = lock(&entry.agent);
-            let Some(rt) = agent.as_mut() else {
+            let Some(runtime) = agent.as_mut() else {
                 continue;
             };
-            if !rt.knows_request(decide.request_id) {
+            if !runtime.knows_request(decide.request_id) {
                 continue;
             }
-            let outcome = rt.decide(decide.request_id, decide.option_id, actor);
+            let outcome = runtime.decide(decide.request_id, decide.option_id, actor);
             drop(agent);
             return match outcome {
                 Ok(details) => {
@@ -1815,18 +1838,18 @@ impl Core {
 /// The current echo facts and verdict for a pane.
 fn compute_hint(entry: &PaneEntry) -> (EchoHint, Prediction) {
     let echo = entry.pane.echo();
-    let alt = entry.pane.alt_screen();
+    let alt_screen = entry.pane.alt_screen();
     let at_prompt = lock(&entry.meta).at_prompt;
     let hint = EchoHint {
         pane_id: entry.pane.id,
         echo: echo.echo,
         icanon: echo.canonical,
-        alt_screen: alt,
+        alt_screen,
         at_prompt,
     };
     (
         hint,
-        Prediction::decide(echo.echo, echo.canonical, alt, at_prompt),
+        Prediction::decide(echo.echo, echo.canonical, alt_screen, at_prompt),
     )
 }
 
@@ -1842,6 +1865,7 @@ fn refresh_hint(core: &Core, entry: &PaneEntry) {
     if changed {
         core.emit(Event::Echo(EchoHintAt {
             hint,
+            // Tagged with the head now: the state applies to everything after.
             at_seq: entry.pane.head(),
             prediction,
         }));
@@ -1917,8 +1941,8 @@ async fn pane_task(core: Arc<Core>, entry: Arc<PaneEntry>, mut vt_events: mpsc::
                         {
                             crate::askpass::detect(&core, &entry);
                         }
-                        if let Some(rt) = lock(&entry.agent).as_mut() {
-                            rt.pty_output();
+                        if let Some(runtime) = lock(&entry.agent).as_mut() {
+                            runtime.pty_output();
                         }
                     }
                     VtEvent::AltScreen => {
@@ -1943,8 +1967,8 @@ async fn pane_task(core: Arc<Core>, entry: Arc<PaneEntry>, mut vt_events: mpsc::
                 }
                 if changed && meta_due.is_none() {
                     match meta_sent {
-                        Some(t) if t.elapsed() < META_INTERVAL => {
-                            meta_due = Some((t + META_INTERVAL).into());
+                        Some(sent) if sent.elapsed() < META_INTERVAL => {
+                            meta_due = Some((sent + META_INTERVAL).into());
                         }
                         _ => {
                             meta_sent = Some(Instant::now());
@@ -1968,7 +1992,7 @@ async fn pane_task(core: Arc<Core>, entry: Arc<PaneEntry>, mut vt_events: mpsc::
                 crate::askpass::detect(&core, &entry);
             }
             status = &mut exit => {
-                let code = status.ok().and_then(|s| s.code());
+                let code = status.ok().and_then(|exit_status| exit_status.code());
                 lock(&entry.meta).exit = code;
                 let update = lock(&entry.agent).as_mut().map(AgentRuntime::process_exited);
                 core.agent_event(id, update.flatten());
@@ -1999,7 +2023,7 @@ async fn pane_task(core: Arc<Core>, entry: Arc<PaneEntry>, mut vt_events: mpsc::
                 let title = lock(&entry.meta).title.clone();
                 let update = lock(&entry.agent)
                     .as_mut()
-                    .map(|rt| rt.tick(screen.as_deref(), &title));
+                    .map(|runtime| runtime.tick(screen.as_deref(), &title));
                 if let Some(update) = update {
                     for event in update {
                         core.agent_event(id, Some(event));
@@ -2054,7 +2078,9 @@ fn handle_osc(core: &Core, entry: &PaneEntry, osc: Osc) -> bool {
             }
         }
         Osc::Notify(body) => {
-            let event = lock(&entry.agent).as_mut().and_then(|rt| rt.osc9(&body));
+            let event = lock(&entry.agent)
+                .as_mut()
+                .and_then(|runtime| runtime.osc9(&body));
             core.agent_event(id, event);
         }
         Osc::ProgramStatus(body) => {
@@ -2062,14 +2088,14 @@ fn handle_osc(core: &Core, entry: &PaneEntry, osc: Osc) -> bool {
             // printed text can claim to be an agent: only a pane running one may.
             let has_agent = lock(&entry.agent).is_some();
             if let Some(report) = agents::ProgramStatus::parse(&body)
-                .filter(|r| r.id.is_none())
-                .filter(|r| has_agent || !crate::agent::names_an_agent(r))
+                .filter(|report| report.id.is_none())
+                .filter(|report| has_agent || !crate::agent::names_an_agent(report))
             {
                 core.set_program(entry, report);
             }
             let event = lock(&entry.agent)
                 .as_mut()
-                .and_then(|rt| rt.program_status(&body));
+                .and_then(|runtime| runtime.program_status(&body));
             core.agent_event(id, event);
         }
     }
@@ -2078,15 +2104,16 @@ fn handle_osc(core: &Core, entry: &PaneEntry, osc: Osc) -> bool {
 
 fn handle_command(core: &Core, entry: &PaneEntry, update: CommandUpdate) {
     match update {
+        // 133;B: the user is editing a command line (raw-mode prediction may run);
         // 133;C: the command runs and owns the terminal.
         CommandUpdate::AtPrompt(at_prompt) => {
             lock(&entry.meta).at_prompt = at_prompt;
             refresh_hint(core, entry);
         }
         CommandUpdate::Mark(mark) => {
-            let long = mark
-                .finished
-                .is_some_and(|f| f.duration_ms >= core.cfg.long_command.as_millis() as u64);
+            let long = mark.finished.is_some_and(|finished| {
+                finished.duration_ms >= core.cfg.long_command.as_millis() as u64
+            });
             if long && !core.pane_seen(mark.pane_id) {
                 core.emit(Event::CommandUnseen(mark.clone()));
                 crate::ws::command_unseen(core, &mark);
@@ -2108,32 +2135,32 @@ fn capture_codex_session(core: &Arc<Core>, entry: &Arc<PaneEntry>, busy: &Arc<At
     let wanted = lock(&entry.record)
         .agent
         .as_ref()
-        .is_some_and(|a| a.kind == AgentKind::Codex && a.session_id.is_none());
+        .is_some_and(|agent| agent.kind == AgentKind::Codex && agent.session_id.is_none());
     if !wanted || busy.swap(true, Ordering::AcqRel) {
         return;
     }
     let claimed: Vec<String> = core
         .pane_entries()
         .iter()
-        .filter_map(|(_, e)| lock(&e.record).agent.as_ref()?.session_id.clone())
+        .filter_map(|(_, other)| lock(&other.record).agent.as_ref()?.session_id.clone())
         .collect();
     let cwd = lock(&entry.record).cwd.clone().unwrap_or_default();
     let account = lock(&entry.record)
         .agent
         .as_ref()
-        .and_then(|a| a.account.clone())
+        .and_then(|agent| agent.account.clone())
         .unwrap_or_else(|| proto::SYSTEM_ACCOUNT.into());
     // Rollouts are under the pane's account's home.
     let codex_home = core
         .ws
         .accounts
         .context(AgentKind::Codex, &account)
-        .and_then(|a| a.dir)
+        .and_then(|context| context.dir)
         .or_else(|| core.cfg.pane_var("CODEX_HOME").map(PathBuf::from))
         .or_else(|| {
             core.cfg
                 .pane_var("HOME")
-                .map(|h| PathBuf::from(h).join(".codex"))
+                .map(|home| PathBuf::from(home).join(".codex"))
         });
     let root = entry.pane.pty().pid();
     let since = entry.launched_at;
@@ -2162,18 +2189,18 @@ fn capture_codex_session(core: &Arc<Core>, entry: &Arc<PaneEntry>, busy: &Arc<At
 
 /// Starts tracking an agent the user launched by hand (no hooks, screen and OSC only).
 fn detect_agent(entry: &PaneEntry) {
-    let Some(fg) = entry.pane.pty().foreground_process() else {
+    let Some(foreground) = entry.pane.pty().foreground_process() else {
         return;
     };
-    let kind = match fg.program() {
+    let kind = match foreground.program() {
         "claude" => AgentKind::Claude,
         "codex" => AgentKind::Codex,
         _ => return,
     };
     let adapter = crate::agent::adapter(kind);
-    let mut rt = AgentRuntime::new(kind, entry.pane.id, adapter, false);
-    rt.note_process(fg.pid);
-    *lock(&entry.agent) = Some(rt);
+    let mut runtime = AgentRuntime::new(kind, entry.pane.id, adapter, false);
+    runtime.note_process(foreground.pid);
+    *lock(&entry.agent) = Some(runtime);
 }
 
 /// Ends the pane's agent once its process exited and the pane is back at its shell: the
@@ -2183,22 +2210,22 @@ fn end_exited_agent(core: &Core, entry: &PaneEntry) {
     // A launched agent's pane at its own shell, past the `sh -c` that ran the agent.
     let launched = matches!(lock(&entry.record).launch, PaneLaunch::Agent { .. });
     let at_shell = launched
-        && foreground.as_ref().is_some_and(|fg| {
-            fg.pid == entry.pane.pty().pid()
-                && !fg.argv.is_empty()
-                && !fg.argv.iter().any(|a| a == "-c")
+        && foreground.as_ref().is_some_and(|process| {
+            process.pid == entry.pane.pty().pid()
+                && !process.argv.is_empty()
+                && !process.argv.iter().any(|arg| arg == "-c")
         });
     let event = {
         let mut agent = lock(&entry.agent);
-        let Some(rt) = agent.as_mut() else {
+        let Some(runtime) = agent.as_mut() else {
             return;
         };
-        if !rt.process_gone(foreground.as_ref(), at_shell, |pid| {
+        if !runtime.process_gone(foreground.as_ref(), at_shell, |pid| {
             pty::ForegroundProcess::of(pid).is_some()
         }) {
             return;
         }
-        rt.process_exited()
+        runtime.process_exited()
     };
     let id = entry.pane.id;
     tracing::info!(pane = %id, "agent exited");
@@ -2216,15 +2243,16 @@ fn end_exited_agent(core: &Core, entry: &PaneEntry) {
     core.emit(Event::PaneMeta(id));
 }
 
-/// Quotes `s` for a POSIX shell as one word.
-pub(crate) fn shell_quote(s: &str) -> String {
-    if !s.is_empty()
-        && s.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"/._-+=:,@".contains(&b))
+/// Quotes `word` for a POSIX shell as one word.
+pub(crate) fn shell_quote(word: &str) -> String {
+    if !word.is_empty()
+        && word
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"/._-+=:,@".contains(&byte))
     {
-        return s.to_owned();
+        return word.to_owned();
     }
-    format!("'{}'", s.replace('\'', r"'\''"))
+    format!("'{}'", word.replace('\'', r"'\''"))
 }
 
 /// Restores the saved layout, respawning every pane (agents resume their sessions).
@@ -2280,8 +2308,8 @@ pub(crate) fn restore(
             }
             _ => false,
         };
-        if let Err((_, e)) = core.spawn_pane(id, launch, None, restored_agent) {
-            tracing::warn!(pane = %id, "restoring pane failed: {e}");
+        if let Err((_, message)) = core.spawn_pane(id, launch, None, restored_agent) {
+            tracing::warn!(pane = %id, "restoring pane failed: {message}");
             failed.push(id);
         }
     }
@@ -2296,7 +2324,7 @@ pub(crate) fn saved_state(core: &Core) -> persist::Saved {
     let panes = core
         .pane_entries()
         .into_iter()
-        .map(|(id, e)| (id.0, lock(&e.record).clone()))
+        .map(|(id, entry)| (id.0, lock(&entry.record).clone()))
         .collect();
     persist::Saved::new(layout, panes, core.closed_panes()).with_creators(core.term.creators())
 }
@@ -2333,7 +2361,7 @@ mod tests {
         let ticks = || -> u64 {
             core.pane_entries()
                 .iter()
-                .map(|(_, e)| e.ticks.load(Ordering::Relaxed))
+                .map(|(_, entry)| entry.ticks.load(Ordering::Relaxed))
                 .sum()
         };
         // Busy right after start (the shell prints its prompt), then quiet.

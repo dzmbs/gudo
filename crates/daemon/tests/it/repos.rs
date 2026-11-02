@@ -26,12 +26,12 @@ fn canonical_tempdir() -> (tempfile::TempDir, PathBuf) {
     (dir, path)
 }
 
-fn s(p: &Path) -> String {
-    p.to_string_lossy().into_owned()
+fn text_of(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
 }
 
 fn run_git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let output = Command::new("git")
         .current_dir(dir)
         .args([
             "-c",
@@ -47,17 +47,17 @@ fn run_git(dir: &Path, args: &[&str]) -> String {
         .output()
         .unwrap();
     assert!(
-        out.status.success(),
+        output.status.success(),
         "git {args:?}: {}",
-        String::from_utf8_lossy(&out.stderr)
+        String::from_utf8_lossy(&output.stderr)
     );
-    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
 }
 
 /// `home/repo` with two commits, pushed to `home/origin.git`, plus one local commit (ahead 1).
 fn repo(home: &Path, config: Option<&str>) -> PathBuf {
     let origin = home.join("origin.git");
-    run_git(home, &["init", "-q", "--bare", &s(&origin)]);
+    run_git(home, &["init", "-q", "--bare", &text_of(&origin)]);
     let repo = home.join("repo");
     std::fs::create_dir_all(repo.join("src")).unwrap();
     run_git(&repo, &["init", "-q"]);
@@ -67,7 +67,7 @@ fn repo(home: &Path, config: Option<&str>) -> PathBuf {
     }
     run_git(&repo, &["add", "-A"]);
     run_git(&repo, &["commit", "-q", "-m", "init"]);
-    run_git(&repo, &["remote", "add", "origin", &s(&origin)]);
+    run_git(&repo, &["remote", "add", "origin", &text_of(&origin)]);
     run_git(&repo, &["push", "-q", "-u", "origin", "main"]);
     std::fs::write(repo.join("src/b.rs"), "fn d() {}\n").unwrap();
     run_git(&repo, &["add", "-A"]);
@@ -132,15 +132,16 @@ fn gh_log(dir: &Path) -> String {
 
 async fn start(state: &Path, home: &Path, gh: Option<PathBuf>) -> Daemon {
     let home = home.to_owned();
-    start_with(state, move |c| {
-        c.pane_env
+    start_with(state, move |config| {
+        config
+            .pane_env
             .push(("HOME".into(), home.to_string_lossy().into_owned()));
-        c.fs_allow.push(home.clone());
-        c.worktree_root = Some(home.join("worktrees"));
-        c.repos.gh = Some(gh.unwrap_or_else(|| home.join("no-such-gh")));
-        c.repos.debounce = Duration::from_millis(100);
-        c.repos.poll = Duration::from_millis(700);
-        c.repos.pr_poll = Duration::from_millis(500);
+        config.fs_allow.push(home.clone());
+        config.worktree_root = Some(home.join("worktrees"));
+        config.repos.gh = Some(gh.unwrap_or_else(|| home.join("no-such-gh")));
+        config.repos.debounce = Duration::from_millis(100);
+        config.repos.poll = Duration::from_millis(700);
+        config.repos.pr_poll = Duration::from_millis(500);
     })
     .await
 }
@@ -150,21 +151,25 @@ async fn watcher(daemon: &Daemon) -> (TestClient, UnboundedReceiver<WorkspaceEve
     let mut config = ClientConfig::new(ClientConfig::generate_key());
     config.relay = RelayMode::Disabled;
     config.repo_status = true;
-    let mut c = TestClient::connect_with(&ticket(daemon), config, ConnectOptions::default());
+    let mut client = TestClient::connect_with(&ticket(daemon), config, ConnectOptions::default());
     let (listener, events) = WorkspaceEventQueue::channel();
-    c.client.set_workspace_listener(listener);
-    c.until("connected", |c| c.connected > 0).await;
-    (c, events)
+    client.client.set_workspace_listener(listener);
+    client
+        .until("connected", |client| client.connected > 0)
+        .await;
+    (client, events)
 }
 
 /// Opens a tab with a shell in `dir`; its pane.
-async fn tab_in(c: &mut TestClient, dir: &Path) -> PaneId {
-    let session = c.layout.as_ref().unwrap().session_id;
-    match c
+async fn tab_in(client: &mut TestClient, dir: &Path) -> PaneId {
+    let session = client.layout.as_ref().unwrap().session_id;
+    match client
         .op(LayoutOp::NewTab {
             session_id: session,
             name: String::new(),
-            launch: PaneLaunch::Shell { cwd: Some(s(dir)) },
+            launch: PaneLaunch::Shell {
+                cwd: Some(text_of(dir)),
+            },
         })
         .await
     {
@@ -203,23 +208,27 @@ async fn snapshot_follows_panes_branches_diffs_and_pull_requests() {
     let gh = fake_gh(&home);
     pr_fixture(&home, "quiet-otter", 42, "OPEN", "UNSTABLE");
     let daemon = start(&state, &home, Some(gh)).await;
-    let (mut c, mut events) = watcher(&daemon).await;
-    c.attach_and_follow().await;
-    let first = tab_in(&mut c, &repo).await;
-    let snap = snapshot_where(&mut events, "the main worktree", |s| {
-        s.panes.iter().any(|p| p.pane_id == first)
-            && s.worktrees.iter().any(|w| w.main)
-            && s.gh != GhStatus::Unknown
+    let (mut client, mut events) = watcher(&daemon).await;
+    client.attach_and_follow().await;
+    let first = tab_in(&mut client, &repo).await;
+    let snapshot = snapshot_where(&mut events, "the main worktree", |snapshot| {
+        snapshot.panes.iter().any(|pane| pane.pane_id == first)
+            && snapshot.worktrees.iter().any(|worktree| worktree.main)
+            && snapshot.gh != GhStatus::Unknown
     })
     .await;
-    let main = snap.worktrees.iter().find(|w| w.main).unwrap();
+    let main = snapshot
+        .worktrees
+        .iter()
+        .find(|worktree| worktree.main)
+        .unwrap();
     assert_eq!(main.repo_name, "repo");
     assert_eq!(main.branch.as_deref(), Some("main"));
     assert_eq!(main.upstream.as_deref(), Some("origin/main"));
     assert_eq!((main.ahead, main.behind), (1, 0));
     assert!(!main.dirty);
     assert_eq!(
-        snap.gh,
+        snapshot.gh,
         GhStatus::Ready {
             account: Some("octo".into())
         }
@@ -227,12 +236,12 @@ async fn snapshot_follows_panes_branches_diffs_and_pull_requests() {
 
     // New task: worktree on a branch named after the task, setup first (the owner trusts
     // it), then a shell.
-    let session = c.layout.as_ref().unwrap().session_id;
-    trust_new_task(&c, &repo).await;
-    let task = c
+    let session = client.layout.as_ref().unwrap().session_id;
+    trust_new_task(&client, &repo).await;
+    let task = client
         .client
         .task_create(TaskCreate {
-            repo: s(&repo),
+            repo: text_of(&repo),
             session_id: session,
             name: "quiet-otter".into(),
             branch: None,
@@ -243,9 +252,12 @@ async fn snapshot_follows_panes_branches_diffs_and_pull_requests() {
         .unwrap();
     assert_eq!(task.worktree.branch.as_deref(), Some("quiet-otter"));
     assert_eq!(task.setup.as_deref(), Some("echo setup-ran > .setup-done"));
-    let wt = PathBuf::from(&task.worktree.path);
-    assert!(wt.starts_with(home.join("worktrees/repo")), "{wt:?}");
-    let setup_done = wt.join(".setup-done");
+    let worktree_path = PathBuf::from(&task.worktree.path);
+    assert!(
+        worktree_path.starts_with(home.join("worktrees/repo")),
+        "{worktree_path:?}"
+    );
+    let setup_done = worktree_path.join(".setup-done");
     tokio::time::timeout(Duration::from_secs(10), async {
         while !setup_done.exists() {
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -255,34 +267,51 @@ async fn snapshot_follows_panes_branches_diffs_and_pull_requests() {
     .expect("setup ran in the new tab");
 
     // Changes: a new file (2 lines, plus the setup file's 1) and an edit (-1 +1).
-    std::fs::write(wt.join("new.txt"), "one\ntwo\n").unwrap();
-    std::fs::write(wt.join("src/a.rs"), "fn a() {}\nfn B() {}\nfn c() {}\n").unwrap();
-    let snap = snapshot_where(&mut events, "the task's changes and pull request", |s| {
-        s.worktrees.iter().any(|w| {
-            w.path == task.worktree.path && w.added == 4 && w.removed == 1 && w.pr.is_some()
-        }) && s.panes.iter().any(|p| p.pane_id == task.pane_id)
-    })
+    std::fs::write(worktree_path.join("new.txt"), "one\ntwo\n").unwrap();
+    std::fs::write(
+        worktree_path.join("src/a.rs"),
+        "fn a() {}\nfn B() {}\nfn c() {}\n",
+    )
+    .unwrap();
+    let snapshot = snapshot_where(
+        &mut events,
+        "the task's changes and pull request",
+        |snapshot| {
+            snapshot.worktrees.iter().any(|worktree| {
+                worktree.path == task.worktree.path
+                    && worktree.added == 4
+                    && worktree.removed == 1
+                    && worktree.pr.is_some()
+            }) && snapshot
+                .panes
+                .iter()
+                .any(|pane| pane.pane_id == task.pane_id)
+        },
+    )
     .await;
-    let w = snap
+    let worktree = snapshot
         .worktrees
         .iter()
-        .find(|w| w.path == task.worktree.path)
+        .find(|worktree| worktree.path == task.worktree.path)
         .unwrap();
-    assert!(w.dirty && w.managed && !w.main);
-    assert_eq!(w.name, "quiet-otter");
-    assert_eq!(w.changed_files, 3);
-    assert_eq!(w.scripts.len(), 1);
+    assert!(worktree.dirty && worktree.managed && !worktree.main);
+    assert_eq!(worktree.name, "quiet-otter");
+    assert_eq!(worktree.changed_files, 3);
+    assert_eq!(worktree.scripts.len(), 1);
     assert_eq!(
-        w.hooks.setup.as_deref(),
+        worktree.hooks.setup.as_deref(),
         Some("echo setup-ran > .setup-done")
     );
-    let pr = w.pr.as_ref().unwrap();
+    let pr = worktree.pr.as_ref().unwrap();
     assert_eq!(
         (pr.number, pr.state, pr.merge_state),
         (42, PrState::Open, MergeState::Unstable)
     );
     assert_eq!(
-        pr.checks.iter().map(|c| c.status).collect::<Vec<_>>(),
+        pr.checks
+            .iter()
+            .map(|check| check.status)
+            .collect::<Vec<_>>(),
         [
             CheckStatus::Failure,
             CheckStatus::Pending,
@@ -290,40 +319,41 @@ async fn snapshot_follows_panes_branches_diffs_and_pull_requests() {
         ]
     );
     // Both worktrees of the repository are listed, the main one first.
-    let paths: Vec<bool> = snap
+    let paths: Vec<bool> = snapshot
         .worktrees
         .iter()
-        .filter(|w| w.repo == s(&repo))
-        .map(|w| w.main)
+        .filter(|worktree| worktree.repo == text_of(&repo))
+        .map(|worktree| worktree.main)
         .collect();
     assert_eq!(paths, [true, false]);
 
     // A commit is seen through the git directory (no file left changed).
-    run_git(&wt, &["add", "-A"]);
-    run_git(&wt, &["commit", "-q", "-m", "work"]);
-    snapshot_where(&mut events, "the commit", |s| {
-        s.worktrees
-            .iter()
-            .any(|w| w.path == task.worktree.path && !w.dirty && w.added == 0)
+    run_git(&worktree_path, &["add", "-A"]);
+    run_git(&worktree_path, &["commit", "-q", "-m", "work"]);
+    snapshot_where(&mut events, "the commit", |snapshot| {
+        snapshot.worktrees.iter().any(|worktree| {
+            worktree.path == task.worktree.path && !worktree.dirty && worktree.added == 0
+        })
     })
     .await;
 
     // Repository script in its own tab.
-    let pane = c
+    let pane = client
         .client
         .script_run(ScriptRun {
             cwd: task.worktree.path.clone(),
             session_id: session,
             name: "Dev".into(),
-            command: w.scripts[0].command.clone(),
+            command: worktree.scripts[0].command.clone(),
         })
         .await
         .unwrap();
-    c.follow(pane).await;
-    c.wait_flat(pane, "SCRIPT-RAN-42").await;
+    client.follow(pane).await;
+    client.wait_flat(pane, "SCRIPT-RAN-42").await;
 
     // Pull request actions.
-    c.client
+    client
+        .client
         .pr_rerun_failed(task.worktree.path.clone())
         .await
         .unwrap();
@@ -332,7 +362,7 @@ async fn snapshot_follows_panes_branches_diffs_and_pull_requests() {
         "{}",
         gh_log(&home)
     );
-    let wrong = c
+    let wrong = client
         .client
         .pr_merge(PrMerge {
             path: task.worktree.path.clone(),
@@ -341,7 +371,7 @@ async fn snapshot_follows_panes_branches_diffs_and_pull_requests() {
         })
         .await;
     assert!(matches!(wrong, Err(WsError::Conflict(_))), "{wrong:?}");
-    let merged = c
+    let merged = client
         .client
         .pr_merge(PrMerge {
             path: task.worktree.path.clone(),
@@ -353,23 +383,29 @@ async fn snapshot_follows_panes_branches_diffs_and_pull_requests() {
         .unwrap();
     assert_eq!(merged.state, PrState::Merged);
     assert!(gh_log(&home).contains("pr merge 42 --squash"));
-    let snap = snapshot_where(&mut events, "the merge", |s| {
-        s.worktrees.iter().any(|w| {
-            w.path == task.worktree.path
-                && w.pr.as_ref().is_some_and(|p| p.state == PrState::Merged)
+    let snapshot = snapshot_where(&mut events, "the merge", |snapshot| {
+        snapshot.worktrees.iter().any(|worktree| {
+            worktree.path == task.worktree.path
+                && worktree
+                    .pr
+                    .as_ref()
+                    .is_some_and(|pr| pr.state == PrState::Merged)
         })
     })
     .await;
-    let w = snap
+    let worktree = snapshot
         .worktrees
         .iter()
-        .find(|w| w.path == task.worktree.path)
+        .find(|worktree| worktree.path == task.worktree.path)
         .unwrap();
-    assert!(w.merged_at.is_some(), "the auto-delete clock started");
+    assert!(
+        worktree.merged_at.is_some(),
+        "the auto-delete clock started"
+    );
 
     // A pull request that is blocked is refused before gh is asked to merge.
     pr_fixture(&home, "quiet-otter", 42, "OPEN", "BLOCKED");
-    let blocked = c
+    let blocked = client
         .client
         .pr_merge(PrMerge {
             path: task.worktree.path.clone(),
@@ -391,13 +427,13 @@ async fn archive_keeps_refs_and_changes_and_restore_brings_them_back() {
     let repo = repo(&home, None);
     // No gh at all: the snapshot says so once, and nothing else breaks.
     let daemon = start(&state, &home, None).await;
-    let (mut c, mut events) = watcher(&daemon).await;
-    let first = c.attach_and_follow().await;
-    let session = c.layout.as_ref().unwrap().session_id;
-    let task = c
+    let (mut client, mut events) = watcher(&daemon).await;
+    let first = client.attach_and_follow().await;
+    let session = client.layout.as_ref().unwrap().session_id;
+    let task = client
         .client
         .task_create(TaskCreate {
-            repo: s(&repo),
+            repo: text_of(&repo),
             session_id: session,
             name: "Brave Fox".into(),
             branch: None,
@@ -407,27 +443,32 @@ async fn archive_keeps_refs_and_changes_and_restore_brings_them_back() {
         .await
         .unwrap();
     assert_eq!(task.worktree.branch.as_deref(), Some("brave-fox"));
-    let wt = PathBuf::from(&task.worktree.path);
-    let snap = snapshot_where(&mut events, "the task", |s| {
-        s.panes.iter().any(|p| p.pane_id == task.pane_id) && s.gh != GhStatus::Unknown
+    let worktree_path = PathBuf::from(&task.worktree.path);
+    let snapshot = snapshot_where(&mut events, "the task", |snapshot| {
+        snapshot
+            .panes
+            .iter()
+            .any(|pane| pane.pane_id == task.pane_id)
+            && snapshot.gh != GhStatus::Unknown
     })
     .await;
-    assert_eq!(snap.gh, GhStatus::Missing);
+    assert_eq!(snapshot.gh, GhStatus::Missing);
     let _ = first;
 
-    std::fs::write(wt.join("src/a.rs"), "changed\n").unwrap();
-    std::fs::write(wt.join("notes.md"), "keep me\n").unwrap();
-    let refused = c
+    std::fs::write(worktree_path.join("src/a.rs"), "changed\n").unwrap();
+    std::fs::write(worktree_path.join("notes.md"), "keep me\n").unwrap();
+    let refused = client
         .client
         .worktree_archive(task.worktree.path.clone(), false)
         .await;
     assert!(matches!(refused, Err(WsError::Conflict(_))), "{refused:?}");
-    assert!(wt.exists());
-    c.client
+    assert!(worktree_path.exists());
+    client
+        .client
         .worktree_archive(task.worktree.path.clone(), true)
         .await
         .unwrap();
-    assert!(!wt.exists());
+    assert!(!worktree_path.exists());
     // The branch and the archive refs stay.
     run_git(&repo, &["rev-parse", "--verify", "refs/heads/brave-fox"]);
     let refs = run_git(
@@ -436,24 +477,35 @@ async fn archive_keeps_refs_and_changes_and_restore_brings_them_back() {
     );
     assert!(refs.contains("refs/gudo/archived/1"), "{refs}");
     assert!(refs.contains("refs/gudo/archived/1/changes"), "{refs}");
-    let archived = c.client.worktree_archived(Some(s(&repo))).await.unwrap();
+    let archived = client
+        .client
+        .worktree_archived(Some(text_of(&repo)))
+        .await
+        .unwrap();
     assert_eq!(archived.len(), 1);
     assert!(archived[0].saved_changes);
     assert_eq!(archived[0].branch.as_deref(), Some("brave-fox"));
 
-    let back = c.client.worktree_restore(archived[0].id).await.unwrap();
+    let back = client
+        .client
+        .worktree_restore(archived[0].id)
+        .await
+        .unwrap();
     assert_eq!(back.path, task.worktree.path);
     assert_eq!(
-        std::fs::read_to_string(wt.join("notes.md")).unwrap(),
+        std::fs::read_to_string(worktree_path.join("notes.md")).unwrap(),
         "keep me\n"
     );
     assert_eq!(
-        std::fs::read_to_string(wt.join("src/a.rs")).unwrap(),
+        std::fs::read_to_string(worktree_path.join("src/a.rs")).unwrap(),
         "changed\n"
     );
     // Uncommitted again, on the branch, and the refs are gone.
-    assert_eq!(run_git(&wt, &["branch", "--show-current"]), "brave-fox");
-    let status = run_git(&wt, &["status", "--porcelain"]);
+    assert_eq!(
+        run_git(&worktree_path, &["branch", "--show-current"]),
+        "brave-fox"
+    );
+    let status = run_git(&worktree_path, &["status", "--porcelain"]);
     assert!(
         status.contains("M src/a.rs") && status.contains("?? notes.md"),
         "{status}"
@@ -465,7 +517,14 @@ async fn archive_keeps_refs_and_changes_and_restore_brings_them_back() {
         ),
         ""
     );
-    assert!(c.client.worktree_archived(None).await.unwrap().is_empty());
+    assert!(
+        client
+            .client
+            .worktree_archived(None)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -474,50 +533,70 @@ async fn merged_worktrees_are_deleted_after_n_days_unless_dirty() {
     let (_home, home) = canonical_tempdir();
     let repo = repo(&home, Some(r#"{"teardown":"touch ../teardown-ran"}"#));
     let gh = fake_gh(&home);
-    let homec = home.clone();
-    let daemon = start_with(&state, move |c| {
-        c.pane_env
-            .push(("HOME".into(), homec.to_string_lossy().into_owned()));
-        c.fs_allow.push(homec.clone());
-        c.worktree_root = Some(homec.join("worktrees"));
-        c.repos.gh = Some(gh);
-        c.repos.sweep = Duration::from_millis(300);
-        c.repos.day = Duration::from_millis(100);
+    let daemon_home = home.clone();
+    let daemon = start_with(&state, move |config| {
+        config
+            .pane_env
+            .push(("HOME".into(), daemon_home.to_string_lossy().into_owned()));
+        config.fs_allow.push(daemon_home.clone());
+        config.worktree_root = Some(daemon_home.join("worktrees"));
+        config.repos.gh = Some(gh);
+        config.repos.sweep = Duration::from_millis(300);
+        config.repos.day = Duration::from_millis(100);
     })
     .await;
     // A client without the repository capability: the sweep runs anyway.
-    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    c.until("connected", |c| c.connected > 0).await;
-    c.attach_and_follow().await;
+    let mut client = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    client
+        .until("connected", |client| client.connected > 0)
+        .await;
+    client.attach_and_follow().await;
     assert_eq!(
-        c.client.worktree_settings(None).await.unwrap(),
+        client.client.worktree_settings(None).await.unwrap(),
         WorktreeSettings {
             auto_delete_merged_days: 7
         }
     );
-    c.client
+    client
+        .client
         .worktree_settings(Some(WorktreeSettings {
             auto_delete_merged_days: 2,
         }))
         .await
         .unwrap();
-    let mk = |branch: &str| client_core::proto::WorktreeCreate {
-        repo: s(&repo),
+    let worktree_request = |branch: &str| client_core::proto::WorktreeCreate {
+        repo: text_of(&repo),
         branch: Some(branch.into()),
         base: None,
         path: None,
     };
-    let clean = c.client.worktree_create(mk("done-clean")).await.unwrap();
-    let hooks = c
+    let clean = client
+        .client
+        .worktree_create(worktree_request("done-clean"))
+        .await
+        .unwrap();
+    let hooks = client
         .client
         .repo_hooks(RepoHooksFor::Worktree {
             path: clean.path.clone(),
         })
         .await
         .unwrap();
-    c.client.repo_trust(hooks.repo, hooks.hash).await.unwrap();
-    let dirty = c.client.worktree_create(mk("done-dirty")).await.unwrap();
-    let open = c.client.worktree_create(mk("still-open")).await.unwrap();
+    client
+        .client
+        .repo_trust(hooks.repo, hooks.hash)
+        .await
+        .unwrap();
+    let dirty = client
+        .client
+        .worktree_create(worktree_request("done-dirty"))
+        .await
+        .unwrap();
+    let open = client
+        .client
+        .worktree_create(worktree_request("still-open"))
+        .await
+        .unwrap();
     std::fs::write(PathBuf::from(&dirty.path).join("wip.txt"), "wip\n").unwrap();
     pr_fixture(&home, "done-clean", 1, "MERGED", "UNKNOWN");
     pr_fixture(&home, "done-dirty", 2, "MERGED", "UNKNOWN");
@@ -552,34 +631,40 @@ async fn clients_without_the_capability_get_no_snapshot() {
     let mut plain = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
     let (listener, mut plain_events) = WorkspaceEventQueue::channel();
     plain.client.set_workspace_listener(listener);
-    plain.until("connected", |c| c.connected > 0).await;
-    let (mut c, mut events) = watcher(&daemon).await;
-    c.attach_and_follow().await;
-    let pane = tab_in(&mut c, &repo).await;
-    snapshot_where(&mut events, "the pane in the repo", |s| {
-        s.panes.iter().any(|p| p.pane_id == pane)
+    plain
+        .until("connected", |client| client.connected > 0)
+        .await;
+    let (mut client, mut events) = watcher(&daemon).await;
+    client.attach_and_follow().await;
+    let pane = tab_in(&mut client, &repo).await;
+    snapshot_where(&mut events, "the pane in the repo", |snapshot| {
+        snapshot.panes.iter().any(|shown| shown.pane_id == pane)
     })
     .await;
     // Explicit refresh answers with the same picture.
-    let snap = c.client.repo_refresh(None).await.unwrap();
-    assert!(snap.panes.iter().any(|p| p.pane_id == pane));
+    let snapshot = client.client.repo_refresh(None).await.unwrap();
+    assert!(snapshot.panes.iter().any(|shown| shown.pane_id == pane));
     tokio::time::sleep(Duration::from_millis(300)).await;
-    while let Ok(e) = plain_events.try_recv() {
-        assert!(!matches!(e, WorkspaceEvent::Repos { .. }), "{e:?}");
+    while let Ok(event) = plain_events.try_recv() {
+        assert!(!matches!(event, WorkspaceEvent::Repos { .. }), "{event:?}");
     }
 }
 
 /// Trusts the commands a new task in `repo` would run.
-async fn trust_new_task(c: &TestClient, repo: &Path) {
-    let hooks = c
+async fn trust_new_task(client: &TestClient, repo: &Path) {
+    let hooks = client
         .client
         .repo_hooks(RepoHooksFor::NewTask {
-            repo: s(repo),
+            repo: text_of(repo),
             base: None,
         })
         .await
         .unwrap();
-    c.client.repo_trust(hooks.repo, hooks.hash).await.unwrap();
+    client
+        .client
+        .repo_trust(hooks.repo, hooks.hash)
+        .await
+        .unwrap();
 }
 
 /// Waits a moment for `path` to appear.
@@ -603,11 +688,11 @@ async fn repository_commands_run_only_once_the_owner_trusts_them() {
     let config = r#"{"setup":"echo setup-ran > .setup-done","teardown":"touch ../teardown-ran"}"#;
     let repo = repo(&home, Some(config));
     let daemon = start(&state, &home, None).await;
-    let (mut c, _events) = watcher(&daemon).await;
-    c.attach_and_follow().await;
-    let session = c.layout.as_ref().unwrap().session_id;
+    let (mut client, _events) = watcher(&daemon).await;
+    client.attach_and_follow().await;
+    let session = client.layout.as_ref().unwrap().session_id;
     let task = |name: &str| TaskCreate {
-        repo: s(&repo),
+        repo: text_of(&repo),
         session_id: session,
         name: name.into(),
         branch: None,
@@ -615,14 +700,14 @@ async fn repository_commands_run_only_once_the_owner_trusts_them() {
         agent: None,
     };
     let new_task = RepoHooksFor::NewTask {
-        repo: s(&repo),
+        repo: text_of(&repo),
         base: None,
     };
     let teardown_ran = home.join("worktrees/repo/teardown-ran");
 
-    let features = c.client.daemon_info().unwrap().features;
+    let features = client.client.daemon_info().unwrap().features;
     assert!(features.contains(client_core::proto::DaemonFeatures::REPO_TRUST));
-    let asked = c.client.repo_hooks(new_task.clone()).await.unwrap();
+    let asked = client.client.repo_hooks(new_task.clone()).await.unwrap();
     assert!(!asked.trusted);
     assert_eq!(
         asked.hooks.setup.as_deref(),
@@ -635,11 +720,12 @@ async fn repository_commands_run_only_once_the_owner_trusts_them() {
     assert_eq!(PathBuf::from(&asked.repo), repo);
 
     // Untrusted: the task opens, but neither its setup nor its teardown runs.
-    let first = c.client.task_create(task("first")).await.unwrap();
+    let first = client.client.task_create(task("first")).await.unwrap();
     assert_eq!(first.setup, None);
     let first_path = PathBuf::from(&first.worktree.path);
     assert!(!appears(&first_path.join(".setup-done"), Duration::from_secs(2)).await);
-    c.client
+    client
+        .client
         .worktree_archive(first.worktree.path.clone(), true)
         .await
         .unwrap();
@@ -649,32 +735,53 @@ async fn repository_commands_run_only_once_the_owner_trusts_them() {
     let mut spec = client_core::grants::GrantSpec::new(Roles::OWNER, Scope::Daemon);
     spec.label = "bob".into();
     spec.expires = Some(UnixMillis(client_core::now_millis().0 + 3_600_000));
-    let invite = c.client.create_invite(spec, "bob".into()).await.unwrap();
+    let invite = client
+        .client
+        .create_invite(spec, "bob".into())
+        .await
+        .unwrap();
     let mut bob = TestClient::join(&invite.to_string(), ClientConfig::generate_key());
     bob.client.attach(None);
-    bob.until("guest layout", |c| c.layout.is_some()).await;
+    bob.until("guest layout", |client| client.layout.is_some())
+        .await;
     assert!(matches!(
         bob.client
             .repo_trust(asked.repo.clone(), asked.hash.clone())
             .await,
         Err(WsError::Denied(_))
     ));
-    assert!(!c.client.repo_hooks(new_task.clone()).await.unwrap().trusted);
+    assert!(
+        !client
+            .client
+            .repo_hooks(new_task.clone())
+            .await
+            .unwrap()
+            .trusted
+    );
 
     // The owner trusts them: they run.
-    c.client
+    client
+        .client
         .repo_trust(asked.repo.clone(), asked.hash.clone())
         .await
         .unwrap();
-    assert!(c.client.repo_hooks(new_task.clone()).await.unwrap().trusted);
-    let second = c.client.task_create(task("second")).await.unwrap();
+    assert!(
+        client
+            .client
+            .repo_hooks(new_task.clone())
+            .await
+            .unwrap()
+            .trusted
+    );
+    let second = client.client.task_create(task("second")).await.unwrap();
     assert_eq!(
         second.setup.as_deref(),
         Some("echo setup-ran > .setup-done")
     );
     let second_path = PathBuf::from(&second.worktree.path);
     assert!(appears(&second_path.join(".setup-done"), Duration::from_secs(10)).await);
-    c.client
+    client
+        .client
         .worktree_archive(second.worktree.path.clone(), true)
         .await
         .unwrap();
@@ -687,10 +794,10 @@ async fn repository_commands_run_only_once_the_owner_trusts_them() {
     )
     .unwrap();
     run_git(&repo, &["commit", "-qam", "change setup"]);
-    let changed = c.client.repo_hooks(new_task.clone()).await.unwrap();
+    let changed = client.client.repo_hooks(new_task.clone()).await.unwrap();
     assert!(!changed.trusted);
     assert_ne!(changed.hash, asked.hash);
-    let third = c.client.task_create(task("third")).await.unwrap();
+    let third = client.client.task_create(task("third")).await.unwrap();
     assert_eq!(third.setup, None);
     assert!(!appears(&home.join("worktrees/repo/pwned"), Duration::from_secs(2)).await);
 }

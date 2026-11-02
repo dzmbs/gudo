@@ -70,9 +70,9 @@ async fn agents_pull_their_sessions_drawings_and_nothing_else() {
     let daemon = start(dir.path()).await;
     let socket = daemon.hook_socket().to_owned();
     let token = std::fs::read_to_string(dir.path().join("hook.token")).unwrap();
-    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    let pane = c.attach_and_follow().await;
-    let session = c.layout.as_ref().unwrap().session_id;
+    let mut client = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = client.attach_and_follow().await;
+    let session = client.layout.as_ref().unwrap().session_id;
 
     // Nothing yet.
     let PullReply::List { artifacts, .. } = pull(&socket, &token, pane.0, PullOp::List).await
@@ -85,7 +85,7 @@ async fn agents_pull_their_sessions_drawings_and_nothing_else() {
         PullReply::Error("no drawings in this session".into())
     );
 
-    let old = c
+    let old = client
         .client
         .artifact_create(boxed(session, "old"))
         .await
@@ -95,8 +95,12 @@ async fn agents_pull_their_sessions_drawings_and_nothing_else() {
         height: 3,
         data: vec![90; 48],
     });
-    let image = c.client.blob_upload(session, png.clone()).await.unwrap();
-    let photo = c
+    let image = client
+        .client
+        .blob_upload(session, png.clone())
+        .await
+        .unwrap();
+    let photo = client
         .client
         .artifact_create(ArtifactCreate {
             session_id: session,
@@ -109,7 +113,7 @@ async fn agents_pull_their_sessions_drawings_and_nothing_else() {
         })
         .await
         .unwrap();
-    let arch = c
+    let arch = client
         .client
         .artifact_create(boxed(session, "arch"))
         .await
@@ -120,7 +124,7 @@ async fn agents_pull_their_sessions_drawings_and_nothing_else() {
         session_id: other,
         pane_id: other_pane,
         ..
-    } = c
+    } = client
         .op(LayoutOp::CreateSession {
             name: "other".into(),
             launch: PaneLaunch::Shell { cwd: None },
@@ -129,7 +133,7 @@ async fn agents_pull_their_sessions_drawings_and_nothing_else() {
     else {
         panic!("session not created")
     };
-    let secret = c
+    let secret = client
         .client
         .artifact_create(boxed(other, "secret"))
         .await
@@ -143,25 +147,36 @@ async fn agents_pull_their_sessions_drawings_and_nothing_else() {
         panic!("list failed")
     };
     assert_eq!(listed, session.0);
-    let ids: Vec<u64> = artifacts.iter().map(|a| a.id).collect();
+    let ids: Vec<u64> = artifacts.iter().map(|artifact| artifact.id).collect();
     assert_eq!(ids.len(), 3, "{artifacts:?}");
     assert_eq!(ids[0], arch.artifact_id.0, "newest first");
     assert!(ids.contains(&old.artifact_id.0) && ids.contains(&photo.artifact_id.0));
     assert!(!ids.contains(&secret.artifact_id.0));
-    let p = artifacts.iter().find(|a| a.kind == "image").unwrap();
-    assert_eq!((p.width, p.height), (Some(4), Some(3)));
+    let listed_image = artifacts
+        .iter()
+        .find(|artifact| artifact.kind == "image")
+        .unwrap();
+    assert_eq!(
+        (listed_image.width, listed_image.height),
+        (Some(4), Some(3))
+    );
     assert_eq!(artifacts[0].elements, 1);
 
     // The newest drawing by default, as a PNG the daemon rasterises.
-    let PullReply::Export(e) = pull(&socket, &token, pane.0, get(None, "png")).await else {
+    let PullReply::Export(export) = pull(&socket, &token, pane.0, get(None, "png")).await else {
         panic!("png export failed")
     };
-    assert_eq!((e.id, e.title.as_str()), (arch.artifact_id.0, "arch"));
-    assert_eq!((e.mime.as_str(), e.base64), ("image/png", true));
-    let bytes = data_encoding::BASE64.decode(e.data.as_bytes()).unwrap();
+    assert_eq!(
+        (export.id, export.title.as_str()),
+        (arch.artifact_id.0, "arch")
+    );
+    assert_eq!((export.mime.as_str(), export.base64), ("image/png", true));
+    let bytes = data_encoding::BASE64
+        .decode(export.data.as_bytes())
+        .unwrap();
     assert!(bytes.starts_with(b"\x89PNG"));
 
-    let PullReply::Export(e) = pull(
+    let PullReply::Export(export) = pull(
         &socket,
         &token,
         pane.0,
@@ -171,8 +186,12 @@ async fn agents_pull_their_sessions_drawings_and_nothing_else() {
     else {
         panic!("svg export failed")
     };
-    assert!(e.data.contains("<svg") && !e.base64, "{}", e.data);
-    let PullReply::Export(e) = pull(
+    assert!(
+        export.data.contains("<svg") && !export.base64,
+        "{}",
+        export.data
+    );
+    let PullReply::Export(export) = pull(
         &socket,
         &token,
         pane.0,
@@ -182,9 +201,9 @@ async fn agents_pull_their_sessions_drawings_and_nothing_else() {
     else {
         panic!("ascii export failed")
     };
-    assert!(e.data.contains('┌'), "{}", e.data);
+    assert!(export.data.contains('┌'), "{}", export.data);
     // An image as an `.excalidraw` scene holding it; op-log drawings have no such file.
-    let PullReply::Export(e) = pull(
+    let PullReply::Export(export) = pull(
         &socket,
         &token,
         pane.0,
@@ -194,17 +213,17 @@ async fn agents_pull_their_sessions_drawings_and_nothing_else() {
     else {
         panic!("excalidraw export failed")
     };
-    let file = drawing::parse_file(e.data.as_bytes()).unwrap();
+    let file = drawing::parse_file(export.data.as_bytes()).unwrap();
     assert_eq!((file.elements.len(), &file.files[0].2), (1, &png));
-    let r = pull(
+    let reply = pull(
         &socket,
         &token,
         pane.0,
         get(Some(arch.artifact_id.0), "excalidraw"),
     )
     .await;
-    assert!(matches!(r, PullReply::Error(_)), "{r:?}");
-    let PullReply::Export(e) = pull(
+    assert!(matches!(reply, PullReply::Error(_)), "{reply:?}");
+    let PullReply::Export(export) = pull(
         &socket,
         &token,
         pane.0,
@@ -215,12 +234,14 @@ async fn agents_pull_their_sessions_drawings_and_nothing_else() {
         panic!("image export failed")
     };
     assert_eq!(
-        data_encoding::BASE64.decode(e.data.as_bytes()).unwrap(),
+        data_encoding::BASE64
+            .decode(export.data.as_bytes())
+            .unwrap(),
         png
     );
 
     // Refusals carry no data.
-    let refused = |r: PullReply| matches!(r, PullReply::Error(_));
+    let refused = |reply: PullReply| matches!(reply, PullReply::Error(_));
     assert!(refused(
         pull(
             &socket,
@@ -242,7 +263,7 @@ async fn agents_pull_their_sessions_drawings_and_nothing_else() {
     else {
         panic!("list failed")
     };
-    let ids: Vec<u64> = artifacts.iter().map(|a| a.id).collect();
+    let ids: Vec<u64> = artifacts.iter().map(|artifact| artifact.id).collect();
     assert_eq!(ids, [secret.artifact_id.0]);
     daemon.shutdown().await;
 }

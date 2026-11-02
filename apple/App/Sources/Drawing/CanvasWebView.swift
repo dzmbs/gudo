@@ -2,9 +2,8 @@ import Foundation
 import os
 import WebKit
 
-/// The bundled, offline Excalidraw (apple/App/Resources/Excalidraw, built by
-/// apple/scripts/build-excalidraw.sh) in a transparent `WKWebView`, and the JS bridge of
-/// docs/DAEMON.md §7.11: Swift → JS `window.canvas.<fn>(json)`, JS → Swift messages on
+/// The bundled, offline Excalidraw (built by scripts/build-excalidraw.sh) in a transparent
+/// `WKWebView`. Swift calls `window.canvas.<fn>(json)`; the page posts to
 /// `window.webkit.messageHandlers.canvas`.
 @MainActor
 final class CanvasWebView: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
@@ -17,7 +16,7 @@ final class CanvasWebView: NSObject, WKScriptMessageHandler, WKNavigationDelegat
     static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app", category: "drawing")
 
     let webView: WKWebView
-    /// Messages from the page (`type` plus the fields of §7.11's table).
+    /// Messages from the page: a `type` plus its fields.
     var onMessage: (([String: Any]) -> Void)?
     private(set) var isReady = false
     private var queued: [String] = []
@@ -71,7 +70,6 @@ final class CanvasWebView: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         }
     }
 
-    /// Evaluates an expression that returns a JSON string, decoded.
     func value(_ expression: String) async -> Any? {
         await waitUntilReady()
         guard let result = try? await webView.evaluateJavaScript("JSON.stringify(\(expression))") as? String,
@@ -97,8 +95,7 @@ final class CanvasWebView: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         await withCheckedContinuation { readyWaiters.append($0) }
     }
 
-    /// Renders the scene (`exportToBlob` / `exportToSvg`). `bounds` in scene px fixes the
-    /// exported area; `scale` is image pixels per scene px.
+    /// `bounds` in scene px fixes the exported area; `scale` is image pixels per scene px.
     func export(format: String = "png", scale: CGFloat, bounds: CGRect?, background: Bool = false) async -> (data: Data, count: Int)? {
         await waitUntilReady()
         let id = UUID().uuidString
@@ -138,15 +135,14 @@ final class CanvasWebView: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         onMessage?(body)
     }
 
-    /// Only the bundled page speaks for the drawing: frames inside it (a scene's embedded
-    /// video or site) can post to the handler too.
+    /// Only the bundled page speaks for the drawing: frames inside it (a scene's embeds) can
+    /// post to the handler too.
     static func isOwnPage(_ frame: WKFrameInfo) -> Bool {
         frame.isMainFrame && frame.securityOrigin.protocol == scheme
     }
 
-    /// Whether the canvas may load a navigation: its own bundle, and frames inside it (a
-    /// scene's embeds). The page itself never leaves the bundle, not even for a page made from
-    /// a `data:` or `blob:` URL; a link opens in the browser.
+    /// The page itself never leaves the bundle, not even for a `data:` or `blob:` URL; only
+    /// frames inside it (a scene's embeds) load from elsewhere.
     static func policy(for url: URL?, mainFrame: Bool) -> WKNavigationActionPolicy {
         let scheme = url?.scheme?.lowercased() ?? ""
         if scheme == Self.scheme { return .allow }

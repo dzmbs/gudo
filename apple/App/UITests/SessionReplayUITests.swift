@@ -1,5 +1,6 @@
 import XCTest
 
+/// Session Replay on the shared daemon fixtures (`UI_TEST_CLASS=SessionReplayUITests
 /// apple/scripts/w3-ui-test.sh`): an agent's browser tools from its terminal (`gudo-hook
 /// browser`) drive a page; the page's Replays then open the session, which steps action by
 /// action and exports as a Playwright test. Skipped without a ticket.

@@ -27,13 +27,17 @@ fn spec(roles: Roles) -> GrantSpec {
 
 /// Pumps `clients` until each was either admitted or refused; returns how many were admitted.
 async fn admitted(clients: &mut [TestClient]) -> usize {
-    for c in clients.iter_mut() {
-        c.until("admitted or refused", |c| {
-            c.client.me().is_some() || !c.refused.is_empty()
-        })
-        .await;
+    for client in clients.iter_mut() {
+        client
+            .until("admitted or refused", |c| {
+                c.client.me().is_some() || !c.refused.is_empty()
+            })
+            .await;
     }
-    clients.iter().filter(|c| c.client.me().is_some()).count()
+    clients
+        .iter()
+        .filter(|client| client.client.me().is_some())
+        .count()
 }
 
 /// One pairing ticket raced by several devices at once pairs exactly one of them.
@@ -88,7 +92,8 @@ async fn an_expired_invite_admits_nobody_and_ends_its_sessions() {
     tokio::time::sleep(Duration::from_millis(2_200)).await;
     inside
         .until("closed at expiry", |c| {
-            c.mp.iter().any(|e| matches!(e, MultiplayerEvent::Revoked))
+            c.mp.iter()
+                .any(|event| matches!(event, MultiplayerEvent::Revoked))
         })
         .await;
     let mut late = vec![TestClient::join(&link, ClientConfig::generate_key())];
@@ -177,19 +182,20 @@ async fn only_drivers_type_into_a_pane() {
         (Roles::DRIVER, "driver"),
     ] {
         let link = invite_with(&owner, spec(roles), InviteTerms::default()).await;
-        let mut g = TestClient::join(&link, ClientConfig::generate_key());
-        g.client.attach(None);
-        g.until("joined", |c| c.layout.is_some()).await;
-        g.follow(pane).await;
-        g.type_line(pane, &format!("echo typed-by-{mark}"));
+        let mut guest = TestClient::join(&link, ClientConfig::generate_key());
+        guest.client.attach(None);
+        guest.until("joined", |c| c.layout.is_some()).await;
+        guest.follow(pane).await;
+        guest.type_line(pane, &format!("echo typed-by-{mark}"));
         if roles == Roles::DRIVER {
             owner.wait_text(pane, "typed-by-driver").await;
         } else {
-            g.until("input rejected", |c| {
-                c.mp.iter()
-                    .any(|e| matches!(e, MultiplayerEvent::InputRejected { .. }))
-            })
-            .await;
+            guest
+                .until("input rejected", |c| {
+                    c.mp.iter()
+                        .any(|event| matches!(event, MultiplayerEvent::InputRejected { .. }))
+                })
+                .await;
         }
     }
     let text = owner.text(pane);

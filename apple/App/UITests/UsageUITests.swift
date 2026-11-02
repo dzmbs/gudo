@@ -1,5 +1,6 @@
 import XCTest
 
+/// Agent plan usage meters with a fake usage source
 /// (`-fakeUsage YES`: Claude at 62 % of 5h, Codex at 92 % of its week): one quiet line per agent
 /// under the host's name, the detail popover with every window, and the Inbox strip.
 @MainActor

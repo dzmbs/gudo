@@ -15,16 +15,16 @@ pub fn boot_nanos() -> u64 {
     const CLOCK: libc::clockid_t = libc::CLOCK_BOOTTIME;
     #[cfg(not(target_os = "linux"))]
     const CLOCK: libc::clockid_t = libc::CLOCK_MONOTONIC;
-    let mut ts = libc::timespec {
+    let mut timespec = libc::timespec {
         tv_sec: 0,
         tv_nsec: 0,
     };
-    // SAFETY: `ts` is a valid, writable timespec; the clock id exists on this OS.
-    let rc = unsafe { libc::clock_gettime(CLOCK, &mut ts) };
-    debug_assert_eq!(rc, 0, "clock_gettime");
-    (ts.tv_sec as u64)
+    // SAFETY: `timespec` is a valid, writable timespec; the clock id exists on this OS.
+    let status = unsafe { libc::clock_gettime(CLOCK, &mut timespec) };
+    debug_assert_eq!(status, 0, "clock_gettime");
+    (timespec.tv_sec as u64)
         .saturating_mul(1_000_000_000)
-        .saturating_add(ts.tv_nsec as u64)
+        .saturating_add(timespec.tv_nsec as u64)
 }
 
 /// Wall-clock milliseconds as of the daemon's start, carried forward by the boot clock: close
@@ -58,18 +58,18 @@ mod tests {
 
     #[test]
     fn the_boot_clock_moves_forward() {
-        let a = boot_nanos();
+        let before = boot_nanos();
         std::thread::sleep(std::time::Duration::from_millis(5));
-        let b = boot_nanos();
-        assert!(b >= a + 4_000_000, "{a} → {b}");
+        let after = boot_nanos();
+        assert!(after >= before + 4_000_000, "{before} → {after}");
     }
 
     #[test]
     fn steady_time_follows_the_boot_clock_only() {
-        let s = Steady::new(1_000_000, 50_000_000_000);
-        assert_eq!(s.at(50_000_000_000), 1_000_000);
-        assert_eq!(s.at(53_500_000_000), 1_003_500);
-        let a = steady_millis();
-        assert!(steady_millis() >= a);
+        let steady = Steady::new(1_000_000, 50_000_000_000);
+        assert_eq!(steady.at(50_000_000_000), 1_000_000);
+        assert_eq!(steady.at(53_500_000_000), 1_003_500);
+        let first = steady_millis();
+        assert!(steady_millis() >= first);
     }
 }

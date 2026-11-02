@@ -13,10 +13,8 @@ use tokio::sync::mpsc;
 use super::git;
 use crate::core::{Core, lock};
 
-/// Turns kept per pane.
 const MAX_TURNS: usize = 50;
 
-/// A turn boundary to snapshot.
 #[derive(Debug)]
 pub(crate) enum Boundary {
     Start { pane: PaneId, cwd: PathBuf },
@@ -66,28 +64,30 @@ impl Turns {
                 .get(&pane)
                 .ok_or_else(|| WsError::NotFound(format!("no recorded turns in pane {pane}")))?;
             match turn {
-                Some(n) => turns.iter().find(|t| t.turn == n).cloned(),
+                Some(number) => turns
+                    .iter()
+                    .find(|recorded| recorded.turn == number)
+                    .cloned(),
                 None => turns.last().cloned(),
             }
             .ok_or_else(|| WsError::NotFound(format!("turn {turn:?} in pane {pane}")))?
         };
         let root = PathBuf::from(&info.root);
-        let end = match &info.end_tree {
-            Some(t) => t.clone(),
+        let end_tree = match &info.end_tree {
+            Some(tree) => tree.clone(),
             None => git::worktree_tree(&root)?,
         };
-        git::diff_trees(&root, &info.start_tree, &end, &[], context, hunks)
+        git::diff_trees(&root, &info.start_tree, &end_tree, &[], context, hunks)
     }
 }
 
-/// Applies turn boundaries in order.
 pub(crate) async fn run(core: Arc<Core>) {
     let Some(mut rx) = lock(&core.ws.turns.rx).take() else {
         return;
     };
     while let Some(boundary) = rx.recv().await {
-        let core2 = Arc::clone(&core);
-        let _ = tokio::task::spawn_blocking(move || apply(&core2, boundary)).await;
+        let core = Arc::clone(&core);
+        let _ = tokio::task::spawn_blocking(move || apply(&core, boundary)).await;
     }
 }
 
@@ -99,9 +99,9 @@ fn apply(core: &Core, boundary: Boundary) {
             // An unfinished previous turn ends where this one starts.
             let open = lock(&turns.by_pane)
                 .get(&pane)
-                .and_then(|t| t.last())
-                .filter(|t| t.end_tree.is_none())
-                .map(|t| PathBuf::from(&t.root));
+                .and_then(|pane_turns| pane_turns.last())
+                .filter(|turn| turn.end_tree.is_none())
+                .map(|turn| PathBuf::from(&turn.root));
             if let Some(root) = open {
                 finish(turns, pane, &root, now);
             }
@@ -110,16 +110,16 @@ fn apply(core: &Core, boundary: Boundary) {
                 Ok((root, tree))
             });
             let (root, tree) = match snapshot {
-                Ok(v) => v,
-                Err(e) => {
-                    tracing::debug!(%pane, "no turn snapshot in {}: {e}", cwd.display());
+                Ok(snapshot) => snapshot,
+                Err(error) => {
+                    tracing::debug!(%pane, "no turn snapshot in {}: {error}", cwd.display());
                     return;
                 }
             };
             let mut by_pane = lock(&turns.by_pane);
-            let list = by_pane.entry(pane).or_default();
-            let turn = list.last().map_or(1, |t| t.turn + 1);
-            list.push(TurnInfo {
+            let pane_turns = by_pane.entry(pane).or_default();
+            let turn = pane_turns.last().map_or(1, |last| last.turn + 1);
+            pane_turns.push(TurnInfo {
                 turn,
                 root: root.to_string_lossy().into_owned(),
                 started_at: now,
@@ -127,17 +127,17 @@ fn apply(core: &Core, boundary: Boundary) {
                 start_tree: tree,
                 end_tree: None,
             });
-            if list.len() > MAX_TURNS {
-                list.remove(0);
+            if pane_turns.len() > MAX_TURNS {
+                pane_turns.remove(0);
             }
             tracing::debug!(%pane, turn, "turn snapshot taken");
         }
         Boundary::End { pane } => {
             let open = lock(&turns.by_pane)
                 .get(&pane)
-                .and_then(|t| t.last())
-                .filter(|t| t.end_tree.is_none())
-                .map(|t| PathBuf::from(&t.root));
+                .and_then(|pane_turns| pane_turns.last())
+                .filter(|turn| turn.end_tree.is_none())
+                .map(|turn| PathBuf::from(&turn.root));
             if let Some(root) = open {
                 finish(turns, pane, &root, now);
             }
@@ -147,15 +147,15 @@ fn apply(core: &Core, boundary: Boundary) {
 
 fn finish(turns: &Turns, pane: PaneId, root: &std::path::Path, now: UnixMillis) {
     let tree = match git::worktree_tree(root) {
-        Ok(t) => t,
-        Err(e) => {
-            tracing::debug!(%pane, "turn end snapshot: {e}");
+        Ok(tree) => tree,
+        Err(error) => {
+            tracing::debug!(%pane, "turn end snapshot: {error}");
             return;
         }
     };
     if let Some(last) = lock(&turns.by_pane)
         .get_mut(&pane)
-        .and_then(|t| t.last_mut())
+        .and_then(|pane_turns| pane_turns.last_mut())
         && last.end_tree.is_none()
     {
         last.end_tree = Some(tree);

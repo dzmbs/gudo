@@ -34,7 +34,7 @@ memory in them, and what stops that.
 
 - `deny.toml` (`cargo deny check`): RustSec advisories (vulnerable and yanked crates fail;
   unmaintained ones are reported), licences limited to permissive ones (MIT, Apache-2.0, BSD,
-  ISC, Zlib, Unicode, CC0, … — GPL/LGPL/AGPL and unknown licences fail; MPL-2.0 is allowed
+  ISC, Zlib, Unicode, CC0, …: GPL/LGPL/AGPL and unknown licences fail; MPL-2.0 is allowed
   only for UniFFI, unmodified), crates.io as the only source (no git dependencies, no other
   registries), no wildcard versions, and no OpenSSL / aws-lc / native-tls (ring and rustls are
   the only crypto). `cargo audit` reads the same ignores from `.cargo/audit.toml`.
@@ -161,8 +161,8 @@ LIBGHOSTTY_VT_OPTIMIZE=safe CORRUPT_SEEDS=100000 CARGO_TARGET_DIR=target/safe \
      against.
   4. A kitty graphics load could hold ~400 MB at each step whatever the image storage limit
      (~380 KiB of `o=z` data, or endless chunked loads, from any program's output).
-  Fixes 2–3 degrade the invalid state on decode, as Ghostty's snapshot code does for other
-  ghostty-org; drop each patch when the pinned release contains it (`ghostty-source.sh`
+  Fixes 2-3 degrade the invalid state on decode, as Ghostty's snapshot code does for other
+  fields. These are to be reported upstream to Ghostty as a private advisory; drop each patch when the pinned release contains it (`ghostty-source.sh`
   fails loudly once a patch no longer applies).
 - The Excalidraw lockfile pins fixed nanoid, lodash-es and katex through npm `overrides`
   (`npm audit` clean, checked in CI). The rebuilt `canvas.js` is byte-identical: the bundle
@@ -203,7 +203,7 @@ the fix was restored.
 | SSH install keeps a newer helper | `bootstrap::an_older_helper_never_replaces_a_newer_install` (real OpenSSH in a VM) | fails without the check |
 | SSH upload refuses bytes changed in transit | `bootstrap::a_tampered_upload_is_refused_and_installs_nothing` (a hostile remote `gzip` corrupts the stream; nothing installed, no temp file left) | fails without the remote SHA-256 comparison |
 
-Also run for this pass: `cargo deny check` and `cargo audit` (clean), gitleaks over all 361
+Also run: `cargo deny check` and `cargo audit` (clean), gitleaks over all 361
 commits (no leaks), `scripts/check-invisible-unicode.py` (clean), `npm audit` of the push
 relay and both app bundles (clean), each CI step by hand (`act` is not installed), and a
 20,000-seed corrupt-snapshot soak with libghostty-vt's safety checks on and all patches

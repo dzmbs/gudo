@@ -50,7 +50,6 @@ struct File {
     sessions: Vec<SessionPin>,
 }
 
-/// The daemon's accounts.
 pub(crate) struct Accounts {
     root: PathBuf,
     file: PathBuf,
@@ -63,7 +62,10 @@ pub(crate) struct Accounts {
 
 /// Whether `id` is one the daemon mints: 8 lowercase hex digits, so it is safe in a path.
 fn is_minted(id: &str) -> bool {
-    id.len() == 8 && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    id.len() == 8
+        && id
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 fn agent_dir_name(agent: AgentKind) -> &'static str {
@@ -79,10 +81,10 @@ impl Accounts {
         let file = state_dir.join("accounts.json");
         let mut state: File = std::fs::read(&file)
             .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default();
         // Never trust an id from disk with a path.
-        state.accounts.retain(|a| is_minted(&a.id));
+        state.accounts.retain(|account| is_minted(&account.id));
         Self {
             root: state_dir.join("accounts"),
             file,
@@ -94,8 +96,8 @@ impl Accounts {
 
     fn save(&self, state: &File) {
         let bytes = serde_json::to_vec_pretty(state).expect("accounts serialize");
-        if let Err(e) = crate::fsutil::write_atomic(&self.file, &bytes) {
-            tracing::warn!("saving accounts: {e}");
+        if let Err(error) = crate::fsutil::write_atomic(&self.file, &bytes) {
+            tracing::warn!("saving accounts: {error}");
         }
     }
 
@@ -104,13 +106,12 @@ impl Accounts {
         self.root.join(agent_dir_name(agent)).join(id)
     }
 
-    /// Whether `agent` has account `id`.
     pub fn exists(&self, agent: AgentKind, id: &str) -> bool {
         id == SYSTEM_ACCOUNT
             || lock(&self.state)
                 .accounts
                 .iter()
-                .any(|a| a.agent == agent && a.id == id)
+                .any(|account| account.agent == agent && account.id == id)
     }
 
     /// The launch context of an existing account.
@@ -138,16 +139,16 @@ impl Accounts {
         resume: Option<&str>,
         project: Option<&str>,
     ) -> Result<AccountContext, String> {
-        let st = lock(&self.state);
+        let state = lock(&self.state);
         if let Some(session) = resume
-            && let Some(pin) = st
+            && let Some(pin) = state
                 .sessions
                 .iter()
                 .rev()
-                .find(|p| p.agent == agent && p.session_id == session)
+                .find(|pin| pin.agent == agent && pin.session_id == session)
         {
             let pinned = pin.account.clone();
-            drop(st);
+            drop(state);
             return self.context(agent, &pinned).ok_or_else(|| {
                 "this session belongs to an account that was removed, so it cannot resume"
                     .to_owned()
@@ -158,15 +159,15 @@ impl Accounts {
             None => {
                 let report = proto::AccountsReport {
                     accounts: Vec::new(),
-                    defaults: st.defaults.clone(),
+                    defaults: state.defaults.clone(),
                     panes: Vec::new(),
                 };
                 report.default_for(agent, project).to_owned()
             }
         };
-        drop(st);
+        drop(state);
         match self.context(agent, &id) {
-            Some(ctx) => Ok(ctx),
+            Some(context) => Ok(context),
             // A default whose account went: the user's own setup, as before accounts.
             None if asked.is_none() => Ok(AccountContext::system()),
             None => Err(format!("no such {} account", agent_dir_name(agent))),
@@ -175,24 +176,25 @@ impl Accounts {
 
     /// Remembers that `account` created `agent`'s session `session_id`.
     pub fn pin(&self, agent: AgentKind, session_id: &str, account: &str) {
-        let mut st = lock(&self.state);
-        if st
+        let mut state = lock(&self.state);
+        if state
             .sessions
             .iter()
-            .any(|p| p.agent == agent && p.session_id == session_id && p.account == account)
+            .any(|pin| pin.agent == agent && pin.session_id == session_id && pin.account == account)
         {
             return;
         }
-        st.sessions
-            .retain(|p| !(p.agent == agent && p.session_id == session_id));
-        st.sessions.push(SessionPin {
+        state
+            .sessions
+            .retain(|pin| !(pin.agent == agent && pin.session_id == session_id));
+        state.sessions.push(SessionPin {
             agent,
             session_id: session_id.to_owned(),
             account: account.to_owned(),
         });
-        let excess = st.sessions.len().saturating_sub(SESSION_PINS);
-        st.sessions.drain(..excess);
-        self.save(&st);
+        let excess = state.sessions.len().saturating_sub(SESSION_PINS);
+        state.sessions.drain(..excess);
+        self.save(&state);
     }
 }
 
@@ -207,36 +209,32 @@ impl Accounts {
     /// Every account, each agent's system account first.
     pub fn list(&self) -> Vec<AgentAccount> {
         let stored = lock(&self.state).accounts.clone();
-        let mut out = Vec::new();
+        let mut accounts = Vec::new();
         for agent in [AgentKind::Claude, AgentKind::Codex] {
-            out.push(AgentAccount {
+            accounts.push(AgentAccount {
                 id: SYSTEM_ACCOUNT.into(),
                 agent,
                 label: "System".into(),
                 color: 0,
                 status: self.status_of(agent, SYSTEM_ACCOUNT),
             });
-            out.extend(
-                stored
-                    .iter()
-                    .filter(|a| a.agent == agent)
-                    .map(|a| AgentAccount {
-                        id: a.id.clone(),
-                        agent,
-                        label: a.label.clone(),
-                        color: a.color,
-                        status: self.status_of(agent, &a.id),
-                    }),
-            );
+            accounts.extend(stored.iter().filter(|account| account.agent == agent).map(
+                |account| AgentAccount {
+                    id: account.id.clone(),
+                    agent,
+                    label: account.label.clone(),
+                    color: account.color,
+                    status: self.status_of(agent, &account.id),
+                },
+            ));
         }
-        out
+        accounts
     }
 
-    /// One account.
     pub fn get(&self, agent: AgentKind, id: &str) -> Option<AgentAccount> {
         self.list()
             .into_iter()
-            .find(|a| a.agent == agent && a.id == id)
+            .find(|account| account.agent == agent && account.id == id)
     }
 
     /// The report clients see, with the panes' accounts from the core.
@@ -257,14 +255,18 @@ impl Accounts {
         if !proto::is_valid_account_label(&add.label) || add.color > proto::MAX_ACCOUNT_COLOR {
             return Err("an account needs a name of up to 64 bytes and a palette colour".into());
         }
-        let mut st = lock(&self.state);
-        let count = st.accounts.iter().filter(|a| a.agent == add.agent).count();
+        let mut state = lock(&self.state);
+        let count = state
+            .accounts
+            .iter()
+            .filter(|account| account.agent == add.agent)
+            .count();
         if count + 1 >= proto::MAX_ACCOUNTS_PER_AGENT {
             return Err("this host has as many accounts for that agent as it keeps".into());
         }
         let id = loop {
             let id = crate::fsutil::hex(&crate::fsutil::random::<4>());
-            if !st.accounts.iter().any(|a| a.id == id) {
+            if !state.accounts.iter().any(|account| account.id == id) {
                 break id;
             }
         };
@@ -278,18 +280,18 @@ impl Accounts {
                 }
                 AgentKind::Claude => Ok(()),
             });
-        if let Err(e) = made {
+        if let Err(error) = made {
             let _ = std::fs::remove_dir_all(&dir);
-            return Err(format!("could not make the account's directory: {e}"));
+            return Err(format!("could not make the account's directory: {error}"));
         }
-        st.accounts.push(Stored {
+        state.accounts.push(Stored {
             id: id.clone(),
             agent: add.agent,
             label: add.label.trim().to_owned(),
             color: add.color,
         });
-        self.save(&st);
-        drop(st);
+        self.save(&state);
+        drop(state);
         lock(&self.status).insert((add.agent, id.clone()), AccountStatus::SignedOut);
         Ok(self.get(add.agent, &id).expect("just added"))
     }
@@ -303,15 +305,15 @@ impl Accounts {
         if !proto::is_valid_account_label(label) || color > proto::MAX_ACCOUNT_COLOR {
             return Err("an account needs a name of up to 64 bytes and a palette colour".into());
         }
-        let mut st = lock(&self.state);
-        let account = st
+        let mut state = lock(&self.state);
+        let account = state
             .accounts
             .iter_mut()
-            .find(|a| a.agent == agent && a.id == id)
+            .find(|account| account.agent == agent && account.id == id)
             .ok_or("no such account (the system account cannot be renamed)")?;
         account.label = label.trim().to_owned();
         account.color = color;
-        self.save(&st);
+        self.save(&state);
         Ok(())
     }
 
@@ -326,7 +328,10 @@ impl Accounts {
         project: Option<String>,
         account: Option<String>,
     ) -> Result<(), String> {
-        if project.as_deref().is_some_and(|p| !proto::is_valid_id(p)) {
+        if project
+            .as_deref()
+            .is_some_and(|project| !proto::is_valid_id(project))
+        {
             return Err("invalid project".into());
         }
         if let Some(account) = &account
@@ -334,29 +339,33 @@ impl Accounts {
         {
             return Err("no such account".into());
         }
-        let mut st = lock(&self.state);
-        st.defaults
-            .retain(|d| !(d.agent == agent && d.project == project));
+        let mut state = lock(&self.state);
+        state
+            .defaults
+            .retain(|default| !(default.agent == agent && default.project == project));
         if let Some(account) = account {
-            st.defaults.push(AccountDefault {
+            state.defaults.push(AccountDefault {
                 agent,
                 project,
                 account,
             });
         }
-        self.save(&st);
+        self.save(&state);
         Ok(())
     }
 
     /// Forgets account `id` and its defaults; its directory goes too. Its session pins stay,
     /// so those sessions say why they cannot resume.
     pub fn forget(&self, agent: AgentKind, id: &str) {
-        let mut st = lock(&self.state);
-        st.accounts.retain(|a| !(a.agent == agent && a.id == id));
-        st.defaults
-            .retain(|d| !(d.agent == agent && d.account == id));
-        self.save(&st);
-        drop(st);
+        let mut state = lock(&self.state);
+        state
+            .accounts
+            .retain(|account| !(account.agent == agent && account.id == id));
+        state
+            .defaults
+            .retain(|default| !(default.agent == agent && default.account == id));
+        self.save(&state);
+        drop(state);
         lock(&self.status).remove(&(agent, id.to_owned()));
         let _ = std::fs::remove_dir_all(self.dir(agent, id));
     }
@@ -366,7 +375,6 @@ impl Accounts {
         lock(&self.status).insert((agent, id.to_owned()), status.clone()) != Some(status)
     }
 
-    /// Notes that `pane` signs in account `id`.
     pub fn signing_in(&self, pane: proto::PaneId, agent: AgentKind, id: &str) {
         lock(&self.sign_ins).insert(pane, (agent, id.to_owned()));
     }
@@ -384,15 +392,16 @@ impl Accounts {
 
 /// Who `claude auth status --json` says is signed in: `None` when signed out.
 pub(crate) fn claude_identity(succeeded: bool, json: &str) -> Option<AccountIdentity> {
-    let v: serde_json::Value = serde_json::from_str(json.trim()).unwrap_or_default();
+    let status: serde_json::Value = serde_json::from_str(json.trim()).unwrap_or_default();
     let text = |key: &str| {
-        v.get(key)
+        status
+            .get(key)
             .and_then(serde_json::Value::as_str)
-            .filter(|s| !s.is_empty())
+            .filter(|value| !value.is_empty())
             .map(str::to_owned)
     };
     let method = text("authMethod");
-    let logged_in = v
+    let logged_in = status
         .get("loggedIn")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(succeeded);
@@ -417,7 +426,7 @@ pub(crate) fn codex_identity(result: &serde_json::Value) -> Option<AccountIdenti
         account
             .get(key)
             .and_then(serde_json::Value::as_str)
-            .filter(|s| !s.is_empty())
+            .filter(|value| !value.is_empty())
             .map(str::to_owned)
     };
     Some(AccountIdentity {
@@ -437,11 +446,11 @@ pub(crate) struct Tools {
 }
 
 impl Tools {
-    pub fn new(cfg: &crate::config::Config) -> Self {
+    pub fn new(config: &crate::config::Config) -> Self {
         Self {
-            home: cfg.home(),
-            path: cfg.pane_var("PATH"),
-            vars: cfg.pane_env.clone(),
+            home: config.home(),
+            path: config.pane_var("PATH"),
+            vars: config.pane_env.clone(),
         }
     }
 
@@ -450,7 +459,7 @@ impl Tools {
         let path = self.path.iter().flat_map(std::env::split_paths);
         let installers = crate::ws::installs::INSTALLER_DIRS
             .iter()
-            .map(|d| self.home.join(d));
+            .map(|dir| self.home.join(dir));
         crate::ws::installs::find(path.chain(installers), program)
     }
 
@@ -470,7 +479,7 @@ impl Tools {
         let mut vars = self.vars.clone();
         vars.extend(
             set.into_iter()
-                .map(|(k, v)| (k, v.to_string_lossy().into_owned())),
+                .map(|(name, value)| (name, value.to_string_lossy().into_owned())),
         );
         Ok(crate::usage::cli::Env {
             program: self
@@ -497,19 +506,19 @@ impl Accounts {
     ) -> Result<(AgentAccount, bool), String> {
         let account = self.context(agent, id).ok_or("no such account")?;
         let status = match tools.env(agent, &account) {
-            Err(e) => AccountStatus::Failed(e),
+            Err(error) => AccountStatus::Failed(error),
             Ok(env) => match agent {
                 AgentKind::Claude => match env.run(agents::ClaudeCode::STATUS).await {
-                    Ok((ok, out)) => claude_identity(ok, &out)
+                    Ok((succeeded, output)) => claude_identity(succeeded, &output)
                         .map_or(AccountStatus::SignedOut, AccountStatus::SignedIn),
-                    Err(e) => AccountStatus::Failed(e),
+                    Err(error) => AccountStatus::Failed(error),
                 },
                 AgentKind::Codex => {
                     let params = serde_json::json!({"refreshToken": false});
                     match crate::usage::cli::app_server(&env, "account/read", params).await {
                         Ok(result) => codex_identity(&result)
                             .map_or(AccountStatus::SignedOut, AccountStatus::SignedIn),
-                        Err(e) => AccountStatus::Failed(e),
+                        Err(error) => AccountStatus::Failed(error),
                     }
                 }
             },
@@ -538,13 +547,15 @@ impl Accounts {
         match tools.env(agent, &account) {
             // A failed logout of an account that is not signed in has nothing to clear.
             Ok(env) => {
-                if let Err(e) = env.run(args).await
+                if let Err(error) = env.run(args).await
                     && !signed_out
                 {
-                    return Err(format!("could not sign out first: {e}"));
+                    return Err(format!("could not sign out first: {error}"));
                 }
             }
-            Err(e) if !signed_out => return Err(format!("could not sign out first: {e}")),
+            Err(error) if !signed_out => {
+                return Err(format!("could not sign out first: {error}"));
+            }
             Err(_) => {}
         }
         self.forget(agent, id);
@@ -576,22 +587,24 @@ mod tests {
         assert!(is_minted(&work.id));
         assert_eq!(work.status, AccountStatus::SignedOut);
         let dir = accounts.dir(AgentKind::Codex, &work.id);
-        for d in [
+        for path in [
             state.path().join("accounts"),
             dir.parent().unwrap().into(),
             dir.clone(),
         ] {
-            let mode = std::fs::metadata(&d).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode, 0o700, "{}", d.display());
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700, "{}", path.display());
         }
         // MCP OAuth logins stay per account.
         let config = std::fs::read_to_string(dir.join("config.toml")).unwrap();
         assert!(config.contains("mcp_oauth_credentials_store = \"file\""));
-        // Survives a restart.
         let again = Accounts::load(state.path());
         assert_eq!(again.get(AgentKind::Codex, &work.id).unwrap().label, "Work");
-        // System first, per agent.
-        let ids: Vec<_> = again.list().into_iter().map(|a| (a.agent, a.id)).collect();
+        let ids: Vec<_> = again
+            .list()
+            .into_iter()
+            .map(|account| (account.agent, account.id))
+            .collect();
         assert_eq!(ids[0], (AgentKind::Claude, SYSTEM_ACCOUNT.to_owned()));
         assert_eq!(ids[1], (AgentKind::Codex, SYSTEM_ACCOUNT.to_owned()));
         assert_eq!(ids[2], (AgentKind::Codex, work.id));
@@ -617,7 +630,7 @@ mod tests {
         let accounts = Accounts::load(state.path());
         let work = add(&accounts, AgentKind::Claude, "Work");
         let personal = add(&accounts, AgentKind::Claude, "Personal");
-        let id = |r: Result<AccountContext, String>| r.unwrap().id;
+        let id = |resolved: Result<AccountContext, String>| resolved.unwrap().id;
         // Nothing set: the user's own setup, with no directory.
         let system = accounts
             .resolve(AgentKind::Claude, None, None, None)
@@ -653,11 +666,10 @@ mod tests {
                 .resolve(AgentKind::Claude, Some("ffffffff"), None, None)
                 .is_err()
         );
-        // The account a dir comes from is the one asked for.
-        let ctx = accounts
+        let context = accounts
             .resolve(AgentKind::Claude, Some(&work.id), None, None)
             .unwrap();
-        assert_eq!(ctx.dir, Some(accounts.dir(AgentKind::Claude, &work.id)));
+        assert_eq!(context.dir, Some(accounts.dir(AgentKind::Claude, &work.id)));
     }
 
     /// Transcripts live in the account's directory, so a session resumes only under the account
@@ -683,7 +695,6 @@ mod tests {
                 .id,
             SYSTEM_ACCOUNT
         );
-        // Pins survive a restart.
         let again = Accounts::load(state.path());
         assert_eq!(
             again
@@ -729,22 +740,22 @@ mod tests {
     #[test]
     fn reads_who_is_signed_in() {
         let json = r#"{"loggedIn":true,"authMethod":"claude.ai","email":"me@work.example","orgName":"Acme","subscriptionType":"max"}"#;
-        let id = claude_identity(true, json).unwrap();
-        assert_eq!(id.email.as_deref(), Some("me@work.example"));
-        assert_eq!(id.plan.as_deref(), Some("max"));
-        assert_eq!(id.organization.as_deref(), Some("Acme"));
+        let identity = claude_identity(true, json).unwrap();
+        assert_eq!(identity.email.as_deref(), Some("me@work.example"));
+        assert_eq!(identity.plan.as_deref(), Some("max"));
+        assert_eq!(identity.organization.as_deref(), Some("Acme"));
         assert_eq!(claude_identity(false, json), None);
         assert_eq!(
             claude_identity(true, r#"{"loggedIn":false,"authMethod":"none"}"#),
             None
         );
         let codex = serde_json::json!({"account": {"type": "chatgpt", "email": "me@x", "planType": "plus"}, "requiresOpenaiAuth": true});
-        let id = codex_identity(&codex).unwrap();
+        let identity = codex_identity(&codex).unwrap();
         assert_eq!(
             (
-                id.email.as_deref(),
-                id.plan.as_deref(),
-                id.method.as_deref()
+                identity.email.as_deref(),
+                identity.plan.as_deref(),
+                identity.method.as_deref()
             ),
             (Some("me@x"), Some("plus"), Some("chatgpt"))
         );

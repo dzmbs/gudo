@@ -6,13 +6,12 @@ import NotifyKit
 import os
 import GudoCore
 
-/// The agents Live Activity the daemons push (docs/PUSH.md §6). The app only hands out tokens:
-/// the push-to-start token goes into every daemon's push registration (`activityCap`), and
-/// once an activity runs (started by a daemon's push, possibly while the app was not running:
-/// iOS wakes it to deliver the new token) its update token goes to every connected daemon that
-/// offers Live Activities. When the activity ends or is dismissed the daemons are told, so they
-/// stop updating it and start a new one only for the next busy spell. Push builds only (the
-/// tokens need the APNs entitlement); without one the per-run local activities stay.
+/// The agents Live Activity the daemons push. The app only hands out tokens: the push-to-start
+/// token goes into every daemon's push registration (`activityCap`), and once an activity runs
+/// (possibly started while the app was not running; iOS wakes it to deliver the new token) its
+/// update token goes to every connected daemon. When the activity ends or is dismissed the
+/// daemons are told, so they start a new one only for the next busy spell. Push builds only
+/// (the tokens need the APNs entitlement); otherwise the per-run local activities are used.
 @MainActor
 final class AgentsLiveActivity {
     static let shared = AgentsLiveActivity()

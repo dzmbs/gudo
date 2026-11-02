@@ -10,7 +10,7 @@ use client_core::{ClientConfig, MultiplayerEvent, now_millis};
 use crate::support::{TestClient, start, start_with, ticket};
 
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 async fn invite(owner: &TestClient, roles: Roles) -> String {
@@ -27,19 +27,26 @@ async fn invite(owner: &TestClient, roles: Roles) -> String {
 async fn joined(invite: &str, key: Vec<u8>) -> TestClient {
     let mut guest = TestClient::join(invite, key);
     guest.client.attach(None);
-    guest.until("guest attached", |c| c.layout.is_some()).await;
+    guest
+        .until("guest attached", |client| client.layout.is_some())
+        .await;
     guest
 }
 
 async fn refused(invite: &str, key: Vec<u8>) -> TestClient {
     let mut guest = TestClient::join(invite, key);
-    guest.until("refused", |c| !c.refused.is_empty()).await;
+    guest
+        .until("refused", |client| !client.refused.is_empty())
+        .await;
     assert!(guest.layout.is_none());
     guest
 }
 
-fn is_revoked(c: &TestClient) -> bool {
-    c.mp.iter().any(|e| matches!(e, MultiplayerEvent::Revoked))
+fn is_revoked(client: &TestClient) -> bool {
+    client
+        .mp
+        .iter()
+        .any(|event| matches!(event, MultiplayerEvent::Revoked))
 }
 
 /// Removing an owner device from the app is like removing it from an Apple ID's device list:
@@ -121,8 +128,11 @@ async fn a_removed_device_cannot_reconnect_on_its_old_pairing() {
     phone.until("signed out", is_revoked).await;
     // The client keeps redialling with its device grant: every attempt is refused.
     phone
-        .until("reconnect refused", |c| {
-            c.refused.iter().any(|r| r.contains("Revoked"))
+        .until("reconnect refused", |client| {
+            client
+                .refused
+                .iter()
+                .any(|reason| reason.contains("Revoked"))
         })
         .await;
     assert_eq!(phone.connected, 1, "never admitted again");
@@ -188,8 +198,9 @@ async fn a_damaged_grant_store_fails_closed_for_guests_only() {
     let kept: Vec<_> = std::fs::read_dir(dir.path())
         .unwrap()
         .filter_map(Result::ok)
-        .filter(|e| {
-            e.file_name()
+        .filter(|entry| {
+            entry
+                .file_name()
                 .to_string_lossy()
                 .starts_with("grants.json.unreadable-")
         })
@@ -200,9 +211,11 @@ async fn a_damaged_grant_store_fails_closed_for_guests_only() {
     let mut owner = TestClient::connect(&ticket(&daemon), owner_key);
     owner.attach_and_follow().await;
     owner
-        .until("owner alerted", |c| {
-            c.mp.iter()
-                .any(|e| matches!(e, MultiplayerEvent::HostAlert { .. }))
+        .until("owner alerted", |client| {
+            client
+                .mp
+                .iter()
+                .any(|event| matches!(event, MultiplayerEvent::HostAlert { .. }))
         })
         .await;
     drop(refused(&link, guest_key.clone()).await);
@@ -222,9 +235,9 @@ async fn a_damaged_grant_store_fails_closed_for_guests_only() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_paired_device_connects_while_strangers_fill_the_pre_hello_slots() {
     let dir = tempfile::tempdir().unwrap();
-    let daemon = start_with(dir.path(), |c| {
-        c.hello_timeout = Duration::from_secs(30);
-        c.pre_auth = daemon::PreAuthLimits {
+    let daemon = start_with(dir.path(), |config| {
+        config.hello_timeout = Duration::from_secs(30);
+        config.pre_auth = daemon::PreAuthLimits {
             handshakes: 64,
             handshakes_per_addr: 64,
             strangers: 4,
@@ -239,26 +252,26 @@ async fn a_paired_device_connects_while_strangers_fill_the_pre_hello_slots() {
     drop(phone);
 
     let id = iroh::EndpointId::from_bytes(&daemon.daemon_id().0).unwrap();
-    let mut addr = iroh::EndpointAddr::new(id);
+    let mut address = iroh::EndpointAddr::new(id);
     for socket in daemon.bound_sockets() {
-        addr = addr.with_ip_addr(socket);
+        address = address.with_ip_addr(socket);
     }
     let mut strangers = Vec::new();
     for _ in 0..4 {
         let endpoint = stranger().await;
-        let conn = endpoint
-            .connect(addr.clone(), client_core::proto::ALPN)
+        let connection = endpoint
+            .connect(address.clone(), client_core::proto::ALPN)
             .await
             .expect("a stranger gets a slot");
-        strangers.push((endpoint, conn));
+        strangers.push((endpoint, connection));
     }
     // The next stranger is turned away…
     let endpoint = stranger().await;
     let fifth = endpoint
-        .connect(addr.clone(), client_core::proto::ALPN)
+        .connect(address.clone(), client_core::proto::ALPN)
         .await;
-    if let Ok(conn) = fifth {
-        tokio::time::timeout(Duration::from_secs(5), conn.closed())
+    if let Ok(connection) = fifth {
+        tokio::time::timeout(Duration::from_secs(5), connection.closed())
             .await
             .expect("a stranger over the limit is closed");
     }
@@ -266,7 +279,9 @@ async fn a_paired_device_connects_while_strangers_fill_the_pre_hello_slots() {
     let mut phone = TestClient::connect(&pairing, key);
     phone.attach_and_follow().await;
     assert!(
-        strangers.iter().all(|(_, c)| c.close_reason().is_none()),
+        strangers
+            .iter()
+            .all(|(_, connection)| connection.close_reason().is_none()),
         "the strangers are still waiting"
     );
     drop(phone);

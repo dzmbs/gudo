@@ -1,12 +1,11 @@
+//! The Prompter's injection sanitizer: a prompt is text for the agent's input box,
 //! never a way into a shell or the agent's own commands.
 
-/// Longest prompt accepted, in bytes.
 pub(crate) const MAX_PROMPT: usize = 16 << 10;
 
 /// Slash commands a prompter may send: read-only views of the agent's own state.
 const ALLOWED_COMMANDS: &[&str] = &["/help", "/cost", "/context", "/status"];
 
-/// Why a prompt was refused.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum Refused {
     #[error("empty prompt")]
@@ -33,11 +32,11 @@ pub(crate) fn check(text: &str) -> Result<(), Refused> {
     if text.len() > MAX_PROMPT {
         return Err(Refused::TooLong);
     }
-    if let Some(c) = text
+    if let Some(control) = text
         .chars()
         .find(|&c| c.is_control() && c != '\n' && c != '\t')
     {
-        return Err(Refused::Control(c as u32));
+        return Err(Refused::Control(control as u32));
     }
     let head = text.trim_start();
     if head.starts_with('!') {

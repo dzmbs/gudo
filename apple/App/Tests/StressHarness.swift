@@ -119,16 +119,16 @@ final class StressHost {
             size: PaneSize(cols: 80, rows: 24), sizePolicy: .smallest, sizedBy: nil)
     }
 
-    /// The `n`-th status change: each pane cycles working → waiting → done.
-    nonisolated func churn(_ n: Int) -> ClientEvent {
-        let pane = UInt64(n % panes.count) + 1
-        let state: AgentState = switch (n / panes.count) % 3 {
-        case 0: .blocked(requestId: UInt64(n), summary: "rm -rf build/\(n)", options: options)
+    /// The `step`-th status change: each pane cycles working → waiting → done.
+    nonisolated func churn(_ step: Int) -> ClientEvent {
+        let pane = UInt64(step % panes.count) + 1
+        let state: AgentState = switch (step / panes.count) % 3 {
+        case 0: .blocked(requestId: UInt64(step), summary: "rm -rf build/\(step)", options: options)
         case 1: .done
         default: .running
         }
         return .paneMeta(meta: PaneMeta(
-            paneId: pane, title: "task \(pane) step \(n)", cwd: "/home/me/repo\(pane % 40)", exit: nil,
+            paneId: pane, title: "task \(pane) step \(step)", cwd: "/home/me/repo\(pane % 40)", exit: nil,
             agent: AgentStatus(kind: pane % 2 == 0 ? "claude" : "codex", state: state),
             size: PaneSize(cols: 80, rows: 24), sizePolicy: .smallest, sizedBy: nil))
     }
@@ -158,9 +158,9 @@ nonisolated func drive(_ count: Int, perSecond: Double, _ send: @escaping @Senda
     await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
         Thread.detachNewThread {
             let start = ContinuousClock.now
-            for n in 0..<count {
-                send(n)
-                let due = start + .seconds(Double(n + 1) / perSecond)
+            for index in 0..<count {
+                send(index)
+                let due = start + .seconds(Double(index + 1) / perSecond)
                 let now = ContinuousClock.now
                 if due > now { Thread.sleep(forTimeInterval: Double((due - now).components.attoseconds) / 1e18 + Double((due - now).components.seconds)) }
             }

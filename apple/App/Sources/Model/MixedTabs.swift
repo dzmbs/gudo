@@ -6,10 +6,10 @@ import PaneLayout
 import UIKit
 #endif
 
-/// Mixed tabs (panes from several hosts in one tab) and Two Columns, as a window runs them
-/// (docs/APP-ARCHITECTURE.md §19). The composites themselves live in `groups.composites`
-/// (PaneLayout's `CompositeTabs`); this connects them to the window's workspaces: what each
-/// host's layout is, where ops go, which host is on screen, and what each daemon hears.
+/// Mixed tabs (panes from several hosts in one tab) and Two Columns, as a window runs them.
+/// The composites themselves live in `groups.composites` (PaneLayout's `CompositeTabs`); this
+/// connects them to the window's workspaces: what each host's layout is, where ops go, which
+/// host is on screen, and what each daemon hears.
 extension WindowModel {
     var composites: CompositeTabs { groups.composites }
 

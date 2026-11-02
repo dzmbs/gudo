@@ -6,10 +6,9 @@ import GudoCore
 /// The core's agent kind (the app's own `AgentKind` also names other programs).
 typealias AccountAgent = GudoCore.AgentKind
 
-/// Settings ▸ Agents ▸ Accounts: each owned host's Claude Code and Codex sign-ins (docs/DAEMON.md
-/// "Agent accounts"). An account is a directory on the host the agent is launched with; signing
-/// in is the agent's own login in a terminal tab, finished by the user. Nothing here sees a
-/// password or a token.
+/// Each owned host's Claude Code and Codex sign-ins. An account is a directory on the host the
+/// agent is launched with; signing in is the agent's own login in a terminal tab, so nothing here
+/// sees a password or a token.
 struct AccountsSettingsSection: View {
     private let hosts = AppModel.shared.hosts
 
@@ -67,9 +66,9 @@ enum AccountHosts {
     /// Codex's own localhost callback. Claude prints a URL and takes a pasted code either way.
     static func usesDeviceCode(_ id: String, hosts: HostsModel) -> Bool {
         #if os(macOS)
-        guard let host = (hosts.connection(id) as? DaemonConnection)?.daemonInfo?.hostname else { return true }
-        return host != ProcessInfo.processInfo.hostName
-            && host + ".local" != ProcessInfo.processInfo.hostName
+        guard let hostname = (hosts.connection(id) as? DaemonConnection)?.daemonInfo?.hostname else { return true }
+        return hostname != ProcessInfo.processInfo.hostName
+            && hostname + ".local" != ProcessInfo.processInfo.hostName
         #else
         return true
         #endif
@@ -141,7 +140,6 @@ struct HostAccountsView: View {
         let name = DeviceHosts.name(hostId, hosts: hosts)
         Group {
             if let book = AccountHosts.book(hostId, hosts: hosts) {
-                // A grouped form, as the other Settings panes: its footers wrap.
                 Form {
                     ForEach([AccountAgent.claude, .codex], id: \.self) { agent in
                         section(agent, book: book)
@@ -249,10 +247,10 @@ struct HostAccountsView: View {
         }
     }
 
-    private func change(_ body: (any DaemonAccountsAPI) async throws -> AccountsReport) async {
+    private func change(_ request: (any DaemonAccountsAPI) async throws -> AccountsReport) async {
         guard let workspace = AccountHosts.workspace(hostId, hosts: hosts) else { return }
         do {
-            try await workspace.changeAccounts(body)
+            try await workspace.changeAccounts(request)
         } catch {
             failure = ScreenError.describe(error)
         }

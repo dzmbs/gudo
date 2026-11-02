@@ -3,8 +3,8 @@ import Foundation
 import Observation
 import enum GudoCore.InstallState
 
-// Stand-ins for the daemon-backed sources until the wiring lands. They hold believable data so
-// every screen can be designed, screenshotted and reviewed against real-length content.
+// Stand-ins for the daemon-backed sources (`-mock`). They hold believable data so every screen
+// can be designed, screenshotted and reviewed against real-length content.
 
 private func ago(_ seconds: TimeInterval) -> Date { Date(timeIntervalSinceNow: -seconds) }
 
@@ -81,7 +81,7 @@ final class MockAgentFeed: AgentFeed {
         AgentItem(
             id: "a5", agent: .claude, hostName: "studio", sessionTitle: "gudo · docs", state: .done,
             since: ago(25 * 60), prompt: "Update SSH.md for the new host key flow",
-            summary: "Edited 2 files · docs/SSH.md, docs/ROADMAP.md", unseen: true, canReply: true),
+            summary: "Edited 2 files · docs/SSH.md, docs/DAEMON.md", unseen: true, canReply: true),
         AgentItem(
             id: "a7", agent: .other, hostName: "studio", sessionTitle: "gudo", state: .done,
             since: ago(31 * 60), prompt: "cargo test --workspace --release", summary: "Exited 0 · 4m 12s",
@@ -205,7 +205,7 @@ final class MockPaneStatus: PaneStatusSource {
     }
 }
 
-/// No statuses: a plain shell everywhere (until the daemon reports program status).
+/// No statuses: a plain shell everywhere.
 @Observable
 final class NoPaneStatus: PaneStatusSource {
     func state(of pane: String) -> AgentState? { nil }

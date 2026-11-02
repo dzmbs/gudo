@@ -65,7 +65,10 @@ pub(crate) fn summarize(core: &Core) -> Summary {
     let mut entries = core.pane_entries();
     entries.sort_by_key(|(id, _)| id.0);
     for (id, entry) in entries {
-        let Some(status) = lock(&entry.agent).as_mut().map(|a| a.wire_status()) else {
+        let Some(status) = lock(&entry.agent)
+            .as_mut()
+            .map(|runtime| runtime.wire_status())
+        else {
             continue;
         };
         let title = lock(&entry.meta).title.clone();
@@ -135,13 +138,8 @@ fn shorten(line: &str) -> String {
 /// One push decided for one device.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Send {
-    /// Push-to-start.
-    Start {
-        urgent: bool,
-    },
-    Update {
-        urgent: bool,
-    },
+    Start { urgent: bool },
+    Update { urgent: bool },
     End,
 }
 
@@ -204,7 +202,7 @@ pub(crate) fn decide(
     if state.sent.as_ref() == Some(summary) {
         return (None, None);
     }
-    let urgent = summary.blocked > state.sent.as_ref().map_or(0, |s| s.blocked);
+    let urgent = summary.blocked > state.sent.as_ref().map_or(0, |shown| shown.blocked);
     match state.sent_at {
         Some(at) if !urgent && now.duration_since(at) < interval => (None, Some(at + interval)),
         _ => (Some(Send::Update { urgent }), None),
@@ -215,9 +213,9 @@ pub(crate) fn decide(
 /// summary to a new one at once.
 pub(super) fn token_changed(core: &Core, device: &str, cap: Option<String>) {
     let ended = cap.is_none();
-    core.push.update(device, |reg| {
-        let changed = reg.activity_update_cap != cap;
-        reg.activity_update_cap = cap;
+    core.push.update(device, |registration| {
+        let changed = registration.activity_update_cap != cap;
+        registration.activity_update_cap = cap;
         changed
     });
     {
@@ -255,16 +253,16 @@ pub(crate) async fn run(core: Arc<Core>) {
         };
         tokio::select! {
             event = events.recv() => match event {
-                Ok(e) if !relevant(&e) => continue,
+                Ok(event) if !relevant(&event) => continue,
                 Ok(_) | Err(RecvError::Lagged(_)) => {
                     let settle = Instant::now() + core.cfg.push.activity_debounce;
-                    next = Some(next.map_or(settle, |n| n.min(settle)));
+                    next = Some(next.map_or(settle, |pending| pending.min(settle)));
                 }
                 Err(RecvError::Closed) => return,
             },
             () = core.push.activity_wake.notified() => {
                 let settle = Instant::now() + core.cfg.push.activity_debounce;
-                next = Some(next.map_or(settle, |n| n.min(settle)));
+                next = Some(next.map_or(settle, |pending| pending.min(settle)));
             }
             () = wait => next = evaluate(&core).await,
         }
@@ -279,15 +277,15 @@ async fn evaluate(core: &Arc<Core>) -> Option<Instant> {
     let summary = summarize(core);
     let now = Instant::now();
     let mut next: Option<Instant> = None;
-    for reg in super::targets(core) {
-        let can_start = reg.activity_cap.is_some();
-        let running = reg.activity_update_cap.is_some();
+    for registration in super::targets(core) {
+        let can_start = registration.activity_cap.is_some();
+        let running = registration.activity_update_cap.is_some();
         if !can_start && !running {
             continue;
         }
         let (send, recheck) = {
             let mut devices = lock(&core.push.activities);
-            let state = devices.entry(reg.device.clone()).or_default();
+            let state = devices.entry(registration.device.clone()).or_default();
             decide(
                 state,
                 &summary,
@@ -299,23 +297,24 @@ async fn evaluate(core: &Arc<Core>) -> Option<Instant> {
             )
         };
         if let Some(at) = recheck {
-            next = Some(next.map_or(at, |n| n.min(at)));
+            next = Some(next.map_or(at, |pending| pending.min(at)));
         }
         let Some(send) = send else { continue };
-        let result = deliver(core, &reg, &summary, send).await;
+        let result = deliver(core, &registration, &summary, send).await;
         let mut devices = lock(&core.push.activities);
-        let state = devices.entry(reg.device.clone()).or_default();
+        let state = devices.entry(registration.device.clone()).or_default();
         match result {
             Ok(()) => {
-                lock(&core.push.errors).remove(&reg.device);
+                lock(&core.push.errors).remove(&registration.device);
                 match send {
                     Send::Start { .. } => state.started = true,
                     Send::Update { .. } => {}
                     Send::End => {
                         *state = DeviceState::default();
                         drop(devices);
-                        core.push
-                            .update(&reg.device, |r| r.activity_update_cap.take().is_some());
+                        core.push.update(&registration.device, |stored| {
+                            stored.activity_update_cap.take().is_some()
+                        });
                         continue;
                     }
                 }
@@ -323,23 +322,23 @@ async fn evaluate(core: &Arc<Core>) -> Option<Instant> {
                 state.sent_at = Some(now);
             }
             Err(SendError::Gone) => {
-                tracing::info!(device = %&reg.device[..8], ?send, "live activity token gone");
+                tracing::info!(device = %&registration.device[..8], ?send, "live activity token gone");
                 *state = DeviceState::default();
                 drop(devices);
-                core.push.update(&reg.device, |r| match send {
-                    Send::Start { .. } => r.activity_cap.take().is_some(),
-                    _ => r.activity_update_cap.take().is_some(),
+                core.push.update(&registration.device, |stored| match send {
+                    Send::Start { .. } => stored.activity_cap.take().is_some(),
+                    _ => stored.activity_update_cap.take().is_some(),
                 });
             }
             Err(SendError::Failed(why)) => {
-                tracing::warn!(device = %&reg.device[..8], "live activity push failed: {why}");
+                tracing::warn!(device = %&registration.device[..8], "live activity push failed: {why}");
                 // Not marked sent: the next change (or this recheck) tries again.
                 if matches!(send, Send::Start { .. }) {
                     state.started = true;
                 }
-                lock(&core.push.errors).insert(reg.device.clone(), why);
+                lock(&core.push.errors).insert(registration.device.clone(), why);
                 let retry = now + core.cfg.push.activity_interval;
-                next = Some(next.map_or(retry, |n| n.min(retry)));
+                next = Some(next.map_or(retry, |pending| pending.min(retry)));
             }
         }
     }
@@ -349,11 +348,11 @@ async fn evaluate(core: &Arc<Core>) -> Option<Instant> {
 /// Seals the summary for the device and posts it as a Live Activity push.
 async fn deliver(
     core: &Core,
-    reg: &Registration,
+    registration: &Registration,
     summary: &Summary,
     send: Send,
 ) -> Result<(), SendError> {
-    let seal_key = unhex::<32>(&reg.seal_key)
+    let seal_key = unhex::<32>(&registration.seal_key)
         .ok_or_else(|| SendError::Failed("bad sealing key on file".into()))?;
     let seed = core.identity.secret.to_bytes();
     let at = now_millis();
@@ -367,30 +366,34 @@ async fn deliver(
         headline: summary.headline.clone(),
         at,
     };
-    let json = serde_json::to_vec(&state).map_err(|e| SendError::Failed(e.to_string()))?;
+    let json = serde_json::to_vec(&state).map_err(|error| SendError::Failed(error.to_string()))?;
     let sealed = push::seal(&seal_key, &seed, &json)
-        .map_err(|e| SendError::Failed(format!("sealing: {e}")))?;
+        .map_err(|error| SendError::Failed(format!("sealing: {error}")))?;
     let (cap, event, urgent) = match send {
-        Send::Start { urgent } => (reg.activity_cap.clone(), push::ActivityEvent::Start, urgent),
+        Send::Start { urgent } => (
+            registration.activity_cap.clone(),
+            push::ActivityEvent::Start,
+            urgent,
+        ),
         Send::Update { urgent } => (
-            reg.activity_update_cap.clone(),
+            registration.activity_update_cap.clone(),
             push::ActivityEvent::Update,
             urgent,
         ),
         Send::End => (
-            reg.activity_update_cap.clone(),
+            registration.activity_update_cap.clone(),
             push::ActivityEvent::End,
             false,
         ),
     };
     let cap = cap.ok_or_else(|| SendError::Failed("no activity capability".into()))?;
-    let secs = at / 1000;
+    let seconds = at / 1000;
     let (stale, dismiss) = match event {
-        push::ActivityEvent::End => (None, Some(secs + DISMISS_AFTER.as_secs())),
-        _ => (Some(secs + STALE_AFTER.as_secs()), None),
+        push::ActivityEvent::End => (None, Some(seconds + DISMISS_AFTER.as_secs())),
+        _ => (Some(seconds + STALE_AFTER.as_secs()), None),
     };
-    tracing::debug!(device = %&reg.device[..8], ?send, ?summary, "live activity");
-    post(core, reg, ATTEMPTS, || push::RelayRequest {
+    tracing::debug!(device = %&registration.device[..8], ?send, ?summary, "live activity");
+    post(core, registration, ATTEMPTS, || push::RelayRequest {
         v: push::RelayRequest::VERSION,
         daemon: String::new(),
         cap: cap.clone(),
@@ -425,109 +428,198 @@ mod tests {
 
     fn step(
         state: &mut DeviceState,
-        s: &Summary,
+        shown: &Summary,
         can_start: bool,
         running: bool,
         now: Instant,
     ) -> (Option<Send>, Option<Instant>) {
-        let out = decide(state, s, can_start, running, now, 10 * SECOND, 60 * SECOND);
-        if let (Some(send), _) = out {
+        let decision = decide(
+            state,
+            shown,
+            can_start,
+            running,
+            now,
+            10 * SECOND,
+            60 * SECOND,
+        );
+        if let (Some(send), _) = decision {
             if matches!(send, Send::Start { .. }) {
                 state.started = true;
             }
-            state.sent = Some(s.clone());
+            state.sent = Some(shown.clone());
             state.sent_at = Some(now);
         }
-        out
+        decision
     }
 
     #[test]
     fn starts_once_per_active_spell() {
-        let t = Instant::now();
+        let start = Instant::now();
         let mut state = DeviceState::default();
         // Nothing runs: nothing to start.
-        assert_eq!(step(&mut state, &summary(0, 0, 0), true, false, t).0, None);
+        assert_eq!(
+            step(&mut state, &summary(0, 0, 0), true, false, start).0,
+            None
+        );
         // An agent works: push-to-start, routine priority.
         assert_eq!(
-            step(&mut state, &summary(1, 0, 0), true, false, t).0,
+            step(&mut state, &summary(1, 0, 0), true, false, start).0,
             Some(Send::Start { urgent: false })
         );
         // The device never registered the started activity (dismissed, or failed): no
         // second start while the same spell lasts.
         assert_eq!(
-            step(&mut state, &summary(1, 1, 0), true, false, t + SECOND).0,
+            step(&mut state, &summary(1, 1, 0), true, false, start + SECOND).0,
             None
         );
         // Idle, then busy again: a new spell starts again, urgent when someone waits.
         assert_eq!(
-            step(&mut state, &summary(0, 0, 1), true, false, t + 2 * SECOND).0,
+            step(
+                &mut state,
+                &summary(0, 0, 1),
+                true,
+                false,
+                start + 2 * SECOND
+            )
+            .0,
             None
         );
         assert_eq!(
-            step(&mut state, &summary(0, 1, 0), true, false, t + 3 * SECOND).0,
+            step(
+                &mut state,
+                &summary(0, 1, 0),
+                true,
+                false,
+                start + 3 * SECOND
+            )
+            .0,
             Some(Send::Start { urgent: true })
         );
         // Without a push-to-start capability nothing starts.
         let mut other = DeviceState::default();
-        assert_eq!(step(&mut other, &summary(1, 0, 0), false, false, t).0, None);
+        assert_eq!(
+            step(&mut other, &summary(1, 0, 0), false, false, start).0,
+            None
+        );
     }
 
     #[test]
     fn updates_are_rate_limited_but_needing_you_goes_at_once() {
-        let t = Instant::now();
+        let start = Instant::now();
         let mut state = DeviceState::default();
         assert_eq!(
-            step(&mut state, &summary(1, 0, 0), false, true, t).0,
+            step(&mut state, &summary(1, 0, 0), false, true, start).0,
             Some(Send::Update { urgent: false })
         );
         // The same summary again: nothing.
         assert_eq!(
-            step(&mut state, &summary(1, 0, 0), false, true, t + SECOND),
+            step(&mut state, &summary(1, 0, 0), false, true, start + SECOND),
             (None, None)
         );
         // A routine change inside the interval waits for its end.
         assert_eq!(
-            step(&mut state, &summary(2, 0, 0), false, true, t + 2 * SECOND),
-            (None, Some(t + 10 * SECOND))
+            step(
+                &mut state,
+                &summary(2, 0, 0),
+                false,
+                true,
+                start + 2 * SECOND
+            ),
+            (None, Some(start + 10 * SECOND))
         );
         // An agent needing the user goes at once, with high priority.
         assert_eq!(
-            step(&mut state, &summary(1, 1, 0), false, true, t + 3 * SECOND).0,
+            step(
+                &mut state,
+                &summary(1, 1, 0),
+                false,
+                true,
+                start + 3 * SECOND
+            )
+            .0,
             Some(Send::Update { urgent: true })
         );
         // Answered (fewer blocked): routine again, after the interval.
         assert_eq!(
-            step(&mut state, &summary(2, 0, 0), false, true, t + 4 * SECOND),
-            (None, Some(t + 13 * SECOND))
+            step(
+                &mut state,
+                &summary(2, 0, 0),
+                false,
+                true,
+                start + 4 * SECOND
+            ),
+            (None, Some(start + 13 * SECOND))
         );
         assert_eq!(
-            step(&mut state, &summary(2, 0, 0), false, true, t + 13 * SECOND).0,
+            step(
+                &mut state,
+                &summary(2, 0, 0),
+                false,
+                true,
+                start + 13 * SECOND
+            )
+            .0,
             Some(Send::Update { urgent: false })
         );
     }
 
     #[test]
     fn ends_after_staying_idle() {
-        let t = Instant::now();
+        let start = Instant::now();
         let mut state = DeviceState::default();
-        step(&mut state, &summary(1, 0, 0), false, true, t);
+        step(&mut state, &summary(1, 0, 0), false, true, start);
         // Finished: shown at once (outside the interval), the end is scheduled.
         assert_eq!(
-            step(&mut state, &summary(0, 0, 1), false, true, t + 20 * SECOND),
-            (Some(Send::Update { urgent: false }), Some(t + 80 * SECOND))
+            step(
+                &mut state,
+                &summary(0, 0, 1),
+                false,
+                true,
+                start + 20 * SECOND
+            ),
+            (
+                Some(Send::Update { urgent: false }),
+                Some(start + 80 * SECOND)
+            )
         );
         assert_eq!(
-            step(&mut state, &summary(0, 0, 1), false, true, t + 30 * SECOND),
-            (None, Some(t + 80 * SECOND))
+            step(
+                &mut state,
+                &summary(0, 0, 1),
+                false,
+                true,
+                start + 30 * SECOND
+            ),
+            (None, Some(start + 80 * SECOND))
         );
         // Busy again before the end: the clock resets.
-        step(&mut state, &summary(1, 0, 0), false, true, t + 40 * SECOND);
-        assert_eq!(
-            step(&mut state, &summary(0, 0, 0), false, true, t + 50 * SECOND).1,
-            Some(t + 110 * SECOND)
+        step(
+            &mut state,
+            &summary(1, 0, 0),
+            false,
+            true,
+            start + 40 * SECOND,
         );
         assert_eq!(
-            step(&mut state, &summary(0, 0, 0), false, true, t + 110 * SECOND).0,
+            step(
+                &mut state,
+                &summary(0, 0, 0),
+                false,
+                true,
+                start + 50 * SECOND
+            )
+            .1,
+            Some(start + 110 * SECOND)
+        );
+        assert_eq!(
+            step(
+                &mut state,
+                &summary(0, 0, 0),
+                false,
+                true,
+                start + 110 * SECOND
+            )
+            .0,
             Some(Send::End)
         );
     }

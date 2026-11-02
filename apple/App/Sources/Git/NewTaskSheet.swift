@@ -3,11 +3,8 @@ import HostKit
 import SwiftUI
 import GudoCore
 
-/// New Agent (⇧⌘N, every + and the palette; one flow for agents and worktree tasks): pick the
-/// host and repository, a friendly generated name, the branch (derived from the name), and
-/// what runs: Claude Code, Codex or a shell. With New Worktree on, the host makes a worktree on
-/// the new branch, runs the repository's setup command, and opens a tab there; off, the agent
-/// starts in a tab of its own in the focused pane's directory.
+/// With New Worktree on, the host makes a worktree on a new branch, runs the repository's setup
+/// command and opens a tab there; off, the agent starts in a new tab in the focused pane's directory.
 struct NewTaskSheet: View {
     let feed: any AgentFeed
 
@@ -48,9 +45,9 @@ struct NewTaskSheet: View {
     @State private var worktree = true
     @State private var isStarting = false
     @State private var failure: String?
-    /// The account picked per host and agent; unpicked follows the project's or host's default.
+    /// Keyed by host and runner; unpicked follows the project's or host's default.
     @State private var accountPicks: [String: String] = [:]
-    /// The chosen host's agents, by what launching would find; nil until it answers.
+    /// nil until the host answers.
     @State private var installs: [AgentKind: InstallState]?
     @FocusState private var isPromptFocused: Bool
 
@@ -66,8 +63,6 @@ struct NewTaskSheet: View {
     }
     private var accountBook: AccountBook? { hostID.flatMap { model.accountBook(onGroup: $0) } }
     private var accountKey: String { "\(hostID ?? "")/\(runner.rawValue)" }
-    /// The account the agent will run under: the pick, else the current project's default,
-    /// else the host's.
     private var account: String? {
         guard let agent = accountAgent, let book = accountBook else { return nil }
         return book.resolve(agent, project: model.currentProjectId, override: accountPicks[accountKey])
@@ -86,7 +81,6 @@ struct NewTaskSheet: View {
         }
     }
 
-    /// The host's repositories (from its repository snapshot), main worktrees only.
     private var repos: [WorktreeState] {
         guard let hostID, let daemon = model.app.hosts.connection(hostID) as? DaemonConnection,
               let snapshot = daemon.existingWorkspace?.repos else { return [] }
@@ -95,22 +89,20 @@ struct NewTaskSheet: View {
 
     private var repo: WorktreeState? { repos.first { $0.path == repoPath } }
 
-    /// The setup command of the chosen repository.
     private var setup: String? {
         guard let hostID, let daemon = model.app.hosts.connection(hostID) as? DaemonConnection,
               let snapshot = daemon.existingWorkspace?.repos, let repoPath else { return nil }
         return snapshot.worktrees.first { $0.repo == repoPath && $0.main }?.setup
     }
 
-    /// The `PORT`s the chosen repository's worktrees hold now.
     private var portsInUse: [UInt16] {
         guard let hostID, let daemon = model.app.hosts.connection(hostID) as? DaemonConnection,
               let hub = daemon.existingWorkspace, let snapshot = hub.repos, let repoPath else { return [] }
         return snapshot.worktrees.filter { $0.repo == repoPath }.compactMap { hub.port(ofWorktree: $0.path) }.sorted()
     }
 
-    /// The host gives the worktree its `PORT` when it makes it (the lowest free one), so the
-    /// sheet says that, and which ones are taken; the toast after Start says the one it got.
+    /// The host picks the lowest free `PORT` when it makes the worktree; the toast after Start
+    /// says which one it got.
     private var portNote: some View {
         let taken = portsInUse.map(String.init).joined(separator: ", ")
         return (Text("Gets its own ") + Text("PORT").font(DS.Font.literalSmall)
@@ -118,7 +110,7 @@ struct NewTaskSheet: View {
             .accessibilityIdentifier("task-port-note")
     }
 
-    /// The branch the host will use when the field is empty (as the daemon derives it).
+    /// Must match how the daemon derives the branch when the field is empty.
     private var derivedBranch: String {
         let slug = name.lowercased().map { $0.isLetter || $0.isNumber || "/._".contains($0) ? String($0) : "-" }.joined()
         let collapsed = slug.split(separator: "-", omittingEmptySubsequences: true).joined(separator: "-")
@@ -142,8 +134,6 @@ struct NewTaskSheet: View {
                         .listRowInsets(EdgeInsets())
                 }
                 #endif
-                // Always present and one size in every state: the check's answer changes the
-                // row, never the sheet.
                 Section {
                     LaunchStatusRow(
                         status: status, hostName: host?.name ?? "",
@@ -188,7 +178,6 @@ struct NewTaskSheet: View {
                     .accessibilityIdentifier("task-worktree")
                     if let agent = accountAgent, let book = accountBook, book.hasChoice(agent) {
                         if worktree {
-                            // A new task's tab follows the host's default.
                             LabeledContent("Account") {
                                 Text(book.account(agent, book.defaultAccount(agent, project: nil))?.label ?? "")
                             }
@@ -284,33 +273,30 @@ struct NewTaskSheet: View {
                 repoPath = repoPath ?? (repos.first { preferred.contains($0.path) } ?? repos.first)?.path
                 worktree = repo != nil
                 if let seeded = seed.prompt { prompt = seeded }
-                // Not on a phone: its keyboard would scroll the runner and host out of view as
-                // the sheet opens.
+                // A phone's keyboard would scroll the runner and host out of view as the sheet opens.
                 isPromptFocused = model.widthBucket != .compact
             }
             .onChange(of: hosts.map(\.id)) { _, ids in
                 if hostID == nil || !ids.contains(hostID!) { hostID = ids.first }
             }
-            .onChange(of: hostID) { old, _ in
-                // The first pick (on appearing) keeps the seeded repository.
-                guard old != nil else { return }
+            .onChange(of: hostID) { previousHostID, _ in
+                // The first pick, on appearing, keeps the seeded repository.
+                guard previousHostID != nil else { return }
                 installs = nil
                 repoPath = repos.first?.path
                 worktree = repo != nil
             }
-            // On every opening, so an install made since shows.
             .task(id: hostID) { await checkInstalls() }
             // The host's repositories can arrive after the sheet opened: one is picked, but
             // New Worktree stays as it opened rather than adding a section under the pointer.
-            .onChange(of: repos.map(\.path)) { old, paths in
-                guard old.isEmpty, repoPath == nil, !paths.isEmpty else { return }
+            .onChange(of: repos.map(\.path)) { previousPaths, paths in
+                guard previousPaths.isEmpty, repoPath == nil, !paths.isEmpty else { return }
                 repoPath = model.git.worktree?.repo ?? paths.first
             }
         }
         #if os(iOS)
         .phoneDetents([.large])
         #else
-        // As tall as the form (its status row is one size in every state); a longer form scrolls.
         .frame(width: 520)
         #endif
     }
@@ -319,7 +305,6 @@ struct NewTaskSheet: View {
         host != nil && !isStarting && status.canStart && (!worktree || !name.trimmingCharacters(in: .whitespaces).isEmpty)
     }
 
-    /// Asks the host which agents it has; a helper too old to say leaves every agent startable.
     private func checkInstalls() async {
         guard let hostID else { return }
         let answer = await feed.installs(on: hostID) ?? [:]
@@ -327,7 +312,6 @@ struct NewTaskSheet: View {
         withAnimation(DS.Motion.snappy) { installs = answer }
     }
 
-    /// Runs the vendor's installer in a new tab on the host, the user's own act.
     private func install(_ command: String) {
         guard let host, let daemon, let session = daemon.layout.sessionId else { return }
         let title = runner.title
@@ -357,7 +341,6 @@ struct NewTaskSheet: View {
                 let note = try await feed.launch(request)
                 isStarting = false
                 if worktree {
-                    // "fix-login started on hetzner · PORT 4102 · running setup first: npm i"
                     let text = ["\(name) started on \(host.name)", note].compactMap(\.self).joined(separator: " · ")
                     model.toasts.show(Toast(text, systemImage: "arrow.triangle.branch", style: .success))
                 } else if let note {
@@ -374,9 +357,8 @@ struct NewTaskSheet: View {
     }
 }
 
-/// What runs, as one segmented row drawn here rather than a `UISegmentedControl`: that one
-/// lays its labels out against the sheet's presentation (and the keyboard rising under it), so
-/// they overlapped for a moment before settling.
+/// Drawn here rather than as a `UISegmentedControl`, whose labels overlap for a moment while the
+/// sheet presents and the keyboard rises.
 private struct RunnerPicker: View {
     @Binding var selection: NewTaskSheet.Runner
     @Namespace private var pill
@@ -389,7 +371,6 @@ private struct RunnerPicker: View {
                     withAnimation(DS.Motion.snappy) { selection = runner }
                 } label: {
                     HStack(spacing: DS.Space.row) {
-                        // The agent's own mark (Claude's, Codex's), as in the Agents screen.
                         if let agent = runner.agent {
                             ProgramMark(agent.identity, size: 14)
                         } else {
@@ -405,8 +386,6 @@ private struct RunnerPicker: View {
                         .frame(maxWidth: .infinity, minHeight: 32)
                         .background {
                             if selected {
-                                // The system segmented control's thumb: the raised surface, an
-                                // edge and a contact shadow.
                                 Capsule()
                                     .fill(DS.Palette.overlay)
                                     .overlay(Capsule().strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
@@ -428,7 +407,6 @@ private struct RunnerPicker: View {
     }
 }
 
-/// What Start would do on the chosen host, as the host's own check says.
 private enum LaunchStatus: Equatable {
     case noHost
     case shell
@@ -446,9 +424,7 @@ private enum LaunchStatus: Equatable {
     }
 }
 
-/// One row, the same height in every state (a title line and two reserved detail lines), so
-/// the check's answer never moves the form: checking, ready, or why the agent can't start
-/// with the vendor's fix beside it.
+/// The same height in every state, so the host's answer never moves the form.
 private struct LaunchStatusRow: View {
     let status: LaunchStatus
     let hostName: String

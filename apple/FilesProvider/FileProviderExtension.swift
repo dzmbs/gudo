@@ -28,9 +28,8 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
         session?.close()
     }
 
-    /// Runs `work` on the host's files and answers the system's completion handler.
     private func run<T: Sendable>(
-        _ what: String, _ completion: @escaping @Sendable (T?, Error?) -> Void,
+        _ operation: String, _ completion: @escaping @Sendable (T?, Error?) -> Void,
         _ work: @escaping @Sendable (FilesProviderCore) async throws -> T
     ) -> Progress {
         let progress = Progress(totalUnitCount: 1)
@@ -41,7 +40,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
                 progress.completedUnitCount = 1
                 completion(result, nil)
             } catch {
-                Self.log.error("\(what, privacy: .public): \(String(describing: error), privacy: .public)")
+                Self.log.error("\(operation, privacy: .public): \(String(describing: error), privacy: .public)")
                 completion(nil, error)
             }
         }
@@ -76,14 +75,14 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
         let completion = UncheckedHandler(completionHandler)
         let name = itemTemplate.filename
         let parent = itemTemplate.parentItemIdentifier
-        let type = itemTemplate.contentType ?? .data
-        guard type.conforms(to: .folder) || !type.conforms(to: .symbolicLink) else {
+        let contentType = itemTemplate.contentType ?? .data
+        guard contentType.conforms(to: .folder) || !contentType.conforms(to: .symbolicLink) else {
             completionHandler(nil, [], false, NSError(domain: NSCocoaErrorDomain, code: NSFeatureUnsupportedError))
             return Progress()
         }
         let mayAlreadyExist = options.contains(.mayAlreadyExist)
         return run("create", { (item: RemoteItem?, error) in completion.call(item, [], false, error) }) {
-            try await $0.create(name: name, in: parent, isFolder: type.conforms(to: .folder), contents: url, mayAlreadyExist: mayAlreadyExist)
+            try await $0.create(name: name, in: parent, isFolder: contentType.conforms(to: .folder), contents: url, mayAlreadyExist: mayAlreadyExist)
         }
     }
 
@@ -101,10 +100,10 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
         let identifier = item.itemIdentifier
         let name = item.filename
         let parent = item.parentItemIdentifier
-        let base = version.contentVersion
+        let baseContentVersion = version.contentVersion
         let fields = changes
         return run("modify", { (item: RemoteItem?, error) in completion.call(item, [], false, error) }) {
-            try await $0.modify(identifier, changes: fields, name: name, parent: parent, baseVersion: base, contents: newContents)
+            try await $0.modify(identifier, changes: fields, name: name, parent: parent, baseVersion: baseContentVersion, contents: newContents)
         }
     }
 
@@ -132,9 +131,9 @@ private struct FetchResult: @unchecked Sendable {
 }
 
 /// The system's completion handlers are not `Sendable`; each is called exactly once.
-private struct UncheckedHandler<F>: @unchecked Sendable {
-    let call: F
-    init(_ call: F) { self.call = call }
+private struct UncheckedHandler<Handler>: @unchecked Sendable {
+    let call: Handler
+    init(_ call: Handler) { self.call = call }
 }
 
 /// A folder's items, or the working set (the folders listed lately). Changes are never

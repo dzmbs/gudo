@@ -92,12 +92,12 @@ final class BrowserPageEventsTests: XCTestCase {
             "const r = cross.getBoundingClientRect(); return [r.left, r.top].join(',')", [:], as: String.self)
         let inner = try await pane.js(
             "const r = go.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2].join(',')", [:], frame: crossFrame, as: String.self)
-        let (fx, fy) = try pair(box), (bx, by) = try pair(inner)
+        let (frameX, frameY) = try pair(box), (buttonX, buttonY) = try pair(inner)
         pane.shotScale = 1
-        let located = try await pane.locate(["type": "coordinate", "x": fx + bx, "y": fy + by])
+        let located = try await pane.locate(["type": "coordinate", "x": frameX + buttonX, "y": frameY + buttonY])
         XCTAssertEqual(located.frame, crossFrame)
-        XCTAssertEqual((located.target?["x"] as? Double) ?? 0, bx, accuracy: 1)
-        XCTAssertEqual((located.target?["y"] as? Double) ?? 0, by, accuracy: 1)
+        XCTAssertEqual((located.target?["x"] as? Double) ?? 0, buttonX, accuracy: 1)
+        XCTAssertEqual((located.target?["y"] as? Double) ?? 0, buttonY, accuracy: 1)
 
         // Annotated screenshots label refs inside frames with the frame's prefix.
         await pane.label(true)

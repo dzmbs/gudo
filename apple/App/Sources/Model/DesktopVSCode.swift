@@ -7,16 +7,13 @@ import AppKit
 import Network
 #endif
 
-/// §5): which local port a host's sshd gets, which login name, and whether a sshd answered.
-/// Platform-free so it is unit-tested everywhere.
+/// The platform-free parts of opening desktop VS Code with Remote - SSH over our forward.
 nonisolated enum RemoteSSHPlan {
     static let portsKey = "editor.remoteSSHPorts"
-    /// Local ports for hosts' sshd: `[127.0.0.1]:<port>` lands in `known_hosts` once per host,
-    /// so each host keeps its own port for good.
+    /// `[127.0.0.1]:<port>` lands in `known_hosts` once per host, so each host keeps its own port for good.
     static let portRange: ClosedRange<UInt16> = 22200...22999
 
-    /// The host's stable local port: the one it was given before, else one derived from its id
-    /// that no other host has. Remembered in `defaults`.
+    /// The port given before, else one derived from the id that no other host has.
     static func port(for hostId: String, defaults: UserDefaults = .standard) -> UInt16 {
         var ports = defaults.dictionary(forKey: portsKey) as? [String: Int] ?? [:]
         if let port = ports[hostId], let value = UInt16(exactly: port), portRange.contains(value) { return value }
@@ -36,16 +33,14 @@ nonisolated enum RemoteSSHPlan {
         return UInt16(chosen)
     }
 
-    /// Moves a host to another port (its usual one was taken on this Mac).
     static func reassign(_ hostId: String, to port: UInt16, defaults: UserDefaults = .standard) {
         var ports = defaults.dictionary(forKey: portsKey) as? [String: Int] ?? [:]
         ports[hostId] = Int(port)
         defaults.set(ports, forKey: portsKey)
     }
 
-    /// The login name for the host's sshd: the SSH endpoint's when the host came from SSH, else
-    /// the owner of the home directory the folder is in (`/home/<u>/…`, `/Users/<u>/…`), else
-    /// nil (ssh's own default).
+    /// The SSH endpoint's user, else the owner of the home directory the folder is in, else nil
+    /// for ssh's own default.
     static func user(sshUser: String?, folder: String?) -> String? {
         if let sshUser, !sshUser.isEmpty { return sshUser }
         guard let folder else { return nil }
@@ -56,12 +51,11 @@ nonisolated enum RemoteSSHPlan {
         return String(parts[1])
     }
 
-    /// The first bytes a sshd sends: `SSH-2.0-…` (RFC 4253 §4.2).
+    /// RFC 4253 §4.2.
     static func isSSHBanner(_ data: Data) -> Bool {
         data.starts(with: Array("SSH-".utf8))
     }
 
-    /// `vscode://…` for VS Code, `vscode-insiders://…` for Insiders.
     static func uri(_ uri: String, insiders: Bool) -> String {
         guard insiders, uri.hasPrefix("vscode://") else { return uri }
         return "vscode-insiders://" + uri.dropFirst("vscode://".count)
@@ -78,22 +72,19 @@ nonisolated enum RemoteSSHPlan {
 }
 
 #if os(macOS)
-/// "Open in VS Code" on the Mac: the user's own desktop VS Code with Microsoft's Remote - SSH,
-/// reaching the host's sshd through a local port we forward over the daemon link. No licence
-/// sheet here (desktop VS Code and Remote - SSH have their own) and no account. When VS Code is
-/// not installed, or the host has no sshd, the in-app editor opens instead.
+/// The user's own desktop VS Code with Remote - SSH, reaching the host's sshd through a local port
+/// forwarded over the daemon link. No licence sheet: desktop VS Code and Remote - SSH have their own.
 @MainActor
 enum DesktopVSCode {
     static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app", category: "editor")
     static let bundleIdentifiers = ["com.microsoft.VSCode", "com.microsoft.VSCodeInsiders"]
 
-    /// The installed VS Code and whether it is Insiders; nil when neither is installed, or for
-    /// UI tests (`-desktopVSCode NO`).
+    /// Nil when neither is installed, or with `-desktopVSCode NO`.
     static var app: (url: URL, insiders: Bool)? {
         if UserDefaults.standard.object(forKey: "desktopVSCode") as? Bool == false { return nil }
-        for id in bundleIdentifiers {
-            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) {
-                return (url, id.hasSuffix("Insiders"))
+        for bundleId in bundleIdentifiers {
+            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) {
+                return (url, bundleId.hasSuffix("Insiders"))
             }
         }
         return nil
@@ -101,8 +92,7 @@ enum DesktopVSCode {
 
     static var isInstalled: Bool { app != nil }
 
-    /// Opens the folder (or a file at a line) of `context` in desktop VS Code. Nil when it
-    /// opened; else why not, in words, for the in-app fallback.
+    /// Nil when it opened; else why not, for the in-app fallback.
     static func open(context: HostContext, sshUser: String?, path: String?, line: Int?, column: Int?) async -> String? {
         guard let app else { return "Desktop VS Code is not installed." }
         do {
@@ -116,8 +106,8 @@ enum DesktopVSCode {
             }
             let host = VsCodeSshHost(host: "127.0.0.1", user: RemoteSSHPlan.user(sshUser: sshUser, folder: folder), port: port)
             let target = path ?? folder
-            let raw = vscodeRemoteSshUri(host: host, path: target, line: line.map { UInt32($0) }, column: column.map { UInt32($0) })
-            guard let uri = URL(string: RemoteSSHPlan.uri(raw, insiders: app.insiders)) else { return "Could not build the VS Code link." }
+            let link = vscodeRemoteSshUri(host: host, path: target, line: line.map { UInt32($0) }, column: column.map { UInt32($0) })
+            guard let uri = URL(string: RemoteSSHPlan.uri(link, insiders: app.insiders)) else { return "Could not build the VS Code link." }
             let configuration = NSWorkspace.OpenConfiguration()
             configuration.activates = true
             _ = try await NSWorkspace.shared.open([uri], withApplicationAt: app.url, configuration: configuration)
@@ -129,8 +119,7 @@ enum DesktopVSCode {
         }
     }
 
-    /// A local port forwarded to the host's sshd: the existing forward, else the host's stable
-    /// port (or the next free one, remembered).
+    /// The existing forward to sshd, else the host's stable port or the next free one.
     private static func forward(_ api: any DaemonWorkspaceAPI, host: String) throws -> UInt16 {
         if let existing = api.forwards().first(where: { $0.target == .tcp(port: 22) }) { return existing.localPort }
         let preferred = RemoteSSHPlan.port(for: host)
@@ -149,7 +138,6 @@ enum DesktopVSCode {
         throw lastError ?? HostError.notConnected
     }
 
-    /// Whether something answering like a sshd is behind the forward (its banner within 5 s).
     nonisolated private static func sshdAnswers(port: UInt16) async -> Bool {
         guard let endpointPort = NWEndpoint.Port(rawValue: port) else { return false }
         let connection = NWConnection(host: "127.0.0.1", port: endpointPort, using: .tcp)

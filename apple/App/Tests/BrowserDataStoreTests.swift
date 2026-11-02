@@ -14,18 +14,17 @@ final class BrowserDataStoreTests: XCTestCase {
         XCTAssertNil(own.identifier, "the user's own pages: the app's default store")
         XCTAssertTrue(own.isPersistent)
 
-        let a = routing.dataStore(forHost: "store-host-a")
-        let b = routing.dataStore(forHost: "store-host-b")
-        XCTAssertEqual(a.identifier, DevServerRouting.storeIdentifier("store-host-a"))
-        XCTAssertEqual(b.identifier, DevServerRouting.storeIdentifier("store-host-b"))
-        XCTAssertNotEqual(a.identifier, b.identifier)
-        XCTAssertTrue(a.isPersistent, "a host's sign-ins survive a relaunch")
-        XCTAssertTrue(routing.dataStore(forHost: "store-host-a") === a, "one instance per host")
+        let hostA = routing.dataStore(forHost: "store-host-a")
+        let hostB = routing.dataStore(forHost: "store-host-b")
+        XCTAssertEqual(hostA.identifier, DevServerRouting.storeIdentifier("store-host-a"))
+        XCTAssertEqual(hostB.identifier, DevServerRouting.storeIdentifier("store-host-b"))
+        XCTAssertNotEqual(hostA.identifier, hostB.identifier)
+        XCTAssertTrue(hostA.isPersistent, "a host's sign-ins survive a relaunch")
+        XCTAssertTrue(routing.dataStore(forHost: "store-host-a") === hostA, "one instance per host")
     }
 
     /// A page a host opened while its proxy is off (or the host is not connected yet, after a
-    /// relaunch) used to fall back to the default store, where it could read the user's
-    /// cookies.
+    /// relaunch) must not fall back to the default store, where it could read the user's cookies.
     func testAHostsPageNeverFallsBackToTheUsersStore() async throws {
         routing.isEnabled = false
         defer { routing.isEnabled = true }

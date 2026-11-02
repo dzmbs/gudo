@@ -27,8 +27,8 @@ async fn hook(socket: &std::path::Path, request: &HookRequest) -> HookResponse {
 async fn permission_request_is_answered_from_a_client() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = start(dir.path()).await;
-    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    let pane = c.attach_and_follow().await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = owner.attach_and_follow().await;
 
     let token = std::fs::read_to_string(dir.path().join("hook.token")).unwrap();
     let request = HookRequest {
@@ -44,24 +44,27 @@ async fn permission_request_is_answered_from_a_client() {
     let waiting = tokio::spawn(async move { hook(&socket, &request).await });
 
     // The client sees the agent blocked, with the hook's options.
-    c.until("blocked agent", |c| {
-        c.metas
-            .get(&pane)
-            .and_then(|m| m.agent.as_ref())
-            .is_some_and(|a| matches!(a.state, AgentState::Blocked(_)))
-    })
-    .await;
+    owner
+        .until("blocked agent", |owner| {
+            owner
+                .metas
+                .get(&pane)
+                .and_then(|meta| meta.agent.as_ref())
+                .is_some_and(|agent| matches!(agent.state, AgentState::Blocked(_)))
+        })
+        .await;
     assert!(
-        c.agent_events
+        owner
+            .agent_events
             .iter()
-            .any(|e| e.contains("rm -rf node_modules"))
+            .any(|event| event.contains("rm -rf node_modules"))
     );
-    let AgentState::Blocked(blocker) = c.metas[&pane].agent.clone().unwrap().state else {
+    let AgentState::Blocked(blocker) = owner.metas[&pane].agent.clone().unwrap().state else {
         unreachable!()
     };
     assert_eq!(blocker.options[0].label, "Yes");
 
-    c.client.decide(blocker.request_id, OptionId(0));
+    owner.client.decide(blocker.request_id, OptionId(0));
     let response = tokio::time::timeout(Duration::from_secs(10), waiting)
         .await
         .expect("hook answered")
@@ -71,7 +74,7 @@ async fn permission_request_is_answered_from_a_client() {
         stdout["hookSpecificOutput"]["decision"]["behavior"], "allow",
         "{stdout}"
     );
-    drop(c);
+    drop(owner);
     daemon.shutdown().await;
 }
 
@@ -83,19 +86,27 @@ async fn an_agent_that_exits_leaves_a_shell() {
     let fake = dir.path().join("claude");
     std::os::unix::fs::symlink("/bin/sleep", &fake).unwrap();
     let daemon = start(dir.path()).await;
-    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    let pane = c.attach_and_follow().await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = owner.attach_and_follow().await;
 
-    c.type_line(pane, &format!("{} 60", fake.display()));
-    c.until("agent tracked", |c| {
-        c.metas.get(&pane).is_some_and(|m| m.agent.is_some())
-    })
-    .await;
-    c.client.send_input(pane, b"\x03".to_vec());
-    c.until("agent gone", |c| {
-        c.metas.get(&pane).is_some_and(|m| m.agent.is_none())
-    })
-    .await;
-    drop(c);
+    owner.type_line(pane, &format!("{} 60", fake.display()));
+    owner
+        .until("agent tracked", |owner| {
+            owner
+                .metas
+                .get(&pane)
+                .is_some_and(|meta| meta.agent.is_some())
+        })
+        .await;
+    owner.client.send_input(pane, b"\x03".to_vec());
+    owner
+        .until("agent gone", |owner| {
+            owner
+                .metas
+                .get(&pane)
+                .is_some_and(|meta| meta.agent.is_none())
+        })
+        .await;
+    drop(owner);
     daemon.shutdown().await;
 }

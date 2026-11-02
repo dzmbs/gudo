@@ -1,4 +1,4 @@
-//! D3: the bytes of an atomic submit.
+//! The bytes of an atomic submit.
 //!
 //! One write: `^E` (end of line) and `^U` (kill to the start of the line: `unix-line-discard`
 //! in readline, `kill-whole-line` in zsh's emacs keymap, `backward-kill-line` in fish), which
@@ -6,7 +6,6 @@
 //! shell enabled mode 2004, which keeps a newline from running the line early); and `\r` when
 //! the line should run.
 
-/// Clears the line editor's buffer.
 const CLEAR_LINE: &[u8] = b"\x05\x15";
 
 /// Why a text cannot be submitted.
@@ -20,19 +19,17 @@ pub(crate) enum TextError {
     TooLong(usize),
 }
 
-/// Longest text submitted.
 pub(crate) const MAX_TEXT: usize = 64 << 10;
 
-/// Checks `text` for submission.
 pub(crate) fn check(text: &str, bracketed: bool) -> Result<(), TextError> {
     if text.len() > MAX_TEXT {
         return Err(TextError::TooLong(MAX_TEXT));
     }
-    if let Some(c) = text
+    if let Some(character) = text
         .chars()
-        .find(|&c| c.is_control() && c != '\n' && c != '\t')
+        .find(|&character| character.is_control() && character != '\n' && character != '\t')
     {
-        return Err(TextError::Control(c as u32));
+        return Err(TextError::Control(character as u32));
     }
     if text.contains('\n') && !bracketed {
         return Err(TextError::Multiline);
@@ -42,13 +39,13 @@ pub(crate) fn check(text: &str, bracketed: bool) -> Result<(), TextError> {
 
 /// The whole write: clear, paste (already encoded for the pane's modes), Return.
 pub(crate) fn bytes(paste: &[u8], run: bool) -> Vec<u8> {
-    let mut out = Vec::with_capacity(CLEAR_LINE.len() + paste.len() + 1);
-    out.extend_from_slice(CLEAR_LINE);
-    out.extend_from_slice(paste);
+    let mut write = Vec::with_capacity(CLEAR_LINE.len() + paste.len() + 1);
+    write.extend_from_slice(CLEAR_LINE);
+    write.extend_from_slice(paste);
     if run {
-        out.push(b'\r');
+        write.push(b'\r');
     }
-    out
+    write
 }
 
 #[cfg(test)]

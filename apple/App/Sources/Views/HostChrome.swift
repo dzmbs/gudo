@@ -3,13 +3,8 @@ import HostKit
 import PaneLayout
 import SwiftUI
 
-// Chrome for remote hosts over the terminal: the plain-SSH upgrade offer, install progress and
-// notes, the offline notice, stale panes, and host-key decisions. The reconnect card itself is
-// the design system's `connectionOverlay` (ActiveTabView). Everything binds to HostKit's models
-// (docs/APP-ARCHITECTURE.md).
-
 /// Floating notices for a host window, top-trailing over the terminal like Ghostty's search
-/// bar: small glass panels that never cover more than they must.
+/// bar.
 struct HostNotices: View {
     let workspace: Workspace
     @Environment(WindowModel.self) private var model
@@ -91,8 +86,8 @@ struct HostNotices: View {
     }
 }
 
-/// "Install Helper" on a plain-SSH host (04-mobile-ux C1): installs or upgrades the daemon,
-/// pairs, and the window switches to it (`HostsModel.installHelper`).
+/// "Install Helper" on a plain-SSH host: installs or upgrades the daemon, pairs, and the window
+/// switches to it.
 private struct InstallHelperOffer: View {
     let hostId: String
     let onDismiss: () -> Void
@@ -139,9 +134,8 @@ private struct InstallHelperOffer: View {
     }
 }
 
-/// The host's helper version (`HostsModel.helperAdvice`): one quiet line with "Update" when the
-/// app has a newer build; a plain statement when the app cannot work with it, with "Update
-/// Helper" when that can be done from here (docs/APP-ARCHITECTURE.md §14).
+/// The host's helper version: "Update" when the app has a newer build, or a plain statement when
+/// the app cannot work with it.
 private struct HelperUpdateNotice: View {
     let hostId: String
     let advice: HelperAdvice
@@ -195,9 +189,9 @@ private struct HelperUpdateNotice: View {
     }
 }
 
-/// A pane whose host link dropped keeps its last content (never blank, R12). The window-wide
-/// reconnect card dims the tab; this marks the pane for VoiceOver and tests, and when only this
-/// pane is stale (the host is otherwise live) dims it the same way with its reason.
+/// A pane whose host link dropped keeps its last content. The window-wide reconnect card dims the
+/// tab; this marks the pane for VoiceOver and tests, and when only this pane is stale (the host is
+/// otherwise live) dims it the same way with its reason.
 struct StalePaneOverlay: View {
     let connection: PaneConnection
     let paneId: PaneId
@@ -229,9 +223,8 @@ struct StalePaneOverlay: View {
     }
 }
 
-/// A pane showing the screen this device saved, before its host sends its own (instant
-/// start): a quiet wash of the terminal's background, gone the moment the host's screen
-/// replaces it. Input typed meanwhile waits, and says so.
+/// A pane showing the screen this device saved, before its host sends its own. Input typed
+/// meanwhile waits, and says so.
 struct SavedScreenOverlay: View {
     let pane: Pane
     @Environment(\.terminalTheme) private var theme
@@ -257,7 +250,6 @@ struct SavedScreenOverlay: View {
         .animation(DS.Motion.overlay, value: pane.heldInput)
         .allowsHitTesting(false)
         .accessibilityElement(children: .combine)
-        // VoiceOver hears that the text is the saved screen, not the host's yet.
         .accessibilityLabel(spoken)
         .accessibilityHidden(spoken.isEmpty)
         .accessibilityIdentifier(pane.showsSavedScreen ? "saved-\(pane.id)" : "")
@@ -271,7 +263,7 @@ struct SavedScreenOverlay: View {
     }
 }
 
-/// Trust-on-first-use and changed-key decisions (04-mobile-ux C1.3).
+/// Trust-on-first-use and changed-key decisions.
 struct HostKeyPromptModifier: ViewModifier {
     let prompts: HostKeyPrompts
 

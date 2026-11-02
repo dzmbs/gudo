@@ -1,6 +1,7 @@
 import XCTest
 
 /// Swipe and long-press on sidebar rows, and the full-screen editor's way out, on the iPad
+/// against the shared daemon fixtures (`UI_TEST_CLASS=RowActionsUITests apple/scripts/w3-ui-test.sh`):
 /// a real daemon and the stand-in `code serve-web`. Skipped without a ticket.
 @MainActor
 final class RowActionsUITests: XCTestCase {
@@ -72,8 +73,6 @@ final class RowActionsUITests: XCTestCase {
         attachment.lifetime = .keepAlways
         add(attachment)
     }
-
-    // MARK: Tests
 
     /// The fixtures' shell sits in a repository, so its tabs list under their worktree; a second
     /// tab there gives each tab a row of its own.

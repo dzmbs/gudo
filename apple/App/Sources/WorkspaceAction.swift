@@ -14,36 +14,35 @@ enum WorkspaceAction: Hashable {
     /// A pane on another host beside the focused one: the tab becomes a mixed tab.
     case splitWithHost
     case toggleZoom, focus(Direction), resize(Direction)
-    /// Tab); the pane menus also move it into another tab.
+    /// The focused pane leaves for a new tab right after its own.
     case movePaneToNewTab
-    /// The previous or next shell prompt at the top of the pane (Ghostty's `jump_to_prompt`).
+    /// Scrolls the previous or next shell prompt to the top of the pane.
     case previousPrompt, nextPrompt
     /// From a VS Code pane back to the terminal beside it, or the tab worked in before (⌃⌘`).
     case returnToTerminal
     /// The focused VS Code pane alone in the window, without the window's chrome (⌃⌘F).
     case fullScreenEditor
     case previousTab, nextTab, selectTab(Int), lastTab, goToTab
-    /// The current tab one row up or down in the sidebar, within its project or host.
     case moveTabUp, moveTabDown
-    /// The host switcher's ⌃⌘1…⌃⌘9 (⌘1…⌘9 are the tabs', as in Ghostty).
     case selectHost(Int)
+    /// The draw overlay on the focused pane, and a canvas split.
     case draw, newCanvas
-    /// A new window with this window's hosts, on its tab (⌘N).
+    /// A new window with this window's hosts, on its tab.
     case newWindow
-    /// The window's own screens and overlays.
     case commandPalette, commandPaletteGhostty, find, links, inbox, hosts
-    /// The next (older) and previous scrollback search match (⌘G / ⇧⌘G).
+    /// The next (older) and previous scrollback search match.
     case findNext, findPrevious
+    /// Shows the agent that has waited longest for you.
     case jumpToWaitingAgent
     /// Shows or hides the sidebar; hidden, the tabs are a strip on top (`TabPlacement`).
     case toggleSidebar
-    /// Every shortcut on one page.
     case shortcuts
-    /// The last closed tab (or tabs closed together) back where it was (⇧⌘T, browsers).
+    /// The last closed tab (or tabs closed together) back where it was.
     case reopenClosedTab
-    /// Floating windows (docs/APP-ARCHITECTURE.md §28): float or dock the focused pane, send
-    /// its window to the tray, bring the next window forward, look under them all.
+    /// Float or dock the focused pane, send its window to the tray, bring the next window
+    /// forward, look under them all.
     case toggleFloat, minimizeFloat, cycleFloats, toggleFloatsHidden
+    /// The next or previous pane, tiled panes then windows.
     case focusNextPane, focusPreviousPane
     /// The focused pane trades places past its neighbour; a floating window steps that way.
     case movePane(Direction)
@@ -65,8 +64,8 @@ enum WorkspaceAction: Hashable {
     /// the scene's menu commands, which it can miss right after the window switched hosts.
     static let allShortcutActions: [Self] = fileActions + paneActions + drawActions + tabActions + hostActions + windowActions + historyActions + floatActions + [.newWindow]
 
-    /// Whether the shortcut stays the app's while a VS Code pane has the keyboard
-    /// (docs/APP-ARCHITECTURE.md §20): ⌘1–⌘9 switch tabs (VS Code's own ⌘1–⌘8 focus editor
+    /// Whether the shortcut stays the app's while a VS Code pane has the keyboard:
+    /// ⌘1–⌘9 switch tabs (VS Code's own ⌘1–⌘8 focus editor
     /// groups, which a browser takes for its tabs too), ⌘W closes the editor pane (as it closes
     /// vscode.dev's tab in a browser), ⌃⌘` goes back to the terminal. Every other key is VS
     /// Code's: ⌃Tab, ⇧⌘[ ], ⌥⌘arrows, ⌘P, ⌘K, ⌘B, ⌘D, ⌘F …
@@ -150,7 +149,7 @@ enum WorkspaceAction: Hashable {
         case .previousPrompt: KeyboardShortcut(.upArrow, modifiers: .command)
         case .nextPrompt: KeyboardShortcut(.downArrow, modifiers: .command)
         // VS Code's ⌃` toggles its own terminal; ⌃⌘` is bound by neither VS Code nor the systems.
-        // (⌘⎋ was tried: on iPad it never reaches the app past a focused web view.)
+        // ⌘⎋ would not do: on iPad it never reaches the app past a focused web view.
         case .returnToTerminal: KeyboardShortcut("`", modifiers: [.command, .control])
         // VS Code's own full-screen key on the Mac; the web workbench binds nothing to it.
         case .fullScreenEditor: KeyboardShortcut("f", modifiers: [.command, .control])
@@ -167,7 +166,7 @@ enum WorkspaceAction: Hashable {
         case .draw: KeyboardShortcut("d", modifiers: [.command, .control])
         case .newCanvas: KeyboardShortcut("d", modifiers: [.command, .control, .shift])
         case .newWindow: KeyboardShortcut("n")
-        // ⌘K is Raycast's and Linear's; ⇧⌘P is Ghostty's.
+        // ⇧⌘P is Ghostty's palette key.
         case .commandPalette: KeyboardShortcut("k")
         case .commandPaletteGhostty: KeyboardShortcut("p", modifiers: [.command, .shift])
         case .find: KeyboardShortcut("f")
@@ -178,9 +177,11 @@ enum WorkspaceAction: Hashable {
         // ⇧⌘G is find previous (Ghostty, macOS); A for agent, free in the app and the systems.
         case .jumpToWaitingAgent: KeyboardShortcut("a", modifiers: [.command, .shift])
         case .hosts: KeyboardShortcut("h", modifiers: [.command, .shift])
+        // VS Code's sidebar key; AppKit's ⌃⌘S is left free for the terminal.
         case .toggleSidebar: KeyboardShortcut("b")
         case .shortcuts: KeyboardShortcut("/")
         case .reopenClosedTab: KeyboardShortcut("t", modifiers: [.command, .shift])
+        // ⇧⌘↩ beside it is Zoom (Ghostty).
         case .toggleFloat: KeyboardShortcut(.return, modifiers: [.command, .option])
         // ⌘M and ⌥⌘M are the system's own window minimize.
         case .minimizeFloat: KeyboardShortcut("m", modifiers: [.command, .shift])
@@ -190,6 +191,7 @@ enum WorkspaceAction: Hashable {
         case .toggleFloatsHidden: KeyboardShortcut("f", modifiers: [.command, .option])
         case .focusNextPane: KeyboardShortcut("]")
         case .focusPreviousPane: KeyboardShortcut("[")
+        // ⌥⌘arrows move focus and ⌃⌘arrows dividers; ⇧ takes the pane along.
         case .movePane(let direction): KeyboardShortcut(direction.arrow, modifiers: [.command, .option, .shift])
         case .splitBestFit: KeyboardShortcut(.return, modifiers: .command)
         }
@@ -248,7 +250,6 @@ enum WorkspaceAction: Hashable {
         }
     }
 
-    /// Runs the action on one workspace (its own tabs only).
     func perform(on workspace: Workspace) {
         switch self {
         case .newTab, .newTabOnHost: workspace.apply(.newTab)
@@ -266,14 +267,12 @@ enum WorkspaceAction: Hashable {
         case .selectTab(let number): workspace.selectTab(at: number - 1)
         case .lastTab: workspace.selectTab(at: nil)
         case .goToTab, .moveTabUp, .moveTabDown, .newWindow, .newAgent, .newProject, .splitWithHost, .returnToTerminal, .fullScreenEditor, .selectHost, .reopenClosedTab: break
-        // Windows and pane moves need the window's view of the tab.
         case .toggleFloat, .minimizeFloat, .cycleFloats, .toggleFloatsHidden, .movePane: break
         case .focusNextPane: workspace.apply(.focusDirection(.right))
         case .focusPreviousPane: workspace.apply(.focusDirection(.left))
         case .splitBestFit: workspace.split(.horizontal)
         case .draw: DrawingCommands.toggleDrawing(in: workspace)
         case .newCanvas: DrawingCommands.newCanvas(in: workspace)
-        // Window screens need a window.
         case .commandPalette, .commandPaletteGhostty, .find, .findNext, .findPrevious, .links, .inbox, .jumpToWaitingAgent, .hosts, .toggleSidebar, .shortcuts: break
         }
     }

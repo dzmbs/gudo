@@ -44,8 +44,8 @@ fn platform() -> Option<&'static str> {
     }
 }
 
-fn root(cfg: &Config) -> PathBuf {
-    cfg.state_dir.join("vscode").join("server")
+fn root(config: &Config) -> PathBuf {
+    config.state_dir.join("vscode").join("server")
 }
 
 fn entry(dir: &Path) -> PathBuf {
@@ -62,18 +62,18 @@ fn latest(root: &Path) -> Option<PathBuf> {
 /// The command that serves on `127.0.0.1:port` with the token in `token_file`, from the
 /// server in `dir`.
 pub(crate) fn command(dir: &Path, port: u16, token_file: &Path) -> Command {
-    let mut cmd = Command::new(entry(dir));
-    cmd.args(["--host", "127.0.0.1", "--port"])
+    let mut command = Command::new(entry(dir));
+    command
+        .args(["--host", "127.0.0.1", "--port"])
         .arg(port.to_string())
         .arg("--connection-token-file")
         .arg(token_file)
         .arg("--accept-server-license-terms")
         .arg("--reconnection-grace-time")
         .arg(RECONNECTION_GRACE.as_secs().to_string());
-    cmd
+    command
 }
 
-/// The host's VS Code servers.
 #[derive(Default)]
 pub(crate) struct Servers {
     /// When the update service last answered, and with which server.
@@ -88,31 +88,32 @@ impl Servers {
     ///
     /// `Unavailable` when Microsoft publishes no server for this host; `Failed` when none is
     /// here and the download failed.
-    pub(crate) async fn ensure(&self, cfg: &Config) -> Result<PathBuf, WsError> {
+    pub(crate) async fn ensure(&self, config: &Config) -> Result<PathBuf, WsError> {
         let platform = platform().ok_or_else(|| {
             WsError::Unavailable("Microsoft publishes no VS Code server for this host".into())
         })?;
         // Held across the download: one download at a time.
         let mut checked = self.checked.lock().await;
-        if let Some((at, dir)) = checked.as_ref()
-            && at.elapsed() < CHECK_INTERVAL
+        if let Some((checked_at, dir)) = checked.as_ref()
+            && checked_at.elapsed() < CHECK_INTERVAL
             && entry(dir).is_file()
         {
             return Ok(dir.clone());
         }
-        let root = root(cfg);
-        let base = cfg.vscode_update_url.clone();
-        let root2 = root.clone();
-        let fetched = tokio::task::spawn_blocking(move || install(&base, platform, &root2))
-            .await
-            .map_err(|e| WsError::Failed(e.to_string()))
-            .flatten();
+        let root = root(config);
+        let base_url = config.vscode_update_url.clone();
+        let install_root = root.clone();
+        let fetched =
+            tokio::task::spawn_blocking(move || install(&base_url, platform, &install_root))
+                .await
+                .map_err(|error| WsError::Failed(error.to_string()))
+                .flatten();
         match fetched {
             Ok(dir) => {
                 *checked = Some((Instant::now(), dir.clone()));
                 Ok(dir)
             }
-            Err(e) => latest(&root).ok_or(e).inspect(|dir| {
+            Err(error) => latest(&root).ok_or(error).inspect(|dir| {
                 tracing::warn!(dir = %dir.display(), "VS Code server update check failed; using the one here");
             }),
         }
@@ -122,26 +123,26 @@ impl Servers {
 /// Asks the update service for the latest server and, when it is not here yet, downloads it,
 /// checks the published SHA-256 and unpacks it; the one before stays (it may be running),
 /// older ones go.
-fn install(base: &str, platform: &str, root: &Path) -> Result<PathBuf, WsError> {
-    let failed = |e: std::io::Error| WsError::Failed(e.to_string());
+fn install(base_url: &str, platform: &str, root: &Path) -> Result<PathBuf, WsError> {
+    let failed = |error: std::io::Error| WsError::Failed(error.to_string());
     std::fs::create_dir_all(root).map_err(failed)?;
     let tag = fsutil::hex(&fsutil::random::<4>());
-    let meta_path = root.join(format!(".release-{tag}.json"));
+    let release_path = root.join(format!(".release-{tag}.json"));
     tunnel::fetch(
-        &format!("{base}/api/update/{platform}/stable/latest"),
-        &meta_path,
+        &format!("{base_url}/api/update/{platform}/stable/latest"),
+        &release_path,
     )?;
-    let meta = std::fs::read(&meta_path).map_err(failed);
-    let _ = std::fs::remove_file(&meta_path);
-    let release: Release = serde_json::from_slice(&meta?)
-        .map_err(|e| WsError::Failed(format!("unexpected update service answer: {e}")))?;
-    if base == tunnel::DEFAULT_UPDATE_URL && !release.url.starts_with("https://") {
+    let release_json = std::fs::read(&release_path).map_err(failed);
+    let _ = std::fs::remove_file(&release_path);
+    let release: Release = serde_json::from_slice(&release_json?)
+        .map_err(|error| WsError::Failed(format!("unexpected update service answer: {error}")))?;
+    if base_url == tunnel::DEFAULT_UPDATE_URL && !release.url.starts_with("https://") {
         return Err(WsError::Failed(format!(
             "refusing a non-HTTPS download: {}",
             release.url
         )));
     }
-    if release.version.is_empty() || !release.version.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if release.version.is_empty() || !release.version.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(WsError::Failed(format!(
             "unexpected commit from the update service: {}",
             release.version
@@ -157,7 +158,7 @@ fn install(base: &str, platform: &str, root: &Path) -> Result<PathBuf, WsError> 
     }
     fsutil::write_atomic(&root.join(LATEST), release.version.as_bytes()).map_err(failed)?;
     if let Ok(entries) = std::fs::read_dir(root) {
-        for old in entries.filter_map(Result::ok).map(|e| e.path()) {
+        for old in entries.filter_map(Result::ok).map(|entry| entry.path()) {
             if old.is_dir() && old != dir && Some(&old) != previous.as_ref() {
                 let _ = std::fs::remove_dir_all(&old);
             }
@@ -167,7 +168,7 @@ fn install(base: &str, platform: &str, root: &Path) -> Result<PathBuf, WsError> 
 }
 
 fn unpack_release(release: &Release, root: &Path, tag: &str, dir: &Path) -> Result<(), WsError> {
-    let failed = |e: std::io::Error| WsError::Failed(e.to_string());
+    let failed = |error: std::io::Error| WsError::Failed(error.to_string());
     let zip = release.url.ends_with(".zip");
     let archive = root.join(format!(
         ".server-{tag}{}",
@@ -181,24 +182,28 @@ fn unpack_release(release: &Release, root: &Path, tag: &str, dir: &Path) -> Resu
     tracing::info!(url = %release.url, "downloading the VS Code server");
     let result = (|| {
         tunnel::fetch(&release.url, &archive)?;
-        let sha = super::editor::sha256_file(&archive).map_err(failed)?;
-        if !sha.eq_ignore_ascii_case(&release.sha256hash) {
+        let actual = super::editor::sha256_file(&archive).map_err(failed)?;
+        if !actual.eq_ignore_ascii_case(&release.sha256hash) {
             return Err(WsError::Failed(format!(
-                "VS Code server checksum mismatch: got {sha}, Microsoft published {}",
+                "VS Code server checksum mismatch: got {actual}, Microsoft published {}",
                 release.sha256hash
             )));
         }
         std::fs::create_dir_all(&staging).map_err(failed)?;
         let mut unpack = if zip {
-            let mut c = std::process::Command::new("unzip");
-            c.args(["-q", "-o"]).arg(&archive).arg("-d").arg(&staging);
-            c
+            let mut command = std::process::Command::new("unzip");
+            command
+                .args(["-q", "-o"])
+                .arg(&archive)
+                .arg("-d")
+                .arg(&staging);
+            command
         } else {
-            let mut c = std::process::Command::new("tar");
-            c.arg("-xzf").arg(&archive).arg("-C").arg(&staging);
-            c
+            let mut command = std::process::Command::new("tar");
+            command.arg("-xzf").arg(&archive).arg("-C").arg(&staging);
+            command
         };
-        if !unpack.status().is_ok_and(|s| s.success()) {
+        if !unpack.status().is_ok_and(|status| status.success()) {
             return Err(WsError::Failed(
                 "unpacking the VS Code server failed".into(),
             ));
@@ -207,8 +212,8 @@ fn unpack_release(release: &Release, root: &Path, tag: &str, dir: &Path) -> Resu
         let server = std::fs::read_dir(&staging)
             .map_err(failed)?
             .filter_map(Result::ok)
-            .map(|e| e.path())
-            .find(|p| entry(p).is_file())
+            .map(|entry| entry.path())
+            .find(|path| entry(path).is_file())
             .ok_or_else(|| {
                 WsError::Failed("the VS Code server archive has no bin/code-server".into())
             })?;
@@ -225,9 +230,9 @@ mod tests {
 
     /// A `file://` update service serving a server archive for `platform`; its base URL.
     fn service(dir: &Path, platform: &str, commit: &str, body: &str) -> String {
-        let src = dir.join("src").join(format!("vscode-server-{platform}"));
-        std::fs::create_dir_all(src.join("bin")).unwrap();
-        std::fs::write(src.join("bin/code-server"), body).unwrap();
+        let source = dir.join("src").join(format!("vscode-server-{platform}"));
+        std::fs::create_dir_all(source.join("bin")).unwrap();
+        std::fs::write(source.join("bin/code-server"), body).unwrap();
         let archive = dir.join(format!("{commit}.tar.gz"));
         let ok = std::process::Command::new("tar")
             .arg("-czf")
@@ -256,14 +261,14 @@ mod tests {
 
     #[test]
     fn installs_the_latest_keeps_the_one_before_and_drops_older() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("root");
-        let p = "server-test-web";
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let platform = "server-test-web";
         let mut installed = Vec::new();
         for (commit, body) in [("aa11", "one"), ("bb22", "two"), ("cc33", "three")] {
-            let svc = tmp.path().join(commit);
-            let base = service(&svc, p, commit, body);
-            let dir = install(&base, p, &root).unwrap();
+            let service_dir = temp.path().join(commit);
+            let base_url = service(&service_dir, platform, commit, body);
+            let dir = install(&base_url, platform, &root).unwrap();
             assert_eq!(std::fs::read_to_string(entry(&dir)).unwrap(), body);
             assert_eq!(latest(&root).as_deref(), Some(dir.as_path()));
             installed.push(dir);
@@ -274,21 +279,26 @@ mod tests {
             "the one before stays (it may be running)"
         );
         // Asked again with nothing new: nothing is downloaded or removed.
-        let svc = tmp.path().join("cc33");
-        let again = install(&format!("file://{}", svc.display()), p, &root).unwrap();
+        let service_dir = temp.path().join("cc33");
+        let again = install(
+            &format!("file://{}", service_dir.display()),
+            platform,
+            &root,
+        )
+        .unwrap();
         assert_eq!(again, installed[2]);
         assert!(installed[1].exists());
     }
 
     #[test]
     fn a_tampered_download_is_refused() {
-        let tmp = tempfile::tempdir().unwrap();
-        let p = "server-test-web";
-        let base = service(tmp.path(), p, "dd44", "x");
-        std::fs::write(tmp.path().join("dd44.tar.gz"), b"not it").unwrap();
-        let root = tmp.path().join("root");
-        let err = install(&base, p, &root).unwrap_err();
-        assert!(matches!(err, WsError::Failed(m) if m.contains("checksum")));
+        let temp = tempfile::tempdir().unwrap();
+        let platform = "server-test-web";
+        let base_url = service(temp.path(), platform, "dd44", "x");
+        std::fs::write(temp.path().join("dd44.tar.gz"), b"not it").unwrap();
+        let root = temp.path().join("root");
+        let error = install(&base_url, platform, &root).unwrap_err();
+        assert!(matches!(error, WsError::Failed(message) if message.contains("checksum")));
         assert!(latest(&root).is_none());
     }
 }

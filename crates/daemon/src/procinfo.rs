@@ -1,6 +1,7 @@
 //! Process-table inspection: a pane's process tree, the files its processes hold open, the TCP
 //! ports they listen on, and a process's name, executable and environment.
 //!
+//! Used to learn a Codex session id from the rollout file Codex keeps open, to find
 //! the ports a pane's dev servers listen on (Linux: `/proc/net/tcp{,6}` mapped through
 //! `/proc/<pid>/fd` socket inodes; macOS: `proc_pidfdinfo(PROC_PIDFDSOCKETINFO)`, no `lsof`),
 //! to find an editor server's CLI channel, and a pane variable a helper's ancestors carry.
@@ -63,7 +64,7 @@ pub(crate) fn process_env_var(pid: u32, name: &str) -> Option<String> {
     let prefix = format!("{name}=");
     imp::process_env(pid)?
         .into_iter()
-        .find_map(|e| e.strip_prefix(&prefix).map(str::to_owned))
+        .find_map(|variable| variable.strip_prefix(&prefix).map(str::to_owned))
 }
 
 /// The value of `name` in the environment of this process's nearest ancestor that has it.
@@ -82,7 +83,6 @@ pub fn inherited_env_var(name: &str) -> Option<String> {
     None
 }
 
-/// The process's executable.
 pub(crate) fn exe_path(pid: u32) -> Option<PathBuf> {
     imp::exe_path(pid)
 }
@@ -101,7 +101,7 @@ mod imp {
             return Vec::new();
         };
         dir.filter_map(Result::ok)
-            .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
+            .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
             .filter_map(|pid| {
                 let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
                 // `pid (comm) state ppid …`; comm may contain spaces and parentheses.
@@ -117,37 +117,39 @@ mod imp {
             return Vec::new();
         };
         dir.filter_map(Result::ok)
-            .filter_map(|e| fs::read_link(e.path()).ok())
-            .filter(|p| p.is_absolute())
+            .filter_map(|entry| fs::read_link(entry.path()).ok())
+            .filter(|path| path.is_absolute())
             .collect()
     }
 
     /// `inode → (port, loopback)` for listening sockets in `/proc/net/tcp` and `tcp6`.
     fn listen_table() -> HashMap<u64, (u16, bool)> {
         let mut table = HashMap::new();
-        for (file, v6) in [("/proc/net/tcp", false), ("/proc/net/tcp6", true)] {
+        for (file, ipv6) in [("/proc/net/tcp", false), ("/proc/net/tcp6", true)] {
             let Ok(text) = fs::read_to_string(file) else {
                 continue;
             };
             for line in text.lines().skip(1) {
                 // sl local_address rem_address st tx:rx tr:when retrnsmt uid timeout inode
-                let cols: Vec<&str> = line.split_whitespace().collect();
-                if cols.len() < 10 || cols[3] != "0A" {
+                let columns: Vec<&str> = line.split_whitespace().collect();
+                if columns.len() < 10 || columns[3] != "0A" {
                     continue;
                 }
-                let Some((addr, port)) = cols[1].split_once(':') else {
+                let Some((address, port)) = columns[1].split_once(':') else {
                     continue;
                 };
-                let (Ok(port), Ok(inode)) = (u16::from_str_radix(port, 16), cols[9].parse()) else {
+                let (Ok(port), Ok(inode)) = (u16::from_str_radix(port, 16), columns[9].parse())
+                else {
                     continue;
                 };
                 // The address is hex of the in-memory words: 127.0.0.1 is `0100007F`, ::1
                 // is three zero words and `01000000`, ::ffff:127.0.0.1 ends in `0100007F`.
-                let loopback = if v6 {
-                    addr == "00000000000000000000000001000000"
-                        || (addr.starts_with("0000000000000000FFFF0000") && addr.ends_with("7F"))
+                let loopback = if ipv6 {
+                    address == "00000000000000000000000001000000"
+                        || (address.starts_with("0000000000000000FFFF0000")
+                            && address.ends_with("7F"))
                 } else {
-                    addr.ends_with("7F")
+                    address.ends_with("7F")
                 };
                 table.insert(inode, (port, loopback));
             }
@@ -160,25 +162,25 @@ mod imp {
         if table.is_empty() {
             return Vec::new();
         }
-        let mut out = Vec::new();
+        let mut listeners = Vec::new();
         for &pid in pids {
             let Ok(dir) = fs::read_dir(format!("/proc/{pid}/fd")) else {
                 continue;
             };
             for link in dir
                 .filter_map(Result::ok)
-                .filter_map(|e| fs::read_link(e.path()).ok())
+                .filter_map(|entry| fs::read_link(entry.path()).ok())
             {
                 let link = link.to_string_lossy();
                 let Some(inode) = link
                     .strip_prefix("socket:[")
-                    .and_then(|r| r.strip_suffix(']'))
-                    .and_then(|n| n.parse::<u64>().ok())
+                    .and_then(|rest| rest.strip_suffix(']'))
+                    .and_then(|number| number.parse::<u64>().ok())
                 else {
                     continue;
                 };
                 if let Some(&(port, loopback)) = table.get(&inode) {
-                    out.push(Listener {
+                    listeners.push(Listener {
                         pid,
                         port,
                         loopback,
@@ -186,7 +188,7 @@ mod imp {
                 }
             }
         }
-        out
+        listeners
     }
 
     pub fn process_name(pid: u32) -> Option<String> {
@@ -197,9 +199,9 @@ mod imp {
     pub fn process_env(pid: u32) -> Option<Vec<String>> {
         let env = fs::read(format!("/proc/{pid}/environ")).ok()?;
         Some(
-            env.split(|&b| b == 0)
-                .filter(|e| !e.is_empty())
-                .map(|e| String::from_utf8_lossy(e).into_owned())
+            env.split(|&byte| byte == 0)
+                .filter(|variable| !variable.is_empty())
+                .map(|variable| String::from_utf8_lossy(variable).into_owned())
                 .collect(),
         )
     }
@@ -246,21 +248,21 @@ mod imp {
 
     pub fn parent_table() -> Vec<(u32, u32)> {
         // SAFETY: a null buffer asks for the number of pids.
-        let n = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
-        if n <= 0 {
+        let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+        if count <= 0 {
             return Vec::new();
         }
         // Room for processes started in between.
-        let mut pids = vec![0 as c_int; n as usize + 64];
+        let mut pids = vec![0 as c_int; count as usize + 64];
         let bytes = (pids.len() * mem::size_of::<c_int>()) as c_int;
         // SAFETY: `pids` is writable for `bytes` bytes.
-        let n = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
-        if n <= 0 {
+        let count = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
+        if count <= 0 {
             return Vec::new();
         }
-        pids.truncate(n as usize);
+        pids.truncate(count as usize);
         pids.into_iter()
-            .filter(|&p| p > 0)
+            .filter(|&pid| pid > 0)
             .filter_map(|pid| {
                 let size = mem::size_of::<libc::proc_bsdinfo>() as c_int;
                 // SAFETY: proc_bsdinfo is plain old data, so all-zero is a valid value.
@@ -295,10 +297,16 @@ mod imp {
             };
             bytes as usize / entry + 16
         ];
-        let cap = (fds.len() * entry) as c_int;
-        // SAFETY: `fds` is writable for `cap` bytes of proc_fdinfo entries.
+        let capacity = (fds.len() * entry) as c_int;
+        // SAFETY: `fds` is writable for `capacity` bytes of proc_fdinfo entries.
         let bytes = unsafe {
-            libc::proc_pidinfo(pid, libc::PROC_PIDLISTFDS, 0, fds.as_mut_ptr().cast(), cap)
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDLISTFDS,
+                0,
+                fds.as_mut_ptr().cast(),
+                capacity,
+            )
         };
         fds.truncate(bytes.max(0) as usize / entry);
         fds
@@ -306,92 +314,105 @@ mod imp {
 
     pub fn open_files(pid: u32) -> Vec<PathBuf> {
         let pid = pid as c_int;
-        let mut buf = vec![0u8; VNODE_FDINFO_WITH_PATH];
+        let mut buffer = vec![0u8; VNODE_FDINFO_WITH_PATH];
         fds(pid)
             .iter()
             .filter(|fd| fd.proc_fdtype == libc::PROX_FDTYPE_VNODE as u32)
             .filter_map(|fd| {
-                // SAFETY: `buf` is writable for its full length, the size passed.
-                let got = unsafe {
+                // SAFETY: `buffer` is writable for its full length, the size passed.
+                let written = unsafe {
                     libc::proc_pidfdinfo(
                         pid,
                         fd.proc_fd,
                         PROC_PIDFDVNODEPATHINFO,
-                        buf.as_mut_ptr().cast(),
-                        buf.len() as c_int,
+                        buffer.as_mut_ptr().cast(),
+                        buffer.len() as c_int,
                     )
                 };
-                if got as usize != VNODE_FDINFO_WITH_PATH {
+                if written as usize != VNODE_FDINFO_WITH_PATH {
                     return None;
                 }
-                let path = CStr::from_bytes_until_nul(&buf[VIP_PATH_OFFSET..]).ok()?;
+                let path = CStr::from_bytes_until_nul(&buffer[VIP_PATH_OFFSET..]).ok()?;
                 let path = PathBuf::from(path.to_str().ok()?);
                 path.is_absolute().then_some(path)
             })
             .collect()
     }
 
-    fn i32_at(buf: &[u8], at: usize) -> i32 {
-        i32::from_ne_bytes(buf[at..at + 4].try_into().expect("4 bytes"))
+    fn i32_at(buffer: &[u8], at: usize) -> i32 {
+        i32::from_ne_bytes(buffer[at..at + 4].try_into().expect("4 bytes"))
     }
 
     pub fn listening_ports(pids: &[u32]) -> Vec<Listener> {
-        let mut out = Vec::new();
-        let mut buf = vec![0u8; SOCKET_FDINFO_SIZE];
+        let mut listeners = Vec::new();
+        let mut buffer = vec![0u8; SOCKET_FDINFO_SIZE];
         for &pid in pids {
-            let cpid = pid as c_int;
-            for fd in fds(cpid) {
+            let c_pid = pid as c_int;
+            for fd in fds(c_pid) {
                 if fd.proc_fdtype != libc::PROX_FDTYPE_SOCKET as u32 {
                     continue;
                 }
-                // SAFETY: `buf` is writable for its full length, the size passed.
-                let got = unsafe {
+                // SAFETY: `buffer` is writable for its full length, the size passed.
+                let written = unsafe {
                     libc::proc_pidfdinfo(
-                        cpid,
+                        c_pid,
                         fd.proc_fd,
                         PROC_PIDFDSOCKETINFO,
-                        buf.as_mut_ptr().cast(),
-                        buf.len() as c_int,
+                        buffer.as_mut_ptr().cast(),
+                        buffer.len() as c_int,
                     )
                 };
-                if got as usize != SOCKET_FDINFO_SIZE
-                    || i32_at(&buf, SOI_KIND) != SOCKINFO_TCP
-                    || i32_at(&buf, SOI_PROTO + TCPSI_STATE) != TSI_S_LISTEN
+                if written as usize != SOCKET_FDINFO_SIZE
+                    || i32_at(&buffer, SOI_KIND) != SOCKINFO_TCP
+                    || i32_at(&buffer, SOI_PROTO + TCPSI_STATE) != TSI_S_LISTEN
                 {
                     continue;
                 }
-                let lport = i32_at(&buf, SOI_PROTO + INSI_LPORT);
-                let port = u16::from_be(lport as u16);
-                let laddr = &buf[SOI_PROTO + INSI_LADDR..SOI_PROTO + INSI_LADDR + 16];
-                let loopback = if buf[SOI_PROTO + INSI_VFLAG] & INI_IPV4 != 0 {
+                let raw_port = i32_at(&buffer, SOI_PROTO + INSI_LPORT);
+                let port = u16::from_be(raw_port as u16);
+                let local_address = &buffer[SOI_PROTO + INSI_LADDR..SOI_PROTO + INSI_LADDR + 16];
+                let loopback = if buffer[SOI_PROTO + INSI_VFLAG] & INI_IPV4 != 0 {
                     // in4in6_addr: 12 bytes of padding, then the IPv4 address.
-                    laddr[12] == 127
+                    local_address[12] == 127
                 } else {
-                    laddr[..15].iter().all(|&b| b == 0) && laddr[15] == 1
+                    local_address[..15].iter().all(|&byte| byte == 0) && local_address[15] == 1
                 };
-                out.push(Listener {
+                listeners.push(Listener {
                     pid,
                     port,
                     loopback,
                 });
             }
         }
-        out
+        listeners
     }
 
     pub fn process_name(pid: u32) -> Option<String> {
-        let mut buf = [0u8; 256];
-        // SAFETY: `buf` is writable for its length.
-        let n = unsafe { libc::proc_name(pid as c_int, buf.as_mut_ptr().cast(), buf.len() as u32) };
-        (n > 0).then(|| String::from_utf8_lossy(&buf[..n as usize]).into_owned())
+        let mut buffer = [0u8; 256];
+        // SAFETY: `buffer` is writable for its length.
+        let length = unsafe {
+            libc::proc_name(
+                pid as c_int,
+                buffer.as_mut_ptr().cast(),
+                buffer.len() as u32,
+            )
+        };
+        (length > 0).then(|| String::from_utf8_lossy(&buffer[..length as usize]).into_owned())
     }
 
     pub fn exe_path(pid: u32) -> Option<PathBuf> {
-        let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
-        // SAFETY: `buf` is writable for its length.
-        let n =
-            unsafe { libc::proc_pidpath(pid as c_int, buf.as_mut_ptr().cast(), buf.len() as u32) };
-        (n > 0).then(|| PathBuf::from(String::from_utf8_lossy(&buf[..n as usize]).into_owned()))
+        let mut buffer = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+        // SAFETY: `buffer` is writable for its length.
+        let length = unsafe {
+            libc::proc_pidpath(
+                pid as c_int,
+                buffer.as_mut_ptr().cast(),
+                buffer.len() as u32,
+            )
+        };
+        (length > 0).then(|| {
+            PathBuf::from(String::from_utf8_lossy(&buffer[..length as usize]).into_owned())
+        })
     }
 
     /// The environment from `KERN_PROCARGS2`: `argc`, the executable path, padding, `argc`
@@ -413,13 +434,13 @@ mod imp {
         if ret != 0 || size < 4 {
             return None;
         }
-        let mut buf = vec![0u8; size];
-        // SAFETY: `buf` is writable for `size` bytes.
+        let mut buffer = vec![0u8; size];
+        // SAFETY: `buffer` is writable for `size` bytes.
         let ret = unsafe {
             libc::sysctl(
                 mib.as_mut_ptr(),
                 3,
-                buf.as_mut_ptr().cast::<c_void>(),
+                buffer.as_mut_ptr().cast::<c_void>(),
                 &mut size,
                 std::ptr::null_mut(),
                 0,
@@ -428,15 +449,17 @@ mod imp {
         if ret != 0 {
             return None;
         }
-        buf.truncate(size);
-        let argc = i32::from_ne_bytes(buf[..4].try_into().ok()?) as usize;
-        let mut parts = buf[4..].split(|&b| b == 0).filter(|p| !p.is_empty());
+        buffer.truncate(size);
+        let argc = i32::from_ne_bytes(buffer[..4].try_into().ok()?) as usize;
+        let mut parts = buffer[4..]
+            .split(|&byte| byte == 0)
+            .filter(|part| !part.is_empty());
         parts.next()?; // the executable path
         Some(
             parts
                 .skip(argc)
-                .map(|p| String::from_utf8_lossy(p).into_owned())
-                .filter(|e| e.contains('='))
+                .map(|part| String::from_utf8_lossy(part).into_owned())
+                .filter(|variable| variable.contains('='))
                 .collect(),
         )
     }
@@ -469,10 +492,11 @@ mod tests {
         for _ in 0..100 {
             let tree = process_tree(child.id());
             found = tree.len() >= 2
-                && tree.iter().any(|&p| {
-                    open_files(p)
-                        .iter()
-                        .any(|f| f.canonicalize().is_ok_and(|f| f == canonical))
+                && tree.iter().any(|&pid| {
+                    open_files(pid).iter().any(|path| {
+                        path.canonicalize()
+                            .is_ok_and(|resolved| resolved == canonical)
+                    })
                 });
             if found {
                 break;
@@ -489,16 +513,16 @@ mod tests {
 
     #[test]
     fn finds_own_listening_sockets_and_environment() {
-        let v4 = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let any = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
+        let loopback_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let any_listener = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
         let me = std::process::id();
         let found = listening_ports(&[me]);
-        let p4 = v4.local_addr().unwrap().port();
-        let pany = any.local_addr().unwrap().port();
+        let loopback_port = loopback_listener.local_addr().unwrap().port();
+        let any_port = any_listener.local_addr().unwrap().port();
         assert!(
             found.contains(&Listener {
                 pid: me,
-                port: p4,
+                port: loopback_port,
                 loopback: true
             }),
             "{found:?}"
@@ -506,7 +530,7 @@ mod tests {
         assert!(
             found.contains(&Listener {
                 pid: me,
-                port: pany,
+                port: any_port,
                 loopback: false
             }),
             "{found:?}"

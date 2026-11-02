@@ -81,13 +81,11 @@ impl Shell {
 /// What starting a shell with integration needs.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct Injection {
-    /// Environment to set.
     pub env: Vec<(String, String)>,
     /// Arguments that go before the shell's own (`--posix` for bash).
     pub args: Vec<String>,
 }
 
-/// The installed scripts.
 #[derive(Debug, Clone)]
 pub(crate) struct ShellIntegration {
     dir: PathBuf,
@@ -97,8 +95,8 @@ impl ShellIntegration {
     /// Writes the scripts under `<state_dir>/shell-integration`, replacing stale copies.
     pub fn install(state_dir: &Path) -> io::Result<Self> {
         let dir = state_dir.join("shell-integration");
-        for (rel, contents) in FILES {
-            let path = dir.join(rel);
+        for (relative, contents) in FILES {
+            let path = dir.join(relative);
             if std::fs::read(&path).is_ok_and(|old| old == contents.as_bytes()) {
                 continue;
             }
@@ -115,46 +113,55 @@ impl ShellIntegration {
         lookup: impl Fn(&str) -> Option<OsString>,
     ) -> Option<Injection> {
         let kind = Shell::detect(shell)?;
-        let path = |rel: &str| self.dir.join(rel).to_string_lossy().into_owned();
-        let existing = |name: &str| lookup(name).map(|v| v.to_string_lossy().into_owned());
-        let mut inj = Injection::default();
-        inj.env
+        let path = |relative: &str| self.dir.join(relative).to_string_lossy().into_owned();
+        let existing = |name: &str| lookup(name).map(|value| value.to_string_lossy().into_owned());
+        let mut injection = Injection::default();
+        injection
+            .env
             .push(("GHOSTTY_SHELL_FEATURES".into(), FEATURES.into()));
         match kind {
             Shell::Zsh => {
                 if let Some(old) = existing("ZDOTDIR") {
-                    inj.env.push(("GHOSTTY_ZSH_ZDOTDIR".into(), old));
+                    injection.env.push(("GHOSTTY_ZSH_ZDOTDIR".into(), old));
                 }
-                inj.env.push(("ZDOTDIR".into(), path("zsh")));
+                injection.env.push(("ZDOTDIR".into(), path("zsh")));
             }
             Shell::Bash => {
-                inj.args.push("--posix".into());
-                if let Some(old) = existing("ENV").filter(|v| !v.is_empty()) {
-                    inj.env.push(("GHOSTTY_BASH_ENV".into(), old));
+                injection.args.push("--posix".into());
+                if let Some(old) = existing("ENV").filter(|value| !value.is_empty()) {
+                    injection.env.push(("GHOSTTY_BASH_ENV".into(), old));
                 }
-                inj.env.push(("ENV".into(), path("bash/ghostty.bash")));
-                inj.env.push(("GHOSTTY_BASH_INJECT".into(), "1".into()));
+                injection
+                    .env
+                    .push(("ENV".into(), path("bash/ghostty.bash")));
+                injection
+                    .env
+                    .push(("GHOSTTY_BASH_INJECT".into(), "1".into()));
                 if existing("HISTFILE").is_none()
                     && let Some(home) = existing("HOME")
                 {
-                    inj.env
+                    injection
+                        .env
                         .push(("HISTFILE".into(), format!("{home}/.bash_history")));
-                    inj.env
+                    injection
+                        .env
                         .push(("GHOSTTY_BASH_UNEXPORT_HISTFILE".into(), "1".into()));
                 }
             }
             Shell::Fish => {
                 let ours = self.dir.to_string_lossy().into_owned();
                 let rest = existing("XDG_DATA_DIRS")
-                    .filter(|v| !v.is_empty())
+                    .filter(|value| !value.is_empty())
                     .unwrap_or_else(|| "/usr/local/share:/usr/share".into());
-                inj.env
+                injection
+                    .env
                     .push(("GHOSTTY_SHELL_INTEGRATION_XDG_DIR".into(), ours.clone()));
-                inj.env
+                injection
+                    .env
                     .push(("XDG_DATA_DIRS".into(), format!("{ours}:{rest}")));
             }
         }
-        Some(inj)
+        Some(injection)
     }
 }
 
@@ -178,7 +185,7 @@ mod tests {
     #[test]
     fn installs_scripts_and_builds_injections() {
         let dir = tempfile::tempdir().unwrap();
-        let si = ShellIntegration::install(dir.path()).unwrap();
+        let integration = ShellIntegration::install(dir.path()).unwrap();
         let zshenv = dir.path().join("shell-integration/zsh/.zshenv");
         assert!(
             std::fs::read_to_string(&zshenv)
@@ -194,7 +201,7 @@ mod tests {
             "ENV" => Some("/home/u/.shrc".into()),
             _ => None,
         };
-        let zsh = si.injection(Path::new("/bin/zsh"), env).unwrap();
+        let zsh = integration.injection(Path::new("/bin/zsh"), env).unwrap();
         assert!(
             zsh.env
                 .contains(&("GHOSTTY_ZSH_ZDOTDIR".into(), "/home/u/.zsh".into()))
@@ -202,10 +209,10 @@ mod tests {
         assert!(
             zsh.env
                 .iter()
-                .any(|(k, v)| k == "ZDOTDIR" && v.ends_with("zsh"))
+                .any(|(name, value)| name == "ZDOTDIR" && value.ends_with("zsh"))
         );
 
-        let bash = si
+        let bash = integration
             .injection(Path::new("/usr/bin/bash-5/bash"), env)
             .unwrap();
         assert_eq!(bash.args, ["--posix"]);
@@ -218,14 +225,16 @@ mod tests {
                 .contains(&("HISTFILE".into(), "/home/u/.bash_history".into()))
         );
 
-        let fish = si.injection(Path::new("/usr/bin/fish"), |_| None).unwrap();
+        let fish = integration
+            .injection(Path::new("/usr/bin/fish"), |_| None)
+            .unwrap();
         let xdg = &fish
             .env
             .iter()
-            .find(|(k, _)| k == "XDG_DATA_DIRS")
+            .find(|(name, _)| name == "XDG_DATA_DIRS")
             .unwrap()
             .1;
         assert!(xdg.ends_with(":/usr/local/share:/usr/share"), "{xdg}");
-        assert!(si.injection(Path::new("/bin/sh"), env).is_none());
+        assert!(integration.injection(Path::new("/bin/sh"), env).is_none());
     }
 }

@@ -1,11 +1,9 @@
 import Foundation
-// `PaneBackend`, `PredictionFeed`, `ForegroundProgramReporting`, `PaneEvent` and the remote
-// backends live in HostKit (docs/APP-ARCHITECTURE.md); the app sees them everywhere.
+// The pane backend protocols and the remote backends live in HostKit.
 @_exported import HostKit
 import PaneLayout
 
-/// The backend for new panes in the local workspace: a login shell on a local PTY on macOS (a
-/// local echo under `-mock`), a local echo on iOS (the scratch workspace; remote hosts use HostKit's backends).
+/// A login shell on a local PTY on macOS; a local echo on iOS and under `-mock`.
 @MainActor
 func makeLocalBackend(for pane: PaneId) throws -> any PaneBackend {
     #if os(macOS)

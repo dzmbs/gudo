@@ -1,7 +1,6 @@
 //! Transport, pairing and grant hardening end to end: device removal reaches live
 //! connections and the invites a device signed, new pairings are announced, silent strangers
-//! are dropped, and every guest role is held to the
-//! enforcement table (docs/DAEMON.md §6.3).
+//! are dropped, and every guest role is held to the enforcement table (docs/DAEMON.md §6.3).
 
 use std::time::{Duration, Instant};
 
@@ -15,7 +14,7 @@ use client_core::{ClientConfig, MultiplayerEvent, now_millis};
 use crate::support::{TestClient, start, start_with, ticket};
 
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn spec(roles: Roles, label: &str) -> GrantSpec {
@@ -33,12 +32,17 @@ async fn guest_of(owner: &TestClient, roles: Roles, label: &str) -> TestClient {
         .expect("invite");
     let mut guest = TestClient::join(&invite.to_string(), ClientConfig::generate_key());
     guest.client.attach(None);
-    guest.until("guest attached", |c| c.layout.is_some()).await;
+    guest
+        .until("guest attached", |client| client.layout.is_some())
+        .await;
     guest
 }
 
-fn revoked(c: &TestClient) -> bool {
-    c.mp.iter().any(|e| matches!(e, MultiplayerEvent::Revoked))
+fn revoked(client: &TestClient) -> bool {
+    client
+        .mp
+        .iter()
+        .any(|event| matches!(event, MultiplayerEvent::Revoked))
 }
 
 /// `hostd unpair` on a lost phone: its live connection closes, and so do the guests it
@@ -62,7 +66,7 @@ async fn unpairing_from_the_cli_closes_the_device_and_its_invites() {
     kept.wait_text(pane, "still-kept").await;
     assert!(!revoked(&kept));
     // It cannot come back on its old pairing.
-    lost.until("lost device refused", |c| !c.refused.is_empty())
+    lost.until("lost device refused", |client| !client.refused.is_empty())
         .await;
     drop((lost, kept, guest));
     daemon.shutdown().await;
@@ -91,7 +95,7 @@ async fn revoking_an_owner_device_closes_the_guests_it_invited() {
     assert!(!revoked(&from_ipad), "invites from other devices stand");
     assert!(from_ipad.client.me().is_some());
     from_ipad
-        .until("still served", |c| c.layout.is_some())
+        .until("still served", |client| client.layout.is_some())
         .await;
     drop((phone, ipad, from_phone, from_ipad));
     daemon.shutdown().await;
@@ -109,9 +113,9 @@ async fn a_new_pairing_is_announced_to_the_other_owner_devices() {
     second.attach_and_follow().await;
     let device = second.client.me().unwrap().actor.device;
     first
-        .until("pairing announced", |c| {
-            c.mp.iter().any(
-                |e| matches!(e, MultiplayerEvent::DevicePaired { device: d } if d.device == device),
+        .until("pairing announced", |client| {
+            client.mp.iter().any(
+                |event| matches!(event, MultiplayerEvent::DevicePaired { device: paired } if paired.device == device),
             )
         })
         .await;
@@ -119,7 +123,7 @@ async fn a_new_pairing_is_announced_to_the_other_owner_devices() {
         !second
             .mp
             .iter()
-            .any(|e| matches!(e, MultiplayerEvent::DevicePaired { .. })),
+            .any(|event| matches!(event, MultiplayerEvent::DevicePaired { .. })),
         "the new device is not told about itself"
     );
     drop((first, second));
@@ -130,7 +134,10 @@ async fn a_new_pairing_is_announced_to_the_other_owner_devices() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_connection_that_never_says_hello_is_closed() {
     let dir = tempfile::tempdir().unwrap();
-    let daemon = start_with(dir.path(), |c| c.hello_timeout = Duration::from_millis(500)).await;
+    let daemon = start_with(dir.path(), |config| {
+        config.hello_timeout = Duration::from_millis(500)
+    })
+    .await;
     let endpoint = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
         .clear_ip_transports()
         .bind_addr("127.0.0.1:0".parse::<std::net::SocketAddr>().unwrap())
@@ -143,12 +150,12 @@ async fn a_connection_that_never_says_hello_is_closed() {
     for socket in daemon.bound_sockets() {
         addr = addr.with_ip_addr(socket);
     }
-    let conn = endpoint
+    let connection = endpoint
         .connect(addr, client_core::proto::ALPN)
         .await
         .unwrap();
     let start = Instant::now();
-    tokio::time::timeout(Duration::from_secs(10), conn.closed())
+    tokio::time::timeout(Duration::from_secs(10), connection.closed())
         .await
         .expect("the daemon closes a silent connection");
     assert!(start.elapsed() < Duration::from_secs(5));
@@ -158,19 +165,19 @@ async fn a_connection_that_never_says_hello_is_closed() {
 
 /// What a guest role was refused for, if it was refused for its role.
 fn role_refusal(result: Result<(), String>) -> bool {
-    result.is_err_and(|e| e.contains("needs "))
+    result.is_err_and(|error| error.contains("needs "))
 }
 
-fn ws<T>(r: Result<T, WsError>) -> Result<(), String> {
-    r.map(drop).map_err(|e| match e {
-        WsError::Denied(m) => m,
+fn ws<T>(result: Result<T, WsError>) -> Result<(), String> {
+    result.map(drop).map_err(|error| match error {
+        WsError::Denied(message) => message,
         other => format!("{other:?}"),
     })
 }
 
-fn mp<T>(r: Result<T, MpError>) -> Result<(), String> {
-    r.map(drop).map_err(|e| match e {
-        MpError::Forbidden(m) => m,
+fn mp<T>(result: Result<T, MpError>) -> Result<(), String> {
+    result.map(drop).map_err(|error| match error {
+        MpError::Forbidden(message) => message,
         other => format!("{other:?}"),
     })
 }
@@ -210,8 +217,8 @@ async fn each_guest_role_gets_exactly_what_the_table_allows() {
         Roles::APPROVER,
         Roles::DRIVER,
     ] {
-        let mut g = guest_of(&owner, roles, "matrix").await;
-        let c = &g.client;
+        let mut guest = guest_of(&owner, roles, "matrix").await;
+        let client = &guest.client;
         let file = scratch.join(format!("{}.txt", roles.names()));
         let target = WriteTarget {
             path: file.display().to_string(),
@@ -224,74 +231,77 @@ async fn each_guest_role_gets_exactly_what_the_table_allows() {
             (
                 "prompt",
                 Level::Prompt,
-                mp(c.prompt(pane, "hi".into(), false).await),
+                mp(client.prompt(pane, "hi".into(), false).await),
             ),
             (
                 "fs list",
                 Level::Drive,
-                ws(c.workspace(WorkspaceRequest::FsList {
-                    path: scratch.display().to_string(),
-                    show_hidden: false,
-                })
-                .await),
+                ws(client
+                    .workspace(WorkspaceRequest::FsList {
+                        path: scratch.display().to_string(),
+                        show_hidden: false,
+                    })
+                    .await),
             ),
             (
                 "fs write",
                 Level::Drive,
-                ws(c.fs_write(target.clone(), b"x".to_vec()).await),
+                ws(client.fs_write(target.clone(), b"x".to_vec()).await),
             ),
             (
                 "upload",
                 Level::Drive,
-                ws(c.upload_bytes(b"x".to_vec(), target).await),
+                ws(client.upload_bytes(b"x".to_vec(), target).await),
             ),
             (
                 "forward",
                 Level::Drive,
-                ws(c.forward_io(
-                    ForwardTarget::Tcp { port: 1 },
-                    tokio::io::empty(),
-                    tokio::io::sink(),
-                )
-                .await),
+                ws(client
+                    .forward_io(
+                        ForwardTarget::Tcp { port: 1 },
+                        tokio::io::empty(),
+                        tokio::io::sink(),
+                    )
+                    .await),
             ),
             (
                 "editor status",
                 Level::Drive,
-                ws(c.workspace(WorkspaceRequest::EditorStatus).await),
+                ws(client.workspace(WorkspaceRequest::EditorStatus).await),
             ),
             (
                 "take control",
                 Level::Drive,
-                mp(c.take_control(pane, false).await),
+                mp(client.take_control(pane, false).await),
             ),
             (
                 "push status",
                 Level::Own,
-                ws(c.workspace(WorkspaceRequest::PushStatus).await),
+                ws(client.workspace(WorkspaceRequest::PushStatus).await),
             ),
             (
                 "usage watch off",
                 Level::Own,
-                ws(c.workspace(WorkspaceRequest::UsageUnwatch).await),
+                ws(client.workspace(WorkspaceRequest::UsageUnwatch).await),
             ),
-            ("list grants", Level::Own, mp(c.list_grants().await)),
-            ("list devices", Level::Own, mp(c.list_devices().await)),
-            ("audit", Level::Own, mp(c.audit(None, 10).await)),
+            ("list grants", Level::Own, mp(client.list_grants().await)),
+            ("list devices", Level::Own, mp(client.list_devices().await)),
+            ("audit", Level::Own, mp(client.audit(None, 10).await)),
             (
                 "revoke",
                 Level::Own,
-                mp(c.revoke(RevokeTarget::Grant(GrantId([9; 16]))).await),
+                mp(client.revoke(RevokeTarget::Grant(GrantId([9; 16]))).await),
             ),
             (
                 "answer knock",
                 Level::Own,
-                mp(c.answer_knock(KnockId(1), None).await),
+                mp(client.answer_knock(KnockId(1), None).await),
             ),
             (
                 "approval rules",
                 Level::Own,
-                mp(c.set_approval_policy(session, ApprovalPolicy::default())
+                mp(client
+                    .set_approval_policy(session, ApprovalPolicy::default())
                     .await),
             ),
         ];
@@ -319,7 +329,7 @@ async fn each_guest_role_gets_exactly_what_the_table_allows() {
                 Level::Own,
             ),
         ] {
-            checks.push((name, level, op(g.op(layout_op).await)));
+            checks.push((name, level, op(guest.op(layout_op).await)));
         }
         for (name, level, result) in checks {
             let allowed = match level {
@@ -336,7 +346,7 @@ async fn each_guest_role_gets_exactly_what_the_table_allows() {
                 roles.names()
             );
         }
-        drop(g);
+        drop(guest);
     }
     // Nothing a guest did closed the owner's pane or session.
     assert!(owner.layout.as_ref().is_some());

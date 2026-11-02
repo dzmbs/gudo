@@ -1,7 +1,7 @@
 #if os(iOS)
 import XCTest
 
-/// The context-aware key bar (04-mobile-ux C5) over the software keyboard: profile switching from
+/// The context-aware key bar over the software keyboard: profile switching from
 /// the pane title, the agent composer, and snippets. Titles are set through the iOS echo backend's
 /// `title <text>` command, which emits OSC 2 like a program would.
 final class KeyBarUITests: XCTestCase {
@@ -99,6 +99,7 @@ final class KeyBarUITests: XCTestCase {
         hold()
     }
 
+    /// Capsule A and the arrow circle sit in the same place in every profile, a
     /// key's second character is in its long-press menu, and tapping ✥ opens the arrow pad.
     @MainActor
     func testCapsuleAIsFixedLongPressSendsAlternateAndJoystickOpensPad() throws {
@@ -137,7 +138,7 @@ final class KeyBarUITests: XCTestCase {
         hold()
     }
 
-    /// Never fewer than four profile keys, whatever the width (the old bar collapsed to "~").
+    /// Never fewer than four profile keys, whatever the width.
     @MainActor
     func testProfileCapsuleKeepsAtLeastFourKeys() throws {
         let app = launch()
@@ -151,7 +152,7 @@ final class KeyBarUITests: XCTestCase {
         add(attachment)
     }
 
-    /// overlaps, and alt joins capsule A.
+    /// Landscape: every capsule key is on screen, nothing overlaps, and alt joins capsule A.
     @MainActor
     func testLandscapeKeepsCapsulesApart() throws {
         let app = launch()

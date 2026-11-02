@@ -2,10 +2,9 @@
 import HostKit
 import UIKit
 
-/// Keeps host connections up for the time iOS grants an app that just went to the background,
-/// so a quick visit to another app comes back to live terminals and editors (VS Code's
-/// websockets never notice it left). Connections are suspended only when that time runs out;
-/// coming back resumes them before the app is active again, so pages' timers find the link up.
+/// Keeps host connections up for the background time iOS grants, so a quick visit to another app
+/// comes back to live terminals and editors. Connections resume before the app is active again,
+/// so pages' timers find the link up.
 @MainActor
 final class BackgroundGrace {
     static let shared = BackgroundGrace()
@@ -21,7 +20,6 @@ final class BackgroundGrace {
         }
     }
 
-    /// The app went to the background.
     func enter() {
         guard task == .invalid, !suspended else { return }
         task = UIApplication.shared.beginBackgroundTask(withName: "Keep host connections") {
@@ -30,7 +28,6 @@ final class BackgroundGrace {
         if task == .invalid { expire() }
     }
 
-    /// The app is coming back: end the grace, and resume what was suspended.
     func returned() {
         end()
         guard suspended else { return }

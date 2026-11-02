@@ -43,8 +43,8 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         }
     }
 
-    /// Windows (Windows/ExternalDisplay.swift): an external display without Stage Manager gets a
-    /// window of its own; every other scene is SwiftUI's `WindowGroup`.
+    /// An external display without Stage Manager gets a window of its own; every other scene is
+    /// SwiftUI's `WindowGroup`.
     func application(
         _ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession,
         options: UIScene.ConnectionOptions
@@ -62,8 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Hosting unit tests: no Dock icon and never active, so a test run leaves the screen alone.
         if LaunchOptions.isTesting { NSApp.setActivationPolicy(.accessory) }
         #if DEBUG
-        // `-dogfoodBackground YES` (scripts/dogfood.sh's default): a test run never takes the
-        // screen from whoever is working. No Dock icon, never active, its window kept behind.
+        // `-dogfoodBackground YES`: a dogfood run never takes the screen from whoever is working.
         if UserDefaults.standard.bool(forKey: "dogfoodBackground") {
             NSApp.setActivationPolicy(.accessory)
         }

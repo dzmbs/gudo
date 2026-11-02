@@ -7,13 +7,6 @@ import GudoCore
 import UIKit
 #endif
 
-// Presence on the terminal: avatars in the toolbar and pane headers, who is driving a pane and
-// "Take Control", the holder's hand-over prompt, the guest's role banner and the prompter's
-// composer. All of it floats on the grid as quiet glass (DESIGN.md: chrome recedes, color only
-// for state), and none of it shows while the owner is alone.
-
-/// The toolbar's people button: others' avatars (≤ 3 + N, typing ring), or a share glyph when
-/// nobody else is here. Opens Share Session.
 struct PresenceToolbarButton: View {
     let session: MultiplayerSession
     /// The tab a pane is in, for "In cargo test".
@@ -26,7 +19,6 @@ struct PresenceToolbarButton: View {
 
     var body: some View {
         let others = session.others
-        // Alone, it is Share Session; with people here it lists them (follow, then share).
         Button {
             if others.isEmpty { action() } else { showsPeople.toggle() }
         } label: {
@@ -90,8 +82,6 @@ struct PresenceToolbarButton: View {
     }
 }
 
-/// People in one pane, for its header: small avatars with typing rings and a keyboard when one
-/// of them is driving.
 struct PanePresence: View {
     let workspace: Workspace
     let pane: PaneId
@@ -135,20 +125,19 @@ struct PanePresence: View {
     }
 }
 
-/// Three dots that breathe while someone types (stills under Reduce Motion).
 struct TypingDots: View {
     let color: AnyShapeStyle
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1 / 15, paused: reduceMotion)) { context in
-            let t = context.date.timeIntervalSinceReferenceDate
+            let seconds = context.date.timeIntervalSinceReferenceDate
             HStack(spacing: 2) {
                 ForEach(0..<3) { index in
                     Circle()
                         .fill(color)
                         .frame(width: 3.5, height: 3.5)
-                        .opacity(reduceMotion ? 0.8 : 0.35 + 0.65 * max(0, sin((t * 5) - Double(index) * 0.8)))
+                        .opacity(reduceMotion ? 0.8 : 0.35 + 0.65 * max(0, sin((seconds * 5) - Double(index) * 0.8)))
                 }
             }
         }
@@ -156,7 +145,6 @@ struct TypingDots: View {
     }
 }
 
-/// Everything multiplayer drawn over one pane.
 struct MultiplayerPaneOverlay: View {
     let workspace: Workspace
     let pane: PaneId
@@ -182,7 +170,6 @@ struct MultiplayerPaneOverlay: View {
                     .padding(.top, 52)
                     .padding(.horizontal, DS.Space.m)
                 VStack(alignment: .leading, spacing: DS.Space.s) {
-                    // Following someone: on the pane they brought you to, with how to stop.
                     if isFocused {
                         FollowPill(session: session)
                             .movingTransition(.top)
@@ -193,7 +180,6 @@ struct MultiplayerPaneOverlay: View {
                 .padding(DS.Space.s)
                 .animation(DS.Motion.overlay, value: session.following)
                 VStack(alignment: .leading, spacing: DS.Space.s) {
-                    // Others' drafts and typing, live, above any composer of this device's.
                     LivePaneActivity(session: session, pane: pane.rawValue)
                     // A prompter's composer sits on every agent pane (it is their only input);
                     // the role banner only on the focused pane.
@@ -230,7 +216,6 @@ struct MultiplayerPaneOverlay: View {
     }
 }
 
-/// Who drives the pane, and the way to take over. Owners can force.
 private struct ControlChip: View {
     let session: MultiplayerSession
     let pane: UInt64
@@ -241,8 +226,8 @@ private struct ControlChip: View {
                 Text("Asked \(session.name(ofPrincipal: pending.holder))")
                     .font(.callout.weight(.medium))
                 TimelineView(.periodic(from: pending.since, by: 1)) { context in
-                    let left = max(0, Int((session.leaseIdle / .seconds(1)).rounded()) - Int(context.date.timeIntervalSince(pending.since)))
-                    Text(left > 0 ? "· yours if idle \(left) s" : "· waiting for an answer")
+                    let secondsLeft = max(0, Int((session.leaseIdle / .seconds(1)).rounded()) - Int(context.date.timeIntervalSince(pending.since)))
+                    Text(secondsLeft > 0 ? "· yours if idle \(secondsLeft) s" : "· waiting for an answer")
                         .font(DS.Font.meta)
                         .foregroundStyle(DS.Palette.textSecondary)
                         .contentTransition(.numericText(countsDown: true))
@@ -284,7 +269,7 @@ private struct ControlChip: View {
     }
 }
 
-/// The holder is asked: keep or hand over. If they stay idle, the host hands over by itself.
+/// Asks the holder to keep or hand over; if they stay idle, the host hands over by itself.
 private struct LeaseRequestCard: View {
     let session: MultiplayerSession
     let request: MultiplayerSession.LeaseRequest
@@ -300,8 +285,8 @@ private struct LeaseRequestCard: View {
                         .font(.callout.weight(.semibold))
                         .lineLimit(1)
                     TimelineView(.periodic(from: request.at, by: 1)) { context in
-                        let left = max(0, Int((session.leaseIdle / .seconds(1)).rounded()) - Int(context.date.timeIntervalSince(request.at)))
-                        Text(left > 0 ? "Hands over in \(left) s if you stay idle" : "Hands over when you stop typing")
+                        let secondsLeft = max(0, Int((session.leaseIdle / .seconds(1)).rounded()) - Int(context.date.timeIntervalSince(request.at)))
+                        Text(secondsLeft > 0 ? "Hands over in \(secondsLeft) s if you stay idle" : "Hands over when you stop typing")
                             .font(DS.Font.meta)
                             .foregroundStyle(DS.Palette.textSecondary)
                             .lineLimit(1)
@@ -333,7 +318,6 @@ private struct LeaseRequestCard: View {
     }
 }
 
-/// A guest who cannot type: what they can do here, always visible but out of the way.
 private struct GuestBanner: View {
     let session: MultiplayerSession
     let isAgentPane: Bool
@@ -368,8 +352,7 @@ private struct GuestBanner: View {
     }
 }
 
-/// The prompter's composer on an agent pane: text goes through the host's sanitizer as a
-/// bracketed paste, then Enter. Others see a typing indicator while it has text.
+/// The host sends the prompt as a sanitized bracketed paste, then Enter.
 private struct PromptComposer: View {
     let session: MultiplayerSession
     let pane: UInt64
@@ -440,14 +423,12 @@ private struct PromptComposer: View {
     }
 }
 
-/// Window-level multiplayer: notices (refusals, hand-overs, revocation) become toasts.
 struct MultiplayerWindowHooks: ViewModifier {
     let workspace: Workspace
     @Environment(WindowModel.self) private var model
 
     func body(content: Content) -> some View {
         content
-            // Someone with a knock link waits for the owner (the Inbox has the full list).
             .overlay(alignment: .bottom) { KnockOverlay(workspace: workspace) }
             .modifier(PresenceSyncModifier(workspace: workspace))
             .onChange(of: workspace.multiplayer?.notice) { _, notice in
@@ -455,14 +436,14 @@ struct MultiplayerWindowHooks: ViewModifier {
                 var toast = PresenceNotices.toast(notice, in: session)
                 switch notice.kind {
                 case .devicePaired, .hostAlert:
-                    if let host = workspace.hostId {
-                        toast.action = Toast.Action("Review") { SettingsLink.shared.open(.hostDevices(host)) }
+                    if let hostId = workspace.hostId {
+                        toast.action = Toast.Action("Review") { SettingsLink.shared.open(.hostDevices(hostId)) }
                     }
                 default: break
                 }
                 model.toasts.show(toast)
             }
-            // Per host: the window no longer rebuilds per workspace (multi-host sidebar).
+            // Keyed by host: one window is reused across hosts.
             .task(id: "\(workspace.hostId ?? "")/\(workspace.multiplayer?.me?.name ?? "")") {
                 // A paired device is "owner" on the host until it says who it is; others see
                 // this device's name instead.
@@ -481,7 +462,6 @@ struct MultiplayerWindowHooks: ViewModifier {
     }
 }
 
-/// Banners for multiplayer notices; arrivals and departures of one person carry their avatar.
 enum PresenceNotices {
     @MainActor static func toast(_ notice: MultiplayerSession.Notice, in session: MultiplayerSession) -> Toast {
         var toast = notice.toast

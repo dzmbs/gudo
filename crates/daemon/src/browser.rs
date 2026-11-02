@@ -47,7 +47,6 @@ pub struct BrowserCall {
     pub token: String,
     /// The pane id from the pane's environment.
     pub pane: String,
-    /// What to do.
     pub browser: BrowserAsk,
 }
 
@@ -56,10 +55,7 @@ pub struct BrowserCall {
 #[serde(rename_all = "snake_case")]
 pub enum BrowserAsk {
     /// Open a URL (`$BROWSER <url>`).
-    Open {
-        /// The URL.
-        url: String,
-    },
+    Open { url: String },
     /// Run a browser tool.
     Tool {
         /// Its name (`browser_navigate`, …).
@@ -92,8 +88,8 @@ struct Pending {
 /// flight.
 pub(crate) struct Browser {
     helper: Option<PathBuf>,
-    next: AtomicU64,
-    conns: Mutex<HashMap<ConnId, Authz>>,
+    next_call_id: AtomicU64,
+    connections: Mutex<HashMap<ConnId, Authz>>,
     calls: Mutex<HashMap<u64, Pending>>,
 }
 
@@ -111,15 +107,15 @@ impl Browser {
         );
         let helper = match crate::askpass::write_executable(&helper, &script) {
             Ok(()) => Some(helper),
-            Err(e) => {
-                tracing::warn!("writing the browser helper: {e}");
+            Err(error) => {
+                tracing::warn!("writing the browser helper: {error}");
                 None
             }
         };
         Self {
             helper,
-            next: AtomicU64::new(1),
-            conns: Mutex::default(),
+            next_call_id: AtomicU64::new(1),
+            connections: Mutex::default(),
             calls: Mutex::default(),
         }
     }
@@ -143,23 +139,23 @@ impl Browser {
 
     pub fn register(&self, conn: ConnId, authz: &Authz, caps: Caps) {
         if caps.contains(Caps::BROWSER) {
-            lock(&self.conns).insert(conn, authz.clone());
+            lock(&self.connections).insert(conn, authz.clone());
         }
     }
 
     /// A connection left: its calls fail now rather than at the timeout.
     pub fn forget_conn(&self, conn: ConnId) {
-        lock(&self.conns).remove(&conn);
-        lock(&self.calls).retain(|_, p| p.conn != conn);
+        lock(&self.connections).remove(&conn);
+        lock(&self.calls).retain(|_, pending| pending.conn != conn);
     }
 
     /// The app's answer to call `id`; only the connection it was sent to may give it.
     pub fn answer(&self, conn: ConnId, id: u64, result: Result<String, String>) {
         let mut calls = lock(&self.calls);
-        if calls.get(&id).is_some_and(|p| p.conn == conn)
-            && let Some(p) = calls.remove(&id)
+        if calls.get(&id).is_some_and(|pending| pending.conn == conn)
+            && let Some(pending) = calls.remove(&id)
         {
-            let _ = p.reply.send(result);
+            let _ = pending.reply.send(result);
         }
     }
 }
@@ -168,11 +164,11 @@ impl Core {
     /// The connection that shows `pane`'s browser (see the module docs).
     pub(crate) fn browser_conn(&self, pane: PaneId) -> Option<ConnId> {
         let session = self.session_of_pane(pane)?;
-        let conns: Vec<(ConnId, Authz)> = lock(&self.browser.conns)
+        let connections: Vec<(ConnId, Authz)> = lock(&self.browser.connections)
             .iter()
-            .map(|(c, a)| (*c, a.clone()))
+            .map(|(conn, authz)| (*conn, authz.clone()))
             .collect();
-        let eligible: Vec<ConnId> = conns
+        let eligible: Vec<ConnId> = connections
             .into_iter()
             .filter(|(conn, authz)| {
                 self.attached_session(*conn) == Some(session)
@@ -185,9 +181,9 @@ impl Core {
             .collect();
         let sizer = self
             .pane(pane)
-            .and_then(|e| lock(&e.meta).sized_by.map(|(conn, _)| conn));
+            .and_then(|entry| lock(&entry.meta).sized_by.map(|(conn, _)| conn));
         sizer
-            .filter(|c| eligible.contains(c))
+            .filter(|conn| eligible.contains(conn))
             .or_else(|| eligible.into_iter().max())
     }
 }
@@ -239,7 +235,7 @@ pub(crate) async fn serve(
                     "browser tools are off while {guest} is driving this pane"
                 ));
             }
-            let id = core.browser.next.fetch_add(1, Ordering::Relaxed);
+            let id = core.browser.next_call_id.fetch_add(1, Ordering::Relaxed);
             let (tx, rx) = oneshot::channel();
             lock(&core.browser.calls).insert(id, Pending { conn, reply: tx });
             core.emit(Event::Browser {

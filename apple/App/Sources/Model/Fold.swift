@@ -1,7 +1,6 @@
 import CoreGraphics
 
-/// The hinge as the system reports it (`UIHinge`, SwiftUI `DeviceHinge`), kept free of UIKit so
-/// the layout rules below are plain values.
+/// The hinge as the system reports it, kept free of UIKit so the layout rules are plain values.
 struct HingeReading: Equatable, Sendable {
     enum Status: String, Sendable {
         case unknown, closed, partiallyOpen, fullyOpen
@@ -12,12 +11,12 @@ struct HingeReading: Equatable, Sendable {
     var angle: Double
 }
 
-/// What a foldable is doing. iOS has no posture value (Apple DTS): it is read from the hinge's
-/// status and the fold's division region, whose shape says which way the fold runs.
+/// iOS has no posture value: it is read from the hinge's status and the division region, whose
+/// shape says which way the fold runs.
 enum FoldPosture: String, Sendable, CaseIterable {
     /// No hinge: iPhone, iPad, Mac.
     case none
-    /// Closed: the cover screen.
+    /// The cover screen.
     case folded
     /// The inner screen, open flat.
     case flat
@@ -27,19 +26,18 @@ enum FoldPosture: String, Sendable, CaseIterable {
     case tabletop
 }
 
-/// The window's fold: the hinge, and the division region in window coordinates (`.division`,
-/// queried with `.includeInactive` so a flat screen still says where its fold is).
+/// The division region is in window coordinates, queried with `.includeInactive` so a flat
+/// screen still says where its fold is.
 struct FoldGeometry: Equatable, Sendable {
     var hinge: HingeReading?
-    /// The division's frame, margins included; zero wide (or tall) while the screen is flat.
+    /// Margins included; zero wide (or tall) while the screen is flat.
     var division: CGRect?
-    /// Active only while the device is partly open: then nothing interactive belongs under it.
+    /// Active only while partly open, when nothing interactive belongs under it.
     var isDivisionActive = false
     var windowSize: CGSize = .zero
 
-    /// Narrower than this, a window is a phone (the width bucket's boundary).
     static let phoneWidth = WidthBucket.boundary
-    /// The band kept clear over a flat fold, which still shows as a faint crease.
+    /// A flat fold still shows as a faint crease.
     static let flatGutter: CGFloat = 12
 
     var posture: FoldPosture {
@@ -60,13 +58,11 @@ struct FoldGeometry: Equatable, Sendable {
         }
     }
 
-    /// Where the fold crosses this window and which way it runs. A division wider than tall runs
-    /// across; a zero-sized one (flat) is read from its own extent.
+    /// Nil when the fold doesn't cross this window (a Split View half).
     var foldLine: (isVertical: Bool, frame: CGRect)? {
         guard let division, windowSize.width > 0, windowSize.height > 0 else { return nil }
         let window = CGRect(origin: .zero, size: windowSize)
         let isVertical = division.height >= division.width
-        // Only a fold that crosses the window splits it (a Split View half has none).
         if isVertical {
             guard division.midX > window.minX, division.midX < window.maxX else { return nil }
         } else {
@@ -75,7 +71,6 @@ struct FoldGeometry: Equatable, Sendable {
         return (isVertical, division)
     }
 
-    /// The band nothing is placed under: the active division, or a thin one over a flat fold.
     var gutter: CGRect? {
         guard let fold = foldLine else { return nil }
         if isDivisionActive, fold.frame.width > 0, fold.frame.height > 0 { return fold.frame }
@@ -87,13 +82,10 @@ struct FoldGeometry: Equatable, Sendable {
 }
 
 extension FoldGeometry {
-    /// The band a partly open fold reserves in `simulated`: a guess, as Apple publishes no width
-    /// (the device reports its own through the division's frame and margins).
+    /// A guess: Apple publishes no width; the device reports its own through the division.
     static let simulatedCrease: CGFloat = 24
 
-    /// `posture` over a window of `size`, the fold through its middle: top to bottom for a book,
-    /// across for tabletop, and across the long side when flat (the inner screen folds in half).
-    /// For the simulator, which folds only by hand, and for tests.
+    /// The fold through the window's middle, for the simulator (which folds only by hand) and tests.
     static func simulated(_ posture: FoldPosture, in size: CGSize) -> FoldGeometry {
         var fold = FoldGeometry(windowSize: size)
         let vertical = CGRect(x: size.width / 2, y: 0, width: 0, height: size.height)
@@ -120,16 +112,12 @@ extension FoldGeometry {
     }
 }
 
-/// How a window uses its fold.
 enum FoldLayout: Equatable, Sendable {
-    /// What the window's width gives: iPhone, iPad, Mac, the cover screen, a Split View half, and
-    /// the inner screen held tall and flat (scrolling content may cross a flat fold; HIG).
+    /// Also the inner screen held tall and flat: per the HIG, scrolling content may cross a flat fold.
     case standard
-    /// A fold top to bottom (open wide, or a book): one page each side. `leading` is the left
-    /// page's width and `gutter` the band between the pages, both in window points.
+    /// A fold top to bottom: one page each side. Window points.
     case pages(leading: CGFloat, gutter: CGFloat)
-    /// A fold across, partly open: the terminal above, the deck below. `top` is the upper
-    /// screen's height and `gutter` the band between them.
+    /// A fold across, partly open: the terminal above, the deck below.
     case deck(top: CGFloat, gutter: CGFloat)
 
     /// Each side of a fold must hold a phone-width page; a narrower half is no page at all.
@@ -169,7 +157,6 @@ extension FoldLayout {
         if case .pages = self { true } else { false }
     }
 
-    /// The band over the fold, nothing on it.
     var gutter: CGFloat {
         switch self {
         case .standard: 0
@@ -177,12 +164,10 @@ extension FoldLayout {
         }
     }
 
-    /// The left page's width for a view whose leading edge is at `x` (window points).
     func leadingPage(from x: CGFloat) -> CGFloat? {
         if case .pages(let leading, _) = self { max(0, leading - x) } else { nil }
     }
 
-    /// The upper screen's height for a view whose top is at `y` (window points).
     func deckTop(from y: CGFloat) -> CGFloat? {
         if case .deck(let top, _) = self { max(0, top - y) } else { nil }
     }

@@ -69,7 +69,7 @@ while on the same network. Push notifications still need the push relay (docs/PU
 ## 2. Run your own iroh-relay on a VPS (Docker)
 
 Needs: a VPS with a public IPv4 (and ideally IPv6), a DNS name, ports **80/tcp, 443/tcp,
-7842/udp** open. 1 vCPU / 1 GB is plenty for a household; bandwidth is the cost driver
+7842/udp** open. 1 vCPU / 1 GB is plenty for a household; bandwidth is the cost driver.
 
 1. DNS: `A` (and `AAAA`) record `relay.example.com` → the VPS.
 2. On the VPS:
@@ -125,15 +125,15 @@ Without Docker: `cargo install iroh-relay --version 1.3.0 --features server` and
 
 `cargo test -p daemon --test it relays`:
 
-- `daemon_and_client_connect_through_a_self_hosted_relay` — spawns an `iroh-relay` server in
+- `daemon_and_client_connect_through_a_self_hosted_relay`: spawns an `iroh-relay` server in
   process (self-signed certificate for 127.0.0.1), starts a daemon with `RelayMode::Custom` and
   the certificate as `ca_files`, mints a pairing link, **strips the direct addresses** from
   the ticket, and connects a default-mode client with the certificate in
   `ConnectOptions::relay_ca_der`; the client attaches and round-trips a shell command, which is
   only possible through the relay.
-- `local_only_daemons_hand_out_direct_tickets` — a relay-less daemon's link carries
+- `local_only_daemons_hand_out_direct_tickets`: a relay-less daemon's link carries
   `TicketRelays::Disabled` and a default-mode client follows it and connects directly.
-- `relay_settings_come_from_config_toml` — parsing, validation and the `--no-relay`
+- `relay_settings_come_from_config_toml`: parsing, validation and the `--no-relay`
   precedence.
 
 `cargo test -p proto --test golden ticket_extras` freezes the extension bytes and checks old
@@ -144,6 +144,7 @@ parsers still read extended tickets.
 - The default relay `relay.gudo.dev` must be running before release: until it is, devices on
   different networks reach a default-mode daemon only over direct paths.
 - A daemon whose home relay changes while no client is connected relies on the app redialling
+  the ticket's relays; no `iroh-dns-server` / Pkarr origin is run.
 - No per-host override of the Network setting: it applies to every host.
 - The private-CA path is tested in Rust against an in-process relay; the app's UI test imports
   a CA and connects directly (no relay runs in the simulator test).

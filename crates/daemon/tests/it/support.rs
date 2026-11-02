@@ -86,7 +86,6 @@ pub struct TestClient {
     /// `ClientEvent::Incompatible` reasons.
     pub incompatible: Vec<String>,
     mp_events: UnboundedReceiver<MultiplayerEvent>,
-    /// Multiplayer pushes received so far.
     pub mp: Vec<MultiplayerEvent>,
     askpass_events: UnboundedReceiver<AskpassEvent>,
     /// Askpass pushes received so far (connections made with `askpass: true`).
@@ -243,8 +242,8 @@ impl TestClient {
         match event {
             ClientEvent::Connected { .. } => self.connected += 1,
             ClientEvent::Layout { layout } => {
-                if self.layout.as_ref().is_none_or(|l| {
-                    l.session_id != layout.session_id || l.revision <= layout.revision
+                if self.layout.as_ref().is_none_or(|current| {
+                    current.session_id != layout.session_id || current.revision <= layout.revision
                 }) {
                     self.layout = Some(layout);
                 }
@@ -329,7 +328,7 @@ impl TestClient {
 
     /// Waits for the answer to request `id`.
     pub async fn answer(&mut self, id: u64) -> ClientEvent {
-        self.until("request answer", |c| c.answers.contains_key(&id))
+        self.until("request answer", |client| client.answers.contains_key(&id))
             .await;
         self.answers.remove(&id).expect("present")
     }
@@ -341,13 +340,13 @@ impl TestClient {
 
     pub async fn wait_flat(&mut self, pane: PaneId, needle: &str) {
         let what = format!("{needle:?} in pane {pane}");
-        self.until(&what, |c| c.flat_text(pane).contains(needle))
+        self.until(&what, |client| client.flat_text(pane).contains(needle))
             .await;
     }
 
     pub async fn op(&mut self, op: LayoutOp) -> OpOutcome {
         let id = self.client.op(op);
-        self.until("op result", |c| c.results.contains_key(&id))
+        self.until("op result", |client| client.results.contains_key(&id))
             .await;
         self.results[&id].clone()
     }
@@ -357,7 +356,7 @@ impl TestClient {
         layout
             .tabs
             .iter()
-            .find(|t| Some(t.tab_id) == layout.active_tab)
+            .find(|tab| Some(tab.tab_id) == layout.active_tab)
             .expect("active tab")
     }
 
@@ -368,7 +367,7 @@ impl TestClient {
     /// Attaches to the default session and follows its focused pane.
     pub async fn attach_and_follow(&mut self) -> PaneId {
         self.client.attach(None);
-        self.until("layout", |c| c.layout.is_some()).await;
+        self.until("layout", |client| client.layout.is_some()).await;
         let pane = self.focused();
         self.follow(pane).await;
         pane
@@ -386,8 +385,10 @@ impl TestClient {
         );
         self.client.subscribe(pane);
         self.client.set_view(Some(pane), vec![pane]);
-        self.until("pane mirror", |c| c.client.pane_seq(pane).is_some())
-            .await;
+        self.until("pane mirror", |client| {
+            client.client.pane_seq(pane).is_some()
+        })
+        .await;
     }
 
     pub fn text(&self, pane: PaneId) -> String {
@@ -396,7 +397,8 @@ impl TestClient {
 
     pub async fn wait_text(&mut self, pane: PaneId, needle: &str) {
         let what = format!("{needle:?} in pane {pane}");
-        self.until(&what, |c| c.text(pane).contains(needle)).await;
+        self.until(&what, |client| client.text(pane).contains(needle))
+            .await;
     }
 
     pub fn type_line(&self, pane: PaneId, line: &str) {
@@ -405,14 +407,13 @@ impl TestClient {
     }
 }
 
-/// Leaves of a split tree.
 pub fn leaves(node: &LayoutNode) -> Vec<PaneId> {
     match node {
-        LayoutNode::Leaf(p) => vec![*p],
+        LayoutNode::Leaf(pane) => vec![*pane],
         LayoutNode::Split { first, second, .. } => {
-            let mut v = leaves(first);
-            v.extend(leaves(second));
-            v
+            let mut panes = leaves(first);
+            panes.extend(leaves(second));
+            panes
         }
     }
 }
@@ -422,10 +423,10 @@ pub fn shape(layout: &SessionLayout) -> Vec<String> {
     layout
         .tabs
         .iter()
-        .map(|t| format!("{}:{:?}", t.name, t.root))
+        .map(|tab| format!("{}:{:?}", tab.name, tab.root))
         .collect()
 }
 
-pub fn ms(d: Duration) -> f64 {
-    d.as_secs_f64() * 1000.0
+pub fn ms(duration: Duration) -> f64 {
+    duration.as_secs_f64() * 1000.0
 }

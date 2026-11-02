@@ -4,7 +4,8 @@ import GudoCore
 import XCTest
 @testable import App
 
-/// report the UI test and screenshots use reads as designed, and watching is balanced.
+/// The usage feed the sidebar and the Inbox read: the fake report the UI test and screenshots
+/// use reads as designed, and watching is balanced.
 @MainActor
 final class UsageFeedTests: XCTestCase {
     func testFakeReportReadsAsTheSidebarShowsIt() throws {

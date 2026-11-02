@@ -13,7 +13,7 @@ enum WorkspaceTarget: Hashable, Codable {
 /// App-wide state: the hosts (HostKit's `HostsModel`), this device's layout, and the pane
 /// streams every window shares. Each window makes its own `Workspace` per host
 /// (`makeWorkspace`): its own selection, terminals and views over the host's one layout store and
-/// one stream per pane (docs/APP-ARCHITECTURE.md "Windows").
+/// one stream per pane.
 @MainActor
 @Observable
 final class AppModel {
@@ -53,7 +53,7 @@ final class AppModel {
 
     private init() {
         CoreLog.install()
-        let defaults = LaunchArguments()
+        let arguments = LaunchArguments()
         // Tests and tooling keep hosts and secrets in a folder of their own (`AppData`): they
         // never touch the user's hosts or Keychain.
         let isolated = AppData.isolatedDirectory
@@ -63,21 +63,21 @@ final class AppModel {
                 service: (Bundle.main.bundleIdentifier ?? "app") + ".secrets",
                 fallbackDirectory: repository.directory.appending(path: "secrets"))
         var configuration = HostsModel.Configuration()
-        if defaults.string(forKey: "testRelay") == "disabled" { configuration.relay = .disabled }
-        configuration.mirrorVt = defaults.bool(forKey: "testMirror")
+        if arguments.string(forKey: "testRelay") == "disabled" { configuration.relay = .disabled }
+        configuration.mirrorVt = arguments.bool(forKey: "testMirror")
         // `-testLinkDelayMs 600`: a slow link to a local daemon (echo prediction tests).
-        let linkDelay = defaults.integer(forKey: "testLinkDelayMs")
+        let linkDelay = arguments.integer(forKey: "testLinkDelayMs")
         if linkDelay > 0 { configuration.linkDelay = .milliseconds(linkDelay) }
         configuration.hostdBinaries = { Self.bundledDaemons() }
         // `-testBundledDaemons <dir>`: a hostd-manifest.json and builds elsewhere (tests that
         // update a local daemon).
-        let manifest = defaults.string(forKey: "testBundledDaemons").map {
+        let manifest = arguments.string(forKey: "testBundledDaemons").map {
             URL(fileURLWithPath: $0).appending(path: "hostd-manifest.json")
         } ?? Bundle.main.url(forResource: "hostd-manifest", withExtension: "json")
         let bundled = manifest.flatMap(BundledDaemons.load(manifest:))
         configuration.bundledDaemons = { bundled }
         hosts = HostsModel(secrets: secrets, repository: repository, configuration: configuration)
-        hosts.hostKeyPrompts.trustNewHostsAutomatically = defaults.bool(forKey: "testTrustHostKeys")
+        hosts.hostKeyPrompts.trustNewHostsAutomatically = arguments.bool(forKey: "testTrustHostKeys")
         // Instant start: each daemon host opens on what this device saved of it.
         if !LaunchOptions.mock, LaunchOptions.screen == nil {
             hosts.workspaceCache = WorkspaceCacheStore.appDefault(isolated: isolated)
@@ -200,7 +200,7 @@ final class AppModel {
     #if os(macOS)
     /// Dials This Mac's helper before any window exists when it already runs (a login item)
     /// and is the one paired: the first frame then shows its saved workspace and the link is
-    /// on its way. The helper's own start (login item checks, pairing) follows as before.
+    /// on its way. The helper's own start (login item checks, pairing) follows.
     private func connectEarly(_ helper: LocalHelper) {
         guard helper.isEnabled, let id = hosts.thisDeviceId,
               let endpoint = LocalHelper.runningEndpoint(in: helper.stateDirectory),
@@ -237,7 +237,7 @@ final class AppModel {
         #endif
     }
 
-    // MARK: Test hooks (launch arguments; used by UI tests and the real-host runs)
+    // MARK: Test hooks (launch arguments)
 
     /// `-testTicket <ticket>`: pair and show that host. `-testSSH user@host[:port]` with
     /// `-testSSHKey <path>` (a private key file to import) or `-testSSHPassword <pw>`: "just ssh"
@@ -249,10 +249,10 @@ final class AppModel {
         // (two windows restored at launch must not pair the same ticket twice).
         guard !launchHooksRan else { return [] }
         launchHooksRan = true
-        let defaults = LaunchArguments()
-        if let list = defaults.string(forKey: "testTickets"), !list.isEmpty {
+        let arguments = LaunchArguments()
+        if let list = arguments.string(forKey: "testTickets"), !list.isEmpty {
             let tickets = list.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
-            let names = (defaults.string(forKey: "testTicketNames") ?? "").split(separator: ",").map(String.init)
+            let names = (arguments.string(forKey: "testTicketNames") ?? "").split(separator: ",").map(String.init)
             var targets: [WorkspaceTarget] = []
             for (index, ticket) in tickets.enumerated() {
                 do {
@@ -274,19 +274,19 @@ final class AppModel {
     /// waits for it instead of restoring.
     var hasLaunchHooks: Bool {
         guard !launchHooksRan else { return false }
-        let defaults = LaunchArguments()
-        return ["testTickets", "testTicket", "testSSH"].contains { !(defaults.string(forKey: $0) ?? "").isEmpty }
+        let arguments = LaunchArguments()
+        return ["testTickets", "testTicket", "testSSH"].contains { !(arguments.string(forKey: $0) ?? "").isEmpty }
     }
 
     private func runSingleLaunchHook() async -> WorkspaceTarget? {
-        let defaults = LaunchArguments()
+        let arguments = LaunchArguments()
         // `-testSSHConfig <path>`: read that ssh_config as Hosts → Import would (UI tests; the
         // simulator's pasteboard and file picker cannot be driven reliably).
-        if let path = defaults.string(forKey: "testSSHConfig"),
+        if let path = arguments.string(forKey: "testSSHConfig"),
            let text = try? String(contentsOf: URL(fileURLWithPath: path), encoding: .utf8) {
             try? hosts.loadSSHConfig(text)
         }
-        if let ticket = defaults.string(forKey: "testTicket"), !ticket.isEmpty {
+        if let ticket = arguments.string(forKey: "testTicket"), !ticket.isEmpty {
             do {
                 return .host(try await hosts.pair(try PairingTicket(ticket)))
             } catch {
@@ -295,14 +295,14 @@ final class AppModel {
                 return nil
             }
         }
-        if let destination = defaults.string(forKey: "testSSH"), !destination.isEmpty {
+        if let destination = arguments.string(forKey: "testSSH"), !destination.isEmpty {
             let flow = JustSSHFlow(hosts: hosts)
             flow.destination = destination
             do {
-                if let path = defaults.string(forKey: "testSSHKey") {
+                if let path = arguments.string(forKey: "testSSHKey") {
                     let pem = try Data(contentsOf: URL(fileURLWithPath: path))
                     try flow.importKey(pem: pem, passphrase: nil, label: URL(fileURLWithPath: path).lastPathComponent)
-                } else if let password = defaults.string(forKey: "testSSHPassword") {
+                } else if let password = arguments.string(forKey: "testSSHPassword") {
                     flow.auth = .password
                     flow.password = password
                 }
@@ -315,10 +315,10 @@ final class AppModel {
                 if case .failed(let reason) = flow.step { lastError = reason }
                 return nil
             }
-            if defaults.bool(forKey: "testInstallHelper") {
+            if arguments.bool(forKey: "testInstallHelper") {
                 Task {
                     // Let the plain-SSH pane show first (the screenshot of that step).
-                    try? await Task.sleep(for: .seconds(defaults.double(forKey: "testInstallDelay").nonZero ?? 4))
+                    try? await Task.sleep(for: .seconds(arguments.double(forKey: "testInstallDelay").nonZero ?? 4))
                     do {
                         try await self.hosts.installHelper(id)
                     } catch {
@@ -333,8 +333,7 @@ final class AppModel {
 }
 
 /// When a launch reached its milestones, logged (category `launch`) so a slow start can be
-/// told apart: process start → first frame of a window → its host live (docs/PERFORMANCE.md
-/// "Instant start").
+/// told apart: process start → first frame of a window → its host live.
 @MainActor
 enum LaunchTimeline {
     private static var firstFrameLogged = false

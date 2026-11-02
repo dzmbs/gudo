@@ -3,12 +3,6 @@ import HostKit
 import SwiftUI
 import GudoCore
 
-// Knock to join and approval rules (docs/DAEMON.md §6.9). Someone with a knock link waits
-// until the owner lets them in: the owner sees them here (a banner over the terminal, the
-// Inbox, Share Session) and admits them with a role, or turns them away. The approval rules
-// say who answers a session's agent requests.
-
-/// Someone knocking on one of this device's hosts.
 struct KnockItem: Identifiable {
     var id: String { "\(hostId)/\(knock.knockId)" }
     var hostId: String
@@ -25,13 +19,12 @@ nonisolated struct ApprovalContext: Equatable, Sendable {
     var progress: String?
     /// The session asks approvers to claim requests.
     var claimMode: Bool
-    /// This principal holds the claim.
     var claimedByMe: Bool
     /// This principal's approval is already counted (two-person rule).
     var approvedAlready: Bool
 }
 
-/// The roles an owner admits someone as, weakest first, as the "Admit as" menu lists them.
+/// The roles an owner can admit a knocker as, weakest first.
 enum AdmitChoice: String, CaseIterable, Identifiable {
     case viewer, prompter, driver, pair
 
@@ -59,15 +52,12 @@ enum AdmitChoice: String, CaseIterable, Identifiable {
 }
 
 extension Knock {
-    /// The knocker as the design system draws people.
     var avatar: DesignSystem.Participant {
         DesignSystem.Participant(id: actor.device, name: name.isEmpty ? "Guest" : name, role: .viewer,
                                  hue: GudoCore.Participant.hue(for: actor.principal))
     }
 }
 
-/// "Admit as ▾" and "Deny" for one knock. Scrollback from before they join stays hidden unless
-/// the owner turns "Show Earlier Output" on.
 struct KnockActions: View {
     let knock: Knock
     let session: MultiplayerSession
@@ -112,8 +102,6 @@ struct KnockActions: View {
     }
 }
 
-/// One knock as a row (Inbox, Share Session): who, what the invite offers, how long they have
-/// waited, and the answer.
 struct KnockRow: View {
     let knock: Knock
     let session: MultiplayerSession
@@ -164,9 +152,7 @@ struct KnockRow: View {
     }
 }
 
-/// The newest knock on the window's host, floating at the foot of the terminal (clear of the
-/// toolbar and the panes' control chips) so the owner sees it
-/// without opening anything. Other knocks wait in Agents.
+/// The newest knock on the window's host; the others wait in Agents.
 struct KnockBanner: View {
     let session: MultiplayerSession
 
@@ -201,7 +187,6 @@ struct KnockBanner: View {
     }
 }
 
-/// The knock banner for the window's host, owner devices only.
 struct KnockOverlay: View {
     let workspace: Workspace
 
@@ -217,7 +202,6 @@ struct KnockOverlay: View {
     }
 }
 
-/// Share Session, owner: who answers this session's agent requests.
 struct ApprovalRulesSection: View {
     let session: MultiplayerSession
     let sessionId: UInt64?

@@ -7,6 +7,7 @@ import Network
 import XCTest
 @testable import App
 
+/// The workspace screens' models against a fake daemon client (no daemon, no UI).
 @MainActor
 final class WorkspaceScreenModelTests: XCTestCase {
     // MARK: Inbox
@@ -511,10 +512,10 @@ final class WorkspaceScreenModelTests: XCTestCase {
 
     func testRemoteSSHPlan() {
         let defaults = UserDefaults(suiteName: "remote-ssh-tests-\(UUID().uuidString)")!
-        let a = RemoteSSHPlan.port(for: "host-a", defaults: defaults)
-        XCTAssertTrue(RemoteSSHPlan.portRange.contains(a))
-        XCTAssertEqual(RemoteSSHPlan.port(for: "host-a", defaults: defaults), a, "stable per host")
-        var seen: Set<UInt16> = [a]
+        let port = RemoteSSHPlan.port(for: "host-a", defaults: defaults)
+        XCTAssertTrue(RemoteSSHPlan.portRange.contains(port))
+        XCTAssertEqual(RemoteSSHPlan.port(for: "host-a", defaults: defaults), port, "stable per host")
+        var seen: Set<UInt16> = [port]
         for i in 0..<50 { XCTAssertTrue(seen.insert(RemoteSSHPlan.port(for: "host-\(i)-x", defaults: defaults)).inserted, "no two hosts share a port") }
         RemoteSSHPlan.reassign("host-a", to: 22999, defaults: defaults)
         XCTAssertEqual(RemoteSSHPlan.port(for: "host-a", defaults: defaults), 22999)
@@ -533,7 +534,7 @@ final class WorkspaceScreenModelTests: XCTestCase {
         XCTAssertEqual(RemoteSSHPlan.uri("vscode://vscode-remote/ssh-remote+x/p", insiders: true), "vscode-insiders://vscode-remote/ssh-remote+x/p")
         XCTAssertEqual(RemoteSSHPlan.uri("vscode://vscode-remote/ssh-remote+x/p", insiders: false), "vscode://vscode-remote/ssh-remote+x/p")
         // The URI desktop VS Code gets: Remote - SSH's hex-JSON authority for 127.0.0.1 + user + port.
-        let uri = vscodeRemoteSshUri(host: VsCodeSshHost(host: "127.0.0.1", user: "me", port: a), path: "/home/me/proj", line: nil, column: nil)
+        let uri = vscodeRemoteSshUri(host: VsCodeSshHost(host: "127.0.0.1", user: "me", port: port), path: "/home/me/proj", line: nil, column: nil)
         XCTAssertTrue(uri.hasPrefix("vscode://vscode-remote/ssh-remote+"), uri)
         XCTAssertTrue(uri.hasSuffix("/home/me/proj"), uri)
     }
@@ -576,7 +577,7 @@ final class WorkspaceScreenModelTests: XCTestCase {
         XCTAssertEqual(fallback.port, 50_000, "a port taken here falls back to any free one")
     }
 
-    /// S-BR1: a dev server opens at the URL it printed, in the host's own data store, and its
+    /// A dev server opens at the URL it printed, in the host's own data store, and its
     /// connections reach the host's forward of that port.
     func testPortsOpenAtThePrintedURLThroughTheHost() async throws {
         let client = FakeWorkspaceClient()
