@@ -49,18 +49,18 @@ import Testing
 /// projects as they were; drops and New Project name them by the rules.
 @MainActor
 @Suite struct ProjectCreationTests {
-    /// This Mac (2 tabs), hetzner (a daemon record, 2 tabs, kept in the window's copy), box (SSH,
+    /// This Mac (2 tabs), cloud (a daemon record, 2 tabs, kept in the window's copy), box (SSH,
     /// 1 tab).
     private func fixture(_ hosts: HostsModel? = nil) throws -> (HostGroups, HostsModel) {
         let model = hosts ?? HostsModel(secrets: MemorySecretStore(), repository: HostRepository(directory: temporaryDirectory()))
-        model.upsert(HostRecord(id: "hetzner", name: "hetzner", kind: .daemon, daemonId: "bb"))
+        model.upsert(HostRecord(id: "cloud", name: "cloud", kind: .daemon, daemonId: "bb"))
         model.upsert(HostRecord(id: "box", name: "box", kind: .ssh, ssh: SSHEndpoint(user: "me", host: "box", identity: .password)))
-        model.connections["hetzner"] = FakeConnection(tabs: 2)
+        model.connections["cloud"] = FakeConnection(tabs: 2)
         model.connections["box"] = FakeConnection(tabs: 1)
         let store = LocalLayoutStore()
         store.apply(.newTab)
         let groups = HostGroups(hosts: model, local: .init(name: "This Mac", layout: store))
-        try groups.open("hetzner")
+        try groups.open("cloud")
         try groups.open("box")
         return (groups, model)
     }
@@ -72,7 +72,7 @@ import Testing
         let before = groups.projects
         groups.local?.layout.apply(.newTab)
         groups.local?.layout.apply(.newTab)
-        (model.connections["hetzner"] as? FakeConnection)?.layout.apply(.newTab)
+        (model.connections["cloud"] as? FakeConnection)?.layout.apply(.newTab)
         #expect(groups.claimNewTabs().isEmpty)
         #expect(groups.projects == before)
     }

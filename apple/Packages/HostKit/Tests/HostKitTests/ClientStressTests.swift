@@ -201,9 +201,9 @@ import GudoCore
         var seedWorst = Duration.zero
         while ContinuousClock.now - start < .seconds(heavyStress ? 60 : 10) {
             for _ in 0..<20 where main.backend.requestHistory() { requested += 1 }
-            let t = ContinuousClock.now
+            let seedStart = ContinuousClock.now
             let extra = MirrorPane(try connection.makeBackend(for: panes[0]))
-            seedWorst = max(seedWorst, ContinuousClock.now - t)
+            seedWorst = max(seedWorst, ContinuousClock.now - seedStart)
             opened += 1
             try await Task.sleep(for: .milliseconds(20))
             extra.backend.terminate()

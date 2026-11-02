@@ -5,8 +5,8 @@ import PaneLayout
 import GudoCore
 
 /// What a window needs from a host, whatever kind it is: a layout store, pane backends, a
-/// status, and the lifecycle hooks (04-mobile-ux R1–R12). The connection is a stable logical
-/// handle; the transport underneath is swapped on reconnect, never the object views hold (R7).
+/// status, and the lifecycle hooks. The connection is a stable logical handle; the transport
+/// underneath is swapped on reconnect, never the object views hold.
 @MainActor
 public protocol HostConnection: AnyObject, Observable {
     var status: ConnectionStatus { get }
@@ -17,13 +17,13 @@ public protocol HostConnection: AnyObject, Observable {
     /// tabs and panes show, ops wait.
     var showsCachedLayout: Bool { get }
     func makeBackend(for pane: PaneId) throws -> any PaneBackend
-    /// User asked to retry (R9); also resets backoff (R10).
+    /// Also resets backoff.
     func retry()
-    /// App came to the foreground: probe and resume now (R1, R10).
+    /// Probe and resume now.
     func foreground()
-    /// App went to the background (iOS): suspend, keeping resume state (R3, R5).
+    /// iOS: suspend, keeping resume state.
     func background()
-    /// The network path changed: redial or probe now (R10).
+    /// Redial or probe now.
     func networkChanged()
     func close()
 }
@@ -198,10 +198,10 @@ public final class DaemonConnection: HostConnection {
         Self.log.info("dialing host=\(self.hostId, privacy: .public)")
         let client = try dialer(ticket, listener)
         self.client = client
-        if let mp = client as? any MultiplayerClientAPI { multiplayer.attach(mp) }
-        if let ap = client as? any AskpassClientAPI { askpass.attach(ap) }
-        if let ac = client as? any ApprovalClientAPI { approvals.attach(ac) }
-        if let bc = client as? any BrowserClientAPI { browser.attach(bc) }
+        if let multiplayerClient = client as? any MultiplayerClientAPI { multiplayer.attach(multiplayerClient) }
+        if let askpassClient = client as? any AskpassClientAPI { askpass.attach(askpassClient) }
+        if let approvalClient = client as? any ApprovalClientAPI { approvals.attach(approvalClient) }
+        if let browserClient = client as? any BrowserClientAPI { browser.attach(browserClient) }
         if let source = client as? any WorkspaceEventSource { workspaceEvents.attach(source) }
         pushClient = client as? any PushClientAPI
         pump = Task { [weak self] in
@@ -402,7 +402,6 @@ public final class DaemonConnection: HostConnection {
         return try await upgrader.upgradeDaemon(path: path, build: build, progress: progress.map { TransferProgressHandler($0) })
     }
 
-    /// Answers a blocked agent.
     public func decide(requestId: UInt64, optionId: UInt32) {
         client?.decide(requestId: requestId, optionId: optionId)
     }
@@ -620,7 +619,6 @@ nonisolated enum Log {
     static let subsystem = Bundle.main.bundleIdentifier ?? "dev.gudo.app"
 }
 
-/// A one-time message about a host, shown as a toast.
 nonisolated public struct HostNotice: Sendable, Equatable, Identifiable {
     public let id = UUID()
     public let text: String

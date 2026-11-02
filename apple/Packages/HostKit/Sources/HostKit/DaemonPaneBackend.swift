@@ -7,7 +7,7 @@ import GudoCore
 /// Delivers a connection's pane-stream events to pane backends on the Rust runtime thread
 /// they arrive on, in order, without a hop through the main actor (the terminal is
 /// thread-safe; input-to-echo latency matters). Output for a pane whose view has not started
-/// yet is buffered (04-mobile-ux R12: output is buffered per session, independent of views).
+/// yet is buffered: output is buffered per session, independent of views.
 ///
 /// A pane shown in several windows has one stream (the daemon keeps one subscription per pane
 /// per connection) and one tap per window (`DaemonPaneBackend`): every tap's terminal gets every
@@ -24,7 +24,6 @@ nonisolated final class PaneRouter: Sendable {
     typealias Prediction = @Sendable (PredictionUpdate) -> Void
     typealias Seed = @Sendable () -> [PaneEvent]
 
-    /// One window's view of a pane.
     private struct Tap {
         var sink: Sink?
         /// How to copy this tap's terminal for a tap that starts later.
@@ -116,7 +115,7 @@ nonisolated final class PaneRouter: Sendable {
     func start(_ pane: UInt64, tap id: UInt64, sink: @escaping Sink, seed: Seed? = nil) -> Bool {
         delivery.withLock { _ in
             let state = connection.withLock { $0 }
-            let (first, source, pending, offsets, last) = routes.withLock { routes in
+            let (first, source, pending, offsets, lastApplied) = routes.withLock { routes in
                 var route = routes[pane] ?? Route()
                 let running = route.started
                 let source = route.driver.flatMap { route.taps[$0]?.sink != nil ? route.taps[$0]?.seed : nil }
@@ -125,13 +124,13 @@ nonisolated final class PaneRouter: Sendable {
                 tap.sink = sink
                 tap.seed = seed
                 route.taps[id] = tap
-                let pending = (route.pending, route.pendingApplied)
+                let (pendingEvents, pendingOffsets) = (route.pending, route.pendingApplied)
                 if running.isEmpty {
                     route.pending = []
                     route.pendingApplied = []
                 }
                 routes[pane] = route
-                return (running.isEmpty, source, pending.0, pending.1, route.lastApplied)
+                return (running.isEmpty, source, pendingEvents, pendingOffsets, route.lastApplied)
             }
             sink(.connection(state))
             if first {
@@ -141,7 +140,7 @@ nonisolated final class PaneRouter: Sendable {
                 }
             } else if let source {
                 for event in source() { sink(event) }
-                if let last { applied(pane, Offset(seq: last, snapshot: true), only: id) }
+                if let lastApplied { applied(pane, Offset(seq: lastApplied, snapshot: true), only: id) }
             }
             return first
         }
@@ -509,8 +508,8 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap 
             cols: cols, rows: rows,
             widthPx: UInt16(clamping: UInt32(cols) * cellWidth),
             heightPx: UInt16(clamping: UInt32(rows) * cellHeight))
-        if let send = router.resize(pane.rawValue, tap: tap, to: size) {
-            client.resize(paneId: pane.rawValue, size: send)
+        if let sizeToSend = router.resize(pane.rawValue, tap: tap, to: size) {
+            client.resize(paneId: pane.rawValue, size: sizeToSend)
         }
     }
 

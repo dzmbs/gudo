@@ -40,18 +40,18 @@ private func tabsLayout(revision: UInt64, _ ids: [UInt64], session: UInt64 = 7) 
 
     @Test func projectsMergeAcrossHostsById() {
         // The same project on two hosts, renamed on one while the other was away.
-        let a = HostProjects(projects: ["p": info("p", "app", updated: 1)], members: [TabId(1): Membership(project: "p", rank: 2048)])
-        let b = HostProjects(
+        let hostA = HostProjects(projects: ["p": info("p", "app", updated: 1)], members: [TabId(1): Membership(project: "p", rank: 2048)])
+        let hostB = HostProjects(
             projects: ["p": info("p", "web app", color: 3, updated: 9), "q": info("q", "infra", order: -1024)],
             members: [TabId(1): Membership(project: "p", rank: 1024), TabId(2): Membership(project: "q", rank: 0), TabId(3): Membership(project: "p", rank: 0)])
-        let merged = ProjectMerge.merge(["a": a, "b": b], existing: [ref("a", 1), ref("b", 1), ref("b", 2), ref("b", 3)])
+        let merged = ProjectMerge.merge(["a": hostA, "b": hostB], existing: [ref("a", 1), ref("b", 1), ref("b", 2), ref("b", 3)])
         #expect(merged.map(\.name) == ["infra", "web app"])
         #expect(merged[1].color == 3)
         // Tabs of both hosts interleave by rank.
         #expect(merged[1].tabs == [ref("b", 3), ref("b", 1), ref("a", 1)])
         #expect(merged[1].hosts == ["b", "a"])
         // A closed tab is not listed, and a project left with none is gone.
-        let fewer = ProjectMerge.merge(["a": a, "b": b], existing: [ref("a", 1), ref("b", 3)])
+        let fewer = ProjectMerge.merge(["a": hostA, "b": hostB], existing: [ref("a", 1), ref("b", 3)])
         #expect(fewer.map(\.name) == ["web app"])
     }
 
@@ -68,12 +68,12 @@ private func tabsLayout(revision: UInt64, _ ids: [UInt64], session: UInt64 = 7) 
     }
 
     @Test func movingWithinAProjectRenumbersOnlyWhatChanged() {
-        let p = Project(info: info("p", "app"), tabs: [ref("a", 1), ref("b", 2), ref("a", 3)])
+        let project = Project(info: info("p", "app"), tabs: [ref("a", 1), ref("b", 2), ref("a", 3)])
         let sources = [
-            "a": HostProjects(projects: ["p": p.info], members: [TabId(1): .init(project: "p", rank: 0), TabId(3): .init(project: "p", rank: 2048)]),
-            "b": HostProjects(projects: ["p": p.info], members: [TabId(2): .init(project: "p", rank: 1024)]),
+            "a": HostProjects(projects: ["p": project.info], members: [TabId(1): .init(project: "p", rank: 0), TabId(3): .init(project: "p", rank: 2048)]),
+            "b": HostProjects(projects: ["p": project.info], members: [TabId(2): .init(project: "p", rank: 1024)]),
         ]
-        let planner = ProjectPlanner(projects: [p], sources: sources, now: 1)
+        let planner = ProjectPlanner(projects: [project], sources: sources, now: 1)
         // a/3 to the top: a/3 → 0, a/1 → 1024, b/2 → 2048.
         let changes = planner.move(ref("a", 3), into: "p", at: 0)
         #expect(changes.count == 3)
@@ -91,7 +91,7 @@ private func tabsLayout(revision: UInt64, _ ids: [UInt64], session: UInt64 = 7) 
             Project(info: info("r", "r", order: 2048), tabs: [ref("b", 3)]),
         ]
         let changes = ProjectPlanner(projects: projects, sources: [:], now: 9).moveProject("r", to: 0)
-        let orders: [String: Int64] = Dictionary(changes.compactMap { if case .put(let i) = $0.change { (i.id, i.order) } else { nil } }, uniquingKeysWith: { a, _ in a })
+        let orders: [String: Int64] = Dictionary(changes.compactMap { if case .put(let info) = $0.change { (info.id, info.order) } else { nil } }, uniquingKeysWith: { first, _ in first })
         #expect(orders == ["r": 0, "p": 1024, "q": 2048])
     }
 
@@ -222,18 +222,18 @@ private func tabsLayout(revision: UInt64, _ ids: [UInt64], session: UInt64 = 7) 
 
 @MainActor
 @Suite struct HostGroupsProjectTests {
-    /// This Mac (2 tabs), hetzner (2 tabs), box (SSH, 1 tab); none keeps projects on a daemon,
+    /// This Mac (2 tabs), cloud (2 tabs), box (SSH, 1 tab); none keeps projects on a daemon,
     /// so memberships live in the window's copy.
     private func fixture() throws -> HostGroups {
         let model = HostsModel(secrets: MemorySecretStore(), repository: HostRepository(directory: temporaryDirectory()))
-        model.upsert(HostRecord(id: "hetzner", name: "hetzner", kind: .daemon, daemonId: "bb"))
+        model.upsert(HostRecord(id: "cloud", name: "cloud", kind: .daemon, daemonId: "bb"))
         model.upsert(HostRecord(id: "box", name: "box", kind: .ssh, ssh: SSHEndpoint(user: "me", host: "box", identity: .password)))
-        model.connections["hetzner"] = FakeConnection(tabs: 2)
+        model.connections["cloud"] = FakeConnection(tabs: 2)
         model.connections["box"] = FakeConnection(tabs: 1)
         let local = LocalLayoutStore()
         local.apply(.newTab)
         let groups = HostGroups(hosts: model, local: .init(name: "This Mac", layout: local))
-        try groups.open("hetzner")
+        try groups.open("cloud")
         try groups.open("box")
         return groups
     }
@@ -241,32 +241,32 @@ private func tabsLayout(revision: UInt64, _ ids: [UInt64], session: UInt64 = 7) 
     @Test func droppingATabOnAnotherMakesAProjectThatLeadsTheOrder() throws {
         let groups = try fixture()
         let before = groups.tabs
-        let mac2 = before[1], hetzner2 = before[3], box = before[4]
-        groups.commit(.group(box, onto: hetzner2)) { _, _ in "api" }
+        let mac2 = before[1], cloud2 = before[3], box = before[4]
+        groups.commit(.group(box, onto: cloud2)) { _, _ in "api" }
         #expect(groups.projects.map(\.name) == ["api"])
-        #expect(groups.projects[0].tabs == [hetzner2, box])
+        #expect(groups.projects[0].tabs == [cloud2, box])
         // Projects lead ⌘1…; the rest keep their host order.
-        #expect(groups.tabs == [hetzner2, box, before[0], mac2, before[2]])
-        #expect(groups.tab(forShortcut: 1) == hetzner2)
+        #expect(groups.tabs == [cloud2, box, before[0], mac2, before[2]])
+        #expect(groups.tab(forShortcut: 1) == cloud2)
         #expect(groups.sections.first { $0.container == .host("box") }?.rows == [])
 
         // Onto a project's tab: joins after it.
-        groups.commit(.group(mac2, onto: hetzner2)) { _, _ in "unused" }
-        #expect(groups.projects[0].tabs == [hetzner2, mac2, box])
+        groups.commit(.group(mac2, onto: cloud2)) { _, _ in "unused" }
+        #expect(groups.projects[0].tabs == [cloud2, mac2, box])
 
         // Back onto its host's section: leaves, at the place it was dropped.
         groups.commit(.insert(mac2, into: .host("local"), at: 0)) { _, _ in "" }
-        #expect(groups.projects[0].tabs == [hetzner2, box])
+        #expect(groups.projects[0].tabs == [cloud2, box])
         let local = try #require(groups.group("local"))
         #expect(local.tabs.map { local.ref($0.id) } == [mac2, before[0]])
 
         // ⌃⌘↓ within the project.
-        groups.moveTab(hetzner2, by: 1)
-        #expect(groups.projects[0].tabs == [box, hetzner2])
+        groups.moveTab(cloud2, by: 1)
+        #expect(groups.projects[0].tabs == [box, cloud2])
 
         // The last members leave: the project is gone, nothing is left behind.
         groups.commit(.insert(box, into: .host("box"), at: 0)) { _, _ in "" }
-        groups.commit(.insert(hetzner2, into: .host("hetzner"), at: 1)) { _, _ in "" }
+        groups.commit(.insert(cloud2, into: .host("cloud"), at: 1)) { _, _ in "" }
         #expect(groups.projects.isEmpty)
         #expect(groups.windowProjects.isEmpty)
     }
@@ -281,7 +281,7 @@ private func tabsLayout(revision: UInt64, _ ids: [UInt64], session: UInt64 = 7) 
             .insert(tabs[4], into: .project(project.id), at: 1),
             .insert(tabs[3], into: .project(project.id), at: 0),
             .insert(tabs[1], into: .host("local"), at: 0),
-            .insert(tabs[2], into: .host("hetzner"), at: 0),
+            .insert(tabs[2], into: .host("cloud"), at: 0),
         ]
         for drop in drops {
             let preview = drop.applied(to: groups.sections)

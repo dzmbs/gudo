@@ -28,9 +28,9 @@ nonisolated enum LayoutConversion {
         case .split(let axis, let ratio, let first, let second):
             // Children come after their parent, which rules out cycles.
             guard Int(first) > index, Int(second) > index,
-                  let a = node(nodes, Int(first)), let b = node(nodes, Int(second))
+                  let firstNode = node(nodes, Int(first)), let secondNode = node(nodes, Int(second))
             else { return nil }
-            return .split(axis: PaneLayout.Axis(axis), ratio: Double(ratio), first: a, second: b)
+            return .split(axis: PaneLayout.Axis(axis), ratio: Double(ratio), first: firstNode, second: secondNode)
         }
     }
 

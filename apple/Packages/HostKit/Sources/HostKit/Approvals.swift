@@ -48,8 +48,8 @@ nonisolated public struct ApprovalMatch: Hashable, Sendable {
         prefix.isEmpty ? "any \(tool)" : "\(prefix) …"
     }
 
-    init(_ m: ApprovalRuleMatch) {
-        self.init(tool: m.tool, prefix: m.prefix)
+    init(_ match: ApprovalRuleMatch) {
+        self.init(tool: match.tool, prefix: match.prefix)
     }
 
     var core: ApprovalRuleMatch { ApprovalRuleMatch(tool: tool, prefix: prefix) }
@@ -74,9 +74,9 @@ nonisolated public struct ApprovalRequestInfo: Hashable, Sendable {
         self.like = like
     }
 
-    init(_ i: ApprovalInfo) {
-        self.init(paneId: i.paneId, requestId: i.requestId, tool: i.tool, editableInput: i.editableInput,
-                  like: i.like.map(ApprovalMatch.init))
+    init(_ info: ApprovalInfo) {
+        self.init(paneId: info.paneId, requestId: info.requestId, tool: info.tool, editableInput: info.editableInput,
+                  like: info.like.map(ApprovalMatch.init))
     }
 }
 
@@ -85,9 +85,7 @@ nonisolated public struct ApprovalRequestInfo: Hashable, Sendable {
 nonisolated public struct DriveRequestInfo: Identifiable, Hashable, Sendable {
     /// The request, as the asking pane's `AgentState.blocked` names it.
     public var id: UInt64
-    /// The asking agent's pane.
     public var paneId: UInt64
-    /// The pane it wants to drive.
     public var target: UInt64
     /// "Claude wants to type into ~/api · zsh".
     public var title: String
@@ -110,13 +108,12 @@ nonisolated public struct DriveRequestInfo: Identifiable, Hashable, Sendable {
         self.deny = deny
     }
 
-    init(_ a: DriveAsk) {
-        self.init(id: a.requestId, paneId: a.paneId, target: a.target, title: a.title, action: a.action,
-                  allowOnce: a.allowOnce.id, allowPane: a.allowPane.id, deny: a.deny.id)
+    init(_ ask: DriveAsk) {
+        self.init(id: ask.requestId, paneId: ask.paneId, target: ask.target, title: ask.title, action: ask.action,
+                  allowOnce: ask.allowOnce.id, allowPane: ask.allowPane.id, deny: ask.deny.id)
     }
 }
 
-/// An auto-approve rule in force on a pane.
 nonisolated public struct AutoApproveRuleInfo: Identifiable, Hashable, Sendable {
     /// For `ApprovalSession.revoke`.
     public var id: String
@@ -125,7 +122,6 @@ nonisolated public struct AutoApproveRuleInfo: Identifiable, Hashable, Sendable 
     public var expiresAt: Date
     /// Turns it still covers, the current one included (1: this turn only).
     public var turnsLeft: Int
-    /// Requests it has approved.
     public var uses: Int
     /// Who added it (their display name; may be empty).
     public var grantedBy: String
@@ -140,11 +136,11 @@ nonisolated public struct AutoApproveRuleInfo: Identifiable, Hashable, Sendable 
         self.grantedBy = grantedBy
     }
 
-    init(_ r: AutoApproveRule) {
+    init(_ rule: AutoApproveRule) {
         self.init(
-            id: r.id, paneId: r.paneId, match: ApprovalMatch(r.matcher),
-            expiresAt: Date(timeIntervalSince1970: Double(r.expiresAtMs) / 1000),
-            turnsLeft: max(0, Int(r.maxTurns) - Int(r.turnsUsed) + 1), uses: Int(r.uses), grantedBy: r.grantedBy)
+            id: rule.id, paneId: rule.paneId, match: ApprovalMatch(rule.matcher),
+            expiresAt: Date(timeIntervalSince1970: Double(rule.expiresAtMs) / 1000),
+            turnsLeft: max(0, Int(rule.maxTurns) - Int(rule.turnsUsed) + 1), uses: Int(rule.uses), grantedBy: rule.grantedBy)
     }
 }
 
@@ -235,11 +231,11 @@ public final class ApprovalSession {
     @discardableResult
     public func approveAllLikeThis(paneId: UInt64, requestId: UInt64, match: ApprovalMatch, minutes: Int, turns: Int) async throws -> String {
         guard let client else { throw ApprovalError.Disconnected }
-        let id = try await client.addAutoApprove(
+        let ruleId = try await client.addAutoApprove(
             paneId: paneId, requestId: requestId, matcher: match.core,
             minutes: UInt32(clamping: minutes), maxTurns: UInt32(clamping: turns))
         if requests[paneId]?.requestId == requestId { requests[paneId] = nil }
-        return id
+        return ruleId
     }
 
     /// Revokes rule `ruleId` on `paneId`; it approves nothing from now on.

@@ -5,7 +5,7 @@ import GudoCore
 
 nonisolated func daemonInfo(
     build: String = "aaa", builtUnix: UInt64 = 100, protocol level: UInt32 = 1, minClient: UInt32 = 0,
-    selfUpgrade: Bool = true, hostname: String = "ubuntu-32gb-hel1-2.example.com", os: String = "linux",
+    selfUpgrade: Bool = true, hostname: String = "build-server-01.example.com", os: String = "linux",
     arch: String = "x86_64", agentUsage: Bool = false
 ) -> DaemonInfo {
     DaemonInfo(
@@ -119,8 +119,8 @@ nonisolated let bundled = BundledDaemons(
 
 @Suite struct MachineNameTests {
     @Test func theDomainIsDropped() {
-        #expect(MachineName.display("ubuntu-32gb-hel1-2") == "ubuntu-32gb-hel1-2")
-        #expect(MachineName.display("ubuntu-32gb-hel1-2.example.com") == "ubuntu-32gb-hel1-2")
+        #expect(MachineName.display("build-server-01") == "build-server-01")
+        #expect(MachineName.display("build-server-01.example.com") == "build-server-01")
         #expect(MachineName.display("studio-MacBook-Pro.local\n") == "studio-MacBook-Pro")
         #expect(MachineName.display("") == nil)
         #expect(MachineName.display("localhost") == nil)
@@ -170,13 +170,13 @@ nonisolated let bundled = BundledDaemons(
         let (model, directory) = model([record])
         let (connection, _) = try connect(model, "h")
         connection.handle(.daemonInfo(info: daemonInfo()))
-        #expect(model.record("h")?.name == "ubuntu-32gb-hel1-2")
+        #expect(model.record("h")?.name == "build-server-01")
         #expect(model.record("h")?.nameSource == .machine)
         #expect(model.record("h")?.machine?.osName == "Ubuntu 24.04.1 LTS")
         #expect(model.entries.first?.machine == "Ubuntu 24.04.1 LTS · x86_64")
         // Once: a later host name change does not rename it again.
         connection.handle(.daemonInfo(info: daemonInfo(hostname: "renamed-box")))
-        #expect(model.record("h")?.name == "ubuntu-32gb-hel1-2")
+        #expect(model.record("h")?.name == "build-server-01")
         #expect(model.record("h")?.machine?.hostname == "renamed-box")
         // The user's name always wins, and stays.
         model.rename("h", to: "prod")
@@ -196,7 +196,7 @@ nonisolated let bundled = BundledDaemons(
         let (c, _) = try connect(model, "c")
         t.handle(.daemonInfo(info: daemonInfo()))
         c.handle(.daemonInfo(info: daemonInfo()))
-        #expect(model.record("t")?.name == "ubuntu-32gb-hel1-2")
+        #expect(model.record("t")?.name == "build-server-01")
         #expect(model.record("c")?.name == "my box")
         #expect(model.record("c")?.nameSource == .user)
     }

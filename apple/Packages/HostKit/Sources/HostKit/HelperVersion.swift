@@ -165,7 +165,7 @@ nonisolated public enum HelperCheck {
 /// Host names from the machine.
 nonisolated public enum MachineName {
     /// The name to give a host from its machine's host name: the first label, without the
-    /// domain (`ubuntu-32gb-hel1-2.example.com` → `ubuntu-32gb-hel1-2`); nil when there is
+    /// domain (`build-server-01.example.com` → `build-server-01`); nil when there is
     /// nothing useful (empty, `localhost`).
     public static func display(_ hostname: String) -> String? {
         let trimmed = hostname.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -102,10 +102,10 @@ public enum CommandBlocks {
 
     /// Run time in the sidebar's words: "8s", "1m 12s", "2h 03m".
     public static func elapsed(seconds: Int) -> String {
-        let s = max(0, seconds)
-        if s < 60 { return "\(s)s" }
-        if s < 3600 { return "\(s / 60)m \(String(format: "%02d", s % 60))s" }
-        return "\(s / 3600)h \(String(format: "%02d", s % 3600 / 60))m"
+        let total = max(0, seconds)
+        if total < 60 { return "\(total)s" }
+        if total < 3600 { return "\(total / 60)m \(String(format: "%02d", total % 60))s" }
+        return "\(total / 3600)h \(String(format: "%02d", total % 3600 / 60))m"
     }
 
     /// The last line of output with something on it, trimmed (a notification body's "latest
@@ -147,10 +147,10 @@ public enum CommandBlocks {
 
     /// Text without control characters other than newline and tab.
     static func clean(_ text: String) -> String {
-        var out = String.UnicodeScalarView()
+        var kept = String.UnicodeScalarView()
         for scalar in text.unicodeScalars where scalar == "\n" || scalar == "\t" || scalar.properties.generalCategory != .control {
-            out.append(scalar)
+            kept.append(scalar)
         }
-        return String(out)
+        return String(kept)
     }
 }

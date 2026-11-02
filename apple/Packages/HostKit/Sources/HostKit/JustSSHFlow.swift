@@ -2,7 +2,7 @@ import Foundation
 import Observation
 import GudoCore
 
-/// The "just ssh" flow (04-mobile-ux C1): type `user@host[:port]`, pick how to authenticate,
+/// The "just ssh" flow: type `user@host[:port]`, pick how to authenticate,
 /// answer the host-key prompt (`HostsModel.hostKeyPrompts`), get a plain-SSH terminal at once,
 /// then optionally "Install helper" (`HostsModel.installHelper`).
 @MainActor
@@ -16,7 +16,6 @@ public final class JustSSHFlow {
         case failed(String)
     }
 
-    /// How to authenticate.
     public enum AuthChoice: Hashable, Sendable {
         case password
         /// A key the app already has (generated, imported or Secure Enclave).
@@ -75,7 +74,6 @@ public final class JustSSHFlow {
         auth = .key(id: key.id)
     }
 
-    /// A Secure Enclave P-256 key, selected.
     public func generateSecureEnclaveKey() throws {
         let key = try hosts.keys.generateSecureEnclaveKey(label: (try? endpoint().display) ?? "secure enclave")
         newKey = key
@@ -127,7 +125,7 @@ public final class JustSSHFlow {
     }
 
     /// Installs `key`'s public half into `~/.ssh/authorized_keys` over a host's live SSH
-    /// session ("Use a key next time", C1.2), then switches the host to that key.
+    /// session ("Use a key next time"), then switches the host to that key.
     public func authorizeOverSession(hostId: String, key: SSHKey) async throws {
         guard let ssh = hosts.connection(hostId) as? SshConnection, let session = ssh.session else {
             throw HostError.notConnected

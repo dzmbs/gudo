@@ -185,7 +185,7 @@ nonisolated final class LocalDaemon {
         try await eventually("status shows the drop", timeout: .seconds(10)) { !connection.status.isLive }
         let outputBefore = sink.output
         try daemon.start()
-        connection.networkChanged()  // what the path monitor or foreground would do (R10)
+        connection.networkChanged()  // what the path monitor or foreground would do
         let resumeStarted = ContinuousClock.now
         try await eventually("live again", timeout: .seconds(30)) { sink.lastConnection == .live && connection.status.isLive }
         try await eventually("layout restored", timeout: .seconds(10)) { connection.layout.session.panes.count == 2 }
@@ -335,8 +335,7 @@ nonisolated final class LocalDaemon {
         #expect(again.layout.projects.members[tabs[2]]?.rank == 1024)
     }
 
-    /// Closing a host's last tab leaves the host empty, never a tab whose panes are gone (the
-    /// owner once typed into one and was told it was "outside what you were invited to"); Undo
+    /// Closing a host's last tab leaves the host empty, never a tab whose panes are gone; Undo
     /// brings the tab back in the same session, in its directory.
     @Test func closingTheLastTabLeavesTheHostEmptyAndUndoBringsItBack() async throws {
         let daemon = try LocalDaemon()

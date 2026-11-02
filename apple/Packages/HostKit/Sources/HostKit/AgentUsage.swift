@@ -1,13 +1,14 @@
 import Foundation
 import GudoCore
 
+// Agent plan usage: the words and colours the meters show.
 // The daemon gathers the numbers on the host (`DaemonWorkspace.usage`); this turns them into a
-// compact meter ("Claude · 62% of 5h · resets 14:20") and a detail list. Quiet by design
-// unknown (the reason is in the detail).
+// compact meter ("Claude · 62% of 5h · resets 14:20") and a detail list. Quiet by design: no
+// colour below 80 %, amber above, red when limited; nothing at all when unknown (the reason is
+// in the detail).
 
 /// How loud a meter is.
 public enum UsageTone: Sendable, Equatable {
-    /// Monochrome.
     case quiet
     /// Above 80 %: amber.
     case attention
@@ -35,10 +36,10 @@ public struct UsageMeter: Equatable, Sendable, Identifiable {
         let current = usage.windows.filter { window in
             window.resetsAtMs.map { UsageText.date($0) > now } ?? true
         }
-        guard let window = current.min(by: { a, b in
-            if a.limited != b.limited { return a.limited }
-            if a.usedPermille != b.usedPermille { return a.usedPermille > b.usedPermille }
-            return (a.minutes == 0 ? .max : a.minutes) < (b.minutes == 0 ? .max : b.minutes)
+        guard let window = current.min(by: { lhs, rhs in
+            if lhs.limited != rhs.limited { return lhs.limited }
+            if lhs.usedPermille != rhs.usedPermille { return lhs.usedPermille > rhs.usedPermille }
+            return (lhs.minutes == 0 ? .max : lhs.minutes) < (rhs.minutes == 0 ? .max : rhs.minutes)
         }) else { return nil }
         var parts = [UsageText.name(usage.agent), "\(UsageText.percent(window.usedPermille)) of \(window.name)"]
         if let reset = window.resetsAtMs {
@@ -98,7 +99,6 @@ public struct UsageDetail: Equatable, Sendable, Identifiable {
     }
 }
 
-/// The words.
 public enum UsageText {
     public static func name(_ agent: AgentKind) -> String {
         switch agent {

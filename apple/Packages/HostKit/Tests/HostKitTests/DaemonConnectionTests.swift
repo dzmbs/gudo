@@ -6,7 +6,7 @@ import Testing
 import TerminalCore
 import GudoCore
 
-/// The connection state machine and pane routing against a fake client (04-mobile-ux R1–R12).
+/// The connection state machine and pane routing against a fake client.
 @MainActor
 @Suite struct DaemonConnectionTests {
     /// A connection whose dialer hands out a `FakeClient`.
@@ -46,7 +46,7 @@ import GudoCore
     @Test func paneOutputInputAndHistory() async throws {
         let (connection, client) = try makeConnection()
         let backend = try connection.makeBackend(for: PaneId(3))
-        // Output that arrives before the view starts is buffered (R12).
+        // Output that arrives before the view starts is buffered.
         client().send(.connected(epoch: 1, resumed: false))
         client().send(.paneSnapshot(paneId: 3, seq: 100, data: Data("SNAP".utf8)))
         client().send(.paneBytes(paneId: 3, seq: 100, data: Data("$ ".utf8)))
@@ -125,7 +125,7 @@ import GudoCore
     }
 
     /// Never blank, never silently dead: a drop dims the pane and the status says why; the
-    /// reconnect brings it back; background suspends and foreground resumes (R5, R10).
+    /// reconnect brings it back; background suspends and foreground resumes.
     @Test func dropReconnectSuspendResume() async throws {
         let (connection, client) = try makeConnection()
         let sink = EventSink()

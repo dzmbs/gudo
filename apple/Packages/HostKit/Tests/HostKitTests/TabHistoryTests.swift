@@ -169,26 +169,26 @@ private func ref(_ host: String, _ tab: UInt64) -> TabRef { TabRef(hostId: host,
 
 /// Dragging a selection by one of its rows: the rest land right after it, together.
 @Suite struct CarriedDropTests {
-    private let a = ref("studio", 1), b = ref("studio", 2), c = ref("studio", 3), d = ref("studio", 4), x = ref("box", 1)
+    private let studio1 = ref("studio", 1), studio2 = ref("studio", 2), studio3 = ref("studio", 3), studio4 = ref("studio", 4), box1 = ref("box", 1)
 
     @Test func insertsLandInARowAfterTheDraggedOne() {
-        let sections = [SidebarSection(.project("p"), rows: [a]), SidebarSection(.host("studio"), rows: [b, c, d]), SidebarSection(.host("box"), rows: [x])]
-        let drops = SidebarDrop.insert(c, into: .project("p"), at: 0).carrying([b, x], in: sections)
+        let sections = [SidebarSection(.project("p"), rows: [studio1]), SidebarSection(.host("studio"), rows: [studio2, studio3, studio4]), SidebarSection(.host("box"), rows: [box1])]
+        let drops = SidebarDrop.insert(studio3, into: .project("p"), at: 0).carrying([studio2, box1], in: sections)
         let after = drops.reduce(sections) { $1.applied(to: $0) }
-        #expect(after[0].rows == [c, b, x, a])
-        #expect(after[1].rows == [d])
+        #expect(after[0].rows == [studio3, studio2, box1, studio1])
+        #expect(after[1].rows == [studio4])
     }
 
     @Test func aHostSectionTakesOnlyItsOwnTabs() {
-        let sections = [SidebarSection(.project("p"), rows: [a, x]), SidebarSection(.host("studio"), rows: [b])]
-        let drops = SidebarDrop.insert(a, into: .host("studio"), at: 1).carrying([x], in: sections)
+        let sections = [SidebarSection(.project("p"), rows: [studio1, box1]), SidebarSection(.host("studio"), rows: [studio2])]
+        let drops = SidebarDrop.insert(studio1, into: .host("studio"), at: 1).carrying([box1], in: sections)
         #expect(drops.count == 1)
-        #expect(drops.reduce(sections) { $1.applied(to: $0) }[0].rows == [x])
+        #expect(drops.reduce(sections) { $1.applied(to: $0) }[0].rows == [box1])
     }
 
     @Test func aGroupDropTakesEveryRowOntoTheSameTarget() {
-        let drops = SidebarDrop.group(a, onto: d).carrying([b, d], in: [])
-        #expect(drops == [.group(a, onto: d), .group(b, onto: d)])
+        let drops = SidebarDrop.group(studio1, onto: studio4).carrying([studio2, studio4], in: [])
+        #expect(drops == [.group(studio1, onto: studio4), .group(studio2, onto: studio4)])
     }
 }
 
@@ -197,16 +197,16 @@ private func ref(_ host: String, _ tab: UInt64) -> TabRef { TabRef(hostId: host,
 @Suite struct ReopenPlacementTests {
     private func fixture() throws -> (HostGroups, LocalLayoutStore) {
         let model = HostsModel(secrets: MemorySecretStore(), repository: HostRepository(directory: temporaryDirectory()))
-        model.upsert(HostRecord(id: "hetzner", name: "hetzner", kind: .daemon, daemonId: "bb"))
+        model.upsert(HostRecord(id: "cloud", name: "cloud", kind: .daemon, daemonId: "bb"))
         let connection = FakeConnection(tabs: 4)
-        model.connections["hetzner"] = connection
+        model.connections["cloud"] = connection
         let groups = HostGroups(hosts: model)
-        try groups.open("hetzner")
+        try groups.open("cloud")
         return (groups, connection.layout)
     }
 
     private func tabs(_ groups: HostGroups) -> [TabRef] {
-        groups.group("hetzner")!.tabs.map { groups.group("hetzner")!.ref($0.id) }
+        groups.group("cloud")!.tabs.map { groups.group("cloud")!.ref($0.id) }
     }
 
     @Test func intoItsProjectAtItsPlaceAndItsPlaceOnTheHost() throws {
@@ -214,7 +214,7 @@ private func ref(_ host: String, _ tab: UInt64) -> TabRef { TabRef(hostId: host,
         let all = tabs(groups)
         let project = try #require(groups.groupTabs([all[0], all[2], all[3]], name: "app"))
         // The middle tab of the project, second on its host... closes.
-        let entry = groups.closedTab(all[2], title: "web", name: "web", hostName: "hetzner", pane: 3, directory: "/srv/web", agent: nil)
+        let entry = groups.closedTab(all[2], title: "web", name: "web", hostName: "cloud", pane: 3, directory: "/srv/web", agent: nil)
         #expect(entry.project?.id == project && entry.project?.name == "app")
         #expect(entry.projectIndex == 1 && entry.hostIndex == 2)
         store.apply(.closeTab(all[2].tab))
@@ -231,7 +231,7 @@ private func ref(_ host: String, _ tab: UInt64) -> TabRef { TabRef(hostId: host,
         let all = tabs(groups)
         let project = try #require(groups.groupTabs([all[1]], name: "infra"))
         groups.updateProject(project, color: 5)
-        let entry = groups.closedTab(all[1], title: "deploy", name: nil, hostName: "hetzner", pane: 2, directory: nil, agent: "claude")
+        let entry = groups.closedTab(all[1], title: "deploy", name: nil, hostName: "cloud", pane: 2, directory: nil, agent: "claude")
         store.apply(.closeTab(all[1].tab))
         #expect(groups.project(project) == nil, "a project goes with its last tab")
         store.apply(.newTab)

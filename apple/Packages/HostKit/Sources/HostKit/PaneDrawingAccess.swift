@@ -1,13 +1,13 @@
 import Foundation
 import GudoCore
 
+/// What drawing in a pane (docs/DAEMON.md §7.11) needs from a daemon pane: the client for
 /// artifacts, placements and send-to-agent, and the output offsets its terminal applies (row
 /// anchors are named by offset). Local and plain-SSH panes have no daemon and no drawing.
 extension DaemonPaneBackend {
     /// The daemon client behind this pane (nil only for test fakes).
     public var daemonClient: DaemonClient? { client as? DaemonClient }
 
-    /// The pane's id on the daemon.
     public var paneId: UInt64 { pane.rawValue }
 
     /// `callback(seq, snapshot)` runs right after the pane's terminal applied output up to `seq`
