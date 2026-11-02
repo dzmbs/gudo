@@ -504,3 +504,126 @@ async fn usage_is_kept_per_account() {
     drop(c);
     daemon.shutdown().await;
 }
+
+const CODEX_ID: &str = "0199a213-81c0-7800-8aa1-bbab2a035a53";
+
+/// Answers `account/read` from `$CODEX_HOME/.fake-login`, and otherwise writes a rollout under
+/// `$CODEX_HOME` the way Codex does and keeps it open.
+const FAKE_CODEX: &str = r#"#!/bin/sh
+if [ "$1" = "app-server" ]; then
+  while read -r line; do
+    case "$line" in *'"id":2'*)
+      if [ -f "$CODEX_HOME/.fake-login" ]; then
+        echo '{"id":2,"result":{"account":{"type":"chatgpt","email":"me@codex.example","planType":"plus"},"requiresOpenaiAuth":true}}'
+      else
+        echo '{"id":2,"result":{"account":null,"requiresOpenaiAuth":true}}'
+      fi ;;
+    esac
+  done
+  exit 0
+fi
+if [ "$1" = "login" ]; then touch "$CODEX_HOME/.fake-login"; echo "login $2 done"; exit 0; fi
+echo "HOME=${CODEX_HOME:-unset}|"
+echo "KEY=${OPENAI_API_KEY:-none}|"
+echo "ARGS $*"
+dir="$CODEX_HOME/sessions/2026/10/18"
+mkdir -p "$dir"
+f="$dir/rollout-2026-10-18T12-00-00-__ID__.jsonl"
+if [ ! -e "$f" ]; then
+  printf '{"type":"session_meta","payload":{"id":"__ID__","cwd":"%s"}}\n' "$PWD" > "$f"
+fi
+exec 3>>"$f"
+exec sleep 600
+"#;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn codex_accounts_sign_in_and_resume_in_their_own_home() {
+    let state = tempfile::tempdir().unwrap();
+    let mut host = Host::new();
+    let bin = host._dir.path().join("bin");
+    let codex = bin.join("codex");
+    std::fs::write(&codex, FAKE_CODEX.replace("__ID__", CODEX_ID)).unwrap();
+    std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755)).unwrap();
+    host.env
+        .push(("OPENAI_API_KEY".into(), "from-daemon".into()));
+    let daemon = start_with(state.path(), host.config()).await;
+    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    c.attach_and_follow().await;
+    let Ok(WorkspaceResponse::Account(work)) = ask(
+        &c,
+        WorkspaceRequest::AccountAdd(AccountAdd {
+            agent: AgentKind::Codex,
+            label: "Work".into(),
+            color: 1,
+        }),
+    )
+    .await
+    else {
+        panic!("add");
+    };
+    let home = state.path().join("accounts/codex").join(&work.id);
+
+    // A remote host signs in with a device code, in the account's home only.
+    let sign_in = PaneLaunch::AccountSignIn {
+        agent: AgentKind::Codex,
+        account: work.id.clone(),
+        device_code: true,
+    };
+    let OpOutcome::TabCreated { pane_id: login, .. } = new_tab(&mut c, sign_in).await else {
+        panic!("sign-in tab");
+    };
+    c.follow(login).await;
+    c.wait_flat(login, "login --device-auth done").await;
+    assert!(home.join(".fake-login").exists());
+    let check = WorkspaceRequest::AccountCheck {
+        agent: AgentKind::Codex,
+        account: work.id.clone(),
+    };
+    let Ok(WorkspaceResponse::Account(checked)) = ask(&c, check).await else {
+        panic!("check");
+    };
+    let AccountStatus::SignedIn(who) = checked.status else {
+        panic!("not signed in: {checked:?}");
+    };
+    assert_eq!(who.email.as_deref(), Some("me@codex.example"));
+
+    // The agent runs in the account's home; its rollout is found there.
+    let launch = |resume: Option<&str>| PaneLaunch::AccountAgent {
+        agent: AgentKind::Codex,
+        account: resume.is_none().then(|| work.id.clone()),
+        resume: resume.map(str::to_owned),
+        cwd: None,
+    };
+    let OpOutcome::TabCreated { pane_id: pane, .. } = new_tab(&mut c, launch(None)).await else {
+        panic!("codex tab");
+    };
+    c.follow(pane).await;
+    c.wait_flat(pane, "ARGS").await;
+    let text = c.flat_text(pane);
+    assert_eq!(field(&text, "HOME"), home.display().to_string(), "{text}");
+    assert_eq!(field(&text, "KEY"), "none", "{text}");
+    let layout = state.path().join("layout.json");
+    let deadline = Instant::now() + TIMEOUT;
+    while !std::fs::read_to_string(&layout).is_ok_and(|s| s.contains(CODEX_ID)) {
+        assert!(Instant::now() < deadline, "session id never found");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(matches!(
+        c.op(LayoutOp::ClosePane { pane_id: pane }).await,
+        OpOutcome::Done
+    ));
+    // Resuming by id alone goes back to the account that made it.
+    let OpOutcome::TabCreated { pane_id: again, .. } =
+        new_tab(&mut c, launch(Some(CODEX_ID))).await
+    else {
+        panic!("resume tab");
+    };
+    c.follow(again).await;
+    c.wait_flat(again, &format!("resume {CODEX_ID}")).await;
+    assert_eq!(
+        field(&c.flat_text(again), "HOME"),
+        home.display().to_string()
+    );
+    drop(c);
+    daemon.shutdown().await;
+}
