@@ -760,13 +760,22 @@ async fn read_input(client: &Arc<Client>, mut stream: RecvStream) -> Result<(), 
         if client.live().is_err() {
             return Ok(());
         }
-        // Sent again after a reconnect, but this one arrived before the old link died.
+        // Sent again after a reconnect, but this one arrived before the old link died; its
+        // acknowledgement did not, or it would not have been sent again.
         if let Some(stream) = client.input_stream
             && !client
                 .core
                 .inputs
                 .admit(client.actor.device, stream, input.input_seq.0)
         {
+            if let Some(entry) = client.core.pane(input.pane_id)
+                && let Some(sub) = lock(&client.state).subs.get(&input.pane_id)
+            {
+                let _ = sub.cmds.send(StreamCmd::InputAck {
+                    input_seq: input.input_seq,
+                    at_seq: entry.pane.head(),
+                });
+            }
             continue;
         }
         if input.principal != client.actor.principal {
