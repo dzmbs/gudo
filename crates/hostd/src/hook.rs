@@ -26,7 +26,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use daemon::{HookRequest, HookResponse, STATUS_LINE_EVENT};
 use serde_json::Value;
@@ -77,9 +77,7 @@ fn relay(args: &[String], raw: &[u8], status_line: bool) -> Result<(), Box<dyn s
         token: env("TOKEN")?,
         pane: env("PANE_ID")?,
         agent: agent.clone(),
-        seq: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos() as u64),
+        seq: daemon::hook_seq(),
         payload,
         event: event.clone(),
     };

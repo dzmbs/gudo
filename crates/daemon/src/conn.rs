@@ -63,6 +63,9 @@ struct Client {
     authz: Authz,
     /// Optional features the client announced in its `Hello`.
     caps: Caps,
+    /// The input stream this connection continues, for clients that resend input after a
+    /// reconnect (`Caps::INPUT_RESUME`).
+    input_stream: Option<u64>,
     ctl: mpsc::UnboundedSender<ServerCtl>,
     state: Mutex<ConnState>,
     /// The connection's `bulk` stream, opened on first use.
@@ -150,6 +153,7 @@ async fn run(
         }
     };
 
+    let input_stream = core.inputs.stream(core.epoch, hello.resume_token.as_ref());
     let welcome = Welcome {
         daemon_id: core.identity.daemon_id(),
         session_epoch: core.epoch,
@@ -164,7 +168,7 @@ async fn run(
                 .filter_map(|(id, _)| core.pane_meta(id))
                 .collect()
         },
-        resume_token: proto::ResumeToken(core.epoch.0.to_le_bytes().to_vec()),
+        resume_token: crate::resume::InputStreams::token(core.epoch, input_stream),
     };
     net::send(&mut ctl_tx, &ServerCtl::Welcome(welcome)).await?;
     if maintenance {
@@ -205,6 +209,10 @@ async fn run(
         actor: authz.actor,
         authz,
         caps: hello.caps,
+        input_stream: hello
+            .caps
+            .contains(Caps::INPUT_RESUME)
+            .then_some(input_stream),
         ctl,
         state: Mutex::new(ConnState::default()),
         bulk: tokio::sync::Mutex::new(None),
@@ -297,7 +305,8 @@ pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {
         | DaemonFeatures::PROGRAM_STATUS
         | DaemonFeatures::REPO_TRUST
         | DaemonFeatures::REOPEN
-        | DaemonFeatures::ACCOUNTS;
+        | DaemonFeatures::ACCOUNTS
+        | DaemonFeatures::INPUT_RESUME;
     if core.cfg.push.enabled && core.cfg.push.live_activity {
         features |= DaemonFeatures::LIVE_ACTIVITY;
     }
@@ -759,6 +768,24 @@ async fn read_input(client: &Arc<Client>, mut stream: RecvStream) -> Result<(), 
         };
         if client.live().is_err() {
             return Ok(());
+        }
+        // Sent again after a reconnect, but this one arrived before the old link died; its
+        // acknowledgement did not, or it would not have been sent again.
+        if let Some(stream) = client.input_stream
+            && !client
+                .core
+                .inputs
+                .admit(client.actor.device, stream, input.input_seq.0)
+        {
+            if let Some(entry) = client.core.pane(input.pane_id)
+                && let Some(sub) = lock(&client.state).subs.get(&input.pane_id)
+            {
+                let _ = sub.cmds.send(StreamCmd::InputAck {
+                    input_seq: input.input_seq,
+                    at_seq: entry.pane.head(),
+                });
+            }
+            continue;
         }
         if input.principal != client.actor.principal {
             client.send(reject(InputRejectReason::Role));

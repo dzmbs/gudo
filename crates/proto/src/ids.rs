@@ -330,6 +330,10 @@ bitset! {
         /// Mirrors panes with the daemon's terminal limits: wants
         /// `ServerCtl::TerminalLimits` after `DaemonInfo` and before `Welcome`.
         TERMINAL_LIMITS = 24;
+        /// Numbers its input across reconnects (`Input::input_seq` keeps counting) and, after
+        /// reconnecting with the `Welcome`'s resume token, sends again what was not yet
+        /// acknowledged; the daemon applies each number once (`DaemonFeatures::INPUT_RESUME`).
+        INPUT_RESUME = 25;
     }
 }
 
@@ -388,5 +392,7 @@ bitset! {
         /// `PaneLaunch::AccountAgent` and `AccountSignIn` (see `proto::account`). Bits 16 and 17 are
         /// floating panes' and agent driving's.
         ACCOUNTS = 18;
+        /// Applies each input of a client once across its reconnects (`Caps::INPUT_RESUME`).
+        INPUT_RESUME = 19;
     }
 }

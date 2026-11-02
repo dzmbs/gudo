@@ -49,8 +49,14 @@ const START_WAIT: Duration = Duration::from_secs(2);
 const TICK: Duration = Duration::from_millis(50);
 /// Live panes one agent, with all the workers it started, may have opened at once.
 const MAX_OPEN_PANES: usize = 32;
+/// Calls one pane may have running at once (the hook socket serves 512 connections in all).
+const MAX_CALLS_PER_PANE: usize = 32;
 /// Output a wait holds at most (the pane's ring is 1 MiB).
 const WAIT_KEEP: usize = 1 << 20;
+/// How often a wait for a pattern renders and searches new output at most.
+const MATCH_EVERY: Duration = Duration::from_millis(100);
+/// Chunks (64 KiB each) a wait takes at once when output is waiting.
+const MAX_BATCH: usize = 16;
 
 /// What the shim sends on the hook socket: one JSON line.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,7 +145,8 @@ type Result<T> = std::result::Result<T, ToolError>;
 /// Results of agents whose floats closed when they finished, kept for `agent_result`.
 const KEPT_RESULTS: usize = 64;
 
-/// Which pane created which, for ownership, and the owner's answers to drive requests.
+/// Which pane created which, for ownership, the owner's answers to drive requests, and each
+/// pane's calls in progress.
 #[derive(Default)]
 pub(crate) struct Term {
     creators: Mutex<HashMap<PaneId, PaneId>>,
@@ -150,6 +157,28 @@ pub(crate) struct Term {
     pub asks: ask::Asks,
     /// The event stream (`events_wait`).
     pub events: events::Feed,
+    calls: Mutex<HashMap<PaneId, usize>>,
+    /// Held from counting an agent's panes to opening one, so parallel calls cannot all
+    /// pass the count and overshoot the cap.
+    opening: Mutex<()>,
+}
+
+/// A call in progress, counted against its pane until dropped.
+struct CallSlot<'a> {
+    term: &'a Term,
+    pane: PaneId,
+}
+
+impl Drop for CallSlot<'_> {
+    fn drop(&mut self) {
+        let mut calls = lock(&self.term.calls);
+        if let Some(n) = calls.get_mut(&self.pane) {
+            *n -= 1;
+            if *n == 0 {
+                calls.remove(&self.pane);
+            }
+        }
+    }
 }
 
 impl Term {
@@ -254,6 +283,17 @@ impl Term {
             .map(|(_, c, v)| (*c, v.clone()))?;
         (creator == caller || self.owns(caller, creator)).then_some(result)
     }
+
+    /// Counts a call from `pane`; `None` past [`MAX_CALLS_PER_PANE`] at once.
+    fn enter(&self, pane: PaneId) -> Option<CallSlot<'_>> {
+        let mut calls = lock(&self.calls);
+        let n = calls.entry(pane).or_default();
+        if *n >= MAX_CALLS_PER_PANE {
+            return None;
+        }
+        *n += 1;
+        Some(CallSlot { term: self, pane })
+    }
 }
 
 /// Answers one call. A caller that hangs up (`hangup` ends) abandons it: a wait stops, and
@@ -289,6 +329,17 @@ pub(crate) async fn serve(
             ErrorCode::NotFound,
             "the calling pane is gone",
         ));
+    };
+    // Waits hold a hook-socket connection for minutes: one agent must not take them all.
+    let Some(_slot) = core.term.enter(caller) else {
+        return TermReply::Error(ToolError {
+            retryable: true,
+            ..ToolError::new(
+                ErrorCode::Failed,
+                format!("{MAX_CALLS_PER_PANE} calls from this pane are still running"),
+            )
+            .hint("wait for some to finish before starting more")
+        });
     };
     let ctx = Ctx {
         core: Arc::clone(core),
@@ -1151,6 +1202,7 @@ impl Ctx {
         let Some(FloatOpts { frame, close }) = float else {
             return self.split(of, direction, launch, focus);
         };
+        let _opening = lock(&self.core.term.opening);
         self.may_open()?;
         let pane = match self.core.apply_op(LayoutOp::NewFloat {
             pane_id: of,
@@ -1177,7 +1229,14 @@ impl Ctx {
         launch: PaneLaunch,
         focus: bool,
     ) -> Result<PaneId> {
+        let _opening = lock(&self.core.term.opening);
         self.may_open()?;
+        // Splits nested as deep as layouts go: the pane opens in a tab of its own instead.
+        if lock(&self.core.layout).check_split(of).is_err() {
+            return self
+                .open_tab(String::new(), launch, focus)
+                .map(|(_, pane)| pane);
+        }
         let focused = self.focused_in_tab_of(of);
         let axis = match direction {
             Direction::Right => Axis::Horizontal,
@@ -1202,7 +1261,6 @@ impl Ctx {
     }
 
     async fn tab_new(&self, a: TabArgs) -> Result<Value> {
-        let session = self.session().ok_or_else(closed)?;
         if let Some(float) = float_opts(a.float, a.frame, a.close_when_done)? {
             // Over the caller's own tab instead of a tab of its own.
             if a.title.is_some() {
@@ -1222,14 +1280,27 @@ impl Ctx {
             let entry = self.core.pane(pane).ok_or_else(closed)?;
             return Ok(json!({ "tab": tab, "pane": self.pane_info(pane, &entry) }));
         }
-        self.may_open()?;
+        let (tab, pane) = {
+            let _opening = lock(&self.core.term.opening);
+            self.may_open()?;
+            let launch = Self::launch(a.command, None, a.cwd);
+            self.open_tab(a.title.unwrap_or_default(), launch, a.focus)?
+        };
+        let entry = self.core.pane(pane).ok_or_else(closed)?;
+        Ok(json!({ "tab": tab_ref(tab), "pane": self.pane_info(pane, &entry) }))
+    }
+
+    /// Opens a tab in the caller's session; the tab the user was on stays selected unless
+    /// `focus`.
+    fn open_tab(&self, name: String, launch: PaneLaunch, focus: bool) -> Result<(TabId, PaneId)> {
+        let session = self.session().ok_or_else(closed)?;
         let before = lock(&self.core.layout)
             .snapshot(session)
             .and_then(|l| l.active_tab);
         let (tab, pane) = match self.core.apply_op(LayoutOp::NewTab {
             session_id: session,
-            name: a.title.unwrap_or_default(),
-            launch: Self::launch(a.command, None, a.cwd),
+            name,
+            launch,
         }) {
             OpOutcome::TabCreated { tab_id, pane_id } => (tab_id, pane_id),
             OpOutcome::Failed { message, .. } => {
@@ -1238,13 +1309,10 @@ impl Ctx {
             other => return Err(ToolError::new(ErrorCode::Failed, format!("{other:?}"))),
         };
         self.core.term.created(self.caller, pane);
-        if !a.focus
-            && let Some(before) = before
-        {
+        if !focus && let Some(before) = before {
             self.core.apply_op(LayoutOp::SelectTab { tab_id: before });
         }
-        let entry = self.core.pane(pane).ok_or_else(closed)?;
-        Ok(json!({ "tab": tab_ref(tab), "pane": self.pane_info(pane, &entry) }))
+        Ok((tab, pane))
     }
 
     async fn pane_close(&self, a: PaneArg) -> Result<Value> {
@@ -1277,10 +1345,8 @@ impl Ctx {
                 _ => break,
             }
         }
-        Ok((
-            output::render(&bytes, entry.pane.size().cols),
-            position(&sub),
-        ))
+        let cols = entry.pane.size().cols;
+        Ok((output::render_bounded(bytes, cols).await, position(&sub)))
     }
 
     /// The last `lines` lines, scrollback included.
@@ -1482,11 +1548,20 @@ impl Ctx {
         let mut bytes = Vec::new();
         let mut last_output = Instant::now();
         let cols = entry.pane.size().cols;
+        // Output not yet searched, and when the pattern last ran.
+        let mut fresh = true;
+        let mut matched_at: Option<Instant> = None;
         loop {
             // Each condition is checked against the state after the newest output.
             let mut text = None;
-            if let Some(re) = &re {
-                let rendered = output::visible(&output::render(&bytes, cols));
+            let due = matched_at.is_none_or(|t| t.elapsed() >= MATCH_EVERY)
+                || Instant::now() + TICK >= deadline;
+            if let Some(re) = re.as_ref().filter(|_| fresh && due) {
+                // Rendering is the costly part: off the async workers, and at most every
+                // MATCH_EVERY however fast the pane prints.
+                let rendered = output::visible(&output::render_bounded(bytes.clone(), cols).await);
+                fresh = false;
+                matched_at = Some(Instant::now());
                 if let Some(found) = rendered.lines().find_map(|l| {
                     re.captures(l).map(|c| {
                         (
@@ -1512,16 +1587,18 @@ impl Ctx {
                     .as_str()
                     .is_some_and(|s| a.status.iter().any(|w| w == s))
                 {
-                    let mut done = self.waited(
-                        pane,
-                        "status",
-                        text.clone(),
-                        &bytes,
-                        cols,
-                        max,
-                        position(&sub),
-                        None,
-                    )?;
+                    let mut done = self
+                        .waited(
+                            pane,
+                            "status",
+                            text.clone(),
+                            &bytes,
+                            cols,
+                            max,
+                            position(&sub),
+                            None,
+                        )
+                        .await?;
                     done["programStatus"] = now;
                     return Ok(done);
                 }
@@ -1534,16 +1611,18 @@ impl Ctx {
                     .commands
                     .last()
                     .map(|c| CommandInfo::of(&c.mark));
-                return self.waited(
-                    pane,
-                    "prompt",
-                    text,
-                    &bytes,
-                    cols,
-                    max,
-                    position(&sub),
-                    last,
-                );
+                return self
+                    .waited(
+                        pane,
+                        "prompt",
+                        text,
+                        &bytes,
+                        cols,
+                        max,
+                        position(&sub),
+                        last,
+                    )
+                    .await;
             }
             if let Some(id) = a.exit {
                 let mark = entry
@@ -1555,16 +1634,18 @@ impl Ctx {
                     .find(|m| m.command_id == id);
                 match mark {
                     Some(m) if m.finished.is_some() => {
-                        return self.waited(
-                            pane,
-                            "exited",
-                            text,
-                            &bytes,
-                            cols,
-                            max,
-                            position(&sub),
-                            Some(CommandInfo::of(&m)),
-                        );
+                        return self
+                            .waited(
+                                pane,
+                                "exited",
+                                text,
+                                &bytes,
+                                cols,
+                                max,
+                                position(&sub),
+                                Some(CommandInfo::of(&m)),
+                            )
+                            .await;
                     }
                     None => {
                         return Err(ToolError::new(
@@ -1578,36 +1659,50 @@ impl Ctx {
             if let Some(quiet) = a.quiet_ms
                 && last_output.elapsed() >= Duration::from_millis(quiet)
             {
-                return self.waited(pane, "quiet", text, &bytes, cols, max, position(&sub), None);
+                return self
+                    .waited(pane, "quiet", text, &bytes, cols, max, position(&sub), None)
+                    .await;
             }
             if self.core.pane_meta(pane).and_then(|m| m.exit).is_some() {
-                return self.waited(
-                    pane,
-                    "closed",
-                    text,
-                    &bytes,
-                    cols,
-                    max,
-                    position(&sub),
-                    None,
-                );
+                return self
+                    .waited(
+                        pane,
+                        "closed",
+                        text,
+                        &bytes,
+                        cols,
+                        max,
+                        position(&sub),
+                        None,
+                    )
+                    .await;
             }
             let now = Instant::now();
             if now >= deadline {
-                return self.waited(
-                    pane,
-                    "timeout",
-                    text,
-                    &bytes,
-                    cols,
-                    max,
-                    position(&sub),
-                    None,
-                );
+                return self
+                    .waited(
+                        pane,
+                        "timeout",
+                        text,
+                        &bytes,
+                        cols,
+                        max,
+                        position(&sub),
+                        None,
+                    )
+                    .await;
             }
             match tokio::time::timeout(TICK.min(deadline - now), sub.recv()).await {
                 Ok(Ok(chunk)) => {
                     bytes.extend_from_slice(&chunk.data);
+                    fresh = true;
+                    // Take what else is ready too, so a flood is checked per batch.
+                    for _ in 0..MAX_BATCH {
+                        match tokio::time::timeout(Duration::ZERO, sub.recv()).await {
+                            Ok(Ok(chunk)) => bytes.extend_from_slice(&chunk.data),
+                            _ => break,
+                        }
+                    }
                     // A flood of output over a long wait keeps only its newest part.
                     if bytes.len() > WAIT_KEEP {
                         bytes.drain(..bytes.len() - WAIT_KEEP / 2);
@@ -1621,7 +1716,7 @@ impl Ctx {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn waited(
+    async fn waited(
         &self,
         pane: PaneId,
         status: &str,
@@ -1632,7 +1727,10 @@ impl Ctx {
         at: Seq,
         command: Option<CommandInfo>,
     ) -> Result<Value> {
-        let text = text.unwrap_or_else(|| output::render(bytes, cols));
+        let text = match text {
+            Some(text) => text,
+            None => output::render_bounded(bytes.to_vec(), cols).await,
+        };
         Ok(
             json!({ "status": status, "output": Output::new(text, max, at).shared(self.shared(pane)), "command": command }),
         )
@@ -2287,6 +2385,24 @@ fn letter_key(c: char) -> Option<ghostty_vt::Key> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 600 waits from one agent took every hook-socket connection, so other agents' hooks
+    /// and approvals queued for minutes.
+    #[test]
+    fn one_pane_cannot_hold_every_call_slot() {
+        let term = Term::default();
+        let slots: Vec<_> = (0..MAX_CALLS_PER_PANE)
+            .map(|_| term.enter(PaneId(1)).expect("a slot"))
+            .collect();
+        assert!(term.enter(PaneId(1)).is_none());
+        assert!(
+            term.enter(PaneId(2)).is_some(),
+            "other panes are not held up"
+        );
+        drop(slots);
+        assert!(term.enter(PaneId(1)).is_some());
+        assert!(lock(&term.calls).len() <= 1);
+    }
 
     #[test]
     fn workers_count_against_the_agent_that_started_them() {

@@ -5,6 +5,7 @@
 //! carry the approver's signature, checked again whenever the chain is verified. Raw
 //! keystrokes and prompt text are never logged, only lengths and hashes.
 
+use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -31,7 +32,7 @@ struct State {
     file: Option<File>,
     last_hash: [u8; 32],
     seq: u64,
-    recent: Vec<AuditRecord>,
+    recent: VecDeque<AuditRecord>,
     /// Every record loaded or written so far verified.
     chain_ok: bool,
 }
@@ -56,7 +57,7 @@ impl Audit {
             file: None,
             last_hash: [0; 32],
             seq: 0,
-            recent: Vec::new(),
+            recent: VecDeque::new(),
             chain_ok: true,
         };
         if let Ok(file) = File::open(&path) {
@@ -79,10 +80,12 @@ impl Audit {
                 }
                 state.last_hash = record.hash.as_slice().try_into().unwrap_or([0; 32]);
                 state.seq = record.seq;
-                state.recent.push(record);
+                // A long log is read through, never held whole.
+                if state.recent.len() == KEEP {
+                    state.recent.pop_front();
+                }
+                state.recent.push_back(record);
             }
-            let excess = state.recent.len().saturating_sub(KEEP);
-            state.recent.drain(..excess);
         }
         state.file = Some(open_append(&path)?);
         Ok(Self {
@@ -123,10 +126,10 @@ impl Audit {
         }
         state.seq = record.seq;
         state.last_hash = hash;
-        state.recent.push(record.clone());
-        if state.recent.len() > KEEP {
-            state.recent.remove(0);
+        if state.recent.len() == KEEP {
+            state.recent.pop_front();
         }
+        state.recent.push_back(record.clone());
         record
     }
 
@@ -144,7 +147,7 @@ impl Audit {
                 .collect(),
             None => {
                 let start = state.recent.len().saturating_sub(limit);
-                state.recent[start..].to_vec()
+                state.recent.range(start..).cloned().collect()
             }
         };
         AuditPage {

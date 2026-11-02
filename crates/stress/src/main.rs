@@ -2,7 +2,9 @@
 //! saved (`$XDG_CONFIG_HOME/unnamed`) and drives the daemon over the real protocol. The
 //! scenarios in `scripts/stress/` start the daemon and call this; results go to stdout.
 
+mod outages;
 mod raw;
+mod sink;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -41,6 +43,17 @@ enum Cmd {
         /// Canvas panes (no process), to go past the PTY limit.
         #[arg(long)]
         canvas: bool,
+    },
+    /// Open `count` tabs (canvas panes without a process with `--canvas`, else running
+    /// `command` or the shell), 16 ops in flight, and keep them; prints op latency, the time a
+    /// new client takes to get the layout, and the layout's encoded size.
+    Tabs {
+        #[arg(long)]
+        count: usize,
+        #[arg(long)]
+        canvas: bool,
+        #[arg(long)]
+        command: Option<String>,
     },
     /// Open a tab running `command` and print its pane id.
     Spawn { command: Vec<String> },
@@ -103,6 +116,45 @@ enum Cmd {
         rate: u64,
         #[arg(long, default_value_t = 10)]
         secs: u64,
+    },
+    /// Numbered lines typed into a pane that writes them to `file` while the daemon (`pid`)
+    /// is frozen every `every` seconds for `outage_secs`; checks each arrived exactly once.
+    Outages {
+        #[arg(long)]
+        pid: u32,
+        #[arg(long)]
+        file: PathBuf,
+        #[arg(long, default_value_t = 60)]
+        secs: u64,
+        #[arg(long, default_value_t = 30)]
+        every: u64,
+        #[arg(long, default_value_t = 20)]
+        outage_secs: u64,
+        #[arg(long, default_value_t = 20)]
+        interval_ms: u64,
+    },
+    /// Registers for pushes with a local fake relay answering `status`, stays in the
+    /// background for `secs` and counts the pushes.
+    PushSink {
+        #[arg(long, default_value_t = 60)]
+        secs: u64,
+        #[arg(long, default_value_t = 200)]
+        status: u16,
+        /// Pair a device of its own with the ticket in this file (a device that is looking at
+        /// the host gets no pushes, and the other commands share one key).
+        #[arg(long)]
+        ticket_file: Option<PathBuf>,
+    },
+    /// Fresh devices knocking on the knock invite in `invite_file`, `parallel` at a time.
+    Knocks {
+        #[arg(long)]
+        invite_file: PathBuf,
+        #[arg(long, default_value_t = 30)]
+        secs: u64,
+        #[arg(long, default_value_t = 16)]
+        parallel: usize,
+        #[arg(long, default_value_t = 500)]
+        hold_ms: u64,
     },
     /// Project definitions and tab memberships at `rate` per second.
     Projects {
@@ -272,6 +324,11 @@ async fn run(cli: Cli, handle: tokio::runtime::Handle) -> Result<()> {
             command,
         } => churn(&handle, key, &ticket, secs, concurrency, command).await,
         Cmd::Deep { depth, canvas } => deep(&handle, key, &ticket, depth, canvas).await,
+        Cmd::Tabs {
+            count,
+            canvas,
+            command,
+        } => tabs(&handle, key, &ticket, count, canvas, command).await,
         Cmd::Spawn { command } => {
             let mut conn = Conn::open(&handle, key, &ticket, false)?;
             let layout = conn.layout().await?;
@@ -309,6 +366,44 @@ async fn run(cli: Cli, handle: tokio::runtime::Handle) -> Result<()> {
         Cmd::Paste { mb } => paste(&handle, key, &ticket, mb).await,
         Cmd::Layout { rate, secs } => layout_storm(&handle, key, &ticket, rate, secs).await,
         Cmd::Projects { rate, secs } => projects(&handle, key, &ticket, rate, secs).await,
+        Cmd::PushSink {
+            secs,
+            status,
+            ticket_file,
+        } => {
+            let (key, ticket) = match ticket_file {
+                Some(f) => (
+                    ClientConfig::generate_key(),
+                    std::fs::read_to_string(f)?.trim().to_owned(),
+                ),
+                None => (key, ticket),
+            };
+            sink::push_sink(&handle, key, &ticket, secs, status).await
+        }
+        Cmd::Knocks {
+            invite_file,
+            secs,
+            parallel,
+            hold_ms,
+        } => sink::knocks(&sink::read_invite(&invite_file)?, secs, parallel, hold_ms).await,
+        Cmd::Outages {
+            pid,
+            file,
+            secs,
+            every,
+            outage_secs,
+            interval_ms,
+        } => {
+            let plan = outages::Plan {
+                secs,
+                every,
+                outage_secs,
+                pid,
+                interval_ms,
+                file,
+            };
+            outages::run(&handle, key, &ticket, plan).await
+        }
     }
 }
 
@@ -428,6 +523,79 @@ async fn deep(
         "deep: {} panes in the session after {:.1} s",
         all_panes(&layout).len(),
         start.elapsed().as_secs_f64()
+    );
+    Ok(())
+}
+
+async fn tabs(
+    handle: &tokio::runtime::Handle,
+    key: Vec<u8>,
+    ticket: &str,
+    count: usize,
+    canvas: bool,
+    command: Option<String>,
+) -> Result<()> {
+    let mut conn = Conn::open(handle, key.clone(), ticket, false)?;
+    let session = conn.layout().await?.session_id;
+    let new_tab = |c: &Conn| {
+        c.client.op(LayoutOp::NewTab {
+            session_id: session,
+            name: String::new(),
+            launch: if canvas {
+                PaneLaunch::Canvas { artifact_id: None }
+            } else {
+                launch(&command)
+            },
+        })
+    };
+    let mut pending: HashMap<u64, Instant> = HashMap::new();
+    let (mut asked, mut created) = (0, 0);
+    let mut errors: HashMap<String, u64> = HashMap::new();
+    let mut lat = Vec::new();
+    let start = Instant::now();
+    while asked < count.min(16) {
+        pending.insert(new_tab(&conn), Instant::now());
+        asked += 1;
+    }
+    while !pending.is_empty() {
+        let event = tokio::time::timeout(Duration::from_secs(60), conn.next())
+            .await
+            .context("no answer to an op for 60 s")??;
+        let ClientEvent::OpResult { op_id, outcome } = event else {
+            continue;
+        };
+        let Some(at) = pending.remove(&op_id) else {
+            continue;
+        };
+        lat.push(at.elapsed());
+        match outcome {
+            OpOutcome::TabCreated { .. } => created += 1,
+            OpOutcome::Failed { code, message } => {
+                *errors.entry(format!("{code:?}: {message}")).or_default() += 1;
+            }
+            _ => {}
+        }
+        if asked < count {
+            pending.insert(new_tab(&conn), Instant::now());
+            asked += 1;
+        }
+    }
+    println!(
+        "tabs: {created} of {count} created in {:.1} s; op latency {}",
+        start.elapsed().as_secs_f64(),
+        percentiles(lat)
+    );
+    for (e, n) in errors {
+        println!("  {n}x {e}");
+    }
+    let at = Instant::now();
+    let mut fresh = Conn::open(handle, key, ticket, false)?;
+    let layout = fresh.layout().await?;
+    println!(
+        "tabs: a new client had the layout ({} panes, {} KiB encoded) after {:.0} ms",
+        all_panes(&layout).len(),
+        proto::frame::to_vec(&layout)?.len() / 1024,
+        at.elapsed().as_secs_f64() * 1000.0
     );
     Ok(())
 }

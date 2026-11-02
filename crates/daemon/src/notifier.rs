@@ -22,7 +22,7 @@ mod activity;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use proto::{
     Actor, AttentionItem, AttentionKind, AttentionSeen, AttentionUpdate, Decide, Decided, DeviceId,
@@ -69,6 +69,101 @@ pub(crate) struct Push {
     activity_wake: tokio::sync::Notify,
     /// What each device's Live Activity was sent (hex device key).
     activities: Mutex<HashMap<String, activity::DeviceState>>,
+    /// What is left of the relay's alert budgets.
+    budgets: Mutex<Budgets>,
+}
+
+/// A rate the push relay enforces: `burst` at once, then one every `every`.
+#[derive(Debug, Clone, Copy)]
+struct Budget {
+    burst: u32,
+    every: Duration,
+}
+
+/// Alerts the relay accepts (docs/PUSH.md §9): per daemon 30 at once then one every 3 s, per
+/// device 30 then one every 12 s. Past them it only refuses (and retries pile up), so pushes
+/// past them wait their turn instead.
+const DAEMON_ALERTS: Budget = Budget {
+    burst: 30,
+    every: Duration::from_secs(3),
+};
+const DEVICE_ALERTS: Budget = Budget {
+    burst: 30,
+    every: Duration::from_secs(12),
+};
+
+/// Pushes left in a budget, refilled over time.
+#[derive(Debug, Clone, Copy)]
+struct Bucket {
+    tokens: f64,
+    at: Instant,
+}
+
+impl Bucket {
+    fn full(budget: Budget, now: Instant) -> Self {
+        Self {
+            tokens: f64::from(budget.burst),
+            at: now,
+        }
+    }
+
+    fn refill(&mut self, budget: Budget, now: Instant) {
+        let earned =
+            now.saturating_duration_since(self.at).as_secs_f64() / budget.every.as_secs_f64();
+        self.tokens = (self.tokens + earned).min(f64::from(budget.burst));
+        self.at = now;
+    }
+
+    /// How long until a whole push is available (after [`refill`](Self::refill)).
+    fn wait(&self, budget: Budget) -> Duration {
+        if self.tokens >= 1.0 {
+            Duration::ZERO
+        } else {
+            budget.every.mul_f64(1.0 - self.tokens)
+        }
+    }
+}
+
+/// The relay's alert budgets as this daemon has spent them.
+#[derive(Debug)]
+struct Budgets {
+    daemon: Bucket,
+    devices: HashMap<String, Bucket>,
+    /// The relay answered 429: nothing goes out before this.
+    paused_until: Option<Instant>,
+}
+
+impl Budgets {
+    fn new(now: Instant) -> Self {
+        Self {
+            daemon: Bucket::full(DAEMON_ALERTS, now),
+            devices: HashMap::new(),
+            paused_until: None,
+        }
+    }
+
+    /// Takes one alert to `device` from both budgets; if either is spent, how long until
+    /// both have one again.
+    fn spend(&mut self, device: &str, now: Instant) -> Result<(), Duration> {
+        let paused = self
+            .paused_until
+            .map_or(Duration::ZERO, |until| until.saturating_duration_since(now));
+        self.daemon.refill(DAEMON_ALERTS, now);
+        let own = self
+            .devices
+            .entry(device.to_owned())
+            .or_insert_with(|| Bucket::full(DEVICE_ALERTS, now));
+        own.refill(DEVICE_ALERTS, now);
+        let wait = paused
+            .max(self.daemon.wait(DAEMON_ALERTS))
+            .max(own.wait(DEVICE_ALERTS));
+        if !wait.is_zero() {
+            return Err(wait);
+        }
+        self.daemon.tokens -= 1.0;
+        own.tokens -= 1.0;
+        Ok(())
+    }
 }
 
 impl Push {
@@ -92,6 +187,7 @@ impl Push {
             http: OnceLock::new(),
             activity_wake: tokio::sync::Notify::new(),
             activities: Mutex::new(HashMap::new()),
+            budgets: Mutex::new(Budgets::new(Instant::now())),
         }
     }
 
@@ -467,18 +563,19 @@ fn wants(prefs: &PushPrefs, kind: push::Kind) -> bool {
     }
 }
 
+/// Debounce: not seen meanwhile (a client focused the pane, the blocker went away), and no
+/// newer item for the same pane that will be pushed instead.
+fn still_due(core: &Core, item: &AttentionItem) -> bool {
+    core.ws.attention.get(item.id).is_some_and(|i| !i.seen)
+        && !core.ws.attention.superseded(item.id, item.pane_id)
+}
+
 async fn deliver(core: Arc<Core>, item: AttentionItem) {
     if !core.cfg.push.enabled || lock(&core.push.regs).is_empty() {
         return;
     }
     tokio::time::sleep(core.cfg.push.delay).await;
-    // Debounce: seen meanwhile (a client focused the pane, the blocker went away), or a newer
-    // item for the same pane will be pushed instead.
-    match core.ws.attention.get(item.id) {
-        Some(current) if !current.seen => {}
-        _ => return,
-    }
-    if core.ws.attention.superseded(item.id, item.pane_id) {
+    if !still_due(&core, &item) {
         return;
     }
     let (kind, buttons) = classify(&core, &item);
@@ -497,6 +594,17 @@ async fn deliver(core: Arc<Core>, item: AttentionItem) {
         let core = Arc::clone(&core);
         let (item, host, buttons) = (item.clone(), host.clone(), buttons.clone());
         tokio::spawn(async move {
+            // Past the relay's budget a push waits its turn, and goes only if still due.
+            loop {
+                let wait = match lock(&core.push.budgets).spend(&reg.device, Instant::now()) {
+                    Ok(()) => break,
+                    Err(wait) => wait,
+                };
+                tokio::time::sleep(wait).await;
+                if !still_due(&core, &item) || core.device_active(device) {
+                    return;
+                }
+            }
             let result = send(&core, &reg, device, &item, kind, buttons.as_ref(), &host).await;
             match result {
                 Ok(()) => {
@@ -691,7 +799,11 @@ async fn post(
                     .and_then(|v| v.parse::<u64>().ok())
                     .map(Duration::from_secs);
                 last = format!("relay answered {}", r.status());
-                retry_after.unwrap_or(backoff).min(Duration::from_secs(300))
+                let wait = retry_after.unwrap_or(backoff).min(Duration::from_secs(300));
+                if r.status().as_u16() == 429 {
+                    lock(&core.push.budgets).paused_until = Some(Instant::now() + wait);
+                }
+                wait
             }
             Ok(r) => {
                 let status = r.status();
@@ -727,6 +839,30 @@ mod tests {
         assert!(wants(&prefs, push::Kind::Approval));
         assert!(!wants(&prefs, push::Kind::Done));
         assert!(wants(&prefs, push::Kind::Failed));
+    }
+
+    #[test]
+    fn alerts_stay_within_the_relays_budgets() {
+        let t0 = Instant::now();
+        let mut b = Budgets::new(t0);
+        let sent = (0..100).filter(|_| b.spend("a", t0).is_ok()).count();
+        assert_eq!(sent, 30, "a burst stops at the budget");
+        let wait = b.spend("a", t0 + Duration::from_secs(11)).unwrap_err();
+        assert!(
+            wait.abs_diff(Duration::from_secs(1)) < Duration::from_millis(1),
+            "the next one is due a second later, not {wait:?}"
+        );
+        assert_eq!(b.spend("a", t0 + Duration::from_secs(12)), Ok(()));
+        // The daemon's budget earned 4 in those 12 s, one of them spent above.
+        let other = (0..100)
+            .filter(|_| b.spend("b", t0 + Duration::from_secs(12)).is_ok())
+            .count();
+        assert_eq!(other, 3);
+        // A 429 holds everything back until its retry-after.
+        let later = t0 + Duration::from_secs(600);
+        b.paused_until = Some(later + Duration::from_secs(5));
+        assert_eq!(b.spend("c", later), Err(Duration::from_secs(5)));
+        assert_eq!(b.spend("c", later + Duration::from_secs(5)), Ok(()));
     }
 
     #[test]

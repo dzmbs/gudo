@@ -7,7 +7,11 @@ use client_core::ClientConfig;
 use client_core::proto::{LayoutOp, OpOutcome, PaneLaunch};
 use iroh::endpoint::presets;
 use iroh::{Endpoint, EndpointAddr, EndpointId};
-use proto::{Caps, ClientCtl, DeviceId, GrantId, Hello, LinkClass, ServerCtl, SignedGrant, Ticket};
+use proto::{
+    Caps, ClientCtl, ClientInput, DeviceId, GrantId, Hello, Input, InputPayload, InputSeq,
+    LinkClass, PaneId, PrincipalId, ResumeToken, ServerCtl, SignedGrant, StreamHeader, Ticket,
+    Welcome,
+};
 
 use crate::support::{self, TestClient};
 
@@ -24,16 +28,20 @@ async fn raw_pair(ticket: &str) -> Raw {
 }
 
 /// Dials as device `key`, pairing with the ticket's secret or as an already paired device.
-async fn raw_dial(
+async fn raw_dial(ticket: &str, key: &[u8], pairing: bool) -> Raw {
+    dial_with(ticket, key, pairing, Caps::ATTACH_RESULT, None)
+        .await
+        .0
+}
+
+/// [`raw_dial`] announcing `caps` and presenting `token`; also returns the `Welcome`.
+async fn dial_with(
     ticket: &str,
     key: &[u8],
     pairing: bool,
-) -> (
-    Endpoint,
-    iroh::endpoint::Connection,
-    iroh::endpoint::SendStream,
-    iroh::endpoint::RecvStream,
-) {
+    caps: Caps,
+    token: Option<ResumeToken>,
+) -> (Raw, Welcome) {
     let (ticket, _) = Ticket::parse_with_extras(ticket).unwrap();
     let secret = iroh::SecretKey::from_bytes(key.try_into().unwrap());
     let device = DeviceId(*secret.public().as_bytes());
@@ -66,9 +74,9 @@ async fn raw_dial(
         },
         snapshot_format: u32::from(ghostty_vt::snapshot_format()),
         resume: Vec::new(),
-        caps: Caps::ATTACH_RESULT,
+        caps,
         link: LinkClass::Normal,
-        resume_token: None,
+        resume_token: token,
     };
     tx.write_all(&proto::frame::to_vec(&ClientCtl::Hello(hello)).unwrap())
         .await
@@ -78,9 +86,11 @@ async fn raw_dial(
     let mut body = vec![0; proto::frame::body_len(prefix, proto::MAX_FRAME_LEN).unwrap()];
     rx.read_exact(&mut body).await.unwrap();
     let first: ServerCtl = proto::frame::decode_body(&body).unwrap();
-    assert!(matches!(first, ServerCtl::Welcome(_)), "{first:?}");
+    let ServerCtl::Welcome(welcome) = first else {
+        panic!("{first:?}")
+    };
     // Nothing the daemon sends is read from here on.
-    (endpoint, conn, tx, rx)
+    ((endpoint, conn, tx, rx), welcome)
 }
 
 /// A peer that keeps asking but never reads used to grow the daemon's queue for it without
@@ -269,4 +279,93 @@ async fn title_floods_are_coalesced() {
     let pushes = c.meta_events - before;
     assert!(pushes < 300, "{pushes} metadata pushes for 3001 titles");
     let _ = first;
+}
+
+/// Writes lines `seqs` to `pane` on a new input stream of `raw`, numbered as given.
+async fn type_numbered(
+    raw: &Raw,
+    pane: PaneId,
+    principal: PrincipalId,
+    seqs: std::ops::RangeInclusive<u64>,
+) {
+    let mut input = raw.1.open_uni().await.unwrap();
+    let mut bytes = proto::frame::to_vec(&StreamHeader::Input).unwrap();
+    for n in seqs {
+        let frame = ClientInput::Input(Input {
+            pane_id: pane,
+            input_seq: InputSeq(n),
+            principal,
+            payload: InputPayload::Bytes(format!("line {n}\n").into_bytes()),
+        });
+        bytes.extend(proto::frame::to_vec(&frame).unwrap());
+    }
+    input.write_all(&bytes).await.unwrap();
+    input.finish().unwrap();
+}
+
+/// The file's text once it contains `needle` (or after 10 s).
+async fn file_with(path: &std::path::Path, needle: &str) -> String {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        if text.contains(needle) || Instant::now() > deadline {
+            return text;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Keystrokes written to a connection that then died (a frozen host) were lost: the client
+/// never sent them again. Now it does, and the daemon applies each one once, although some of
+/// them had arrived over the old connection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn input_sent_again_after_a_reconnect_is_applied_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = support::start(dir.path()).await;
+    let ticket = support::ticket(&daemon);
+    let out = dir.path().join("typed.txt");
+    let mut c = TestClient::connect(&ticket, ClientConfig::generate_key());
+    c.attach_and_follow().await;
+    let session = c.layout.as_ref().unwrap().session_id;
+    let OpOutcome::TabCreated { pane_id, .. } = c
+        .op(LayoutOp::NewTab {
+            session_id: session,
+            name: String::new(),
+            launch: PaneLaunch::Command {
+                argv: vec![
+                    "/bin/sh".into(),
+                    "-c".into(),
+                    format!("stty raw -echo; exec cat > '{}'", out.display()),
+                ],
+                cwd: None,
+            },
+        })
+        .await
+    else {
+        panic!("no tab")
+    };
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let ticket = support::ticket(&daemon);
+    let principal = Ticket::parse_with_extras(&ticket).unwrap().0.principal;
+    let key = ClientConfig::generate_key();
+    let caps = Caps::INPUT_RESUME;
+
+    let (first, welcome) = dial_with(&ticket, &key, true, caps, None).await;
+    type_numbered(&first, pane_id, principal, 1..=5).await;
+    file_with(&out, "line 5").await;
+    first.1.close(0u32.into(), b"link died");
+    // The client cannot know 3..=5 arrived: it sends them again with what came after.
+    let token = Some(welcome.resume_token);
+    let (second, _) = dial_with(&ticket, &key, false, caps, token).await;
+    type_numbered(&second, pane_id, principal, 3..=7).await;
+    let text = file_with(&out, "line 7").await;
+    let lines: Vec<&str> = text.lines().map(|l| l.trim_end_matches('\r')).collect();
+    let want: Vec<String> = (1..=7).map(|n| format!("line {n}")).collect();
+    assert_eq!(lines, want);
+
+    // Without the token it is another input stream, applied as it comes.
+    let (third, _) = dial_with(&ticket, &key, false, caps, None).await;
+    type_numbered(&third, pane_id, principal, 1..=1).await;
+    let text = file_with(&out, "line 7\nline 1").await;
+    assert!(text.ends_with("line 7\nline 1\n"), "{text}");
 }

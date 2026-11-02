@@ -32,6 +32,7 @@ mod art;
 mod askpass;
 mod assist;
 mod browser;
+mod clock;
 mod codex_session;
 mod commands;
 mod config;
@@ -51,6 +52,7 @@ mod pane;
 mod persist;
 mod preauth;
 mod procinfo;
+mod resume;
 mod scan;
 mod shell;
 mod stream;
@@ -82,6 +84,7 @@ pub use assist::HistoryConfig;
 pub use browser::{
     BROWSER_VERSION, BrowserAsk, BrowserCall, BrowserReply, CALL_TIMEOUT as BROWSER_CALL_TIMEOUT,
 };
+pub use clock::boot_nanos as hook_seq;
 pub use config::{ArtifactLimits, AskpassConfig, Config, RelayMode, default_state_dir};
 pub use config::{CustomRelays, PresenceTimes, PushConfig, RepoConfig};
 pub use fsutil::create_private_temp_file;

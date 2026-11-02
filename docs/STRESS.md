@@ -18,6 +18,8 @@ load stops, and cleans up.
 cargo build --release -p hostd -p un -p stress     # unnamed-hostd, un, un-hook, un-stress
 B=target/release
 scripts/stress/scenarios.sh $B panes churn floods slow clients control lifecycle soak
+scripts/stress/scenarios.sh $B outages hooks term knocks upgrade many   # second pass
+SOAK_MIN=90 scripts/stress/scenarios.sh $B soak
 ```
 
 | Script | What it does |
@@ -29,7 +31,9 @@ scripts/stress/scenarios.sh $B panes churn floods slow clients control lifecycle
 | `s-slow.sh`, `s-clients.sh`, `s-control.sh`, `s-soak.sh` | Stuck clients; many clients (paired or `GUESTS=1`); input and control storms; mixed soak |
 | `gen.py <kind> [rate]` | Output generators: titles, OSC 7/133/9/777/7501/52, OSC 8 links, Unicode storm, alt-screen storm, kitty images, long lines |
 | `s-gen.sh`, `profile-during.sh`, `mem-during.sh` | Diagnostics: RSS of one generator without a client; a `sample(1)` profile; heap and VM regions mid-run |
-| `un-stress` (`crates/stress`) | The driver: `churn`, `deep`, `spawn`, `latency`, `clients`, `slow` (raw peers that never read), `reconnect`, `stale-resume` (raw garbage `Hello`s), `keys`, `paste`, `layout`, `projects` |
+| `un-stress` (`crates/stress`) | The driver: `churn`, `deep`, `tabs`, `spawn`, `latency`, `clients`, `slow` (raw peers that never read), `reconnect`, `stale-resume` (raw garbage `Hello`s), `keys`, `paste`, `layout`, `projects`, `outages` (lines typed while the daemon is frozen, checked exactly once), `push-sink` (a device registered with a local fake push relay, counting pushes), `knocks` (fresh devices knocking on one invite) |
+| `s-outages.sh`, `s-hooks.sh`, `s-term.sh`, `s-knocks.sh`, `s-upgrade.sh`, `many.sh`, `s-soak-heap.sh` | Second pass: input across outages; real `un-hook` floods and approval spam with a push sink; agents' terminal tools at high concurrency (a fake `codex` for `agent_spawn`); knock floods; self-upgrade under full load; 1000 panes and a restart; the soak with heap snapshots |
+| `hookload.py`, `jobs.sh` | Load from inside panes (they hold the pane's hook token): `un-hook` processes, held approvals, terminal-tool calls on the hook socket |
 
 "Echo latency" is the time from sending a token to a pane running `cat` until it comes back in
 that pane's stream, measured by a separate client while the load runs.
@@ -126,27 +130,99 @@ connections), pane churn every 30 s, and a latency probe each minute.
 
 Descriptors and threads stay flat. RSS rose by about 1.2 MB a minute; the OSC 133 stream
 records a new distinct command 200 times a second into the command history, which is capped
-at 50 000 entries, so this growth is expected to level off there (a longer soak should confirm
-it). No input was lost and the worst echo in 30 minutes was 12 ms.
+at 50 000 entries. No input was lost and the worst echo in 30 minutes was 12 ms.
+
+**90 minutes** (2026-11-02, same mix, machine load 3 to 290 from other jobs, heap sampled every
+10 minutes with `heap(1)`): the growth levels off. It was the command history filling up.
+
+| Minute | RSS | Live heap | History file lines | fds / threads |
+|---|---|---|---|---|
+| 1 | 75 MB | — | — | 151 / 116 |
+| 10 | 106 MB | 81 MB | 69 370 | 151 / 122 |
+| 20 | 114 MB | 85 MB | 90 199 | 151 / 124 |
+| 30–90 | 113–122 MB, flat | 85–88 MB | 55 675–97 004, sawtooth | 151 / 124 |
+| +10 s after | 93 MB | — | — | 19 / 19 |
+
+The history keeps up to twice its cap (100 000 distinct commands, about 60 MB here) before it
+compacts to 50 000; the live heap follows that sawtooth and nothing else grows. 10 411
+reconnects over the run. Echo p50 0.25–20 ms and p99 under 190 ms throughout, except one
+sample of 4.0 s at minute 52 during a load spike of the machine; nothing was lost.
+
+### Second pass (2026-11-02)
+
+Self-upgrade, network outages, clock steps, approval spam, real hook floods, agents' terminal
+tools, knock floods, a 90-minute soak (above) and 1000 panes, on the same shared Mac (load 3
+to 290). "Before" rows ran the build from before the fixes, A/B at the same load where they
+compare numbers.
+
+| Scenario | Peak (RSS, CPU, fds, threads) | Focused-pane echo | Outcome |
+|---|---|---|---|
+| Self-upgrade under full load (40 shells, 2 `yes`, a Unicode stream, a title flood, 20 guests following a flood, 2 reconnect loops), 3 rounds | 122 MB, 955 %, 157 fds, 120 threads | p99 under 1 ms between rounds | before: **the daemon died** restarting on round 2 or 3 (SIGPIPE, exit 141). **Fixed** (`execv`): every round answers in 0.8–5 s (the 38 MB build over QUIC), back 1.0–1.1 s later, all 46 tabs back, same PID; the 20 guests reconnected each round |
+| Same, no load, a client reconnecting, 10 upgrades in a row | — | — | before: 0 of 10 came back. After: 10 of 10 |
+| Lines typed every 20 ms while the daemon is frozen (SIGSTOP) 2 s every 10 s, and 8 s every 20 s | 24 MB | — | Survived: 2001/2001 and 3001/3001 lines, exactly once, no reconnect (QUIC retransmits) |
+| Same, frozen 20 s every 30 s (past the 12 s idle timeout, so the link drops) | 24 MB | back 8.3 s after the thaw | before: **601 of 4501 lines lost** (everything typed between the freeze and the drop). **Fixed** (input resume): 5500/5500, none lost or doubled, over 2 drops |
+| Packet loss, high RTT and link flaps through a UDP proxy | — | — | **Not testable on one host**: QUIC multipath opened a direct loopback path around the proxy (12 of thousands of datagrams went through it). Needs pf/dummynet (root) or a second machine |
+| Approval spam: 20 fake agents × 4 threads running `un-hook claude PermissionRequest` in a loop (about 35 000 requests a minute), a device registered for pushes with a local fake relay | 107 MB, 33 %, 275 fds | p99 64 ms | Survived. Each pane holds one request (a newer one replaces it) and identical requests merge into one approval: 20 pushes, 20 inbox items |
+| 40 fake agents each asking for a new approval every 4 s | — | — | before: 40 pushes at once (the relay accepts 30 a burst per daemon, so 10 would be refused and retried). **Fixed**: within the relay's budgets, the rest wait their turn: all 40 delivered over 130 s |
+| Real `un-hook` flood: 4 panes × 16 threads, PreToolUse/PostToolUse, 30 s | 62 MB, 31 % | p99 13–22 ms | Survived: 640–860 hooks/s (by machine load), none failed, hook p99 under 300 ms (process start included) |
+| 600 `pane_wait`s for a pattern that never comes on a `yes` pane, real hooks from another pane | before: 1.07 GB, 1040 % | before: p50 2.0 s, p99 3.9 s, one lost | **Broke, fixed**: renders were synchronous on the async workers and unbounded; the hook socket was full (hooks 2/s, 5 s each, 32 failed). After: 442 MB, 412 %, echo p99 6 ms, hooks 298/s, none failed; calls past 32 per pane are refused at once |
+| `cmd_run` without a pane from 40 threads | — | — | before: after 16 panes **every call failed** ("too many nested splits"). **Fixed**: past the nesting limit panes open in a background tab; the 32-pane budget then holds |
+| `agent_spawn` (a stand-in `codex`) from 16 threads | — | — | before: **41 panes** opened for a budget of 32 (parallel calls raced the count). **Fixed**: exactly 32 |
+| Knock flood: 32 fresh devices at a time knocking on one knock invite, 60 s, then 32 that stay | before 205 MB; after 437 MB (cheaper refusals let more connections through: 21 000 in 90 s) | p99 118 → 44 ms | before: 254 knocks reached the owner a minute and 10 366 refusals filled the audit log (4.6 MB a minute). **Fixed**: 16 knocks reached the owner, 47 audit records in all. Waiting knocks stay at 8 per invite |
+| Same, live heap 65 s after the flood | 118 MB → 31 MB | — | Recovers: iroh keeps state per remote key for 60 s after its last connection (see limits) |
+| 100 guests following a `yes` pane, 40 s, without and with shared snapshots (A/B at load ~24) | 439 → 397 MB, 813 → 748 % | p99 311 → 272 ms | Shared snapshots: 8 % less CPU, 10 % less RSS. The first version **deadlocked the daemon** (fixed before merging, regression test). Memory per client stays about 3.5–4 MB: QUIC send buffers, not snapshots |
+| Kitty images (64×64, new id each), one client, 40 s | 416 → 351 MB | p99 13 ms | Older history snapshots now kept only within 48 MiB: one full snapshot fewer, 276 → 211 MB after the load |
+| 1000 panes: 300 tabs running `sleep` (real PTYs) and 700 canvas tabs, then a restart | 70 MB, 921 fds, 622 threads | p99 0.4 ms | Survived. PTY tabs 2.7 ms each; canvas tabs 32 ms each at 1000 (three fsynced writes per canvas, see limits); layout 8 KiB on the wire, `layout.json` 270 KB; answering 1.0 s after the restart with all 1001 panes; 48 MB after closing |
+| Clock steps (wall clock set back or forward) | — | — | Reviewed, **two bugs fixed** (not exercised on the real clock, which needs root): the hook shim ordered hooks by wall-clock nanoseconds, so after the clock went back every hook of an agent was dropped as stale until the clock caught up (approvals vanished from the app for that long); the agent arbiter measured its debounces and staleness on the wall clock, so a step back delayed "blocked" notifications by the step. Both use the boot clock now (`daemon::clock`). Expiries (grants, tickets, push action tokens, auto-approve rules) stay on the wall clock by design: they are absolute times |
+
+Bugs found and fixed in the second pass:
+
+| Severity | Bug | Cause | Fix | Test |
+|---|---|---|---|---|
+| Critical | Self-upgrade killed the daemon instead of restarting it whenever clients were connected | `Command::exec` resets SIGPIPE to its default before `execve` while the runtime's other threads still run; a write to a socket a peer had just closed delivered SIGPIPE | Restart with `execv` directly (the new build ignores SIGPIPE again as it starts) | `hostd/tests/restart.rs` (a real daemon, 4 upgrades, clients reconnecting) |
+| Critical | Shared snapshots deadlocked the daemon (found by the A/B run before merging) | The ring's oldest offset was read under the VT lock; the PTY thread feeds the VT under the ring's lock | Read it before taking the VT lock | `pane::tests::snapshots_of_a_flooding_pane_are_shared_without_deadlock` |
+| High | Keystrokes typed while the link was dying were lost (601 in a 20 s freeze) | Input written to a connection that then died was never sent again | Input resume: clients with `Caps::INPUT_RESUME` keep numbering input across reconnects and resend what was not acknowledged; the `Welcome`'s resume token names the input stream and the daemon applies each number once (`DaemonFeatures::INPUT_RESUME`) | `stress::input_sent_again_after_a_reconnect_is_applied_once`, `resend` and `resume` unit tests |
+| High | Waits with a pattern stalled the whole daemon and the hook socket | Each wait re-rendered up to 1 MiB on every chunk, synchronously on the async workers; one agent could hold all 512 hook connections | Renders off the workers, four at a time, at most every 100 ms per wait over batched output; 32 calls in progress per pane | `term::tests::one_pane_cannot_hold_every_call_slot`; the `term` scenario |
+| High | After the clock went back, an agent's hooks (approvals) were dropped until it caught up | Hook order by wall-clock nanoseconds | Boot-clock order | `clock` unit tests (a real step needs root) |
+| Medium | A leaked knock link flooded the owners and the audit log (4.6 MB a minute on disk, forever) | No limit per invite but 8 waiting; every refusal audited | 8 knocks at once per invite, then one per 10 s; refusals audited once a minute with a count | `mp::knock_limit` tests |
+| Medium | Agents' panes past 16 nested splits all failed | Every new pane split the caller's pane again | Open them in a background tab | `term::panes_past_the_nesting_limit_open_in_a_tab` |
+| Medium | Parallel tool calls overshot the 32-pane budget (41) | Count and open were not atomic | One lock around both | `term::parallel_opens_stay_within_the_pane_budget` |
+| Medium | Push bursts past the relay's budget were refused and retried with back-off | No budget on the daemon side | The relay's budgets (30 a burst then one per 3 s per daemon, one per 12 s per device), honouring 429 `retry-after`; pushes past them wait their turn | `notifier::tests::alerts_stay_within_the_relays_budgets` |
+| Medium | Blocked-agent notifications from the screen were held back by a step of the clock | Arbiter debounce on the wall clock | Steady clock (wall time at start, carried by the boot clock) | — |
+| Low | Loading a long audit log held it whole in memory; each append shifted 10 000 records | `Vec` then `drain` | Bounded `VecDeque` while reading | existing audit tests |
+| Low | An image-heavy pane kept two full snapshots (tens of MB each) | Two kept for history paging whatever their size | Older ones only within 48 MiB | `pane::tests::large_snapshots_keep_no_older_copies` |
+
+New limits (by design):
+
+| Limit | Value | When hit |
+|---|---|---|
+| Terminal-tool calls in progress per pane | 32 | Refused at once, retryable ("32 calls from this pane are still running") |
+| Agents' output renders at once | 4 | Calls wait their turn |
+| Knocks per invite | 8 at once, then one per 10 s (and 8 waiting) | `Refused { InvalidGrant }`; audited once a minute with a count |
+| Alert pushes | 30 a burst then one per 3 s per daemon, one per 12 s per device | Waits its turn; dropped if seen meanwhile |
+| Input kept for resending | 4 MiB or 8192 inputs per client | Older unacknowledged input could be lost on a dead link, never doubled |
+| Input streams remembered | 4096 (idle ones forgotten after 30 min) | A client resuming after that starts a new stream |
+| iroh state per remote key | 60 s after its last connection | A stranger opening connections from fresh keys holds memory for a minute: about 13 KB per key; 118 MB live after 21 000 connections in 90 s, 31 MB a minute later |
+| Canvas panes | three fsynced writes each | about 30 per second at 1000 canvases |
 
 ### Not tested, and open items
 
-- **1000 and 2000 panes, and the real PTY cap.** macOS allows 511 PTYs system-wide and the
-  machine is shared, so the runs stopped at 400. The exhaustion path was driven through the fd
-  limit instead (same error path). On Linux (Hetzner host, off limits for this pass) note that
-  every pane has two threads and `RLIMIT_NPROC` counts threads there.
-- **Self-upgrade under load**, **clock jumps** (timers are
-  tokio's monotonic clock by design, but not exercised), **network chaos** (loss and latency via
-  a lossy transport or local relay), **approval spam from fake agents**, real `un-hook` floods
-  (only idle connections were tested), **MCP `cmd_run`/`pane_wait` at high concurrency**, and
-  **knock floods**.
-- **Memory per client under a flood is high**: about 1.5–8 MB per client watching a `yes` pane
-  (QUIC send buffers within each stream's in-flight budget, snapshots). 200 such clients reached
-  1.7 GB. Bounded, but worth shrinking: share one snapshot encode between clients that ask
-  within a few ms of each other, and lower budgets for non-focused panes.
-- **Kitty images**: a pane keeps up to three full snapshots (cache plus two for history paging),
-  each with every image (up to the 64 MB storage limit). 545 MB peak for one image-heavy pane.
-  Snapshots for history could drop the image payloads.
+- **2000 panes and the real PTY cap.** macOS allows 511 PTYs for the whole machine
+  (`kern.tty.ptmx_max`, root to raise) and other jobs hold some, so real PTYs stopped at 300 and
+  1000 panes were reached with 700 canvas panes. The exhaustion path is driven through the fd
+  limit instead (same error path). On Linux (Hetzner host, off limits) note that every pane has
+  two threads and `RLIMIT_NPROC` counts threads there.
+- **Packet loss, latency and flaps on the wire.** Outages were made by freezing the daemon, which
+  covers the dead-link and resume paths; QUIC's own loss recovery was not exercised (see the
+  scenario table). On a second machine, put `pf`/`dnctl` or `tc netem` between client and daemon
+  and run `un-stress outages` with `--every 0` (a plain typing check).
+- **A real clock step** (needs root). Timers and the arbiter run on monotonic or boot clocks;
+  the remaining wall-clock uses are absolute expiries and timestamps.
+- **Memory per client under a flood**: about 3.5–4 MB per client following a `yes` pane, mostly
+  QUIC send buffers within each stream's in-flight budget. Lower budgets for non-focused panes
+  would shrink it.
+- **Agent pane renders**: a render of a megabyte of short lines still takes 40 ms and up to 30
+  MB; four run at once.
 - **macOS malloc keeps freed memory resident** after a burst (150 MB after 100 clients left).
   `malloc_zone_pressure_relief` did not release it in a quick try; the system reclaims it under
   memory pressure.
@@ -161,7 +237,9 @@ it). No input was lost and the worst echo in 30 minutes was 12 ms.
 |---|---|---|
 | Unbounded queue between PTY reader and consumer | zellij #525, xterm.js, VS Code (watermarks) | PTY ring is bounded; the event queue was not (**fixed**) |
 | Children that ignore SIGHUP linger | WezTerm #8226 | **Fixed** (group kill after 3 s) |
-| Clock jumps break timers | mosh #1014 | Monotonic timers by design (untested) |
+| Clock jumps break timers | mosh #1014 | Timers were monotonic, but hook ordering and the agent arbiter used the wall clock (**fixed**: boot clock) |
+| Self-update kills the process | (ours) | `Command::exec` let SIGPIPE through during the restart (**fixed**) |
+| Keystrokes lost on a dying link | mosh (its reason to exist) | Unacknowledged input is resent and applied once (**fixed**) |
 | Reconnect storms | zellij #1948, WezTerm #7771 | 3661 reconnects in 15 s survived; garbage resumes were not (**fixed**) |
 
 ## App and renderer

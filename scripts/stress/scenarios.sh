@@ -61,8 +61,51 @@ case_lifecycle() {
 }
 
 case_soak() {
-  echo "== mixed soak, ${SOAK_MIN:-30} min"
-  RECOVER=10 D soak "$W/s-soak.sh" ${SOAK_MIN:-30}
+  echo "== mixed soak, ${SOAK_MIN:-30} min, heap every ${HEAP_EVERY:-10} min"
+  RECOVER=10 D soak "$W/s-soak-heap.sh" ${SOAK_MIN:-30}
+}
+
+case_hooks() {
+  echo "== un-hook floods and approval spam"
+  RECOVER=5 D hooks "$W/s-hooks.sh"
+}
+
+case_term() {
+  # agent_spawn starts `codex`: a stand-in that only sleeps, so no real agent ever runs.
+  local fake=$B/fake-agents
+  mkdir -p "$fake"
+  printf '#!/bin/sh\nexec sleep 600\n' >"$fake/codex"
+  chmod +x "$fake/codex"
+  echo "== terminal tools at high concurrency"
+  PATH=$fake:$PATH RECOVER=5 D term "$W/s-term.sh"
+  rm -rf "$fake"
+}
+
+case_upgrade() {
+  # The upgrade replaces the running executable, so it runs from a copy.
+  local copy=$B/upgrade-bin
+  mkdir -p "$copy"
+  cp "$B"/unnamed-hostd "$B"/un "$B"/un-hook "$B"/un-stress "$copy/"
+  echo "== self-upgrade under load, 3 rounds"
+  RECOVER=5 "$W/with-daemon.sh" "$copy" upgrade "$W/s-upgrade.sh" "$B/unnamed-hostd" 3
+  rm -rf "$copy"
+}
+
+case_knocks() {
+  echo "== knock flood on one knock invite"
+  RECOVER=5 D knocks "$W/s-knocks.sh" 60
+}
+
+case_many() {
+  echo "== 1000 panes: 300 PTY tabs and 700 canvas tabs, a restart"
+  "$W/many.sh" "$B" 300 700
+}
+
+case_outages() {
+  # Outages freeze the daemon (SIGSTOP): a user-space UDP proxy cannot cut the link, since
+  # QUIC multipath finds the direct loopback path around it.
+  echo "== input across outages"
+  RECOVER=3 D chaos "$W/s-outages.sh"
 }
 
 for s in "$@"; do
