@@ -265,16 +265,39 @@ fn in_app_bundle(exe: &Path) -> bool {
 /// keep supervising it). Falls back to the previous build if the new one cannot be executed,
 /// and exits with an error (the service manager restarts it) if neither can.
 fn restart_into(exe: &Path) -> ! {
-    use std::os::unix::process::CommandExt;
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    let err = std::process::Command::new(exe).args(&args).exec();
+    let err = exec(exe, &args);
     eprintln!("could not start the new build {}: {err}", exe.display());
     let prev = daemon::upgrade_prev_path(exe);
     if std::fs::rename(&prev, exe).is_ok() {
-        let err = std::process::Command::new(exe).args(&args).exec();
+        let err = exec(exe, &args);
         eprintln!("could not start the previous build either: {err}");
     }
     std::process::exit(1)
+}
+
+/// `execv` with `exe` as argv[0]; returns only on failure.
+///
+/// Not `Command::exec`: it sets SIGPIPE back to the default before `execve` while the
+/// runtime's other threads still run, so one writing to a closed socket or pipe in that window
+/// kills the daemon instead of restarting it. Kept ignored, the new build inherits it ignored,
+/// as Rust programs run anyway.
+fn exec(exe: &Path, args: &[std::ffi::OsString]) -> std::io::Error {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(argv) = std::iter::once(exe.as_os_str())
+        .chain(args.iter().map(|a| a.as_os_str()))
+        .map(|s| CString::new(s.as_bytes()))
+        .collect::<Result<Vec<_>, _>>()
+    else {
+        return std::io::ErrorKind::InvalidInput.into();
+    };
+    let mut pointers: Vec<*const libc::c_char> = argv.iter().map(|a| a.as_ptr()).collect();
+    pointers.push(std::ptr::null());
+    // SAFETY: `argv[0]` and every pointer are NUL-terminated strings that outlive the call,
+    // and the array ends with a null pointer.
+    unsafe { libc::execv(argv[0].as_ptr(), pointers.as_ptr()) };
+    std::io::Error::last_os_error()
 }
 
 fn build_info(json: bool) -> Result<()> {
@@ -528,6 +551,36 @@ mod tests {
             "/home/u/.local/bin/unnamed-hostd"
         )));
         assert!(!in_app_bundle(Path::new("/opt/Contents/X.app/hostd")));
+    }
+
+    /// The restart keeps SIGPIPE ignored through `exec`, so no thread writing to a closed
+    /// socket in the meantime can kill the daemon: the program it becomes still has it ignored.
+    #[test]
+    fn exec_keeps_sigpipe_ignored() {
+        const CHILD: &str = "HOSTD_TEST_EXEC_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            // In the re-run test binary: become a shell that sends itself SIGPIPE.
+            let err = exec(
+                Path::new("/bin/sh"),
+                &["-c".into(), "kill -PIPE $$; exit 7".into()],
+            );
+            panic!("exec failed: {err}");
+        }
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "tests::exec_keeps_sigpipe_ignored",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert_eq!(
+            status.code(),
+            Some(7),
+            "SIGPIPE stays ignored through exec: {status}"
+        );
     }
 
     #[test]
