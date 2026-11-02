@@ -603,6 +603,10 @@ final class WorkspaceScreenModelTests: XCTestCase {
         XCTAssertNil(ports.offer)
         ports.portsChanged("h1", [PortInfo(port: 3000, loopbackOnly: true, paneId: nil, pid: 3, process: "node", kind: .http, url: nil)])
         XCTAssertEqual(ports.offer?.port, 3000)
+        // The URL the server printed arrives after its listener: the offer opens there.
+        ports.portsChanged("h1", [PortInfo(port: 3000, loopbackOnly: true, paneId: nil, pid: 3, process: "node", kind: .http, url: "http://web.localhost:3000/")])
+        let offer = try XCTUnwrap(ports.offer)
+        XCTAssertEqual(DevServerRouting.pageURL(for: offer).absoluteString, "http://web.localhost:3000/")
         ports.dismissOffer()
         ports.portsChanged("h1", [
             PortInfo(port: 3000, loopbackOnly: true, paneId: nil, pid: 3, process: "node", kind: .http, url: nil),

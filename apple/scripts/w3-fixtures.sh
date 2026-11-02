@@ -117,7 +117,11 @@ if args[:1] == ["tunnel"]:
     while True:
         time.sleep(1000)
 port =int(args[args.index("--port") + 1])
-token = args[args.index("--connection-token") + 1]
+# The daemon passes the token in a file (never on the command line), as serve-web allows.
+if "--connection-token-file" in args:
+    token = open(args[args.index("--connection-token-file") + 1]).read().strip()
+else:
+    token = args[args.index("--connection-token") + 1]
 PAGE = b"""<!doctype html><html><head><meta name=viewport content="width=device-width">
 <title>Fake VS Code</title><style>body{background:#1f1f1f;color:#ccc;font:16px -apple-system}</style></head>
 <body tabindex=0><h1>Fake VS Code workbench</h1><p id=path></p><p>Keys: <span id=keys>none</span></p>
