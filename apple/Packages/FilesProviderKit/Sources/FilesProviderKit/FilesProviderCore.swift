@@ -8,7 +8,6 @@ import GudoCore
 /// carry identifiers from `ItemIdentifiers`, and every change goes through the daemon's file
 /// RPCs. Errors come out as the File Provider errors Files understands.
 nonisolated public final class FilesProviderCore: Sendable {
-    /// What a modification touches.
     public struct Changes: OptionSet, Sendable {
         public let rawValue: Int
         public init(rawValue: Int) { self.rawValue = rawValue }
@@ -39,7 +38,7 @@ nonisolated public final class FilesProviderCore: Sendable {
 
     // MARK: Paths and items
 
-    /// The host's home directory: the domain's root.
+    /// The domain's root.
     public func homePath() async throws -> String {
         if let path = home.withLock({ $0 }) { return path }
         let stat = try await mapped { try await self.remote.fsStat(path: "~") }
@@ -76,7 +75,7 @@ nonisolated public final class FilesProviderCore: Sendable {
 
     // MARK: Enumeration
 
-    /// A folder's items, hidden ones included (flagged hidden).
+    /// Hidden items included, flagged hidden.
     public func children(of container: NSFileProviderItemIdentifier) async throws -> [RemoteItem] {
         if container == .workingSet { return try await workingSet() }
         guard container != .trashContainer else { return [] }
@@ -110,7 +109,7 @@ nonisolated public final class FilesProviderCore: Sendable {
 
     // MARK: Contents
 
-    /// Downloads a file; the system takes the file at the returned URL.
+    /// The system takes the file at the returned URL.
     public func fetchContents(of identifier: NSFileProviderItemIdentifier) async throws -> (URL, RemoteItem) {
         let path = try await path(of: identifier)
         let folder = downloads.appending(path: UUID().uuidString)
@@ -124,8 +123,8 @@ nonisolated public final class FilesProviderCore: Sendable {
 
     // MARK: Changes
 
-    /// A new folder or file. `mayAlreadyExist`: the system is re-creating what it knew (after a
-    /// reinstall); an existing item of that name is then the answer, not a collision.
+    /// `mayAlreadyExist`: the system is re-creating what it knew (after a reinstall); an existing
+    /// item of that name is then the answer, not a collision.
     public func create(
         name: String, in parent: NSFileProviderItemIdentifier, isFolder: Bool, contents: URL?, mayAlreadyExist: Bool = false
     ) async throws -> RemoteItem {
@@ -174,9 +173,9 @@ nonisolated public final class FilesProviderCore: Sendable {
                 try await keepBoth(contents, beside: path)
             }
         }
-        let final = path
-        let stat = try await mapped { try await self.remote.fsStat(path: final) }
-        return try await item(stat, at: final)
+        let finalPath = path
+        let stat = try await mapped { try await self.remote.fsStat(path: finalPath) }
+        return try await item(stat, at: finalPath)
     }
 
     /// Into the host's trash (Files' own delete is final, the host's trash is not).
@@ -210,9 +209,9 @@ nonisolated public final class FilesProviderCore: Sendable {
 
     /// "name 2.ext".
     static func numbered(_ name: String, _ number: Int) -> String {
-        let ext = (name as NSString).pathExtension
+        let pathExtension = (name as NSString).pathExtension
         let base = (name as NSString).deletingPathExtension
-        return ext.isEmpty ? "\(base) \(number)" : "\(base) \(number).\(ext)"
+        return pathExtension.isEmpty ? "\(base) \(number)" : "\(base) \(number).\(pathExtension)"
     }
 
     private func emptyFile() throws -> URL {
@@ -222,7 +221,6 @@ nonisolated public final class FilesProviderCore: Sendable {
         return url
     }
 
-    /// Runs a daemon call with its errors as File Provider errors.
     private func mapped<T>(_ call: @Sendable () async throws -> T) async throws -> T {
         do {
             return try await call()

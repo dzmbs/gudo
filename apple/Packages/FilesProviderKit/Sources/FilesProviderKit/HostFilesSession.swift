@@ -44,13 +44,13 @@ nonisolated public final class HostFilesSession: Sendable {
             remote: client, identifiers: share.identifiers(for: hostId),
             downloads: share.hostDirectory(hostId).appending(path: "downloads"),
             onContainerChanged: { [weak self] _ in self?.changed() })
-        let (winner, extra) = state.withLock { state -> (FilesProviderCore, DaemonClient?) in
+        let (winner, unusedClient) = state.withLock { state -> (FilesProviderCore, DaemonClient?) in
             if let existing = state.core { return (existing, client) }
             state.client = client
             state.core = core
             return (core, nil)
         }
-        extra?.suspend()
+        unusedClient?.suspend()
         return winner
     }
 
@@ -61,7 +61,7 @@ nonisolated public final class HostFilesSession: Sendable {
         return NSFileProviderSyncAnchor(Data("\(launch.uuidString)/\(generation)".utf8))
     }
 
-    /// Whether anything may have changed since `anchor` was handed out.
+    /// False when anything may have changed since `anchor` was handed out.
     public func isCurrent(_ anchor: NSFileProviderSyncAnchor) -> Bool {
         anchor == self.anchor
     }
@@ -73,20 +73,19 @@ nonisolated public final class HostFilesSession: Sendable {
 
     // MARK: Watches
 
-    /// Watches what the working set follows (at most its folders, the oldest dropped).
     public func watchVisited() async {
         guard let core = try? core(), let client = state.withLock({ $0.client }) else { return }
         let wanted = Set(core.identifiers.visitedDirectories)
         let (stale, missing) = state.withLock { state in
             (state.watched.filter { !wanted.contains($0.key) }, wanted.filter { state.watched[$0] == nil })
         }
-        for (path, id) in stale {
-            try? await client.fsUnwatch(watchId: id)
+        for (path, watchId) in stale {
+            try? await client.fsUnwatch(watchId: watchId)
             state.withLock { _ = $0.watched.removeValue(forKey: path) }
         }
         for path in missing {
-            guard let id = try? await client.fsWatch(path: path) else { continue }
-            state.withLock { $0.watched[path] = id }
+            guard let watchId = try? await client.fsWatch(path: path) else { continue }
+            state.withLock { $0.watched[path] = watchId }
         }
     }
 
