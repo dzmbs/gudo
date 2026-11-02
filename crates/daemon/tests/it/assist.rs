@@ -1,6 +1,6 @@
-//! prompt state and the input line (D2), atomic submit (D3), history (D4), completion with a
-//! latency benchmark (D5), file search (D7), blocked-agent options (D9), and the roles each
-//! request needs.
+//! Input assistance end to end against real shells: foreground programs, prompt state and the
+//! input line, atomic submit, history, completion with a latency benchmark, file search,
+//! blocked-agent options, and the roles each request needs.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -16,7 +16,10 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use crate::support::{TestClient, start_with, ticket};
 
 fn find(candidates: &[&str]) -> Option<PathBuf> {
-    candidates.iter().map(PathBuf::from).find(|p| p.exists())
+    candidates
+        .iter()
+        .map(PathBuf::from)
+        .find(|path| path.exists())
 }
 
 fn zsh() -> Option<PathBuf> {
@@ -67,16 +70,16 @@ impl Env {
         setup(home.path());
         let shell = shell.to_owned();
         let home_str = home.path().to_string_lossy().into_owned();
-        let daemon = start_with(dir.path(), move |c| {
-            c.shell = Some(shell);
-            c.pane_env = vec![
+        let daemon = start_with(dir.path(), move |config| {
+            config.shell = Some(shell);
+            config.pane_env = vec![
                 ("HOME".into(), home_str.clone()),
                 ("PS1".into(), "$ ".into()),
                 ("ZDOTDIR".into(), home_str),
                 // Keep fish's greeting and the user's universal variables out.
                 ("fish_greeting".into(), String::new()),
             ];
-            edit(c);
+            edit(config);
         })
         .await;
         Self {
@@ -88,30 +91,34 @@ impl Env {
     }
 
     fn client(&self) -> (TestClient, UnboundedReceiver<AssistEvent>) {
-        let c = TestClient::connect(&ticket(&self.daemon), ClientConfig::generate_key());
+        let client = TestClient::connect(&ticket(&self.daemon), ClientConfig::generate_key());
         let (listener, rx) = AssistEventQueue::channel();
-        c.client.set_assist_listener(listener);
-        (c, rx)
+        client.client.set_assist_listener(listener);
+        (client, rx)
     }
 }
 
 /// Waits until the client's latest prompt state for `pane` satisfies `pred`.
 async fn prompt(
-    c: &mut TestClient,
+    client: &mut TestClient,
     pane: PaneId,
     what: &str,
-    pred: impl Fn(&PromptState) -> bool,
+    matches: impl Fn(&PromptState) -> bool,
 ) -> PromptState {
-    c.until(what, |c| {
-        c.client.prompt_state(pane).is_some_and(|s| pred(&s))
-    })
-    .await;
-    c.client.prompt_state(pane).unwrap()
+    client
+        .until(what, |client| {
+            client
+                .client
+                .prompt_state(pane)
+                .is_some_and(|state| matches(&state))
+        })
+        .await;
+    client.client.prompt_state(pane).unwrap()
 }
 
 fn input(state: &PromptState) -> Option<&client_core::proto::PromptInput> {
     match &state.phase {
-        PromptPhase::AtPrompt(i) => Some(i),
+        PromptPhase::AtPrompt(line) => Some(line),
         _ => None,
     }
 }
@@ -148,101 +155,108 @@ async fn prompt_scenario(shell: &Path, kind: ShellKind) {
         std::fs::write(home.join(".zshrc"), ZSHRC).unwrap();
     })
     .await;
-    let (mut c, _rx) = env.client();
-    let pane = c.attach_and_follow().await;
-    let first = c.client.watch_prompt(pane, true).await.unwrap();
+    let (mut owner, _rx) = env.client();
+    let pane = owner.attach_and_follow().await;
+    let first = owner.client.watch_prompt(pane, true).await.unwrap();
     assert_eq!(first.prompt.pane_id, pane);
     let marked = kind != ShellKind::Fish;
 
-    c.type_line(pane, &format!("cd {}", env.work.display()));
-    let st = prompt(&mut c, pane, "prompt in work", |s| {
-        input(s).is_some_and(|i| i.text.is_empty()) && s.prompt_id >= 1
+    owner.type_line(pane, &format!("cd {}", env.work.display()));
+    let state = prompt(&mut owner, pane, "prompt in work", |state| {
+        input(state).is_some_and(|line| line.text.is_empty()) && state.prompt_id >= 1
     })
     .await;
-    let i = input(&st).unwrap();
-    assert_eq!(i.shell, kind, "{st:?}");
-    assert!(i.bracketed_paste, "{st:?}");
+    let line = input(&state).unwrap();
+    assert_eq!(line.shell, kind, "{state:?}");
+    assert!(line.bracketed_paste, "{state:?}");
 
     if kind == ShellKind::Zsh {
         // The fake autosuggestion is cut and reported; the right prompt is left out.
-        c.client.send_input(pane, b"ech".to_vec());
-        let st = prompt(&mut c, pane, "suggestion", |s| {
-            input(s).is_some_and(|i| i.suggestion.is_some())
+        owner.client.send_input(pane, b"ech".to_vec());
+        let state = prompt(&mut owner, pane, "suggestion", |state| {
+            input(state).is_some_and(|line| line.suggestion.is_some())
         })
         .await;
-        let i = input(&st).unwrap();
-        assert_eq!(i.text, "ech", "{st:?}");
-        assert_eq!(i.cursor, 3);
-        assert_eq!(i.suggestion.as_deref(), Some("o ghost"));
-        assert!(i.right_prompt, "{st:?}");
-        assert!(i.confident, "{st:?}");
-        c.client.send_input(pane, b"o hello world".to_vec());
+        let line = input(&state).unwrap();
+        assert_eq!(line.text, "ech", "{state:?}");
+        assert_eq!(line.cursor, 3);
+        assert_eq!(line.suggestion.as_deref(), Some("o ghost"));
+        assert!(line.right_prompt, "{state:?}");
+        assert!(line.confident, "{state:?}");
+        owner.client.send_input(pane, b"o hello world".to_vec());
     } else {
         // fish's input start is inferred from output in the 25 ms after the prompt starts;
         // typing that fast would land in it (a documented limit), so a person's pause first.
         tokio::time::sleep(Duration::from_millis(100)).await;
-        c.client.send_input(pane, b"echo hello world".to_vec());
+        owner.client.send_input(pane, b"echo hello world".to_vec());
     }
-    let st = prompt(&mut c, pane, "typed line", |s| {
-        input(s).is_some_and(|i| same(marked, &i.text, "echo hello world"))
+    let state = prompt(&mut owner, pane, "typed line", |state| {
+        input(state).is_some_and(|line| same(marked, &line.text, "echo hello world"))
     })
     .await;
-    let i = input(&st).unwrap();
-    let end = i.text.chars().count() as u32;
-    assert_eq!(i.cursor, end);
-    assert_eq!(i.suggestion, None);
+    let line = input(&state).unwrap();
+    let end = line.text.chars().count() as u32;
+    assert_eq!(line.cursor, end);
+    assert_eq!(line.suggestion, None);
     if marked {
-        assert!(i.confident, "{st:?}");
+        assert!(line.confident, "{state:?}");
     } else {
         // fish 3 sends no 133;B: the input start is inferred, so the editor is not prefilled.
-        assert_eq!(i.doubt, Some(InputDoubt::NoInputMark));
+        assert_eq!(line.doubt, Some(InputDoubt::NoInputMark));
     }
     // Cursor movement is followed.
-    c.client
+    owner
+        .client
         .send_input(pane, b"\x1b[D\x1b[D\x1b[D\x1b[D\x1b[D".to_vec());
-    let st = prompt(&mut c, pane, "cursor moved", |s| {
-        input(s).is_some_and(|i| i.cursor == end - 5)
+    let state = prompt(&mut owner, pane, "cursor moved", |state| {
+        input(state).is_some_and(|line| line.cursor == end - 5)
     })
     .await;
-    let id = st.prompt_id;
+    let id = state.prompt_id;
 
-    // D3: atomic submit replaces the half-typed line and runs.
-    let marks_before = c.marks.len();
-    c.client
+    // Atomic submit replaces the half-typed line and runs.
+    let marks_before = owner.marks.len();
+    owner
+        .client
         .submit_line(pane, id, "echo submitted-ok", true)
         .await
         .expect("submitted");
-    c.until("submitted command finished", |c| {
-        c.marks[marks_before..].iter().any(|m| {
-            m.finished.is_some()
-                && m.command
-                    .as_deref()
-                    .is_some_and(|t| same(marked, t, "echo submitted-ok"))
+    owner
+        .until("submitted command finished", |owner| {
+            owner.marks[marks_before..].iter().any(|mark| {
+                mark.finished.is_some()
+                    && mark
+                        .command
+                        .as_deref()
+                        .is_some_and(|command| same(marked, command, "echo submitted-ok"))
+            })
         })
-    })
-    .await;
+        .await;
     assert!(
-        !c.marks.iter().any(|m| m
+        !owner.marks.iter().any(|mark| mark
             .command
             .as_deref()
-            .is_some_and(|t| t.contains("hello world"))),
+            .is_some_and(|command| command.contains("hello world"))),
         "{:?}",
-        c.marks
+        owner.marks
     );
     // The prompt id moved on: a submit naming the old one is refused, nothing written.
-    let stale = c.client.submit_line(pane, id, "echo never-1", true).await;
+    let stale = owner
+        .client
+        .submit_line(pane, id, "echo never-1", true)
+        .await;
     let Err(AssistError::NotAtPrompt(now)) = stale else {
         panic!("{stale:?}")
     };
     assert_ne!(now.prompt_id, id);
 
     // While a command runs, submit is refused without side effects.
-    c.type_line(pane, "sleep 1.5");
-    let running = prompt(&mut c, pane, "running", |s| {
-        matches!(s.phase, PromptPhase::Running { .. })
+    owner.type_line(pane, "sleep 1.5");
+    let running = prompt(&mut owner, pane, "running", |state| {
+        matches!(state.phase, PromptPhase::Running { .. })
     })
     .await;
-    let refused = c
+    let refused = owner
         .client
         .submit_line(pane, running.prompt_id, "echo never-2", true)
         .await;
@@ -250,28 +264,30 @@ async fn prompt_scenario(shell: &Path, kind: ShellKind) {
         matches!(refused, Err(AssistError::NotAtPrompt(_))),
         "{refused:?}"
     );
-    let after_sleep = prompt(&mut c, pane, "prompt after sleep", |s| {
-        input(s).is_some() && s.prompt_id == running.prompt_id
+    let after_sleep = prompt(&mut owner, pane, "prompt after sleep", |state| {
+        input(state).is_some() && state.prompt_id == running.prompt_id
     })
     .await;
     tokio::time::sleep(Duration::from_millis(300)).await;
-    c.until("settled", |_| true).await;
-    assert!(!c.text(pane).contains("never-"), "{}", c.text(pane));
+    owner.until("settled", |_| true).await;
+    assert!(!owner.text(pane).contains("never-"), "{}", owner.text(pane));
     assert_eq!(input(&after_sleep).unwrap().text, "");
 
-    // D4: history keeps the command with its directory and exit status, but not one typed
+    // History keeps the command with its directory and exit status, but not one typed
     // with a leading space.
-    c.type_line(pane, " echo private-secret");
-    c.until("private command finished", |c| {
-        c.marks.iter().any(|m| {
-            m.finished.is_some()
-                && m.command
-                    .as_deref()
-                    .is_some_and(|t| same(marked, t, "echo private-secret"))
+    owner.type_line(pane, " echo private-secret");
+    owner
+        .until("private command finished", |owner| {
+            owner.marks.iter().any(|mark| {
+                mark.finished.is_some()
+                    && mark
+                        .command
+                        .as_deref()
+                        .is_some_and(|command| same(marked, command, "echo private-secret"))
+            })
         })
-    })
-    .await;
-    let history = c
+        .await;
+    let history = owner
         .client
         .history(HistoryQuery {
             cwd: Some(env.work.to_string_lossy().into_owned()),
@@ -282,41 +298,47 @@ async fn prompt_scenario(shell: &Path, kind: ShellKind) {
         })
         .await
         .unwrap();
-    let ok = history
+    let submitted = history
         .iter()
-        .find(|h| same(marked, &h.command, "echo submitted-ok"))
+        .find(|entry| same(marked, &entry.command, "echo submitted-ok"))
         .unwrap_or_else(|| panic!("{history:?}"));
-    assert_eq!(ok.exit, Some(0));
-    assert_eq!(ok.cwd.as_deref(), Some(env.work.to_str().unwrap()));
+    assert_eq!(submitted.exit, Some(0));
+    assert_eq!(submitted.cwd.as_deref(), Some(env.work.to_str().unwrap()));
     // fish: only when its inferred input start was exact (DAEMON.md §7.10).
-    let exact = ok.command == "echo submitted-ok";
+    let exact = submitted.command == "echo submitted-ok";
     if exact {
         assert!(
-            !history.iter().any(|h| h.command.contains("private")),
+            !history
+                .iter()
+                .any(|entry| entry.command.contains("private")),
             "{history:?}"
         );
     }
 
-    // D5: completion in the shell's directory.
-    let done = c.client.complete(pane, "cat no", 6, 20).await.unwrap();
-    assert_eq!(done.cwd.as_deref(), Some(env.work.to_str().unwrap()));
+    // Completion in the shell's directory.
+    let completions = owner.client.complete(pane, "cat no", 6, 20).await.unwrap();
+    assert_eq!(completions.cwd.as_deref(), Some(env.work.to_str().unwrap()));
     assert!(
-        done.items
+        completions
+            .items
             .iter()
-            .any(|i| i.text == "notes.txt" && i.kind == CompletionKind::Path),
-        "{done:?}"
+            .any(|item| item.text == "notes.txt" && item.kind == CompletionKind::Path),
+        "{completions:?}"
     );
-    let done = c.client.complete(pane, "echo sub", 8, 20).await.unwrap();
+    let completions = owner
+        .client
+        .complete(pane, "echo sub", 8, 20)
+        .await
+        .unwrap();
     assert!(
         !exact
-            || done
-                .items
-                .iter()
-                .any(|i| i.text == "echo submitted-ok" && i.kind == CompletionKind::History),
-        "{done:?}"
+            || completions.items.iter().any(
+                |item| item.text == "echo submitted-ok" && item.kind == CompletionKind::History
+            ),
+        "{completions:?}"
     );
 
-    drop(c);
+    drop(owner);
     env.daemon.shutdown().await;
 }
 
@@ -347,24 +369,26 @@ async fn fish_prompt_state_submit_history_completion() {
     prompt_scenario(&fish, ShellKind::Fish).await;
 }
 
-/// D1: profiles for pagers, monitors and editors; short-lived commands never reported.
+/// Profiles for pagers, monitors and editors; short-lived commands never reported.
 #[tokio::test(flavor = "multi_thread")]
 async fn foreground_programs_are_reported_debounced() {
     let shell = zsh().unwrap_or_else(|| PathBuf::from("/bin/sh"));
     let env = Env::new(&shell, |_| {}).await;
-    let (mut c, mut rx) = env.client();
-    let pane = c.attach_and_follow().await;
-    c.until("shell in front", |c| {
-        c.client
-            .foreground(pane)
-            .is_some_and(|f| f.profile == ProgramProfile::Shell)
-    })
-    .await;
+    let (mut owner, mut rx) = env.client();
+    let pane = owner.attach_and_follow().await;
+    owner
+        .until("shell in front", |owner| {
+            owner
+                .client
+                .foreground(pane)
+                .is_some_and(|foreground| foreground.profile == ProgramProfile::Shell)
+        })
+        .await;
     let mut seen: Vec<(String, ProgramProfile)> = Vec::new();
     let file = env.work.join("notes.txt");
     std::fs::write(&file, "line\n".repeat(200)).unwrap();
     let programs: Vec<(String, &[u8], ProgramProfile)> = {
-        let mut p: Vec<(String, &[u8], ProgramProfile)> = vec![
+        let mut list: Vec<(String, &[u8], ProgramProfile)> = vec![
             (
                 format!("less {}", file.display()),
                 b"q",
@@ -373,27 +397,31 @@ async fn foreground_programs_are_reported_debounced() {
             ("top".into(), b"q", ProgramProfile::Monitor),
         ];
         if Path::new("/usr/bin/vi").exists() {
-            p.push(("vi".into(), b"\x1b:q!\r", ProgramProfile::Vim));
+            list.push(("vi".into(), b"\x1b:q!\r", ProgramProfile::Vim));
         }
-        p
+        list
     };
-    for (cmd, quit, profile) in programs {
+    for (command, quit, profile) in programs {
         // Short commands first: never reported.
-        c.type_line(pane, "/bin/echo quick; /bin/echo quick");
-        c.type_line(pane, &cmd);
-        c.until(&format!("{profile:?} in front"), |c| {
-            c.client
-                .foreground(pane)
-                .is_some_and(|f| f.profile == profile)
-        })
-        .await;
-        c.client.send_input(pane, quit.to_vec());
-        c.until("shell back", |c| {
-            c.client
-                .foreground(pane)
-                .is_some_and(|f| f.profile == ProgramProfile::Shell)
-        })
-        .await;
+        owner.type_line(pane, "/bin/echo quick; /bin/echo quick");
+        owner.type_line(pane, &command);
+        owner
+            .until(&format!("{profile:?} in front"), |owner| {
+                owner
+                    .client
+                    .foreground(pane)
+                    .is_some_and(|foreground| foreground.profile == profile)
+            })
+            .await;
+        owner.client.send_input(pane, quit.to_vec());
+        owner
+            .until("shell back", |owner| {
+                owner
+                    .client
+                    .foreground(pane)
+                    .is_some_and(|foreground| foreground.profile == ProgramProfile::Shell)
+            })
+            .await;
     }
     while let Ok(event) = rx.try_recv() {
         if let AssistEvent::Foreground { foreground } = event
@@ -403,13 +431,13 @@ async fn foreground_programs_are_reported_debounced() {
         }
     }
     assert!(!seen.iter().any(|(name, _)| name == "echo"), "{seen:?}");
-    let profiles: Vec<_> = seen.iter().map(|(_, p)| *p).collect();
+    let profiles: Vec<_> = seen.iter().map(|(_, profile)| *profile).collect();
     assert!(profiles.contains(&ProgramProfile::Pager), "{seen:?}");
     assert!(profiles.contains(&ProgramProfile::Monitor), "{seen:?}");
     // State answers with the foreground too.
-    let state = c.client.pane_assist(pane).await.unwrap();
+    let state = owner.client.pane_assist(pane).await.unwrap();
     assert_eq!(state.foreground.unwrap().profile, ProgramProfile::Shell);
-    drop(c);
+    drop(owner);
     env.daemon.shutdown().await;
 }
 
@@ -433,32 +461,32 @@ fn git(dir: &Path, args: &[&str]) {
 }
 
 /// Writes `n` history records spread over directories, as the daemon would have.
-fn seed_history(state: &Path, n: usize, cwd: &Path) {
+fn seed_history(state: &Path, count: usize, cwd: &Path) {
     let dir = state.join("history");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("imported.json"), "{}").unwrap();
     let words = [
         "git", "cargo", "make", "ls", "cd", "docker", "kubectl", "npm", "rg", "vim",
     ];
-    let sub = [
+    let arguments = [
         "status", "build", "test", "run", "log", "push", "-la", "src", "up", "install",
     ];
     let now = now_millis().0;
     let mut body = String::new();
-    for i in 0..n {
-        let cmd = format!(
+    for i in 0..count {
+        let command = format!(
             "{} {} --flag-{i} {}",
             words[i % 10],
-            sub[(i / 10) % 10],
+            arguments[(i / 10) % 10],
             i % 97
         );
-        let d = if i % 5 == 0 {
+        let dir = if i % 5 == 0 {
             cwd.to_string_lossy().into_owned()
         } else {
             format!("/srv/p{}", i % 50)
         };
         body.push_str(
-            &serde_json::json!({"c": cmd, "d": d, "x": (i % 7 == 0) as i32, "ms": 12, "t": now - (i as u64) * 60_000})
+            &serde_json::json!({"c": command, "d": dir, "x": (i % 7 == 0) as i32, "ms": 12, "t": now - (i as u64) * 60_000})
                 .to_string(),
         );
         body.push('\n');
@@ -466,7 +494,7 @@ fn seed_history(state: &Path, n: usize, cwd: &Path) {
     std::fs::write(dir.join("commands.jsonl"), body).unwrap();
 }
 
-/// D5: git refs and paths, `$PATH` commands, and p95 latency on a host with 10 000 history
+/// Git refs and paths, `$PATH` commands, and p95 latency on a host with 10 000 history
 /// entries.
 #[tokio::test(flavor = "multi_thread")]
 async fn completion_sources_and_latency_with_10k_history() {
@@ -496,71 +524,73 @@ async fn completion_sources_and_latency_with_10k_history() {
         bin.display(),
         std::env::var("PATH").unwrap_or_default()
     );
-    let repo_str = repo.to_string_lossy().into_owned();
-    let daemon = start_with(state.path(), move |c| {
-        c.pane_env.push(("HOME".into(), home_str));
-        c.pane_env.push(("PATH".into(), path));
-        c.pane_env.push(("PS1".into(), "$ ".into()));
-        let _ = repo_str;
+    let daemon = start_with(state.path(), move |config| {
+        config.pane_env.push(("HOME".into(), home_str));
+        config.pane_env.push(("PATH".into(), path));
+        config.pane_env.push(("PS1".into(), "$ ".into()));
     })
     .await;
-    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    let pane = c.attach_and_follow().await;
-    c.type_line(pane, &format!("cd {}", repo.display()));
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = owner.attach_and_follow().await;
+    owner.type_line(pane, &format!("cd {}", repo.display()));
     // `/bin/sh` reports no OSC 7, so tell the daemon the directory the way shells do.
-    c.type_line(
+    owner.type_line(
         pane,
         &format!("printf '\\033]7;file://localhost{}\\007'", repo.display()),
     );
-    c.until("cwd", |c| {
-        c.metas
-            .get(&pane)
-            .and_then(|m| m.cwd.as_deref())
-            .is_some_and(|d| d == repo.to_str().unwrap())
-    })
-    .await;
+    owner
+        .until("cwd", |owner| {
+            owner
+                .metas
+                .get(&pane)
+                .and_then(|meta| meta.cwd.as_deref())
+                .is_some_and(|cwd| cwd == repo.to_str().unwrap())
+        })
+        .await;
 
     let items = |line: &str| {
-        let client = &c.client;
+        let client = &owner.client;
         let line = line.to_owned();
         async move {
-            let n = line.chars().count() as u32;
-            client.complete(pane, line, n, 50).await.unwrap().items
+            let length = line.chars().count() as u32;
+            client.complete(pane, line, length, 50).await.unwrap().items
         }
     };
     // Cold caches: the first ref lookup runs `for-each-ref` and `status`.
-    let t = Instant::now();
+    let started = Instant::now();
     let got = items("git checkout feat").await;
-    let cold_refs = t.elapsed();
+    let cold_refs = started.elapsed();
     assert!(
         got.iter()
-            .any(|i| i.text == "feature/completion" && i.kind == CompletionKind::GitRef),
+            .any(|item| item.text == "feature/completion" && item.kind == CompletionKind::GitRef),
         "{got:?}"
     );
     let got = items("git add ").await;
-    let texts: Vec<_> = got.iter().map(|i| i.text.as_str()).collect();
+    let texts: Vec<_> = got.iter().map(|item| item.text.as_str()).collect();
     assert!(
         texts.contains(&"src/main.rs") && texts.contains(&"untracked.txt"),
         "{got:?}"
     );
     // Changed files first, then the directory's other entries.
     assert!(
-        got[..2].iter().all(|i| i.kind == CompletionKind::GitPath),
+        got[..2]
+            .iter()
+            .all(|item| item.kind == CompletionKind::GitPath),
         "{got:?}"
     );
     let got = items("git che").await;
     assert_eq!(got[0].text, "checkout");
     // Cold: the first command lookup lists every `$PATH` directory.
-    let t = Instant::now();
+    let started = Instant::now();
     let got = items("zzfrob").await;
     eprintln!(
         "cold completion: refs and status {:.1} ms, $PATH scan {:.1} ms",
         cold_refs.as_secs_f64() * 1e3,
-        t.elapsed().as_secs_f64() * 1e3
+        started.elapsed().as_secs_f64() * 1e3
     );
     assert!(
         got.iter()
-            .any(|i| i.text == "zzfrobnicate" && i.kind == CompletionKind::Command),
+            .any(|item| item.text == "zzfrobnicate" && item.kind == CompletionKind::Command),
         "{got:?}"
     );
     let got = items("vim src/ma").await;
@@ -569,7 +599,7 @@ async fn completion_sources_and_latency_with_10k_history() {
     let got = items("git status").await;
     let first = got
         .iter()
-        .find(|i| i.kind == CompletionKind::History)
+        .find(|item| item.kind == CompletionKind::History)
         .expect("history item");
     assert_eq!(
         first.detail.as_deref(),
@@ -593,18 +623,18 @@ async fn completion_sources_and_latency_with_10k_history() {
         "npm i",
     ];
     let mut times = Vec::new();
-    for round in 0..25 {
+    for _ in 0..25 {
         for line in lines {
-            let t = Instant::now();
-            let n = line.chars().count() as u32;
-            let _ = c.client.complete(pane, line, n, 50).await.unwrap();
-            times.push(t.elapsed());
-            let _ = round;
+            let started = Instant::now();
+            let length = line.chars().count() as u32;
+            let _ = owner.client.complete(pane, line, length, 50).await.unwrap();
+            times.push(started.elapsed());
         }
     }
     times.sort();
-    let pct = |p: f64| times[((times.len() as f64 * p) as usize).min(times.len() - 1)];
-    let (p50, p95, max) = (pct(0.50), pct(0.95), *times.last().unwrap());
+    let percentile =
+        |fraction: f64| times[((times.len() as f64 * fraction) as usize).min(times.len() - 1)];
+    let (p50, p95, max) = (percentile(0.50), percentile(0.95), *times.last().unwrap());
     eprintln!(
         "completion over {} requests, 10k history: p50 {:.1} ms, p95 {:.1} ms, max {:.1} ms",
         times.len(),
@@ -614,8 +644,8 @@ async fn completion_sources_and_latency_with_10k_history() {
     );
     assert!(p95 < Duration::from_millis(150), "p95 {p95:?}");
     // The history request itself on 10k entries.
-    let t = Instant::now();
-    let h = c
+    let started = Instant::now();
+    let found = owner
         .client
         .history(HistoryQuery {
             cwd: Some(repo.to_string_lossy().into_owned()),
@@ -628,50 +658,58 @@ async fn completion_sources_and_latency_with_10k_history() {
         .unwrap();
     eprintln!(
         "history query over 10k entries: {:.1} ms",
-        t.elapsed().as_secs_f64() * 1e3
+        started.elapsed().as_secs_f64() * 1e3
     );
-    assert_eq!(h.len(), 100);
-    drop(c);
+    assert_eq!(found.len(), 100);
+    drop(owner);
     daemon.shutdown().await;
 }
 
-/// D7: fuzzy file search honours .gitignore and hidden files and stays inside allowed roots.
+/// Fuzzy file search honours .gitignore and hidden files and stays inside allowed roots.
 #[tokio::test(flavor = "multi_thread")]
 async fn file_search_for_mentions() {
     let state = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
     let root = home.path().canonicalize().unwrap().join("proj");
-    for f in [
+    for name in [
         "src/daemon/conn.rs",
         "src/daemon/core.rs",
         "docs/connectivity.md",
         "target/debug/conn.rs",
         ".secret/conn.rs",
     ] {
-        let p = root.join(f);
-        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-        std::fs::write(p, "").unwrap();
+        let path = root.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "").unwrap();
     }
     std::fs::write(root.join(".gitignore"), "target/\n").unwrap();
     let home_str = home.path().to_string_lossy().into_owned();
-    let daemon = start_with(state.path(), move |c| {
-        c.pane_env.push(("HOME".into(), home_str));
+    let daemon = start_with(state.path(), move |config| {
+        config.pane_env.push(("HOME".into(), home_str));
     })
     .await;
-    let c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    let found = c.client.file_search("~/proj", "conrs", 10).await.unwrap();
-    let paths: Vec<_> = found.matches.iter().map(|m| m.path.as_str()).collect();
+    let owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let found = owner
+        .client
+        .file_search("~/proj", "conrs", 10)
+        .await
+        .unwrap();
+    let paths: Vec<_> = found
+        .matches
+        .iter()
+        .map(|file_match| file_match.path.as_str())
+        .collect();
     assert_eq!(paths.first(), Some(&"src/daemon/conn.rs"), "{found:?}");
     assert!(
         !paths
             .iter()
-            .any(|p| p.starts_with("target") || p.starts_with(".secret"))
+            .any(|path| path.starts_with("target") || path.starts_with(".secret"))
     );
     assert!(!found.truncated);
     assert_eq!(found.matches[0].positions.len(), 5);
-    let denied = c.client.file_search("/etc", "passwd", 5).await;
+    let denied = owner.client.file_search("/etc", "passwd", 5).await;
     assert!(matches!(denied, Err(AssistError::Denied(_))), "{denied:?}");
-    drop(c);
+    drop(owner);
     daemon.shutdown().await;
 }
 
@@ -691,7 +729,7 @@ sleep 30
 const PERMISSION: &str =
     include_str!("../../../agents/tests/fixtures/claude/permission_request.json");
 
-/// D9: options for the decision strip, from the screen and from a held hook, and answering
+/// Options for the decision strip, from the screen and from a held hook, and answering
 /// by keys after re-checking the dialog.
 #[tokio::test(flavor = "multi_thread")]
 async fn blocked_agent_options_and_answer() {
@@ -709,14 +747,14 @@ async fn blocked_agent_options_and_answer() {
     // A home of its own, so no profile puts a real `claude` ahead of the fake one.
     let home = tempfile::tempdir().unwrap();
     let home_str = home.path().to_string_lossy().into_owned();
-    let daemon = start_with(state.path(), move |c| {
-        c.pane_env.push(("PATH".into(), path));
-        c.pane_env.push(("HOME".into(), home_str));
+    let daemon = start_with(state.path(), move |config| {
+        config.pane_env.push(("PATH".into(), path));
+        config.pane_env.push(("HOME".into(), home_str));
     })
     .await;
-    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    let shell_pane = c.attach_and_follow().await;
-    let OpOutcome::PaneCreated { pane_id: pane } = c
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let shell_pane = owner.attach_and_follow().await;
+    let OpOutcome::PaneCreated { pane_id: pane } = owner
         .op(LayoutOp::Split {
             pane_id: shell_pane,
             axis: Axis::Horizontal,
@@ -730,11 +768,16 @@ async fn blocked_agent_options_and_answer() {
     else {
         panic!("split failed")
     };
-    c.follow(pane).await;
-    c.wait_text(pane, "Esc to cancel").await;
+    owner.follow(pane).await;
+    owner.wait_text(pane, "Esc to cancel").await;
 
     // From the screen: labels, meanings, keys, the selected row.
-    let blocked = c.client.blocked_options(pane).await.unwrap().expect("menu");
+    let blocked = owner
+        .client
+        .blocked_options(pane)
+        .await
+        .unwrap()
+        .expect("menu");
     assert_eq!(blocked.source, BlockedSource::Screen);
     assert_eq!(blocked.options.len(), 3, "{blocked:?}");
     assert_eq!(blocked.options[0].label, "Yes");
@@ -743,10 +786,18 @@ async fn blocked_agent_options_and_answer() {
     assert_eq!(blocked.options[1].choice, BlockedChoice::AllowSession);
     assert_eq!(blocked.options[2].choice, BlockedChoice::Deny);
     assert_eq!(blocked.options[2].keys, b"\x1b");
-    assert!(blocked.options.iter().all(|o| o.option_id.is_none()));
+    assert!(
+        blocked
+            .options
+            .iter()
+            .all(|option| option.option_id.is_none())
+    );
 
     // A shell pane has no dialog.
-    assert_eq!(c.client.blocked_options(shell_pane).await.unwrap(), None);
+    assert_eq!(
+        owner.client.blocked_options(shell_pane).await.unwrap(),
+        None
+    );
 
     // With the hook holding the request open, options carry decision ids too.
     let request = daemon::HookRequest {
@@ -771,9 +822,11 @@ async fn blocked_agent_options_and_answer() {
     });
     let deadline = Instant::now() + Duration::from_secs(10);
     let hooked = loop {
-        let b = c.client.blocked_options(pane).await.unwrap();
-        if let Some(b) = b.filter(|b| b.source == BlockedSource::Hook && b.request_id.is_some()) {
-            break b;
+        let options = owner.client.blocked_options(pane).await.unwrap();
+        if let Some(options) = options
+            .filter(|options| options.source == BlockedSource::Hook && options.request_id.is_some())
+        {
+            break options;
         }
         assert!(Instant::now() < deadline, "hook options never appeared");
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -783,10 +836,10 @@ async fn blocked_agent_options_and_answer() {
     let deny = hooked
         .options
         .iter()
-        .find(|o| o.choice == BlockedChoice::Deny)
+        .find(|option| option.choice == BlockedChoice::Deny)
         .unwrap();
     assert_eq!(deny.keys, b"\x1b");
-    c.client.decide(hooked.request_id.unwrap(), OptionId(0));
+    owner.client.decide(hooked.request_id.unwrap(), OptionId(0));
     let answer = tokio::time::timeout(Duration::from_secs(10), waiting)
         .await
         .unwrap()
@@ -794,16 +847,16 @@ async fn blocked_agent_options_and_answer() {
     assert!(answer.contains("allow"), "{answer}");
 
     // Answering on screen: a stale label is refused; the right one types its key.
-    let stale = c.client.answer_blocked(pane, 0, "No").await;
+    let stale = owner.client.answer_blocked(pane, 0, "No").await;
     assert!(matches!(stale, Err(AssistError::NotFound(_))), "{stale:?}");
-    c.client.answer_blocked(pane, 0, "Yes").await.unwrap();
-    c.wait_text(pane, "ANSWER:1").await;
-    drop(c);
+    owner.client.answer_blocked(pane, 0, "Yes").await.unwrap();
+    owner.wait_text(pane, "ANSWER:1").await;
+    drop(owner);
     daemon.shutdown().await;
 }
 
-fn denied<T>(r: &Result<T, AssistError>) -> bool {
-    matches!(r, Err(AssistError::Denied(_)))
+fn denied<T>(result: &Result<T, AssistError>) -> bool {
+    matches!(result, Err(AssistError::Denied(_)))
 }
 
 /// Roles: viewers read prompt state and foreground and blocked options, but cannot submit,
@@ -826,15 +879,15 @@ async fn roles_gate_assist_requests() {
     viewer.client.attach(None);
     viewer.until("layout", |c| c.layout.is_some()).await;
 
-    let st = viewer.client.watch_prompt(pane, true).await.unwrap();
-    assert_eq!(st.prompt.pane_id, pane);
+    let state = viewer.client.watch_prompt(pane, true).await.unwrap();
+    assert_eq!(state.prompt.pane_id, pane);
     assert!(viewer.client.blocked_options(pane).await.unwrap().is_none());
-    let r = viewer
+    let result = viewer
         .client
-        .submit_line(pane, st.prompt.prompt_id, "ls", true)
+        .submit_line(pane, state.prompt.prompt_id, "ls", true)
         .await;
-    assert!(denied(&r), "{r:?}");
-    let r = viewer
+    assert!(denied(&result), "{result:?}");
+    let result = viewer
         .client
         .history(HistoryQuery {
             cwd: None,
@@ -844,13 +897,13 @@ async fn roles_gate_assist_requests() {
             limit: 5,
         })
         .await;
-    assert!(denied(&r), "{r:?}");
-    let r = viewer.client.complete(pane, "l", 1, 5).await;
-    assert!(denied(&r), "{r:?}");
-    let r = viewer.client.file_search("~", "x", 5).await;
-    assert!(denied(&r), "{r:?}");
-    let r = viewer.client.answer_blocked(pane, 0, "Yes").await;
-    assert!(denied(&r), "{r:?}");
+    assert!(denied(&result), "{result:?}");
+    let result = viewer.client.complete(pane, "l", 1, 5).await;
+    assert!(denied(&result), "{result:?}");
+    let result = viewer.client.file_search("~", "x", 5).await;
+    assert!(denied(&result), "{result:?}");
+    let result = viewer.client.answer_blocked(pane, 0, "Yes").await;
+    assert!(denied(&result), "{result:?}");
     // The owner may.
     assert!(owner.client.complete(pane, "l", 1, 5).await.is_ok());
     drop((owner, viewer));

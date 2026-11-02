@@ -30,7 +30,9 @@ async fn invite(owner: &TestClient, roles: Roles, scope: Scope) -> TestClient {
         .unwrap();
     let mut guest = TestClient::join(&invite.to_string(), ClientConfig::generate_key());
     guest.client.attach(None);
-    guest.until("guest layout", |c| c.layout.is_some()).await;
+    guest
+        .until("guest layout", |client| client.layout.is_some())
+        .await;
     guest
 }
 
@@ -100,8 +102,11 @@ async fn drivers_arrange_floats_everyone_in_scope_sees_them() {
     );
 
     viewer
-        .until("the float", |c| {
-            c.floats.last().is_some_and(|f| f.floats.len() == 1)
+        .until("the float", |client| {
+            client
+                .floats
+                .last()
+                .is_some_and(|pushed| pushed.floats.len() == 1)
         })
         .await;
     for op in [
@@ -153,7 +158,9 @@ async fn drivers_arrange_floats_everyone_in_scope_sees_them() {
     };
     assert_eq!(owner.floats.last().unwrap().floats.len(), 2);
     let mut carol = invite(&owner, Roles::DRIVER, Scope::Tab(other)).await;
-    carol.until("scoped floats", |c| !c.floats.is_empty()).await;
+    carol
+        .until("scoped floats", |client| !client.floats.is_empty())
+        .await;
     let seen = carol.floats.last().unwrap();
     assert_eq!(seen.floats.len(), 1);
     assert_eq!(seen.floats[0].panes, [theirs]);
@@ -182,10 +189,11 @@ async fn drivers_arrange_floats_everyone_in_scope_sees_them() {
 
     // Floats come back after a restart, with the same ids.
     owner
-        .until("the chip", |c| {
-            c.floats
+        .until("the chip", |client| {
+            client
+                .floats
                 .last()
-                .is_some_and(|f| f.floats.iter().any(|w| w.minimized))
+                .is_some_and(|pushed| pushed.floats.iter().any(|window| window.minimized))
         })
         .await;
     let before = owner.floats.last().unwrap().floats.clone();
@@ -194,7 +202,9 @@ async fn drivers_arrange_floats_everyone_in_scope_sees_them() {
     let daemon = start(dir.path()).await;
     let mut owner = TestClient::connect(&ticket(&daemon), key);
     owner.client.attach(Some(session));
-    owner.until("floats again", |c| !c.floats.is_empty()).await;
+    owner
+        .until("floats again", |client| !client.floats.is_empty())
+        .await;
     assert_eq!(owner.floats.last().unwrap().floats, before);
     let tab = owner
         .layout
@@ -202,7 +212,7 @@ async fn drivers_arrange_floats_everyone_in_scope_sees_them() {
         .unwrap()
         .tabs
         .iter()
-        .find(|t| leaves(&t.root).contains(&second))
+        .find(|tab| leaves(&tab.root).contains(&second))
         .expect("the pane is still in its tab")
         .clone();
     assert_eq!(leaves(&tab.root).len(), 2);

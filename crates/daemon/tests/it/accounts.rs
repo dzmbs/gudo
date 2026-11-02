@@ -1,8 +1,8 @@
 //! Agent accounts against a real daemon: an account's sign-in runs the agent's own login in
 //! its own directory, agent panes under a named account run with every credential variable
-//! removed (even one a startup file exports) while the system account keeps them, resume stays with the account that made the
-//! session, sign-out runs the agent's logout before the directory goes, usage counts per
-//! account, and guests neither see nor choose accounts. `claude` is a script that honours
+//! removed (even one a startup file exports) while the system account keeps them, resume
+//! stays with the account that made the session, sign-out runs the agent's logout before the
+//! directory goes, usage counts per account, and guests neither see nor choose accounts. `claude` is a script that honours
 //! `CLAUDE_CONFIG_DIR` the way Claude Code documents it; nothing signs in for real.
 
 use std::os::unix::fs::PermissionsExt;
@@ -91,29 +91,29 @@ impl Host {
 
     fn config(&self) -> impl FnOnce(&mut daemon::Config) + use<> {
         let env = self.env.clone();
-        move |c: &mut daemon::Config| {
-            c.pane_env.extend(env);
-            c.usage.cli = false;
+        move |config: &mut daemon::Config| {
+            config.pane_env.extend(env);
+            config.usage.cli = false;
         }
     }
 }
 
-async fn ask(c: &TestClient, req: WorkspaceRequest) -> Result<WorkspaceResponse, WsError> {
-    tokio::time::timeout(TIMEOUT, c.client.workspace(req))
+async fn ask(client: &TestClient, request: WorkspaceRequest) -> Result<WorkspaceResponse, WsError> {
+    tokio::time::timeout(TIMEOUT, client.client.workspace(request))
         .await
         .expect("an answer")
 }
 
-async fn report(c: &TestClient) -> AccountsReport {
-    match ask(c, WorkspaceRequest::Accounts).await {
-        Ok(WorkspaceResponse::Accounts(r)) => r,
+async fn report(client: &TestClient) -> AccountsReport {
+    match ask(client, WorkspaceRequest::Accounts).await {
+        Ok(WorkspaceResponse::Accounts(accounts)) => accounts,
         other => panic!("accounts: {other:?}"),
     }
 }
 
-async fn add(c: &TestClient, label: &str) -> AgentAccount {
+async fn add(client: &TestClient, label: &str) -> AgentAccount {
     match ask(
-        c,
+        client,
         WorkspaceRequest::AccountAdd(AccountAdd {
             agent: AgentKind::Claude,
             label: label.into(),
@@ -122,32 +122,33 @@ async fn add(c: &TestClient, label: &str) -> AgentAccount {
     )
     .await
     {
-        Ok(WorkspaceResponse::Account(a)) => a,
+        Ok(WorkspaceResponse::Account(meter)) => meter,
         other => panic!("add: {other:?}"),
     }
 }
 
-async fn new_tab(c: &mut TestClient, launch: PaneLaunch) -> OpOutcome {
-    let session_id = c.layout.as_ref().unwrap().session_id;
-    c.op(LayoutOp::NewTab {
-        session_id,
-        name: String::new(),
-        launch,
-    })
-    .await
+async fn new_tab(client: &mut TestClient, launch: PaneLaunch) -> OpOutcome {
+    let session_id = client.layout.as_ref().unwrap().session_id;
+    client
+        .op(LayoutOp::NewTab {
+            session_id,
+            name: String::new(),
+            launch,
+        })
+        .await
 }
 
-async fn agent_tab(c: &mut TestClient, account: Option<&str>, resume: Option<&str>) -> PaneId {
+async fn agent_tab(client: &mut TestClient, account: Option<&str>, resume: Option<&str>) -> PaneId {
     let launch = PaneLaunch::AccountAgent {
         agent: AgentKind::Claude,
         account: account.map(str::to_owned),
         resume: resume.map(str::to_owned),
         cwd: None,
     };
-    match new_tab(c, launch).await {
+    match new_tab(client, launch).await {
         OpOutcome::TabCreated { pane_id, .. } => {
-            c.follow(pane_id).await;
-            c.wait_flat(pane_id, "ARGS").await;
+            client.follow(pane_id).await;
+            client.wait_flat(pane_id, "ARGS").await;
             pane_id
         }
         other => panic!("agent tab: {other:?}"),
@@ -161,17 +162,17 @@ fn field(text: &str, key: &str) -> String {
 }
 
 /// Waits until `account` is signed in, asking the daemon as the app would.
-async fn signed_in(c: &TestClient, account: &str) -> AgentAccount {
+async fn signed_in(client: &TestClient, account: &str) -> AgentAccount {
     let deadline = Instant::now() + TIMEOUT;
     loop {
         let check = WorkspaceRequest::AccountCheck {
             agent: AgentKind::Claude,
             account: account.into(),
         };
-        if let Ok(WorkspaceResponse::Account(a)) = ask(c, check).await
-            && matches!(a.status, AccountStatus::SignedIn(_))
+        if let Ok(WorkspaceResponse::Account(meter)) = ask(client, check).await
+            && matches!(meter.status, AccountStatus::SignedIn(_))
         {
-            return a;
+            return meter;
         }
         assert!(Instant::now() < deadline, "never signed in");
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -187,15 +188,15 @@ async fn accounts_sign_in_launch_resume_and_sign_out_in_their_own_directory() {
     let state = tempfile::tempdir().unwrap();
     let host = Host::new();
     let daemon = start_with(state.path(), host.config()).await;
-    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    c.attach_and_follow().await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    owner.attach_and_follow().await;
 
     // Only the system accounts at first, unchanged.
-    let first = report(&c).await;
+    let first = report(&owner).await;
     assert_eq!(first.accounts.len(), 2);
     assert!(first.accounts.iter().all(AgentAccount::is_system));
 
-    let work = add(&c, "Work").await;
+    let work = add(&owner, "Work").await;
     let dir = dir_of(state.path(), &work.id);
     assert_eq!(
         std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
@@ -208,12 +209,12 @@ async fn accounts_sign_in_launch_resume_and_sign_out_in_their_own_directory() {
         account: work.id.clone(),
         device_code: false,
     };
-    let OpOutcome::TabCreated { pane_id: login, .. } = new_tab(&mut c, sign_in).await else {
+    let OpOutcome::TabCreated { pane_id: login, .. } = new_tab(&mut owner, sign_in).await else {
         panic!("sign-in tab");
     };
-    c.follow(login).await;
-    c.wait_flat(login, "login done").await;
-    let signed = signed_in(&c, &work.id).await;
+    owner.follow(login).await;
+    owner.wait_flat(login, "login done").await;
+    let signed = signed_in(&owner, &work.id).await;
     let AccountStatus::SignedIn(who) = &signed.status else {
         unreachable!()
     };
@@ -223,8 +224,8 @@ async fn accounts_sign_in_launch_resume_and_sign_out_in_their_own_directory() {
     assert!(!host.home.join(".claude/.fake-login").exists());
 
     // An agent under Work: its directory, no credential, not even one the profile exports.
-    let pane = agent_tab(&mut c, Some(&work.id), None).await;
-    let text = c.flat_text(pane);
+    let pane = agent_tab(&mut owner, Some(&work.id), None).await;
+    let text = owner.flat_text(pane);
     assert_eq!(field(&text, "CFG"), dir.display().to_string(), "{text}");
     assert_eq!(field(&text, "ACC"), work.id);
     assert_eq!(field(&text, "KEY"), "none", "{text}");
@@ -233,19 +234,19 @@ async fn accounts_sign_in_launch_resume_and_sign_out_in_their_own_directory() {
     let session = text
         .split("--session-id ")
         .nth(1)
-        .and_then(|s| s.split_whitespace().next())
+        .and_then(|after| after.split_whitespace().next())
         .unwrap()
         .to_owned();
-    let panes = report(&c).await.panes;
+    let panes = report(&owner).await.panes;
     assert!(
         panes
             .iter()
-            .any(|p| p.pane_id == pane && p.account == work.id)
+            .any(|assignment| assignment.pane_id == pane && assignment.account == work.id)
     );
 
     // The system account behaves as before accounts: the user's own directory and keys.
-    let own = agent_tab(&mut c, None, None).await;
-    let text = c.flat_text(own);
+    let own = agent_tab(&mut owner, None, None).await;
+    let text = owner.flat_text(own);
     assert_eq!(
         field(&text, "CFG"),
         host.home.join(".claude").display().to_string()
@@ -260,27 +261,27 @@ async fn accounts_sign_in_launch_resume_and_sign_out_in_their_own_directory() {
         account: work.id.clone(),
     };
     assert!(matches!(
-        ask(&c, remove.clone()).await,
+        ask(&owner, remove.clone()).await,
         Err(WsError::Conflict(_))
     ));
 
     // Resume runs under the account that made the session, whatever is asked.
     assert!(matches!(
-        c.op(LayoutOp::ClosePane { pane_id: pane }).await,
+        owner.op(LayoutOp::ClosePane { pane_id: pane }).await,
         OpOutcome::Done
     ));
-    let resumed = agent_tab(&mut c, Some(SYSTEM_ACCOUNT), Some(&session)).await;
-    let text = c.flat_text(resumed);
+    let resumed = agent_tab(&mut owner, Some(SYSTEM_ACCOUNT), Some(&session)).await;
+    let text = owner.flat_text(resumed);
     assert!(text.contains(&format!("--resume {session}")), "{text}");
     assert_eq!(field(&text, "CFG"), dir.display().to_string(), "{text}");
     assert!(matches!(
-        c.op(LayoutOp::ClosePane { pane_id: resumed }).await,
+        owner.op(LayoutOp::ClosePane { pane_id: resumed }).await,
         OpOutcome::Done
     ));
 
     // Sign-out: the agent's own logout first, then the directory goes.
     assert!(matches!(
-        ask(&c, remove).await,
+        ask(&owner, remove).await,
         Ok(WorkspaceResponse::Accounts(_))
     ));
     let log = std::fs::read_to_string(&host.log).unwrap();
@@ -293,7 +294,7 @@ async fn accounts_sign_in_launch_resume_and_sign_out_in_their_own_directory() {
         resume: Some(session),
         cwd: None,
     };
-    match new_tab(&mut c, launch).await {
+    match new_tab(&mut owner, launch).await {
         OpOutcome::Failed { message, .. } => assert!(message.contains("removed"), "{message}"),
         other => panic!("resumed under another account: {other:?}"),
     }
@@ -302,8 +303,8 @@ async fn accounts_sign_in_launch_resume_and_sign_out_in_their_own_directory() {
         agent: AgentKind::Claude,
         account: SYSTEM_ACCOUNT.into(),
     };
-    assert!(ask(&c, system).await.is_err());
-    drop(c);
+    assert!(ask(&owner, system).await.is_err());
+    drop(owner);
     daemon.shutdown().await;
 }
 
@@ -312,47 +313,47 @@ async fn defaults_choose_the_account_and_survive_a_restart() {
     let state = tempfile::tempdir().unwrap();
     let host = Host::new();
     let daemon = start_with(state.path(), host.config()).await;
-    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    c.attach_and_follow().await;
-    let work = add(&c, "Work").await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    owner.attach_and_follow().await;
+    let work = add(&owner, "Work").await;
     let set = WorkspaceRequest::AccountSetDefault {
         agent: AgentKind::Claude,
         project: None,
         account: Some(work.id.clone()),
     };
-    let Ok(WorkspaceResponse::Accounts(r)) = ask(&c, set).await else {
+    let Ok(WorkspaceResponse::Accounts(r)) = ask(&owner, set).await else {
         panic!("set default");
     };
     assert_eq!(r.default_for(AgentKind::Claude, None), work.id);
     assert_eq!(r.default_for(AgentKind::Codex, None), SYSTEM_ACCOUNT);
     // A launch naming no account takes the host default; old clients' `Agent` too.
-    let pane = agent_tab(&mut c, None, None).await;
-    assert_eq!(field(&c.flat_text(pane), "ACC"), work.id);
+    let pane = agent_tab(&mut owner, None, None).await;
+    assert_eq!(field(&owner.flat_text(pane), "ACC"), work.id);
     let old = PaneLaunch::Agent {
         agent: AgentKind::Claude,
         resume: None,
         cwd: None,
     };
-    let OpOutcome::TabCreated { pane_id: old, .. } = new_tab(&mut c, old).await else {
+    let OpOutcome::TabCreated { pane_id: old, .. } = new_tab(&mut owner, old).await else {
         panic!("agent tab");
     };
-    c.follow(old).await;
-    c.wait_flat(old, "ARGS").await;
-    assert_eq!(field(&c.flat_text(old), "ACC"), work.id);
-    drop(c);
+    owner.follow(old).await;
+    owner.wait_flat(old, "ARGS").await;
+    assert_eq!(field(&owner.flat_text(old), "ACC"), work.id);
+    drop(owner);
     daemon.shutdown().await;
 
     // After a restart the pane comes back under its account.
     let daemon = start_with(state.path(), host.config()).await;
-    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    c.client.attach(None);
-    c.until("layout", |c| c.layout.is_some()).await;
-    c.follow(pane).await;
-    c.wait_flat(pane, "--resume").await;
-    assert_eq!(field(&c.flat_text(pane), "ACC"), work.id);
-    let r = report(&c).await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    owner.client.attach(None);
+    owner.until("layout", |owner| owner.layout.is_some()).await;
+    owner.follow(pane).await;
+    owner.wait_flat(pane, "--resume").await;
+    assert_eq!(field(&owner.flat_text(pane), "ACC"), work.id);
+    let r = report(&owner).await;
     assert_eq!(r.default_for(AgentKind::Claude, None), work.id);
-    drop(c);
+    drop(owner);
     daemon.shutdown().await;
 }
 
@@ -379,7 +380,9 @@ async fn guests_neither_see_nor_choose_the_owners_accounts() {
         .to_string();
     let mut guest = TestClient::join(&invite, ClientConfig::generate_key());
     guest.client.attach(None);
-    guest.until("guest attached", |c| c.layout.is_some()).await;
+    guest
+        .until("guest attached", |client| client.layout.is_some())
+        .await;
 
     assert!(matches!(
         ask(&guest, WorkspaceRequest::Accounts).await,
@@ -445,19 +448,19 @@ async fn usage_is_kept_per_account() {
     let state = tempfile::tempdir().unwrap();
     let host = Host::new();
     let daemon = start_with(state.path(), host.config()).await;
-    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    c.attach_and_follow().await;
-    let work = add(&c, "Work").await;
-    let pane = agent_tab(&mut c, Some(&work.id), None).await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    owner.attach_and_follow().await;
+    let work = add(&owner, "Work").await;
+    let pane = agent_tab(&mut owner, Some(&work.id), None).await;
     let (listener, mut events) = WorkspaceEventQueue::channel();
-    c.client.set_workspace_listener(listener);
-    let first = c.client.usage_watch().await.unwrap();
-    assert!(
-        first
-            .agents
+    owner.client.set_workspace_listener(listener);
+    let first = owner.client.usage_watch().await.unwrap();
+    assert!(first.agents.iter().all(|meter| {
+        meter
+            .windows
             .iter()
-            .all(|a| a.windows.iter().all(|w| w.used_permille != 815))
-    );
+            .all(|window| window.used_permille != 815)
+    }));
 
     status_line(state.path(), daemon.hook_socket(), pane).await;
     let deadline = Instant::now() + TIMEOUT;
@@ -471,7 +474,7 @@ async fn usage_is_kept_per_account() {
             && report
                 .accounts
                 .iter()
-                .any(|a| a.account == work.id && !a.usage.windows.is_empty())
+                .any(|meter| meter.account == work.id && !meter.usage.windows.is_empty())
         {
             break (report, first);
         }
@@ -479,21 +482,26 @@ async fn usage_is_kept_per_account() {
     let entry = accounts
         .accounts
         .iter()
-        .find(|a| a.account == work.id)
+        .find(|meter| meter.account == work.id)
         .unwrap();
     assert_eq!(entry.usage.agent, AgentKind::Claude);
     assert_eq!(entry.usage.windows[0].used_permille, 815);
     let own = accounts
         .accounts
         .iter()
-        .find(|a| a.account == SYSTEM_ACCOUNT && a.usage.agent == AgentKind::Claude);
-    assert!(own.is_none_or(|o| o.usage.windows.iter().all(|w| w.used_permille != 815)));
-    assert!(
-        system
-            .agents
+        .find(|meter| meter.account == SYSTEM_ACCOUNT && meter.usage.agent == AgentKind::Claude);
+    assert!(own.is_none_or(|own| {
+        own.usage
+            .windows
             .iter()
-            .all(|a| a.windows.iter().all(|w| w.used_permille != 815))
-    );
+            .all(|window| window.used_permille != 815)
+    }));
+    assert!(system.agents.iter().all(|meter| {
+        meter
+            .windows
+            .iter()
+            .all(|window| window.used_permille != 815)
+    }));
     // Kept for the account across a restart, apart from the system account's snapshot.
     assert!(
         state
@@ -502,7 +510,7 @@ async fn usage_is_kept_per_account() {
             .exists()
     );
     assert!(!state.path().join("usage/claude-status-line.json").exists());
-    drop(c);
+    drop(owner);
     daemon.shutdown().await;
 }
 
@@ -548,10 +556,10 @@ async fn codex_accounts_sign_in_and_resume_in_their_own_home() {
     host.env
         .push(("OPENAI_API_KEY".into(), "from-daemon".into()));
     let daemon = start_with(state.path(), host.config()).await;
-    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    c.attach_and_follow().await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    owner.attach_and_follow().await;
     let Ok(WorkspaceResponse::Account(work)) = ask(
-        &c,
+        &owner,
         WorkspaceRequest::AccountAdd(AccountAdd {
             agent: AgentKind::Codex,
             label: "Work".into(),
@@ -570,17 +578,17 @@ async fn codex_accounts_sign_in_and_resume_in_their_own_home() {
         account: work.id.clone(),
         device_code: true,
     };
-    let OpOutcome::TabCreated { pane_id: login, .. } = new_tab(&mut c, sign_in).await else {
+    let OpOutcome::TabCreated { pane_id: login, .. } = new_tab(&mut owner, sign_in).await else {
         panic!("sign-in tab");
     };
-    c.follow(login).await;
-    c.wait_flat(login, "login --device-auth done").await;
+    owner.follow(login).await;
+    owner.wait_flat(login, "login --device-auth done").await;
     assert!(home.join(".fake-login").exists());
     let check = WorkspaceRequest::AccountCheck {
         agent: AgentKind::Codex,
         account: work.id.clone(),
     };
-    let Ok(WorkspaceResponse::Account(checked)) = ask(&c, check).await else {
+    let Ok(WorkspaceResponse::Account(checked)) = ask(&owner, check).await else {
         panic!("check");
     };
     let AccountStatus::SignedIn(who) = checked.status else {
@@ -595,36 +603,37 @@ async fn codex_accounts_sign_in_and_resume_in_their_own_home() {
         resume: resume.map(str::to_owned),
         cwd: None,
     };
-    let OpOutcome::TabCreated { pane_id: pane, .. } = new_tab(&mut c, launch(None)).await else {
+    let OpOutcome::TabCreated { pane_id: pane, .. } = new_tab(&mut owner, launch(None)).await
+    else {
         panic!("codex tab");
     };
-    c.follow(pane).await;
-    c.wait_flat(pane, "ARGS").await;
-    let text = c.flat_text(pane);
+    owner.follow(pane).await;
+    owner.wait_flat(pane, "ARGS").await;
+    let text = owner.flat_text(pane);
     assert_eq!(field(&text, "HOME"), home.display().to_string(), "{text}");
     assert_eq!(field(&text, "KEY"), "none", "{text}");
     let layout = state.path().join("layout.json");
     let deadline = Instant::now() + TIMEOUT;
-    while !std::fs::read_to_string(&layout).is_ok_and(|s| s.contains(CODEX_ID)) {
+    while !std::fs::read_to_string(&layout).is_ok_and(|text| text.contains(CODEX_ID)) {
         assert!(Instant::now() < deadline, "session id never found");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     assert!(matches!(
-        c.op(LayoutOp::ClosePane { pane_id: pane }).await,
+        owner.op(LayoutOp::ClosePane { pane_id: pane }).await,
         OpOutcome::Done
     ));
     // Resuming by id alone goes back to the account that made it.
     let OpOutcome::TabCreated { pane_id: again, .. } =
-        new_tab(&mut c, launch(Some(CODEX_ID))).await
+        new_tab(&mut owner, launch(Some(CODEX_ID))).await
     else {
         panic!("resume tab");
     };
-    c.follow(again).await;
-    c.wait_flat(again, &format!("resume {CODEX_ID}")).await;
+    owner.follow(again).await;
+    owner.wait_flat(again, &format!("resume {CODEX_ID}")).await;
     assert_eq!(
-        field(&c.flat_text(again), "HOME"),
+        field(&owner.flat_text(again), "HOME"),
         home.display().to_string()
     );
-    drop(c);
+    drop(owner);
     daemon.shutdown().await;
 }

@@ -1,4 +1,5 @@
-//! (owner only, two-person rule, claims, risk caps) and scrollback since joining.
+//! Multiplayer end to end, part two: knock to join, approval policies (owner only, two-person
+//! rule, claims, risk caps) and scrollback since joining.
 
 use std::time::Duration;
 
@@ -43,11 +44,11 @@ async fn invite(owner: &TestClient, spec: GrantSpec, terms: InviteTerms) -> Stri
 }
 
 async fn guest(invite: &str, pane: PaneId) -> TestClient {
-    let mut g = TestClient::join(invite, ClientConfig::generate_key());
-    g.client.attach(None);
-    g.until("guest layout", |c| c.layout.is_some()).await;
-    g.follow(pane).await;
-    g
+    let mut joined = TestClient::join(invite, ClientConfig::generate_key());
+    joined.client.attach(None);
+    joined.until("guest layout", |c| c.layout.is_some()).await;
+    joined.follow(pane).await;
+    joined
 }
 
 fn knocker_config() -> ClientConfig {
@@ -76,11 +77,12 @@ fn start_knock(invite: &str, name: &str) -> (JoinHandle<KnockOutcome>, Vec<u8>) 
     (task, key)
 }
 
-fn knocks_named(c: &TestClient, name: &str) -> Option<client_core::proto::Knock> {
-    c.client
+fn knocks_named(client: &TestClient, name: &str) -> Option<client_core::proto::Knock> {
+    client
+        .client
         .pending_knocks()
         .into_iter()
-        .find(|k| k.name == name)
+        .find(|pending| pending.name == name)
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -179,8 +181,8 @@ async fn knocking_waits_for_the_owner_who_admits_or_turns_away() {
     max.abort();
     owner
         .until("max withdrew", |c| {
-            c.mp.iter().any(|e| {
-                matches!(e, MultiplayerEvent::Knock { update: KnockUpdate::Gone { knock_id, outcome: Outcome::Withdrawn, .. } } if *knock_id == max_id)
+            c.mp.iter().any(|event| {
+                matches!(event, MultiplayerEvent::Knock { update: KnockUpdate::Gone { knock_id, outcome: Outcome::Withdrawn, .. } } if *knock_id == max_id)
             })
         })
         .await;
@@ -194,28 +196,37 @@ async fn knocking_waits_for_the_owner_who_admits_or_turns_away() {
 
     let page = owner.client.audit(None, 200).await.unwrap();
     assert!(page.chain_ok);
-    let kinds: Vec<AuditKind> = page.records.iter().map(|r| r.kind).collect();
+    let kinds: Vec<AuditKind> = page.records.iter().map(|record| record.kind).collect();
     assert!(kinds.contains(&AuditKind::Knock), "{kinds:?}");
     assert!(
         page.records
             .iter()
-            .any(|r| r.kind == AuditKind::Knock && r.detail.starts_with("Kim Lee knocked")),
+            .any(|record| record.kind == AuditKind::Knock
+                && record.detail.starts_with("Kim Lee knocked")),
         "knocks are audited under the name the knocker gave"
     );
     let answered: Vec<&str> = page
         .records
         .iter()
-        .filter(|r| r.kind == AuditKind::KnockAnswered)
-        .map(|r| r.detail.as_str())
+        .filter(|record| record.kind == AuditKind::KnockAnswered)
+        .map(|record| record.detail.as_str())
         .collect();
     assert!(
         answered
             .iter()
-            .any(|d| d.contains("admitted Kim Lee as driver+viewer")),
+            .any(|detail| detail.contains("admitted Kim Lee as driver+viewer")),
         "{answered:?}"
     );
-    assert!(answered.iter().any(|d| d.contains("turned Lou away")));
-    assert!(answered.iter().any(|d| d.contains("Max stopped waiting")));
+    assert!(
+        answered
+            .iter()
+            .any(|detail| detail.contains("turned Lou away"))
+    );
+    assert!(
+        answered
+            .iter()
+            .any(|detail| detail.contains("Max stopped waiting"))
+    );
     drop((owner, kim, old, thief));
     daemon.shutdown().await;
 }
@@ -254,37 +265,40 @@ fn ask(
     tokio::spawn(async move { hook(&socket, &request).await })
 }
 
-fn blocked(c: &TestClient, pane: PaneId) -> Option<Blocker> {
-    c.metas
+fn blocked(client: &TestClient, pane: PaneId) -> Option<Blocker> {
+    client
+        .metas
         .get(&pane)
-        .and_then(|m| m.agent.clone())
-        .and_then(|a| match a.state {
-            AgentState::Blocked(b) => Some(b),
+        .and_then(|meta| meta.agent.clone())
+        .and_then(|agent| match agent.state {
+            AgentState::Blocked(prompt) => Some(prompt),
             _ => None,
         })
 }
 
-/// Waits until `c` sees a request blocked on `pane` newer than `after` (ids only grow; a
+/// Waits until `client` sees a request blocked on `pane` newer than `after` (ids only grow; a
 /// client that has not pumped events for a while may still show an older one).
-async fn next_block(c: &mut TestClient, pane: PaneId, after: Option<u64>) -> Blocker {
-    c.until("blocked", |c| {
-        blocked(c, pane).is_some_and(|b| Some(b.request_id.0) > after)
-    })
-    .await;
-    blocked(c, pane).unwrap()
+async fn next_block(client: &mut TestClient, pane: PaneId, after: Option<u64>) -> Blocker {
+    client
+        .until("blocked", |client| {
+            blocked(client, pane).is_some_and(|blocker| Some(blocker.request_id.0) > after)
+        })
+        .await;
+    blocked(client, pane).unwrap()
 }
 
-fn option(b: &Blocker, allow: bool) -> OptionId {
-    b.options
+fn option(blocker: &Blocker, allow: bool) -> OptionId {
+    blocker
+        .options
         .iter()
-        .find(|o| o.label.to_lowercase().starts_with("no") != allow)
-        .map(|o| o.id)
+        .find(|choice| choice.label.to_lowercase().starts_with("no") != allow)
+        .map(|choice| choice.id)
         .expect("option")
 }
 
-fn refusal(c: &TestClient, needle: &str) -> bool {
-    c.mp.iter().any(|e| {
-        matches!(e, MultiplayerEvent::Forbidden { what, reason } if what == "Decide" && reason.contains(needle))
+fn refusal(client: &TestClient, needle: &str) -> bool {
+    client.mp.iter().any(|event| {
+        matches!(event, MultiplayerEvent::Forbidden { what, reason } if what == "Decide" && reason.contains(needle))
     })
 }
 
@@ -366,74 +380,95 @@ async fn approval_policies_decide_who_may_answer() {
 
     // Two-person rule: Ann's approval of a command is held until Bob approves too.
     let waiting = ask(&daemon, dir.path(), pane, 1, "Bash");
-    let b = next_block(&mut ann, pane, None).await;
-    ann.client.decide(b.request_id, option(&b, true));
+    let two_person_command = next_block(&mut ann, pane, None).await;
+    ann.client.decide(
+        two_person_command.request_id,
+        option(&two_person_command, true),
+    );
     bob.until("one of two", |c| {
-        c.client
-            .approval_statuses()
-            .iter()
-            .any(|s| s.request_id == b.request_id && s.approvals.len() == 1 && s.needed == 2)
+        c.client.approval_statuses().iter().any(|status| {
+            status.request_id == two_person_command.request_id
+                && status.approvals.len() == 1
+                && status.needed == 2
+        })
     })
     .await;
     assert!(!waiting.is_finished(), "one approval is not enough");
-    ann.client.decide(b.request_id, option(&b, true));
+    ann.client.decide(
+        two_person_command.request_id,
+        option(&two_person_command, true),
+    );
     ann.until("same person twice refused", |c| refusal(c, "second person"))
         .await;
-    bob.client.decide(b.request_id, option(&b, true));
+    bob.client.decide(
+        two_person_command.request_id,
+        option(&two_person_command, true),
+    );
     assert_eq!(answered(waiting).await, "allow");
     // Edits need only one approval, and one "no" ends a command request.
     let waiting = ask(&daemon, dir.path(), pane, 2, "Edit");
-    let b2 = next_block(&mut ann, pane, Some(b.request_id.0)).await;
-    ann.client.decide(b2.request_id, option(&b2, true));
+    let edit = next_block(&mut ann, pane, Some(two_person_command.request_id.0)).await;
+    ann.client.decide(edit.request_id, option(&edit, true));
     assert_eq!(answered(waiting).await, "allow");
     let waiting = ask(&daemon, dir.path(), pane, 3, "Bash");
-    let b3 = next_block(&mut ann, pane, Some(b2.request_id.0)).await;
-    bob.client.decide(b3.request_id, option(&b3, false));
+    let denied_command = next_block(&mut ann, pane, Some(edit.request_id.0)).await;
+    bob.client
+        .decide(denied_command.request_id, option(&denied_command, false));
     assert_eq!(answered(waiting).await, "deny");
 
     // Owner only: approvers are refused, the owner answers.
     set_policy(&owner, ApprovalMode::OwnerOnly, Risk::Any).await;
     let waiting = ask(&daemon, dir.path(), pane, 4, "Read");
-    let b4 = next_block(&mut ann, pane, Some(b3.request_id.0)).await;
-    ann.client.decide(b4.request_id, option(&b4, true));
+    let owner_only_read = next_block(&mut ann, pane, Some(denied_command.request_id.0)).await;
+    ann.client
+        .decide(owner_only_read.request_id, option(&owner_only_read, true));
     ann.until("approver refused", |c| refusal(c, "only the owner"))
         .await;
     assert!(!waiting.is_finished());
-    owner.client.decide(b4.request_id, option(&b4, true));
+    owner
+        .client
+        .decide(owner_only_read.request_id, option(&owner_only_read, true));
     assert_eq!(answered(waiting).await, "allow");
 
     // A risk cap: approvers allow edits but not commands; they may still say no.
     set_policy(&owner, ApprovalMode::AnyApprover, Risk::Edits).await;
     let waiting = ask(&daemon, dir.path(), pane, 5, "Bash");
-    let b5 = next_block(&mut bob, pane, Some(b4.request_id.0)).await;
-    bob.client.decide(b5.request_id, option(&b5, true));
+    let capped_command = next_block(&mut bob, pane, Some(owner_only_read.request_id.0)).await;
+    bob.client
+        .decide(capped_command.request_id, option(&capped_command, true));
     bob.until("command needs the owner", |c| refusal(c, "needs the owner"))
         .await;
     assert!(!waiting.is_finished());
-    bob.client.decide(b5.request_id, option(&b5, false));
+    bob.client
+        .decide(capped_command.request_id, option(&capped_command, false));
     assert_eq!(answered(waiting).await, "deny");
 
     // Claims: Bob takes the request; Ann can no longer answer it, Bob can.
     set_policy(&owner, ApprovalMode::Claim, Risk::Any).await;
     let waiting = ask(&daemon, dir.path(), pane, 6, "Bash");
-    let b6 = next_block(&mut ann, pane, Some(b5.request_id.0)).await;
-    let status = bob.client.claim(b6.request_id, true).await.unwrap();
+    let claimed_command = next_block(&mut ann, pane, Some(capped_command.request_id.0)).await;
+    let status = bob
+        .client
+        .claim(claimed_command.request_id, true)
+        .await
+        .unwrap();
     assert_eq!(status.claimed_by.unwrap().name, "bob");
     ann.until("claim pushed", |c| {
-        c.client
-            .approval_statuses()
-            .iter()
-            .any(|s| s.request_id == b6.request_id && s.claimed_by.is_some())
+        c.client.approval_statuses().iter().any(|status| {
+            status.request_id == claimed_command.request_id && status.claimed_by.is_some()
+        })
     })
     .await;
     assert!(matches!(
-        ann.client.claim(b6.request_id, true).await,
+        ann.client.claim(claimed_command.request_id, true).await,
         Err(MpError::Conflict(_))
     ));
-    ann.client.decide(b6.request_id, option(&b6, true));
+    ann.client
+        .decide(claimed_command.request_id, option(&claimed_command, true));
     ann.until("claimed by someone else", |c| refusal(c, "claimed"))
         .await;
-    bob.client.decide(b6.request_id, option(&b6, true));
+    bob.client
+        .decide(claimed_command.request_id, option(&claimed_command, true));
     assert_eq!(answered(waiting).await, "allow");
 
     // Everything is in the audit log, still intact.
@@ -442,8 +477,8 @@ async fn approval_policies_decide_who_may_answer() {
     let details = |kind: AuditKind| -> Vec<String> {
         page.records
             .iter()
-            .filter(|r| r.kind == kind)
-            .map(|r| r.detail.clone())
+            .filter(|record| record.kind == kind)
+            .map(|record| record.detail.clone())
             .collect()
     };
     let policies = details(AuditKind::Policy);
@@ -452,34 +487,36 @@ async fn approval_policies_decide_who_may_answer() {
     assert!(
         details(AuditKind::Approval)
             .iter()
-            .any(|d| d.contains("1 of 2")),
+            .any(|detail| detail.contains("1 of 2")),
         "the held vote is audited"
     );
     assert!(
         details(AuditKind::Claim)
             .iter()
-            .any(|d| d.contains("bob claimed"))
+            .any(|detail| detail.contains("bob claimed"))
     );
     assert!(
         details(AuditKind::Denied)
             .iter()
-            .any(|d| d.contains("only the owner")),
+            .any(|detail| detail.contains("only the owner")),
         "refusals are audited"
     );
     drop((ann, bob, owner));
     daemon.shutdown().await;
 }
 
-async fn all_history(c: &mut TestClient, pane: PaneId) -> String {
-    while c.client.fetch_history(pane, 64 << 10) {
-        let before = c.history.len();
-        c.until("history page", |c| c.history.len() > before).await;
+async fn all_history(client: &mut TestClient, pane: PaneId) -> String {
+    while client.client.fetch_history(pane, 64 << 10) {
+        let before = client.history.len();
+        client
+            .until("history page", |client| client.history.len() > before)
+            .await;
     }
-    c.client.pane_text_all(pane).unwrap_or_default()
+    client.client.pane_text_all(pane).unwrap_or_default()
 }
 
-async fn search_total(c: &mut TestClient, pane: PaneId, pattern: &str) -> u32 {
-    let id = c.client.search(
+async fn search_total(client: &mut TestClient, pane: PaneId, pattern: &str) -> u32 {
+    let id = client.client.search(
         pane,
         SearchQuery {
             pattern: pattern.into(),
@@ -489,7 +526,7 @@ async fn search_total(c: &mut TestClient, pane: PaneId, pattern: &str) -> u32 {
         0,
         10,
     );
-    let ClientEvent::SearchResult { result, .. } = c.answer(id).await else {
+    let ClientEvent::SearchResult { result, .. } = client.answer(id).await else {
         unreachable!()
     };
     result.unwrap().total

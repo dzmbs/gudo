@@ -6,12 +6,13 @@ use client_core::proto::{PaneId, ProgramKind, ProgramReport, ProgramState};
 
 use crate::support::{TestClient, start, ticket};
 
-fn last(c: &TestClient, pane: PaneId) -> Option<Option<ProgramReport>> {
-    c.programs
+fn last(client: &TestClient, pane: PaneId) -> Option<Option<ProgramReport>> {
+    client
+        .programs
         .iter()
         .rev()
-        .find(|(p, _)| *p == pane)
-        .map(|(_, s)| s.clone())
+        .find(|(reported_pane, _)| *reported_pane == pane)
+        .map(|(_, report)| report.clone())
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -84,7 +85,7 @@ async fn any_programs_status_reaches_clients_that_ask() {
         .until("the title", |c| {
             c.metas
                 .get(&pane)
-                .is_some_and(|m| m.title == "after-status")
+                .is_some_and(|meta| meta.title == "after-status")
         })
         .await;
     assert!(plain.programs.is_empty(), "{:?}", plain.programs);
@@ -117,13 +118,17 @@ async fn printed_text_cannot_pose_as_an_agent() {
     watcher.type_line(pane, r"printf '\033]7501;state=working:app=make\033\\'");
     watcher
         .until("the make report", |c| {
-            last(c, pane).flatten().and_then(|r| r.app).as_deref() == Some("make")
+            last(c, pane)
+                .flatten()
+                .and_then(|report| report.app)
+                .as_deref()
+                == Some("make")
         })
         .await;
     let apps: Vec<_> = watcher
         .programs
         .iter()
-        .filter_map(|(_, r)| r.as_ref()?.app.clone())
+        .filter_map(|(_, report)| report.as_ref()?.app.clone())
         .collect();
     assert_eq!(apps, ["make"]);
 }

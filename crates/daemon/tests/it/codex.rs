@@ -44,12 +44,12 @@ async fn codex_session_id_is_captured_and_resumed_after_restart() {
         ("CODEX_HOME".to_owned(), codex_home.display().to_string()),
     ];
     let configure =
-        |env: Vec<(String, String)>| move |c: &mut daemon::Config| c.pane_env.extend(env);
+        |env: Vec<(String, String)>| move |config: &mut daemon::Config| config.pane_env.extend(env);
 
     let daemon = start_with(dir.path(), configure(env.clone())).await;
-    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    let shell = c.attach_and_follow().await;
-    let OpOutcome::PaneCreated { pane_id: agent } = c
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let shell = owner.attach_and_follow().await;
+    let OpOutcome::PaneCreated { pane_id: agent } = owner
         .op(LayoutOp::Split {
             pane_id: shell,
             axis: Axis::Horizontal,
@@ -63,27 +63,27 @@ async fn codex_session_id_is_captured_and_resumed_after_restart() {
     else {
         panic!("split failed");
     };
-    c.follow(agent).await;
-    c.wait_text(agent, "fake codex").await;
+    owner.follow(agent).await;
+    owner.wait_text(agent, "fake codex").await;
 
     // The id reaches the persisted layout.
     let layout = dir.path().join("layout.json");
     let deadline = Instant::now() + TIMEOUT;
-    while !std::fs::read_to_string(&layout).is_ok_and(|s| s.contains(ID)) {
+    while !std::fs::read_to_string(&layout).is_ok_and(|text| text.contains(ID)) {
         assert!(Instant::now() < deadline, "session id never persisted");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    drop(c);
+    drop(owner);
     daemon.shutdown().await;
 
     // After a restart the pane resumes that session.
     let daemon = start_with(dir.path(), configure(env)).await;
-    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    c.client.attach(None);
-    c.until("layout", |c| c.layout.is_some()).await;
-    assert!(leaves(&c.tab().root).contains(&agent));
-    c.follow(agent).await;
-    c.wait_flat(agent, &format!("resume {ID}")).await;
-    drop(c);
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    owner.client.attach(None);
+    owner.until("layout", |owner| owner.layout.is_some()).await;
+    assert!(leaves(&owner.tab().root).contains(&agent));
+    owner.follow(agent).await;
+    owner.wait_flat(agent, &format!("resume {ID}")).await;
+    drop(owner);
     daemon.shutdown().await;
 }

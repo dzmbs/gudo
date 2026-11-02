@@ -74,32 +74,33 @@ async fn reply(call: JoinHandle<TermReply>) -> TermReply {
 
 fn ok(reply: TermReply) -> Value {
     match reply {
-        TermReply::Ok(v) => v,
-        TermReply::Error(e) => panic!("refused: {e:?}"),
+        TermReply::Ok(value) => value,
+        TermReply::Error(error) => panic!("refused: {error:?}"),
     }
 }
 
 fn refused(reply: TermReply) -> daemon::ToolError {
     match reply {
-        TermReply::Error(e) => e,
-        TermReply::Ok(v) => panic!("allowed: {v}"),
+        TermReply::Error(error) => error,
+        TermReply::Ok(value) => panic!("allowed: {value}"),
     }
 }
 
-fn blocker(c: &TestClient, pane: PaneId) -> Option<Blocker> {
-    match c.metas.get(&pane)?.agent.clone()?.state {
-        AgentState::Blocked(b) => Some(b),
+fn blocker(client: &TestClient, pane: PaneId) -> Option<Blocker> {
+    match client.metas.get(&pane)?.agent.clone()?.state {
+        AgentState::Blocked(blocked) => Some(blocked),
         _ => None,
     }
 }
 
 /// Waits until `pane` is blocked on a drive request other than `not`, and returns it.
-async fn asked(c: &mut TestClient, pane: PaneId, not: Option<u64>) -> Blocker {
-    c.until("a drive request", |c| {
-        blocker(c, pane).is_some_and(|b| Some(b.request_id.0) != not)
-    })
-    .await;
-    blocker(c, pane).unwrap()
+async fn asked(client: &mut TestClient, pane: PaneId, not: Option<u64>) -> Blocker {
+    client
+        .until("a drive request", |client| {
+            blocker(client, pane).is_some_and(|blocked| Some(blocked.request_id.0) != not)
+        })
+        .await;
+    blocker(client, pane).unwrap()
 }
 
 /// An owner attached to a session of two shells: the user's pane and the agent's.
@@ -112,10 +113,10 @@ async fn setup_with(
     wait: Duration,
     shell: Option<PathBuf>,
 ) -> (Daemon, TestClient, PaneId, PaneId) {
-    let daemon = start_with(dir, |c| {
-        c.drive_ask_wait = wait;
+    let daemon = start_with(dir, |config| {
+        config.drive_ask_wait = wait;
         if shell.is_some() {
-            c.shell = shell;
+            config.shell = shell;
         }
     })
     .await;
@@ -148,7 +149,7 @@ async fn the_owners_answer_unlocks_exactly_one_action() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|p| p["id"] == format!("p{}", user.0))
+        .find(|pane| pane["id"] == format!("p{}", user.0))
         .unwrap()
         .clone();
     assert_eq!(theirs["scopes"], json!(["read", "ask"]), "{theirs}");
@@ -163,17 +164,22 @@ async fn the_owners_answer_unlocks_exactly_one_action() {
         first.summary.contains("wants to type into") && first.summary.contains("echo drive-once"),
         "{first:?}"
     );
-    let labels: Vec<&str> = first.options.iter().map(|o| o.label.as_str()).collect();
+    let labels: Vec<&str> = first
+        .options
+        .iter()
+        .map(|option| option.label.as_str())
+        .collect();
     assert_eq!(
         labels,
         ["Allow once", "Allow for this pane until it closes", "Deny"]
     );
     owner
-        .until("the exact action", |c| {
-            c.client
+        .until("the exact action", |client| {
+            client
+                .client
                 .drive_asks()
                 .iter()
-                .any(|a| a.request_id == first.request_id)
+                .any(|ask| ask.request_id == first.request_id)
         })
         .await;
     let shown = owner.client.drive_asks().remove(0);
@@ -195,7 +201,9 @@ async fn the_owners_answer_unlocks_exactly_one_action() {
     ok(reply(typing).await);
     owner.wait_text(user, "drive-once").await;
     owner
-        .until("the card cleared", |c| blocker(c, agent).is_none())
+        .until("the card cleared", |client| {
+            blocker(client, agent).is_none()
+        })
         .await;
 
     // The answer is used up: the next action asks again, and replaying the old answer
@@ -207,9 +215,9 @@ async fn the_owners_answer_unlocks_exactly_one_action() {
     let second = asked(&mut owner, agent, Some(first.request_id.0)).await;
     owner.client.decide(first.request_id, DriveAsk::ALLOW_ONCE);
     owner
-        .until("the replay refused", |c| {
-            c.mp.iter()
-                .any(|e| matches!(e, MultiplayerEvent::Forbidden { what, .. } if what == "Decide"))
+        .until("the replay refused", |client| {
+            client.mp.iter()
+                .any(|event| matches!(event, MultiplayerEvent::Forbidden { what, .. } if what == "Decide"))
         })
         .await;
     assert!(
@@ -264,10 +272,13 @@ async fn the_owners_answer_unlocks_exactly_one_action() {
     let answers: Vec<_> = page
         .records
         .iter()
-        .filter(|r| r.kind == AuditKind::Approval)
-        .filter_map(|r| r.approval.as_ref())
+        .filter(|record| record.kind == AuditKind::Approval)
+        .filter_map(|record| record.approval.as_ref())
         .collect();
-    let options: Vec<&str> = answers.iter().map(|a| a.option.as_str()).collect();
+    let options: Vec<&str> = answers
+        .iter()
+        .map(|answer| answer.option.as_str())
+        .collect();
     assert_eq!(
         options,
         ["Allow once", "Deny", "Allow for this pane until it closes"]
@@ -307,12 +318,16 @@ async fn guests_cannot_answer_and_unanswered_requests_lapse() {
         .unwrap();
     let mut guest = TestClient::join(&invite.to_string(), ClientConfig::generate_key());
     guest.client.attach(None);
-    guest.until("guest layout", |c| c.layout.is_some()).await;
+    guest
+        .until("guest layout", |client| client.layout.is_some())
+        .await;
 
     let closing = caller.spawn("pane_close", json!({ "pane": format!("p{}", user.0) }));
     let ask = asked(&mut owner, agent, None).await;
     guest
-        .until("the guest sees the card", |c| blocker(c, agent).is_some())
+        .until("the guest sees the card", |client| {
+            blocker(client, agent).is_some()
+        })
         .await;
     assert!(
         guest.client.drive_asks().is_empty(),
@@ -320,9 +335,9 @@ async fn guests_cannot_answer_and_unanswered_requests_lapse() {
     );
     guest.client.decide(ask.request_id, DriveAsk::ALLOW_ONCE);
     guest
-        .until("the guest refused", |c| {
-            c.mp.iter()
-                .any(|e| matches!(e, MultiplayerEvent::Forbidden { what, .. } if what == "Decide"))
+        .until("the guest refused", |client| {
+            client.mp.iter()
+                .any(|event| matches!(event, MultiplayerEvent::Forbidden { what, .. } if what == "Decide"))
         })
         .await;
     assert!(!closing.is_finished());
@@ -332,7 +347,9 @@ async fn guests_cannot_answer_and_unanswered_requests_lapse() {
     assert_eq!(lapsed.code, TermErrorCode::Forbidden);
     assert!(lapsed.retryable, "{lapsed:?}");
     owner
-        .until("the card cleared", |c| blocker(c, agent).is_none())
+        .until("the card cleared", |client| {
+            blocker(client, agent).is_none()
+        })
         .await;
     assert!(owner.client.drive_asks().is_empty());
     assert!(
@@ -348,7 +365,9 @@ async fn guests_cannot_answer_and_unanswered_requests_lapse() {
     asked(&mut owner, agent, Some(ask.request_id.0)).await;
     hanging.abort();
     owner
-        .until("the request withdrawn", |c| blocker(c, agent).is_none())
+        .until("the request withdrawn", |client| {
+            blocker(client, agent).is_none()
+        })
         .await;
     drop((guest, owner));
     daemon.shutdown().await;
@@ -365,14 +384,14 @@ async fn an_agent_keeps_the_panes_it_opened_across_a_restart() {
     drop(owner);
     daemon.shutdown().await;
 
-    let daemon = start_with(dir.path(), |c| c.drive_ask_wait = wait).await;
+    let daemon = start_with(dir.path(), |config| config.drive_ask_wait = wait).await;
     let caller = Caller::new(dir.path(), &daemon, agent);
     let list = ok(caller.call("pane_list", json!({})).await);
     let mine = list["panes"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|p| p["id"] == worker)
+        .find(|pane| pane["id"] == worker)
         .cloned()
         .expect("the worker came back");
     assert_eq!(mine["createdByYou"], true, "{mine}");
@@ -407,7 +426,7 @@ async fn events_come_to_subscribers_of_their_own_session_only() {
     let Some(zsh) = ["/bin/zsh", "/usr/bin/zsh"]
         .into_iter()
         .map(PathBuf::from)
-        .find(|p| p.exists())
+        .find(|path| path.exists())
     else {
         eprintln!("skipping: zsh not installed");
         return;
@@ -442,7 +461,10 @@ async fn events_come_to_subscribers_of_their_own_session_only() {
 
     let mut seen = Vec::new();
     let mut cursor = start;
-    while !seen.iter().any(|e: &Value| e["type"] == "pane.closed") {
+    while !seen
+        .iter()
+        .any(|event: &Value| event["type"] == "pane.closed")
+    {
         let page = ok(caller
             .call("events_wait", json!({ "since": cursor, "timeoutMs": 5000 }))
             .await);
@@ -451,24 +473,27 @@ async fn events_come_to_subscribers_of_their_own_session_only() {
         cursor = page["cursor"].as_u64().unwrap();
         seen.extend(events.iter().cloned());
     }
-    let opened: Vec<&Value> = seen.iter().filter(|e| e["type"] == "pane.opened").collect();
+    let opened: Vec<&Value> = seen
+        .iter()
+        .filter(|event| event["type"] == "pane.opened")
+        .collect();
     assert_eq!(opened.len(), 1, "{seen:?}");
     assert_eq!(opened[0]["pane"], worker);
     assert_eq!(opened[0]["v"], 1);
     assert!(
         seen.iter()
-            .all(|e| e["pane"] != format!("p{}", elsewhere.0)),
+            .all(|event| event["pane"] != format!("p{}", elsewhere.0)),
         "another session's pane leaked: {seen:?}"
     );
-    assert!(seen.iter().any(|e| e["type"] == "layout.changed"));
+    assert!(seen.iter().any(|event| event["type"] == "layout.changed"));
     let finished = seen
         .iter()
-        .find(|e| e["type"] == "command.finished" && e["pane"] == worker)
+        .find(|event| event["type"] == "command.finished" && event["pane"] == worker)
         .unwrap_or_else(|| panic!("no command.finished in {seen:?}"));
     assert_eq!(finished["exitCode"], 7, "{finished}");
     assert!(
         seen.iter()
-            .any(|e| e["type"] == "command.started" && e["pane"] == worker),
+            .any(|event| event["type"] == "command.started" && event["pane"] == worker),
         "{seen:?}"
     );
 
@@ -483,7 +508,7 @@ async fn events_come_to_subscribers_of_their_own_session_only() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|e| e["type"].as_str().unwrap())
+        .map(|event| event["type"].as_str().unwrap())
         .collect();
     assert_eq!(types, ["pane.closed"]);
     let bad = refused(
@@ -503,7 +528,7 @@ async fn a_clients_event_stream_follows_its_scope() {
     let Some(zsh) = ["/bin/zsh", "/usr/bin/zsh"]
         .into_iter()
         .map(PathBuf::from)
-        .find(|p| p.exists())
+        .find(|path| path.exists())
     else {
         eprintln!("skipping: zsh not installed");
         return;
@@ -521,7 +546,9 @@ async fn a_clients_event_stream_follows_its_scope() {
         .unwrap();
     let mut guest = TestClient::join(&invite.to_string(), ClientConfig::generate_key());
     guest.client.attach(None);
-    guest.until("guest layout", |c| c.layout.is_some()).await;
+    guest
+        .until("guest layout", |client| client.layout.is_some())
+        .await;
 
     owner.type_line(user, "true");
     owner.type_line(agent, "(exit 4)");
@@ -535,46 +562,51 @@ async fn a_clients_event_stream_follows_its_scope() {
     else {
         panic!("split")
     };
-    let finished = |c: &TestClient, pane: PaneId| {
-        c.script_events.iter().any(|e| {
-            e.pane.as_deref() == Some(&format!("p{}", pane.0))
+    let finished = |client: &TestClient, pane: PaneId| {
+        client.script_events.iter().any(|event| {
+            event.pane.as_deref() == Some(&format!("p{}", pane.0))
                 && matches!(
-                    e.kind,
+                    event.kind,
                     client_core::proto::ScriptEventKind::CommandFinished { .. }
                 )
         })
     };
     owner
-        .until("both commands", |c| finished(c, user) && finished(c, agent))
+        .until("both commands", |client| {
+            finished(client, user) && finished(client, agent)
+        })
         .await;
-    assert!(owner.script_events.iter().any(|e| {
-        e.pane.as_deref() == Some(&format!("p{}", third.0))
+    assert!(owner.script_events.iter().any(|event| {
+        event.pane.as_deref() == Some(&format!("p{}", third.0))
             && matches!(
-                e.kind,
+                event.kind,
                 client_core::proto::ScriptEventKind::PaneOpened { .. }
             )
     }));
     // A later command in its pane: anything sent before it has arrived by then.
     owner.type_line(user, "true");
-    let in_user = |c: &TestClient| {
-        c.script_events
+    let in_user = |client: &TestClient| {
+        client
+            .script_events
             .iter()
-            .filter(|e| {
-                e.pane.as_deref() == Some(&format!("p{}", user.0))
+            .filter(|event| {
+                event.pane.as_deref() == Some(&format!("p{}", user.0))
                     && matches!(
-                        e.kind,
+                        event.kind,
                         client_core::proto::ScriptEventKind::CommandFinished { .. }
                     )
             })
             .count()
     };
     guest
-        .until("its pane's commands", |c| in_user(c) >= 2)
+        .until("its pane's commands", |client| in_user(client) >= 2)
         .await;
     let leaked: Vec<_> = guest
         .script_events
         .iter()
-        .filter(|e| e.pane.is_some() && e.pane.as_deref() != Some(&format!("p{}", user.0)))
+        .filter(|event| {
+            event.pane.is_some() && event.pane.as_deref() != Some(&format!("p{}", user.0))
+        })
         .collect();
     assert!(leaked.is_empty(), "outside the guest's scope: {leaked:?}");
     drop((guest, owner));
@@ -588,11 +620,11 @@ async fn the_typescript_client_drives_a_real_daemon() {
     let node_works = std::process::Command::new("node")
         .args(["-e", "process.exit(0)"])
         .status()
-        .is_ok_and(|s| s.success());
+        .is_ok_and(|status| status.success());
     let zsh = ["/bin/zsh", "/usr/bin/zsh"]
         .into_iter()
         .map(PathBuf::from)
-        .find(|p| p.exists());
+        .find(|path| path.exists());
     let (true, Some(zsh)) = (node_works, zsh) else {
         eprintln!("skipping: node or zsh not installed");
         return;
