@@ -260,7 +260,7 @@ private final class FakeClient: NotificationActionClient {
         let client = FakeClient()
         #expect(await NotificationActionHandler(client: client).handle(actionIdentifier: PushAction.approve, userInfo: forged, remote: true) == .ignored)
         #expect(client.recorded.isEmpty)
-        // Even if the extension timed processed and delivered the push as it came.
+        // Even if the extension timed out and delivered the push as it came.
         let content = placeholder("AAAA")
         content.userInfo = content.userInfo.merging(forged) { current, _ in current }
         let delivered = ServiceExtensionCore.placeholder(content)
