@@ -96,14 +96,14 @@ pub(crate) fn names_an_agent(report: &agents::ProgramStatus) -> bool {
     };
     [AgentKind::Claude, AgentKind::Codex]
         .into_iter()
-        .any(|k| app.contains(program(k)))
+        .any(|kind| app.contains(program(kind)))
 }
 
 /// What a blocked agent asks, as people see and approve it. It may come from printed text
 /// (OSC 9, OSC 7501) or a prompt-injected tool call: every line kept, nothing invisible.
 fn shown_summary(blocker: &agents::Blocker) -> String {
     let text = blocker.summary.as_ref().or(blocker.tool.as_ref());
-    text.map(|t| proto::clean_prompt_text(t, SUMMARY_CHARS))
+    text.map(|text| proto::clean_prompt_text(text, SUMMARY_CHARS))
         .unwrap_or_default()
 }
 
@@ -133,17 +133,17 @@ fn now() -> agents::UnixMillis {
 
 /// A random RFC 4122 version-4 UUID, for pinning a Claude session id.
 pub(crate) fn new_uuid() -> String {
-    let mut b = fsutil::random::<16>();
-    b[6] = (b[6] & 0x0f) | 0x40;
-    b[8] = (b[8] & 0x3f) | 0x80;
-    let h = fsutil::hex(&b);
+    let mut bytes = fsutil::random::<16>();
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let hex = fsutil::hex(&bytes);
     format!(
         "{}-{}-{}-{}-{}",
-        &h[0..8],
-        &h[8..12],
-        &h[12..16],
-        &h[16..20],
-        &h[20..32]
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
     )
 }
 
@@ -153,16 +153,15 @@ pub(crate) fn new_uuid() -> String {
 static NEXT_REQUEST: std::sync::LazyLock<AtomicU64> =
     std::sync::LazyLock::new(|| AtomicU64::new(first_request_id()));
 
-/// A new wire request id, unique for this run.
 pub(crate) fn next_request_id() -> RequestId {
     RequestId(NEXT_REQUEST.fetch_add(1, Ordering::Relaxed))
 }
 
 /// A random id in `[2^32, 2^52)`: far from any earlier run's, and exact as a JSON number.
 fn first_request_id() -> u64 {
-    let mut b = [0; 8];
-    getrandom::fill(&mut b).expect("the OS random source is available");
-    (1 << 32) + u64::from_le_bytes(b) % ((1 << 52) - (1 << 32))
+    let mut bytes = [0; 8];
+    getrandom::fill(&mut bytes).expect("the OS random source is available");
+    (1 << 32) + u64::from_le_bytes(bytes) % ((1 << 52) - (1 << 32))
 }
 
 /// A dialog's approving and refusing options, with labels (for push notification actions).
@@ -229,13 +228,12 @@ impl AgentRuntime {
         self.kind
     }
 
-    /// Whether the agent is blocked now.
     pub fn is_blocked(&self) -> bool {
         self.arbiter.status().blocked().is_some()
     }
 
     fn wire_request(&mut self, id: &agents::RequestId) -> RequestId {
-        if let Some((wire, _)) = self.requests.iter().find(|(_, r)| r == id) {
+        if let Some((wire, _)) = self.requests.iter().find(|(_, known)| known == id) {
             return *wire;
         }
         let wire = next_request_id();
@@ -264,9 +262,9 @@ impl AgentRuntime {
                         .options
                         .iter()
                         .enumerate()
-                        .map(|(i, o)| DecisionOption {
+                        .map(|(i, option)| DecisionOption {
                             id: OptionId(i as u32),
-                            label: o.label.clone(),
+                            label: option.label.clone(),
                         })
                         .collect(),
                 })
@@ -298,8 +296,8 @@ impl AgentRuntime {
                 self.take(update)
             }
             Ok(None) => None,
-            Err(e) => {
-                tracing::debug!("ignoring hook payload: {e}");
+            Err(error) => {
+                tracing::debug!("ignoring hook payload: {error}");
                 None
             }
         }
@@ -337,14 +335,14 @@ impl AgentRuntime {
         at_shell: bool,
         alive: impl FnOnce(u32) -> bool,
     ) -> bool {
-        if let Some(fg) = foreground
-            && fg.program() == program(self.kind)
+        if let Some(process) = foreground
+            && process.program() == program(self.kind)
         {
-            self.note_process(fg.pid);
+            self.note_process(process.pid);
             return false;
         }
         match self.pid {
-            Some(pid) => foreground.is_none_or(|fg| fg.pid != pid) && !alive(pid),
+            Some(pid) => foreground.is_none_or(|process| process.pid != pid) && !alive(pid),
             None => at_shell,
         }
     }
@@ -361,7 +359,7 @@ impl AgentRuntime {
         let wire = self.wire_request(&request);
         let allow = self
             .approval_options(wire)
-            .and_then(|b| b.approve)
+            .and_then(|buttons| buttons.approve)
             .map(|(id, _)| id);
         Some((wire, request, allow))
     }
@@ -371,25 +369,30 @@ impl AgentRuntime {
         self.arbiter
             .status()
             .blocked()
-            .map(|b| b.request_id.clone())
+            .map(|blocked| blocked.request_id.clone())
     }
 
     /// For a notification's Approve / Deny buttons: the options of the dialog `id` that allow
     /// this one request and that refuse it, with their labels. `None` unless the agent is
     /// blocked on `id` now.
     pub fn approval_options(&self, id: RequestId) -> Option<ApprovalButtons> {
-        let request = self.requests.iter().find(|(w, _)| *w == id)?.1.clone();
+        let request = self
+            .requests
+            .iter()
+            .find(|(wire, _)| *wire == id)?
+            .1
+            .clone();
         let blocked = self
             .arbiter
             .status()
             .blocked()
-            .filter(|b| b.request_id == request)?;
+            .filter(|blocked| blocked.request_id == request)?;
         let find = |choice: ApprovalChoice| {
             blocked
                 .blocker
                 .options
                 .iter()
-                .position(|o| o.id == choice)
+                .position(|option| option.id == choice)
                 .map(|i| (OptionId(i as u32), blocked.blocker.options[i].label.clone()))
         };
         Some(ApprovalButtons {
@@ -398,7 +401,7 @@ impl AgentRuntime {
         })
     }
 
-    /// The dialog the agent is blocked on, for the decision strip (D9). `None` unless blocked.
+    /// The dialog the agent is blocked on, for the decision strip. `None` unless blocked.
     pub fn blocked_detail(&mut self) -> Option<BlockedDetail> {
         let blocked = self.arbiter.status().blocked()?.clone();
         let wire = self.wire_request(&blocked.request_id);
@@ -409,7 +412,7 @@ impl AgentRuntime {
                 .blocker
                 .options
                 .iter()
-                .map(|o| (o.label.clone(), o.id))
+                .map(|option| (option.label.clone(), option.id))
                 .collect(),
             request: blocked.request_id,
         })
@@ -418,17 +421,22 @@ impl AgentRuntime {
     /// What an approval policy needs to know about open request `id`: the tool asking, and
     /// for `option`, whether it allows the call. `None` unless the agent is blocked on `id`.
     pub fn request_facts(&self, id: RequestId, option: Option<OptionId>) -> Option<RequestFacts> {
-        let request = self.requests.iter().find(|(w, _)| *w == id)?.1.clone();
+        let request = self
+            .requests
+            .iter()
+            .find(|(wire, _)| *wire == id)?
+            .1
+            .clone();
         let blocked = self
             .arbiter
             .status()
             .blocked()
-            .filter(|b| b.request_id == request)?;
-        let chosen = option.and_then(|o| blocked.blocker.options.get(o.0 as usize));
+            .filter(|blocked| blocked.request_id == request)?;
+        let chosen = option.and_then(|option| blocked.blocker.options.get(option.0 as usize));
         Some(RequestFacts {
             tool: blocked.blocker.tool.clone(),
-            allows: chosen.map(|o| o.id != ApprovalChoice::Deny),
-            option: chosen.map(|o| o.label.clone()),
+            allows: chosen.map(|chosen| chosen.id != ApprovalChoice::Deny),
+            option: chosen.map(|chosen| chosen.label.clone()),
             summary: shown_summary(&blocked.blocker),
             request,
         })
@@ -439,12 +447,12 @@ impl AgentRuntime {
         let blocked = self.arbiter.status().blocked()?;
         self.requests
             .iter()
-            .find(|(_, r)| *r == blocked.request_id)
-            .map(|(w, _)| *w)
+            .find(|(_, known)| *known == blocked.request_id)
+            .map(|(wire, _)| *wire)
     }
 
     pub fn knows_request(&self, id: RequestId) -> bool {
-        self.requests.iter().any(|(w, _)| *w == id)
+        self.requests.iter().any(|(wire, _)| *wire == id)
     }
 
     /// Accepts the first decision for a request. On refusal returns who decided first, if
@@ -463,14 +471,14 @@ impl AgentRuntime {
         let request = self
             .requests
             .iter()
-            .find(|(w, _)| *w == id)
-            .map(|(_, r)| r.clone())
+            .find(|(wire, _)| *wire == id)
+            .map(|(_, known)| known.clone())
             .ok_or(None)?;
         let blocked = self
             .arbiter
             .status()
             .blocked()
-            .filter(|b| b.request_id == request)
+            .filter(|blocked| blocked.request_id == request)
             .cloned()
             .ok_or(None)?;
         let chosen = blocked.blocker.options.get(option.0 as usize).ok_or(None)?;
@@ -492,13 +500,15 @@ impl AgentRuntime {
                 self.last_decided = Some((id, actor));
                 Ok(details)
             }
-            Err(DecisionError::AlreadyDecided { .. }) => Err(self.last_decided.map(|(_, a)| a)),
+            Err(DecisionError::AlreadyDecided { .. }) => {
+                Err(self.last_decided.map(|(_, actor)| actor))
+            }
             Err(_) => Err(None),
         }
     }
 }
 
-/// What a blocked agent waits for (D9).
+/// What a blocked agent waits for.
 #[derive(Debug, Clone)]
 pub(crate) struct BlockedDetail {
     /// The wire id clients decide with.
@@ -591,11 +601,11 @@ impl HookServer {
     pub fn new(state_dir: &Path, hook_bin: PathBuf) -> io::Result<Self> {
         let token_path = state_dir.join("hook.token");
         let token = match fsutil::read_optional(&token_path)? {
-            Some(t) => String::from_utf8_lossy(&t).trim().to_owned(),
+            Some(saved) => String::from_utf8_lossy(&saved).trim().to_owned(),
             None => {
-                let t = fsutil::hex(&fsutil::random::<16>());
-                fsutil::write_atomic(&token_path, t.as_bytes())?;
-                t
+                let fresh = fsutil::hex(&fsutil::random::<16>());
+                fsutil::write_atomic(&token_path, fresh.as_bytes())?;
+                fresh
             }
         };
         let mut socket = state_dir.join("hook.sock");
@@ -667,22 +677,22 @@ impl HookServer {
                 };
                 let stream = match listener.accept().await {
                     Ok((stream, _)) => stream,
-                    Err(e) => {
+                    Err(error) => {
                         // Out of descriptors, typically: retrying at once would spin.
-                        tracing::warn!("accepting a hook connection: {e}");
+                        tracing::warn!("accepting a hook connection: {error}");
                         tokio::time::sleep(ACCEPT_BACKOFF).await;
                         continue;
                     }
                 };
-                let peer = stream.peer_cred().ok().map(|c| c.uid());
+                let peer = stream.peer_cred().ok().map(|cred| cred.uid());
                 if !same_user(peer) {
                     tracing::warn!(uid = ?peer, "refused a hook connection from another user");
                     continue;
                 }
                 let core = Arc::clone(&core);
                 tokio::spawn(async move {
-                    if let Err(e) = serve_hook(&core, stream).await {
-                        tracing::debug!("hook connection: {e}");
+                    if let Err(error) = serve_hook(&core, stream).await {
+                        tracing::debug!("hook connection: {error}");
                     }
                     drop(slot);
                 });
@@ -692,10 +702,13 @@ impl HookServer {
 
     pub fn resolve(&self, pane: PaneId, request: &agents::RequestId, choice: ApprovalChoice) {
         let mut pending = lock(&self.pending);
-        if pending.get(&pane).is_some_and(|p| &p.request == request) {
-            let p = pending.remove(&pane).expect("checked above");
-            let stdout = ClaudeCode::permission_response(choice, &p.suggestions).to_string();
-            let _ = p.reply.send(HookResponse {
+        if pending
+            .get(&pane)
+            .is_some_and(|held| &held.request == request)
+        {
+            let held = pending.remove(&pane).expect("checked above");
+            let stdout = ClaudeCode::permission_response(choice, &held.suggestions).to_string();
+            let _ = held.reply.send(HookResponse {
                 stdout: Some(stdout),
             });
         }
@@ -705,13 +718,16 @@ impl HookServer {
     /// asked for (Claude Code's `updatedInput`). False if the request is no longer held.
     pub fn resolve_edited(&self, pane: PaneId, request: &agents::RequestId, command: &str) -> bool {
         let mut pending = lock(&self.pending);
-        if !pending.get(&pane).is_some_and(|p| &p.request == request) {
+        if !pending
+            .get(&pane)
+            .is_some_and(|held| &held.request == request)
+        {
             return false;
         }
-        let p = pending.remove(&pane).expect("checked above");
-        let mut input = p.input.clone();
-        if let Some(obj) = input.as_object_mut() {
-            obj.insert("command".into(), command.into());
+        let held = pending.remove(&pane).expect("checked above");
+        let mut input = held.input.clone();
+        if let Some(fields) = input.as_object_mut() {
+            fields.insert("command".into(), command.into());
         }
         let stdout = serde_json::json!({
             "hookSpecificOutput": {
@@ -720,7 +736,7 @@ impl HookServer {
             }
         })
         .to_string();
-        let _ = p.reply.send(HookResponse {
+        let _ = held.reply.send(HookResponse {
             stdout: Some(stdout),
         });
         true
@@ -728,11 +744,11 @@ impl HookServer {
 
     /// The request a hook holds open on `pane`, if any.
     pub fn held(&self, pane: PaneId) -> Option<HeldRequest> {
-        lock(&self.pending).get(&pane).map(|p| HeldRequest {
-            request: p.request.clone(),
-            agent: p.agent,
-            tool: p.tool.clone(),
-            input: p.input.clone(),
+        lock(&self.pending).get(&pane).map(|held| HeldRequest {
+            request: held.request.clone(),
+            agent: held.agent,
+            tool: held.tool.clone(),
+            input: held.input.clone(),
         })
     }
 
@@ -740,7 +756,7 @@ impl HookServer {
     pub fn is_pending(&self, pane: PaneId, request: &agents::RequestId) -> bool {
         lock(&self.pending)
             .get(&pane)
-            .is_some_and(|p| &p.request == request)
+            .is_some_and(|held| &held.request == request)
     }
 
     pub fn cancel_pending(&self, pane: PaneId) {
@@ -754,7 +770,7 @@ impl HookServer {
     /// Removes the socket, and the private directory made for it outside the state dir.
     pub fn remove_socket(&self) {
         let _ = std::fs::remove_file(&self.socket);
-        if let Some(dir) = self.socket.parent().filter(|d| *d != self.state_dir) {
+        if let Some(dir) = self.socket.parent().filter(|dir| *dir != self.state_dir) {
             let _ = std::fs::remove_dir(dir);
         }
     }
@@ -778,7 +794,7 @@ const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
 const HOOK_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 async fn serve_hook(core: &Arc<Core>, stream: UnixStream) -> io::Result<()> {
-    let peer_uid = stream.peer_cred().ok().map(|c| c.uid());
+    let peer_uid = stream.peer_cred().ok().map(|cred| cred.uid());
     let (read, mut write) = stream.into_split();
     let mut line = String::new();
     let mut reader = BufReader::new(AsyncReadExt::take(read, MAX_REQUEST as u64));
@@ -788,43 +804,43 @@ async fn serve_hook(core: &Arc<Core>, stream: UnixStream) -> io::Result<()> {
     // The askpass helper shares the socket (docs/DAEMON.md §9).
     if let Ok(call) = serde_json::from_str::<crate::askpass::AskpassCall>(&line) {
         let reply = crate::askpass::serve(core, call, peer_uid, reader).await;
-        let mut out = serde_json::to_vec(&reply).map_err(io::Error::other)?;
+        let mut encoded = serde_json::to_vec(&reply).map_err(io::Error::other)?;
         drop(reply);
-        out.push(b'\n');
-        let written = write.write_all(&out).await;
-        zeroize::Zeroize::zeroize(&mut out);
+        encoded.push(b'\n');
+        let written = write.write_all(&encoded).await;
+        zeroize::Zeroize::zeroize(&mut encoded);
         written?;
         return write.shutdown().await;
     }
     // So do the browser helper and tools.
     if let Ok(call) = serde_json::from_str::<crate::browser::BrowserCall>(&line) {
         let reply = crate::browser::serve(core, call, peer_uid, reader).await;
-        let mut out = serde_json::to_vec(&reply).map_err(io::Error::other)?;
-        out.push(b'\n');
-        write.write_all(&out).await?;
+        let mut encoded = serde_json::to_vec(&reply).map_err(io::Error::other)?;
+        encoded.push(b'\n');
+        write.write_all(&encoded).await?;
         return write.shutdown().await;
     }
     // So do the terminal tools.
     if let Ok(call) = serde_json::from_str::<crate::term::TermCall>(&line) {
         let reply = crate::term::serve(core, call, peer_uid, reader).await;
-        let mut out = serde_json::to_vec(&reply).map_err(io::Error::other)?;
-        out.push(b'\n');
-        write.write_all(&out).await?;
+        let mut encoded = serde_json::to_vec(&reply).map_err(io::Error::other)?;
+        encoded.push(b'\n');
+        write.write_all(&encoded).await?;
         return write.shutdown().await;
     }
     // So does the MCP pull channel (§7.12).
     if let Ok(call) = serde_json::from_str::<crate::art::pull::PullCall>(&line) {
         let reply = crate::art::pull::serve(core, call).await;
-        let mut out = serde_json::to_vec(&reply).map_err(io::Error::other)?;
-        out.push(b'\n');
-        write.write_all(&out).await?;
+        let mut encoded = serde_json::to_vec(&reply).map_err(io::Error::other)?;
+        encoded.push(b'\n');
+        write.write_all(&encoded).await?;
         return write.shutdown().await;
     }
     let request: HookRequest = serde_json::from_str(&line).map_err(io::Error::other)?;
     let response = handle_hook(core, request).await;
-    let mut out = serde_json::to_vec(&response).map_err(io::Error::other)?;
-    out.push(b'\n');
-    write.write_all(&out).await?;
+    let mut encoded = serde_json::to_vec(&response).map_err(io::Error::other)?;
+    encoded.push(b'\n');
+    write.write_all(&encoded).await?;
     write.shutdown().await
 }
 
@@ -833,7 +849,8 @@ async fn handle_hook(core: &Arc<Core>, request: HookRequest) -> HookResponse {
         tracing::warn!("hook with a bad token");
         return HookResponse::default();
     }
-    // shim prints the user's own status line itself.
+    // Claude Code's status-line input (not a hook): its plan limits. The shim prints the
+    // user's own status line itself.
     let Some(pane_id) = request.pane.parse().ok().map(PaneId) else {
         return HookResponse::default();
     };
@@ -869,13 +886,13 @@ async fn handle_hook(core: &Arc<Core>, request: HookRequest) -> HookResponse {
             *agent = Some(AgentRuntime::new(kind, pane_id, adapter(kind), false));
             entry.agent_attached.notify_one();
         }
-        let Some(rt) = agent.as_mut() else {
+        let Some(runtime) = agent.as_mut() else {
             return HookResponse::default();
         };
-        let event = rt.hook(&payload, request.seq);
+        let event = runtime.hook(&payload, request.seq);
         // Register wire ids now so a client can answer as soon as it sees the event.
-        let _ = rt.wire_status();
-        (event, rt.blocked_request())
+        let _ = runtime.wire_status();
+        (event, runtime.blocked_request())
     };
     core.agent_event(pane_id, event);
     if request.event != "PermissionRequest" {
@@ -986,28 +1003,28 @@ mod tests {
 
     #[test]
     fn the_shell_before_the_agent_starts_is_not_an_exit() {
-        let mut rt = runtime();
-        assert!(!rt.process_gone(Some(&job(10, "zsh")), false, |_| false));
+        let mut runtime = runtime();
+        assert!(!runtime.process_gone(Some(&job(10, "zsh")), false, |_| false));
     }
 
     #[test]
     fn an_agent_never_seen_ends_at_the_shell() {
-        let mut rt = runtime();
-        assert!(rt.process_gone(Some(&job(10, "zsh")), true, |_| false));
+        let mut runtime = runtime();
+        assert!(runtime.process_gone(Some(&job(10, "zsh")), true, |_| false));
     }
 
     #[test]
     fn the_agent_exiting_back_to_the_shell_is_an_exit() {
-        let mut rt = runtime();
-        assert!(!rt.process_gone(Some(&job(20, "claude")), false, |_| true));
-        assert!(rt.process_gone(Some(&job(10, "zsh")), true, |_| false));
+        let mut runtime = runtime();
+        assert!(!runtime.process_gone(Some(&job(20, "claude")), false, |_| true));
+        assert!(runtime.process_gone(Some(&job(10, "zsh")), true, |_| false));
     }
 
     #[test]
     fn a_suspended_agent_is_still_running() {
-        let mut rt = runtime();
-        assert!(!rt.process_gone(Some(&job(20, "claude")), false, |_| true));
-        assert!(!rt.process_gone(Some(&job(10, "zsh")), true, |pid| pid == 20));
-        assert!(!rt.process_gone(None, false, |pid| pid == 20));
+        let mut runtime = runtime();
+        assert!(!runtime.process_gone(Some(&job(20, "claude")), false, |_| true));
+        assert!(!runtime.process_gone(Some(&job(10, "zsh")), true, |pid| pid == 20));
+        assert!(!runtime.process_gone(None, false, |pid| pid == 20));
     }
 }

@@ -1,4 +1,5 @@
 //! The tools' own documented commands, run on the host when their local data is missing or
+//! stale, and to read and end an account's sign-in:
 //!
 //! - `claude -p /usage --output-format stream-json --verbose` prints a `usage_report` (no model
 //!   call, no tokens; documented as experimental), and `claude auth status --json` names the
@@ -34,41 +35,43 @@ pub(crate) struct Env {
 
 impl Env {
     fn command(&self, args: &[&str]) -> Command {
-        let mut cmd = Command::new(&self.program);
-        cmd.args(args)
+        let mut command = Command::new(&self.program);
+        command
+            .args(args)
             .current_dir(&self.cwd)
-            .envs(self.vars.iter().map(|(k, v)| (k, v)))
+            .envs(self.vars.iter().map(|(name, value)| (name, value)))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true);
         for var in &self.remove {
-            cmd.env_remove(var);
+            command.env_remove(var);
         }
-        cmd
+        command
     }
 
     /// Runs the program to its end: whether it succeeded, and its output.
     pub(crate) async fn run(&self, args: &[&str]) -> Result<(bool, String), String> {
-        let out = tokio::time::timeout(TIMEOUT, self.command(args).output())
+        let output = tokio::time::timeout(TIMEOUT, self.command(args).output())
             .await
             .map_err(|_| format!("{} did not answer", name(&self.program)))?
-            .map_err(|e| format!("could not run {}: {e}", name(&self.program)))?;
+            .map_err(|error| format!("could not run {}: {error}", name(&self.program)))?;
         Ok((
-            out.status.success(),
-            String::from_utf8_lossy(&out.stdout).into_owned(),
+            output.status.success(),
+            String::from_utf8_lossy(&output.stdout).into_owned(),
         ))
     }
 
     async fn output(&self, args: &[&str]) -> Result<String, String> {
-        self.run(args).await.map(|(_, out)| out)
+        self.run(args).await.map(|(_, stdout)| stdout)
     }
 }
 
 fn name(program: &Path) -> String {
-    program
-        .file_name()
-        .map_or_else(|| "the tool".into(), |n| n.to_string_lossy().into_owned())
+    program.file_name().map_or_else(
+        || "the tool".into(),
+        |file_name| file_name.to_string_lossy().into_owned(),
+    )
 }
 
 /// Claude Code's limits from `/usage`, with the plan from `auth status`.
@@ -111,11 +114,11 @@ pub(crate) async fn codex(env: &Env) -> Result<AgentUsage, String> {
 
 /// Asks `codex app-server` one JSON-RPC `method` and returns its result.
 pub(crate) async fn app_server(env: &Env, method: &str, params: Value) -> Result<Value, String> {
-    let mut cmd = env.command(&["app-server"]);
-    cmd.stdin(Stdio::piped());
-    let mut child = cmd
+    let mut command = env.command(&["app-server"]);
+    command.stdin(Stdio::piped());
+    let mut child = command
         .spawn()
-        .map_err(|e| format!("could not run codex app-server: {e}"))?;
+        .map_err(|error| format!("could not run codex app-server: {error}"))?;
     let mut stdin = child.stdin.take().ok_or("no stdin")?;
     let stdout = child.stdout.take().ok_or("no stdout")?;
     let exchange = async move {
@@ -126,8 +129,8 @@ pub(crate) async fn app_server(env: &Env, method: &str, params: Value) -> Result
             json!({"method": "initialized"}),
             json!({"method": method, "id": 2, "params": params}),
         ];
-        for m in messages {
-            let mut line = m.to_string();
+        for message in messages {
+            let mut line = message.to_string();
             line.push('\n');
             stdin
                 .write_all(line.as_bytes())
@@ -136,20 +139,20 @@ pub(crate) async fn app_server(env: &Env, method: &str, params: Value) -> Result
         }
         let mut lines = BufReader::new(stdout).lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            let Ok(v) = serde_json::from_str::<Value>(&line) else {
+            let Ok(reply) = serde_json::from_str::<Value>(&line) else {
                 continue;
             };
-            if v.get("id").and_then(Value::as_u64) != Some(2) {
+            if reply.get("id").and_then(Value::as_u64) != Some(2) {
                 continue;
             }
-            if let Some(err) = v.get("error") {
-                let msg = err
+            if let Some(error) = reply.get("error") {
+                let message = error
                     .get("message")
                     .and_then(Value::as_str)
                     .unwrap_or("error");
-                return Err(format!("Codex: {msg}"));
+                return Err(format!("Codex: {message}"));
             }
-            return v
+            return reply
                 .get("result")
                 .cloned()
                 .ok_or_else(|| "Codex answered without a result".to_owned());

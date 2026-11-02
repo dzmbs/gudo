@@ -37,22 +37,22 @@ struct Cell {
     col: u16,
 }
 
-/// Walks `text` as the terminal lays it out in `cols` columns, calling `f(byte, cell, width)`
-/// for every character that takes cells. Returns the number of rows used (at least one).
-fn layout(text: &str, cols: u16, mut f: impl FnMut(usize, Cell, u16)) -> u64 {
+/// Walks `text` as the terminal lays it out in `cols` columns, calling
+/// `visit(byte, cell, width)` for every character that takes cells. Returns the number of rows used (at least one).
+fn layout(text: &str, cols: u16, mut visit: impl FnMut(usize, Cell, u16)) -> u64 {
     let cols = cols.max(1);
     let (mut row, mut col) = (0u64, 0u16);
-    for (i, c) in text.char_indices() {
-        let w = u16::from(char_width(c));
-        if w == 0 {
+    for (i, character) in text.char_indices() {
+        let width = u16::from(char_width(character));
+        if width == 0 {
             continue;
         }
-        if col + w > cols {
+        if col + width > cols {
             row += 1;
             col = 0;
         }
-        f(i, Cell { row, col }, w);
-        col += w;
+        visit(i, Cell { row, col }, width);
+        col += width;
     }
     row + 1
 }
@@ -80,43 +80,45 @@ impl ScreenText {
         }
     }
 
-    /// Every match of `re`, newest (bottom right) first, at most [`MAX_MATCHES`].
-    pub fn search(&self, re: &Regex) -> Vec<SearchMatch> {
-        let mut out = Vec::new();
+    /// Every match of `pattern`, newest (bottom right) first, at most [`MAX_MATCHES`].
+    pub fn search(&self, pattern: &Regex) -> Vec<SearchMatch> {
+        let mut matches = Vec::new();
         for line in self.lines.iter().rev() {
-            let spans: Vec<(usize, usize)> = re
+            let spans: Vec<(usize, usize)> = pattern
                 .find_iter(&line.text)
-                .filter(|m| !m.is_empty())
-                .map(|m| (m.start(), m.end()))
+                .filter(|hit| !hit.is_empty())
+                .map(|hit| (hit.start(), hit.end()))
                 .collect();
             if spans.is_empty() {
                 continue;
             }
             let cells = self.cells(&line.text);
             for (start, end) in spans.into_iter().rev() {
-                let first = cells.iter().find(|(b, _, _)| *b >= start);
-                let last = cells.iter().rev().find(|(b, _, _)| *b < end);
-                let (Some(&(_, first, _)), Some(&(_, last, w))) = (first, last) else {
+                let first = cells.iter().find(|(byte, _, _)| *byte >= start);
+                let last = cells.iter().rev().find(|(byte, _, _)| *byte < end);
+                let (Some(&(_, first, _)), Some(&(_, last, width))) = (first, last) else {
                     continue;
                 };
-                out.push(SearchMatch {
+                matches.push(SearchMatch {
                     row: line.row + first.row,
                     col: first.col,
                     end_row: line.row + last.row,
-                    end_col: last.col + w - 1,
+                    end_col: last.col + width - 1,
                     line: line.text.clone(),
                 });
-                if out.len() >= MAX_MATCHES {
-                    return out;
+                if matches.len() >= MAX_MATCHES {
+                    return matches;
                 }
             }
         }
-        out
+        matches
     }
 
     fn cells(&self, text: &str) -> Vec<(usize, Cell, u16)> {
         let mut cells = Vec::with_capacity(text.len());
-        layout(text, self.cols, |b, cell, w| cells.push((b, cell, w)));
+        layout(text, self.cols, |byte, cell, width| {
+            cells.push((byte, cell, width))
+        });
         cells
     }
 }
@@ -143,7 +145,7 @@ pub(crate) fn compile(query: &SearchQuery) -> Result<Regex, String> {
         .case_insensitive(insensitive)
         .size_limit(1 << 22)
         .build()
-        .map_err(|e| e.to_string())
+        .map_err(|error| error.to_string())
 }
 
 /// Collects links, deduplicated across calls through `seen`.
@@ -192,7 +194,7 @@ impl<'a> LinkCollector<'a> {
         for line in plain.lines().rev() {
             let urls: Vec<(usize, usize)> = url_re()
                 .find_iter(line)
-                .map(|m| (m.start(), m.start() + trim_url(m.as_str()).len()))
+                .map(|hit| (hit.start(), hit.start() + trim_url(hit.as_str()).len()))
                 .collect();
             let mut found = Vec::new();
             for &(start, end) in &urls {
@@ -210,19 +212,21 @@ impl<'a> LinkCollector<'a> {
                     },
                 ));
             }
-            for caps in path_re().captures_iter(line) {
-                let whole = caps.get(0).expect("group 0 always matches");
-                let overlaps_url = urls
-                    .iter()
-                    .any(|&(s, e)| whole.start() < e && s < whole.end());
+            for captures in path_re().captures_iter(line) {
+                let whole = captures.get(0).expect("group 0 always matches");
+                let overlaps_url = urls.iter().any(|&(url_start, url_end)| {
+                    whole.start() < url_end && url_start < whole.end()
+                });
                 let glued = line[..whole.start()]
                     .chars()
                     .next_back()
-                    .is_some_and(|c| c.is_alphanumeric() || "/._-~:".contains(c));
+                    .is_some_and(|character| {
+                        character.is_alphanumeric() || "/._-~:".contains(character)
+                    });
                 if overlaps_url || glued {
                     continue;
                 }
-                let raw = &caps["path"];
+                let raw = &captures["path"];
                 let Some(target) = self.resolve(raw) else {
                     continue;
                 };
@@ -234,7 +238,11 @@ impl<'a> LinkCollector<'a> {
                 if !exists && !(explicit && raw.matches('/').count() >= 2) {
                     continue;
                 }
-                let number = |name| caps.name(name).and_then(|m| m.as_str().parse().ok());
+                let number = |name| {
+                    captures
+                        .name(name)
+                        .and_then(|group| group.as_str().parse().ok())
+                };
                 found.push((
                     whole.start(),
                     Link {
@@ -272,17 +280,17 @@ impl<'a> LinkCollector<'a> {
 
 /// Removes `.` and resolves `..` lexically (symlinks are kept as written).
 fn normalize(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for c in path.components() {
-        match c {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
             Component::CurDir => {}
             Component::ParentDir => {
-                out.pop();
+                normalized.pop();
             }
-            other => out.push(other),
+            other => normalized.push(other),
         }
     }
-    out
+    normalized
 }
 
 fn url_re() -> &'static Regex {
@@ -296,10 +304,10 @@ fn url_re() -> &'static Regex {
 fn path_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        let seg = r"[\w.@%+=~-]+";
+        let segment = r"[\w.@%+=~-]+";
         let name = r"[\w@%+=~-][\w.@%+=~-]*";
         Regex::new(&format!(
-            r"(?P<path>(?:~|\.{{1,2}})?(?:/{seg})+/?|{name}(?:/{seg})+/?|{name}\.[A-Za-z]\w{{0,9}}|~)(?::(?P<line>\d+)(?::(?P<col>\d+))?)?"
+            r"(?P<path>(?:~|\.{{1,2}})?(?:/{segment})+/?|{name}(?:/{segment})+/?|{name}\.[A-Za-z]\w{{0,9}}|~)(?::(?P<line>\d+)(?::(?P<col>\d+))?)?"
         ))
         .expect("valid path regex")
     })
@@ -307,12 +315,13 @@ fn path_re() -> &'static Regex {
 
 /// Drops trailing punctuation that is almost never part of a URL, and an unbalanced `)`.
 fn trim_url(url: &str) -> &str {
-    let mut s = url;
+    let mut trimmed = url;
     loop {
-        let Some(last) = s.chars().next_back() else {
-            return s;
+        let Some(last) = trimmed.chars().next_back() else {
+            return trimmed;
         };
-        let unbalanced = |open, close| s.matches(open).count() < s.matches(close).count();
+        let unbalanced =
+            |open, close| trimmed.matches(open).count() < trimmed.matches(close).count();
         let trim = match last {
             '.' | ',' | ';' | ':' | '!' | '?' => true,
             ')' => unbalanced('(', ')'),
@@ -321,15 +330,15 @@ fn trim_url(url: &str) -> &str {
             _ => false,
         };
         if !trim {
-            return s;
+            return trimmed;
         }
-        s = &s[..s.len() - last.len_utf8()];
+        trimmed = &trimmed[..trimmed.len() - last.len_utf8()];
     }
 }
 
 /// `(uri, text)` of every OSC 8 hyperlink in VT-formatted text, in order.
 fn hyperlinks(vt: &str) -> Vec<(String, String)> {
-    let mut out = Vec::new();
+    let mut links = Vec::new();
     let mut rest = vt;
     while let Some(start) = rest.find("\x1b]8;") {
         let after = &rest[start + 4..];
@@ -346,46 +355,48 @@ fn hyperlinks(vt: &str) -> Vec<(String, String)> {
         }
         let end = body.find("\x1b]8;").unwrap_or(body.len());
         let text = strip_escapes(&body[..end]).trim().to_owned();
-        out.push((uri.to_owned(), text));
+        links.push((uri.to_owned(), text));
         rest = &body[end..];
     }
-    out
+    links
 }
 
-/// Splits `s` at the end of an OSC (BEL or ST), returning the body and what follows.
-fn osc_body(s: &str) -> Option<(&str, &str)> {
-    let bel = s.find('\x07');
-    let st = s.find("\x1b\\");
+/// Splits `text` at the end of an OSC (BEL or ST), returning the body and what follows.
+fn osc_body(text: &str) -> Option<(&str, &str)> {
+    let bel = text.find('\x07');
+    let st = text.find("\x1b\\");
     match (bel, st) {
-        (Some(b), Some(t)) if b < t => Some((&s[..b], &s[b + 1..])),
-        (_, Some(t)) => Some((&s[..t], &s[t + 2..])),
-        (Some(b), None) => Some((&s[..b], &s[b + 1..])),
+        (Some(bel), Some(st)) if bel < st => Some((&text[..bel], &text[bel + 1..])),
+        (_, Some(st)) => Some((&text[..st], &text[st + 2..])),
+        (Some(bel), None) => Some((&text[..bel], &text[bel + 1..])),
         (None, None) => None,
     }
 }
 
 /// Plain text of VT output: CSI, OSC and two-byte escapes removed.
-fn strip_escapes(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c != '\x1b' {
-            if !c.is_control() || c == '\n' {
-                out.push(c);
+fn strip_escapes(text: &str) -> String {
+    let mut plain = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character != '\x1b' {
+            if !character.is_control() || character == '\n' {
+                plain.push(character);
             }
             continue;
         }
         match chars.next() {
             Some('[') => {
-                for c in chars.by_ref() {
-                    if ('\x40'..='\x7e').contains(&c) {
+                for character in chars.by_ref() {
+                    if ('\x40'..='\x7e').contains(&character) {
                         break;
                     }
                 }
             }
             Some(']') => {
-                while let Some(c) = chars.next() {
-                    if c == '\x07' || (c == '\x1b' && chars.next_if_eq(&'\\').is_some()) {
+                while let Some(character) = chars.next() {
+                    if character == '\x07'
+                        || (character == '\x1b' && chars.next_if_eq(&'\\').is_some())
+                    {
                         break;
                     }
                 }
@@ -393,7 +404,7 @@ fn strip_escapes(s: &str) -> String {
             _ => {}
         }
     }
-    out
+    plain
 }
 
 #[cfg(test)]
@@ -415,24 +426,24 @@ mod tests {
         let text = ScreenText::new("first\n0123456789abc\nxxxxxxxxx漢字 end", 10, 6);
         let found = text.search(&query("9ab", SearchMode::Plain, CaseMode::Sensitive));
         assert_eq!(found.len(), 1);
-        let m = &found[0];
-        assert_eq!((m.row, m.col, m.end_row, m.end_col), (1, 9, 2, 1));
+        let hit = &found[0];
+        assert_eq!((hit.row, hit.col, hit.end_row, hit.end_col), (1, 9, 2, 1));
         let found = text.search(&query("字 E", SearchMode::Plain, CaseMode::Insensitive));
-        let m = &found[0];
+        let hit = &found[0];
         // "xxxxxxxxx" fills 9 cells; 漢 (2 wide) wraps to row 4, 字 follows at col 2.
-        assert_eq!((m.row, m.col, m.end_row, m.end_col), (4, 2, 4, 5));
+        assert_eq!((hit.row, hit.col, hit.end_row, hit.end_col), (4, 2, 4, 5));
     }
 
     #[test]
     fn search_is_newest_first_with_case_rules() {
         let text = ScreenText::new("Error one\nok\nerror two error", 80, 3);
         let smart = text.search(&query("error", SearchMode::Plain, CaseMode::Smart));
-        let at: Vec<_> = smart.iter().map(|m| (m.row, m.col)).collect();
+        let at: Vec<_> = smart.iter().map(|hit| (hit.row, hit.col)).collect();
         assert_eq!(at, [(2, 10), (2, 0), (0, 0)]);
         let upper = text.search(&query("Error", SearchMode::Plain, CaseMode::Smart));
         assert_eq!(upper.len(), 1);
-        let re = text.search(&query(r"e\w+r t", SearchMode::Regex, CaseMode::Sensitive));
-        assert_eq!(re.len(), 1);
+        let regex = text.search(&query(r"e\w+r t", SearchMode::Regex, CaseMode::Sensitive));
+        assert_eq!(regex.len(), 1);
         assert!(
             compile(&SearchQuery {
                 pattern: "(".into(),
@@ -453,15 +464,23 @@ mod tests {
                      error in Cargo.toml, not in nope.toml or 1/2\n\
                      /definitely/missing/file.txt ./src/main.rs";
         let vt = "x \x1b]8;id=1;https://docs.rs/\x1b\\\x1b[1mdocs\x1b[0m\x1b]8;;\x1b\\ y";
-        let mut c = LinkCollector::new(Some(dir.path()), None);
-        c.scan(vt, plain, LinkSource::Screen);
-        let got: Vec<_> = c
+        let mut collector = LinkCollector::new(Some(dir.path()), None);
+        collector.scan(vt, plain, LinkSource::Screen);
+        let summary: Vec<_> = collector
             .links
             .iter()
-            .map(|l| (l.kind, l.text.as_str(), l.exists, l.line, l.column))
+            .map(|link| {
+                (
+                    link.kind,
+                    link.text.as_str(),
+                    link.exists,
+                    link.line,
+                    link.column,
+                )
+            })
             .collect();
         assert_eq!(
-            got,
+            summary,
             [
                 (LinkKind::Hyperlink, "docs", None, None, None),
                 (LinkKind::Path, "./src/main.rs", Some(true), None, None),
@@ -484,11 +503,11 @@ mod tests {
             ]
         );
         assert_eq!(
-            c.links[4].target,
+            collector.links[4].target,
             dir.path().join("src/main.rs").to_string_lossy()
         );
         // A second scan of the same targets adds nothing.
-        c.scan(vt, plain, LinkSource::Command { command_id: 1 });
-        assert_eq!(c.links.len(), 6);
+        collector.scan(vt, plain, LinkSource::Command { command_id: 1 });
+        assert_eq!(collector.links.len(), 6);
     }
 }
