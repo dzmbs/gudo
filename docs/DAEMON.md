@@ -266,7 +266,8 @@ policy is always `LastInput` for now.
 
 ### Persistence
 
-`<state>/layout.json`: layout plus per-pane `{launch, cwd, agent{kind, session_id}}`, written
+`<state>/layout.json`: layout plus per-pane `{launch, cwd, agent{kind, session_id}}` and which
+pane created which (`creators`, for the terminal tools), written
 atomically (tmp, fsync, rename, fsync dir) 500 ms after the last change and on shutdown. On
 start the layout is restored with the same ids; shells restart in their last directory
 (OSC 7), agents resume, one-off commands come back as shells. An unreadable file is moved
@@ -2104,10 +2105,48 @@ Agents drive the terminal they run in through `un-hook mcp`: one `TermCall {v, t
 - **Limits.** One agent, with every worker it started, may have 32 panes open at once; a wait
   holds at most 1 MiB of output.
 - **Tools.** `whoami`, `pane_list`, `pane_split`, `tab_new`, `pane_close`, `cmd_run`, `pane_read`,
-  `pane_wait`, `pane_send`, `status_set`, `agent_spawn`, `agent_prompt`, `agent_wait`, `agent_result`. Ids are `p12`, `t3`; `self` (or no pane) is the caller.
-- **Rules.** Read any pane of the caller's session; type into, run in and close only the panes it
-  created (or that those created), never its own; nothing it opens takes the user's focus;
-  input is refused while the program asks for a password (echo off, canonical).
+  `pane_wait`, `pane_send`, `status_set`, `agent_spawn`, `agent_prompt`, `agent_wait`, `agent_result`,
+  `events_wait`. Ids are `p12`, `t3`; `self` (or no pane) is the caller. `pane_list` scopes:
+  `read`, plus `input` and `manage` where it drives, or `ask` on the user's panes.
+- **Rules.** Read any pane of the caller's session; type into, run in and close the panes it
+  created (or that those created) at once, never its own; the user's panes (any other pane of
+  its session) only once the owner allows it (below); nothing it opens takes the user's focus;
+  input is refused while the program asks for a password (echo off, canonical), whoever allowed
+  it. Another session's panes are refused outright.
+- **Asking the owner** (`proto::drive`, `daemon::term::ask`, `DaemonFeatures::DRIVE_ASKS`).
+  `pane_send`, `cmd_run` with a `pane`, `agent_prompt` and `pane_close` on a user's pane open a
+  drive request instead of refusing, after the cheap refusals (own pane, other session, password
+  prompt, busy pane for `cmd_run`). The request holds the exact action: the text and keys, the
+  command line as it will be typed (with the `cd` a `cwd` adds), the prompt, or the close. The
+  asking pane shows `AgentState::Blocked` with three options, in this order: `Allow once` (0),
+  `Allow for this pane until it closes` (1), `Deny` (2); old apps' Approve picks the first, so it
+  is never the wider answer. The summary is `Claude wants to type into ~/api · zsh: Type
+  “npm test”, then Return`; control characters show as `^X`, line breaks as `⏎` and bidi or
+  zero-width characters as `<U+…>` (`DriveAction::describe`), so nothing typed hides from the
+  reader. An attention item (`AgentBlocked{request_id}`, titled with what it wants, the action as
+  body) goes out as a push: `AGENT_APPROVAL` with Approve = Allow once and Deny when the action
+  fits whole (400 characters), else `AGENT_BLOCKED` (open the app to see it all), never approved
+  blind. Owner devices announcing `Caps::DRIVE_ASKS` (bit 22) also get
+  `ApprovalPush::Drive(Open | Closed)` with the action as data (again after attaching); guests
+  never do. Answers are the existing signed `Decide` (in app) or `PushAction` (lock screen,
+  `.authenticationRequired`, token bound to this device, pane and the request's content, 15 min):
+  only paired owner devices may answer (a guest's `Decide`, whatever its roles, is `Forbidden`
+  and audited as `Denied`); approval policies do not apply; the first answer uses the request up,
+  so a replayed or second answer finds nothing, and it unlocks only the call that is waiting,
+  which then does exactly the action shown, rechecking the password prompt. Every answer is an
+  `Approval` audit record with the signed bytes. "For this pane" lets that caller drive that
+  target without asking until either pane closes (or the daemon restarts: memory only).
+  Unanswered after `drive_ask_wait` (120 s) the call fails `forbidden` with `retryable`; a caller
+  that hangs up withdraws its request; a closing pane withdraws requests that name it.
+- **Ownership across restarts.** Which pane created which is saved in `layout.json`
+  (`creators: [[pane, creator]]`) and restored for panes that came back, so an agent keeps the
+  panes it opened through a restart or upgrade. A closed pane's entry goes; panes it had opened
+  pass to its own creator (an agent keeps what its closed worker opened), or back to the user when
+  it had none.
+- **Events.** `events_wait {since?, types?, max?, timeoutMs?}` returns the caller's session's
+  events after the cursor `since` (default: from now), waiting up to `timeoutMs` for the first,
+  and the cursor to read on from: the "Scripting" schema below. The daemon keeps the last 1024;
+  a cursor older than that gets `events.lost` first.
 - **Output.** Bytes are rendered by a scratch terminal of the pane's width, so carriage returns,
   erases and colors come out as seen. Results cap at 16 KiB by default (256 KiB at most), keeping
   the first third and last two thirds. A cursor (`c<seq>`, the pane's output offset) reads on
@@ -2137,6 +2176,75 @@ Agents drive the terminal they run in through `un-hook mcp`: one `TermCall {v, t
   prompt asks about. The server is `unnamed` (`agents::mcp_server_name`); registering with
   an agent removes a registration under the old `unnamed_drawings` first. Other harnesses add
   it by hand, e.g. pi: `pi mcp add unnamed -- un-hook mcp` from a pane.
+- **Tests.** `tests/it/term.rs`; `tests/it/drive.rs` (allow once runs exactly the shown action,
+  a replayed answer unlocks nothing, deny, for this pane, the password prompt refused anyway, the
+  audit records; a guest approver refused and not sent the request; expiry and hang-up withdraw
+  it; ownership kept across a restart; events scoped to the session and to a guest's grant; the
+  TypeScript client against a real daemon); `tests/it/notify.rs`
+  (`a_drive_request_is_answered_from_the_lock_screen`: Allow once from the lock screen, the token
+  spent, a long action offered without Approve); goldens `proto/tests/golden_drive.rs`.
+
+### Scripting: `un --json`, `un events`, the TypeScript client
+
+**`--json`.** The read commands print one JSON document: `un ls`, `marks`, `output`, `search`,
+`links`, `ports`, `inbox`, `git status`, `who`, `audit`, `daemon info`. Every document is
+`{"v": 1, "kind": "<command>", …}` with camelCase fields; optional fields are present as `null`.
+Version 1 only gains fields and kinds; renaming, retyping or dropping one is version 2. Ids are
+`p12`, `t3`, `s1`. Goldens: `crates/un/tests/golden/*.json` (`crates/un/src/json.rs`). `un fs`,
+`un grants` and the layout-changing commands print text.
+
+**Events** (`proto::script`, `SCRIPT_EVENTS_VERSION` 1). One JSON object per event:
+`{"v":1, "seq", "at" (Unix ms), "session"?: "s1", "pane"?: "p4", "type", …}`:
+
+| `type` | fields |
+|---|---|
+| `pane.opened` | `tab`? |
+| `pane.closed` | |
+| `command.started` | `id`, `command`?, `cwd`? |
+| `command.finished` | `id`, `command`?, `exitCode`?, `durationMs` |
+| `agent.state` | `state` (`idle`, `working`, `blocked`, `done`, `error`, `none`), `kind`? (`permission`, `question`, `auth`), `app`? |
+| `layout.changed` | tabs, splits, floating panes or projects changed: read the layout again |
+| `events.lost` | `missed` (0 when unknown): events were dropped; what you knew may be stale |
+
+New types may appear; ignore unknown ones. Two sources, one schema:
+
+- `un events [--type T]… [--json]` (a client): what its connection is shown, so roles and scopes
+  are the daemon's (a pane-scoped guest hears only its pane). The attached session; what is there
+  at the start is the baseline, not events; a reconnect says `events.lost`.
+  (`client_core::script::EventMapper`.)
+- `events_wait` (terminal tools, MCP): the caller's session, from the daemon's ring; `seq` is
+  the daemon's and skips other sessions' events.
+
+**TypeScript client** (`sdk/typescript/un.ts`, no dependencies, Node ≥ 22.18, Bun, Deno), for
+`UN_ENDPOINT_FILE`/`UN_SOCK`, `UN_TOKEN` and `UN_PANE_ID` and speaks the hook socket's line
+protocol, so a script has an agent's rights exactly (its own panes; the user's after the owner
+says yes). `term.run(cmd)`, `term.panes.list/split/read/wait/send/close`,
+`term.agents.spawn/prompt/wait/result`, typed results, `TermError {code, retryable, hint}`, and
+`for await (const e of term.events({types}))`, which throws `EventsLost` rather than skip. Tests:
+`cd sdk/typescript && npm test` (fake socket) and
+`tests/it/drive.rs::the_typescript_client_drives_a_real_daemon`. We chose TypeScript over a
+Rust module: scripts that drive panes are mostly JS/Python/shell, and Rust callers already have
+`daemon::TermCall`.
+
+### Cross-host tools (design only, not built)
+
+An agent on host A driving a pane on host B. Not built; the safe shape:
+
+- **Identity.** A's daemon, not the agent, is the actor on B: it connects to B as a guest under a
+  grant chain B's owner issued to A's daemon key (an invite, `crates/grants`), narrowed to the
+  panes or session meant for it and to roles that fit (Prompter for `agent_prompt`, Driver for
+  input). A never holds B's owner key, and an agent's request never travels as a credential.
+- **Ownership.** Panes A's agent opens on B are recorded on B with the guest principal as creator;
+  driving them needs no further question while the grant lives. Every other pane of B is B's
+  owner's: a drive request on B, answered by B's owner like any other (guests never answer), and
+  "for this pane" scoped to the guest principal. Password prompts stay refused.
+- **Revocation and audit.** B audits every action under the guest principal and grant id;
+  revoking the grant on B ends A's access at once (the live checks of §6.2). A also audits what
+  it asked B to do, so both sides can account for a cross-host action.
+- **Tools.** A `host` argument (from `un hosts`) on the terminal tools, forwarded over A's
+  connection to B; results and the event stream stay per host; nothing is ever fanned out to
+  every host at once. Open: how A's owner sees B's pending requests (B's own push to B's owner
+  is the default; A forwarding them would need B to trust A's devices).
 
 ## 10. Known gaps / follow-ups
 

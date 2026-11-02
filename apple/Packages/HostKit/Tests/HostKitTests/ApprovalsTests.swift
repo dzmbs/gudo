@@ -110,4 +110,21 @@ nonisolated final class FakeApprovalClient: ApprovalClientAPI, @unchecked Sendab
         #expect(ApprovalMatch(tool: "Edit", prefix: "").label == "any Edit")
         #expect(ApprovalMatch(tool: "Bash", prefix: "rm").label == "rm …")
     }
+
+    @Test func driveRequestsComeAndGo() {
+        let session = ApprovalSession()
+        let option = { (id: UInt32, label: String) in DriveOption(id: id, label: label) }
+        let ask = DriveAsk(
+            requestId: 5, paneId: 1, target: 2, title: "Claude wants to close ~ · zsh", action: "Close the pane",
+            kind: .close, expiresAtMs: 0, allowOnce: option(0, "Allow once"),
+            allowPane: option(1, "Allow for this pane until it closes"), deny: option(2, "Deny"))
+        session.apply(.driveOpened(ask: ask))
+        #expect(session.drives[5]?.title == "Claude wants to close ~ · zsh")
+        #expect(session.drives[5]?.allowPane == 1)
+        session.apply(.driveClosed(requestId: 5))
+        #expect(session.drives[5] == nil)
+        session.apply(.driveOpened(ask: ask))
+        session.apply(.reset)
+        #expect(session.drives.isEmpty, "a dropped connection forgets them")
+    }
 }

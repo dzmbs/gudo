@@ -21,6 +21,32 @@ final class WorkspaceScreenModelTests: XCTestCase {
         AttentionItem(id: id, atMs: 1_700_000_000_000 + id * 1000, paneId: pane, sessionId: 1, kind: kind, title: title, body: body, seen: seen, whileViewed: false)
     }
 
+    /// An agent asking to drive one of the user's panes reads as what it wants and exactly what
+    /// it would do, and its card offers "for this pane"; Approve is never the wider answer.
+    func testADriveRequestShowsItsActionAndOffersThePane() {
+        let options = [DecisionOption(id: 0, label: "Allow once"),
+                       DecisionOption(id: 1, label: "Allow for this pane until it closes"),
+                       DecisionOption(id: 2, label: "Deny")]
+        let drive = DriveRequestInfo(id: 9, paneId: 1, target: 2, title: "Claude wants to run a command in ~/api · zsh",
+                                     action: "Run $ npm test")
+        let metas: [PaneId: PaneMeta] = [
+            PaneId(1): meta(1, title: "claude", agent: AgentStatus(kind: "claude", state: .blocked(
+                requestId: 9, summary: "\(drive.title): \(drive.action)", options: options))),
+        ]
+        let feed = [attention(1, pane: 1, kind: .agentBlocked(agent: "claude", requestId: 9))]
+        let items = LiveAgentFeed.items(hostId: "h", hostName: "studio", meta: metas, attention: feed, drives: [9: drive])
+        let item = try! XCTUnwrap(items.first)
+        XCTAssertTrue(item.drive)
+        XCTAssertEqual(item.request, .permission(tool: "Claude wants to run a command in ~/api · zsh", detail: "Run $ npm test"))
+        XCTAssertEqual(item.prompt, "Waiting for your approval")
+        XCTAssertEqual(LiveAgentFeed.option(options, allow: true)?.id, 0, "old clients' Approve is Allow once")
+
+        // Another pane's request with the same id is not this one.
+        let stray = DriveRequestInfo(id: 9, paneId: 7, target: 2, title: "x", action: "y")
+        let plain = LiveAgentFeed.items(hostId: "h", hostName: "studio", meta: metas, attention: feed, drives: [9: stray])
+        XCTAssertFalse(plain.first!.drive)
+    }
+
     func testInboxMergesLiveAgentsWithTheAttentionFeed() {
         let options = [DecisionOption(id: 1, label: "Yes"), DecisionOption(id: 2, label: "No, and tell Claude what to do differently")]
         let metas: [PaneId: PaneMeta] = [

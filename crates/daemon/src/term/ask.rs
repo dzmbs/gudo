@@ -84,11 +84,17 @@ impl Asks {
     }
 
     /// Opens a request; the receiver gets the answer, or closes when the request is withdrawn.
-    pub fn open(&self, ask: DriveAsk) -> oneshot::Receiver<Answer> {
+    /// `None` while the same pane already waits on one: an agent cannot queue up questions
+    /// (or notifications) faster than the owner answers them.
+    pub fn open(&self, ask: DriveAsk) -> Option<oneshot::Receiver<Answer>> {
         let (reply, rx) = oneshot::channel();
         let title = ask.title();
         let action = ask.action.describe();
-        lock(&self.open).insert(
+        let mut open = lock(&self.open);
+        if open.values().any(|o| o.ask.pane_id == ask.pane_id) {
+            return None;
+        }
+        open.insert(
             ask.request_id,
             Open {
                 ask,
@@ -97,7 +103,7 @@ impl Asks {
                 reply,
             },
         );
-        rx
+        Some(rx)
     }
 
     /// Withdraws a request (expired, the caller hung up); `true` if it was still open.
@@ -253,7 +259,11 @@ mod tests {
             action: DriveAction::Close,
             expires_at: proto::UnixMillis(0),
         };
-        let mut rx = asks.open(ask(7));
+        let mut rx = asks.open(ask(7)).unwrap();
+        assert!(
+            asks.open(ask(9)).is_none(),
+            "one question at a time per pane"
+        );
         assert_eq!(asks.blocker(PaneId(1)).unwrap().options.len(), 3);
         assert_eq!(asks.facts(RequestId(7)).unwrap().tool, "pane_close");
         asks.forget_pane(PaneId(2));
@@ -262,7 +272,7 @@ mod tests {
             "closing the target withdraws the request"
         );
         assert!(asks.caller_of(RequestId(7)).is_none());
-        let _rx = asks.open(ask(8));
+        let _rx = asks.open(ask(8)).unwrap();
         assert!(asks.withdraw(RequestId(8)));
         assert!(!asks.withdraw(RequestId(8)));
     }

@@ -75,7 +75,12 @@ async fn an_agent_runs_waits_reads_and_stays_in_its_lane() {
         return;
     };
     let dir = tempfile::tempdir().unwrap();
-    let daemon = start_with(dir.path(), |c| c.shell = Some(zsh)).await;
+    let daemon = start_with(dir.path(), |c| {
+        c.shell = Some(zsh);
+        // Driving the user's panes asks the owner, who never answers here.
+        c.drive_ask_wait = std::time::Duration::from_millis(500);
+    })
+    .await;
     let mut user = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
     let me = user.attach_and_follow().await;
     let agent = Caller {
@@ -206,7 +211,7 @@ async fn an_agent_runs_waits_reads_and_stays_in_its_lane() {
         itself.ok("whoami", json!({})).await["pane"]["id"],
         format!("p{other_pane}")
     );
-    // And it may not drive the pane that created it.
+    // And it may not drive the pane that created it without the owner's yes (none comes).
     assert_eq!(
         itself
             .refused(

@@ -673,7 +673,16 @@ impl Ctx {
             action,
             expires_at: proto::UnixMillis(crate::identity::now_millis() + wait.as_millis() as u64),
         };
-        let answer = self.core.term.asks.open(request.clone());
+        let Some(answer) = self.core.term.asks.open(request.clone()) else {
+            return Err(ToolError {
+                retryable: true,
+                ..ToolError::new(
+                    ErrorCode::AgentBlocked,
+                    "you are already waiting for the user to answer a request",
+                )
+                .hint("one request at a time: wait for its answer")
+            });
+        };
         let _withdraw = Withdraw {
             core: &self.core,
             request_id,
@@ -720,8 +729,14 @@ impl Ctx {
             }
             return (display, name.to_owned());
         }
-        match self.core.assist.foreground(&entry) {
-            Some(f) => (f.name.clone(), f.name),
+        match self
+            .core
+            .assist
+            .foreground(&entry)
+            .map(|f| proto::clean_prompt_text(&f.name, 40))
+            .filter(|name| !name.is_empty())
+        {
+            Some(name) => (name.clone(), name),
             None => ("A program".into(), "program".into()),
         }
     }
@@ -744,7 +759,9 @@ impl Ctx {
             .foreground(entry)
             .map(|f| f.name)
             .or_else(|| meta.map(|m| m.title).filter(|t| !t.is_empty()));
-        match (cwd, program) {
+        // Programs set both (OSC 7, titles): shown on an approval card, they must stay plain.
+        let clean = |t: String| Some(proto::clean_prompt_text(&t, 80)).filter(|t| !t.is_empty());
+        match (cwd.and_then(clean), program.and_then(clean)) {
             (Some(cwd), Some(program)) => format!("{cwd} · {program}"),
             (Some(one), None) | (None, Some(one)) => one,
             (None, None) => pane_ref(entry.pane.id),
@@ -1902,6 +1919,32 @@ mod tests {
         assert_eq!(parse_key("f5").unwrap().key, ghostty_vt::Key::F5.0);
         assert!(parse_key("hyper+x").is_err());
         assert!(parse_key("ab").is_err());
+    }
+
+    #[test]
+    fn a_closed_pane_leaves_no_claim_behind() {
+        let term = Term::default();
+        let (lead, worker, shell, stray) = (PaneId(1), PaneId(2), PaneId(3), PaneId(4));
+        term.created(lead, worker);
+        term.created(worker, shell);
+        term.created(stray, PaneId(5));
+        // The worker closes: the lead keeps what the worker opened.
+        term.forget(worker);
+        assert!(term.owns(lead, shell));
+        assert!(
+            !term.owns(worker, shell),
+            "a reused id must not inherit the claim"
+        );
+        // A top-level agent closes: its panes go back to the user.
+        term.forget(stray);
+        assert!(!term.owns(stray, PaneId(5)));
+        assert_eq!(term.creators(), vec![(shell, lead)]);
+
+        // Restoring keeps only pairs whose panes both came back.
+        let restored = Term::default();
+        restored.restore([(shell, lead), (PaneId(9), lead)], |p| p != PaneId(9));
+        assert!(restored.owns(lead, shell));
+        assert!(!restored.owns(lead, PaneId(9)));
     }
 
     #[test]

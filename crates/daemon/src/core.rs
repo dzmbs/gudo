@@ -609,7 +609,7 @@ impl Core {
         option: Option<proto::OptionId>,
     ) -> Option<(PaneId, crate::agent::RequestFacts)> {
         if let Some(facts) = self.term.asks.facts(id) {
-            let chosen = option.and_then(|o| crate::term::ask::option_label(o));
+            let chosen = option.and_then(crate::term::ask::option_label);
             return Some((
                 facts.caller,
                 crate::agent::RequestFacts {
