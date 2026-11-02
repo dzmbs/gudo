@@ -153,7 +153,8 @@ impl Daemon {
         let core = Core::new(config, identity, layout, hooks, shell, mp);
         let mut tasks = vec![HookServer::listen(&core)?];
         core::restore(&core, records, closed);
-        core.term.restore(creators, |pane| core.pane(pane).is_some());
+        core.term
+            .restore(creators, |pane| core.pane(pane).is_some());
 
         let endpoint = bind(&core).await?;
         let info = endpoint_info_of(&endpoint, &core.cfg.relay);
@@ -488,8 +489,9 @@ async fn accept_loop(core: Arc<Core>, endpoint: Endpoint) {
             };
             match handshake {
                 Ok(Ok(connection)) => {
-                    let known =
-                        core.mp.known_device(DeviceId(*connection.remote_id().as_bytes()));
+                    let known = core
+                        .mp
+                        .known_device(DeviceId(*connection.remote_id().as_bytes()));
                     match slot.authenticated(known) {
                         Some(slot) => conn::serve(core, connection, slot).await,
                         None => {
