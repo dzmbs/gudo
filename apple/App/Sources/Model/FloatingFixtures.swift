@@ -17,6 +17,9 @@ enum FloatingFixtures {
         var logs: PaneId?
     }
 
+    /// The panes the last fixture made (snapshot tests repaint them once the grids settle).
+    static var last: Panes?
+
     static let screens: Set<String> = ["floating", "floating-tiled", "floating-multi", "floating-tray", "floating-zoom"]
 
     /// Builds `screen` in the workspace's active tab (one fresh pane).
@@ -29,8 +32,10 @@ enum FloatingFixtures {
             result = await multi(workspace, panes)
         case "floating-tray":
             result = await multi(workspace, panes)
+            // Two windows in the tray: Claude with its log tail, and the shell.
             if let agent = result.agent { workspace.apply(.setFloat(agent, frame: nil, minimized: true, pinned: nil)) }
-            if let logs = result.logs { workspace.apply(.setFloat(logs, frame: nil, minimized: true, pinned: nil)) }
+            workspace.apply(.float(panes.shell, frame: FloatFrame(x: 0.1, y: 0.5, width: 0.4, height: 0.4)))
+            workspace.apply(.setFloat(panes.shell, frame: nil, minimized: true, pinned: nil))
             workspace.apply(.focus(panes.htop))
         case "floating-zoom":
             workspace.apply(.focus(panes.tests))
@@ -38,8 +43,15 @@ enum FloatingFixtures {
         default:
             break
         }
+        // Panes are made in stages and their shells greet first: paint once all have a grid
+        // and have said hello.
+        let all = [result.shell, result.tests, result.htop, result.agent, result.logs].compactMap(\.self)
+        for _ in 0..<60 where !all.allSatisfy({ workspace.panes[$0]?.view.surface.grid != nil }) {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
         try? await Task.sleep(for: .milliseconds(900))
         paint(workspace, result)
+        last = result
         return result
     }
 
@@ -90,16 +102,24 @@ enum FloatingFixtures {
     static func paint(_ workspace: Workspace, _ panes: Panes) {
         write(shellScreen, to: panes.shell, in: workspace)
         write(testScreen, to: panes.tests, in: workspace)
-        let grid = workspace.grids[panes.htop] ?? GridSize(cols: 100, rows: 30)
-        write(htop(cols: Int(grid.cols), rows: Int(grid.rows)), to: panes.htop, in: workspace)
+        // At the grid the terminal has now, so nothing wraps or scrolls.
+        let grid = workspace.panes[panes.htop]?.view.surface.grid
+        write(htop(cols: Int(grid?.cols ?? 100), rows: Int(grid?.rows ?? 30)), to: panes.htop, in: workspace)
         if let agent = panes.agent { write(agentScreen, to: agent, in: workspace) }
         if let logs = panes.logs { write(logScreen, to: logs, in: workspace) }
     }
 
     static func write(_ text: String, to pane: PaneId, in workspace: Workspace) {
-        guard let surface = workspace.panes[pane]?.view.surface else { return }
-        surface.terminal.write(Array(("\u{1b}[?25l\u{1b}[2J\u{1b}[H" + text).utf8))
-        surface.outputArrived()
+        // No cursor, no autowrap: a screen drawn for one width never spills into the next row.
+        let screen = "\u{1b}[?25l\u{1b}[?7l\u{1b}[2J\u{1b}[H" + text
+        // Through the stand-in shell when there is one, so its greeting never lands on top.
+        let backend = workspace.panes[pane]?.backend
+        if let echo = (backend.flatMap(SharedPaneBackend.underlying) ?? backend) as? EchoBackend {
+            echo.show(screen)
+        } else if let surface = workspace.panes[pane]?.view.surface {
+            surface.terminal.write(Array(screen.utf8))
+            surface.outputArrived()
+        }
     }
 
     // MARK: Screens
@@ -228,9 +248,12 @@ enum FloatingFixtures {
             } else {
                 let user = p.1 == "root" ? sgr("2") : ""
                 let cpu = p.6 > 10 ? sgr("1;31") : ""
-                let program = p.8.split(separator: " ").first.map(String.init) ?? p.8
-                let args = String(p.8.dropFirst(program.count))
-                lines.append("\(user)\(cpu)\(base)\(reset)\(sgr("1"))\(program)\(reset)\(sgr("2"))\(args)\(reset)")
+                // Cut at the right edge, as htop does.
+                let room = max(cols - base.count, 0)
+                let command = String(p.8.prefix(room))
+                let program = command.split(separator: " ").first.map(String.init) ?? command
+                let args = String(command.dropFirst(program.count))
+                lines.append("\(user)\(cpu)\(String(base.prefix(cols)))\(reset)\(sgr("1"))\(program)\(reset)\(sgr("2"))\(args)\(reset)")
             }
         }
         while lines.count < rows - 1 { lines.append("") }

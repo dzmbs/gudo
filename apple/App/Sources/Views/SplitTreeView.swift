@@ -162,11 +162,12 @@ struct SplitTreeView: View {
         }
         let motion: Animation? = animated ? (lastShape.lastChange == .float ? DS.Motion.lift : DS.Motion.split) : nil
         return GeometryReader { geometry in
-            let layout = CanvasLayout(
+            let target = CanvasLayout(
                 node: node, floats: floats, zoomed: zoomed, focused: tree.focusedLeaf,
                 size: geometry.size, gap: paneStyle == .comfortable ? DS.Space.row : DS.Size.dividerVisible,
                 header: PaneHeader.height, cell: tree.cellSize, padding: tree.padding, live: arrangement.live)
-            let _ = arrangement.update(layout: layout, tree: tree, hidden: floats.hidden)
+            let _ = arrangement.update(layout: target, tree: tree)
+            let layout = arrangement.scrub.map { target.blended(from: $0.from, progress: $0.progress) } ?? target
             ZStack(alignment: .topLeading) {
                 ForEach(layout.cards, id: \.id) { card in
                     FloatCardBackdrop(card: card)
@@ -177,8 +178,8 @@ struct SplitTreeView: View {
                         .floatingChrome(leaf, dragging: arrangement.paneDrag?.pane == leaf.pane)
                         .frame(width: leaf.frame.width, height: leaf.frame.height)
                         .liftBeat(floating: leaf.window != nil)
-                        .scaleEffect(leaf.visible ? 1 : leaf.hiddenScale, anchor: leaf.hiddenAnchor)
-                        .opacity(leaf.visible ? 1 : 0)
+                        .scaleEffect(leaf.scale, anchor: leaf.hiddenAnchor)
+                        .opacity(leaf.opacity)
                         .allowsHitTesting(leaf.visible)
                         .accessibilityHidden(!leaf.visible)
                         .offset(x: leaf.frame.minX, y: leaf.frame.minY)
@@ -286,7 +287,7 @@ struct SplitLayout {
         let ratio: Double
         let first: Node
         /// The visible line.
-        let frame: CGRect
+        var frame: CGRect
         /// The split's length along its axis, for turning drags into ratios.
         let extent: CGFloat
     }

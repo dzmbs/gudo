@@ -3,6 +3,7 @@ import AppKit
 import DesignSystem
 import HostKit
 import SwiftUI
+import TerminalRenderer
 import XCTest
 @testable import App
 
@@ -542,19 +543,73 @@ final class MacSnapshotTests: XCTestCase {
     /// The Mac's width and an iPad's (the same canvas at 1024 × 768).
     private static let floatingSizes: [(String, CGSize)] = [("", CGSize(width: 1180, height: 760)), ("-ipad", CGSize(width: 1024, height: 768))]
 
-    /// Draws every pane's latest frame: a window off screen gets no display-link ticks.
-    private func present(_ model: WindowModel) {
-        for pane in model.workspace.map({ Array($0.panes.values) }) ?? [] { _ = pane.view.surface.renderIfDirty() }
+    /// Repaints the fixture's screens at the grids the panes settled at.
+    private func repaint(_ model: WindowModel) async {
+        guard let workspace = model.workspace, let panes = FloatingFixtures.last else { return }
+        FloatingFixtures.paint(workspace, panes)
+        await pump(0.4)
+        await present(model)
     }
 
-    /// Captures `name-0…` at the given gaps after `change` starts.
-    private func frames(_ name: String, _ model: WindowModel, gaps: [Double] = [0, 0.04, 0.05, 0.06, 0.08, 0.1, 0.15, 0.4], _ change: () -> Void) async {
-        change()
-        for (index, gap) in gaps.enumerated() {
-            await pump(gap)
-            present(model)
-            try? capture(current!, "\(name)-\(index)")
+    /// Draws every pane's latest frame: a window off screen gets no display-link ticks. Glyphs
+    /// are drawn a frame's budget at a time, so it draws frame by frame until all are done.
+    private func present(_ model: WindowModel) async {
+        if let current, current.level.rawValue < 0 { return }
+        let surfaces = model.workspace.map { $0.panes.values.map(\.view.surface) } ?? []
+        for _ in 0..<60 {
+            var drew = false
+            for surface in surfaces { drew = surface.renderIfDirty() || drew }
+            guard drew else { return }
+            await pump(1.0 / 60)
         }
+    }
+
+    /// Puts the fixture's window on the main display below the desktop picture: invisible to
+    /// anyone at the Mac, never active, but on a display, so its animations get frames (a window
+    /// off every display gets no display-link ticks and jumps to the end of each animation).
+    private func animating(_ window: NSWindow) {
+        // A locked display hands back blank pictures of windows on it: stay off it.
+        let session = CGSessionCopyCurrentDictionary() as? [String: Any]
+        guard session?["CGSSessionScreenIsLocked"] as? Bool != true, let screen = NSScreen.main else { return }
+        window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopWindow)) - 1)
+        window.setFrameOrigin(NSPoint(x: screen.frame.minX, y: screen.frame.minY))
+        window.orderBack(nil)
+    }
+
+    /// Captures `name-0…` through `change`: in real time on a display; off it (a locked Mac)
+    /// the canvas is drawn at points along the `lift` spring, as its animation would draw it.
+    private func frames(_ name: String, _ model: WindowModel, _ change: () -> Void) async {
+        guard let window = current else { return }
+        if window.level.rawValue >= 0 {
+            animating(window)
+            if window.level.rawValue < 0 { await pump(0.5) }
+        }
+        if window.level.rawValue < 0 {
+            change()
+            for (index, gap) in [0, 0.016, 0.016, 0.016, 0.016, 0.03, 0.06, 0.3].enumerated() {
+                await pump(gap)
+                try? capture(window, "\(name)-\(index)")
+            }
+        } else {
+            let arrangement = model.arrangement
+            guard let from = arrangement.layout else { return }
+            // The grids hold through the motion, as they do while it animates.
+            TerminalSurface.holdGrids(for: .milliseconds(1300))
+            change()
+            await pump(0.1)
+            let spring = Spring(duration: 0.42, bounce: 0.12)
+            for (index, time) in [0, 0.03, 0.06, 0.1, 0.15, 0.22, 0.3, 0.5].enumerated() {
+                arrangement.scrub = .init(from: from, progress: spring.value(target: 1.0, time: time))
+                await pump(0.08)
+                await present(model)
+                try? capture(window, "\(name)-\(index)")
+            }
+            arrangement.scrub = nil
+        }
+        // At rest the grids reflow once and the programs redraw at their new size.
+        await pump(0.8)
+        await repaint(model)
+        try? capture(window, "\(name)-8")
     }
 
     /// inside one, the tray, and a zoomed pane with its way back.
@@ -563,27 +618,9 @@ final class MacSnapshotTests: XCTestCase {
         for (suffix, size) in Self.floatingSizes {
             for screen in ["floating", "floating-multi", "floating-tray", "floating-zoom"] {
                 try await window(screen + suffix, screen: screen, size: size) { model in
-                    await self.pump(0.6)
-                    self.present(model)
+                    await self.pump(0.8)
+                    await self.repaint(model)
                 }
-            }
-        }
-    }
-
-    /// Snap guides while a window is held against another's edge and the tab's middle.
-    func testFloatingGuides() async throws {
-        defer { MockPaneStatus.fixture = nil; MockPaneStatus.details = [:] }
-        for (suffix, size) in Self.floatingSizes {
-            try await window("floating-guides" + suffix, screen: "floating-multi", size: size) { model in
-                await self.pump(0.8)
-                let arrangement = model.arrangement
-                guard let layout = arrangement.layout, let card = layout.cards.first(where: { $0.panes.count == 1 }) else { return XCTFail("no window") }
-                // Its left edge 4 pt off the tab's middle: it snaps there and the guide shows.
-                let dx = layout.bounds.midX + 4 - card.frame.minX
-                arrangement.move(card.id, by: CGSize(width: dx, height: 30), at: CGPoint(x: card.frame.midX + dx, y: card.frame.minY + 12))
-                await self.pump(0.4)
-                self.present(model)
-                XCTAssertFalse(arrangement.guides.isEmpty, "a snap guide shows")
             }
         }
     }
@@ -594,6 +631,8 @@ final class MacSnapshotTests: XCTestCase {
         defer { MockPaneStatus.fixture = nil; MockPaneStatus.details = [:] }
         try await window("floating-drag-end", screen: "floating-tiled") { model in
             await self.pump(0.8)
+            self.animating(self.current!)
+            await self.repaint(model)
             let arrangement = model.arrangement
             guard let workspace = model.workspace, let layout = arrangement.layout, layout.tiled.count == 3 else { return XCTFail("three tiled panes") }
             let (dragged, from) = layout.tiled[0]
@@ -604,7 +643,7 @@ final class MacSnapshotTests: XCTestCase {
                 let t = CGFloat(step) / 8
                 arrangement.drag(dragged, to: CGPoint(x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t))
                 await self.pump(0.05)
-                self.present(model)
+                await self.present(model)
                 try? self.capture(self.current!, "floating-drag-\(step)")
             }
             XCTAssertNotNil(arrangement.paneDrag?.preview, "the drop region is lit")
@@ -619,6 +658,7 @@ final class MacSnapshotTests: XCTestCase {
         defer { MockPaneStatus.fixture = nil; MockPaneStatus.details = [:] }
         try await window("floating-split-end", screen: "floating-tiled") { model in
             await self.pump(0.8)
+            await self.repaint(model)
             guard let workspace = model.workspace, let htop = workspace.focusedPane else { return XCTFail("no pane") }
             await self.frames("floating-lift", model) { model.toggleFloat(htop, in: workspace) }
             XCTAssertTrue(workspace.session.isFloating(htop))
@@ -636,6 +676,18 @@ final class MacSnapshotTests: XCTestCase {
             await self.pump(0.5)
             await self.frames("floating-split", model) { WorkspaceAction.splitDown.perform(on: workspace, window: model) }
             XCTAssertEqual(workspace.window(of: htop)?.panes.count, 2, "the new pane joins the window")
+            // Held 4 pt off the tab's middle: it snaps there and the guide shows.
+            await self.pump(0.5)
+            let arrangement = model.arrangement
+            guard let card = arrangement.layout?.cards.first(where: { $0.panes.contains(htop) }), let bounds = arrangement.layout?.bounds else {
+                return XCTFail("no window")
+            }
+            let dx = bounds.midX + 4 - card.frame.minX
+            arrangement.move(card.id, by: CGSize(width: dx, height: 20), at: CGPoint(x: card.frame.midX + dx, y: card.frame.minY + 8))
+            await self.pump(0.3)
+            XCTAssertFalse(arrangement.guides.isEmpty, "a snap guide shows")
+            try? self.capture(self.current!, "floating-guides")
+            arrangement.endMove(card.id, by: CGSize(width: dx, height: 20), velocity: .zero)
         }
     }
 

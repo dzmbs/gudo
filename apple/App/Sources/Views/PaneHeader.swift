@@ -156,6 +156,8 @@ private struct PaneHeaderButtons: View {
                     model.toggleMinimized(id, in: workspace)
                 }
                 .accessibilityIdentifier("pane-minimize-button")
+                // Shows once the header has made room for it.
+                .transition(.asymmetric(insertion: .opacity.animation(.easeIn(duration: 0.12).delay(0.2)), removal: .opacity.animation(.easeOut(duration: 0.08))))
             }
             HeaderButton(
                 zoomed ? "Restore Pane" : "Zoom Pane",

@@ -62,19 +62,17 @@ final class PaneArrangementTests: XCTestCase {
         super.tearDown()
     }
 
-    func testDraggingOntoAPaneLightsExactlyWhereItWillLandAndDropsThere() throws {
+    func testDraggingOntoAPaneLightsTheHalfItWillTakeAndDropsThere() {
         let (left, right, _) = make()
         let target = frame(of: right)
         let point = CGPoint(x: target.maxX - 60, y: target.midY)
         arrangement.drag(left, to: point)
         XCTAssertEqual(arrangement.paneDrag?.drop, .beside(right, .right))
-        let lit = try XCTUnwrap(arrangement.paneDrag?.preview)
-        XCTAssertGreaterThan(lit.minX, size.width / 3, "on the target's right side")
+        XCTAssertEqual(arrangement.paneDrag?.preview, CGRect(x: target.midX, y: target.minY, width: target.width / 2, height: target.height))
         arrangement.endDrag(left, at: point)
         XCTAssertNil(arrangement.paneDrag)
         XCTAssertEqual(tiledOrder, [right, left])
-        // What was lit is exactly what the pane got.
-        XCTAssertEqual(frame(of: left), lit)
+        XCTAssertNotNil(arrangement.landing, "the region stays lit until the pane is there")
     }
 
     func testDroppingOnItselfChangesNothing() {
@@ -92,9 +90,9 @@ final class PaneArrangementTests: XCTestCase {
         let point = CGPoint(x: 10, y: size.height / 2)
         arrangement.drag(below!, to: point)
         XCTAssertEqual(arrangement.paneDrag?.drop, .edge(.left))
-        let lit = arrangement.paneDrag?.preview
+        XCTAssertEqual(arrangement.paneDrag?.preview, CGRect(x: 0, y: 0, width: size.width / 3, height: size.height))
         arrangement.endDrag(below!, at: point)
-        XCTAssertEqual(frame(of: below!), lit)
+        XCTAssertEqual(frame(of: below!).width, size.width / 3, accuracy: 2, "a third of the tab, as lit")
         XCTAssertEqual(tiledOrder.first, below)
         XCTAssertEqual(frame(of: below!).height, size.height, accuracy: 1, "along the whole edge")
         XCTAssertTrue(tiledOrder.contains(right))
@@ -141,10 +139,8 @@ final class PaneArrangementTests: XCTestCase {
         arrangement.move(card.id, by: by, at: point)
         XCTAssertNil(arrangement.dockPreview, "passing over a pane offers nothing at once")
         try await Task.sleep(for: .milliseconds(600))
-        let lit = try XCTUnwrap(arrangement.dockPreview)
-        XCTAssertLessThan(lit.maxX, target.midX + 1, "the target's left side")
+        XCTAssertEqual(arrangement.dockPreview, CGRect(x: target.minX, y: target.minY, width: target.width / 2, height: target.height))
         arrangement.endMove(card.id, by: by, velocity: .zero)
-        XCTAssertEqual(frame(of: below!), lit)
         XCTAssertFalse(workspace.session.isFloating(below!))
         XCTAssertEqual(tiledOrder, [below!, left, right])
     }

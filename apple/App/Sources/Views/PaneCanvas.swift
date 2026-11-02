@@ -12,7 +12,7 @@ import TerminalRenderer
 struct CanvasLayout {
     struct Leaf {
         let pane: PaneId
-        let frame: CGRect
+        var frame: CGRect
         let z: Double
         let radii: RectangleCornerRadii
         /// The window it floats in.
@@ -25,24 +25,32 @@ struct CanvasLayout {
         /// While out of sight: how small it is drawn, and towards where.
         let hiddenScale: CGFloat
         let hiddenAnchor: UnitPoint
+        /// Part way between shown and hidden (a layout blended for review).
+        var fade: Double?
+
+        var opacity: Double { fade ?? (visible ? 1 : 0) }
+        var scale: CGFloat { hiddenScale + (1 - hiddenScale) * opacity }
     }
 
     struct Divider {
         let id: String
-        let divider: SplitLayout.Divider
+        var divider: SplitLayout.Divider
         let z: Double
         let visible: Bool
     }
 
     struct Card {
         let id: FloatId
-        let frame: CGRect
+        var frame: CGRect
         let z: Double
         /// Holds several panes: drawn as a backdrop with a grip above them.
         let multi: Bool
         let visible: Bool
         let focused: Bool
         let panes: [PaneId]
+        var fade: Double?
+
+        var opacity: Double { fade ?? (visible && multi ? 1 : 0) }
     }
 
     struct Chip {
@@ -63,16 +71,7 @@ struct CanvasLayout {
     static let chipSize = CGSize(width: 204, height: 36)
     #endif
 
-    /// What the panes are laid out with, so a layout of another arrangement matches this one.
-    struct Metrics: Equatable {
-        var gap: CGFloat
-        var header: CGFloat
-        var cell: CGSize?
-        var padding: CGFloat
-    }
-
     let bounds: CGRect
-    let metrics: Metrics
     private(set) var leaves: [Leaf] = []
     private(set) var dividers: [Divider] = []
     private(set) var cards: [Card] = []
@@ -87,7 +86,6 @@ struct CanvasLayout {
         header: CGFloat, cell: CGSize?, padding: CGFloat, live: [FloatId: CGRect] = [:]
     ) {
         bounds = CGRect(origin: .zero, size: size)
-        metrics = Metrics(gap: gap, header: header, cell: cell, padding: padding)
         let zoomedWindow = zoomed.flatMap { z in floats.windows.first { $0.window.panes.contains(z) } }
 
         // Tiled panes: the zoomed one alone, or the tree.
@@ -120,7 +118,8 @@ struct CanvasLayout {
             let fillsTab = isZoomed && single
             var rect = live[window.id] ?? FloatGeometry.rect(of: window.frame, in: bounds)
             if fillsTab { rect = bounds }
-            let visible = !floats.hidden && !window.minimized && (zoomedWindow == nil || isZoomed)
+            // A zoomed pane is all there is: windows step aside until it is restored.
+            let visible = !floats.hidden && !window.minimized && (zoomed == nil || isZoomed)
             let hasFocus = focused.map(window.panes.contains) ?? false
             let multi = !single && !fillsTab
             let content = multi ? rect.inset(by: Self.gripInsets) : rect
@@ -159,19 +158,46 @@ struct CanvasLayout {
 
     func card(_ id: FloatId) -> Card? { cards.first { $0.id == id } }
 
-    /// The canvas `session`'s active tab would show at this size: where a pane will be once
-    /// an op lands, for the region a drag lights.
-    func after(_ session: Session, hidden: Bool) -> CanvasLayout? {
-        guard let tab = session.activeTab else { return nil }
-        return CanvasLayout(
-            node: session.tiledRoot(of: tab) ?? tab.root, floats: FloatScene(session: session, tab: tab, hidden: hidden),
-            zoomed: tab.zoomed, focused: tab.focused, size: bounds.size, gap: metrics.gap, header: metrics.header,
-            cell: metrics.cell, padding: metrics.padding)
+    /// This layout `progress` of the way from `from` (0) to here (1), as an animation between
+    /// the two draws it: frames move, what appears or goes fades. For design review, where a
+    /// window off every display gets no animation frames.
+    func blended(from: CanvasLayout, progress t: Double) -> CanvasLayout {
+        func mix(_ a: CGRect, _ b: CGRect) -> CGRect {
+            CGRect(
+                x: a.minX + (b.minX - a.minX) * t, y: a.minY + (b.minY - a.minY) * t,
+                width: a.width + (b.width - a.width) * t, height: a.height + (b.height - a.height) * t)
+        }
+        var out = self
+        out.leaves = leaves.map { leaf in
+            var leaf = leaf
+            if let old = from.leaves.first(where: { $0.pane == leaf.pane }) {
+                leaf.frame = mix(old.frame, leaf.frame)
+                leaf.fade = old.opacity + (leaf.opacity - old.opacity) * t
+            }
+            return leaf
+        }
+        out.cards = cards.map { card in
+            var card = card
+            if let old = from.card(card.id) {
+                card.frame = mix(old.frame, card.frame)
+                card.fade = old.opacity + (card.opacity - old.opacity) * t
+            }
+            return card
+        }
+        out.dividers = dividers.map { divider in
+            var divider = divider
+            if let old = from.dividers.first(where: { $0.id == divider.id }) {
+                divider.divider.frame = mix(old.divider.frame, divider.divider.frame)
+            }
+            return divider
+        }
+        return out
     }
 
-    /// The Float target a dragged pane can be dropped on: top centre of the tab.
+    /// The Float target a dragged pane can be dropped on: top centre of the tab, below the
+    /// pane headers so it never hides one.
     var floatTarget: CGRect {
-        CGRect(x: bounds.midX - 64, y: bounds.minY + 14, width: 128, height: 32)
+        CGRect(x: bounds.midX - 64, y: bounds.minY + PaneHeader.height + 12, width: 128, height: 32)
     }
 }
 
@@ -203,8 +229,15 @@ final class PaneArrangement {
         var preview: CGRect?
     }
 
+    /// A layout change drawn part way (design review): the layout before it and how far.
+    struct Scrub {
+        var from: CanvasLayout
+        var progress: Double
+    }
+
     /// Windows being moved or resized, where the hand has them.
     var live: [FloatId: CGRect] = [:]
+    var scrub: Scrub?
     var guides: [FloatGeometry.Guide] = []
     var paneDrag: PaneDrag?
     /// A moved window resting over a pane's edge: where it would dock.
@@ -213,7 +246,7 @@ final class PaneArrangement {
     var landing: CGRect?
 
     @ObservationIgnored private(set) var layout: CanvasLayout?
-    @ObservationIgnored private var landingPane: PaneId?
+    @ObservationIgnored private var landingPane: (PaneId, CGRect)?
     @ObservationIgnored private(set) var tree: (any PaneTree)?
     @ObservationIgnored private var startFrame: CGRect?
     @ObservationIgnored private var dockDrop: FloatGeometry.Drop?
@@ -221,12 +254,11 @@ final class PaneArrangement {
     @ObservationIgnored private var dwellingOn: FloatGeometry.Drop?
 
     /// The canvas's latest layout (each layout pass; not observed).
-    func update(layout: CanvasLayout, tree: any PaneTree, hidden: Bool = false) {
+    func update(layout: CanvasLayout, tree: any PaneTree) {
         self.layout = layout
         self.tree = tree
-        self.hidden = hidden
-        // The pane has arrived where its drop was lit: the region goes as it settles.
-        if let landing, let pane = landingPane, layout.leaves.contains(where: { $0.pane == pane && $0.frame == landing }) {
+        // The host has moved the pane: the lit region fades as it settles there.
+        if landing != nil, let (pane, from) = landingPane, layout.leaves.contains(where: { $0.pane == pane && $0.frame != from }) {
             landingPane = nil
             Task { @MainActor [weak self] in
                 withAnimation(DS.Motion.overlay) { self?.landing = nil }
@@ -324,9 +356,7 @@ final class PaneArrangement {
             try? await Task.sleep(for: .milliseconds(380))
             guard !Task.isCancelled, let self, let layout = self.layout else { return }
             self.dockDrop = drop
-            let region = self.op(for: drop, of: pane, docking: true).flatMap { self.region(of: pane, after: $0) }
-                ?? FloatGeometry.preview(of: drop, in: layout.bounds, panes: layout.tiled)
-            withAnimation(DS.Motion.menu) { self.dockPreview = region }
+            withAnimation(DS.Motion.menu) { self.dockPreview = FloatGeometry.preview(of: drop, in: layout.bounds, panes: layout.tiled) }
         }
     }
 
@@ -373,33 +403,11 @@ final class PaneArrangement {
 
     // MARK: Dragging a pane
 
-    /// Where `pane` ends up once `op` lands: the session's own rules, laid out like the canvas.
-    /// The daemon applies the same rules, so the lit region is exactly what the pane gets.
-    func region(of pane: PaneId, after op: LayoutOp) -> CGRect? {
-        guard let layout, let workspace else { return nil }
-        var probe = workspace.session
-        probe.apply(op)
-        return layout.after(probe, hidden: hidden)?.leaves.first { $0.pane == pane && $0.visible }?.frame
-    }
-
-    /// The op a drop of `pane` ends in.
-    func op(for drop: FloatGeometry.Drop, of pane: PaneId, docking: Bool = false) -> LayoutOp? {
-        switch drop {
-        case .beside(let target, let side): docking ? .dock(pane, beside: target, side: side) : .movePane(pane, beside: target, side: side)
-        case .edge(let side): workspace?.session.activeTab.map { .movePaneToEdge(pane, tab: $0.id, side: side) }
-        case .float, .cancel: nil
-        }
-    }
-
-    /// The floating windows are out of sight (⌥⌘F).
-    @ObservationIgnored private(set) var hidden = false
-
     func drag(_ pane: PaneId, to point: CGPoint) {
         guard let layout, let workspace, workspace.canMovePanes else { return }
         let floatTarget = workspace.canFloat ? layout.floatTarget : nil
         let drop = FloatGeometry.drop(at: point, in: layout.bounds, panes: layout.targets, dragged: pane, floatTarget: floatTarget)
-        let preview = op(for: drop, of: pane).flatMap { region(of: pane, after: $0) }
-            ?? FloatGeometry.preview(of: drop, in: layout.bounds, panes: layout.targets)
+        let preview = FloatGeometry.preview(of: drop, in: layout.bounds, panes: layout.targets)
         untracked {
             if paneDrag == nil, let tab = workspace.session.tab(containing: pane), tab.focused != pane { workspace.apply(.focus(pane)) }
             paneDrag = PaneDrag(pane: pane, point: point, drop: paneDrag?.drop ?? drop, preview: paneDrag?.preview ?? preview)
@@ -421,7 +429,7 @@ final class PaneArrangement {
         withAnimation(DS.Motion.lift) {
             paneDrag = nil
             landing = drag.preview
-            landingPane = drag.preview == nil ? nil : pane
+            landingPane = drag.preview == nil ? nil : layout.leaves.first { $0.pane == pane }.map { (pane, $0.frame) }
             switch drop {
             case .beside(let target, let side):
                 workspace.apply(.movePane(pane, beside: target, side: side))
@@ -486,6 +494,7 @@ private struct FloatingChrome: ViewModifier {
     let leaf: CanvasLayout.Leaf
     let dragging: Bool
     @Environment(\.chrome) private var chrome
+    @Environment(\.terminalTheme) private var theme
 
     func body(content: Content) -> some View {
         let dark = chrome.scheme == .dark
@@ -509,7 +518,12 @@ private struct FloatingChrome: ViewModifier {
             .shadow(
                 color: .black.opacity(lifted ? DS.Shadow.panel.opacity(dark: dark) : 0),
                 radius: lifted ? DS.Shadow.panel.radius : 0, y: lifted ? DS.Shadow.panel.y : 0)
-            .opacity(dragging ? 0.45 : 1)
+            // Washed while it is being moved: an overlay, as the terminal's layer draws itself.
+            .overlay {
+                if dragging {
+                    shape.fill(theme.background.opacity(0.55)).allowsHitTesting(false)
+                }
+            }
     }
 }
 
@@ -553,7 +567,7 @@ struct FloatCardBackdrop: View {
                     #endif
                     .accessibilityLabel("Move window")
             }
-            .opacity(shown ? 1 : 0)
+            .opacity(card.opacity)
             .allowsHitTesting(shown)
             .offset(x: card.frame.minX, y: card.frame.minY)
     }
