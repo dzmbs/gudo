@@ -66,11 +66,13 @@ pub(crate) fn check(cfg: &Config, path: Option<OsString>) -> Vec<AgentInstall> {
 
 /// Each installed agent's own command that adds the daemon's MCP server to the user's
 /// configuration (`register`), or removes it, naming each by path: the command may run
-/// where rc files are not read.
+/// where rc files are not read. Every account has its own configuration, so each gets its
+/// own command, run with `env <DIR_VAR>=<dir>`; the system account's runs as the user's own.
 pub(crate) fn mcp_commands(
     cfg: &Config,
     path: Option<OsString>,
     register: bool,
+    accounts: &[(AgentKind, PathBuf)],
 ) -> Vec<AgentMcpCommand> {
     let hook_bin = cfg.hook_bin();
     let home = cfg.home();
@@ -83,23 +85,66 @@ pub(crate) fn mcp_commands(
                 InstallState::Missing => return Vec::new(),
             };
             let (state_dir, agent) = (&cfg.state_dir, install.agent);
-            let (add, old) = match agent {
-                AgentKind::Claude => (
-                    agents::ClaudeCode::user_mcp_command(&program, &hook_bin, state_dir, register),
-                    agents::ClaudeCode::user_mcp_registered(&home, &legacy)
-                        .then(|| agents::ClaudeCode::user_mcp_remove(&program, &legacy)),
-                ),
-                AgentKind::Codex => (
-                    agents::Codex::user_mcp_command(&program, &hook_bin, state_dir, register),
-                    agents::Codex::user_mcp_registered(&home, &legacy)
-                        .then(|| agents::Codex::user_mcp_remove(&program, &legacy)),
-                ),
-            };
-            // The server's old name goes too, so an agent does not run it twice.
-            old.into_iter()
-                .chain([add])
-                .map(|argv| AgentMcpCommand { agent, argv })
-                .collect()
+            let system_dir = cfg
+                .pane_var(match agent {
+                    AgentKind::Claude => agents::CLAUDE_DIR_VAR,
+                    AgentKind::Codex => agents::CODEX_DIR_VAR,
+                })
+                .map(PathBuf::from);
+            let dirs = std::iter::once(None).chain(
+                accounts
+                    .iter()
+                    .filter(|(a, _)| *a == agent)
+                    .map(|(_, dir)| Some(dir.clone())),
+            );
+            dirs.flat_map(|dir| {
+                let (add, old) = match agent {
+                    AgentKind::Claude => {
+                        let config = agents::ClaudeCode::user_config_file(
+                            &home,
+                            dir.as_deref().or(system_dir.as_deref()),
+                        );
+                        (
+                            agents::ClaudeCode::user_mcp_command(
+                                &program, &hook_bin, state_dir, register,
+                            ),
+                            agents::ClaudeCode::user_mcp_registered(&config, &legacy)
+                                .then(|| agents::ClaudeCode::user_mcp_remove(&program, &legacy)),
+                        )
+                    }
+                    AgentKind::Codex => {
+                        let config = agents::Codex::config_file(
+                            &home,
+                            dir.as_deref().or(system_dir.as_deref()),
+                        );
+                        (
+                            agents::Codex::user_mcp_command(
+                                &program, &hook_bin, state_dir, register,
+                            ),
+                            agents::Codex::user_mcp_registered(&config, &legacy)
+                                .then(|| agents::Codex::user_mcp_remove(&program, &legacy)),
+                        )
+                    }
+                };
+                let prefix: Vec<String> = dir
+                    .map(|dir| {
+                        let var = match agent {
+                            AgentKind::Claude => agents::CLAUDE_DIR_VAR,
+                            AgentKind::Codex => agents::CODEX_DIR_VAR,
+                        };
+                        vec!["env".into(), format!("{var}={}", dir.display())]
+                    })
+                    .unwrap_or_default();
+                // The server's old name goes too, so an agent does not run it twice.
+                old.into_iter()
+                    .chain([add])
+                    .map(|argv| AgentMcpCommand {
+                        agent,
+                        argv: prefix.iter().cloned().chain(argv).collect(),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
         })
         .collect()
 }

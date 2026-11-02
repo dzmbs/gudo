@@ -63,6 +63,8 @@
 //! - Asking the owner before an agent drives one of the user's panes: an ordinary approval
 //!   request answered with [`ClientCtl::Decide`], plus [`ApprovalPush::Drive`] for clients with
 //!   [`Caps::DRIVE_ASKS`]; see [`drive`].
+//! - Agent accounts (several Claude Code / Codex sign-ins per host) are pushed as
+//!   [`ServerCtl::Accounts`] to owner clients with [`Caps::ACCOUNTS`]; see [`account`].
 //! - Pushed without a request: [`ServerCtl::CommandMark`] (shell-integration command start and
 //!   end, for the attached session) and [`ServerCtl::CommandFinishedUnseen`] (any session).
 //! - Input: [`InputPayload::KeyFull`], [`InputPayload::Mouse`] and [`InputPayload::Paste`] are
@@ -83,6 +85,7 @@
 //! every client message is checked against a [`GrantId`], and input and decisions carry the
 //! acting principal.
 
+pub mod account;
 pub mod approve;
 pub mod artifact;
 pub mod askpass;
@@ -106,6 +109,7 @@ pub mod usage;
 pub mod workflow;
 pub mod workspace;
 
+pub use account::*;
 pub use approve::*;
 pub use artifact::*;
 pub use askpass::*;

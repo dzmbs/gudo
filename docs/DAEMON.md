@@ -893,7 +893,8 @@ calls the providers' undocumented usage endpoints: that is closest to what Anthr
 OpenAI's terms forbid. `UsageWatch::api_fallback` and `UsageSource::Api` stay on the wire for
 compatibility; clients send `false`, the daemon ignores the flag and never reports `Api`. The
 report refreshes at most once a minute and only
-while a connection watches; the last status-line snapshot survives restarts
+while a connection watches. Usage is kept per agent account (§5.15): `AgentUsageReport` carries the
+system accounts, `ServerCtl::AccountUsage` every account; the last status-line snapshot survives restarts
 (`<state>/usage/claude-status-line.json`). Tools are found through the panes' `PATH` (plus
 `~/.local/bin`), `CODEX_HOME` and `CLAUDE_CONFIG_DIR`. Tests: `cargo test -p daemon --test it usage`
 (fixture rollouts, status-line hook, fake `claude` / `codex`; a client that still sends
@@ -1057,6 +1058,72 @@ format). Code: `crates/daemon/src/ws/workflows.rs`; wire types and the template 
   goldens in `crates/proto/tests/golden_installs.rs`; app: `AgentInstallGuideTests`,
   `W3UITests.testAgentNotInstalledOffersTheOfficialInstaller` (`apple/scripts/w3-ui-test.sh`).
 
+### 5.15 Agent accounts (`proto::account`)
+
+Several Claude Code and Codex sign-ins on one host, such as Personal and Work. This follows the vendors' documented mechanism: one configuration directory per account, `CLAUDE_CONFIG_DIR` for Claude (documented for exactly this, concurrent use included) and `CODEX_HOME` for Codex. Codex's keyring item is keyed by a hash of `CODEX_HOME`. Codex profiles are not accounts. Code: `crates/daemon/src/accounts.rs`.
+
+- **System account.** Each agent has an implicit account with id `system`: the user's own `~/.claude` / `~/.codex`, or whatever the panes' environment already says. Agents under it are launched with **no** directory variable, so a host without accounts behaves byte for byte as before. Whether an explicit `CLAUDE_CONFIG_DIR=~/.claude` changes Claude's Keychain item could not be confirmed offline. The 2.1.316 binary is compiled bytecode that holds `Claude Code`, `-credentials`, `sha256` and `.claude` together. Since the variable is never set for the system account, either answer is safe.
+- **Storage.** Each account is `<state>/accounts/<claude|codex>/<id>/`. The id is 8 hex digits the daemon mints; ids read from disk that are not of that form are dropped, so they never become a path. The directory and its parents are mode 0700. A Codex account's `config.toml` starts with `mcp_oauth_credentials_store = "file"`, because Codex keys MCP OAuth keyring items by server alone, so they would otherwise be shared by every home. `<state>/accounts.json` holds names, colours (palette 0–7, as projects), host and per-project defaults, and which account created each session (the last 2048). It never holds a credential, and credential files are never copied between accounts.
+- **Requests** (owner device only, `DaemonFeatures::ACCOUNTS`). Each answers `Accounts(AccountsReport)` or `Account(AgentAccount)`.
+  - `Accounts`: the list. Any account not asked about yet is checked in the background.
+  - `AccountAdd {agent, label, color}`: makes the directory; the account starts signed out.
+  - `AccountEdit`: renames or recolours.
+  - `AccountRemove`: refused for `system`, and refused (`Conflict`) while an agent pane runs under the account. It first runs the agent's own `claude auth logout` / `codex logout` in that account's environment, then deletes the directory. If the logout cannot run and the account is not known to be signed out, nothing is deleted, because deleting the directory alone would orphan a macOS Keychain item.
+  - `AccountCheck`: runs `claude auth status --json` (exit 0 when signed in; `email`, `subscriptionType`, `orgName`, `authMethod`) or `codex app-server` `account/read` (`email`, `planType`, `type`), and keeps who it is signed in as. That is display facts, never a token.
+  - `AccountSetDefault {agent, project, account}`: sets or clears the host default (`project: None`) or a project's.
+- **Sign-in.** `PaneLaunch::AccountSignIn {agent, account, device_code}` (owner device only) opens a tab running the vendor's own login:
+  - Claude: `claude auth login`.
+  - Codex: `codex login`, with `--device-auth` when the client is not on the host, because the browser login's localhost callback cannot reach a remote browser.
+
+  The user completes it in the pane: the URL is tappable, and Claude takes a pasted code. When the login ends, the pane runs `un-hook account SignIn`; the daemon checks the account and pushes the result. It checks again when the pane closes. The tab's record is a plain shell, so a restart never runs a login again.
+- **Launching.** `PaneLaunch::AccountAgent {agent, account, resume, cwd}`; plain `Agent` from older clients behaves the same with `account: None`.
+  - **Which account:**
+    1. A resume runs under the account that created the session, whatever was asked. If that account was removed, the launch is refused and the session runs under no other.
+    2. Otherwise the named account. Clients send it resolved: tab pick, else project default, else host default.
+    3. Otherwise the default of the tab's project, then the host default, then `system`.
+  - The record keeps the account (`AgentRecord.account`), so restore and Reopen come back under it.
+  - **Environment** (`agents::account_env`, `LaunchSpec::shell_line`):
+    - **System account: unchanged.** Its panes keep the environment exactly as before accounts, API keys included, because many users run the agents with `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. Only `UN_ACCOUNT=system` is added.
+    - **Named account:** the pane has `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`, `ANTHROPIC_PROFILE`, `CODEX_API_KEY`, `OPENAI_API_KEY`, `CODEX_ACCESS_TOKEN` and the other agent's directory variable removed. These outrank a `/login` and would silently override the account's own sign-in and bill another.
+    - For a named account the removal happens twice: on the spawned process, and with `unset` in the login shell's command line after its startup files ran. A `.profile` that exports a key cannot reach the agent.
+    - Only the account's directory is exported, plus `UN_ACCOUNT=<id>` and `UN_ACCOUNT_DIR` (directories only, never a secret, since the line is visible in the process list). The account's own commands (status, logout, usage) run with the same rules.
+    - Plain shell panes are untouched; the shell left after an agent exits keeps the account's directory.
+- **Where one account was assumed:**
+  - Codex session capture reads rollouts under the pane's account home.
+  - `un-hook` finds the user's status line through `UN_ACCOUNT_DIR` rather than `CLAUDE_CONFIG_DIR`, which Claude's subprocess scrub may remove.
+  - `user_mcp_registered` takes the account's `.claude.json` / `config.toml`.
+  - `AgentMcpCommands` returns one command per account, `env CLAUDE_CONFIG_DIR=<dir> claude mcp add …`.
+- **Usage** (§5.11) is kept per (agent, account):
+  - A status line counts for the account of the pane that sent it; the daemon looks the pane up and never trusts a field.
+  - Rollouts are read per account home.
+  - `claude -p /usage` and `codex app-server` run once per account in its environment, at most every 5 min each; accounts known to be signed out are not asked.
+  - `AgentUsageReport` keeps reporting the system accounts for older clients. Owner clients with `Caps::ACCOUNTS` also get `ServerCtl::AccountUsage` while they watch.
+  - Snapshots: `usage/claude-status-line-<id>.json`.
+  - No undocumented endpoint is used, and the daemon never switches accounts on its own. At a limit, the app suggests a new tab under another account (APP-ARCHITECTURE §27).
+- **Pushes.** `ServerCtl::Accounts` goes to owner devices with `Caps::ACCOUNTS`: on connect, on every change, and when an agent pane starts or closes, since `panes` lists each agent pane's account.
+- **Guests** neither see nor choose accounts:
+  - every `Account*` request is refused for anything but an owner device, a guest whose grant names every role included;
+  - `AccountAgent` naming a non-system account, and `AccountSignIn`, need the owner role *and* an owner device;
+  - a driver's plain agent launch uses the host default.
+- **Isolation.** All accounts are readable by the host user, as the vendors' own directories are. The isolation guards against mix-ups and environment leakage, not against a malicious process running as that user.
+- **Wire.**
+  - Append-only: `Caps::ACCOUNTS = 23` and `DaemonFeatures::ACCOUNTS = 18` (bits 21–22 / 16–17 are floating panes' and agent driving's).
+  - New last variants: `PaneLaunch::AccountAgent`, `AccountSignIn`; `WorkspaceRequest::Accounts` … `AccountSetDefault`; `WorkspaceResponse::Accounts`, `Account`; `ServerCtl::Accounts`, `AccountUsage`.
+  - Goldens: `crates/proto/tests/golden_accounts.rs`.
+- **Tests:**
+  - `cargo test -p daemon --lib accounts`: 0700 directories, ids from disk, resolution order, resume pinning across a restart and after removal, limits, identity parsing.
+  - `cargo test -p agents`: a named account scrubs every credential for both agents, the system account removes nothing, and `shell_line` unsets before it exports.
+  - `cargo test -p daemon --test it accounts`, against fake `claude` / `codex` that honour `CLAUDE_CONFIG_DIR` / `CODEX_HOME`:
+    - sign-in in the account's directory only;
+    - a Work launch with a key in the daemon's environment and in `.profile` sees none, while a system launch keeps the key, as before accounts;
+    - resume pinned, and refused after removal;
+    - logout runs before the directory goes;
+    - defaults and the account survive a restart;
+    - per-account usage;
+    - Codex device-code sign-in, rollouts and resume in the account home;
+    - a full-role guest is refused.
+  - `mp::policy` unit test. Nothing signs in for real.
+
 
 Amp's multiplayer (a thread toggle that lets every workspace member prompt the agent) rests on
 hosted threads and one workspace-wide role. Ours runs on the daemon over iroh, end to end
@@ -1168,6 +1235,8 @@ with an id get the error in their answer (`OpError::Forbidden`, `WsError::Denied
 | `Artifact`: `Send` (to agent) | **prompter or driver**; **agent pane only** | pane in scope |
 | `Op` `Split`/`NewTab` with `PaneLaunch::Canvas` | driver (as any split) | session of the pane |
 | `Op` `Split`/`NewTab` with `PaneLaunch::Reopen` | **owner** (it can resume the owner's agent session) | session / session of the pane |
+| `Op` `Split`/`NewTab` with `PaneLaunch::AccountAgent` naming a non-system account, or `AccountSignIn` | **owner** role and an owner device (§5.15) | session / session of the pane |
+| `Workspace`: `Accounts`, `AccountAdd`, `AccountEdit`, `AccountRemove`, `AccountCheck`, `AccountSetDefault` | **owner** device | daemon |
 | `Assist`: `Watch`, `State`, `BlockedOptions` / `SubmitLine` / `History`, `Complete`, `FileSearch` / `AnswerBlocked` | any role / **driver** + lease / **driver** / **approver** (§7.8) | pane in scope / pane / host / pane |
 
 An artifact is visible to daemon- and session-wide grants in its session; tab- and

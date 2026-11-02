@@ -2,9 +2,10 @@
 //!
 //! - `claude -p /usage --output-format stream-json --verbose` prints a `usage_report` (no model
 //!   call, no tokens; documented as experimental), and `claude auth status --json` names the
-//!   plan.
+//!   plan and the signed-in account.
 //! - `codex app-server` speaks JSON-RPC on stdio: `initialize`, `initialized`, then
-//!   `account/rateLimits/read` (documented; the app-server is labelled experimental).
+//!   `account/rateLimits/read` or `account/read` (documented; the app-server is labelled
+//!   experimental).
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -25,8 +26,10 @@ pub(crate) struct Env {
     pub program: PathBuf,
     /// Working directory (`$HOME`).
     pub cwd: PathBuf,
-    /// The panes' configured environment, over the daemon's own.
+    /// The panes' configured environment, over the daemon's own, then the account's.
     pub vars: Vec<(String, String)>,
+    /// Variables removed after `vars`: credentials that would outrank the account's sign-in.
+    pub remove: Vec<String>,
 }
 
 impl Env {
@@ -39,15 +42,26 @@ impl Env {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true);
+        for var in &self.remove {
+            cmd.env_remove(var);
+        }
         cmd
     }
 
-    async fn output(&self, args: &[&str]) -> Result<String, String> {
+    /// Runs the program to its end: whether it succeeded, and its output.
+    pub(crate) async fn run(&self, args: &[&str]) -> Result<(bool, String), String> {
         let out = tokio::time::timeout(TIMEOUT, self.command(args).output())
             .await
             .map_err(|_| format!("{} did not answer", name(&self.program)))?
             .map_err(|e| format!("could not run {}: {e}", name(&self.program)))?;
-        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+        Ok((
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+        ))
+    }
+
+    async fn output(&self, args: &[&str]) -> Result<String, String> {
+        self.run(args).await.map(|(_, out)| out)
     }
 }
 
@@ -69,7 +83,7 @@ pub(crate) async fn claude(env: &Env) -> Result<AgentUsage, String> {
         ])
         .await?;
     let mut usage = super::claude::from_usage_report(&stream, crate::identity::now_millis())?;
-    if let Ok(status) = env.output(&["auth", "status", "--json"]).await {
+    if let Ok(status) = env.output(agents::ClaudeCode::STATUS).await {
         usage.plan = super::claude::plan_from_auth_status(&status);
     }
     Ok(usage)
@@ -77,6 +91,26 @@ pub(crate) async fn claude(env: &Env) -> Result<AgentUsage, String> {
 
 /// Codex's limits from its app server.
 pub(crate) async fn codex(env: &Env) -> Result<AgentUsage, String> {
+    let result = app_server(
+        env,
+        "account/rateLimits/read",
+        json!({"excludeResetCreditDetails": true}),
+    )
+    .await?;
+    let limits = result
+        .get("rateLimits")
+        .or_else(|| result.pointer("/rateLimitsByLimitId/codex"))
+        .ok_or("Codex reported no plan limits")?;
+    super::codex::snapshot(
+        limits,
+        Some(crate::identity::now_millis()),
+        UsageSource::Cli,
+    )
+    .ok_or_else(|| "Codex reported no plan limits".to_owned())
+}
+
+/// Asks `codex app-server` one JSON-RPC `method` and returns its result.
+pub(crate) async fn app_server(env: &Env, method: &str, params: Value) -> Result<Value, String> {
     let mut cmd = env.command(&["app-server"]);
     cmd.stdin(Stdio::piped());
     let mut child = cmd
@@ -90,7 +124,7 @@ pub(crate) async fn codex(env: &Env) -> Result<AgentUsage, String> {
                 "clientInfo": {"name": brand::DAEMON_BIN, "title": brand::DAEMON_BIN, "version": env!("CARGO_PKG_VERSION")},
             }}),
             json!({"method": "initialized"}),
-            json!({"method": "account/rateLimits/read", "id": 2, "params": {"excludeResetCreditDetails": true}}),
+            json!({"method": method, "id": 2, "params": params}),
         ];
         for m in messages {
             let mut line = m.to_string();
@@ -115,17 +149,10 @@ pub(crate) async fn codex(env: &Env) -> Result<AgentUsage, String> {
                     .unwrap_or("error");
                 return Err(format!("Codex: {msg}"));
             }
-            let result = v.get("result").ok_or("Codex answered without a result")?;
-            let limits = result
-                .get("rateLimits")
-                .or_else(|| result.pointer("/rateLimitsByLimitId/codex"))
-                .ok_or("Codex reported no plan limits")?;
-            return super::codex::snapshot(
-                limits,
-                Some(crate::identity::now_millis()),
-                UsageSource::Cli,
-            )
-            .ok_or_else(|| "Codex reported no plan limits".to_owned());
+            return v
+                .get("result")
+                .cloned()
+                .ok_or_else(|| "Codex answered without a result".to_owned());
         }
         Err("codex app-server ended without answering".to_owned())
     };

@@ -320,6 +320,10 @@ bitset! {
         /// the user's panes, to show it and offer all three answers (see `proto::drive`).
         /// Bit 21 is the floating panes' `FLOATS`.
         DRIVE_ASKS = 22;
+        /// On an owner device, wants `ServerCtl::Accounts` and, while watching usage,
+        /// `ServerCtl::AccountUsage` (see `proto::account`). Bits 21 and 22 are floating
+        /// panes' and agent driving's.
+        ACCOUNTS = 23;
     }
 }
 
@@ -371,5 +375,9 @@ bitset! {
         /// Asks the owner before an agent drives one of the user's panes (`proto::drive`),
         /// instead of refusing. Bit 16 is the floating panes' `FLOATS`.
         DRIVE_ASKS = 17;
+        /// Keeps agent accounts: answers the `Account*` workspace requests, launches
+        /// `PaneLaunch::AccountAgent` and `AccountSignIn` (see `proto::account`). Bits 16 and 17 are
+        /// floating panes' and agent driving's.
+        ACCOUNTS = 18;
     }
 }

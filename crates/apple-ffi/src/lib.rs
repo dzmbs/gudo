@@ -26,6 +26,7 @@
 //! Byte payloads cross as `Data` with bulk copies ([`Bytes`], not UniFFI's byte-by-byte
 //! `Vec<u8>` converter), no serialization format. Input (`send_input`) is borrowed from Swift.
 
+mod accounts;
 mod approvals;
 mod art_types;
 mod artifacts;
@@ -53,6 +54,10 @@ use std::sync::OnceLock;
 
 use tokio::runtime::Runtime;
 
+pub use accounts::{
+    AccountDefault, AccountIdentity, AccountStatus, AccountUsage, AccountUsageReport,
+    AccountsReport, AgentAccount, PaneAccount, system_account_id,
+};
 pub use approvals::{
     ApprovalError, ApprovalEvent, ApprovalInfo, ApprovalListener, ApprovalRuleMatch,
     AutoApproveRule, DriveAsk, DriveKind, DriveOption, approval_like_this,

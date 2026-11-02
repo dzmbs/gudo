@@ -154,6 +154,32 @@ pub enum PaneLaunch {
         /// Where to start when the daemon kept no directory for it.
         cwd: Option<String>,
     },
+    /// A coding agent under one of the host's accounts (see [`crate::account`]); otherwise as
+    /// `Agent`. Needs [`DaemonFeatures::ACCOUNTS`](crate::DaemonFeatures::ACCOUNTS). A resumed
+    /// session always runs under the account that created it, whatever `account` says.
+    AccountAgent {
+        /// Which agent.
+        agent: AgentKind,
+        /// The account ([`AgentAccount::id`](crate::AgentAccount::id)); `None` uses the
+        /// tab's project default, else the host default.
+        account: Option<String>,
+        /// The agent's own session id to resume, or `None` for a fresh session.
+        resume: Option<String>,
+        /// Working directory, as for `Shell`.
+        cwd: Option<String>,
+    },
+    /// The agent's own sign-in for an account (`claude auth login`, `codex login`) with only
+    /// that account's directory in its environment, then a shell. The user completes it in
+    /// the pane; the daemon checks the account when it ends. Owner only.
+    AccountSignIn {
+        /// The account's agent.
+        agent: AgentKind,
+        /// The account.
+        account: String,
+        /// Codex: sign in with a device code (`codex login --device-auth`), for a host whose
+        /// browser is not the user's. Claude prints a URL and takes a pasted code anyway.
+        device_code: bool,
+    },
 }
 
 /// A change to the layout, sent in [`ClientCtl::Op`](crate::ClientCtl::Op).

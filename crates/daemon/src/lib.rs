@@ -24,6 +24,7 @@
 //! # }
 //! ```
 
+mod accounts;
 mod agent;
 mod anchor;
 mod approve;
