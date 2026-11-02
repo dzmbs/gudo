@@ -203,7 +203,7 @@ enum FloatingFixtures {
         lines.append("")
         let header = "    PID USER       PRI  NI  VIRT   RES   SHR S  CPU% MEM%   TIME+  Command"
         lines.append("\(sgr("30;42"))\(pad(header, cols))\(reset)")
-        let procs: [(Int, String, String, String, String, Double, Double, String, String)] = [
+        let procs: [(Int, String, String, String, String, String, Double, Double, String)] = [
             (48213, "me", "1214M", "312M", "98M", "R", 38.2, 1.9, "unnamed-hostd --foreground"),
             (51877, "me", "2104M", "540M", "122M", "S", 21.4, 3.3, "cargo test -p daemon"),
             (902, "root", "412M", "88M", "41M", "S", 9.1, 0.5, "/usr/libexec/WindowServer"),

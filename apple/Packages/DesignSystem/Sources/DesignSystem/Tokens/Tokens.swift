@@ -189,15 +189,15 @@ public extension DS {
         /// The palette and the host switcher: the top of the stack.
         case panel
 
-        func opacity(dark: Bool) -> Double {
+        public func opacity(dark: Bool) -> Double {
             switch self {
             case .float: dark ? 0.35 : 0.12
             case .panel: dark ? 0.45 : 0.16
             }
         }
 
-        var radius: CGFloat { self == .float ? 16 : 28 }
-        var y: CGFloat { self == .float ? 6 : 12 }
+        public var radius: CGFloat { self == .float ? 16 : 28 }
+        public var y: CGFloat { self == .float ? 6 : 12 }
     }
 }
 

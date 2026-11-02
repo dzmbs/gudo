@@ -141,7 +141,7 @@ enum PaletteCommands {
             (.focusNextPane, WorkspaceAction.focusNextPane.title, "arrow.right.to.line"),
             (.focusPreviousPane, WorkspaceAction.focusPreviousPane.title, "arrow.left.to.line"),
         ]
-        for (direction, image) in [(Direction.up, "arrow.up"), (.down, "arrow.down"), (.left, "arrow.left"), (.right, "arrow.right")] {
+        for (direction, image) in [(PaneLayout.Direction.up, "arrow.up"), (.down, "arrow.down"), (.left, "arrow.left"), (.right, "arrow.right")] {
             let focus = WorkspaceAction.focus(direction)
             actions.append((focus, "Focus Pane \(direction.rawValue.capitalized)", image))
             actions.append((.movePane(direction), WorkspaceAction.movePane(direction).title, "arrow.up.and.down.and.arrow.left.and.right"))
