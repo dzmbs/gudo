@@ -3,9 +3,8 @@ import Foundation
 /// How to install an agent on a host, only as its vendor documents it: Claude Code from
 /// code.claude.com/docs/en/setup, Codex from the github.com/openai/codex README.
 nonisolated struct AgentInstallGuide: Equatable, Sendable {
-    /// The vendor's one-line installer for the host's system; `nil` where it has none.
+    /// `nil` where the vendor has no one-line installer for the host's system.
     let command: String?
-    /// The vendor's installation page.
     let docs: URL
     /// What to do when the command is installed but the shell can't find it.
     let pathHelp: URL
