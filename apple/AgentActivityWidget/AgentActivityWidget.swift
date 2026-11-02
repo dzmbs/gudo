@@ -3,9 +3,8 @@ import NotifyKit
 import SwiftUI
 import WidgetKit
 
-/// The agent-run Live Activity: Lock Screen banner and Dynamic Island. Terminal-dark like the
-/// app (the activity sits next to the terminal in the user's mind), hue only for state:
-/// working amber, needs-you red, done green (the terminal palette, DESIGN.md).
+/// Agent Live Activities: Lock Screen banner and Dynamic Island. Terminal-dark like the app, with
+/// hue only for state: working amber, needs-you red, done green.
 @main
 struct AgentActivityBundle: WidgetBundle {
     var body: some Widget {
@@ -130,7 +129,7 @@ private struct LockScreenView: View {
     }
 }
 
-/// The agents Live Activity the daemons push (docs/PUSH.md §6): all hosts in one, each host's
+/// The agents Live Activity the daemons push: all hosts in one, each host's
 /// row sealed to this device and opened here with the shared sealing key. A state that does
 /// not open (a build without the push entitlement, an unpaired host) shows a neutral line.
 struct AgentsActivity: Widget {
