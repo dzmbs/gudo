@@ -69,7 +69,8 @@ Now:
 - `.gudoreplay` files are parsed as JSON. Session ids are UUIDs, keyframe names must match a
   fixed pattern, and imported sessions play offline in rrweb's script-less sandbox.
 
-**A host is not trusted with this device** (the "remote-to-local" class: VS Code Remote-SSH
+**A host is not trusted with this device** (the "remote-to-local" class, as in known VS Code Remote-SSH
+and terminal SSH-integration bugs).
 - A host may open only `http`/`https` pages, inside the in-app browser beside its pane. It can
   never open:
   - a `file:` URL, which its agent could then read through the browser tools;

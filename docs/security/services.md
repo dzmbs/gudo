@@ -38,10 +38,10 @@ Details of the push design: docs/PUSH.md.
 | Spamming a device via a leaked token (2) | Per-token budget across all daemons, separate per push kind; per-daemon and per-IP limits (IPv6 by /64, IPv4-mapped as IPv4); content stays unreadable and Approve does nothing | `limits pushes per device token across daemons`, `counts a whole IPv6 /64 as one client`, `does not let activity pushes refill…` |
 | Resource abuse of the Worker (1) | 8 KiB body cap enforced before buffering; strict JSON shapes; collapse id hex only (it becomes a header) | `refuses oversized bodies…`, `refuses header injection and loose types` |
 | Targeting another app or environment (1) | APNs topic comes only from Worker config; environment fixed inside the sealed capability | Worker tests |
-| Key leaks (all) | `.p8` and cap key only as Wrangler secrets; JWT key non-extractable; cap key rotation with `PUSH_CAP_KEY_PREVIOUS` | — |
+| Key leaks (all) | `.p8` and cap key only as Wrangler secrets; JWT key non-extractable; cap key rotation with `PUSH_CAP_KEY_PREVIOUS` | - |
 | Information leaks (1) | Generic 500s; no CORS; `nosniff`, `no-store`, CSP `default-src 'none'`, HSTS; no invocation logs, no logging of tokens, IPs or payloads | `sends security headers and no CORS` |
 | Open relay used as a free proxy (1) | `access.shared_token` required: compose refuses to start without `IROH_RELAY_ACCESS_TOKEN`, and the shipped `[""]` makes iroh-relay itself refuse to start when nobody set a token; per-connection accept limits and per-client byte limits | config parsed and started with iroh-relay 1.3.0 |
-| Relay container escape impact (1) | Non-root user, no capabilities, read-only root fs, `no-new-privileges`, memory/CPU/pids/log limits; metrics on loopback only | — |
+| Relay container escape impact (1) | Non-root user, no capabilities, read-only root fs, `no-new-privileges`, memory/CPU/pids/log limits; metrics on loopback only | - |
 
 ## Residual risk
 
@@ -78,7 +78,7 @@ Details of the push design: docs/PUSH.md.
 
 ## Validation
 
-2026-10-30). The exploit tests that guard this area:
+Each defence was checked by removing it and confirming a test fails. The exploit tests that guard this area:
 
 - Worker (`services/push-relay`, `npm test`), "attacks on the relay": concurrent copies of a
   request (16 at once, 10 rounds), a replay while the clock crosses the skew edge, a
