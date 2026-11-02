@@ -54,7 +54,6 @@ impl PullFormat {
         }
     }
 
-    /// The format called `name`.
     pub fn by_name(name: &str) -> Option<&'static Self> {
         PULL_FORMATS.iter().find(|f| f.name == name)
     }
@@ -73,11 +72,9 @@ pub struct PullCall {
     pub token: String,
     /// The pane whose session is read.
     pub pane: String,
-    /// What to do.
     pub pull: PullOp,
 }
 
-/// A pull operation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum PullOp {
@@ -118,13 +115,10 @@ pub enum PullReply {
 /// One artifact in a [`PullReply::List`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PullSummary {
-    /// The artifact id.
     pub id: u64,
     /// `drawing`, `excalidraw` or `image`.
     pub kind: String,
-    /// Its title (may be empty).
     pub title: String,
-    /// Its version.
     pub version: u64,
     /// Last change, Unix milliseconds.
     pub updated_at: u64,
@@ -145,11 +139,8 @@ pub struct PullSummary {
 /// One exported artifact in a [`PullReply::Export`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PullExport {
-    /// The artifact id.
     pub id: u64,
-    /// Its title.
     pub title: String,
-    /// The version exported.
     pub version: u64,
     /// The [`PullFormat::name`].
     pub format: String,
@@ -174,7 +165,7 @@ pub(crate) async fn serve(core: &Arc<Core>, call: PullCall) -> PullReply {
         .pane
         .parse()
         .ok()
-        .and_then(|p| core.session_of_pane(PaneId(p)))
+        .and_then(|pane| core.session_of_pane(PaneId(pane)))
     else {
         return PullReply::Error(format!("pane {} is in no session", call.pane));
     };
@@ -183,11 +174,11 @@ pub(crate) async fn serve(core: &Arc<Core>, call: PullCall) -> PullReply {
     tokio::task::spawn_blocking(move || {
         let art = &core.art;
         let mut items = art.list(session);
-        items.sort_by_key(|i| std::cmp::Reverse((i.updated_at.0, i.artifact_id.0)));
+        items.sort_by_key(|info| std::cmp::Reverse((info.updated_at.0, info.artifact_id.0)));
         match call.pull {
             PullOp::List => PullReply::List {
                 session: session.0,
-                artifacts: items.iter().map(|i| summary(art, i)).collect(),
+                artifacts: items.iter().map(|info| summary(art, info)).collect(),
             },
             PullOp::Get {
                 id,
@@ -198,11 +189,11 @@ pub(crate) async fn serve(core: &Arc<Core>, call: PullCall) -> PullReply {
         }
     })
     .await
-    .unwrap_or_else(|e| PullReply::Error(format!("export failed: {e}")))
+    .unwrap_or_else(|error| PullReply::Error(format!("export failed: {error}")))
 }
 
 fn summary(art: &super::Art, info: &ArtifactInfo) -> PullSummary {
-    let size = info.image.or(info.preview.map(|p| p.image));
+    let size = info.image.or(info.preview.map(|preview| preview.image));
     PullSummary {
         id: info.artifact_id.0,
         kind: kind_name(info.kind).into(),
@@ -213,12 +204,12 @@ fn summary(art: &super::Art, info: &ArtifactInfo) -> PullSummary {
         placed_in: art
             .placement_panes(info.artifact_id)
             .into_iter()
-            .map(|p| p.0)
+            .map(|pane| pane.0)
             .collect(),
-        canvas_in: info.canvas_panes.iter().map(|p| p.0).collect(),
-        ink_over: info.anchor.as_ref().map(|a| a.pane_id.0),
-        width: size.map(|s| s.width),
-        height: size.map(|s| s.height),
+        canvas_in: info.canvas_panes.iter().map(|pane| pane.0).collect(),
+        ink_over: info.anchor.as_ref().map(|anchor| anchor.pane_id.0),
+        width: size.map(|image| image.width),
+        height: size.map(|image| image.height),
     }
 }
 
@@ -249,30 +240,30 @@ fn get(
         // Another session's id reads as unknown, like an id that never existed.
         Some(id) => items
             .iter()
-            .find(|i| i.artifact_id.0 == id)
+            .find(|info| info.artifact_id.0 == id)
             .ok_or_else(|| format!("no artifact {id} in this session"))?,
         None => items
             .iter()
-            .find(|i| i.kind != ArtifactKind::Image)
+            .find(|info| info.kind != ArtifactKind::Image)
             .ok_or("no drawings in this session")?,
     };
     let (version, data) = match format.export {
         Some(export) => {
-            let exported =
-                super::export(art, info.artifact_id, version, export).map_err(|e| e.to_string())?;
+            let exported = super::export(art, info.artifact_id, version, export)
+                .map_err(|error| error.to_string())?;
             let data = match exported.blob {
-                Some(hash) => art.read_blob(&hash).map_err(|e| e.to_string())?.1,
+                Some(hash) => art.read_blob(&hash).map_err(|error| error.to_string())?.1,
                 None => exported.data,
             };
             (exported.version, data)
         }
         None => {
-            if version.is_some_and(|v| v != info.version) {
+            if version.is_some_and(|requested| requested != info.version) {
                 return Err("excalidraw files are of the current version only".into());
             }
             let data = art
                 .excalidraw_file(info.artifact_id)
-                .map_err(|e| e.to_string())?;
+                .map_err(|error| error.to_string())?;
             (info.version, data)
         }
     };

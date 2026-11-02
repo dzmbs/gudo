@@ -3,6 +3,7 @@
 //! Send: the PNG is written to `<state>/artifacts/<session>/send/<artifact>@<version>.png`
 //! and its absolute path is pasted into the agent pane — bracketed when the program enabled
 //! bracketed paste (Claude Code and Codex do), never followed by Enter, so the agent turns it
+//! into an `[Image #N]` attachment and the user keeps typing.
 
 use std::sync::Arc;
 
@@ -15,23 +16,26 @@ use proto::{
 use super::{INLINE_MAX, Result, failed};
 use crate::core::Core;
 
-/// `[A-Za-z0-9_./@:-]` (or non-ASCII), else every other character backslash-escaped. Verified
-/// live: Claude Code 2.1.302 and Codex 0.163.0 both attach `…/Application\ Support/…` paths;
-/// Codex refuses the raw spaced form (it shlex-splits the paste), Claude refuses `'\''`
-/// splices and `file://` URLs. `None` for paths with control characters.
+/// The text pasted for `path`: the path itself when it holds only `[A-Za-z0-9_./@:-]` (or
+/// non-ASCII), else every other character backslash-escaped. Claude Code and Codex both attach
+/// `…/Application\ Support/…` paths; Codex refuses the raw spaced form (it shlex-splits the
+/// paste), Claude Code refuses `'\''` splices and `file://` URLs. `None` for paths with
+/// control characters.
 pub(crate) fn paste_text(path: &str) -> Option<String> {
-    let mut out = String::with_capacity(path.len() + 8);
-    for c in path.chars() {
-        if c.is_control() {
+    let mut escaped = String::with_capacity(path.len() + 8);
+    for character in path.chars() {
+        if character.is_control() {
             return None;
         }
-        let plain = c.is_ascii_alphanumeric() || "_./@:-".contains(c) || !c.is_ascii();
+        let plain = character.is_ascii_alphanumeric()
+            || "_./@:-".contains(character)
+            || !character.is_ascii();
         if !plain {
-            out.push('\\');
+            escaped.push('\\');
         }
-        out.push(c);
+        escaped.push(character);
     }
-    Some(out)
+    Some(escaped)
 }
 
 /// Sends a PNG to an agent pane. Returns what was sent and the events to broadcast (a bare
@@ -39,34 +43,33 @@ pub(crate) fn paste_text(path: &str) -> Option<String> {
 pub(crate) async fn send(
     core: &Arc<Core>,
     actor: Actor,
-    req: ArtifactSend,
+    request: ArtifactSend,
 ) -> Result<(Sent, Vec<ArtifactEvent>)> {
     let entry = core
-        .pane(req.pane_id)
-        .ok_or_else(|| ArtifactError::NotFound(format!("pane {}", req.pane_id)))?;
-    if !core.is_agent_pane(req.pane_id) {
+        .pane(request.pane_id)
+        .ok_or_else(|| ArtifactError::NotFound(format!("pane {}", request.pane_id)))?;
+    if !core.is_agent_pane(request.pane_id) {
         return Err(ArtifactError::NotAgentPane);
     }
     let session = core
-        .session_of_pane(req.pane_id)
-        .ok_or_else(|| ArtifactError::NotFound(format!("pane {}", req.pane_id)))?;
+        .session_of_pane(request.pane_id)
+        .ok_or_else(|| ArtifactError::NotFound(format!("pane {}", request.pane_id)))?;
     let art = &core.art;
     let mut events = Vec::new();
 
-    // The bytes, and the artifact and version they stand for.
-    let (png, artifact_id, version) = match (&req.png, req.artifact_id) {
+    let (png, artifact_id, version) = match (&request.png, request.artifact_id) {
         (PngSource::Inline(bytes), _) if bytes.len() > INLINE_MAX => {
             return Err(ArtifactError::TooLarge(
                 "inline PNGs are at most 1 MiB; upload a blob".into(),
             ));
         }
-        (PngSource::Inline(bytes), id) => (bytes.clone(), id, req.version),
-        (PngSource::Blob(hash), id) => (art.read_blob(hash)?.1, id, req.version),
+        (PngSource::Inline(bytes), id) => (bytes.clone(), id, request.version),
+        (PngSource::Blob(hash), id) => (art.read_blob(hash)?.1, id, request.version),
         (PngSource::Artifact, None) => {
             return Err(ArtifactError::Invalid("no artifact to render".into()));
         }
         (PngSource::Artifact, Some(id)) => {
-            let exported = super::export(art, id, req.version, proto::ExportFormat::Png)?;
+            let exported = super::export(art, id, request.version, proto::ExportFormat::Png)?;
             let bytes = match exported.blob {
                 Some(hash) => art.read_blob(&hash)?.1,
                 None => exported.data,
@@ -123,8 +126,9 @@ pub(crate) async fn send(
         .pane
         .write(bytes)
         .await
-        .map_err(|_| ArtifactError::NotFound(format!("pane {} exited", req.pane_id)))?;
+        .map_err(|_| ArtifactError::NotFound(format!("pane {} exited", request.pane_id)))?;
     // Claude Code attaches the image asynchronously: a keystroke right behind the paste can
+    // land in front of the chip. Answer once it has had time to settle.
     tokio::time::sleep(std::time::Duration::from_millis(120)).await;
     Ok((
         Sent {
@@ -156,8 +160,8 @@ fn write_send_file(
     let path = dir.join(format!("{id}@{version}.{}", media.extension()));
     // Agents may read the file at any time after the paste; write it whole first.
     crate::fsutil::write_atomic(&path, bytes).map_err(failed)?;
-    let abs = std::fs::canonicalize(&path).unwrap_or(path);
-    Ok(abs.to_string_lossy().into_owned())
+    let absolute = std::fs::canonicalize(&path).unwrap_or(path);
+    Ok(absolute.to_string_lossy().into_owned())
 }
 
 /// Serves one blob stream (the caller checked the roles).
@@ -180,11 +184,11 @@ pub(crate) async fn serve_blob(
                 }
                 Ok(())
             }
-            Err(e) => Err(e),
+            Err(error) => Err(error),
         },
     };
-    if let Err(e) = result {
-        let _ = crate::net::send(&mut send, &BlobReply::Failed(e)).await;
+    if let Err(error) = result {
+        let _ = crate::net::send(&mut send, &BlobReply::Failed(error)).await;
     }
     let _ = send.finish();
     let _ = send.stopped().await;
@@ -209,7 +213,7 @@ async fn put(
     let mut bytes = vec![0; size as usize];
     recv.read_exact(&mut bytes)
         .await
-        .map_err(|e| failed(format!("upload ended early: {e}")))?;
+        .map_err(|error| failed(format!("upload ended early: {error}")))?;
     let image = core.art.put_blob(&bytes)?;
     if image.media != media {
         tracing::debug!("blob declared {media:?}, is {:?}", image.media);
@@ -226,14 +230,14 @@ mod tests {
 
     #[test]
     fn escaping_matches_the_agents_rules() {
-        let p = |s: &str| paste_text(s).unwrap();
-        assert_eq!(p("/tmp/a/1@2.png"), "/tmp/a/1@2.png");
+        let escaped = |path: &str| paste_text(path).unwrap();
+        assert_eq!(escaped("/tmp/a/1@2.png"), "/tmp/a/1@2.png");
         assert_eq!(
-            p("/Users/me/Library/Application Support/gudo/x.png"),
-            r"/Users/me/Library/Application\ Support/gudo/x.png"
+            escaped("/tmp/Library/Application Support/gudo/x.png"),
+            r"/tmp/Library/Application\ Support/gudo/x.png"
         );
-        assert_eq!(p("/t/it's (1).png"), r"/t/it\'s\ \(1\).png");
-        assert_eq!(p("/t/ü+.png"), "/t/ü\\+.png");
+        assert_eq!(escaped("/t/it's (1).png"), r"/t/it\'s\ \(1\).png");
+        assert_eq!(escaped("/t/ü+.png"), "/t/ü\\+.png");
         assert_eq!(paste_text("/t/a\nb.png"), None);
     }
 }

@@ -137,13 +137,17 @@ impl LineMarks {
         if self.phase != Phase::Prompt {
             return;
         }
-        if input.is_none() && self.inferred_at.is_some_and(|t| t.elapsed() < INFER_WINDOW) {
+        if input.is_none()
+            && self
+                .inferred_at
+                .is_some_and(|inferred_at| inferred_at.elapsed() < INFER_WINDOW)
+        {
             self.repin_inferred(term);
         }
         if !self.watch_right {
             return;
         }
-        let Some(start) = input.or(self.inferred).and_then(|p| term.pin_point(p)) else {
+        let Some(start) = input.or(self.inferred).and_then(|pin| term.pin_point(pin)) else {
             self.watch_right = false;
             return;
         };
@@ -151,8 +155,8 @@ impl LineMarks {
             self.watch_right = false;
             return;
         }
-        if let Some(rp) = right_prompt_after(term, start) {
-            self.right_prompt = Some(rp);
+        if let Some(right_prompt) = right_prompt_after(term, start) {
+            self.right_prompt = Some(right_prompt);
         }
     }
 
@@ -174,17 +178,17 @@ impl LineMarks {
     /// Cuts the remembered right prompt off a command line read off the screen (zsh leaves
     /// `RPROMPT` on the line when it runs it).
     pub fn strip_right_prompt(&self, text: &str) -> String {
-        let Some(rp) = &self.right_prompt else {
+        let Some(right_prompt) = &self.right_prompt else {
             return text.to_owned();
         };
-        let rp_text = rp.cells.concat();
-        let rp_text = rp_text.trim();
+        let right_text = right_prompt.cells.concat();
+        let right_text = right_text.trim();
         let (first, rest) = match text.split_once('\n') {
             Some((first, rest)) => (first, Some(rest)),
             None => (text, None),
         };
-        let first = match first.trim_end().strip_suffix(rp_text) {
-            Some(kept) if !rp_text.is_empty() && kept.ends_with(' ') => kept.trim_end(),
+        let first = match first.trim_end().strip_suffix(right_text) {
+            Some(kept) if !right_text.is_empty() && kept.ends_with(' ') => kept.trim_end(),
             _ => first,
         };
         match rest {
@@ -217,15 +221,18 @@ fn right_prompt_after(term: &Terminal, start: Point) -> Option<RightPrompt> {
     let row = term.row(start.y).ok()?;
     let cells = row.cells.get(usize::from(start.x)..)?;
     // Text right at the cursor is not a right prompt (a pushed buffer, a suggestion).
-    if cells.first().is_none_or(|c| !c.is_blank()) {
+    if cells.first().is_none_or(|cell| !cell.is_blank()) {
         return None;
     }
     let first = cells
         .iter()
-        .position(|c| !c.is_blank() && c.width != CellWidth::SpacerTail)?;
-    let last = cells.iter().rposition(|c| !c.is_blank())?;
+        .position(|cell| !cell.is_blank() && cell.width != CellWidth::SpacerTail)?;
+    let last = cells.iter().rposition(|cell| !cell.is_blank())?;
     Some(RightPrompt {
         col: start.x + first as u16,
-        cells: cells[first..=last].iter().map(|c| c.text.clone()).collect(),
+        cells: cells[first..=last]
+            .iter()
+            .map(|cell| cell.text.clone())
+            .collect(),
     })
 }

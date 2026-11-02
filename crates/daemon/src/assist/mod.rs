@@ -1,11 +1,12 @@
-//! foreground program per pane (D1), the prompt state and input line (D2), atomic submit
-//! (D3), persistent history (D4), completion (D5), file search for `@` mentions (D7) and the
-//! options of a blocked agent (D9).
+//! Input assistance for the mobile line editor: the foreground program per pane, the prompt
+//! state and input line, atomic submit, persistent history, completion, file search for `@`
+//! mentions and the options of a blocked agent.
 //!
 //! One task ([`run`]) samples the foreground process group of the panes clients show every
-//! [`foreground::SAMPLE`] (the rest of their sessions' panes ten times less often) and, for panes some connection watches, re-reads the
-//! prompt state whenever output arrived, pushing changes; with no client connected it sleeps. Requests are answered by [`handle`]; the policy
-//! check happens in the connection before it.
+//! [`foreground::SAMPLE`] (the rest of their sessions' panes ten times less often) and, for
+//! panes some connection watches, re-reads the prompt state whenever output arrived, pushing
+//! changes; with no client connected it sleeps. Requests are answered by [`handle`]; the
+//! policy check happens in the connection before it.
 
 pub(crate) mod blocked;
 pub(crate) mod complete;
@@ -63,12 +64,16 @@ pub(crate) struct Assist {
 }
 
 impl Assist {
-    pub fn new(cfg: &Config) -> Self {
+    pub fn new(config: &Config) -> Self {
         Self {
             watchers: Mutex::default(),
             pushed: Mutex::default(),
             foreground: Mutex::default(),
-            history: history::History::open(&cfg.state_dir, cfg.history.clone(), &cfg.home()),
+            history: history::History::open(
+                &config.state_dir,
+                config.history.clone(),
+                &config.home(),
+            ),
             completion: complete::Caches::default(),
             files: files::FileIndex::default(),
         }
@@ -78,13 +83,13 @@ impl Assist {
     pub fn watching(&self, conn: ConnId, pane: PaneId) -> bool {
         lock(&self.watchers)
             .get(&pane)
-            .is_some_and(|w| w.contains(&conn))
+            .is_some_and(|watchers| watchers.contains(&conn))
     }
 
     fn set_watch(&self, conn: ConnId, pane: PaneId, on: bool) {
         let mut watchers = lock(&self.watchers);
         let list = watchers.entry(pane).or_default();
-        list.retain(|&c| c != conn);
+        list.retain(|&watcher| watcher != conn);
         if on {
             list.push(conn);
         }
@@ -94,22 +99,20 @@ impl Assist {
         }
     }
 
-    /// A connection closed.
     pub fn forget_conn(&self, conn: ConnId) {
         let mut watchers = lock(&self.watchers);
         watchers.retain(|_, list| {
-            list.retain(|&c| c != conn);
+            list.retain(|&watcher| watcher != conn);
             !list.is_empty()
         });
         let watched: Vec<PaneId> = watchers.keys().copied().collect();
-        lock(&self.pushed).retain(|p, _| watched.contains(p));
+        lock(&self.pushed).retain(|pane, _| watched.contains(pane));
     }
 
-    /// The pane's reported foreground program.
     fn reported(&self, pane: PaneId) -> Option<Foreground> {
         lock(&self.foreground)
             .get(&pane)
-            .and_then(|t| t.current().cloned())
+            .and_then(|tracker| tracker.current().cloned())
     }
 
     /// The pane's foreground program: the reported one, else read now (panes no client sees
@@ -120,14 +123,10 @@ impl Assist {
                 .pane
                 .pty()
                 .foreground_process()
-                .map(|p| foreground::foreground(entry.pane.id, p))
+                .map(|process| foreground::foreground(entry.pane.id, process))
         })
     }
 }
-
-// ---------------------------------------------------------------------------------------------
-// Prompt state
-// ---------------------------------------------------------------------------------------------
 
 fn shell_kind(name: &str) -> ShellKind {
     match name
@@ -147,27 +146,26 @@ fn shell_kind(name: &str) -> ShellKind {
 /// configured shell.
 fn pane_shell(core: &Core, entry: &PaneEntry) -> ShellKind {
     match core.assist.foreground(entry) {
-        Some(fg) if fg.profile == ProgramProfile::Shell => shell_kind(&fg.name),
+        Some(program) if program.profile == ProgramProfile::Shell => shell_kind(&program.name),
         _ => shell_kind(&core.cfg.shell().to_string_lossy()),
     }
 }
 
-/// Builds the wire state from a snapshot.
-fn state_of(pane: PaneId, snap: &LineSnapshot, shell: ShellKind) -> PromptState {
-    let phase = match snap.view.phase {
+fn state_of(pane: PaneId, snapshot: &LineSnapshot, shell: ShellKind) -> PromptState {
+    let phase = match snapshot.view.phase {
         Phase::Running(id) => PromptPhase::Running { command_id: id },
-        Phase::Prompt if !snap.alt => match &snap.screen {
+        Phase::Prompt if !snapshot.alt => match &snapshot.screen {
             Some(screen) => {
-                let r = line::read(screen, &snap.view);
+                let input = line::read(screen, &snapshot.view);
                 PromptPhase::AtPrompt(PromptInput {
-                    confident: r.doubt.is_none(),
-                    text: r.text,
-                    cursor: r.cursor,
-                    doubt: r.doubt,
-                    suggestion: r.suggestion,
-                    right_prompt: r.right_prompt,
+                    confident: input.doubt.is_none(),
+                    text: input.text,
+                    cursor: input.cursor,
+                    doubt: input.doubt,
+                    suggestion: input.suggestion,
+                    right_prompt: input.right_prompt,
                     shell,
-                    bracketed_paste: snap.bracketed,
+                    bracketed_paste: snapshot.bracketed,
                     keymap: Keymap::Unknown,
                 })
             }
@@ -179,7 +177,7 @@ fn state_of(pane: PaneId, snap: &LineSnapshot, shell: ShellKind) -> PromptState 
                 suggestion: None,
                 right_prompt: false,
                 shell,
-                bracketed_paste: snap.bracketed,
+                bracketed_paste: snapshot.bracketed,
                 keymap: Keymap::Unknown,
             }),
         },
@@ -187,16 +185,16 @@ fn state_of(pane: PaneId, snap: &LineSnapshot, shell: ShellKind) -> PromptState 
     };
     PromptState {
         pane_id: pane,
-        prompt_id: snap.view.prompt_id,
-        at_seq: snap.at_seq,
+        prompt_id: snapshot.view.prompt_id,
+        at_seq: snapshot.at_seq,
         phase,
     }
 }
 
 /// The pane's prompt state now.
 pub(crate) fn prompt_state(core: &Core, entry: &PaneEntry) -> PromptState {
-    let snap = entry.pane.line_snapshot();
-    state_of(entry.pane.id, &snap, pane_shell(core, entry))
+    let snapshot = entry.pane.line_snapshot();
+    state_of(entry.pane.id, &snapshot, pane_shell(core, entry))
 }
 
 fn pane_assist(core: &Core, entry: &PaneEntry) -> PaneAssist {
@@ -249,7 +247,7 @@ pub(crate) async fn run(core: Arc<Core>) {
             foreground::SAMPLE
         })
         .await;
-        if last_sample.is_none_or(|t| t.elapsed() >= foreground::SAMPLE) {
+        if last_sample.is_none_or(|sampled_at| sampled_at.elapsed() >= foreground::SAMPLE) {
             last_sample = Some(Instant::now());
             samples += 1;
             // The first sample after a client arrives covers every pane.
@@ -310,7 +308,7 @@ fn sample_foregrounds(core: &Core, reads: &mut ProcessReads, all: bool) {
     // The process lookups happen before the trackers are locked.
     let samples: Vec<(PaneId, Option<pty::ForegroundProcess>)> = attached
         .iter()
-        .filter(|(id, _)| viewed.as_ref().is_none_or(|v| v.contains(id)))
+        .filter(|(id, _)| viewed.as_ref().is_none_or(|viewed| viewed.contains(id)))
         .map(|(id, entry)| (*id, reads.read(*id, entry, now)))
         .collect();
     let mut changed = Vec::new();
@@ -319,17 +317,17 @@ fn sample_foregrounds(core: &Core, reads: &mut ProcessReads, all: bool) {
         if all {
             reads
                 .0
-                .retain(|p, _| attached.iter().any(|(id, _)| id == p));
-            trackers.retain(|p, _| attached.iter().any(|(id, _)| id == p));
+                .retain(|pane, _| attached.iter().any(|(id, _)| id == pane));
+            trackers.retain(|pane, _| attached.iter().any(|(id, _)| id == pane));
         }
         for (id, process) in samples {
-            if let Some(fg) = trackers.entry(id).or_default().sample(id, process, now) {
-                changed.push(fg);
+            if let Some(program) = trackers.entry(id).or_default().sample(id, process, now) {
+                changed.push(program);
             }
         }
     }
-    for fg in changed {
-        core.emit(Event::Assist(AssistPush::Foreground(fg)));
+    for program in changed {
+        core.emit(Event::Assist(AssistPush::Foreground(program)));
     }
 }
 
@@ -363,10 +361,6 @@ fn refresh_prompts(core: &Core) {
     }
 }
 
-// ---------------------------------------------------------------------------------------------
-// Requests
-// ---------------------------------------------------------------------------------------------
-
 /// Who is asking.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Caller {
@@ -378,22 +372,21 @@ fn pane_entry(core: &Core, pane: PaneId) -> Result<Arc<PaneEntry>, AssistError> 
     core.pane(pane).ok_or(AssistError::UnknownPane)
 }
 
-/// Runs `f` on the blocking pool.
 async fn blocking<T: Send + 'static>(
-    f: impl FnOnce() -> Result<T, AssistError> + Send + 'static,
+    work: impl FnOnce() -> Result<T, AssistError> + Send + 'static,
 ) -> Result<T, AssistError> {
-    tokio::task::spawn_blocking(f)
+    tokio::task::spawn_blocking(work)
         .await
-        .unwrap_or_else(|e| Err(AssistError::Failed(e.to_string())))
+        .unwrap_or_else(|error| Err(AssistError::Failed(error.to_string())))
 }
 
 /// Answers one request (already allowed by the policy).
 pub(crate) async fn handle(
     core: &Arc<Core>,
     caller: Caller,
-    req: AssistRequest,
+    request: AssistRequest,
 ) -> Result<AssistResponse, AssistError> {
-    match req {
+    match request {
         AssistRequest::Watch { pane_id, watch } => {
             let entry = pane_entry(core, pane_id)?;
             core.assist.set_watch(caller.conn, pane_id, watch);
@@ -413,44 +406,44 @@ pub(crate) async fn handle(
             let core = Arc::clone(core);
             blocking(move || Ok(AssistResponse::History(core.assist.history.query(&query)))).await
         }
-        AssistRequest::Complete(req) => {
-            let entry = pane_entry(core, req.pane_id)?;
+        AssistRequest::Complete(request) => {
+            let entry = pane_entry(core, request.pane_id)?;
             let cwd = lock(&entry.meta).cwd.clone().map(PathBuf::from);
             let path_var = crate::procinfo::process_env_var(entry.pane.pty().pid(), "PATH")
                 .map(Into::into)
                 .or_else(|| core.cfg.pane_var("PATH"));
             let core = Arc::clone(core);
             blocking(move || {
-                let ctx = complete::Context {
+                let context = complete::Context {
                     cwd,
                     home: core.cfg.home(),
                     path_var,
                     history: &core.assist.history,
-                    limit: (req.limit as usize).clamp(1, MAX_COMPLETIONS),
+                    limit: (request.limit as usize).clamp(1, MAX_COMPLETIONS),
                 };
                 let items = complete::complete(
-                    &ctx,
+                    &context,
                     &core.assist.completion,
-                    &req.line,
-                    req.cursor as usize,
+                    &request.line,
+                    request.cursor as usize,
                 );
                 Ok(AssistResponse::Completions(proto::Completions {
-                    cwd: ctx.cwd.map(|c| c.to_string_lossy().into_owned()),
+                    cwd: context.cwd.map(|cwd| cwd.to_string_lossy().into_owned()),
                     items,
                 }))
             })
             .await
         }
         AssistRequest::FileSearch(search) => {
-            let root = core
-                .ws
-                .policy
-                .resolve_followed(&search.root)
-                .map_err(|e| match e {
-                    proto::WsError::Denied(why) => AssistError::Denied(why),
-                    proto::WsError::Invalid(why) => AssistError::Invalid(why),
-                    other => AssistError::NotFound(other.to_string()),
-                })?;
+            let root =
+                core.ws
+                    .policy
+                    .resolve_followed(&search.root)
+                    .map_err(|error| match error {
+                        proto::WsError::Denied(why) => AssistError::Denied(why),
+                        proto::WsError::Invalid(why) => AssistError::Invalid(why),
+                        other => AssistError::NotFound(other.to_string()),
+                    })?;
             if !root.is_dir() {
                 return Err(AssistError::NotFound(format!(
                     "{} is not a directory",
@@ -475,44 +468,47 @@ pub(crate) async fn handle(
     }
 }
 
-/// D3: verifies the prompt, then writes clear + paste + Return in one write.
+/// Verifies the prompt, then writes clear + paste + Return in one write.
 async fn submit_line(
     core: &Arc<Core>,
     caller: Caller,
-    req: SubmitLine,
+    request: SubmitLine,
 ) -> Result<AssistResponse, AssistError> {
-    let entry = pane_entry(core, req.pane_id)?;
-    let snap = entry.pane.line_snapshot();
-    let state = state_of(req.pane_id, &snap, pane_shell(core, &entry));
+    let entry = pane_entry(core, request.pane_id)?;
+    let snapshot = entry.pane.line_snapshot();
+    let state = state_of(request.pane_id, &snapshot, pane_shell(core, &entry));
     // Sampled now, not the debounced report: a program started a moment ago owns the line.
     let shell_in_front = entry
         .pane
         .pty()
         .foreground_process()
-        .is_some_and(|p| ProgramProfile::classify(&p.name, &p.argv) == ProgramProfile::Shell);
+        .is_some_and(|process| {
+            ProgramProfile::classify(&process.name, &process.argv) == ProgramProfile::Shell
+        });
     let at_prompt = matches!(state.phase, PromptPhase::AtPrompt(_))
-        && state.prompt_id == req.prompt_id
-        && !snap.view.continuation
+        && state.prompt_id == request.prompt_id
+        && !snapshot.view.continuation
         && shell_in_front;
     if !at_prompt {
         return Err(AssistError::NotAtPrompt(state));
     }
-    submit::check(&req.text, snap.bracketed).map_err(|e| AssistError::Invalid(e.to_string()))?;
+    submit::check(&request.text, snapshot.bracketed)
+        .map_err(|error| AssistError::Invalid(error.to_string()))?;
     // One driver at a time: the same lease rule as raw input.
-    if let Err(lease) = core.mp.input(core, req.pane_id, caller.actor) {
+    if let Err(lease) = core.mp.input(core, request.pane_id, caller.actor) {
         core.emit(Event::Lease(lease));
         return Err(AssistError::Denied(
             "another participant holds this pane's control lease".into(),
         ));
     }
-    let paste = entry.pane.encode_input(InputPayload::Paste(req.text));
+    let paste = entry.pane.encode_input(InputPayload::Paste(request.text));
     let at_seq = entry
         .pane
-        .write(submit::bytes(&paste, req.run))
+        .write(submit::bytes(&paste, request.run))
         .await
         .map_err(|_| AssistError::UnknownPane)?;
     Ok(AssistResponse::Submitted {
-        prompt_id: req.prompt_id,
+        prompt_id: request.prompt_id,
         at_seq,
     })
 }
@@ -525,19 +521,21 @@ fn choice_of(choice: agents::ApprovalChoice) -> BlockedChoice {
     }
 }
 
-/// D9: the blocked agent's options, from its hook when it holds the request open, with keys
+/// The blocked agent's options, from its hook when it holds the request open, with keys
 /// from the menu on screen.
 fn blocked_prompt(core: &Core, entry: &PaneEntry) -> Option<BlockedPrompt> {
     let pane = entry.pane.id;
-    let detail = lock(&entry.agent).as_mut().map(|rt| rt.blocked_detail());
+    let detail = lock(&entry.agent)
+        .as_mut()
+        .map(|runtime| runtime.blocked_detail());
     let detail = detail?;
     let menu = blocked::parse_menu(&entry.pane.screen_text());
     let (request_id, summary, hook_options, hook_held) = match &detail {
-        Some(d) => (
-            Some(d.wire),
-            d.summary.clone(),
-            d.options.clone(),
-            core.hooks.is_pending(pane, &d.request),
+        Some(blocked) => (
+            Some(blocked.wire),
+            blocked.summary.clone(),
+            blocked.options.clone(),
+            core.hooks.is_pending(pane, &blocked.request),
         ),
         None => (None, String::new(), Vec::new(), false),
     };
@@ -555,25 +553,25 @@ fn blocked_prompt(core: &Core, entry: &PaneEntry) -> Option<BlockedPrompt> {
                 let on_screen = if menu.len() == hook_options.len() {
                     menu.get(i)
                 } else {
-                    menu.iter().find(|m| m.choice == choice)
+                    menu.iter().find(|item| item.choice == choice)
                 };
                 BlockedOption {
                     label: label.clone(),
                     choice,
                     option_id: hook_held.then_some(OptionId(i as u32)),
-                    keys: on_screen.map(|m| m.keys.clone()).unwrap_or_default(),
-                    selected: on_screen.is_some_and(|m| m.selected),
+                    keys: on_screen.map(|item| item.keys.clone()).unwrap_or_default(),
+                    selected: on_screen.is_some_and(|item| item.selected),
                 }
             })
             .collect()
     } else {
         menu.iter()
-            .map(|m| BlockedOption {
-                label: m.label.clone(),
-                choice: m.choice,
+            .map(|item| BlockedOption {
+                label: item.label.clone(),
+                choice: item.choice,
                 option_id: None,
-                keys: m.keys.clone(),
-                selected: m.selected,
+                keys: item.keys.clone(),
+                selected: item.selected,
             })
             .collect()
     };
@@ -593,7 +591,7 @@ fn blocked_prompt(core: &Core, entry: &PaneEntry) -> Option<BlockedPrompt> {
     })
 }
 
-/// D9: picks a menu option by typing its keys, after re-reading the menu.
+/// Picks a menu option by typing its keys, after re-reading the menu.
 async fn answer_blocked(
     core: &Arc<Core>,
     answer: AnswerBlocked,
@@ -605,7 +603,7 @@ async fn answer_blocked(
     let menu = blocked::parse_menu(&entry.pane.screen_text());
     let option = menu
         .get(answer.index as usize)
-        .filter(|m| m.label == answer.label)
+        .filter(|item| item.label == answer.label)
         .ok_or_else(|| {
             AssistError::NotFound(format!(
                 "the dialog no longer offers {:?} as option {}",

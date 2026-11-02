@@ -31,15 +31,15 @@ pub(super) fn load(dir: &Path) -> io::Result<ExScene> {
     let mut scene = ExScene::new();
     if let Some(bytes) = read_optional(&dir.join("excalidraw.bin"))? {
         let disk: Disk = postcard::from_bytes(&bytes).map_err(io::Error::other)?;
-        for (el, rev) in disk.elements {
-            scene.restore(el, rev);
+        for (element, revision) in disk.elements {
+            scene.restore(element, revision);
         }
         scene.revision = scene.revision.max(disk.revision);
         scene.app_state = disk.app_state;
         scene.files = disk
             .files
             .into_iter()
-            .map(|f| (f.file_id.clone(), f))
+            .map(|ex_file| (ex_file.file_id.clone(), ex_file))
             .collect();
     }
     Ok(scene)
@@ -55,46 +55,46 @@ pub(crate) struct Applied {
 }
 
 impl Art {
-    /// The scene, or what changed after `since`.
     pub fn ex_get(&self, id: ArtifactId, since: u64) -> Result<ExcalidrawScene> {
-        let st = lock(&self.state);
-        let it = st.items.get(&id).ok_or_else(|| not_found(id))?;
-        let ex = it
+        let state = lock(&self.state);
+        let item = state.items.get(&id).ok_or_else(|| not_found(id))?;
+        let scene = item
             .ex
             .as_ref()
             .ok_or_else(|| ArtifactError::Invalid("not an Excalidraw scene".into()))?;
         Ok(ExcalidrawScene {
-            info: it.info.clone(),
-            elements: ex.changed_since(since),
-            app_state: ex.app_state.clone(),
-            files: ex.files.values().cloned().collect(),
+            info: item.info.clone(),
+            elements: scene.changed_since(since),
+            app_state: scene.app_state.clone(),
+            files: scene.files.values().cloned().collect(),
         })
     }
 
     /// Reconciles offered elements, app state and files.
     pub fn ex_put(&self, put: ExcalidrawPut) -> Result<Applied> {
-        for el in &put.elements {
-            if el.json.len() > ELEMENT_MAX || el.id.len() > 256 {
+        for element in &put.elements {
+            if element.json.len() > ELEMENT_MAX || element.id.len() > 256 {
                 return Err(ArtifactError::TooLarge(format!(
                     "element {:.40} is over {ELEMENT_MAX} bytes",
-                    el.id
+                    element.id
                 )));
             }
             // The fields we reconcile on must be the element's own.
-            let parsed = drawing::parse_element(&el.json).map_err(ArtifactError::Invalid)?;
-            if parsed.id != el.id
-                || parsed.version != el.version
-                || parsed.version_nonce != el.version_nonce
-                || parsed.deleted != el.deleted
+            let parsed = drawing::parse_element(&element.json).map_err(ArtifactError::Invalid)?;
+            if parsed.id != element.id
+                || parsed.version != element.version
+                || parsed.version_nonce != element.version_nonce
+                || parsed.deleted != element.deleted
             {
                 return Err(ArtifactError::Invalid(format!(
                     "element {:.40}: fields disagree with its JSON",
-                    el.id
+                    element.id
                 )));
             }
         }
-        if let Some(a) = &put.app_state
-            && (a.len() > 64 << 10 || serde_json::from_str::<serde_json::Value>(a).is_err())
+        if let Some(app_state) = &put.app_state
+            && (app_state.len() > 64 << 10
+                || serde_json::from_str::<serde_json::Value>(app_state).is_err())
         {
             return Err(ArtifactError::Invalid(
                 "app state must be JSON under 64 KiB".into(),
@@ -102,29 +102,29 @@ impl Art {
         }
         // Files must be stored blobs; trust our own reading of them, not the offer.
         let mut files = Vec::new();
-        for f in &put.files {
-            let (image, _) = self.read_blob(&f.image.hash)?;
+        for offered in &put.files {
+            let (image, _) = self.read_blob(&offered.image.hash)?;
             files.push(ExFile {
-                file_id: f.file_id.clone(),
+                file_id: offered.file_id.clone(),
                 image,
             });
         }
-        let mut st = lock(&self.state);
-        let it = st
+        let mut state = lock(&self.state);
+        let item = state
             .items
             .get_mut(&put.artifact_id)
             .ok_or_else(|| not_found(put.artifact_id))?;
-        if it.info.kind != ArtifactKind::Excalidraw {
+        if item.info.kind != ArtifactKind::Excalidraw {
             return Err(ArtifactError::Invalid("not an Excalidraw scene".into()));
         }
-        let ex = it.ex.get_or_insert_with(ExScene::new);
-        let mut trial = ex.clone();
+        let scene = item.ex.get_or_insert_with(ExScene::new);
+        let mut trial = scene.clone();
         let (won, lost) = trial.merge(put.elements);
-        if let Some(a) = &put.app_state {
-            trial.app_state = Some(a.clone());
+        if let Some(app_state) = &put.app_state {
+            trial.app_state = Some(app_state.clone());
         }
-        for f in &files {
-            trial.files.insert(f.file_id.clone(), f.clone());
+        for ex_file in &files {
+            trial.files.insert(ex_file.file_id.clone(), ex_file.clone());
         }
         if trial.bytes() as u64 > self.limits.log_max {
             return Err(ArtifactError::TooLarge(format!(
@@ -133,19 +133,19 @@ impl Art {
             )));
         }
         let changed = !won.is_empty() || put.app_state.is_some() || !files.is_empty();
-        if changed && trial.revision == ex.revision {
+        if changed && trial.revision == scene.revision {
             // App state or files alone still make a new revision.
             trial.revision += 1;
         }
-        *ex = trial;
-        it.info.version = ex.revision;
-        it.info.elements = ex.live() as u32;
+        *scene = trial;
+        item.info.version = scene.revision;
+        item.info.elements = scene.live() as u32;
         if changed {
-            it.info.updated_at = UnixMillis(now_millis());
-            it.ex_dirty = true;
+            item.info.updated_at = UnixMillis(now_millis());
+            item.ex_dirty = true;
         }
         Ok(Applied {
-            info: it.info.clone(),
+            info: item.info.clone(),
             won,
             lost,
             app_state: put.app_state,
@@ -156,27 +156,31 @@ impl Art {
     /// Writes every Excalidraw scene that changed (called each second and on shutdown).
     pub fn flush(&self) {
         let dirty: Vec<(ArtifactInfo, Vec<u8>)> = {
-            let mut st = lock(&self.state);
-            st.items
+            let mut state = lock(&self.state);
+            state
+                .items
                 .values_mut()
-                .filter(|it| it.ex_dirty)
-                .filter_map(|it| {
-                    it.ex_dirty = false;
-                    let ex = it.ex.as_ref()?;
+                .filter(|item| item.ex_dirty)
+                .filter_map(|item| {
+                    item.ex_dirty = false;
+                    let scene = item.ex.as_ref()?;
                     let disk = Disk {
-                        revision: ex.revision,
-                        elements: ex.with_revisions().map(|(e, r)| (e.clone(), r)).collect(),
-                        app_state: ex.app_state.clone(),
-                        files: ex.files.values().cloned().collect(),
+                        revision: scene.revision,
+                        elements: scene
+                            .with_revisions()
+                            .map(|(element, revision)| (element.clone(), revision))
+                            .collect(),
+                        app_state: scene.app_state.clone(),
+                        files: scene.files.values().cloned().collect(),
                     };
-                    Some((it.info.clone(), postcard::to_stdvec(&disk).ok()?))
+                    Some((item.info.clone(), postcard::to_stdvec(&disk).ok()?))
                 })
                 .collect()
         };
         for (info, bytes) in dirty {
             let dir = self.item_dir(&info);
-            if let Err(e) = write_atomic(&dir.join("excalidraw.bin"), &bytes) {
-                tracing::warn!("saving Excalidraw scene {}: {e}", info.artifact_id);
+            if let Err(error) = write_atomic(&dir.join("excalidraw.bin"), &bytes) {
+                tracing::warn!("saving Excalidraw scene {}: {error}", info.artifact_id);
             }
             self.save_info(&info);
         }
@@ -190,9 +194,9 @@ impl Art {
             (ArtifactKind::Excalidraw, _) => {
                 let scene = self.ex_get(id, 0)?;
                 let mut files = Vec::with_capacity(scene.files.len());
-                for f in scene.files {
-                    let (image, bytes) = self.read_blob(&f.image.hash)?;
-                    files.push((f.file_id, image.media.mime().to_owned(), bytes));
+                for ex_file in scene.files {
+                    let (image, bytes) = self.read_blob(&ex_file.image.hash)?;
+                    files.push((ex_file.file_id, image.media.mime().to_owned(), bytes));
                 }
                 drawing::ExcalidrawFile {
                     elements: scene.elements,
@@ -257,10 +261,10 @@ impl Art {
             files,
         });
         match applied {
-            Ok(a) => Ok(a.info),
-            Err(e) => {
+            Ok(applied) => Ok(applied.info),
+            Err(error) => {
                 let _ = self.delete(info.artifact_id);
-                Err(e)
+                Err(error)
             }
         }
     }

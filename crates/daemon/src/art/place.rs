@@ -1,4 +1,5 @@
 //! Inline placements: artifacts shown in a terminal pane, glued to an output row, so a
+//! finished drawing becomes part of the pane's output.
 //!
 //! Placements travel as `ArtifactEvent::Placed` and are sent again on `Attach`; their rows
 //! are tracked pins like ink anchors. Two ways in: a person places an artifact (the overlay's
@@ -26,36 +27,35 @@ const CELL_PX: (f32, f32) = (18.0, 36.0);
 
 impl Art {
     fn alloc_placement(&self) -> u64 {
-        let mut st = lock(&self.state);
-        st.next_placement = st.next_placement.max(1);
-        let id = st.next_placement;
-        st.next_placement += 1;
+        let mut state = lock(&self.state);
+        state.next_placement = state.next_placement.max(1);
+        let id = state.next_placement;
+        state.next_placement += 1;
         id
     }
 
-    fn insert_placement(&self, p: Placement, key: u64) {
-        let mut st = lock(&self.state);
-        st.anchor_keys.insert(p.placement_id, key);
-        st.placements.insert(p.placement_id, p);
-        self.save_index(&st);
+    fn insert_placement(&self, placement: Placement, key: u64) {
+        let mut state = lock(&self.state);
+        state.anchor_keys.insert(placement.placement_id, key);
+        state.placements.insert(placement.placement_id, placement);
+        self.save_index(&state);
     }
 
     /// Removes a placement; returns it with its anchor key.
     pub fn remove_placement(&self, id: u64) -> Option<(Placement, u64)> {
-        let mut st = lock(&self.state);
-        let p = st.placements.remove(&id)?;
-        let key = st.anchor_keys.remove(&id).unwrap_or(PLACEMENT_KEY | id);
-        self.save_index(&st);
-        Some((p, key))
+        let mut state = lock(&self.state);
+        let placement = state.placements.remove(&id)?;
+        let key = state.anchor_keys.remove(&id).unwrap_or(PLACEMENT_KEY | id);
+        self.save_index(&state);
+        Some((placement, key))
     }
 
-    /// Panes an artifact is placed in.
     pub fn placement_panes(&self, artifact: ArtifactId) -> Vec<PaneId> {
         lock(&self.state)
             .placements
             .values()
-            .filter(|p| p.artifact_id == artifact)
-            .map(|p| p.pane_id)
+            .filter(|placement| placement.artifact_id == artifact)
+            .map(|placement| placement.pane_id)
             .collect()
     }
 
@@ -68,7 +68,7 @@ impl Art {
         lock(&self.state)
             .placements
             .values()
-            .filter(|p| p.pane_id == pane)
+            .filter(|placement| placement.pane_id == pane)
             .cloned()
             .collect()
     }
@@ -76,38 +76,39 @@ impl Art {
     /// Refreshes live placements' rows; returns those that detached (to broadcast).
     pub fn check_placements(&self, core: &Core) -> Vec<Placement> {
         let live: Vec<(u64, u64, PaneId)> = {
-            let st = lock(&self.state);
-            st.placements
+            let state = lock(&self.state);
+            state
+                .placements
                 .values()
-                .filter(|p| p.anchor.state == AnchorState::Live)
-                .map(|p| {
-                    let key = st
+                .filter(|placement| placement.anchor.state == AnchorState::Live)
+                .map(|placement| {
+                    let key = state
                         .anchor_keys
-                        .get(&p.placement_id)
+                        .get(&placement.placement_id)
                         .copied()
-                        .unwrap_or(PLACEMENT_KEY | p.placement_id);
-                    (p.placement_id, key, p.pane_id)
+                        .unwrap_or(PLACEMENT_KEY | placement.placement_id);
+                    (placement.placement_id, key, placement.pane_id)
                 })
                 .collect()
         };
         let mut changed = Vec::new();
         for (id, key, pane) in live {
-            let pos = match core.pane(pane) {
+            let position = match core.pane(pane) {
                 None => AnchorPos::Detached(DetachReason::PaneClosed),
-                Some(e) => e
+                Some(entry) => entry
                     .pane
                     .anchor_position(key)
                     .unwrap_or(AnchorPos::Detached(DetachReason::RowGone)),
             };
-            let mut st = lock(&self.state);
-            let Some(p) = st.placements.get_mut(&id) else {
+            let mut state = lock(&self.state);
+            let Some(placement) = state.placements.get_mut(&id) else {
                 continue;
             };
-            let detached = matches!(pos, AnchorPos::Detached(_));
-            p.anchor = row_anchor(pane, pos, p.anchor.command_id);
+            let detached = matches!(position, AnchorPos::Detached(_));
+            placement.anchor = row_anchor(pane, position, placement.anchor.command_id);
             if detached {
-                changed.push(p.clone());
-                self.save_index(&st);
+                changed.push(placement.clone());
+                self.save_index(&state);
             }
         }
         changed
@@ -118,7 +119,7 @@ impl Art {
 /// size at the pane's cell size (2× renders of 9×18 pt cells when the client sent no pixel
 /// size), at most the pane's width.
 fn size_for(image: &ImageRef, pane: PaneSize, col: u16, cols: u16, rows: u16) -> (u16, u16) {
-    let (cw, ch) = if pane.width_px > 0 && pane.height_px > 0 {
+    let (cell_width, cell_height) = if pane.width_px > 0 && pane.height_px > 0 {
         (
             f32::from(pane.width_px) / f32::from(pane.cols.max(1)),
             f32::from(pane.height_px) / f32::from(pane.rows.max(1)),
@@ -130,13 +131,13 @@ fn size_for(image: &ImageRef, pane: PaneSize, col: u16, cols: u16, rows: u16) ->
     let cols = if cols > 0 {
         cols.min(room)
     } else {
-        ((image.width as f32 / cw).round() as u16).clamp(1, room)
+        ((image.width as f32 / cell_width).round() as u16).clamp(1, room)
     };
     let rows = if rows > 0 {
         rows
     } else {
         let aspect = image.height as f32 / image.width.max(1) as f32;
-        ((f32::from(cols) * cw * aspect / ch).round() as u16).max(1)
+        ((f32::from(cols) * cell_width * aspect / cell_height).round() as u16).max(1)
     };
     (cols, rows.min(500))
 }
@@ -168,28 +169,28 @@ fn image_for(
 /// placement and the one it replaced.
 pub(crate) fn place(
     core: &Arc<Core>,
-    req: PlaceRequest,
+    request: PlaceRequest,
     source: PlacementSource,
 ) -> Result<(Placement, Option<Placement>)> {
     let entry = core
-        .pane(req.pane_id)
-        .ok_or_else(|| ArtifactError::NotFound(format!("terminal pane {}", req.pane_id)))?;
+        .pane(request.pane_id)
+        .ok_or_else(|| ArtifactError::NotFound(format!("terminal pane {}", request.pane_id)))?;
     let info = core
         .art
-        .info(req.artifact_id)
-        .ok_or_else(|| ArtifactError::NotFound(format!("artifact {}", req.artifact_id)))?;
-    if core.session_of_pane(req.pane_id) != Some(info.session_id) {
+        .info(request.artifact_id)
+        .ok_or_else(|| ArtifactError::NotFound(format!("artifact {}", request.artifact_id)))?;
+    if core.session_of_pane(request.pane_id) != Some(info.session_id) {
         return Err(ArtifactError::Invalid(
             "the artifact belongs to another session".into(),
         ));
     }
-    let (version, image) = image_for(&core.art, req.artifact_id, req.version, req.png)?;
+    let (version, image) = image_for(&core.art, request.artifact_id, request.version, request.png)?;
     let id = core.art.alloc_placement();
     let key = PLACEMENT_KEY | id;
-    let (pos, command_id) = match req.anchor {
-        Some(a) if a.pane_id == req.pane_id => entry
+    let (position, command_id) = match request.anchor {
+        Some(anchor) if anchor.pane_id == request.pane_id => entry
             .pane
-            .anchor_create(key, a.at_seq, a.from_bottom)
+            .anchor_create(key, anchor.at_seq, anchor.from_bottom)
             .map_err(ArtifactError::Invalid)?,
         Some(_) => {
             return Err(ArtifactError::Invalid(
@@ -204,19 +205,25 @@ pub(crate) fn place(
             None,
         ),
     };
-    let (cols, rows) = size_for(&image, entry.pane.size(), req.col, req.cols, req.rows);
-    let replaced = match req.replace {
+    let (cols, rows) = size_for(
+        &image,
+        entry.pane.size(),
+        request.col,
+        request.cols,
+        request.rows,
+    );
+    let replaced = match request.replace {
         Some(old) => unplace(core, old),
         None => None,
     };
     let placement = Placement {
         placement_id: id,
-        pane_id: req.pane_id,
-        artifact_id: req.artifact_id,
+        pane_id: request.pane_id,
+        artifact_id: request.artifact_id,
         version,
         image,
-        anchor: row_anchor(req.pane_id, pos, command_id),
-        col: req.col,
+        anchor: row_anchor(request.pane_id, position, command_id),
+        col: request.col,
         cols,
         rows,
         source,
@@ -237,41 +244,43 @@ pub(crate) fn reshow(
     let ids: Vec<u64> = lock(&core.art.state)
         .placements
         .values()
-        .filter(|p| p.artifact_id == artifact)
-        .map(|p| p.placement_id)
+        .filter(|placement| placement.artifact_id == artifact)
+        .map(|placement| placement.placement_id)
         .collect();
     let mut changed = Vec::new();
     for id in ids {
         let size = {
-            let st = lock(&core.art.state);
-            st.placements.get(&id).map(|p| (p.pane_id, p.col, p.cols))
+            let state = lock(&core.art.state);
+            state
+                .placements
+                .get(&id)
+                .map(|placement| (placement.pane_id, placement.col, placement.cols))
         };
         let Some((pane, col, cols)) = size else {
             continue;
         };
-        let pane_size = core.pane(pane).map(|e| e.pane.size());
-        let mut st = lock(&core.art.state);
-        let Some(p) = st.placements.get_mut(&id) else {
+        let pane_size = core.pane(pane).map(|entry| entry.pane.size());
+        let mut state = lock(&core.art.state);
+        let Some(placement) = state.placements.get_mut(&id) else {
             continue;
         };
         if let Some(pane_size) = pane_size {
-            (p.cols, p.rows) = size_for(&image, pane_size, col, cols, 0);
+            (placement.cols, placement.rows) = size_for(&image, pane_size, col, cols, 0);
         }
-        p.image = image;
-        p.version = version;
-        changed.push(p.clone());
-        core.art.save_index(&st);
+        placement.image = image;
+        placement.version = version;
+        changed.push(placement.clone());
+        core.art.save_index(&state);
     }
     changed
 }
 
-/// Removes a placement and its pin.
 pub(crate) fn unplace(core: &Core, id: u64) -> Option<Placement> {
-    let (p, key) = core.art.remove_placement(id)?;
-    if let Some(e) = core.pane(p.pane_id) {
-        e.pane.anchor_remove(key);
+    let (placement, key) = core.art.remove_placement(id)?;
+    if let Some(entry) = core.pane(placement.pane_id) {
+        entry.pane.anchor_remove(key);
     }
-    Some(p)
+    Some(placement)
 }
 
 /// A file pasted or dropped onto a pane: an image or an `.excalidraw` scene becomes an
@@ -279,26 +288,26 @@ pub(crate) fn unplace(core: &Core, id: u64) -> Option<Placement> {
 pub(crate) fn import(
     core: &Arc<Core>,
     actor: Actor,
-    req: ImportRequest,
+    request: ImportRequest,
 ) -> Result<(Placement, proto::ArtifactInfo)> {
     let session = core
-        .session_of_pane(req.pane_id)
-        .ok_or_else(|| ArtifactError::NotFound(format!("pane {}", req.pane_id)))?;
-    let bytes = match req.blob {
+        .session_of_pane(request.pane_id)
+        .ok_or_else(|| ArtifactError::NotFound(format!("pane {}", request.pane_id)))?;
+    let bytes = match request.blob {
         Some(hash) => core.art.read_blob(&hash)?.1,
-        None if req.data.len() > super::INLINE_MAX => {
+        None if request.data.len() > super::INLINE_MAX => {
             return Err(ArtifactError::TooLarge(
                 "inline imports are at most 1 MiB; upload a blob".into(),
             ));
         }
-        None => req.data,
+        None => request.data,
     };
-    let lower = req.name.to_ascii_lowercase();
+    let lower = request.name.to_ascii_lowercase();
     let info = if lower.ends_with(".excalidraw")
         || (lower.ends_with(".json") && bytes.starts_with(b"{"))
     {
         let file = drawing::parse_file(&bytes).map_err(ArtifactError::Invalid)?;
-        core.art.ex_import(actor, session, &req.name, file)?
+        core.art.ex_import(actor, session, &request.name, file)?
     } else {
         let image = core.art.put_blob(&bytes)?;
         core.art
@@ -307,7 +316,7 @@ pub(crate) fn import(
                 &proto::ArtifactCreate {
                     session_id: session,
                     kind: ArtifactKind::Image,
-                    title: req.name.clone(),
+                    title: request.name.clone(),
                     space: proto::CoordSpace::Canvas,
                     anchor: None,
                     image: Some(image.hash),
@@ -320,7 +329,7 @@ pub(crate) fn import(
     let placed = place(
         core,
         PlaceRequest {
-            pane_id: req.pane_id,
+            pane_id: request.pane_id,
             artifact_id: info.artifact_id,
             version: None,
             anchor: None,
@@ -333,10 +342,10 @@ pub(crate) fn import(
         PlacementSource::User,
     );
     match placed {
-        Ok((p, _)) => Ok((p, core.art.info(info.artifact_id).unwrap_or(info))),
-        Err(e) => {
+        Ok((placement, _)) => Ok((placement, core.art.info(info.artifact_id).unwrap_or(info))),
+        Err(error) => {
             let _ = core.art.delete(info.artifact_id);
-            Err(e)
+            Err(error)
         }
     }
 }

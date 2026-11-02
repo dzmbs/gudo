@@ -1,4 +1,4 @@
-//! D7: fuzzy file search under a directory, for `@` mentions in agent prompts.
+//! Fuzzy file search under a directory, for `@` mentions in agent prompts.
 //!
 //! The tree is walked with the `ignore` crate (ripgrep's walker): `.gitignore`, `.ignore`,
 //! the global git excludes and hidden files are respected, in parallel. The listing is cached
@@ -30,7 +30,6 @@ struct Listing {
     truncated: bool,
 }
 
-/// Cached listings.
 #[derive(Default)]
 pub(crate) struct FileIndex {
     cache: Mutex<HashMap<PathBuf, (Instant, Arc<Listing>)>>,
@@ -106,18 +105,18 @@ fn walk(root: &Path) -> Listing {
                 if entry.depth() == 0 {
                     return WalkState::Continue;
                 }
-                let Ok(rel) = entry.path().strip_prefix(root) else {
+                let Ok(relative) = entry.path().strip_prefix(root) else {
                     return WalkState::Continue;
                 };
                 let kind = match entry.file_type() {
-                    Some(t) if t.is_dir() => FileKind::Dir,
-                    Some(t) if t.is_symlink() => FileKind::Symlink,
-                    Some(t) if t.is_file() => FileKind::File,
+                    Some(file_type) if file_type.is_dir() => FileKind::Dir,
+                    Some(file_type) if file_type.is_symlink() => FileKind::Symlink,
+                    Some(file_type) if file_type.is_file() => FileKind::File,
                     _ => FileKind::Other,
                 };
-                let path = rel
+                let path = relative
                     .components()
-                    .map(|c| c.as_os_str().to_string_lossy())
+                    .map(|component| component.as_os_str().to_string_lossy())
                     .collect::<Vec<_>>()
                     .join("/");
                 let mut found = lock(found);
@@ -143,25 +142,29 @@ fn walk(root: &Path) -> Listing {
 /// Returns the score and the matched character positions.
 pub(crate) fn fuzzy(query: &str, path: &str) -> Option<(i64, Vec<u32>)> {
     let sensitive = query.chars().any(char::is_uppercase);
-    let fold = |c: char| {
-        if sensitive { c } else { c.to_ascii_lowercase() }
+    let fold = |character: char| {
+        if sensitive {
+            character
+        } else {
+            character.to_ascii_lowercase()
+        }
     };
-    let q: Vec<char> = query
+    let query_chars: Vec<char> = query
         .chars()
-        .filter(|c| !c.is_whitespace())
+        .filter(|character| !character.is_whitespace())
         .map(fold)
         .collect();
-    let p: Vec<char> = path.chars().collect();
-    if q.is_empty() {
-        return Some((-(p.len() as i64), Vec::new()));
+    let path_chars: Vec<char> = path.chars().collect();
+    if query_chars.is_empty() {
+        return Some((-(path_chars.len() as i64), Vec::new()));
     }
     // Forward pass: the earliest end of a match.
-    let mut qi = 0;
+    let mut matched = 0;
     let mut end = None;
-    for (i, &c) in p.iter().enumerate() {
-        if fold(c) == q[qi] {
-            qi += 1;
-            if qi == q.len() {
+    for (i, &character) in path_chars.iter().enumerate() {
+        if fold(character) == query_chars[matched] {
+            matched += 1;
+            if matched == query_chars.len() {
                 end = Some(i);
                 break;
             }
@@ -169,67 +172,72 @@ pub(crate) fn fuzzy(query: &str, path: &str) -> Option<(i64, Vec<u32>)> {
     }
     let end = end?;
     // Backward pass from there: the tightest match ending at `end`.
-    let mut positions = vec![0u32; q.len()];
-    let mut qi = q.len();
+    let mut positions = vec![0u32; query_chars.len()];
+    let mut matched = query_chars.len();
     for i in (0..=end).rev() {
-        if qi > 0 && fold(p[i]) == q[qi - 1] {
-            qi -= 1;
-            positions[qi] = i as u32;
+        if matched > 0 && fold(path_chars[i]) == query_chars[matched - 1] {
+            matched -= 1;
+            positions[matched] = i as u32;
         }
     }
     // Prefer the same characters in the file name when they appear there.
-    let name_start = p.iter().rposition(|&c| c == '/').map_or(0, |i| i + 1);
-    if let Some(in_name) = match_from(&p, &q, name_start, fold) {
+    let name_start = path_chars
+        .iter()
+        .rposition(|&character| character == '/')
+        .map_or(0, |i| i + 1);
+    if let Some(in_name) = match_from(&path_chars, &query_chars, name_start, fold) {
         positions = in_name;
     }
 
     let boundary = |i: usize| {
         i == 0 || {
-            let prev = p[i - 1];
-            prev == '/' || "_-. ".contains(prev) || (prev.is_lowercase() && p[i].is_uppercase())
+            let previous = path_chars[i - 1];
+            previous == '/'
+                || "_-. ".contains(previous)
+                || (previous.is_lowercase() && path_chars[i].is_uppercase())
         }
     };
     let mut score: i64 = 0;
-    for (k, &pos) in positions.iter().enumerate() {
-        let i = pos as usize;
+    for (index, &position) in positions.iter().enumerate() {
+        let i = position as usize;
         score += 16;
-        if i == 0 || p[i - 1] == '/' {
+        if i == 0 || path_chars[i - 1] == '/' {
             score += 12;
         } else if boundary(i) {
             score += 8;
         }
-        if k > 0 && positions[k - 1] + 1 == pos {
+        if index > 0 && positions[index - 1] + 1 == position {
             score += 6;
         }
     }
-    let span = (positions[q.len() - 1] - positions[0]) as i64 + 1;
-    score -= (span - q.len() as i64).min(40);
+    let span = (positions[query_chars.len() - 1] - positions[0]) as i64 + 1;
+    score -= (span - query_chars.len() as i64).min(40);
     if positions[0] as usize >= name_start {
         score += 20;
         if positions[0] as usize == name_start {
             score += 10;
         }
     }
-    score -= p.len() as i64 / 16;
+    score -= path_chars.len() as i64 / 16;
     Some((score, positions))
 }
 
-/// A match of all of `q` inside `p[from..]`, greedy.
+/// A match of all of `query_chars` inside `path_chars[from..]`, greedy.
 fn match_from(
-    p: &[char],
-    q: &[char],
+    path_chars: &[char],
+    query_chars: &[char],
     from: usize,
     fold: impl Fn(char) -> char,
 ) -> Option<Vec<u32>> {
-    let mut out = Vec::with_capacity(q.len());
-    let mut qi = 0;
-    for (i, &c) in p.iter().enumerate().skip(from) {
-        if qi < q.len() && fold(c) == q[qi] {
-            out.push(i as u32);
-            qi += 1;
+    let mut positions = Vec::with_capacity(query_chars.len());
+    let mut matched = 0;
+    for (i, &character) in path_chars.iter().enumerate().skip(from) {
+        if matched < query_chars.len() && fold(character) == query_chars[matched] {
+            positions.push(i as u32);
+            matched += 1;
         }
     }
-    (qi == q.len()).then_some(out)
+    (matched == query_chars.len()).then_some(positions)
 }
 
 #[cfg(test)]
@@ -246,13 +254,13 @@ mod tests {
         ];
         let mut scored: Vec<_> = paths
             .iter()
-            .filter_map(|p| fuzzy("conn", p).map(|(s, _)| (s, *p)))
+            .filter_map(|path| fuzzy("conn", path).map(|(score, _)| (score, *path)))
             .collect();
-        scored.sort_by_key(|s| std::cmp::Reverse(s.0));
+        scored.sort_by_key(|entry| std::cmp::Reverse(entry.0));
         assert_eq!(scored[0].1, "src/daemon/conn.rs");
         assert!(fuzzy("xyz", "src/conn.rs").is_none());
-        let (_, pos) = fuzzy("dc", "src/daemon/conn.rs").unwrap();
-        assert_eq!(pos, vec![4, 11]);
+        let (_, positions) = fuzzy("dc", "src/daemon/conn.rs").unwrap();
+        assert_eq!(positions, vec![4, 11]);
         // Smart case.
         assert!(fuzzy("Conn", "src/conn.rs").is_none());
         assert!(fuzzy("Conn", "src/Conn.rs").is_some());
@@ -261,9 +269,9 @@ mod tests {
     #[test]
     fn walk_respects_gitignore_and_hidden_files() {
         let dir = tempfile::tempdir().unwrap();
-        let d = dir.path();
-        std::fs::write(d.join(".gitignore"), "target/\n*.log\n").unwrap();
-        for f in [
+        let root = dir.path();
+        std::fs::write(root.join(".gitignore"), "target/\n*.log\n").unwrap();
+        for name in [
             "src/main.rs",
             "src/lib.rs",
             "target/debug/app",
@@ -271,13 +279,17 @@ mod tests {
             ".env",
             "README.md",
         ] {
-            let p = d.join(f);
-            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-            std::fs::write(p, "").unwrap();
+            let path = root.join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "").unwrap();
         }
         let index = FileIndex::default();
-        let all = index.search(d, "", 100);
-        let paths: Vec<_> = all.matches.iter().map(|m| m.path.as_str()).collect();
+        let all = index.search(root, "", 100);
+        let paths: Vec<_> = all
+            .matches
+            .iter()
+            .map(|found| found.path.as_str())
+            .collect();
         assert!(
             paths.contains(&"src/main.rs") && paths.contains(&"README.md"),
             "{paths:?}"
@@ -286,10 +298,10 @@ mod tests {
         assert!(
             !paths
                 .iter()
-                .any(|p| p.starts_with("target") || p.ends_with(".log"))
+                .any(|path| path.starts_with("target") || path.ends_with(".log"))
         );
         assert!(!paths.contains(&".env"));
-        let hit = index.search(d, "mainrs", 5);
+        let hit = index.search(root, "mainrs", 5);
         assert_eq!(hit.matches[0].path, "src/main.rs");
         assert_eq!(hit.matches[0].kind, FileKind::File);
     }
