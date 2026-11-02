@@ -43,6 +43,8 @@ enum FloatingFixtures {
         default:
             break
         }
+        // The fixture's own moves are layout changes, not resizes by hand: no cols × rows.
+        workspace.layoutChangeUntil = .now + .seconds(4)
         // Panes are made in stages and their shells greet first: paint once all have a grid
         // and have said hello.
         let all = [result.shell, result.tests, result.htop, result.agent, result.logs].compactMap(\.self)

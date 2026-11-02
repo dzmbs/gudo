@@ -179,6 +179,9 @@ final class TouchSnapshotTests: XCTestCase {
             let panes = await FloatingFixtures.apply(screen, workspace: workspace, model: model)
             if !pad, let panes { workspace.apply(.focus(panes.tests)) }
             await pump(1.5)
+            // Once more at the grids the panes settled at.
+            if let panes { FloatingFixtures.paint(workspace, panes) }
+            await pump(0.8)
             try capture(window, pad ? screen : "pip")
             window.isHidden = true
             model.close()

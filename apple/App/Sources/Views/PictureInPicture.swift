@@ -113,12 +113,14 @@ private struct PictureInPictureWindow: View {
     }
 }
 
-/// A pane's live terminal at its own grid, drawn small: never resized, so the program and the
-/// other devices keep their layout.
+/// A pane's terminal at its own grid, drawn small: never resized, so the program and the other
+/// devices keep their layout. The terminal runs unseen at its own size; what shows is a picture
+/// of its latest frame, twice a second (a platform view cannot be scaled).
 private struct MiniTerminal: View {
     let pane: PaneId
     let workspace: Workspace
     @Environment(\.terminalTheme) private var theme
+    @Environment(\.displayScale) private var displayScale
     static let scale: CGFloat = 0.5
 
     var body: some View {
@@ -128,12 +130,23 @@ private struct MiniTerminal: View {
                 let grid = workspace.grids[pane] ?? GridSize(cols: 80, rows: 24)
                 let padding = workspace.appearance.padding
                 let natural = CGSize(width: CGFloat(grid.cols) * cell.width + 2 * padding, height: CGFloat(grid.rows) * cell.height + 2 * padding)
-                // The latest lines, half size: where an agent's output is.
-                TerminalHost(pane: terminal, isFocused: false, workspace: workspace)
-                    .frame(width: natural.width, height: natural.height)
-                    .scaleEffect(Self.scale, anchor: .bottomLeading)
-                    .frame(width: geometry.size.width, height: geometry.size.height, alignment: .bottomLeading)
-                    .allowsHitTesting(false)
+                ZStack(alignment: .topLeading) {
+                    TerminalHost(pane: terminal, isFocused: false, workspace: workspace)
+                        .frame(width: natural.width, height: natural.height)
+                        .opacity(0)
+                    TimelineView(.periodic(from: .now, by: 0.5)) { _ in
+                        let surface = terminal.view.surface
+                        if let frame = surface.snapshot() {
+                            // Up to the cursor's line, where a shell or an agent is writing; a
+                            // full-screen program (no cursor) from its top.
+                            let lift = surface.cursorRect.map { min(0, geometry.size.height - ($0.maxY * Self.scale + DS.Space.xs)) } ?? 0
+                            Image(decorative: frame, scale: displayScale / Self.scale)
+                                .offset(y: lift)
+                        }
+                    }
+                }
+                .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+                .allowsHitTesting(false)
             } else {
                 theme.background
             }
