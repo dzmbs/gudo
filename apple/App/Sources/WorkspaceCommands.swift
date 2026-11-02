@@ -3,8 +3,7 @@ import SwiftUI
 import WebKit
 
 /// The menus. On macOS they are the menu bar; on iPadOS the same commands drive the iPadOS menu
-/// bar and the ⌘-hold shortcut overlay as `UIKeyCommand`s. ⌘ is never sent to the terminal
-/// (04-mobile-ux C7).
+/// bar and the ⌘-hold shortcut overlay as `UIKeyCommand`s. ⌘ is never sent to the terminal.
 struct WorkspaceCommands: Commands {
     @FocusedValue(Workspace.self) private var focusedWorkspace
     @FocusedValue(WindowModel.self) private var focusedModel
@@ -12,7 +11,7 @@ struct WorkspaceCommands: Commands {
 
     /// The focused window's workspace, else the one last worked in. The items are never disabled
     /// for a missing focused value: SwiftUI reports none at times while a window is key (after it
-    /// rebuilds its content), and an item disabled then stayed disabled, so ⌘D or ⌘T silently did
+    /// rebuilds its content), and an item disabled then stays disabled, so ⌘D or ⌘T silently do
     /// nothing. The actions resolve the window when they run.
     private var workspace: Workspace? { focusedWorkspace ?? ActiveWindow.workspace }
     private var model: WindowModel? { focusedModel ?? ActiveWindow.model }
@@ -53,7 +52,6 @@ struct WorkspaceCommands: Commands {
             buttons([.links])
             #if os(macOS)
             Divider()
-            // The focused tool leaf's own Open in New Window, as ⌥ opens a tool in one.
             Button("Open in New Window") {
                 if let model, let tool = model.focusedToolLeaf { model.moveToolToWindow(tool) }
             }
@@ -91,7 +89,6 @@ struct WorkspaceCommands: Commands {
                 Button("Close \(model.tabSelection.selected.count) Selected Tabs") { model.requestCloseSelectedTabs() }
             }
         }
-        // Safari's History menu: the last close back, the tabs a launch kept aside, the list.
         CommandMenu("History") {
             HistoryMenuItems(model: model)
         }
@@ -109,7 +106,7 @@ struct WorkspaceCommands: Commands {
             Button("Create Pull Request") { model?.git.createPR() }
             Button("Check Out Pull Request…") { model?.git.isCheckoutPromptShown = true }
             Divider()
-            Button("Archive Worktree") { if let wt = model?.git.worktree { model?.git.archive(wt) } }
+            Button("Archive Worktree") { if let worktree = model?.git.worktree { model?.git.archive(worktree) } }
         }
         CommandGroup(before: .sidebar) {
             Button(model?.isSidebarShown == false ? "Show Sidebar" : "Hide Sidebar") {
@@ -118,7 +115,6 @@ struct WorkspaceCommands: Commands {
                 .keyboardShortcut(WorkspaceAction.toggleSidebar.shortcut)
                 .disabled(editorHasKeys)
             Toggle("Tab Bar When the Sidebar Is Hidden", isOn: $showsTabBar)
-            // Two tabs side by side (on by itself on a foldable's open inner screen).
             Toggle("Two Columns", isOn: Binding(get: { model?.isTwoColumns ?? false }, set: { _ in model?.toggleTwoColumns() }))
                 .disabled(editorHasKeys || model == nil)
             Divider()
