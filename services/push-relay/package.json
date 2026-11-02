@@ -2,6 +2,7 @@
   "name": "push-relay",
   "version": "0.0.0",
   "private": true,
+  "license": "Apache-2.0",
   "description": "The push relay (ARCHITECTURE D16): forwards E2E-sealed notifications from host daemons to APNs. See docs/PUSH.md.",
   "type": "module",
   "scripts": {

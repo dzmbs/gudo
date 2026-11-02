@@ -1,0 +1,23 @@
+Gudo
+Copyright 2026 The Gudo Authors
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product includes software derived from herdr (https://github.com/herdrdev/herdr),
+Copyright herdr contributors, licensed under the Apache License, Version 2.0
+(crates/agents/manifests/LICENSE-herdr). Derived files say so in their headers:
+
+  - crates/agents/manifests/claude.toml and codex.toml (copied from herdr v0.9.5)
+  - crates/agents/src/manifest.rs (the manifest format and its evaluation, ported)
+  - crates/ghostty-vt-sys/build.rs and parts of crates/ghostty-vt/src/lib.rs (adapted)
+  - crates/pty/src/foreground.rs (adapted from its foreground-job code)
+
+This product includes software derived from Ghostty (https://github.com/ghostty-org/ghostty),
+Copyright (c) 2024 Mitchell Hashimoto, Ghostty contributors, licensed under the MIT License.
+The host daemon and the apps link libghostty-vt, built from vendor/ghostty; the Apple apps
+port parts of Ghostty's macOS interface. The full notice, and the notices of every other
+component the binaries include, are in:
+
+  - apple/THIRD_PARTY_NOTICES.md (code and data in the Apple apps)
+  - apple/App/Resources/THIRD_PARTY_NOTICES.txt (shipped in the apps)
+  - crates/hostd/THIRD_PARTY_NOTICES.txt (shipped in the host daemon, `gudo-hostd licenses`)
