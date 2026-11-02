@@ -221,8 +221,13 @@ final class FontGrid {
         // so `maxSpan` does not change its glyph).
         let asciiIndex = codepoint < 128 && span == 1 ? style.rawValue << 7 | Int(codepoint) : nil
         if let asciiIndex, let cached = asciiGlyphs[asciiIndex] { return cached }
+        let directKey = DirectGlyphCache.key(codepoint: codepoint, style: style, span: span, maxSpan: maxSpan ?? 1)
+        if asciiIndex == nil, let cached = directGlyphs.lookup(directKey) { return cached }
         let fastKey = FastKey(codepoint: codepoint, style: style, span: span, maxSpan: maxSpan ?? 1)
-        if asciiIndex == nil, let cached = fastGlyphs[fastKey] { return cached }
+        if asciiIndex == nil, let cached = fastGlyphs[fastKey] {
+            directGlyphs.insert(cached, for: directKey)
+            return cached
+        }
         let deferred = deferrals
         let result = slowGlyph(for: [codepoint], base: codepoint, style: style, span: span, maxSpan: maxSpan)
         if deferrals == deferred {
@@ -231,6 +236,7 @@ final class FontGrid {
             } else {
                 if fastGlyphs.count >= maxCacheEntries { fastGlyphs.removeAll() }
                 fastGlyphs[fastKey] = result
+                directGlyphs.insert(result, for: directKey)
             }
         }
         return result
@@ -254,6 +260,8 @@ final class FontGrid {
     }
 
     private var fastGlyphs: [FastKey: RenderedGlyph?] = [:]
+    /// In front of `fastGlyphs`: the non-ASCII glyphs a screen shows (box drawing, CJK) without hashing.
+    private var directGlyphs = DirectGlyphCache()
 
     var cacheEntryCounts: (resolved: Int, fast: Int) { (resolved.count, fastGlyphs.count) }
 
@@ -338,6 +346,7 @@ final class FontGrid {
         grayscaleTexture = nil
         colorTexture = nil
         fastGlyphs.removeAll()
+        directGlyphs.removeAll()
         asciiGlyphs = asciiGlyphs.map { _ in nil }
         glyphs.removeAll()
         spriteGlyphs.removeAll()

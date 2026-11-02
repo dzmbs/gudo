@@ -87,6 +87,21 @@ struct StressProbeTests {
         print("PROBE 6K tiny: worst frame \(worst) footprint +\((footprint() - start) >> 20) MB \(surface.stats.drain().map(String.init(describing:)) ?? "")")
     }
 
+    /// As `probeTinyFont6K`, with box drawing, Greek and CJK instead of ASCII (a TUI's borders, CJK text).
+    @Test func probeTinyFont6KNonASCII() throws {
+        let terminal = Terminal(cols: 80, rows: 24) { _ in }
+        let surface = try TerminalSurface(terminal: terminal, fontSize: 4)
+        surface.layout(size: CGSize(width: 3008, height: 1692), scale: 2)
+        let pool = Array("─│┌┐└┘├┤┬┴┼═║╔╗╚╝αβγδεζηθλμπσφψω日本語中文字")
+        let line = String((0..<1600).map { _ in pool.randomElement()! })
+        _ = surface.stats.drain()
+        for _ in 0..<300 {
+            terminal.write(Array(String(repeating: line + "\r\n", count: 40).utf8))
+            surface.renderIfDirty()
+        }
+        print("PROBE 6K tiny non-ASCII: \(surface.stats.drain().map(String.init(describing:)) ?? "")")
+    }
+
     @Test func probeManySurfaces() async throws {
         let start = footprint()
         var surfaces: [TerminalSurface] = []
@@ -151,6 +166,29 @@ struct StressProbeTests {
         let buildAvg = builds.map(\.buildAvg).reduce(0, +) / Double(builds.count)
         rounds.sort()
         print("PROBE 16 panes 6K: grid \(String(describing: surfaces[0].grid)) round median \(rounds[rounds.count / 2]) ms p99 \(rounds[rounds.count * 99 / 100]) ms; build avg per pane frame \(buildAvg) ms")
+    }
+
+    /// Cost of one cached glyph lookup, ASCII and not (box drawing, Latin-1, Greek, CJK).
+    @Test func probeGlyphLookup() {
+        let fonts = FontGrid(pixelSize: 26)
+        let ascii = (UInt32(0x21)...0x7E).map { ($0, 1) }
+        let other = (UInt32(0x2500)...0x257F).map { ($0, 1) } + (UInt32(0xC0)...0xFF).map { ($0, 1) }
+            + (UInt32(0x3B1)...0x3C9).map { ($0, 1) } + (UInt32(0x4E00)..<0x4E00 + 400).map { ($0, 2) }
+        for (codepoint, span) in ascii + other { _ = fonts.glyph(codepoint: codepoint, style: .regular, span: span) }
+        func nanosPerLookup(_ set: [(UInt32, Int)]) -> Double {
+            let lookups = 4_000_000
+            var found = 0
+            let start = CACurrentMediaTime()
+            for i in 0..<lookups {
+                let (codepoint, span) = set[i % set.count]
+                if fonts.glyph(codepoint: codepoint, style: .regular, span: span) != nil { found += 1 }
+            }
+            #expect(found > 0)
+            return (CACurrentMediaTime() - start) / Double(lookups) * 1e9
+        }
+        let asciiCost = (0..<5).map { _ in nanosPerLookup(ascii) }.sorted()[2]
+        let otherCost = (0..<5).map { _ in nanosPerLookup(other) }.sorted()[2]
+        print("PROBE glyph lookup: ascii \(asciiCost) ns, non-ASCII \(otherCost) ns (median of 5)")
     }
 
     @Test func probeFontSizeStorm() throws {
