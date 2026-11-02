@@ -6,8 +6,8 @@ import TerminalCore
 @testable import TerminalRenderer
 
 /// Measurements for docs/STRESS.md, printed as "PROBE" lines; slow, so opt-in:
-/// `UNNAMED_STRESS=1 swift test -c release -Xswiftc -enable-testing --filter StressProbeTests`.
-@MainActor @Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["UNNAMED_STRESS"] != nil))
+/// `GUDO_STRESS=1 swift test -c release -Xswiftc -enable-testing --filter StressProbeTests`.
+@MainActor @Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["GUDO_STRESS"] != nil))
 struct StressProbeTests {
     func footprint() -> Int {
         var info = task_vm_info_data_t()
@@ -194,18 +194,18 @@ struct StressProbeTests {
         try await pauseForInspection()
     }
 
-    /// With UNNAMED_STRESS_SAMPLE=<file>, samples this process for a few seconds in the background.
+    /// With GUDO_STRESS_SAMPLE=<file>, samples this process for a few seconds in the background.
     func startSampling() {
-        guard let file = ProcessInfo.processInfo.environment["UNNAMED_STRESS_SAMPLE"] else { return }
+        guard let file = ProcessInfo.processInfo.environment["GUDO_STRESS_SAMPLE"] else { return }
         let sample = Process()
         sample.executableURL = URL(fileURLWithPath: "/usr/bin/sample")
         sample.arguments = ["\(getpid())", "5", "-file", file]
         try? sample.run()
     }
 
-    /// With UNNAMED_STRESS_PAUSE=<file>, writes the pid there and waits for `leaks`/`vmmap`.
+    /// With GUDO_STRESS_PAUSE=<file>, writes the pid there and waits for `leaks`/`vmmap`.
     func pauseForInspection() async throws {
-        guard let pidFile = ProcessInfo.processInfo.environment["UNNAMED_STRESS_PAUSE"] else { return }
+        guard let pidFile = ProcessInfo.processInfo.environment["GUDO_STRESS_PAUSE"] else { return }
         try? "\(getpid())".write(toFile: pidFile, atomically: true, encoding: .utf8)
         try await Task.sleep(for: .seconds(40))
     }

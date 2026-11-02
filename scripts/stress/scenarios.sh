@@ -1,14 +1,14 @@
 #!/bin/zsh
 # Usage: scenarios.sh <bin_dir> <scenario>...
-# <bin_dir> holds release unnamed-hostd, un, un-hook and un-stress
-# (cargo build --release -p hostd -p un -p stress). Each scenario starts its own daemon in a temp
+# <bin_dir> holds release gudo-hostd, gudo, gudo-hook and gudo-stress
+# (cargo build --release -p hostd -p cli -p stress). Each scenario starts its own daemon in a temp
 # state dir (with-daemon.sh) and prints peak RSS/CPU/fds/threads, the state after the load and
 # whether the daemon survived. docs/STRESS.md lists the results.
 set -u
 B=$1; shift
 W=$(cd "$(dirname $0)" && pwd)
 D() { local name=$1; shift; "$W/with-daemon.sh" "$B" "$name" "$@"; }
-ST=$B/un-stress
+ST=$B/gudo-stress
 
 case_churn() {
   for c in 1 4 16 64; do
@@ -66,7 +66,7 @@ case_soak() {
 }
 
 case_hooks() {
-  echo "== un-hook floods and approval spam"
+  echo "== gudo-hook floods and approval spam"
   RECOVER=5 D hooks "$W/s-hooks.sh"
 }
 
@@ -85,9 +85,9 @@ case_upgrade() {
   # The upgrade replaces the running executable, so it runs from a copy.
   local copy=$B/upgrade-bin
   mkdir -p "$copy"
-  cp "$B"/unnamed-hostd "$B"/un "$B"/un-hook "$B"/un-stress "$copy/"
+  cp "$B"/gudo-hostd "$B"/gudo "$B"/gudo-hook "$B"/gudo-stress "$copy/"
   echo "== self-upgrade under load, 3 rounds"
-  RECOVER=5 "$W/with-daemon.sh" "$copy" upgrade "$W/s-upgrade.sh" "$B/unnamed-hostd" 3
+  RECOVER=5 "$W/with-daemon.sh" "$copy" upgrade "$W/s-upgrade.sh" "$B/gudo-hostd" 3
   rm -rf "$copy"
 }
 

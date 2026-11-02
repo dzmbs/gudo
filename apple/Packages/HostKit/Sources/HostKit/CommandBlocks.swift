@@ -1,5 +1,5 @@
 import Foundation
-import UnnamedCore
+import GudoCore
 
 /// How a shell command (OSC 133 marks) stands.
 public enum CommandStatus: Equatable, Sendable {

@@ -2,7 +2,7 @@ import Darwin
 import Foundation
 @testable import HostKit
 import Synchronization
-import UnnamedCore
+import GudoCore
 @testable import App
 
 /// The longest the main thread went without serving its queue, pinged every 5 ms from a

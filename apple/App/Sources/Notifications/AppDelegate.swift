@@ -91,6 +91,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 /// `<scheme>://join/<invite>` and `<scheme>://open/<host>/<pane>` (Live Activity, notification).
 enum AppLinks {
+    /// A universal link (`https://<web domain>/pair#…`, `/join#…`) as the same `<scheme>://` link;
+    /// nil for any other URL.
+    static func fromWeb(_ url: URL, scheme: String, domain: String = Brand.webDomain) -> URL? {
+        guard url.scheme?.lowercased() == "https", !domain.isEmpty, url.host()?.lowercased() == domain.lowercased(),
+              let payload = url.fragment(percentEncoded: false), !payload.isEmpty
+        else { return nil }
+        let verb = url.path().lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard verb == "pair" || verb == "join" else { return nil }
+        return URL(string: "\(scheme)://\(verb)/\(payload)")
+    }
+
     static func isInvite(_ url: URL) -> Bool {
         url.host()?.lowercased() == "join"
     }

@@ -15,7 +15,7 @@
 			<string>Owner</string>
 			<key>LSItemContentTypes</key>
 			<array>
-				<string>$(BRAND_BUNDLE_ID_PREFIX).unreplay</string>
+				<string>$(BRAND_BUNDLE_ID_PREFIX).gudoreplay</string>
 			</array>
 		</dict>
 	</array>
@@ -84,7 +84,7 @@
 	<key>PushKeychainGroup</key>
 	<string>$(PUSH_KEYCHAIN_GROUP)</string>
 	<key>ReplayTypeIdentifier</key>
-	<string>$(BRAND_BUNDLE_ID_PREFIX).unreplay</string>
+	<string>$(BRAND_BUNDLE_ID_PREFIX).gudoreplay</string>
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>
@@ -101,16 +101,16 @@
 			<key>UTTypeDescription</key>
 			<string>Session Replay</string>
 			<key>UTTypeIdentifier</key>
-			<string>$(BRAND_BUNDLE_ID_PREFIX).unreplay</string>
+			<string>$(BRAND_BUNDLE_ID_PREFIX).gudoreplay</string>
 			<key>UTTypeTagSpecification</key>
 			<dict>
 				<key>public.filename-extension</key>
 				<array>
-					<string>unreplay</string>
+					<string>gudoreplay</string>
 				</array>
 				<key>public.mime-type</key>
 				<array>
-					<string>application/vnd.unnamed.unreplay+json</string>
+					<string>application/vnd.gudo.gudoreplay+json</string>
 				</array>
 			</dict>
 		</dict>
@@ -122,7 +122,7 @@
 			<key>UTTypeDescription</key>
 			<string>Tab</string>
 			<key>UTTypeIdentifier</key>
-			<string>dev.unnamed.tab</string>
+			<string>dev.gudo.tab</string>
 		</dict>
 	</array>
 	<key>UTImportedTypeDeclarations</key>

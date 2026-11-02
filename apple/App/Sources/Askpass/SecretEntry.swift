@@ -1,7 +1,7 @@
 import Foundation
 import HostKit
 import Observation
-import UnnamedCore
+import GudoCore
 
 /// The app's saved-password vault ("Remember in Keychain"), shared by every window.
 @MainActor

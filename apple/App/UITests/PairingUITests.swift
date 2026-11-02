@@ -1,8 +1,8 @@
 import XCTest
 
-/// Pairing the way people do it, against a real `unnamed-hostd --no-relay`
+/// Pairing the way people do it, against a real `gudo-hostd --no-relay`
 /// (apple/scripts/pairing-ui-test.sh starts it and passes one ticket per test): pasting a ticket
-/// into Add Host, opening a `unnamed://pair/…` deep link, and pairing with Settings › Network on
+/// into Add Host, opening a `gudo://pair/…` deep link, and pairing with Settings › Network on
 /// "Direct and Local Network Only" with a private CA imported. Each ends on the host's shell,
 /// typed into. Skipped without the tickets.
 @MainActor

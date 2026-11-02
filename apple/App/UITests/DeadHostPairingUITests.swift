@@ -2,7 +2,7 @@
 import XCTest
 
 /// Pairing a new host while the host used last is gone, the way consecutive UI suites (and a
-/// user who replaced a machine) do it, against real local `unnamed-hostd`s
+/// user who replaced a machine) do it, against real local `gudo-hostd`s
 /// (apple/scripts/dead-host-ui-test.sh): the first run pairs daemon 1 and leaves it as the
 /// window's restored host; the script stops daemon 1 and starts daemon 2 on another port; the
 /// second run pairs daemon 2 with daemon 1 dead in the saved hosts and window state. The new

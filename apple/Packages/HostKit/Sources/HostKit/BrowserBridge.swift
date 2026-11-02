@@ -1,11 +1,11 @@
 import Foundation
-import UnnamedCore
+import GudoCore
 
 // The app's browser, used from the host (`proto::browser`): URLs programs in a pane open
 // through `BROWSER` (a sign-in), and browser tools agents call. The daemon sends each to one
 // connection, the device the pane was last used from.
 
-/// The browser half of `UnnamedCore.DaemonClient`, so the session can be tested with a fake.
+/// The browser half of `GudoCore.DaemonClient`, so the session can be tested with a fake.
 nonisolated public protocol BrowserClientAPI: AnyObject, Sendable {
     func setBrowserListener(listener: any BrowserListener)
     func answerBrowserCall(id: UInt64, result: String?, error: String?)

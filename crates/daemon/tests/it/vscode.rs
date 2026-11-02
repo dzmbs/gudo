@@ -479,7 +479,7 @@ async fn vscode_cli_downloads_from_the_update_service_and_checks_its_hash() {
     daemon.shutdown().await;
 }
 
-/// `forward_io` splices any reader/writer onto a host port (what `un ssh-proxy` does with
+/// `forward_io` splices any reader/writer onto a host port (what `gudo ssh-proxy` does with
 /// stdin/stdout for VS Code Remote - SSH).
 #[tokio::test(flavor = "multi_thread")]
 async fn forward_io_splices_a_stream_onto_a_host_port() {

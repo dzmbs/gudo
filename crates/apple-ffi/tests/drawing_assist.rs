@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use unnamed_core::{
+use gudo_core::{
     ArtifactCreate, ArtifactError, ArtifactEvent, ArtifactKind, ArtifactListener, AssistError,
     AssistEvent, AssistListener, ClientConfig, ClientEvent, ClientEventListener, CompletionKind,
     CoordSpace, DaemonClient, DrawElement, DrawElementKind, DrawOp, DrawStyle, ExportFormat,

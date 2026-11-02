@@ -26,7 +26,7 @@ agent's own output. Terminal emulators have a long record of bugs here:
 
 Anyone who can get bytes into a pane's output: files, network responses, remote hosts, programs
 and their dependencies. Also a multiplayer guest with input rights (its typing is echoed).
-Anyone who can hand the user a `.unreplay` file.
+Anyone who can hand the user a `.gudoreplay` file.
 
 ## What we defend, and how
 
@@ -144,7 +144,7 @@ see it.
 **In-band channels.** The SSH helper bootstrap uses separate `exec` channels, never the
 interactive stream. Shell-integration marks (OSC 133) are trusted only for display and timing.
 
-**Replay files.** Imported `.unreplay` files:
+**Replay files.** Imported `.gudoreplay` files:
 - play in a non-persistent WebPage with no network (content rules) and no navigation;
 - render through rrweb's script-less sandboxed frame;
 - have keyframe names validated;

@@ -53,8 +53,8 @@ async fn urls_and_tool_calls_reach_the_app_showing_the_pane() {
 
     // Panes carry the helper.
     plain.type_line(pane, "printf 'browser=%s\\n' \"${BROWSER##*/}\"");
-    plain.wait_text(pane, "browser=un-open").await;
-    let script = std::fs::read_to_string(dir.path().join("browser/un-open")).unwrap();
+    plain.wait_text(pane, "browser=gudo-open").await;
+    let script = std::fs::read_to_string(dir.path().join("browser/gudo-open")).unwrap();
     assert!(script.contains(" open-url \"$@\""), "{script}");
 
     // Nobody can show it yet: the helper falls back to the system's opener.

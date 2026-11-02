@@ -2,9 +2,9 @@ import Foundation
 @testable import HostKit
 import PaneLayout
 import Testing
-import UnnamedCore
+import GudoCore
 
-/// "Update Helper" end to end on this Mac: a real `unnamed-hostd` installed as a copy in a
+/// "Update Helper" end to end on this Mac: a real `gudo-hostd` installed as a copy in a
 /// scratch directory reports its build and host name; the app's manifest says it bundles a
 /// newer build for this platform; `HostsModel.updateHelper` streams it over the daemon
 /// connection; the daemon checks it, swaps it in and restarts in place (`exec`); the same
@@ -13,7 +13,7 @@ import UnnamedCore
 @Suite(.serialized) struct HelperUpdateIntegrationTests {
     @Test func updateOverTheConnectionAndComeBack() async throws {
         let scratch = temporaryDirectory()
-        let installed = scratch.appending(path: "bin/unnamed-hostd")
+        let installed = scratch.appending(path: "bin/gudo-hostd")
         try FileManager.default.createDirectory(at: installed.deletingLastPathComponent(), withIntermediateDirectories: true)
         try FileManager.default.copyItem(at: LocalDaemon.defaultBinary, to: installed)
         // The "bundled" build: the same executable, which the manifest says is newer.

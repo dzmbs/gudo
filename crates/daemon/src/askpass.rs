@@ -588,7 +588,7 @@ pub(crate) fn write_executable(path: &Path, contents: &str) -> io::Result<()> {
 /// helper's `--available` probe), plain `sudo` otherwise and whenever the caller already
 /// chose how sudo reads the password (`-A`, `-S`, `-n`).
 const SUDO_SH: &str = r#"sudo() {
-  if [ -n "${UN_ASKPASS_SUDO-}" ] && [ -x "${UN_ASKPASS-}" ]; then
+  if [ -n "${GUDO_ASKPASS_SUDO-}" ] && [ -x "${GUDO_ASKPASS-}" ]; then
     local __un_arg
     for __un_arg in "$@"; do
       case $__un_arg in
@@ -597,7 +597,7 @@ const SUDO_SH: &str = r#"sudo() {
         *) break ;;
       esac
     done
-    if "$UN_ASKPASS" --available 2>/dev/null; then
+    if "$GUDO_ASKPASS" --available 2>/dev/null; then
       command sudo -A "$@"
       return
     fi
@@ -606,7 +606,7 @@ const SUDO_SH: &str = r#"sudo() {
 }
 "#;
 
-const SUDO_FISH: &str = r#"if status is-interactive; and set -q UN_ASKPASS_SUDO; and set -q UN_ASKPASS
+const SUDO_FISH: &str = r#"if status is-interactive; and set -q GUDO_ASKPASS_SUDO; and set -q GUDO_ASKPASS
     function sudo --wraps sudo
         for __un_arg in $argv
             switch $__un_arg
@@ -618,7 +618,7 @@ const SUDO_FISH: &str = r#"if status is-interactive; and set -q UN_ASKPASS_SUDO;
                     break
             end
         end
-        if $UN_ASKPASS --available 2>/dev/null
+        if $GUDO_ASKPASS --available 2>/dev/null
             command sudo -A $argv
         else
             command sudo $argv
@@ -631,7 +631,7 @@ end
 /// `vendor_conf.d` script under `si`.
 fn write_wrappers(dir: &Path, si: &Path) -> io::Result<()> {
     let prefix = brand::ENV_PREFIX;
-    let sudo_sh = SUDO_SH.replace("UN_", prefix);
+    let sudo_sh = SUDO_SH.replace("GUDO_", prefix);
     let ghostty_zshenv = agents_quote(&si.join("zsh/.zshenv").to_string_lossy());
     let zshenv = format!(
         "# Written by {daemon}: Ghostty's zsh integration, then the askpass `sudo` wrapper\n\
@@ -653,7 +653,7 @@ fn write_wrappers(dir: &Path, si: &Path) -> io::Result<()> {
     let fish = format!(
         "# Written by {}: the askpass `sudo` wrapper (docs/DAEMON.md §9).\n{}",
         brand::DAEMON_BIN,
-        SUDO_FISH.replace("UN_", prefix)
+        SUDO_FISH.replace("GUDO_", prefix)
     );
     write_executable(
         &si.join(format!(
@@ -709,12 +709,12 @@ mod tests {
         let askpass = Askpass::install(
             &AskpassConfig::default(),
             dir.path(),
-            Path::new("/opt/x y/un-hook"),
+            Path::new("/opt/x y/gudo-hook"),
         );
         let helper = askpass.helper.clone().unwrap();
         let script = std::fs::read_to_string(&helper).unwrap();
         assert!(
-            script.contains("exec '/opt/x y/un-hook' askpass \"$@\""),
+            script.contains("exec '/opt/x y/gudo-hook' askpass \"$@\""),
             "{script}"
         );
         let zshenv = std::fs::read_to_string(dir.path().join("askpass/zsh/.zshenv")).unwrap();

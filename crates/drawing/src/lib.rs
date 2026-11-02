@@ -1,4 +1,4 @@
-//! The drawing model shared by the daemon, the client core and the `un` CLI
+//! The drawing model shared by the daemon, the client core and the `gudo` CLI
 //!
 //! - [`InkPoint`] and the packed wire form of stroke points ([`pack`] / [`unpack`]), with
 //!   [`simplify`] (Ramer–Douglas–Peucker) for committed strokes.

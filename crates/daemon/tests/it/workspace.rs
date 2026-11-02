@@ -814,10 +814,7 @@ async fn worktrees_get_stable_ports_and_dirty_checks() {
         .await
         .unwrap();
     assert!(a.path.starts_with(&s(&home)), "{a:?}");
-    assert!(
-        b.branch.as_deref().unwrap().starts_with("unnamed/"),
-        "{b:?}"
-    );
+    assert!(b.branch.as_deref().unwrap().starts_with("gudo/"), "{b:?}");
     let (pa, pb) = (a.port.unwrap(), b.port.unwrap());
     assert_ne!(pa, pb);
     // Branch exists already.
@@ -901,7 +898,7 @@ async fn worktrees_get_stable_ports_and_dirty_checks() {
 #[tokio::test(flavor = "multi_thread")]
 async fn the_state_dir_stays_out_of_reach_inside_an_allowed_root() {
     let (_home, home) = canonical_tempdir();
-    let state = home.join(".local/state/unnamed");
+    let state = home.join(".local/state/gudo");
     std::fs::create_dir_all(&state).unwrap();
     let daemon = start_home(&state, &home).await;
     let c = connected(&daemon).await;
@@ -914,8 +911,8 @@ async fn the_state_dir_stays_out_of_reach_inside_an_allowed_root() {
 
     // Other spellings of the same directory, where the volume ignores case (macOS).
     let spelled = [
-        home.join(".local/state/UNNAMED"),
-        home.join(".LOCAL/State/unnamed"),
+        home.join(".local/state/GUDO"),
+        home.join(".LOCAL/State/gudo"),
     ];
     let spelled: Vec<_> = spelled.iter().filter(|p| p.exists()).collect();
     let mut paths = vec![

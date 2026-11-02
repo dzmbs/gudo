@@ -1,14 +1,15 @@
 {
-  "name": "@unnamed/term",
+  "name": "@gudo/term",
   "version": "1.0.0",
   "private": true,
+  "license": "Apache-2.0",
   "description": "Typed client for the terminal tools, for scripts running in a pane. See docs/DAEMON.md (Scripting).",
   "type": "module",
-  "exports": "./un.ts",
+  "exports": "./gudo.ts",
   "engines": {
     "node": ">=22.18"
   },
   "scripts": {
-    "test": "node --test un.test.ts"
+    "test": "node --test gudo.test.ts"
   }
 }

@@ -12,14 +12,14 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../HostKit"),
-        .package(path: "../UnnamedCore"),
+        .package(path: "../GudoCore"),
     ],
     targets: [
         .target(
             name: "FilesProviderKit",
             dependencies: [
                 .product(name: "HostKit", package: "HostKit"),
-                .product(name: "UnnamedCore", package: "UnnamedCore"),
+                .product(name: "GudoCore", package: "GudoCore"),
             ]
         ),
         .testTarget(name: "FilesProviderKitTests", dependencies: ["FilesProviderKit"]),

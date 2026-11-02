@@ -2,7 +2,7 @@ import FileProvider
 import Foundation
 import Synchronization
 import UniformTypeIdentifiers
-import UnnamedCore
+import GudoCore
 
 /// One host's files for the File Provider extension: the home directory is the root, items
 /// carry identifiers from `ItemIdentifiers`, and every change goes through the daemon's file

@@ -4,10 +4,10 @@
 //!   iOS, the iOS simulator and macOS (arm64, release), generates the Swift bindings,
 //!   hides every symbol but the UniFFI API (so the core's private copy of libghostty-vt and
 //!   Rust's std cannot clash with the app's), strips, and assembles
-//!   `apple/Packages/UnnamedCore/UnnamedCore.xcframework` plus the generated Swift source.
+//!   `apple/Packages/GudoCore/GudoCore.xcframework` plus the generated Swift source.
 //! - `build-hostd-linux`: stripped, gzipped static musl daemons (aarch64 + x86_64) for the
 //!   app bundle's SSH bootstrap and self upgrade, in `apple/build/hostd/`, stamped with the
-//!   build id and time (`UN_BUILD_ID`, `UN_BUILD_UNIX`; see `daemon::info`) and described in
+//!   build id and time (`GUDO_BUILD_ID`, `GUDO_BUILD_UNIX`; see `daemon::info`) and described in
 //!   `hostd-manifest.json` so the app knows what it bundles without running it.
 //! - `build-hostd-macos`: the stripped arm64 daemon the Mac app runs for "This Mac", in
 //!   `apple/build/hostd/macos/`, stamped the same way.
@@ -30,11 +30,11 @@ use camino::Utf8PathBuf;
 
 /// The Swift package, module and xcframework name (brand-bearing: rename together with
 /// `crates/apple-ffi/uniffi.toml`).
-const CORE_NAME: &str = "UnnamedCore";
+const CORE_NAME: &str = "GudoCore";
 /// The clang module the generated Swift imports (`ffi_module_name` in uniffi.toml).
-const FFI_MODULE: &str = "UnnamedCoreFFI";
+const FFI_MODULE: &str = "GudoCoreFFI";
 /// `[lib] name` of crates/apple-ffi.
-const LIB_NAME: &str = "unnamed_core";
+const LIB_NAME: &str = "gudo_core";
 /// Minimum OS versions (ARCHITECTURE D1).
 const IOS_MIN: &str = "26.0";
 const MACOS_MIN: &str = "26.0";
@@ -70,7 +70,7 @@ const MACOS: Slice = Slice {
 const USAGE: &str = "usage: cargo xtask <command>
 
 commands:
-  build-xcframework [--macos-only]   build apple/Packages/UnnamedCore (UnnamedCore.xcframework
+  build-xcframework [--macos-only]   build apple/Packages/GudoCore (GudoCore.xcframework
                                      + generated Swift); --macos-only skips the iOS slices
   build-hostd-linux                  stripped, gzipped static musl daemons (aarch64, x86_64)
                                      into apple/build/hostd/
@@ -488,8 +488,8 @@ fn build_hostd_linux() -> Result<()> {
             .arg(&triple)
             .env("CARGO_PROFILE_RELEASE_STRIP", "symbols")
             .env("CARGO_PROFILE_RELEASE_DEBUG", "false")
-            .env("UN_BUILD_ID", &build_id)
-            .env("UN_BUILD_UNIX", built_unix.to_string()))?;
+            .env("GUDO_BUILD_ID", &build_id)
+            .env("GUDO_BUILD_UNIX", built_unix.to_string()))?;
         let binary = target_dir()
             .join(&triple)
             .join("release")
@@ -542,8 +542,8 @@ fn build_hostd_macos() -> Result<()> {
         .env("MACOSX_DEPLOYMENT_TARGET", MACOS_MIN)
         .env("CARGO_PROFILE_RELEASE_STRIP", "symbols")
         .env("CARGO_PROFILE_RELEASE_DEBUG", "false")
-        .env("UN_BUILD_ID", &build_id)
-        .env("UN_BUILD_UNIX", built_unix.to_string()))?;
+        .env("GUDO_BUILD_ID", &build_id)
+        .env("GUDO_BUILD_UNIX", built_unix.to_string()))?;
     let binary = target_dir()
         .join(MACOS.target)
         .join("release")

@@ -170,7 +170,7 @@ pub async fn knocks(invite: &str, secs: u64, parallel: usize, hold_ms: u64) -> R
     Ok(())
 }
 
-/// The invite in `path` (the `un invite` output's link line).
+/// The invite in `path` (the `gudo invite` output's link line).
 pub fn read_invite(path: &std::path::Path) -> Result<String> {
     std::fs::read_to_string(path)?
         .split_whitespace()

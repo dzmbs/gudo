@@ -329,7 +329,7 @@ final class BrowserPane: Identifiable {
         favicon = data.flatMap(Self.image)
     }
 
-    private static let faviconWorld = WKContentWorld.world(name: "unnamed-favicon")
+    private static let faviconWorld = WKContentWorld.world(name: "gudo-favicon")
 
     private static func image(_ data: Data) -> Image? {
         #if os(iOS)

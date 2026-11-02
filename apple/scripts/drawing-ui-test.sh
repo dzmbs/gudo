@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs DrawingUITests (draw overlay, placements, Send To, export, Write) on a simulator against
-# a local unnamed-hostd of its own.
+# a local gudo-hostd of its own.
 #
 #   apple/scripts/drawing-ui-test.sh [simulator-udid] [test-name …]
 #
@@ -11,7 +11,7 @@ set -euo pipefail
 apple="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 sim="${1:-$(xcrun simctl list devices available | grep -m1 'iPad Pro 13-inch' | grep -oE '[0-9A-F-]{36}')}"
 shift || true
-state="$(mktemp -d "${TMPDIR:-/tmp}/un-ui-drawing.XXXXXX")"
+state="$(mktemp -d "${TMPDIR:-/tmp}/gudo-ui-drawing.XXXXXX")"
 export PORT="${PORT:-47016}"
 daemon() { SHELL_ARGS= "$apple/scripts/local-daemon.sh" "$@" "$state"; }
 

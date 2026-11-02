@@ -2,7 +2,7 @@
 import XCTest
 
 /// New Agent opens its own tab, and panes move between tabs (Move to New Tab, Merge Into Tab, a
-/// tab dropped on a pane's edge) against a real `unnamed-hostd` (apple/scripts/w3-ui-test.sh
+/// tab dropped on a pane's edge) against a real `gudo-hostd` (apple/scripts/w3-ui-test.sh
 /// with `UI_TEST_CLASS=PaneMoveUITests`). Skipped without a ticket.
 @MainActor
 final class PaneMoveUITests: XCTestCase {

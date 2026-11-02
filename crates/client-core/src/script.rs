@@ -1,4 +1,4 @@
-//! The script event stream (`proto::script`) from what a connection is shown: `un events`.
+//! The script event stream (`proto::script`) from what a connection is shown: `gudo events`.
 //!
 //! The daemon only sends a connection what its grant covers (the attached session, a guest's
 //! scope), so the stream holds nothing the connection could not see anyway.

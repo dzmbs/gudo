@@ -94,10 +94,10 @@ xcodebuild -exportArchive -archivePath build/release/App.xcarchive \
 ## Check the signature
 
 ```sh
-app=build/release/export/unnamed.app
+app=build/release/export/gudo.app
 codesign --verify --deep --strict --verbose=2 "$app"
 codesign -dv --entitlements - "$app"                       # flags=0x10000(runtime), TeamIdentifier set, no get-task-allow
-codesign -dv "$app/Contents/MacOS/unnamed-hostd"           # runtime, same team, identifier <bundle id>.hostd
+codesign -dv "$app/Contents/MacOS/gudo-hostd"           # runtime, same team, identifier <bundle id>.hostd
 ```
 
 The entitlements must hold no `com.apple.security.cs.*` exception (JIT, unsigned executable
@@ -113,7 +113,7 @@ but left the helper as it was, sign the helper with the Developer ID first, then
 
 ```sh
 codesign --force --sign "Developer ID Application" --options runtime --timestamp \
-  --identifier dev.unnamed.app.hostd "$app/Contents/MacOS/unnamed-hostd"
+  --identifier dev.gudo.app.hostd "$app/Contents/MacOS/gudo-hostd"
 codesign --force --sign "Developer ID Application" --options runtime --timestamp \
   --entitlements <(codesign -d --entitlements - --xml "$app" 2>/dev/null) "$app"
 ```
@@ -124,23 +124,23 @@ Store the credentials in the keychain once, with an app-specific password from
 appleid.apple.com, or with an App Store Connect API key (`--key`, `--key-id`, `--issuer`):
 
 ```sh
-xcrun notarytool store-credentials unnamed-notary --apple-id <apple id> --team-id <TEAMID>
+xcrun notarytool store-credentials gudo-notary --apple-id <apple id> --team-id <TEAMID>
 ```
 
 Then for each release:
 
 ```sh
-ditto -c -k --keepParent "$app" build/release/unnamed.zip
-xcrun notarytool submit build/release/unnamed.zip --keychain-profile unnamed-notary --wait
-xcrun notarytool log <submission id> --keychain-profile unnamed-notary   # when it says Invalid
+ditto -c -k --keepParent "$app" build/release/gudo.zip
+xcrun notarytool submit build/release/gudo.zip --keychain-profile gudo-notary --wait
+xcrun notarytool log <submission id> --keychain-profile gudo-notary   # when it says Invalid
 xcrun stapler staple "$app"
 xcrun stapler validate "$app"
 spctl --assess --type execute --verbose=4 "$app"            # accepted, source=Notarized Developer ID
 ```
 
 For a disk image: put the stapled app in the image, sign it
-(`codesign --sign "Developer ID Application" --timestamp unnamed.dmg`), submit it the same
-way, then `xcrun stapler staple unnamed.dmg`.
+(`codesign --sign "Developer ID Application" --timestamp gudo.dmg`), submit it the same
+way, then `xcrun stapler staple gudo.dmg`.
 
 ## After installing
 

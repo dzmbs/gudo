@@ -4,7 +4,7 @@ import HostKit
 import Observation
 import PaneLayout
 import SwiftUI
-import UnnamedCore
+import GudoCore
 #if os(macOS)
 import AppKit
 #else

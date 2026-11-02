@@ -1,7 +1,7 @@
 import DesignSystem
 import HostKit
 import PaneLayout
-import UnnamedCore
+import GudoCore
 
 /// What the program in a daemon pane says it is doing, for every status surface. The daemon's
 /// agent integration wins (Claude, Codex: it knows approvals); any other program's own OSC 7501

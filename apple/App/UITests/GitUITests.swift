@@ -1,6 +1,6 @@
 import XCTest
 
-/// The git workspace on the iPad against a real `unnamed-hostd` with a git repository (an
+/// The git workspace on the iPad against a real `gudo-hostd` with a git repository (an
 /// origin, a second worktree) and a stand-in `gh` that answers from fixture JSON
 /// (apple/scripts/git-ui-test.sh sets them up and passes `PAIR_TICKET` and `GIT_FIXTURES`).
 /// Skipped without a ticket.
@@ -137,7 +137,7 @@ final class GitUITests: XCTestCase {
         let pr = element("pr-button")
         XCTAssertTrue(pr.waitForExistence(timeout: 30), "the toolbar shows the new worktree's pull request")
         XCTAssertTrue(text(containing: "#42").waitForExistence(timeout: 30), "#42 from gh")
-        let worktree = fixtures + "/work/.unnamed/worktrees/proj/quiet-otter"
+        let worktree = fixtures + "/work/.gudo/worktrees/proj/quiet-otter"
         XCTAssertTrue(FileManager.default.fileExists(atPath: worktree), "the worktree exists at \(worktree)")
         let setup = worktree + "/.setup-done"
         let deadline = Date().addingTimeInterval(15)
@@ -191,7 +191,7 @@ final class GitUITests: XCTestCase {
         try launch()
         XCTAssertTrue(element("pr-button").waitForExistence(timeout: 30), "the focused pane's worktree in the toolbar")
         newTask("brave-heron")
-        let worktree = fixtures + "/work/.unnamed/worktrees/proj/brave-heron"
+        let worktree = fixtures + "/work/.gudo/worktrees/proj/brave-heron"
         let port = try XCTUnwrap(waitForPort(of: "brave-heron"), "the daemon gave the worktree a PORT")
 
         // The sidebar row (iPad, Mac) and the toolbar popover show it.

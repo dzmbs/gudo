@@ -10,13 +10,13 @@ case $KIND in
   bigline) CMD="head -c 104857600 /dev/zero | tr '\\000' x; exec sleep 100000" ;;
   *) CMD="exec python3 $G $KIND ${RATE:-0}" ;;
 esac
-for i in $(seq $COUNT); do "$BIN/un-stress" spawn "$CMD" >/dev/null; done
-"$BIN/unnamed-hostd" --state-dir "$ROOT/state" pair --json --local --wait 10 |
+for i in $(seq $COUNT); do "$BIN/gudo-stress" spawn "$CMD" >/dev/null; done
+"$BIN/gudo-hostd" --state-dir "$ROOT/state" pair --json --local --wait 10 |
   python3 -c 'import json,sys; print(json.load(sys.stdin)["ticket"])' >"$ROOT/tickets"
-"$BIN/un-stress" clients --tickets "$ROOT/tickets" --secs $SECS &
+"$BIN/gudo-stress" clients --tickets "$ROOT/tickets" --secs $SECS &
 CL=$!
 sleep 5
-"$BIN/un-stress" latency --secs $((SECS - 10))
+"$BIN/gudo-stress" latency --secs $((SECS - 10))
 wait $CL
 # Stop the load so the wrapper sees the recovery.
-"$BIN/un" --no-relay session close >/dev/null 2>&1
+"$BIN/gudo" --no-relay session close >/dev/null 2>&1

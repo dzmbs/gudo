@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# A Mac screenshot of the git workspace on real data: a local unnamed-hostd on the git
+# A Mac screenshot of the git workspace on real data: a local gudo-hostd on the git
 # fixtures (git-fixtures.sh, a stand-in gh), the Debug app paired with it, drawn by the app
 # itself (`-snapshot`, works on a locked Mac; glass shows as white shapes there).
 #
@@ -10,7 +10,7 @@ apple="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 app="$1"
 out="$2"
 appearance="${3:-dark}"
-state="$(mktemp -d "${TMPDIR:-/tmp}/un-git-mac.XXXXXX")"
+state="$(mktemp -d "${TMPDIR:-/tmp}/gudo-git-mac.XXXXXX")"
 "$apple/scripts/git-fixtures.sh" "$state" >/dev/null
 export PORT="${PORT:-47615}"
 daemon() { PORT="$PORT" "$apple/scripts/w3-daemon.sh" "$1" "$state"; }

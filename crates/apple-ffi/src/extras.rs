@@ -44,7 +44,7 @@ pub enum TicketRelays {
     Disabled,
 }
 
-/// Reads a `unnamed://pair/…` ticket (the scheme is the brand's; surrounding whitespace is
+/// Reads a `gudo://pair/…` ticket (the scheme is the brand's; surrounding whitespace is
 /// ignored).
 ///
 /// # Errors
@@ -231,7 +231,7 @@ mod tests {
             }
         );
         assert!(matches!(
-            inspect_pair_ticket("unnamed://pair/nope".into()),
+            inspect_pair_ticket("gudo://pair/nope".into()),
             Err(ClientError::Ticket { .. })
         ));
     }

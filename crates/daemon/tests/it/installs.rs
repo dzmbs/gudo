@@ -93,28 +93,19 @@ async fn names_each_installed_agents_mcp_command() {
     let claude = add.iter().find(|c| c.agent == AgentKind::Claude).unwrap();
     // Every agent is named by path, on the terminal `PATH` or off it.
     assert_eq!(claude.argv[0], s(&home.join(".local/bin/claude")));
-    assert_eq!(
-        claude.argv[1..6],
-        ["mcp", "add", "--scope", "user", "unnamed"]
-    );
+    assert_eq!(claude.argv[1..6], ["mcp", "add", "--scope", "user", "gudo"]);
     let codex = add.iter().find(|c| c.agent == AgentKind::Codex).unwrap();
     assert_eq!(
         codex.argv[..5],
-        [
-            s(&bin.join("codex")).as_str(),
-            "mcp",
-            "add",
-            "unnamed",
-            "--"
-        ]
+        [s(&bin.join("codex")).as_str(), "mcp", "add", "gudo", "--"]
     );
-    assert!(codex.argv[5].ends_with("un-hook"));
+    assert!(codex.argv[5].ends_with("gudo-hook"));
     assert_eq!(codex.argv[6..8], ["mcp", "--state"]);
 
-    // A registration under the server's old name is removed first, and only where it exists.
+    // Registrations under the server's old names are removed first, and only where they exist.
     std::fs::write(
         home.join(".claude.json"),
-        r#"{"mcpServers":{"unnamed_drawings":{"command":"un-hook"}}}"#,
+        r#"{"mcpServers":{"unnamed":{"command":"un-hook"},"unnamed_drawings":{"command":"un-hook"}}}"#,
     )
     .unwrap();
     let add = c.client.agent_mcp_commands(true).await.unwrap();
@@ -124,9 +115,13 @@ async fn names_each_installed_agents_mcp_command() {
         .collect();
     assert_eq!(
         claude[0].argv[1..],
+        ["mcp", "remove", "--scope", "user", "unnamed"]
+    );
+    assert_eq!(
+        claude[1].argv[1..],
         ["mcp", "remove", "--scope", "user", "unnamed_drawings"]
     );
-    assert_eq!(claude[1].argv[2], "add");
+    assert_eq!(claude[2].argv[2], "add");
     assert_eq!(
         add.iter().filter(|c| c.agent == AgentKind::Codex).count(),
         1
@@ -138,6 +133,6 @@ async fn names_each_installed_agents_mcp_command() {
     assert_eq!(remove.len(), 1, "a missing agent has no command");
     assert_eq!(
         remove[0].argv[1..],
-        ["mcp", "remove", "--scope", "user", "unnamed"]
+        ["mcp", "remove", "--scope", "user", "gudo"]
     );
 }

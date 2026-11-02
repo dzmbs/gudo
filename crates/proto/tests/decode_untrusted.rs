@@ -70,7 +70,7 @@ proptest! {
         let _ = Ticket::parse_with_extras(&text);
         let _ = text.parse::<Invite>();
         let _ = Invite::parse_with_terms(&text);
-        let prefixed = format!("unnamed://pair/{text}");
+        let prefixed = format!("gudo://pair/{text}");
         let _ = prefixed.parse::<Ticket>();
     }
 }

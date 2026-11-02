@@ -67,7 +67,7 @@ extension BrowserPane {
 
     func recorded<T>(_ list: String) async throws -> [T] {
         let value = try await page.run(
-            "const l = window.__unRecorder; return l ? l[name].splice(0) : []", arguments: ["name": list], in: .page)
+            "const l = window.__gudoRecorder; return l ? l[name].splice(0) : []", arguments: ["name": list], in: .page)
         return value as? [T] ?? []
     }
 
@@ -176,7 +176,7 @@ extension BrowserPane {
 
     /// The page now, to tell what an action started.
     func activity() async -> Activity {
-        let started = try? await page.run("const l = window.__unRecorder; return l ? l.started : 0", in: .page) as? Int
+        let started = try? await page.run("const l = window.__gudoRecorder; return l ? l.started : 0", in: .page) as? Int
         return Activity(url: page.url, started: started ?? 0)
     }
 
@@ -217,7 +217,7 @@ extension BrowserPane {
     /// No fetch or XHR in flight (for `quiet` ms).
     func networkIdle(quiet: Int = 500) async -> Bool {
         let idle = try? await page.run(
-            "const l = window.__unRecorder; return !l || (l.pending === 0 && Date.now() - l.lastActivity >= q)",
+            "const l = window.__gudoRecorder; return !l || (l.pending === 0 && Date.now() - l.lastActivity >= q)",
             arguments: ["q": quiet], in: .page) as? Bool
         return idle ?? true
     }

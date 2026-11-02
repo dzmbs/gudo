@@ -2,7 +2,7 @@ import DesignSystem
 import Foundation
 import HostKit
 import PaneLayout
-import UnnamedCore
+import GudoCore
 
 // What a host asks of the app's browser (`proto::browser`): URLs its panes open through
 // `BROWSER` (`claude /login`), and browser tools its agents call.

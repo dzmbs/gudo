@@ -32,9 +32,9 @@ import Testing
     }
 
     @Test func theRepositoryRootNamesItButNeverAHomeRepository() {
-        let repos: Set<String> = ["/Users/me/src/unnamed/.git", "/Users/me/.git"]
+        let repos: Set<String> = ["/Users/me/src/gudo/.git", "/Users/me/.git"]
         let exists = { repos.contains($0) }
-        #expect(ProjectNaming.gitRoot(of: "/Users/me/src/unnamed/apple/App", home: "/Users/me", exists: exists) == "/Users/me/src/unnamed")
+        #expect(ProjectNaming.gitRoot(of: "/Users/me/src/gudo/apple/App", home: "/Users/me", exists: exists) == "/Users/me/src/gudo")
         #expect(ProjectNaming.gitRoot(of: "/Users/me/notes", home: "/Users/me", exists: exists) == nil, "dotfiles in home")
         #expect(ProjectNaming.gitRoot(of: "/tmp/x", home: "/Users/me", exists: exists) == nil)
     }

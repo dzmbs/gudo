@@ -4,7 +4,7 @@ import PaneLayout
 import Synchronization
 import Testing
 import TerminalCore
-import UnnamedCore
+import GudoCore
 
 /// One pane shown in two windows (docs/APP-ARCHITECTURE.md "Windows"): one stream, a terminal
 /// per window, the later window seeded from the earlier one, one size, and acks to the window
@@ -116,7 +116,7 @@ import UnnamedCore
         #expect(predictionsB.all.contains(.acknowledged(upTo: 7, hint: nil)))
         #expect(!predictionsA.all.contains { if case .acknowledged = $0 { true } else { false } })
         // Hints are the pane's: every window hears them.
-        client().send(.echoHint(hint: UnnamedCore.EchoHint(paneId: 3, echo: true, icanon: false, altScreen: false, atPrompt: true, atSeq: 11, prediction: .allow)))
+        client().send(.echoHint(hint: GudoCore.EchoHint(paneId: 3, echo: true, icanon: false, altScreen: false, atPrompt: true, atSeq: 11, prediction: .allow)))
         let hint = PredictionUpdate.hint(TerminalCore.EchoHint(echo: true, canonical: false, atPrompt: true, altScreen: false))
         #expect(predictionsA.all.last == hint)
         #expect(predictionsB.all.last == hint)

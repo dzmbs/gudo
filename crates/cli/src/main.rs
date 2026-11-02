@@ -1,34 +1,34 @@
-//! `un`: a small developer client for testing the daemon end to end without the app.
+//! `gudo`: a small developer client for testing the daemon end to end without the app.
 //!
 //! ```text
-//! un pair <ticket>            remember a daemon (and create this machine's device key)
-//! un attach                   show the focused pane in this terminal (Ctrl-] detaches)
-//! un ls                       sessions, tabs and panes
-//! un split [-v] [--agent claude|codex]
-//! un close | zoom | focus <left|right|up|down|PANE>
-//! un resize <h|v> <delta>
-//! un tab new|close|next|prev|select <n>|move <n>|rename <name>
-//! un session new <name>|rename <name>|close
-//! un forward <remote-port> | --unix <path> [--local <port>]
-//! un ports [--watch]          un inbox [--seen] [--watch]
-//! un editor status|launch [folder]|stop <folder>|open <path[:line[:col]]>
-//! un git status [path]        un git diff [--staged|--index|--rev R|--merge-base B] [--stat]
-//! un turns [--diff N]         un review --pane P --note 'path:L[-L]:text' [--submit]
-//! un worktree create|list|remove|launch
-//! un fs ls|stat|cat|put|get|mkdir|mv|rm|watch
-//! un search <pattern> [-e] [--case sensitive|insensitive|smart]
-//! un links [--commands N]      un marks      un output [--command N]
-//! un invite [--role R+R] [--scope daemon|session|tab|pane[:ID]] [--ttl 24h] [--uses N]
-//!           [--name N] [--delegate]           un join <invite>
-//! un daemon info              the daemon's build, protocol level and host
-//! un daemon upgrade <file>    send a new build (raw or .gz) to the daemon, which restarts
-//! un who [--watch]            un take-control [--force] [--wait]   un release-control
-//! un prompt <text>            un grants [--devices]   un revoke <grant>|--device K   un audit
-//! un draft <text> [--cps N] [--then-focus PANE] [--hold S]   a live draft others watch
-//! un float run [--close-when-done] [--frame x,y,w,h] [--focus] [--over P] -- <command…>
-//! un float pane|min|restore|pin [--off] <P>   un float move <P> <x,y,w,h>
-//! un float dock <P> [--beside P --side left|right|up|down]   un float list
-//! un events [--type T]…       what happens in the session, as it happens
+//! gudo pair <ticket>            remember a daemon (and create this machine's device key)
+//! gudo attach                   show the focused pane in this terminal (Ctrl-] detaches)
+//! gudo ls                       sessions, tabs and panes
+//! gudo split [-v] [--agent claude|codex]
+//! gudo close | zoom | focus <left|right|up|down|PANE>
+//! gudo resize <h|v> <delta>
+//! gudo tab new|close|next|prev|select <n>|move <n>|rename <name>
+//! gudo session new <name>|rename <name>|close
+//! gudo forward <remote-port> | --unix <path> [--local <port>]
+//! gudo ports [--watch]          gudo inbox [--seen] [--watch]
+//! gudo editor status|launch [folder]|stop <folder>|open <path[:line[:col]]>
+//! gudo git status [path]        gudo git diff [--staged|--index|--rev R|--merge-base B] [--stat]
+//! gudo turns [--diff N]         gudo review --pane P --note 'path:L[-L]:text' [--submit]
+//! gudo worktree create|list|remove|launch
+//! gudo fs ls|stat|cat|put|get|mkdir|mv|rm|watch
+//! gudo search <pattern> [-e] [--case sensitive|insensitive|smart]
+//! gudo links [--commands N]      gudo marks      gudo output [--command N]
+//! gudo invite [--role R+R] [--scope daemon|session|tab|pane[:ID]] [--ttl 24h] [--uses N]
+//!           [--name N] [--delegate]           gudo join <invite>
+//! gudo daemon info              the daemon's build, protocol level and host
+//! gudo daemon upgrade <file>    send a new build (raw or .gz) to the daemon, which restarts
+//! gudo who [--watch]            gudo take-control [--force] [--wait]   gudo release-control
+//! gudo prompt <text>            gudo grants [--devices]   gudo revoke <grant>|--device K   gudo audit
+//! gudo draft <text> [--cps N] [--then-focus PANE] [--hold S]   a live draft others watch
+//! gudo float run [--close-when-done] [--frame x,y,w,h] [--focus] [--over P] -- <command…>
+//! gudo float pane|min|restore|pin [--off] <P>   gudo float move <P> <x,y,w,h>
+//! gudo float dock <P> [--beside P --side left|right|up|down]   gudo float list
+//! gudo events [--type T]…       what happens in the session, as it happens
 //! ```
 //!
 //! `--json` makes the read commands (`ls`, `marks`, `output`, `search`, `links`, `ports`,
@@ -271,7 +271,7 @@ enum TabCmd {
 enum DaemonCmd {
     /// Version, build, protocol level, OS, CPU and host name.
     Info,
-    /// Send a new build (an `unnamed-hostd` executable or its .gz) to the daemon, which
+    /// Send a new build (an `gudo-hostd` executable or its .gz) to the daemon, which
     /// checks it, swaps it in and restarts into it. Panes come back from its saved layout;
     /// shells restart.
     Upgrade {
@@ -299,13 +299,31 @@ pub(crate) enum Agent {
 }
 
 fn config_dir() -> PathBuf {
-    std::env::var_os("XDG_CONFIG_HOME")
+    let root = std::env::var_os("XDG_CONFIG_HOME")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config")
-        })
-        .join(brand::DIR_NAME)
+        });
+    let dir = root.join(brand::DIR_NAME);
+    adopt_legacy(&root.join(brand::legacy::DIR_NAME), &dir);
+    dir
+}
+
+/// Takes over the key and pairing saved by the CLI under the product's earlier names.
+fn adopt_legacy(old: &Path, dir: &Path) {
+    if old.is_dir() && !dir.exists() {
+        let _ = std::fs::rename(old, dir);
+    }
+    for file in ["key", "ticket", "invite"] {
+        let (from, to) = (
+            dir.join(format!("{}.{file}", brand::legacy::CLI_BIN)),
+            dir.join(format!("{}.{file}", brand::CLI_BIN)),
+        );
+        if from.exists() && !to.exists() {
+            let _ = std::fs::rename(from, to);
+        }
+    }
 }
 
 /// Knocks with a knock invite and waits for the owner; returns the invite to join with.
@@ -333,7 +351,7 @@ async fn knock(cli: &Cli, invite: &str, name: Option<String>) -> Result<String> 
 }
 
 fn device_key() -> Result<Vec<u8>> {
-    let path = config_dir().join("un.key");
+    let path = config_dir().join("gudo.key");
     if let Ok(key) = std::fs::read(&path)
         && key.len() == 32
     {
@@ -378,14 +396,14 @@ fn dial(cli: &Cli) -> Result<Dial> {
     }
     match saved_ticket() {
         Ok(t) => Ok(Dial::Ticket(t)),
-        Err(e) => std::fs::read_to_string(config_dir().join("un.invite"))
+        Err(e) => std::fs::read_to_string(config_dir().join("gudo.invite"))
             .map(|i| Dial::Invite(i.trim().to_owned()))
             .map_err(|_| e),
     }
 }
 
 fn saved_ticket() -> Result<String> {
-    std::fs::read_to_string(config_dir().join("un.ticket"))
+    std::fs::read_to_string(config_dir().join("gudo.ticket"))
         .map(|t| t.trim().to_owned())
         .with_context(|| format!("no ticket: run `{} pair <ticket>` first", brand::CLI_BIN))
 }
@@ -585,7 +603,7 @@ async fn run(cli: Cli) -> Result<()> {
         ticket
             .parse::<client_core::proto::Ticket>()
             .context("not a pairing ticket")?;
-        write_private(&config_dir().join("un.ticket"), ticket.as_bytes())?;
+        write_private(&config_dir().join("gudo.ticket"), ticket.as_bytes())?;
         let cli = Cli {
             ticket: Some(ticket.clone()),
             ..cli
@@ -602,7 +620,7 @@ async fn run(cli: Cli) -> Result<()> {
         } else {
             invite.clone()
         };
-        write_private(&config_dir().join("un.invite"), invite.as_bytes())?;
+        write_private(&config_dir().join("gudo.invite"), invite.as_bytes())?;
         let cli = Cli {
             ticket: None,
             invite: Some(invite.clone()),
@@ -996,7 +1014,7 @@ async fn run(cli: Cli) -> Result<()> {
     Ok(())
 }
 
-/// `un events`: one line per event until Ctrl-C.
+/// `gudo events`: one line per event until Ctrl-C.
 async fn events(mut conn: Conn, types: &[String]) -> Result<()> {
     use client_core::proto::ScriptEvent;
     let mut mapper = client_core::script::EventMapper::new();
@@ -1251,7 +1269,7 @@ fn show_position(layout: &SessionLayout, pane: PaneId) {
         return;
     };
     let title = format!(
-        "un · {} · tab {}/{} · pane {pane} ({} in tab)",
+        "gudo · {} · tab {}/{} · pane {pane} ({} in tab)",
         layout.name,
         index + 1,
         layout.tabs.len(),
@@ -1266,7 +1284,7 @@ fn follow(client: &Client, pane: PaneId) {
     client.set_view(Some(pane), vec![pane]);
 }
 
-/// `un daemon …`: works without attaching, also against a daemon this build cannot otherwise
+/// `gudo daemon …`: works without attaching, also against a daemon this build cannot otherwise
 /// talk to (it admits its owner to upgrade only).
 async fn daemon_cmd(cli: &Cli, action: &DaemonCmd) -> Result<()> {
     let (listener, mut events) = EventQueue::channel();

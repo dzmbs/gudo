@@ -1,7 +1,7 @@
 import DesignSystem
 import HostKit
 import SwiftUI
-import UnnamedCore
+import GudoCore
 
 // name ("Claude · 62% of 5h · resets 14:20"), a detail popover with every window, and the same
 // lines in the Inbox. Status UX §3: monochrome until it needs the user (amber above 80 %, red

@@ -60,7 +60,7 @@ enum FloatingFixtures {
     /// A shell beside a test run, htop floating over both (or tiled beside them).
     static func base(_ workspace: Workspace, floated: Bool = true) async -> Panes? {
         guard let shell = workspace.focusedPane, let tab = workspace.session.activeTabId else { return nil }
-        workspace.apply(.rename(tab, "~/projects/unnamed"))
+        workspace.apply(.rename(tab, "~/projects/gudo"))
         workspace.apply(.split(shell, .horizontal))
         guard let tests = workspace.focusedPane, tests != shell else { return nil }
         workspace.apply(.split(tests, .horizontal))
@@ -131,7 +131,7 @@ enum FloatingFixtures {
     private static let reset = sgr("0")
 
     static var shellScreen: String {
-        let prompt = "\(sgr("36"))~/projects/unnamed\(reset) \(sgr("35"))main\(reset) \(sgr("32"))❯\(reset) "
+        let prompt = "\(sgr("36"))~/projects/gudo\(reset) \(sgr("35"))main\(reset) \(sgr("32"))❯\(reset) "
         let log = [
             ("adaf810", "PTY bound test: raw mode, so input backs up"),
             ("7fb4929", "Merge final polish: layer animations, staged panes"),
@@ -226,7 +226,7 @@ enum FloatingFixtures {
         let header = "    PID USER       PRI  NI  VIRT   RES   SHR S  CPU% MEM%   TIME+  Command"
         lines.append("\(sgr("30;42"))\(pad(header, cols))\(reset)")
         let procs: [(Int, String, String, String, String, String, Double, Double, String)] = [
-            (48213, "me", "1214M", "312M", "98M", "R", 38.2, 1.9, "unnamed-hostd --foreground"),
+            (48213, "me", "1214M", "312M", "98M", "R", 38.2, 1.9, "gudo-hostd --foreground"),
             (51877, "me", "2104M", "540M", "122M", "S", 21.4, 3.3, "cargo test -p daemon"),
             (902, "root", "412M", "88M", "41M", "S", 9.1, 0.5, "/usr/libexec/WindowServer"),
             (51902, "me", "880M", "201M", "64M", "S", 6.7, 1.2, "claude --resume"),

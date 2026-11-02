@@ -983,7 +983,7 @@ async fn local_dev_relay_live_activity() {
         assert_eq!(entry["headers"]["pushType"], "liveactivity");
         assert_eq!(
             entry["headers"]["topic"],
-            "dev.unnamed.app.push-type.liveactivity"
+            "dev.gudo.app.push-type.liveactivity"
         );
         let sealed = entry["payload"]["aps"]["content-state"]["s"]
             .as_str()

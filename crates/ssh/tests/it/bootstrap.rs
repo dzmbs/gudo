@@ -13,9 +13,9 @@ use ssh::{
 use crate::common::env;
 
 /// The stripped static build for the VM, made by `scripts/ssh-test-vm.sh`
-/// (`UN_SSH_TEST_HOSTD` overrides).
+/// (`GUDO_SSH_TEST_HOSTD` overrides).
 pub fn hostd_binary(platform: HostPlatform) -> PathBuf {
-    if let Some(p) = std::env::var_os("UN_SSH_TEST_HOSTD") {
+    if let Some(p) = std::env::var_os("GUDO_SSH_TEST_HOSTD") {
         return PathBuf::from(p);
     }
     let arch = match platform {
@@ -44,7 +44,7 @@ impl BootstrapListener for Steps {
 }
 
 #[tokio::test]
-#[cfg_attr(not(ssh_test_host), ignore = "needs UN_SSH_TEST_HOST (docs/SSH.md)")]
+#[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
 async fn install_reuse_upgrade() {
     let _host = HOST.lock().await;
     let env = env();
@@ -165,25 +165,25 @@ async fn main_pid(conn: &ssh::Connection) -> String {
 /// Bytes altered between the app and the disk (here by a hostile `gzip` on the remote) are
 /// refused by the remote SHA-256 check: nothing is installed and no temp file is left.
 #[tokio::test]
-#[cfg_attr(not(ssh_test_host), ignore = "needs UN_SSH_TEST_HOST (docs/SSH.md)")]
+#[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
 async fn a_tampered_upload_is_refused_and_installs_nothing() {
     let conn = env().connect().await;
-    // A `gzip` first on PATH that corrupts its output only for uploads into ~/un-tamper (its
+    // A `gzip` first on PATH that corrupts its output only for uploads into ~/gudo-tamper (its
     // parent `sh -c` script names the target), so parallel tests are unaffected.
     conn.exec(
         r#"set -e
-mkdir -p ~/un-tamper-bin ~/un-tamper
-rm -f ~/un-tamper/*
-cat > ~/un-tamper-bin/gzip <<'SH'
+mkdir -p ~/gudo-tamper-bin ~/gudo-tamper
+rm -f ~/gudo-tamper/*
+cat > ~/gudo-tamper-bin/gzip <<'SH'
 #!/bin/sh
-if grep -q un-tamper /proc/$PPID/cmdline 2>/dev/null; then
+if grep -q gudo-tamper /proc/$PPID/cmdline 2>/dev/null; then
   /usr/bin/gzip "$@"; printf X
 else
   exec /usr/bin/gzip "$@"
 fi
 SH
-chmod +x ~/un-tamper-bin/gzip
-grep -q un-tamper-bin ~/.bashrc || sed -i '1i export PATH="$HOME/un-tamper-bin:$PATH"' ~/.bashrc"#,
+chmod +x ~/gudo-tamper-bin/gzip
+grep -q gudo-tamper-bin ~/.bashrc || sed -i '1i export PATH="$HOME/gudo-tamper-bin:$PATH"' ~/.bashrc"#,
     )
     .await
     .unwrap()
@@ -191,10 +191,12 @@ grep -q un-tamper-bin ~/.bashrc || sed -i '1i export PATH="$HOME/un-tamper-bin:$
     .unwrap();
     let data = b"\x7fELF pretend helper".repeat(1000);
     let result = conn
-        .upload("~/un-tamper/helper", &data, 0o755, UploadEncoding::Gzip)
+        .upload("~/gudo-tamper/helper", &data, 0o755, UploadEncoding::Gzip)
         .await;
     let left = conn
-        .exec("ls -A ~/un-tamper; sed -i '/un-tamper-bin/d' ~/.bashrc; rm -rf ~/un-tamper-bin")
+        .exec(
+            "ls -A ~/gudo-tamper; sed -i '/gudo-tamper-bin/d' ~/.bashrc; rm -rf ~/gudo-tamper-bin",
+        )
         .await
         .unwrap();
     match result {
@@ -238,7 +240,7 @@ fn fakes(build: &[u8]) -> HostdBinaries {
 /// Rollback protection over SSH: an app carrying an older helper keeps the newer one the host
 /// runs, unless the downgrade is explicit.
 #[tokio::test]
-#[cfg_attr(not(ssh_test_host), ignore = "needs UN_SSH_TEST_HOST (docs/SSH.md)")]
+#[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
 async fn an_older_helper_never_replaces_a_newer_install() {
     let _host = HOST.lock().await;
     let conn = env().connect().await;

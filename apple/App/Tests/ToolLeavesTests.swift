@@ -1,6 +1,6 @@
 import HostKit
 import PaneLayout
-import UnnamedCore
+import GudoCore
 import XCTest
 @testable import App
 #if os(iOS)

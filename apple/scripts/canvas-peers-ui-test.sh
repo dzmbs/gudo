@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs CanvasPeersUITests on a simulator against a real local unnamed-hostd with a second
+# Runs CanvasPeersUITests on a simulator against a real local gudo-hostd with a second
 # device on the same canvas pane: HostKit's CanvasPeerTests, paired with its own ticket, waits
 # for the app's rectangle and adds an ellipse the app must show. Both have to pass.
 #
@@ -11,14 +11,14 @@ set -euo pipefail
 apple="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 repo="$(cd "$apple/.." && pwd)"
 sim="${1:-$(xcrun simctl list devices available | grep -m1 'iPad Pro 13-inch' | grep -oE '[0-9A-F-]{36}')}"
-state="$(mktemp -d "${TMPDIR:-/tmp}/un-ui-canvas-peers.XXXXXX")"
+state="$(mktemp -d "${TMPDIR:-/tmp}/gudo-ui-canvas-peers.XXXXXX")"
 export PORT="${PORT:-47015}"
 daemon() { "$apple/scripts/local-daemon.sh" "$@" "$state"; }
 
 ticket="$(daemon start)"
 . "$apple/scripts/lib/cleanup.sh"
 on_exit 'daemon stop; rm -rf "$state"'
-bin="${UN_HOSTD_BIN:-$repo/target/debug/unnamed-hostd}"
+bin="${GUDO_HOSTD_BIN:-$repo/target/debug/gudo-hostd}"
 peer_ticket="$("$bin" --state-dir "$state" pair --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["ticket"])')"
 
 # The peer builds first (so its wait starts when the app does).

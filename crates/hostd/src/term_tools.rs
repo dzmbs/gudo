@@ -1,4 +1,4 @@
-//! The terminal tools of `un-hook mcp`: one [`TermAsk`] on the hook socket per call, answered
+//! The terminal tools of `gudo-hook mcp`: one [`TermAsk`] on the hook socket per call, answered
 //! by the daemon (`daemon::term`). Every tool declares an output schema and returns its result
 //! as `structuredContent`, so code-mode harnesses get typed values; the text content leads
 //! with a one-line summary and then the output itself, for the model.

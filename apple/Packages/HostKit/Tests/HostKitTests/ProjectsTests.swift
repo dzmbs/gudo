@@ -2,7 +2,7 @@ import Foundation
 @testable import HostKit
 import PaneLayout
 import Testing
-import UnnamedCore
+import GudoCore
 
 private func ref(_ host: String, _ tab: UInt64) -> TabRef { TabRef(hostId: host, tab: TabId(tab)) }
 
@@ -152,7 +152,7 @@ private func tabsLayout(revision: UInt64, _ ids: [UInt64], session: UInt64 = 7) 
 @MainActor
 @Suite struct ProjectStoreTests {
     @Test func anOldEchoNeverPutsAMovedTabBack() {
-        var sent: [UnnamedCore.LayoutOp] = []
+        var sent: [GudoCore.LayoutOp] = []
         let store = DaemonLayoutStore { sent.append($0); return UInt64(sent.count) }
         store.receive(tabsLayout(revision: 1, [1, 2, 3]))
         store.apply(.focus(PaneId(200)))
@@ -174,7 +174,7 @@ private func tabsLayout(revision: UInt64, _ ids: [UInt64], session: UInt64 = 7) 
     }
 
     @Test func aRefusedMoveGoesBack() {
-        var sent: [UnnamedCore.LayoutOp] = []
+        var sent: [GudoCore.LayoutOp] = []
         let store = DaemonLayoutStore { sent.append($0); return UInt64(sent.count) }
         store.receive(tabsLayout(revision: 1, [1, 2]))
         store.apply(.moveTab(TabId(2), to: 0))
@@ -184,7 +184,7 @@ private func tabsLayout(revision: UInt64, _ ids: [UInt64], session: UInt64 = 7) 
     }
 
     @Test func projectChangesShowAtOnceAndReconcileWithTheDaemon() {
-        var sent: [UnnamedCore.LayoutOp] = []
+        var sent: [GudoCore.LayoutOp] = []
         let store = DaemonLayoutStore { sent.append($0); return UInt64(sent.count) }
         store.supportsProjects = true
         store.receive(tabsLayout(revision: 1, [1, 2]))
@@ -212,7 +212,7 @@ private func tabsLayout(revision: UInt64, _ ids: [UInt64], session: UInt64 = 7) 
     }
 
     @Test func aDaemonWithoutProjectsIsNeverSentThem() {
-        var sent: [UnnamedCore.LayoutOp] = []
+        var sent: [GudoCore.LayoutOp] = []
         let store = DaemonLayoutStore { sent.append($0); return UInt64(sent.count) }
         store.receive(tabsLayout(revision: 1, [1]))
         store.apply(.put(info("p", "app")))

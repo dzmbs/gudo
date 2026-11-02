@@ -4,7 +4,7 @@ import PaneLayout
 import Synchronization
 import TerminalCore
 import Testing
-import UnnamedCore
+import GudoCore
 
 /// The client under connection churn: many hosts at once, hosts that freeze, die and come
 /// back, a resume with a big backlog, and connections and panes opened and closed over and
@@ -241,10 +241,10 @@ import UnnamedCore
             [stress] open/close: \(rounds) panes then connections; at round 5 \(first.map { "\(Gauge.mb($0.0)) \($0.1)t \($0.2)fd" } ?? "-"), after panes \(Gauge.mb(panesDone.0)) \(panesDone.1)t \(panesDone.2)fd, end \(Gauge.mb(end.0)) \(end.1)t \(end.2)fd
               \(samples.joined(separator: "\n  "))
             """)
-        if let pause = ProcessInfo.processInfo.environment["UN_STRESS_PAUSE"].flatMap(Int.init) {
+        if let pause = ProcessInfo.processInfo.environment["GUDO_STRESS_PAUSE"].flatMap(Int.init) {
             // Time to look at the process from outside: leaks, vmmap --summary, lsof -p.
             print("[stress] pid \(getpid()) paused for \(pause) s")
-            if let file = ProcessInfo.processInfo.environment["UN_STRESS_PID_FILE"] {
+            if let file = ProcessInfo.processInfo.environment["GUDO_STRESS_PID_FILE"] {
                 try "\(getpid())\n".write(toFile: file, atomically: true, encoding: .utf8)
             }
             try await Task.sleep(for: .seconds(pause))

@@ -66,7 +66,7 @@ pub trait AskpassListener: Send + Sync {
     fn on_askpass_event(&self, event: AskpassEvent);
 }
 
-/// An [`AskpassListener`] that queues events for async Rust consumers (`un`, tests).
+/// An [`AskpassListener`] that queues events for async Rust consumers (`gudo`, tests).
 pub struct AskpassEventQueue {
     tx: mpsc::UnboundedSender<AskpassEvent>,
 }

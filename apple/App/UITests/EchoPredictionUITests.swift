@@ -1,7 +1,7 @@
 import XCTest
 
 /// Echo prediction on a daemon pane over a slow link (apple/scripts/prediction-ui-test.sh: a
-/// real local `unnamed-hostd`, every event from it held back 2.5 s by `-testLinkDelayMs`).
+/// real local `gudo-hostd`, every event from it held back 2.5 s by `-testLinkDelayMs`).
 /// Typed text is drawn ahead of the echo, the echo confirms it, nothing is mispredicted, and
 /// hidden input (a password prompt) is never predicted. Skipped without a ticket.
 @MainActor

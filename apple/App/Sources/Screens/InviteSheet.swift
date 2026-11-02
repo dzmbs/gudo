@@ -4,7 +4,7 @@ import DesignSystem
 import HostKit
 import PaneLayout
 import SwiftUI
-import UnnamedCore
+import GudoCore
 import UniformTypeIdentifiers
 #if canImport(UIKit)
 import UIKit
@@ -77,7 +77,7 @@ private struct ShareRoot: View {
     @State private var createdSummary = ""
     @State private var isCreating = false
     @State private var error: String?
-    @State private var revoking: UnnamedCore.Participant?
+    @State private var revoking: GudoCore.Participant?
 
     var body: some View {
         Form {
@@ -344,7 +344,7 @@ private struct ShareRoot: View {
         }
     }
 
-    @ViewBuilder private func personMenu(_ person: UnnamedCore.Participant) -> some View {
+    @ViewBuilder private func personMenu(_ person: GudoCore.Participant) -> some View {
         if let pane = person.focus, session.isDriving(pane), person.roles.contains(.driver) || person.roles.contains(.owner),
            person.actor.principal != session.myPrincipal
         {
@@ -359,7 +359,7 @@ private struct ShareRoot: View {
         }
     }
 
-    private func canRevoke(_ person: UnnamedCore.Participant) -> Bool {
+    private func canRevoke(_ person: GudoCore.Participant) -> Bool {
         session.isOwner && person.grantId != nil && person.actor.principal != session.myPrincipal
     }
 
@@ -379,9 +379,9 @@ extension Workspace {
     }
 }
 
-extension [UnnamedCore.Participant] {
+extension [GudoCore.Participant] {
     /// This device's principal first, then by arrival.
-    func sortedForDisplay(me: String?) -> [UnnamedCore.Participant] {
+    func sortedForDisplay(me: String?) -> [GudoCore.Participant] {
         sorted { a, b in
             if (a.actor.principal == me) != (b.actor.principal == me) { return a.actor.principal == me }
             return a.sinceMs < b.sinceMs
@@ -557,7 +557,7 @@ private struct InviteResult: View {
 
 /// A person in the session: avatar, name, role, where they are, driving.
 private struct PersonRow: View {
-    let person: UnnamedCore.Participant
+    let person: GudoCore.Participant
     let session: MultiplayerSession
     let workspace: Workspace
     var onRemove: (() -> Void)?

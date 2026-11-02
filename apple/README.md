@@ -7,7 +7,7 @@ One multiplatform SwiftUI app (iPhone, iPad, Mac; iOS/iPadOS/macOS 26+) over thr
 | `App/Sources` | The app: `Workspace` (one window: layout + live panes), split/tab views, menu commands, iOS key bar, pane backends |
 | `App/UITests` | Hardware-keyboard UI tests (splits, zoom, focus, tabs, key bar) |
 | `Packages/HostKit` | Data/control layer: hosts, pairing, daemon and plain-SSH connections, `DaemonLayoutStore`, pane backends, lifecycle (docs/APP-ARCHITECTURE.md) |
-| `Packages/UnnamedCore` | The Rust core (UniFFI): `cargo xtask build-xcframework` (docs/APPLE-FFI.md) |
+| `Packages/GudoCore` | The Rust core (UniFFI): `cargo xtask build-xcframework` (docs/APPLE-FFI.md) |
 | `Packages/PaneLayout` | Layout model shared in spirit with the daemon: Session → Tab → split tree, `LayoutOp`, `LayoutStore` |
 | `Packages/DesignSystem` | Tokens, Liquid Glass components, Ghostty overlays (resize, search, palette, exit bar), agent status, the 463 Ghostty themes; spec in `docs/DESIGN.md` |
 | `Packages/DrawingKit` | Drawing without UI: overlay anchor math (Excalidraw scene px ↔ cells ↔ points), PencilKit → Excalidraw `freedraw`, the row tracker that pins daemon anchors in the app's VT |
@@ -50,7 +50,7 @@ macOS:
 ```sh
 cd apple
 xcodebuild -project App.xcodeproj -scheme App -destination 'platform=macOS' -derivedDataPath build/DerivedData build
-open build/DerivedData/Build/Products/Debug/unnamed.app
+open build/DerivedData/Build/Products/Debug/gudo.app
 ```
 
 iPad simulator (any Apple silicon simulator; the xcframework has no x86_64 simulator slice):
@@ -60,8 +60,8 @@ cd apple
 DEVICE=$(xcrun simctl list devices available | grep -m1 'iPad Pro 13-inch' | grep -oE '[0-9A-F-]{36}')
 xcrun simctl boot "$DEVICE"; open -a Simulator
 xcodebuild -project App.xcodeproj -scheme App -destination "platform=iOS Simulator,id=$DEVICE" -derivedDataPath build/DerivedData build
-xcrun simctl install "$DEVICE" build/DerivedData/Build/Products/Debug-iphonesimulator/unnamed.app
-xcrun simctl launch "$DEVICE" dev.unnamed.app
+xcrun simctl install "$DEVICE" build/DerivedData/Build/Products/Debug-iphonesimulator/gudo.app
+xcrun simctl launch "$DEVICE" dev.gudo.app
 ```
 
 Or open `App.xcodeproj` in Xcode and run the `App` scheme on "My Mac" or a simulator.
@@ -77,7 +77,7 @@ xcodebuild -project App.xcodeproj -scheme App -destination "platform=iOS Simulat
 Notifications: `(cd Packages/NotifyKit && swift test)` (NSE decrypt with the shared vectors,
 action handler, local content, prefs). Multiplayer: `MultiplayerSessionTests` and
 `MultiplayerIntegrationTests` in HostKit, and `scripts/multiplayer-ui-test.sh <udid>` (iPad: share
-sheet, invite + QR, grants, revoke, audit against a local daemon with a guest joined by the `un`
+sheet, invite + QR, grants, revoke, audit against a local daemon with a guest joined by the `gudo`
 CLI).
 
 Developer-workflow screens (Inbox, Files, Diff, Editor, Browser, Links): `AppTests` (the models
@@ -186,12 +186,12 @@ Every screen opens directly with mock data: `-screen <name> -mock` (names in `do
 e.g. `splits`, `inbox`, `palette`, `diff`). Screenshots in light and dark:
 
 ```sh
-scripts/mac-screenshots.sh build/DerivedData/Build/Products/Debug/unnamed.app out  # Mac, works while locked
+scripts/mac-screenshots.sh build/DerivedData/Build/Products/Debug/gudo.app out  # Mac, works while locked
 ```
 
 The Mac script uses the Debug-only `-snapshot <png>` switch (the app draws its own window; glass and
 the vibrant sidebar do not draw that way and show white). UI tests that paste need the
-simulator's paste permission: `xcrun simctl privacy "$DEVICE" grant pasteboard dev.unnamed.app`.
+simulator's paste permission: `xcrun simctl privacy "$DEVICE" grant pasteboard dev.gudo.app`.
 
 ## Shortcuts (Ghostty defaults)
 

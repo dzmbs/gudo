@@ -2,7 +2,7 @@ import Foundation
 import Observation
 import os
 import PaneLayout
-import UnnamedCore
+import GudoCore
 
 /// One row of the host list, ready to show (04-mobile-ux C2).
 public struct HostEntry: Identifiable, Equatable, Sendable {

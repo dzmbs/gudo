@@ -9,7 +9,7 @@ import XCTest
 /// Design review on touch without UI tests: a window's content drawn in-process into a window
 /// of the test host's scene and written as `<dir>/<ipad|iphone>-<name>-<mode>.png` (a foldable's
 /// open screen and an iPad both get the sidebar). Runs only with
-/// `SNAPSHOT_DIR` and `UNNAMED_MOCK` set, like `MacSnapshotTests`.
+/// `SNAPSHOT_DIR` and `GUDO_MOCK` set, like `MacSnapshotTests`.
 @MainActor
 final class TouchSnapshotTests: XCTestCase {
     private let env = ProcessInfo.processInfo.environment

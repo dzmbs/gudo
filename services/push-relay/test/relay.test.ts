@@ -157,7 +157,7 @@ describe("push relay", () => {
     const [apns] = apnsCalls;
     expect(apns.url).toBe(`https://api.push.apple.com/3/device/${TOKEN}`);
     expect(apns.headers.get("apns-push-type")).toBe("alert");
-    expect(apns.headers.get("apns-topic")).toBe("dev.unnamed.app");
+    expect(apns.headers.get("apns-topic")).toBe("dev.gudo.app");
     expect(apns.headers.get("apns-priority")).toBe("10");
     expect(apns.headers.get("apns-collapse-id")).toBe("c0ffee".repeat(5) + "00");
     const sent = JSON.parse(new TextDecoder().decode(init.body as Uint8Array));
@@ -299,7 +299,7 @@ describe("push relay", () => {
     const sealed = JSON.parse(new TextDecoder().decode(start.body as Uint8Array)).sealed;
     const [call0] = apnsCalls;
     expect(call0.headers.get("apns-push-type")).toBe("liveactivity");
-    expect(call0.headers.get("apns-topic")).toBe("dev.unnamed.app.push-type.liveactivity");
+    expect(call0.headers.get("apns-topic")).toBe("dev.gudo.app.push-type.liveactivity");
     expect(call0.headers.get("apns-priority")).toBe("10");
     expect(call0.body.aps).toMatchObject({
       event: "start",

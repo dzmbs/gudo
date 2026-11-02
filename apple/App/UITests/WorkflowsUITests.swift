@@ -1,7 +1,7 @@
 #if os(iOS)
 import XCTest
 
-/// Workflows on the iPad against a real `unnamed-hostd` whose repository has workflow files
+/// Workflows on the iPad against a real `gudo-hostd` whose repository has workflow files
 /// (apple/scripts/workflows-ui-test.sh sets them up and passes `PAIR_TICKET` and
 /// `WORKFLOW_FIXTURES`): "/" in the palette lists them with their source, the argument form
 /// fills defaults, ⇥ moves between fields and previews the command, ↩ types it at the prompt
@@ -11,7 +11,7 @@ import XCTest
 final class WorkflowsUITests: XCTestCase {
     private var app: XCUIApplication!
     private var fixtures = ""
-    private var brand = "unnamed"
+    private var brand = "gudo"
 
     override nonisolated func setUp() {
         continueAfterFailure = false
@@ -23,7 +23,7 @@ final class WorkflowsUITests: XCTestCase {
         let ticket = ProcessInfo.processInfo.environment["PAIR_TICKET"] ?? ""
         try XCTSkipIf(ticket.isEmpty, "no daemon ticket (run apple/scripts/workflows-ui-test.sh)")
         fixtures = ProcessInfo.processInfo.environment["WORKFLOW_FIXTURES"] ?? ""
-        brand = ProcessInfo.processInfo.environment["BRAND"] ?? "unnamed"
+        brand = ProcessInfo.processInfo.environment["BRAND"] ?? "gudo"
         try? FileManager.default.removeItem(atPath: output)
         app = XCUIApplication()
         app.launchArguments += ["-testTicket", ticket, "-testRelay", "disabled", "-noAutoFocus", "YES"]

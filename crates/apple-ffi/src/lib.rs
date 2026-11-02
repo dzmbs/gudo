@@ -1,6 +1,6 @@
 //! The Swift app's view of the Rust core (ARCHITECTURE D6): a UniFFI surface over
 //! [`client_core`] (daemon connections) and [`ssh`] (plain SSH, bootstrap), built into
-//! `UnnamedCore.xcframework` by `cargo xtask build-xcframework`. See docs/APPLE-FFI.md.
+//! `GudoCore.xcframework` by `cargo xtask build-xcframework`. See docs/APPLE-FFI.md.
 //!
 //! - [`DaemonClient`]: dial a daemon by ticket; every client-core request; events through a
 //!   Swift [`ClientEventListener`].
@@ -19,7 +19,7 @@
 //! One multi-thread tokio runtime ([`runtime`]) runs everything: connections, SSH sessions,
 //! panes. No exported function blocks: synchronous methods only queue work, and the
 //! `async` ones await a task on that runtime, so Swift may call anything from the main
-//! thread. Callbacks into Swift arrive on runtime threads (named `unnamed-core`), except
+//! thread. Callbacks into Swift arrive on runtime threads (named `gudo-core`), except
 //! the SSH signer, keyboard-interactive and host-key callbacks, which arrive on the
 //! runtime's blocking pool so they may wait for the user.
 //!
@@ -138,7 +138,7 @@ pub fn runtime() -> &'static Runtime {
     RUNTIME.get_or_init(|| {
         tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
-            .thread_name("unnamed-core")
+            .thread_name("gudo-core")
             .enable_all()
             .build()
             .expect("the core runtime starts")

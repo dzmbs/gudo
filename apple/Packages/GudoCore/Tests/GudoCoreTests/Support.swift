@@ -1,9 +1,9 @@
 import Foundation
 import Synchronization
 import Testing
-import UnnamedCore
+import GudoCore
 
-/// The repository root (this file is apple/Packages/UnnamedCore/Tests/UnnamedCoreTests/…).
+/// The repository root (this file is apple/Packages/GudoCore/Tests/GudoCoreTests/…).
 let repoRoot = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -83,9 +83,9 @@ func runProgram(_ executable: URL, _ arguments: [String]) throws -> String {
     return String(decoding: data, as: UTF8.self)
 }
 
-/// A local `unnamed-hostd` with relays off, in a temporary state directory, as
+/// A local `gudo-hostd` with relays off, in a temporary state directory, as
 /// crates/client-core's tests run the daemon. Build it first: `cargo build -p hostd`
-/// (or point `UN_HOSTD_BIN` at a build).
+/// (or point `GUDO_HOSTD_BIN` at a build).
 final class LocalDaemon {
     let binary: URL
     let stateDir: URL
@@ -102,13 +102,13 @@ final class LocalDaemon {
         setup: (URL) throws -> Void = { _ in }
     ) throws {
         let env = ProcessInfo.processInfo.environment
-        binary = env["UN_HOSTD_BIN"].map(URL.init(fileURLWithPath:))
-            ?? repoRoot.appending(path: "target/debug/unnamed-hostd")
+        binary = env["GUDO_HOSTD_BIN"].map(URL.init(fileURLWithPath:))
+            ?? repoRoot.appending(path: "target/debug/gudo-hostd")
         guard FileManager.default.isExecutableFile(atPath: binary.path) else {
             throw TestError("no daemon at \(binary.path): run `cargo build -p hostd` first")
         }
         stateDir = FileManager.default.temporaryDirectory
-            .appending(path: "un-swift-\(UUID().uuidString)")
+            .appending(path: "gudo-swift-\(UUID().uuidString)")
             .resolvingSymlinksInPath()
         try FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
         if let config {

@@ -7,7 +7,7 @@ import XCTest
 @MainActor
 final class LinkSecurityTests: XCTestCase {
     /// A valid ticket for daemon `abab…` (never dialled).
-    static let ticket = "unnamed://pair/AGV2XK5LVOV2XK5LVOV2XK5LVOV2XK5LVOV2XK5LVOV2XK5LVOV2WAIAP4AAAAOREIARM2DUORYHGORPF5ZGK3DBPEXGK6DBNVYGYZJPAEAQCAIBAEAQCAIBAEAQCAIBAEBAEAQCAIBAEAQCAIBAEAQCAIBIBIHRYKYTI"
+    static let ticket = "gudo://pair/AGV2XK5LVOV2XK5LVOV2XK5LVOV2XK5LVOV2XK5LVOV2XK5LVOV2WAIAP4AAAAOREIARM2DUORYHGORPF5ZGK3DBPEXGK6DBNVYGYZJPAEAQCAIBAEAQCAIBAEAQCAIBAEBAEAQCAIBAEAQCAIBAEAQCAIBIBIHRYKYTI"
 
     func testAPairingLinkShowsAddHostAndPairsNothing() throws {
         let model = WindowModel(app: .shared)
@@ -27,6 +27,20 @@ final class LinkSecurityTests: XCTestCase {
         let model = WindowModel(app: .shared)
         model.openLink(URL(string: "\(WindowContent.urlScheme)://join/whatever")!)
         XCTAssertEqual(model.sheet, .join)
+    }
+
+    func testUniversalLinksOpenLikeTheAppsOwn() throws {
+        let model = WindowModel(app: .shared)
+        let payload = String(Self.ticket.dropFirst("gudo://pair/".count))
+        model.openLink(try XCTUnwrap(URL(string: "https://\(Brand.webDomain)/pair#\(payload)")))
+        XCTAssertEqual(model.sheet, .pairing)
+        XCTAssertEqual(model.pairingTicket, "\(WindowContent.urlScheme)://pair/\(payload)")
+
+        let join = try XCTUnwrap(URL(string: "https://\(Brand.webDomain)/join#abc"))
+        XCTAssertEqual(AppLinks.fromWeb(join, scheme: "gudo")?.absoluteString, "gudo://join/abc")
+        for other in ["https://elsewhere.example/join#abc", "http://\(Brand.webDomain)/join#abc", "https://\(Brand.webDomain)/admin#abc", "https://\(Brand.webDomain)/join"] {
+            XCTAssertNil(AppLinks.fromWeb(try XCTUnwrap(URL(string: other)), scheme: "gudo"), other)
+        }
     }
 
     func testTestHooksComeFromLaunchArgumentsOnly() {

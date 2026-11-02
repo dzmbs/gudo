@@ -30,7 +30,7 @@ pub struct LaunchContext {
 /// Which of the host's accounts an agent runs under (docs/DAEMON.md "Agent accounts").
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountContext {
-    /// The account's id, exported as `UN_ACCOUNT`.
+    /// The account's id, exported as `GUDO_ACCOUNT`.
     pub id: String,
     /// The account's configuration directory, passed as the agent's own variable
     /// (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`). `None` is the system account: the pane inherits
@@ -239,7 +239,7 @@ pub fn pane_env(ctx: &LaunchContext) -> Vec<(String, OsString)> {
 /// # Examples
 ///
 /// ```
-/// assert_eq!(agents::mcp_server_name(), "unnamed");
+/// assert_eq!(agents::mcp_server_name(), "gudo");
 /// ```
 pub fn mcp_server_name() -> String {
     brand::PRODUCT_NAME
@@ -252,10 +252,10 @@ pub fn mcp_server_name() -> String {
         .collect()
 }
 
-/// The name earlier builds registered the server under, when it only served drawings; a user
-/// registration under it is removed when registering again.
-pub fn legacy_mcp_server_name() -> String {
-    format!("{}_drawings", mcp_server_name())
+/// The names earlier builds registered the server under (before the product's rename, and when
+/// it only served drawings); a user registration under one is removed when registering again.
+pub fn legacy_mcp_server_names() -> [&'static str; 2] {
+    brand::legacy::MCP_SERVER_NAMES
 }
 
 /// The MCP server's terminal tools that act (run, type, open, close, start and prompt agents):
@@ -290,7 +290,7 @@ pub fn mcp_args(ctx: &LaunchContext) -> Vec<String> {
 
 /// Returns the server command an agent's user-wide configuration names, for agents the user
 /// starts by hand in a pane: `<hook_bin> mcp --state <state_dir>`. The pane comes from the
-/// pane's `UN_PANE_ID`, which every pane has.
+/// pane's `GUDO_PANE_ID`, which every pane has.
 pub(crate) fn user_mcp_server(hook_bin: &Path, state_dir: &Path) -> Vec<String> {
     vec![
         hook_bin.to_string_lossy().into_owned(),
@@ -334,10 +334,10 @@ pub fn shell_quote(s: &str) -> String {
 pub(crate) fn test_context() -> LaunchContext {
     LaunchContext {
         pane_id: PaneId::new("p_9f2"),
-        socket: "/run/un/hostd.sock".into(),
+        socket: "/run/gudo/hostd.sock".into(),
         token: "tok".into(),
         endpoint_file: "/state/endpoint".into(),
-        hook_bin: "/opt/un/bin/un-hook".into(),
+        hook_bin: "/opt/gudo/bin/gudo-hook".into(),
         state_dir: "/state".into(),
         cwd: "/src/app".into(),
         account: AccountContext::system(),
@@ -366,11 +366,11 @@ mod tests {
         assert_eq!(
             names,
             [
-                "UN_PANE_ID",
-                "UN_SOCK",
-                "UN_TOKEN",
-                "UN_ENDPOINT_FILE",
-                "UN_HOOK"
+                "GUDO_PANE_ID",
+                "GUDO_SOCK",
+                "GUDO_TOKEN",
+                "GUDO_ENDPOINT_FILE",
+                "GUDO_HOOK"
             ]
         );
         assert_eq!(env[0].1, "p_9f2");
@@ -378,8 +378,8 @@ mod tests {
 
     #[test]
     fn mcp_server_runs_the_shim_for_this_pane() {
-        assert_eq!(mcp_server_name(), "unnamed");
-        assert_eq!(legacy_mcp_server_name(), "unnamed_drawings");
+        assert_eq!(mcp_server_name(), "gudo");
+        assert_eq!(legacy_mcp_server_names(), ["unnamed", "unnamed_drawings"]);
         assert_eq!(
             mcp_args(&test_context()),
             ["mcp", "--state", "/state", "--pane", "p_9f2"]
@@ -389,12 +389,12 @@ mod tests {
     #[test]
     fn quotes_for_toml() {
         assert_eq!(
-            toml_quote("/opt/un/bin/un-hook"),
-            r#""/opt/un/bin/un-hook""#
+            toml_quote("/opt/gudo/bin/gudo-hook"),
+            r#""/opt/gudo/bin/gudo-hook""#
         );
         assert_eq!(
-            toml_quote(r#"/Users/A "B"\C/un-hook"#),
-            r#""/Users/A \"B\"\\C/un-hook""#
+            toml_quote(r#"/Users/A "B"\C/gudo-hook"#),
+            r#""/Users/A \"B\"\\C/gudo-hook""#
         );
         assert_eq!(toml_quote("a\nb\u{7f}"), r#""a\nb\u007F""#);
         let weird = "it's \"x\" \\ y\tz é\u{1}";
@@ -404,8 +404,14 @@ mod tests {
 
     #[test]
     fn quotes_for_the_shell() {
-        assert_eq!(shell_quote("/opt/un/bin/un-hook"), "/opt/un/bin/un-hook");
-        assert_eq!(shell_quote("/Users/A B/un-hook"), "'/Users/A B/un-hook'");
+        assert_eq!(
+            shell_quote("/opt/gudo/bin/gudo-hook"),
+            "/opt/gudo/bin/gudo-hook"
+        );
+        assert_eq!(
+            shell_quote("/Users/A B/gudo-hook"),
+            "'/Users/A B/gudo-hook'"
+        );
         assert_eq!(shell_quote("it's"), r"'it'\''s'");
         assert_eq!(shell_quote(""), "''");
     }
@@ -437,12 +443,12 @@ mod tests {
             );
         }
         let (_, set) = account_env(&test_context().account, CLAUDE_DIR_VAR);
-        assert_eq!(names(&set), ["UN_ACCOUNT"]);
+        assert_eq!(names(&set), ["GUDO_ACCOUNT"]);
         assert_eq!(set[0].1, "system");
         let (_, set) = account_env(&work_context().account, CLAUDE_DIR_VAR);
         assert_eq!(
             names(&set),
-            ["UN_ACCOUNT", "CLAUDE_CONFIG_DIR", "UN_ACCOUNT_DIR"]
+            ["GUDO_ACCOUNT", "CLAUDE_CONFIG_DIR", "GUDO_ACCOUNT_DIR"]
         );
         assert_eq!(set[1].1, "/state/accounts/claude/a1b2");
     }

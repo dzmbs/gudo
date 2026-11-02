@@ -121,8 +121,8 @@ final class BrowserRecorderTests: XCTestCase {
 
         // Nothing of the recorder reaches the page.
         let seen = try await page.callJavaScript("""
-            return [typeof window.__unReplay, typeof window.__unRRWeb, !!(window.webkit && window.webkit.messageHandlers
-              && window.webkit.messageHandlers.unReplay), window.heard || 0, EventTarget.prototype.addEventListener.toString().includes("native code")]
+            return [typeof window.__gudoReplay, typeof window.__gudoRRWeb, !!(window.webkit && window.webkit.messageHandlers
+              && window.webkit.messageHandlers.gudoReplay), window.heard || 0, EventTarget.prototype.addEventListener.toString().includes("native code")]
             """) as? [Any]
         XCTAssertEqual(seen?[0] as? String, "undefined")
         XCTAssertEqual(seen?[1] as? String, "undefined")

@@ -13,7 +13,7 @@ import AppKit
 @MainActor
 final class BrowserWindows: NSObject, WKUIDelegate, WKScriptMessageHandler {
     /// The message handler a popup's `window.close()` posts to.
-    static let closeHandler = "unCloseWindow"
+    static let closeHandler = "gudoCloseWindow"
     static let closeScript = WKUserScript(
         source: "window.close = () => window.webkit.messageHandlers.\(closeHandler).postMessage(0);",
         injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .page)

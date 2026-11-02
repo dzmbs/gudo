@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 @testable import HostKit
-import UnnamedCore
+import GudoCore
 
 /// Agent plan usage: the meter's words and colours, the detail rows, and watching only while
 @MainActor

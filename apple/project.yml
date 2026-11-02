@@ -27,8 +27,8 @@ packages:
     path: Packages/PaneLayout
   HostKit:
     path: Packages/HostKit
-  UnnamedCore:
-    path: Packages/UnnamedCore
+  GudoCore:
+    path: Packages/GudoCore
   DesignSystem:
     path: Packages/DesignSystem
   PushCrypto:
@@ -55,10 +55,10 @@ targets:
         type: folder
         buildPhase: resources
       # The static Linux daemons "Install helper" uploads (`cargo xtask build-hostd-linux`).
-      - path: build/hostd/unnamed-hostd-x86_64-linux.gz
+      - path: build/hostd/gudo-hostd-x86_64-linux.gz
         buildPhase: resources
         optional: true
-      - path: build/hostd/unnamed-hostd-aarch64-linux.gz
+      - path: build/hostd/gudo-hostd-aarch64-linux.gz
         buildPhase: resources
         optional: true
       # What those builds are (build, time, protocol level), to offer "Update Helper".
@@ -102,27 +102,30 @@ targets:
         FilesKeychainGroup: $(FILES_KEYCHAIN_GROUP)
         FilesAppGroup: $(FILES_APP_GROUP)
         FilesSecretsService: $(BRAND_BUNDLE_ID_PREFIX).files
+        # Universal links (`https://<domain>/join#…`) and the bundled helper (Brand.xcconfig).
+        BrandWebDomain: $(BRAND_WEB_DOMAIN)
+        BrandDaemonBinary: $(BRAND_DAEMON_BIN)
         # `.excalidraw` scenes: drawings dragged, copied and exported out of the app (with a
         # PNG alongside), and dropped or pasted in. Excalidraw declares no UTI; imported, not
         # owned.
-        # Session Replay files (`.unreplay`, ReplayStore): shared from the app and opened in it.
-        ReplayTypeIdentifier: $(BRAND_BUNDLE_ID_PREFIX).unreplay
+        # Session Replay files (`.gudoreplay`, ReplayStore): shared from the app and opened in it.
+        ReplayTypeIdentifier: $(BRAND_BUNDLE_ID_PREFIX).gudoreplay
         UTExportedTypeDeclarations:
-          - UTTypeIdentifier: $(BRAND_BUNDLE_ID_PREFIX).unreplay
+          - UTTypeIdentifier: $(BRAND_BUNDLE_ID_PREFIX).gudoreplay
             UTTypeDescription: Session Replay
             UTTypeConformsTo: [public.data, public.content]
             UTTypeTagSpecification:
-              public.filename-extension: [unreplay]
-              public.mime-type: [application/vnd.unnamed.unreplay+json]
+              public.filename-extension: [gudoreplay]
+              public.mime-type: [application/vnd.gudo.gudoreplay+json]
           # A tab or project dragged in the app (TabDrag); never leaves the process.
-          - UTTypeIdentifier: dev.unnamed.tab
+          - UTTypeIdentifier: dev.gudo.tab
             UTTypeDescription: Tab
             UTTypeConformsTo: [public.data]
         CFBundleDocumentTypes:
           - CFBundleTypeName: Session Replay
             CFBundleTypeRole: Viewer
             LSHandlerRank: Owner
-            LSItemContentTypes: [$(BRAND_BUNDLE_ID_PREFIX).unreplay]
+            LSItemContentTypes: [$(BRAND_BUNDLE_ID_PREFIX).gudoreplay]
         # Opened files are read where they are (security-scoped, in onOpenURL) and imported.
         LSSupportsOpeningDocumentsInPlace: true
         UTImportedTypeDeclarations:
@@ -175,7 +178,7 @@ targets:
         HELPER_LAUNCH_AGENT: $(DERIVED_FILE_DIR)/unused-launch-agent.plist
         "HELPER_LAUNCH_AGENT[sdk=macosx*]": $(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Library/LaunchAgents/$(PRODUCT_BUNDLE_IDENTIFIER).hostd.plist
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) PUSH_$(PUSH_ENTITLEMENT) FILES_PROVIDER_$(FILES_PROVIDER)"
-        CODE_SIGN_ENTITLEMENTS: $(PUSH_ENTITLEMENTS_FILE)
+        CODE_SIGN_ENTITLEMENTS: $(APP_ENTITLEMENTS_FILE)
     # This Mac's own helper (`cargo xtask build-hostd-macos`; a build without it has plain
     # local shells only), signed like the app, and the LaunchAgent SMAppService registers for
     # it: the bundled daemon runs for this user and keeps running after the app quits.
@@ -183,20 +186,20 @@ targets:
       - name: This Mac Helper
         basedOnDependencyAnalysis: false
         inputFiles:
-          - $(SRCROOT)/build/hostd/macos/$(BRAND_NAME)-hostd
+          - $(SRCROOT)/build/hostd/macos/$(BRAND_DAEMON_BIN)
         outputFiles:
-          - $(DERIVED_FILE_DIR)/$(BRAND_NAME)-hostd
-          - $(DERIVED_FILE_DIR)/$(BRAND_NAME)-hostd.cstemp
-          - $(TARGET_BUILD_DIR)/$(EXECUTABLE_FOLDER_PATH)/$(BRAND_NAME)-hostd
+          - $(DERIVED_FILE_DIR)/$(BRAND_DAEMON_BIN)
+          - $(DERIVED_FILE_DIR)/$(BRAND_DAEMON_BIN).cstemp
+          - $(TARGET_BUILD_DIR)/$(EXECUTABLE_FOLDER_PATH)/$(BRAND_DAEMON_BIN)
           - $(HELPER_LAUNCH_AGENT)
         script: |
           [ "$PLATFORM_NAME" = macosx ] || exit 0
           set -e
-          src="$SRCROOT/build/hostd/macos/$BRAND_NAME-hostd"
-          dst="$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH/$BRAND_NAME-hostd"
+          src="$SRCROOT/build/hostd/macos/$BRAND_DAEMON_BIN"
+          dst="$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH/$BRAND_DAEMON_BIN"
           if [ -f "$src" ]; then
             # Signed outside the bundle (the script sandbox lets codesign write only there).
-            signed="$DERIVED_FILE_DIR/$BRAND_NAME-hostd"
+            signed="$DERIVED_FILE_DIR/$BRAND_DAEMON_BIN"
             mkdir -p "$DERIVED_FILE_DIR"
             cp -f "$src" "$signed"
             flags=""
@@ -216,8 +219,8 @@ targets:
           <plist version="1.0">
           <dict>
             <key>Label</key><string>$PRODUCT_BUNDLE_IDENTIFIER.hostd</string>
-            <key>BundleProgram</key><string>Contents/MacOS/$BRAND_NAME-hostd</string>
-            <key>ProgramArguments</key><array><string>$BRAND_NAME-hostd</string><string>run</string></array>
+            <key>BundleProgram</key><string>Contents/MacOS/$BRAND_DAEMON_BIN</string>
+            <key>ProgramArguments</key><array><string>$BRAND_DAEMON_BIN</string><string>run</string></array>
             <key>AssociatedBundleIdentifiers</key><array><string>$PRODUCT_BUNDLE_IDENTIFIER</string></array>
             <key>RunAtLoad</key><true/>
             <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
@@ -237,8 +240,8 @@ targets:
         product: PaneLayout
       - package: HostKit
         product: HostKit
-      - package: UnnamedCore
-        product: UnnamedCore
+      - package: GudoCore
+        product: GudoCore
       - package: DesignSystem
         product: DesignSystem
       - package: DrawingKit

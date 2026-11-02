@@ -4,7 +4,7 @@ import PaneLayout
 import Synchronization
 import Testing
 import TerminalCore
-import UnnamedCore
+import GudoCore
 
 /// The connection state machine and pane routing against a fake client (04-mobile-ux R1–R12).
 @MainActor
@@ -87,7 +87,7 @@ import UnnamedCore
         #expect(sink.all.filter { if case .history = $0 { true } else { false } } == [.history(Data("page".utf8), done: true)])
 
         // Echo hints reach the predictor, in-band resizes the pane.
-        client().send(.echoHint(hint: UnnamedCore.EchoHint(paneId: 3, echo: true, icanon: false, altScreen: false, atPrompt: true, atSeq: 104, prediction: .allow)))
+        client().send(.echoHint(hint: GudoCore.EchoHint(paneId: 3, echo: true, icanon: false, altScreen: false, atPrompt: true, atSeq: 104, prediction: .allow)))
         #expect(predictions.all.last == .hint(TerminalCore.EchoHint(echo: true, canonical: false, atPrompt: true, altScreen: false)))
         client().send(.paneResized(paneId: 3, seq: 105, size: PaneSize(cols: 100, rows: 30, widthPx: 1000, heightPx: 600)))
         #expect(sink.all.last == .resized(cols: 100, rows: 30, cellWidth: 10, cellHeight: 20))

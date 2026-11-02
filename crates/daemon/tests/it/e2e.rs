@@ -278,9 +278,9 @@ async fn port_forward_to_a_local_echo_server() {
     daemon.shutdown().await;
 }
 
-/// A device that dials direct addresses only (`un --no-relay`, the app's local-only switch)
+/// A device that dials direct addresses only (`gudo --no-relay`, the app's local-only switch)
 /// has nothing but the ticket it paired with. A restart used to bind fresh random UDP ports,
-/// so that ticket pointed nowhere and `un --no-relay forward` timed out "waiting for layout".
+/// so that ticket pointed nowhere and `gudo --no-relay forward` timed out "waiting for layout".
 #[tokio::test(flavor = "multi_thread")]
 async fn a_direct_only_ticket_still_reaches_the_daemon_after_a_restart() {
     let dir = tempfile::tempdir().unwrap();

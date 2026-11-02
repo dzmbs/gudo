@@ -4,15 +4,15 @@ import Foundation
 @testable import FilesProviderKit
 import HostKit
 import Testing
-import UnnamedCore
+import GudoCore
 
 /// The repository root (this file is apple/Packages/FilesProviderKit/Tests/FilesProviderKitTests/…).
 nonisolated let repoRoot = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
 
-/// A local `unnamed-hostd` with relays off and its own home (`cargo build -p hostd` first, or
-/// `UN_HOSTD_BIN`).
+/// A local `gudo-hostd` with relays off and its own home (`cargo build -p hostd` first, or
+/// `GUDO_HOSTD_BIN`).
 nonisolated final class LocalDaemon {
     let binary: URL
     let stateDir = temporaryDirectory()
@@ -20,8 +20,8 @@ nonisolated final class LocalDaemon {
     private let process = Process()
 
     init() throws {
-        binary = ProcessInfo.processInfo.environment["UN_HOSTD_BIN"].map(URL.init(fileURLWithPath:))
-            ?? repoRoot.appending(path: "target/debug/unnamed-hostd")
+        binary = ProcessInfo.processInfo.environment["GUDO_HOSTD_BIN"].map(URL.init(fileURLWithPath:))
+            ?? repoRoot.appending(path: "target/debug/gudo-hostd")
         guard FileManager.default.isExecutableFile(atPath: binary.path) else {
             throw TestFailure("no daemon at \(binary.path): run `cargo build -p hostd` first")
         }

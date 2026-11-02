@@ -1,13 +1,13 @@
 import Foundation
 import HostKit
-import UnnamedCore
+import GudoCore
 #if canImport(UIKit)
 import UIKit
 #else
 import AppKit
 #endif
 
-/// Asks the owner before a repository's own setup or teardown commands (`.unnamed.json`) run
+/// Asks the owner before a repository's own setup or teardown commands (`.gudo.json`) run
 /// for the first time or after they changed, like VS Code's workspace trust and `direnv allow`:
 /// a clone or an unpacked archive must not run commands just because a task started in it.
 /// The daemon keeps the trust; declining only skips the commands this time.

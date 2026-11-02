@@ -1,6 +1,6 @@
 import Foundation
 import os
-import UnnamedCore
+import GudoCore
 
 // Push plumbing (docs/PUSH.md): the device's sealing key, relay registration per daemon, and
 // the lock-screen answer on a one-shot connection. Registration only runs when the app has an

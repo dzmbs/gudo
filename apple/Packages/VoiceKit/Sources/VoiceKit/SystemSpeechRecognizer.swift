@@ -10,7 +10,7 @@ import os
 @MainActor
 public final class SystemSpeechRecognizer: SpeechRecognizer {
     private var session: (any RecognitionSession)?
-    nonisolated static let log = Logger(subsystem: "dev.unnamed.voice", category: "voice")
+    nonisolated static let log = Logger(subsystem: "dev.gudo.voice", category: "voice")
 
     public init() {}
 

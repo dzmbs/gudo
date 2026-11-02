@@ -9,7 +9,7 @@
 //! A host reachable only over iroh is reached by forwarding a local port to its sshd
 //! ([`Client::forward`](crate::Client::forward) with `ForwardTarget::Tcp { port: 22 }`) and
 //! pointing Remote - SSH at `127.0.0.1:<that port>` with [`ssh_authority`], or by an
-//! `~/.ssh/config` host whose `ProxyCommand` is `un ssh-proxy` (stdio over the same link).
+//! `~/.ssh/config` host whose `ProxyCommand` is `gudo ssh-proxy` (stdio over the same link).
 //!
 //! VS Code opens a path ending in `:<line>` (optionally `:<col>`) as a file at that line, and
 //! anything else as a folder.
@@ -126,11 +126,11 @@ pub fn tunnel_web_url(name: &str, folder: &str) -> String {
 }
 
 /// An `~/.ssh/config` entry that reaches the host's sshd through the daemon link, for users
-/// who prefer an alias over a local port. `un` is the CLI that holds the pairing.
-pub fn ssh_config_entry(alias: &str, user: &str, un: &str, ticket_arg: Option<&str>) -> String {
+/// who prefer an alias over a local port. `gudo` is the CLI that holds the pairing.
+pub fn ssh_config_entry(alias: &str, user: &str, gudo: &str, ticket_arg: Option<&str>) -> String {
     let ticket = ticket_arg.map_or(String::new(), |t| format!(" --ticket {t}"));
     format!(
-        "Host {alias}\n  HostName {alias}\n  User {user}\n  ProxyCommand {un}{ticket} ssh-proxy\n"
+        "Host {alias}\n  HostName {alias}\n  User {user}\n  ProxyCommand {gudo}{ticket} ssh-proxy\n"
     )
 }
 
@@ -188,6 +188,8 @@ mod tests {
             tunnel_web_url("box", "/home/me"),
             "https://vscode.dev/tunnel/box/home/me"
         );
-        assert!(ssh_config_entry("box-un", "me", "un", None).contains("ProxyCommand un ssh-proxy"));
+        assert!(
+            ssh_config_entry("box-un", "me", "gudo", None).contains("ProxyCommand gudo ssh-proxy")
+        );
     }
 }

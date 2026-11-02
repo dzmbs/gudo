@@ -14,7 +14,7 @@ enum TransitionFixtures {
 
     static func apply(_ screen: String, workspace: Workspace) async {
         guard let first = workspace.focusedPane, let tab = workspace.session.activeTabId else { return }
-        workspace.apply(.rename(tab, "~/projects/unnamed"))
+        workspace.apply(.rename(tab, "~/projects/gudo"))
         workspace.apply(.split(first, screen == "transitions-rows" ? .vertical : .horizontal))
         guard let second = workspace.focusedPane, second != first else { return }
         MockPaneStatus.fixture = [first.description: ("zsh", nil), second.description: ("zsh", nil)]
@@ -42,7 +42,7 @@ enum TransitionFixtures {
     private static let esc = "\u{1b}["
     private static func sgr(_ codes: String) -> String { "\(esc)\(codes)m" }
     private static let reset = sgr("0")
-    private static let prompt = "\(sgr("36"))~/projects/unnamed\(reset) \(sgr("35"))main\(reset) \(sgr("32"))❯\(reset) "
+    private static let prompt = "\(sgr("36"))~/projects/gudo\(reset) \(sgr("35"))main\(reset) \(sgr("32"))❯\(reset) "
     private static let promptWidth = 26
 
     private static var logScreen: String {
@@ -61,9 +61,9 @@ enum TransitionFixtures {
 
     private static var buildScreen: String {
         [
-            prompt + "cargo build -p unnamed-hostd",
-            "\(sgr("1;32"))   Compiling\(reset) daemon v0.0.0 (/Users/me/projects/unnamed/crates/daemon)",
-            "\(sgr("1;32"))   Compiling\(reset) hostd v0.0.0 (/Users/me/projects/unnamed/crates/hostd)",
+            prompt + "cargo build -p gudo-hostd",
+            "\(sgr("1;32"))   Compiling\(reset) daemon v0.0.0 (/Users/me/projects/gudo/crates/daemon)",
+            "\(sgr("1;32"))   Compiling\(reset) hostd v0.0.0 (/Users/me/projects/gudo/crates/hostd)",
             "\(sgr("1;32"))    Finished\(reset) `dev` profile [unoptimized + debuginfo] target(s) in 41.27s",
         ].joined(separator: "\r\n")
     }

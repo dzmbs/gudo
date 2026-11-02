@@ -2,7 +2,7 @@ import Foundation
 import XCTest
 @testable import App
 
-/// Session Replay's files: the store's size cap and age, `.unreplay` round trips, and the
+/// Session Replay's files: the store's size cap and age, `.gudoreplay` round trips, and the
 /// Playwright test a session exports as.
 @MainActor
 final class BrowserReplayTests: XCTestCase {

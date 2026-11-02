@@ -4,7 +4,7 @@ import os
 import PaneLayout
 import Synchronization
 import TerminalCore
-import UnnamedCore
+import GudoCore
 
 /// A plain-SSH host (no daemon): one self-healing `SshSession` shared by every pane (one
 /// channel each), and a local split layout. Also the connection the "Install helper"

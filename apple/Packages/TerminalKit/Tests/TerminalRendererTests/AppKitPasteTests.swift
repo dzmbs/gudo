@@ -114,10 +114,10 @@ import Testing
     @Test func unpastedDragsGoToTheViewAround() throws {
         let (view, window, written) = try makeView()
         let around = DropRecorder(frame: view.frame)
-        around.registerForDraggedTypes([NSPasteboard.PasteboardType("dev.unnamed.tab")])
+        around.registerForDraggedTypes([NSPasteboard.PasteboardType("dev.gudo.tab")])
         window.contentView = around
         around.addSubview(view)
-        view.unpastedDragTypes = ["dev.unnamed.tab"]
+        view.unpastedDragTypes = ["dev.gudo.tab"]
         let board = NSPasteboard(name: NSPasteboard.Name("terminal-unpasted-drop-test"))
         defer { board.releaseGlobally() }
 
@@ -131,7 +131,7 @@ import Testing
 
         board.clearContents()
         board.setString("host/1", forType: .string)
-        board.setData(Data("host/1".utf8), forType: NSPasteboard.PasteboardType("dev.unnamed.tab"))
+        board.setData(Data("host/1".utf8), forType: NSPasteboard.PasteboardType("dev.gudo.tab"))
         let tab = FakeDrag(board)
         #expect(view.draggingEntered(tab) == .move)
         #expect(view.draggingUpdated(tab) == .move)

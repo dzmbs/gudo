@@ -293,7 +293,7 @@ public nonisolated final class DevServerSocksProxy: @unchecked Sendable {
 /// shared by every host and routed by the request's route cookie (see the top of this file).
 public nonisolated final class LoopbackRouter: @unchecked Sendable {
     /// The HttpOnly cookie each host's data store carries for the loopback names.
-    public static let routeCookie = "__unnamed_route"
+    public static let routeCookie = "__gudo_route"
 
     private let queue = DispatchQueue(label: "loopback-router")
     private var listeners: [UInt16: [NWListener]] = [:]

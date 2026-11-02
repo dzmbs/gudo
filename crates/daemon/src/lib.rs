@@ -44,6 +44,7 @@ mod identity;
 mod input;
 mod layout;
 mod limits;
+pub mod migrate;
 mod mp;
 mod net;
 mod notifier;
@@ -346,9 +347,16 @@ fn sticky_binds(bind: Option<SocketAddr>, previous: &[SocketAddr]) -> Vec<Socket
         .unwrap_or_default()
 }
 
+/// The product's own relay ([`brand::RELAY_URL`]), the default unless `config.toml` names others.
+fn default_relays() -> iroh::RelayMap {
+    iroh::RelayMap::try_from_iter([brand::RELAY_URL]).expect("the default relay URL parses")
+}
+
 fn endpoint_builder(core: &Core) -> Result<iroh::endpoint::Builder, StartError> {
     let builder = match &core.cfg.relay {
-        RelayMode::Default => Endpoint::builder(presets::N0),
+        RelayMode::Default => {
+            Endpoint::builder(presets::N0).relay_mode(iroh::RelayMode::Custom(default_relays()))
+        }
         RelayMode::Disabled => Endpoint::builder(presets::Minimal),
         RelayMode::Custom(custom) => {
             let map = iroh::RelayMap::try_from_iter(custom.urls.iter().map(String::as_str))
@@ -372,7 +380,7 @@ fn endpoint_builder(core: &Core) -> Result<iroh::endpoint::Builder, StartError> 
     };
     let builder = builder
         .secret_key(core.identity.secret.clone())
-        .alpns(vec![proto::ALPN.to_vec()])
+        .alpns(vec![proto::ALPN.to_vec(), proto::LEGACY_ALPN.to_vec()])
         .transport_config(transport_config());
     // A fixed `--bind` replaces the default sockets; `bind_addr` per family does the same.
     Ok(if core.cfg.bind.is_some() {

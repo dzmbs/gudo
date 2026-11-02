@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 // Session Replay (docs/APP-ARCHITECTURE.md §21.1): what an agent did on a page, kept on the
 // device. A session is the agent's actions (`BrowserActionEntry`, with a Playwright locator
 // each), the page's rrweb events and one picture per action; it plays back in the Session
-// Replay viewer, travels as one `.unreplay` file and exports as a Playwright test.
+// Replay viewer, travels as one `.gudoreplay` file and exports as a Playwright test.
 
 /// One recorded session: an agent driving one page.
 nonisolated struct ReplaySession: Codable, Identifiable, Hashable, Sendable {
@@ -128,9 +128,9 @@ final class ReplayStore {
     static let enabledKey = "recordAgentBrowserSessions"
     static var isEnabled: Bool { UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true }
 
-    nonisolated static let fileExtension = "unreplay"
-    /// The `.unreplay` file type (exported in Info.plist).
-    nonisolated static let fileType = UTType(exportedAs: (Bundle.main.object(forInfoDictionaryKey: "ReplayTypeIdentifier") as? String) ?? "dev.unnamed.unreplay", conformingTo: .data)
+    nonisolated static let fileExtension = "gudoreplay"
+    /// The `.gudoreplay` file type (exported in Info.plist).
+    nonisolated static let fileType = UTType(exportedAs: (Bundle.main.object(forInfoDictionaryKey: "ReplayTypeIdentifier") as? String) ?? "dev.gudo.gudoreplay", conformingTo: .data)
 
     let root: URL
     /// All sessions together stay under this many bytes; the oldest go first.
@@ -263,9 +263,9 @@ final class ReplayStore {
         }
     }
 
-    // MARK: `.unreplay` files
+    // MARK: `.gudoreplay` files
 
-    /// One file: `{"format":"unreplay","version":1,"session":…,"events":[…],"keyframes":{name: base64}}`,
+    /// One file: `{"format":"gudoreplay","version":1,"session":…,"events":[…],"keyframes":{name: base64}}`,
     /// the same bytes for the same session.
     func bundle(_ id: UUID) throws -> Data {
         guard let session = session(id) else { throw CocoaError(.fileNoSuchFile) }
@@ -278,7 +278,7 @@ final class ReplayStore {
         exported.imported = false
         // Which host, pane and page recorded it means nothing on another device.
         (exported.hostId, exported.paneId, exported.page) = (nil, nil, nil)
-        var out = Data(#"{"format":"unreplay","version":1,"session":"#.utf8)
+        var out = Data(#"{"format":"gudoreplay","version":1,"session":"#.utf8)
         out += try encoder.encode(exported)
         out += Data(#","events":["#.utf8)
         for (index, line) in events.enumerated() {
@@ -294,11 +294,11 @@ final class ReplayStore {
         return out
     }
 
-    /// Opens a `.unreplay` file as a new session on the device (a session already here opens as is).
+    /// Opens a `.gudoreplay` file as a new session on the device (a session already here opens as is).
     @discardableResult
     func importBundle(_ data: Data) throws -> ReplaySession {
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              object["format"] as? String == "unreplay", let raw = object["session"]
+              object["format"] as? String == "gudoreplay", let raw = object["session"]
         else { throw CocoaError(.fileReadCorruptFile) }
         var session = try Self.decoder.decode(ReplaySession.self, from: JSONSerialization.data(withJSONObject: raw))
         if self.session(session.id) != nil { return self.session(session.id)! }

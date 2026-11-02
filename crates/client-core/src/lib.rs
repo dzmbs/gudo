@@ -431,7 +431,7 @@ pub trait ClientListener: Send + Sync {
     fn on_event(&self, event: ClientEvent);
 }
 
-/// A [`ClientListener`] that queues events for async Rust consumers (the `un` CLI, tests).
+/// A [`ClientListener`] that queues events for async Rust consumers (the `gudo` CLI, tests).
 pub struct EventQueue {
     tx: mpsc::UnboundedSender<ClientEvent>,
 }
@@ -1018,7 +1018,7 @@ impl Client {
     }
 
     /// The mirror as VT escape sequences that redraw the visible screen, styles and cursor
-    /// included (used by `un attach` to repaint after a snapshot).
+    /// included (used by `gudo attach` to repaint after a snapshot).
     pub fn pane_vt(&self, pane_id: PaneId) -> Option<String> {
         lock(&self.inner.mirrors).get(&pane_id)?.vt()
     }

@@ -219,11 +219,11 @@ mod tests {
     #[test]
     fn the_state_dir_is_refused_in_any_case() {
         let home = tempfile::tempdir().unwrap();
-        let state = home.path().join("Library/Application Support/Unnamed");
+        let state = home.path().join("Library/Application Support/Gudo");
         std::fs::create_dir_all(&state).unwrap();
         std::fs::write(state.join("hook.token"), "secret").unwrap();
         let policy = Policy::new(home.path(), &[]).deny(&state);
-        let other = home.path().join("library/application support/UNNAMED");
+        let other = home.path().join("library/application support/GUDO");
         if !other.join("hook.token").exists() {
             return; // a case-sensitive volume: another spelling is another path
         }
@@ -250,11 +250,11 @@ mod tests {
     #[test]
     fn what_holds_the_state_dir_is_not_moved() {
         let home = tempfile::tempdir().unwrap();
-        let state = home.path().join(".local/state/un");
+        let state = home.path().join(".local/state/gudo");
         std::fs::create_dir_all(&state).unwrap();
         std::fs::create_dir_all(home.path().join(".local/share")).unwrap();
         let policy = Policy::new(home.path(), &[]).deny(&state);
-        for path in ["~/.local", "~/.local/state", "~/.local/state/un"] {
+        for path in ["~/.local", "~/.local/state", "~/.local/state/gudo"] {
             assert!(
                 matches!(policy.resolve_movable(path), Err(WsError::Denied(_))),
                 "{path}"
@@ -267,15 +267,15 @@ mod tests {
     #[test]
     fn the_state_dir_is_never_served() {
         let home = tempfile::tempdir().unwrap();
-        let state = home.path().join(".local/state/un");
+        let state = home.path().join(".local/state/gudo");
         std::fs::create_dir_all(&state).unwrap();
         std::fs::write(state.join("hook.token"), "secret").unwrap();
         std::os::unix::fs::symlink(&state, home.path().join("st")).unwrap();
         let policy = Policy::new(home.path(), &[]).deny(&state);
         for path in [
-            "~/.local/state/un/hook.token",
-            "~/.local/state/un",
-            "~/.local/state/un/new-file",
+            "~/.local/state/gudo/hook.token",
+            "~/.local/state/gudo",
+            "~/.local/state/gudo/new-file",
             "~/st/hook.token",
         ] {
             assert!(

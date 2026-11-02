@@ -17,7 +17,7 @@ for appearance in dark light; do
         style=sidebar
         name=$screen
         if [ "$screen" = bar ]; then style=bar; name=splits; fi
-        xcrun simctl launch --terminate-running-process "$device" dev.unnamed.app \
+        xcrun simctl launch --terminate-running-process "$device" dev.gudo.app \
             -screen "$name" -mock -tabStyle "$style" >/dev/null
         sleep "${SCREENSHOT_DELAY:-3}"
         xcrun simctl io "$device" screenshot --type=png "$out/$prefix-$screen-$appearance.png" >/dev/null 2>&1

@@ -31,9 +31,9 @@ fn env() -> Env {
         })
     };
     Env {
-        host: var("UN_SSH_TEST_HOST"),
-        user: var("UN_SSH_TEST_USER"),
-        keys: PathBuf::from(var("UN_SSH_TEST_KEYS")),
+        host: var("GUDO_SSH_TEST_HOST"),
+        user: var("GUDO_SSH_TEST_USER"),
+        keys: PathBuf::from(var("GUDO_SSH_TEST_KEYS")),
     }
 }
 
@@ -60,7 +60,7 @@ async fn next_matching(
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let e = events.recv().await.expect("events flowing");
-            if std::env::var_os("UN_TEST_TRACE_EVENTS").is_some() {
+            if std::env::var_os("GUDO_TEST_TRACE_EVENTS").is_some() {
                 eprintln!("event: {e:?}");
             }
             if f(&e) {
@@ -179,7 +179,7 @@ async fn proxy(upstream: String, cut: Arc<AtomicBool>) -> u16 {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[cfg_attr(not(ssh_test_host), ignore = "needs UN_SSH_TEST_HOST (docs/SSH.md)")]
+#[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
 async fn fallback_pane_survives_a_drop_with_a_new_shell() {
     let env = env();
     let cut = Arc::new(AtomicBool::new(false));
@@ -273,7 +273,7 @@ async fn fallback_pane_survives_a_drop_with_a_new_shell() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[cfg_attr(not(ssh_test_host), ignore = "needs UN_SSH_TEST_HOST (docs/SSH.md)")]
+#[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
 async fn tmux_pane_reattaches_after_a_drop() {
     let env = env();
     let session = Session::start(
@@ -287,7 +287,7 @@ async fn tmux_pane_reattaches_after_a_drop() {
         eprintln!("tmux not installed on the test host; skipping");
         return;
     }
-    let name = format!("un-test-{}", std::process::id());
+    let name = format!("gudo-test-{}", std::process::id());
     let (listener, events) = EventQueue::channel();
     let mut opts = SshPaneOptions::new(
         PaneId(1),
@@ -304,13 +304,13 @@ async fn tmux_pane_reattaches_after_a_drop() {
     events
         .until(|e| matches!(e, ClientEvent::Connected { .. }))
         .await;
-    pane.send_input(b"export UN_MARK=kept-$((3*3)); echo set\n".to_vec());
+    pane.send_input(b"export GUDO_MARK=kept-$((3*3)); echo set\n".to_vec());
     events.read_until(b"\r\nset").await;
     session.reconnect_now();
     events
         .until(|e| matches!(e, ClientEvent::Connected { resumed: true, .. }))
         .await;
-    pane.send_input(b"echo $UN_MARK\n".to_vec());
+    pane.send_input(b"echo $GUDO_MARK\n".to_vec());
     events.read_until(b"kept-9").await;
     assert!(
         !events
@@ -328,7 +328,7 @@ async fn tmux_pane_reattaches_after_a_drop() {
 
 /// The static daemon build for the test VM (made by scripts/ssh-test-vm.sh).
 fn hostd_binary(platform: ssh::HostPlatform) -> PathBuf {
-    if let Some(p) = std::env::var_os("UN_SSH_TEST_HOSTD") {
+    if let Some(p) = std::env::var_os("GUDO_SSH_TEST_HOSTD") {
         return PathBuf::from(p);
     }
     let arch = match platform {
@@ -342,7 +342,7 @@ fn hostd_binary(platform: ssh::HostPlatform) -> PathBuf {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[cfg_attr(not(ssh_test_host), ignore = "needs UN_SSH_TEST_HOST (docs/SSH.md)")]
+#[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
 async fn bootstrap_then_pair_over_iroh() {
     let env = env();
     let target = Target::direct(HostSpec::new(&env.host, &env.user));

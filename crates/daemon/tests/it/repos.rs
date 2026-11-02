@@ -63,7 +63,7 @@ fn repo(home: &Path, config: Option<&str>) -> PathBuf {
     run_git(&repo, &["init", "-q"]);
     std::fs::write(repo.join("src/a.rs"), "fn a() {}\nfn b() {}\nfn c() {}\n").unwrap();
     if let Some(config) = config {
-        std::fs::write(repo.join(".unnamed.json"), config).unwrap();
+        std::fs::write(repo.join(".gudo.json"), config).unwrap();
     }
     run_git(&repo, &["add", "-A"]);
     run_git(&repo, &["commit", "-q", "-m", "init"]);
@@ -432,10 +432,10 @@ async fn archive_keeps_refs_and_changes_and_restore_brings_them_back() {
     run_git(&repo, &["rev-parse", "--verify", "refs/heads/brave-fox"]);
     let refs = run_git(
         &repo,
-        &["for-each-ref", "--format=%(refname)", "refs/unnamed/"],
+        &["for-each-ref", "--format=%(refname)", "refs/gudo/"],
     );
-    assert!(refs.contains("refs/unnamed/archived/1"), "{refs}");
-    assert!(refs.contains("refs/unnamed/archived/1/changes"), "{refs}");
+    assert!(refs.contains("refs/gudo/archived/1"), "{refs}");
+    assert!(refs.contains("refs/gudo/archived/1/changes"), "{refs}");
     let archived = c.client.worktree_archived(Some(s(&repo))).await.unwrap();
     assert_eq!(archived.len(), 1);
     assert!(archived[0].saved_changes);
@@ -461,7 +461,7 @@ async fn archive_keeps_refs_and_changes_and_restore_brings_them_back() {
     assert_eq!(
         run_git(
             &repo,
-            &["for-each-ref", "--format=%(refname)", "refs/unnamed/"]
+            &["for-each-ref", "--format=%(refname)", "refs/gudo/"]
         ),
         ""
     );
@@ -593,7 +593,7 @@ async fn appears(path: &Path, within: Duration) -> bool {
     .is_ok()
 }
 
-/// A repository's `.unnamed.json` commands (a clone, an unpacked archive) run only once the
+/// A repository's `.gudo.json` commands (a clone, an unpacked archive) run only once the
 /// owner trusts exactly them, as VS Code's workspace trust or `direnv allow`; guests cannot
 /// trust them, and changed commands are asked about again.
 #[tokio::test(flavor = "multi_thread")]
@@ -682,7 +682,7 @@ async fn repository_commands_run_only_once_the_owner_trusts_them() {
 
     // Changed commands (a pull, a new branch) are untrusted again.
     std::fs::write(
-        repo.join(".unnamed.json"),
+        repo.join(".gudo.json"),
         r#"{"setup":"echo setup-ran > .setup-done; touch ../pwned"}"#,
     )
     .unwrap();

@@ -2,7 +2,7 @@ import Foundation
 @testable import HostKit
 import PaneLayout
 import Testing
-import UnnamedCore
+import GudoCore
 
 nonisolated func temporaryDirectory() -> URL {
     let url = FileManager.default.temporaryDirectory.appending(path: "hostkit-\(UUID().uuidString)")

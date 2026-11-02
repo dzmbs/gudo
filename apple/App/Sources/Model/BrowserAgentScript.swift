@@ -12,9 +12,9 @@ import WebKit
 ///   and the page's fetch and XHR requests for `browser_console`, `browser_network` and for
 ///   waiting until requests an action started are done.
 enum BrowserAgentScript {
-    static let world = WKContentWorld.world(name: "unnamed-agent")
+    static let world = WKContentWorld.world(name: "gudo-agent")
     /// The message handler frames announce themselves on (`{token, main}`).
-    static let frameHandler = "unAgentFrame"
+    static let frameHandler = "gudoAgentFrame"
 
     static func install(in controller: WKUserContentController, frames: (any WKScriptMessageHandler)? = nil) {
         controller.addUserScript(WKUserScript(source: agent, injectionTime: .atDocumentEnd, forMainFrameOnly: false, in: world))
@@ -37,9 +37,9 @@ enum BrowserAgentScript {
 
     static let recorder = #"""
     (() => {
-      if (window.__unRecorder) return;
+      if (window.__gudoRecorder) return;
       const log = { console: [], network: [], pending: 0, started: 0, lastActivity: Date.now() };
-      Object.defineProperty(window, "__unRecorder", { value: log, enumerable: false });
+      Object.defineProperty(window, "__gudoRecorder", { value: log, enumerable: false });
       const keep = (list, item) => { list.push(item); if (list.length > 300) list.shift(); };
       const text = (args) => args.map(a => {
         if (typeof a === "string") return a;

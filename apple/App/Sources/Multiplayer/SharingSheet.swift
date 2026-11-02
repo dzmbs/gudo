@@ -1,7 +1,7 @@
 import DesignSystem
 import HostKit
 import SwiftUI
-import UnnamedCore
+import GudoCore
 
 /// Manage Sharing: every host this device owns that has guests or live links, with who is
 /// connected and each link, removable and revocable on the spot.
@@ -66,7 +66,7 @@ struct SharingSheet: View {
 private struct HostSharing: View {
     let name: String
     let session: MultiplayerSession
-    @State private var removing: UnnamedCore.Participant?
+    @State private var removing: GudoCore.Participant?
 
     var body: some View {
         Section {
@@ -94,7 +94,7 @@ private struct HostSharing: View {
 
 /// A connected guest: who, with what role, on what device; Remove.
 private struct GuestRow: View {
-    let person: UnnamedCore.Participant
+    let person: GudoCore.Participant
     let session: MultiplayerSession
     let onRemove: () -> Void
 

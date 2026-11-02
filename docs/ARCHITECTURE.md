@@ -17,11 +17,11 @@ not being on mobile at all.
 
 ```
 ┌──────────── iPhone / iPad / Mac app (Swift) ────────────┐        ┌──────── Host (macOS / Linux) ────────┐
-│ UIKit/SwiftUI shell · Agent Inbox · Key bar · Gestures  │        │ unnamed-hostd (Rust, tokio)          │
+│ UIKit/SwiftUI shell · Agent Inbox · Key bar · Gestures  │        │ gudo-hostd (Rust, tokio)          │
 │ Metal renderer (port of Ghostty shaders + atlas)        │        │  ├ PTY actor per pane                │
 │ libghostty-vt (client copy, fed raw bytes / snapshots)  │        │  ├ libghostty-vt per pane (truth)    │
 │ Secure Enclave signer · APNs · Live Activities · NSE    │        │  ├ ring buffer ~1 MB raw bytes/pane   │
-│ ┌──────── UnnamedCore.xcframework (Rust, UniFFI) ─────┐ │  QUIC  │  ├ agent harness (hooks, OSC 7501,   │
+│ ┌──────── GudoCore.xcframework (Rust, UniFFI) ─────┐ │  QUIC  │  ├ agent harness (hooks, OSC 7501,   │
 │ │ iroh endpoint · protocol codec · seq/ack · resume   │◄├────────┤  │   screen manifests, resume)       │
 │ └─────────────────────────────────────────────────────┘ │ direct │  └ persistence (layout, agent ids)   │
 └─────────────────────────────────────────────────────────┘ /relay └──────────────────────────────────────┘
@@ -37,7 +37,7 @@ not being on mobile at all.
 | D19 | Host platforms | **macOS and headless Linux are equal first-class hosts** (incl. AWS/GCP VMs, x86_64 + aarch64). Static musl daemon binary (cargo-zigbuild), XDG dirs, systemd `--user` / launchd service, headless pairing (terminal QR + ticket text), install via `curl \| sh` or one tap over SSH from the phone. Cloud VMs need no inbound ports: outbound UDP hole punching or relay over 443 | Owner |
 
 
-One iroh connection per (device, daemon), ALPN `unnamed/1`, postcard/CBOR, every message versioned.
+One iroh connection per (device, daemon), ALPN `gudo/1`, postcard/CBOR, every message versioned.
 
 | Stream | Priority | Content |
 |---|---|---|
@@ -67,7 +67,7 @@ One iroh connection per (device, daemon), ALPN `unnamed/1`, postcard/CBOR, every
 ## 6. Repo layout
 
 ```
-unnamed/
+gudo/
 ├─ Cargo.toml                 # virtual workspace, [workspace.dependencies], profiles from 07
 ├─ .cargo/config.toml
 ├─ crates/
@@ -76,8 +76,8 @@ unnamed/
 │  ├─ agents/                 # manifests, detection, AgentEvent, resume recipes, hook shim lib
 │  ├─ hostd/                  # daemon as a library
 │  ├─ core/                   # client core: iroh, seq/ack, resume, prediction, russh
-│  └─ apple-ffi/              # UniFFI surface → UnnamedCore.xcframework (not in default-members)
-├─ bins/  hostd, un-hook, un (CLI)
+│  └─ apple-ffi/              # UniFFI surface → GudoCore.xcframework (not in default-members)
+├─ bins/  hostd, gudo-hook, gudo (CLI)
 ├─ apple/                     # Xcode project: iOS, iPadOS, macOS targets; Metal renderer; fonts
 ├─ xtask/                     # build-xcframework, build-ghostty, release
 ├─ vendor/ghostty             # pinned
@@ -111,10 +111,10 @@ the safe *Prompter* role possible),  kitty graphics, foldable layouts, external 
 ## 8. Open decisions (need owner input)
 
 1. ~~Hosted infra~~ — **decided (D16)**: managed third-party is fine. Est. ~$30/mo at 1k users,
-2. ~~Product name~~ — **deferred.** Keep the placeholder `unnamed`. Rule: every brand-bearing string (ALPN,
-   bundle ids, env prefix `UN_`, binary names, config dirs, URL schemes) is defined once — `crates/brand`
-   (Rust consts) and `apple/Brand.xcconfig` (Swift/Info.plist) — and nothing else hard-codes it, so a
-   rename is a two-file change plus a CI grep check for stray `unnamed`/`UN_`.
+2. ~~Product name~~ — **decided: Gudo** (gudo.dev). Every brand-bearing string (ALPN, bundle ids,
+   env prefix `GUDO_`, binary names, config dirs, URL schemes) is defined once — `crates/brand`
+   (Rust consts) and `apple/Brand.xcconfig` (Swift/Info.plist). The previous placeholder name
+   lives on only in `brand::legacy`, for migrating installs made under it.
    to be written as `docs/TESTING.md` before code.
 4. ~~Toolchain~~ — Zig **0.17.0** installed (`brew install zig`). Ghostty requires major.minor to
    match exactly (`src/build/zig.zig:9`), so 0.17 won't work; pin it in CI too.

@@ -1,7 +1,7 @@
 //!
-//! `un-hook mcp` (and `un-hook term`) send one [`TermCall`] line on the hook socket per tool
+//! `gudo-hook mcp` (and `gudo-hook term`) send one [`TermCall`] line on the hook socket per tool
 //! call; the daemon answers one [`TermReply`] line. The caller is the pane named in the call,
-//! proven by its own token (`UN_TOKEN`), and omitted targets mean that pane.
+//! proven by its own token (`GUDO_TOKEN`), and omitted targets mean that pane.
 //!
 //! What a caller may do: read any pane of its own session; type into, run in and close the
 //! panes it created (or that those created), never its own; split and open tabs next to

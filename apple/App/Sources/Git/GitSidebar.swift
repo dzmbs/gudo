@@ -2,7 +2,7 @@ import DesignSystem
 import HostKit
 import PaneLayout
 import SwiftUI
-import UnnamedCore
+import GudoCore
 #if os(macOS)
 import AppKit
 #endif

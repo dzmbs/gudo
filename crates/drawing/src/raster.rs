@@ -1,5 +1,5 @@
-//! A small software rasteriser, so hosts without a GPU (headless `un`, the daemon's fallback
-//! for "send to agent" without a client render) produce a PNG of a drawing, and so `un draw
+//! A small software rasteriser, so hosts without a GPU (headless `gudo`, the daemon's fallback
+//! for "send to agent" without a client render) produce a PNG of a drawing, and so `gudo draw
 //! show` can print it with kitty graphics or braille.
 //!
 //! Strokes are stamped as anti-aliased discs along each segment (radius from width ×

@@ -5,8 +5,8 @@ memory in them, and what stops that.
 
 ## Assets
 
-- The code users run: the iOS/iPadOS/macOS app (with `UnnamedCore`, libghostty-vt and the
-  bundled Linux and macOS helpers), and `unnamed-hostd` on their hosts. The helper runs as the
+- The code users run: the iOS/iPadOS/macOS app (with `GudoCore`, libghostty-vt and the
+  bundled Linux and macOS helpers), and `gudo-hostd` on their hosts. The helper runs as the
   user with their shell, files, SSH agent and agent credentials, so whoever controls its code
   controls the host.
 - The signing identity (Developer ID, App Store), the notarization credentials, the Cloudflare
@@ -97,7 +97,7 @@ There is no download server and no update channel to hijack:
   shell on the host, so this grants nothing new.
 - **No silent rollback.** The daemon refuses a build older than itself (lower protocol
   level, or the same level from earlier source; `UpgradeFailure::Older`). Only an explicit
-  downgrade from the owner (`StreamHeader::Downgrade`, `un daemon upgrade --allow-downgrade`)
+  downgrade from the owner (`StreamHeader::Downgrade`, `gudo daemon upgrade --allow-downgrade`)
   installs one; the app never sends it. The SSH bootstrap stages a new build next to an
   installed one that reports its version and keeps the installed build if it is newer
   (`InstallAction::KeptNewer`), so an older app on another device cannot reinstate an old
@@ -180,7 +180,7 @@ LIBGHOSTTY_VT_OPTIMIZE=safe CORRUPT_SEEDS=100000 CARGO_TARGET_DIR=target/safe \
   and the helpers (cargo-about), the npm packages in both JS bundles and the native code
   (`scripts/notices/native.txt`, kept by hand: libghostty-vt and its Zig/C dependencies,
   musl, Rust's standard library). The app shows them in Settings ▸ Acknowledgements ▸
-  Open-Source Licenses, the helper prints its own with `unnamed-hostd licenses`, and CI fails
+  Open-Source Licenses, the helper prints its own with `gudo-hostd licenses`, and CI fails
   when they are stale. The native list must be updated by hand when Ghostty's linked
   dependencies change.
 

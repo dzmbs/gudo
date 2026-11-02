@@ -1,11 +1,11 @@
 import Foundation
-import UnnamedCore
+import GudoCore
 
-/// The part of `UnnamedCore.DaemonClient` the data layer uses, so stores and backends can be
+/// The part of `GudoCore.DaemonClient` the data layer uses, so stores and backends can be
 /// tested against a fake. Every method returns at once; answers arrive as `ClientEvent`s.
 nonisolated public protocol DaemonClientAPI: AnyObject, Sendable {
     func attach(sessionId: UInt64?)
-    func op(op: UnnamedCore.LayoutOp) -> UInt64
+    func op(op: GudoCore.LayoutOp) -> UInt64
     func subscribe(paneId: UInt64)
     func unsubscribe(paneId: UInt64)
     func setView(focused: UInt64?, visible: [UInt64])

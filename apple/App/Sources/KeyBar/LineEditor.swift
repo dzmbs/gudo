@@ -2,7 +2,7 @@
 import HostKit
 import SwiftUI
 import UIKit
-import UnnamedCore
+import GudoCore
 
 /// §2.4–2.6). While the daemon reports the pane at a prompt, typing goes into a native text field
 /// (caret, loupe, selection, dictation, Scribble for free) and Return submits the whole line in

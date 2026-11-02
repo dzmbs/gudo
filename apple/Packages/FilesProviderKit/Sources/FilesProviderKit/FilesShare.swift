@@ -1,6 +1,6 @@
 import Foundation
 import HostKit
-import UnnamedCore
+import GudoCore
 
 /// What the app hands the File Provider extension, which runs without the app: the paired
 /// hosts it may show (owner hosts only, never guests), their tickets, this device's key and

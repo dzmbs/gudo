@@ -121,7 +121,7 @@ nonisolated final class DevServerProxyTests: XCTestCase {
         XCTAssertFalse(LoopbackRouter.headIsComplete(Data("GET / HTTP/1.1\r\nHost: x\r\n".utf8)))
         XCTAssertTrue(LoopbackRouter.headIsComplete(Data("GET / HTTP/1.1\r\nHost: x\r\n\r\n".utf8)))
         XCTAssertTrue(LoopbackRouter.headIsComplete(Data([0x16, 3, 1])), "TLS goes on at once")
-        let head = Data("GET / HTTP/1.1\r\nHost: localhost:3000\r\nCOOKIE: a=b; __unnamed_route=tok; c=d\r\n\r\n".utf8)
+        let head = Data("GET / HTTP/1.1\r\nHost: localhost:3000\r\nCOOKIE: a=b; __gudo_route=tok; c=d\r\n\r\n".utf8)
         XCTAssertEqual(LoopbackRouter.routeToken(in: head), "tok")
         XCTAssertNil(LoopbackRouter.routeToken(in: Data("GET / HTTP/1.1\r\nCookie: a=b\r\n\r\n".utf8)))
     }

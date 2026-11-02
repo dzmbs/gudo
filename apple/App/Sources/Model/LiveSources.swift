@@ -3,7 +3,7 @@ import Foundation
 import HostKit
 import Observation
 import PaneLayout
-import UnnamedCore
+import GudoCore
 
 // The screens' data sources over the real models (HostKit's `HostsModel` and the daemons'
 // pane metadata). `MockData.swift` holds the `-mock` stand-ins; the screens cannot tell them
@@ -169,7 +169,7 @@ extension ConnectionState {
 
 extension DesignSystem.AgentState {
     /// The daemon's agent state (OSC 7501 / hooks, through `PaneMeta.agent`).
-    init(_ state: UnnamedCore.AgentState) {
+    init(_ state: GudoCore.AgentState) {
         switch state {
         case .idle: self = .idle
         case .running: self = .working

@@ -8,12 +8,12 @@ S=many BIN=$1; PTYS=$2; CANVAS=$3
 trap cleanup EXIT
 start_daemon; sleep 1.5; pair
 sample "start"
-"$BIN/un-stress" tabs --count $PTYS --command 'exec sleep 100000'
+"$BIN/gudo-stress" tabs --count $PTYS --command 'exec sleep 100000'
 sample "$PTYS PTY tabs"
-"$BIN/un-stress" tabs --count $CANVAS --canvas
+"$BIN/gudo-stress" tabs --count $CANVAS --canvas
 sleep 3
 sample "+ $CANVAS canvas tabs"
-"$BIN/un-stress" latency --secs 10
+"$BIN/gudo-stress" latency --secs 10
 before=$(U ls 2>&1 | wc -l)
 sleep 3 # the layout save is debounced
 ls -la "$ROOT/state/layout.json" | awk '{print "layout.json: " $5 " bytes"}'
@@ -26,7 +26,7 @@ alive || { echo "DAEMON DIED on restart"; tail -5 "$ROOT/daemon.log"; exit 1; }
 sleep 5
 sample "after restart"
 printf "answering %.1f s after the restart; ls lines before: %s, after: %s\n" $((t1 - t0)) $before "$(U ls 2>&1 | wc -l)"
-"$BIN/un-stress" latency --secs 10
+"$BIN/gudo-stress" latency --secs 10
 U session close >/dev/null 2>&1
 sleep 8
 sample "after closing the session"

@@ -5,7 +5,7 @@ import HostKit
 import NotifyKit
 import os
 import PaneLayout
-import UnnamedCore
+import GudoCore
 
 /// A Live Activity per agent run, updated locally while the app is alive: started when an
 /// agent starts working, "Needs you" when it blocks, ended a few minutes after it finishes.

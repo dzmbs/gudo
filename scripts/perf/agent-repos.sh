@@ -3,7 +3,7 @@
 set -eu
 N=${1:-20}
 BENCH=$(cd "$(dirname $0)" && pwd)
-OUT=${BENCH_OUT:-${TMPDIR:-/tmp}/unnamed-bench}; mkdir -p $OUT
+OUT=${BENCH_OUT:-${TMPDIR:-/tmp}/gudo-bench}; mkdir -p $OUT
 ROOT=$OUT/agent-repos
 mkdir -p $ROOT
 for i in $(seq -w 1 $N); do

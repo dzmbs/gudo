@@ -222,17 +222,11 @@ impl FromStr for Invite {
     type Err = TicketError;
 
     /// Parses the URL form (also with `#` instead of `/` before the payload, so the payload
-    /// can travel in a URL fragment) or the bare base32. Whitespace and case are ignored.
+    /// can travel in a URL fragment, and as the universal link `https://<web domain>/join#…`)
+    /// or the bare base32. Whitespace and case are ignored.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let s = s.trim();
-        let prefix = Self::prefix();
-        let head = &prefix[..prefix.len() - 1];
-        let payload = match s.get(..head.len()) {
-            Some(h) if h.eq_ignore_ascii_case(head) => s[head.len()..]
-                .strip_prefix(['/', '#'])
-                .ok_or(TicketError::Encoding)?,
-            _ => s,
-        };
+        let payload = crate::ticket::link_payload(s, "join").unwrap_or(s);
         let cleaned: String = payload
             .chars()
             .filter(|c| !c.is_whitespace())
@@ -792,14 +786,7 @@ impl Invite {
 /// The base32 payload of an invite's text, decoded.
 fn invite_bytes(s: &str) -> Result<Vec<u8>, TicketError> {
     let s = s.trim();
-    let prefix = Invite::prefix();
-    let head = &prefix[..prefix.len() - 1];
-    let payload = match s.get(..head.len()) {
-        Some(h) if h.eq_ignore_ascii_case(head) => s[head.len()..]
-            .strip_prefix(['/', '#'])
-            .ok_or(TicketError::Encoding)?,
-        _ => s,
-    };
+    let payload = crate::ticket::link_payload(s, "join").unwrap_or(s);
     let cleaned: String = payload
         .chars()
         .filter(|c| !c.is_whitespace())

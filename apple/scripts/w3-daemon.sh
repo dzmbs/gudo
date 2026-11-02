@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# A local gudo-hostd on the W3 fixtures (w3-fixtures.sh): HOME is the fixtures' work
 # directory, the stand-in `claude` and `code` are first on PATH. Prints the pairing ticket.
 #
 #   apple/scripts/w3-daemon.sh start <dir>   # creates the fixtures if <dir> has none

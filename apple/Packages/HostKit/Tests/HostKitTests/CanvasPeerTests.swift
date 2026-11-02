@@ -1,7 +1,7 @@
 import Foundation
 @testable import HostKit
 import Testing
-import UnnamedCore
+import GudoCore
 
 /// The other device on a canvas pane, for `apple/scripts/canvas-peers-ui-test.sh`: paired with
 /// `CANVAS_PEER_TICKET` as a second device of the owner, it waits for the app's canvas pane and

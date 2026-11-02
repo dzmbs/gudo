@@ -34,7 +34,7 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// `un ls`.
+/// `gudo ls`.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Ls {
@@ -58,7 +58,7 @@ struct Session {
 #[serde(rename_all = "camelCase")]
 struct Tab {
     id: String,
-    /// From 1, as `un tab select` takes it.
+    /// From 1, as `gudo tab select` takes it.
     index: usize,
     name: String,
     active: bool,
@@ -110,7 +110,7 @@ fn leaves(node: &LayoutNode) -> Vec<client_core::proto::PaneId> {
     }
 }
 
-/// A shell-integration command (`un marks`, `un output`).
+/// A shell-integration command (`gudo marks`, `gudo output`).
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Command {
@@ -144,13 +144,13 @@ impl From<&CommandMark> for Command {
     }
 }
 
-/// `un marks`.
+/// `gudo marks`.
 #[derive(Serialize)]
 pub struct Marks {
     pub commands: Vec<Command>,
 }
 
-/// `un output`.
+/// `gudo output`.
 #[derive(Serialize)]
 pub struct Output {
     pub command: Command,
@@ -158,7 +158,7 @@ pub struct Output {
     pub truncated: bool,
 }
 
-/// `un search`.
+/// `gudo search`.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Search {
@@ -197,7 +197,7 @@ impl From<&SearchPage> for Search {
     }
 }
 
-/// `un links`.
+/// `gudo links`.
 #[derive(Serialize)]
 pub struct Links {
     pub links: Vec<LinkOut>,
@@ -234,7 +234,7 @@ impl From<&Link> for LinkOut {
     }
 }
 
-/// `un ports`.
+/// `gudo ports`.
 #[derive(Serialize)]
 pub struct Ports {
     pub ports: Vec<Port>,
@@ -267,7 +267,7 @@ impl From<&PortInfo> for Port {
     }
 }
 
-/// `un inbox`.
+/// `gudo inbox`.
 #[derive(Serialize)]
 pub struct Inbox {
     pub items: Vec<Item>,
@@ -308,7 +308,7 @@ impl From<&AttentionItem> for Item {
     }
 }
 
-/// `un git status`.
+/// `gudo git status`.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Git {
@@ -354,7 +354,7 @@ impl From<&GitStatus> for Git {
     }
 }
 
-/// `un who`.
+/// `gudo who`.
 #[derive(Serialize)]
 pub struct Who {
     pub participants: Vec<Person>,
@@ -396,7 +396,7 @@ impl Person {
     }
 }
 
-/// `un audit`.
+/// `gudo audit`.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Audit {
@@ -437,7 +437,7 @@ impl From<&AuditRecord> for Record {
     }
 }
 
-/// `un daemon info`.
+/// `gudo daemon info`.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Info {

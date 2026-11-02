@@ -269,7 +269,7 @@ struct PairingSheet: View {
             if !linkTicket.isEmpty, ticket == linkTicket {
                 footer(default: Text("A link opened this ticket. Pair only with a host you set up: it will see what you type in its terminals and can show you web pages."))
             } else {
-                footer(default: Text("Run \(Text(verbatim: "\(Brand.name) pair").font(DS.Font.literalSmall)) on the host to print a ticket and its QR code. Tickets expire after 10 minutes."))
+                footer(default: Text("Run \(Text(verbatim: "\(Brand.daemonBinary) pair").font(DS.Font.literalSmall)) on the host to print a ticket and its QR code. Tickets expire after 10 minutes."))
             }
         }
     }
@@ -345,7 +345,7 @@ struct PairingSheet: View {
             .listRowInsets(EdgeInsets())
         } footer: {
             footer(default: Text(Viewfinder.hasCamera || live == nil
-                ? "Point the camera at the code, then check the host and pair. The host shows its code with \(Text(verbatim: "\(Brand.name) pair").font(DS.Font.literalSmall))."
+                ? "Point the camera at the code, then check the host and pair. The host shows its code with \(Text(verbatim: "\(Brand.daemonBinary) pair").font(DS.Font.literalSmall))."
                 : "This device has no camera for scanning. Paste the ticket instead, or open the pairing link on this device."))
         }
     }

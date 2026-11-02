@@ -1,4 +1,4 @@
-# Apple FFI (`crates/apple-ffi` → `UnnamedCore`)
+# Apple FFI (`crates/apple-ffi` → `GudoCore`)
 
 Status: working on macOS (Swift tests against a local daemon and the Linux VM), iOS device and
 simulator slices build and link; 2026-10-19. ARCHITECTURE D6: the Swift app talks to the Rust core
@@ -6,12 +6,12 @@ through UniFFI (0.32, proc-macro mode, no UDL). Swift owns UI, rendering, lifecy
 persistence; the core owns connections, SSH, resume.
 
 ```
-crates/apple-ffi (lib name unnamed_core)        apple/Packages/UnnamedCore (Swift package)
-  client.rs   DaemonClient, ClientEvent,          UnnamedCore.xcframework   (generated, gitignored)
-              ClientEventListener                 Sources/UnnamedCore/
-  ssh_api.rs  SshSession, SshPane, keys,            UnnamedCore.swift       (generated, gitignored)
+crates/apple-ffi (lib name gudo_core)        apple/Packages/GudoCore (Swift package)
+  client.rs   DaemonClient, ClientEvent,          GudoCore.xcframework   (generated, gitignored)
+              ClientEventListener                 Sources/GudoCore/
+  ssh_api.rs  SshSession, SshPane, keys,            GudoCore.swift       (generated, gitignored)
               known_hosts, ssh_config,              Streams.swift           (AsyncStream adapters)
-              bootstrap                           Tests/UnnamedCoreTests/   (swift test)
+              bootstrap                           Tests/GudoCoreTests/   (swift test)
   types.rs    mirrors of proto types
   workspace.rs  git, worktrees, files, transfers,
                 ports, attention, agent launcher
@@ -36,8 +36,8 @@ crates/apple-ffi (lib name unnamed_core)        apple/Packages/UnnamedCore (Swif
 ```sh
 cargo xtask build-xcframework               # iOS + iOS simulator + macOS, arm64, release (~2 min cold)
 cargo xtask build-xcframework --macos-only  # enough for `swift test` on a Mac
-cargo xtask build-hostd-linux               # apple/build/hostd/unnamed-hostd-{aarch64,x86_64}-linux.gz
-cargo xtask build-hostd-macos               # apple/build/hostd/macos/unnamed-hostd (This Mac's helper)
+cargo xtask build-hostd-linux               # apple/build/hostd/gudo-hostd-{aarch64,x86_64}-linux.gz
+cargo xtask build-hostd-macos               # apple/build/hostd/macos/gudo-hostd (This Mac's helper)
 ```
 
 `build-xcframework`:
@@ -46,12 +46,12 @@ cargo xtask build-hostd-macos               # apple/build/hostd/macos/unnamed-ho
    `aarch64-apple-ios-sim`, `aarch64-apple-darwin` (`CARGO_PROFILE_RELEASE_DEBUG=false`,
    deployment targets iOS/macOS 26). libghostty-vt is built by `ghostty-vt-sys` with Zig for each.
 2. Swift bindings with `uniffi_bindgen`'s library mode from the macOS archive's metadata; names
-   from `crates/apple-ffi/uniffi.toml` (module `UnnamedCore`, C module `UnnamedCoreFFI`).
+   from `crates/apple-ffi/uniffi.toml` (module `GudoCore`, C module `GudoCoreFFI`).
 3. Per slice, **hides everything but the UniFFI API** (§4) and strips debug info.
-4. `xcodebuild -create-xcframework` → `apple/Packages/UnnamedCore/UnnamedCore.xcframework`, and
-   copies the generated `UnnamedCore.swift` into the package.
+4. `xcodebuild -create-xcframework` → `apple/Packages/GudoCore/GudoCore.xcframework`, and
+   copies the generated `GudoCore.swift` into the package.
 
-The app depends on the local package `apple/Packages/UnnamedCore` (product `UnnamedCore`). Rebuild
+The app depends on the local package `apple/Packages/GudoCore` (product `GudoCore`). Rebuild
 the xcframework after any change to `apple-ffi`, `client-core`, `ssh` or `proto`; the generated
 Swift and the binary must come from the same build (UniFFI checks API checksums at first use and
 traps on a mismatch).
@@ -64,8 +64,8 @@ inflated in Rust).
 
 The package's target links CoreFoundation, Network (netdev's path monitor on iOS), Security,
 SystemConfiguration and libresolv; the app gets them through the package. The library inside
-the xcframework is named `libUnnamedCoreFFI.a` (a `libUnnamedCore.a` would collide with
-SwiftPM's own product for the `UnnamedCore` target).
+the xcframework is named `libGudoCoreFFI.a` (a `libGudoCore.a` would collide with
+SwiftPM's own product for the `GudoCore` target).
 
 Requirements: Xcode (iOS SDKs), Zig 0.17, `rustup target add aarch64-apple-ios
 aarch64-apple-ios-sim` (in `rust-toolchain.toml`), `cargo install cargo-zigbuild` for the daemons.
@@ -75,7 +75,7 @@ aarch64-apple-ios-sim` (in `rust-toolchain.toml`), `cargo install cargo-zigbuild
 Everything below is generated Swift; Rust names are snake_case, Swift camelCase.
 
 Byte payloads (`PaneBytes`, snapshots, history, keys, exec output, daemon builds) are Swift
-`Data`. On the Rust side they are `unnamed_core::Bytes`, which declares UniFFI's `Vec<u8>` wire
+`Data`. On the Rust side they are `gudo_core::Bytes`, which declares UniFFI's `Vec<u8>` wire
 type but converts with one `memcpy`: UniFFI's stock converter is the generic `Vec<T>` one and
 moves bytes one at a time (§5). `sendInput` takes `&[u8]`, which Swift passes without copying.
 
@@ -84,7 +84,7 @@ moves bytes one at a time (§5). `sendInput` takes `&[u8]`, which Swift passes w
 | | |
 |---|---|
 | `generateDeviceKey() -> Data` | 32-byte device key; the app keeps it in the Keychain |
-| `DaemonClient.connect(ticket:config:listener:) throws(ClientError)` | dial by `unnamed://pair/…` ticket, keep the connection up, resume followed panes |
+| `DaemonClient.connect(ticket:config:listener:) throws(ClientError)` | dial by `gudo://pair/…` ticket, keep the connection up, resume followed panes |
 | `ClientConfig(secretKey:relay:mirrorVt:)` | `relay: .default / .disabled`; `mirrorVt: false` when the app feeds its own VT |
 | `attach(sessionId:)`, `listSessions()` | |
 | `op(op: LayoutOp) -> UInt64` | `.split / .closePane / .focus / .focusDirection / .resize / .toggleZoom / .newTab / .closeTab / .moveTab / .selectTab / .renameTab / .renameSession / .createSession / .closeSession`; answer: `.opResult(opId:outcome:)` |
@@ -126,7 +126,7 @@ AsyncStream<ClientEvent>`; `SshStateStream` does the same for SSH session states
 | `SshOptions()` | keepalive / timeouts / compression / background budget, all defaulted |
 | `session.connected() async throws`, `session.exec(command:) async throws -> SshExecOutput` | |
 | `session.openPane(options:listener:) -> SshPane` | plain-SSH fallback pane: **the same `ClientEvent`s as daemon panes** (`connected`, `paneBytes` with a running `seq`, `paneResized`, `disconnected`, `refused`, `paneClosed`); `sendInput / resize / close`; `tmuxSession` re-attaches after drops |
-| `session.bootstrap(binaries:ticketMinutes:waitSecs:listener:) async throws -> BootstrapReport` | install/upgrade/reuse `unnamed-hostd`, start it, mint a ticket (`report.ticket` → `DaemonClient.connect`); `BootstrapListener.onStep` progress; `HostdBinary.file(path:)` or `.data(data:)`, gzip or raw |
+| `session.bootstrap(binaries:ticketMinutes:waitSecs:listener:) async throws -> BootstrapReport` | install/upgrade/reuse `gudo-hostd`, start it, mint a ticket (`report.ticket` → `DaemonClient.connect`); `BootstrapListener.onStep` progress; `HostdBinary.file(path:)` or `.data(data:)`, gzip or raw |
 
 
 Requests are `async throws(WorkspaceError)` methods on `DaemonClient`; they run on the core
@@ -341,7 +341,7 @@ Errors are typed Swift enums: `ClientError` (`Ticket`, `Key`, `Io`), `SshError` 
 ## 3. Threading
 
 - **One runtime.** The FFI layer owns a single multi-thread tokio runtime (2 workers, threads
-  named `unnamed-core`, plus tokio's blocking pool), started on first use. Every
+  named `gudo-core`, plus tokio's blocking pool), started on first use. Every
   `DaemonClient` (via `client_core::Client::connect_on`) and `SshSession` runs on it.
 - **Nothing blocks the caller.** Synchronous methods queue work and return; `async` methods
   (`connected`, `exec`, `bootstrap`) spawn onto the runtime and await the task, so they can be
@@ -370,7 +370,7 @@ symbol, Zig's `compiler_rt`, and all of Rust std/crates; with the app's copy tha
 dependent at best and, with `-all_load` (or any force-load), **141 duplicate symbols** (measured).
 
 Decision: **the core's copy is private**. `xtask` prelinks each slice (`ld -r`) with an
-exported-symbols list of only `_uniffi_unnamed_core_*` / `_ffi_unnamed_core_*`, so libghostty-vt,
+exported-symbols list of only `_uniffi_gudo_core_*` / `_ffi_gudo_core_*`, so libghostty-vt,
 compiler_rt and Rust std become local symbols of one object. The app keeps linking its own
 libghostty-vt, and both copies coexist (checked by linking a binary with TerminalKit's archive,
 the xcframework slice and `-all_load`: no duplicates). Details that keep it small:
@@ -384,7 +384,7 @@ the xcframework slice and `-all_load`: no duplicates). Details that keep it smal
 - Only debug info is stripped; local symbols remain so dead-stripping works per function.
 
 Cost: two copies of libghostty-vt's code in the app (the core's VT is used only for the mirror
-and pane text). Alternative, if size matters later: export `ghostty_*` from UnnamedCore as well
+and pane text). Alternative, if size matters later: export `ghostty_*` from GudoCore as well
 (add it to the exported list and ship the Ghostty headers in the xcframework) and drop the app's
 own copy; that couples the renderer to the core's Ghostty pin, which is the same pin today.
 
@@ -396,7 +396,7 @@ own copy; that couples the renderer to the core's Ghostty pin, which is the same
 | same, Swift debug build (`swift test`) | 64 B: 1.9–5.6 µs · 4 KiB: 6–15 µs · 64 KiB: 90–215 µs |
 | same with UniFFI's stock `Vec<u8>` converter (debug), before [`Bytes`] | 64 B: 5.5 µs · 4 KiB: 20 µs · 64 KiB: 194 µs |
 | xcframework (3 slices) on disk | 109 MB (gitignored; static archives with symbols for dead-stripping) |
-| per slice (`libUnnamedCoreFFI.a`) | 36 MB (raw Rust staticlib: 185 MB) |
+| per slice (`libGudoCoreFFI.a`) | 36 MB (raw Rust staticlib: 185 MB) |
 | app size delta, iOS arm64 (every UniFFI function referenced, `-dead_strip`, stripped) | 14.5 MB file, 13.7 MB `__TEXT` (macOS: 14.9 MB) |
 | … of which the symbol hiding costs | +0.25 MB `__TEXT` vs. linking the raw archive |
 | `cargo xtask build-xcframework` | cold ≈ 4 min (3 × Zig libghostty-vt + Rust release), warm 20–35 s |
@@ -410,9 +410,9 @@ libghostty-vt.
 ## 6. Tests
 
 ```sh
-cargo build -p hostd                       # the Swift tests spawn target/debug/unnamed-hostd
+cargo build -p hostd                       # the Swift tests spawn target/debug/gudo-hostd
 cargo xtask build-xcframework --macos-only
-cd apple/Packages/UnnamedCore && swift test
+cd apple/Packages/GudoCore && swift test
 # SSH (OrbStack VM `un-linux`): scripts/ssh-test-vm.sh, then
 source ../../../target/ssh-test/env && swift test --filter SshTests
 ```
@@ -446,10 +446,10 @@ source ../../../target/ssh-test/env && swift test --filter SshTests
   echo server, `fsList` / `fsWrite` / `fsRead`, invite + join as a viewer with refused input.
 - Offline: keys, ssh_config + ProxyJump + destinations, known_hosts persistence callback, typed
   errors, the `PaneBytes` crossing benchmark.
-- Daemon (`UN_HOSTD_BIN` overrides the binary): connect by ticket to a spawned `unnamed-hostd
+- Daemon (`GUDO_HOSTD_BIN` overrides the binary): connect by ticket to a spawned `gudo-hostd
   --no-relay`, attach, input → echo, paste + Enter as a key event, split, search; and without the
   Rust mirror (bytes and snapshots still flow).
-- SSH (enabled when `UN_SSH_TEST_HOST` is set): key auth with TOFU through the delegate and the
+- SSH (enabled when `GUDO_SSH_TEST_HOST` is set): key auth with TOFU through the delegate and the
   known_hosts listener, exec, `SshPane` echo and close, bootstrap (prefers the gzipped
   `apple/build/hostd/*.gz` the app bundles) with progress, pairing by the returned ticket and an
   echo through the daemon; a changed host key goes to `trustChangedHost` and a refusal is

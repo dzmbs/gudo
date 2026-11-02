@@ -2,7 +2,7 @@ import DesignSystem
 import HostKit
 import PaneLayout
 import SwiftUI
-import UnnamedCore
+import GudoCore
 
 // "Kim is typing" for raw keys, where people are scrolled, who is in each tab, and following a
 // person. Everything is read-only and quiet: color only where it names a person.

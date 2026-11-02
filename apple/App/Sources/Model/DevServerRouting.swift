@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 import HostKit
 import Network
-import UnnamedCore
+import GudoCore
 import WebKit
 
 /// S-BR1: a host's dev server opens in the in-app browser at exactly the URL it printed
@@ -221,7 +221,7 @@ final class DevServerRouting {
 
     /// The same store for a host across launches (its dev servers' cookies and storage).
     nonisolated static func storeIdentifier(_ hostId: String) -> UUID {
-        WKWebsiteDataStore.stableIdentifier("unnamed-browser:\(hostId)")
+        WKWebsiteDataStore.stableIdentifier("gudo-browser:\(hostId)")
     }
 }
 

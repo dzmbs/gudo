@@ -2,7 +2,7 @@
 import XCTest
 
 /// Scrollback search, links tapped in a pane and mouse reporting on the iPad against a real
-/// local `unnamed-hostd` (`TEST_RUNNER_PAIR_TICKET=$(apple/scripts/local-daemon.sh start)`):
+/// local `gudo-hostd` (`TEST_RUNNER_PAIR_TICKET=$(apple/scripts/local-daemon.sh start)`):
 /// - ⌘F finds every match, Return / ⇧⌘G step through them, the pane scrolls to an old one and
 ///   the renderer draws the match colors; Esc closes and the highlights go;
 /// - a dev server's URL printed in a pane opens in the in-app browser through a forward; a

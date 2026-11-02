@@ -1,4 +1,4 @@
-# Host daemon (`unnamed-hostd`) and client core
+# Host daemon (`gudo-hostd`) and client core
 
 Status: MVP path working end to end on macOS and Linux (2026-10-18), plus terminal completeness
 (key/mouse/paste encoding, history paging, shell integration, search, links, Codex resume), plus
@@ -8,7 +8,7 @@ program, prompt state and input line, atomic submit, history, completion, file s
 blocked-agent options), and native password prompts (§9: askpass helper, detected
 hidden-input prompts).
 Crates: `daemon` (library),
-`hostd` (binaries `unnamed-hostd` and the `un-hook` shim), `client-core` (library), `un` (dev CLI).
+`hostd` (binaries `gudo-hostd` and the `gudo-hook` shim), `client-core` (library), `gudo` (dev CLI).
 Wire types live in `proto`; see its crate docs for the frame format and compatibility rules.
 
 ## 1. Model
@@ -76,12 +76,12 @@ Tab  = { tab_id, name, root, focused: PaneId, zoomed: Option<PaneId> }
 ## 2. Architecture
 
 ```
-            ┌──────────────────── unnamed-hostd (tokio, multi-thread) ───────────────────┐
+            ┌──────────────────── gudo-hostd (tokio, multi-thread) ───────────────────┐
  iroh  ───► │ accept loop ─► per connection: ctl reader, ctl writer, event forwarder,      │
  (QUIC)     │                input reader, port-forward splicers, one task per pane stream │
             │ Core: Layout (Mutex) · panes · broadcast<Event> · persistence (debounced)    │
             │ per pane task: VT events → title/cwd/prompt/echo hints/agent arbiter         │
-            │ hook socket (Unix) ◄── un-hook ◄── Claude/Codex hooks                        │
+            │ hook socket (Unix) ◄── gudo-hook ◄── Claude/Codex hooks                        │
             └──────────────┬──────────────────────────────────────────────────────────────┘
                            │ per pane: PtyActor (pty crate)
                            │   pty-io thread: poll → ring buffer (1 MiB, Seq-addressed)
@@ -230,7 +230,7 @@ policy is always `LastInput` for now.
   both rewrite `pairing.json`, so each read-modify-write holds an exclusive `flock` on
   `pairing.lock`: unlocked, a ticket minted while the daemon wrote its own was lost and refused
   with `InvalidGrant`, and a secret consumed by one pairing could survive another's rewrite.
-- A ticket (`proto::Ticket`, `unnamed://pair/<base32>`) carries the daemon id, direct
+- A ticket (`proto::Ticket`, `gudo://pair/<base32>`) carries the daemon id, direct
   addresses, home relay, owner principal, a 128-bit one-time secret and expiry. Dialing by key
   pins the daemon in the TLS handshake.
 - `Hello.grant.v = PAIRING` presents the secret; success allowlists the device key (proven by the
@@ -266,7 +266,7 @@ policy is always `LastInput` for now.
 - `PaneLaunch::Agent{Claude|Codex}` runs the adapter's launch recipe (`claude --settings
   <hooks> --session-id <uuid>`, `codex -c …osc9…`) through the login shell, then drops to a
   shell when the agent exits. Agents started by hand are detected from the foreground process.
-- Each agent pane has an `Arbiter`. Inputs: hooks (via `un-hook` → Unix socket
+- Each agent pane has an `Arbiter`. Inputs: hooks (via `gudo-hook` → Unix socket
   `<state>/hook.sock`, one JSON line each way, token-checked), OSC 9 and OSC 7501, screen
   manifests (every 500 ms after output), timers, process exit. Events go to clients as
 - A Claude `PermissionRequest` hook is held open; the first client `Decide` answers it with the
@@ -313,9 +313,9 @@ and only once), `mp::policy` unit test.
   relying on a daemon feature) and the oldest client level it serves, features
   (`SELF_UPGRADE`), and the machine: `gethostname` (empty when refusing), OS, `os-release`
   `PRETTY_NAME`, CPU. Older daemons ignore the bit and answer `Welcome` directly, so clients
-  treat "no info" as level 0. `unnamed-hostd build-info [--json]` prints the same for a binary
+  treat "no info" as level 0. `gudo-hostd build-info [--json]` prints the same for a binary
   without running it as a daemon. Release stamps come from `cargo xtask build-hostd-linux`
-  (`UN_BUILD_ID`, `UN_BUILD_UNIX`), which also writes `apple/build/hostd/hostd-manifest.json`
+  (`GUDO_BUILD_ID`, `GUDO_BUILD_UNIX`), which also writes `apple/build/hostd/hostd-manifest.json`
   (file, OS, CPU, build, time, level per bundled build) for the app.
 - **Incompatible clients.** A client with `DAEMON_INFO` whose snapshot format differs, presenting
   the owner's device grant, gets `Welcome` (with the daemon's format) but a connection that
@@ -341,7 +341,24 @@ and only once), `mp::policy` unit test.
   (`--resume`) come back; clients redial by themselves (backoff ≤ 5 s) and get snapshots.
   **Lost**: the shell processes and whatever ran in them (they restart in their last directory),
   (attention items, turn snapshots, editor servers; §9), and Codex sessions started by hand.
-- `un daemon info` / `un daemon upgrade <file> [--build ID]` drive it from a terminal.
+- `gudo daemon info` / `gudo daemon upgrade <file> [--build ID]` drive it from a terminal.
+- **Installs from before the rename** (`brand::legacy`: `unnamed-hostd`, state in `unnamed`,
+  ALPN `unnamed/1`). The daemon accepts both ALPNs and the client offers both, so either side
+  can be the older one. `run` takes over the old install when it starts
+  (`daemon::migrate`, `hostd` `adopt_legacy_install`): the old default state directory (keys,
+  paired devices, grants, layout) moves to today's when that has no `daemon.key` yet, entry by
+  entry if an installer already made it, waiting up to 10 s for a still-running old daemon to
+  release its lock; `~/.config/unnamed` becomes `~/.config/gudo`. A service unit or plist from
+  before the rename that names the old state directory is read as today's. A build upgraded in
+  place over `unnamed-hostd` while running as the old service copies itself to `gudo-hostd`,
+  installs and starts the `gudo-hostd` service, then disables, removes and stops the old one
+  (ending itself); `service install` does the same for an old service before starting the new
+  one (SSH bootstrap's upgrade path). A daemon started as `gudo-hostd` removes a leftover
+  `unnamed-hostd` (and `.prev`) next to it. The Mac app stops the old app's helper login item
+  (`dev.unnamed.app.hostd`) and the old `service install` agent, and disables both
+  (`LocalHelper.retireLegacyHelper`), so its own helper can move the state. Agents' MCP
+  registrations under `unnamed` / `unnamed_drawings` are removed when the server is registered
+  again; the env vars a pane gets are `GUDO_*`, and the hook shim and MCP server also read `UN_*`.
 
 ### Port forwarding
 
@@ -351,58 +368,58 @@ See §5.1. `Client::forward_port(local, remote)` (the original API) still works;
 ## 3. Running it
 
 ```sh
-cargo build --release -p hostd -p un
+cargo build --release -p hostd -p cli
 
 # Host
-unnamed-hostd run                 # prints a pairing QR + ticket if nothing is paired yet
-unnamed-hostd pair                # new one-time ticket (QR + text), valid 10 min
-unnamed-hostd pair --json --wait 30   # the same as one JSON object, once a running daemon has
+gudo-hostd run                 # prints a pairing QR + ticket if nothing is paired yet
+gudo-hostd pair                # new one-time ticket (QR + text), valid 10 min
+gudo-hostd pair --json --wait 30   # the same as one JSON object, once a running daemon has
                                   # recorded its endpoint and relay (used by ssh::bootstrap)
-unnamed-hostd status
-unnamed-hostd build-info --json   # version, build, protocol level, OS, CPU, host name
-unnamed-hostd service install     # systemd --user (Linux) / LaunchAgent (macOS); (re)starts it
-unnamed-hostd service uninstall
-#   --state-dir DIR (or $UN_STATE_DIR), run: --bind ADDR, --no-relay, --shell PATH
-#   logs: UN_LOG=debug
+gudo-hostd status
+gudo-hostd build-info --json   # version, build, protocol level, OS, CPU, host name
+gudo-hostd service install     # systemd --user (Linux) / LaunchAgent (macOS); (re)starts it
+gudo-hostd service uninstall
+#   --state-dir DIR (or $GUDO_STATE_DIR), run: --bind ADDR, --no-relay, --shell PATH
+#   logs: GUDO_LOG=debug
 
 # Client (anywhere)
-un pair 'unnamed://pair/…'        # saves the ticket and a device key under ~/.config/unnamed
-un attach                         # focused pane in this terminal; follows focus; Ctrl-] detaches
-un ls
-un split [-v] [--agent claude|codex]
-un focus left|right|up|down|<pane>   un zoom   un close   un resize h|v <delta>
-un tab new [name]|close|next|prev|select <n>|move <n>|rename <name>
-un session new <name>|rename <name>|close      un -s <name> attach
-un forward <remote-port> [--local <port>]
-un search <pattern> [-e] [--case sensitive|insensitive|smart] [--limit N] [--pane P]
-un links [--commands N]           # hyperlinks, URLs, paths (screen + last N commands' output)
-un marks                          # shell-integration commands: exit, duration, cwd
-un output [--command N]           # a command's output (default: the last one)
-un forward 3000 | --unix ~/x.sock [--local N]
-un ports [--watch]                un inbox [--seen] [--watch]
-un editor status | launch [folder] [--kind vscode|openvscode] [--accept-license] | stop <folder>
+gudo pair 'gudo://pair/…'        # saves the ticket and a device key under ~/.config/gudo
+gudo attach                         # focused pane in this terminal; follows focus; Ctrl-] detaches
+gudo ls
+gudo split [-v] [--agent claude|codex]
+gudo focus left|right|up|down|<pane>   gudo zoom   gudo close   gudo resize h|v <delta>
+gudo tab new [name]|close|next|prev|select <n>|move <n>|rename <name>
+gudo session new <name>|rename <name>|close      gudo -s <name> attach
+gudo forward <remote-port> [--local <port>]
+gudo search <pattern> [-e] [--case sensitive|insensitive|smart] [--limit N] [--pane P]
+gudo links [--commands N]           # hyperlinks, URLs, paths (screen + last N commands' output)
+gudo marks                          # shell-integration commands: exit, duration, cwd
+gudo output [--command N]           # a command's output (default: the last one)
+gudo forward 3000 | --unix ~/x.sock [--local N]
+gudo ports [--watch]                gudo inbox [--seen] [--watch]
+gudo editor status | launch [folder] [--kind vscode|openvscode] [--accept-license] | stop <folder>
           | open <path[:line[:col]]>
-un editor tunnel status | install --accept-license | start --accept-license [--microsoft]
+gudo editor tunnel status | install --accept-license | start --accept-license [--microsoft]
           [--name N] | stop | open <path[:line[:col]]>      # real VS Code via vscode.dev
-un ssh-proxy [--port 22]          # ProxyCommand for VS Code Remote-SSH over the daemon link
-un git status [path] | diff [--staged|--index|--rev R|--merge-base B] [--stat] [-U n] [files…]
-un turns [--diff N] [--stat]      un review --pane P --note 'path:L[-L]:text' [--submit]
-un worktree create [--repo R] [--branch B] [--base B] | list | remove <path> [--force]
+gudo ssh-proxy [--port 22]          # ProxyCommand for VS Code Remote-SSH over the daemon link
+gudo git status [path] | diff [--staged|--index|--rev R|--merge-base B] [--stat] [-U n] [files…]
+gudo turns [--diff N] [--stat]      gudo review --pane P --note 'path:L[-L]:text' [--submit]
+gudo worktree create [--repo R] [--branch B] [--base B] | list | remove <path> [--force]
             [--delete-branch] | launch <path> [--agent claude|codex]
-un draw list | show <id> [--mode kitty|ascii] | export <id> --format png|svg|ascii [-o F]
+gudo draw list | show <id> [--mode kitty|ascii] | export <id> --format png|svg|ascii [-o F]
         | send <id> | --file img.png [--pane P] [--version V]
         | place <id> [--pane P] | import <file.png|.excalidraw> [--pane P]
-un fs ls <dir> [-a] | stat | cat | put <local> <remote> [--if-match V] [--new] | get <remote>
+gudo fs ls <dir> [-a] | stat | cat | put <local> <remote> [--if-match V] [--new] | get <remote>
       <local> | mkdir [-p] | mv <a> <b> [--force] | rm <path> [--permanent] [-r] | watch <dir>
 #   --no-relay for direct-only; --ticket to override the saved one
 ```
 
-`un attach` proxies raw bytes, so the local terminal also answers queries the remote program
+`gudo attach` proxies raw bytes, so the local terminal also answers queries the remote program
 sends (the daemon's VT answers them too); a program that queries in a loop may see doubled
 replies. It is a test tool; the app renders from its own VT.
 
-Default state directory: `$XDG_STATE_HOME/unnamed`, else `~/.local/state/unnamed` on Linux and
-`~/Library/Application Support/unnamed` on macOS. One daemon per state dir (`hostd.lock`).
+Default state directory: `$XDG_STATE_HOME/gudo`, else `~/.local/state/gudo` on Linux and
+`~/Library/Application Support/gudo` on macOS. One daemon per state dir (`hostd.lock`).
 
 ### Cloud VMs and headless Linux
 
@@ -411,23 +428,23 @@ Default state directory: `$XDG_STATE_HOME/unnamed`, else `~/.local/state/unnamed
 - **No inbound ports or security-group rules are needed.** Cloud VMs normally allow outbound
   UDP, so iroh hole-punches a direct path; where UDP is blocked the n0 relay over HTTPS (443)
   carries the connection. `--no-relay` is only for LAN/Tailscale setups.
-- **Direct-only devices and restarts.** A device with relays off (`un --no-relay`, the app's
+- **Direct-only devices and restarts.** A device with relays off (`gudo --no-relay`, the app's
   local-only switch) dials only the direct addresses in the ticket it paired with. iroh binds
   random UDP ports, so a restart or upgrade used to move the daemon away from every such
-  ticket (`un --no-relay forward` then timed out "waiting for layout"; with relays, address
+  ticket (`gudo --no-relay forward` then timed out "waiting for layout"; with relays, address
   lookup hid it). The daemon now records the sockets it bound (`endpoint.json` `bound`) and
   binds the same ports on the next start (the default binds and `--bind` with port 0; a port
   taken in the meantime falls back to a fresh one, which a direct-only device only learns
-  from a new ticket). `un` reports a daemon it never reached as such, with the last dial
-  error, instead of "timed out waiting for layout", and `un forward` no longer attaches.
+  from a new ticket). `gudo` reports a daemon it never reached as such, with the last dial
+  error, instead of "timed out waiting for layout", and `gudo forward` no longer attaches.
   Test: `a_direct_only_ticket_still_reaches_the_daemon_after_a_restart`.
-- `service install` writes `~/.config/systemd/user/unnamed-hostd.service`
+- `service install` writes `~/.config/systemd/user/gudo-hostd.service`
   (`Restart=on-failure`); run `sudo loginctl enable-linger $USER` once so it starts at boot and
   survives logout. Stopping the service ends the panes; the layout and agent sessions come back
   on the next start.
-- Static binaries: `cargo zigbuild --release -p hostd -p un --target
+- Static binaries: `cargo zigbuild --release -p hostd -p cli --target
   {x86_64,aarch64}-unknown-linux-musl` (zig 0.16, `cargo install cargo-zigbuild`). Stripped
-  sizes: `unnamed-hostd` 18.7 MB, `un-hook` 2.3 MB (aarch64).
+  sizes: `gudo-hostd` 18.7 MB, `gudo-hook` 2.3 MB (aarch64).
 
 ## 4. Tests and numbers
 
@@ -456,7 +473,7 @@ Loopback, release build, M5 Max, 3 runs each (Linux: OrbStack Ubuntu 24.04 arm64
 | worst keystroke → echo during a 40 MB flood in a visible pane | 3.3–6.6 ms | 2.9–6.8 ms |
 
 Cross-host (Mac ↔ OrbStack Linux VM, both directions) and relay-only (ticket stripped of direct
-addresses, n0 relay, ~1.8 s to pair including relay setup) were exercised by hand with `un`.
+addresses, n0 relay, ~1.8 s to pair including relay setup) were exercised by hand with `gudo`.
 
 
 All requests are one ctl message pair: `ClientCtl::Workspace{req_id, WorkspaceRequest}` →
@@ -467,7 +484,7 @@ the requests are `async` methods on `Client` (`git_status`, `fs_list`, `editor_l
 awaitable from any executor; the work runs on the client's runtime, a dropped connection
 answers `WsError::Disconnected`) and pushes go to a separate `WorkspaceListener`
 (`Client::set_workspace_listener`), so `ClientEvent` and the existing listener are untouched.
-Code: `crates/daemon/src/ws/`, `crates/client-core/src/workspace.rs`, `crates/un/src/ws.rs`.
+Code: `crates/daemon/src/ws/`, `crates/client-core/src/workspace.rs`, `crates/cli/src/ws.rs`.
 
 ### 5.0 Path policy and configuration
 
@@ -484,7 +501,7 @@ never get setuid/setgid/sticky bits from a client. Optional
 [files]
 allow = ["/srv/projects"]        # besides $HOME
 [worktrees]
-root = "/home/me/worktrees"      # default ~/.unnamed/worktrees
+root = "/home/me/worktrees"      # default ~/.gudo/worktrees
 port_base = 4100                 # first PORT handed to a worktree
 [editor]
 code = "/usr/local/bin/code"     # default: PATH + usual app bundle locations
@@ -610,7 +627,7 @@ The tunnel RPCs:
 - **Desktop Remote-SSH to iroh-only hosts.**
   - `Client::forward(<stable port>, Tcp{22})` plus `client_core::vscode::remote_ssh_uri(
     SshHost::local_forward(user, port), …)`. This uses Remote-SSH's hex-JSON authority.
-  - Or `un ssh-proxy` as `ProxyCommand` (`Client::forward_io`).
+  - Or `gudo ssh-proxy` as `ProxyCommand` (`Client::forward_io`).
 
 The per-folder servers below remain. **`Auto` no longer falls back to openvscode-server**: it means
 `code serve-web` and fails with `Unavailable` (no CLI) or `Denied` (licence not accepted).
@@ -725,7 +742,7 @@ no editor picker; VS Code is the editor and must just work).
   accepted (`Unavailable`/`Denied` are returned as before), when the grant is not the owner's,
   or when a kind was asked for explicitly. Both failing → `Failed` with both messages.
 - The explicit kind is internal: `open_editor_with(folder, accept, Some(kind))` (Rust only,
-  `#[doc(hidden)]`, for tests), `un ws editor launch --kind vscodium`, and the host's
+  `#[doc(hidden)]`, for tests), `gudo ws editor launch --kind vscodium`, and the host's
   `[editor] default = "vscodium"` (then `Auto` means VSCodium; for hosts where Microsoft's CLI
   is known not to work). Proto: `EditorKind::Vscodium` appended (goldens added).
 - **What runs:** VSCodium's Web Host `vscodium-reh-web-<platform>-1.140.06880.tar.gz` from
@@ -812,15 +829,15 @@ no editor picker; VS Code is the editor and must just work).
 ### 5.5 Worktrees and `PORT`
 
 `WorktreeCreate{repo, branch?, base?, path?}` runs `git worktree add -b` into
-`<root>/<repo>/<branch with / → ->`; a missing branch name becomes `unnamed/<word>-<hex>`
+`<root>/<repo>/<branch with / → ->`; a missing branch name becomes `gudo/<word>-<hex>`
 the main worktree and, unless `force`, any worktree with changes or untracked files (`Conflict`
 with the count), and can `branch -d` the branch. Each worktree gets a stable `PORT` from
 `port_base` up (skipping ports held by other worktrees or bound now), kept in
 `<state>/worktrees.json` across restarts. Every pane whose directory is inside a registered
-worktree is started with `PORT` and `UN_WORKTREE`, recorded in `layout.json`
+worktree is started with `PORT` and `GUDO_WORKTREE`, recorded in `layout.json`
 (`worktree: {path, port}`). `WorktreeLaunch{path, split_from, axis, agent?}` splits a pane into
 a shell or Claude/Codex in the worktree. Setup and teardown commands come from
-`.unnamed.json` (§5.12).
+`.gudo.json` (§5.12).
 
 The `Repos` push (§5.12) does not carry the port: `WorktreeState` is frozen on the wire. The app
 reads ports with `WorktreeList` whenever a repository's set of worktrees changes
@@ -845,7 +862,7 @@ One bidirectional stream per transfer at bulk priority, so QUIC flow control is 
 backpressure and transfers never delay ctl or keystrokes. Upload: `StreamHeader::Upload{target,
 size}` → `TransferReply::Ready` (preconditions checked first) → exactly `size` bytes, FIN →
 `Done(stat)` or `Failed`. The daemon writes from a blocking thread fed through a 4-chunk
-channel (a slow disk slows the stream), into `.<name>.unnamed-upload-<hex>` next to the
+channel (a slow disk slows the stream), into `.<name>.gudo-upload-<hex>` next to the
 target, fsyncs, re-checks `if_match`, renames (or hard-links for `create_new`), fsyncs the
 directory; an interrupted upload leaves nothing behind. Download: `Download{path, offset, len?}`
 → `Ready{stat, len}` → bytes → FIN (reset on a read error); client-core writes to a temporary
@@ -903,7 +920,7 @@ report at once, then `ServerCtl::AgentUsage` pushes changes (clients with `Caps:
 `UsageUnwatch` stops. Offered as `DaemonFeatures::AGENT_USAGE`.
 
 Sources, preferred first: Codex's `token_count` rate limits in its rollouts; Claude's status-line
-input (Claude panes launched by the daemon run `un-hook claude StatusLine` as their status line,
+input (Claude panes launched by the daemon run `gudo-hook claude StatusLine` as their status line,
 which forwards the JSON as hook event `StatusLine` and then runs the user's own status line);
 when those are missing or older than 10 min, `claude -p /usage --output-format stream-json`
 (+ `claude auth status --json` for the plan) and `codex app-server` → `account/rateLimits/read`,
@@ -967,7 +984,7 @@ to clients that announce `Caps::REPO_STATUS` (the app does; the CLI and tests op
   command, then stays a shell with shell integration; an empty command is a plain shell tab);
   `WorktreeArchive{path, force}`; `WorktreeArchived{repo?}`; `WorktreeRestore{id}`;
   `WorktreeSettings(Option<…>)` (changing it needs the owner).
-- **Setup, teardown and scripts**: `.unnamed.json` at the worktree's top level (else the main
+- **Setup, teardown and scripts**: `.gudo.json` at the worktree's top level (else the main
   worktree's): `{"setup": "...", "teardown": "...", "scripts": [{"name", "command", "icon",
   "tint", "default"}]}`. Setup runs first in the new task's pane, echoed dimmed (`› pnpm i`),
   before the shell or the agent. Teardown runs (`sh -c`, ≤ 5 min) before archive or delete; a
@@ -981,7 +998,7 @@ to clients that announce `Caps::REPO_STATUS` (the app does; the CLI and tests op
   devices only, never a guest's grant) trusts it. The app asks "Run Setup Commands for repo?"
   before a task and "Run Teardown Commands…" before archive or delete.
 - **Archive keeps refs**: refused with `Conflict` when the worktree has changes unless `force`.
-  The commit goes to `refs/unnamed/archived/<id>/head` and, with changes, a commit of the whole
+  The commit goes to `refs/gudo/archived/<id>/head` and, with changes, a commit of the whole
   working tree (untracked files included, the user's index untouched) to `…/changes`; then the
   worktree is removed; the branch stays. Restore re-adds the worktree where it was, on its branch
   (recreated from the ref if it was deleted), checks the saved changes out and resets the index
@@ -1006,8 +1023,8 @@ to clients that announce `Caps::REPO_STATUS` (the app does; the CLI and tests op
 format). Code: `crates/daemon/src/ws/workflows.rs`; wire types and the template functions in
 `crates/proto/src/workflow.rs`.
 
-- **Where**: `~/.config/unnamed/workflows/*.yaml|*.yml` (`$XDG_CONFIG_HOME/unnamed/workflows` when
-  set; global, every pane) and `<repository>/.unnamed/workflows/` (the repository a pane's
+- **Where**: `~/.config/gudo/workflows/*.yaml|*.yml` (`$XDG_CONFIG_HOME/gudo/workflows` when
+  set; global, every pane) and `<repository>/.gudo/workflows/` (the repository a pane's
   directory is in: the nearest ancestor with `.git`; a linked worktree without its own directory
   falls back to the main worktree's, found through `.git` → `gitdir` → `commondir`). Hidden
   files are skipped; symlinked files are followed.
@@ -1067,12 +1084,12 @@ format). Code: `crates/daemon/src/ws/workflows.rs`; wire types and the template 
   `apple/App/Sources/Git/AgentInstallGuide.swift`.
 - `WorkspaceRequest::AgentMcpCommands{register}` → `AgentMcpCommands([AgentMcpCommand{agent,
   argv}])`, offered as `DaemonFeatures::AGENT_MCP`. Owner only. One command per installed agent
-  (named by path when off the login `PATH`): `claude mcp add --scope user unnamed_drawings --
-  <un-hook> mcp --state <state>` and `codex mcp add unnamed_drawings -- …`, or with `register`
+  (named by path when off the login `PATH`): `claude mcp add --scope user gudo_drawings --
+  <gudo-hook> mcp --state <state>` and `codex mcp add gudo_drawings -- …`, or with `register`
   false `claude mcp remove --scope user …` / `codex mcp remove …`. Nothing runs on the daemon:
   the app (Settings ▸ Agents ▸ Agent Tools, off by default) shows them and runs them in a new tab
   (`ScriptRun`), so agents the user starts by hand get the §7.12 server; its pane comes from
-  the pane's `UN_PANE_ID`. Goldens: `crates/proto/tests/golden_agent_mcp.rs`.
+  the pane's `GUDO_PANE_ID`. Goldens: `crates/proto/tests/golden_agent_mcp.rs`.
 - Tests: `cargo test -p daemon --lib installs`, `cargo test -p daemon --test it installs`,
   goldens in `crates/proto/tests/golden_installs.rs`; app: `AgentInstallGuideTests`,
   `W3UITests.testAgentNotInstalledOffersTheOfficialInstaller` (`apple/scripts/w3-ui-test.sh`).
@@ -1094,7 +1111,7 @@ Several Claude Code and Codex sign-ins on one host, such as Personal and Work. T
   - Claude: `claude auth login`.
   - Codex: `codex login`, with `--device-auth` when the client is not on the host, because the browser login's localhost callback cannot reach a remote browser.
 
-  The user completes it in the pane: the URL is tappable, and Claude takes a pasted code. When the login ends, the pane runs `un-hook account SignIn`; the daemon checks the account and pushes the result. It checks again when the pane closes. The tab's record is a plain shell, so a restart never runs a login again.
+  The user completes it in the pane: the URL is tappable, and Claude takes a pasted code. When the login ends, the pane runs `gudo-hook account SignIn`; the daemon checks the account and pushes the result. It checks again when the pane closes. The tab's record is a plain shell, so a restart never runs a login again.
 - **Launching.** `PaneLaunch::AccountAgent {agent, account, resume, cwd}`; plain `Agent` from older clients behaves the same with `account: None`.
   - **Which account:**
     1. A resume runs under the account that created the session, whatever was asked. If that account was removed, the launch is refused and the session runs under no other.
@@ -1102,14 +1119,14 @@ Several Claude Code and Codex sign-ins on one host, such as Personal and Work. T
     3. Otherwise the default of the tab's project, then the host default, then `system`.
   - The record keeps the account (`AgentRecord.account`), so restore and Reopen come back under it.
   - **Environment** (`agents::account_env`, `LaunchSpec::shell_line`):
-    - **System account: unchanged.** Its panes keep the environment exactly as before accounts, API keys included, because many users run the agents with `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. Only `UN_ACCOUNT=system` is added.
+    - **System account: unchanged.** Its panes keep the environment exactly as before accounts, API keys included, because many users run the agents with `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. Only `GUDO_ACCOUNT=system` is added.
     - **Named account:** the pane has `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`, `ANTHROPIC_PROFILE`, `CODEX_API_KEY`, `OPENAI_API_KEY`, `CODEX_ACCESS_TOKEN` and the other agent's directory variable removed. These outrank a `/login` and would silently override the account's own sign-in and bill another.
     - For a named account the removal happens twice: on the spawned process, and with `unset` in the login shell's command line after its startup files ran. A `.profile` that exports a key cannot reach the agent.
-    - Only the account's directory is exported, plus `UN_ACCOUNT=<id>` and `UN_ACCOUNT_DIR` (directories only, never a secret, since the line is visible in the process list). The account's own commands (status, logout, usage) run with the same rules.
+    - Only the account's directory is exported, plus `GUDO_ACCOUNT=<id>` and `GUDO_ACCOUNT_DIR` (directories only, never a secret, since the line is visible in the process list). The account's own commands (status, logout, usage) run with the same rules.
     - Plain shell panes are untouched; the shell left after an agent exits keeps the account's directory.
 - **Where one account was assumed:**
   - Codex session capture reads rollouts under the pane's account home.
-  - `un-hook` finds the user's status line through `UN_ACCOUNT_DIR` rather than `CLAUDE_CONFIG_DIR`, which Claude's subprocess scrub may remove.
+  - `gudo-hook` finds the user's status line through `GUDO_ACCOUNT_DIR` rather than `CLAUDE_CONFIG_DIR`, which Claude's subprocess scrub may remove.
   - `user_mcp_registered` takes the account's `.claude.json` / `config.toml`.
   - `AgentMcpCommands` returns one command per account, `env CLAUDE_CONFIG_DIR=<dir> claude mcp add …`.
 - **Usage** (§5.11) is kept per (agent, account):
@@ -1149,7 +1166,7 @@ hosted threads and one workspace-wide role. Ours runs on the daemon over iroh, e
 encrypted, with no account: an invite is a link or QR code, roles are per person, a pane has
 Code: `crates/grants` (signing and verification), `proto::mp` (wire types),
 `crates/daemon/src/mp/` (grant table, policy, leases, presence, audit),
-`crates/client-core/src/mp.rs`, `crates/un/src/mp.rs`. Tests: `crates/grants/tests/props.rs`,
+`crates/client-core/src/mp.rs`, `crates/cli/src/mp.rs`. Tests: `crates/grants/tests/props.rs`,
 `crates/daemon/tests/it/multiplayer.rs`.
 
 ### 6.1 Grants and invites
@@ -1177,7 +1194,7 @@ Code: `crates/grants` (signing and verification), `proto::mp` (wire types),
   `RefuseReason::InvalidGrant` or `Revoked`, and audited.
 - **Invite** = iroh dial info + chain: `proto::Invite{daemon_id, addrs, relay_url, inviter,
   chain}`, text `<scheme>://join/<base32>` (`brand::URL_SCHEME`; `#` in place of the last `/`
-  also parses, for a URL fragment). `un invite` prints a QR code (upper-cased, alphanumeric
+  also parses, for a URL fragment). `gudo invite` prints a QR code (upper-cased, alphanumeric
   mode) and the link; an invite with one link is about 380 characters.
 - Paired owner devices (pairing ticket, `devices.json`) keep working unchanged as `Owner` on
   `Daemon` scope; every connection (owner or guest) is told who it is with
@@ -1327,7 +1344,7 @@ changes focus, then `PeerPush::Changed(peer)` per change. Rules:
 - *Following* is by principal: the follower tracks that person's most recently active device
   (its focus and viewport); the leader sees `following` on the follower.
 
-`un draft <text> [--cps N] [--then-focus PANE]` types a live draft (UI tests use it).
+`gudo draft <text> [--cps N] [--then-focus PANE]` types a live draft (UI tests use it).
 
 ### 6.6 Signed approvals and the audit log
 
@@ -1351,16 +1368,16 @@ changes focus, then `PeerPush::Changed(peer)` per change. Rules:
 ### 6.7 CLI
 
 ```sh
-un invite --role driver+approver --scope session --ttl 24h --uses 1 --name bob [--delegate]
-un join 'unnamed://join/…'        # saves the invite (used when no pairing ticket is saved)
-un who [--watch]                  # participants, roles, scope, focus, typing
-un take-control [--pane P] [--force] [--wait]     un release-control
-un prompt 'fix the failing test' [--pane P] [--no-submit]
-un grants [--devices]             un revoke <grant-id-prefix> | --device KEY | --principal ID
-un audit [--limit N] [--after SEQ]
+gudo invite --role driver+approver --scope session --ttl 24h --uses 1 --name bob [--delegate]
+gudo join 'gudo://join/…'        # saves the invite (used when no pairing ticket is saved)
+gudo who [--watch]                  # participants, roles, scope, focus, typing
+gudo take-control [--pane P] [--force] [--wait]     gudo release-control
+gudo prompt 'fix the failing test' [--pane P] [--no-submit]
+gudo grants [--devices]             gudo revoke <grant-id-prefix> | --device KEY | --principal ID
+gudo audit [--limit N] [--after SEQ]
 ```
 
-`un invite` from a guest signs a narrower child of its own grant (needs `--delegate` on the
+`gudo invite` from a guest signs a narrower child of its own grant (needs `--delegate` on the
 parent). Separate identities on one machine: separate `XDG_CONFIG_HOME`.
 
 ### 6.8 Tests
@@ -1401,7 +1418,7 @@ history}` with the grant in `grants.json`. They are not in the signed grant: the
 them up for every link of a presented chain and applies the strictest, so a delegated child
 can add terms but never drop its parent's, and a guest cannot strip them from a link. A copy
 rides after the invite's bytes (`Invite::to_string_with_terms`, marker `0xE9`; old parsers
-ignore it) only so the join card can say "asks first" and "earlier output hidden". `un invite
+ignore it) only so the join card can say "asks first" and "earlier output hidden". `gudo invite
 --knock --history since-join`.
 
 **Knock to join.** A chain whose terms say `knock` does not join. With `Caps::KNOCK` the
@@ -1416,9 +1433,9 @@ by the daemon key, on the invite's scope, bound to the knocking device, single u
 `KnockAnswer::Admitted(chain)` and reconnects with it (`knock::knock` returns the invite to
 join with). `None` sends `Denied`. Revoking or expiring the knock invite turns its waiting
 knockers away. Audited: `Knock`, `KnockAnswered` (admitted as …, turned away, stopped
-waiting). `un knocks [--watch]`, `un admit N --role driver`, `un deny N`, `un join` knocks.
+waiting). `gudo knocks [--watch]`, `gudo admit N --role driver`, `gudo deny N`, `gudo join` knocks.
 
-(`MpRequest::SetApprovalPolicy`, `un policy --mode two-person --max-risk edits`), everyone in
+(`MpRequest::SetApprovalPolicy`, `gudo policy --mode two-person --max-risk edits`), everyone in
 the session hears `ServerCtl::ApprovalPolicy` on attach and on change. Enforced where
 decisions are signed, before the agent is answered: `Decide`, push actions and on-screen
 dialog answers (`AnswerBlocked`).
@@ -1484,10 +1501,10 @@ the pane; pushes go to connections whose scope covers the pane.
   a viewer can neither add nor revoke); goldens in `proto/tests/golden_approve.rs`.
 
 
-`proto::artifact` (wire), `crates/drawing` (model shared with client-core and `un`: packed
+`proto::artifact` (wire), `crates/drawing` (model shared with client-core and `gudo`: packed
 ink points, scene from the op log, SVG writer, rasteriser, PNG), `crates/daemon/src/art/`
 (store, send, blob streams), `crates/daemon/src/anchor.rs` (row anchors),
-`crates/client-core/src/artifacts.rs`, `crates/un/src/draw.rs`.
+`crates/client-core/src/artifacts.rs`, `crates/cli/src/draw.rs`.
 
 ### 7.1 Model
 
@@ -1571,7 +1588,7 @@ artifact_set_anchor / artifact_set_preview / artifact_export / send_to_agent / b
 blob_download / ink_live` (blob transfers also as `*_with_progress`, reporting every
 64 KiB); pushes go to an `ArtifactListener` (`ArtifactUpdate::Event` or `Synced`). The client caches a `drawing::Scene` per artifact it has seen: pushed batches apply
 in order, a gap or a reconnect fetches `Get{since}` (resync), `artifact_scene(id)` reads it.
-`un draw list | show | export | send` (show: kitty graphics when the terminal supports it,
+`gudo draw list | show | export | send` (show: kitty graphics when the terminal supports it,
 from the environment or an `a=q` query; else a braille render and a summary).
 
 ### 7.8 Tests
@@ -1637,7 +1654,7 @@ Two ways in:
   `.excalidraw` file becomes an artifact placed at the cursor row.
 
 **Kitty graphics** (`kitten icat`, yazi and ranger previews, chafa/timg, matplotlib's kitty
-backend, `un draw show`, agents printing screenshots) are not placements: Ghostty implements
+backend, `gudo draw show`, agents printing screenshots) are not placements: Ghostty implements
 the protocol. The daemon's VT and every client's VT keep the images (64 MiB per pane and
 screen by default, `[terminal] image_storage_mb`). A mirror must keep exactly what the host
 keeps, or an image one evicts and the other keeps lays the text after it out differently: so
@@ -1768,7 +1785,7 @@ PNG) and placed with the render; on an agent pane it is sent (`send_to_agent`). 
 
 ### 7.12 MCP pull channel
 
-Agents read the session's drawings themselves (push is §7.4). `un-hook mcp [--state <dir>]
+Agents read the session's drawings themselves (push is §7.4). `gudo-hook mcp [--state <dir>]
 [--pane <id>]` is a stdio MCP server (`crates/hostd/src/mcp.rs`): JSON-RPC 2.0, one message per
 line; `initialize` echoes the client's `protocolVersion` if it is 2024-11-05, 2025-03-26 or
 2025-06-18 (else 2025-06-18), capabilities `{tools: {}}`, `serverInfo.name`
@@ -1803,35 +1820,35 @@ in no session, an unknown format or an export over 8 MiB is an `error`. Exports 
 (name, `ExportFormat`, MIME, binary); a row there is all a new format needs.
 
 The server finds the socket in `<state>/hook.endpoint` (re-read per call). Its token is the
-pane's own `UN_TOKEN` (from its environment, or the agent's when Codex trimmed it) when that
-environment's `UN_PANE_ID` is the pane asked for; only otherwise `<state>/hook.token`; never
-argv. Without `--state` it uses `UN_ENDPOINT_FILE`/`UN_SOCK` and `UN_TOKEN`, else the default
-state dir; without `--pane`, `UN_PANE_ID`.
+pane's own `GUDO_TOKEN` (from its environment, or the agent's when Codex trimmed it) when that
+environment's `GUDO_PANE_ID` is the pane asked for; only otherwise `<state>/hook.token`; never
+argv. Without `--state` it uses `GUDO_ENDPOINT_FILE`/`GUDO_SOCK` and `GUDO_TOKEN`, else the default
+state dir; without `--pane`, `GUDO_PANE_ID`.
 
 **Agents the daemon launches** get it with no change to the user's config. The server name is
 `<product>_drawings` (`agents::mcp_server_name`, valid for both). Claude: `--mcp-config
-<state>/claude/mcp/<pane>.json` (`{"mcpServers":{"unnamed_drawings":{"type":"stdio","command":
+<state>/claude/mcp/<pane>.json` (`{"mcpServers":{"gudo_drawings":{"type":"stdio","command":
 "<hook_bin>","args":["mcp","--state","<state>","--pane","<pane>"]}}}`, added to the user's
 servers; no `--strict-mcp-config`), and the `--settings` file (v3) allows
-`mcp__unnamed_drawings`. Codex: `-c mcp_servers.unnamed_drawings.command="<hook_bin>"` and
-`-c mcp_servers.unnamed_drawings.args=["mcp","--state","<state>","--pane","<pane>"]` (TOML
+`mcp__gudo_drawings`. Codex: `-c mcp_servers.gudo_drawings.command="<hook_bin>"` and
+`-c mcp_servers.gudo_drawings.args=["mcp","--state","<state>","--pane","<pane>"]` (TOML
 strings, escaped).
 
 **By hand** (an agent we did not launch, started in one of our panes, whose environment
-carries `UN_PANE_ID`, `UN_TOKEN` and the endpoint):
+carries `GUDO_PANE_ID`, `GUDO_TOKEN` and the endpoint):
 
 ```sh
-claude mcp add unnamed_drawings -- /path/to/un-hook mcp
+claude mcp add gudo_drawings -- /path/to/gudo-hook mcp
 # ~/.codex/config.toml
-[mcp_servers.unnamed_drawings]
-command = "/path/to/un-hook"
+[mcp_servers.gudo_drawings]
+command = "/path/to/gudo-hook"
 args = ["mcp", "--pane", "12"]
 ```
 
 Codex starts MCP servers with a reduced environment, so give it `--pane` (and `--state` when
 the state dir is not the default). Tests: `mcp::tests` (protocol over a fake backend),
 `tests/it/pull.rs` (socket: list, png/svg/ascii/excalidraw, other session, bad token, stray pane),
-`hostd/tests/mcp.rs` (the built `un-hook mcp` against a daemon).
+`hostd/tests/mcp.rs` (the built `gudo-hook mcp` against a daemon).
 
 ### 7.13 Version history
 
@@ -1851,8 +1868,8 @@ ordinary `Excalidraw` (or `Changed`) push, so open editors and caches converge w
 reload. The artifact's preview and every placement of it switch to the old render (`Placed`,
 same placement id; the height follows the image), and the restore is itself recorded
 (`restored_from`). Both requests are gated by `DaemonFeatures::ARTIFACT_HISTORY` (older daemons
-drop a connection that sends them; client-core refuses locally). CLI: `un draw history <id>`,
-`un draw restore <id> <version>`, `un draw export <id> --format excalidraw`. App: Version
+drop a connection that sends them; client-core refuses locally). CLI: `gudo draw history <id>`,
+`gudo draw restore <id> <version>`, `gudo draw export <id> --format excalidraw`. App: Version
 History in a placement's menu (each version with its render, the shown one checked; picking
 
 D9). Wire types: `proto::assist` (append-only; goldens in `crates/proto/tests/golden_assist.rs`).
@@ -2069,12 +2086,12 @@ instead of the user typing blind into the terminal. Two sources, one wire (`Caps
 
 - **Environment.** Every pane gets `SUDO_ASKPASS`, `SSH_ASKPASS`, `SSH_ASKPASS_REQUIRE=prefer`
   (OpenSSH ≥ 8.4 then uses it even with a terminal) and `GIT_ASKPASS`, all naming
-  `<state>/askpass/un-askpass`: a two-line script, rewritten on start, that runs
-  `un-hook askpass "$@"` (also `unnamed-hostd askpass`). `UN_ASKPASS` names it too, and the
-  pane gets the hook socket's coordinates (`UN_SOCK`, `UN_TOKEN`, `UN_ENDPOINT_FILE`).
+  `<state>/askpass/gudo-askpass`: a two-line script, rewritten on start, that runs
+  `gudo-hook askpass "$@"` (also `gudo-hostd askpass`). `GUDO_ASKPASS` names it too, and the
+  pane gets the hook socket's coordinates (`GUDO_SOCK`, `GUDO_TOKEN`, `GUDO_ENDPOINT_FILE`).
   The user's dotfiles run after and can override any of them. `[askpass] enabled = false`
   in `config.toml` turns all of this off.
-- **Helper.** `un-hook askpass <prompt>` sends one JSON line on the hook socket
+- **Helper.** `gudo-hook askpass <prompt>` sends one JSON line on the hook socket
   (`AskpassCall{v, token, pane, askpass: {prompt, program, confirm, probe}}`; `program` is its
   parent's command line, `confirm` is `SSH_ASKPASS_PROMPT=confirm`) and reads one line back:
   `{"answer": "…"}` (printed with a newline, exit 0), `"cancelled"` (exit 1) or `"terminal"`.
@@ -2109,8 +2126,8 @@ instead of the user typing blind into the terminal. Two sources, one wire (`Caps
 sudo only uses `SUDO_ASKPASS` with `-A`. With shell integration (`[askpass] sudo = true`, the
 default), interactive bash, zsh and fish get a `sudo` function: zsh through our own `ZDOTDIR`
 whose `.zshenv` sources Ghostty's, bash through our `ENV` file that sources `ghostty.bash`,
-fish through `vendor_conf.d/un-askpass.fish` next to Ghostty's. It runs `sudo -A` only when
-`un-askpass --available` says an app could answer now; otherwise, and whenever the arguments
+fish through `vendor_conf.d/gudo-askpass.fish` next to Ghostty's. It runs `sudo -A` only when
+`gudo-askpass --available` says an app could answer now; otherwise, and whenever the arguments
 before the command already include `-A`, `-S`/`--stdin` or `-n`, it is plain `sudo`.
 
 Trade-offs: the probe costs a few ms per `sudo`; aliases such as `sudo='sudo -E'` still reach
@@ -2143,14 +2160,14 @@ driving guest; timeout, abandoned (helper hangs up), bad token;
 no app → `"terminal"` and `--available` false, the app leaving mid-prompt → `"terminal"`
 after the grace; a program that turns echo off and prints `Password:` gets `Detected`,
 `TypeSecret` reaches it without echo, `NotHidden` at a shell prompt, a client attaching late is
-told. `crates/hostd/tests/askpass.rs` runs the real `un-hook`: sudo- and ssh-like scripts that
+told. `crates/hostd/tests/askpass.rs` runs the real `gudo-hook`: sudo- and ssh-like scripts that
 call `$SUDO_ASKPASS`/`$SSH_ASKPASS` get the app's answer (or fail on Cancel), the terminal
 fallback reads with echo off, and interactive zsh's `sudo` becomes `sudo -A` only while an app
 can answer (`-S` left alone). Goldens: `proto/tests/golden_askpass.rs`.
 
 ### 9.1 The app's browser (`proto::browser`)
 
-Panes get `BROWSER=<state>/browser/un-open`, a script running `un-hook open-url "$@"`. The shim
+Panes get `BROWSER=<state>/browser/gudo-open`, a script running `gudo-hook open-url "$@"`. The shim
 sends a `BrowserCall` (`{"browser":{"open":{"url":…}}}`) on the hook socket; the daemon pushes
 `ServerCtl::Browser(Open)` to one of the owner's connections with `Caps::BROWSER` that shows the
 pane's session (the one that last sized the pane, else the newest; never a guest's, whose
@@ -2177,11 +2194,11 @@ Browser tools: `{"browser":{"tool":{"name":…,"args":{…}}}}` is pushed as
 120 s, the caller hanging up (`CallClosed` pushed) or the connection leaving. Daemons offering
 this say `DaemonFeatures::BROWSER`.
 
-The callers are `un-hook mcp` (tools `browser_navigate`, `browser_snapshot`, `browser_find`,
+The callers are `gudo-hook mcp` (tools `browser_navigate`, `browser_snapshot`, `browser_find`,
 `browser_get_text`, `browser_click`, `browser_double_click`, `browser_hover`, `browser_type`,
 `browser_fill`, `browser_press`, `browser_scroll`, `browser_scroll_to`, `browser_wait`,
 `browser_screenshot`, `browser_zoom`, `browser_tabs`, `browser_dialog`, `browser_upload`,
-`browser_console`, `browser_network`; read-only ones carry `readOnlyHint`) and `un-hook browser <verb> [json | key=value …]` for
+`browser_console`, `browser_network`; read-only ones carry `readOnlyHint`) and `gudo-hook browser <verb> [json | key=value …]` for
 shells (Codex, scripts). Semantics follow Anthropic's browser toolset: `role "name" [ref_N]`
 snapshots, targets `{"type":"ref","ref":…}` or `{"type":"coordinate","x","y"}` in screenshot
 pixels, a stale ref is an error asking for a new snapshot, actions answer with what changed.
@@ -2196,11 +2213,11 @@ the tools.
 
 ### Terminal tools (`daemon::term`)
 
-Agents drive the terminal they run in through `un-hook mcp`: one `TermCall {v, token, pane, term:
+Agents drive the terminal they run in through `gudo-hook mcp`: one `TermCall {v, token, pane, term:
 {tool, args}}` line per call on the hook socket, answered by `TermReply::Ok(value)` or
 `TermReply::Error({code, message, retryable, hint})`. Design and the competitors it is measured
 
-- **Identity.** `UN_TOKEN` in a pane is that pane's own token (an HMAC of its id under
+- **Identity.** `GUDO_TOKEN` in a pane is that pane's own token (an HMAC of its id under
   `hook.token`), so a pane's programs cannot act as another pane. `hook.token` itself, which only
   the state directory holds, speaks for any pane. Every hook-socket caller is checked this way,
   and the socket (0600, in the 0700 state dir or a fresh 0700 temporary dir) refuses peers of
@@ -2281,9 +2298,9 @@ Agents drive the terminal they run in through `un-hook mcp`: one `TermCall {v, t
   to the tab's tray or restores it, and `pane_raise {pane}` brings it to the front and out of the
   tray. There is no tool that focuses a pane: the keyboard is the user's. Every pane listing
   carries `float` (the window's id, panes, frame, `minimized`, `pinned`, `closeWhenDone`, or
-  `null`). From a shell, `un float run [--close-when-done] [--frame x,y,w,h] [--focus] [--over P]
+  `null`). From a shell, `gudo float run [--close-when-done] [--frame x,y,w,h] [--focus] [--over P]
   -- <command…>` opens a shell in a window and runs the command in it (so its output stays to
-  read, and its end closes the window); `un float pane|move|dock|min|restore|pin|list` arrange
+  read, and its end closes the window); `gudo float pane|move|dock|min|restore|pin|list` arrange
   and list windows.
 - **Workers.** `agent_spawn` starts Claude or Codex in a pane beside the caller (owned, no
   focus) and gives it its first prompt once it is idle and its screen has settled; a worker on
@@ -2294,9 +2311,9 @@ Agents drive the terminal they run in through `un-hook mcp`: one `TermCall {v, t
 - **MCP.** Every tool has an `outputSchema` and returns `structuredContent` (typed values for
   code-mode harnesses) plus text that leads with a summary and then the output verbatim.
   Annotations mark the read-only tools; `agents::ACTING_TOOLS` are the ones Claude's permission
-  prompt asks about. The server is `unnamed` (`agents::mcp_server_name`); registering with
-  an agent removes a registration under the old `unnamed_drawings` first. Other harnesses add
-  it by hand, e.g. pi: `pi mcp add unnamed -- un-hook mcp` from a pane.
+  prompt asks about. The server is `gudo` (`agents::mcp_server_name`); registering with
+  an agent removes a registration under the old `gudo_drawings` first. Other harnesses add
+  it by hand, e.g. pi: `pi mcp add gudo -- gudo-hook mcp` from a pane.
 - **Tests.** `tests/it/term.rs`; `tests/it/drive.rs` (allow once runs exactly the shown action,
   a replayed answer unlocks nothing, deny, for this pane, the password prompt refused anyway, the
   audit records; a guest approver refused and not sent the request; expiry and hang-up withdraw
@@ -2305,14 +2322,14 @@ Agents drive the terminal they run in through `un-hook mcp`: one `TermCall {v, t
   (`a_drive_request_is_answered_from_the_lock_screen`: Allow once from the lock screen, the token
   spent, a long action offered without Approve); goldens `proto/tests/golden_drive.rs`.
 
-### Scripting: `un --json`, `un events`, the TypeScript client
+### Scripting: `gudo --json`, `gudo events`, the TypeScript client
 
-**`--json`.** The read commands print one JSON document: `un ls`, `marks`, `output`, `search`,
+**`--json`.** The read commands print one JSON document: `gudo ls`, `marks`, `output`, `search`,
 `links`, `ports`, `inbox`, `git status`, `who`, `audit`, `daemon info`. Every document is
 `{"v": 1, "kind": "<command>", …}` with camelCase fields; optional fields are present as `null`.
 Version 1 only gains fields and kinds; renaming, retyping or dropping one is version 2. Ids are
-`p12`, `t3`, `s1`. Goldens: `crates/un/tests/golden/*.json` (`crates/un/src/json.rs`). `un fs`,
-`un grants` and the layout-changing commands print text.
+`p12`, `t3`, `s1`. Goldens: `crates/cli/tests/golden/*.json` (`crates/cli/src/json.rs`). `gudo fs`,
+`gudo grants` and the layout-changing commands print text.
 
 **Events** (`proto::script`, `SCRIPT_EVENTS_VERSION` 1). One JSON object per event:
 `{"v":1, "seq", "at" (Unix ms), "session"?: "s1", "pane"?: "p4", "type", …}`:
@@ -2329,15 +2346,15 @@ Version 1 only gains fields and kinds; renaming, retyping or dropping one is ver
 
 New types may appear; ignore unknown ones. Two sources, one schema:
 
-- `un events [--type T]… [--json]` (a client): what its connection is shown, so roles and scopes
+- `gudo events [--type T]… [--json]` (a client): what its connection is shown, so roles and scopes
   are the daemon's (a pane-scoped guest hears only its pane). The attached session; what is there
   at the start is the baseline, not events; a reconnect says `events.lost`.
   (`client_core::script::EventMapper`.)
 - `events_wait` (terminal tools, MCP): the caller's session, from the daemon's ring; `seq` is
   the daemon's and skips other sessions' events.
 
-**TypeScript client** (`sdk/typescript/un.ts`, no dependencies, Node ≥ 22.18, Bun, Deno), for
-`UN_ENDPOINT_FILE`/`UN_SOCK`, `UN_TOKEN` and `UN_PANE_ID` and speaks the hook socket's line
+**TypeScript client** (`sdk/typescript/gudo.ts`, no dependencies, Node ≥ 22.18, Bun, Deno), for
+`GUDO_ENDPOINT_FILE`/`GUDO_SOCK`, `GUDO_TOKEN` and `GUDO_PANE_ID` and speaks the hook socket's line
 protocol, so a script has an agent's rights exactly (its own panes; the user's after the owner
 says yes). `term.run(cmd)`, `term.panes.list/split/read/wait/send/close`,
 `term.agents.spawn/prompt/wait/result`, typed results, `TermError {code, retryable, hint}`, and
@@ -2362,7 +2379,7 @@ An agent on host A driving a pane on host B. Not built; the safe shape:
 - **Revocation and audit.** B audits every action under the guest principal and grant id;
   revoking the grant on B ends A's access at once (the live checks of §6.2). A also audits what
   it asked B to do, so both sides can account for a cross-host action.
-- **Tools.** A `host` argument (from `un hosts`) on the terminal tools, forwarded over A's
+- **Tools.** A `host` argument (from `gudo hosts`) on the terminal tools, forwarded over A's
   connection to B; results and the event stream stay per host; nothing is ever fanned out to
   every host at once. Open: how A's owner sees B's pending requests (B's own push to B's owner
   is the default; A forwarding them would need B to trust A's devices).

@@ -4,7 +4,7 @@ import Foundation
 import SwiftUI
 import TerminalRenderer
 import UniformTypeIdentifiers
-import UnnamedCore
+import GudoCore
 #if os(iOS)
 import UIKit
 #else

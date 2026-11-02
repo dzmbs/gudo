@@ -1,13 +1,13 @@
 ---
-name: unnamed-browser
-description: Use the browser pane beside this terminal in the Unnamed app (iPad, iPhone, Mac) to open, read and operate web pages, including this host's localhost dev servers. Use it to check a web change, reproduce a UI bug, read docs behind a sign-in the user already has, or fill a form, while the user watches.
+name: gudo-browser
+description: Use the browser pane beside this terminal in the Gudo app (iPad, iPhone, Mac) to open, read and operate web pages, including this host's localhost dev servers. Use it to check a web change, reproduce a UI bug, read docs behind a sign-in the user already has, or fill a form, while the user watches.
 ---
 
 # Browser beside the terminal
 
 The terminal runs inside an app the user watches. The `browser_*` tools (MCP server
-`unnamed`) drive a real page shown beside this terminal there. Without MCP, the same
-verbs work from the shell: `un-hook browser <verb> [json | key=value …]`.
+`gudo`) drive a real page shown beside this terminal there. Without MCP, the same
+verbs work from the shell: `gudo-hook browser <verb> [json | key=value …]`.
 
 ## How to work
 
@@ -49,10 +49,10 @@ verbs work from the shell: `un-hook browser <verb> [json | key=value …]`.
   snapshot line with its ref.
 
 ```sh
-un-hook browser navigate url=localhost:5173
-un-hook browser snapshot filter=visible
-un-hook browser click ref=ref_4
-un-hook browser type text="hello" submit=true
-un-hook browser dialog accept=true
-un-hook browser screenshot annotate=true   # prints the saved image's path
+gudo-hook browser navigate url=localhost:5173
+gudo-hook browser snapshot filter=visible
+gudo-hook browser click ref=ref_4
+gudo-hook browser type text="hello" submit=true
+gudo-hook browser dialog accept=true
+gudo-hook browser screenshot annotate=true   # prints the saved image's path
 ```

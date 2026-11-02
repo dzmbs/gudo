@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 import os
-import UnnamedCore
+import GudoCore
 
 // Native password prompts (docs/DAEMON.md §9): a program in a pane asks for a secret through
 // the daemon's askpass helper (`sudo -A`, ssh, git over HTTPS), or prints a password prompt
@@ -9,7 +9,7 @@ import UnnamedCore
 // straight from the field to the daemon and are never logged or kept, unless the user turns on
 // "Remember in Keychain" for that host and prompt (`AskpassVault`).
 
-/// The askpass half of `UnnamedCore.DaemonClient`, so the session can be tested with a fake.
+/// The askpass half of `GudoCore.DaemonClient`, so the session can be tested with a fake.
 nonisolated public protocol AskpassClientAPI: AnyObject, Sendable {
     func setAskpassListener(listener: any AskpassListener)
     func openAskpass() -> [SecretPrompt]

@@ -20,7 +20,7 @@ final class SplitWebLeavesTests: XCTestCase {
     private var window: NSWindow!
 
     override func setUp() async throws {
-        try XCTSkipIf(!LaunchOptions.mock, "needs the mock hosts (TEST_RUNNER_UNNAMED_MOCK=1)")
+        try XCTSkipIf(!LaunchOptions.mock, "needs the mock hosts (TEST_RUNNER_GUDO_MOCK=1)")
         model = WindowModel(app: .shared)
         model.start()
         window = show(WindowContent(request: nil, model: model).environment(AppModel.shared))
@@ -129,7 +129,7 @@ final class SplitWebLeavesTests: XCTestCase {
     func testEditorRightAfterSplit() async throws {
         try perform(.splitRight)
         await pump(0.03)
-        let member = EditorMember(hostId: "studio", folder: "~/projects/unnamed")
+        let member = EditorMember(hostId: "studio", folder: "~/projects/gudo")
         let editor = model.showEditor(member, placement: .split)
         let browser = editor.makeBrowser(for: URL(string: "about:blank")!)
         await pump(2)

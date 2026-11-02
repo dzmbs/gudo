@@ -29,21 +29,21 @@ struct BrowserNativeInput {
     static func `for`(_ page: any BrowserPageContent) async -> BrowserNativeInput? {
         let token = UUID().uuidString
         do {
-            _ = try await page.run("window.__unInputToken = token", arguments: ["token": token], in: world)
+            _ = try await page.run("window.__gudoInputToken = token", arguments: ["token": token], in: world)
         } catch {
             return nil
         }
         for window in NSApp.windows {
             guard let content = window.contentView else { continue }
             for view in webViews(in: content) {
-                let mark = try? await view.evaluateJavaScript("window.__unInputToken", in: nil, contentWorld: world) as? String
+                let mark = try? await view.evaluateJavaScript("window.__gudoInputToken", in: nil, contentWorld: world) as? String
                 if mark == token { return BrowserNativeInput(view: view) }
             }
         }
         return nil
     }
 
-    private static let world = WKContentWorld.world(name: "unnamed-input")
+    private static let world = WKContentWorld.world(name: "gudo-input")
 
     private static func webViews(in view: NSView) -> [WKWebView] {
         if let web = view as? WKWebView { return [web] }

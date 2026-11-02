@@ -1,6 +1,6 @@
 import Observation
 import PaneLayout
-import UnnamedCore
+import GudoCore
 
 /// A `LayoutStore` whose source of truth is the daemon (docs/DAEMON.md §1): `apply` sends the
 /// op to the daemon and `session` is whatever `LayoutChanged` last said. Ops that only move
@@ -46,10 +46,10 @@ public final class DaemonLayoutStore: LayoutStore {
     /// How long a layout waits for its floats before it shows anyway.
     @ObservationIgnored public var floatsWait = Duration.milliseconds(250)
     @ObservationIgnored private var pending: [(id: UInt64, change: Pending)] = []
-    @ObservationIgnored private let send: (UnnamedCore.LayoutOp) -> UInt64
+    @ObservationIgnored private let send: (GudoCore.LayoutOp) -> UInt64
 
     /// `send` delivers an op to the daemon and returns its id (`DaemonClient.op`).
-    public init(send: @escaping (UnnamedCore.LayoutOp) -> UInt64) {
+    public init(send: @escaping (GudoCore.LayoutOp) -> UInt64) {
         self.send = send
         let empty = Session(tabs: [], activeTabId: nil)
         session = empty

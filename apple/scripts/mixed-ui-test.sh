@@ -5,12 +5,12 @@
 #
 #   apple/scripts/mixed-ui-test.sh [simulator-udid]
 #
-# Needs `cargo build -p hostd` (or UN_HOSTD_BIN) and the app project (xcodegen).
+# Needs `cargo build -p hostd` (or GUDO_HOSTD_BIN) and the app project (xcodegen).
 set -euo pipefail
 
 apple="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 sim="${1:-$(xcrun simctl list devices available | grep -m1 'iPad Pro 13-inch' | grep -oE '[0-9A-F-]{36}')}"
-root="$(mktemp -d "${TMPDIR:-/tmp}/un-ui-mixed.XXXXXX")"
+root="$(mktemp -d "${TMPDIR:-/tmp}/gudo-ui-mixed.XXXXXX")"
 a="$root/alpha" b="$root/beta"
 daemon() { local port=$1; shift; PORT=$port SHELL_ARGS= "$apple/scripts/local-daemon.sh" "$@"; }
 

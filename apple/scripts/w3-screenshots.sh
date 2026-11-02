@@ -14,17 +14,17 @@ device=$1 prefix=$2 out=$3
 shift 3
 screens=${*:-"inbox files diff editor browser links launchAgent"}
 mkdir -p "$out"
-state="$(mktemp -d "${TMPDIR:-/tmp}/un-w3shots.XXXXXX")"
+state="$(mktemp -d "${TMPDIR:-/tmp}/gudo-w3shots.XXXXXX")"
 "$apple/scripts/w3-fixtures.sh" "$state" >/dev/null
 export PORT="${PORT:-47614}"
-bin="${UN_HOSTD_BIN:-$apple/../target/debug/unnamed-hostd}"
+bin="${GUDO_HOSTD_BIN:-$apple/../target/debug/gudo-hostd}"
 daemon() { PORT="${PORT:-47614}" "$apple/scripts/w3-daemon.sh" "$1" "$state"; }
 ticket="$(daemon start)"
 . "$apple/scripts/lib/cleanup.sh"
 on_exit 'daemon stop; pkill -f "http.server 18766" 2>/dev/null || true; rm -rf "$state"'
 
 app() {
-  xcrun simctl launch --terminate-running-process "$device" dev.unnamed.app \
+  xcrun simctl launch --terminate-running-process "$device" dev.gudo.app \
     -testTicket "$ticket" -testRelay disabled -noAutoFocus YES "$@" >/dev/null
 }
 

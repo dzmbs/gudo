@@ -1,7 +1,7 @@
 import Foundation
 import HostKit
 import PaneLayout
-import UnnamedCore
+import GudoCore
 
 /// Drawing commands on the focused pane (menu, ⌃⌘D, command palette). ⌃⌘D rather than the
 /// ⇧⌘D the contract names: ⇧⌘D is Ghostty's Split Down.

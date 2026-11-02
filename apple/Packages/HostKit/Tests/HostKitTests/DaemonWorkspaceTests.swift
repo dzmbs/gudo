@@ -2,7 +2,7 @@ import Foundation
 import Synchronization
 import Testing
 @testable import HostKit
-import UnnamedCore
+import GudoCore
 
 /// The workspace hub over a fake client: one listener per client, pushes fanned out, attention
 /// unseen counts, seen requests, directory watches re-established after a reconnect, and pane
@@ -184,7 +184,7 @@ nonisolated final class FakeWorkspaceAPI: DaemonClientAPI, DaemonWorkspaceAPI, W
 
     // DaemonClientAPI
     func attach(sessionId: UInt64?) {}
-    func op(op: UnnamedCore.LayoutOp) -> UInt64 { 0 }
+    func op(op: GudoCore.LayoutOp) -> UInt64 { 0 }
     func subscribe(paneId: UInt64) {}
     func unsubscribe(paneId: UInt64) {}
     func setView(focused: UInt64?, visible: [UInt64]) {}
@@ -204,7 +204,7 @@ nonisolated final class FakeWorkspaceAPI: DaemonClientAPI, DaemonWorkspaceAPI, W
     func forward(localPort: UInt16, target: ForwardTarget) throws -> UInt16 { localPort }
     func stopForward(localPort: UInt16) -> Bool { true }
     func forwards() -> [ForwardInfo] { [] }
-    func gitStatus(path: String) async throws -> UnnamedCore.GitStatus { throw WorkspaceError.Disconnected }
+    func gitStatus(path: String) async throws -> GudoCore.GitStatus { throw WorkspaceError.Disconnected }
     func gitDiff(request: GitDiffRequest) async throws -> GitDiff { throw WorkspaceError.Disconnected }
     func listTurns(paneId: UInt64) async throws -> [TurnInfo] { [] }
     func turnDiff(paneId: UInt64, turn: UInt64?, context: UInt32, hunks: Bool) async throws -> GitDiff { throw WorkspaceError.Disconnected }

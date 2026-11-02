@@ -1,6 +1,6 @@
 //! `cargo xtask notices [--check]`: the licence notices that ship with our binaries.
 //!
-//! - `crates/hostd/THIRD_PARTY_NOTICES.txt`, embedded in the helper (`unnamed-hostd
+//! - `crates/hostd/THIRD_PARTY_NOTICES.txt`, embedded in the helper (`gudo-hostd
 //!   licenses`): the native code it links (`scripts/notices/native.txt`, kept by hand) and its
 //!   Rust crates.
 //! - `apple/App/Resources/THIRD_PARTY_NOTICES.txt`, bundled in the app: the same plus the
@@ -30,14 +30,14 @@ pub fn notices(check: bool) -> Result<()> {
     let browser = npm_packages("agent-browser", true)?;
 
     let helper = [
-        section("Native code linked into unnamed-hostd", &native),
-        section("Rust crates in unnamed-hostd", &hostd),
+        section("Native code linked into gudo-hostd", &native),
+        section("Rust crates in gudo-hostd", &hostd),
     ]
     .concat();
     let app = [
         section("Native code linked into the app and its helpers", &native),
-        section("Rust crates in the app (UnnamedCore)", &core),
-        section("Rust crates in the bundled helpers (unnamed-hostd)", &hostd),
+        section("Rust crates in the app (GudoCore)", &core),
+        section("Rust crates in the bundled helpers (gudo-hostd)", &hostd),
         section("npm packages in the Excalidraw canvas bundle", &excalidraw),
         section("npm packages in the agent browser scripts", &browser),
     ]

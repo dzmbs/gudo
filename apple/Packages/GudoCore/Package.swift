@@ -2,21 +2,21 @@
 import PackageDescription
 
 // The Rust core (crates/apple-ffi) for the app. `cargo xtask build-xcframework` builds
-// UnnamedCore.xcframework and Sources/UnnamedCore/UnnamedCore.swift (both gitignored);
+// GudoCore.xcframework and Sources/GudoCore/GudoCore.swift (both gitignored);
 // `--macos-only` is enough for `swift test`. See docs/APPLE-FFI.md.
 let package = Package(
-    name: "UnnamedCore",
+    name: "GudoCore",
     platforms: [.macOS(.v26), .iOS(.v26)],
     products: [
-        .library(name: "UnnamedCore", targets: ["UnnamedCore"]),
+        .library(name: "GudoCore", targets: ["GudoCore"]),
     ],
     targets: [
-        // Static library + C header (module UnnamedCoreFFI). Exports only the UniFFI API;
+        // Static library + C header (module GudoCoreFFI). Exports only the UniFFI API;
         // its libghostty-vt and Rust std are private to it.
-        .binaryTarget(name: "UnnamedCoreFFI", path: "UnnamedCore.xcframework"),
+        .binaryTarget(name: "GudoCoreFFI", path: "GudoCore.xcframework"),
         .target(
-            name: "UnnamedCore",
-            dependencies: ["UnnamedCoreFFI"],
+            name: "GudoCore",
+            dependencies: ["GudoCoreFFI"],
             linkerSettings: [
                 // iroh/netdev (network paths and interfaces, DNS), ring/rustls (system roots).
                 .linkedFramework("CoreFoundation"),
@@ -26,6 +26,6 @@ let package = Package(
                 .linkedLibrary("resolv"),
             ]
         ),
-        .testTarget(name: "UnnamedCoreTests", dependencies: ["UnnamedCore"]),
+        .testTarget(name: "GudoCoreTests", dependencies: ["GudoCore"]),
     ]
 )

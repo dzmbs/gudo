@@ -19,7 +19,7 @@ async fn whoami(creds: Credentials) -> Result<String, SshError> {
 }
 
 #[tokio::test]
-#[cfg_attr(not(ssh_test_host), ignore = "needs UN_SSH_TEST_HOST (docs/SSH.md)")]
+#[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
 async fn password() {
     let env = env();
     let user = whoami(Credentials::new().with(AuthMethod::Password(env.password.clone())))
@@ -34,7 +34,7 @@ async fn password() {
 }
 
 #[tokio::test]
-#[cfg_attr(not(ssh_test_host), ignore = "needs UN_SSH_TEST_HOST (docs/SSH.md)")]
+#[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
 async fn every_key_type() {
     let env = env();
     for name in ["id_ed25519", "id_ecdsa", "id_rsa"] {
@@ -60,7 +60,7 @@ async fn every_key_type() {
 }
 
 #[tokio::test]
-#[cfg_attr(not(ssh_test_host), ignore = "needs UN_SSH_TEST_HOST (docs/SSH.md)")]
+#[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
 async fn falls_through_to_the_next_method() {
     let env = env();
     // An unknown key first, then the right one.
@@ -73,7 +73,7 @@ async fn falls_through_to_the_next_method() {
 }
 
 #[tokio::test]
-#[cfg_attr(not(ssh_test_host), ignore = "needs UN_SSH_TEST_HOST (docs/SSH.md)")]
+#[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
 async fn ssh_agent() {
     let env = env();
     let dir = tempfile::tempdir().unwrap();
@@ -157,7 +157,7 @@ fn openssh_p256(point: &[u8]) -> String {
 }
 
 #[tokio::test]
-#[cfg_attr(not(ssh_test_host), ignore = "needs UN_SSH_TEST_HOST (docs/SSH.md)")]
+#[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
 async fn external_signer_secure_enclave_style() {
     let env = env();
     let admin = env.connect().await;
@@ -201,7 +201,7 @@ impl HostKeyPrompt for Prompt {
 }
 
 #[tokio::test]
-#[cfg_attr(not(ssh_test_host), ignore = "needs UN_SSH_TEST_HOST (docs/SSH.md)")]
+#[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
 async fn host_keys_tofu_pin_and_mismatch() {
     let env = env();
     let dir = tempfile::tempdir().unwrap();

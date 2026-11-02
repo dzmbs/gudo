@@ -1,6 +1,6 @@
 import XCTest
 
-/// The developer-workflow screens on the iPad against a real `unnamed-hostd` with a test
+/// The developer-workflow screens on the iPad against a real `gudo-hostd` with a test
 /// repository, a stand-in `claude` that drives the daemon's hooks, and a stand-in `code
 /// serve-web` (apple/scripts/w3-ui-test.sh sets them up and passes `PAIR_TICKET` and
 /// `W3_REPO`). Skipped without a ticket.

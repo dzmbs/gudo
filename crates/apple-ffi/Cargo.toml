@@ -1,16 +1,16 @@
 [package]
 name = "apple-ffi"
 version = "0.0.0"
-description = "UniFFI surface over client-core and ssh for the Swift app (UnnamedCore.xcframework)"
+description = "UniFFI surface over client-core and ssh for the Swift app (GudoCore.xcframework)"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
 [lib]
-# The Swift module is `UnnamedCore` (uniffi.toml); the Rust library name only shows up in
-# the static archive's file name, libunnamed_core.a.
-name = "unnamed_core"
+# The Swift module is `GudoCore` (uniffi.toml); the Rust library name only shows up in
+# the static archive's file name, libgudo_core.a.
+name = "gudo_core"
 crate-type = ["lib", "staticlib"]
 
 [dependencies]

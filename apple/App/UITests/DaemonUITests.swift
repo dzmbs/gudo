@@ -1,6 +1,6 @@
 import XCTest
 
-/// The app against a real `unnamed-hostd` (apple/scripts/daemon-ui-test.sh starts one on the Mac,
+/// The app against a real `gudo-hostd` (apple/scripts/daemon-ui-test.sh starts one on the Mac,
 /// passes its ticket as `TEST_RUNNER_PAIR_TICKET`, and restarts it while the test waits): pair,
 /// type and see the echo, ⌘D splits on the daemon, and a dropped connection shows the stale
 /// pane dimmed, then live again. Skipped without a ticket.

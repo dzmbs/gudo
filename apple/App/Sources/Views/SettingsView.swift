@@ -1,7 +1,7 @@
 import DesignSystem
 import SwiftUI
 import TerminalCore
-import UnnamedCore
+import GudoCore
 
 /// Ghostty's config surfaced as native settings. Each control shows the Ghostty key it mirrors, so
 /// a Ghostty user can map their config file; the values are the same names and defaults.

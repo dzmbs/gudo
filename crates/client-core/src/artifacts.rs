@@ -52,7 +52,7 @@ pub trait ArtifactListener: Send + Sync {
     fn on_artifact(&self, update: ArtifactUpdate);
 }
 
-/// An [`ArtifactListener`] that queues updates for async Rust consumers (`un`, tests).
+/// An [`ArtifactListener`] that queues updates for async Rust consumers (`gudo`, tests).
 pub struct ArtifactEventQueue {
     tx: mpsc::UnboundedSender<ArtifactUpdate>,
 }

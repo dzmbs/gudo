@@ -8,8 +8,8 @@ use std::time::Duration;
 /// devices dial the same way (`proto::TicketRelays`).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum RelayMode {
-    /// n0's public relays and address lookup (`presets::N0`): works across NATs with no open
-    /// inbound ports.
+    /// The product's relay ([`brand::RELAY_URL`]) and n0's address lookup (`presets::N0`): works
+    /// across NATs with no open inbound ports.
     #[default]
     Default,
     /// No relays and no address lookup: direct addresses only ("local only": LAN, Tailscale,
@@ -97,7 +97,7 @@ impl Default for PushConfig {
 /// # Examples
 ///
 /// ```
-/// let config = daemon::Config::new("/tmp/un-state");
+/// let config = daemon::Config::new("/tmp/gudo-state");
 /// assert_eq!(config.relay, daemon::RelayMode::Default);
 /// ```
 #[derive(Debug, Clone)]
@@ -519,19 +519,27 @@ impl Config {
 ///
 /// - `$XDG_STATE_HOME/<name>` when set (any OS);
 /// - Linux and other Unix: `~/.local/state/<name>` (XDG default);
-/// - macOS: `~/Library/Application Support/<name>`.
+/// - macOS: `~/Library/Application Support/<Name>`.
 pub fn default_state_dir() -> PathBuf {
-    if let Some(xdg) = std::env::var_os("XDG_STATE_HOME").filter(|v| !v.is_empty()) {
-        return PathBuf::from(xdg).join(brand::DIR_NAME);
+    state_dir_named(brand::MAC_DIR_NAME, brand::DIR_NAME)
+}
+
+/// [`default_state_dir`] under the product's earlier name.
+pub fn legacy_state_dir() -> PathBuf {
+    state_dir_named(brand::legacy::DIR_NAME, brand::legacy::DIR_NAME)
+}
+
+fn state_dir_named(mac: &str, xdg: &str) -> PathBuf {
+    if let Some(root) = std::env::var_os("XDG_STATE_HOME").filter(|v| !v.is_empty()) {
+        return PathBuf::from(root).join(xdg);
     }
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/"));
     if cfg!(target_os = "macos") {
-        home.join("Library/Application Support")
-            .join(brand::DIR_NAME)
+        home.join("Library/Application Support").join(mac)
     } else {
-        home.join(".local/state").join(brand::DIR_NAME)
+        home.join(".local/state").join(xdg)
     }
 }
 

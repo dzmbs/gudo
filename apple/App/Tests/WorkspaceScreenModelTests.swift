@@ -2,7 +2,7 @@ import DesignSystem
 import Foundation
 import HostKit
 import PaneLayout
-import UnnamedCore
+import GudoCore
 import Network
 import XCTest
 @testable import App
@@ -199,7 +199,7 @@ final class WorkspaceScreenModelTests: XCTestCase {
                 FakeWorkspaceClient.stat("/home/me/proj/new.txt", size: 3),
                 FakeWorkspaceClient.stat("/home/me/proj/.env", size: 3),
             ], truncated: false)
-            state.status = UnnamedCore.GitStatus(root: "/home/me/proj", branch: "main", head: "abc", upstream: nil, ahead: 0, behind: 0, files: [
+            state.status = GudoCore.GitStatus(root: "/home/me/proj", branch: "main", head: "abc", upstream: nil, ahead: 0, behind: 0, files: [
                 GitFileStatus(path: "src/deep/a.rs", origPath: nil, staged: .unmodified, unstaged: .modified),
                 GitFileStatus(path: "new.txt", origPath: nil, staged: .unmodified, unstaged: .untracked),
                 GitFileStatus(path: "README.md", origPath: nil, staged: .added, unstaged: .unmodified),
@@ -290,12 +290,12 @@ final class WorkspaceScreenModelTests: XCTestCase {
 
     func testDaemonDiffGetsLineNumbers() {
         let hunk = Hunk(oldStart: 10, oldLines: 3, newStart: 10, newLines: 4, header: "@@ -10,3 +10,4 @@ fn x", lines: [
-            UnnamedCore.DiffLine(kind: .context, text: "a"),
-            UnnamedCore.DiffLine(kind: .removed, text: "b"),
-            UnnamedCore.DiffLine(kind: .added, text: "B"),
-            UnnamedCore.DiffLine(kind: .added, text: "C"),
-            UnnamedCore.DiffLine(kind: .context, text: "d"),
-            UnnamedCore.DiffLine(kind: .noNewline, text: "\\ No newline at end of file"),
+            GudoCore.DiffLine(kind: .context, text: "a"),
+            GudoCore.DiffLine(kind: .removed, text: "b"),
+            GudoCore.DiffLine(kind: .added, text: "B"),
+            GudoCore.DiffLine(kind: .added, text: "C"),
+            GudoCore.DiffLine(kind: .context, text: "d"),
+            GudoCore.DiffLine(kind: .noNewline, text: "\\ No newline at end of file"),
         ])
         let file = DiffFile(FileDiff(path: "src/x.rs", oldPath: nil, change: .modified, binary: false, additions: 2, deletions: 1, hunks: [hunk], hunksOmitted: false))
         let lines = file.hunks[0].lines
@@ -329,7 +329,7 @@ final class WorkspaceScreenModelTests: XCTestCase {
     func testReviewGoesToTheTurnsAgent() async throws {
         let client = FakeWorkspaceClient()
         client.state.withLock { state in
-            state.status = UnnamedCore.GitStatus(root: "/home/me/proj", branch: "main", head: nil, upstream: nil, ahead: 1, behind: 0, files: [])
+            state.status = GudoCore.GitStatus(root: "/home/me/proj", branch: "main", head: nil, upstream: nil, ahead: 1, behind: 0, files: [])
             state.turns[4] = [TurnInfo(turn: 2, root: "/home/me/proj", startedAtMs: 1_000, endedAtMs: 2_000, startTree: "a", endTree: "b")]
         }
         let source = LiveDiffSource(app: .shared)
@@ -361,7 +361,7 @@ final class WorkspaceScreenModelTests: XCTestCase {
 
     func testReviewWithoutAnAgentSaysSo() async throws {
         let client = FakeWorkspaceClient()
-        client.state.withLock { $0.status = UnnamedCore.GitStatus(root: "/r", branch: nil, head: nil, upstream: nil, ahead: 0, behind: 0, files: []) }
+        client.state.withLock { $0.status = GudoCore.GitStatus(root: "/r", branch: nil, head: nil, upstream: nil, ahead: 0, behind: 0, files: []) }
         let source = LiveDiffSource(app: .shared)
         let context = try fakeContext(client)
         source.contextOverride = { context }
@@ -380,7 +380,7 @@ final class WorkspaceScreenModelTests: XCTestCase {
     func testEditorShowsInstallThenLoadsAndReusesTheSession() async throws {
         let client = FakeWorkspaceClient()
         client.state.withLock { state in
-            state.status = UnnamedCore.GitStatus(root: "/home/me/proj", branch: "main", head: nil, upstream: nil, ahead: 0, behind: 0, files: [])
+            state.status = GudoCore.GitStatus(root: "/home/me/proj", branch: "main", head: nil, upstream: nil, ahead: 0, behind: 0, files: [])
             state.editorDelay = .milliseconds(300)
         }
         let editor = LiveEditorSource(app: .shared)
@@ -706,6 +706,6 @@ final class WorkspaceScreenModelTests: XCTestCase {
     func testWorkspaceErrorsReadAsWords() {
         XCTAssertEqual(ScreenError.describe(WorkspaceError.Unavailable(message: "git is not installed")), "git is not installed")
         XCTAssertTrue(ScreenError.describe(WorkspaceError.Disconnected).contains("not connected"))
-        XCTAssertFalse(ScreenError.describe(WorkspaceError.NotFound(message: "x")).contains("UnnamedCore"))
+        XCTAssertFalse(ScreenError.describe(WorkspaceError.NotFound(message: "x")).contains("GudoCore"))
     }
 }

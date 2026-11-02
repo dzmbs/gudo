@@ -1,5 +1,5 @@
 import PaneLayout
-import UnnamedCore
+import GudoCore
 
 /// The daemon's layout (`SessionLayout`, flattened split trees) as the app's `PaneLayout`
 /// model, and the app's ops as the daemon's. Both sides share the vocabulary
@@ -36,18 +36,18 @@ nonisolated enum LayoutConversion {
 
     /// The daemon op for a local one, given the session it applies to. Nil when the op has no
     /// effect (no focused pane, an unknown tab).
-    static func op(_ op: PaneLayout.LayoutOp, sessionId: UInt64, session: Session) -> UnnamedCore.LayoutOp? {
+    static func op(_ op: PaneLayout.LayoutOp, sessionId: UInt64, session: Session) -> GudoCore.LayoutOp? {
         let shell = PaneLaunch.shell(cwd: nil)
         switch op {
         case .split(let pane, let axis):
-            return .split(paneId: pane.rawValue, axis: UnnamedCore.Axis(axis), launch: shell)
+            return .split(paneId: pane.rawValue, axis: GudoCore.Axis(axis), launch: shell)
         case .close(let pane):
             return .closePane(paneId: pane.rawValue)
         case .focus(let pane):
             return .focus(paneId: pane.rawValue)
         case .focusDirection(let direction):
             guard let tab = session.activeTab else { return nil }
-            return .focusDirection(tabId: tab.id.rawValue, direction: UnnamedCore.Direction(direction))
+            return .focusDirection(tabId: tab.id.rawValue, direction: GudoCore.Direction(direction))
         case .resize(let pane, let direction, let amount):
             let own = session.window(containing: pane)?.id
             guard let tab = session.tab(containing: pane),
@@ -58,7 +58,7 @@ nonisolated enum LayoutConversion {
             // (right/down) exactly when a pane in the split's first half grows.
             let forward = direction == .right || direction == .down
             let delta = Float(amount) * (forward == inFirst ? 1 : -1)
-            return .resize(paneId: pane.rawValue, axis: UnnamedCore.Axis(direction.axis), delta: delta)
+            return .resize(paneId: pane.rawValue, axis: GudoCore.Axis(direction.axis), delta: delta)
         case .toggleZoom:
             guard let tab = session.activeTab else { return nil }
             return .toggleZoom(paneId: tab.focused.rawValue)
@@ -73,19 +73,19 @@ nonisolated enum LayoutConversion {
         case .movePaneToNewTab(let pane):
             return .breakPane(paneId: pane.rawValue)
         case .movePane(let pane, let target, let side):
-            return .movePane(paneId: pane.rawValue, target: target.rawValue, side: UnnamedCore.Direction(side))
+            return .movePane(paneId: pane.rawValue, target: target.rawValue, side: GudoCore.Direction(side))
         case .mergeTab(let tab, let target, let side):
-            return .mergeTab(tabId: tab.rawValue, target: target.rawValue, side: UnnamedCore.Direction(side))
+            return .mergeTab(tabId: tab.rawValue, target: target.rawValue, side: GudoCore.Direction(side))
         case .float(let pane, let frame):
-            return .floatPane(paneId: pane.rawValue, frame: frame.map(UnnamedCore.FloatFrame.init))
+            return .floatPane(paneId: pane.rawValue, frame: frame.map(GudoCore.FloatFrame.init))
         case .newFloat(let pane, let frame, let focus):
-            return .newFloat(paneId: pane.rawValue, launch: shell, frame: frame.map(UnnamedCore.FloatFrame.init), focus: focus, closeWhenDone: false)
+            return .newFloat(paneId: pane.rawValue, launch: shell, frame: frame.map(GudoCore.FloatFrame.init), focus: focus, closeWhenDone: false)
         case .setFloat(let pane, let frame, let minimized, let pinned):
-            return .setFloat(paneId: pane.rawValue, frame: frame.map(UnnamedCore.FloatFrame.init), minimized: minimized, pinned: pinned)
+            return .setFloat(paneId: pane.rawValue, frame: frame.map(GudoCore.FloatFrame.init), minimized: minimized, pinned: pinned)
         case .dock(let pane, let target, let side):
-            return .dockPane(paneId: pane.rawValue, target: target?.rawValue, side: UnnamedCore.Direction(side))
+            return .dockPane(paneId: pane.rawValue, target: target?.rawValue, side: GudoCore.Direction(side))
         case .movePaneToEdge(let pane, let tab, let side):
-            return .movePaneToEdge(paneId: pane.rawValue, tabId: tab.rawValue, side: UnnamedCore.Direction(side))
+            return .movePaneToEdge(paneId: pane.rawValue, tabId: tab.rawValue, side: GudoCore.Direction(side))
         }
     }
 
@@ -126,7 +126,7 @@ nonisolated enum LayoutConversion {
         }
     }
 
-    static func op(_ change: ProjectChange, sessionId: UInt64) -> UnnamedCore.LayoutOp {
+    static func op(_ change: ProjectChange, sessionId: UInt64) -> GudoCore.LayoutOp {
         switch change {
         case .put(let info):
             return .putProject(sessionId: sessionId, project: DaemonProject(
@@ -158,25 +158,25 @@ nonisolated enum LayoutConversion {
     }
 }
 
-nonisolated extension UnnamedCore.FloatFrame {
+nonisolated extension GudoCore.FloatFrame {
     init(_ frame: PaneLayout.FloatFrame) {
         self.init(x: Float(frame.x), y: Float(frame.y), w: Float(frame.width), h: Float(frame.height))
     }
 }
 
 nonisolated extension PaneLayout.Axis {
-    init(_ axis: UnnamedCore.Axis) {
+    init(_ axis: GudoCore.Axis) {
         self = axis == .horizontal ? .horizontal : .vertical
     }
 }
 
-nonisolated extension UnnamedCore.Axis {
+nonisolated extension GudoCore.Axis {
     init(_ axis: PaneLayout.Axis) {
         self = axis == .horizontal ? .horizontal : .vertical
     }
 }
 
-nonisolated extension UnnamedCore.Direction {
+nonisolated extension GudoCore.Direction {
     init(_ direction: PaneLayout.Direction) {
         switch direction {
         case .left: self = .left

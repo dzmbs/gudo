@@ -1,4 +1,4 @@
-//! The real askpass helper (`un-hook askpass`) against a daemon in this process: programs in
+//! The real askpass helper (`gudo-hook askpass`) against a daemon in this process: programs in
 //! a pane run `$SUDO_ASKPASS` / `$SSH_ASKPASS` like sudo and ssh do, the app answers, and the
 //! program gets the answer on the helper's stdout. Without an app the helper asks on the
 //! terminal with echo off.
@@ -14,7 +14,7 @@ use client_core::{AskpassEvent, ClientConfig};
 
 use support::{TestClient, start_with, ticket};
 
-const HELPER: &str = env!("CARGO_BIN_EXE_un-hook");
+const HELPER: &str = env!("CARGO_BIN_EXE_gudo-hook");
 
 fn prompts(c: &TestClient) -> Vec<SecretPrompt> {
     c.askpass
@@ -88,7 +88,7 @@ async fn programs_get_the_answer_typed_in_the_app() {
     app.wait_text(pane, "ssh got: pass phrase").await;
 
     // The `sudo` wrapper's probe: an app is here.
-    app.type_line(pane, "\"$UN_ASKPASS\" --available; echo \"avail=$?\"");
+    app.type_line(pane, "\"$GUDO_ASKPASS\" --available; echo \"avail=$?\"");
     app.wait_text(pane, "avail=0").await;
 }
 
@@ -99,7 +99,7 @@ async fn without_an_app_the_helper_reads_the_terminal_with_echo_off() {
     let mut cli = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
     let pane = cli.attach_and_follow().await;
 
-    cli.type_line(pane, "\"$UN_ASKPASS\" --available; echo \"avail=$?\"");
+    cli.type_line(pane, "\"$GUDO_ASKPASS\" --available; echo \"avail=$?\"");
     cli.wait_text(pane, "avail=1").await;
 
     cli.type_line(

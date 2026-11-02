@@ -135,7 +135,7 @@ pub trait MultiplayerListener: Send + Sync {
     fn on_multiplayer_event(&self, event: MultiplayerEvent);
 }
 
-/// A [`MultiplayerListener`] that queues events for async Rust consumers (`un`, tests).
+/// A [`MultiplayerListener`] that queues events for async Rust consumers (`gudo`, tests).
 pub struct MultiplayerEventQueue {
     tx: mpsc::UnboundedSender<MultiplayerEvent>,
 }

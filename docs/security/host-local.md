@@ -2,11 +2,11 @@
 
 What the daemon exposes on the host itself: the hook socket and its callers (agent hooks,
 askpass, the app's browser, the MCP server, terminal tools), files and git, port forwarding,
-the editor servers, the state directory, logs, the service and self-upgrade, and the `un` CLI.
+the editor servers, the state directory, logs, the service and self-upgrade, and the `gudo` CLI.
 
 ## Assets
 
-- **The state directory** (`~/Library/Application Support/unnamed`, `~/.local/state/unnamed`):
+- **The state directory** (`~/Library/Application Support/gudo`, `~/.local/state/gudo`):
   the daemon's iroh secret key, paired devices, grants and invites, pairing secrets, the
   audit log, `hook.token`, editor tokens.
 - **The hook token** and the per-pane tokens derived from it (HMAC-SHA256 of the pane id).
@@ -23,7 +23,7 @@ the editor servers, the state directory, logs, the service and self-upgrade, and
    localhost and rebind its own DNS name to 127.0.0.1.
 3. **Hostile content an agent reads**: terminal output, web pages, repository files. This is
    prompt injection, steering an agent's tool calls.
-4. **A hostile repository.** A `.git` directory or `.unnamed.json` from an unpacked archive or a
+4. **A hostile repository.** A `.git` directory or `.gudo.json` from an unpacked archive or a
    clone.
 5. **A multiplayer guest** with Viewer, Prompter, Driver or Approver on some scope.
 
@@ -35,7 +35,7 @@ temporary directory, never a predictable `/tmp` name. Every connection is checke
 `SO_PEERCRED`/`getpeereid`. A peer whose uid differs from ours, or whose uid cannot be read, is
 dropped before a byte is read. Every call carries a token checked in constant time.
 
-**Tokens.** A pane's environment holds only its own token (`UN_TOKEN`), never `hook.token`. The
+**Tokens.** A pane's environment holds only its own token (`GUDO_TOKEN`), never `hook.token`. The
 MCP server uses the pane's own token whenever its environment, or the agent's, belongs to the
 pane it serves. It reads `hook.token` only as a fallback, and never takes it from argv.
 
@@ -59,7 +59,7 @@ a host sends there anyway. While a guest holds the pane's lease, the owner's she
 while bob is driving", and the saved password is not offered with one tap: the guest may have
 typed the command that asks.
 
-**Repository commands.** A repository's `.unnamed.json` `setup` and `teardown` run only once
+**Repository commands.** A repository's `.gudo.json` `setup` and `teardown` run only once
 the owner trusts them, like VS Code's workspace trust or `direnv allow`. Trust is kept per
 repository (its main worktree) and SHA-256 of both commands, in `<state>/repo-trust.json`. New
 or changed commands do not run. The app first asks "Run Setup Commands for repo?" (or
@@ -116,7 +116,7 @@ rebinding cannot reach the editor (Ollama CVE-2024-28224, Tailscale TS-2022-004)
 - Browser snapshots and screenshots saved for agents are created as new 0600 files with
   random names: no symlink following, no world-readable page content.
 - A self-upgrade is staged with `O_CREAT|O_EXCL`.
-- `un` keeps its device key, tickets and invites as 0600 files in a 0700 directory.
+- `gudo` keeps its device key, tickets and invites as 0600 files in a 0700 directory.
 
 **Logs.** No tokens, answers or terminal text are logged at info level. The first-run pairing
 ticket (a bearer credential for ownership) is printed only when stderr is a terminal, never
@@ -140,11 +140,11 @@ SHA-256, must run here and report this OS and CPU, and is then swapped in atomic
   `cat hook.token`, read keys, or pair a device of their own. Pane scoping limits what the
   daemon offers, not what a shell can do. Prompters reach the same through the agent, subject
   to its approvals.
-- **Askpass phishing by a guest.** A Driver guest can run `un-askpass "[sudo] password:"` in a
+- **Askpass phishing by a guest.** A Driver guest can run `gudo-askpass "[sudo] password:"` in a
   shared pane. The owner's sheet now says the guest is driving, and offers no one-tap saved
   password, but the owner can still type one. A guest who released the lease or left before
   the program asked (a delayed `sleep 60; sudo …`) is not named.
-- **Repository scripts.** The `scripts` menu entries of `.unnamed.json` run only when the user
+- **Repository scripts.** The `scripts` menu entries of `.gudo.json` run only when the user
   picks one, without a trust prompt. The menu shows the script's name, which need not match its
   command.
 - **Trust is the same user's file.** `repo-trust.json` is in the state directory: a process
@@ -178,7 +178,7 @@ Made:
 Open:
 
 1. **Headless pairing.** With a service install, the first ticket now comes only from
-   `unnamed-hostd pair`; it is no longer printed into the log.
+   `gudo-hostd pair`; it is no longer printed into the log.
 
 ## Validation
 

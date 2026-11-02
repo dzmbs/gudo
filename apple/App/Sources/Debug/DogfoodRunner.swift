@@ -7,7 +7,7 @@ import TerminalRenderer
 
 /// In-app end-to-end scenario runner ("dogfood"), debug builds only.
 ///
-///     unnamed.app/Contents/MacOS/unnamed -dogfood core.json -dogfoodOut /tmp/out
+///     gudo.app/Contents/MacOS/gudo -dogfood core.json -dogfoodOut /tmp/out
 ///
 /// Drives the app through its real input paths (synthesized `NSEvent`s posted to its own queue: see
 /// `DogfoodEvents`), checks the terminal screen (`Terminal.visibleText`), the pane's process tree

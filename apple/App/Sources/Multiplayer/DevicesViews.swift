@@ -1,7 +1,7 @@
 import DesignSystem
 import HostKit
 import SwiftUI
-import UnnamedCore
+import GudoCore
 
 /// Settings › Devices: every host this device paired with, each opening its devices.
 struct DevicesSettingsSection: View {

@@ -2,7 +2,7 @@ import Foundation
 @testable import HostKit
 import PaneLayout
 import Testing
-import UnnamedCore
+import GudoCore
 
 /// The git grouping of a host's tabs (repository → worktree → tabs) and the PR helpers.
 @Suite struct RepoSidebarTests {

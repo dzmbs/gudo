@@ -203,7 +203,7 @@ does not speak HTTP/2 to Apple; only the deployed Worker talks to real APNs.
 
 Apple (developer.apple.com):
 
-1. Identifiers → the app id `dev.unnamed.app` (`apple/Brand.xcconfig`): enable **Push
+1. Identifiers → the app id `dev.gudo.app` (`apple/Brand.xcconfig`): enable **Push
    Notifications**; add an App Group / Keychain access group shared by the app, the
    Notification Service Extension and the widget.
 2. Keys → **+** → enable **Apple Push Notifications service (APNs)**, environment *Sandbox &
@@ -248,7 +248,7 @@ free account; APNs registration activates only with `PUSH_ENTITLEMENT = YES` and
 
 9. App: in `apple/Brand.xcconfig` set `PUSH_ENTITLEMENT = YES`,
    `PUSH_ENTITLEMENTS_FILE = App/Push.entitlements`, `PUSH_KEYCHAIN_GROUP =
-   <TEAMID>.dev.unnamed.shared`, `PUSH_APP_GROUP = group.dev.unnamed.app`; give the App and
+   <TEAMID>.dev.gudo.shared`, `PUSH_APP_GROUP = group.dev.gudo.app`; give the App and
    NotificationService targets the team (`DEVELOPMENT_TEAM`, automatic signing) and the same
    entitlements; `xcodegen`. Release builds need `aps-environment = production`.
 

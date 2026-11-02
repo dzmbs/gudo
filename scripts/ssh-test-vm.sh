@@ -38,7 +38,7 @@ fi
 systemctl enable --now ssh >/dev/null 2>&1
 # The tests open many connections in parallel; OpenSSH's default MaxStartups (10:30:100)
 # would randomly drop some of them before authentication.
-echo 'MaxStartups 200:30:400' >/etc/ssh/sshd_config.d/50-un-test.conf
+echo 'MaxStartups 200:30:400' >/etc/ssh/sshd_config.d/50-gudo-test.conf
 systemctl reload ssh
 id untest >/dev/null 2>&1 || useradd -m -s /bin/bash untest
 echo "untest:$password" | chpasswd
@@ -53,14 +53,14 @@ EOF
 arch="$(orb -m "$machine" uname -m)"
 mkdir -p "$dir/bin"
 (cd "$root" && cargo zigbuild --release -p hostd --target "$arch-unknown-linux-musl")
-orb -m "$machine" strip -o "$dir/bin/unnamed-hostd-$arch-linux" \
-    "$root/target/$arch-unknown-linux-musl/release/unnamed-hostd"
+orb -m "$machine" strip -o "$dir/bin/gudo-hostd-$arch-linux" \
+    "$root/target/$arch-unknown-linux-musl/release/gudo-hostd"
 
 ip="$(orb list | awk -v m="$machine" '$1 == m { print $NF }')"
 cat >"$dir/env" <<EOF
-export UN_SSH_TEST_HOST=$ip
-export UN_SSH_TEST_USER=untest
-export UN_SSH_TEST_PASSWORD=$password
-export UN_SSH_TEST_KEYS=$dir
+export GUDO_SSH_TEST_HOST=$ip
+export GUDO_SSH_TEST_USER=untest
+export GUDO_SSH_TEST_PASSWORD=$password
+export GUDO_SSH_TEST_KEYS=$dir
 EOF
 echo "wrote $dir/env (host $ip, user untest)"

@@ -67,7 +67,7 @@ public struct AgentRunAttributes: ActivityAttributes {
         self.task = task
     }
 
-    /// `unnamed://open/<host>/<pane>`-style deep link the activity opens.
+    /// `gudo://open/<host>/<pane>`-style deep link the activity opens.
     public func openURL(scheme: String) -> URL? {
         URL(string: "\(scheme)://open/\(hostId)/\(paneId)")
     }

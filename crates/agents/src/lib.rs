@@ -38,7 +38,7 @@ pub use event::{
 };
 pub use launch::{
     ACTING_TOOLS, AccountContext, CLAUDE_DIR_VAR, CODEX_DIR_VAR, CREDENTIAL_VARS, LaunchContext,
-    LaunchMode, LaunchSpec, SYSTEM_ACCOUNT, SupportFile, account_env, legacy_mcp_server_name,
+    LaunchMode, LaunchSpec, SYSTEM_ACCOUNT, SupportFile, account_env, legacy_mcp_server_names,
     mcp_args, mcp_server_name, pane_env, shell_quote,
 };
 pub use manifest::{

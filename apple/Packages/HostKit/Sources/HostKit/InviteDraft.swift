@@ -1,5 +1,5 @@
 import Foundation
-import UnnamedCore
+import GudoCore
 
 /// What the Share sheet is about to invite: the person, their roles, how much of the host,
 /// for how long and for how many devices. Turns into the daemon's `InviteOptions`.

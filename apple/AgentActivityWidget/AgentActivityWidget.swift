@@ -38,7 +38,7 @@ struct AgentRunActivity: Widget {
             LockScreenView(attributes: context.attributes, state: context.state)
                 .activityBackgroundTint(Look.background)
                 .activitySystemActionForegroundColor(Look.foreground)
-                .widgetURL(context.attributes.openURL(scheme: Bundle.main.object(forInfoDictionaryKey: "BrandURLScheme") as? String ?? "unnamed"))
+                .widgetURL(context.attributes.openURL(scheme: Bundle.main.object(forInfoDictionaryKey: "BrandURLScheme") as? String ?? "gudo"))
         } dynamicIsland: { context in
             let state = context.state
             return DynamicIsland {
@@ -135,7 +135,7 @@ private struct LockScreenView: View {
 /// not open (a build without the push entitlement, an unpaired host) shows a neutral line.
 struct AgentsActivity: Widget {
     private static let reader = AgentsActivityReader.shared()
-    private static let scheme = Bundle.main.object(forInfoDictionaryKey: "BrandURLScheme") as? String ?? "unnamed"
+    private static let scheme = Bundle.main.object(forInfoDictionaryKey: "BrandURLScheme") as? String ?? "gudo"
 
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: AgentsActivityAttributes.self) { context in

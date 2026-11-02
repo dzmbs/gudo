@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The app's own entitlements, used only when Brand.xcconfig sets PUSH_ENTITLEMENT = YES (needs
+     the paid team): push with the groups its extensions share (as App/Push.entitlements), and
+     universal links for `https://<web domain>/pair#…` and `/join#…`. -->
+<plist version="1.0">
+<dict>
+	<key>aps-environment</key>
+	<string>development</string>
+	<key>com.apple.developer.usernotifications.time-sensitive</key>
+	<true/>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(PUSH_KEYCHAIN_GROUP)</string>
+	</array>
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>$(PUSH_APP_GROUP)</string>
+	</array>
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:$(BRAND_WEB_DOMAIN)</string>
+	</array>
+</dict>
+</plist>

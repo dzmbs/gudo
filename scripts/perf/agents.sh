@@ -7,21 +7,21 @@
 set -u
 BIN=$1; LABEL=$2; NC=$3; NI=$4; NP=${5:-0}; NK=${6:-0}
 BENCH=$(cd "$(dirname $0)" && pwd)
-OUT=${BENCH_OUT:-${TMPDIR:-/tmp}/unnamed-bench}; mkdir -p $OUT
+OUT=${BENCH_OUT:-${TMPDIR:-/tmp}/gudo-bench}; mkdir -p $OUT
 REPOS=$OUT/agent-repos
 for r in $REPOS/repo-*; do (cd $r && git reset -q --hard && git clean -qfdx); done
 ROOT=$(mktemp -d $OUT/run-XXXX); STATE=$ROOT/state; CFG=$ROOT/cfg; mkdir -p $STATE $CFG
 export XDG_CONFIG_HOME=$CFG
 WINDOW=${WINDOW:-30}
-# The client: this build's `un` (it needs `send` and `split --cwd`) unless UN names another.
-UN=${UN:-$BIN/un}
+# The client: this build's `gudo` (it needs `send` and `split --cwd`) unless UN names another.
+UN=${UN:-$BIN/gudo}
 U() { $UN --no-relay "$@" < /dev/null; }
 PROMPT="This is a scratch repo for a performance benchmark; keep working without asking me anything. Do eight rounds, one after another. In each round add one feature to stats.py (round 1 line and character counts, then most common words, a --top option, reading files given as arguments, a JSON output flag, ignoring a stop-word list, per-file totals, and a --sort option), write unittest tests for it in test_stats.py, run the whole suite with python3 -m unittest -v and fix any failures. Only after round eight, write a short summary. Stay inside this directory and do not use the network."
 # A clean environment: nothing from the shell that runs this bench leaks into the agents.
 env -i HOME=$HOME USER=$USER LOGNAME=$USER SHELL=/bin/zsh TERM=xterm-256color LANG=en_US.UTF-8 \
   TMPDIR=$TMPDIR PATH=$HOME/.local/bin:$HOME/.kimi-code/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin \
-  ANTHROPIC_MODEL=haiku UN_LOG=warn \
-  $BIN/unnamed-hostd --state-dir $STATE run --no-relay --bind 127.0.0.1:0 --shell /bin/zsh 2>$ROOT/daemon.log &
+  ANTHROPIC_MODEL=haiku GUDO_LOG=warn \
+  $BIN/gudo-hostd --state-dir $STATE run --no-relay --bind 127.0.0.1:0 --shell /bin/zsh 2>$ROOT/daemon.log &
 DPID=$!
 cleanup() {
   pkill -f "$UN --no-relay attach" 2>/dev/null; pkill -f 'sleep 100000'
@@ -44,7 +44,7 @@ measure() {
     $(echo "$rss/1024" | bc -l) $(echo "$c0 $c1 $WINDOW" | awk '{printf "%.1f", ($2-$1)/$3*100}') $(echo "$w0 $w1 $WINDOW" | awk '{printf "%.1f", ($2-$1)/$3}') $working
 }
 screen_has() { U search --pane $1 --regex "$2" 2>/dev/null | head -1 | grep -q "^[1-9]"; }
-TICKET=$($BIN/unnamed-hostd --state-dir $STATE pair --json --local --wait 10 | python3 -c 'import json,sys; print(json.load(sys.stdin)["ticket"])')
+TICKET=$($BIN/gudo-hostd --state-dir $STATE pair --json --local --wait 10 | python3 -c 'import json,sys; print(json.load(sys.stdin)["ticket"])')
 U pair "$TICKET" >/dev/null
 for ((i=1; i<=NI; i++)); do U tab new >/dev/null; done
 AGENT_PANES=()

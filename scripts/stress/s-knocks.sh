@@ -3,20 +3,20 @@
 # lets them in, while an owner client is connected and an echo probe runs. Then the waiting
 # list, the audit log's growth and whether the owner still gets answers.
 SECS=${1:-60}
-"$BIN/un" --no-relay invite --knock --uses 0 --role driver --no-qr >"$ROOT/invite.txt"
+"$BIN/gudo" --no-relay invite --knock --uses 0 --role driver --no-qr >"$ROOT/invite.txt"
 before=$(wc -c <"$ROOT/state/audit/audit.jsonl" 2>/dev/null || echo 0)
 echo "== 32 knockers at a time, each hanging up after 2 s, $SECS s"
-"$BIN/un-stress" knocks --invite-file "$ROOT/invite.txt" --secs $SECS --parallel 32 --hold-ms 2000 &
+"$BIN/gudo-stress" knocks --invite-file "$ROOT/invite.txt" --secs $SECS --parallel 32 --hold-ms 2000 &
 K=$!
 sleep 5
-"$BIN/un-stress" latency --secs $((SECS - 10)) --interval-ms 50
-"$BIN/un" --no-relay knocks 2>&1 | tail -3 | sed 's/^/  knocks mid-flood: /'
+"$BIN/gudo-stress" latency --secs $((SECS - 10)) --interval-ms 50
+"$BIN/gudo" --no-relay knocks 2>&1 | tail -3 | sed 's/^/  knocks mid-flood: /'
 wait $K
 echo "== 32 knockers that stay, 30 s (the per-invite cap)"
-"$BIN/un-stress" knocks --invite-file "$ROOT/invite.txt" --secs 30 --parallel 32 --hold-ms 30000 &
+"$BIN/gudo-stress" knocks --invite-file "$ROOT/invite.txt" --secs 30 --parallel 32 --hold-ms 30000 &
 K=$!
 sleep 20
-echo "  waiting knocks: $("$BIN/un" --no-relay knocks 2>/dev/null | grep -c .)"
+echo "  waiting knocks: $("$BIN/gudo" --no-relay knocks 2>/dev/null | grep -c .)"
 wait $K
 after=$(wc -c <"$ROOT/state/audit/audit.jsonl" 2>/dev/null || echo 0)
 echo "  audit log grew by $(((after - before) / 1024)) KiB ($(wc -l <"$ROOT/state/audit/audit.jsonl") records)"

@@ -450,7 +450,7 @@ mod tests {
     fn reads_a_variable_an_ancestor_carries() {
         // The test runner's parent (cargo or the shell) has a PATH; nobody has this one.
         assert!(inherited_env_var("PATH").is_some());
-        assert_eq!(inherited_env_var("UN_TEST_NOBODY_HAS_THIS"), None);
+        assert_eq!(inherited_env_var("GUDO_TEST_NOBODY_HAS_THIS"), None);
     }
 
     #[test]

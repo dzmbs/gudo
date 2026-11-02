@@ -173,7 +173,7 @@ final class Bench {
     }
 
     static let showcaseText = [
-        "\u{1b}[1;32mvani@mac\u{1b}[0m:\u{1b}[1;34m~/projects/unnamed\u{1b}[0m$ ./showcase\r\n",
+        "\u{1b}[1;32mme@mac\u{1b}[0m:\u{1b}[1;34m~/projects/gudo\u{1b}[0m$ ./showcase\r\n",
         "\u{1b}[1mbold\u{1b}[0m \u{1b}[3mitalic\u{1b}[0m \u{1b}[1;3mbold-italic\u{1b}[0m \u{1b}[4munderline\u{1b}[0m ",
         "\u{1b}[9mstrike\u{1b}[0m \u{1b}[7minverse\u{1b}[0m \u{1b}[2mfaint\u{1b}[0m\r\n",
         (0..<16).map { "\u{1b}[48;5;\($0)m   " }.joined() + "\u{1b}[0m\r\n",
@@ -189,7 +189,7 @@ final class Bench {
         "    \u{1b}[35mguard\u{1b}[0m state.dirty != .clean \u{1b}[35melse\u{1b}[0m { \u{1b}[35mreturn\u{1b}[0m \u{1b}[33mfalse\u{1b}[0m }\r\n",
         "}\r\n",
         "\r\n",
-        "\u{1b}[1;32mvani@mac\u{1b}[0m:\u{1b}[1;34m~/projects/unnamed\u{1b}[0m$ ",
+        "\u{1b}[1;32mme@mac\u{1b}[0m:\u{1b}[1;34m~/projects/gudo\u{1b}[0m$ ",
     ].joined()
 }
 

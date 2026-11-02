@@ -4,15 +4,15 @@ import PaneLayout
 import Synchronization
 import TerminalCore
 import Testing
-import UnnamedCore
+import GudoCore
 
 /// Heavy load on the client side of a daemon connection: floods into the client's terminal
 /// through `DaemonPaneBackend`, history and view storms, connection churn, many hosts. Each
 /// prints its peaks (footprint, threads, fds, main-thread hang, CPU, input latency).
 ///
-/// Run alone against a release daemon: `UN_STRESS=1 UN_HOSTD_BIN=<release unnamed-hostd>
+/// Run alone against a release daemon: `GUDO_STRESS=1 GUDO_HOSTD_BIN=<release gudo-hostd>
 /// swift test --no-parallel --filter 'ClientStressTests|ConnectionChurnTests'`;
-/// `UN_STRESS=heavy` runs the long variants.
+/// `GUDO_STRESS=heavy` runs the long variants.
 @MainActor
 @Suite(.serialized, .enabled(if: stressEnabled)) struct ClientStressTests {
     func makeModel() -> HostsModel {

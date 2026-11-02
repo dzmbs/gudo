@@ -1,4 +1,4 @@
-//! Trust for a repository's setup and teardown commands (`.unnamed.json`), like VS Code's
+//! Trust for a repository's setup and teardown commands (`.gudo.json`), like VS Code's
 //! workspace trust or `direnv allow`: a clone or an unpacked archive must not run commands as
 //! the user just because a task was started in it.
 //!

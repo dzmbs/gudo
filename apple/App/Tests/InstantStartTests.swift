@@ -6,7 +6,7 @@ import Synchronization
 import SwiftUI
 import TerminalCore
 import TerminalRenderer
-import UnnamedCore
+import GudoCore
 import XCTest
 @testable import App
 
@@ -25,7 +25,7 @@ nonisolated final class SilentDaemonClient: DaemonClientAPI, @unchecked Sendable
     var inputs: [String] { state.withLock { $0.inputs } }
 
     func attach(sessionId: UInt64?) {}
-    func op(op: UnnamedCore.LayoutOp) -> UInt64 { 1 }
+    func op(op: GudoCore.LayoutOp) -> UInt64 { 1 }
     func subscribe(paneId: UInt64) { state.withLock { $0.subscribed.append(paneId) } }
     func unsubscribe(paneId: UInt64) {}
     func setView(focused: UInt64?, visible: [UInt64]) {}

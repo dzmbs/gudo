@@ -150,9 +150,7 @@ fn filled(workload: Workload, seed: u64) -> Result<Terminal, Error> {
         bytes.extend_from_slice(workload.line(&mut rng, n).as_bytes());
         bytes.extend_from_slice(b"\r\n");
     }
-    bytes.extend_from_slice(
-        b"\x1b[1;32mvani@host\x1b[0m:\x1b[1;34m~/projects/unnamed\x1b[0m$ cargo te",
-    );
+    bytes.extend_from_slice(b"\x1b[1;32mme@host\x1b[0m:\x1b[1;34m~/projects/gudo\x1b[0m$ cargo te");
     terminal.write(&bytes);
     Ok(terminal)
 }

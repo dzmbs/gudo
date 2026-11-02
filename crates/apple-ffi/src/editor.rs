@@ -429,16 +429,16 @@ pub fn vscode_tunnel_web_url(name: String, folder: String) -> String {
     client_core::vscode::tunnel_web_url(&name, &folder)
 }
 
-/// An `~/.ssh/config` entry reaching the host's sshd through the daemon link (`un ssh-proxy`
+/// An `~/.ssh/config` entry reaching the host's sshd through the daemon link (`gudo ssh-proxy`
 /// as `ProxyCommand`).
 #[uniffi::export]
 pub fn vscode_ssh_config_entry(
     alias: String,
     user: String,
-    un: String,
+    gudo: String,
     ticket_arg: Option<String>,
 ) -> String {
-    client_core::vscode::ssh_config_entry(&alias, &user, &un, ticket_arg.as_deref())
+    client_core::vscode::ssh_config_entry(&alias, &user, &gudo, ticket_arg.as_deref())
 }
 
 /// The Visual Studio Code licence (covers the `code` CLI); show it before

@@ -19,7 +19,7 @@ is real and what still shows mock data.
                  │     SshConnection    ─ LocalLayoutStore  · SshPaneBackend               │
                  │ JustSSHFlow · PairingTicket · HostKeyPrompts · NetworkMonitor · CoreLog │
                  └───────────────────────────────┬────────────────────────────────────────┘
-                                                 │ UniFFI (UnnamedCore: DaemonClient, SshSession, SshPane)
+                                                 │ UniFFI (GudoCore: DaemonClient, SshSession, SshPane)
 ```
 
 ## 1. Models the views bind to
@@ -149,7 +149,7 @@ is pushed on every layout change (stream priorities).
 `CoreLog.install()` routes the Rust core's `tracing` (`install_log_sink`, new in apple-ffi) to
 os_log category `core`. HostKit logs `daemon` (dial, connected after N ms, first paint, echo
 RTT at debug), `ssh`, `hosts` (pairing, bootstrap action and time). In the simulator:
-`xcrun simctl spawn <udid> log show --info --predicate 'subsystem == "dev.unnamed.app"'`.
+`xcrun simctl spawn <udid> log show --info --predicate 'subsystem == "dev.gudo.app"'`.
 
 ## 6. Test hooks (launch arguments)
 
@@ -167,7 +167,7 @@ disabled`; `-testMirror YES` (core VT mirror for pane text); DEBUG `-posture
 
 | | |
 |---|---|
-| `cd apple/Packages/HostKit && swift test` | unit tests with a fake `DaemonClientAPI` (layout conversion, store revisions/optimism, connection state machine, routing/buffering, prediction feed, hosts sorting/persistence, ssh_config import, keys, secrets) and `DaemonIntegrationTests` against a real local `unnamed-hostd` (pair, echo, split, daemon restart → stale → live, suspend/resume, re-dial by saved ticket) |
+| `cd apple/Packages/HostKit && swift test` | unit tests with a fake `DaemonClientAPI` (layout conversion, store revisions/optimism, connection state machine, routing/buffering, prediction feed, hosts sorting/persistence, ssh_config import, keys, secrets) and `DaemonIntegrationTests` against a real local `gudo-hostd` (pair, echo, split, daemon restart → stale → live, suspend/resume, re-dial by saved ticket) |
 | `cd apple/Packages/TerminalKit && swift test --filter snapshot` | READY restore + history pages + live bytes |
 | `apple/scripts/daemon-ui-test.sh [udid]` | `DaemonUITests` on the iPad simulator against a local daemon, killed and restarted mid-test |
 | `apple/scripts/w3-ui-test.sh [udid] [test …]` | `W3UITests` on the iPad simulator against a local daemon set up by `w3-fixtures.sh` (HOME = a scratch dir with a git repo, a `claude` stand-in that drives the daemon's real hooks, a `code serve-web` stand-in): Files, Diff + notes, New Agent → Approve → finished summary → Reply → Open Pane → the turn's diff → review sent to the agent, Editor (workbench over the forward, ⌘P reaches the page, a path from Links opens at its line), a dev server offered and opened, Copy Last Command Output |
@@ -329,8 +329,8 @@ viewer by link, the viewer sees output, its keys are gated and, sent raw, refuse
 `.role`; a driver asks for control, the owner is asked and hands over, the driver's keys
 arrive; the owner revokes the driver; the audit chain verifies with join, redeem, lease and
 revoke records), `MultiplayerUITests` via `apple/scripts/multiplayer-ui-test.sh` (iPad, a
-guest joined through the `un` CLI: presence, invite + QR, grants, revoke, audit; the script
-then checks the guest's `un who --watch` was disconnected).
+guest joined through the `gudo` CLI: presence, invite + QR, grants, revoke, audit; the script
+then checks the guest's `gudo who --watch` was disconnected).
 
 
 `NotifyKit` (package, no core): categories `AGENT_APPROVAL` (Approve / Deny with
@@ -408,7 +408,7 @@ host's helper needs an update") and `epoch` (the daemon run).
 id>.hostd.plist`, `BundleProgram`). At launch it registers the agent with `SMAppService` (runs at
 login, survives quitting the app), or runs the daemon as its child when Settings ▸ This Mac ▸ Keep
 Sessions Running in the Background is off or the login item is not allowed. The daemon uses its
-default folder (`~/Library/Application Support/<name>`, where `un` and the agent hooks look); a
+default folder (`~/Library/Application Support/<name>`, where `gudo` and the agent hooks look); a
 daemon already running there (`hostd service install`) is used as is. The app pairs once with a
 `pair --json --local` ticket (loopback addresses: works offline) as the owner, saved as a host with
 `thisDevice` and named "This Mac": listed first, no helper-update offers (a new app build restarts
@@ -931,7 +931,7 @@ keeps a folder per session (`session.json`, `events.jsonl`, `k<N>.jpg`) in Appli
 at most 512 MB and 30 days in all (oldest first; never the session being recorded) and 96 MB of
 events per session.
 
-rrweb runs in its own content world (`unnamed-replay`), in every frame, idle until the app
+rrweb runs in its own content world (`gudo-replay`), in every frame, idle until the app
 answers its hello with "record". An isolated world sees the same DOM (mutation observers, input
 and scroll events), and the page sees nothing: no globals, no message handler in its world, no
 patched prototypes. What it misses — style rules a page inserts through the CSSOM later — comes
@@ -942,7 +942,7 @@ never receives what its embedded frames (a payment form) recorded. Password and 
 are masked.
 
 Session Replay (`SessionReplayView`, from the page's Replays button or More menu, an agent's
-row in Agents ▸ Session Replay, the palette, or a `.unreplay` file opened in the app): the steps
+row in Agents ▸ Session Replay, the palette, or a `.gudoreplay` file opened in the app): the steps
 (picture, tool, target, verdict) beside rrweb-player in its own `WebPage` (a throwaway data
 store, no navigation, the recorded page in rrweb's script-less sandboxed frame; a session from a
 file also loads nothing from the network). Play, pause, scrub (a tick per step), speed, and
@@ -950,7 +950,7 @@ previous/next step (← →, space); the list follows the playhead. In a leaf an
 session opens in place over the Replays list with a back button in the tool's bar (as Files
 browses in place: a push from a leaf would land in the window's navigation); an iOS sheet pushes.
 
-Sharing: a `.unreplay` file (exported type `<bundle prefix>.unreplay`, opened by the app) is one
+Sharing: a `.gudoreplay` file (exported type `<bundle prefix>.gudoreplay`, opened by the app) is one
 JSON document — `session` (the actions), `events` (rrweb) and `keyframes` (base64 JPEGs) — the
 same bytes for the same session. Export as Playwright Test (`ReplayPlaywright`) writes a
 TypeScript test: `page.goto`, then each step on its recorded locator (`getByRole(…).click()`,
@@ -971,12 +971,12 @@ effect, but lists the events (`native` in `act`) for the app to send. Frames, iO
 equivalent) and pages off screen keep the script's events; `browser_drag` from an HTML drag
 source always uses the script's DataTransfer drag.
 
-Tests: `BrowserReplayTests` (store cap and age, `.unreplay` round trip and unsafe names,
+Tests: `BrowserReplayTests` (store cap and age, `.gudoreplay` round trip and unsafe names,
 Playwright export with and without locators), `BrowserRecorderTests` (a `WebPage` fixture with
 a frame from another origin: rrweb's snapshot, mutations, masked input, nothing visible to the
 page, playback in rrweb-player), `BrowserNativeInputTests` (Mac, a page in a window: hover,
 clicks, drag, keys), `SessionReplayUITests` (iPad, `UI_TEST_CLASS=SessionReplayUITests
-apple/scripts/w3-ui-test.sh`: `un-hook browser` drives a page, its Replays step through the
+apple/scripts/w3-ui-test.sh`: `gudo-hook browser` drives a page, its Replays step through the
 session and export the test).
 
 ## 22. Files app locations (File Provider)
@@ -1243,7 +1243,7 @@ panes and their terminal views live on.
 
 DEBUG only; the simulator folds only by hand in Device Hub.
 - `-posture <none|folded|flat|book|tabletop>` at launch, or the Darwin notification
-  `dev.unnamed.debug.posture.<name>` at run time (`DebugPostures`;
+  `dev.gudo.debug.posture.<name>` at run time (`DebugPostures`;
   `xcrun simctl spawn <udid> notifyutil -p …`; `real` returns to the device's hinge).
 - Either feeds `FoldGeometry.simulated` (the fold through the window's middle, a 24 pt band when
   partly open) through the same path as the real API.

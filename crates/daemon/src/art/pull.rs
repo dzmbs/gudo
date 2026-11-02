@@ -1,6 +1,6 @@
 //! The pull channel (docs/DAEMON.md §7.12): agents read their session's drawings themselves.
 //!
-//! `un-hook mcp` (an MCP server the agent runs) sends one [`PullCall`] line on the hook socket
+//! `gudo-hook mcp` (an MCP server the agent runs) sends one [`PullCall`] line on the hook socket
 //! and reads one [`PullReply`] line, like the askpass helper. The pane named in the call picks
 //! the session; only that session's artifacts are visible.
 

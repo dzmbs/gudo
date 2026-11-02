@@ -1,6 +1,6 @@
 import Foundation
 @testable import FilesProviderKit
-import UnnamedCore
+import GudoCore
 
 nonisolated func temporaryDirectory() -> URL {
     let url = FileManager.default.temporaryDirectory.appending(path: "filesprovider-\(UUID().uuidString)")

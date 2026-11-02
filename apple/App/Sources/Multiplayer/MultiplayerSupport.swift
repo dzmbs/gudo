@@ -3,7 +3,7 @@ import Foundation
 import HostKit
 import PaneLayout
 import SwiftUI
-import UnnamedCore
+import GudoCore
 
 // Glue between HostKit's `MultiplayerSession` and the screens: which session a window shows,
 // people as the design system draws them, and the `-mock` stand-ins.
@@ -32,7 +32,7 @@ extension Workspace {
     }
 }
 
-extension UnnamedCore.Participant {
+extension GudoCore.Participant {
     /// The design system's avatar: initials on a hue fixed per person, a ring while typing.
     var avatar: DesignSystem.Participant {
         DesignSystem.Participant(
@@ -66,12 +66,12 @@ extension UnnamedCore.Participant {
     }
 }
 
-extension UnnamedCore.Peer {
+extension GudoCore.Peer {
     /// The same avatar and color as the person's participant entry.
     var avatar: DesignSystem.Participant {
         DesignSystem.Participant(
-            id: "\(peer)", name: name.isEmpty ? "Guest" : name, role: UnnamedCore.Participant.avatarRole(roles),
-            isActive: typing != nil, hue: UnnamedCore.Participant.hue(for: actor.principal))
+            id: "\(peer)", name: name.isEmpty ? "Guest" : name, role: GudoCore.Participant.avatarRole(roles),
+            isActive: typing != nil, hue: GudoCore.Participant.hue(for: actor.principal))
     }
 
     var firstName: String {
@@ -149,10 +149,10 @@ nonisolated enum MockMultiplayer {
         default: JoinInfo(actor: owner, name: "Alex Kim", roles: [.owner], scope: .daemon, grantId: nil, expiresMs: nil)
         }
         let people = [
-            UnnamedCore.Participant(actor: owner, name: "Alex Kim", roles: [.owner], scope: .daemon, grantId: nil, sinceMs: now - 3_600_000, state: .active, focus: 1, typing: false, cursor: nil),
-            UnnamedCore.Participant(actor: mira, name: "Mira Holt", roles: [.viewer, .driver, .approver], scope: .daemon, grantId: "g2", sinceMs: now - 1_800_000, state: .active, focus: 3, typing: true, cursor: nil),
-            UnnamedCore.Participant(actor: jon, name: "Jon Oyelaran", roles: [.viewer], scope: .session(sessionId: 1), grantId: "g3", sinceMs: now - 900_000, state: .idle, focus: 1, typing: false, cursor: nil),
-            UnnamedCore.Participant(actor: sam, name: "Sam Ruiz", roles: [.viewer, .prompter], scope: .session(sessionId: 1), grantId: "g4", sinceMs: now - 300_000, state: .active, focus: 3, typing: false, cursor: nil),
+            GudoCore.Participant(actor: owner, name: "Alex Kim", roles: [.owner], scope: .daemon, grantId: nil, sinceMs: now - 3_600_000, state: .active, focus: 1, typing: false, cursor: nil),
+            GudoCore.Participant(actor: mira, name: "Mira Holt", roles: [.viewer, .driver, .approver], scope: .daemon, grantId: "g2", sinceMs: now - 1_800_000, state: .active, focus: 3, typing: true, cursor: nil),
+            GudoCore.Participant(actor: jon, name: "Jon Oyelaran", roles: [.viewer], scope: .session(sessionId: 1), grantId: "g3", sinceMs: now - 900_000, state: .idle, focus: 1, typing: false, cursor: nil),
+            GudoCore.Participant(actor: sam, name: "Sam Ruiz", roles: [.viewer, .prompter], scope: .session(sessionId: 1), grantId: "g4", sinceMs: now - 300_000, state: .active, focus: 3, typing: false, cursor: nil),
         ]
         let holder = role == "driver" || UserDefaults.standard.bool(forKey: "mockLeaseRequest") ? owner.principal : mira.principal
         let session = MultiplayerSession.preview(
@@ -173,7 +173,7 @@ nonisolated enum MockMultiplayer {
     }()
 
     /// A participant's live presence; Mira is writing a prompt for Claude Code.
-    static func peer(_ person: UnnamedCore.Participant, id: UInt64) -> Peer {
+    static func peer(_ person: GudoCore.Participant, id: UInt64) -> Peer {
         let drafting = person.actor == mira
         return Peer(
             peer: id, rev: id, actor: person.actor, name: person.name, roles: person.roles,
@@ -236,7 +236,7 @@ nonisolated enum MockMultiplayer {
         let approval = ApprovalAudit(requestId: 41, agentRequest: "toolu_01HcV9", optionId: 1, option: "Yes", tool: "Bash",
                                      summary: "git push --force-with-lease origin feat/mp", signed: signed, sig: Data((0..<64).map { UInt8($0 &* 37 & 0xff) }))
         let denied = ApprovalAudit(requestId: 44, agentRequest: "toolu_01KqZ2", optionId: 3, option: "No", tool: "Bash",
-                                   summary: "rm -rf ~/projects/unnamed/target", signed: signed, sig: Data((0..<64).map { UInt8($0 &* 11 & 0xff) }))
+                                   summary: "rm -rf ~/projects/gudo/target", signed: signed, sig: Data((0..<64).map { UInt8($0 &* 11 & 0xff) }))
         return AuditPage(records: [
             record(1, 86_400_000, .grantRegistered, owner, "grant for Mira Holt: driver+approver on daemon"),
             record(2, 1_800_000, .grantRedeemed, mira, "Mira Holt redeemed an invite"),
@@ -256,14 +256,14 @@ nonisolated enum MockMultiplayer {
 nonisolated final class MockMultiplayerClient: MultiplayerClientAPI {
     func setMultiplayerListener(listener: any MultiplayerListener) {}
     func me() -> JoinInfo? { nil }
-    func participantList() -> [UnnamedCore.Participant] { [] }
+    func participantList() -> [GudoCore.Participant] { [] }
     func lease(paneId: UInt64) -> Lease? { nil }
     func setTyping(paneId: UInt64, typing: Bool) {}
-    func participants() async throws -> [UnnamedCore.Participant] { [] }
+    func participants() async throws -> [GudoCore.Participant] { [] }
     func setName(name: String) async throws {}
     func createInvite(options: InviteOptions) async throws -> CreatedInvite {
         try await Task.sleep(for: .milliseconds(250))
-        let link = "unnamed://join/" + "ab3kq7m2d4x9p5r8t6v1w3y5z7c2e4g6j8l0n3q5s7u9w2y4a6c8e0g2i4k6m8o0q2s4u6w8y0a3c5e7g9i1k3m5o7q9s2u4w6y8a0c2e4g6i8k0m2o4q6s8u0w2y4b6d8f0h2j4l6n8p0r2t4v6x8z1b3d5f7h9j2l4n6p8r1t3v5x7z9"
+        let link = "gudo://join/" + "ab3kq7m2d4x9p5r8t6v1w3y5z7c2e4g6j8l0n3q5s7u9w2y4a6c8e0g2i4k6m8o0q2s4u6w8y0a3c5e7g9i1k3m5o7q9s2u4w6y8a0c2e4g6i8k0m2o4q6s8u0w2y4b6d8f0h2j4l6n8p0r2t4v6x8z1b3d5f7h9j2l4n6p8r1t3v5x7z9"
         return CreatedInvite(link: link, qrPayload: link.uppercased(), grantId: "5e7a".padding(toLength: 32, withPad: "0", startingAt: 0),
                              expiresMs: options.ttlSecs.map { UInt64(Date.now.timeIntervalSince1970 * 1000) + $0 * 1000 })
     }

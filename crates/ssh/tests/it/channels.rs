@@ -25,7 +25,7 @@ async fn read_until(out: &mut ShellOutput, needle: &str) -> String {
 }
 
 #[tokio::test]
-#[cfg_attr(not(ssh_test_host), ignore = "needs UN_SSH_TEST_HOST (docs/SSH.md)")]
+#[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
 async fn pty_echo_resize_env_and_exit() {
     let conn = env().connect().await;
     let mut request = PtyRequest::new(80, 24);
@@ -67,7 +67,7 @@ async fn pty_echo_resize_env_and_exit() {
 }
 
 #[tokio::test]
-#[cfg_attr(not(ssh_test_host), ignore = "needs UN_SSH_TEST_HOST (docs/SSH.md)")]
+#[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
 async fn exec_captures_streams_and_status() {
     let conn = env().connect().await;
     let out = conn.exec("echo out; echo err >&2; exit 7").await.unwrap();
@@ -103,14 +103,14 @@ async fn exec_captures_streams_and_status() {
 }
 
 #[tokio::test]
-#[cfg_attr(not(ssh_test_host), ignore = "needs UN_SSH_TEST_HOST (docs/SSH.md)")]
+#[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
 async fn upload_raw_and_gzip_with_checksum() {
     let conn = env().connect().await;
     // Half compressible, half random.
     let mut data = vec![0u8; 4 << 20];
     getrandom::fill(&mut data[..2 << 20]).unwrap();
     for encoding in [UploadEncoding::Raw, UploadEncoding::Gzip] {
-        let path = "~/un-test/dir with space/upload.bin";
+        let path = "~/gudo-test/dir with space/upload.bin";
         let t = Instant::now();
         let report = conn.upload(path, &data, 0o640, encoding).await.unwrap();
         eprintln!(
@@ -124,7 +124,7 @@ async fn upload_raw_and_gzip_with_checksum() {
             assert!(report.sent < report.size * 3 / 4);
         }
         let check = conn
-            .exec("sha256sum ~/'un-test/dir with space/upload.bin' && stat -c %a ~/'un-test/dir with space/upload.bin' && ls ~/'un-test/dir with space' | wc -l")
+            .exec("sha256sum ~/'gudo-test/dir with space/upload.bin' && stat -c %a ~/'gudo-test/dir with space/upload.bin' && ls ~/'gudo-test/dir with space' | wc -l")
             .await
             .unwrap()
             .check()
@@ -135,11 +135,11 @@ async fn upload_raw_and_gzip_with_checksum() {
         assert!(check.ends_with("1\n"), "temp file left behind: {check}");
         assert_eq!(conn.download(path).await.unwrap(), data);
     }
-    conn.exec("rm -rf ~/un-test").await.unwrap();
+    conn.exec("rm -rf ~/gudo-test").await.unwrap();
 }
 
 #[tokio::test]
-#[cfg_attr(not(ssh_test_host), ignore = "needs UN_SSH_TEST_HOST (docs/SSH.md)")]
+#[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
 async fn proxy_jump_chain() {
     let env = env();
     // VM → its own sshd on 127.0.0.1 → again 127.0.0.1: two jumps, three handshakes.

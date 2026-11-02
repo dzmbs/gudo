@@ -52,7 +52,7 @@ final class DuoUITests: XCTestCase {
 
     /// The posture the app is told to draw, as `DebugPostures` hears it.
     private func fold(to posture: String) {
-        let name = "dev.unnamed.debug.posture.\(posture)" as CFString
+        let name = "dev.gudo.debug.posture.\(posture)" as CFString
         CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFNotificationName(name), nil, nil, true)
         RunLoop.current.run(until: Date().addingTimeInterval(0.8))
     }

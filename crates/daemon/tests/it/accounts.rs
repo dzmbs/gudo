@@ -34,7 +34,7 @@ case "$1 $2" in
     echo '{"loggedIn":false,"authMethod":"none"}'; exit 1 ;;
 esac
 echo "CFG=${CLAUDE_CONFIG_DIR:-unset}|"
-echo "ACC=${UN_ACCOUNT:-unset}|"
+echo "ACC=${GUDO_ACCOUNT:-unset}|"
 echo "KEY=${ANTHROPIC_API_KEY:-none}|"
 echo "TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-none}|"
 echo "CODEX=${CODEX_HOME:-none}|"

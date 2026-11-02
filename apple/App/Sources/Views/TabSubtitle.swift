@@ -2,7 +2,7 @@ import DesignSystem
 import HostKit
 import PaneLayout
 import SwiftUI
-import UnnamedCore
+import GudoCore
 
 extension Workspace {
     /// The longest-running shell command in a tab's panes (daemon hosts, shell integration);

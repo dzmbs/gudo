@@ -485,7 +485,7 @@ impl From<client_core::ClientEvent> for ClientEvent {
 
 /// Receives [`ClientEvent`]s; implemented in Swift.
 ///
-/// Called on a Rust runtime thread (named `unnamed-core`), never the main thread, one event
+/// Called on a Rust runtime thread (named `gudo-core`), never the main thread, one event
 /// at a time and in order per client or pane. Return quickly: hand the event to the main
 /// actor or a renderer queue and return. Blocking here stalls the connection.
 #[uniffi::export(foreign)]
@@ -693,7 +693,7 @@ const OP_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[uniffi::export]
 impl DaemonClient {
-    /// Starts connecting to the daemon named by `ticket` (`unnamed://pair/…`); progress
+    /// Starts connecting to the daemon named by `ticket` (`gudo://pair/…`); progress
     /// arrives as [`ClientEvent::Connected`] and friends.
     ///
     /// # Errors
@@ -732,7 +732,7 @@ impl DaemonClient {
         })
     }
 
-    /// Joins the daemon named by an invite (`unnamed://join/…`, from a link or QR code) as a
+    /// Joins the daemon named by an invite (`gudo://join/…`, from a link or QR code) as a
     /// guest under the invite's grant; otherwise like [`connect`](Self::connect). Who this
     /// connection is arrives as `MultiplayerEvent.joined`.
     ///
@@ -1110,8 +1110,8 @@ mod tests {
             expires_ms: 0,
         };
         let invite = crate::mp::CreatedInvite {
-            link: "unnamed://join/invite-secret".into(),
-            qr_payload: "UNNAMED://JOIN/INVITE-SECRET".into(),
+            link: "gudo://join/invite-secret".into(),
+            qr_payload: "GUDO://JOIN/INVITE-SECRET".into(),
             grant_id: "g".into(),
             expires_ms: None,
         };

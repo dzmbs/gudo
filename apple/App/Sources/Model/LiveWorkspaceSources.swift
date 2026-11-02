@@ -4,7 +4,7 @@ import HostKit
 import Observation
 import os
 import PaneLayout
-import UnnamedCore
+import GudoCore
 #if canImport(UIKit)
 import UIKit
 #else
@@ -753,7 +753,7 @@ final class LiveFileSource: FileSource {
     }
 
     /// Listing entries with their git letters (a directory gets M when anything under it changed).
-    static func entries(_ listing: DirListing, git: UnnamedCore.GitStatus?) -> [FileEntry] {
+    static func entries(_ listing: DirListing, git: GudoCore.GitStatus?) -> [FileEntry] {
         var letters: [String: FileEntry.GitStatus] = [:]
         if let git {
             // Shell, git and the daemon may spell the same directory with or without /private.
@@ -1021,7 +1021,7 @@ final class LiveDiffSource: DiffSource {
         let request = ReviewRequest(
             paneId: target.pane, preamble: preamble?.nonEmpty,
             notes: notes.map {
-                UnnamedCore.ReviewNote(
+                GudoCore.ReviewNote(
                     path: $0.path, startLine: UInt32($0.startLine), endLine: UInt32($0.endLine), oldSide: $0.oldSide,
                     quote: $0.quote, note: $0.note)
             },

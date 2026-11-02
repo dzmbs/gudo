@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Runs AskpassUITests on a simulator against a real local unnamed-hostd: a script in the pane
+# Runs AskpassUITests on a simulator against a real local gudo-hostd: a script in the pane
 # runs $SSH_ASKPASS, the test answers in the secure card, and a hidden-input prompt gets the
 # "Enter Password Securely" chip.
 #
 #   apple/scripts/askpass-ui-test.sh [simulator-udid]
 #
-# Needs `cargo build -p hostd` (unnamed-hostd and un-hook, side by side) and the app project
+# Needs `cargo build -p hostd` (gudo-hostd and gudo-hook, side by side) and the app project
 # (xcodegen).
 set -euo pipefail
 
 apple="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 sim="${1:-$(xcrun simctl list devices available | grep -m1 'iPad Pro 13-inch' | grep -oE '[0-9A-F-]{36}')}"
-state="$(mktemp -d "${TMPDIR:-/tmp}/un-ui-askpass.XXXXXX")"
+state="$(mktemp -d "${TMPDIR:-/tmp}/gudo-ui-askpass.XXXXXX")"
 export PORT="${PORT:-47013}"
 daemon() { "$apple/scripts/local-daemon.sh" "$@" "$state"; }
 

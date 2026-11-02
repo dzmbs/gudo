@@ -12,7 +12,7 @@ import XCTest
 /// Design review of the Mac window, its sheets and popovers without putting anything on screen:
 /// each fixture is drawn in-process into an offscreen window (titlebar and toolbar bridged from
 /// SwiftUI) and written as `<dir>/mac-<name>-<mode>.png`. Runs only with `SNAPSHOT_DIR` and
-/// `UNNAMED_MOCK` set (`TEST_RUNNER_SNAPSHOT_DIR`, `TEST_RUNNER_UNNAMED_MOCK=1`);
+/// `GUDO_MOCK` set (`TEST_RUNNER_SNAPSHOT_DIR`, `TEST_RUNNER_GUDO_MOCK=1`);
 /// `SNAPSHOT_MODE` is `dark` (default) or `light`, `SNAPSHOT_ONLY` a comma list of fixtures.
 @MainActor
 final class MacSnapshotTests: XCTestCase {
@@ -617,7 +617,7 @@ final class MacSnapshotTests: XCTestCase {
         for route in [SheetRoute.files, .diff, .browser, .replays] {
             try await tool("tool-\(route.rawValue)") { ToolWindowContent(route: route) }
         }
-        let entry = FileEntry(path: "~/projects/unnamed/Cargo.toml", name: "Cargo.toml", isDirectory: false, size: 1_412)
+        let entry = FileEntry(path: "~/projects/gudo/Cargo.toml", name: "Cargo.toml", isDirectory: false, size: 1_412)
         try await tool("file-preview") {
             NavigationStack {
                 FilePreviewScreen(
