@@ -1,3 +1,4 @@
+//! Agent plan usage: Codex rollouts and Claude's status-line input on the host
 //! reach a watching client, the tools' own commands answer when there is no local data, and the
 //! host's sign-ins are never used. Everything runs against a scratch `$HOME` and fake `claude` /
 //! `codex` programs.
@@ -80,9 +81,9 @@ impl Host {
 
 fn config(host: &Host, cli: bool) -> impl FnOnce(&mut daemon::Config) {
     let env = host.env();
-    move |c: &mut daemon::Config| {
-        c.pane_env.extend(env);
-        c.usage.cli = cli;
+    move |config: &mut daemon::Config| {
+        config.pane_env.extend(env);
+        config.usage.cli = cli;
     }
 }
 
@@ -90,7 +91,7 @@ fn agent(report: &AgentUsageReport, kind: AgentKind) -> &AgentUsage {
     report
         .agents
         .iter()
-        .find(|a| a.agent == kind)
+        .find(|usage| usage.agent == kind)
         .unwrap_or_else(|| panic!("{kind:?} missing from {report:?}"))
 }
 
@@ -141,17 +142,17 @@ async fn codex_rollouts_and_claude_status_line_reach_a_watching_client() {
     let host = Host::new();
     host.rollout();
     let daemon = start_with(state.path(), config(&host, true)).await;
-    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    c.attach_and_follow().await;
-    let info = c.infos.last().cloned().flatten().expect("daemon info");
+    let mut client = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    client.attach_and_follow().await;
+    let info = client.infos.last().cloned().flatten().expect("daemon info");
     assert!(
         info.features
             .contains(client_core::proto::DaemonFeatures::AGENT_USAGE)
     );
     let (listener, mut events) = WorkspaceEventQueue::channel();
-    c.client.set_workspace_listener(listener);
+    client.client.set_workspace_listener(listener);
 
-    let report = c.client.usage_watch().await.unwrap();
+    let report = client.client.usage_watch().await.unwrap();
     let codex = agent(&report, AgentKind::Codex);
     assert_eq!(codex.source, UsageSource::LocalLog);
     assert_eq!(codex.plan.as_deref(), Some("plus"));
@@ -164,10 +165,13 @@ async fn codex_rollouts_and_claude_status_line_reach_a_watching_client() {
         agent(&report, AgentKind::Claude).note.as_deref(),
         Some("Checking…")
     );
-    let report = next_usage(&mut events, |r| {
-        r.agents
-            .iter()
-            .any(|a| a.note.as_deref().is_some_and(|n| n.contains("PATH")))
+    let report = next_usage(&mut events, |report| {
+        report.agents.iter().any(|usage| {
+            usage
+                .note
+                .as_deref()
+                .is_some_and(|note| note.contains("PATH"))
+        })
     })
     .await;
     assert_eq!(
@@ -186,10 +190,10 @@ async fn codex_rollouts_and_claude_status_line_reach_a_watching_client() {
 
     // A Claude session's status line arrives: pushed at once.
     status_line(state.path(), daemon.hook_socket(), STATUS_LINE).await;
-    let pushed = next_usage(&mut events, |r| {
-        r.agents
-            .iter()
-            .any(|a| a.agent == AgentKind::Claude && a.source == UsageSource::StatusLine)
+    let pushed = next_usage(&mut events, |report| {
+        report.agents.iter().any(|usage| {
+            usage.agent == AgentKind::Claude && usage.source == UsageSource::StatusLine
+        })
     })
     .await;
     let claude = agent(&pushed, AgentKind::Claude);
@@ -204,7 +208,7 @@ async fn codex_rollouts_and_claude_status_line_reach_a_watching_client() {
     // The same numbers again are not news.
     status_line(state.path(), daemon.hook_socket(), STATUS_LINE).await;
     // After unwatching, changes are not pushed.
-    c.client.usage_unwatch().await.unwrap();
+    client.client.usage_unwatch().await.unwrap();
     status_line(
         state.path(),
         daemon.hook_socket(),
@@ -218,18 +222,18 @@ async fn codex_rollouts_and_claude_status_line_reach_a_watching_client() {
             "pushed after unwatch: {event:?}"
         );
     }
-    drop(c);
+    drop(client);
     daemon.shutdown().await;
 
     // The last status line survives a restart.
     let daemon = start_with(state.path(), config(&host, true)).await;
-    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    c.attach_and_follow().await;
-    let report = c.client.usage_watch().await.unwrap();
+    let mut client = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    client.attach_and_follow().await;
+    let report = client.client.usage_watch().await.unwrap();
     let claude = agent(&report, AgentKind::Claude);
     assert_eq!(claude.source, UsageSource::StatusLine);
     assert_eq!(claude.windows[0].used_permille, 900);
-    drop(c);
+    drop(client);
     daemon.shutdown().await;
 }
 
@@ -266,32 +270,39 @@ async fn the_tools_commands_answer_when_there_is_no_local_data() {
     host.program("claude", FAKE_CLAUDE);
     host.program("codex", FAKE_CODEX);
     let daemon = start_with(state.path(), config(&host, true)).await;
-    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    c.attach_and_follow().await;
+    let mut client = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    client.attach_and_follow().await;
     let (listener, mut events) = WorkspaceEventQueue::channel();
-    c.client.set_workspace_listener(listener);
+    client.client.set_workspace_listener(listener);
 
     // The answer comes at once (the commands take seconds); their results are pushed.
-    let first = c.client.usage_watch().await.unwrap();
+    let first = client.client.usage_watch().await.unwrap();
     assert_eq!(
         agent(&first, AgentKind::Claude).note.as_deref(),
         Some("Checking…")
     );
-    let report = next_usage(&mut events, |r| {
-        r.agents.iter().all(|a| a.source == UsageSource::Cli)
+    let report = next_usage(&mut events, |report| {
+        report
+            .agents
+            .iter()
+            .all(|usage| usage.source == UsageSource::Cli)
     })
     .await;
     let claude = agent(&report, AgentKind::Claude);
     assert_eq!(claude.source, UsageSource::Cli);
     assert_eq!(claude.plan.as_deref(), Some("max"));
-    let names: Vec<_> = claude.windows.iter().map(|w| w.name.as_str()).collect();
+    let names: Vec<_> = claude
+        .windows
+        .iter()
+        .map(|window| window.name.as_str())
+        .collect();
     assert_eq!(names, ["5h", "weekly", "weekly Opus"]);
     assert_eq!(claude.windows[1].used_permille, 580);
     let codex = agent(&report, AgentKind::Codex);
     assert_eq!(codex.source, UsageSource::Cli);
     assert_eq!(codex.plan.as_deref(), Some("pro"));
     assert_eq!(codex.windows[0].used_permille, 910);
-    drop(c);
+    drop(client);
     daemon.shutdown().await;
 }
 
@@ -312,18 +323,18 @@ async fn the_sign_in_is_never_used_even_when_a_client_asks() {
     )
     .unwrap();
     let env = host.env();
-    let daemon = start_with(state.path(), move |c| {
-        c.pane_env.extend(env);
-        c.usage.cli = false;
+    let daemon = start_with(state.path(), move |config| {
+        config.pane_env.extend(env);
+        config.usage.cli = false;
     })
     .await;
-    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    c.attach_and_follow().await;
+    let mut client = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    client.attach_and_follow().await;
 
     // What an older app sends when its "check usage with your sign-in" switch was on.
     let watch = || async {
-        let req = WorkspaceRequest::UsageWatch(UsageWatch { api_fallback: true });
-        match c.client.workspace(req).await.unwrap() {
+        let request = WorkspaceRequest::UsageWatch(UsageWatch { api_fallback: true });
+        match client.client.workspace(request).await.unwrap() {
             WorkspaceResponse::AgentUsage(report) => report,
             other => panic!("{other:?}"),
         }
@@ -343,6 +354,6 @@ async fn the_sign_in_is_never_used_even_when_a_client_asks() {
         );
     }
     assert!(!format!("{report:?}").contains("secret"));
-    drop(c);
+    drop(client);
     daemon.shutdown().await;
 }

@@ -16,7 +16,7 @@ fn zsh() -> Option<PathBuf> {
     ["/bin/zsh", "/usr/bin/zsh", "/opt/homebrew/bin/zsh"]
         .into_iter()
         .map(PathBuf::from)
-        .find(|p| p.exists())
+        .find(|path| path.exists())
 }
 
 struct Caller {
@@ -37,15 +37,15 @@ impl Caller {
 
     async fn ok(&self, tool: &str, args: Value) -> Value {
         match self.call(tool, args.clone()).await {
-            TermReply::Ok(v) => v,
-            TermReply::Error(e) => panic!("{tool} {args}: {e:?}"),
+            TermReply::Ok(value) => value,
+            TermReply::Error(error) => panic!("{tool} {args}: {error:?}"),
         }
     }
 
     async fn refused(&self, tool: &str, args: Value) -> TermErrorCode {
         match self.call(tool, args.clone()).await {
-            TermReply::Error(e) => e.code,
-            TermReply::Ok(v) => panic!("{tool} {args} was allowed: {v}"),
+            TermReply::Error(error) => error.code,
+            TermReply::Ok(value) => panic!("{tool} {args} was allowed: {value}"),
         }
     }
 }
@@ -76,22 +76,22 @@ async fn an_agent_runs_waits_reads_and_stays_in_its_lane() {
         return;
     };
     let dir = tempfile::tempdir().unwrap();
-    let daemon = start_with(dir.path(), |c| {
-        c.shell = Some(zsh);
+    let daemon = start_with(dir.path(), |config| {
+        config.shell = Some(zsh);
         // Driving the user's panes asks the owner, who never answers here.
-        c.drive_ask_wait = std::time::Duration::from_millis(500);
+        config.drive_ask_wait = std::time::Duration::from_millis(500);
     })
     .await;
     let mut user = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    let me = user.attach_and_follow().await;
+    let agent_pane = user.attach_and_follow().await;
     let agent = Caller {
         socket: daemon.hook_socket().to_owned(),
         token: std::fs::read_to_string(dir.path().join("hook.token")).unwrap(),
-        pane: me.0.to_string(),
+        pane: agent_pane.0.to_string(),
     };
 
     let who = agent.ok("whoami", json!({})).await;
-    assert_eq!(who["pane"]["id"], format!("p{}", me.0));
+    assert_eq!(who["pane"]["id"], format!("p{}", agent_pane.0));
     assert_eq!(who["pane"]["isSelf"], true);
 
     // A command in a pane of its own: exit code and output, and the user keeps focus.
@@ -102,11 +102,15 @@ async fn an_agent_runs_waits_reads_and_stays_in_its_lane() {
     assert_eq!(run["command"]["exitCode"], 3, "{run}");
     assert_eq!(run["output"]["text"], "hello", "{run}");
     let worker = run["pane"].as_str().unwrap().to_owned();
-    user.until("the split", |c| {
-        c.tab().root != client_core::proto::LayoutNode::Leaf(me)
+    user.until("the split", |client| {
+        client.tab().root != client_core::proto::LayoutNode::Leaf(agent_pane)
     })
     .await;
-    assert_eq!(user.focused(), me, "the agent's pane did not take focus");
+    assert_eq!(
+        user.focused(),
+        agent_pane,
+        "the agent's pane did not take focus"
+    );
 
     // The same pane again, and its listing.
     let run = agent
@@ -121,7 +125,7 @@ async fn an_agent_runs_waits_reads_and_stays_in_its_lane() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|p| p["id"] == worker)
+        .find(|pane| pane["id"] == worker)
         .unwrap();
     assert_eq!(mine["createdByYou"], true);
     assert_eq!(mine["lastCommand"]["exitCode"], 0);
@@ -197,7 +201,7 @@ async fn an_agent_runs_waits_reads_and_stays_in_its_lane() {
     assert_eq!(other_token.len(), 64, "{run}");
     let posing = Caller {
         token: other_token.clone(),
-        ..agent.clone_as(me.0.to_string())
+        ..agent.clone_as(agent_pane.0.to_string())
     };
     assert_eq!(
         posing.refused("whoami", json!({})).await,
@@ -217,7 +221,7 @@ async fn an_agent_runs_waits_reads_and_stays_in_its_lane() {
         itself
             .refused(
                 "pane_send",
-                json!({ "pane": format!("p{}", me.0), "text": "x" })
+                json!({ "pane": format!("p{}", agent_pane.0), "text": "x" })
             )
             .await,
         TermErrorCode::Forbidden
@@ -241,13 +245,13 @@ async fn any_program_reports_its_status_and_agents_wait_for_it() {
         return;
     };
     let dir = tempfile::tempdir().unwrap();
-    let daemon = start_with(dir.path(), |c| c.shell = Some(zsh)).await;
+    let daemon = start_with(dir.path(), |config| config.shell = Some(zsh)).await;
     let mut user = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    let me = user.attach_and_follow().await;
+    let agent_pane = user.attach_and_follow().await;
     let agent = Caller {
         socket: daemon.hook_socket().to_owned(),
         token: std::fs::read_to_string(dir.path().join("hook.token")).unwrap(),
-        pane: me.0.to_string(),
+        pane: agent_pane.0.to_string(),
     };
 
     // A worker (any program, no agent integration) says it is blocked on a question.
@@ -263,7 +267,7 @@ async fn any_program_reports_its_status_and_agents_wait_for_it() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|p| p["id"] == worker)
+        .find(|pane| pane["id"] == worker)
         .unwrap();
     assert_eq!(pane["status"]["state"], "blocked", "{pane}");
     assert_eq!(pane["status"]["kind"], "question");
@@ -368,24 +372,24 @@ async fn an_agent_runs_a_worker_agent_and_reads_its_answers() {
     let home = tempfile::tempdir().unwrap();
     let home_dir = home.path().to_string_lossy().into_owned();
     let dir = tempfile::tempdir().unwrap();
-    let daemon = start_with(dir.path(), |c| {
-        c.shell = Some(zsh);
-        c.pane_env.push(("PATH".into(), path));
-        c.pane_env.push(("HOME".into(), home_dir));
+    let daemon = start_with(dir.path(), |config| {
+        config.shell = Some(zsh);
+        config.pane_env.push(("PATH".into(), path));
+        config.pane_env.push(("HOME".into(), home_dir));
     })
     .await;
     let mut user = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    let me = user.attach_and_follow().await;
+    let agent_pane = user.attach_and_follow().await;
     let lead = Caller {
         socket: daemon.hook_socket().to_owned(),
         token: std::fs::read_to_string(dir.path().join("hook.token")).unwrap(),
-        pane: me.0.to_string(),
+        pane: agent_pane.0.to_string(),
     };
     let (socket, token) = (lead.socket.clone(), lead.token.clone());
 
     // Spawned with a prompt: delivered once the worker's session has started.
     let spawning = {
-        let lead = lead.clone_as(me.0.to_string());
+        let lead = lead.clone_as(agent_pane.0.to_string());
         tokio::spawn(async move {
             lead.ok(
                 "agent_spawn",
@@ -396,13 +400,17 @@ async fn an_agent_runs_a_worker_agent_and_reads_its_answers() {
     };
     let worker = loop {
         let list = lead.ok("pane_list", json!({})).await;
-        if let Some(p) = list["panes"]
+        if let Some(pane) = list["panes"]
             .as_array()
             .unwrap()
             .iter()
-            .find(|p| p["kind"] == "agent")
+            .find(|pane| pane["kind"] == "agent")
         {
-            break p["id"].as_str().unwrap().trim_start_matches('p').to_owned();
+            break pane["id"]
+                .as_str()
+                .unwrap()
+                .trim_start_matches('p')
+                .to_owned();
         }
         assert!(
             !spawning.is_finished(),
@@ -477,7 +485,7 @@ async fn an_agent_runs_a_worker_agent_and_reads_its_answers() {
 
     // Prompt and wait for that turn's answer in one call.
     let prompting = {
-        let lead = lead.clone_as(me.0.to_string());
+        let lead = lead.clone_as(agent_pane.0.to_string());
         let worker_ref = worker_ref.clone();
         tokio::spawn(async move {
             lead.ok(
@@ -521,10 +529,16 @@ async fn an_agent_runs_a_worker_agent_and_reads_its_answers() {
 fn user_floats(user: &TestClient) -> Vec<(Vec<u64>, bool)> {
     user.floats
         .last()
-        .map(|f| {
-            f.floats
+        .map(|update| {
+            update
+                .floats
                 .iter()
-                .map(|w| (w.panes.iter().map(|p| p.0).collect(), w.minimized))
+                .map(|window| {
+                    (
+                        window.panes.iter().map(|pane| pane.0).collect(),
+                        window.minimized,
+                    )
+                })
                 .collect()
         })
         .unwrap_or_default()
@@ -546,13 +560,13 @@ async fn an_agent_floats_its_panes_and_never_takes_the_users_focus() {
         return;
     };
     let dir = tempfile::tempdir().unwrap();
-    let daemon = start_with(dir.path(), |c| c.shell = Some(zsh)).await;
+    let daemon = start_with(dir.path(), |config| config.shell = Some(zsh)).await;
     let mut user = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    let me = user.attach_and_follow().await;
+    let agent_pane = user.attach_and_follow().await;
     let agent = Caller {
         socket: daemon.hook_socket().to_owned(),
         token: std::fs::read_to_string(dir.path().join("hook.token")).unwrap(),
-        pane: me.0.to_string(),
+        pane: agent_pane.0.to_string(),
     };
 
     // A log window over the tab, where the agent asked for it.
@@ -565,9 +579,11 @@ async fn an_agent_floats_its_panes_and_never_takes_the_users_focus() {
     let log = id_of(&opened["pane"]);
     assert_eq!(opened["pane"]["float"]["panes"], json!([format!("p{log}")]));
     assert_eq!(opened["pane"]["float"]["frame"]["x"], 0.55);
-    user.until("the float", |c| user_floats(c) == [(vec![log], false)])
-        .await;
-    assert_eq!(user.focused(), me, "the float did not take focus");
+    user.until("the float", |client| {
+        user_floats(client) == [(vec![log], false)]
+    })
+    .await;
+    assert_eq!(user.focused(), agent_pane, "the float did not take focus");
 
     // Its frame and closing only make sense on a float.
     assert_eq!(
@@ -583,7 +599,7 @@ async fn an_agent_floats_its_panes_and_never_takes_the_users_focus() {
     );
     let OpOutcome::PaneCreated { pane_id: theirs } = user
         .op(LayoutOp::Split {
-            pane_id: me,
+            pane_id: agent_pane,
             axis: client_core::proto::Axis::Vertical,
             launch: PaneLaunch::Shell { cwd: None },
         })
@@ -591,7 +607,10 @@ async fn an_agent_floats_its_panes_and_never_takes_the_users_focus() {
     else {
         panic!("no split");
     };
-    user.op(LayoutOp::Focus { pane_id: me }).await;
+    user.op(LayoutOp::Focus {
+        pane_id: agent_pane,
+    })
+    .await;
     assert_eq!(
         agent
             .refused("pane_float", json!({ "pane": format!("p{}", theirs.0) }))
@@ -608,13 +627,17 @@ async fn an_agent_floats_its_panes_and_never_takes_the_users_focus() {
     // To the tray and back to the front, the keyboard staying with the user.
     let log_ref = format!("p{log}");
     agent.ok("pane_minimize", json!({ "pane": log_ref })).await;
-    user.until("the chip", |c| user_floats(c) == [(vec![log], true)])
-        .await;
+    user.until("the chip", |client| {
+        user_floats(client) == [(vec![log], true)]
+    })
+    .await;
     let raised = agent.ok("pane_raise", json!({ "pane": log_ref })).await;
     assert_eq!(raised["pane"]["float"]["minimized"], false, "{raised}");
-    user.until("restored", |c| user_floats(c) == [(vec![log], false)])
-        .await;
-    assert_eq!(user.focused(), me);
+    user.until("restored", |client| {
+        user_floats(client) == [(vec![log], false)]
+    })
+    .await;
+    assert_eq!(user.focused(), agent_pane);
 
     // Docked beside the user's pane: in the layout, the user's focus where it was.
     let docked = agent
@@ -624,8 +647,9 @@ async fn an_agent_floats_its_panes_and_never_takes_the_users_focus() {
         )
         .await;
     assert!(docked["pane"]["float"].is_null(), "{docked}");
-    user.until("docked", |c| user_floats(c).is_empty()).await;
-    assert_eq!(user.focused(), me, "docking gave the focus back");
+    user.until("docked", |client| user_floats(client).is_empty())
+        .await;
+    assert_eq!(user.focused(), agent_pane, "docking gave the focus back");
     assert_eq!(
         agent
             .refused("pane_raise", json!({ "pane": log_ref }))
@@ -648,10 +672,10 @@ async fn an_agent_floats_its_panes_and_never_takes_the_users_focus() {
         .await;
     let runner = id_of(&run["pane"]);
     assert_eq!(run["pane"]["float"]["closeWhenDone"], true);
-    let gone = |c: &TestClient| {
-        !crate::support::leaves(&c.tab().root).contains(&client_core::proto::PaneId(runner))
+    let gone = |client: &TestClient| {
+        !crate::support::leaves(&client.tab().root).contains(&client_core::proto::PaneId(runner))
     };
-    user.until("the run window", |c| !gone(c)).await;
+    user.until("the run window", |client| !gone(client)).await;
     let ran = agent
         .ok(
             "cmd_run",
@@ -665,7 +689,7 @@ async fn an_agent_floats_its_panes_and_never_takes_the_users_focus() {
         ended.elapsed() >= std::time::Duration::from_secs(2),
         "it stays a moment to be read"
     );
-    assert_eq!(user.focused(), me);
+    assert_eq!(user.focused(), agent_pane);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -686,18 +710,18 @@ async fn a_floating_worker_closes_when_its_turn_ends_and_leaves_its_answer() {
     let home = tempfile::tempdir().unwrap();
     let home_dir = home.path().to_string_lossy().into_owned();
     let dir = tempfile::tempdir().unwrap();
-    let daemon = start_with(dir.path(), |c| {
-        c.shell = Some(zsh);
-        c.pane_env.push(("PATH".into(), path));
-        c.pane_env.push(("HOME".into(), home_dir));
+    let daemon = start_with(dir.path(), |config| {
+        config.shell = Some(zsh);
+        config.pane_env.push(("PATH".into(), path));
+        config.pane_env.push(("HOME".into(), home_dir));
     })
     .await;
     let mut user = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    let me = user.attach_and_follow().await;
+    let agent_pane = user.attach_and_follow().await;
     let lead = Caller {
         socket: daemon.hook_socket().to_owned(),
         token: std::fs::read_to_string(dir.path().join("hook.token")).unwrap(),
-        pane: me.0.to_string(),
+        pane: agent_pane.0.to_string(),
     };
 
     let spawned = lead
@@ -712,11 +736,11 @@ async fn a_floating_worker_closes_when_its_turn_ends_and_leaves_its_answer() {
         .trim_start_matches('p')
         .to_owned();
     let worker_id: u64 = worker.parse().unwrap();
-    user.until("the worker's window", |c| {
-        user_floats(c) == [(vec![worker_id], false)]
+    user.until("the worker's window", |client| {
+        user_floats(client) == [(vec![worker_id], false)]
     })
     .await;
-    assert_eq!(user.focused(), me);
+    assert_eq!(user.focused(), agent_pane);
 
     let (socket, token) = (lead.socket.clone(), lead.token.clone());
     for (seq, event, extra) in [
@@ -738,8 +762,8 @@ async fn a_floating_worker_closes_when_its_turn_ends_and_leaves_its_answer() {
         )
         .await;
     }
-    user.until("the worker's window closing", |c| {
-        !crate::support::leaves(&c.tab().root).contains(&client_core::proto::PaneId(worker_id))
+    user.until("the worker's window closing", |client| {
+        !crate::support::leaves(&client.tab().root).contains(&client_core::proto::PaneId(worker_id))
     })
     .await;
     let result = lead
@@ -759,14 +783,14 @@ async fn a_panes_environment_reaches_only_that_pane() {
         return;
     };
     let dir = tempfile::tempdir().unwrap();
-    let daemon = start_with(dir.path(), |c| c.shell = Some(zsh)).await;
+    let daemon = start_with(dir.path(), |config| config.shell = Some(zsh)).await;
     let mut user = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    let me = user.attach_and_follow().await;
+    let agent_pane = user.attach_and_follow().await;
     let hook_token = std::fs::read_to_string(dir.path().join("hook.token")).unwrap();
     let agent = Caller {
         socket: daemon.hook_socket().to_owned(),
         token: hook_token.clone(),
-        pane: me.0.to_string(),
+        pane: agent_pane.0.to_string(),
     };
 
     let run = agent
@@ -791,13 +815,13 @@ async fn a_panes_environment_reaches_only_that_pane() {
     // Its token does not speak for the pane that opened it on the other channels either.
     let pull = raw(
         &agent.socket,
-        json!({ "v": 1, "token": token, "pane": me.0.to_string(), "pull": { "op": "list" } }),
+        json!({ "v": 1, "token": token, "pane": agent_pane.0.to_string(), "pull": { "op": "list" } }),
     )
     .await;
     assert!(pull.contains("bad token"), "{pull}");
     let browser = raw(
         &agent.socket,
-        json!({ "v": 1, "token": token, "pane": me.0.to_string(),
+        json!({ "v": 1, "token": token, "pane": agent_pane.0.to_string(),
                 "browser": { "open": { "url": "https://example.com" } } }),
     )
     .await;
@@ -808,8 +832,8 @@ async fn a_panes_environment_reaches_only_that_pane() {
     loop {
         match worker.call("tab_new", json!({})).await {
             TermReply::Ok(_) => opened += 1,
-            TermReply::Error(e) => {
-                assert_eq!(e.code, TermErrorCode::Forbidden, "{e:?}");
+            TermReply::Error(error) => {
+                assert_eq!(error.code, TermErrorCode::Forbidden, "{error:?}");
                 break;
             }
         }
@@ -843,14 +867,14 @@ async fn reads_of_a_pane_a_guest_can_type_into_say_so() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = start_with(dir.path(), |_| {}).await;
     let mut user = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    let me = user.attach_and_follow().await;
+    let agent_pane = user.attach_and_follow().await;
     let agent = Caller {
         socket: daemon.hook_socket().to_owned(),
         token: std::fs::read_to_string(dir.path().join("hook.token")).unwrap(),
-        pane: me.0.to_string(),
+        pane: agent_pane.0.to_string(),
     };
-    let source = |v: &Value| {
-        v["output"]["source"]
+    let source = |value: &Value| {
+        value["output"]["source"]
             .as_str()
             .unwrap_or_default()
             .to_owned()
@@ -867,7 +891,9 @@ async fn reads_of_a_pane_a_guest_can_type_into_say_so() {
             let invite = client.create_invite(spec, name.into()).await.unwrap();
             let mut guest = TestClient::join(&invite.to_string(), ClientConfig::generate_key());
             guest.client.attach(None);
-            guest.until("guest layout", |c| c.layout.is_some()).await;
+            guest
+                .until("guest layout", |client| client.layout.is_some())
+                .await;
             guest
         }
     };
@@ -885,41 +911,51 @@ async fn reads_of_a_pane_a_guest_can_type_into_say_so() {
     assert_eq!(source(&waited), daemon::TERM_SOURCE_SHARED, "{waited}");
 }
 
-/// Each pane an agent opened split its own pane again, nesting one level deeper; past the
-/// layout's 16 levels every `cmd_run` without a pane failed with "too many nested splits",
-/// long before the 32-pane budget. Those panes open in a background tab instead.
+/// Splitting the agent's pane for every new pane would nest one level deeper each time and hit
+/// the layout's 16-level limit ("too many nested splits") long before the 32-pane budget, so
+/// once that deep, panes open in a background tab instead.
 #[tokio::test(flavor = "multi_thread")]
 async fn panes_past_the_nesting_limit_open_in_a_tab() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = start_with(dir.path(), |_| {}).await;
     let mut user = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    let me = user.attach_and_follow().await;
+    let agent_pane = user.attach_and_follow().await;
     let agent = Caller {
         socket: daemon.hook_socket().to_owned(),
         token: std::fs::read_to_string(dir.path().join("hook.token")).unwrap(),
-        pane: me.0.to_string(),
+        pane: agent_pane.0.to_string(),
     };
     for _ in 0..20 {
         agent.ok("pane_split", json!({})).await;
     }
-    user.until("a second tab", |c| {
-        c.layout.as_ref().is_some_and(|l| l.tabs.len() > 1)
+    user.until("a second tab", |client| {
+        client
+            .layout
+            .as_ref()
+            .is_some_and(|layout| layout.tabs.len() > 1)
     })
     .await;
-    assert_eq!(user.focused(), me, "the user's tab stays in front");
+    assert_eq!(user.focused(), agent_pane, "the user's tab stays in front");
 }
 
-/// Parallel calls all passed the open-pane count before any pane existed, so an agent asking
-/// for many panes at once ended up with more than its 32.
+/// Parallel calls must not all pass the open-pane count before any pane exists, or an agent
+/// asking for many panes at once would end up with more than its 32.
 #[tokio::test(flavor = "multi_thread")]
 async fn parallel_opens_stay_within_the_pane_budget() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = start_with(dir.path(), |_| {}).await;
     let mut user = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    let me = user.attach_and_follow().await;
+    let agent_pane = user.attach_and_follow().await;
     let token = std::fs::read_to_string(dir.path().join("hook.token")).unwrap();
     let socket = daemon.hook_socket().to_owned();
-    let TermReply::Ok(first) = call(&socket, &token, &me.0.to_string(), "tab_new", json!({})).await
+    let TermReply::Ok(first) = call(
+        &socket,
+        &token,
+        &agent_pane.0.to_string(),
+        "tab_new",
+        json!({}),
+    )
+    .await
     else {
         panic!("no first tab")
     };
@@ -929,7 +965,7 @@ async fn parallel_opens_stay_within_the_pane_budget() {
         .trim_start_matches('p')
         .to_owned();
     // The agent and its worker both ask, more at once than one pane may call.
-    let calls: Vec<_> = [me.0.to_string(), worker]
+    let calls: Vec<_> = [agent_pane.0.to_string(), worker]
         .into_iter()
         .flat_map(|pane| std::iter::repeat_n(pane, 32))
         .map(|pane| {
@@ -938,8 +974,8 @@ async fn parallel_opens_stay_within_the_pane_budget() {
         })
         .collect();
     let mut opened = 1;
-    for c in calls {
-        if matches!(c.await.unwrap(), TermReply::Ok(_)) {
+    for pending in calls {
+        if matches!(pending.await.unwrap(), TermReply::Ok(_)) {
             opened += 1;
         }
     }

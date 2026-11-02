@@ -64,9 +64,9 @@ fn good_build(build: &str) -> Vec<u8> {
 }
 
 fn gzip(data: &[u8]) -> Vec<u8> {
-    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
-    gz.write_all(data).unwrap();
-    gz.finish().unwrap()
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    encoder.write_all(data).unwrap();
+    encoder.finish().unwrap()
 }
 
 /// The "installed" executable: a file the daemon may replace.
@@ -93,14 +93,14 @@ fn strays(exe: &Path) -> Vec<String> {
     let name = exe.file_name().unwrap().to_string_lossy().into_owned();
     std::fs::read_dir(exe.parent().unwrap())
         .unwrap()
-        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-        .filter(|n| *n != name && *n != format!("{name}.prev"))
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|file| *file != name && *file != format!("{name}.prev"))
         .collect()
 }
 
-async fn upgrade(c: &TestClient, data: Vec<u8>) -> Result<proto::DaemonInfo, UpgradeError> {
+async fn upgrade(client: &TestClient, data: Vec<u8>) -> Result<proto::DaemonInfo, UpgradeError> {
     let build = DaemonBuild::new(data, "test-build".into()).unwrap();
-    c.client.upgrade_daemon(build, None).await
+    client.client.upgrade_daemon(build, None).await
 }
 
 fn assert_refused(result: Result<proto::DaemonInfo, UpgradeError>, want: UpgradeFailure) {
@@ -121,9 +121,9 @@ async fn restart_requested(daemon: &Daemon, wait: Duration) -> Option<PathBuf> {
 async fn every_connection_learns_the_daemon_and_its_host_name() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = start_with(dir.path(), |_| {}).await;
-    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    c.attach_and_follow().await;
-    let info = c.infos[0].clone().expect("daemon info before Welcome");
+    let mut client = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    client.attach_and_follow().await;
+    let info = client.infos[0].clone().expect("daemon info before Welcome");
     assert_eq!(info.protocol, proto::PROTOCOL_LEVEL);
     assert_eq!(info.hostname, daemon::info::hostname());
     assert!(!info.hostname.is_empty());
@@ -131,20 +131,29 @@ async fn every_connection_learns_the_daemon_and_its_host_name() {
     assert_eq!(info.arch, std::env::consts::ARCH);
     // A library daemon without an installed executable cannot replace itself.
     assert!(!info.features.contains(DaemonFeatures::SELF_UPGRADE));
-    assert_eq!(c.client.daemon_info(), Some(info.clone()));
+    assert_eq!(client.client.daemon_info(), Some(info.clone()));
     assert_eq!(daemon.info().build, info.build);
-    assert!(c.incompatible.is_empty());
+    assert!(client.incompatible.is_empty());
 
     // A refused device learns the build but not the host name.
     let stale = ticket(&daemon);
-    let mut a = TestClient::connect(&stale, ClientConfig::generate_key());
-    a.until("first pairing", |c| c.connected > 0).await;
-    let mut b = TestClient::connect(&stale, ClientConfig::generate_key());
-    b.until("refusal", |c| !c.refused.is_empty()).await;
-    let refused = b.infos.last().cloned().flatten().expect("info on refusal");
+    let mut first_device = TestClient::connect(&stale, ClientConfig::generate_key());
+    first_device
+        .until("first pairing", |client| client.connected > 0)
+        .await;
+    let mut second_device = TestClient::connect(&stale, ClientConfig::generate_key());
+    second_device
+        .until("refusal", |client| !client.refused.is_empty())
+        .await;
+    let refused = second_device
+        .infos
+        .last()
+        .cloned()
+        .flatten()
+        .expect("info on refusal");
     assert!(refused.hostname.is_empty());
     assert_eq!(refused.protocol, proto::PROTOCOL_LEVEL);
-    drop((a, b, c));
+    drop((first_device, second_device, client));
     daemon.shutdown().await;
 }
 
@@ -174,25 +183,25 @@ async fn owner_upgrades_the_daemon_and_the_session_comes_back() {
     ];
     let port = free_udp_port();
     let configure = |env: Vec<(String, String)>, exe: PathBuf| {
-        move |c: &mut daemon::Config| {
-            c.bind = Some(format!("127.0.0.1:{port}").parse().unwrap());
-            c.pane_env.extend(env);
-            c.self_exe = Some(exe);
+        move |config: &mut daemon::Config| {
+            config.bind = Some(format!("127.0.0.1:{port}").parse().unwrap());
+            config.pane_env.extend(env);
+            config.self_exe = Some(exe);
         }
     };
 
     // The old daemon: a shell, an agent beside it, a second tab.
     let daemon = start_with(dir.path(), configure(env.clone(), exe.clone())).await;
-    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    let shell = c.attach_and_follow().await;
+    let mut client = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let shell = client.attach_and_follow().await;
     assert!(
-        c.infos[0]
+        client.infos[0]
             .as_ref()
             .unwrap()
             .features
             .contains(DaemonFeatures::SELF_UPGRADE)
     );
-    let OpOutcome::PaneCreated { pane_id: agent } = c
+    let OpOutcome::PaneCreated { pane_id: agent } = client
         .op(LayoutOp::Split {
             pane_id: shell,
             axis: Axis::Horizontal,
@@ -206,31 +215,34 @@ async fn owner_upgrades_the_daemon_and_the_session_comes_back() {
     else {
         panic!("split failed");
     };
-    c.follow(agent).await;
-    c.wait_text(agent, "fake codex").await;
-    let session_id = c.layout.as_ref().unwrap().session_id;
-    c.op(LayoutOp::NewTab {
-        session_id,
-        name: "second".into(),
-        launch: PaneLaunch::Shell { cwd: None },
-    })
-    .await;
+    client.follow(agent).await;
+    client.wait_text(agent, "fake codex").await;
+    let session_id = client.layout.as_ref().unwrap().session_id;
+    client
+        .op(LayoutOp::NewTab {
+            session_id,
+            name: "second".into(),
+            launch: PaneLaunch::Shell { cwd: None },
+        })
+        .await;
     let layout = dir.path().join("layout.json");
     let deadline = Instant::now() + TIMEOUT;
-    while !std::fs::read_to_string(&layout).is_ok_and(|s| s.contains(CODEX_ID)) {
+    while !std::fs::read_to_string(&layout).is_ok_and(|text| text.contains(CODEX_ID)) {
         assert!(
             Instant::now() < deadline,
             "agent session id never persisted"
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    let before = c.layout.clone().unwrap();
-    c.type_line(shell, "echo before-upgrade");
-    c.wait_text(shell, "before-upgrade").await;
+    let before = client.layout.clone().unwrap();
+    client.type_line(shell, "echo before-upgrade");
+    client.wait_text(shell, "before-upgrade").await;
 
     // The upgrade: gzip on the wire, verified, swapped in, old build kept.
     let new = good_build("new-build");
-    let installed = upgrade(&c, gzip(&new)).await.expect("upgrade installed");
+    let installed = upgrade(&client, gzip(&new))
+        .await
+        .expect("upgrade installed");
     assert_eq!(installed.build, "new-build");
     assert_eq!(installed.protocol, proto::PROTOCOL_LEVEL + 1);
     assert_eq!(std::fs::read(&exe).unwrap(), new);
@@ -246,41 +258,47 @@ async fn owner_upgrades_the_daemon_and_the_session_comes_back() {
     let restart = restart_requested(&daemon, TIMEOUT).await;
     assert_eq!(restart.as_deref(), Some(exe.as_path()));
     // One upgrade at a time: the daemon is restarting now.
-    assert_refused(upgrade(&c, good_build("again")).await, UpgradeFailure::Busy);
+    assert_refused(
+        upgrade(&client, good_build("again")).await,
+        UpgradeFailure::Busy,
+    );
 
     // What `gudo-hostd run` does next: save, stop, exec the new build. The "new build"
     // here is this same daemon library on the same state directory and port.
     daemon.shutdown().await;
-    let connections = c.connected;
+    let connections = client.connected;
     let daemon = start_with(dir.path(), configure(env, exe.clone())).await;
 
     // The same client reconnects by itself and finds its session.
-    c.until("reconnected", |c| c.connected > connections).await;
-    c.until("layout after the upgrade", |c| {
-        c.layout
-            .as_ref()
-            .is_some_and(|l| l.session_id == session_id && shape(l) == shape(&before))
-    })
-    .await;
-    let panes: Vec<_> = c
+    client
+        .until("reconnected", |client| client.connected > connections)
+        .await;
+    client
+        .until("layout after the upgrade", |client| {
+            client.layout.as_ref().is_some_and(|layout| {
+                layout.session_id == session_id && shape(layout) == shape(&before)
+            })
+        })
+        .await;
+    let panes: Vec<_> = client
         .layout
         .as_ref()
         .unwrap()
         .tabs
         .iter()
-        .flat_map(|t| leaves(&t.root))
+        .flat_map(|tab| leaves(&tab.root))
         .collect();
     assert!(
         panes.contains(&agent) && panes.contains(&shell),
         "{panes:?}"
     );
     // The agent resumed its session; the shell is a new process that takes input.
-    c.follow(agent).await;
-    c.wait_flat(agent, &format!("resume {CODEX_ID}")).await;
-    c.follow(shell).await;
-    c.type_line(shell, "echo after-upgrade$((1+1))");
-    c.wait_text(shell, "after-upgrade2").await;
-    drop(c);
+    client.follow(agent).await;
+    client.wait_flat(agent, &format!("resume {CODEX_ID}")).await;
+    client.follow(shell).await;
+    client.type_line(shell, "echo after-upgrade$((1+1))");
+    client.wait_text(shell, "after-upgrade2").await;
+    drop(client);
     daemon.shutdown().await;
 }
 
@@ -290,8 +308,11 @@ async fn guests_and_bad_builds_are_refused_and_change_nothing() {
     let tools = tempfile::tempdir().unwrap();
     let exe = installed_exe(tools.path());
     let original = std::fs::read(&exe).unwrap();
-    let exe2 = exe.clone();
-    let daemon = start_with(dir.path(), move |c| c.self_exe = Some(exe2)).await;
+    let exe_for_daemon = exe.clone();
+    let daemon = start_with(dir.path(), move |config| {
+        config.self_exe = Some(exe_for_daemon)
+    })
+    .await;
     let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
     let pane = owner.attach_and_follow().await;
 
@@ -305,7 +326,9 @@ async fn guests_and_bad_builds_are_refused_and_change_nothing() {
         .expect("invite");
     let mut guest = TestClient::join(&invite.to_string(), ClientConfig::generate_key());
     guest.client.attach(None);
-    guest.until("guest layout", |c| c.layout.is_some()).await;
+    guest
+        .until("guest layout", |client| client.layout.is_some())
+        .await;
     guest.follow(pane).await;
     assert_refused(
         upgrade(&guest, good_build("guest")).await,
@@ -369,8 +392,11 @@ async fn an_older_build_needs_the_owners_explicit_downgrade() {
     let tools = tempfile::tempdir().unwrap();
     let exe = installed_exe(tools.path());
     let original = std::fs::read(&exe).unwrap();
-    let exe2 = exe.clone();
-    let daemon = start_with(dir.path(), move |c| c.self_exe = Some(exe2)).await;
+    let exe_for_daemon = exe.clone();
+    let daemon = start_with(dir.path(), move |config| {
+        config.self_exe = Some(exe_for_daemon)
+    })
+    .await;
     let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
     let pane = owner.attach_and_follow().await;
     let older = || {
@@ -400,7 +426,9 @@ async fn an_older_build_needs_the_owners_explicit_downgrade() {
         .expect("invite");
     let mut guest = TestClient::join(&invite.to_string(), ClientConfig::generate_key());
     guest.client.attach(None);
-    guest.until("guest layout", |c| c.layout.is_some()).await;
+    guest
+        .until("guest layout", |client| client.layout.is_some())
+        .await;
     guest.follow(pane).await;
     let mut forced = older();
     forced.downgrade = true;
@@ -432,13 +460,13 @@ async fn an_older_build_needs_the_owners_explicit_downgrade() {
 async fn a_daemon_that_cannot_replace_itself_says_so() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = start_with(dir.path(), |_| {}).await;
-    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    c.attach_and_follow().await;
+    let mut client = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    client.attach_and_follow().await;
     assert_refused(
-        upgrade(&c, good_build("x")).await,
+        upgrade(&client, good_build("x")).await,
         UpgradeFailure::Unsupported,
     );
-    drop(c);
+    drop(client);
     daemon.shutdown().await;
 }
 
@@ -447,34 +475,36 @@ async fn an_incompatible_owner_is_let_in_only_to_upgrade() {
     let dir = tempfile::tempdir().unwrap();
     let tools = tempfile::tempdir().unwrap();
     let exe = installed_exe(tools.path());
-    let exe2 = exe.clone();
+    let exe_for_daemon = exe.clone();
     let key = ClientConfig::generate_key();
     // Pair while compatible, then restart announcing a snapshot format the client lacks.
     let daemon = start_with(dir.path(), |_| {}).await;
-    let mut c = TestClient::connect(&ticket(&daemon), key.clone());
-    c.attach_and_follow().await;
-    drop(c);
+    let mut client = TestClient::connect(&ticket(&daemon), key.clone());
+    client.attach_and_follow().await;
+    drop(client);
     daemon.shutdown().await;
-    let daemon = start_with(dir.path(), move |c| {
-        c.self_exe = Some(exe2);
-        c.test_snapshot_format = Some(0xdead);
+    let daemon = start_with(dir.path(), move |config| {
+        config.self_exe = Some(exe_for_daemon);
+        config.test_snapshot_format = Some(0xdead);
     })
     .await;
-    let mut c = TestClient::connect(&ticket(&daemon), key);
-    c.client.attach(None);
-    c.until("incompatible", |c| !c.incompatible.is_empty())
+    let mut client = TestClient::connect(&ticket(&daemon), key);
+    client.client.attach(None);
+    client
+        .until("incompatible", |client| !client.incompatible.is_empty())
         .await;
-    assert!(c.client.is_incompatible());
-    assert!(c.infos.last().cloned().flatten().is_some());
+    assert!(client.client.is_incompatible());
+    assert!(client.infos.last().cloned().flatten().is_some());
     // Nothing but the upgrade works: no layout ever arrives.
     let start = Instant::now();
-    c.until("a quiet moment", |c| {
-        c.layout.is_some() || start.elapsed() > Duration::from_millis(300)
-    })
-    .await;
-    assert!(c.layout.is_none());
-    assert_eq!(c.connected, 0);
-    let installed = upgrade(&c, good_build("compatible-again"))
+    client
+        .until("a quiet moment", |client| {
+            client.layout.is_some() || start.elapsed() > Duration::from_millis(300)
+        })
+        .await;
+    assert!(client.layout.is_none());
+    assert_eq!(client.connected, 0);
+    let installed = upgrade(&client, good_build("compatible-again"))
         .await
         .expect("upgrade over the maintenance connection");
     assert_eq!(installed.build, "compatible-again");
@@ -482,13 +512,15 @@ async fn an_incompatible_owner_is_let_in_only_to_upgrade() {
 
     // A device that is not paired gets the plain refusal, not the upgrade door.
     let mut stranger = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    stranger.until("refusal", |c| !c.refused.is_empty()).await;
+    stranger
+        .until("refusal", |client| !client.refused.is_empty())
+        .await;
     assert!(
         stranger.refused[0].contains("SnapshotFormat"),
         "{:?}",
         stranger.refused
     );
     assert!(stranger.layout.is_none());
-    drop((c, stranger));
+    drop((client, stranger));
     daemon.shutdown().await;
 }

@@ -13,7 +13,10 @@ use crate::support::{TestClient, start_with, ticket};
 
 /// The first existing path, for shells that live in different places per OS.
 fn find(candidates: &[&str]) -> Option<PathBuf> {
-    candidates.iter().map(PathBuf::from).find(|p| p.exists())
+    candidates
+        .iter()
+        .map(PathBuf::from)
+        .find(|path| path.exists())
 }
 
 fn zsh() -> Option<PathBuf> {
@@ -49,37 +52,46 @@ async fn scenario(shell: &Path, typed_commands: bool) {
     std::fs::write(work.join("notes.txt"), "").unwrap();
     let shell = shell.to_owned();
     let home_str = home.path().to_string_lossy().into_owned();
-    let daemon = start_with(dir.path(), move |c| {
-        c.shell = Some(shell);
-        c.pane_env = vec![
+    let daemon = start_with(dir.path(), move |config| {
+        config.shell = Some(shell);
+        config.pane_env = vec![
             ("HOME".into(), home_str.clone()),
             ("PS1".into(), "$ ".into()),
             ("ZDOTDIR".into(), home_str),
         ];
-        c.long_command = Duration::from_millis(1200);
+        config.long_command = Duration::from_millis(1200);
     })
     .await;
-    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    let pane = c.attach_and_follow().await;
+    let mut client = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = client.attach_and_follow().await;
 
-    c.until("prompt hint", |c| {
-        c.hints
-            .iter()
-            .any(|h| h.hint.at_prompt && h.prediction == Prediction::Allow)
-    })
-    .await;
+    // The prompt is marked: raw-mode prediction is allowed only there.
+    client
+        .until("prompt hint", |client| {
+            client
+                .hints
+                .iter()
+                .any(|hint| hint.hint.at_prompt && hint.prediction == Prediction::Allow)
+        })
+        .await;
 
-    c.type_line(pane, &format!("cd {}", work.display()));
-    c.type_line(pane, "sh -c 'exit 3'");
-    c.type_line(pane, "printf 'out1\\nout2 notes.txt\\n'");
-    c.until("three finished commands", |c| {
-        c.marks.iter().filter(|m| m.finished.is_some()).count() >= 3
-    })
-    .await;
-    let finished: Vec<_> = c
+    client.type_line(pane, &format!("cd {}", work.display()));
+    client.type_line(pane, "sh -c 'exit 3'");
+    client.type_line(pane, "printf 'out1\\nout2 notes.txt\\n'");
+    client
+        .until("three finished commands", |client| {
+            client
+                .marks
+                .iter()
+                .filter(|mark| mark.finished.is_some())
+                .count()
+                >= 3
+        })
+        .await;
+    let finished: Vec<_> = client
         .marks
         .iter()
-        .filter(|m| m.finished.is_some())
+        .filter(|mark| mark.finished.is_some())
         .cloned()
         .collect();
     if typed_commands {
@@ -89,10 +101,10 @@ async fn scenario(shell: &Path, typed_commands: bool) {
     assert_eq!(finished[2].finished.unwrap().exit, Some(0));
     assert_eq!(finished[2].cwd.as_deref(), Some(work.to_str().unwrap()));
     // While a command runs, prediction in raw mode is off again.
-    assert!(c.hints.iter().any(|h| !h.hint.at_prompt));
+    assert!(client.hints.iter().any(|hint| !hint.hint.at_prompt));
 
-    let id = c.client.commands(pane);
-    let ClientEvent::Commands { result, .. } = c.answer(id).await else {
+    let id = client.client.commands(pane);
+    let ClientEvent::Commands { result, .. } = client.answer(id).await else {
         unreachable!()
     };
     let list = result.unwrap();
@@ -103,43 +115,49 @@ async fn scenario(shell: &Path, typed_commands: bool) {
         "{rows:?}"
     );
 
-    let id = c.client.command_output(pane, None);
-    let ClientEvent::CommandOutput { result, .. } = c.answer(id).await else {
+    let id = client.client.command_output(pane, None);
+    let ClientEvent::CommandOutput { result, .. } = client.answer(id).await else {
         unreachable!()
     };
-    let out = result.unwrap();
-    assert_eq!(out.text, "out1\nout2 notes.txt");
-    assert_eq!(out.mark.command_id, finished[2].command_id);
+    let output = result.unwrap();
+    assert_eq!(output.text, "out1\nout2 notes.txt");
+    assert_eq!(output.mark.command_id, finished[2].command_id);
 
     // Paths in the last command's output resolve against the shell's directory.
-    let id = c.client.links(pane, 1);
-    let ClientEvent::Links { result, .. } = c.answer(id).await else {
+    let id = client.client.links(pane, 1);
+    let ClientEvent::Links { result, .. } = client.answer(id).await else {
         unreachable!()
     };
     let links = result.unwrap();
     assert!(
-        links
-            .links
-            .iter()
-            .any(|l| l.target == work.join("notes.txt").to_str().unwrap()
-                && l.exists == Some(true)),
+        links.links.iter().any(
+            |link| link.target == work.join("notes.txt").to_str().unwrap()
+                && link.exists == Some(true)
+        ),
         "{links:#?}"
     );
 
     // A long command finishing while the pane is shown is not announced...
-    c.type_line(pane, "sleep 1.5");
-    c.until("sleep finished", |c| {
-        c.marks.iter().filter(|m| m.finished.is_some()).count() >= 4
-    })
-    .await;
-    assert!(c.unseen.is_empty());
-    // ...but it is when nobody looks.
-    c.client.set_view(None, vec![]);
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    c.type_line(pane, "sleep 1.5; echo 'it broke'; false");
-    c.until("unseen long command", |c| !c.unseen.is_empty())
+    client.type_line(pane, "sleep 1.5");
+    client
+        .until("sleep finished", |client| {
+            client
+                .marks
+                .iter()
+                .filter(|mark| mark.finished.is_some())
+                .count()
+                >= 4
+        })
         .await;
-    let unseen = c.unseen[0].clone();
+    assert!(client.unseen.is_empty());
+    // ...but it is when nobody looks.
+    client.client.set_view(None, vec![]);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    client.type_line(pane, "sleep 1.5; echo 'it broke'; false");
+    client
+        .until("unseen long command", |client| !client.unseen.is_empty())
+        .await;
+    let unseen = client.unseen[0].clone();
     if typed_commands {
         assert_eq!(
             unseen.command.as_deref(),
@@ -150,16 +168,16 @@ async fn scenario(shell: &Path, typed_commands: bool) {
     assert_eq!(end.exit, Some(1));
     assert!(end.duration_ms >= 1400, "{end:?}");
     // Its notification ends with the last line of output.
-    let list = c.client.attention_list().await.unwrap();
+    let list = client.client.attention_list().await.unwrap();
     let item = list
         .items
         .iter()
-        .find(|i| matches!(&i.kind, AttentionKind::CommandFinished(m) if m.command_id == unseen.command_id))
+        .find(|item| matches!(&item.kind, AttentionKind::CommandFinished(mark) if mark.command_id == unseen.command_id))
         .expect("an attention item for the command");
     assert!(item.title.ends_with("failed (1)"), "{item:?}");
     assert_eq!(item.body, "after 1 s · it broke");
 
-    drop(c);
+    drop(client);
     daemon.shutdown().await;
 }
 
