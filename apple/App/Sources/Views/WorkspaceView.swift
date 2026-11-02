@@ -84,7 +84,7 @@ struct WorkspaceView: View {
             }
             // At the bottom, clear of every pane's top bar; over the port offer when it shows,
             // and over the iPhone's tab bar.
-            .toastHost(model.toasts, bottomInset: (model.widthBucket == .compact ? 64 : DS.Space.l)
+            .toastHost(model.toasts, bottomInset: PortOfferBanner.bottomInset(model)
                 + (model.ports.offer != nil && !model.editorHasKeys ? PortOfferBanner.height + DS.Space.s : 0))
             .overlay(alignment: model.widthBucket == .compact ? .top : .topTrailing) { AgentToastStack() }
             .dictationIndicator()

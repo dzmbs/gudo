@@ -924,7 +924,10 @@ struct CompactTerminalView: View {
         HStack(spacing: DS.Space.xs) {
             tabSwitcher
             Spacer()
-            if let tab = workspace.session.activeTab, tab.root.panes.count > 1 {
+            if let mixed = model.activeMixed {
+                // A page, editor or another host's pane beside a terminal: one shows at a time.
+                if mixed.leaves.count > 1 { mixedPaneSwitcher(mixed) }
+            } else if let tab = workspace.session.activeTab, tab.root.panes.count > 1 {
                 paneSwitcher(tab)
             }
             Button("Command Palette", systemImage: "command") { model.isPaletteShown = true }
@@ -1082,6 +1085,32 @@ struct CompactTerminalView: View {
             Label("Panes", systemImage: "rectangle.split.2x1")
         }
         .menuIndicator(.hidden)
+    }
+
+    private func mixedPaneSwitcher(_ mixed: CompositeTab) -> some View {
+        Menu {
+            Picker("Pane", selection: Binding(get: { mixed.focusedLeaf }, set: { model.focusLeaf($0, inMixedTab: mixed.id) })) {
+                ForEach(Array(mixed.leaves.enumerated()), id: \.element) { index, leaf in
+                    mixedLeafLabel(mixed, leaf, index: index).tag(leaf)
+                }
+            }
+        } label: {
+            Label("Panes", systemImage: "rectangle.split.2x1")
+        }
+        .menuIndicator(.hidden)
+    }
+
+    @ViewBuilder private func mixedLeafLabel(_ mixed: CompositeTab, _ leaf: PaneId, index: Int) -> some View {
+        if let browser = mixed.browsers[leaf] {
+            Label(URL(string: browser.url)?.host() ?? "Browser", systemImage: "globe")
+        } else if let editor = mixed.editors[leaf] {
+            Label("VS Code · \(editor.folderName)", systemImage: "chevron.left.forwardslash.chevron.right")
+        } else if let tool = mixed.tools[leaf] {
+            Text(tool.tool.title)
+        } else if let member = mixed.members[leaf] {
+            let program = model.programIdentity(ofPane: member.pane, onGroup: member.hostId)
+            Label { Text(program.isShell ? "Pane \(index + 1)" : program.displayName) } icon: { program.image }
+        }
     }
 }
 

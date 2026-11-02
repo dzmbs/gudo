@@ -302,6 +302,9 @@ struct BrowserView: View {
         .accessibilityIdentifier("browser-more")
     }
 
+    /// The iPhone bar's height over the bottom edge: its capsules and the gap under them.
+    static let compactBarHeight: CGFloat = 44 + DS.Space.s
+
     /// iPhone: one floating glass capsule with the controls around the address.
     private var compactBar: some View {
         GlassEffectContainer(spacing: DS.Space.s) {
@@ -348,6 +351,7 @@ struct BrowserView: View {
                     .labelStyle(.iconOnly)
                     .frame(width: 44, height: 44)
                     .floatingCapsule(interactive: true)
+                    .accessibilityIdentifier("browser-more")
                 }
             }
             .buttonStyle(.bar)
