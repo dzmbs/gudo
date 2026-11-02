@@ -1,0 +1,9 @@
+{
+  "name": "gudo",
+  "compatibility_date": "2026-10-23",
+  "observability": { "enabled": true },
+  "assets": {
+    "directory": "site",
+    "not_found_handling": "404-page"
+  }
+}

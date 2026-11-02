@@ -7,3 +7,4 @@ zig-out
 xcuserdata/
 /.claude/worktrees
 node_modules/
+.wrangler/

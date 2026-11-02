@@ -1,7 +1,7 @@
 # gudo.dev
 
 The static site for Gudo. Plain HTML and one stylesheet, no build step, no trackers, no
-cookies. Served by Cloudflare Pages.
+cookies. Served by Cloudflare as static assets (`wrangler deploy` from the repo root).
 
 ## Deploy
 
