@@ -11,6 +11,7 @@ One multiplatform SwiftUI app (iPhone, iPad, Mac; iOS/iPadOS/macOS 26+) over thr
 | `Packages/PaneLayout` | Layout model shared in spirit with the daemon: Session → Tab → split tree, `LayoutOp`, `LayoutStore` |
 | `Packages/DesignSystem` | Tokens, Liquid Glass components, Ghostty overlays (resize, search, palette, exit bar), agent status, the 463 Ghostty themes; spec in `docs/DESIGN.md` |
 | `Packages/DrawingKit` | Drawing without UI: overlay anchor math (Excalidraw scene px ↔ cells ↔ points), PencilKit → Excalidraw `freedraw`, the row tracker that pins daemon anchors in the app's VT |
+| `App/Sources/Drawing` | Drawing in the terminal (see "Drawing" below) |
 | `App/Resources/Excalidraw` | Offline Excalidraw build (`scripts/build-excalidraw.sh`, MIT) |
 | `App/Sources/Screens` | Hosts, pairing, Inbox, share, links, diff, files, browser, editor: views over the protocols in `App/Sources/Model/ScreenModels.swift` (mock data in `MockData.swift`) |
 | `Packages/NotifyKit` | Notification categories and actions, per-kind preferences, local notifications from the attention feed, the action handler, the Notification Service Extension's work (over `PushCrypto`) and the Live Activity attributes; no core, so the extensions stay small |
@@ -114,10 +115,11 @@ End-to-end on the Mac without any permission prompt: `scripts/dogfood.sh [scenar
 runs a scenario (`Dogfood/core.json`: the daily-driver checklist) inside the app, which synthesizes
 its own input and writes `report.json` plus PNGs; see `Dogfood/README.md`.
 
-(TerminalBench `--glyphs-png`), `selection-handles-ipad.png`, `ime-preedit-ipad.png`.
+Glyph test screens: `-echoFixture glyphs` in the app, `--glyphs-png` in TerminalBench.
 
 ## Terminal view
 
+What `TerminalKit` does beyond drawing cells:
 
 | Area | Where | Notes |
 |---|---|---|
@@ -130,7 +132,7 @@ its own input and writes `report.json` plus PNGs; see `Dogfood/README.md`.
 | IME | `UITextInput` / `NSTextInputClient` | Marked text drawn inline at the cursor, underlined, never sent; candidate window at the cursor |
 | Links | OSC 8 | Underlined on hover; tap (iOS) / ⌘-click (Mac) opens after confirmation |
 | Echo prediction | `TerminalCore/Prediction/*` | 05 §5.5 with the S6 rule. Backends adopt `PredictionFeed` (hints, acks, RTT); the iOS echo backend simulates latency with `-echoLatencyMs 150` |
-| Appearance | `TerminalAppearance` | Font family/size, palette, colors, cursor, selection colors, padding, unfocused-split opacity — configuration, not constants |
+| Appearance | `TerminalAppearance` | Font family/size, palette, colors, cursor, selection colors, padding, unfocused-split opacity: configuration, not constants |
 
 iOS gestures: tap focuses (or clicks in mouse mode, or opens a link); double/triple tap and long-press
 select with drag handles and the edit menu; one finger scrolls with momentum (arrows on the alt screen,
@@ -152,6 +154,7 @@ Bench (`swift run -c release TerminalBench`, 112×35 at 2x, M-series Mac): typin
 sprite screen full redraw 0.61 ms avg / 0.66 ms p99; selection drag (whole viewport dirty every frame)
 0.60 ms avg / 0.67 ms p99; GPU ≤ 0.3 ms avg. All within the ~2 ms budget.
 
+## Drawing
 
 The app side of docs/DAEMON.md §7.11, on panes of a daemon (local and plain-SSH panes have none).
 
@@ -159,8 +162,8 @@ The app side of docs/DAEMON.md §7.11, on panes of a daemon (local and plain-SSH
 |---|---|
 | Draw mode | ⌃⌘D (Pane menu ▸ Draw on Pane, command palette), a Pencil stroke on the pane (iPad; the stroke becomes the drawing's first, a Pencil tap opens it empty), or a two-finger long press. ⇧⌘D stays Ghostty's Split Down. One pane draws (or writes) at a time, across windows: another pane's empty overlay closes, one holding a drawing asks (Place It / Discard It / Keep Drawing There; `DrawingKit.DrawExclusivity`). A transparent overlay anchored to the touched row (the cursor row from the keyboard) holds one Excalidraw scene: shapes, arrows and text from the bundled editor, Pen ink from PencilKit converted to `freedraw` elements (`DrawingKit.Freedraw`). It scrolls with the output (wheel / trackpad scroll, or two fingers on iPad and iPhone, scroll the terminal) and syncs live (`excalidrawPut`, pushes reconciled with Excalidraw's rule, Pencil points streamed with `inkLive` every 16 ms) |
 | Tools | One choice for every input (`DrawTool`, `DrawRouting`): Select, Pen, Rectangle, Ellipse, Arrow, Text, Eraser in our glass toolbar at the bottom of the pane (folded into one menu on narrow panes); Excalidraw's own chrome is hidden (`index.html`), so nothing sits over the first rows. One finger and the Pencil draw with the chosen tool, which stays picked after each shape (Excalidraw `locked`); the editor's keyboard letters and its switch back to selection after text update the toolbar (`tool` message). Pen inks through PencilKit for finger and Pencil; with Select the Pencil still inks. Excalidraw's pen mode (fingers stop drawing once a Pencil touched the page) is forced off. Pencil double tap: eraser and back |
-| Pencil hand-off | `DrawingKit.InkHandoff`: a lifted stroke is converted and sent; the page holds elements until its scene has loaded (`loaded`; earlier ones were replaced by the scene load and vanished), draws them, and confirms (`inkApplied`); PencilKit's stroke is removed only after that and only between strokes (replacing the drawing mid-stroke cancelled the next stroke); unconfirmed elements are resent after 1 s (the page de-duplicates by id); Done waits for every stroke. Each step logs `ink:` lines to the `drawing` category (`log stream --predicate 'category == "drawing"'`) |
-| Actions | Draw mode is modal and holds the keyboard focus (`DrawKeySink`, a hidden text view on iOS; the overlay view on the Mac): Esc / ⌘. cancel, ⌘↩ keeps, ⇧⌘↩ sends, the tool letters pick tools, nothing reaches the shell (an Esc used to: the overlay stayed open and the shell's bell flashed the pane white; the key bar and software keyboard are away while drawing). Cancel deletes a new drawing and reverts a reopened one (`canvas.revert`: the loaded elements put back with higher versions). The primary button names where the drawing goes (`DrawingActions.swift`): **Send to Claude Code / Codex** (⇧⌘↩) when the pane or another pane in its tab runs an agent, with a chevron menu of every other destination; otherwise a **Send To…** menu: agent panes on any host the window shows (other hosts get the PNG uploaded), Start Claude Code / Codex with This Drawing (a split launched with `launchAgentPane`; the image is attached once the agent reports idle), Copy Image, Share… (iOS share sheet) / Save Image… and Share… (Mac), Keep in Terminal. Keep (⌘↩) only places it. Every choice also keeps the drawing in the output. The first draw mode shows a one-line hint above the toolbar saying what drawings are for (`drawingHintSeen` once one is finished). After it a notice says what happened ("Sent to Claude Code · in the prompt as an image · also kept here", "Image copied", "Kept in terminal · tap it to send, copy or edit" with Send to Claude/Codex when an agent runs) and the placement is outlined for a moment |
+| Pencil hand-off | `DrawingKit.InkHandoff`: a lifted stroke is converted and sent; the page holds elements until its scene has loaded (`loaded`; elements drawn earlier would be replaced by the scene load), draws them, and confirms (`inkApplied`); PencilKit's stroke is removed only after that and only between strokes (replacing the drawing mid-stroke cancels the next stroke); unconfirmed elements are resent after 1 s (the page de-duplicates by id); Done waits for every stroke. Each step logs `ink:` lines to the `drawing` category (`log stream --predicate 'category == "drawing"'`) |
+| Actions | Draw mode is modal and holds the keyboard focus (`DrawKeySink`, a hidden text view on iOS; the overlay view on the Mac): Esc / ⌘. cancel, ⌘↩ keeps, ⇧⌘↩ sends, the tool letters pick tools, nothing reaches the shell (the key bar and software keyboard are away while drawing). Cancel deletes a new drawing and reverts a reopened one (`canvas.revert`: the loaded elements put back with higher versions). The primary button names where the drawing goes (`DrawingActions.swift`): **Send to Claude Code / Codex** (⇧⌘↩) when the pane or another pane in its tab runs an agent, with a chevron menu of every other destination; otherwise a **Send To…** menu: agent panes on any host the window shows (other hosts get the PNG uploaded), Start Claude Code / Codex with This Drawing (a split launched with `launchAgentPane`; the image is attached once the agent reports idle), Copy Image, Share… (iOS share sheet) / Save Image… and Share… (Mac), Keep in Terminal. Keep (⌘↩) only places it. Every choice also keeps the drawing in the output. The first draw mode shows a one-line hint above the toolbar saying what drawings are for (`drawingHintSeen` once one is finished). After it a notice says what happened ("Sent to Claude Code · in the prompt as an image · also kept here", "Image copied", "Kept in terminal · tap it to send, copy or edit" with Send to Claude/Codex when an agent runs) and the placement is outlined for a moment |
 | Write (iPad) | The pencil-and-scribble button in the toolbar, or the Pencil held still on the terminal for 0.5 s. Handwriting anywhere over the pane goes through Scribble (`UIIndirectScribbleInteraction`) into a hidden field and shows live at the prompt as marked text (`TerminalSurface.preedit`); a hardware keyboard edits the same draft. Return or Send types it as one line and presses Return; Cancel or Esc drops it. Nothing reaches the shell before that (`WriteController`; the terminal's own Scribble stays off, `TerminalView.allowsHandwriting = false`) |
 | Done | The covered cells (`OverlayGeometry.cells(covering:)`) are exported from the editor at device scale (`exportToBlob`, dark theme applied to the pixels because WebKit has no canvas `filter`) and placed with `placePng(replace:)`; the device's PNG shows at once, the `Placed` push follows |
 | Placements | Drawn by the Metal renderer as image quads above the text (Ghostty's `image` pipeline, `TerminalSurface.inlineImages`), pinned to rows with libghostty-vt tracked refs (`Terminal+Pins`), resolved from the daemon's `(at_seq, from_bottom)` anchors by `DrawingKit.RowTracker`; blobs are downloaded once per hash. Tap/click one for its menu: the same destinations as the overlay (Send to…, Start Claude Code / Codex with This Drawing, Copy Image, Share… / Save Image…) plus Edit Drawing (reopens its scene in place) and Delete Drawing; viewers get Copy and Share only. Placements whose row is gone (detached by `clear` or a restart, or evicted from this device's scrollback ring) are not drawn and go to the loose tray, a glass chip top-right of the pane: Place at Cursor, Send to Claude/Codex, Remove |
@@ -178,6 +181,7 @@ two rectangles and Pen ink with the chosen tool; one pane draws at a time (quiet
 question); Write previews at the prompt and sends only on Send; Esc leaves draw mode with no key bar up and no flash of the pane, sampled from screenshots while it closes; the Send To… menu, Copy Image, and a placement's tap menu with Edit and Delete Drawing). AppTests `DrawingMenuTests` (what each menu lists). `DrawingKit` `DrawInputTests`
 (routing, hand-off, exclusivity, loose tray, handwriting) and AppTests `WriteControllerTests`
 (the commit path). Debug: `-drawingDemo overlay|done|scroll|canvas`
+scripts the drawing screens; `-drawingDebug YES` adds the overlay's
 "Rect" button the UI test uses.
 
 ## Design review
@@ -186,6 +190,7 @@ Every screen opens directly with mock data: `-screen <name> -mock` (names in `do
 e.g. `splits`, `inbox`, `palette`, `diff`). Screenshots in light and dark:
 
 ```sh
+scripts/screenshots.sh "$DEVICE" ipad /tmp/gudo-screens                       # booted simulator
 scripts/mac-screenshots.sh build/DerivedData/Build/Products/Debug/Gudo.app out  # Mac, works while locked
 ```
 
@@ -203,7 +208,7 @@ simulator's paste permission: `xcrun simctl privacy "$DEVICE" grant pasteboard d
 | ⌥⌘ arrows | Focus pane in that direction |
 | ⌃⌘ arrows | Move the divider |
 | ⌘T / ⌥⌘T | New tab on the current host / on a host you pick |
-| ⇧⌘[ / ⇧⌘], ⌘1…⌘8, ⌘9 | Previous / next tab, tab N, last tab — across every host in the window (the sidebar's numbering) |
+| ⇧⌘[ / ⇧⌘], ⌘1…⌘8, ⌘9 | Previous / next tab, tab N, last tab: across every host in the window (the sidebar's numbering) |
 | ⌘P | Go to Tab… (any host; matches name, context line, host) |
 
 They are SwiftUI commands: menu-bar items on macOS, and on iPadOS the menu bar and the ⌘-hold overlay.
