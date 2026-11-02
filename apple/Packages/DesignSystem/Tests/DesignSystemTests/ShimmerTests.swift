@@ -1,7 +1,7 @@
 import Testing
 @testable import DesignSystem
 
-// The cases of Warp's `shimmer_math_tests.rs` (MIT), on the Swift port.
+// Cases ported with `ShimmerMath` from Warp's `shimmer_math_tests.rs` (MIT).
 private let config = ShimmerMath.Config(period: 2, radius: 6, padding: 8)
 
 @Test func shimmerCenterStartsBeforeTheTextAndSweepsAcrossIt() {
@@ -26,6 +26,6 @@ private let config = ShimmerMath.Config(period: 2, radius: 6, padding: 8)
     #expect(far > 0)
 }
 
-@Test func shimmerDefaultsAreWarps() {
+@Test func shimmerDefaults() {
     #expect(ShimmerMath.Config.standard == ShimmerMath.Config(period: 3, radius: 6, padding: 8))
 }

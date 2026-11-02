@@ -49,8 +49,8 @@ nonisolated public struct TerminalTheme: Codable, Hashable, Identifiable, Sendab
         let digits = bg.dropFirst()
         guard let value = UInt32(digits, radix: 16) else { return false }
         func channel(_ shift: UInt32) -> Double {
-            let c = Double((value >> shift) & 0xFF) / 255
-            return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+            let level = Double((value >> shift) & 0xFF) / 255
+            return level <= 0.04045 ? level / 12.92 : pow((level + 0.055) / 1.055, 2.4)
         }
         return 0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0) > 0.5
     }
@@ -60,6 +60,7 @@ nonisolated public struct TerminalTheme: Codable, Hashable, Identifiable, Sendab
     public var splitDivider: Color { scaled(isLight ? 0.92 : 0.6) }
 
     /// A surface on the terminal itself (diff file headers, the editor's cards): the foreground
+    /// over the background at `strength` (0.05, 0.10, 0.15). Chrome around the
     /// terminal uses `ChromePalette`, which also follows the window scheme.
     public func surface(_ strength: Double) -> Color { bgRGB.blended(with: fgRGB, strength).color }
 
@@ -75,8 +76,7 @@ nonisolated public struct TerminalTheme: Codable, Hashable, Identifiable, Sendab
     }
 }
 
-/// The themes Ghostty bundles (iTerm2-Color-Schemes, MIT), converted to one JSON file by
-/// docs/DESIGN.md "Themes".
+/// The themes Ghostty bundles (from iTerm2-Color-Schemes, MIT), converted to one JSON file.
 nonisolated public enum ThemeCatalog {
     public nonisolated static let all: [TerminalTheme] = {
         guard let url = Bundle.module.url(forResource: "ghostty-themes", withExtension: "json"),

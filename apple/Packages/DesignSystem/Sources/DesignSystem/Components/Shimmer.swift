@@ -1,7 +1,6 @@
 import SwiftUI
 
-// The band maths (`ShimmerMath`) is ported from Warp's `crates/warpui_core/src/elements/shimmer_math.rs`
-// (MIT; the rest of Warp is AGPL and none of it is used here):
+// `ShimmerMath` is ported from Warp's `crates/warpui_core/src/elements/shimmer_math.rs` (MIT):
 //
 //   Copyright (C) 2020-2026 Denver Technologies, Inc.
 //
@@ -21,6 +20,7 @@ import SwiftUI
 //   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 /// A highlight band that sweeps across a run of glyphs: each glyph is lit by a cosine of its
+/// distance from the band's centre.
 nonisolated public enum ShimmerMath {
     public struct Config: Hashable, Sendable {
         /// One sweep, start of the track to its end.

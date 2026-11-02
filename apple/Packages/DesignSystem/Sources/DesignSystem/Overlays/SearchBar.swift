@@ -1,9 +1,7 @@
 import SwiftUI
 
-/// Scrollback search (Ghostty `SurfaceSearchOverlay`): a 180 pt field with the match counter inside
-/// it, next/previous/close buttons, in a floating panel pinned to a corner. Drag it to another
-/// corner; it snaps with a 0.2 s ease-out. Return goes to the next match, ⇧Return to the previous,
-/// Esc closes. "Aa" matches case exactly (off: case-insensitive, as Ghostty).
+/// Scrollback search (Ghostty `SurfaceSearchOverlay`) in a floating panel pinned to a corner; drag
+/// it to another corner. Return goes to the next match, ⇧Return to the previous, Esc closes.
 public struct TerminalSearchBar: View {
     @Binding var needle: String
     /// Match case; nil hides the toggle.
@@ -37,7 +35,7 @@ public struct TerminalSearchBar: View {
     }
 
     public var body: some View {
-        GeometryReader { geo in
+        GeometryReader { geometry in
             HStack(spacing: 4) {
                 TextField("Search", text: $needle)
                     .textFieldStyle(.plain)
@@ -127,10 +125,10 @@ public struct TerminalSearchBar: View {
                 DragGesture()
                     .onChanged { dragOffset = $0.translation }
                     .onEnded { value in
-                        let center = centerPosition(for: corner, in: geo.size)
+                        let center = centerPosition(for: corner, in: geometry.size)
                         let dropped = CGPoint(x: center.x + value.translation.width, y: center.y + value.translation.height)
                         withAnimation(DS.Motion.overlay) {
-                            corner = closestCorner(to: dropped, in: geo.size)
+                            corner = closestCorner(to: dropped, in: geometry.size)
                             dragOffset = .zero
                         }
                     })

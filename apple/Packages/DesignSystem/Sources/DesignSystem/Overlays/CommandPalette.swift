@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// One command palette entry (Ghostty `CommandOption`, plus a section for the empty-query view).
+/// One command palette entry; `section` groups it in the empty-query view.
 public struct PaletteCommand: Identifiable {
     public let id: String
     public var title: String
@@ -32,16 +32,16 @@ public struct PaletteCommand: Identifiable {
     }
 }
 
-/// The command palette (Ghostty `CommandPaletteView`, Spotlight's and Raycast's shape): a search
-/// field, a hairline and a list of compact one-line rows. One row is always selected, as a soft
-/// accent tint; ↑/↓ and ⌃P/⌃N move, Return runs, ⌘1–⌘5 run the first five matches, Esc or
-/// clicking outside closes. Matched characters are bold. With an empty query, entries are grouped
-/// by section (Raycast); with a query, they are ranked flat. Present it with `spotlightOverlay`.
+/// The command palette: a search field over compact one-line rows. One row is always selected;
+/// ↑/↓ and ⌃P/⌃N move, Return runs, ⌘1–⌘5 run the first five matches, Esc or clicking outside
+/// closes. With an empty query, entries are grouped by section; with a query, they are ranked
+/// flat. Present it with `spotlightOverlay`.
 public struct CommandPalette: View {
     @Binding var isPresented: Bool
     let commands: [PaletteCommand]
     var placeholder: String
-    /// it switched the palette to that scope (the query is then dropped).
+    /// A scope typed as the whole query ("/" for workflows): returns true when it switched the
+    /// palette to that scope (the query is then dropped).
     var onScope: ((String) -> Bool)?
     /// ⌫ on an empty query (a scoped palette goes back to all commands).
     var onDeleteEmpty: (() -> Void)?
@@ -62,14 +62,14 @@ public struct CommandPalette: View {
         self.onDeleteEmpty = onDeleteEmpty
     }
 
-    private var trimmed: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var trimmedQuery: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     private var results: [PaletteCommand] {
-        guard !trimmed.isEmpty else { return commands }
+        guard !trimmedQuery.isEmpty else { return commands }
         return commands
             .compactMap { command -> (PaletteCommand, Int)? in
-                if let score = FuzzyMatch.score(trimmed, in: command.title) { return (command, score) }
-                if let subtitle = command.subtitle, let score = FuzzyMatch.score(trimmed, in: subtitle) { return (command, score - 50) }
+                if let score = FuzzyMatch.score(trimmedQuery, in: command.title) { return (command, score) }
+                if let subtitle = command.subtitle, let score = FuzzyMatch.score(trimmedQuery, in: subtitle) { return (command, score - 50) }
                 return nil
             }
             .sorted { $0.1 > $1.1 }
@@ -136,10 +136,9 @@ public struct CommandPalette: View {
                 move(press.characters == "p" ? -1 : 1, in: results)
                 return .handled
             }
-            // ⌘1–⌘5 run the first five results.
             .onKeyPress(keys: ["1", "2", "3", "4", "5"], phases: .down) { press in
-                guard press.modifiers == .command, let n = Int(press.characters), results.indices.contains(n - 1) else { return .ignored }
-                run(results[n - 1])
+                guard press.modifiers == .command, let number = Int(press.characters), results.indices.contains(number - 1) else { return .ignored }
+                run(results[number - 1])
                 return .handled
             }
             .accessibilityIdentifier("palette-field")
@@ -150,7 +149,7 @@ public struct CommandPalette: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(results.enumerated()), id: \.element.id) { index, command in
-                        if trimmed.isEmpty, let section = command.section,
+                        if trimmedQuery.isEmpty, let section = command.section,
                            index == 0 || results[index - 1].section != section {
                             Text(section)
                                 .font(Self.sectionFont)
@@ -226,7 +225,7 @@ public struct CommandPalette: View {
                         .foregroundStyle(DS.Palette.textSecondary)
                 }
                 // The first five results run with ⌘1–⌘5 while a query narrows them.
-                if !trimmed.isEmpty, index < 5 {
+                if !trimmedQuery.isEmpty, index < 5 {
                     PaletteKeys(["⌘", "\(index + 1)"])
                 } else if let shortcut = command.shortcut {
                     PaletteKeys(shortcut)
@@ -264,7 +263,7 @@ public struct CommandPalette: View {
 
     /// Matched characters in bold, in the row's own colour (never the accent).
     private func highlighted(_ title: String) -> Text {
-        guard !trimmed.isEmpty, let indices = FuzzyMatch.indices(trimmed, in: title) else { return Text(title) }
+        guard !trimmedQuery.isEmpty, let indices = FuzzyMatch.indices(trimmedQuery, in: title) else { return Text(title) }
         var attributed = AttributedString(title)
         for offset in indices {
             let start = attributed.index(attributed.startIndex, offsetByCharacters: offset)
@@ -293,8 +292,8 @@ public struct CommandPalette: View {
     }
 }
 
-/// A shortcut right-aligned in palette rows as plain glyphs, the way system menus, Ghostty's
-/// palette and the host switcher show them: grey boxes behind every key read as clutter.
+/// A shortcut in palette rows as plain glyphs, as system menus show them: grey boxes behind every
+/// key read as clutter.
 struct PaletteKeys: View {
     let symbols: [String]
 
@@ -311,9 +310,9 @@ struct PaletteKeys: View {
 }
 
 public extension View {
-    /// A Spotlight-style panel over the whole window: centred, its top at a sixth of the height,
-    /// over a light scrim that dims and blocks whatever is beneath (the find bar too). A tap on
-    /// the scrim calls `onDismiss`.
+    /// A panel over the whole window: centred, its top at a sixth of the height, over a light
+    /// scrim that dims and blocks whatever is beneath (the find bar too). A tap on the scrim calls
+    /// `onDismiss`.
     func spotlightOverlay<Panel: View>(
         isPresented: Bool, onDismiss: @escaping () -> Void, @ViewBuilder panel: @escaping () -> Panel
     ) -> some View {
@@ -350,22 +349,23 @@ private struct SpotlightLayer<Panel: View>: View {
 /// Subsequence matching with a preference for word starts and contiguous runs.
 nonisolated public enum FuzzyMatch {
     public static func indices(_ query: String, in text: String) -> [Int]? {
-        let q = Array(query.lowercased()), t = Array(text.lowercased())
-        var result: [Int] = [], qi = 0
-        for (ti, c) in t.enumerated() where qi < q.count && c == q[qi] {
-            result.append(ti)
-            qi += 1
+        let queryCharacters = Array(query.lowercased()), textCharacters = Array(text.lowercased())
+        var result: [Int] = [], matched = 0
+        for (offset, character) in textCharacters.enumerated()
+        where matched < queryCharacters.count && character == queryCharacters[matched] {
+            result.append(offset)
+            matched += 1
         }
-        return qi == q.count ? result : nil
+        return matched == queryCharacters.count ? result : nil
     }
 
     public static func score(_ query: String, in text: String) -> Int? {
         guard let indices = indices(query, in: text) else { return nil }
-        let chars = Array(text)
+        let characters = Array(text)
         var score = 100 - (indices.first ?? 0)
-        for (n, index) in indices.enumerated() {
-            if n > 0, indices[n - 1] == index - 1 { score += 8 }
-            if index == 0 || chars[index - 1] == " " || chars[index - 1] == "-" { score += 10 }
+        for (position, index) in indices.enumerated() {
+            if position > 0, indices[position - 1] == index - 1 { score += 8 }
+            if index == 0 || characters[index - 1] == " " || characters[index - 1] == "-" { score += 10 }
         }
         if text.lowercased().hasPrefix(query.lowercased()) { score += 40 }
         return score

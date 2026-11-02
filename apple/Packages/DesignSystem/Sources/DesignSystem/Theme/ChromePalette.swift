@@ -1,5 +1,6 @@
 import SwiftUI
 
+/// Every chrome colour, derived from the active terminal theme.
 ///
 /// A theme gives four inputs: background, foreground, an accent and its 16 ANSI colours. Every
 /// surface is the foreground laid over the background at a few fixed strengths, so a light theme
@@ -7,12 +8,10 @@ import SwiftUI
 /// strengths; state colours are the theme's own ANSI hues softened toward the foreground. The
 /// result: Solarized chrome is Solarized, Dracula's is Dracula, and no grey from the system sits
 /// on a tinted ground.
-///
 nonisolated public struct ChromePalette: Hashable, Sendable {
-    /// Light or dark: the window's chrome scheme (`window-theme`), which is the theme's own unless
-    /// the user forced the other one.
+    /// The window's chrome scheme (`window-theme`), which is the theme's own unless the user
+    /// forced the other one.
     public let scheme: ColorScheme
-    /// The terminal grid's background, whatever the chrome scheme.
     public let terminal: ThemeColor
     /// The chrome's background: the theme's background, or a neutral one when the user forced the
     /// other scheme (a dark theme in a light window). The tab strip and toolbar band sit on it.
@@ -40,11 +39,13 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
     public let attention: ThemeColor
     public let working: ThemeColor
     public let info: ThemeColor
-    /// keeps them below the level above) where a mid-tone ink would leave them unreadable, as on
-    /// most light themes: secondary toward 4.5:1, tertiary toward 3:1.
+    /// The secondary and tertiary text strengths: 60 % and 40 %, raised (up to a cap that keeps
+    /// them below the level above) where a mid-tone ink would leave them unreadable, as on most
+    /// light themes: secondary toward 4.5:1, tertiary toward 3:1.
     public let secondaryLevel: Double
     public let tertiaryLevel: Double
 
+    // MARK: Strengths
 
     /// Panels and surfaces: the foreground over the background at 5 / 10 / 15 %.
     public static let sidebarStrength = 0.05
@@ -54,13 +55,11 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
     public static let textLevels = (primary: 0.90, secondary: 0.60, tertiary: 0.40, quaternary: 0.20)
     /// The most secondary and tertiary text are raised to for contrast.
     public static let levelCaps = (secondary: 0.78, tertiary: 0.60)
-    /// Translucent fills: hover / selected / pressed.
     public static let fillLevels = (hover: 0.05, selected: 0.10, pressed: 0.15)
-    /// Lines: hairline / separator / strong border.
     public static let lineLevels = (hairline: 0.10, separator: 0.15, border: 0.20)
-    /// theme's amber "needs you" is a cream barely apart from the text beside it (Ghostty's
-    /// #F0C674 becomes #F8E3BA), so states keep two thirds of their hue: softened into the chrome,
-    /// still a colour at a glance.
+    /// How far a state hue is mixed toward the foreground. At 50 % a dark theme's amber "needs
+    /// you" is a cream barely apart from the text beside it (#F0C674 becomes #F8E3BA), so states
+    /// keep two thirds of their hue: softened into the chrome, still a colour at a glance.
     public static let stateMix = 0.35
     /// The soft selection's accent strength (light / dark chrome): a tint, never a block of colour.
     public static let selectionLevels = (light: 0.14, dark: 0.24)
@@ -74,9 +73,8 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
 
     // MARK: Surfaces (opaque)
 
-    /// The window base under the tab strip and toolbar band (one surface with the terminal).
+    /// One surface with the terminal.
     public var base: ThemeColor { background }
-    /// The sidebar and side panels.
     public var sidebar: ThemeColor { background.blended(with: foreground, Self.sidebarStrength) }
     /// Cards, popovers, the palette's fill under glass.
     public var raised: ThemeColor { background.blended(with: foreground, Self.raisedStrength) }
@@ -96,34 +94,33 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
 
     // MARK: Init
 
-    /// Derives the chrome for `theme`. `scheme` is the window's scheme when the user forced one
-    /// (Light/Dark, or System differing from the theme); nil or the theme's own gives the theme's
-    /// chrome.
+    /// `scheme` is the window's scheme when the user forced one (Light/Dark, or System differing
+    /// from the theme); nil or the theme's own gives the theme's chrome.
     public init(theme: TerminalTheme, scheme requested: ColorScheme? = nil) {
         let themeScheme: ColorScheme = theme.isLight ? .light : .dark
         let scheme = requested ?? themeScheme
-        let bg = theme.bgRGB, fg = theme.fgRGB
+        let themeBackground = theme.bgRGB, themeForeground = theme.fgRGB
         var background: ThemeColor, ink: ThemeColor
         if scheme == themeScheme {
-            background = bg
-            ink = fg
+            background = themeBackground
+            ink = themeForeground
         } else if scheme == .light {
             // A dark theme in a light window: near-white with a whisper of the theme, its
             // background as the ink.
-            background = ThemeColor.white.blended(with: bg, 0.03)
-            ink = bg
+            background = ThemeColor.white.blended(with: themeBackground, 0.03)
+            ink = themeBackground
         } else {
             // A light theme in a dark window: near-black tinted with the theme's paper (its ink is
             // often black itself, which would leave a flat black window).
-            background = ThemeColor.black.blended(with: bg, 0.12)
-            ink = bg
+            background = ThemeColor.black.blended(with: themeBackground, 0.12)
+            ink = themeBackground
         }
-        // A garish mid-tone background (Grass, Hot Dog Stand) cannot carry readable text even in
-        // white: only then does the chrome's background step away from the terminal's.
+        // A garish mid-tone background cannot carry readable text even in white: only then does
+        // the chrome's background step away from the terminal's.
         let (chromeBackground, foreground) = Self.readable(ink: ink, background: background)
         background = chromeBackground
         self.scheme = scheme
-        self.terminal = bg
+        self.terminal = themeBackground
         self.background = background
         self.foreground = foreground
 
@@ -151,10 +148,10 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
 
         func state(_ index: Int, reference: String) -> ThemeColor {
             var hue = theme.ansiRGB(index)
-            let ref = ThemeColor(hex: reference)!
+            let referenceHue = ThemeColor(hex: reference)!
             // A theme whose "green" is grey or not green (monochrome themes) keeps the meaning
             // with the default hue.
-            if hue.chroma < 12 || Self.hueDistance(hue.hue, ref.hue) > 60 { hue = ref }
+            if hue.chroma < 12 || Self.hueDistance(hue.hue, referenceHue.hue) > 60 { hue = referenceHue }
             let mixed = foreground.blended(with: hue, 1 - Self.stateMix)
             return Self.legible(mixed, on: surfaces, toward: foreground, minimum: Self.minimumGlyphContrast)
         }
@@ -165,7 +162,6 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
         info = state(4, reference: "#81a2be")
     }
 
-    /// The default theme's chrome (the environment's default).
     public static let standard = ChromePalette(theme: .ghosttyDefault)
 
     // MARK: Derivation steps
@@ -182,16 +178,16 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
                 return surface.blended(with: ink, level).contrast(with: surface)
             }.min() ?? 0
         }
-        var u = 0.0
-        while u <= 1 {
-            let candidateBackground = background.blended(with: opposite, u)
-            var t = 0.0
-            while t <= 1 {
-                let candidate = ink.blended(with: extreme, t)
+        var backgroundShift = 0.0
+        while backgroundShift <= 1 {
+            let candidateBackground = background.blended(with: opposite, backgroundShift)
+            var inkShift = 0.0
+            while inkShift <= 1 {
+                let candidate = ink.blended(with: extreme, inkShift)
                 if worst(candidate, candidateBackground) >= minimumTextContrast { return (candidateBackground, candidate) }
-                t += 0.02
+                inkShift += 0.02
             }
-            u += 0.05
+            backgroundShift += 0.05
         }
         return (opposite, extreme)
     }
@@ -209,22 +205,23 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
 
     /// The colour mixed toward `ink` until it reaches `minimum` against every surface.
     static func legible(_ color: ThemeColor, on surfaces: [ThemeColor], toward ink: ThemeColor, minimum: Double) -> ThemeColor {
-        var t = 0.0
-        while t <= 1 {
-            let candidate = color.blended(with: ink, t)
+        var mix = 0.0
+        while mix <= 1 {
+            let candidate = color.blended(with: ink, mix)
             if surfaces.allSatisfy({ candidate.contrast(with: $0) >= minimum }) { return candidate }
-            t += 0.02
+            mix += 0.02
         }
         return ink
     }
 
-    /// the foreground; otherwise the bright blue, magenta or cyan farthest (CIEDE2000) from both
-    /// background and foreground. Red, green and yellow are left out on purpose: they say failed,
-    /// done and needs-you, and an accent must never read as a state.
+    /// The cursor colour when it is a real colour distinct from the foreground; otherwise the
+    /// bright blue, magenta or cyan farthest (CIEDE2000) from both background and foreground. Red,
+    /// green and yellow are left out on purpose: they say failed, done and needs-you, and an
+    /// accent must never read as a state.
     static func accent(of theme: TerminalTheme) -> ThemeColor {
-        let bg = theme.bgRGB, fg = theme.fgRGB
-        if let cursor = theme.cursorRGB, cursor.chroma >= 20, ThemeColor.deltaE2000(cursor, fg) > 10,
-           cursor.contrast(with: bg) >= minimumGlyphContrast,
+        let background = theme.bgRGB, foreground = theme.fgRGB
+        if let cursor = theme.cursorRGB, cursor.chroma >= 20, ThemeColor.deltaE2000(cursor, foreground) > 10,
+           cursor.contrast(with: background) >= minimumGlyphContrast,
            !isStateHue(cursor, theme: theme)
         {
             return cursor
@@ -234,10 +231,12 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
         func slot(_ normal: Int) -> ThemeColor? {
             [normal + 8, normal].map(theme.ansiRGB).first { $0.chroma >= 10 }
         }
-        func distance(_ c: ThemeColor) -> Double { ThemeColor.deltaE2000(c, bg) + ThemeColor.deltaE2000(c, fg) }
+        func distance(_ color: ThemeColor) -> Double {
+            ThemeColor.deltaE2000(color, background) + ThemeColor.deltaE2000(color, foreground)
+        }
         // Blue first: the platform's selection colour, whenever it stands clear of both inks.
         if let blue = slot(4), !isStateHue(blue, theme: theme),
-           ThemeColor.deltaE2000(blue, bg) >= 20, ThemeColor.deltaE2000(blue, fg) >= 10
+           ThemeColor.deltaE2000(blue, background) >= 20, ThemeColor.deltaE2000(blue, foreground) >= 10
         {
             return blue
         }
@@ -285,18 +284,18 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
     static func prominent(accent: ThemeColor, background: ThemeColor, foreground: ThemeColor) -> (fill: ThemeColor, text: ThemeColor) {
         let light = background.luminance >= foreground.luminance ? background : foreground
         let dark = background.luminance >= foreground.luminance ? foreground : background
-        var t = 0.0
-        while t <= 1 {
-            let fill = accent.blended(with: dark, t)
+        var mix = 0.0
+        while mix <= 1 {
+            let fill = accent.blended(with: dark, mix)
             if light.contrast(with: fill) >= minimumTextContrast { return (fill, light) }
-            t += 0.02
+            mix += 0.02
         }
         return (dark, light)
     }
 
     static func hueDistance(_ a: Double, _ b: Double) -> Double {
-        let d = abs(a - b).truncatingRemainder(dividingBy: 360)
-        return d > 180 ? 360 - d : d
+        let difference = abs(a - b).truncatingRemainder(dividingBy: 360)
+        return difference > 180 ? 360 - difference : difference
     }
 }
 
@@ -326,7 +325,6 @@ nonisolated public extension ChromePalette {
     var groupedRowColor: Color { groupedRow.color }
     var terminalColor: Color { terminal.color }
 
-    /// The four text levels.
     var text: Color { foreground.color.opacity(Self.textLevels.primary) }
     var textSecondary: Color { foreground.color.opacity(secondaryLevel) }
     var textTertiary: Color { foreground.color.opacity(tertiaryLevel) }

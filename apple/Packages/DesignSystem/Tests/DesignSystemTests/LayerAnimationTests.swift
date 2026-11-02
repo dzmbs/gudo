@@ -16,7 +16,6 @@ import Testing
             let glyph = width / CGFloat(glyphs)
             #expect(abs(band.width - 2 * config.radius * glyph) < 0.001)
             for elapsed in stride(from: 0.0, to: 6, by: 0.37) {
-                // The band's centre in glyphs, as the per-glyph gradient placed it.
                 let center = ShimmerMath.center(glyphs: glyphs, elapsed: elapsed, config: config)
                 #expect(abs(band.centerX(elapsed: elapsed, config: config) - (center + 0.5) * glyph) < 0.001, "\(glyphs) glyphs at \(elapsed) s")
             }

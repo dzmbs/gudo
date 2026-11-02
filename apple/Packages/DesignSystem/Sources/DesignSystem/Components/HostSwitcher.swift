@@ -41,7 +41,7 @@ public struct HostSwitcherCommand: Identifiable {
     public var group: Int
     public var title: String
     public var systemImage: String
-    /// The shortcut as glyphs, e.g. ["⇧", "⌘", "N"].
+    /// e.g. ["⇧", "⌘", "N"].
     public var shortcut: [String]
     public var perform: () -> Void
 
@@ -58,7 +58,9 @@ public struct HostSwitcherCommand: Identifiable {
     }
 }
 
-/// window's and its ⌃⌘ number, then the commands. ↑/↓ move the highlight, ↩ chooses, Esc closes.
+/// A popup for hosts: a filter on top, one row per host with ✓ on the window's and its ⌃⌘
+/// number, then the commands. ↑/↓ move the highlight, ↩ chooses, Esc closes. Typing what matches
+/// no host offers to connect to it (`onCreate`).
 public struct HostSwitcher: View {
     let hosts: [HostSwitcherHost]
     let commands: [HostSwitcherCommand]
@@ -103,21 +105,21 @@ public struct HostSwitcher: View {
         }
     }
 
-    private var trimmed: String { query.trimmingCharacters(in: .whitespaces) }
+    private var trimmedQuery: String { query.trimmingCharacters(in: .whitespaces) }
 
     private var shownHosts: [HostSwitcherHost] {
-        guard !trimmed.isEmpty else { return hosts }
-        return hosts.filter { $0.name.localizedCaseInsensitiveContains(trimmed) }
+        guard !trimmedQuery.isEmpty else { return hosts }
+        return hosts.filter { $0.name.localizedCaseInsensitiveContains(trimmedQuery) }
     }
 
     private var shownCommands: [HostSwitcherCommand] {
-        guard !trimmed.isEmpty else { return commands }
-        return commands.filter { $0.title.localizedCaseInsensitiveContains(trimmed) }
+        guard !trimmedQuery.isEmpty else { return commands }
+        return commands.filter { $0.title.localizedCaseInsensitiveContains(trimmedQuery) }
     }
 
     private var rows: [Row] {
         var rows = shownHosts.map(Row.host)
-        if onCreate != nil, !trimmed.isEmpty, shownHosts.isEmpty { rows.append(.create(trimmed)) }
+        if onCreate != nil, !trimmedQuery.isEmpty, shownHosts.isEmpty { rows.append(.create(trimmedQuery)) }
         return rows + shownCommands.map(Row.command)
     }
 
@@ -132,7 +134,7 @@ public struct HostSwitcher: View {
             if !hostRows.isEmpty {
                 ScrollView {
                     VStack(spacing: 1) {
-                        Text(trimmed.isEmpty ? "Hosts" : "Matching Hosts")
+                        Text(trimmedQuery.isEmpty ? "Hosts" : "Matching Hosts")
                             .font(DS.Font.sectionSmall)
                             .foregroundStyle(DS.Palette.textTertiary)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -289,10 +291,10 @@ public struct HostSwitcher: View {
     }
 
     private func move(_ step: Int) {
-        let ids = rows.map(\.id)
-        guard !ids.isEmpty else { return }
-        let index = highlighted.flatMap { ids.firstIndex(of: $0) } ?? (step > 0 ? -1 : ids.count)
-        withAnimation(DS.Motion.menu) { highlighted = ids[min(max(index + step, 0), ids.count - 1)] }
+        let rowIDs = rows.map(\.id)
+        guard !rowIDs.isEmpty else { return }
+        let index = highlighted.flatMap { rowIDs.firstIndex(of: $0) } ?? (step > 0 ? -1 : rowIDs.count)
+        withAnimation(DS.Motion.menu) { highlighted = rowIDs[min(max(index + step, 0), rowIDs.count - 1)] }
     }
 
     private func choose(_ id: String?) {
@@ -306,8 +308,8 @@ public struct HostSwitcher: View {
     }
 }
 
-/// symbol, its name and a small chevron; the symbol gives way to a link glyph when the link is
-/// not healthy.
+/// The toolbar button that opens the switcher: the host's symbol, its name and a small chevron;
+/// the symbol gives way to a link glyph when the link is not healthy.
 public struct HostSwitcherLabel<Glyph: View>: View {
     let name: String
     let glyph: Glyph

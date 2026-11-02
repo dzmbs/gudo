@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Liquid Glass usage rules (docs/DESIGN.md "Materials"):
+// Liquid Glass usage rules:
 // 1. Glass is for the navigation layer that floats over content: toolbars, the sidebar, the tab
 //    capsule, floating panels (palette, search, toasts), the key bar. Never on content itself:
 //    the terminal grid, list rows, diff lines and file content stay opaque.
@@ -9,20 +9,18 @@ import SwiftUI
 //    decoration.
 
 public extension View {
-    /// A floating panel over content: palette, search bar, reconnect card. The glass is tinted
-    /// `surface_2`), not the system's grey. Every floating surface gets a hairline edge and the
-    /// float shadow so it lifts off whatever is under it; `elevated` casts the deeper panel
+    /// A floating panel over content. The glass is tinted with the chrome's own surface, so it
+    /// reads as the theme's material, not the system's grey; `elevated` casts the deeper panel
     /// shadow for what sits above everything (the palette).
     func floatingPanel(cornerRadius: CGFloat = DS.Radius.panel, elevated: Bool = false) -> some View {
         modifier(ThemedGlass(shape: .rect(cornerRadius: cornerRadius), interactive: false, elevated: elevated))
     }
 
-    /// A floating capsule: banners, hints, the resize readout on iPad, compact bars.
     func floatingCapsule(interactive: Bool = false) -> some View {
         modifier(ThemedGlass(shape: .capsule, interactive: interactive, elevated: false))
     }
 
-    /// key pill at primary 15 %): a lit rim on dark chrome, a faint ink line on light.
+    /// A lit rim on dark chrome, a faint ink line on light.
     func glassEdge(_ shape: some InsettableShape) -> some View {
         modifier(GlassEdge(shape: shape))
     }
@@ -75,8 +73,8 @@ private struct ThemedGlass<S: InsettableShape>: ViewModifier {
 }
 
 /// The one primary action on a screen: prominent glass tinted with the theme's prominent colour
-/// (its accent deepened until the label reads on it at 4.5:1). A pale accent (Dracula's lavender,
-/// Ghostty's blue) under the system's white label would not.
+/// (its accent deepened until the label reads on it at 4.5:1). A pale accent under the system's
+/// white label would not.
 public struct PrimaryGlassButtonStyle: PrimitiveButtonStyle {
     public init() {}
 
@@ -93,8 +91,7 @@ public extension PrimitiveButtonStyle where Self == PrimaryGlassButtonStyle {
     static var primaryGlass: PrimaryGlassButtonStyle { PrimaryGlassButtonStyle() }
 }
 
-/// A plain, chrome-quiet button for bars: icon only, secondary until hovered or pressed, with
-/// Ghostty's search-bar hover fill (primary 10 % hover, 20 % pressed, radius 6).
+/// A plain, chrome-quiet button for bars: icon only, secondary until hovered or pressed.
 public struct BarButtonStyle: ButtonStyle {
     @State private var isHovered = false
 
@@ -121,8 +118,7 @@ public extension ButtonStyle where Self == BarButtonStyle {
     static var bar: BarButtonStyle { BarButtonStyle() }
 }
 
-/// A full-width list row with hover and pressed fills, for rows that are buttons (palette items,
-/// inbox rows on Mac). On iPad the pointer gets the system lift/highlight effect.
+/// A full-width list row with hover and pressed fills, for rows that are buttons.
 public struct RowButtonStyle: ButtonStyle {
     var isSelected: Bool
     var cornerRadius = DS.Radius.control
@@ -156,7 +152,6 @@ public struct RowButtonStyle: ButtonStyle {
 public extension ButtonStyle where Self == RowButtonStyle {
     static var row: RowButtonStyle { RowButtonStyle() }
     static func row(selected: Bool) -> RowButtonStyle { RowButtonStyle(isSelected: selected) }
-    /// The command palette's row: the soft accent selection (Raycast, Spotlight).
     static func paletteRow(selected: Bool) -> RowButtonStyle {
         RowButtonStyle(isSelected: selected, cornerRadius: DS.Radius.paletteRow)
     }
@@ -164,7 +159,7 @@ public extension ButtonStyle where Self == RowButtonStyle {
 
 public extension View {
     /// A toolbar toggle that is on (Find while the search bar is open): lit with the terminal's
-    /// accent. VoiceOver hears it as selected.
+    /// ink behind the glyph, never the accent.
     func lit(_ isOn: Bool) -> some View {
         modifier(LitModifier(isOn: isOn))
     }
@@ -187,7 +182,8 @@ private struct LitModifier: ViewModifier {
 
 /// A text or icon button inside a row, a banner or a card: no chrome of its own, the label in the
 /// theme's secondary ink (or the accent for the row's main verb), a soft fill under the pointer or
-/// bars and floating surfaces: a glass capsule inside a list row reads as a sticker.
+/// a finger. Glass stays on bars and floating surfaces: a glass capsule inside a list row reads as
+/// a sticker.
 public struct QuietButtonStyle: ButtonStyle {
     var prominent: Bool
     @State private var isHovered = false

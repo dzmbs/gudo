@@ -7,7 +7,6 @@ nonisolated public struct Participant: Identifiable, Hashable, Sendable {
     public var id: String
     public var name: String
     public var role: Role
-    /// Typing right now; drawn as a ring in the participant's color.
     public var isActive: Bool
     /// Index into the presence hue list, stable per participant.
     public var hue: Int
@@ -25,8 +24,7 @@ nonisolated public struct Participant: Identifiable, Hashable, Sendable {
         return parts.compactMap { $0.first.map(String.init) }.joined().uppercased()
     }
 
-    /// Presence hues are the theme's own ANSI hues, so cursors and avatars match the terminal
-    /// (palette 4, 5, 6, 2, 3).
+    /// The theme's own ANSI hues, so cursors and avatars match the terminal.
     public var color: ChromeStyle {
         let hues = [4, 5, 6, 2, 3]
         return DS.Palette.ansi(hues[abs(hue) % hues.count])
@@ -58,8 +56,7 @@ public struct PresenceAvatar: View {
     }
 }
 
-/// Overlapping avatars, at most `limit`, then "+N" (Figma/Linear presence stacks). Each avatar
-/// cuts a thin gap out of the one under it, so the stack reads on any background (a selected
+/// Overlapping avatars, at most `limit`, then "+N". Each avatar cuts a thin gap out of the one under it, so the stack reads on any background (a selected
 /// sidebar row, glass, the terminal) without a ring in a guessed colour.
 public struct PresenceStack: View {
     let participants: [Participant]
@@ -95,10 +92,10 @@ public struct PresenceStack: View {
     private var overlap: CGFloat { size * 0.28 }
 
     /// Everything but a ring around the avatar to the left, which overlaps this one.
-    private func cutout(_ hasLeft: Bool) -> some View {
+    private func cutout(_ hasLeftNeighbour: Bool) -> some View {
         Rectangle()
             .overlay {
-                if hasLeft {
+                if hasLeftNeighbour {
                     Circle()
                         .frame(width: size + 3, height: size + 3)
                         .offset(x: -(size - overlap))

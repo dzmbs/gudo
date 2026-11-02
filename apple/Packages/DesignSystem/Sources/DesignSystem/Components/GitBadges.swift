@@ -1,21 +1,19 @@
 import SwiftUI
 
-// taken): the diff stat, the outline PR pill, the checks ring and per-check glyphs, and a
-// popover that opens on pointer hover with a 150 ms grace.
-
 public extension DS.Palette {
-    /// Merged pull requests (GitHub's purple): the theme's magenta, like a working agent.
+    /// The theme's magenta, like a working agent.
     static let merged = DS.Palette.working
 }
 
 public extension DS {
     nonisolated enum Git {
+        /// The width is `DS.Size.popoverWidth`.
         public static let popoverMaxHeight: CGFloat = 400
     }
 }
 
-/// `+12 −3` in the palette's green and red, caption, monospaced digits, 2 pt apart. On a
-/// selected row both drop to `.secondary` (selection never competes with state).
+/// `+12 −3` in the palette's green and red. On a selected row both drop to `.secondary`
+/// (selection never competes with state).
 public struct DiffStat: View {
     let added: UInt32
     let removed: UInt32
@@ -49,7 +47,6 @@ public struct DiffStat: View {
     }
 }
 
-/// What a pull request is, for its colour and glyph.
 public enum PRKind: Sendable, Equatable {
     case open, draft, merged, closed
 
@@ -62,7 +59,7 @@ public enum PRKind: Sendable, Equatable {
         }
     }
 
-    /// The branch-row glyph (SF Symbols; GitHub's octicons are not ours to ship).
+    /// SF Symbols: GitHub's octicons are not ours to ship.
     public var systemImage: String {
         switch self {
         case .open, .draft: "arrow.triangle.pull"
@@ -81,7 +78,7 @@ public enum PRKind: Sendable, Equatable {
     }
 }
 
-/// `#124`: caption2, padding h 6 / v 2, radius 4, a 1 pt stroke in the state colour, no fill
+/// `#124` outlined in the state colour, no fill. Selected rows draw it `.secondary`.
 public struct PRNumberBadge: View {
     let number: UInt32
     let kind: PRKind
@@ -105,7 +102,6 @@ public struct PRNumberBadge: View {
     }
 }
 
-/// A check's state, as the ring and the checks list draw it.
 public enum CheckKind: Sendable, Equatable {
     case success, failure, pending, skipped, neutral, cancelled
 
@@ -150,8 +146,7 @@ public enum CheckKind: Sendable, Equatable {
     }
 }
 
-/// The checks ring: 12 pt, 2 pt line (scaled with caption text), one segment per state in the
-/// order failed, in progress, skipped, passed; rounded caps, a small gap between segments.
+/// One segment per state in the order failed, in progress, skipped, passed.
 public struct ChecksRing: View {
     let checks: [CheckKind]
     @ScaledMetric(relativeTo: .caption) private var size: CGFloat = 12
@@ -213,7 +208,7 @@ public struct CheckBadge: View {
     }
 }
 
-/// The 6 pt dot of a highlight section header: the colour at 60 % with a hairline stroke.
+/// The dot of a highlight section header.
 public struct SectionDot: View {
     let color: AnyShapeStyle
     @Environment(\.displayScale) private var scale

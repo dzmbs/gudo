@@ -2,6 +2,7 @@ import SwiftUI
 
 /// The dense list row every list uses: a fixed leading slot (icon or status glyph), a title with an
 /// optional subtitle, and trailing metadata. Leading slots are fixed width so titles align to one
+/// column.
 public struct ListRow<Leading: View, Trailing: View>: View {
     let title: Text
     let subtitle: Text?
@@ -58,7 +59,7 @@ public struct SectionTitle: View {
     let count: Int?
     let small: Bool
 
-    /// `small` for dense lists (the Agents screen), one step under the sidebar's.
+    /// `small` for dense lists, one step under the sidebar's.
     public init(_ title: String, count: Int? = nil, small: Bool = false) {
         self.title = title
         self.count = count
@@ -78,12 +79,9 @@ public struct SectionTitle: View {
     }
 }
 
-/// An empty or zero-data state, compact like the system's `ContentUnavailableView` on the Mac
-/// and Xcode's empty editors: a 28 pt glyph (34 on touch) in the tertiary grey, the title
-/// (`headline`), one line (`subheadline`), then the actions at the regular control size. It sits
-/// at the optical centre, two fifths of the way down, never sinking to the middle of a tall
-/// pane. Greys are the theme's (`DS.Palette`). Copy names the next step, not the absence; give
-/// it an action whenever there is one.
+/// An empty or zero-data state. It sits at the optical centre, two fifths of the way down, never
+/// sinking to the middle of a tall pane. Copy names the next step, not the absence; give it an
+/// action whenever there is one.
 public struct EmptyState<Actions: View>: View {
     let title: String
     let systemImage: String
@@ -147,7 +145,7 @@ public struct EmptyState<Actions: View>: View {
         .accessibilityElement(children: .contain)
     }
 
-    /// Mac 28 pt, touch 34 pt: about twice the title's cap height, as the system's empty views.
+    /// About twice the title's cap height.
     private static var glyphSize: CGFloat {
         #if os(macOS)
         28
@@ -157,7 +155,7 @@ public struct EmptyState<Actions: View>: View {
     }
 }
 
-/// default, `.vertical` inside an `HStack`.
+/// A one-pixel line in the theme's ink: horizontal by default, `.vertical` inside an `HStack`.
 public struct Hairline: View {
     public enum Axis: Sendable { case horizontal, vertical }
 
@@ -171,6 +169,7 @@ public struct Hairline: View {
     }
 
     public var body: some View {
+        // Never under half a point: a third of a point vanishes on glass.
         let width = max(DS.Size.hairline(scale: scale), 0.5)
         Rectangle()
             .fill(style)

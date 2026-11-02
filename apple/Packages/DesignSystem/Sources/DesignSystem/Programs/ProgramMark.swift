@@ -5,14 +5,13 @@ import UIKit
 import AppKit
 #endif
 
-/// logo where one ships, unaltered in its own colours or drawn in the text colour where the owner
-/// allows a monochrome version (the owner's dark-background variant, where it publishes one,
-/// follows the scheme through the asset's dark appearance); otherwise its kind's SF Symbol in the
-/// inherited foreground style.
-/// A new program cross-fades in place, so the row never jumps. Its accessibility label is the
-/// program's display name.
+/// A program's mark in a fixed square: its official logo where one ships, unaltered in its own
+/// colours or drawn in the text colour where the owner allows a monochrome version; otherwise its
+/// kind's SF Symbol in the inherited foreground style. A new program cross-fades in place, so the
+/// row never jumps.
 public struct ProgramMark: View {
-    /// 16 pt on the Mac; 18 on iPad and iPhone, a step up with their larger titles).
+    /// The leading slot in sidebar and tab rows and the mark inside it: a step up on touch, with
+    /// its larger titles.
     #if os(macOS)
     public static let rowSlot: CGFloat = 16
     public static let rowSize: CGFloat = 14
@@ -20,8 +19,8 @@ public struct ProgramMark: View {
     public static let rowSlot: CGFloat = 18
     public static let rowSize: CGFloat = 16
     #endif
-    /// and one-colour logos draw at 0.6 of the inherited foreground. Colour logos stay as their
-    /// owners publish them.
+    /// Symbols and one-colour logos draw at `DS.Opacity.mutedGlyph` of the inherited foreground.
+    /// Colour logos stay as their owners publish them.
     public static let mutedOpacity: Double = 0.6
 
     let identity: ProgramIdentity

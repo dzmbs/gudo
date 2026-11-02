@@ -2,7 +2,7 @@ import SwiftUI
 import Testing
 @testable import DesignSystem
 
-/// the theme, and stay readable on every bundled theme.
+/// The chrome derivation: surfaces, text, accent and states follow the theme, and stay readable on every bundled theme.
 struct ChromePaletteTests {
     static let themes = [TerminalTheme.ghosttyDefault] + ThemeCatalog.all
 

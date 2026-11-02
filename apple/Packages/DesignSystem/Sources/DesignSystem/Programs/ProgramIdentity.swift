@@ -1,7 +1,8 @@
 import Foundation
 
 /// What a pane runs, as the chrome shows it: a display name ("Neovim") and a mark, either the
-/// or a neutral SF Symbol for its kind.
+/// program's official logo (where one ships, `ProgramCatalog.logos`) or a neutral SF Symbol for
+/// its kind.
 nonisolated public struct ProgramIdentity: Hashable, Sendable {
     public enum Kind: String, Hashable, Sendable {
         case shell, agent, editor, monitor, vcs, container, language, database, multiplexer, remote, other
@@ -25,12 +26,14 @@ nonisolated public struct ProgramIdentity: Hashable, Sendable {
 
     /// An official logo in the package's asset catalog.
     public struct Logo: Hashable, Sendable {
+        /// Why the logo may ship.
         public enum Clearance: String, Hashable, Sendable {
             /// The artwork's licence or the owner's trademark terms allow this use.
             case licensed
             /// The owner publishes the artwork without terms for this use; permission requested.
             case termsSilent
-            /// (docs/legal/logo-permission-requests.md).
+            /// The owner's terms ask for permission first. Shipped as nominative use while
+            /// permission is requested (docs/legal/logo-permission-requests.md).
             case ownerApprovedRisk
         }
 
@@ -84,7 +87,7 @@ nonisolated public struct ProgramIdentity: Hashable, Sendable {
 nonisolated public enum ProgramCatalog {
     // MARK: Entries
 
-    /// means the kind's neutral symbol.
+    /// Every known program. Logos come from `logos`; `logo: nil` means the kind's neutral symbol.
     public static let entries: [ProgramIdentity] = [
         // Agents
         entry("claude", "Claude Code", .agent),
@@ -141,7 +144,7 @@ nonisolated public enum ProgramCatalog {
     /// again). Each file is the owner's own artwork, byte-identical to its download (ruby: the
     /// kit's PDF page cropped to the gem), in its own colours; a dark variant only where the owner
     /// publishes one. `template` only where the licence allows recolouring and the artwork needs
-    /// it (tmux's dark-grey screen). Terms, minimum sizes and notices:
+    /// it (tmux's dark-grey screen). Terms and notices: apple/THIRD_PARTY_NOTICES.md.
     public static let logos: [String: ProgramIdentity.Logo] = [
         // CC BY 3.0 (Jason Long); the Git trademark policy allows identifying Git without
         // permission. Not lazygit: the Git mark on another project would suggest it is Git.
@@ -165,6 +168,7 @@ nonisolated public enum ProgramCatalog {
         "bun": .init("BunLogo", sources: ["https://bun.com/logo.svg"], retrieved: "2026-10-21", clearance: .termsSilent),
         // Deno's guidelines: light mark on light, outlined dark mark on dark.
         "deno": .init("DenoLogo", sources: ["https://deno.com/logos/icon-light.svg", "https://deno.com/logos/icon-dark.svg"], retrieved: "2026-10-21", clearance: .termsSilent),
+        // Each owner's terms ask for permission first; permission requested.
         "claude": .init("ClaudeLogo", sources: ["https://www.anthropic.com/press-kit#Anthropic media resources/Anthropic logos/Claude logos/3 Claude Spark/SVG/Claude Spark - Clay.svg"], retrieved: "2026-10-21", clearance: .ownerApprovedRisk),
         // OpenAI publishes no Codex mark; the Blossom, black on light and white on dark.
         "codex": .init("CodexLogo", sources: ["https://cdn.openai.com/brand/OpenAI-Logos-2025.zip#OpenAI-logos(new)/SVGs/OpenAI-black-monoblossom.svg", "https://cdn.openai.com/brand/OpenAI-Logos-2025.zip#OpenAI-logos(new)/SVGs/OpenAI-white-monoblossom.svg"], retrieved: "2026-10-21", clearance: .ownerApprovedRisk),
@@ -236,7 +240,6 @@ nonisolated public enum ProgramCatalog {
 
     // MARK: Lookup
 
-    /// The catalog entry for a catalog id, nil when unknown.
     public static func entry(id: String) -> ProgramIdentity? { byId[id] }
 
     /// The identity of a process: its name (`nvim`, `/usr/bin/python3.12`, `-zsh`) and, when the
@@ -252,11 +255,11 @@ nonisolated public enum ProgramCatalog {
     /// Claude Code's "✳ task" titles, and titles that start with a program ("vim README.md").
     /// Shells are never inferred from a title (a prompt's title is usually the directory).
     public static func identity(title: String) -> ProgramIdentity? {
-        let trimmed = title.trimmingCharacters(in: .whitespaces)
-        guard let first = trimmed.unicodeScalars.first else { return nil }
+        let trimmedTitle = title.trimmingCharacters(in: .whitespaces)
+        guard let firstScalar = trimmedTitle.unicodeScalars.first else { return nil }
         // Claude Code titles its terminal "✳ <task>" (a spinner glyph while working).
-        if "✳✻✽✶✢".unicodeScalars.contains(first) { return byId["claude"] }
-        let word = trimmed.split(whereSeparator: { $0.isWhitespace || $0 == ":" }).first.map(String.init) ?? trimmed
+        if "✳✻✽✶✢".unicodeScalars.contains(firstScalar) { return byId["claude"] }
+        let word = trimmedTitle.split(whereSeparator: { $0.isWhitespace || $0 == ":" }).first.map(String.init) ?? trimmedTitle
         guard let name = normalize(word), let known = byId[name], !known.isShell else { return nil }
         return known
     }
@@ -269,7 +272,7 @@ nonisolated public enum ProgramCatalog {
     public static func normalize(_ name: String, arguments: [String] = []) -> String? {
         var words = arguments.isEmpty ? [name] : arguments
         // `FOO=1 make` from a command line.
-        if let first = words.firstIndex(where: { !isAssignment($0) }), first > 0 { words = Array(words[first...]) }
+        if let commandStart = words.firstIndex(where: { !isAssignment($0) }), commandStart > 0 { words = Array(words[commandStart...]) }
         words = unwrapped(words)
         guard let head = words.first else { return nil }
         let base = canonical(head)

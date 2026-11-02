@@ -1,11 +1,9 @@
 import SwiftUI
 
-// Overlays drawn over a terminal surface. Each is a port of the matching view in Ghostty's macOS
-// app (reference/ghostty/macos/Sources/Ghostty/Surface View/SurfaceView.swift and friends, MIT;
-// see apple/THIRD_PARTY_NOTICES.md) with the same metrics, adapted to plain values instead of a
-// Ghostty surface.
+// Overlays drawn over a terminal surface, ported from the matching views in Ghostty's macOS app
+// (MIT; see apple/THIRD_PARTY_NOTICES.md) and adapted to plain values instead of a Ghostty
+// surface.
 
-/// A terminal grid size.
 nonisolated public struct GridSize: Equatable, Hashable, Sendable {
     public var cols: Int
     public var rows: Int
@@ -80,9 +78,8 @@ nonisolated struct ResizeOverlayState: Equatable {
     }
 }
 
-/// The bar at the bottom of a pane whose process exited (Ghostty `ChildExitedMessageBar`): one
-/// line, centered, the window background for success and red 50 % for failure; it hides while
-/// the pointer is over it so it never covers the last line for good.
+/// The bar at the bottom of a pane whose process exited (Ghostty `ChildExitedMessageBar`). It hides
+/// while the pointer is over it so it never covers the last line for good.
 public struct ProcessExitedBar: View {
     let message: String
     let failed: Bool
@@ -110,7 +107,7 @@ public struct ProcessExitedBar: View {
     }
 }
 
-/// Ghostty's bell border: a 3 pt #FFCC00 50 % stroke that fades in and out over 0.3 s.
+/// Ghostty's bell border.
 public struct BellBorder: View {
     let ringing: Bool
 
@@ -198,7 +195,7 @@ public struct SecureInputBadge: View {
 }
 
 /// The hovered link's URL in the bottom-left corner, moving to the right while the pointer is over
-/// it (Ghostty `URLHoverBanner`: padding 5, radius 9 on the inner top corner).
+/// it (Ghostty `URLHoverBanner`).
 public struct URLHoverBanner: View {
     let url: String
     @State private var isHoveringLeft = false

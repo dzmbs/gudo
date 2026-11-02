@@ -55,15 +55,14 @@ public struct SwipeActionTray: View {
         return min(48, max(28, room))
     }
 
-    /// How far a row slides to show every action.
     public static func width(for count: Int, rowHeight: CGFloat) -> CGFloat {
         CGFloat(count) * (diameter(rowHeight: rowHeight) + DS.Space.s) + DS.Space.s
     }
 
     public var body: some View {
         let diameter = Self.diameter(rowHeight: rowHeight)
-        let full = Self.width(for: actions.count, rowHeight: rowHeight)
-        let progress = min(1, revealed / max(1, full))
+        let fullWidth = Self.width(for: actions.count, rowHeight: rowHeight)
+        let progress = min(1, revealed / max(1, fullWidth))
         let shown = armed ? Array(actions.suffix(1)) : actions
         // Laid out left to right: on the trailing edge the outermost is rightmost.
         let ordered = edge == .trailing ? shown : shown.reversed()

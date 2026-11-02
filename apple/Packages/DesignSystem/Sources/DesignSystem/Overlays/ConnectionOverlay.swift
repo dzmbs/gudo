@@ -1,11 +1,11 @@
 import SwiftUI
 
-//
-// and only a failure, or a link gone for 40 s, a card with actions (VS Code). Motion is the system
-// spinner while connecting, never a pulsing dot.
+// Connection state in the chrome. Quiet when fine, loud when broken: a healthy link shows nothing,
+// a slow or reconnecting one a static amber glyph and a one-line notice, and only a failure, or a
+// link gone for 40 s, a card with actions. Motion is the system spinner while connecting, never a
+// pulsing dot.
 
 nonisolated public enum ConnectionState: Hashable, Sendable {
-    /// Live.
     case connected
     /// Live but slow: keystrokes take `rtt` to echo.
     case slow(rtt: Duration)
@@ -76,7 +76,6 @@ nonisolated public enum ConnectionState: Hashable, Sendable {
         }
     }
 
-    /// The glyph's colour: amber for "your turn", red for failure, otherwise the chrome's own.
     public var color: ChromeStyle {
         switch self {
         case .slow, .reconnecting: DS.Palette.attention
@@ -103,7 +102,7 @@ public struct ConnectionGlyph: View {
         healthy = nil
     }
 
-    /// A host icon that the state glyph replaces while the link is not healthy (Zed).
+    /// A host icon that the state glyph replaces while the link is not healthy.
     public init(_ state: ConnectionState, healthy: some View) {
         self.state = state
         self.healthy = AnyView(healthy)
@@ -125,10 +124,10 @@ public struct ConnectionGlyph: View {
     }
 }
 
-/// The deprecated name of `ConnectionGlyph` (it was a coloured dot).
 @available(*, deprecated, renamed: "ConnectionGlyph")
 public typealias ConnectionDot = ConnectionGlyph
 
+/// The system mini spinner, shown only once a wait has lasted `grace`.
 struct GraceSpinner: View {
     var grace: Duration = .seconds(1)
     @State private var shown = false
@@ -155,8 +154,9 @@ struct GraceSpinner: View {
 }
 
 /// Over a host's panes while the link is not live. The last frame stays: undimmed for a 2 s
-/// with actions appears only for a failure or a link gone for 40 s (VS Code
-/// `DISCONNECT_PROMPT_TIME`). Live, slow and paused links show nothing here.
+/// grace, then dimmed. Short trouble is a one-line notice at the top right; a card with actions
+/// appears only for a failure or a link gone for 40 s. Live, slow and paused links show nothing
+/// here.
 private struct ConnectionOverlayModifier: ViewModifier {
     let state: ConnectionState
     let hostName: String
@@ -211,26 +211,26 @@ private struct ConnectionOverlayModifier: ViewModifier {
     }
 
     private func presentation(now: Date) -> Presentation {
-        let down = downSince.map { now.timeIntervalSince($0) } ?? 0
-        var result = Presentation(dimmed: !state.isLive && !state.isQuiet && down >= Self.dimAfter)
+        let downFor = downSince.map { now.timeIntervalSince($0) } ?? 0
+        var result = Presentation(dimmed: !state.isLive && !state.isQuiet && downFor >= Self.dimAfter)
         switch state {
         case .connected, .slow, .paused, .disconnected:
             result.dimmed = false
         case .connecting where showsSavedState:
             result.dimmed = false
-            if down >= Self.dimAfter { result.notice = NoticeCopy(before: "Connecting to ", host: hostName, after: "…") }
+            if downFor >= Self.dimAfter { result.notice = NoticeCopy(before: "Connecting to ", host: hostName, after: "…") }
         case .connecting(let phase):
             result.notice = phase.map { NoticeCopy(before: "\($0.trimmingCharacters(in: ["…"])) on ", host: hostName, after: "…") }
                 ?? NoticeCopy(before: "Connecting to ", host: hostName, after: "…")
         case .reconnecting(_, let since):
-            let gone = now.timeIntervalSince(since)
-            if gone >= Self.cardAfter {
+            let goneFor = now.timeIntervalSince(since)
+            if goneFor >= Self.cardAfter {
                 result.card = CardCopy(
                     title: "Lost connection to \(hostName)",
                     detail: "Sessions keep running on the host. Reconnecting automatically.",
                     action: "Reconnect Now")
             } else {
-                result.notice = NoticeCopy.reconnecting(to: hostName, ago: Self.ago(gone))
+                result.notice = NoticeCopy.reconnecting(to: hostName, ago: Self.ago(goneFor))
             }
         case .offline:
             result.notice = NoticeCopy(before: "Offline · waiting for network")
@@ -280,7 +280,8 @@ struct NoticeCopy: Equatable {
     }
 }
 
-/// narrow pane (iPhone) the words shorten by priority (`NoticeCopy`), never cutting the time.
+/// One line at the top right of the pane: glyph and words, on material. On a narrow pane the
+/// words shorten by priority (`NoticeCopy`), never cutting the time.
 struct ConnectionNotice: View {
     let state: ConnectionState
     let copy: NoticeCopy

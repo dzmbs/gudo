@@ -4,7 +4,7 @@ import AppKit
 #endif
 
 /// Puts a window's (or a sheet's, or a Settings window's) chrome on the terminal theme: the theme
-/// and its `ChromePalette` in the environment and the window scheme (Ghostty `window-theme`).
+/// and its `ChromePalette` in the environment and the window scheme (`window-theme`).
 /// The ink and tint go on content (`chromeContent()`), never above a toolbar: bar items keep the
 /// system's monochrome look and their disabled state.
 private struct ChromeThemeModifier: ViewModifier {

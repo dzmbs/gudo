@@ -14,7 +14,6 @@ import AppKit
 /// A layer-backed view that keeps one repeating animation installed while it is in a window.
 @MainActor
 class RepeatingLayerView: PlatformLayerView {
-    /// The animated layer, sized to the view.
     let animated: CALayer
     var animation: CAAnimation? {
         didSet { refreshAnimation() }
@@ -157,19 +156,18 @@ struct SpinnerLayer: PlatformViewRepresentable {
 /// over `width`: the same sweep as `ShimmerMath` (one glyph is `width / glyphs`), as one layer
 /// that slides from `startX` to `endX` once per period.
 nonisolated struct ShimmerBand: Equatable {
-    /// The band's width: twice the radius.
     var width: CGFloat
     /// The band's centre at the start and at the end of a sweep.
     var startX: CGFloat
     var endX: CGFloat
 
     init(textWidth: CGFloat, glyphs: Int, config: ShimmerMath.Config = .standard) {
-        let glyph = textWidth / CGFloat(max(glyphs, 1))
+        let glyphWidth = textWidth / CGFloat(max(glyphs, 1))
         let span = Double(max(glyphs - 1, 0)) + 2 * config.padding
-        width = 2 * config.radius * glyph
-        // Glyph `i`'s centre is at `(i + 0.5) * glyph` (the stops of the gradient it replaces).
-        startX = (0.5 - config.padding) * glyph
-        endX = startX + span * glyph
+        width = 2 * config.radius * glyphWidth
+        // Glyph `i`'s centre is at `(i + 0.5) * glyphWidth`.
+        startX = (0.5 - config.padding) * glyphWidth
+        endX = startX + span * glyphWidth
     }
 
     /// The band's centre `elapsed` seconds into the clock (all bands share one phase).
@@ -234,7 +232,7 @@ final class ShimmerBandView: RepeatingLayerView {
         sweep.duration = config.period
         sweep.repeatCount = .infinity
         sweep.timingFunction = CAMediaTimingFunction(name: .linear)
-        // Every band on screen in the same phase, from the wall clock (as the timeline was).
+        // Every band on screen in the same phase, from the wall clock.
         let phase = Date.now.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: config.period)
         sweep.beginTime = band.convertTime(CACurrentMediaTime(), from: nil) - phase
         animation = sweep
@@ -251,7 +249,6 @@ struct ShimmerBandLayer: PlatformViewRepresentable {
 
 // MARK: - Representable
 
-/// One representable for both platforms.
 @MainActor
 protocol PlatformViewRepresentable: PlatformRepresentable {
     associatedtype Layered: PlatformLayerView

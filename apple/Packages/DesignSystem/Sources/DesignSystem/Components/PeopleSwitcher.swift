@@ -21,8 +21,8 @@ public struct PeopleSwitcherPerson: Identifiable {
     }
 }
 
-/// person with their avatar and what they are doing, ✓ on the one this window follows; a tap
-/// follows (or stops). Then commands (Share Session…).
+/// Who is here, in the host switcher's form: one row per person with what they are doing, ✓ on
+/// the one this window follows; a tap follows (or stops). Then commands (Share Session…).
 public struct PeopleSwitcher: View {
     let people: [PeopleSwitcherPerson]
     let commands: [HostSwitcherCommand]
