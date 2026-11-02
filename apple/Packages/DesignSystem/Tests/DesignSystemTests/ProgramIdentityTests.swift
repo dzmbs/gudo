@@ -79,7 +79,7 @@ func programNamesNormalize(name: String, id: String) {
         }
         #expect(logo.retrieved.wholeMatch(of: date) != nil, "\(id) records its retrieval date: \(logo.retrieved)")
     }
-    // Shipped while permission is requested (docs/legal/logo-permission-requests.md).
+    // Shipped while permission is requested.
     let risky = ProgramCatalog.logos.filter { $0.value.clearance == .ownerApprovedRisk }.keys
     #expect(Set(risky) == ["claude", "codex", "gemini", "copilot", "docker", "kubectl", "python", "node", "go", "rustc", "cargo", "psql"])
 }

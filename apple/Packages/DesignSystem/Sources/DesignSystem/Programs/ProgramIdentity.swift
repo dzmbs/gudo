@@ -33,7 +33,7 @@ nonisolated public struct ProgramIdentity: Hashable, Sendable {
             /// The owner publishes the artwork without terms for this use; permission requested.
             case termsSilent
             /// The owner's terms ask for permission first. Shipped as nominative use while
-            /// permission is requested (docs/legal/logo-permission-requests.md).
+            /// permission is requested (apple/THIRD_PARTY_NOTICES.md).
             case ownerApprovedRisk
         }
 
