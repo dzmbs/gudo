@@ -29,6 +29,10 @@ for line in open(sys.argv[1]):
 for (k, d), n in c.most_common(6): print(f"    {n:6} {k}: …{d}")' "$ROOT/state/audit/audit.jsonl"
 sleep 5
 heap $DPID 2>/dev/null | grep -E 'Physical footprint:|All zones: [0-9]+ nodes \(' | sed 's/^/  /'
+# iroh keeps state per remote key for 60 s after its last connection.
+sleep 65
+echo "  65 s later:"
+heap $DPID 2>/dev/null | grep -E 'Physical footprint:|All zones: [0-9]+ nodes \(' | sed 's/^/  /'
 # With MallocStackLogging=lite in the daemon's environment: where the memory still held was
 # allocated.
 [ -n "${MallocStackLogging:-}" ] && malloc_history $DPID -allBySize 2>/dev/null >"$ROOT/../knocks-malloc.txt"

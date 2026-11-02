@@ -495,12 +495,14 @@ impl Pane {
     /// [`SHARE_SNAPSHOT`] that the ring can still continue from. The newest few are kept whole
     /// so clients can page through their history.
     pub fn snapshot(&self) -> Result<Arc<Snapshot>, SnapshotError> {
+        // Read before the VT lock: the PTY thread feeds the VT while holding the ring's lock.
+        let oldest = self.pty.oldest().get();
         let (full, seq, resize_count) = {
             let vt = lock(&self.vt);
             let cache = lock(&self.cache);
             if let Some(cached) = cache.as_ref()
                 && cached.resize_count == vt.resize_count
-                && (cached.seq.0 == vt.seq || self.shareable(cached))
+                && (cached.seq.0 == vt.seq || shareable(cached, oldest))
             {
                 return Ok(Arc::clone(cached));
             }
@@ -519,12 +521,6 @@ impl Pane {
         Ok(snapshot)
     }
 
-    /// Whether a stream may start from `snapshot` although output moved on since: it is recent
-    /// and the bytes after it are still in the ring.
-    fn shareable(&self, snapshot: &Snapshot) -> bool {
-        snapshot.made.elapsed() < SHARE_SNAPSHOT && self.pty.oldest().get() <= snapshot.seq.0
-    }
-
     /// The current snapshot as `viewer` may see it: the pane's own for `None`, the
     /// principal's since-join view otherwise (opened now if it is missing, which only ever
     /// hides more).
@@ -532,13 +528,14 @@ impl Pane {
         let Some(principal) = viewer else {
             return self.snapshot();
         };
+        let oldest = self.pty.oldest().get();
         let (full, seq, resize_count) = {
             let mut vt = lock(&self.vt);
             open_view(&mut vt, principal)?;
             let view = vt.view(principal).ok_or(ghostty_vt::Error::InvalidValue)?;
             if let Some(cached) = view.snapshots.back()
                 && cached.resize_count == vt.resize_count
-                && (cached.seq.0 == vt.seq || self.shareable(cached))
+                && (cached.seq.0 == vt.seq || shareable(cached, oldest))
             {
                 return Ok(Arc::clone(cached));
             }
@@ -963,6 +960,13 @@ impl Snapshot {
     }
 }
 
+/// Whether a stream may start from `snapshot` although output moved on since: it is recent
+/// and the bytes after it were still in the ring (oldest offset `oldest`) a moment ago. If they
+/// left since, the stream's seek fails and it asks again.
+fn shareable(snapshot: &Snapshot, oldest: u64) -> bool {
+    snapshot.made.elapsed() < SHARE_SNAPSHOT && oldest <= snapshot.seq.0
+}
+
 /// Keeps `snapshot` among the newest few for history paging: older ones only while all kept
 /// stay within [`HISTORY_BYTES`] (a client paging a dropped one starts over from the newest).
 fn keep_snapshot(snapshots: &mut VecDeque<Arc<Snapshot>>, snapshot: &Arc<Snapshot>) {
@@ -1073,6 +1077,60 @@ mod tests {
             full: vec![0; len],
             made: Instant::now(),
         })
+    }
+
+    /// Many streams asking for snapshots of a flooding pane share recent ones. Checking that
+    /// the ring still holds a shared one's offset under the VT lock deadlocked with the PTY
+    /// thread, which feeds the VT under the ring's lock.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn snapshots_of_a_flooding_pane_are_shared_without_deadlock() {
+        let mut cmd = Command::new("/bin/sh");
+        cmd.args(["-c", "exec yes"]);
+        let size = PaneSize {
+            cols: 80,
+            rows: 24,
+            width_px: 0,
+            height_px: 0,
+        };
+        let limits = VtLimits {
+            scrollback_bytes: 1 << 20,
+            image_storage_bytes: 1 << 20,
+        };
+        let (pane, _events) =
+            Pane::spawn(PaneId(1), SnapGen(1), cmd, size, 1 << 20, limits).unwrap();
+        let pane = Arc::new(pane);
+        while pane.head().0 < 4 << 20 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        // Plain threads: a deadlocked one must not keep the test from failing.
+        let (tx, rx) = std::sync::mpsc::channel();
+        for _ in 0..4 {
+            let (pane, tx) = (Arc::clone(&pane), tx.clone());
+            std::thread::spawn(move || {
+                let (mut asked, mut distinct) = (0, std::collections::HashSet::new());
+                let end = Instant::now() + Duration::from_secs(2);
+                while Instant::now() < end {
+                    asked += 1;
+                    if let Ok(s) = pane.snapshot() {
+                        distinct.insert(s.seq);
+                    }
+                }
+                let _ = tx.send((asked, distinct.len()));
+            });
+        }
+        let (mut asked, mut encoded) = (0, 0);
+        for _ in 0..4 {
+            let (a, e) = rx
+                .recv_timeout(Duration::from_secs(30))
+                .expect("snapshots deadlocked with the PTY thread");
+            asked += a;
+            encoded += e;
+        }
+        assert!(
+            encoded * 2 < asked,
+            "{encoded} snapshots encoded for {asked} requests"
+        );
+        let _ = pane.pty().signal(pty::Signal::Kill);
     }
 
     /// Snapshots of an image-heavy pane are tens of MB each; older ones for paging must not
