@@ -17,8 +17,8 @@ const DEVICE_SECRET: [u8; 32] = [0x11; 32];
 const DAEMON_SEED: [u8; 32] = [0x22; 32];
 const DEVICE_SEED: [u8; 32] = [0x33; 32];
 
-fn eph(n: u8) -> [u8; 32] {
-    [0x40 + n; 32]
+fn ephemeral(index: u8) -> [u8; 32] {
+    [0x40 + index; 32]
 }
 
 fn notification(kind: Kind, action: Option<ActionOffer>) -> Notification {
@@ -79,7 +79,8 @@ fn vectors() -> Value {
     {
         let json = serde_json::to_vec(&note).unwrap();
         let sealed =
-            push::seal_with_ephemeral(&device_public, &DAEMON_SEED, &json, &eph(i as u8)).unwrap();
+            push::seal_with_ephemeral(&device_public, &DAEMON_SEED, &json, &ephemeral(i as u8))
+                .unwrap();
         // Rust reads back what it wrote.
         let opened = push::open(&DEVICE_SECRET, &sealed).unwrap();
         assert_eq!(opened.notification().unwrap(), note);
@@ -103,7 +104,8 @@ fn vectors() -> Value {
     };
     let activity_json = serde_json::to_vec(&activity).unwrap();
     let activity_sealed =
-        push::seal_with_ephemeral(&device_public, &DAEMON_SEED, &activity_json, &eph(9)).unwrap();
+        push::seal_with_ephemeral(&device_public, &DAEMON_SEED, &activity_json, &ephemeral(9))
+            .unwrap();
     assert_eq!(
         push::open(&DEVICE_SECRET, &activity_sealed)
             .unwrap()
@@ -117,12 +119,12 @@ fn vectors() -> Value {
     let other_device = hpke::public_key(&[0x55; 32]);
     let done_json = serde_json::to_vec(&notification(Kind::Done, None)).unwrap();
     let wrong_key =
-        push::seal_with_ephemeral(&other_device, &DAEMON_SEED, &done_json, &eph(10)).unwrap();
+        push::seal_with_ephemeral(&other_device, &DAEMON_SEED, &done_json, &ephemeral(10)).unwrap();
     let mut flipped = push::unb64(payloads[1]["sealed"].as_str().unwrap()).unwrap();
     let last = flipped.len() - 1;
     flipped[last] ^= 0x01;
     let wrong_signer =
-        push::seal_with_ephemeral(&device_public, &[0x66; 32], &done_json, &eph(11)).unwrap();
+        push::seal_with_ephemeral(&device_public, &[0x66; 32], &done_json, &ephemeral(11)).unwrap();
 
     let mut decisions = Vec::new();
     for decision in [Decision::Approve, Decision::Deny] {
@@ -215,9 +217,9 @@ fn vectors_match_the_committed_files() {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(&path, &text).unwrap();
         }
-        let committed = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        let committed = std::fs::read_to_string(&path).unwrap_or_else(|err| {
             panic!(
-                "{}: {e}; run with UPDATE_PUSH_VECTORS=1 to create it",
+                "{}: {err}; run with UPDATE_PUSH_VECTORS=1 to create it",
                 path.display()
             )
         });
@@ -232,10 +234,10 @@ fn vectors_match_the_committed_files() {
 
 #[test]
 fn rejects_are_rejected() {
-    let v = vectors();
-    for case in v["rejects"].as_array().unwrap() {
+    let vectors = vectors();
+    for case in vectors["rejects"].as_array().unwrap() {
         let sealed = case["sealed"].as_str().unwrap();
-        let result = push::open(&DEVICE_SECRET, sealed).and_then(|o| o.notification());
+        let result = push::open(&DEVICE_SECRET, sealed).and_then(|opened| opened.notification());
         match case["error"].as_str().unwrap() {
             "open" => assert!(
                 matches!(result, Err(push::PushError::Open(_))),

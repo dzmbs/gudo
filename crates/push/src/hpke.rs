@@ -38,9 +38,9 @@ fn extract(salt: &[u8], ikm: &[u8]) -> [u8; 32] {
     tag.as_ref().try_into().expect("SHA-256 output")
 }
 
-struct Len(usize);
+struct OutputLen(usize);
 
-impl hkdf::KeyType for Len {
+impl hkdf::KeyType for OutputLen {
     fn len(&self) -> usize {
         self.0
     }
@@ -49,7 +49,7 @@ impl hkdf::KeyType for Len {
 fn expand(prk: &[u8; 32], info: &[u8], len: usize) -> Vec<u8> {
     let prk = hkdf::Prk::new_less_safe(hkdf::HKDF_SHA256, prk);
     let mut out = vec![0; len];
-    prk.expand(&[info], Len(len))
+    prk.expand(&[info], OutputLen(len))
         .and_then(|okm| okm.fill(&mut out))
         .expect("HKDF-SHA256 length within limits");
     out
@@ -141,15 +141,15 @@ pub fn seal_with_ephemeral(
     let enc = public_key(ephemeral);
     let shared = shared_secret(&dh(ephemeral, recipient)?, &enc, recipient);
     let (key, nonce) = key_schedule(&shared, info);
-    let mut buf = plaintext.to_vec();
+    let mut sealed = plaintext.to_vec();
     aead_key(&key)
         .seal_in_place_append_tag(
             aead::Nonce::assume_unique_for_key(nonce),
             aead::Aad::from(aad),
-            &mut buf,
+            &mut sealed,
         )
         .map_err(|_| OpenError)?;
-    Ok((enc, buf))
+    Ok((enc, sealed))
 }
 
 /// Opens a message sealed to the key pair of `secret`.
@@ -167,29 +167,29 @@ pub fn open(
     let pk_r = public_key(secret);
     let shared = shared_secret(&dh(secret, enc)?, enc, &pk_r);
     let (key, nonce) = key_schedule(&shared, info);
-    let mut buf = ciphertext.to_vec();
-    let len = aead_key(&key)
+    let mut message = ciphertext.to_vec();
+    let plaintext_len = aead_key(&key)
         .open_in_place(
             aead::Nonce::assume_unique_for_key(nonce),
             aead::Aad::from(aad),
-            &mut buf,
+            &mut message,
         )
         .map_err(|_| OpenError)?
         .len();
-    buf.truncate(len);
-    Ok(buf)
+    message.truncate(plaintext_len);
+    Ok(message)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn h(s: &str) -> Vec<u8> {
-        data_encoding::HEXLOWER.decode(s.as_bytes()).unwrap()
+    fn h(hex: &str) -> Vec<u8> {
+        data_encoding::HEXLOWER.decode(hex.as_bytes()).unwrap()
     }
 
-    fn h32(s: &str) -> [u8; 32] {
-        h(s).try_into().unwrap()
+    fn h32(hex: &str) -> [u8; 32] {
+        h(hex).try_into().unwrap()
     }
 
     /// RFC 9180 appendix A.2.1 (base mode), sequence number 0.
@@ -215,29 +215,38 @@ mod tests {
         );
         assert_eq!(nonce.to_vec(), h("5c4d98150661b848853b547f"));
 
-        let pt = h("4265617574792069732074727574682c20747275746820626561757479");
+        let plaintext = h("4265617574792069732074727574682c20747275746820626561757479");
         let aad = h("436f756e742d30");
-        let ct = h(
+        let ciphertext = h(
             "1c5250d8034ec2b784ba2cfd69dbdb8af406cfe3ff938e131f0def8c8b60b4db21993c62ce81883d2dd1b51a28",
         );
-        let (enc, sealed) = seal_with_ephemeral(&pk_r, &sk_e, &info, &aad, &pt).unwrap();
+        let (enc, sealed) = seal_with_ephemeral(&pk_r, &sk_e, &info, &aad, &plaintext).unwrap();
         assert_eq!(enc, pk_e);
-        assert_eq!(sealed, ct);
-        assert_eq!(open(&sk_r, &enc, &info, &aad, &ct).unwrap(), pt);
+        assert_eq!(sealed, ciphertext);
+        assert_eq!(
+            open(&sk_r, &enc, &info, &aad, &ciphertext).unwrap(),
+            plaintext
+        );
     }
 
     #[test]
     fn random_round_trip_and_tamper() {
-        let sk = [7; 32];
-        let pk = public_key(&sk);
-        let (enc, ct) = seal(&pk, b"i", b"a", b"hello").unwrap();
-        assert_eq!(open(&sk, &enc, b"i", b"a", &ct).unwrap(), b"hello");
-        assert_eq!(open(&sk, &enc, b"j", b"a", &ct), Err(OpenError));
-        assert_eq!(open(&sk, &enc, b"i", b"b", &ct), Err(OpenError));
-        let mut bad = ct.clone();
-        bad[0] ^= 1;
-        assert_eq!(open(&sk, &enc, b"i", b"a", &bad), Err(OpenError));
-        assert_eq!(open(&[8; 32], &enc, b"i", b"a", &ct), Err(OpenError));
+        let secret = [7; 32];
+        let public = public_key(&secret);
+        let (enc, ciphertext) = seal(&public, b"i", b"a", b"hello").unwrap();
+        assert_eq!(
+            open(&secret, &enc, b"i", b"a", &ciphertext).unwrap(),
+            b"hello"
+        );
+        assert_eq!(open(&secret, &enc, b"j", b"a", &ciphertext), Err(OpenError));
+        assert_eq!(open(&secret, &enc, b"i", b"b", &ciphertext), Err(OpenError));
+        let mut tampered = ciphertext.clone();
+        tampered[0] ^= 1;
+        assert_eq!(open(&secret, &enc, b"i", b"a", &tampered), Err(OpenError));
+        assert_eq!(
+            open(&[8; 32], &enc, b"i", b"a", &ciphertext),
+            Err(OpenError)
+        );
     }
 
     #[test]
