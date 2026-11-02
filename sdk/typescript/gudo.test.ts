@@ -15,15 +15,15 @@ import { EventsLost, TermError, Terminal } from "./gudo.ts";
 async function fake(answer: (call: any) => unknown): Promise<{ socket: string; calls: any[]; server: Server }> {
   const socket = join(mkdtempSync(join(tmpdir(), "gudo-sdk-")), "hook.sock");
   const calls: any[] = [];
-  const server = createServer((conn) => {
+  const server = createServer((connection) => {
     let line = "";
-    conn.setEncoding("utf8");
-    conn.on("data", (chunk: string) => {
+    connection.setEncoding("utf8");
+    connection.on("data", (chunk: string) => {
       line += chunk;
       if (!line.includes("\n")) return;
       const call = JSON.parse(line);
       calls.push(call);
-      conn.end(JSON.stringify(answer(call)) + "\n");
+      connection.end(JSON.stringify(answer(call)) + "\n");
     });
   });
   await new Promise<void>((resolve) => server.listen(socket, resolve));
@@ -49,10 +49,10 @@ test("refusals are TermErrors with the daemon's code and hint", async () => {
     error: { code: "forbidden", message: "the user said no", retryable: false, hint: "ask them" },
   }));
   const term = new Terminal({ socket, token: "t", pane: "1" });
-  await assert.rejects(term.panes.send("p2", { text: "x" }), (e: unknown) => {
-    assert.ok(e instanceof TermError);
-    assert.equal(e.code, "forbidden");
-    assert.equal(e.hint, "ask them");
+  await assert.rejects(term.panes.send("p2", { text: "x" }), (error: unknown) => {
+    assert.ok(error instanceof TermError);
+    assert.equal(error.code, "forbidden");
+    assert.equal(error.hint, "ask them");
     return true;
   });
   server.close();
@@ -73,7 +73,7 @@ test("events follow the cursor and lost events are an error, not a gap", async (
     (async () => {
       for await (const event of term.events({ types: ["pane.opened"] })) seen.push(`${event.type} ${event.pane}`);
     })(),
-    (e: unknown) => e instanceof EventsLost && e.missed === 3,
+    (error: unknown) => error instanceof EventsLost && error.missed === 3,
   );
   assert.deepEqual(seen, ["pane.opened p9"]);
   assert.equal(calls[1].term.args.since, 5, "the second read starts at the first's cursor");
