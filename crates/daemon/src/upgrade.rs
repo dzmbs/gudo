@@ -75,8 +75,8 @@ fn fail(code: UpgradeFailure, message: impl Into<String>) -> Failure {
 /// The build an upgrade stream announces, and whether the owner sent it as a downgrade.
 pub(crate) fn requested(header: &StreamHeader) -> Option<(&UpgradeHeader, bool)> {
     match header {
-        StreamHeader::Upgrade(h) => Some((h, false)),
-        StreamHeader::Downgrade(h) => Some((h, true)),
+        StreamHeader::Upgrade(upgrade) => Some((upgrade, false)),
+        StreamHeader::Downgrade(upgrade) => Some((upgrade, true)),
         _ => None,
     }
 }
@@ -176,15 +176,15 @@ async fn install(
         encoding = ?header.encoding,
         "receiving an upgrade"
     );
-    let staged = Staged::create(&exe).map_err(|e| {
+    let staged = Staged::create(&exe).map_err(|error| {
         fail(
             UpgradeFailure::Unsupported,
-            format!("cannot write next to {}: {e}", exe.display()),
+            format!("cannot write next to {}: {error}", exe.display()),
         )
     })?;
     net::send(send, &UpgradeReply::Ready)
         .await
-        .map_err(|e| fail(UpgradeFailure::Io, e.to_string()))?;
+        .map_err(|error| fail(UpgradeFailure::Io, error.to_string()))?;
     let staged = receive(staged, header, recv).await?;
     let info = check(&staged.path).await?;
     let running = crate::info::build_info(DaemonFeatures::EMPTY);
@@ -201,14 +201,14 @@ async fn install(
         tracing::warn!(from = %running.build, to = %info.build, "owner downgrade");
     }
     let path = staged.path.clone();
-    let exe2 = exe.clone();
-    tokio::task::spawn_blocking(move || swap(&path, &exe2))
+    let target = exe.clone();
+    tokio::task::spawn_blocking(move || swap(&path, &target))
         .await
-        .map_err(|e| fail(UpgradeFailure::Io, e.to_string()))?
-        .map_err(|e| {
+        .map_err(|error| fail(UpgradeFailure::Io, error.to_string()))?
+        .map_err(|error| {
             fail(
                 UpgradeFailure::Io,
-                format!("swapping in the new build: {e}"),
+                format!("swapping in the new build: {error}"),
             )
         })?;
     staged.keep();
@@ -227,7 +227,7 @@ impl Staged {
         let dir = exe.parent().unwrap_or(Path::new("."));
         let name = exe.file_name().map_or_else(
             || brand::DAEMON_BIN.to_owned(),
-            |n| n.to_string_lossy().into_owned(),
+            |file_name| file_name.to_string_lossy().into_owned(),
         );
         let path = dir.join(format!(".{name}.upgrade-{}", std::process::id()));
         // A leftover of a crashed attempt goes; whatever else sits there is never followed.
@@ -261,14 +261,14 @@ struct Hashing<W> {
 }
 
 impl<W: Write> Write for Hashing<W> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let n = self.inner.write(buf)?;
-        self.digest.update(&buf[..n]);
-        self.written += n as u64;
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let count = self.inner.write(bytes)?;
+        self.digest.update(&bytes[..count]);
+        self.written += count as u64;
         if self.written > MAX_SIZE {
             return Err(io::Error::other("the decoded build is too large"));
         }
-        Ok(n)
+        Ok(count)
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -292,9 +292,9 @@ async fn receive(
             digest: ring::digest::Context::new(&ring::digest::SHA256),
             written: 0,
         };
-        let finish = |h: Hashing<io::BufWriter<File>>| -> io::Result<(File, [u8; 32])> {
-            let digest = h.digest.finish();
-            let file = h
+        let finish = |hashed: Hashing<io::BufWriter<File>>| -> io::Result<(File, [u8; 32])> {
+            let digest = hashed.digest.finish();
+            let file = hashed
                 .inner
                 .into_inner()
                 .map_err(io::IntoInnerError::into_error)?;
@@ -304,45 +304,45 @@ async fn receive(
         };
         match encoding {
             UpgradeEncoding::Raw => {
-                let mut out = hashing;
+                let mut writer = hashing;
                 while let Some(chunk) = rx.blocking_recv() {
-                    out.write_all(&chunk)?;
+                    writer.write_all(&chunk)?;
                 }
-                finish(out)
+                finish(writer)
             }
             UpgradeEncoding::Gzip => {
-                let mut gz = flate2::write::GzDecoder::new(hashing);
+                let mut decoder = flate2::write::GzDecoder::new(hashing);
                 while let Some(chunk) = rx.blocking_recv() {
-                    gz.write_all(&chunk)?;
+                    decoder.write_all(&chunk)?;
                 }
-                finish(gz.finish()?)
+                finish(decoder.finish()?)
             }
         }
     });
     let mut received: u64 = 0;
-    let mut buf = vec![0; 64 * 1024];
+    let mut chunk = vec![0; 64 * 1024];
     let read = loop {
-        match recv.read(&mut buf).await {
-            Ok(Some(n)) => {
-                received += n as u64;
+        match recv.read(&mut chunk).await {
+            Ok(Some(len)) => {
+                received += len as u64;
                 if received > header.size {
                     break Err(fail(
                         UpgradeFailure::Corrupt,
                         format!("more than the announced {} bytes", header.size),
                     ));
                 }
-                if tx.send(buf[..n].to_vec()).await.is_err() {
+                if tx.send(chunk[..len].to_vec()).await.is_err() {
                     break Ok(());
                 }
             }
             Ok(None) => break Ok(()),
-            Err(e) => break Err(fail(UpgradeFailure::Io, format!("upgrade stream: {e}"))),
+            Err(error) => break Err(fail(UpgradeFailure::Io, format!("upgrade stream: {error}"))),
         }
     };
     drop(tx);
     let written = writer
         .await
-        .map_err(|e| fail(UpgradeFailure::Io, e.to_string()))?;
+        .map_err(|error| fail(UpgradeFailure::Io, error.to_string()))?;
     read?;
     if received != header.size {
         return Err(fail(
@@ -350,10 +350,10 @@ async fn receive(
             format!("the stream ended after {received} of {} bytes", header.size),
         ));
     }
-    let (file, sha) = written.map_err(|e| {
+    let (file, sha) = written.map_err(|error| {
         fail(
             UpgradeFailure::Corrupt,
-            format!("decoding the build failed: {e}"),
+            format!("decoding the build failed: {error}"),
         )
     })?;
     if sha != header.sha256 {
@@ -363,7 +363,7 @@ async fn receive(
         ));
     }
     file.sync_all()
-        .map_err(|e| fail(UpgradeFailure::Io, e.to_string()))?;
+        .map_err(|error| fail(UpgradeFailure::Io, error.to_string()))?;
     Ok(staged)
 }
 
@@ -375,35 +375,35 @@ async fn check(path: &Path) -> Result<DaemonInfo, Failure> {
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true)
         .output();
-    let out = tokio::time::timeout(CHECK_TIMEOUT, run)
+    let output = tokio::time::timeout(CHECK_TIMEOUT, run)
         .await
         .map_err(|_| fail(UpgradeFailure::Rejected, "the new build did not answer"))?
-        .map_err(|e| {
+        .map_err(|error| {
             fail(
                 UpgradeFailure::Rejected,
-                format!("the new build does not run on this host: {e}"),
+                format!("the new build does not run on this host: {error}"),
             )
         })?;
-    if !out.status.success() {
+    if !output.status.success() {
         return Err(fail(
             UpgradeFailure::Rejected,
             format!(
                 "the new build failed its self-check ({}): {}",
-                out.status,
-                String::from_utf8_lossy(&out.stderr).trim()
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
             ),
         ));
     }
-    let text = String::from_utf8_lossy(&out.stdout);
+    let text = String::from_utf8_lossy(&output.stdout);
     let line = text
         .lines()
         .rev()
-        .find(|l| l.trim_start().starts_with('{'))
+        .find(|candidate| candidate.trim_start().starts_with('{'))
         .unwrap_or_default();
-    let info: DaemonInfo = serde_json::from_str(line).map_err(|e| {
+    let info: DaemonInfo = serde_json::from_str(line).map_err(|error| {
         fail(
             UpgradeFailure::Rejected,
-            format!("the new build reported nonsense ({e})"),
+            format!("the new build reported nonsense ({error})"),
         )
     })?;
     if info.os != std::env::consts::OS || info.arch != std::env::consts::ARCH {
@@ -431,14 +431,13 @@ fn swap(new: &Path, exe: &Path) -> io::Result<()> {
     }
     fs::rename(new, exe)?;
     if let Some(dir) = exe.parent()
-        && let Ok(d) = File::open(dir)
+        && let Ok(dir_file) = File::open(dir)
     {
-        let _ = d.sync_all();
+        let _ = dir_file.sync_all();
     }
     Ok(())
 }
 
-/// Where the previous build is kept.
 pub fn prev_path(exe: &Path) -> PathBuf {
     let mut name = exe.file_name().unwrap_or_default().to_os_string();
     name.push(".prev");

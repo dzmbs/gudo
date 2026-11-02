@@ -23,8 +23,8 @@ fn canonical_tempdir() -> (tempfile::TempDir, PathBuf) {
     (dir, path)
 }
 
-fn s(p: &Path) -> String {
-    p.to_string_lossy().into_owned()
+fn path_string(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
 }
 
 fn workflow_dir(root: &Path) -> PathBuf {
@@ -37,11 +37,15 @@ fn global_dir(home: &Path) -> PathBuf {
 
 async fn start(state: &Path, home: &Path) -> Daemon {
     let home = home.to_owned();
-    start_with(state, move |c| {
-        c.pane_env.push(("HOME".into(), s(&home)));
-        c.pane_env.retain(|(k, _)| k != "XDG_CONFIG_HOME");
-        c.pane_env.push(("XDG_CONFIG_HOME".into(), String::new()));
-        c.fs_allow.push(home.clone());
+    start_with(state, move |config| {
+        config.pane_env.push(("HOME".into(), path_string(&home)));
+        config
+            .pane_env
+            .retain(|(name, _)| name != "XDG_CONFIG_HOME");
+        config
+            .pane_env
+            .push(("XDG_CONFIG_HOME".into(), String::new()));
+        config.fs_allow.push(home.clone());
     })
     .await
 }
@@ -49,25 +53,29 @@ async fn start(state: &Path, home: &Path) -> Daemon {
 async fn client(daemon: &Daemon) -> (TestClient, UnboundedReceiver<WorkspaceEvent>) {
     let mut config = ClientConfig::new(ClientConfig::generate_key());
     config.relay = RelayMode::Disabled;
-    let mut c = TestClient::connect_with(
+    let mut client = TestClient::connect_with(
         &ticket(daemon),
         config,
         client_core::ConnectOptions::default(),
     );
     let (listener, events) = WorkspaceEventQueue::channel();
-    c.client.set_workspace_listener(listener);
-    c.until("connected", |c| c.connected > 0).await;
-    c.attach_and_follow().await;
-    (c, events)
+    client.client.set_workspace_listener(listener);
+    client
+        .until("connected", |client| client.connected > 0)
+        .await;
+    client.attach_and_follow().await;
+    (client, events)
 }
 
-async fn tab_in(c: &mut TestClient, dir: &Path) -> PaneId {
-    let session = c.layout.as_ref().unwrap().session_id;
-    match c
+async fn tab_in(client: &mut TestClient, dir: &Path) -> PaneId {
+    let session = client.layout.as_ref().unwrap().session_id;
+    match client
         .op(LayoutOp::NewTab {
             session_id: session,
             name: String::new(),
-            launch: PaneLaunch::Shell { cwd: Some(s(dir)) },
+            launch: PaneLaunch::Shell {
+                cwd: Some(path_string(dir)),
+            },
         })
         .await
     {
@@ -93,7 +101,7 @@ async fn changed(events: &mut UnboundedReceiver<WorkspaceEvent>, after: u64) -> 
 fn names(list: &WorkflowList) -> Vec<(&str, WorkflowScope)> {
     list.workflows
         .iter()
-        .map(|w| (w.name.as_str(), w.scope))
+        .map(|workflow| (workflow.name.as_str(), workflow.scope))
         .collect()
 }
 
@@ -126,11 +134,11 @@ async fn lists_watches_and_saves_workflows() {
     std::fs::create_dir_all(&outside).unwrap();
 
     let daemon = start(&state, &home).await;
-    let (mut c, mut events) = client(&daemon).await;
-    let in_repo = tab_in(&mut c, &repo.join("src")).await;
-    let not_in_repo = tab_in(&mut c, &outside).await;
+    let (mut client, mut events) = client(&daemon).await;
+    let in_repo = tab_in(&mut client, &repo.join("src")).await;
+    let not_in_repo = tab_in(&mut client, &outside).await;
 
-    let list = c.client.workflow_list(Some(in_repo)).await.unwrap();
+    let list = client.client.workflow_list(Some(in_repo)).await.unwrap();
     assert_eq!(
         names(&list),
         [
@@ -138,7 +146,7 @@ async fn lists_watches_and_saves_workflows() {
             ("Disk usage", WorkflowScope::Global)
         ]
     );
-    assert_eq!(list.repo.as_deref(), Some(s(&repo).as_str()));
+    assert_eq!(list.repo.as_deref(), Some(path_string(&repo).as_str()));
     assert_eq!(list.repo_name.as_deref(), Some("proj"));
     assert_eq!(list.problems.len(), 1, "{:?}", list.problems);
     assert!(list.problems[0].path.ends_with("broken.yaml"));
@@ -147,10 +155,14 @@ async fn lists_watches_and_saves_workflows() {
     // A placeholder without an `arguments` entry still gets one.
     assert_eq!(list.workflows[1].arguments[0].name, "path");
 
-    let list = c.client.workflow_list(Some(not_in_repo)).await.unwrap();
+    let list = client
+        .client
+        .workflow_list(Some(not_in_repo))
+        .await
+        .unwrap();
     assert_eq!(names(&list), [("Disk usage", WorkflowScope::Global)]);
     assert_eq!(list.repo, None);
-    let global_only = c.client.workflow_list(None).await.unwrap();
+    let global_only = client.client.workflow_list(None).await.unwrap();
     assert_eq!(names(&global_only), [("Disk usage", WorkflowScope::Global)]);
 
     // Editing a listed file pushes a change, and the next list has it.
@@ -162,7 +174,7 @@ async fn lists_watches_and_saves_workflows() {
     )
     .unwrap();
     let rev = changed(&mut events, rev).await;
-    let list = c.client.workflow_list(Some(in_repo)).await.unwrap();
+    let list = client.client.workflow_list(Some(in_repo)).await.unwrap();
     assert!(list.rev >= rev);
     assert_eq!(list.workflows[0].name, "Switch branch");
 
@@ -193,7 +205,7 @@ async fn lists_watches_and_saves_workflows() {
         pane_id: Some(in_repo),
         workflow: draft.clone(),
     };
-    let saved = c
+    let saved = client
         .client
         .workflow_save(save(WorkflowScope::Repo))
         .await
@@ -207,7 +219,7 @@ async fn lists_watches_and_saves_workflows() {
         2,
         "crate, then filter from the command"
     );
-    let again = c
+    let again = client
         .client
         .workflow_save(save(WorkflowScope::Repo))
         .await
@@ -217,16 +229,16 @@ async fn lists_watches_and_saves_workflows() {
         workflow_dir(&repo).join("run-tests-2.yaml")
     );
     changed(&mut events, rev).await;
-    let list = c.client.workflow_list(Some(in_repo)).await.unwrap();
+    let list = client.client.workflow_list(Some(in_repo)).await.unwrap();
     assert_eq!(
         list.workflows
             .iter()
-            .filter(|w| w.name == "Run tests")
+            .filter(|workflow| workflow.name == "Run tests")
             .count(),
         2
     );
 
-    let global = c
+    let global = client
         .client
         .workflow_save(save(WorkflowScope::Global))
         .await
@@ -234,7 +246,7 @@ async fn lists_watches_and_saves_workflows() {
     assert!(Path::new(&global.path).starts_with(global_dir(&home)));
 
     // A pane outside a repository cannot save a repository workflow.
-    let refused = c
+    let refused = client
         .client
         .workflow_save(WorkflowSave {
             scope: WorkflowScope::Repo,
@@ -243,7 +255,7 @@ async fn lists_watches_and_saves_workflows() {
         })
         .await;
     assert!(matches!(refused, Err(WsError::NotFound(_))), "{refused:?}");
-    let empty = c
+    let empty = client
         .client
         .workflow_save(WorkflowSave {
             scope: WorkflowScope::Global,
@@ -274,9 +286,9 @@ async fn notices_a_new_workflow_directory() {
             .success()
     );
     let daemon = start(&state, &home).await;
-    let (mut c, mut events) = client(&daemon).await;
-    let pane = tab_in(&mut c, &repo).await;
-    let list = c.client.workflow_list(Some(pane)).await.unwrap();
+    let (mut client, mut events) = client(&daemon).await;
+    let pane = tab_in(&mut client, &repo).await;
+    let list = client.client.workflow_list(Some(pane)).await.unwrap();
     assert!(list.workflows.is_empty());
     tokio::time::sleep(Duration::from_millis(300)).await;
     std::fs::create_dir_all(workflow_dir(&repo)).unwrap();
@@ -288,6 +300,6 @@ async fn notices_a_new_workflow_directory() {
     )
     .unwrap();
     changed(&mut events, rev).await;
-    let list = c.client.workflow_list(Some(pane)).await.unwrap();
+    let list = client.client.workflow_list(Some(pane)).await.unwrap();
     assert_eq!(names(&list), [("Hello", WorkflowScope::Repo)]);
 }

@@ -61,7 +61,7 @@ struct Registration {
 /// Registered devices and delivery state.
 pub(crate) struct Push {
     path: PathBuf,
-    regs: Mutex<Vec<Registration>>,
+    registrations: Mutex<Vec<Registration>>,
     /// Last delivery error per device (hex), cleared on success.
     errors: Mutex<HashMap<String, String>>,
     http: OnceLock<reqwest::Client>,
@@ -169,20 +169,20 @@ impl Budgets {
 impl Push {
     pub fn load(state_dir: &Path) -> Self {
         let path = state_dir.join(STORE_FILE);
-        let regs = match read_optional(&path) {
-            Ok(Some(bytes)) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
-                tracing::warn!("ignoring malformed {}: {e}", path.display());
+        let registrations = match read_optional(&path) {
+            Ok(Some(bytes)) => serde_json::from_slice(&bytes).unwrap_or_else(|error| {
+                tracing::warn!("ignoring malformed {}: {error}", path.display());
                 Vec::new()
             }),
             Ok(None) => Vec::new(),
-            Err(e) => {
-                tracing::warn!("reading {}: {e}", path.display());
+            Err(error) => {
+                tracing::warn!("reading {}: {error}", path.display());
                 Vec::new()
             }
         };
         Self {
             path,
-            regs: Mutex::new(regs),
+            registrations: Mutex::new(registrations),
             errors: Mutex::new(HashMap::new()),
             http: OnceLock::new(),
             activity_wake: tokio::sync::Notify::new(),
@@ -191,36 +191,39 @@ impl Push {
         }
     }
 
-    fn save(&self, regs: &[Registration]) {
-        let result = serde_json::to_vec_pretty(regs)
+    fn save(&self, registrations: &[Registration]) {
+        let result = serde_json::to_vec_pretty(registrations)
             .map_err(std::io::Error::other)
             .and_then(|bytes| write_atomic(&self.path, &bytes));
-        if let Err(e) = result {
-            tracing::warn!("saving {}: {e}", self.path.display());
+        if let Err(error) = result {
+            tracing::warn!("saving {}: {error}", self.path.display());
         }
     }
 
     fn registrations(&self) -> Vec<Registration> {
-        lock(&self.regs).clone()
+        lock(&self.registrations).clone()
     }
 
     fn remove(&self, device: &str) {
-        let mut regs = lock(&self.regs);
-        let before = regs.len();
-        regs.retain(|r| r.device != device);
-        if regs.len() != before {
-            self.save(&regs);
+        let mut registrations = lock(&self.registrations);
+        let before = registrations.len();
+        registrations.retain(|registration| registration.device != device);
+        if registrations.len() != before {
+            self.save(&registrations);
         }
     }
 
     /// Changes one device's registration; saved when `edit` returns true.
     fn update(&self, device: &str, edit: impl FnOnce(&mut Registration) -> bool) {
-        let mut regs = lock(&self.regs);
-        let Some(reg) = regs.iter_mut().find(|r| r.device == device) else {
+        let mut registrations = lock(&self.registrations);
+        let Some(registration) = registrations
+            .iter_mut()
+            .find(|registration| registration.device == device)
+        else {
             return;
         };
-        if edit(reg) {
-            self.save(&regs);
+        if edit(registration) {
+            self.save(&registrations);
         }
     }
 
@@ -232,11 +235,14 @@ impl Push {
 /// Drops the registrations of revoked devices: a revoked device may be lost or stolen, and
 /// must not keep receiving sealed prompts or action tokens.
 pub(crate) fn drop_revoked(core: &Core) {
-    let mut regs = lock(&core.push.regs);
-    let before = regs.len();
-    regs.retain(|r| unhex::<32>(&r.device).is_some_and(|d| !core.mp.device_removed(DeviceId(d))));
-    if regs.len() != before {
-        core.push.save(&regs);
+    let mut registrations = lock(&core.push.registrations);
+    let before = registrations.len();
+    registrations.retain(|registration| {
+        unhex::<32>(&registration.device)
+            .is_some_and(|device| !core.mp.device_removed(DeviceId(device)))
+    });
+    if registrations.len() != before {
+        core.push.save(&registrations);
     }
 }
 
@@ -270,46 +276,44 @@ pub(crate) fn http_client() -> reqwest::Client {
         .expect("the HTTP client builds")
 }
 
-// --- requests from clients ----------------------------------------------------------------------
-
 /// `PushRegister`: adds or replaces the asking device's registration.
 pub(crate) fn register(
     core: &Core,
     actor: Actor,
-    reg: PushRegistration,
+    registration: PushRegistration,
 ) -> Result<PushStatus, WsError> {
-    if reg.cap.is_empty() || reg.cap.len() > MAX_CAP_LEN {
+    if registration.cap.is_empty() || registration.cap.len() > MAX_CAP_LEN {
         return Err(WsError::Invalid("bad push capability".into()));
     }
     // A small-order point would make every seal fail; refuse it now.
-    if push::hpke::seal(&reg.seal_key, b"", b"", b"").is_err() {
+    if push::hpke::seal(&registration.seal_key, b"", b"", b"").is_err() {
         return Err(WsError::Invalid("bad sealing key".into()));
     }
-    if let Some(url) = &reg.relay_url
+    if let Some(url) = &registration.relay_url
         && !(url.starts_with("https://") || url.starts_with("http://"))
     {
         return Err(WsError::Invalid(format!("relay url {url:?}")));
     }
     let device = hex(&actor.device.0);
     {
-        let mut regs = lock(&core.push.regs);
+        let mut registrations = lock(&core.push.registrations);
         // A running Live Activity outlives a re-registration (each launch).
-        let activity_update_cap = regs
+        let activity_update_cap = registrations
             .iter()
-            .find(|r| r.device == device)
-            .and_then(|r| r.activity_update_cap.clone());
-        regs.retain(|r| r.device != device);
-        regs.push(Registration {
+            .find(|existing| existing.device == device)
+            .and_then(|existing| existing.activity_update_cap.clone());
+        registrations.retain(|existing| existing.device != device);
+        registrations.push(Registration {
             device: device.clone(),
-            cap: reg.cap,
-            seal_key: hex(&reg.seal_key),
-            relay_url: reg.relay_url,
-            prefs: reg.prefs,
-            activity_cap: reg.activity_cap,
+            cap: registration.cap,
+            seal_key: hex(&registration.seal_key),
+            relay_url: registration.relay_url,
+            prefs: registration.prefs,
+            activity_cap: registration.activity_cap,
             activity_update_cap,
             registered_at: now_millis(),
         });
-        core.push.save(&regs);
+        core.push.save(&registrations);
     }
     lock(&core.push.errors).remove(&device);
     core.push.activity_wake.notify_one();
@@ -330,7 +334,10 @@ pub(crate) fn activity_token(
         return Err(WsError::Invalid("bad activity capability".into()));
     }
     let device = hex(&actor.device.0);
-    if !lock(&core.push.regs).iter().any(|r| r.device == device) {
+    if !lock(&core.push.registrations)
+        .iter()
+        .any(|registration| registration.device == device)
+    {
         return Err(WsError::NotFound("register for push first".into()));
     }
     activity::token_changed(core, &device, token.cap);
@@ -346,12 +353,15 @@ pub(crate) fn unregister(core: &Core, actor: Actor) -> PushStatus {
 /// `PushStatus`.
 pub(crate) fn status(core: &Core, device: DeviceId) -> PushStatus {
     let device = hex(&device.0);
-    let regs = lock(&core.push.regs);
+    let registrations = lock(&core.push.registrations);
     PushStatus {
         enabled: core.cfg.push.enabled,
         relay_url: core.cfg.push.relay_url.clone(),
-        registered: regs.iter().find(|r| r.device == device).map(|r| r.prefs),
-        devices: regs.len() as u32,
+        registered: registrations
+            .iter()
+            .find(|registration| registration.device == device)
+            .map(|registration| registration.prefs),
+        devices: registrations.len() as u32,
         last_error: lock(&core.push.errors).get(&device).cloned(),
     }
 }
@@ -371,13 +381,17 @@ fn open_subject(core: &Core, id: proto::RequestId) -> Option<(proto::PaneId, [u8
 pub(crate) fn action(
     core: &Core,
     actor: Actor,
-    req: &PushActionRequest,
+    request: &PushActionRequest,
 ) -> Result<Decided, WsError> {
     let daemon = core.identity.daemon_id().0;
     let token =
-        push::verify_token(&daemon, &req.token, UnixMillis(now_millis())).map_err(|e| match e {
-            push::PushError::Expired => WsError::Denied("the notification action expired".into()),
-            _ => WsError::Denied("invalid action token".into()),
+        push::verify_token(&daemon, &request.token, UnixMillis(now_millis())).map_err(|error| {
+            match error {
+                push::PushError::Expired => {
+                    WsError::Denied("the notification action expired".into())
+                }
+                _ => WsError::Denied("invalid action token".into()),
+            }
         })?;
     if token.device != actor.device {
         return Err(WsError::Denied(
@@ -390,12 +404,12 @@ pub(crate) fn action(
             "the agent is no longer waiting for this".into(),
         ));
     }
-    let decision = if req.approve {
+    let decision = if request.approve {
         push::Decision::Approve
     } else {
         push::Decision::Deny
     };
-    push::verify_decision(&actor.device.0, &req.token, decision, &req.sig)
+    push::verify_decision(&actor.device.0, &request.token, decision, &request.sig)
         .map_err(|_| WsError::Denied("bad decision signature".into()))?;
     let option = match decision {
         push::Decision::Approve => token.approve,
@@ -406,7 +420,7 @@ pub(crate) fn action(
     // `DECISION_DOMAIN || token || decision`, which the audit log re-verifies.
     let signed = [
         push::DECISION_DOMAIN,
-        &push::decision_message(&req.token, decision),
+        &push::decision_message(&request.token, decision),
     ]
     .concat();
     // Push actions come from owner devices only, so only the two-person rule can hold them.
@@ -424,7 +438,7 @@ pub(crate) fn action(
             ballot,
             token.request,
             option,
-            (signed.clone(), req.sig.clone()),
+            (signed.clone(), request.sig.clone()),
         )
     };
     match gate {
@@ -434,7 +448,7 @@ pub(crate) fn action(
                 "approval counted; a second person must approve too".into(),
             ));
         }
-        Err(e) => return Err(WsError::Denied(e.to_string())),
+        Err(error) => return Err(WsError::Denied(error.to_string())),
     }
     let record = |decided: &Decided, details: &crate::agent::DecidedRequest| {
         core.mp.audit.append(
@@ -454,7 +468,7 @@ pub(crate) fn action(
                     tool: details.tool.clone(),
                     summary: details.summary.clone(),
                     signed,
-                    sig: req.sig.clone(),
+                    sig: request.sig.clone(),
                 }),
                 ..crate::mp::AuditEntry::default()
             },
@@ -467,7 +481,7 @@ pub(crate) fn action(
                 request_id: token.request,
                 option_id: option,
                 actor,
-                sig: req.sig.clone(),
+                sig: request.sig.clone(),
             },
             record,
         )
@@ -481,7 +495,7 @@ pub(crate) fn action(
     core.mp.approvals.forget(token.request);
     tracing::info!(
         pane = decided.pane_id.0,
-        approve = req.approve,
+        approve = request.approve,
         "decision from a notification"
     );
     let seen = AttentionSeen {
@@ -494,8 +508,6 @@ pub(crate) fn action(
     }
     Ok(decided)
 }
-
-// --- delivery -----------------------------------------------------------------------------------
 
 /// Watches the attention feed and pushes items that stay unseen; runs the Live Activity.
 pub(crate) async fn run(core: Arc<Core>) {
@@ -541,8 +553,8 @@ fn classify(
                 agent.as_ref()?.approval_options(id)
             });
             match buttons {
-                Some(b) if b.approve.is_some() || b.deny.is_some() => {
-                    (push::Kind::Approval, Some(b))
+                Some(buttons) if buttons.approve.is_some() || buttons.deny.is_some() => {
+                    (push::Kind::Approval, Some(buttons))
                 }
                 _ => (push::Kind::Blocked, None),
             }
@@ -566,12 +578,15 @@ fn wants(prefs: &PushPrefs, kind: push::Kind) -> bool {
 /// Debounce: not seen meanwhile (a client focused the pane, the blocker went away), and no
 /// newer item for the same pane that will be pushed instead.
 fn still_due(core: &Core, item: &AttentionItem) -> bool {
-    core.ws.attention.get(item.id).is_some_and(|i| !i.seen)
+    core.ws
+        .attention
+        .get(item.id)
+        .is_some_and(|current| !current.seen)
         && !core.ws.attention.superseded(item.id, item.pane_id)
 }
 
 async fn deliver(core: Arc<Core>, item: AttentionItem) {
-    if !core.cfg.push.enabled || lock(&core.push.regs).is_empty() {
+    if !core.cfg.push.enabled || lock(&core.push.registrations).is_empty() {
         return;
     }
     tokio::time::sleep(core.cfg.push.delay).await;
@@ -580,11 +595,11 @@ async fn deliver(core: Arc<Core>, item: AttentionItem) {
     }
     let (kind, buttons) = classify(&core, &item);
     let host = crate::ws::tunnel::hostname();
-    for reg in targets(&core) {
-        if !wants(&reg.prefs, kind) {
+    for registration in targets(&core) {
+        if !wants(&registration.prefs, kind) {
             continue;
         }
-        let Some(device) = unhex::<32>(&reg.device).map(DeviceId) else {
+        let Some(device) = unhex::<32>(&registration.device).map(DeviceId) else {
             continue;
         };
         if core.device_active(device) {
@@ -596,27 +611,37 @@ async fn deliver(core: Arc<Core>, item: AttentionItem) {
         tokio::spawn(async move {
             // Past the relay's budget a push waits its turn, and goes only if still due.
             loop {
-                let wait = match lock(&core.push.budgets).spend(&reg.device, Instant::now()) {
-                    Ok(()) => break,
-                    Err(wait) => wait,
-                };
+                let wait =
+                    match lock(&core.push.budgets).spend(&registration.device, Instant::now()) {
+                        Ok(()) => break,
+                        Err(wait) => wait,
+                    };
                 tokio::time::sleep(wait).await;
                 if !still_due(&core, &item) || core.device_active(device) {
                     return;
                 }
             }
-            let result = send(&core, &reg, device, &item, kind, buttons.as_ref(), &host).await;
+            let result = send(
+                &core,
+                &registration,
+                device,
+                &item,
+                kind,
+                buttons.as_ref(),
+                &host,
+            )
+            .await;
             match result {
                 Ok(()) => {
-                    lock(&core.push.errors).remove(&reg.device);
+                    lock(&core.push.errors).remove(&registration.device);
                 }
                 Err(SendError::Gone) => {
-                    tracing::info!(device = %&reg.device[..8], "push token gone; unregistering");
-                    core.push.remove(&reg.device);
+                    tracing::info!(device = %&registration.device[..8], "push token gone; unregistering");
+                    core.push.remove(&registration.device);
                 }
                 Err(SendError::Failed(why)) => {
-                    tracing::warn!(device = %&reg.device[..8], "push failed: {why}");
-                    lock(&core.push.errors).insert(reg.device.clone(), why);
+                    tracing::warn!(device = %&registration.device[..8], "push failed: {why}");
+                    lock(&core.push.errors).insert(registration.device.clone(), why);
                 }
             }
         });
@@ -645,7 +670,7 @@ fn notification(
                 request_id: Some(request),
                 ..
             },
-            Some(b),
+            Some(buttons),
         ) => open_subject(core, *request).map(|(_, subject)| {
             let expires = UnixMillis(now_millis() + core.cfg.push.action_ttl.as_millis() as u64);
             let token = push::ActionToken {
@@ -654,19 +679,22 @@ fn notification(
                 device,
                 pane: item.pane_id,
                 request: *request,
-                approve: b.approve.as_ref().map(|(id, _)| *id),
-                deny: b.deny.as_ref().map(|(id, _)| *id),
+                approve: buttons.approve.as_ref().map(|(id, _)| *id),
+                deny: buttons.deny.as_ref().map(|(id, _)| *id),
                 item: item.id,
                 expires,
                 subject,
             };
             push::ActionOffer {
                 token: push::b64(&push::issue_token(&seed, &token)),
-                approve: b
+                approve: buttons
                     .approve
                     .as_ref()
-                    .map_or_else(String::new, |(_, l)| l.clone()),
-                deny: b.deny.as_ref().map_or_else(String::new, |(_, l)| l.clone()),
+                    .map_or_else(String::new, |(_, label)| label.clone()),
+                deny: buttons
+                    .deny
+                    .as_ref()
+                    .map_or_else(String::new, |(_, label)| label.clone()),
                 expires: expires.0,
             }
         }),
@@ -679,7 +707,7 @@ fn notification(
         kind,
         item: item.id,
         pane: item.pane_id.0,
-        session: item.session_id.map(|s| s.0),
+        session: item.session_id.map(|session| session.0),
         title: item.title.clone(),
         body: item.body.clone(),
         at: item.at.0,
@@ -699,14 +727,14 @@ fn open_only(note: &mut push::Notification) {
 
 async fn send(
     core: &Core,
-    reg: &Registration,
+    registration: &Registration,
     device: DeviceId,
     item: &AttentionItem,
     kind: push::Kind,
     buttons: Option<&crate::agent::ApprovalButtons>,
     host: &str,
 ) -> Result<(), SendError> {
-    let seal_key = unhex::<32>(&reg.seal_key)
+    let seal_key = unhex::<32>(&registration.seal_key)
         .ok_or_else(|| SendError::Failed("bad sealing key on file".into()))?;
     let seed = core.identity.secret.to_bytes();
     let mut note = notification(core, device, item, kind, buttons, host);
@@ -714,7 +742,8 @@ async fn send(
         open_only(&mut note);
     }
     let sealed = loop {
-        let json = serde_json::to_vec(&note).map_err(|e| SendError::Failed(e.to_string()))?;
+        let json =
+            serde_json::to_vec(&note).map_err(|error| SendError::Failed(error.to_string()))?;
         match push::seal(&seal_key, &seed, &json) {
             Ok(sealed) => break sealed,
             // Too long for APNs: shorten the body and try again.
@@ -723,16 +752,16 @@ async fn send(
                 note.body = note.body.chars().take(keep).collect::<String>() + "…";
                 open_only(&mut note);
             }
-            Err(e) => return Err(SendError::Failed(format!("sealing: {e}"))),
+            Err(error) => return Err(SendError::Failed(format!("sealing: {error}"))),
         }
     };
     let kind = note.kind;
     let collapse = push::collapse_id(&seed, item.pane_id, kind.category());
     let attempts = core.cfg.push.attempts;
-    post(core, reg, attempts, || push::RelayRequest {
+    post(core, registration, attempts, || push::RelayRequest {
         v: push::RelayRequest::VERSION,
         daemon: String::new(),
-        cap: reg.cap.clone(),
+        cap: registration.cap.clone(),
         push_type: push::PushType::Alert,
         category: Some(kind.category()),
         collapse: Some(collapse.clone()),
@@ -752,12 +781,12 @@ async fn send(
 /// network errors with exponential back-off up to `attempts` times.
 async fn post(
     core: &Core,
-    reg: &Registration,
+    registration: &Registration,
     attempts: u32,
     make: impl Fn() -> push::RelayRequest,
 ) -> Result<(), SendError> {
     let seed = core.identity.secret.to_bytes();
-    let relay = reg
+    let relay = registration
         .relay_url
         .clone()
         .unwrap_or_else(|| core.cfg.push.relay_url.clone());
@@ -774,7 +803,8 @@ async fn post(
             nonce: push::nonce(),
             ..make()
         };
-        let body = serde_json::to_vec(&request).map_err(|e| SendError::Failed(e.to_string()))?;
+        let body =
+            serde_json::to_vec(&request).map_err(|error| SendError::Failed(error.to_string()))?;
         let signature = push::sign_request(&seed, &body);
         let response = core
             .push
@@ -786,35 +816,35 @@ async fn post(
             .send()
             .await;
         let wait = match response {
-            Ok(r) if r.status().is_success() => {
+            Ok(reply) if reply.status().is_success() => {
                 tracing::debug!(attempt, "pushed");
                 return Ok(());
             }
-            Ok(r) if r.status().as_u16() == 410 => return Err(SendError::Gone),
-            Ok(r) if r.status().as_u16() == 429 || r.status().is_server_error() => {
-                let retry_after = r
+            Ok(reply) if reply.status().as_u16() == 410 => return Err(SendError::Gone),
+            Ok(reply) if reply.status().as_u16() == 429 || reply.status().is_server_error() => {
+                let retry_after = reply
                     .headers()
                     .get("retry-after")
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|v| v.parse::<u64>().ok())
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| value.parse::<u64>().ok())
                     .map(Duration::from_secs);
-                last = format!("relay answered {}", r.status());
+                last = format!("relay answered {}", reply.status());
                 let wait = retry_after.unwrap_or(backoff).min(Duration::from_secs(300));
-                if r.status().as_u16() == 429 {
+                if reply.status().as_u16() == 429 {
                     lock(&core.push.budgets).paused_until = Some(Instant::now() + wait);
                 }
                 wait
             }
-            Ok(r) => {
-                let status = r.status();
-                let text = r.text().await.unwrap_or_default();
+            Ok(reply) => {
+                let status = reply.status();
+                let text = reply.text().await.unwrap_or_default();
                 return Err(SendError::Failed(format!(
                     "relay refused the push: {status} {}",
                     text.chars().take(200).collect::<String>()
                 )));
             }
-            Err(e) => {
-                last = format!("posting to {url}: {e}");
+            Err(error) => {
+                last = format!("posting to {url}: {error}");
                 backoff
             }
         };
@@ -843,33 +873,37 @@ mod tests {
 
     #[test]
     fn alerts_stay_within_the_relays_budgets() {
-        let t0 = Instant::now();
-        let mut b = Budgets::new(t0);
-        let sent = (0..100).filter(|_| b.spend("a", t0).is_ok()).count();
+        let start = Instant::now();
+        let mut budgets = Budgets::new(start);
+        let sent = (0..100)
+            .filter(|_| budgets.spend("a", start).is_ok())
+            .count();
         assert_eq!(sent, 30, "a burst stops at the budget");
-        let wait = b.spend("a", t0 + Duration::from_secs(11)).unwrap_err();
+        let wait = budgets
+            .spend("a", start + Duration::from_secs(11))
+            .unwrap_err();
         assert!(
             wait.abs_diff(Duration::from_secs(1)) < Duration::from_millis(1),
             "the next one is due a second later, not {wait:?}"
         );
-        assert_eq!(b.spend("a", t0 + Duration::from_secs(12)), Ok(()));
+        assert_eq!(budgets.spend("a", start + Duration::from_secs(12)), Ok(()));
         // The daemon's budget earned 4 in those 12 s, one of them spent above.
         let other = (0..100)
-            .filter(|_| b.spend("b", t0 + Duration::from_secs(12)).is_ok())
+            .filter(|_| budgets.spend("b", start + Duration::from_secs(12)).is_ok())
             .count();
         assert_eq!(other, 3);
         // A 429 holds everything back until its retry-after.
-        let later = t0 + Duration::from_secs(600);
-        b.paused_until = Some(later + Duration::from_secs(5));
-        assert_eq!(b.spend("c", later), Err(Duration::from_secs(5)));
-        assert_eq!(b.spend("c", later + Duration::from_secs(5)), Ok(()));
+        let later = start + Duration::from_secs(600);
+        budgets.paused_until = Some(later + Duration::from_secs(5));
+        assert_eq!(budgets.spend("c", later), Err(Duration::from_secs(5)));
+        assert_eq!(budgets.spend("c", later + Duration::from_secs(5)), Ok(()));
     }
 
     #[test]
     fn store_round_trips() {
         let dir = tempfile::tempdir().unwrap();
         let push = Push::load(dir.path());
-        let reg = Registration {
+        let registration = Registration {
             device: "ab".repeat(32),
             cap: "cap".into(),
             seal_key: "cd".repeat(32),
@@ -879,10 +913,13 @@ mod tests {
             activity_update_cap: Some("u".into()),
             registered_at: 1,
         };
-        lock(&push.regs).push(reg.clone());
-        push.save(&lock(&push.regs));
-        assert_eq!(Push::load(dir.path()).registrations(), vec![reg.clone()]);
-        push.remove(&reg.device);
+        lock(&push.registrations).push(registration.clone());
+        push.save(&lock(&push.registrations));
+        assert_eq!(
+            Push::load(dir.path()).registrations(),
+            vec![registration.clone()]
+        );
+        push.remove(&registration.device);
         assert!(Push::load(dir.path()).registrations().is_empty());
     }
 }

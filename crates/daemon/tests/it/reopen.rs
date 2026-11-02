@@ -29,20 +29,20 @@ fn fake_claude(tools: &Path) -> Vec<(String, String)> {
 }
 
 fn configure(env: Vec<(String, String)>) -> impl FnOnce(&mut daemon::Config) {
-    move |c: &mut daemon::Config| c.pane_env.extend(env)
+    move |config: &mut daemon::Config| config.pane_env.extend(env)
 }
 
 /// The session id the daemon pinned for `pane`'s Claude, read from its launch line.
-async fn pinned_session(c: &mut TestClient, pane: PaneId) -> String {
-    c.wait_flat(pane, "--session-id ").await;
-    let text = c.flat_text(pane);
+async fn pinned_session(client: &mut TestClient, pane: PaneId) -> String {
+    client.wait_flat(pane, "--session-id ").await;
+    let text = client.flat_text(pane);
     let after = text.split("--session-id ").nth(1).unwrap();
     after.split_whitespace().next().unwrap().to_owned()
 }
 
-async fn new_tab(c: &mut TestClient, launch: PaneLaunch) -> PaneId {
-    let session_id = c.layout.as_ref().unwrap().session_id;
-    match c
+async fn new_tab(client: &mut TestClient, launch: PaneLaunch) -> PaneId {
+    let session_id = client.layout.as_ref().unwrap().session_id;
+    match client
         .op(LayoutOp::NewTab {
             session_id,
             name: String::new(),
@@ -64,9 +64,9 @@ async fn closing_the_last_tab_keeps_the_session_and_reopen_brings_it_back() {
     let dir = tempfile::tempdir().unwrap();
     let work = tempfile::tempdir().unwrap();
     let daemon = start_with(dir.path(), |_| {}).await;
-    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    let shell = c.attach_and_follow().await;
-    let session = c.layout.as_ref().unwrap().session_id;
+    let mut client = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let shell = client.attach_and_follow().await;
+    let session = client.layout.as_ref().unwrap().session_id;
     let cwd = work.path().canonicalize().unwrap().display().to_string();
     let leaf = work
         .path()
@@ -75,29 +75,31 @@ async fn closing_the_last_tab_keeps_the_session_and_reopen_brings_it_back() {
         .to_str()
         .unwrap()
         .to_owned();
-    let first = new_tab(&mut c, PaneLaunch::Shell { cwd: Some(cwd) }).await;
+    let first = new_tab(&mut client, PaneLaunch::Shell { cwd: Some(cwd) }).await;
     assert_eq!(
-        c.op(LayoutOp::ClosePane { pane_id: shell }).await,
+        client.op(LayoutOp::ClosePane { pane_id: shell }).await,
         OpOutcome::Done
     );
 
     assert_eq!(
-        c.op(LayoutOp::ClosePane { pane_id: first }).await,
+        client.op(LayoutOp::ClosePane { pane_id: first }).await,
         OpOutcome::Done
     );
-    c.until("empty layout", |c| {
-        c.layout
-            .as_ref()
-            .is_some_and(|l| l.session_id == session && l.tabs.is_empty())
-    })
-    .await;
+    client
+        .until("empty layout", |client| {
+            client
+                .layout
+                .as_ref()
+                .is_some_and(|layout| layout.session_id == session && layout.tabs.is_empty())
+        })
+        .await;
 
-    let back = new_tab(&mut c, reopen(first)).await;
-    assert_eq!(c.layout.as_ref().unwrap().session_id, session);
-    c.follow(back).await;
-    c.type_line(back, "pwd");
-    c.wait_flat(back, &leaf).await;
-    drop(c);
+    let back = new_tab(&mut client, reopen(first)).await;
+    assert_eq!(client.layout.as_ref().unwrap().session_id, session);
+    client.follow(back).await;
+    client.type_line(back, "pwd");
+    client.wait_flat(back, &leaf).await;
+    drop(client);
     daemon.shutdown().await;
 }
 
@@ -107,8 +109,8 @@ async fn a_reopened_agent_resumes_its_session_also_after_a_restart() {
     let tools = tempfile::tempdir().unwrap();
     let env = fake_claude(tools.path());
     let daemon = start_with(dir.path(), configure(env.clone())).await;
-    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    c.attach_and_follow().await;
+    let mut client = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    client.attach_and_follow().await;
     let claude = PaneLaunch::Agent {
         agent: AgentKind::Claude,
         resume: None,
@@ -116,54 +118,58 @@ async fn a_reopened_agent_resumes_its_session_also_after_a_restart() {
     };
 
     // Closed and reopened while the daemon runs.
-    let agent = new_tab(&mut c, claude.clone()).await;
-    c.follow(agent).await;
-    let id = pinned_session(&mut c, agent).await;
+    let agent = new_tab(&mut client, claude.clone()).await;
+    client.follow(agent).await;
+    let id = pinned_session(&mut client, agent).await;
     assert_eq!(
-        c.op(LayoutOp::ClosePane { pane_id: agent }).await,
+        client.op(LayoutOp::ClosePane { pane_id: agent }).await,
         OpOutcome::Done
     );
-    let back = new_tab(&mut c, reopen(agent)).await;
-    c.follow(back).await;
-    c.wait_flat(back, &format!("--resume {id}")).await;
+    let back = new_tab(&mut client, reopen(agent)).await;
+    client.follow(back).await;
+    client.wait_flat(back, &format!("--resume {id}")).await;
 
     // Reopening uses the record up: a second reopen of the same pane is a plain shell.
-    let again = new_tab(&mut c, reopen(agent)).await;
-    c.follow(again).await;
+    let again = new_tab(&mut client, reopen(agent)).await;
+    client.follow(again).await;
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert!(
-        !c.flat_text(again).contains("fake claude"),
+        !client.flat_text(again).contains("fake claude"),
         "{}",
-        c.flat_text(again)
+        client.flat_text(again)
     );
 
     // Closed, then the daemon restarts: the record is kept with the layout.
-    let other = new_tab(&mut c, claude).await;
-    c.follow(other).await;
-    let other_id = pinned_session(&mut c, other).await;
+    let other = new_tab(&mut client, claude).await;
+    client.follow(other).await;
+    let other_id = pinned_session(&mut client, other).await;
     assert_eq!(
-        c.op(LayoutOp::ClosePane { pane_id: other }).await,
+        client.op(LayoutOp::ClosePane { pane_id: other }).await,
         OpOutcome::Done
     );
     let layout = dir.path().join("layout.json");
     let deadline = Instant::now() + TIMEOUT;
     while !std::fs::read_to_string(&layout)
-        .is_ok_and(|s| s.contains("\"closed\"") && s.contains(&other_id))
+        .is_ok_and(|saved| saved.contains("\"closed\"") && saved.contains(&other_id))
     {
         assert!(Instant::now() < deadline, "closed pane never persisted");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    drop(c);
+    drop(client);
     daemon.shutdown().await;
 
     let daemon = start_with(dir.path(), configure(env)).await;
-    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    c.client.attach(None);
-    c.until("layout", |c| c.layout.is_some()).await;
-    assert!(!leaves(&c.tab().root).contains(&other));
-    let back = new_tab(&mut c, reopen(other)).await;
-    c.follow(back).await;
-    c.wait_flat(back, &format!("--resume {other_id}")).await;
-    drop(c);
+    let mut client = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    client.client.attach(None);
+    client
+        .until("layout", |client| client.layout.is_some())
+        .await;
+    assert!(!leaves(&client.tab().root).contains(&other));
+    let back = new_tab(&mut client, reopen(other)).await;
+    client.follow(back).await;
+    client
+        .wait_flat(back, &format!("--resume {other_id}"))
+        .await;
+    drop(client);
     daemon.shutdown().await;
 }

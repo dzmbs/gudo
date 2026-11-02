@@ -29,7 +29,6 @@ const KEEP: usize = 100;
 /// A drawing in a canvas pane gets a version once nobody has changed it for this long.
 pub(crate) const IDLE_MS: u64 = 30_000;
 
-/// One recorded version.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Checkpoint {
     pub meta: ArtifactVersion,
@@ -48,9 +47,13 @@ pub(crate) struct ExSnapshot {
 
 impl Checkpoint {
     fn bytes(&self) -> usize {
-        self.scene.as_ref().map_or(0, |s| {
-            s.elements.iter().map(|e| e.json.len()).sum::<usize>()
-                + s.app_state.as_ref().map_or(0, String::len)
+        self.scene.as_ref().map_or(0, |snapshot| {
+            snapshot
+                .elements
+                .iter()
+                .map(|element| element.json.len())
+                .sum::<usize>()
+                + snapshot.app_state.as_ref().map_or(0, String::len)
         })
     }
 
@@ -59,7 +62,7 @@ impl Checkpoint {
         self.meta.image.iter().chain(
             self.scene
                 .iter()
-                .flat_map(|s| s.files.iter().map(|f| &f.image)),
+                .flat_map(|snapshot| snapshot.files.iter().map(|file| &file.image)),
         )
     }
 }
@@ -67,9 +70,7 @@ impl Checkpoint {
 /// What a restore writes, for the caller to apply through the ordinary paths (so the change
 /// is broadcast like any other).
 pub(crate) enum RestorePlan {
-    /// Elements to put on an Excalidraw scene.
     Excalidraw(ExcalidrawPut),
-    /// Ops to commit on an op-log drawing.
     Ops(Vec<DrawOp>),
 }
 
@@ -91,13 +92,13 @@ impl Art {
         image: Option<ImageRef>,
         restored_from: Option<u64>,
     ) -> Option<ArtifactVersion> {
-        let mut st = lock(&self.state);
-        let it = st.items.get_mut(&id)?;
-        if it.info.kind == ArtifactKind::Image || it.info.version == 0 {
+        let mut state = lock(&self.state);
+        let item = state.items.get_mut(&id)?;
+        if item.info.kind == ArtifactKind::Image || item.info.version == 0 {
             return None;
         }
-        let version = it.info.version;
-        let entry = match it.history.last_mut() {
+        let version = item.info.version;
+        let entry = match item.history.last_mut() {
             Some(last) if last.meta.version == version => {
                 if image.is_none() || last.meta.image == image {
                     return Some(last.meta.clone());
@@ -106,80 +107,84 @@ impl Art {
                 last.meta.clone()
             }
             _ => {
-                let scene = it.ex.as_ref().map(|ex| ExSnapshot {
-                    elements: ex
+                let scene = item.ex.as_ref().map(|live_scene| ExSnapshot {
+                    elements: live_scene
                         .with_revisions()
-                        .map(|(e, _)| e)
-                        .filter(|e| !e.deleted)
+                        .map(|(element, _)| element)
+                        .filter(|element| !element.deleted)
                         .cloned()
                         .collect(),
-                    app_state: ex.app_state.clone(),
-                    files: ex.files.values().cloned().collect(),
+                    app_state: live_scene.app_state.clone(),
+                    files: live_scene.files.values().cloned().collect(),
                 });
                 let meta = ArtifactVersion {
                     version,
                     at: UnixMillis(now_millis()),
                     by,
                     image,
-                    elements: it.info.elements,
+                    elements: item.info.elements,
                     restored_from,
                 };
-                it.history.push(Checkpoint {
+                item.history.push(Checkpoint {
                     meta: meta.clone(),
                     scene,
                 });
                 // A drawing's history stays within four times its own size cap.
                 let budget = self.limits.log_max as usize * 4;
-                while it.history.len() > KEEP
-                    || (it.history.len() > 1
-                        && it.history.iter().map(Checkpoint::bytes).sum::<usize>() > budget)
+                while item.history.len() > KEEP
+                    || (item.history.len() > 1
+                        && item.history.iter().map(Checkpoint::bytes).sum::<usize>() > budget)
                 {
-                    it.history.remove(0);
+                    item.history.remove(0);
                 }
                 meta
             }
         };
-        let (info, bytes) = (it.info.clone(), postcard::to_stdvec(&it.history));
-        drop(st);
+        let (info, bytes) = (item.info.clone(), postcard::to_stdvec(&item.history));
+        drop(state);
         let path = self.item_dir(&info).join("history.bin");
-        if let Err(e) = bytes
+        if let Err(error) = bytes
             .map_err(std::io::Error::other)
-            .and_then(|b| write_atomic(&path, &b))
+            .and_then(|bytes| write_atomic(&path, &bytes))
         {
-            tracing::warn!("saving {}: {e}", path.display());
+            tracing::warn!("saving {}: {error}", path.display());
         }
         Some(entry)
     }
 
     /// The drawing's recorded versions, newest first (none for images).
     pub fn history(&self, id: ArtifactId) -> Result<Vec<ArtifactVersion>> {
-        let st = lock(&self.state);
-        let it = st.items.get(&id).ok_or_else(|| not_found(id))?;
-        Ok(it.history.iter().rev().map(|c| c.meta.clone()).collect())
+        let state = lock(&self.state);
+        let item = state.items.get(&id).ok_or_else(|| not_found(id))?;
+        Ok(item
+            .history
+            .iter()
+            .rev()
+            .map(|checkpoint| checkpoint.meta.clone())
+            .collect())
     }
 
-    /// The recorded entry for `version`.
     pub fn history_entry(&self, id: ArtifactId, version: u64) -> Result<ArtifactVersion> {
-        let st = lock(&self.state);
-        let it = st.items.get(&id).ok_or_else(|| not_found(id))?;
-        it.history
+        let state = lock(&self.state);
+        let item = state.items.get(&id).ok_or_else(|| not_found(id))?;
+        item.history
             .iter()
-            .rfind(|c| c.meta.version == version)
-            .map(|c| c.meta.clone())
+            .rfind(|checkpoint| checkpoint.meta.version == version)
+            .map(|checkpoint| checkpoint.meta.clone())
             .ok_or_else(|| no_version(id, version))
     }
 
     /// What bringing back `version` writes on top of the current one.
     pub fn restore_plan(&self, id: ArtifactId, version: u64) -> Result<RestorePlan> {
         let (kind, snapshot) = {
-            let st = lock(&self.state);
-            let it = st.items.get(&id).ok_or_else(|| not_found(id))?;
-            let c = it
+            let state = lock(&self.state);
+            let item = state.items.get(&id).ok_or_else(|| not_found(id))?;
+            let checkpoint = item
                 .history
                 .iter()
-                .rfind(|c| c.meta.version == version)
+                .rfind(|checkpoint| checkpoint.meta.version == version)
                 .ok_or_else(|| no_version(id, version))?;
-            (it.info.kind, c.scene.clone())
+            (item.info.kind, checkpoint.scene.clone())
         };
         match kind {
             ArtifactKind::Image => Err(ArtifactError::Invalid("images have no versions".into())),
@@ -188,14 +193,16 @@ impl Art {
                     ArtifactError::Failed(format!("version {version} kept no content"))
                 })?;
                 let current: HashMap<String, ExElement> = {
-                    let st = lock(&self.state);
-                    let ex = st.items.get(&id).and_then(|it| it.ex.as_ref());
-                    ex.map(|ex| {
-                        ex.with_revisions()
-                            .map(|(e, _)| (e.id.clone(), e.clone()))
-                            .collect()
-                    })
-                    .unwrap_or_default()
+                    let state = lock(&self.state);
+                    let live_scene = state.items.get(&id).and_then(|item| item.ex.as_ref());
+                    live_scene
+                        .map(|live_scene| {
+                            live_scene
+                                .with_revisions()
+                                .map(|(element, _)| (element.id.clone(), element.clone()))
+                                .collect()
+                        })
+                        .unwrap_or_default()
                 };
                 Ok(RestorePlan::Excalidraw(ExcalidrawPut {
                     artifact_id: id,
@@ -211,7 +218,7 @@ impl Art {
                 let ops = now
                     .elements()
                     .iter()
-                    .map(|e| DrawOp::Delete { id: e.id })
+                    .map(|element| DrawOp::Delete { id: element.id })
                     .chain(then.elements().iter().cloned().map(DrawOp::Add))
                     .collect::<Vec<_>>();
                 if ops.is_empty() {
@@ -229,12 +236,16 @@ impl Art {
         let due: Vec<(ArtifactId, Actor)> = lock(&self.state)
             .items
             .values()
-            .filter(|it| {
-                !it.info.canvas_panes.is_empty()
-                    && it.info.version > it.history.last().map_or(0, |c| c.meta.version)
-                    && now.saturating_sub(it.info.updated_at.0) >= IDLE_MS
+            .filter(|item| {
+                !item.info.canvas_panes.is_empty()
+                    && item.info.version
+                        > item
+                            .history
+                            .last()
+                            .map_or(0, |checkpoint| checkpoint.meta.version)
+                    && now.saturating_sub(item.info.updated_at.0) >= IDLE_MS
             })
-            .map(|it| (it.info.artifact_id, it.info.created_by))
+            .map(|item| (item.info.artifact_id, item.info.created_by))
             .collect();
         for (id, by) in due {
             self.checkpoint(id, by, None, None);
@@ -254,34 +265,37 @@ fn restore_elements(
     current: &HashMap<String, ExElement>,
 ) -> Result<Vec<ExElement>> {
     let now = now_millis();
-    let bump = |el: &ExElement, deleted: bool| -> Result<ExElement> {
-        let mut v: Value = serde_json::from_str(&el.json)
-            .map_err(|e| ArtifactError::Failed(format!("stored element: {e}")))?;
-        let above = current.get(&el.id).map_or(0, |c| c.version);
-        v["version"] = (el.version.max(above) + 1).into();
-        v["versionNonce"] = u32::from_le_bytes(random::<4>()).into();
-        v["isDeleted"] = deleted.into();
-        v["updated"] = now.into();
-        drawing::parse_element(&v.to_string()).map_err(ArtifactError::Failed)
+    let bump = |element: &ExElement, deleted: bool| -> Result<ExElement> {
+        let mut json: Value = serde_json::from_str(&element.json)
+            .map_err(|error| ArtifactError::Failed(format!("stored element: {error}")))?;
+        let above = current
+            .get(&element.id)
+            .map_or(0, |existing| existing.version);
+        json["version"] = (element.version.max(above) + 1).into();
+        json["versionNonce"] = u32::from_le_bytes(random::<4>()).into();
+        json["isDeleted"] = deleted.into();
+        json["updated"] = now.into();
+        drawing::parse_element(&json.to_string()).map_err(ArtifactError::Failed)
     };
-    let kept: std::collections::HashSet<&str> = snapshot.iter().map(|e| e.id.as_str()).collect();
-    let mut out = snapshot
+    let kept: std::collections::HashSet<&str> =
+        snapshot.iter().map(|element| element.id.as_str()).collect();
+    let mut restored = snapshot
         .iter()
-        .map(|e| bump(e, false))
+        .map(|element| bump(element, false))
         .collect::<Result<Vec<_>>>()?;
-    for el in current.values() {
-        if !el.deleted && !kept.contains(el.id.as_str()) {
-            out.push(bump(el, true)?);
+    for element in current.values() {
+        if !element.deleted && !kept.contains(element.id.as_str()) {
+            restored.push(bump(element, true)?);
         }
     }
-    Ok(out)
+    Ok(restored)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn el(id: &str, version: u64) -> ExElement {
+    fn element_at(id: &str, version: u64) -> ExElement {
         drawing::parse_element(&format!(
             r#"{{"id":"{id}","type":"rectangle","version":{version},"versionNonce":5,"isDeleted":false}}"#
         ))
@@ -290,26 +304,28 @@ mod tests {
 
     #[test]
     fn restored_elements_win_over_the_current_ones() {
-        let snapshot = [el("a", 2), el("b", 1)];
-        let current: HashMap<String, ExElement> = [el("a", 9), el("c", 3)]
+        let snapshot = [element_at("a", 2), element_at("b", 1)];
+        let current: HashMap<String, ExElement> = [element_at("a", 9), element_at("c", 3)]
             .into_iter()
-            .map(|e| (e.id.clone(), e))
+            .map(|element| (element.id.clone(), element))
             .collect();
-        let mut out = restore_elements(&snapshot, &current).unwrap();
-        out.sort_by(|x, y| x.id.cmp(&y.id));
-        let summary: Vec<(&str, u64, bool)> = out
+        let mut restored = restore_elements(&snapshot, &current).unwrap();
+        restored.sort_by(|x, y| x.id.cmp(&y.id));
+        let summary: Vec<(&str, u64, bool)> = restored
             .iter()
-            .map(|e| (e.id.as_str(), e.version, e.deleted))
+            .map(|element| (element.id.as_str(), element.version, element.deleted))
             .collect();
         assert_eq!(
             summary,
             [("a", 10, false), ("b", 2, false), ("c", 4, true)],
             "a beats its newer self, b comes back, c (added later) is deleted"
         );
-        for e in &out {
+        for element in &restored {
             assert!(drawing::wins(
-                e,
-                current.get(&e.id).unwrap_or(&el(&e.id, 0))
+                element,
+                current
+                    .get(&element.id)
+                    .unwrap_or(&element_at(&element.id, 0))
             ));
         }
     }

@@ -19,47 +19,46 @@ use tokio::net::{TcpStream, UnixStream};
 use crate::net;
 use crate::ws::Policy;
 
-const BUF: usize = 64 << 10;
+const CHUNK_LEN: usize = 64 << 10;
 
 /// Connects to `localhost:port` and copies bytes both ways until both directions finish.
 pub(crate) async fn serve(port: u16, send: SendStream, recv: RecvStream) {
     let tcp = connect(port)
         .await
-        .map_err(|e| format!("connect to localhost:{port}: {e}"));
-    splice_reply(tcp.map(Conn::Tcp), send, recv).await;
+        .map_err(|error| format!("connect to localhost:{port}: {error}"));
+    splice_reply(tcp.map(Local::Tcp), send, recv).await;
 }
 
-/// Serves a [`proto::StreamHeader::Forward`] stream.
 pub(crate) async fn serve_target(
     target: ForwardTarget,
     policy: Policy,
     send: SendStream,
     recv: RecvStream,
 ) {
-    let conn = match &target {
+    let local = match &target {
         ForwardTarget::Tcp { port } => connect(*port)
             .await
-            .map(Conn::Tcp)
-            .map_err(|e| format!("connect to localhost:{port}: {e}")),
+            .map(Local::Tcp)
+            .map_err(|error| format!("connect to localhost:{port}: {error}")),
         ForwardTarget::Unix { path } => match policy.resolve_followed(path) {
             Ok(path) => UnixStream::connect(&path)
                 .await
-                .map(Conn::Unix)
-                .map_err(|e| format!("connect to {}: {e}", path.display())),
-            Err(e) => Err(e.to_string()),
+                .map(Local::Unix)
+                .map_err(|error| format!("connect to {}: {error}", path.display())),
+            Err(error) => Err(error.to_string()),
         },
     };
-    splice_reply(conn, send, recv).await;
+    splice_reply(local, send, recv).await;
 }
 
-enum Conn {
+enum Local {
     Tcp(TcpStream),
     Unix(UnixStream),
 }
 
-async fn splice_reply(conn: Result<Conn, String>, mut send: SendStream, recv: RecvStream) {
-    let conn = match conn {
-        Ok(c) => c,
+async fn splice_reply(local: Result<Local, String>, mut send: SendStream, recv: RecvStream) {
+    let local = match local {
+        Ok(local) => local,
         Err(reason) => {
             let _ = net::send(&mut send, &ForwardReply::Refused { reason }).await;
             let _ = send.finish();
@@ -72,23 +71,23 @@ async fn splice_reply(conn: Result<Conn, String>, mut send: SendStream, recv: Re
     {
         return;
     }
-    let moved = match conn {
-        Conn::Tcp(tcp) => {
+    let moved = match local {
+        Local::Tcp(tcp) => {
             let _ = tcp.set_nodelay(true);
-            let (mut r, mut w) = tcp.into_split();
-            let moved = splice(recv, &mut w, &mut r, send).await;
+            let (mut reader, mut writer) = tcp.into_split();
+            let moved = splice(recv, &mut writer, &mut reader, send).await;
             if moved.broken {
                 // A reset, not an orderly close: the server must not take it for the client's
                 // goodbye.
-                if let Ok(tcp) = r.reunite(w) {
+                if let Ok(tcp) = reader.reunite(writer) {
                     let _ = tcp.set_zero_linger();
                 }
             }
             moved
         }
-        Conn::Unix(unix) => {
-            let (r, w) = unix.into_split();
-            splice(recv, w, r, send).await
+        Local::Unix(unix) => {
+            let (reader, writer) = unix.into_split();
+            splice(recv, writer, reader, send).await
         }
     };
     tracing::debug!(moved.up, moved.down, moved.broken, "forward closed");
@@ -121,15 +120,15 @@ where
     LW: AsyncWrite + Unpin,
 {
     let up = async {
-        let mut buf = vec![0; BUF];
+        let mut chunk = vec![0; CHUNK_LEN];
         let mut total = 0u64;
         loop {
-            match quic_rx.read(&mut buf).await {
-                Ok(Some(n)) => {
-                    if local_w.write_all(&buf[..n]).await.is_err() {
+            match quic_rx.read(&mut chunk).await {
+                Ok(Some(len)) => {
+                    if local_w.write_all(&chunk[..len]).await.is_err() {
                         return (total, false);
                     }
-                    total += n as u64;
+                    total += len as u64;
                 }
                 Ok(None) => {
                     let _ = local_w.shutdown().await;
@@ -140,19 +139,19 @@ where
         }
     };
     let down = async {
-        let mut buf = vec![0; BUF];
+        let mut chunk = vec![0; CHUNK_LEN];
         let mut total = 0u64;
         loop {
-            match local_r.read(&mut buf).await {
+            match local_r.read(&mut chunk).await {
                 Ok(0) => {
                     let _ = quic_tx.finish();
                     return (total, true);
                 }
-                Ok(n) => {
-                    if quic_tx.write_all(&buf[..n]).await.is_err() {
+                Ok(len) => {
+                    if quic_tx.write_all(&chunk[..len]).await.is_err() {
                         return (total, false);
                     }
-                    total += n as u64;
+                    total += len as u64;
                 }
                 Err(_) => return (total, false),
             }
@@ -175,17 +174,17 @@ async fn both_or_first_failure(
     let (mut up_end, mut down_end): (Option<u64>, Option<u64>) = (None, None);
     loop {
         tokio::select! {
-            (n, clean) = &mut up, if up_end.is_none() => {
+            (bytes, clean) = &mut up, if up_end.is_none() => {
                 if !clean {
-                    return Moved { up: n, down: down_end.unwrap_or(0), broken: true };
+                    return Moved { up: bytes, down: down_end.unwrap_or(0), broken: true };
                 }
-                up_end = Some(n);
+                up_end = Some(bytes);
             }
-            (n, clean) = &mut down, if down_end.is_none() => {
+            (bytes, clean) = &mut down, if down_end.is_none() => {
                 if !clean {
-                    return Moved { up: up_end.unwrap_or(0), down: n, broken: true };
+                    return Moved { up: up_end.unwrap_or(0), down: bytes, broken: true };
                 }
-                down_end = Some(n);
+                down_end = Some(bytes);
             }
         }
         if let (Some(up), Some(down)) = (up_end, down_end) {
@@ -201,8 +200,8 @@ async fn both_or_first_failure(
 async fn connect(port: u16) -> std::io::Result<TcpStream> {
     match TcpStream::connect(SocketAddr::from((Ipv4Addr::LOCALHOST, port))).await {
         Ok(tcp) => Ok(tcp),
-        Err(v4) => TcpStream::connect(SocketAddr::from((Ipv6Addr::LOCALHOST, port)))
+        Err(v4_error) => TcpStream::connect(SocketAddr::from((Ipv6Addr::LOCALHOST, port)))
             .await
-            .map_err(|_| v4),
+            .map_err(|_| v4_error),
     }
 }

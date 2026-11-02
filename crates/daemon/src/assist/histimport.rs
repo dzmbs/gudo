@@ -40,7 +40,7 @@ type Parser = fn(&[u8]) -> Vec<Line>;
 pub(crate) fn import_all(home: &Path) -> (Vec<Record>, Vec<Source>) {
     let xdg_data = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
-        .filter(|p| p.starts_with(home))
+        .filter(|dir| dir.starts_with(home))
         .unwrap_or_else(|| home.join(".local/share"));
     let mut zsh = vec![home.join(".zsh_history"), home.join(".histfile")];
     if let Some(zdotdir) = std::env::var_os("ZDOTDIR").map(PathBuf::from)
@@ -56,7 +56,7 @@ pub(crate) fn import_all(home: &Path) -> (Vec<Record>, Vec<Source>) {
     let mut records = Vec::new();
     let mut report = Vec::new();
     for (shell, candidates, parse) in sources {
-        let Some((path, bytes, mtime)) = candidates.iter().find_map(|p| read(p)) else {
+        let Some((path, bytes, mtime)) = candidates.iter().find_map(|path| read(path)) else {
             continue;
         };
         let lines = parse(&bytes);
@@ -72,47 +72,47 @@ pub(crate) fn import_all(home: &Path) -> (Vec<Record>, Vec<Source>) {
 }
 
 fn read(path: &Path) -> Option<(PathBuf, Vec<u8>, u64)> {
-    let meta = std::fs::metadata(path).ok()?;
-    if !meta.is_file() || meta.len() > MAX_FILE {
+    let metadata = std::fs::metadata(path).ok()?;
+    if !metadata.is_file() || metadata.len() > MAX_FILE {
         return None;
     }
-    let mtime = meta
+    let mtime = metadata
         .modified()
         .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map_or(0, |d| d.as_secs());
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |since_epoch| since_epoch.as_secs());
     Some((path.to_owned(), std::fs::read(path).ok()?, mtime))
 }
 
 /// One record per distinct command: its count and last time (ms).
 fn fold(lines: &[Line], mtime: u64) -> Vec<Record> {
     let total = lines.len() as u64;
-    let mut by: HashMap<&str, (u32, u64)> = HashMap::new();
+    let mut per_command: HashMap<&str, (u32, u64)> = HashMap::new();
     let mut order: Vec<&str> = Vec::new();
-    for (i, (cmd, when)) in lines.iter().enumerate() {
-        let cmd = cmd.trim_end();
-        if cmd.trim().is_empty() {
+    for (i, (command, when)) in lines.iter().enumerate() {
+        let command = command.trim_end();
+        if command.trim().is_empty() {
             continue;
         }
-        let t = when.unwrap_or_else(|| mtime.saturating_sub(total - i as u64)) * 1000;
-        let slot = by.entry(cmd).or_insert_with(|| {
-            order.push(cmd);
+        let at_ms = when.unwrap_or_else(|| mtime.saturating_sub(total - i as u64)) * 1000;
+        let slot = per_command.entry(command).or_insert_with(|| {
+            order.push(command);
             (0, 0)
         });
         slot.0 += 1;
-        slot.1 = slot.1.max(t);
+        slot.1 = slot.1.max(at_ms);
     }
     order
         .into_iter()
-        .map(|cmd| {
-            let (n, t) = by[cmd];
+        .map(|command| {
+            let (count, last_ms) = per_command[command];
             Record {
-                c: cmd.to_owned(),
+                c: command.to_owned(),
                 d: None,
                 x: None,
                 ms: None,
-                t,
-                n,
+                t: last_ms,
+                n: count,
             }
         })
         .collect()
@@ -120,111 +120,111 @@ fn fold(lines: &[Line], mtime: u64) -> Vec<Record> {
 
 /// Undoes zsh's metafication: `0x83` marks the next byte as xor 32.
 fn unmetafy(bytes: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut it = bytes.iter();
-    while let Some(&b) = it.next() {
-        if b == 0x83 {
-            if let Some(&next) = it.next() {
-                out.push(next ^ 32);
+    let mut unmetafied = Vec::with_capacity(bytes.len());
+    let mut rest = bytes.iter();
+    while let Some(&byte) = rest.next() {
+        if byte == 0x83 {
+            if let Some(&next) = rest.next() {
+                unmetafied.push(next ^ 32);
             }
         } else {
-            out.push(b);
+            unmetafied.push(byte);
         }
     }
-    out
+    unmetafied
 }
 
 pub(crate) fn parse_zsh(bytes: &[u8]) -> Vec<Line> {
     let text = String::from_utf8_lossy(&unmetafy(bytes)).into_owned();
-    let mut out = Vec::new();
+    let mut parsed = Vec::new();
     let mut pending: Option<(String, Option<u64>)> = None;
     for line in text.split('\n') {
         let (body, when) = match &mut pending {
-            Some((cmd, _)) => {
-                cmd.push('\n');
+            Some((command, _)) => {
+                command.push('\n');
                 (line, None)
             }
             None => match extended(line) {
-                Some((when, cmd)) => (cmd, Some(when)),
+                Some((when, command)) => (command, Some(when)),
                 None => (line, None),
             },
         };
         let (body, continues) = match body.strip_suffix('\\') {
-            Some(b) => (b, true),
+            Some(stripped) => (stripped, true),
             None => (body, false),
         };
         let entry = pending.get_or_insert_with(|| (String::new(), when));
         entry.0.push_str(body);
         if !continues {
-            out.extend(pending.take());
+            parsed.extend(pending.take());
         }
     }
-    out.extend(pending);
-    out
+    parsed.extend(pending);
+    parsed
 }
 
 /// `: 1700000000:0;cmd` → (1700000000, "cmd").
 fn extended(line: &str) -> Option<(u64, &str)> {
     let rest = line.strip_prefix(": ")?;
-    let (stamp, cmd) = rest.split_once(';')?;
+    let (stamp, command) = rest.split_once(';')?;
     let (start, elapsed) = stamp.split_once(':')?;
-    if !elapsed.bytes().all(|b| b.is_ascii_digit()) {
+    if !elapsed.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
     }
-    Some((start.trim().parse().ok()?, cmd))
+    Some((start.trim().parse().ok()?, command))
 }
 
 pub(crate) fn parse_bash(bytes: &[u8]) -> Vec<Line> {
     let text = String::from_utf8_lossy(bytes);
-    let mut out = Vec::new();
+    let mut parsed = Vec::new();
     let mut when = None;
     for line in text.lines() {
         if let Some(stamp) = line.strip_prefix('#')
             && !stamp.is_empty()
-            && stamp.bytes().all(|b| b.is_ascii_digit())
+            && stamp.bytes().all(|byte| byte.is_ascii_digit())
         {
             when = stamp.parse().ok();
             continue;
         }
-        out.push((line.to_owned(), when.take()));
+        parsed.push((line.to_owned(), when.take()));
     }
-    out
+    parsed
 }
 
 pub(crate) fn parse_fish(bytes: &[u8]) -> Vec<Line> {
     let text = String::from_utf8_lossy(bytes);
-    let mut out: Vec<Line> = Vec::new();
+    let mut parsed: Vec<Line> = Vec::new();
     for line in text.lines() {
-        if let Some(cmd) = line.strip_prefix("- cmd: ") {
-            out.push((unescape_fish(cmd), None));
+        if let Some(command) = line.strip_prefix("- cmd: ") {
+            parsed.push((unescape_fish(command), None));
         } else if let Some(when) = line.trim_start().strip_prefix("when: ")
-            && let Some(last) = out.last_mut()
+            && let Some(last) = parsed.last_mut()
         {
             last.1 = when.trim().parse().ok();
         }
     }
-    out
+    parsed
 }
 
-fn unescape_fish(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        if c != '\\' {
-            out.push(c);
+fn unescape_fish(escaped: &str) -> String {
+    let mut unescaped = String::with_capacity(escaped.len());
+    let mut chars = escaped.chars();
+    while let Some(character) = chars.next() {
+        if character != '\\' {
+            unescaped.push(character);
             continue;
         }
         match chars.next() {
-            Some('n') => out.push('\n'),
-            Some('\\') => out.push('\\'),
+            Some('n') => unescaped.push('\n'),
+            Some('\\') => unescaped.push('\\'),
             Some(other) => {
-                out.push('\\');
-                out.push(other);
+                unescaped.push('\\');
+                unescaped.push(other);
             }
-            None => out.push('\\'),
+            None => unescaped.push('\\'),
         }
     }
-    out
+    unescaped
 }
 
 #[cfg(test)]
@@ -257,7 +257,10 @@ mod tests {
         );
         let records = fold(&lines, 1_800_000_000);
         assert_eq!(records.len(), 2);
-        let make = records.iter().find(|r| r.c == "make test").unwrap();
+        let make = records
+            .iter()
+            .find(|record| record.c == "make test")
+            .unwrap();
         assert_eq!(make.n, 2);
         // The untimestamped repeat is later than the stamped one.
         assert!(make.t > 1_700_000_000_000);
@@ -284,7 +287,9 @@ mod tests {
         .unwrap();
         let (records, report) = import_all(home.path());
         assert_eq!(report.len(), 3, "{report:?}");
-        let cmds: Vec<_> = records.iter().map(|r| r.c.as_str()).collect();
-        assert!(cmds.contains(&"zcmd") && cmds.contains(&"bcmd") && cmds.contains(&"fcmd"));
+        let commands: Vec<_> = records.iter().map(|record| record.c.as_str()).collect();
+        assert!(
+            commands.contains(&"zcmd") && commands.contains(&"bcmd") && commands.contains(&"fcmd")
+        );
     }
 }

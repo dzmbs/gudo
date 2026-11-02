@@ -5,17 +5,13 @@
 //! It only recognises `ESC ] … (BEL | ESC \)`; everything else passes through untouched (the
 //! VT parser sees every byte regardless). Bodies longer than [`MAX_BODY`] are dropped.
 
-/// Longest OSC body kept. Agent reports and titles are far shorter.
 const MAX_BODY: usize = 8 * 1024;
 /// Longest OSC 52 body kept: `52;<targets>;` and the base64 of the largest clipboard write.
 const MAX_CLIPBOARD_BODY: usize = 64 + proto::MAX_CLIPBOARD_BYTES.div_ceil(3) * 4;
-/// Longest title kept, in characters.
 const MAX_TITLE_CHARS: usize = 512;
 
-/// A recognised OSC.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Osc {
-    /// OSC 0 or 2.
     Title(String),
     /// OSC 7, as a path (see [`file_url_path`]).
     Cwd(String),
@@ -23,7 +19,7 @@ pub(crate) enum Osc {
     Notify(String),
     /// OSC 7501 body after `7501;` (program status).
     ProgramStatus(String),
-    /// OSC 52: text a program puts on the clipboard. Reads (`?`) are never recognised.
+    /// OSC 52 write; reads (`?`) are never recognised.
     Clipboard(String),
 }
 
@@ -36,7 +32,7 @@ enum State {
     BodyEsc,
 }
 
-/// Incremental scanner; bytes may be split anywhere.
+/// Incremental scanner; sequences may be split across feeds.
 #[derive(Debug, Default)]
 pub(crate) struct OscScanner {
     state: State,
@@ -45,20 +41,18 @@ pub(crate) struct OscScanner {
 }
 
 impl OscScanner {
-    /// Feeds bytes, calling `emit` for every complete OSC recognised.
     pub fn feed(&mut self, data: &[u8], mut emit: impl FnMut(Osc)) {
         let mut rest = data;
         while !rest.is_empty() {
-            // Almost all output is outside escapes: skip to the next ESC at once.
             if matches!(self.state, State::Ground) {
                 match memchr::memchr(0x1b, rest) {
                     Some(at) => rest = &rest[at..],
                     None => return,
                 }
             }
-            let b = rest[0];
+            let byte = rest[0];
             rest = &rest[1..];
-            self.state = match (&self.state, b) {
+            self.state = match (&self.state, byte) {
                 (State::Ground, 0x1b) => State::Esc,
                 (State::Ground, _) => State::Ground,
                 (State::Esc, b']') => {
@@ -75,7 +69,7 @@ impl OscScanner {
                 (State::Body, 0x1b) => State::BodyEsc,
                 (State::Body, 0x18 | 0x1a) => State::Ground,
                 (State::Body, _) => {
-                    self.push(b);
+                    self.push(byte);
                     State::Body
                 }
                 (State::BodyEsc, b'\\') => {
@@ -93,14 +87,14 @@ impl OscScanner {
         }
     }
 
-    fn push(&mut self, b: u8) {
+    fn push(&mut self, byte: u8) {
         let max = if self.body.starts_with(b"52;") {
             MAX_CLIPBOARD_BODY
         } else {
             MAX_BODY
         };
         if self.body.len() < max {
-            self.body.push(b);
+            self.body.push(byte);
         } else {
             self.overflow = true;
         }
@@ -149,7 +143,9 @@ fn clipboard_text(rest: &str) -> Option<String> {
     if bytes.len() > proto::MAX_CLIPBOARD_BYTES {
         return None;
     }
-    String::from_utf8(bytes).ok().filter(|t| !t.is_empty())
+    String::from_utf8(bytes)
+        .ok()
+        .filter(|text| !text.is_empty())
 }
 
 /// The directory an OSC 7 URL names, if it is an absolute path that prints as it is: any
@@ -173,24 +169,24 @@ pub(crate) fn file_url_path(url: &str) -> String {
         return url.to_owned();
     };
     let path = rest.find('/').map_or("/", |i| &rest[i..]);
-    let mut out = Vec::with_capacity(path.len());
+    let mut decoded = Vec::with_capacity(path.len());
     let bytes = path.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%'
-            && let Some(v) = bytes
+            && let Some(byte) = bytes
                 .get(i + 1..i + 3)
-                .and_then(|h| std::str::from_utf8(h).ok())
-                .and_then(|h| u8::from_str_radix(h, 16).ok())
+                .and_then(|hex| std::str::from_utf8(hex).ok())
+                .and_then(|hex| u8::from_str_radix(hex, 16).ok())
         {
-            out.push(v);
+            decoded.push(byte);
             i += 3;
             continue;
         }
-        out.push(bytes[i]);
+        decoded.push(bytes[i]);
         i += 1;
     }
-    String::from_utf8_lossy(&out).into_owned()
+    String::from_utf8_lossy(&decoded).into_owned()
 }
 
 #[cfg(test)]
@@ -198,30 +194,30 @@ mod tests {
     use super::*;
 
     fn scan(chunks: &[&[u8]]) -> Vec<Osc> {
-        let mut s = OscScanner::default();
-        let mut out = Vec::new();
-        for c in chunks {
-            s.feed(c, |o| out.push(o));
+        let mut scanner = OscScanner::default();
+        let mut found = Vec::new();
+        for chunk in chunks {
+            scanner.feed(chunk, |osc| found.push(osc));
         }
-        out
+        found
     }
 
     #[test]
     fn recognises_split_sequences() {
         let got = scan(&[
             b"hi\x1b]0;ti",
-            b"tle\x07\x1b]7;file://mac/Users/a%20b\x1b",
+            b"tle\x07\x1b]7;file://mac/home/a%20b\x1b",
             b"\\\x1b]133;B\x07\x1b]9;4;1;50\x07\x1b]7501;working\x1b\\\x1b]52;c;xx\x07",
-            b"\x1b]7;kitty-shell-cwd://mac/Users/a%20b\x07",
+            b"\x1b]7;kitty-shell-cwd://mac/home/a%20b\x07",
         ]);
         assert_eq!(
             got,
             [
                 Osc::Title("title".into()),
-                Osc::Cwd("/Users/a b".into()),
+                Osc::Cwd("/home/a b".into()),
                 Osc::Notify("4;1;50".into()),
                 Osc::ProgramStatus("working".into()),
-                Osc::Cwd("/Users/a%20b".into()),
+                Osc::Cwd("/home/a%20b".into()),
             ]
         );
     }
@@ -240,7 +236,7 @@ mod tests {
 
     #[test]
     fn clipboard_writes_are_recognised_and_reads_never() {
-        let b64 = |s: &str| data_encoding::BASE64.encode(s.as_bytes());
+        let b64 = |text: &str| data_encoding::BASE64.encode(text.as_bytes());
         let write = format!("\x1b]52;c;{}\x07", b64("yanked line"));
         assert_eq!(
             scan(&[write.as_bytes()]),

@@ -51,11 +51,11 @@ async fn dial_with(
         .await
         .unwrap();
     let mut addr = EndpointAddr::new(EndpointId::from_bytes(&ticket.daemon_id.0).unwrap());
-    for a in &ticket.addrs {
-        addr = addr.with_ip_addr(*a);
+    for address in &ticket.addrs {
+        addr = addr.with_ip_addr(*address);
     }
-    let conn = endpoint.connect(addr, proto::ALPN).await.unwrap();
-    let (mut tx, mut rx) = conn.open_bi().await.unwrap();
+    let connection = endpoint.connect(addr, proto::ALPN).await.unwrap();
+    let (mut tx, mut rx) = connection.open_bi().await.unwrap();
     let hello = Hello {
         device_id: device,
         principal_id: ticket.principal,
@@ -90,22 +90,22 @@ async fn dial_with(
         panic!("{first:?}")
     };
     // Nothing the daemon sends is read from here on.
-    ((endpoint, conn, tx, rx), welcome)
+    ((endpoint, connection, tx, rx), welcome)
 }
 
-/// A peer that keeps asking but never reads used to grow the daemon's queue for it without
-/// bound. It is disconnected instead, and everyone else carries on.
+/// A peer that keeps asking but never reads must not grow the daemon's queue for it without
+/// bound: it is disconnected, and everyone else carries on.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_client_that_stops_reading_is_disconnected() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = support::start(dir.path()).await;
-    let (_endpoint, conn, mut tx, _rx) = raw_pair(&support::ticket(&daemon)).await;
+    let (_endpoint, connection, mut tx, _rx) = raw_pair(&support::ticket(&daemon)).await;
 
     // Each request is answered on `ctl`; the answers pile up once flow control stops them.
     let ask = proto::frame::to_vec(&ClientCtl::ListSessions).unwrap();
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut sent = 0;
-    while conn.close_reason().is_none() {
+    while connection.close_reason().is_none() {
         assert!(
             Instant::now() < deadline,
             "the daemon kept a stuck client after {sent} requests"
@@ -116,7 +116,7 @@ async fn a_client_that_stops_reading_is_disconnected() {
         }
         tokio::task::yield_now().await;
     }
-    tokio::time::timeout(Duration::from_secs(10), conn.closed())
+    tokio::time::timeout(Duration::from_secs(10), connection.closed())
         .await
         .expect("closed by the daemon");
 
@@ -126,42 +126,42 @@ async fn a_client_that_stops_reading_is_disconnected() {
     other.wait_text(pane, "still-here").await;
 }
 
-/// A paste bigger than one frame used to fail to encode on the client, which dropped the
-/// connection and lost the paste. It arrives whole.
+/// A paste bigger than one frame is split rather than failing to encode on the client (which
+/// would drop the connection and lose the paste).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_paste_larger_than_a_frame_arrives_whole() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = support::start(dir.path()).await;
-    let mut c = TestClient::connect(&support::ticket(&daemon), ClientConfig::generate_key());
-    let pane = c.attach_and_follow().await;
+    let mut client = TestClient::connect(&support::ticket(&daemon), ClientConfig::generate_key());
+    let pane = client.attach_and_follow().await;
     const LEN: usize = 6 << 20;
-    c.type_line(
+    client.type_line(
         pane,
         &format!("stty raw -echo; head -c {LEN} | wc -c | tr -d ' '; stty sane"),
     );
     tokio::time::sleep(Duration::from_millis(500)).await;
-    c.client.send_paste(pane, "a".repeat(LEN));
-    c.wait_text(pane, &LEN.to_string()).await;
-    assert_eq!(c.connected, 1, "the connection held");
+    client.client.send_paste(pane, "a".repeat(LEN));
+    client.wait_text(pane, &LEN.to_string()).await;
+    assert_eq!(client.connected, 1, "the connection held");
 }
 
 /// One device holding many connections (a reconnect loop that never closes the old ones)
-/// used to keep them all, each with what its streams hold in flight. The oldest are closed.
+/// keeps a bounded number, each with what its streams hold in flight: the oldest are closed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_device_keeps_a_bounded_number_of_connections() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = support::start(dir.path()).await;
     let key = ClientConfig::generate_key();
     let ticket = support::ticket(&daemon);
-    let mut conns = vec![raw_dial(&ticket, &key, true).await];
+    let mut connections = vec![raw_dial(&ticket, &key, true).await];
     for _ in 0..20 {
-        conns.push(raw_dial(&ticket, &key, false).await);
+        connections.push(raw_dial(&ticket, &key, false).await);
     }
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let open = conns
+        let open = connections
             .iter()
-            .filter(|(_, c, ..)| c.close_reason().is_none())
+            .filter(|(_, connection, ..)| connection.close_reason().is_none())
             .count();
         if open <= 16 {
             break;
@@ -169,21 +169,27 @@ async fn a_device_keeps_a_bounded_number_of_connections() {
         assert!(Instant::now() < deadline, "{open} connections still open");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    assert!(conns[0].1.close_reason().is_some(), "the oldest went first");
-    assert!(conns[20].1.close_reason().is_none(), "the newest stays");
+    assert!(
+        connections[0].1.close_reason().is_some(),
+        "the oldest went first"
+    );
+    assert!(
+        connections[20].1.close_reason().is_none(),
+        "the newest stays"
+    );
 }
 
-/// A program that ignores SIGHUP used to outlive its closed pane forever, with the pane's
-/// wait thread. It is killed after a short grace period.
+/// A program that ignores SIGHUP would outlive its closed pane forever, with the pane's wait
+/// thread; it is killed after a short grace period.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_process_ignoring_hangup_dies_with_its_pane() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = support::start(dir.path()).await;
-    let mut c = TestClient::connect(&support::ticket(&daemon), ClientConfig::generate_key());
-    c.attach_and_follow().await;
-    let session = c.layout.as_ref().unwrap().session_id;
+    let mut client = TestClient::connect(&support::ticket(&daemon), ClientConfig::generate_key());
+    client.attach_and_follow().await;
+    let session = client.layout.as_ref().unwrap().session_id;
     let marker = format!("{}", 900_000 + std::process::id() % 99_999);
-    let OpOutcome::TabCreated { pane_id, .. } = c
+    let OpOutcome::TabCreated { pane_id, .. } = client
         .op(LayoutOp::NewTab {
             session_id: session,
             name: String::new(),
@@ -204,14 +210,14 @@ async fn a_process_ignoring_hangup_dies_with_its_pane() {
         std::process::Command::new("pgrep")
             .args(["-f", &format!("sleep {marker}")])
             .output()
-            .is_ok_and(|o| !o.stdout.is_empty())
+            .is_ok_and(|output| !output.stdout.is_empty())
     };
     let deadline = Instant::now() + Duration::from_secs(10);
     while !running() {
         assert!(Instant::now() < deadline, "the program never started");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    c.op(LayoutOp::ClosePane { pane_id }).await;
+    client.op(LayoutOp::ClosePane { pane_id }).await;
     let deadline = Instant::now() + Duration::from_secs(10);
     while running() {
         assert!(
@@ -222,8 +228,8 @@ async fn a_process_ignoring_hangup_dies_with_its_pane() {
     }
 }
 
-/// Connections to the hook socket that never send a request used to be held forever; enough
-/// of them used up the daemon's descriptors. They are closed, and hooks keep working.
+/// Connections to the hook socket that never send a request would otherwise use up the
+/// daemon's descriptors; they are closed, and hooks keep working.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn idle_hook_connections_are_closed() {
     use tokio::io::AsyncReadExt;
@@ -238,8 +244,8 @@ async fn idle_hook_connections_are_closed() {
         );
     }
     for mut stream in idle {
-        let mut buf = [0u8; 1];
-        let read = tokio::time::timeout(Duration::from_secs(20), stream.read(&mut buf)).await;
+        let mut byte = [0u8; 1];
+        let read = tokio::time::timeout(Duration::from_secs(20), stream.read(&mut byte)).await;
         assert!(
             matches!(read, Ok(Ok(0) | Err(_))),
             "an idle connection stayed open"
@@ -247,18 +253,18 @@ async fn idle_hook_connections_are_closed() {
     }
 }
 
-/// A program setting its title in a tight loop used to push every title to every client. The
+/// A program setting its title in a tight loop does not push every title to every client: the
 /// pushes are coalesced, and the last title always arrives.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn title_floods_are_coalesced() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = support::start(dir.path()).await;
-    let mut c = TestClient::connect(&support::ticket(&daemon), ClientConfig::generate_key());
-    let first = c.attach_and_follow().await;
-    let session = c.layout.as_ref().unwrap().session_id;
+    let mut client = TestClient::connect(&support::ticket(&daemon), ClientConfig::generate_key());
+    let first = client.attach_and_follow().await;
+    let session = client.layout.as_ref().unwrap().session_id;
     let script = "i=0; while [ $i -lt 3000 ]; do printf '\\033]0;t%d\\007' $i; i=$((i+1)); \
                   done; printf '\\033]0;final\\007'; exec sleep 100";
-    let OpOutcome::TabCreated { pane_id, .. } = c
+    let OpOutcome::TabCreated { pane_id, .. } = client
         .op(LayoutOp::NewTab {
             session_id: session,
             name: String::new(),
@@ -271,12 +277,16 @@ async fn title_floods_are_coalesced() {
     else {
         panic!("no tab")
     };
-    let before = c.meta_events;
-    c.until("the final title", |c| {
-        c.metas.get(&pane_id).is_some_and(|m| m.title == "final")
-    })
-    .await;
-    let pushes = c.meta_events - before;
+    let before = client.meta_events;
+    client
+        .until("the final title", |client| {
+            client
+                .metas
+                .get(&pane_id)
+                .is_some_and(|meta| meta.title == "final")
+        })
+        .await;
+    let pushes = client.meta_events - before;
     assert!(pushes < 300, "{pushes} metadata pushes for 3001 titles");
     let _ = first;
 }
@@ -290,12 +300,12 @@ async fn type_numbered(
 ) {
     let mut input = raw.1.open_uni().await.unwrap();
     let mut bytes = proto::frame::to_vec(&StreamHeader::Input).unwrap();
-    for n in seqs {
+    for seq in seqs {
         let frame = ClientInput::Input(Input {
             pane_id: pane,
-            input_seq: InputSeq(n),
+            input_seq: InputSeq(seq),
             principal,
-            payload: InputPayload::Bytes(format!("line {n}\n").into_bytes()),
+            payload: InputPayload::Bytes(format!("line {seq}\n").into_bytes()),
         });
         bytes.extend(proto::frame::to_vec(&frame).unwrap());
     }
@@ -315,19 +325,19 @@ async fn file_with(path: &std::path::Path, needle: &str) -> String {
     }
 }
 
-/// Keystrokes written to a connection that then died (a frozen host) were lost: the client
-/// never sent them again. Now it does, and the daemon applies each one once, although some of
-/// them had arrived over the old connection.
+/// Keystrokes written to a connection that then died (a frozen host) are sent again on the
+/// next one, and the daemon applies each one once, although some of them had arrived over the
+/// old connection.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn input_sent_again_after_a_reconnect_is_applied_once() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = support::start(dir.path()).await;
     let ticket = support::ticket(&daemon);
-    let out = dir.path().join("typed.txt");
-    let mut c = TestClient::connect(&ticket, ClientConfig::generate_key());
-    c.attach_and_follow().await;
-    let session = c.layout.as_ref().unwrap().session_id;
-    let OpOutcome::TabCreated { pane_id, .. } = c
+    let typed_file = dir.path().join("typed.txt");
+    let mut client = TestClient::connect(&ticket, ClientConfig::generate_key());
+    client.attach_and_follow().await;
+    let session = client.layout.as_ref().unwrap().session_id;
+    let OpOutcome::TabCreated { pane_id, .. } = client
         .op(LayoutOp::NewTab {
             session_id: session,
             name: String::new(),
@@ -335,7 +345,7 @@ async fn input_sent_again_after_a_reconnect_is_applied_once() {
                 argv: vec![
                     "/bin/sh".into(),
                     "-c".into(),
-                    format!("stty raw -echo; exec cat > '{}'", out.display()),
+                    format!("stty raw -echo; exec cat > '{}'", typed_file.display()),
                 ],
                 cwd: None,
             },
@@ -352,20 +362,23 @@ async fn input_sent_again_after_a_reconnect_is_applied_once() {
 
     let (first, welcome) = dial_with(&ticket, &key, true, caps, None).await;
     type_numbered(&first, pane_id, principal, 1..=5).await;
-    file_with(&out, "line 5").await;
+    file_with(&typed_file, "line 5").await;
     first.1.close(0u32.into(), b"link died");
     // The client cannot know 3..=5 arrived: it sends them again with what came after.
     let token = Some(welcome.resume_token);
     let (second, _) = dial_with(&ticket, &key, false, caps, token).await;
     type_numbered(&second, pane_id, principal, 3..=7).await;
-    let text = file_with(&out, "line 7").await;
-    let lines: Vec<&str> = text.lines().map(|l| l.trim_end_matches('\r')).collect();
-    let want: Vec<String> = (1..=7).map(|n| format!("line {n}")).collect();
+    let text = file_with(&typed_file, "line 7").await;
+    let lines: Vec<&str> = text
+        .lines()
+        .map(|line| line.trim_end_matches('\r'))
+        .collect();
+    let want: Vec<String> = (1..=7).map(|seq| format!("line {seq}")).collect();
     assert_eq!(lines, want);
 
     // Without the token it is another input stream, applied as it comes.
     let (third, _) = dial_with(&ticket, &key, false, caps, None).await;
     type_numbered(&third, pane_id, principal, 1..=1).await;
-    let text = file_with(&out, "line 7\nline 1").await;
+    let text = file_with(&typed_file, "line 7\nline 1").await;
     assert!(text.ends_with("line 7\nline 1\n"), "{text}");
 }

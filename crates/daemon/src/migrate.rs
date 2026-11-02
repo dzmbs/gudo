@@ -36,8 +36,8 @@ pub fn adopt_legacy_state(state_dir: &Path, wait: Duration) -> io::Result<bool> 
     if state_dir != default_state_dir() {
         return Ok(false);
     }
-    if let Err(e) = adopt_legacy_config() {
-        tracing::warn!("moving the earlier config directory: {e}");
+    if let Err(error) = adopt_legacy_config() {
+        tracing::warn!("moving the earlier config directory: {error}");
     }
     adopt(&legacy_state_dir(), state_dir, wait)
 }
@@ -50,9 +50,9 @@ pub fn adopt_legacy_state(state_dir: &Path, wait: Duration) -> io::Result<bool> 
 /// The rename fails.
 fn adopt_legacy_config() -> io::Result<bool> {
     let root = std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|v| !v.is_empty())
+        .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")));
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")));
     let Some(root) = root else { return Ok(false) };
     let (old, new) = (
         root.join(brand::legacy::DIR_NAME),
@@ -86,10 +86,14 @@ pub(crate) fn adopt(old: &Path, new: &Path, wait: Duration) -> io::Result<bool> 
 fn merge(old: &Path, new: &Path) -> io::Result<()> {
     for entry in fs::read_dir(old)? {
         let entry = entry?;
-        let to = new.join(entry.file_name());
-        match fs::symlink_metadata(&to) {
-            Err(e) if e.kind() == io::ErrorKind::NotFound => fs::rename(entry.path(), &to)?,
-            Ok(meta) if meta.is_dir() && entry.file_type()?.is_dir() => merge(&entry.path(), &to)?,
+        let target = new.join(entry.file_name());
+        match fs::symlink_metadata(&target) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                fs::rename(entry.path(), &target)?
+            }
+            Ok(metadata) if metadata.is_dir() && entry.file_type()?.is_dir() => {
+                merge(&entry.path(), &target)?
+            }
             _ => {}
         }
     }
@@ -144,7 +148,6 @@ mod tests {
         assert!(!old.exists());
         assert_eq!(fs::read(new.join(KEY_FILE)).unwrap(), b"key");
         assert_eq!(fs::read(new.join("layout/0.json")).unwrap(), b"{}");
-        // Once moved, nothing happens again.
         assert!(!adopt(&old, &new, Duration::ZERO).unwrap());
     }
 
@@ -182,8 +185,8 @@ mod tests {
         let (old, new) = (root.path().join("unnamed"), root.path().join("gudo"));
         daemon_dir(&old);
         let held = lock(&old.join(LOCK_FILE), Duration::ZERO).unwrap();
-        let err = adopt(&old, &new, Duration::from_millis(200)).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
+        let error = adopt(&old, &new, Duration::from_millis(200)).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
         assert!(old.join(KEY_FILE).exists() && !new.exists());
 
         let release = std::thread::spawn(move || {

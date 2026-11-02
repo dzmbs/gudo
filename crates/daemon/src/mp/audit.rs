@@ -1,3 +1,4 @@
+//! The append-only, hash-chained audit log: `<state>/audit/audit.jsonl`.
 //!
 //! One JSON object per line with ids, hashes and signatures in hex. Each record's `hash` is
 //! SHA-256 over the previous record's hash and the postcard encoding of the record (with an
@@ -80,7 +81,6 @@ impl Audit {
                 }
                 state.last_hash = record.hash.as_slice().try_into().unwrap_or([0; 32]);
                 state.seq = record.seq;
-                // A long log is read through, never held whole.
                 if state.recent.len() == KEEP {
                     state.recent.pop_front();
                 }
@@ -94,7 +94,6 @@ impl Audit {
         })
     }
 
-    /// Appends a record and returns it.
     pub fn append(&self, kind: AuditKind, entry: Entry) -> AuditRecord {
         let mut state = lock(&self.state);
         let mut record = AuditRecord {
@@ -113,16 +112,16 @@ impl Audit {
         record.hash = hash.to_vec();
         let mut line = serde_json::to_vec(&DiskRecord::from(&record)).expect("records encode");
         line.push(b'\n');
-        let written = state.file.as_mut().map(|f| {
-            f.write_all(&line)?;
+        let written = state.file.as_mut().map(|file| {
+            file.write_all(&line)?;
             // Approvals are what someone may later have to prove; make them durable now.
             if kind == AuditKind::Approval {
-                f.sync_data()?;
+                file.sync_data()?;
             }
             Ok::<_, io::Error>(())
         });
-        if let Some(Err(e)) = written {
-            tracing::warn!("audit log {}: {e}", self.path.display());
+        if let Some(Err(error)) = written {
+            tracing::warn!("audit log {}: {error}", self.path.display());
         }
         state.seq = record.seq;
         state.last_hash = hash;
@@ -134,14 +133,14 @@ impl Audit {
     }
 
     /// A page of records, oldest first, plus whether the chain verifies.
-    pub fn query(&self, q: AuditQuery) -> AuditPage {
+    pub fn query(&self, query: AuditQuery) -> AuditPage {
         let state = lock(&self.state);
-        let limit = q.limit.clamp(1, 1000) as usize;
-        let records: Vec<AuditRecord> = match q.after {
+        let limit = query.limit.clamp(1, 1000) as usize;
+        let records: Vec<AuditRecord> = match query.after {
             Some(after) => state
                 .recent
                 .iter()
-                .filter(|r| r.seq > after)
+                .filter(|record| record.seq > after)
                 .take(limit)
                 .cloned()
                 .collect(),
@@ -162,7 +161,7 @@ impl Audit {
         let Ok(file) = File::open(&self.path) else {
             return false;
         };
-        let mut prev = [0; 32];
+        let mut prev_hash = [0; 32];
         for line in BufReader::new(file).lines() {
             let Ok(line) = line else { return false };
             if line.trim().is_empty() {
@@ -174,10 +173,10 @@ impl Audit {
             else {
                 return false;
             };
-            if !verify_record(&record, &prev) {
+            if !verify_record(&record, &prev_hash) {
                 return false;
             }
-            prev = record.hash.as_slice().try_into().unwrap_or([0; 32]);
+            prev_hash = record.hash.as_slice().try_into().unwrap_or([0; 32]);
         }
         true
     }
@@ -192,25 +191,25 @@ fn open_append(path: &Path) -> io::Result<File> {
         .open(path)
 }
 
-fn record_hash(record: &AuditRecord, prev: &[u8; 32]) -> [u8; 32] {
+fn record_hash(record: &AuditRecord, prev_hash: &[u8; 32]) -> [u8; 32] {
     let mut unhashed = record.clone();
     unhashed.hash = Vec::new();
     let body = postcard::to_stdvec(&unhashed).expect("records encode");
-    grants::sha256(&[b"audit-v1\0", prev, &body])
+    grants::sha256(&[b"audit-v1\0", prev_hash, &body])
 }
 
-fn verify_record(record: &AuditRecord, prev: &[u8; 32]) -> bool {
-    if record.prev_hash != prev || record.hash != record_hash(record, prev) {
+fn verify_record(record: &AuditRecord, prev_hash: &[u8; 32]) -> bool {
+    if record.prev_hash != prev_hash || record.hash != record_hash(record, prev_hash) {
         return false;
     }
     match (&record.approval, &record.actor) {
-        (Some(a), Some(actor)) => grants::verify_signature(actor.device, &a.signed, &a.sig),
+        (Some(approval), Some(actor)) => {
+            grants::verify_signature(actor.device, &approval.signed, &approval.sig)
+        }
         (Some(_), None) => false,
         _ => true,
     }
 }
-
-// --- on-disk form ------------------------------------------------------------------------------
 
 #[derive(Serialize, Deserialize)]
 struct DiskActor {
@@ -250,67 +249,67 @@ struct DiskRecord {
 }
 
 impl From<&AuditRecord> for DiskRecord {
-    fn from(r: &AuditRecord) -> Self {
+    fn from(record: &AuditRecord) -> Self {
         Self {
-            seq: r.seq,
-            at: r.at.0,
-            kind: r.kind,
-            actor: r.actor.map(|a| DiskActor {
-                principal: hex(&a.principal.0),
-                device: hex(&a.device.0),
+            seq: record.seq,
+            at: record.at.0,
+            kind: record.kind,
+            actor: record.actor.map(|actor| DiskActor {
+                principal: hex(&actor.principal.0),
+                device: hex(&actor.device.0),
             }),
-            grant: r.grant_id.map(|g| hex(&g.0)),
-            pane: r.pane_id.map(|p| p.0),
-            detail: r.detail.clone(),
-            approval: r.approval.as_ref().map(|a| DiskApproval {
-                request_id: a.request_id.0,
-                agent_request: a.agent_request.clone(),
-                option_id: a.option_id.0,
-                option: a.option.clone(),
-                tool: a.tool.clone(),
-                summary: a.summary.clone(),
-                signed: hex(&a.signed),
-                sig: hex(&a.sig),
+            grant: record.grant_id.map(|grant| hex(&grant.0)),
+            pane: record.pane_id.map(|pane| pane.0),
+            detail: record.detail.clone(),
+            approval: record.approval.as_ref().map(|approval| DiskApproval {
+                request_id: approval.request_id.0,
+                agent_request: approval.agent_request.clone(),
+                option_id: approval.option_id.0,
+                option: approval.option.clone(),
+                tool: approval.tool.clone(),
+                summary: approval.summary.clone(),
+                signed: hex(&approval.signed),
+                sig: hex(&approval.sig),
             }),
-            prev_hash: hex(&r.prev_hash),
-            hash: hex(&r.hash),
+            prev_hash: hex(&record.prev_hash),
+            hash: hex(&record.hash),
         }
     }
 }
 
-fn unhex_vec(s: &str) -> Option<Vec<u8>> {
-    if !s.len().is_multiple_of(2) {
+fn unhex_vec(text: &str) -> Option<Vec<u8>> {
+    if !text.len().is_multiple_of(2) {
         return None;
     }
-    (0..s.len())
+    (0..text.len())
         .step_by(2)
-        .map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok())
+        .map(|i| u8::from_str_radix(text.get(i..i + 2)?, 16).ok())
         .collect()
 }
 
 impl DiskRecord {
     fn into_record(self) -> Option<AuditRecord> {
         let actor = match self.actor {
-            Some(a) => Some(Actor {
-                principal: PrincipalId(unhex(&a.principal)?),
-                device: DeviceId(unhex(&a.device)?),
+            Some(actor) => Some(Actor {
+                principal: PrincipalId(unhex(&actor.principal)?),
+                device: DeviceId(unhex(&actor.device)?),
             }),
             None => None,
         };
         let grant_id = match self.grant {
-            Some(g) => Some(GrantId(unhex(&g)?)),
+            Some(grant) => Some(GrantId(unhex(&grant)?)),
             None => None,
         };
         let approval = match self.approval {
-            Some(a) => Some(ApprovalAudit {
-                request_id: RequestId(a.request_id),
-                agent_request: a.agent_request,
-                option_id: OptionId(a.option_id),
-                option: a.option,
-                tool: a.tool,
-                summary: a.summary,
-                signed: unhex_vec(&a.signed)?,
-                sig: unhex_vec(&a.sig)?,
+            Some(approval) => Some(ApprovalAudit {
+                request_id: RequestId(approval.request_id),
+                agent_request: approval.agent_request,
+                option_id: OptionId(approval.option_id),
+                option: approval.option,
+                tool: approval.tool,
+                summary: approval.summary,
+                signed: unhex_vec(&approval.signed)?,
+                sig: unhex_vec(&approval.sig)?,
             }),
             None => None,
         };
@@ -379,7 +378,6 @@ mod tests {
         assert_eq!(third.seq, 3);
         assert_eq!(third.prev_hash, page.records[1].hash);
 
-        // Editing a line breaks the chain.
         let path = dir.path().join("audit/audit.jsonl");
         let text = std::fs::read_to_string(&path).unwrap();
         std::fs::write(&path, text.replace("bob joined", "eve joined")).unwrap();

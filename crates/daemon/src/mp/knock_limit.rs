@@ -16,14 +16,13 @@ const BURST: f64 = 8.0;
 const EVERY: Duration = Duration::from_secs(10);
 /// Refusals of one invite are audited at most this often.
 const AUDIT_EVERY: Duration = Duration::from_secs(60);
-/// Invites tracked before idle ones are forgotten.
 const MAX_INVITES: usize = 1024;
 
 #[derive(Debug)]
 struct Limit {
     tokens: f64,
-    at: Instant,
-    audited: Option<Instant>,
+    refilled_at: Instant,
+    audited_at: Option<Instant>,
     /// Refusals since the last audited one.
     unaudited: u64,
 }
@@ -45,42 +44,44 @@ pub(crate) struct KnockLimits {
 impl KnockLimits {
     fn limit(&mut self, invite: GrantId, now: Instant) -> &mut Limit {
         if self.invites.len() >= MAX_INVITES && !self.invites.contains_key(&invite) {
-            self.invites
-                .retain(|_, l| now.duration_since(l.at) < AUDIT_EVERY.max(EVERY.mul_f64(BURST)));
+            self.invites.retain(|_, limit| {
+                now.duration_since(limit.refilled_at) < AUDIT_EVERY.max(EVERY.mul_f64(BURST))
+            });
         }
         self.invites.entry(invite).or_insert(Limit {
             tokens: BURST,
-            at: now,
-            audited: None,
+            refilled_at: now,
+            audited_at: None,
             unaudited: 0,
         })
     }
 
     /// Takes a knock from `invite`'s budget; false if it has none left.
     pub fn admit(&mut self, invite: GrantId, now: Instant) -> bool {
-        let l = self.limit(invite, now);
-        l.tokens =
-            (l.tokens + now.duration_since(l.at).as_secs_f64() / EVERY.as_secs_f64()).min(BURST);
-        l.at = now;
-        if l.tokens < 1.0 {
+        let limit = self.limit(invite, now);
+        let refill = now.duration_since(limit.refilled_at).as_secs_f64() / EVERY.as_secs_f64();
+        limit.tokens = (limit.tokens + refill).min(BURST);
+        limit.refilled_at = now;
+        if limit.tokens < 1.0 {
             return false;
         }
-        l.tokens -= 1.0;
+        limit.tokens -= 1.0;
         true
     }
 
     /// Whether a refusal of `invite`'s knock goes to the audit log now.
     pub fn refused(&mut self, invite: GrantId, now: Instant) -> Refusal {
-        let l = self.limit(invite, now);
-        if l.audited
-            .is_some_and(|t| now.duration_since(t) < AUDIT_EVERY)
+        let limit = self.limit(invite, now);
+        if limit
+            .audited_at
+            .is_some_and(|audited_at| now.duration_since(audited_at) < AUDIT_EVERY)
         {
-            l.unaudited += 1;
+            limit.unaudited += 1;
             return Refusal::Quiet;
         }
-        l.audited = Some(now);
+        limit.audited_at = Some(now);
         Refusal::Audit {
-            left_out: std::mem::take(&mut l.unaudited),
+            left_out: std::mem::take(&mut limit.unaudited),
         }
     }
 }

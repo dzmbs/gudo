@@ -60,8 +60,8 @@ fn canonical_tempdir() -> (tempfile::TempDir, PathBuf) {
     (dir, path)
 }
 
-fn s(p: &Path) -> String {
-    p.to_string_lossy().into_owned()
+fn path_string(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
 }
 
 fn install_fake(path: &Path) {
@@ -72,9 +72,11 @@ fn install_fake(path: &Path) {
 }
 
 async fn connected(daemon: &daemon::Daemon) -> TestClient {
-    let mut c = TestClient::connect(&ticket(daemon), ClientConfig::generate_key());
-    c.until("connected", |c| c.connected > 0).await;
-    c
+    let mut client = TestClient::connect(&ticket(daemon), ClientConfig::generate_key());
+    client
+        .until("connected", |client| client.connected > 0)
+        .await;
+    client
 }
 
 async fn tunnel_event(
@@ -128,21 +130,21 @@ async fn vscode_tunnel_signs_in_runs_restarts_and_opens() {
     install_fake(&code);
     let edit = {
         let (code, home) = (code.clone(), home.clone());
-        move |c: &mut daemon::Config| {
-            c.pane_env.push(("HOME".into(), s(&home)));
-            c.fs_allow.push(home);
-            c.code_cli = Some(code);
-            c.vscode_serve_web = true;
+        move |config: &mut daemon::Config| {
+            config.pane_env.push(("HOME".into(), path_string(&home)));
+            config.fs_allow.push(home);
+            config.code_cli = Some(code);
+            config.vscode_serve_web = true;
         }
     };
     let daemon = start_with(&state, edit.clone()).await;
-    let c = connected(&daemon).await;
+    let client = connected(&daemon).await;
     let (listener, mut events) = WorkspaceEventQueue::channel();
-    c.client.set_workspace_listener(listener);
+    client.client.set_workspace_listener(listener);
 
-    let status = c.client.vscode_tunnel_status().await.unwrap();
+    let status = client.client.vscode_tunnel_status().await.unwrap();
     let cli = status.cli.expect("the fake CLI is found");
-    assert_eq!(cli.path, s(&code));
+    assert_eq!(cli.path, path_string(&code));
     assert_eq!(cli.version.as_deref(), Some("1.142.0"));
     assert_eq!(cli.commit.as_deref(), Some("fakecommit"));
     assert!(!cli.managed);
@@ -155,7 +157,7 @@ async fn vscode_tunnel_signs_in_runs_restarts_and_opens() {
         name: Some("testbox".into()),
     };
     assert!(matches!(
-        c.client.vscode_tunnel_start(start(false)).await,
+        client.client.vscode_tunnel_start(start(false)).await,
         Err(WsError::Denied(_))
     ));
     assert!(
@@ -166,12 +168,16 @@ async fn vscode_tunnel_signs_in_runs_restarts_and_opens() {
     );
 
     // Not signed in: the device code reaches the client.
-    c.client.vscode_tunnel_start(start(true)).await.unwrap();
-    let st = tunnel_event(&mut events, "device code", |s| {
-        matches!(s, TunnelState::NeedsLogin(_))
+    client
+        .client
+        .vscode_tunnel_start(start(true))
+        .await
+        .unwrap();
+    let status = tunnel_event(&mut events, "device code", |state| {
+        matches!(state, TunnelState::NeedsLogin(_))
     })
     .await;
-    let TunnelState::NeedsLogin(login) = st.state else {
+    let TunnelState::NeedsLogin(login) = status.state else {
         unreachable!()
     };
     assert_eq!(login.provider, TunnelProvider::GitHub);
@@ -180,12 +186,12 @@ async fn vscode_tunnel_signs_in_runs_restarts_and_opens() {
 
     // The user signs in; the tunnel connects and reports its vscode.dev link.
     std::fs::write(bin.join("approve"), "").unwrap();
-    let st = tunnel_event(&mut events, "running", |s| {
-        matches!(s, TunnelState::Running { .. })
+    let status = tunnel_event(&mut events, "running", |state| {
+        matches!(state, TunnelState::Running { .. })
     })
     .await;
     assert_eq!(
-        st.state,
+        status.state,
         TunnelState::Running {
             name: "testbox".into(),
             web_url: "https://vscode.dev/tunnel/testbox/home/me".into(),
@@ -202,7 +208,11 @@ async fn vscode_tunnel_signs_in_runs_restarts_and_opens() {
         "{calls}"
     );
     // Starting again reuses the running tunnel.
-    let again = c.client.vscode_tunnel_start(start(true)).await.unwrap();
+    let again = client
+        .client
+        .vscode_tunnel_start(start(true))
+        .await
+        .unwrap();
     assert!(matches!(again.state, TunnelState::Running { .. }));
 
     // Open a file at a line: the folder is the git work tree.
@@ -210,32 +220,33 @@ async fn vscode_tunnel_signs_in_runs_restarts_and_opens() {
     std::fs::create_dir_all(project.join(".git")).unwrap();
     std::fs::create_dir_all(project.join("src dir")).unwrap();
     std::fs::write(project.join("src dir/main.rs"), "fn main() {}\n").unwrap();
-    let opened = c
+    let opened = client
         .client
         .vscode_tunnel_open(VsCodeTunnelOpen {
             folder: None,
-            path: s(&project.join("src dir/main.rs")),
+            path: path_string(&project.join("src dir/main.rs")),
             line: Some(3),
             column: Some(7),
         })
         .await
         .unwrap();
     assert_eq!(opened.name, "testbox");
-    assert_eq!(opened.folder, s(&project));
+    assert_eq!(opened.folder, path_string(&project));
     assert_eq!(
         opened.web_url,
-        format!("https://vscode.dev/tunnel/testbox{}", s(&project))
+        format!("https://vscode.dev/tunnel/testbox{}", path_string(&project))
     );
     assert_eq!(
         opened.desktop_uri,
         format!(
             "vscode://vscode-remote/tunnel+testbox{}/src%20dir/main.rs:3:7",
-            s(&project)
+            path_string(&project)
         )
     );
     assert!(!opened.in_window, "no connected window in the fake");
     assert!(matches!(
-        c.client
+        client
+            .client
             .vscode_tunnel_open(VsCodeTunnelOpen {
                 folder: None,
                 path: "/etc/passwd".into(),
@@ -251,34 +262,34 @@ async fn vscode_tunnel_signs_in_runs_restarts_and_opens() {
     std::fs::write(bin.join("crash"), "").unwrap();
     // SAFETY: plain syscall on the fake's pid.
     unsafe { libc::kill(pid, libc::SIGKILL) };
-    tunnel_event(&mut events, "failure", |s| {
-        matches!(s, TunnelState::Failed { retrying: true, .. })
+    tunnel_event(&mut events, "failure", |state| {
+        matches!(state, TunnelState::Failed { retrying: true, .. })
     })
     .await;
-    let st = tunnel_event(&mut events, "running again", |s| {
-        matches!(s, TunnelState::Running { .. })
+    let status = tunnel_event(&mut events, "running again", |state| {
+        matches!(state, TunnelState::Running { .. })
     })
     .await;
     assert!(matches!(
-        st.state,
+        status.state,
         TunnelState::Running { adopted: false, .. }
     ));
     let pid = tunnel_pid(&bin);
     assert!(alive(pid));
 
     // Daemon restart: the tunnel stops with it and comes back on its own (signed in).
-    drop(c);
+    drop(client);
     daemon.shutdown().await;
     assert!(gone(pid).await, "the tunnel stopped with the daemon");
     let record = std::fs::read_to_string(state.join("vscode/tunnel.json")).unwrap();
     assert!(record.contains("\"enabled\": true"), "{record}");
     let daemon = start_with(&state, edit.clone()).await;
-    let c = connected(&daemon).await;
+    let client = connected(&daemon).await;
     let mut running = None;
     for _ in 0..100 {
-        let st = c.client.vscode_tunnel_status().await.unwrap();
-        if matches!(st.state, TunnelState::Running { .. }) {
-            running = Some(st);
+        let status = client.client.vscode_tunnel_status().await.unwrap();
+        if matches!(status.state, TunnelState::Running { .. }) {
+            running = Some(status);
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -287,16 +298,17 @@ async fn vscode_tunnel_signs_in_runs_restarts_and_opens() {
     let pid = tunnel_pid(&bin);
 
     // Stop: the process goes and it no longer starts with the daemon.
-    let st = c.client.vscode_tunnel_stop().await.unwrap();
-    assert_eq!(st.state, TunnelState::Stopped);
+    let status = client.client.vscode_tunnel_stop().await.unwrap();
+    assert_eq!(status.state, TunnelState::Stopped);
     assert!(gone(pid).await);
     let record = std::fs::read_to_string(state.join("vscode/tunnel.json")).unwrap();
     assert!(record.contains("\"enabled\": false"), "{record}");
     assert!(matches!(
-        c.client
+        client
+            .client
             .vscode_tunnel_open(VsCodeTunnelOpen {
                 folder: None,
-                path: s(&project),
+                path: path_string(&project),
                 line: None,
                 column: None,
             })
@@ -306,32 +318,36 @@ async fn vscode_tunnel_signs_in_runs_restarts_and_opens() {
 
     // The user runs their own tunnel: adopted, not duplicated.
     std::fs::write(bin.join("adopt"), "").unwrap();
-    let st = c.client.vscode_tunnel_start(start(true)).await.unwrap();
-    let st = if matches!(st.state, TunnelState::Running { .. }) {
-        st
+    let status = client
+        .client
+        .vscode_tunnel_start(start(true))
+        .await
+        .unwrap();
+    let status = if matches!(status.state, TunnelState::Running { .. }) {
+        status
     } else {
         let (listener, mut events) = WorkspaceEventQueue::channel();
-        c.client.set_workspace_listener(listener);
-        let now = c.client.vscode_tunnel_status().await.unwrap();
+        client.client.set_workspace_listener(listener);
+        let now = client.client.vscode_tunnel_status().await.unwrap();
         if matches!(now.state, TunnelState::Running { .. }) {
             now
         } else {
-            tunnel_event(&mut events, "adopted", |s| {
-                matches!(s, TunnelState::Running { .. })
+            tunnel_event(&mut events, "adopted", |state| {
+                matches!(state, TunnelState::Running { .. })
             })
             .await
         }
     };
     assert_eq!(
-        st.state,
+        status.state,
         TunnelState::Running {
             name: "theirs".into(),
             web_url: "https://vscode.dev/tunnel/theirs".into(),
             adopted: true,
         }
     );
-    c.client.vscode_tunnel_stop().await.unwrap();
-    drop(c);
+    client.client.vscode_tunnel_stop().await.unwrap();
+    drop(client);
     daemon.shutdown().await;
 }
 
@@ -344,16 +360,17 @@ async fn vscode_tunnel_microsoft_device_code() {
     install_fake(&code);
     let daemon = start_with(&state, {
         let code = code.clone();
-        move |c| {
-            c.code_cli = Some(code);
-            c.vscode_serve_web = true;
+        move |config| {
+            config.code_cli = Some(code);
+            config.vscode_serve_web = true;
         }
     })
     .await;
-    let c = connected(&daemon).await;
+    let client = connected(&daemon).await;
     let (listener, mut events) = WorkspaceEventQueue::channel();
-    c.client.set_workspace_listener(listener);
-    c.client
+    client.client.set_workspace_listener(listener);
+    client
+        .client
         .vscode_tunnel_start(VsCodeTunnelStart {
             accept_server_license: true,
             provider: TunnelProvider::Microsoft,
@@ -361,18 +378,18 @@ async fn vscode_tunnel_microsoft_device_code() {
         })
         .await
         .unwrap();
-    let st = tunnel_event(&mut events, "device code", |s| {
-        matches!(s, TunnelState::NeedsLogin(_))
+    let status = tunnel_event(&mut events, "device code", |state| {
+        matches!(state, TunnelState::NeedsLogin(_))
     })
     .await;
-    let TunnelState::NeedsLogin(login) = st.state else {
+    let TunnelState::NeedsLogin(login) = status.state else {
         unreachable!()
     };
     assert_eq!(login.provider, TunnelProvider::Microsoft);
     assert_eq!(login.verification_url, "https://login.microsoft.com/device");
     assert_eq!(login.user_code, "MSCODE123");
     // Stopping while it waits for the sign-in kills the login process.
-    c.client.vscode_tunnel_stop().await.unwrap();
+    client.client.vscode_tunnel_stop().await.unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
     let calls = std::fs::read_to_string(home.join("bin/calls.txt")).unwrap();
     assert!(
@@ -380,7 +397,7 @@ async fn vscode_tunnel_microsoft_device_code() {
         "{calls}"
     );
     assert!(!calls.contains("--accept-server-license-terms"), "{calls}");
-    drop(c);
+    drop(client);
     daemon.shutdown().await;
 }
 
@@ -442,24 +459,24 @@ async fn vscode_cli_downloads_from_the_update_service_and_checks_its_hash() {
     update_service(&api, &archive, &"0".repeat(64));
     let daemon = start_with(&state, {
         let api = api.clone();
-        move |c| c.vscode_update_url = format!("file://{}", api.display())
+        move |config| config.vscode_update_url = format!("file://{}", api.display())
     })
     .await;
-    let c = connected(&daemon).await;
+    let client = connected(&daemon).await;
 
     assert!(matches!(
-        c.client.vscode_cli_install(false).await,
+        client.client.vscode_cli_install(false).await,
         Err(WsError::Denied(_))
     ));
     // A hash that does not match what the service published is refused.
-    match c.client.vscode_cli_install(true).await {
+    match client.client.vscode_cli_install(true).await {
         Err(WsError::Failed(m)) => assert!(m.contains("checksum mismatch"), "{m}"),
         other => panic!("expected a checksum failure, got {other:?}"),
     }
     assert!(!state.join("vscode/cli/install.json").exists());
 
     update_service(&api, &archive, &sha);
-    let st = c.client.vscode_cli_install(true).await.unwrap();
+    let status = client.client.vscode_cli_install(true).await.unwrap();
     let record = std::fs::read_to_string(state.join("vscode/cli/install.json")).unwrap();
     let record: serde_json::Value = serde_json::from_str(&record).unwrap();
     assert_eq!(record["version"], "9.9.9");
@@ -469,13 +486,13 @@ async fn vscode_cli_downloads_from_the_update_service_and_checks_its_hash() {
     assert!(installed.is_file());
     assert!(installed.starts_with(state.join("vscode/cli")));
     // Unless the machine has its own VS Code, the managed CLI is the one in use.
-    let cli = st.cli.expect("a CLI");
-    if cli.path == s(&installed) {
+    let cli = status.cli.expect("a CLI");
+    if cli.path == path_string(&installed) {
         assert!(cli.managed);
         assert_eq!(cli.sha256.as_deref(), Some(sha.as_str()));
         assert_eq!(cli.version.as_deref(), Some("9.9.9"));
     }
-    drop(c);
+    drop(client);
     daemon.shutdown().await;
 }
 
@@ -487,36 +504,38 @@ async fn forward_io_splices_a_stream_onto_a_host_port() {
     let echo = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = echo.local_addr().unwrap().port();
     tokio::spawn(async move {
-        let (mut sock, _) = echo.accept().await.unwrap();
-        sock.write_all(b"SSH-2.0-fake\r\n").await.unwrap();
-        let mut buf = vec![0; 64];
-        let n = sock.read(&mut buf).await.unwrap();
-        sock.write_all(&buf[..n]).await.unwrap();
+        let (mut socket, _) = echo.accept().await.unwrap();
+        socket.write_all(b"SSH-2.0-fake\r\n").await.unwrap();
+        let mut received = vec![0; 64];
+        let read = socket.read(&mut received).await.unwrap();
+        socket.write_all(&received[..read]).await.unwrap();
     });
     let daemon = start_with(&state, |_| {}).await;
-    let c = connected(&daemon).await;
+    let client = connected(&daemon).await;
     let (ours, theirs) = tokio::io::duplex(1024);
-    let (r, w) = tokio::io::split(theirs);
+    let (their_read, their_write) = tokio::io::split(theirs);
     let drive = async {
-        let (mut rd, mut wr) = tokio::io::split(ours);
+        let (mut our_read, mut our_write) = tokio::io::split(ours);
         let mut banner = vec![0; 14];
-        rd.read_exact(&mut banner).await.unwrap();
+        our_read.read_exact(&mut banner).await.unwrap();
         assert_eq!(&banner, b"SSH-2.0-fake\r\n");
-        wr.write_all(b"hello").await.unwrap();
+        our_write.write_all(b"hello").await.unwrap();
         let mut back = vec![0; 5];
-        rd.read_exact(&mut back).await.unwrap();
+        our_read.read_exact(&mut back).await.unwrap();
         assert_eq!(&back, b"hello");
-        wr.shutdown().await.unwrap();
+        our_write.shutdown().await.unwrap();
     };
     let (spliced, ()) = tokio::time::timeout(Duration::from_secs(10), async {
         tokio::join!(
-            c.client.forward_io(ForwardTarget::Tcp { port }, r, w),
+            client
+                .client
+                .forward_io(ForwardTarget::Tcp { port }, their_read, their_write),
             drive
         )
     })
     .await
     .unwrap();
     spliced.unwrap();
-    drop(c);
+    drop(client);
     daemon.shutdown().await;
 }

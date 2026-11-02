@@ -16,21 +16,16 @@ use proto::{
 };
 use serde::Deserialize;
 
-/// `gh pr view` and friends get this long.
 const TIMEOUT: Duration = Duration::from_secs(30);
-/// Pushing and creating a pull request may take longer.
 const LONG_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// The fields asked of `gh pr view --json`.
 pub(crate) const PR_FIELDS: &str = "number,title,state,isDraft,headRefName,additions,deletions,\
 mergeStateStatus,statusCheckRollup,url";
 
 /// Why `gh pr view` gave no pull request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ViewError {
-    /// `gh` is not installed.
     Missing,
-    /// `gh` is not signed in.
     Auth(String),
     /// The repository has no GitHub remote: there will never be a pull request.
     NotGitHub,
@@ -41,11 +36,11 @@ pub(crate) enum ViewError {
 /// Finds `gh`: the configured path, then `PATH`, then the usual install locations (a daemon
 /// started by launchd or systemd has a short `PATH`).
 pub(crate) fn find(configured: Option<&Path>) -> Option<PathBuf> {
-    if let Some(p) = configured {
-        return p.is_file().then(|| p.to_owned());
+    if let Some(path) = configured {
+        return path.is_file().then(|| path.to_owned());
     }
     let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
-        .map(|p| std::env::split_paths(&p).collect())
+        .map(|path| std::env::split_paths(&path).collect())
         .unwrap_or_default();
     let home = std::env::var_os("HOME").map(PathBuf::from);
     dirs.extend(
@@ -62,7 +57,9 @@ pub(crate) fn find(configured: Option<&Path>) -> Option<PathBuf> {
         dirs.push(home.join(".local/bin"));
         dirs.push(home.join("bin"));
     }
-    dirs.into_iter().map(|d| d.join("gh")).find(|p| p.is_file())
+    dirs.into_iter()
+        .map(|dir| dir.join("gh"))
+        .find(|candidate| candidate.is_file())
 }
 
 struct Output {
@@ -71,10 +68,10 @@ struct Output {
     stderr: String,
 }
 
-/// Runs `program args` in `dir` with a timeout.
 fn run(program: &Path, dir: &Path, args: &[&str], timeout: Duration) -> Result<Output, WsError> {
-    let mut cmd = Command::new(program);
-    cmd.current_dir(dir)
+    let mut command = Command::new(program);
+    command
+        .current_dir(dir)
         .args(args)
         .env("GH_PROMPT_DISABLED", "1")
         .env("GH_NO_UPDATE_NOTIFIER", "1")
@@ -85,36 +82,37 @@ fn run(program: &Path, dir: &Path, args: &[&str], timeout: Duration) -> Result<O
         .env("LC_ALL", "C");
     // The git `gh` runs gets the same guard as ours against the repository's own config.
     let guard = super::git::guard(dir, false);
-    cmd.env("GIT_CONFIG_COUNT", guard.len().to_string());
+    command.env("GIT_CONFIG_COUNT", guard.len().to_string());
     for (i, setting) in guard.iter().enumerate() {
         let (key, value) = setting.split_once('=').unwrap_or((setting, ""));
-        cmd.env(format!("GIT_CONFIG_KEY_{i}"), key)
+        command
+            .env(format!("GIT_CONFIG_KEY_{i}"), key)
             .env(format!("GIT_CONFIG_VALUE_{i}"), value);
     }
-    let mut child = cmd
+    let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
                 WsError::Unavailable(format!("{} is not installed", program.display()))
             } else {
-                WsError::Failed(format!("running {}: {e}", program.display()))
+                WsError::Failed(format!("running {}: {error}", program.display()))
             }
         })?;
     // Drain both pipes on threads so a chatty child never blocks on a full pipe.
-    let mut out = child.stdout.take().expect("piped");
-    let mut err = child.stderr.take().expect("piped");
-    let out_t = std::thread::spawn(move || {
-        let mut v = Vec::new();
-        let _ = out.read_to_end(&mut v);
-        v
+    let mut stdout_pipe = child.stdout.take().expect("piped");
+    let mut stderr_pipe = child.stderr.take().expect("piped");
+    let stdout_reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stdout_pipe.read_to_end(&mut bytes);
+        bytes
     });
-    let err_t = std::thread::spawn(move || {
-        let mut v = Vec::new();
-        let _ = err.read_to_end(&mut v);
-        v
+    let stderr_reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stderr_pipe.read_to_end(&mut bytes);
+        bytes
     });
     let deadline = Instant::now() + timeout;
     let status = loop {
@@ -130,13 +128,13 @@ fn run(program: &Path, dir: &Path, args: &[&str], timeout: Duration) -> Result<O
                 )));
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(20)),
-            Err(e) => return Err(WsError::Failed(e.to_string())),
+            Err(error) => return Err(WsError::Failed(error.to_string())),
         }
     };
     Ok(Output {
         ok: status.success(),
-        stdout: out_t.join().unwrap_or_default(),
-        stderr: String::from_utf8_lossy(&err_t.join().unwrap_or_default())
+        stdout: stdout_reader.join().unwrap_or_default(),
+        stderr: String::from_utf8_lossy(&stderr_reader.join().unwrap_or_default())
             .trim()
             .to_owned(),
     })
@@ -150,12 +148,16 @@ pub(crate) fn auth_status(gh: Option<&Path>) -> GhStatus {
     let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from);
     match run(gh, &home, &["auth", "status"], TIMEOUT) {
         Err(WsError::Unavailable(_)) => GhStatus::Missing,
-        Err(e) => GhStatus::NotAuthenticated {
-            message: e.to_string(),
+        Err(error) => GhStatus::NotAuthenticated {
+            message: error.to_string(),
         },
-        Ok(out) => {
-            let text = format!("{}\n{}", String::from_utf8_lossy(&out.stdout), out.stderr);
-            if out.ok {
+        Ok(output) => {
+            let text = format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                output.stderr
+            );
+            if output.ok {
                 GhStatus::Ready {
                     account: account_of(&text),
                 }
@@ -184,7 +186,7 @@ fn account_of(text: &str) -> Option<String> {
 fn first_line(text: &str) -> String {
     text.lines()
         .map(str::trim)
-        .find(|l| !l.is_empty())
+        .find(|line| !line.is_empty())
         .unwrap_or("gh is not signed in")
         .to_owned()
 }
@@ -199,38 +201,41 @@ pub(crate) fn pr_view(
     if branch.starts_with('-') {
         return Ok(None);
     }
-    let out = run(
+    let output = run(
         gh,
         dir,
         &["pr", "view", branch, "--json", PR_FIELDS],
         TIMEOUT,
     )
-    .map_err(|e| match e {
+    .map_err(|error| match error {
         WsError::Unavailable(_) => ViewError::Missing,
-        e => ViewError::Other(e.to_string()),
+        error => ViewError::Other(error.to_string()),
     })?;
-    if !out.ok {
-        return Err(classify(&out.stderr)).or_else(|e| match e {
-            ViewError::Other(m) if m.is_empty() => Ok(None),
-            e => Err(e),
+    if !output.ok {
+        return Err(classify(&output.stderr)).or_else(|error| match error {
+            ViewError::Other(message) if message.is_empty() => Ok(None),
+            error => Err(error),
         });
     }
-    parse_pr(&out.stdout, now)
+    parse_pr(&output.stdout, now)
         .map(Some)
-        .map_err(|e| ViewError::Other(format!("could not read gh's answer: {e}")))
+        .map_err(|error| ViewError::Other(format!("could not read gh's answer: {error}")))
 }
 
 fn classify(stderr: &str) -> ViewError {
-    let s = stderr.to_ascii_lowercase();
-    if s.contains("no pull requests found") || s.contains("could not find pull request") {
+    let lower = stderr.to_ascii_lowercase();
+    if lower.contains("no pull requests found") || lower.contains("could not find pull request") {
         // Not an error: the branch has none.
         ViewError::Other(String::new())
-    } else if s.contains("gh auth login") || s.contains("not logged in") || s.contains("401") {
+    } else if lower.contains("gh auth login")
+        || lower.contains("not logged in")
+        || lower.contains("401")
+    {
         ViewError::Auth(first_line(stderr))
-    } else if s.contains("none of the git remotes")
-        || s.contains("no git remotes")
-        || s.contains("not a git repository")
-        || s.contains("unable to determine base repository")
+    } else if lower.contains("none of the git remotes")
+        || lower.contains("no git remotes")
+        || lower.contains("not a git repository")
+        || lower.contains("unable to determine base repository")
     {
         ViewError::NotGitHub
     } else {
@@ -290,6 +295,7 @@ struct RawCheck {
 pub(crate) fn parse_pr(json: &[u8], now: UnixMillis) -> Result<PullRequest, serde_json::Error> {
     let raw: RawPr = serde_json::from_slice(json)?;
     let mut checks: Vec<PrCheck> = raw.status_check_rollup.into_iter().map(check).collect();
+    // Failures first, then running, then the rest; by name within a group.
     checks.sort_by(|a, b| {
         rank(a.status)
             .cmp(&rank(b.status))
@@ -323,8 +329,8 @@ pub(crate) fn parse_pr(json: &[u8], now: UnixMillis) -> Result<PullRequest, serd
     })
 }
 
-fn rank(s: CheckStatus) -> u8 {
-    match s {
+fn rank(status: CheckStatus) -> u8 {
+    match status {
         CheckStatus::Failure => 0,
         CheckStatus::Pending => 1,
         CheckStatus::Cancelled => 2,
@@ -334,23 +340,23 @@ fn rank(s: CheckStatus) -> u8 {
     }
 }
 
-fn check(c: RawCheck) -> PrCheck {
-    if c.typename == "StatusContext" || (!c.context.is_empty() && c.name.is_empty()) {
+fn check(raw: RawCheck) -> PrCheck {
+    if raw.typename == "StatusContext" || (!raw.context.is_empty() && raw.name.is_empty()) {
         return PrCheck {
-            name: c.context,
-            status: match c.state.as_str() {
+            name: raw.context,
+            status: match raw.state.as_str() {
                 "SUCCESS" => CheckStatus::Success,
                 "FAILURE" | "ERROR" => CheckStatus::Failure,
                 _ => CheckStatus::Pending,
             },
-            url: c.target_url.filter(|u| !u.is_empty()),
+            url: raw.target_url.filter(|url| !url.is_empty()),
             workflow: None,
         };
     }
-    let status = if c.status != "COMPLETED" && !c.status.is_empty() {
+    let status = if raw.status != "COMPLETED" && !raw.status.is_empty() {
         CheckStatus::Pending
     } else {
-        match c.conclusion.as_str() {
+        match raw.conclusion.as_str() {
             "SUCCESS" => CheckStatus::Success,
             "NEUTRAL" => CheckStatus::Neutral,
             "SKIPPED" => CheckStatus::Skipped,
@@ -361,29 +367,29 @@ fn check(c: RawCheck) -> PrCheck {
         }
     };
     PrCheck {
-        name: c.name,
+        name: raw.name,
         status,
-        url: c.details_url.filter(|u| !u.is_empty()),
-        workflow: c.workflow_name.filter(|w| !w.is_empty()),
+        url: raw.details_url.filter(|url| !url.is_empty()),
+        workflow: raw.workflow_name.filter(|name| !name.is_empty()),
     }
 }
 
-fn require(out: Output, what: &str) -> Result<Output, WsError> {
-    if out.ok {
-        Ok(out)
+fn require(output: Output, what: &str) -> Result<Output, WsError> {
+    if output.ok {
+        Ok(output)
     } else {
-        let msg = if out.stderr.is_empty() {
-            String::from_utf8_lossy(&out.stdout).trim().to_owned()
+        let message = if output.stderr.is_empty() {
+            String::from_utf8_lossy(&output.stdout).trim().to_owned()
         } else {
-            out.stderr.clone()
+            output.stderr.clone()
         };
-        let lower = msg.to_ascii_lowercase();
+        let lower = message.to_ascii_lowercase();
         if lower.contains("gh auth login") {
             Err(WsError::Unavailable(format!(
-                "gh is not signed in on the host; run `gh auth login` there ({msg})"
+                "gh is not signed in on the host; run `gh auth login` there ({message})"
             )))
         } else {
-            Err(WsError::Failed(format!("{what}: {msg}")))
+            Err(WsError::Failed(format!("{what}: {message}")))
         }
     }
 }
@@ -400,9 +406,9 @@ pub(crate) fn merge(
         MergeStrategy::Squash => "--squash",
         MergeStrategy::Rebase => "--rebase",
     };
-    let n = number.to_string();
+    let number = number.to_string();
     require(
-        run(gh, dir, &["pr", "merge", &n, flag], LONG_TIMEOUT)?,
+        run(gh, dir, &["pr", "merge", &number, flag], LONG_TIMEOUT)?,
         "gh pr merge",
     )
     .map(drop)
@@ -412,10 +418,10 @@ pub(crate) fn merge(
 pub(crate) fn failed_runs(pr: &PullRequest) -> BTreeSet<u64> {
     pr.checks
         .iter()
-        .filter(|c| c.status == CheckStatus::Failure)
-        .filter_map(|c| c.url.as_deref())
-        .filter_map(|u| {
-            let rest = u.split("/actions/runs/").nth(1)?;
+        .filter(|check| check.status == CheckStatus::Failure)
+        .filter_map(|check| check.url.as_deref())
+        .filter_map(|url| {
+            let rest = url.split("/actions/runs/").nth(1)?;
             rest.split(['/', '?', '#']).next()?.parse().ok()
         })
         .collect()
@@ -460,10 +466,10 @@ pub(crate) fn checkout(
     number: u32,
     branch: Option<&str>,
 ) -> Result<(), WsError> {
-    let n = number.to_string();
-    let mut args = vec!["pr", "checkout", n.as_str()];
-    if let Some(b) = branch {
-        args.extend(["--branch", b]);
+    let number = number.to_string();
+    let mut args = vec!["pr", "checkout", number.as_str()];
+    if let Some(branch) = branch {
+        args.extend(["--branch", branch]);
     }
     require(run(gh, dir, &args, LONG_TIMEOUT)?, "gh pr checkout").map(drop)
 }
@@ -537,7 +543,7 @@ mod tests {
         let pr = parse_pr(json, UnixMillis(1)).unwrap();
         assert_eq!(pr.number, 7);
         assert_eq!(pr.merge_state, MergeState::Unstable);
-        let names: Vec<_> = pr.checks.iter().map(|c| c.name.as_str()).collect();
+        let names: Vec<_> = pr.checks.iter().map(|check| check.name.as_str()).collect();
         assert_eq!(names, ["deploy", "test", "lint", "build"]);
         assert_eq!(pr.checks[2].status, CheckStatus::Pending);
         assert_eq!(failed_runs(&pr), BTreeSet::from([12]));

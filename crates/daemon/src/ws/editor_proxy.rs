@@ -2,6 +2,7 @@
 //! VSCodium, openvscode-server), the port the app's forward actually reaches.
 //!
 //! The VS Code server sends everything uncompressed whatever `Accept-Encoding` says: a cold
+//! workbench load is ~24 MB over the forward, ~4–5 MB compressed.
 //! This proxy compresses responses the client accepts (brotli preferred, then gzip) as they
 //! stream, and leaves alone what must not or need not change: websocket upgrades (the remote
 //! extension host, the file system), range requests and partial responses, bodies that are
@@ -113,7 +114,6 @@ impl EditorProxy {
         Ok(Self { port, shared, task })
     }
 
-    /// The port the app's forward should target.
     pub(crate) fn port(&self) -> u16 {
         self.port
     }
@@ -172,16 +172,16 @@ async fn accept(listener: TcpListener, shared: Arc<Shared>) {
                 let shared = Arc::clone(&shared);
                 connections.spawn(async move {
                     let _busy = Busy::new(&shared);
-                    let service = hyper::service::service_fn(move |req| {
+                    let service = hyper::service::service_fn(move |request| {
                         let shared = Arc::clone(&shared);
-                        async move { Ok::<_, Infallible>(handle(&shared, req).await) }
+                        async move { Ok::<_, Infallible>(handle(&shared, request).await) }
                     });
                     let served = hyper::server::conn::http1::Builder::new()
                         .serve_connection(TokioIo::new(tcp), service)
                         .with_upgrades()
                         .await;
-                    if let Err(e) = served {
-                        tracing::debug!("editor proxy connection: {e}");
+                    if let Err(error) = served {
+                        tracing::debug!("editor proxy connection: {error}");
                     }
                 });
             }
@@ -193,7 +193,7 @@ async fn accept(listener: TcpListener, shared: Arc<Shared>) {
 /// Whether a `Host` header names this machine's loopback. Anything else is a page that
 /// rebound its own name to 127.0.0.1 (DNS rebinding) and must not reach the editor.
 fn loopback_host(host: Option<&HeaderValue>) -> bool {
-    let Some(host) = host.and_then(|h| h.to_str().ok()) else {
+    let Some(host) = host.and_then(|value| value.to_str().ok()) else {
         return false;
     };
     let name = match host.strip_prefix('[') {
@@ -209,57 +209,57 @@ fn loopback_host(host: Option<&HeaderValue>) -> bool {
             .is_ok_and(|ip| ip.is_loopback())
 }
 
-async fn handle(shared: &Arc<Shared>, req: Request<Incoming>) -> Response<ProxyBody> {
-    if !loopback_host(req.headers().get(header::HOST)) {
-        let mut resp = Response::new(ProxyBody::Full(Some(Bytes::from_static(
+async fn handle(shared: &Arc<Shared>, request: Request<Incoming>) -> Response<ProxyBody> {
+    if !loopback_host(request.headers().get(header::HOST)) {
+        let mut response = Response::new(ProxyBody::Full(Some(Bytes::from_static(
             b"editor proxy: not a loopback host\n",
         ))));
-        *resp.status_mut() = StatusCode::FORBIDDEN;
-        return resp;
+        *response.status_mut() = StatusCode::FORBIDDEN;
+        return response;
     }
-    match proxy(shared, req).await {
-        Ok(resp) => resp,
-        Err(e) => {
-            tracing::debug!("editor proxy: {e}");
-            let mut resp = Response::new(ProxyBody::Full(Some(Bytes::from(format!(
-                "editor proxy: {e}\n"
+    match proxy(shared, request).await {
+        Ok(response) => response,
+        Err(error) => {
+            tracing::debug!("editor proxy: {error}");
+            let mut response = Response::new(ProxyBody::Full(Some(Bytes::from(format!(
+                "editor proxy: {error}\n"
             )))));
-            *resp.status_mut() = StatusCode::BAD_GATEWAY;
-            resp
+            *response.status_mut() = StatusCode::BAD_GATEWAY;
+            response
         }
     }
 }
 
 async fn proxy(
     shared: &Arc<Shared>,
-    mut req: Request<Incoming>,
+    mut request: Request<Incoming>,
 ) -> Result<Response<ProxyBody>, BoxError> {
-    let path = req
+    let path = request
         .uri()
         .path_and_query()
-        .map_or_else(|| "/".to_owned(), |p| p.as_str().to_owned());
-    *req.uri_mut() = format!("http://127.0.0.1:{}{path}", shared.upstream).parse()?;
+        .map_or_else(|| "/".to_owned(), |path| path.as_str().to_owned());
+    *request.uri_mut() = format!("http://127.0.0.1:{}{path}", shared.upstream).parse()?;
 
-    if is_upgrade(req.headers()) {
-        return upgrade(shared, req).await;
+    if is_upgrade(request.headers()) {
+        return upgrade(shared, request).await;
     }
 
-    let method = req.method().clone();
+    let method = request.method().clone();
     // Ranges address the identity body: never compressed (the response is passed as is).
-    let coding = if req.headers().contains_key(header::RANGE) {
+    let coding = if request.headers().contains_key(header::RANGE) {
         None
     } else {
-        negotiate(req.headers())
+        negotiate(request.headers())
     };
     let cache_key = match (&shared.cache, method == Method::GET) {
         (Some(cache), true) => cache.key(&path),
         _ => None,
     };
-    let revalidating_ours = unmark_if_none_match(req.headers_mut());
-    strip_hop_by_hop(req.headers_mut());
+    let revalidating_ours = unmark_if_none_match(request.headers_mut());
+    strip_hop_by_hop(request.headers_mut());
 
-    let resp = shared.client.request(req).await?;
-    let (mut parts, body) = resp.into_parts();
+    let response = shared.client.request(request).await?;
+    let (mut parts, body) = response.into_parts();
     strip_hop_by_hop(&mut parts.headers);
 
     if parts.status == StatusCode::NOT_MODIFIED && revalidating_ours {
@@ -273,11 +273,11 @@ async fn proxy(
         .headers
         .get_all(header::VARY)
         .iter()
-        .filter_map(|v| v.to_str().ok())
-        .flat_map(|v| v.split(','))
-        .any(|v| {
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .any(|token| {
             matches!(
-                v.trim().to_ascii_lowercase().as_str(),
+                token.trim().to_ascii_lowercase().as_str(),
                 "accept-encoding" | "*"
             )
         });
@@ -338,23 +338,26 @@ async fn proxy(
 /// connections (VS Code's websockets: extension host, file system, terminals).
 async fn upgrade(
     shared: &Arc<Shared>,
-    mut req: Request<Incoming>,
+    mut request: Request<Incoming>,
 ) -> Result<Response<ProxyBody>, BoxError> {
-    let downstream = hyper::upgrade::on(&mut req);
-    let mut resp = shared.client.request(req).await?;
-    if resp.status() == StatusCode::SWITCHING_PROTOCOLS {
-        let upstream = hyper::upgrade::on(&mut resp);
+    let downstream = hyper::upgrade::on(&mut request);
+    let mut response = shared.client.request(request).await?;
+    if response.status() == StatusCode::SWITCHING_PROTOCOLS {
+        let upstream = hyper::upgrade::on(&mut response);
         let busy = Busy::new(shared);
         tokio::spawn(async move {
             let _busy = busy;
-            let (Ok(down), Ok(up)) = tokio::join!(downstream, upstream) else {
+            let (Ok(downstream), Ok(upstream)) = tokio::join!(downstream, upstream) else {
                 return;
             };
-            let _ =
-                tokio::io::copy_bidirectional(&mut TokioIo::new(down), &mut TokioIo::new(up)).await;
+            let _ = tokio::io::copy_bidirectional(
+                &mut TokioIo::new(downstream),
+                &mut TokioIo::new(upstream),
+            )
+            .await;
         });
     }
-    Ok(resp.map(ProxyBody::Pass))
+    Ok(response.map(ProxyBody::Pass))
 }
 
 fn is_upgrade(headers: &HeaderMap) -> bool {
@@ -362,9 +365,9 @@ fn is_upgrade(headers: &HeaderMap) -> bool {
         && headers
             .get_all(header::CONNECTION)
             .iter()
-            .filter_map(|v| v.to_str().ok())
-            .flat_map(|v| v.split(','))
-            .any(|t| t.trim().eq_ignore_ascii_case("upgrade"))
+            .filter_map(|value| value.to_str().ok())
+            .flat_map(|value| value.split(','))
+            .any(|token| token.trim().eq_ignore_ascii_case("upgrade"))
 }
 
 /// Removes hop-by-hop headers (RFC 9110 §7.6.1), including those `Connection` names.
@@ -372,10 +375,10 @@ fn strip_hop_by_hop(headers: &mut HeaderMap) {
     let named: Vec<String> = headers
         .get_all(header::CONNECTION)
         .iter()
-        .filter_map(|v| v.to_str().ok())
-        .flat_map(|v| v.split(','))
-        .map(|t| t.trim().to_ascii_lowercase())
-        .filter(|t| !t.is_empty())
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .map(|token| token.trim().to_ascii_lowercase())
+        .filter(|token| !token.is_empty())
         .collect();
     for name in named {
         headers.remove(name.as_str());
@@ -401,8 +404,8 @@ pub(crate) fn negotiate(headers: &HeaderMap) -> Option<Coding> {
     for item in headers
         .get_all(header::ACCEPT_ENCODING)
         .iter()
-        .filter_map(|v| v.to_str().ok())
-        .flat_map(|v| v.split(','))
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
     {
         let mut params = item.split(';');
         let name = params
@@ -410,14 +413,14 @@ pub(crate) fn negotiate(headers: &HeaderMap) -> Option<Coding> {
             .unwrap_or_default()
             .trim()
             .to_ascii_lowercase();
-        let q = params
-            .filter_map(|p| p.trim().strip_prefix("q="))
-            .find_map(|q| q.trim().parse::<f32>().ok())
+        let quality = params
+            .filter_map(|param| param.trim().strip_prefix("q="))
+            .find_map(|quality| quality.trim().parse::<f32>().ok())
             .unwrap_or(1.0);
         match name.as_str() {
-            "br" => br = Some(q),
-            "gzip" | "x-gzip" => gzip = Some(q),
-            "*" => star = Some(q),
+            "br" => br = Some(quality),
+            "gzip" | "x-gzip" => gzip = Some(quality),
+            "*" => star = Some(quality),
             _ => {}
         }
     }
@@ -434,17 +437,17 @@ pub(crate) fn negotiate(headers: &HeaderMap) -> Option<Coding> {
 
 /// Whether a response may and should be compressed (before looking at the request).
 fn compressible(status: StatusCode, headers: &HeaderMap) -> bool {
-    let text = |name| headers.get(name).and_then(|v| v.to_str().ok());
-    let encoded =
-        text(header::CONTENT_ENCODING).is_some_and(|e| !e.trim().eq_ignore_ascii_case("identity"));
+    let text = |name| headers.get(name).and_then(|value| value.to_str().ok());
+    let encoded = text(header::CONTENT_ENCODING)
+        .is_some_and(|encoding| !encoding.trim().eq_ignore_ascii_case("identity"));
     let tiny = text(header::CONTENT_LENGTH)
-        .and_then(|l| l.trim().parse::<u64>().ok())
-        .is_some_and(|l| l < MIN_SIZE);
+        .and_then(|length| length.trim().parse::<u64>().ok())
+        .is_some_and(|length| length < MIN_SIZE);
     let no_transform = headers
         .get_all(header::CACHE_CONTROL)
         .iter()
-        .filter_map(|v| v.to_str().ok())
-        .any(|v| v.to_ascii_lowercase().contains("no-transform"));
+        .filter_map(|value| value.to_str().ok())
+        .any(|value| value.to_ascii_lowercase().contains("no-transform"));
     status == StatusCode::OK
         && !encoded
         && !tiny
@@ -493,18 +496,19 @@ fn is_immutable(headers: &HeaderMap) -> bool {
     let directives: Vec<String> = headers
         .get_all(header::CACHE_CONTROL)
         .iter()
-        .filter_map(|v| v.to_str().ok())
-        .flat_map(|v| v.split(','))
-        .map(|d| d.trim().to_ascii_lowercase())
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .map(|directive| directive.trim().to_ascii_lowercase())
         .collect();
     let forbidden = directives
         .iter()
-        .any(|d| matches!(d.as_str(), "no-store" | "no-cache" | "private"));
-    let long = directives.iter().any(|d| {
-        d == "immutable"
-            || d.strip_prefix("max-age=")
-                .and_then(|s| s.parse::<u64>().ok())
-                .is_some_and(|s| s >= 24 * 3600)
+        .any(|directive| matches!(directive.as_str(), "no-store" | "no-cache" | "private"));
+    let long = directives.iter().any(|directive| {
+        directive == "immutable"
+            || directive
+                .strip_prefix("max-age=")
+                .and_then(|seconds| seconds.parse::<u64>().ok())
+                .is_some_and(|seconds| seconds >= 24 * 3600)
     });
     !forbidden && long
 }
@@ -512,11 +516,14 @@ fn is_immutable(headers: &HeaderMap) -> bool {
 /// `"x"` → `W/"x;unz"`; weak tags stay as they are (a weak tag already allows a different
 /// encoding of the same content).
 fn weaken_etag(headers: &mut HeaderMap) {
-    let Some(tag) = headers.get(header::ETAG).and_then(|v| v.to_str().ok()) else {
+    let Some(tag) = headers
+        .get(header::ETAG)
+        .and_then(|value| value.to_str().ok())
+    else {
         return;
     };
     let tag = tag.trim();
-    if let Some(opaque) = tag.strip_prefix('"').and_then(|t| t.strip_suffix('"'))
+    if let Some(opaque) = tag.strip_prefix('"').and_then(|tag| tag.strip_suffix('"'))
         && let Ok(weak) = HeaderValue::from_str(&format!("W/\"{opaque}{ETAG_MARK}\""))
     {
         headers.insert(header::ETAG, weak);
@@ -528,7 +535,7 @@ fn weaken_etag(headers: &mut HeaderMap) {
 fn unmark_if_none_match(headers: &mut HeaderMap) -> bool {
     let Some(value) = headers
         .get(header::IF_NONE_MATCH)
-        .and_then(|v| v.to_str().ok())
+        .and_then(|value| value.to_str().ok())
     else {
         return false;
     };
@@ -539,7 +546,7 @@ fn unmark_if_none_match(headers: &mut HeaderMap) -> bool {
             let tag = tag.trim();
             match tag
                 .strip_prefix("W/\"")
-                .and_then(|t| t.strip_suffix(&format!("{ETAG_MARK}\"")))
+                .and_then(|tag| tag.strip_suffix(&format!("{ETAG_MARK}\"")))
             {
                 Some(opaque) => {
                     ours = true;
@@ -549,8 +556,8 @@ fn unmark_if_none_match(headers: &mut HeaderMap) -> bool {
             }
         })
         .collect();
-    if ours && let Ok(v) = HeaderValue::from_str(&tags.join(", ")) {
-        headers.insert(header::IF_NONE_MATCH, v);
+    if ours && let Ok(value) = HeaderValue::from_str(&tags.join(", ")) {
+        headers.insert(header::IF_NONE_MATCH, value);
     }
     ours
 }
@@ -579,16 +586,16 @@ impl Encoder {
 
     fn out(&mut self) -> &mut Vec<u8> {
         match self {
-            Self::Br(w) => w.get_mut(),
-            Self::Gzip(w) => w.get_mut(),
+            Self::Br(writer) => writer.get_mut(),
+            Self::Gzip(writer) => writer.get_mut(),
         }
     }
 
     /// Compresses `data`; returns whatever output is ready.
     pub(crate) fn write(&mut self, data: &[u8]) -> io::Result<Vec<u8>> {
         match self {
-            Self::Br(w) => w.write_all(data)?,
-            Self::Gzip(w) => w.write_all(data)?,
+            Self::Br(writer) => writer.write_all(data)?,
+            Self::Gzip(writer) => writer.write_all(data)?,
         }
         Ok(std::mem::take(self.out()))
     }
@@ -596,8 +603,8 @@ impl Encoder {
     /// Emits everything written so far (a sync flush; the stream goes on).
     fn flush(&mut self) -> io::Result<Vec<u8>> {
         match self {
-            Self::Br(w) => w.flush()?,
-            Self::Gzip(w) => w.flush()?,
+            Self::Br(writer) => writer.flush()?,
+            Self::Gzip(writer) => writer.flush()?,
         }
         Ok(std::mem::take(self.out()))
     }
@@ -605,13 +612,12 @@ impl Encoder {
     /// Ends the stream; returns the rest.
     pub(crate) fn finish(self) -> io::Result<Vec<u8>> {
         match self {
-            Self::Br(w) => Ok(w.into_inner()),
-            Self::Gzip(w) => w.finish(),
+            Self::Br(writer) => Ok(writer.into_inner()),
+            Self::Gzip(writer) => writer.finish(),
         }
     }
 }
 
-/// The response body.
 pub(crate) enum ProxyBody {
     /// The server's body, untouched.
     Pass(Incoming),
@@ -647,11 +653,11 @@ struct Tee {
 
 impl Tee {
     fn push(tee: &mut Option<Self>, chunk: &[u8]) {
-        if let Some(t) = tee {
-            if t.out.len() + chunk.len() > MAX_CACHED {
+        if let Some(active) = tee {
+            if active.out.len() + chunk.len() > MAX_CACHED {
                 *tee = None;
             } else {
-                t.out.extend_from_slice(chunk);
+                active.out.extend_from_slice(chunk);
             }
         }
     }
@@ -684,10 +690,10 @@ impl Compressing {
                         return self.emit(out);
                     }
                 }
-                Poll::Ready(Some(Err(e))) => {
+                Poll::Ready(Some(Err(error))) => {
                     self.tee = None;
                     self.encoder = None;
-                    return Poll::Ready(Some(Err(e.into())));
+                    return Poll::Ready(Some(Err(error.into())));
                 }
                 Poll::Ready(None) => {
                     let out = self.encoder.take().map(Encoder::finish).transpose()?;
@@ -734,39 +740,39 @@ impl Body for ProxyBody {
     ) -> Poll<Option<Result<Frame<Bytes>, BoxError>>> {
         match self.get_mut() {
             Self::Pass(body) => Pin::new(body).poll_frame(cx).map_err(Into::into),
-            Self::Compress(c) => c.poll_compressed(cx),
-            Self::File(f) => {
-                if f.left == 0 {
+            Self::Compress(compressing) => compressing.poll_compressed(cx),
+            Self::File(cached) => {
+                if cached.left == 0 {
                     return Poll::Ready(None);
                 }
-                let want = usize::try_from(f.left)
+                let want = usize::try_from(cached.left)
                     .unwrap_or(usize::MAX)
                     .min(FILE_CHUNK);
-                let mut buf = BytesMut::zeroed(want);
-                let mut read = tokio::io::ReadBuf::new(&mut buf);
-                match Pin::new(&mut f.file).poll_read(cx, &mut read) {
+                let mut chunk = BytesMut::zeroed(want);
+                let mut read = tokio::io::ReadBuf::new(&mut chunk);
+                match Pin::new(&mut cached.file).poll_read(cx, &mut read) {
                     Poll::Pending => Poll::Pending,
-                    Poll::Ready(Err(e)) => Poll::Ready(Some(Err(e.into()))),
+                    Poll::Ready(Err(error)) => Poll::Ready(Some(Err(error.into()))),
                     Poll::Ready(Ok(())) => {
-                        let n = read.filled().len();
-                        if n == 0 {
+                        let len = read.filled().len();
+                        if len == 0 {
                             return Poll::Ready(Some(Err("cached asset shrank".into())));
                         }
-                        buf.truncate(n);
-                        f.left -= n as u64;
-                        Poll::Ready(Some(Ok(Frame::data(buf.freeze()))))
+                        chunk.truncate(len);
+                        cached.left -= len as u64;
+                        Poll::Ready(Some(Ok(Frame::data(chunk.freeze()))))
                     }
                 }
             }
-            Self::Full(data) => Poll::Ready(data.take().map(|d| Ok(Frame::data(d)))),
+            Self::Full(data) => Poll::Ready(data.take().map(|data| Ok(Frame::data(data)))),
         }
     }
 
     fn is_end_stream(&self) -> bool {
         match self {
             Self::Pass(body) => body.is_end_stream(),
-            Self::Compress(c) => c.encoder.is_none(),
-            Self::File(f) => f.left == 0,
+            Self::Compress(compressing) => compressing.encoder.is_none(),
+            Self::File(cached) => cached.left == 0,
             Self::Full(data) => data.is_none(),
         }
     }
@@ -775,16 +781,18 @@ impl Body for ProxyBody {
         match self {
             Self::Pass(body) => body.size_hint(),
             Self::Compress(_) => SizeHint::default(),
-            Self::File(f) => SizeHint::with_exact(f.left),
+            Self::File(cached) => SizeHint::with_exact(cached.left),
             // `HEAD` of a compressed response: the length is unknown, not zero.
             Self::Full(None) => SizeHint::default(),
-            Self::Full(Some(d)) => SizeHint::with_exact(d.len() as u64),
+            Self::Full(Some(data)) => SizeHint::with_exact(data.len() as u64),
         }
     }
 }
 
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Compressed static assets, one directory per server version:
@@ -817,7 +825,6 @@ impl AssetCache {
         })
     }
 
-    /// Stops background work (daemon shutdown).
     pub(crate) fn close(&self) {
         self.closed.store(true, Ordering::Relaxed);
     }
@@ -828,9 +835,9 @@ impl AssetCache {
         let version = segments.next()?;
         let (quality, commit) = version.split_once('-')?;
         let versioned = !quality.is_empty()
-            && quality.bytes().all(|b| b.is_ascii_lowercase())
+            && quality.bytes().all(|byte| byte.is_ascii_lowercase())
             && commit.len() == 40
-            && commit.bytes().all(|b| b.is_ascii_hexdigit());
+            && commit.bytes().all(|byte| byte.is_ascii_hexdigit());
         if !versioned || segments.next()? != "static" {
             return None;
         }
@@ -882,8 +889,8 @@ impl AssetCache {
                 Coding::Br => "br5",
                 Coding::Gzip => "gz",
             };
-            if let Err(e) = cache.write(&key, ext, &body) {
-                tracing::debug!("caching an editor asset: {e}");
+            if let Err(error) = cache.write(&key, ext, &body) {
+                tracing::debug!("caching an editor asset: {error}");
                 return;
             }
             if coding == Coding::Br {
@@ -900,8 +907,8 @@ impl AssetCache {
         }
         let cache = Arc::clone(self);
         tokio::task::spawn_blocking(move || {
-            if let Err(e) = cache.rewrite_best(&key) {
-                tracing::debug!("recompressing an editor asset: {e}");
+            if let Err(error) = cache.rewrite_best(&key) {
+                tracing::debug!("recompressing an editor asset: {error}");
             }
             lock(&cache.rewriting).remove(&key.name);
         });
@@ -914,22 +921,22 @@ impl AssetCache {
             std::fs::create_dir_all(&dir)?;
             self.prune(&key.version);
         }
-        let tmp = dir.join(format!(
+        let temp = dir.join(format!(
             ".{}.{ext}.{}",
             key.name,
             crate::fsutil::hex(&crate::fsutil::random::<4>())
         ));
         let result =
-            std::fs::write(&tmp, body).and_then(|()| std::fs::rename(&tmp, self.path(key, ext)));
+            std::fs::write(&temp, body).and_then(|()| std::fs::rename(&temp, self.path(key, ext)));
         if result.is_err() {
-            let _ = std::fs::remove_file(&tmp);
+            let _ = std::fs::remove_file(&temp);
         }
         result
     }
 
     /// `.br5` → decompress → best-level brotli → `.br` (and the `.br5` goes).
     fn rewrite_best(&self, key: &CacheKey) -> io::Result<()> {
-        let _one = lock(&self.rewrite);
+        let _one_at_a_time = lock(&self.rewrite);
         let fast = self.path(key, "br5");
         if self.path(key, "br").is_file() || !fast.is_file() {
             return Ok(());
@@ -969,16 +976,15 @@ impl AssetCache {
         };
         let mut versions: Vec<(std::time::SystemTime, PathBuf)> = entries
             .filter_map(Result::ok)
-            .filter(|e| e.file_name() != current && e.path().is_dir())
-            .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+            .filter(|entry| entry.file_name() != current && entry.path().is_dir())
+            .filter_map(|entry| Some((entry.metadata().ok()?.modified().ok()?, entry.path())))
             .collect();
-        versions.sort_by_key(|v| std::cmp::Reverse(v.0));
+        versions.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
         for (_, old) in versions.into_iter().skip(KEEP_VERSIONS - 1) {
             let _ = std::fs::remove_dir_all(old);
         }
     }
 
-    /// The directory a version's assets live in (tests).
     #[cfg(test)]
     fn dir(&self, version: &str) -> PathBuf {
         self.root.join(version)
@@ -993,30 +999,30 @@ mod tests {
     use super::*;
 
     fn headers(pairs: &[(&'static str, &'static str)]) -> HeaderMap {
-        let mut h = HeaderMap::new();
-        for (k, v) in pairs {
-            h.append(*k, HeaderValue::from_static(v));
+        let mut headers = HeaderMap::new();
+        for (name, value) in pairs {
+            headers.append(*name, HeaderValue::from_static(value));
         }
-        h
+        headers
     }
 
     #[test]
     fn negotiates_brotli_first_and_honours_q() {
-        let ae = |v| negotiate(&headers(&[("accept-encoding", v)]));
-        assert_eq!(ae("gzip, deflate, br"), Some(Coding::Br));
-        assert_eq!(ae("gzip, deflate"), Some(Coding::Gzip));
-        assert_eq!(ae("br;q=0, gzip"), Some(Coding::Gzip));
-        assert_eq!(ae("gzip;q=1.0, br;q=0.5"), Some(Coding::Gzip));
-        assert_eq!(ae("identity"), None);
-        assert_eq!(ae("*"), Some(Coding::Br));
-        assert_eq!(ae("*;q=0"), None);
+        let accepting = |value| negotiate(&headers(&[("accept-encoding", value)]));
+        assert_eq!(accepting("gzip, deflate, br"), Some(Coding::Br));
+        assert_eq!(accepting("gzip, deflate"), Some(Coding::Gzip));
+        assert_eq!(accepting("br;q=0, gzip"), Some(Coding::Gzip));
+        assert_eq!(accepting("gzip;q=1.0, br;q=0.5"), Some(Coding::Gzip));
+        assert_eq!(accepting("identity"), None);
+        assert_eq!(accepting("*"), Some(Coding::Br));
+        assert_eq!(accepting("*;q=0"), None);
         assert_eq!(negotiate(&HeaderMap::new()), None);
     }
 
     /// DNS rebinding names an attacker can point at 127.0.0.1, and spellings of loopback.
     #[test]
     fn only_loopback_names_pass_the_host_check() {
-        let host = |h: &str| loopback_host(Some(&HeaderValue::from_str(h).unwrap()));
+        let host = |value: &str| loopback_host(Some(&HeaderValue::from_str(value).unwrap()));
         for ok in [
             "localhost",
             "LOCALHOST:8080",
@@ -1092,13 +1098,13 @@ mod tests {
 
     #[test]
     fn immutable_means_a_long_max_age_and_nothing_private() {
-        let imm = |pairs| is_immutable(&headers(pairs));
-        assert!(imm(&[("cache-control", "public, max-age=31536000")]));
-        assert!(imm(&[("cache-control", "immutable")]));
-        assert!(!imm(&[("cache-control", "max-age=60")]));
-        assert!(!imm(&[("cache-control", "no-cache")]));
-        assert!(!imm(&[]));
-        assert!(!imm(&[
+        let immutable = |pairs| is_immutable(&headers(pairs));
+        assert!(immutable(&[("cache-control", "public, max-age=31536000")]));
+        assert!(immutable(&[("cache-control", "immutable")]));
+        assert!(!immutable(&[("cache-control", "max-age=60")]));
+        assert!(!immutable(&[("cache-control", "no-cache")]));
+        assert!(!immutable(&[]));
+        assert!(!immutable(&[
             ("cache-control", "max-age=31536000"),
             ("set-cookie", "a=b")
         ]));
@@ -1106,20 +1112,20 @@ mod tests {
 
     #[test]
     fn weakened_etags_round_trip_through_if_none_match() {
-        let mut h = headers(&[("etag", "\"abc\"")]);
-        weaken_etag(&mut h);
-        assert_eq!(h["etag"], "W/\"abc;unz\"");
+        let mut strong = headers(&[("etag", "\"abc\"")]);
+        weaken_etag(&mut strong);
+        assert_eq!(strong["etag"], "W/\"abc;unz\"");
         // The server's own weak tags are left alone, both ways.
         let mut weak = headers(&[("etag", "W/\"1-2-3\"")]);
         weaken_etag(&mut weak);
         assert_eq!(weak["etag"], "W/\"1-2-3\"");
 
-        let mut req = headers(&[("if-none-match", "W/\"abc;unz\"")]);
-        assert!(unmark_if_none_match(&mut req));
-        assert_eq!(req["if-none-match"], "\"abc\"");
-        let mut req = headers(&[("if-none-match", "W/\"1-2-3\"")]);
-        assert!(!unmark_if_none_match(&mut req));
-        assert_eq!(req["if-none-match"], "W/\"1-2-3\"");
+        let mut request = headers(&[("if-none-match", "W/\"abc;unz\"")]);
+        assert!(unmark_if_none_match(&mut request));
+        assert_eq!(request["if-none-match"], "\"abc\"");
+        let mut request = headers(&[("if-none-match", "W/\"1-2-3\"")]);
+        assert!(!unmark_if_none_match(&mut request));
+        assert_eq!(request["if-none-match"], "W/\"1-2-3\"");
     }
 
     #[test]
@@ -1155,29 +1161,32 @@ mod tests {
         let mut body = fast.write(&plain).unwrap();
         body.extend(fast.finish().unwrap());
 
-        let v = |n: u32| format!("stable-{n:040x}");
-        let key = cache.key(&format!("/{}/static/a.js", v(1))).unwrap();
+        let version = |n: u32| format!("stable-{n:040x}");
+        let key = cache.key(&format!("/{}/static/a.js", version(1))).unwrap();
         cache.write(&key, "br5", &body).unwrap();
         cache.rewrite_best(&key).unwrap();
         assert!(!cache.path(&key, "br5").exists());
         let best = std::fs::read(cache.path(&key, "br")).unwrap();
         assert!(best.len() <= body.len(), "{} > {}", best.len(), body.len());
-        let mut round = Vec::new();
-        brotli::BrotliDecompress(&mut &best[..], &mut round).unwrap();
-        assert_eq!(round, plain);
+        let mut round_trip = Vec::new();
+        brotli::BrotliDecompress(&mut &best[..], &mut round_trip).unwrap();
+        assert_eq!(round_trip, plain);
 
         for n in 2..=4 {
             std::thread::sleep(Duration::from_millis(20));
-            let key = cache.key(&format!("/{}/static/a.js", v(n))).unwrap();
+            let key = cache.key(&format!("/{}/static/a.js", version(n))).unwrap();
             cache.write(&key, "gz", b"x").unwrap();
         }
-        assert!(!cache.dir(&v(1)).exists(), "the oldest version is pruned");
+        assert!(
+            !cache.dir(&version(1)).exists(),
+            "the oldest version is pruned"
+        );
         for n in 2..=4 {
-            assert!(cache.dir(&v(n)).exists());
+            assert!(cache.dir(&version(n)).exists());
         }
 
         // Shutting down leaves the fast copy for a later rewrite instead of finishing it.
-        let key = cache.key(&format!("/{}/static/b.js", v(4))).unwrap();
+        let key = cache.key(&format!("/{}/static/b.js", version(4))).unwrap();
         cache.write(&key, "br5", &body).unwrap();
         cache.close();
         cache.rewrite_best(&key).unwrap();

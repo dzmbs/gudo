@@ -1,3 +1,4 @@
+//! Reads a shell's input line off the screen.
 //!
 //! The input starts at the `133;B` pin (or, for shells that do not send it, where the cursor
 //! was once the prompt was drawn). From there the text runs to the end of the logical line the
@@ -61,7 +62,6 @@ impl Screen {
     }
 }
 
-/// What was read.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct Reading {
     pub text: String,
@@ -79,11 +79,10 @@ struct Glyph {
     style: CellStyle,
 }
 
-/// Reads the input line.
 pub(crate) fn read(screen: &Screen, view: &LineView) -> Reading {
     let mut doubt = None;
-    let mut note = |d: InputDoubt| {
-        doubt.get_or_insert(d);
+    let mut note = |found: InputDoubt| {
+        doubt.get_or_insert(found);
     };
     if view.inferred {
         note(InputDoubt::NoInputMark);
@@ -107,7 +106,7 @@ pub(crate) fn read(screen: &Screen, view: &LineView) -> Reading {
             .iter()
             .enumerate()
             .skip(usize::from(from))
-            .map(|(x, c)| (x as u16, c))
+            .map(|(x, cell)| (x as u16, cell))
             .collect();
         if y == start.y {
             match cut_right_prompt(&mut cells, view.right_prompt.as_ref(), cursor, y, row) {
@@ -127,7 +126,7 @@ pub(crate) fn read(screen: &Screen, view: &LineView) -> Reading {
             let last = cells
                 .iter()
                 .rev()
-                .find(|(_, c)| !c.is_blank())
+                .find(|(_, cell)| !cell.is_blank())
                 .map(|(x, _)| x + 1);
             let cursor_end = (cursor.y == y).then_some(cursor.x);
             last.max(cursor_end).unwrap_or(from)
@@ -167,25 +166,24 @@ pub(crate) fn read(screen: &Screen, view: &LineView) -> Reading {
         }
         y += 1;
     }
-    // Rows after the input line.
     let below = screen
         .rows
         .iter()
         .skip((y + 1).saturating_sub(screen.first_y) as usize)
-        .any(|r| r.cells.iter().any(|c| !c.is_blank()));
+        .any(|row| row.cells.iter().any(|cell| !cell.is_blank()));
     if below {
         note(InputDoubt::ContentBelow);
     }
 
-    let cursor_index = glyphs.iter().take_while(|g| g.at < cursor).count();
+    let cursor_index = glyphs.iter().take_while(|glyph| glyph.at < cursor).count();
     let (glyphs, suggestion) = split_suggestion(glyphs, cursor_index, &mut note);
-    let text: String = glyphs.iter().map(|g| g.text.as_str()).collect();
+    let text: String = glyphs.iter().map(|glyph| glyph.text.as_str()).collect();
     let cursor_index = cursor_index.min(glyphs.len());
     Reading {
         cursor: text.chars().count().min(
             glyphs[..cursor_index]
                 .iter()
-                .map(|g| g.text.chars().count())
+                .map(|glyph| glyph.text.chars().count())
                 .sum(),
         ) as u32,
         text,
@@ -213,27 +211,29 @@ fn cut_right_prompt(
         return Cut::None;
     }
     let cursor_col = if cursor.y == y { cursor.x } else { u16::MAX };
-    if let Some(rp) = known
-        && rp.col > cursor_col.min(u16::MAX - 1)
+    if let Some(remembered) = known
+        && remembered.col > cursor_col.min(u16::MAX - 1)
     {
-        let matches = rp.cells.iter().enumerate().all(|(i, text)| {
+        let matches = remembered.cells.iter().enumerate().all(|(i, text)| {
             cells
                 .iter()
-                .find(|(x, _)| usize::from(*x) == usize::from(rp.col) + i)
-                .is_some_and(|(_, c)| &c.text == text)
+                .find(|(x, _)| usize::from(*x) == usize::from(remembered.col) + i)
+                .is_some_and(|(_, cell)| &cell.text == text)
         });
         let nothing_after = cells
             .iter()
-            .filter(|(x, _)| usize::from(*x) >= usize::from(rp.col) + rp.cells.len())
-            .all(|(_, c)| c.is_blank());
+            .filter(|(x, _)| {
+                usize::from(*x) >= usize::from(remembered.col) + remembered.cells.len()
+            })
+            .all(|(_, cell)| cell.is_blank());
         if matches && nothing_after {
-            cells.retain(|(x, _)| *x < rp.col);
+            cells.retain(|(x, _)| *x < remembered.col);
             return Cut::Known;
         }
     }
     // Unknown: trailing text ending at the right edge after a wide gap, past the cursor.
     let cols = row.cells.len();
-    let Some(last) = cells.iter().rposition(|(_, c)| !c.is_blank()) else {
+    let Some(last) = cells.iter().rposition(|(_, cell)| !cell.is_blank()) else {
         return Cut::None;
     };
     if usize::from(cells[last].0) + 2 < cols {
@@ -246,9 +246,9 @@ fn cut_right_prompt(
     let gap = cells[..first]
         .iter()
         .rev()
-        .take_while(|(_, c)| c.is_blank())
+        .take_while(|(_, cell)| cell.is_blank())
         .count();
-    let typed_before = cells[..first].iter().any(|(_, c)| !c.is_blank());
+    let typed_before = cells[..first].iter().any(|(_, cell)| !cell.is_blank());
     if gap >= RIGHT_PROMPT_GAP && typed_before && cells[first].0 > cursor_col.min(u16::MAX - 1) {
         let col = cells[first].0;
         cells.retain(|(x, _)| *x < col);
@@ -266,7 +266,7 @@ fn split_suggestion(
     if cursor >= glyphs.len() {
         return (glyphs, None);
     }
-    let visible = |g: &&Glyph| g.text != " " && g.text != "\n";
+    let visible = |glyph: &&Glyph| glyph.text != " " && glyph.text != "\n";
     let after: Vec<&Glyph> = glyphs[cursor..].iter().filter(visible).collect();
     let before: Vec<&Glyph> = glyphs[..cursor].iter().filter(visible).collect();
     if after.is_empty() {
@@ -274,18 +274,23 @@ fn split_suggestion(
         // trailing space typed before moving left stays inside `text` anyway).
         return (glyphs, None);
     }
-    let all_ghost = after.iter().all(|g| ghostlike(g.style));
-    let typed_ghost = before.iter().any(|g| ghostlike(g.style));
+    let all_ghost = after.iter().all(|glyph| ghostlike(glyph.style));
+    let typed_ghost = before.iter().any(|glyph| ghostlike(glyph.style));
     if all_ghost && !typed_ghost {
-        let tail: String = glyphs[cursor..].iter().map(|g| g.text.as_str()).collect();
+        let tail: String = glyphs[cursor..]
+            .iter()
+            .map(|glyph| glyph.text.as_str())
+            .collect();
         glyphs.truncate(cursor);
         let tail = tail.trim_end().to_owned();
         return (glyphs, Some(tail).filter(|t| !t.is_empty()));
     }
-    let one_style = after.iter().all(|g| g.style == after[0].style);
-    let foreign =
-        after[0].style != CellStyle::default() && before.iter().all(|g| g.style != after[0].style);
-    if after.iter().any(|g| ghostlike(g.style)) || (one_style && foreign && !before.is_empty()) {
+    let one_style = after.iter().all(|glyph| glyph.style == after[0].style);
+    let foreign = after[0].style != CellStyle::default()
+        && before.iter().all(|glyph| glyph.style != after[0].style);
+    if after.iter().any(|glyph| ghostlike(glyph.style))
+        || (one_style && foreign && !before.is_empty())
+    {
         note(InputDoubt::PossibleGhostText);
     }
     (glyphs, None)
@@ -298,10 +303,10 @@ fn ghostlike(style: CellStyle) -> bool {
     }
     match style.fg {
         Color::Palette(8) => true,
-        Color::Palette(n) => (232..=250).contains(&n),
+        Color::Palette(index) => (232..=250).contains(&index),
         Color::Rgb(r, g, b) => {
-            let (hi, lo) = (r.max(g).max(b), r.min(g).min(b));
-            hi - lo <= 24 && (60..=170).contains(&hi)
+            let (brightest, darkest) = (r.max(g).max(b), r.min(g).min(b));
+            brightest - darkest <= 24 && (60..=170).contains(&brightest)
         }
         Color::Default => false,
     }
@@ -347,171 +352,177 @@ mod tests {
 
     #[test]
     fn plain_line_with_cursor_in_the_middle() {
-        let mut f = Fixture::new(40);
-        f.feed(PROMPT).feed("git status\x1b[4D");
-        let r = f.read();
-        assert_eq!(r.text, "git status");
-        assert_eq!(r.cursor, 6);
-        assert_eq!(r.doubt, None);
+        let mut fixture = Fixture::new(40);
+        fixture.feed(PROMPT).feed("git status\x1b[4D");
+        let reading = fixture.read();
+        assert_eq!(reading.text, "git status");
+        assert_eq!(reading.cursor, 6);
+        assert_eq!(reading.doubt, None);
     }
 
     #[test]
     fn trailing_space_before_the_cursor_is_kept() {
-        let mut f = Fixture::new(40);
-        f.feed(PROMPT).feed("ls ");
-        assert_eq!(f.read().text, "ls ");
-        assert_eq!(f.read().cursor, 3);
+        let mut fixture = Fixture::new(40);
+        fixture.feed(PROMPT).feed("ls ");
+        assert_eq!(fixture.read().text, "ls ");
+        assert_eq!(fixture.read().cursor, 3);
     }
 
     #[test]
     fn soft_wraps_join_and_wide_characters_count_once() {
-        let mut f = Fixture::new(10);
-        f.feed(PROMPT).feed("echo 漢字 abcdef");
-        let r = f.read();
-        assert_eq!(r.text, "echo 漢字 abcdef");
-        assert_eq!(r.cursor, r.text.chars().count() as u32);
-        assert_eq!(r.doubt, None);
+        let mut fixture = Fixture::new(10);
+        fixture.feed(PROMPT).feed("echo 漢字 abcdef");
+        let reading = fixture.read();
+        assert_eq!(reading.text, "echo 漢字 abcdef");
+        assert_eq!(reading.cursor, reading.text.chars().count() as u32);
+        assert_eq!(reading.doubt, None);
     }
 
     #[test]
     fn autosuggestion_is_cut_and_reported() {
-        let mut f = Fixture::new(40);
+        let mut fixture = Fixture::new(40);
         // zsh-autosuggestions: POSTDISPLAY drawn with fg=8, cursor back at the buffer end.
-        f.feed(PROMPT)
+        fixture
+            .feed(PROMPT)
             .feed("git st\x1b[38;5;8matus --short\x1b[0m\x1b[12D");
-        let r = f.read();
-        assert_eq!(r.text, "git st");
-        assert_eq!(r.cursor, 6);
-        assert_eq!(r.suggestion.as_deref(), Some("atus --short"));
-        assert_eq!(r.doubt, None);
+        let reading = fixture.read();
+        assert_eq!(reading.text, "git st");
+        assert_eq!(reading.cursor, 6);
+        assert_eq!(reading.suggestion.as_deref(), Some("atus --short"));
+        assert_eq!(reading.doubt, None);
         // Faint works too.
-        let mut f = Fixture::new(40);
-        f.feed(PROMPT).feed("ls\x1b[2m -la\x1b[0m\x1b[4D");
-        assert_eq!(f.read().text, "ls");
-        assert_eq!(f.read().suggestion.as_deref(), Some(" -la"));
+        let mut fixture = Fixture::new(40);
+        fixture.feed(PROMPT).feed("ls\x1b[2m -la\x1b[0m\x1b[4D");
+        assert_eq!(fixture.read().text, "ls");
+        assert_eq!(fixture.read().suggestion.as_deref(), Some(" -la"));
     }
 
     #[test]
     fn syntax_highlighting_is_not_ghost_text() {
-        let mut f = Fixture::new(40);
+        let mut fixture = Fixture::new(40);
         // A green command word, default args, cursor moved left into the args.
-        f.feed(PROMPT).feed("\x1b[32mls\x1b[0m -la\x1b[2D");
-        let r = f.read();
-        assert_eq!(r.text, "ls -la");
-        assert_eq!(r.cursor, 4);
-        assert_eq!(r.doubt, None);
+        fixture.feed(PROMPT).feed("\x1b[32mls\x1b[0m -la\x1b[2D");
+        let reading = fixture.read();
+        assert_eq!(reading.text, "ls -la");
+        assert_eq!(reading.cursor, 4);
+        assert_eq!(reading.doubt, None);
     }
 
     #[test]
     fn unknown_styled_tail_is_doubtful() {
-        let mut f = Fixture::new(40);
-        f.feed(PROMPT)
+        let mut fixture = Fixture::new(40);
+        fixture
+            .feed(PROMPT)
             .feed("make\x1b[38;2;200;80;80m test\x1b[0m\x1b[5D");
-        let r = f.read();
-        assert_eq!(r.text, "make test");
-        assert_eq!(r.doubt, Some(InputDoubt::PossibleGhostText));
+        let reading = fixture.read();
+        assert_eq!(reading.text, "make test");
+        assert_eq!(reading.doubt, Some(InputDoubt::PossibleGhostText));
     }
 
     #[test]
     fn right_prompt_drawn_with_the_prompt_is_cut() {
-        let mut f = Fixture::new(30);
+        let mut fixture = Fixture::new(30);
         // zle: prompt, right prompt at the edge, cursor back at the input start.
-        f.feed("\x1b]133;A\x07$ \x1b]133;B\x07\x1b[22G[main]\x1b[3G");
-        f.feed("echo hi");
-        let r = f.read();
-        assert_eq!(r.text, "echo hi");
-        assert!(r.right_prompt);
-        assert_eq!(r.doubt, None);
+        fixture.feed("\x1b]133;A\x07$ \x1b]133;B\x07\x1b[22G[main]\x1b[3G");
+        fixture.feed("echo hi");
+        let reading = fixture.read();
+        assert_eq!(reading.text, "echo hi");
+        assert!(reading.right_prompt);
+        assert_eq!(reading.doubt, None);
         // Once the buffer grows over it, zsh removes it.
-        f.feed("\x1b[K");
-        let r = f.read();
-        assert_eq!(r.text, "echo hi");
-        assert!(!r.right_prompt);
+        fixture.feed("\x1b[K");
+        let reading = fixture.read();
+        assert_eq!(reading.text, "echo hi");
+        assert!(!reading.right_prompt);
     }
 
     #[test]
     fn right_prompt_stays_out_of_the_command_mark() {
-        let mut f = Fixture::new(30);
-        f.feed("\x1b]133;A\x07$ \x1b]133;B\x07\x1b[22G[main]\x1b[3G");
-        f.feed("echo hi\r\n\x1b]133;C\x07");
-        let list = f.log.list(&f.term);
+        let mut fixture = Fixture::new(30);
+        fixture.feed("\x1b]133;A\x07$ \x1b]133;B\x07\x1b[22G[main]\x1b[3G");
+        fixture.feed("echo hi\r\n\x1b]133;C\x07");
+        let list = fixture.log.list(&fixture.term);
         assert_eq!(list[0].mark.command.as_deref(), Some("echo hi"));
     }
 
     #[test]
     fn unremembered_right_prompt_is_a_guess() {
-        let mut f = Fixture::new(30);
-        f.feed(PROMPT).feed("echo hi\x1b[25G12:00\x1b[10G");
-        let r = f.read();
-        assert_eq!(r.text, "echo hi");
-        assert_eq!(r.doubt, Some(InputDoubt::RightPromptGuess));
+        let mut fixture = Fixture::new(30);
+        fixture.feed(PROMPT).feed("echo hi\x1b[25G12:00\x1b[10G");
+        let reading = fixture.read();
+        assert_eq!(reading.text, "echo hi");
+        assert_eq!(reading.doubt, Some(InputDoubt::RightPromptGuess));
     }
 
     #[test]
     fn multi_line_prompt_and_listing_below() {
-        let mut f = Fixture::new(40);
-        f.feed("\x1b]133;A\x07~/src\r\n\x1b]133;P;k=s\x07$ \x1b]133;B\x07cd sr");
-        let r = f.read();
-        assert_eq!(r.text, "cd sr");
-        assert_eq!(r.doubt, None);
+        let mut fixture = Fixture::new(40);
+        fixture.feed("\x1b]133;A\x07~/src\r\n\x1b]133;P;k=s\x07$ \x1b]133;B\x07cd sr");
+        let reading = fixture.read();
+        assert_eq!(reading.text, "cd sr");
+        assert_eq!(reading.doubt, None);
         // A completion listing printed below; the cursor goes back to the line.
-        f.feed("\x1b7\r\nsrc/  srv/\x1b8");
-        let r = f.read();
-        assert_eq!(r.text, "cd sr");
-        assert_eq!(r.doubt, Some(InputDoubt::ContentBelow));
+        fixture.feed("\x1b7\r\nsrc/  srv/\x1b8");
+        let reading = fixture.read();
+        assert_eq!(reading.text, "cd sr");
+        assert_eq!(reading.doubt, Some(InputDoubt::ContentBelow));
     }
 
     #[test]
     fn continuation_prompt_is_flagged() {
-        let mut f = Fixture::new(40);
-        f.feed(PROMPT)
+        let mut fixture = Fixture::new(40);
+        fixture
+            .feed(PROMPT)
             .feed("for i in 1 2\r\n\x1b]133;P;k=s\x07> \x1b]133;B\x07do");
-        let r = f.read();
-        assert_eq!(r.doubt, Some(InputDoubt::Continuation));
-        assert_eq!(r.text, "for i in 1 2\ndo");
+        let reading = fixture.read();
+        assert_eq!(reading.doubt, Some(InputDoubt::Continuation));
+        assert_eq!(reading.text, "for i in 1 2\ndo");
     }
 
     #[test]
     fn fish_without_input_mark_infers_the_start() {
-        let mut f = Fixture::new(40);
+        let mut fixture = Fixture::new(40);
         // The prompt in two reads, then typing a moment later.
-        f.feed("\x1b]133;A\x07~");
-        f.feed("> ");
+        fixture.feed("\x1b]133;A\x07~");
+        fixture.feed("> ");
         std::thread::sleep(std::time::Duration::from_millis(40));
-        f.feed("ls");
-        let r = f.read();
-        assert_eq!(r.text, "ls");
-        assert_eq!(r.doubt, Some(InputDoubt::NoInputMark));
+        fixture.feed("ls");
+        let reading = fixture.read();
+        assert_eq!(reading.text, "ls");
+        assert_eq!(reading.doubt, Some(InputDoubt::NoInputMark));
     }
 
     #[test]
     fn running_and_new_prompt_change_the_id() {
-        let mut f = Fixture::new(40);
-        f.feed(PROMPT);
-        let first = f.log.line_marks().prompt_id;
-        f.feed("ls\r\n\x1b]133;C\x07");
+        let mut fixture = Fixture::new(40);
+        fixture.feed(PROMPT);
+        let first = fixture.log.line_marks().prompt_id;
+        fixture.feed("ls\r\n\x1b]133;C\x07");
         assert!(matches!(
-            f.log.line_marks().phase,
+            fixture.log.line_marks().phase,
             crate::assist::marks::Phase::Running(_)
         ));
-        f.feed("a\r\n\x1b]133;D;0\x07").feed(PROMPT);
-        assert_ne!(f.log.line_marks().prompt_id, first);
+        fixture.feed("a\r\n\x1b]133;D;0\x07").feed(PROMPT);
+        assert_ne!(fixture.log.line_marks().prompt_id, first);
         // A redraw of the same prompt keeps it.
-        let id = f.log.line_marks().prompt_id;
-        f.feed("\r\x1b[K").feed(PROMPT);
-        assert_eq!(f.log.line_marks().prompt_id, id);
+        let id = fixture.log.line_marks().prompt_id;
+        fixture.feed("\r\x1b[K").feed(PROMPT);
+        assert_eq!(fixture.log.line_marks().prompt_id, id);
     }
 
     #[test]
     fn leading_space_marks_a_command_private() {
-        let mut f = Fixture::new(40);
-        f.feed(PROMPT).feed(" export TOKEN=x\r\n\x1b]133;C\x07");
-        f.feed("\x1b]133;D;0\x07")
+        let mut fixture = Fixture::new(40);
+        fixture
+            .feed(PROMPT)
+            .feed(" export TOKEN=x\r\n\x1b]133;C\x07");
+        fixture
+            .feed("\x1b]133;D;0\x07")
             .feed(PROMPT)
             .feed("ls\r\n\x1b]133;C\x07");
-        assert!(f.log.is_private(1));
-        assert!(!f.log.is_private(2));
-        let list = f.log.list(&f.term);
+        assert!(fixture.log.is_private(1));
+        assert!(!fixture.log.is_private(2));
+        let list = fixture.log.list(&fixture.term);
         assert_eq!(list[0].mark.command.as_deref(), Some("export TOKEN=x"));
     }
 }

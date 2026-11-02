@@ -22,7 +22,6 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 const MARK: &str = "\u{1f}path=";
 const END: &str = "\u{1f}";
 
-/// The agents the daemon launches.
 const AGENTS: [AgentKind; 2] = [AgentKind::Claude, AgentKind::Codex];
 
 /// `PATH` as the user's terminal panes see it, resolved once and again on request.
@@ -30,27 +29,25 @@ const AGENTS: [AgentKind; 2] = [AgentKind::Claude, AgentKind::Codex];
 pub(crate) struct TerminalPath(Mutex<Option<OsString>>);
 
 impl TerminalPath {
-    /// Asks the shell again, keeping the answer for [`Self::cached`].
-    pub(crate) async fn refresh(&self, cfg: &Config) -> Option<OsString> {
-        let path = terminal_path(cfg, PROBE_TIMEOUT).await;
+    pub(crate) async fn refresh(&self, config: &Config) -> Option<OsString> {
+        let path = terminal_path(config, PROBE_TIMEOUT).await;
         self.0.lock().unwrap().clone_from(&path);
         path
     }
 
-    /// The last answer, or a fresh one when there is none.
-    pub(crate) async fn cached(&self, cfg: &Config) -> Option<OsString> {
+    pub(crate) async fn cached(&self, config: &Config) -> Option<OsString> {
         let known = self.0.lock().unwrap().clone();
         match known {
             Some(path) => Some(path),
-            None => self.refresh(cfg).await,
+            None => self.refresh(config).await,
         }
     }
 }
 
 /// Each agent's install state on this host, for `path` as [`TerminalPath`] resolves it.
-pub(crate) fn check(cfg: &Config, path: Option<OsString>) -> Vec<AgentInstall> {
-    let path = path.or_else(|| cfg.pane_var("PATH"));
-    let home = cfg.home();
+pub(crate) fn check(config: &Config, path: Option<OsString>) -> Vec<AgentInstall> {
+    let path = path.or_else(|| config.pane_var("PATH"));
+    let home = config.home();
     AGENTS
         .into_iter()
         .map(|agent| {
@@ -69,23 +66,23 @@ pub(crate) fn check(cfg: &Config, path: Option<OsString>) -> Vec<AgentInstall> {
 /// where rc files are not read. Every account has its own configuration, so each gets its
 /// own command, run with `env <DIR_VAR>=<dir>`; the system account's runs as the user's own.
 pub(crate) fn mcp_commands(
-    cfg: &Config,
+    config: &Config,
     path: Option<OsString>,
     register: bool,
     accounts: &[(AgentKind, PathBuf)],
 ) -> Vec<AgentMcpCommand> {
-    let hook_bin = cfg.hook_bin();
-    let home = cfg.home();
-    let legacy = agents::legacy_mcp_server_names();
-    check(cfg, path)
+    let hook_bin = config.hook_bin();
+    let home = config.home();
+    let legacy_names = agents::legacy_mcp_server_names();
+    check(config, path)
         .into_iter()
         .flat_map(|install| {
             let program = match install.state {
                 InstallState::Installed { path } | InstallState::NotOnPath { path } => path,
                 InstallState::Missing => return Vec::new(),
             };
-            let (state_dir, agent) = (&cfg.state_dir, install.agent);
-            let system_dir = cfg
+            let (state_dir, agent) = (&config.state_dir, install.agent);
+            let system_dir = config
                 .pane_var(match agent {
                     AgentKind::Claude => agents::CLAUDE_DIR_VAR,
                     AgentKind::Codex => agents::CODEX_DIR_VAR,
@@ -94,13 +91,13 @@ pub(crate) fn mcp_commands(
             let dirs = std::iter::once(None).chain(
                 accounts
                     .iter()
-                    .filter(|(a, _)| *a == agent)
+                    .filter(|(account_agent, _)| *account_agent == agent)
                     .map(|(_, dir)| Some(dir.clone())),
             );
             dirs.flat_map(|dir| {
-                let (add, old) = match agent {
+                let (add, removals) = match agent {
                     AgentKind::Claude => {
-                        let config = agents::ClaudeCode::user_config_file(
+                        let config_file = agents::ClaudeCode::user_config_file(
                             &home,
                             dir.as_deref().or(system_dir.as_deref()),
                         );
@@ -108,17 +105,17 @@ pub(crate) fn mcp_commands(
                             agents::ClaudeCode::user_mcp_command(
                                 &program, &hook_bin, state_dir, register,
                             ),
-                            legacy
+                            legacy_names
                                 .iter()
                                 .filter(|name| {
-                                    agents::ClaudeCode::user_mcp_registered(&config, name)
+                                    agents::ClaudeCode::user_mcp_registered(&config_file, name)
                                 })
                                 .map(|name| agents::ClaudeCode::user_mcp_remove(&program, name))
                                 .collect::<Vec<_>>(),
                         )
                     }
                     AgentKind::Codex => {
-                        let config = agents::Codex::config_file(
+                        let config_file = agents::Codex::config_file(
                             &home,
                             dir.as_deref().or(system_dir.as_deref()),
                         );
@@ -126,9 +123,11 @@ pub(crate) fn mcp_commands(
                             agents::Codex::user_mcp_command(
                                 &program, &hook_bin, state_dir, register,
                             ),
-                            legacy
+                            legacy_names
                                 .iter()
-                                .filter(|name| agents::Codex::user_mcp_registered(&config, name))
+                                .filter(|name| {
+                                    agents::Codex::user_mcp_registered(&config_file, name)
+                                })
                                 .map(|name| agents::Codex::user_mcp_remove(&program, name))
                                 .collect::<Vec<_>>(),
                         )
@@ -144,7 +143,8 @@ pub(crate) fn mcp_commands(
                     })
                     .unwrap_or_default();
                 // The server's old names go too, so an agent does not run it twice.
-                old.into_iter()
+                removals
+                    .into_iter()
                     .chain([add])
                     .map(|argv| AgentMcpCommand {
                         agent,
@@ -158,13 +158,13 @@ pub(crate) fn mcp_commands(
 }
 
 fn state(program: &str, path: Option<&OsStr>, home: &Path) -> InstallState {
-    let on_path = path.map(|p| find(std::env::split_paths(p), program));
+    let on_path = path.map(|path| find(std::env::split_paths(path), program));
     if let Some(Some(found)) = on_path {
         return InstallState::Installed {
             path: found.to_string_lossy().into_owned(),
         };
     }
-    match find(INSTALLER_DIRS.iter().map(|d| home.join(d)), program) {
+    match find(INSTALLER_DIRS.iter().map(|dir| home.join(dir)), program) {
         Some(found) => InstallState::NotOnPath {
             path: found.to_string_lossy().into_owned(),
         },
@@ -175,30 +175,32 @@ fn state(program: &str, path: Option<&OsStr>, home: &Path) -> InstallState {
 /// The first executable `program` in `dirs`.
 pub(crate) fn find(dirs: impl IntoIterator<Item = PathBuf>, program: &str) -> Option<PathBuf> {
     dirs.into_iter()
-        .filter(|d| d.is_absolute())
-        .map(|d| d.join(program))
-        .find(|p| {
-            p.metadata()
-                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        .filter(|dir| dir.is_absolute())
+        .map(|dir| dir.join(program))
+        .find(|candidate| {
+            candidate.metadata().is_ok_and(|metadata| {
+                metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+            })
         })
 }
 
 /// `PATH` as the user's interactive login shell sets it (rc files included, as in a pane),
 /// or as a plain login shell sets it when the interactive one fails.
-async fn terminal_path(cfg: &Config, timeout: Duration) -> Option<OsString> {
-    match probe(cfg, &["-i", "-l"], timeout).await {
+async fn terminal_path(config: &Config, timeout: Duration) -> Option<OsString> {
+    match probe(config, &["-i", "-l"], timeout).await {
         Some(path) => Some(path),
-        None => probe(cfg, &["-l"], timeout).await,
+        None => probe(config, &["-l"], timeout).await,
     }
 }
 
-async fn probe(cfg: &Config, flags: &[&str], timeout: Duration) -> Option<OsString> {
-    let mut cmd = tokio::process::Command::new(cfg.shell());
+async fn probe(config: &Config, flags: &[&str], timeout: Duration) -> Option<OsString> {
+    let mut command = tokio::process::Command::new(config.shell());
     // `"$PATH"` is colon-joined in fish too.
-    cmd.args(flags)
+    command
+        .args(flags)
         .args(["-c", &format!("printf '%s%s%s' '{MARK}' \"$PATH\" '{END}'")])
-        .current_dir(cfg.home())
-        .envs(cfg.pane_env.iter().map(|(k, v)| (k, v)))
+        .current_dir(config.home())
+        .envs(config.pane_env.iter().map(|(name, value)| (name, value)))
         .env("TERM", "dumb")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -208,15 +210,17 @@ async fn probe(cfg: &Config, flags: &[&str], timeout: Duration) -> Option<OsStri
     // process group to kill along with anything the rc files started.
     // SAFETY: `setsid` is async-signal-safe.
     unsafe {
-        cmd.pre_exec(|| {
+        command.pre_exec(|| {
             libc::setsid();
             Ok(())
         });
     }
-    let child = cmd.spawn().ok()?;
+    let child = command.spawn().ok()?;
     let group = child.id().and_then(|id| libc::pid_t::try_from(id).ok());
     match tokio::time::timeout(timeout, child.wait_with_output()).await {
-        Ok(out) => parse_path(&String::from_utf8_lossy(&out.ok()?.stdout)).map(OsString::from),
+        Ok(output) => {
+            parse_path(&String::from_utf8_lossy(&output.ok()?.stdout)).map(OsString::from)
+        }
         Err(_) => {
             if let Some(group) = group {
                 // SAFETY: signals only the probe's own process group.
@@ -282,8 +286,8 @@ mod tests {
 
     #[test]
     fn reads_path_between_marks_amid_noise() {
-        let out = format!("Welcome!\npath=/fake{MARK}/usr/bin:/bin{END}bye\n");
-        assert_eq!(parse_path(&out), Some("/usr/bin:/bin"));
+        let stdout = format!("Welcome!\npath=/fake{MARK}/usr/bin:/bin{END}bye\n");
+        assert_eq!(parse_path(&stdout), Some("/usr/bin:/bin"));
         assert_eq!(parse_path("no mark\n"), None);
     }
 
@@ -298,41 +302,41 @@ mod tests {
         for (name, body) in files {
             fs::write(tmp.path().join(name), body).unwrap();
         }
-        let mut cfg = Config::new(tmp.path().join("state"));
-        cfg.shell = Some(shell.into());
-        cfg.pane_env = vec![
+        let mut config = Config::new(tmp.path().join("state"));
+        config.shell = Some(shell.into());
+        config.pane_env = vec![
             ("HOME".into(), home.clone()),
             ("ZDOTDIR".into(), home),
             ("PATH".into(), "/usr/bin:/bin".into()),
         ];
-        Some((tmp, cfg))
+        Some((tmp, config))
     }
 
-    async fn claude_state(cfg: &Config) -> InstallState {
-        let path = TerminalPath::default().refresh(cfg).await;
-        check(cfg, path).swap_remove(0).state
+    async fn claude_state(config: &Config) -> InstallState {
+        let path = TerminalPath::default().refresh(config).await;
+        check(config, path).swap_remove(0).state
     }
 
     const ADD_LOCAL_BIN: &str = "export PATH=\"$HOME/.local/bin:$PATH\"\n";
 
     #[tokio::test]
     async fn finds_path_set_in_zshrc() {
-        let Some((_tmp, cfg)) = home_with("/bin/zsh", &[(".zshrc", ADD_LOCAL_BIN)]) else {
+        let Some((_tmp, config)) = home_with("/bin/zsh", &[(".zshrc", ADD_LOCAL_BIN)]) else {
             return;
         };
         assert!(matches!(
-            claude_state(&cfg).await,
+            claude_state(&config).await,
             InstallState::Installed { .. }
         ));
     }
 
     #[tokio::test]
     async fn finds_path_set_in_zprofile() {
-        let Some((_tmp, cfg)) = home_with("/bin/zsh", &[(".zprofile", ADD_LOCAL_BIN)]) else {
+        let Some((_tmp, config)) = home_with("/bin/zsh", &[(".zprofile", ADD_LOCAL_BIN)]) else {
             return;
         };
         assert!(matches!(
-            claude_state(&cfg).await,
+            claude_state(&config).await,
             InstallState::Installed { .. }
         ));
     }
@@ -343,22 +347,23 @@ mod tests {
             (".bash_profile", ". \"$HOME/.bashrc\"\n"),
             (".bashrc", ADD_LOCAL_BIN),
         ];
-        let Some((_tmp, cfg)) = home_with("/bin/bash", &files) else {
+        let Some((_tmp, config)) = home_with("/bin/bash", &files) else {
             return;
         };
         assert!(matches!(
-            claude_state(&cfg).await,
+            claude_state(&config).await,
             InstallState::Installed { .. }
         ));
     }
 
     #[tokio::test]
     async fn off_path_when_no_rc_file_adds_it() {
-        let Some((_tmp, cfg)) = home_with("/bin/zsh", &[(".zshrc", "alias ll='ls -l'\n")]) else {
+        let Some((_tmp, config)) = home_with("/bin/zsh", &[(".zshrc", "alias ll='ls -l'\n")])
+        else {
             return;
         };
         assert!(matches!(
-            claude_state(&cfg).await,
+            claude_state(&config).await,
             InstallState::NotOnPath { .. }
         ));
     }
@@ -372,11 +377,11 @@ mod tests {
             ),
             (".zlogout", "echo 'bye'\n"),
         ];
-        let Some((_tmp, cfg)) = home_with("/bin/zsh", &files) else {
+        let Some((_tmp, config)) = home_with("/bin/zsh", &files) else {
             return;
         };
         assert!(matches!(
-            claude_state(&cfg).await,
+            claude_state(&config).await,
             InstallState::Installed { .. }
         ));
     }
@@ -384,16 +389,16 @@ mod tests {
     #[tokio::test]
     async fn a_hung_rc_file_falls_back_to_the_login_shell() {
         let files = [(".zprofile", ADD_LOCAL_BIN), (".zshrc", "sleep 30\n")];
-        let Some((tmp, cfg)) = home_with("/bin/zsh", &files) else {
+        let Some((tmp, config)) = home_with("/bin/zsh", &files) else {
             return;
         };
         let started = Instant::now();
-        let path = terminal_path(&cfg, Duration::from_millis(1500))
+        let path = terminal_path(&config, Duration::from_millis(1500))
             .await
             .unwrap();
         assert!(started.elapsed() < Duration::from_secs(5));
         let local_bin = tmp.path().join(".local/bin");
-        assert!(std::env::split_paths(&path).any(|d| d == local_bin));
+        assert!(std::env::split_paths(&path).any(|dir| dir == local_bin));
     }
 
     #[tokio::test]
@@ -401,13 +406,13 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let bin = tmp.path().join("bin");
         executable(&bin, "claude");
-        let mut cfg = Config::new(tmp.path().join("state"));
-        cfg.shell = Some(tmp.path().join("no-such-shell"));
-        cfg.pane_env = vec![
+        let mut config = Config::new(tmp.path().join("state"));
+        config.shell = Some(tmp.path().join("no-such-shell"));
+        config.pane_env = vec![
             ("HOME".into(), tmp.path().to_string_lossy().into_owned()),
             ("PATH".into(), bin.to_string_lossy().into_owned()),
         ];
-        let installs = check(&cfg, TerminalPath::default().refresh(&cfg).await);
+        let installs = check(&config, TerminalPath::default().refresh(&config).await);
         assert_eq!(installs.len(), 2);
         assert_eq!(installs[0].agent, AgentKind::Claude);
         assert!(matches!(installs[0].state, InstallState::Installed { .. }));

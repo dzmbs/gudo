@@ -1,3 +1,4 @@
+//! The artifact store: drawings and images per session, versioned with an op log,
 //! content-addressed blobs, canvas panes, ink anchors, exports and "send to agent".
 //! See `docs/DAEMON.md` §7.
 //!
@@ -45,15 +46,13 @@ use crate::identity::now_millis;
 
 /// Inline answers (exports, PNG sources) stay under this size; larger ones go through blobs.
 pub(crate) const INLINE_MAX: usize = 1 << 20;
-/// Longest text element.
 const TEXT_MAX: usize = 16 << 10;
-/// Most elements per drawing.
 const ELEMENTS_MAX: usize = 20_000;
 
 type Result<T> = std::result::Result<T, ArtifactError>;
 
-fn failed(e: impl std::fmt::Display) -> ArtifactError {
-    ArtifactError::Failed(e.to_string())
+fn failed(error: impl std::fmt::Display) -> ArtifactError {
+    ArtifactError::Failed(error.to_string())
 }
 
 fn not_found(id: ArtifactId) -> ArtifactError {
@@ -112,33 +111,33 @@ impl Art {
                 ..State::default()
             }),
         };
-        if let Err(e) = art.load() {
-            tracing::warn!("loading artifacts: {e}");
+        if let Err(error) = art.load() {
+            tracing::warn!("loading artifacts: {error}");
         }
         art.gc_blobs(true);
         art
     }
 
     fn load(&self) -> io::Result<()> {
-        let mut st = lock(&self.state);
+        let mut state = lock(&self.state);
         if let Some(bytes) = read_optional(&self.dir.join("index.bin"))? {
             let index: Index = postcard::from_bytes(&bytes).map_err(io::Error::other)?;
-            st.next_id = index.next_id.max(1);
-            st.canvases = index
+            state.next_id = index.next_id.max(1);
+            state.canvases = index
                 .canvases
                 .into_iter()
                 .map(|c| (c.pane_id, c.artifact_id))
                 .collect();
-            st.next_placement = index.next_placement.max(1);
+            state.next_placement = index.next_placement.max(1);
             // Inline placements lose their rows with the terminal state.
-            st.placements = index
+            state.placements = index
                 .placements
                 .into_iter()
-                .map(|mut p| {
-                    if p.anchor.state == AnchorState::Live {
-                        p.anchor.state = AnchorState::Detached(DetachReason::DaemonRestart);
+                .map(|mut placement| {
+                    if placement.anchor.state == AnchorState::Live {
+                        placement.anchor.state = AnchorState::Detached(DetachReason::DaemonRestart);
                     }
-                    (p.placement_id, p)
+                    (placement.placement_id, placement)
                 })
                 .collect();
         }
@@ -149,37 +148,36 @@ impl Art {
             if !session.path().is_dir() || session.file_name() == "blobs" {
                 continue;
             }
-            let Ok(items) = fs::read_dir(session.path()) else {
+            let Ok(item_dirs) = fs::read_dir(session.path()) else {
                 continue;
             };
-            for item in items.flatten() {
-                match load_item(&item.path()) {
-                    Ok(Some(it)) => {
-                        st.next_id = st.next_id.max(it.info.artifact_id.0 + 1);
-                        st.total += it.log_bytes;
-                        st.items.insert(it.info.artifact_id, it);
+            for item_dir in item_dirs.flatten() {
+                match load_item(&item_dir.path()) {
+                    Ok(Some(item)) => {
+                        state.next_id = state.next_id.max(item.info.artifact_id.0 + 1);
+                        state.total += item.log_bytes;
+                        state.items.insert(item.info.artifact_id, item);
                     }
                     Ok(None) => {}
-                    Err(e) => tracing::warn!("artifact {}: {e}", item.path().display()),
+                    Err(error) => tracing::warn!("artifact {}: {error}", item_dir.path().display()),
                 }
             }
         }
-        // Canvas panes whose drawing is gone are forgotten.
         let State {
             items, canvases, ..
-        } = &mut *st;
-        canvases.retain(|_, a| items.contains_key(a));
+        } = &mut *state;
+        canvases.retain(|_, artifact| items.contains_key(artifact));
         for (pane, artifact) in canvases.iter() {
-            if let Some(it) = items.get_mut(artifact)
-                && !it.info.canvas_panes.contains(pane)
+            if let Some(item) = items.get_mut(artifact)
+                && !item.info.canvas_panes.contains(pane)
             {
-                it.info.canvas_panes.push(*pane);
+                item.info.canvas_panes.push(*pane);
             }
         }
         if let Ok(blobs) = fs::read_dir(self.dir.join("blobs")) {
-            st.total += blobs
+            state.total += blobs
                 .flatten()
-                .filter_map(|b| b.metadata().ok())
+                .filter_map(|blob| blob.metadata().ok())
                 .map(|m| m.len())
                 .sum::<u64>();
         }
@@ -197,17 +195,17 @@ impl Art {
         let result = postcard::to_stdvec(info)
             .map_err(io::Error::other)
             .and_then(|bytes| write_atomic(&path, &bytes));
-        if let Err(e) = result {
-            tracing::warn!("saving {}: {e}", path.display());
+        if let Err(error) = result {
+            tracing::warn!("saving {}: {error}", path.display());
         }
     }
 
-    fn save_index(&self, st: &State) {
+    fn save_index(&self, state: &State) {
         let index = Index {
-            next_id: st.next_id,
-            next_placement: st.next_placement,
-            placements: st.placements.values().cloned().collect(),
-            canvases: st
+            next_id: state.next_id,
+            next_placement: state.next_placement,
+            placements: state.placements.values().cloned().collect(),
+            canvases: state
                 .canvases
                 .iter()
                 .map(|(&pane_id, &artifact_id)| CanvasPane {
@@ -219,18 +217,15 @@ impl Art {
         let result = postcard::to_stdvec(&index)
             .map_err(io::Error::other)
             .and_then(|bytes| write_atomic(&self.dir.join("index.bin"), &bytes));
-        if let Err(e) = result {
-            tracing::warn!("saving artifact index: {e}");
+        if let Err(error) = result {
+            tracing::warn!("saving artifact index: {error}");
         }
     }
-
-    // --- blobs ------------------------------------------------------------------------------
 
     pub fn blob_path(&self, hash: &BlobHash) -> PathBuf {
         self.dir.join("blobs").join(hash.to_hex())
     }
 
-    /// Stores `bytes` (a PNG or JPEG) and returns its reference.
     pub fn put_blob(&self, bytes: &[u8]) -> Result<ImageRef> {
         let (media, width, height) = drawing::sniff(bytes)
             .ok_or_else(|| ArtifactError::Invalid("not a PNG or JPEG image".into()))?;
@@ -255,7 +250,7 @@ impl Art {
             let _ = fs::File::options()
                 .append(true)
                 .open(&path)
-                .and_then(|f| f.set_modified(std::time::SystemTime::now()));
+                .and_then(|file| file.set_modified(std::time::SystemTime::now()));
             return Ok(image);
         }
         self.reserve(size)?;
@@ -263,7 +258,6 @@ impl Art {
         Ok(image)
     }
 
-    /// The bytes and reference of a stored blob.
     pub fn read_blob(&self, hash: &BlobHash) -> Result<(ImageRef, Vec<u8>)> {
         let bytes = fs::read(self.blob_path(hash))
             .map_err(|_| ArtifactError::NotFound(format!("blob {}", hash.to_hex())))?;
@@ -283,14 +277,14 @@ impl Art {
 
     /// Room for `bytes` more under the store's cap.
     pub fn reserve(&self, bytes: u64) -> Result<()> {
-        let mut st = lock(&self.state);
-        if st.total + bytes > self.limits.total_max {
+        let mut state = lock(&self.state);
+        if state.total + bytes > self.limits.total_max {
             return Err(ArtifactError::TooLarge(format!(
                 "the host's artifact store is full ({} of {} bytes)",
-                st.total, self.limits.total_max
+                state.total, self.limits.total_max
             )));
         }
-        st.total += bytes;
+        state.total += bytes;
         Ok(())
     }
 
@@ -298,27 +292,28 @@ impl Art {
     /// waiting for their `Create` survive).
     fn gc_blobs(&self, all: bool) {
         let referenced: HashSet<String> = {
-            let st = lock(&self.state);
-            st.items
+            let state = lock(&self.state);
+            state
+                .items
                 .values()
-                .flat_map(|it| {
-                    let mut refs: Vec<String> = it
+                .flat_map(|item| {
+                    let mut refs: Vec<String> = item
                         .info
                         .image
                         .iter()
                         .map(|i| i.hash.to_hex())
-                        .chain(it.info.preview.iter().map(|p| p.image.hash.to_hex()))
+                        .chain(item.info.preview.iter().map(|p| p.image.hash.to_hex()))
                         .collect();
-                    if let Some(ex) = &it.ex {
+                    if let Some(ex) = &item.ex {
                         refs.extend(ex.files.values().map(|f| f.image.hash.to_hex()));
                     }
-                    for c in &it.history {
-                        refs.extend(c.blobs().map(|i| i.hash.to_hex()));
+                    for checkpoint in &item.history {
+                        refs.extend(checkpoint.blobs().map(|image| image.hash.to_hex()));
                     }
-                    for batch in &it.log {
+                    for batch in &item.log {
                         for op in &batch.ops {
-                            if let DrawOp::Add(e) = op
-                                && let ElementKind::Image { image, .. } = &e.kind
+                            if let DrawOp::Add(element) = op
+                                && let ElementKind::Image { image, .. } = &element.kind
                             {
                                 refs.push(image.hash.to_hex());
                             }
@@ -326,7 +321,12 @@ impl Art {
                     }
                     refs
                 })
-                .chain(st.placements.values().map(|p| p.image.hash.to_hex()))
+                .chain(
+                    state
+                        .placements
+                        .values()
+                        .map(|placement| placement.image.hash.to_hex()),
+                )
                 .collect()
         };
         let Ok(blobs) = fs::read_dir(self.dir.join("blobs")) else {
@@ -343,7 +343,7 @@ impl Art {
             let young = meta
                 .modified()
                 .ok()
-                .and_then(|m| m.elapsed().ok())
+                .and_then(|modified| modified.elapsed().ok())
                 .is_none_or(|age| age < grace);
             if young {
                 continue;
@@ -352,37 +352,38 @@ impl Art {
                 freed += meta.len();
             }
         }
-        let mut st = lock(&self.state);
-        st.total = st.total.saturating_sub(freed);
+        let mut state = lock(&self.state);
+        state.total = state.total.saturating_sub(freed);
     }
 
-    // --- queries ----------------------------------------------------------------------------
-
     pub fn info(&self, id: ArtifactId) -> Option<ArtifactInfo> {
-        lock(&self.state).items.get(&id).map(|it| it.info.clone())
+        lock(&self.state)
+            .items
+            .get(&id)
+            .map(|item| item.info.clone())
     }
 
     pub fn list(&self, session: SessionId) -> Vec<ArtifactInfo> {
         lock(&self.state)
             .items
             .values()
-            .filter(|it| it.info.session_id == session)
-            .map(|it| it.info.clone())
+            .filter(|item| item.info.session_id == session)
+            .map(|item| item.info.clone())
             .collect()
     }
 
     /// Batches after `since`, or every element.
     pub fn scene(&self, id: ArtifactId, since: u64) -> Result<ArtifactScene> {
-        let st = lock(&self.state);
-        let it = st.items.get(&id).ok_or_else(|| not_found(id))?;
-        let version = it.info.version;
+        let state = lock(&self.state);
+        let item = state.items.get(&id).ok_or_else(|| not_found(id))?;
+        let version = item.info.version;
         let (elements, batches) = if since > 0 && since <= version {
-            (None, it.log[since as usize..].to_vec())
+            (None, item.log[since as usize..].to_vec())
         } else {
-            (Some(it.scene.elements().to_vec()), Vec::new())
+            (Some(item.scene.elements().to_vec()), Vec::new())
         };
         Ok(ArtifactScene {
-            info: it.info.clone(),
+            info: item.info.clone(),
             elements,
             batches,
         })
@@ -390,59 +391,57 @@ impl Art {
 
     /// The scene at `version` (replayed from the log), with the artifact's info.
     pub fn scene_at(&self, id: ArtifactId, version: Option<u64>) -> Result<(ArtifactInfo, Scene)> {
-        let st = lock(&self.state);
-        let it = st.items.get(&id).ok_or_else(|| not_found(id))?;
-        if let Some(ex) = &it.ex {
+        let state = lock(&self.state);
+        let item = state.items.get(&id).ok_or_else(|| not_found(id))?;
+        if let Some(ex) = &item.ex {
             // Excalidraw keeps the latest state of each element, not its history.
-            if version.is_some_and(|v| v != it.info.version) {
+            if version.is_some_and(|v| v != item.info.version) {
                 return Err(ArtifactError::NotFound(format!(
                     "Excalidraw scenes keep only their current revision ({})",
-                    it.info.version
+                    item.info.version
                 )));
             }
-            return Ok((it.info.clone(), ex.to_scene()));
+            return Ok((item.info.clone(), ex.to_scene()));
         }
-        let version = version.unwrap_or(it.info.version);
-        if version > it.info.version {
+        let version = version.unwrap_or(item.info.version);
+        if version > item.info.version {
             return Err(ArtifactError::NotFound(format!(
                 "version {version} of artifact {id} (it is at {})",
-                it.info.version
+                item.info.version
             )));
         }
-        if version == it.info.version {
-            return Ok((it.info.clone(), it.scene.clone()));
+        if version == item.info.version {
+            return Ok((item.info.clone(), item.scene.clone()));
         }
         let mut scene = Scene::new();
-        for batch in &it.log[..version as usize] {
+        for batch in &item.log[..version as usize] {
             let _ = scene.apply(batch);
         }
-        Ok((it.info.clone(), scene))
+        Ok((item.info.clone(), scene))
     }
 
     pub fn session_count(&self, session: SessionId) -> usize {
         lock(&self.state)
             .items
             .values()
-            .filter(|it| it.info.session_id == session)
+            .filter(|item| item.info.session_id == session)
             .count()
     }
-
-    // --- changes ----------------------------------------------------------------------------
 
     /// Creates an artifact. The anchor is resolved by the caller (it needs the pane).
     pub fn create(
         &self,
         actor: Actor,
-        req: &ArtifactCreate,
+        request: &ArtifactCreate,
         anchor: Option<RowAnchor>,
     ) -> Result<(ArtifactInfo, Option<OpBatch>)> {
-        if self.session_count(req.session_id) >= self.limits.per_session {
+        if self.session_count(request.session_id) >= self.limits.per_session {
             return Err(ArtifactError::TooLarge(format!(
                 "a session holds at most {} artifacts",
                 self.limits.per_session
             )));
         }
-        let image = match (req.kind, req.image) {
+        let image = match (request.kind, request.image) {
             (ArtifactKind::Image, Some(hash)) => Some(self.read_blob(&hash)?.0),
             (ArtifactKind::Image, None) => {
                 return Err(ArtifactError::Invalid(
@@ -456,21 +455,21 @@ impl Art {
             }
             (ArtifactKind::Drawing | ArtifactKind::Excalidraw, None) => None,
         };
-        if req.kind != ArtifactKind::Drawing && !req.ops.is_empty() {
+        if request.kind != ArtifactKind::Drawing && !request.ops.is_empty() {
             return Err(ArtifactError::Invalid(
                 "only drawings take ops (Excalidraw scenes take ExcalidrawPut)".into(),
             ));
         }
         let now = UnixMillis(now_millis());
-        let mut st = lock(&self.state);
-        let id = ArtifactId(st.next_id);
-        st.next_id += 1;
+        let mut state = lock(&self.state);
+        let id = ArtifactId(state.next_id);
+        state.next_id += 1;
         let info = ArtifactInfo {
             artifact_id: id,
-            session_id: req.session_id,
-            kind: req.kind,
-            title: req.title.clone(),
-            space: req.space,
+            session_id: request.session_id,
+            kind: request.kind,
+            title: request.title.clone(),
+            space: request.space,
             created_by: actor,
             created_at: now,
             updated_at: now,
@@ -481,32 +480,32 @@ impl Art {
             anchor,
             canvas_panes: Vec::new(),
         };
-        st.items.insert(
+        state.items.insert(
             id,
             Item {
                 info: info.clone(),
                 scene: Scene::new(),
                 log: Vec::new(),
                 log_bytes: 0,
-                ex: (req.kind == ArtifactKind::Excalidraw).then(drawing::ExScene::new),
+                ex: (request.kind == ArtifactKind::Excalidraw).then(drawing::ExScene::new),
                 ex_dirty: false,
                 history: Vec::new(),
             },
         );
-        self.save_index(&st);
-        drop(st);
-        if let Err(e) = fs::create_dir_all(self.item_dir(&info)) {
-            tracing::warn!("artifact dir: {e}");
+        self.save_index(&state);
+        drop(state);
+        if let Err(error) = fs::create_dir_all(self.item_dir(&info)) {
+            tracing::warn!("artifact dir: {error}");
         }
         self.save_info(&info);
-        if req.ops.is_empty() {
+        if request.ops.is_empty() {
             return Ok((info, None));
         }
-        match self.apply(id, actor, req.ops.clone()) {
+        match self.apply(id, actor, request.ops.clone()) {
             Ok((info, batch)) => Ok((info, Some(batch))),
-            Err(e) => {
+            Err(error) => {
                 let _ = self.delete(id);
-                Err(e)
+                Err(error)
             }
         }
     }
@@ -519,15 +518,15 @@ impl Art {
         ops: Vec<DrawOp>,
     ) -> Result<(ArtifactInfo, OpBatch)> {
         validate(&ops)?;
-        let mut st = lock(&self.state);
-        let it = st.items.get_mut(&id).ok_or_else(|| not_found(id))?;
-        if it.info.kind != ArtifactKind::Drawing {
+        let mut state = lock(&self.state);
+        let item = state.items.get_mut(&id).ok_or_else(|| not_found(id))?;
+        if item.info.kind != ArtifactKind::Drawing {
             return Err(ArtifactError::Invalid(
                 "only drawings take ops (Excalidraw scenes take ExcalidrawPut)".into(),
             ));
         }
         let batch = OpBatch {
-            version: it.info.version + 1,
+            version: item.info.version + 1,
             actor,
             at: UnixMillis(now_millis()),
             ops,
@@ -540,69 +539,71 @@ impl Art {
                 self.limits.batch_max
             )));
         }
-        if it.log_bytes + encoded.len() as u64 + 4 > self.limits.log_max {
+        if item.log_bytes + encoded.len() as u64 + 4 > self.limits.log_max {
             return Err(ArtifactError::TooLarge(format!(
                 "the drawing's history would exceed {} bytes",
                 self.limits.log_max
             )));
         }
-        let mut scene = it.scene.clone();
-        scene.apply(&batch).map_err(|g| failed(format!("{g:?}")))?;
+        let mut scene = item.scene.clone();
+        scene
+            .apply(&batch)
+            .map_err(|error| failed(format!("{error:?}")))?;
         if scene.elements().len() > ELEMENTS_MAX {
             return Err(ArtifactError::TooLarge(format!(
                 "a drawing holds at most {ELEMENTS_MAX} elements"
             )));
         }
         let added = encoded.len() as u64 + 4;
-        if st.total + added > self.limits.total_max {
+        if state.total + added > self.limits.total_max {
             return Err(ArtifactError::TooLarge(
                 "the host's artifact store is full".into(),
             ));
         }
-        st.total += added;
-        let it = st.items.get_mut(&id).ok_or_else(|| not_found(id))?;
-        let dir = self.item_dir(&it.info);
+        state.total += added;
+        let item = state.items.get_mut(&id).ok_or_else(|| not_found(id))?;
+        let dir = self.item_dir(&item.info);
         let mut frame = (encoded.len() as u32).to_le_bytes().to_vec();
         frame.extend_from_slice(&encoded);
         let appended = fs::create_dir_all(&dir).and_then(|()| {
-            let mut f = fs::OpenOptions::new()
+            let mut log_file = fs::OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(dir.join("ops.log"))?;
-            f.write_all(&frame)?;
-            f.sync_data()
+            log_file.write_all(&frame)?;
+            log_file.sync_data()
         });
-        if let Err(e) = appended {
-            st.total -= added;
-            return Err(failed(format!("writing the drawing's log: {e}")));
+        if let Err(error) = appended {
+            state.total -= added;
+            return Err(failed(format!("writing the drawing's log: {error}")));
         }
-        let it = st.items.get_mut(&id).ok_or_else(|| not_found(id))?;
-        it.scene = scene;
-        it.log.push(batch.clone());
-        it.log_bytes += added;
-        it.info.version = batch.version;
-        it.info.updated_at = batch.at;
-        it.info.elements = it.scene.elements().len() as u32;
-        if let Some(title) = &it.scene.title {
-            it.info.title.clone_from(title);
+        let item = state.items.get_mut(&id).ok_or_else(|| not_found(id))?;
+        item.scene = scene;
+        item.log.push(batch.clone());
+        item.log_bytes += added;
+        item.info.version = batch.version;
+        item.info.updated_at = batch.at;
+        item.info.elements = item.scene.elements().len() as u32;
+        if let Some(title) = &item.scene.title {
+            item.info.title.clone_from(title);
         }
-        let info = it.info.clone();
-        drop(st);
+        let info = item.info.clone();
+        drop(state);
         self.save_info(&info);
         Ok((info, batch))
     }
 
-    /// Changes an artifact's info with `f` and saves it.
+    /// Changes an artifact's info with `change` and saves it.
     pub fn update(
         &self,
         id: ArtifactId,
-        f: impl FnOnce(&mut ArtifactInfo),
+        change: impl FnOnce(&mut ArtifactInfo),
     ) -> Result<ArtifactInfo> {
         let info = {
-            let mut st = lock(&self.state);
-            let it = st.items.get_mut(&id).ok_or_else(|| not_found(id))?;
-            f(&mut it.info);
-            it.info.clone()
+            let mut state = lock(&self.state);
+            let item = state.items.get_mut(&id).ok_or_else(|| not_found(id))?;
+            change(&mut item.info);
+            item.info.clone()
         };
         self.save_info(&info);
         Ok(info)
@@ -612,33 +613,30 @@ impl Art {
     /// them and tell clients.
     pub fn delete(&self, id: ArtifactId) -> Result<ArtifactInfo> {
         let info = {
-            let mut st = lock(&self.state);
-            let it = st.items.remove(&id).ok_or_else(|| not_found(id))?;
-            st.total = st.total.saturating_sub(it.log_bytes);
-            st.canvases.retain(|_, a| *a != id);
-            self.save_index(&st);
-            it.info
+            let mut state = lock(&self.state);
+            let item = state.items.remove(&id).ok_or_else(|| not_found(id))?;
+            state.total = state.total.saturating_sub(item.log_bytes);
+            state.canvases.retain(|_, artifact| *artifact != id);
+            self.save_index(&state);
+            item.info
         };
         let _ = fs::remove_dir_all(self.item_dir(&info));
         self.gc_blobs(false);
         Ok(info)
     }
 
-    /// Deletes every artifact of a closed session.
     pub fn delete_session(&self, session: SessionId) {
         let ids: Vec<ArtifactId> = lock(&self.state)
             .items
             .values()
-            .filter(|it| it.info.session_id == session)
-            .map(|it| it.info.artifact_id)
+            .filter(|item| item.info.session_id == session)
+            .map(|item| item.info.artifact_id)
             .collect();
         for id in ids {
             let _ = self.delete(id);
         }
         let _ = fs::remove_dir_all(self.dir.join(session.0.to_string()));
     }
-
-    // --- canvas panes -----------------------------------------------------------------------
 
     pub fn is_canvas(&self, pane: PaneId) -> bool {
         lock(&self.state).canvases.contains_key(&pane)
@@ -647,15 +645,15 @@ impl Art {
     /// Shows drawing `id` in canvas pane `pane`.
     pub fn add_canvas(&self, pane: PaneId, id: ArtifactId) -> Result<ArtifactInfo> {
         {
-            let mut st = lock(&self.state);
-            let it = st.items.get(&id).ok_or_else(|| not_found(id))?;
-            if it.info.kind == ArtifactKind::Image {
+            let mut state = lock(&self.state);
+            let item = state.items.get(&id).ok_or_else(|| not_found(id))?;
+            if item.info.kind == ArtifactKind::Image {
                 return Err(ArtifactError::Invalid(
                     "canvas panes show drawings and Excalidraw scenes".into(),
                 ));
             }
-            st.canvases.insert(pane, id);
-            self.save_index(&st);
+            state.canvases.insert(pane, id);
+            self.save_index(&state);
         }
         self.update(id, |info| {
             if !info.canvas_panes.contains(&pane) {
@@ -667,23 +665,25 @@ impl Art {
     /// Forgets canvas pane `pane`; returns the drawing's info if it was one.
     pub fn remove_canvas(&self, pane: PaneId) -> Option<ArtifactInfo> {
         let id = {
-            let mut st = lock(&self.state);
-            let id = st.canvases.remove(&pane)?;
-            self.save_index(&st);
+            let mut state = lock(&self.state);
+            let id = state.canvases.remove(&pane)?;
+            self.save_index(&state);
             id
         };
-        self.update(id, |info| info.canvas_panes.retain(|p| *p != pane))
+        self.update(id, |info| info.canvas_panes.retain(|shown| *shown != pane))
             .ok()
     }
 
     pub fn canvases(&self, session: SessionId) -> Vec<CanvasPane> {
-        let st = lock(&self.state);
-        st.canvases
+        let state = lock(&self.state);
+        state
+            .canvases
             .iter()
-            .filter(|(_, a)| {
-                st.items
-                    .get(a)
-                    .is_some_and(|it| it.info.session_id == session)
+            .filter(|(_, artifact)| {
+                state
+                    .items
+                    .get(artifact)
+                    .is_some_and(|item| item.info.session_id == session)
             })
             .map(|(&pane_id, &artifact_id)| CanvasPane {
                 pane_id,
@@ -692,18 +692,20 @@ impl Art {
             .collect()
     }
 
-    // --- anchors ----------------------------------------------------------------------------
-
     /// Pins a drawing's anchor on its pane's terminal.
-    pub fn resolve_anchor(core: &Core, key: ArtifactId, req: AnchorRequest) -> Result<RowAnchor> {
+    pub fn resolve_anchor(
+        core: &Core,
+        key: ArtifactId,
+        request: AnchorRequest,
+    ) -> Result<RowAnchor> {
         let entry = core
-            .pane(req.pane_id)
-            .ok_or_else(|| ArtifactError::NotFound(format!("terminal pane {}", req.pane_id)))?;
-        let (pos, command_id) = entry
+            .pane(request.pane_id)
+            .ok_or_else(|| ArtifactError::NotFound(format!("terminal pane {}", request.pane_id)))?;
+        let (position, command_id) = entry
             .pane
-            .anchor_create(key.0, req.at_seq, req.from_bottom)
+            .anchor_create(key.0, request.at_seq, request.from_bottom)
             .map_err(ArtifactError::Invalid)?;
-        Ok(row_anchor(req.pane_id, pos, command_id))
+        Ok(row_anchor(request.pane_id, position, command_id))
     }
 
     /// Refreshes every live anchor; returns the artifacts whose anchor detached.
@@ -711,25 +713,25 @@ impl Art {
         let live: Vec<(ArtifactId, RowAnchor)> = lock(&self.state)
             .items
             .values()
-            .filter_map(|it| {
-                let a = it.info.anchor?;
-                (a.state == AnchorState::Live).then_some((it.info.artifact_id, a))
+            .filter_map(|item| {
+                let anchor = item.info.anchor?;
+                (anchor.state == AnchorState::Live).then_some((item.info.artifact_id, anchor))
             })
             .collect();
         let mut detached = Vec::new();
         for (id, anchor) in live {
-            let pos = match core.pane(anchor.pane_id) {
+            let position = match core.pane(anchor.pane_id) {
                 None => Some(AnchorPos::Detached(DetachReason::PaneClosed)),
                 Some(entry) => entry
                     .pane
                     .anchor_position(id.0)
                     .or(Some(AnchorPos::Detached(DetachReason::DaemonRestart))),
             };
-            match pos {
+            match position {
                 Some(AnchorPos::Detached(reason)) => {
                     if let Ok(info) = self.update(id, |info| {
-                        if let Some(a) = info.anchor.as_mut() {
-                            a.state = AnchorState::Detached(reason);
+                        if let Some(stored) = info.anchor.as_mut() {
+                            stored.state = AnchorState::Detached(reason);
                         }
                     }) {
                         detached.push(info);
@@ -738,11 +740,15 @@ impl Art {
                 Some(live @ AnchorPos::Live { .. }) => {
                     // Fresh position for listings; not persisted, not pushed (clients track
                     // their own pins).
-                    let mut st = lock(&self.state);
-                    if let Some(a) = st.items.get_mut(&id).and_then(|it| it.info.anchor.as_mut()) {
-                        let fresh = row_anchor(anchor.pane_id, live, a.command_id);
-                        a.at_seq = fresh.at_seq;
-                        a.from_bottom = fresh.from_bottom;
+                    let mut state = lock(&self.state);
+                    if let Some(stored) = state
+                        .items
+                        .get_mut(&id)
+                        .and_then(|item| item.info.anchor.as_mut())
+                    {
+                        let fresh = row_anchor(anchor.pane_id, live, stored.command_id);
+                        stored.at_seq = fresh.at_seq;
+                        stored.from_bottom = fresh.from_bottom;
                     }
                 }
                 None => {}
@@ -761,9 +767,9 @@ pub(crate) async fn run(core: std::sync::Arc<Core>) {
         for info in core.art.check_anchors(&core) {
             core.emit_artifact(info.session_id, proto::ArtifactEvent::Info(info), None);
         }
-        for p in core.art.check_placements(&core) {
-            if let Some(session) = core.session_of_pane(p.pane_id) {
-                core.emit_artifact(session, proto::ArtifactEvent::Placed(p), None);
+        for placement in core.art.check_placements(&core) {
+            if let Some(session) = core.session_of_pane(placement.pane_id) {
+                core.emit_artifact(session, proto::ArtifactEvent::Placed(placement), None);
             }
         }
         core.art.flush();
@@ -771,9 +777,8 @@ pub(crate) async fn run(core: std::sync::Arc<Core>) {
     }
 }
 
-/// The wire anchor for a pane position.
-fn row_anchor(pane_id: PaneId, pos: AnchorPos, command_id: Option<u64>) -> RowAnchor {
-    match pos {
+fn row_anchor(pane_id: PaneId, position: AnchorPos, command_id: Option<u64>) -> RowAnchor {
+    match position {
         AnchorPos::Live {
             screen,
             at_seq,
@@ -806,22 +811,22 @@ fn load_item(dir: &Path) -> io::Result<Option<Item>> {
     let mut log = Vec::new();
     let mut log_bytes = 0;
     if let Some(data) = read_optional(&dir.join("ops.log"))? {
-        let mut pos = 0;
-        while pos + 4 <= data.len() {
-            let len =
-                u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap_or_default()) as usize;
-            let Some(body) = data.get(pos + 4..pos + 4 + len) else {
+        let mut offset = 0;
+        while offset + 4 <= data.len() {
+            let len = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap_or_default())
+                as usize;
+            let Some(body) = data.get(offset + 4..offset + 4 + len) else {
                 tracing::warn!("{}: truncated last batch dropped", dir.display());
                 break;
             };
             match postcard::from_bytes::<OpBatch>(body) {
-                Ok(b) => log.push(b),
-                Err(e) => {
-                    tracing::warn!("{}: bad batch: {e}", dir.display());
+                Ok(batch) => log.push(batch),
+                Err(error) => {
+                    tracing::warn!("{}: bad batch: {error}", dir.display());
                     break;
                 }
             }
-            pos += 4 + len;
+            offset += 4 + len;
             log_bytes += 4 + len as u64;
         }
     }
@@ -842,10 +847,10 @@ fn load_item(dir: &Path) -> io::Result<Option<Item>> {
         None
     };
     // Terminal state does not survive a restart, and neither do anchors' rows.
-    if let Some(a) = info.anchor.as_mut()
-        && a.state == AnchorState::Live
+    if let Some(anchor) = info.anchor.as_mut()
+        && anchor.state == AnchorState::Live
     {
-        a.state = AnchorState::Detached(DetachReason::DaemonRestart);
+        anchor.state = AnchorState::Detached(DetachReason::DaemonRestart);
     }
     Ok(Some(Item {
         info,
@@ -863,14 +868,15 @@ fn validate(ops: &[DrawOp]) -> Result<()> {
         return Err(ArtifactError::Invalid("no ops".into()));
     }
     for op in ops {
-        if let DrawOp::Add(e) = op {
-            if !(e.style.width.is_finite() && e.style.width >= 0.0 && e.style.width < 10_000.0) {
+        if let DrawOp::Add(element) = op {
+            let width = element.style.width;
+            if !(width.is_finite() && (0.0..10_000.0).contains(&width)) {
                 return Err(ArtifactError::Invalid("bad line width".into()));
             }
-            match &e.kind {
-                ElementKind::Stroke(s) => {
-                    drawing::unpack(&s.points)
-                        .map_err(|e| ArtifactError::Invalid(e.to_string()))?;
+            match &element.kind {
+                ElementKind::Stroke(stroke) => {
+                    drawing::unpack(&stroke.points)
+                        .map_err(|error| ArtifactError::Invalid(error.to_string()))?;
                 }
                 ElementKind::Text { text, size, .. } => {
                     if text.len() > TEXT_MAX || !size.is_finite() {
@@ -880,8 +886,8 @@ fn validate(ops: &[DrawOp]) -> Result<()> {
                 ElementKind::Shape { .. } | ElementKind::Image { .. } => {}
             }
         }
-        if let DrawOp::SetTitle(t) = op
-            && t.len() > 1024
+        if let DrawOp::SetTitle(title) = op
+            && title.len() > 1024
         {
             return Err(ArtifactError::Invalid("title too long".into()));
         }
@@ -901,11 +907,11 @@ pub(crate) fn export(
     match format {
         ExportFormat::Ascii => {
             let text = match (info.kind, info.image) {
-                (ArtifactKind::Image, Some(img)) => format!(
+                (ArtifactKind::Image, Some(image)) => format!(
                     "[image {}×{}, {}]\n",
-                    img.width,
-                    img.height,
-                    img.media.mime()
+                    image.width,
+                    image.height,
+                    image.media.mime()
                 ),
                 _ => drawing::to_ascii(&scene, info.space, 160),
             };
@@ -917,17 +923,17 @@ pub(crate) fn export(
             })
         }
         ExportFormat::Svg => {
-            let href = |img: &ImageRef| {
-                if img.size > 8 << 20 {
+            let embed_href = |image: &ImageRef| {
+                if image.size > 8 << 20 {
                     return None;
                 }
-                let bytes = fs::read(art.blob_path(&img.hash)).ok()?;
-                Some(drawing::data_uri(img.media, &bytes))
+                let bytes = fs::read(art.blob_path(&image.hash)).ok()?;
+                Some(drawing::data_uri(image.media, &bytes))
             };
             let svg = match (info.kind, info.image) {
-                (ArtifactKind::Image, Some(img)) => {
-                    let mut s = Scene::new();
-                    s.apply_ops(&[DrawOp::Add(proto::Element {
+                (ArtifactKind::Image, Some(image)) => {
+                    let mut image_scene = Scene::new();
+                    image_scene.apply_ops(&[DrawOp::Add(proto::Element {
                         id: proto::ElementId(0),
                         z: 0,
                         style: proto::Style {
@@ -935,17 +941,17 @@ pub(crate) fn export(
                             width: 0.0,
                         },
                         kind: ElementKind::Image {
-                            image: img,
+                            image,
                             from: proto::Pt { x: 0.0, y: 0.0 },
                             to: proto::Pt {
-                                x: img.width as f32,
-                                y: img.height as f32,
+                                x: image.width as f32,
+                                y: image.height as f32,
                             },
                         },
                     })]);
-                    drawing::to_svg(&s, CoordSpace::Canvas, &info.title, &href)
+                    drawing::to_svg(&image_scene, CoordSpace::Canvas, &info.title, &embed_href)
                 }
-                _ => drawing::to_svg(&scene, info.space, &info.title, &href),
+                _ => drawing::to_svg(&scene, info.space, &info.title, &embed_href),
             };
             if svg.len() > 3 << 20 {
                 return Err(ArtifactError::TooLarge("SVG over 3 MiB".into()));
@@ -959,15 +965,14 @@ pub(crate) fn export(
         }
         ExportFormat::Png => {
             let image = match (info.image, info.preview) {
-                (Some(img), _) => img,
-                (None, Some(p)) if p.version == version => p.image,
+                (Some(image), _) => image,
+                (None, Some(preview)) if preview.version == version => preview.image,
                 _ => {
-                    // No client render of this version: rasterise here.
                     let png = render_png(&scene, info.space);
                     let image = art.put_blob(&png)?;
                     if version == info.version {
-                        let _ = art.update(id, |i| {
-                            i.preview = Some(Preview { image, version });
+                        let _ = art.update(id, |info| {
+                            info.preview = Some(Preview { image, version });
                         });
                     }
                     image
@@ -999,7 +1004,7 @@ pub(crate) fn render_png(scene: &Scene, space: CoordSpace) -> Vec<u8> {
         CoordSpace::Canvas => 2.0,
         CoordSpace::Cells => 1.0,
     };
-    let img = drawing::rasterize(
+    let raster = drawing::rasterize(
         scene,
         space,
         drawing::RasterOptions {
@@ -1007,5 +1012,5 @@ pub(crate) fn render_png(scene: &Scene, space: CoordSpace) -> Vec<u8> {
             ..drawing::RasterOptions::default()
         },
     );
-    drawing::encode_png(&img)
+    drawing::encode_png(&raster)
 }

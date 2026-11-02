@@ -1,4 +1,4 @@
-//! D9: the options of a blocked agent's dialog, read off the screen, with the keys that pick
+//! The options of a blocked agent's dialog, read off the screen, with the keys that pick
 //! each one.
 //!
 //! Claude Code and Codex draw their approval dialogs as numbered menus, optionally inside a
@@ -49,16 +49,16 @@ pub(crate) fn parse_menu(screen: &str) -> Vec<MenuOption> {
     let mut current: Vec<(String, bool)> = Vec::new();
     for raw in screen.lines() {
         let line = clean(raw);
-        if let Some(c) = ITEM.captures(line) {
-            let n: usize = c["n"].parse().unwrap_or(0);
-            if n == 1 {
+        if let Some(captures) = ITEM.captures(line) {
+            let number: usize = captures["n"].parse().unwrap_or(0);
+            if number == 1 {
                 if current.len() >= 2 {
                     best = std::mem::take(&mut current);
                 }
                 current.clear();
             }
-            if n == current.len() + 1 {
-                current.push((c["label"].to_owned(), c.name("sel").is_some()));
+            if number == current.len() + 1 {
+                current.push((captures["label"].to_owned(), captures.name("sel").is_some()));
                 continue;
             }
         }
@@ -89,12 +89,12 @@ pub(crate) fn parse_menu(screen: &str) -> Vec<MenuOption> {
         .enumerate()
         .map(|(i, (mut label, selected))| {
             let keys = match HINT.captures(&label) {
-                Some(h) => {
-                    let keys = match &h["key"] {
+                Some(hint) => {
+                    let keys = match &hint["key"] {
                         "esc" => vec![0x1b],
                         key => key.as_bytes().to_vec(),
                     };
-                    let cut = h.get(0).map_or(label.len(), |m| m.start());
+                    let cut = hint.get(0).map_or(label.len(), |whole| whole.start());
                     label.truncate(cut);
                     keys
                 }
@@ -112,21 +112,21 @@ pub(crate) fn parse_menu(screen: &str) -> Vec<MenuOption> {
 
 /// What a label means.
 pub(crate) fn classify(label: &str) -> BlockedChoice {
-    let l = label.to_lowercase();
-    if l.contains("don't ask again")
-        || l.contains("do not ask again")
-        || l.starts_with("always")
-        || l.contains("for this session")
+    let lowered = label.to_lowercase();
+    if lowered.contains("don't ask again")
+        || lowered.contains("do not ask again")
+        || lowered.starts_with("always")
+        || lowered.contains("for this session")
     {
         BlockedChoice::AllowSession
     } else if ["yes", "allow", "proceed", "approve", "accept", "run"]
         .iter()
-        .any(|w| l.starts_with(w))
+        .any(|word| lowered.starts_with(word))
     {
         BlockedChoice::AllowOnce
     } else if ["no", "deny", "reject", "cancel", "decline", "don't"]
         .iter()
-        .any(|w| l.starts_with(w))
+        .any(|word| lowered.starts_with(word))
     {
         BlockedChoice::Deny
     } else {

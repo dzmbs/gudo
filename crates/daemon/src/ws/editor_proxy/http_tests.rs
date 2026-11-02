@@ -53,7 +53,7 @@ impl Body for Chunks {
             }
             this.pause = None;
         }
-        Poll::Ready(this.chunks.pop_front().map(|c| Ok(Frame::data(c))))
+        Poll::Ready(this.chunks.pop_front().map(|chunk| Ok(Frame::data(chunk))))
     }
 
     fn size_hint(&self) -> SizeHint {
@@ -63,28 +63,28 @@ impl Body for Chunks {
 }
 
 fn reply(status: StatusCode, headers: &[(&str, &str)], body: Chunks) -> Response<Chunks> {
-    let mut resp = Response::new(body);
-    *resp.status_mut() = status;
-    for (k, v) in headers {
-        resp.headers_mut().append(
-            header::HeaderName::from_bytes(k.as_bytes()).unwrap(),
-            HeaderValue::from_str(v).unwrap(),
+    let mut response = Response::new(body);
+    *response.status_mut() = status;
+    for (name, value) in headers {
+        response.headers_mut().append(
+            header::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+            HeaderValue::from_str(value).unwrap(),
         );
     }
-    resp
+    response
 }
 
 /// The fake server: what VS Code's would send, by path.
-fn serve(mut req: Request<Incoming>, hits: &AtomicUsize) -> Response<Chunks> {
+fn serve(mut request: Request<Incoming>, hits: &AtomicUsize) -> Response<Chunks> {
     hits.fetch_add(1, Ordering::SeqCst);
     let js = script();
-    let path = req.uri().path().to_owned();
+    let path = request.uri().path().to_owned();
     let immutable = [
         ("content-type", "text/javascript"),
         ("cache-control", "public, max-age=31536000"),
     ];
     match path.as_str() {
-        p if p.ends_with("/static/app.js") => {
+        path if path.ends_with("/static/app.js") => {
             reply(StatusCode::OK, &immutable, Chunks::new(&js, 7, false))
         }
         "/slow.js" => {
@@ -93,10 +93,10 @@ fn serve(mut req: Request<Incoming>, hits: &AtomicUsize) -> Response<Chunks> {
             reply(StatusCode::OK, &[("content-type", "text/javascript")], body)
         }
         "/data.json" => {
-            if req
+            if request
                 .headers()
                 .get(header::IF_NONE_MATCH)
-                .is_some_and(|v| v == "\"v1\"")
+                .is_some_and(|tag| tag == "\"v1\"")
             {
                 return reply(
                     StatusCode::NOT_MODIFIED,
@@ -116,7 +116,7 @@ fn serve(mut req: Request<Incoming>, hits: &AtomicUsize) -> Response<Chunks> {
             )
         }
         "/range.js" => {
-            let range = req.headers().contains_key(header::RANGE);
+            let range = request.headers().contains_key(header::RANGE);
             let total = format!("bytes 0-9/{}", js.len());
             let mut headers = vec![("content-type", "text/javascript")];
             let body = if range {
@@ -151,12 +151,12 @@ fn serve(mut req: Request<Incoming>, hits: &AtomicUsize) -> Response<Chunks> {
             Chunks::new(&js, 1, true),
         ),
         "/ws" => {
-            let upgraded = hyper::upgrade::on(&mut req);
+            let upgraded = hyper::upgrade::on(&mut request);
             tokio::spawn(async move {
                 let mut io = TokioIo::new(upgraded.await.unwrap());
-                let mut buf = [0; 64];
-                while let Ok(n) = io.read(&mut buf).await {
-                    if n == 0 || io.write_all(&buf[..n]).await.is_err() {
+                let mut echo = [0; 64];
+                while let Ok(len) = io.read(&mut echo).await {
+                    if len == 0 || io.write_all(&echo[..len]).await.is_err() {
                         break;
                     }
                 }
@@ -179,12 +179,12 @@ async fn upstream(hits: Arc<AtomicUsize>) -> u16 {
             let (tcp, _) = listener.accept().await.unwrap();
             let hits = Arc::clone(&hits);
             tokio::spawn(async move {
-                let svc = hyper::service::service_fn(move |req| {
+                let service = hyper::service::service_fn(move |request| {
                     let hits = Arc::clone(&hits);
-                    async move { Ok::<_, Infallible>(serve(req, &hits)) }
+                    async move { Ok::<_, Infallible>(serve(request, &hits)) }
                 });
                 let _ = hyper::server::conn::http1::Builder::new()
-                    .serve_connection(TokioIo::new(tcp), svc)
+                    .serve_connection(TokioIo::new(tcp), service)
                     .with_upgrades()
                     .await;
             });
@@ -219,9 +219,9 @@ struct Reply {
 
 impl Reply {
     fn header(&self, name: &str) -> Option<&str> {
-        self.head.lines().find_map(|l| {
-            let (k, v) = l.split_once(':')?;
-            k.eq_ignore_ascii_case(name).then(|| v.trim())
+        self.head.lines().find_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            key.eq_ignore_ascii_case(name).then(|| value.trim())
         })
     }
 
@@ -245,20 +245,23 @@ impl Reply {
 /// One request on a fresh connection (`Connection: close`), the reply de-chunked.
 async fn request(port: u16, method: &str, path: &str, headers: &[&str]) -> Reply {
     let mut tcp = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
-    let mut req =
+    let mut request_text =
         format!("{method} {path} HTTP/1.1\r\nHost: localhost:{port}\r\nConnection: close\r\n");
-    for h in headers {
-        req.push_str(h);
-        req.push_str("\r\n");
+    for header in headers {
+        request_text.push_str(header);
+        request_text.push_str("\r\n");
     }
-    req.push_str("\r\n");
-    tcp.write_all(req.as_bytes()).await.unwrap();
+    request_text.push_str("\r\n");
+    tcp.write_all(request_text.as_bytes()).await.unwrap();
     let mut raw = Vec::new();
     tokio::time::timeout(Duration::from_secs(10), tcp.read_to_end(&mut raw))
         .await
         .unwrap()
         .unwrap();
-    let split = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+    let split = raw
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .unwrap();
     let mut reply = Reply {
         head: String::from_utf8(raw[..split].to_vec()).unwrap(),
         body: raw[split + 4..].to_vec(),
@@ -272,7 +275,7 @@ async fn request(port: u16, method: &str, path: &str, headers: &[&str]) -> Reply
 /// The data of the chunks in `raw`; `complete` insists on the final empty chunk.
 fn dechunk(mut raw: &[u8], complete: bool) -> Vec<u8> {
     let mut out = Vec::new();
-    while let Some(line) = raw.windows(2).position(|w| w == b"\r\n") {
+    while let Some(line) = raw.windows(2).position(|window| window == b"\r\n") {
         let size = std::str::from_utf8(&raw[..line]).unwrap().trim();
         let size = usize::from_str_radix(size, 16).unwrap();
         if size == 0 {
@@ -295,8 +298,8 @@ fn app_js() -> String {
 /// DNS rebinding: a page whose name now resolves to 127.0.0.1 sends its own name as `Host`.
 #[tokio::test]
 async fn refuses_hosts_that_are_not_loopback() {
-    let f = fixture().await;
-    let port = f.proxy.port();
+    let fixture = fixture().await;
+    let port = fixture.proxy.port();
     let mut tcp = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
     tcp.write_all(b"GET /tiny.css HTTP/1.1\r\nHost: evil.example:80\r\nConnection: close\r\n\r\n")
         .await
@@ -308,37 +311,41 @@ async fn refuses_hosts_that_are_not_loopback() {
         "{}",
         String::from_utf8_lossy(&raw)
     );
-    let hits = f.hits.load(std::sync::atomic::Ordering::SeqCst);
+    let hits = fixture.hits.load(std::sync::atomic::Ordering::SeqCst);
     assert_eq!(hits, 0, "the editor server was never asked");
-    let r = request(port, "GET", "/tiny.css", &[]).await;
-    assert!(r.head.starts_with("HTTP/1.1 200"), "{}", r.head);
+    let reply = request(port, "GET", "/tiny.css", &[]).await;
+    assert!(reply.head.starts_with("HTTP/1.1 200"), "{}", reply.head);
 }
 
 #[tokio::test]
 async fn compresses_chunked_bodies_with_the_accepted_coding() {
-    let f = fixture().await;
-    let port = f.proxy.port();
+    let fixture = fixture().await;
+    let port = fixture.proxy.port();
     for (accept, coding) in [
         ("Accept-Encoding: gzip, deflate, br", Some("br")),
         ("Accept-Encoding: gzip", Some("gzip")),
         ("Accept-Encoding: identity", None),
     ] {
-        let r = request(port, "GET", &app_js(), &[accept]).await;
-        assert!(r.head.starts_with("HTTP/1.1 200"), "{}", r.head);
-        assert_eq!(r.header("content-encoding"), coding, "{accept}");
-        assert_eq!(r.header("vary"), Some("accept-encoding"));
-        assert_eq!(r.decoded(), script(), "{accept}");
+        let reply = request(port, "GET", &app_js(), &[accept]).await;
+        assert!(reply.head.starts_with("HTTP/1.1 200"), "{}", reply.head);
+        assert_eq!(reply.header("content-encoding"), coding, "{accept}");
+        assert_eq!(reply.header("vary"), Some("accept-encoding"));
+        assert_eq!(reply.decoded(), script(), "{accept}");
         if coding.is_some() {
-            assert!(r.header("content-length").is_none());
-            assert!(r.body.len() * 3 < script().len(), "{}", r.body.len());
+            assert!(reply.header("content-length").is_none());
+            assert!(
+                reply.body.len() * 3 < script().len(),
+                "{}",
+                reply.body.len()
+            );
         }
     }
 }
 
 #[tokio::test]
 async fn streams_instead_of_buffering() {
-    let f = fixture().await;
-    let mut tcp = TcpStream::connect(("127.0.0.1", f.proxy.port()))
+    let fixture = fixture().await;
+    let mut tcp = TcpStream::connect(("127.0.0.1", fixture.proxy.port()))
         .await
         .unwrap();
     tcp.write_all(b"GET /slow.js HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: br\r\n\r\n")
@@ -346,16 +353,19 @@ async fn streams_instead_of_buffering() {
         .unwrap();
     // The upstream holds its second half back for 1.5 s; the first half's compressed bytes
     // must arrive well before that (flushed once the upstream goes quiet).
-    let mut got = Vec::new();
+    let mut received = Vec::new();
     let deadline = tokio::time::Instant::now() + Duration::from_millis(700);
-    let mut buf = [0; 65536];
-    while let Ok(Ok(n)) = tokio::time::timeout_at(deadline, tcp.read(&mut buf)).await
-        && n > 0
+    let mut chunk = [0; 65536];
+    while let Ok(Ok(len)) = tokio::time::timeout_at(deadline, tcp.read(&mut chunk)).await
+        && len > 0
     {
-        got.extend_from_slice(&buf[..n]);
+        received.extend_from_slice(&chunk[..len]);
     }
-    let split = got.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
-    let body = dechunk(&got[split + 4..], false);
+    let split = received
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .unwrap();
+    let body = dechunk(&received[split + 4..], false);
     let mut plain = Vec::new();
     // The stream is not finished: decode what there is.
     let _ = brotli::Decompressor::new(&body[..], 4096).read_to_end(&mut plain);
@@ -369,23 +379,23 @@ async fn streams_instead_of_buffering() {
 
 #[tokio::test]
 async fn caches_versioned_static_assets_but_still_asks_the_server() {
-    let f = fixture().await;
-    let port = f.proxy.port();
+    let fixture = fixture().await;
+    let port = fixture.proxy.port();
     let first = request(port, "GET", &app_js(), &["Accept-Encoding: br"]).await;
     assert_eq!(first.header("content-encoding"), Some("br"));
     assert!(first.header("content-length").is_none(), "streamed");
     assert_eq!(first.decoded(), script());
 
     // Stored in the background, then rewritten at the best level.
-    let dir = f.cache_dir.path().join(format!("stable-{COMMIT}"));
+    let dir = fixture.cache_dir.path().join(format!("stable-{COMMIT}"));
     let best = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let found = std::fs::read_dir(&dir)
                 .into_iter()
                 .flatten()
                 .flatten()
-                .map(|e| e.path())
-                .find(|p| p.extension().is_some_and(|x| x == "br"));
+                .map(|entry| entry.path())
+                .find(|path| path.extension().is_some_and(|ext| ext == "br"));
             if let Some(path) = found {
                 return path;
             }
@@ -405,15 +415,15 @@ async fn caches_versioned_static_assets_but_still_asks_the_server() {
     assert_eq!(second.body.len() as u64, len);
     assert_eq!(second.decoded(), script());
     assert_eq!(
-        f.hits.load(Ordering::SeqCst),
+        fixture.hits.load(Ordering::SeqCst),
         2,
         "the server is asked every time"
     );
 
     // gzip has its own entry; identity is never cached.
-    let gz = request(port, "GET", &app_js(), &["Accept-Encoding: gzip"]).await;
-    assert_eq!(gz.header("content-encoding"), Some("gzip"));
-    assert_eq!(gz.decoded(), script());
+    let gzip = request(port, "GET", &app_js(), &["Accept-Encoding: gzip"]).await;
+    assert_eq!(gzip.header("content-encoding"), Some("gzip"));
+    assert_eq!(gzip.decoded(), script());
     let plain = request(port, "GET", &app_js(), &[]).await;
     assert!(plain.header("content-encoding").is_none());
     assert_eq!(plain.body, script());
@@ -421,73 +431,77 @@ async fn caches_versioned_static_assets_but_still_asks_the_server() {
 
 #[tokio::test]
 async fn ranges_encoded_tiny_and_binary_bodies_pass_untouched() {
-    let f = fixture().await;
-    let port = f.proxy.port();
+    let fixture = fixture().await;
+    let port = fixture.proxy.port();
     let br = "Accept-Encoding: br, gzip";
-    let r = request(port, "GET", "/range.js", &[br, "Range: bytes=0-9"]).await;
-    assert!(r.head.starts_with("HTTP/1.1 206"), "{}", r.head);
-    assert!(r.header("content-encoding").is_none());
-    assert!(r.header("content-range").is_some());
-    assert_eq!(r.body, &script()[..10]);
+    let reply = request(port, "GET", "/range.js", &[br, "Range: bytes=0-9"]).await;
+    assert!(reply.head.starts_with("HTTP/1.1 206"), "{}", reply.head);
+    assert!(reply.header("content-encoding").is_none());
+    assert!(reply.header("content-range").is_some());
+    assert_eq!(reply.body, &script()[..10]);
 
-    let r = request(port, "GET", "/pre.js", &[br]).await;
-    assert_eq!(r.header("content-encoding"), Some("gzip"));
-    assert_eq!(r.body, b"\x1f\x8b already gzip");
+    let reply = request(port, "GET", "/pre.js", &[br]).await;
+    assert_eq!(reply.header("content-encoding"), Some("gzip"));
+    assert_eq!(reply.body, b"\x1f\x8b already gzip");
 
-    let r = request(port, "GET", "/tiny.css", &[br]).await;
-    assert!(r.header("content-encoding").is_none());
-    assert_eq!(r.header("content-length"), Some("11"));
+    let reply = request(port, "GET", "/tiny.css", &[br]).await;
+    assert!(reply.header("content-encoding").is_none());
+    assert_eq!(reply.header("content-length"), Some("11"));
 
-    let r = request(port, "GET", "/logo.png", &[br]).await;
-    assert!(r.header("content-encoding").is_none());
-    assert!(r.header("vary").is_none());
-    assert_eq!(r.body, script());
+    let reply = request(port, "GET", "/logo.png", &[br]).await;
+    assert!(reply.header("content-encoding").is_none());
+    assert!(reply.header("vary").is_none());
+    assert_eq!(reply.body, script());
 }
 
 #[tokio::test]
 async fn head_reports_what_get_would_send() {
-    let f = fixture().await;
-    let port = f.proxy.port();
-    let r = request(port, "HEAD", "/data.json", &["Accept-Encoding: br"]).await;
-    assert!(r.head.starts_with("HTTP/1.1 200"), "{}", r.head);
-    assert_eq!(r.header("content-encoding"), Some("br"));
-    assert!(r.header("content-length").is_none(), "{}", r.head);
-    assert!(r.header("transfer-encoding").is_none(), "{}", r.head);
-    assert!(r.body.is_empty());
-    let r = request(port, "HEAD", "/data.json", &[]).await;
-    assert!(r.header("content-encoding").is_none());
-    assert!(r.header("content-length").is_some(), "{}", r.head);
-    assert!(r.body.is_empty());
+    let fixture = fixture().await;
+    let port = fixture.proxy.port();
+    let reply = request(port, "HEAD", "/data.json", &["Accept-Encoding: br"]).await;
+    assert!(reply.head.starts_with("HTTP/1.1 200"), "{}", reply.head);
+    assert_eq!(reply.header("content-encoding"), Some("br"));
+    assert!(reply.header("content-length").is_none(), "{}", reply.head);
+    assert!(
+        reply.header("transfer-encoding").is_none(),
+        "{}",
+        reply.head
+    );
+    assert!(reply.body.is_empty());
+    let reply = request(port, "HEAD", "/data.json", &[]).await;
+    assert!(reply.header("content-encoding").is_none());
+    assert!(reply.header("content-length").is_some(), "{}", reply.head);
+    assert!(reply.body.is_empty());
 }
 
 #[tokio::test]
 async fn etags_are_weakened_and_revalidate() {
-    let f = fixture().await;
-    let port = f.proxy.port();
-    let r = request(port, "GET", "/data.json", &["Accept-Encoding: br"]).await;
-    assert_eq!(r.header("etag"), Some("W/\"v1;unz\""));
-    let r = request(port, "GET", "/data.json", &[]).await;
+    let fixture = fixture().await;
+    let port = fixture.proxy.port();
+    let reply = request(port, "GET", "/data.json", &["Accept-Encoding: br"]).await;
+    assert_eq!(reply.header("etag"), Some("W/\"v1;unz\""));
+    let reply = request(port, "GET", "/data.json", &[]).await;
     assert_eq!(
-        r.header("etag"),
+        reply.header("etag"),
         Some("\"v1\""),
         "identity keeps the strong tag"
     );
 
-    let r = request(
+    let reply = request(
         port,
         "GET",
         "/data.json",
         &["Accept-Encoding: br", "If-None-Match: W/\"v1;unz\""],
     )
     .await;
-    assert!(r.head.starts_with("HTTP/1.1 304"), "{}", r.head);
-    assert_eq!(r.header("etag"), Some("W/\"v1;unz\""));
+    assert!(reply.head.starts_with("HTTP/1.1 304"), "{}", reply.head);
+    assert_eq!(reply.header("etag"), Some("W/\"v1;unz\""));
 }
 
 #[tokio::test]
 async fn websocket_upgrades_pass_through() {
-    let f = fixture().await;
-    let mut tcp = TcpStream::connect(("127.0.0.1", f.proxy.port()))
+    let fixture = fixture().await;
+    let mut tcp = TcpStream::connect(("127.0.0.1", fixture.proxy.port()))
         .await
         .unwrap();
     tcp.write_all(
@@ -499,9 +513,9 @@ async fn websocket_upgrades_pass_through() {
     .unwrap();
     let mut head = Vec::new();
     while !head.ends_with(b"\r\n\r\n") {
-        let mut b = [0; 1];
-        tcp.read_exact(&mut b).await.unwrap();
-        head.push(b[0]);
+        let mut byte = [0; 1];
+        tcp.read_exact(&mut byte).await.unwrap();
+        head.push(byte[0]);
     }
     let head = String::from_utf8(head).unwrap();
     assert!(head.starts_with("HTTP/1.1 101"), "{head}");
@@ -509,21 +523,21 @@ async fn websocket_upgrades_pass_through() {
         head.to_ascii_lowercase().contains("upgrade: websocket"),
         "{head}"
     );
-    for msg in [&b"ping"[..], b"\x81\x05hello", &[0u8; 300][..]] {
-        tcp.write_all(msg).await.unwrap();
-        let mut back = vec![0; msg.len()];
+    for message in [&b"ping"[..], b"\x81\x05hello", &[0u8; 300][..]] {
+        tcp.write_all(message).await.unwrap();
+        let mut back = vec![0; message.len()];
         tokio::time::timeout(Duration::from_secs(5), tcp.read_exact(&mut back))
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(back, msg);
+        assert_eq!(back, message);
     }
 }
 
 #[tokio::test]
 async fn keeps_connections_alive_across_requests() {
-    let f = fixture().await;
-    let mut tcp = TcpStream::connect(("127.0.0.1", f.proxy.port()))
+    let fixture = fixture().await;
+    let mut tcp = TcpStream::connect(("127.0.0.1", fixture.proxy.port()))
         .await
         .unwrap();
     // Two requests on one connection, the second after a compressed one.

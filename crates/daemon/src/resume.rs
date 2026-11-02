@@ -30,15 +30,14 @@ impl InputStreams {
     /// run of the daemon, else a new one.
     pub fn stream(&self, epoch: SessionEpoch, token: Option<&ResumeToken>) -> u64 {
         token
-            .and_then(|t| {
-                let (run, stream) = t.0.split_at_checked(8)?;
+            .and_then(|token| {
+                let (run, stream) = token.0.split_at_checked(8)?;
                 (run == epoch.0.to_le_bytes() && stream.len() == 8)
                     .then(|| u64::from_le_bytes(stream.try_into().expect("8 bytes")))
             })
             .unwrap_or_else(|| u64::from_le_bytes(crate::fsutil::random::<8>()))
     }
 
-    /// The token naming `stream` in this run.
     pub fn token(epoch: SessionEpoch, stream: u64) -> ResumeToken {
         let mut bytes = epoch.0.to_le_bytes().to_vec();
         bytes.extend_from_slice(&stream.to_le_bytes());
@@ -63,7 +62,7 @@ impl InputStreams {
                 && let Some(oldest) = applied
                     .iter()
                     .min_by_key(|(_, (_, used))| *used)
-                    .map(|(k, _)| *k)
+                    .map(|(key, _)| *key)
             {
                 applied.remove(&oldest);
             }
@@ -82,17 +81,16 @@ mod tests {
     #[test]
     fn a_token_from_this_run_continues_its_stream() {
         let streams = InputStreams::default();
-        let s = streams.stream(EPOCH, None);
-        let token = InputStreams::token(EPOCH, s);
-        assert_eq!(streams.stream(EPOCH, Some(&token)), s);
+        let stream = streams.stream(EPOCH, None);
+        let token = InputStreams::token(EPOCH, stream);
+        assert_eq!(streams.stream(EPOCH, Some(&token)), stream);
         assert_ne!(
             streams.stream(SessionEpoch(8), Some(&token)),
-            s,
+            stream,
             "another run starts afresh"
         );
-        // A token from a daemon before this change: the epoch alone.
-        let old = ResumeToken(EPOCH.0.to_le_bytes().to_vec());
-        assert_ne!(streams.stream(EPOCH, Some(&old)), s);
+        let epoch_only = ResumeToken(EPOCH.0.to_le_bytes().to_vec());
+        assert_ne!(streams.stream(EPOCH, Some(&epoch_only)), stream);
     }
 
     #[test]
@@ -110,8 +108,8 @@ mod tests {
     #[test]
     fn streams_are_bounded() {
         let streams = InputStreams::default();
-        for s in 0..(MAX_STREAMS as u64 + 100) {
-            streams.admit(DeviceId([3; 32]), s, 1);
+        for stream in 0..(MAX_STREAMS as u64 + 100) {
+            streams.admit(DeviceId([3; 32]), stream, 1);
         }
         assert!(lock(&streams.applied).len() <= MAX_STREAMS);
     }

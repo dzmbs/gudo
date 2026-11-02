@@ -1,4 +1,4 @@
-//! D5: completion candidates for a command line.
+//! Completion candidates for a command line.
 //!
 //! The line is split into shell words (quotes, backslashes and the operators `; | & ( ) < >`
 //! understood), and the word under the cursor is completed from, in order:
@@ -134,43 +134,46 @@ struct Word {
 
 /// Splits `chars` into words.
 fn words(chars: &[char]) -> (Vec<Word>, bool, usize) {
-    let mut out: Vec<Word> = Vec::new();
-    let mut cur: Option<Word> = None;
+    let mut parsed: Vec<Word> = Vec::new();
+    let mut current_word: Option<Word> = None;
     let mut quote: Option<char> = None;
     let mut escaped = false;
     let mut expect_command = true;
     let mut segment = 0;
-    let finish = |cur: &mut Option<Word>, out: &mut Vec<Word>, expect: &mut bool| {
-        if let Some(w) = cur.take() {
-            let assignment = w.command
-                && w.text.contains('=')
-                && w.text.split('=').next().is_some_and(|n| {
-                    !n.is_empty() && n.chars().all(|c| c.is_alphanumeric() || c == '_')
+    let finish = |current_word: &mut Option<Word>, parsed: &mut Vec<Word>, expect: &mut bool| {
+        if let Some(word) = current_word.take() {
+            let assignment = word.command
+                && word.text.contains('=')
+                && word.text.split('=').next().is_some_and(|name| {
+                    !name.is_empty()
+                        && name
+                            .chars()
+                            .all(|character| character.is_alphanumeric() || character == '_')
                 });
-            *expect = assignment || (w.command && PREFIX_COMMANDS.contains(&w.text.as_str()));
-            out.push(w);
+            *expect = assignment || (word.command && PREFIX_COMMANDS.contains(&word.text.as_str()));
+            parsed.push(word);
         }
     };
-    for (i, &c) in chars.iter().enumerate() {
+    for (i, &character) in chars.iter().enumerate() {
         if escaped {
             escaped = false;
-            if let Some(w) = cur.as_mut() {
-                w.text.push(c);
-                w.end = i + 1;
+            if let Some(word) = current_word.as_mut() {
+                word.text.push(character);
+                word.end = i + 1;
             }
             continue;
         }
-        if quote.is_none() && (c.is_whitespace() || ";|&()<>".contains(c)) {
-            finish(&mut cur, &mut out, &mut expect_command);
-            if ";|&(\n".contains(c) {
+        if quote.is_none() && (character.is_whitespace() || ";|&()<>".contains(character)) {
+            finish(&mut current_word, &mut parsed, &mut expect_command);
+            if ";|&(\n".contains(character) {
                 expect_command = true;
                 segment += 1;
-            } else if "<>".contains(c) {
+            } else if "<>".contains(character) {
                 expect_command = false;
             }
             continue;
         }
-        let w = cur.get_or_insert_with(|| Word {
+        let word = current_word.get_or_insert_with(|| Word {
             start: i,
             end: i,
             text: String::new(),
@@ -178,26 +181,26 @@ fn words(chars: &[char]) -> (Vec<Word>, bool, usize) {
             command: expect_command,
             segment,
         });
-        w.end = i + 1;
-        match (quote, c) {
+        word.end = i + 1;
+        match (quote, character) {
             (None, '\\') => escaped = true,
             (Some('"'), '\\') => escaped = true,
-            (None, '\'' | '"') => quote = Some(c),
-            (Some(q), c) if c == q => quote = None,
-            _ => w.text.push(c),
+            (None, '\'' | '"') => quote = Some(character),
+            (Some(open_quote), character) if character == open_quote => quote = None,
+            _ => word.text.push(character),
         }
-        w.open = quote;
+        word.open = quote;
     }
-    if escaped && let Some(w) = cur.as_mut() {
-        w.text.push('\\');
+    if escaped && let Some(word) = current_word.as_mut() {
+        word.text.push('\\');
     }
-    finish(&mut cur, &mut out, &mut expect_command);
-    (out, expect_command, segment)
+    finish(&mut current_word, &mut parsed, &mut expect_command);
+    (parsed, expect_command, segment)
 }
 
 /// Completes `line` at `cursor` (in chars).
 pub(crate) fn complete(
-    ctx: &Context<'_>,
+    context: &Context<'_>,
     caches: &Caches,
     line: &str,
     cursor: usize,
@@ -209,7 +212,7 @@ pub(crate) fn complete(
     // The word under the cursor, as typed up to the cursor.
     let (head, expect, segment) = words(&chars[..cursor]);
     let current = match head.last() {
-        Some(w) if w.end == cursor => w.clone(),
+        Some(word) if word.end == cursor => word.clone(),
         _ => Word {
             start: cursor,
             end: cursor,
@@ -221,11 +224,11 @@ pub(crate) fn complete(
     };
     let end = all
         .iter()
-        .find(|w| w.start == current.start)
-        .map_or(cursor, |w| w.end.max(cursor));
+        .find(|word| word.start == current.start)
+        .map_or(cursor, |word| word.end.max(cursor));
     let before: Vec<&Word> = head
         .iter()
-        .filter(|w| w.segment == current.segment && w.start < current.start)
+        .filter(|word| word.segment == current.segment && word.start < current.start)
         .collect();
     let mut items = Vec::new();
 
@@ -233,8 +236,11 @@ pub(crate) fn complete(
     let trimmed = line.trim_start();
     if cursor == chars.len() && !trimmed.trim().is_empty() {
         let offset = chars.len() - trimmed.chars().count();
-        let hits = ctx.history.query(&HistoryQuery {
-            cwd: ctx.cwd.as_ref().map(|c| c.to_string_lossy().into_owned()),
+        let hits = context.history.query(&HistoryQuery {
+            cwd: context
+                .cwd
+                .as_ref()
+                .map(|cwd| cwd.to_string_lossy().into_owned()),
             prefix: Some(trimmed.to_owned()),
             contains: None,
             since: None,
@@ -242,13 +248,13 @@ pub(crate) fn complete(
         });
         items.extend(
             hits.into_iter()
-                .filter(|h| h.command != trimmed)
+                .filter(|hit| hit.command != trimmed)
                 .take(HISTORY_ITEMS)
-                .map(|h| Completion {
-                    display: h.command.clone(),
-                    text: h.command,
+                .map(|hit| Completion {
+                    display: hit.command.clone(),
+                    text: hit.command,
                     kind: CompletionKind::History,
-                    detail: h.cwd,
+                    detail: hit.cwd,
                     start: offset as u32,
                     end: chars.len() as u32,
                 }),
@@ -263,46 +269,48 @@ pub(crate) fn complete(
         start: current.start as u32,
         end: end as u32,
     };
-    let quote = |s: &str| quote_for(current.open, s);
+    let quote = |text: &str| quote_for(current.open, text);
 
     // 2. git.
-    let git_cmd = before.first().filter(|w| w.text == "git" && w.command);
+    let git_cmd = before
+        .first()
+        .filter(|word| word.text == "git" && word.command);
     if git_cmd.is_some() && !current.text.starts_with('-') {
-        let sub = before.get(1).map(|w| w.text.as_str());
-        match sub {
+        let subcommand = before.get(1).map(|word| word.text.as_str());
+        match subcommand {
             None => items.extend(
                 GIT_SUBCOMMANDS
                     .iter()
-                    .filter(|s| s.starts_with(current.text.as_str()))
-                    .map(|s| {
+                    .filter(|text| text.starts_with(current.text.as_str()))
+                    .map(|text| {
                         replace(
-                            (*s).to_owned(),
-                            (*s).to_owned(),
+                            (*text).to_owned(),
+                            (*text).to_owned(),
                             CompletionKind::Command,
                             None,
                         )
                     }),
             ),
-            Some(sub) if started.elapsed() < GIT_BUDGET => {
-                if let Some(info) = ctx.cwd.as_deref().and_then(|cwd| caches.git(cwd)) {
-                    if GIT_REF_COMMANDS.contains(&sub) {
+            Some(subcommand) if started.elapsed() < GIT_BUDGET => {
+                if let Some(info) = context.cwd.as_deref().and_then(|cwd| caches.git(cwd)) {
+                    if GIT_REF_COMMANDS.contains(&subcommand) {
                         items.extend(
                             info.refs
                                 .iter()
-                                .filter(|(r, _)| r.starts_with(current.text.as_str()))
-                                .map(|(r, kind)| {
+                                .filter(|(ref_name, _)| ref_name.starts_with(current.text.as_str()))
+                                .map(|(ref_name, kind)| {
                                     replace(
-                                        quote(r),
-                                        r.clone(),
+                                        quote(ref_name),
+                                        ref_name.clone(),
                                         CompletionKind::GitRef,
                                         Some((*kind).to_owned()),
                                     )
                                 }),
                         );
                     }
-                    if GIT_PATH_COMMANDS.contains(&sub) {
+                    if GIT_PATH_COMMANDS.contains(&subcommand) {
                         for (path, status) in &info.changed {
-                            let shown = match &ctx.cwd {
+                            let shown = match &context.cwd {
                                 Some(cwd) => relative(&info.top.join(path), cwd),
                                 None => path.clone(),
                             };
@@ -327,52 +335,54 @@ pub(crate) fn complete(
     if current.command
         && !pathlike
         && !current.text.is_empty()
-        && let Some(path_var) = &ctx.path_var
+        && let Some(path_var) = &context.path_var
     {
         let names = caches.executables(path_var);
-        let start = names.partition_point(|n| n.as_str() < current.text.as_str());
+        let start = names.partition_point(|name| name.as_str() < current.text.as_str());
         items.extend(
             names[start..]
                 .iter()
-                .take_while(|n| n.starts_with(current.text.as_str()))
-                .take(ctx.limit)
-                .map(|n| replace(quote(n), n.clone(), CompletionKind::Command, None)),
+                .take_while(|name| name.starts_with(current.text.as_str()))
+                .take(context.limit)
+                .map(|name| replace(quote(name), name.clone(), CompletionKind::Command, None)),
         );
     }
 
     // 4. Paths.
     if (!current.command || pathlike) && !current.text.starts_with('-') {
-        items.extend(paths(ctx, &chars, &current, end));
+        items.extend(paths(context, &chars, &current, end));
     }
 
     let mut seen = std::collections::HashSet::new();
-    items.retain(|c| seen.insert((c.text.clone(), c.start, c.end)));
-    items.truncate(ctx.limit);
+    items.retain(|completion| {
+        seen.insert((completion.text.clone(), completion.start, completion.end))
+    });
+    items.truncate(context.limit);
     items
 }
 
 /// `path` relative to `base` when inside it, else absolute.
 fn relative(path: &Path, base: &Path) -> String {
     path.strip_prefix(base)
-        .map(|p| p.to_string_lossy().into_owned())
+        .map(|relative_path| relative_path.to_string_lossy().into_owned())
         .unwrap_or_else(|_| path.to_string_lossy().into_owned())
 }
 
 /// File and directory candidates for `word`.
-fn paths(ctx: &Context<'_>, chars: &[char], word: &Word, end: usize) -> Vec<Completion> {
+fn paths(context: &Context<'_>, chars: &[char], word: &Word, end: usize) -> Vec<Completion> {
     let typed = &word.text;
     let (dir_part, base) = match typed.rfind('/') {
         Some(i) => (&typed[..=i], &typed[i + 1..]),
         None => ("", typed.as_str()),
     };
     let dir = if let Some(rest) = dir_part.strip_prefix("~/") {
-        ctx.home.join(rest)
+        context.home.join(rest)
     } else if dir_part == "~" || typed == "~" {
-        ctx.home.clone()
+        context.home.clone()
     } else if dir_part.starts_with('/') {
         PathBuf::from(dir_part)
     } else {
-        match &ctx.cwd {
+        match &context.cwd {
             Some(cwd) => cwd.join(dir_part),
             None => return Vec::new(),
         }
@@ -403,33 +413,32 @@ fn paths(ctx: &Context<'_>, chars: &[char], word: &Word, end: usize) -> Vec<Comp
     let mut found: Vec<(String, bool)> = entries
         .take(MAX_DIR_ENTRIES)
         .filter_map(Result::ok)
-        .filter_map(|e| {
-            let name = e.file_name().to_string_lossy().into_owned();
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
             if name.starts_with('.') && !hidden {
                 return None;
             }
-            let is_dir = e
-                .file_type()
-                .ok()
-                .is_some_and(|t| t.is_dir() || (t.is_symlink() && e.path().is_dir()));
+            let is_dir = entry.file_type().ok().is_some_and(|file_type| {
+                file_type.is_dir() || (file_type.is_symlink() && entry.path().is_dir())
+            });
             Some((name, is_dir))
         })
         .collect();
     let exact: Vec<(String, bool)> = found
         .iter()
-        .filter(|(n, _)| n.starts_with(base))
+        .filter(|(name, _)| name.starts_with(base))
         .cloned()
         .collect();
     if exact.is_empty() {
         let lower = base.to_lowercase();
-        found.retain(|(n, _)| n.to_lowercase().starts_with(&lower));
+        found.retain(|(name, _)| name.to_lowercase().starts_with(&lower));
     } else {
         found = exact;
     }
     found.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     found
         .into_iter()
-        .take(ctx.limit)
+        .take(context.limit)
         .map(|(name, is_dir)| {
             let mut text = format!("{raw_dir}{}", quote_for(word.open, &name));
             if is_dir {
@@ -452,28 +461,28 @@ fn paths(ctx: &Context<'_>, chars: &[char], word: &Word, end: usize) -> Vec<Comp
 }
 
 /// Quotes `s` for insertion inside an open `'` or `"`, or with backslashes outside quotes.
-fn quote_for(open: Option<char>, s: &str) -> String {
+fn quote_for(open: Option<char>, text: &str) -> String {
     match open {
-        Some('\'') => s.replace('\'', r"'\''"),
+        Some('\'') => text.replace('\'', r"'\''"),
         Some('"') => {
-            let mut out = String::with_capacity(s.len());
-            for c in s.chars() {
-                if "\"\\$`".contains(c) {
-                    out.push('\\');
+            let mut quoted = String::with_capacity(text.len());
+            for character in text.chars() {
+                if "\"\\$`".contains(character) {
+                    quoted.push('\\');
                 }
-                out.push(c);
+                quoted.push(character);
             }
-            out
+            quoted
         }
         _ => {
-            let mut out = String::with_capacity(s.len());
-            for c in s.chars() {
-                if c.is_whitespace() || "'\"\\$`!&|;()<>*?[]{}#~".contains(c) {
-                    out.push('\\');
+            let mut quoted = String::with_capacity(text.len());
+            for character in text.chars() {
+                if character.is_whitespace() || "'\"\\$`!&|;()<>*?[]{}#~".contains(character) {
+                    quoted.push('\\');
                 }
-                out.push(c);
+                quoted.push(character);
             }
-            out
+            quoted
         }
     }
 }
@@ -489,13 +498,13 @@ impl Caches {
         let mut names: Vec<String> = std::env::split_paths(path_var)
             .filter_map(|dir| std::fs::read_dir(dir).ok())
             .flat_map(|entries| entries.take(MAX_DIR_ENTRIES).filter_map(Result::ok))
-            .filter(|e| {
+            .filter(|entry| {
                 use std::os::unix::fs::PermissionsExt;
-                e.path()
-                    .metadata()
-                    .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+                entry.path().metadata().is_ok_and(|metadata| {
+                    metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+                })
             })
-            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
             .collect();
         names.sort_unstable();
         names.dedup();
@@ -511,7 +520,7 @@ impl Caches {
     fn git(&self, cwd: &Path) -> Option<std::sync::Arc<GitInfo>> {
         let top = cwd
             .ancestors()
-            .find(|d| d.join(".git").exists())?
+            .find(|dir| dir.join(".git").exists())?
             .to_owned();
         if let Some((at, info)) = lock(&self.git).get(&top)
             && at.elapsed() < GIT_TTL
@@ -522,7 +531,7 @@ impl Caches {
             top: top.clone(),
             ..GitInfo::default()
         };
-        if let Ok(out) = crate::ws::git::git(
+        if let Ok(output) = crate::ws::git::git(
             &top,
             &[
                 "for-each-ref",
@@ -532,34 +541,34 @@ impl Caches {
                 "refs/remotes",
             ],
         ) {
-            let text = String::from_utf8_lossy(&out);
+            let text = String::from_utf8_lossy(&output);
             for full in text.lines() {
-                let (name, kind) = if let Some(n) = full.strip_prefix("refs/heads/") {
-                    (n, "branch")
-                } else if let Some(n) = full.strip_prefix("refs/tags/") {
-                    (n, "tag")
-                } else if let Some(n) = full.strip_prefix("refs/remotes/") {
-                    if n.ends_with("/HEAD") {
+                let (name, kind) = if let Some(name) = full.strip_prefix("refs/heads/") {
+                    (name, "branch")
+                } else if let Some(name) = full.strip_prefix("refs/tags/") {
+                    (name, "tag")
+                } else if let Some(name) = full.strip_prefix("refs/remotes/") {
+                    if name.ends_with("/HEAD") {
                         continue;
                     }
-                    (n, "remote")
+                    (name, "remote")
                 } else {
                     continue;
                 };
                 info.refs.push((name.to_owned(), kind));
             }
-            let rank = |k: &str| match k {
+            let rank = |kind: &str| match kind {
                 "branch" => 0,
                 "tag" => 1,
                 _ => 2,
             };
-            info.refs.sort_by_key(|(_, k)| rank(k));
+            info.refs.sort_by_key(|(_, kind)| rank(kind));
         }
-        if let Ok(out) = crate::ws::git::git(
+        if let Ok(output) = crate::ws::git::git(
             &top,
             &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
         ) {
-            let mut fields = out.split(|&b| b == 0);
+            let mut fields = output.split(|&byte| byte == 0);
             while let Some(entry) = fields.next() {
                 if entry.len() < 4 {
                     continue;
@@ -586,8 +595,11 @@ mod tests {
     #[test]
     fn words_understand_quotes_and_operators() {
         let chars: Vec<char> = r#"FOO=1 sudo ls 'a b' "c\"d" | grep x\ y; cd"#.chars().collect();
-        let (w, expect, _) = words(&chars);
-        let texts: Vec<_> = w.iter().map(|w| (w.text.as_str(), w.command)).collect();
+        let (parsed, expect, _) = words(&chars);
+        let texts: Vec<_> = parsed
+            .iter()
+            .map(|word| (word.text.as_str(), word.command))
+            .collect();
         assert_eq!(
             texts,
             vec![
@@ -602,12 +614,12 @@ mod tests {
             ]
         );
         assert!(!expect);
-        let (w, _, _) = words(&"echo 'unterminated".chars().collect::<Vec<_>>());
-        assert_eq!(w[1].open, Some('\''));
-        assert_eq!(w[1].text, "unterminated");
+        let (parsed, _, _) = words(&"echo 'unterminated".chars().collect::<Vec<_>>());
+        assert_eq!(parsed[1].open, Some('\''));
+        assert_eq!(parsed[1].text, "unterminated");
     }
 
-    fn ctx<'a>(cwd: &Path, history: &'a History, path_var: Option<OsString>) -> Context<'a> {
+    fn context_in<'a>(cwd: &Path, history: &'a History, path_var: Option<OsString>) -> Context<'a> {
         Context {
             cwd: Some(cwd.to_owned()),
             home: cwd.to_owned(),
@@ -618,17 +630,20 @@ mod tests {
     }
 
     fn texts(items: &[Completion]) -> Vec<&str> {
-        items.iter().map(|c| c.text.as_str()).collect()
+        items
+            .iter()
+            .map(|completion| completion.text.as_str())
+            .collect()
     }
 
     #[test]
     fn paths_dirs_hidden_and_quoting() {
         let dir = tempfile::tempdir().unwrap();
-        let d = dir.path();
-        std::fs::create_dir(d.join("src")).unwrap();
-        std::fs::write(d.join("src/main.rs"), "").unwrap();
-        std::fs::write(d.join("my file.txt"), "").unwrap();
-        std::fs::write(d.join(".env"), "").unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join("src")).unwrap();
+        std::fs::write(root.join("src/main.rs"), "").unwrap();
+        std::fs::write(root.join("my file.txt"), "").unwrap();
+        std::fs::write(root.join(".env"), "").unwrap();
         let state = tempfile::tempdir().unwrap();
         let history = History::open(
             state.path(),
@@ -639,25 +654,25 @@ mod tests {
             state.path(),
         );
         let caches = Caches::default();
-        let c = ctx(d, &history, None);
+        let context = context_in(root, &history, None);
 
-        let items = complete(&c, &caches, "cat ", 4);
+        let items = complete(&context, &caches, "cat ", 4);
         assert_eq!(texts(&items), vec!["src/", r"my\ file.txt"]);
         assert_eq!(items[0].kind, CompletionKind::Dir);
         assert_eq!((items[0].start, items[0].end), (4, 4));
 
-        let items = complete(&c, &caches, "cat .", 5);
+        let items = complete(&context, &caches, "cat .", 5);
         assert_eq!(texts(&items), vec![".env"]);
 
-        let items = complete(&c, &caches, "vim src/m", 9);
+        let items = complete(&context, &caches, "vim src/m", 9);
         assert_eq!(texts(&items), vec!["src/main.rs"]);
         assert_eq!((items[0].start, items[0].end), (4, 9));
 
-        let items = complete(&c, &caches, "cat 'my", 7);
+        let items = complete(&context, &caches, "cat 'my", 7);
         assert_eq!(texts(&items), vec!["'my file.txt"]);
 
         // Case-insensitive fallback.
-        let items = complete(&c, &caches, "cd SR", 5);
+        let items = complete(&context, &caches, "cd SR", 5);
         assert_eq!(texts(&items), vec!["src/"]);
     }
 
@@ -667,10 +682,10 @@ mod tests {
         let bin = dir.path().join("bin");
         std::fs::create_dir(&bin).unwrap();
         for name in ["frobnicate", "frobulate", "other"] {
-            let p = bin.join(name);
-            std::fs::write(&p, "#!/bin/sh\n").unwrap();
+            let path = bin.join(name);
+            std::fs::write(&path, "#!/bin/sh\n").unwrap();
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         std::fs::write(bin.join("not-exec"), "").unwrap();
         let state = tempfile::tempdir().unwrap();
@@ -684,8 +699,8 @@ mod tests {
         );
         history.record("frobnicate --all", false, Some("/x"), Some(0), 1);
         let caches = Caches::default();
-        let c = ctx(dir.path(), &history, Some(bin.clone().into_os_string()));
-        let items = complete(&c, &caches, "frob", 4);
+        let context = context_in(dir.path(), &history, Some(bin.clone().into_os_string()));
+        let items = complete(&context, &caches, "frob", 4);
         assert_eq!(
             texts(&items),
             vec!["frobnicate --all", "frobnicate", "frobulate"]
@@ -693,7 +708,7 @@ mod tests {
         assert_eq!(items[0].kind, CompletionKind::History);
         assert_eq!(items[1].kind, CompletionKind::Command);
         // Mid-line: no history.
-        let items = complete(&c, &caches, "frob | cat", 4);
+        let items = complete(&context, &caches, "frob | cat", 4);
         assert_eq!(texts(&items), vec!["frobnicate", "frobulate"]);
         assert_eq!((items[0].start, items[0].end), (0, 4));
     }

@@ -1,4 +1,5 @@
 //! The attention feed: agents blocked or done and long commands finished unseen, as one list
+//! the app turns into local notifications and an inbox.
 //!
 //! Items are kept in memory (the last [`MAX_ITEMS`]). "Seen" is shared by all devices: an
 //! item is seen when a client marks it, when any client focuses its pane, or (for a blocked
@@ -15,7 +16,6 @@ use proto::{
 
 use crate::core::lock;
 
-/// Items kept.
 pub(crate) const MAX_ITEMS: usize = 500;
 
 #[derive(Default)]
@@ -26,7 +26,7 @@ struct Inner {
 
 impl Inner {
     fn unseen(&self) -> u32 {
-        self.items.iter().filter(|i| !i.seen).count() as u32
+        self.items.iter().filter(|item| !item.seen).count() as u32
     }
 }
 
@@ -46,7 +46,7 @@ pub(crate) struct NewItem {
 }
 
 impl Attention {
-    /// Records an item; returns the update to broadcast.
+    /// Returns the update to broadcast.
     pub fn add(&self, new: NewItem) -> AttentionUpdate {
         let mut inner = lock(&self.inner);
         inner.next_id += 1;
@@ -79,9 +79,12 @@ impl Attention {
         }
     }
 
-    /// One item, if still kept.
     pub fn get(&self, id: u64) -> Option<AttentionItem> {
-        lock(&self.inner).items.iter().find(|i| i.id == id).cloned()
+        lock(&self.inner)
+            .items
+            .iter()
+            .find(|item| item.id == id)
+            .cloned()
     }
 
     /// Whether an unseen item newer than `id` exists for the same pane (a push for `id` would
@@ -90,14 +93,14 @@ impl Attention {
         lock(&self.inner)
             .items
             .iter()
-            .any(|i| i.id > id && i.pane_id == pane && !i.seen)
+            .any(|item| item.id > id && item.pane_id == pane && !item.seen)
     }
 
     /// Marks matching unseen items seen; `None` if nothing changed.
     pub fn mark(&self, which: &AttentionSeen) -> Option<AttentionUpdate> {
         self.mark_where(|item| {
             which.ids.contains(&item.id)
-                || which.up_to.is_some_and(|up| item.id <= up)
+                || which.up_to.is_some_and(|up_to| item.id <= up_to)
                 || which.pane_id == Some(item.pane_id)
         })
     }
@@ -109,11 +112,11 @@ impl Attention {
         })
     }
 
-    fn mark_where(&self, pred: impl Fn(&AttentionItem) -> bool) -> Option<AttentionUpdate> {
+    fn mark_where(&self, matches: impl Fn(&AttentionItem) -> bool) -> Option<AttentionUpdate> {
         let mut inner = lock(&self.inner);
         let mut ids = Vec::new();
-        for item in inner.items.iter_mut().filter(|i| !i.seen) {
-            if pred(item) {
+        for item in inner.items.iter_mut().filter(|item| !item.seen) {
+            if matches(item) {
                 item.seen = true;
                 ids.push(item.id);
             }
@@ -142,7 +145,7 @@ mod tests {
 
     #[test]
     fn counts_and_marks_seen() {
-        let a = Attention::default();
+        let attention = Attention::default();
         let blocked = AttentionKind::AgentBlocked {
             agent: "claude".into(),
             request_id: None,
@@ -150,32 +153,32 @@ mod tests {
         let done = AttentionKind::AgentDone {
             agent: "claude".into(),
         };
-        a.add(item(1, blocked.clone(), false));
-        a.add(item(2, done.clone(), false));
-        let AttentionUpdate::Added { unseen, .. } = a.add(item(2, done, true)) else {
+        attention.add(item(1, blocked.clone(), false));
+        attention.add(item(2, done.clone(), false));
+        let AttentionUpdate::Added { unseen, .. } = attention.add(item(2, done, true)) else {
             panic!()
         };
         assert_eq!(unseen, 2, "an item that happened in view starts seen");
         assert_eq!(
-            a.resolve_blocked(PaneId(1)),
+            attention.resolve_blocked(PaneId(1)),
             Some(AttentionUpdate::Seen {
                 ids: vec![1],
                 unseen: 1
             })
         );
-        assert_eq!(a.resolve_blocked(PaneId(1)), None);
+        assert_eq!(attention.resolve_blocked(PaneId(1)), None);
         let seen = AttentionSeen {
             ids: vec![],
             up_to: None,
             pane_id: Some(PaneId(2)),
         };
         assert_eq!(
-            a.mark(&seen),
+            attention.mark(&seen),
             Some(AttentionUpdate::Seen {
                 ids: vec![2],
                 unseen: 0
             })
         );
-        assert_eq!(a.list().items.len(), 3);
+        assert_eq!(attention.list().items.len(), 3);
     }
 }

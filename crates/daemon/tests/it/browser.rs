@@ -66,7 +66,8 @@ async fn urls_and_tool_calls_reach_the_app_showing_the_pane() {
     assert_eq!(app.attach_and_follow().await, pane);
     let reply = answer(send(&socket, &call(dir.path(), pane, open)).await).await;
     assert_eq!(reply, BrowserReply::Opened);
-    app.until("the URL", |c| !c.browser.is_empty()).await;
+    app.until("the URL", |client| !client.browser.is_empty())
+        .await;
     assert_eq!(
         app.browser[0],
         BrowserPush::Open {
@@ -92,7 +93,8 @@ async fn urls_and_tool_calls_reach_the_app_showing_the_pane() {
         args: serde_json::json!({ "interactive": true }),
     };
     let pending = send(&socket, &call(dir.path(), pane, tool.clone())).await;
-    app.until("the call", |c| c.browser.len() == 2).await;
+    app.until("the call", |client| client.browser.len() == 2)
+        .await;
     let BrowserPush::Call {
         id,
         pane_id,
@@ -114,7 +116,8 @@ async fn urls_and_tool_calls_reach_the_app_showing_the_pane() {
     );
     // Failures come back as errors.
     let pending = send(&socket, &call(dir.path(), pane, tool.clone())).await;
-    app.until("the second call", |c| c.browser.len() == 3).await;
+    app.until("the second call", |client| client.browser.len() == 3)
+        .await;
     let BrowserPush::Call { id, .. } = app.browser[2] else {
         panic!("not a call");
     };
@@ -127,13 +130,14 @@ async fn urls_and_tool_calls_reach_the_app_showing_the_pane() {
 
     // A caller that hangs up closes its call in the app.
     let pending = send(&socket, &call(dir.path(), pane, tool)).await;
-    app.until("the third call", |c| c.browser.len() == 4).await;
+    app.until("the third call", |client| client.browser.len() == 4)
+        .await;
     let BrowserPush::Call { id, .. } = app.browser[3] else {
         panic!("not a call");
     };
     drop(pending);
-    app.until("the call closed", |c| {
-        c.browser.contains(&BrowserPush::CallClosed { id })
+    app.until("the call closed", |client| {
+        client.browser.contains(&BrowserPush::CallClosed { id })
     })
     .await;
     assert!(plain.browser.is_empty());
@@ -162,7 +166,8 @@ async fn a_driving_guest_never_gets_the_hosts_browser_calls() {
         .unwrap();
     let mut bob = TestClient::join_browser(&invite.to_string(), ClientConfig::generate_key());
     bob.client.attach(None);
-    bob.until("guest layout", |c| c.layout.is_some()).await;
+    bob.until("guest layout", |client| client.layout.is_some())
+        .await;
     bob.follow(pane).await;
 
     let open = BrowserAsk::Open {
@@ -182,7 +187,8 @@ async fn a_driving_guest_never_gets_the_hosts_browser_calls() {
     assert_eq!(app.attach_and_follow().await, pane);
     let reply = answer(send(&socket, &call(dir.path(), pane, open)).await).await;
     assert_eq!(reply, BrowserReply::Opened);
-    app.until("the URL", |c| !c.browser.is_empty()).await;
+    app.until("the URL", |client| !client.browser.is_empty())
+        .await;
     bob.until("settled", |_| true).await;
     assert!(bob.browser.is_empty(), "{:?}", bob.browser);
 
@@ -203,7 +209,7 @@ async fn a_driving_guest_never_gets_the_hosts_browser_calls() {
     assert!(
         !app.browser
             .iter()
-            .any(|p| matches!(p, BrowserPush::Call { .. })),
+            .any(|push| matches!(push, BrowserPush::Call { .. })),
         "{:?}",
         app.browser
     );

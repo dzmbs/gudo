@@ -1,4 +1,5 @@
 //! One `pane/<id>` stream to one client: raw bytes while the client keeps up, a snapshot when
+//! it falls behind, with the unacked budget sized from a delay target.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -12,6 +13,7 @@ use tokio::sync::{mpsc, watch};
 use crate::net::NetError;
 use crate::pane::{Pane, ResizeRecord};
 
+/// Stream priorities; higher is sent first.
 pub(crate) mod priority {
     pub const CTL: i32 = 100;
     pub const FOCUSED: i32 = 80;
@@ -38,6 +40,7 @@ impl Class {
     }
 
     /// Delay this pane's in-flight bytes may add in front of a keystroke, and budget bounds.
+    /// The budget is link rate × allowed delay, not bandwidth × RTT.
     fn budget_params(self) -> (Duration, usize, usize) {
         match self {
             Self::Focused => (Duration::from_millis(50), 64 << 10, 1 << 20),
@@ -45,6 +48,7 @@ impl Class {
         }
     }
 
+    /// Minimum time between snapshots of a flooding pane.
     fn snapshot_interval(self) -> Duration {
         match self {
             Self::Focused => Duration::from_millis(33),
@@ -59,11 +63,11 @@ fn budget(class: Class, conn: &Connection) -> usize {
     let rate = conn
         .paths()
         .iter()
-        .filter(|p| p.is_selected())
-        .map(|p| {
+        .filter(|path| path.is_selected())
+        .map(|path| {
             // Delivery rate ≈ cwnd / RTT: what the path can drain per second.
-            let rtt = p.rtt().as_secs_f64().max(1e-4);
-            p.stats().cwnd as f64 / rtt
+            let rtt = path.rtt().as_secs_f64().max(1e-4);
+            path.stats().cwnd as f64 / rtt
         })
         .next();
     match rate {
@@ -72,23 +76,21 @@ fn budget(class: Class, conn: &Connection) -> usize {
     }
 }
 
-/// Instructions from the connection to a running stream.
 #[derive(Debug)]
 pub(crate) enum StreamCmd {
     InputAck { input_seq: InputSeq, at_seq: Seq },
     Class(Class),
 }
 
-/// Where a new stream starts.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Start {
     /// Continue from the client's own state at this offset if the ring still has it.
     Resume(Seq),
-    /// Start with a snapshot.
     Snapshot,
 }
 
 /// Wire bytes sent but not yet acknowledged, keyed by the offset each frame brings the client
+/// to: a snapshot moves `seq` far but costs only its size.
 #[derive(Debug, Default)]
 struct InFlight {
     frames: VecDeque<(Seq, usize)>,
@@ -116,7 +118,6 @@ impl InFlight {
     }
 }
 
-/// Counters a stream exposes, for tests and logs.
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct StreamStats {
     pub snapshots: u64,
@@ -136,8 +137,7 @@ pub(crate) struct PaneStream {
 }
 
 struct State {
-    sub: Option<Subscriber>,
-    /// Index of the next resize record to send.
+    subscriber: Option<Subscriber>,
     next_resize: u64,
     in_flight: InFlight,
     dirty: bool,
@@ -145,14 +145,14 @@ struct State {
     retry_at: Option<Instant>,
     budget: usize,
     budget_at: Instant,
-    buf: Vec<u8>,
+    frame_buf: Vec<u8>,
     stats: StreamStats,
 }
 
 impl PaneStream {
     pub async fn run(mut self, start: Start) -> Result<StreamStats, NetError> {
-        let mut st = State {
-            sub: None,
+        let mut state = State {
+            subscriber: None,
             next_resize: 0,
             in_flight: InFlight::default(),
             dirty: true,
@@ -160,121 +160,130 @@ impl PaneStream {
             retry_at: None,
             budget: budget(self.class, &self.conn),
             budget_at: Instant::now(),
-            buf: Vec::with_capacity(64 << 10),
+            frame_buf: Vec::with_capacity(64 << 10),
             stats: StreamStats::default(),
         };
         if let Start::Resume(seq) = start
-            && let (Ok(sub), Some(idx)) = (
+            && let (Ok(subscriber), Some(resize_index)) = (
                 self.pane.subscribe_from(seq),
                 self.pane.resize_index_at(seq),
             )
         {
-            st.sub = Some(sub);
-            st.next_resize = idx;
-            st.dirty = false;
-            self.flush_resizes(&mut st).await?;
+            state.subscriber = Some(subscriber);
+            state.next_resize = resize_index;
+            state.dirty = false;
+            self.flush_resizes(&mut state).await?;
         }
         let mut resizes = self.pane.resize_updates();
         loop {
-            if st.dirty && st.in_flight.is_empty() {
-                let due = self.snapshot_due(&st);
+            if state.dirty && state.in_flight.is_empty() {
+                let due = self.snapshot_due(&state);
                 if due <= Instant::now() {
-                    self.send_snapshot(&mut st).await?;
-                    if self.one_shot && !st.dirty {
+                    self.send_snapshot(&mut state).await?;
+                    if self.one_shot && !state.dirty {
                         self.send.finish().ok();
-                        return Ok(st.stats);
+                        return Ok(state.stats);
                     }
                 }
             }
-            if st.budget_at.elapsed() > Duration::from_millis(100) {
-                st.budget = budget(self.class, &self.conn);
-                st.budget_at = Instant::now();
+            if state.budget_at.elapsed() > Duration::from_millis(100) {
+                state.budget = budget(self.class, &self.conn);
+                state.budget_at = Instant::now();
             }
-            let can_read = !st.dirty && st.in_flight.bytes < st.budget && st.sub.is_some();
-            let wake = (st.dirty && st.in_flight.is_empty()).then(|| self.snapshot_due(&st));
+            let can_read =
+                !state.dirty && state.in_flight.bytes < state.budget && state.subscriber.is_some();
+            let wake =
+                (state.dirty && state.in_flight.is_empty()).then(|| self.snapshot_due(&state));
             tokio::select! {
                 biased;
                 cmd = self.cmds.recv() => match cmd {
                     Some(StreamCmd::InputAck { input_seq, at_seq }) => {
-                        self.write(&mut st, &PaneOutput::InputAck { input_seq, at_seq }, None).await?;
+                        self.write(&mut state, &PaneOutput::InputAck { input_seq, at_seq }, None).await?;
                     }
                     Some(StreamCmd::Class(class)) => {
                         self.class = class;
                         let _ = self.send.set_priority(class.priority());
-                        st.budget = budget(class, &self.conn);
+                        state.budget = budget(class, &self.conn);
                     }
-                    None => return Ok(st.stats),
+                    None => return Ok(state.stats),
                 },
                 changed = self.acks.changed() => {
                     if changed.is_err() {
-                        return Ok(st.stats);
+                        return Ok(state.stats);
                     }
                     let acked = *self.acks.borrow_and_update();
-                    st.in_flight.ack(acked);
+                    state.in_flight.ack(acked);
                 }
                 _ = resizes.changed() => {
-                    if !st.dirty {
-                        self.flush_resizes(&mut st).await?;
+                    if !state.dirty {
+                        self.flush_resizes(&mut state).await?;
                     }
                 }
                 () = sleep_until(wake), if wake.is_some() => {}
-                read = recv(st.sub.as_mut()), if can_read => match read {
-                    Ok(chunk) => self.send_bytes(&mut st, Seq(chunk.seq.get()), &chunk.data).await?,
-                    Err(RecvError::Evicted { .. }) => st.dirty = true,
+                read = recv(state.subscriber.as_mut()), if can_read => match read {
+                    Ok(chunk) => self.send_bytes(&mut state, Seq(chunk.seq.get()), &chunk.data).await?,
+                    Err(RecvError::Evicted { .. }) => state.dirty = true,
                     Err(RecvError::Closed) => {
-                        self.flush_resizes(&mut st).await?;
+                        self.flush_resizes(&mut state).await?;
                         self.send.finish().ok();
-                        return Ok(st.stats);
+                        return Ok(state.stats);
                     }
                 },
             }
         }
     }
 
-    fn snapshot_due(&self, st: &State) -> Instant {
-        let by_rate = st
+    fn snapshot_due(&self, state: &State) -> Instant {
+        let by_rate = state
             .last_snapshot
-            .map_or_else(Instant::now, |t| t + self.class.snapshot_interval());
-        st.retry_at.map_or(by_rate, |r| r.max(by_rate))
+            .map_or_else(Instant::now, |last| last + self.class.snapshot_interval());
+        state
+            .retry_at
+            .map_or(by_rate, |retry_at| retry_at.max(by_rate))
     }
 
     async fn write(
         &mut self,
-        st: &mut State,
+        state: &mut State,
         msg: &PaneOutput,
         end: Option<Seq>,
     ) -> Result<(), NetError> {
-        st.buf.clear();
-        proto::frame::encode(msg, &mut st.buf)?;
-        self.send.write_all(&st.buf).await?;
+        state.frame_buf.clear();
+        proto::frame::encode(msg, &mut state.frame_buf)?;
+        self.send.write_all(&state.frame_buf).await?;
         if let Some(end) = end {
-            st.in_flight.push(end, st.buf.len());
+            state.in_flight.push(end, state.frame_buf.len());
         }
         Ok(())
     }
 
-    async fn send_snapshot(&mut self, st: &mut State) -> Result<(), NetError> {
+    async fn send_snapshot(&mut self, state: &mut State) -> Result<(), NetError> {
         let pane = Arc::clone(&self.pane);
         let viewer = self.viewer;
         let snapshot = tokio::task::spawn_blocking(move || pane.snapshot_as(viewer))
             .await
-            .map_err(|e| NetError::Frame(proto::FrameError::Io(std::io::Error::other(e))))?;
+            .map_err(|error| {
+                NetError::Frame(proto::FrameError::Io(std::io::Error::other(error)))
+            })?;
         let snapshot = match snapshot {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::debug!(pane = %self.pane.id, "snapshot deferred: {e}");
-                st.retry_at = Some(Instant::now() + Duration::from_millis(20));
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                // Unencodable until the current escape sequence ends; keep trying.
+                tracing::debug!(pane = %self.pane.id, "snapshot deferred: {error}");
+                state.retry_at = Some(Instant::now() + Duration::from_millis(20));
                 return Ok(());
             }
         };
-        st.retry_at = None;
-        let sub = match st.sub.take() {
-            Some(mut sub) => sub.seek(pty::Seq::new(snapshot.seq.0)).map(|()| sub),
+        state.retry_at = None;
+        let subscriber = match state.subscriber.take() {
+            Some(mut subscriber) => subscriber
+                .seek(pty::Seq::new(snapshot.seq.0))
+                .map(|()| subscriber),
             None => self.pane.subscribe_from(snapshot.seq),
         };
-        let Ok(sub) = sub else {
+        let Ok(subscriber) = subscriber else {
             // The snapshot fell out of the ring already (extreme flood): take another.
-            st.retry_at = Some(Instant::now());
+            state.retry_at = Some(Instant::now());
             return Ok(());
         };
         let msg = PaneOutput::SnapshotZstd {
@@ -283,91 +292,112 @@ impl PaneStream {
             raw_len: snapshot.raw_len,
             data: snapshot.zstd.clone(),
         };
-        self.write(st, &msg, Some(snapshot.seq)).await?;
-        st.sub = Some(sub);
-        st.next_resize = snapshot.resize_count;
-        st.dirty = false;
-        st.last_snapshot = Some(Instant::now());
-        st.stats.snapshots += 1;
+        self.write(state, &msg, Some(snapshot.seq)).await?;
+        state.subscriber = Some(subscriber);
+        state.next_resize = snapshot.resize_count;
+        state.dirty = false;
+        state.last_snapshot = Some(Instant::now());
+        state.stats.snapshots += 1;
         Ok(())
     }
 
     /// Sends resize records up to the subscriber's position.
-    async fn flush_resizes(&mut self, st: &mut State) -> Result<(), NetError> {
-        let Some(pos) = st.sub.as_ref().map(|s| Seq(s.position().get())) else {
+    async fn flush_resizes(&mut self, state: &mut State) -> Result<(), NetError> {
+        let Some(position) = state
+            .subscriber
+            .as_ref()
+            .map(|subscriber| Seq(subscriber.position().get()))
+        else {
             return Ok(());
         };
-        let records = match self.pane.resizes_from(st.next_resize) {
-            Ok(r) => r,
+        let records = match self.pane.resizes_from(state.next_resize) {
+            Ok(records) => records,
             Err(_) => {
-                st.dirty = true;
+                state.dirty = true;
                 return Ok(());
             }
         };
-        for r in records.into_iter().take_while(|r| r.at <= pos) {
-            self.send_resize(st, r).await?;
+        for record in records
+            .into_iter()
+            .take_while(|record| record.at <= position)
+        {
+            self.send_resize(state, record).await?;
         }
         Ok(())
     }
 
-    async fn send_resize(&mut self, st: &mut State, r: ResizeRecord) -> Result<(), NetError> {
+    async fn send_resize(
+        &mut self,
+        state: &mut State,
+        record: ResizeRecord,
+    ) -> Result<(), NetError> {
         let msg = PaneOutput::Resized {
-            seq: r.at,
-            size: r.size,
+            seq: record.at,
+            size: record.size,
         };
-        self.write(st, &msg, Some(r.at)).await?;
-        st.next_resize = r.index + 1;
+        self.write(state, &msg, Some(record.at)).await?;
+        state.next_resize = record.index + 1;
         Ok(())
     }
 
     /// Sends `data` (starting at `seq`), interleaving resizes at their offsets. Over budget it
     /// drops the bytes and marks the pane dirty; a snapshot follows once everything is acked.
-    async fn send_bytes(&mut self, st: &mut State, seq: Seq, data: &[u8]) -> Result<(), NetError> {
+    async fn send_bytes(
+        &mut self,
+        state: &mut State,
+        seq: Seq,
+        data: &[u8],
+    ) -> Result<(), NetError> {
         let end = Seq(seq.0 + data.len() as u64);
         // Always let one frame through when nothing is in flight, so progress never stalls.
-        if !st.in_flight.is_empty() && st.in_flight.bytes + data.len() > st.budget {
-            st.dirty = true;
+        if !state.in_flight.is_empty() && state.in_flight.bytes + data.len() > state.budget {
+            state.dirty = true;
             return Ok(());
         }
-        let records = match self.pane.resizes_from(st.next_resize) {
-            Ok(r) => r,
+        let records = match self.pane.resizes_from(state.next_resize) {
+            Ok(records) => records,
             Err(_) => {
-                st.dirty = true;
+                state.dirty = true;
                 return Ok(());
             }
         };
-        let mut pos = seq;
+        let mut position = seq;
         let mut rest = data;
-        for r in records.into_iter().take_while(|r| r.at <= end) {
-            let split = (r.at.0.saturating_sub(pos.0) as usize).min(rest.len());
+        for record in records.into_iter().take_while(|record| record.at <= end) {
+            let split = (record.at.0.saturating_sub(position.0) as usize).min(rest.len());
             if split > 0 {
                 let (now, later) = rest.split_at(split);
-                self.write_bytes(st, pos, now).await?;
-                pos = Seq(pos.0 + split as u64);
+                self.write_bytes(state, position, now).await?;
+                position = Seq(position.0 + split as u64);
                 rest = later;
             }
-            self.send_resize(st, r).await?;
+            self.send_resize(state, record).await?;
         }
         if !rest.is_empty() {
-            self.write_bytes(st, pos, rest).await?;
+            self.write_bytes(state, position, rest).await?;
         }
         Ok(())
     }
 
-    async fn write_bytes(&mut self, st: &mut State, seq: Seq, data: &[u8]) -> Result<(), NetError> {
+    async fn write_bytes(
+        &mut self,
+        state: &mut State,
+        seq: Seq,
+        data: &[u8],
+    ) -> Result<(), NetError> {
         let end = Seq(seq.0 + data.len() as u64);
         let msg = PaneOutput::Bytes {
             seq,
             data: data.to_vec(),
         };
-        st.stats.bytes_frames += 1;
-        self.write(st, &msg, Some(end)).await
+        state.stats.bytes_frames += 1;
+        self.write(state, &msg, Some(end)).await
     }
 }
 
-async fn recv(sub: Option<&mut Subscriber>) -> Result<pty::Chunk, RecvError> {
-    match sub {
-        Some(sub) => sub.recv().await,
+async fn recv(subscriber: Option<&mut Subscriber>) -> Result<pty::Chunk, RecvError> {
+    match subscriber {
+        Some(subscriber) => subscriber.recv().await,
         None => std::future::pending().await,
     }
 }

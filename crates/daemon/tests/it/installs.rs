@@ -18,13 +18,13 @@ fn executable(path: &Path) {
 fn state(installs: &[AgentInstall], kind: AgentKind) -> InstallState {
     installs
         .iter()
-        .find(|i| i.agent == kind)
-        .map(|i| i.state.clone())
+        .find(|install| install.agent == kind)
+        .map(|install| install.state.clone())
         .unwrap()
 }
 
-fn s(p: &Path) -> String {
-    p.to_string_lossy().into_owned()
+fn path_text(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -36,35 +36,35 @@ async fn reports_installed_off_path_and_missing_agents() {
     executable(&bin.join("codex"));
     executable(&home.join(".local/bin/claude"));
     let env = [
-        ("HOME".to_owned(), s(&home)),
+        ("HOME".to_owned(), path_text(&home)),
         (
             "PATH".to_owned(),
             format!("{}:/usr/bin:/bin", bin.display()),
         ),
     ];
-    let daemon = start_with(state_dir.path(), move |c| c.pane_env.extend(env)).await;
-    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    c.attach_and_follow().await;
-    let features = c.client.daemon_info().unwrap().features;
+    let daemon = start_with(state_dir.path(), move |config| config.pane_env.extend(env)).await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    owner.attach_and_follow().await;
+    let features = owner.client.daemon_info().unwrap().features;
     assert!(features.contains(DaemonFeatures::AGENT_INSTALLS));
 
-    let installs = c.client.agent_installs().await.unwrap();
+    let installs = owner.client.agent_installs().await.unwrap();
     assert_eq!(
         state(&installs, AgentKind::Codex),
         InstallState::Installed {
-            path: s(&bin.join("codex"))
+            path: path_text(&bin.join("codex"))
         }
     );
     assert_eq!(
         state(&installs, AgentKind::Claude),
         InstallState::NotOnPath {
-            path: s(&home.join(".local/bin/claude"))
+            path: path_text(&home.join(".local/bin/claude"))
         }
     );
 
     // Asked again, the answer is fresh.
     std::fs::remove_file(bin.join("codex")).unwrap();
-    let installs = c.client.agent_installs().await.unwrap();
+    let installs = owner.client.agent_installs().await.unwrap();
     assert_eq!(state(&installs, AgentKind::Codex), InstallState::Missing);
 }
 
@@ -77,27 +77,39 @@ async fn names_each_installed_agents_mcp_command() {
     executable(&bin.join("codex"));
     executable(&home.join(".local/bin/claude"));
     let env = [
-        ("HOME".to_owned(), s(&home)),
+        ("HOME".to_owned(), path_text(&home)),
         (
             "PATH".to_owned(),
             format!("{}:/usr/bin:/bin", bin.display()),
         ),
     ];
-    let daemon = start_with(state_dir.path(), move |c| c.pane_env.extend(env)).await;
-    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    c.attach_and_follow().await;
-    let features = c.client.daemon_info().unwrap().features;
+    let daemon = start_with(state_dir.path(), move |config| config.pane_env.extend(env)).await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    owner.attach_and_follow().await;
+    let features = owner.client.daemon_info().unwrap().features;
     assert!(features.contains(DaemonFeatures::AGENT_MCP));
 
-    let add = c.client.agent_mcp_commands(true).await.unwrap();
-    let claude = add.iter().find(|c| c.agent == AgentKind::Claude).unwrap();
+    let add = owner.client.agent_mcp_commands(true).await.unwrap();
+    let claude = add
+        .iter()
+        .find(|command| command.agent == AgentKind::Claude)
+        .unwrap();
     // Every agent is named by path, on the terminal `PATH` or off it.
-    assert_eq!(claude.argv[0], s(&home.join(".local/bin/claude")));
+    assert_eq!(claude.argv[0], path_text(&home.join(".local/bin/claude")));
     assert_eq!(claude.argv[1..6], ["mcp", "add", "--scope", "user", "gudo"]);
-    let codex = add.iter().find(|c| c.agent == AgentKind::Codex).unwrap();
+    let codex = add
+        .iter()
+        .find(|command| command.agent == AgentKind::Codex)
+        .unwrap();
     assert_eq!(
         codex.argv[..5],
-        [s(&bin.join("codex")).as_str(), "mcp", "add", "gudo", "--"]
+        [
+            path_text(&bin.join("codex")).as_str(),
+            "mcp",
+            "add",
+            "gudo",
+            "--"
+        ]
     );
     assert!(codex.argv[5].ends_with("gudo-hook"));
     assert_eq!(codex.argv[6..8], ["mcp", "--state"]);
@@ -108,10 +120,10 @@ async fn names_each_installed_agents_mcp_command() {
         r#"{"mcpServers":{"unnamed":{"command":"un-hook"},"unnamed_drawings":{"command":"un-hook"}}}"#,
     )
     .unwrap();
-    let add = c.client.agent_mcp_commands(true).await.unwrap();
+    let add = owner.client.agent_mcp_commands(true).await.unwrap();
     let claude: Vec<_> = add
         .iter()
-        .filter(|c| c.agent == AgentKind::Claude)
+        .filter(|command| command.agent == AgentKind::Claude)
         .collect();
     assert_eq!(
         claude[0].argv[1..],
@@ -123,13 +135,15 @@ async fn names_each_installed_agents_mcp_command() {
     );
     assert_eq!(claude[2].argv[2], "add");
     assert_eq!(
-        add.iter().filter(|c| c.agent == AgentKind::Codex).count(),
+        add.iter()
+            .filter(|command| command.agent == AgentKind::Codex)
+            .count(),
         1
     );
 
     std::fs::remove_file(bin.join("codex")).unwrap();
     std::fs::remove_file(home.join(".claude.json")).unwrap();
-    let remove = c.client.agent_mcp_commands(false).await.unwrap();
+    let remove = owner.client.agent_mcp_commands(false).await.unwrap();
     assert_eq!(remove.len(), 1, "a missing agent has no command");
     assert_eq!(
         remove[0].argv[1..],

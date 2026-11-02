@@ -16,6 +16,7 @@ pub(crate) enum Need {
     View,
     /// Send prompts to agent panes through the composer path.
     Prompt,
+    /// Edit drawings and send them to agents.
     Draw,
     /// Raw input, layout changes, host files and forwards.
     Drive,
@@ -50,7 +51,6 @@ impl Need {
     }
 }
 
-/// What an action touches, for the scope check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Target {
     /// Nothing scoped (presence, pings, the caller's own state).
@@ -71,8 +71,6 @@ pub(crate) enum Target {
     Daemon,
 }
 
-/// Checks `authz` against `need` on `target`.
-///
 /// # Errors
 ///
 /// [`MpError::Forbidden`] naming the missing role, or the scope the target lies outside of.
@@ -87,15 +85,15 @@ pub(crate) fn check(core: &Core, authz: &Authz, need: Need, target: Target) -> R
     let scope = authz.scope;
     let inside = match target {
         Target::Any => true,
-        Target::Pane(p) => core.scope_within(Scope::Pane(p), scope),
-        Target::Tab(t) => core.scope_within(Scope::Tab(t), scope),
-        Target::Session(s) => core.scope_within(Scope::Session(s), scope),
-        Target::SessionOf(p) => core
-            .session_of_pane(p)
-            .is_some_and(|s| core.scope_within(Scope::Session(s), scope)),
-        Target::TabOf(p) => core
-            .tab_of_pane(p)
-            .is_some_and(|t| core.scope_within(Scope::Tab(t), scope)),
+        Target::Pane(pane_id) => core.scope_within(Scope::Pane(pane_id), scope),
+        Target::Tab(tab_id) => core.scope_within(Scope::Tab(tab_id), scope),
+        Target::Session(session_id) => core.scope_within(Scope::Session(session_id), scope),
+        Target::SessionOf(pane_id) => core
+            .session_of_pane(pane_id)
+            .is_some_and(|session_id| core.scope_within(Scope::Session(session_id), scope)),
+        Target::TabOf(pane_id) => core
+            .tab_of_pane(pane_id)
+            .is_some_and(|tab_id| core.scope_within(Scope::Tab(tab_id), scope)),
         Target::Host => matches!(scope, Scope::Daemon | Scope::Session(_)),
         Target::Daemon => scope == Scope::Daemon,
     };
@@ -125,7 +123,6 @@ pub(crate) fn chooses_account(op: &LayoutOp) -> bool {
     }
 }
 
-/// What a layout op needs.
 pub(crate) fn op(op: &LayoutOp) -> (Need, Target) {
     use LayoutOp as O;
     match op {
@@ -179,34 +176,33 @@ pub(crate) fn op(op: &LayoutOp) -> (Need, Target) {
     }
 }
 
-/// edits and sends to agents. The artifact itself must also be visible to the scope
-/// (checked by the caller, which knows where it is anchored).
+/// The artifact itself must also be visible to the scope; the caller checks that, since it
+/// knows where the artifact is anchored.
 pub(crate) fn artifact(req: &proto::ArtifactRequest) -> (Need, Target) {
     use proto::ArtifactRequest as R;
     match req {
         R::List { .. } | R::Get { .. } | R::Export { .. } => (Need::View, Target::Any),
-        R::Create(c) => match c.anchor {
-            Some(a) => (Need::Draw, Target::Pane(a.pane_id)),
-            None => (Need::Draw, Target::Session(c.session_id)),
+        R::Create(create) => match create.anchor {
+            Some(anchor) => (Need::Draw, Target::Pane(anchor.pane_id)),
+            None => (Need::Draw, Target::Session(create.session_id)),
         },
         R::Apply { .. } | R::Delete { .. } | R::SetPreview { .. } => (Need::Draw, Target::Any),
         R::SetAnchor { anchor, .. } => match anchor {
-            Some(a) => (Need::Draw, Target::Pane(a.pane_id)),
+            Some(anchor) => (Need::Draw, Target::Pane(anchor.pane_id)),
             None => (Need::Draw, Target::Any),
         },
-        R::Send(s) => (Need::Draw, Target::Pane(s.pane_id)),
+        R::Send(send) => (Need::Draw, Target::Pane(send.pane_id)),
         R::ExcalidrawGet { .. } => (Need::View, Target::Any),
         R::ExcalidrawPut(_) | R::Unplace { .. } => (Need::Draw, Target::Any),
-        R::Place(p) => (Need::Draw, Target::Pane(p.pane_id)),
-        R::Import(i) => (Need::Draw, Target::Pane(i.pane_id)),
+        R::Place(place) => (Need::Draw, Target::Pane(place.pane_id)),
+        R::Import(import) => (Need::Draw, Target::Pane(import.pane_id)),
         R::Placements { pane_id } => (Need::View, Target::Pane(*pane_id)),
         R::History { .. } => (Need::View, Target::Any),
         R::Restore { .. } => (Need::Draw, Target::Any),
     }
 }
 
-/// What a workspace request needs. List answers (ports, attention) are also filtered to the
-/// scope by the caller.
+/// List answers (ports, attention) are also filtered to the scope by the caller.
 pub(crate) fn workspace(req: &WorkspaceRequest) -> (Need, Target) {
     use WorkspaceRequest as R;
     match req {
@@ -257,7 +253,8 @@ pub(crate) fn workspace(req: &WorkspaceRequest) -> (Need, Target) {
         | R::VsCodeCliInstall(_)
         | R::VsCodeTunnelStart(_)
         | R::VsCodeTunnelStop => (Need::Own, Target::Daemon),
-        // Pushes carry agent prompts from every pane, and guests have no push scope yet
+        // Pushes carry agent prompts from every pane, and guests have no push scope yet,
+        // so only owner devices register and act.
         R::PushRegister(_)
         | R::PushUnregister
         | R::PushStatus
@@ -269,7 +266,9 @@ pub(crate) fn workspace(req: &WorkspaceRequest) -> (Need, Target) {
         R::UsageWatch(_) | R::UsageUnwatch => (Need::Own, Target::Daemon),
         // Workflows are typed into a pane (driving it); listing reads files of the pane's
         // repository and the host's global directory, saving writes one there.
-        R::WorkflowList { pane_id: Some(p) } => (Need::Drive, Target::Pane(*p)),
+        R::WorkflowList {
+            pane_id: Some(pane_id),
+        } => (Need::Drive, Target::Pane(*pane_id)),
         R::WorkflowList { pane_id: None } | R::WorkflowSave(_) => (Need::Drive, Target::Host),
         // Asked before launching an agent on the host.
         R::AgentInstalls => (Need::Drive, Target::Host),
@@ -285,7 +284,7 @@ pub(crate) fn workspace(req: &WorkspaceRequest) -> (Need, Target) {
     }
 }
 
-/// foreground program is viewing it; submitting a line is driving it; history, completion and
+/// Reading a pane's prompt and foreground program is viewing it; submitting a line is driving it; history, completion and
 /// file search read the host beyond the pane (other panes' commands, the file system);
 /// answering a dialog on screen is approving.
 pub(crate) fn assist(req: &AssistRequest) -> (Need, Target) {
@@ -294,22 +293,21 @@ pub(crate) fn assist(req: &AssistRequest) -> (Need, Target) {
         R::Watch { pane_id, .. } | R::State { pane_id } | R::BlockedOptions { pane_id } => {
             (Need::View, Target::Pane(*pane_id))
         }
-        R::SubmitLine(s) => (Need::Drive, Target::Pane(s.pane_id)),
+        R::SubmitLine(submit) => (Need::Drive, Target::Pane(submit.pane_id)),
         R::History(_) | R::Complete(_) | R::FileSearch(_) => (Need::Drive, Target::Host),
-        R::AnswerBlocked(a) => (Need::Approve, Target::Pane(a.pane_id)),
+        R::AnswerBlocked(answer) => (Need::Approve, Target::Pane(answer.pane_id)),
     }
 }
 
-/// The pane an input-assistance request addresses, if any.
 pub(crate) fn assist_pane(req: &AssistRequest) -> Option<PaneId> {
     use AssistRequest as R;
     match req {
         R::Watch { pane_id, .. } | R::State { pane_id } | R::BlockedOptions { pane_id } => {
             Some(*pane_id)
         }
-        R::SubmitLine(s) => Some(s.pane_id),
-        R::Complete(c) => Some(c.pane_id),
-        R::AnswerBlocked(a) => Some(a.pane_id),
+        R::SubmitLine(submit) => Some(submit.pane_id),
+        R::Complete(complete) => Some(complete.pane_id),
+        R::AnswerBlocked(answer) => Some(answer.pane_id),
         R::History(_) | R::FileSearch(_) => None,
     }
 }

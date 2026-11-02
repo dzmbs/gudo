@@ -1,11 +1,10 @@
-//! lines, then the note, numbered, in one message the agent can act on.
+//! Review notes → an agent prompt: `path:L-L`, the quoted lines, then the note, numbered, in one
+//! message the agent can act on.
 
 use proto::ReviewNote;
 
 const DEFAULT_PREAMBLE: &str = "I reviewed your changes. Please address these notes:";
 
-/// Formats the prompt.
-///
 /// # Examples
 ///
 /// The output for one note on lines 3–4 of `src/main.rs` with a quote:
@@ -19,28 +18,28 @@ const DEFAULT_PREAMBLE: &str = "I reviewed your changes. Please address these no
 ///    Use a const.
 /// ```
 pub(crate) fn format_prompt(preamble: Option<&str>, notes: &[ReviewNote]) -> String {
-    let mut out = preamble.unwrap_or(DEFAULT_PREAMBLE).trim_end().to_owned();
-    for (i, note) in notes.iter().enumerate() {
-        out.push_str("\n\n");
+    let mut prompt = preamble.unwrap_or(DEFAULT_PREAMBLE).trim_end().to_owned();
+    for (index, note) in notes.iter().enumerate() {
+        prompt.push_str("\n\n");
         let lines = if note.end_line > note.start_line {
             format!("{}-{}", note.start_line, note.end_line)
         } else {
             note.start_line.to_string()
         };
         let side = if note.old_side { " (old version)" } else { "" };
-        out.push_str(&format!("{}. {}:{lines}{side}", i + 1, note.path));
-        if let Some(quote) = note.quote.as_deref().filter(|q| !q.trim().is_empty()) {
+        prompt.push_str(&format!("{}. {}:{lines}{side}", index + 1, note.path));
+        if let Some(quote) = note.quote.as_deref().filter(|text| !text.trim().is_empty()) {
             for line in quote.trim_end_matches('\n').lines() {
-                out.push_str("\n   > ");
-                out.push_str(line);
+                prompt.push_str("\n   > ");
+                prompt.push_str(line);
             }
         }
         for line in note.note.trim().lines() {
-            out.push_str("\n   ");
-            out.push_str(line);
+            prompt.push_str("\n   ");
+            prompt.push_str(line);
         }
     }
-    out
+    prompt
 }
 
 #[cfg(test)]

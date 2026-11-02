@@ -29,29 +29,38 @@ fn png(width: u32, height: u32, shade: u8) -> Vec<u8> {
 
 /// Writes `bytes` to a file and has the pane's shell `cat` it, then print `done` (the shell
 /// computes part of it, so the echoed command line never matches).
-async fn show(c: &mut TestClient, pane: PaneId, dir: &Path, name: &str, bytes: &str, done: &str) {
+async fn show(
+    client: &mut TestClient,
+    pane: PaneId,
+    dir: &Path,
+    name: &str,
+    bytes: &str,
+    done: &str,
+) {
     let path = dir.join(name);
     std::fs::write(&path, bytes).unwrap();
-    c.type_line(
+    client.type_line(
         pane,
         &format!("cat {}; echo {done}-$((6*7))", path.display()),
     );
-    c.wait_text(pane, &format!("{done}-42")).await;
+    client.wait_text(pane, &format!("{done}-42")).await;
 }
 
-fn images(c: &TestClient, pane: PaneId) -> Vec<(KittyPlacement, Option<KittyImage>)> {
-    let mut all = c.client.pane_images(pane).unwrap_or_default();
-    all.sort_by_key(|(p, _)| (p.image_id, p.placement_id));
+fn images(client: &TestClient, pane: PaneId) -> Vec<(KittyPlacement, Option<KittyImage>)> {
+    let mut all = client.client.pane_images(pane).unwrap_or_default();
+    all.sort_by_key(|(placement, _)| (placement.image_id, placement.placement_id));
     all
 }
 
 async fn wait_images(
-    c: &mut TestClient,
+    client: &mut TestClient,
     pane: PaneId,
     what: &str,
     done: impl Fn(&[(KittyPlacement, Option<KittyImage>)]) -> bool,
 ) {
-    c.until(what, |c| done(&images(c, pane))).await;
+    client
+        .until(what, |client| done(&images(client, pane)))
+        .await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -59,88 +68,121 @@ async fn kitty_graphics_are_mirrored_answered_and_survive_reattach() {
     let state = tempfile::tempdir().unwrap();
     let files = tempfile::tempdir().unwrap();
     let daemon = start(state.path()).await;
-    let mut a = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    let pane = a.attach_and_follow().await;
-    a.type_line(pane, "echo ready-$((6*7))");
-    a.wait_text(pane, "ready-42").await;
+    let mut laptop = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = laptop.attach_and_follow().await;
+    laptop.type_line(pane, "echo ready-$((6*7))");
+    laptop.wait_text(pane, "ready-42").await;
 
     // A query: Ghostty's reply reaches the program like any VT reply, once.
-    a.type_line(
+    laptop.type_line(
         pane,
         "stty -icanon -echo min 0 time 20; printf '\\033_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\\033\\\\'; \
          dd bs=64 count=1 2>/dev/null | tr -c 'A-Za-z0-9=;' '.'; stty sane; echo; echo replied-$((6*7))",
     );
-    a.wait_text(pane, "replied-42").await;
-    let text = a.text(pane);
+    laptop.wait_text(pane, "replied-42").await;
+    let text = laptop.text(pane);
     assert_eq!(text.matches("..Gi=31;OK..").count(), 1, "{text}");
 
     // A PNG displayed at once (`a=T`), on a screen cleared to a known layout. The client sent
     // no pixel size, so the daemon gave the pane 10×20 px cells: 40×40 px is 4×2 cells.
-    let seq = format!(
+    let sequence = format!(
         "\x1b[2J\x1b[3;5H{}",
         apc("a=T,f=100,i=1,q=2", &png(40, 40, 200))
     );
-    show(&mut a, pane, files.path(), "png", &seq, "shown-png").await;
-    wait_images(&mut a, pane, "png placed", |all| all.len() == 1).await;
-    let (p, image) = images(&a, pane).remove(0);
+    show(
+        &mut laptop,
+        pane,
+        files.path(),
+        "png",
+        &sequence,
+        "shown-png",
+    )
+    .await;
+    wait_images(&mut laptop, pane, "png placed", |all| all.len() == 1).await;
+    let (placement, image) = images(&laptop, pane).remove(0);
     let image = image.expect("stored");
-    assert_eq!((p.image_id, p.cols, p.rows), (1, 4, 2));
+    assert_eq!(
+        (placement.image_id, placement.cols, placement.rows),
+        (1, 4, 2)
+    );
     assert_eq!((image.width, image.height), (40, 40));
     assert_eq!(image.pixels.as_deref().map(<[u8]>::len), Some(40 * 40 * 4));
     assert_eq!(image.pixels.unwrap()[..4], [200, 200, 200, 200]);
 
     // Transmit once, place twice (`a=t`, then `a=p` at two cells), raw RGBA (`f=32`).
     let rgba: Vec<u8> = [255, 0, 0, 255].repeat(20 * 20);
-    let seq = format!(
+    let sequence = format!(
         "{}\x1b[10;3H{}\x1b[12;30H{}",
         apc("a=t,f=32,s=20,v=20,i=5,q=2", &rgba),
         apc("a=p,i=5,p=1,C=1,q=2", &[]),
         apc("a=p,i=5,p=2,c=6,r=3,C=1,q=2", &[]),
     );
-    show(&mut a, pane, files.path(), "rgba", &seq, "shown-rgba").await;
-    wait_images(&mut a, pane, "two placements of one image", |all| {
-        all.iter().filter(|(p, _)| p.image_id == 5).count() == 2
+    show(
+        &mut laptop,
+        pane,
+        files.path(),
+        "rgba",
+        &sequence,
+        "shown-rgba",
+    )
+    .await;
+    wait_images(&mut laptop, pane, "two placements of one image", |all| {
+        all.iter()
+            .filter(|(placement, _)| placement.image_id == 5)
+            .count()
+            == 2
     })
     .await;
-    let placed: Vec<_> = images(&a, pane)
+    let placed: Vec<_> = images(&laptop, pane)
         .into_iter()
-        .filter(|(p, _)| p.image_id == 5)
+        .filter(|(placement, _)| placement.image_id == 5)
         .collect();
     let (first, second) = (placed[0].0, placed[1].0);
-    assert_eq!(first.viewport.map(|v| v.0), Some(2));
+    assert_eq!(first.viewport.map(|viewport| viewport.0), Some(2));
     assert_eq!((first.cols, first.rows), (2, 1));
-    assert_eq!(second.viewport.map(|v| v.0), Some(29));
+    assert_eq!(second.viewport.map(|viewport| viewport.0), Some(29));
     assert_eq!((second.cols, second.rows), (6, 3));
-    let row = |p: KittyPlacement| p.viewport.unwrap().1;
+    let row = |placement: KittyPlacement| placement.viewport.unwrap().1;
     assert_eq!(row(second) - row(first), 2);
-    let pixels = placed[0].1.clone().and_then(|i| i.pixels).unwrap();
+    let pixels = placed[0].1.clone().and_then(|image| image.pixels).unwrap();
     assert_eq!(pixels, rgba);
 
     // A chunked transfer (`m=1` … `m=0`), in chunks of whole base64 quads as the spec asks.
-    let b64 = data_encoding::BASE64.encode(&png(64, 32, 90));
-    let chunks: Vec<&str> = b64
+    let encoded = data_encoding::BASE64.encode(&png(64, 32, 90));
+    let chunks: Vec<&str> = encoded
         .as_bytes()
         .chunks(32)
-        .map(|c| std::str::from_utf8(c).unwrap())
+        .map(|chunk| std::str::from_utf8(chunk).unwrap())
         .collect();
     assert!(chunks.len() > 2);
-    let mut seq = String::from("\x1b[20;1H");
+    let mut sequence = String::from("\x1b[20;1H");
     for (i, chunk) in chunks.iter().enumerate() {
         let more = u8::from(i + 1 < chunks.len());
         let params = if i == 0 { "a=T,f=100,i=9,q=2," } else { "" };
-        seq += &format!("\x1b_G{params}m={more};{chunk}\x1b\\");
+        sequence += &format!("\x1b_G{params}m={more};{chunk}\x1b\\");
     }
-    show(&mut a, pane, files.path(), "chunked", &seq, "shown-chunks").await;
-    wait_images(&mut a, pane, "chunked image", |all| {
-        all.iter().any(|(p, i)| {
-            p.image_id == 9 && i.as_ref().is_some_and(|i| (i.width, i.height) == (64, 32))
+    show(
+        &mut laptop,
+        pane,
+        files.path(),
+        "chunked",
+        &sequence,
+        "shown-chunks",
+    )
+    .await;
+    wait_images(&mut laptop, pane, "chunked image", |all| {
+        all.iter().any(|(placement, image)| {
+            placement.image_id == 9
+                && image
+                    .as_ref()
+                    .is_some_and(|image| (image.width, image.height) == (64, 32))
         })
     })
     .await;
 
     // Deleting image 5 with its placements (`a=d,d=I`).
     show(
-        &mut a,
+        &mut laptop,
         pane,
         files.path(),
         "delete",
@@ -148,46 +190,46 @@ async fn kitty_graphics_are_mirrored_answered_and_survive_reattach() {
         "deleted",
     )
     .await;
-    wait_images(&mut a, pane, "image 5 deleted", |all| {
-        all.iter().all(|(p, _)| p.image_id != 5)
+    wait_images(&mut laptop, pane, "image 5 deleted", |all| {
+        all.iter().all(|(placement, _)| placement.image_id != 5)
     })
     .await;
-    assert_eq!(images(&a, pane).len(), 2);
+    assert_eq!(images(&laptop, pane).len(), 2);
 
     // A client attaching now restores the images from the snapshot, pixels included.
-    let before = images(&a, pane);
-    let mut b = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    let pane_b = b.attach_and_follow().await;
+    let before = images(&laptop, pane);
+    let mut tablet = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane_b = tablet.attach_and_follow().await;
     assert_eq!(pane_b, pane);
-    wait_images(&mut b, pane, "images restored with pixels", |all| {
+    wait_images(&mut tablet, pane, "images restored with pixels", |all| {
         all.len() == 2
             && all
                 .iter()
-                .all(|(_, i)| i.as_ref().is_some_and(|i| i.pixels.is_some()))
+                .all(|(_, image)| image.as_ref().is_some_and(|image| image.pixels.is_some()))
     })
     .await;
-    let after = images(&b, pane);
-    for ((p, i), (q, j)) in before.iter().zip(&after) {
-        assert_eq!(p, q);
-        let (i, j) = (i.as_ref().unwrap(), j.as_ref().unwrap());
+    let after = images(&tablet, pane);
+    for ((placement, image), (restored_placement, restored)) in before.iter().zip(&after) {
+        assert_eq!(placement, restored_placement);
+        let (image, restored) = (image.as_ref().unwrap(), restored.as_ref().unwrap());
         assert_eq!(
-            (i.width, i.height, &i.pixels),
-            (j.width, j.height, &j.pixels)
+            (image.width, image.height, &image.pixels),
+            (restored.width, restored.height, &restored.pixels)
         );
     }
 
     // And a reconnect of the first client resumes with them too.
-    drop(a);
-    let mut a = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    a.attach_and_follow().await;
-    wait_images(&mut a, pane, "images after reconnect", |all| {
+    drop(laptop);
+    let mut laptop = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    laptop.attach_and_follow().await;
+    wait_images(&mut laptop, pane, "images after reconnect", |all| {
         all.len() == 2
             && all
                 .iter()
-                .all(|(_, i)| i.as_ref().is_some_and(|i| i.pixels.is_some()))
+                .all(|(_, image)| image.as_ref().is_some_and(|image| image.pixels.is_some()))
     })
     .await;
-    drop((a, b));
+    drop((laptop, tablet));
     daemon.shutdown().await;
 }
 
@@ -198,15 +240,16 @@ async fn mirrors_follow_the_hosts_image_storage() {
     let state = tempfile::tempdir().unwrap();
     let files = tempfile::tempdir().unwrap();
     // Room for two 2×2 RGBA images (16 bytes each), not three.
-    let daemon = crate::support::start_with(state.path(), |c| c.image_storage_bytes = 40).await;
-    let mut a = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    let pane = a.attach_and_follow().await;
-    a.type_line(pane, "echo ready-$((6*7))");
-    a.wait_text(pane, "ready-42").await;
-    assert_eq!(a.client.image_storage_limit(), 40);
+    let daemon =
+        crate::support::start_with(state.path(), |config| config.image_storage_bytes = 40).await;
+    let mut laptop = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = laptop.attach_and_follow().await;
+    laptop.type_line(pane, "echo ready-$((6*7))");
+    laptop.wait_text(pane, "ready-42").await;
+    assert_eq!(laptop.client.image_storage_limit(), 40);
 
     let rgba = [0, 0, 255, 255].repeat(4);
-    let seq: String = (1..=3)
+    let sequence: String = (1..=3)
         .map(|id| {
             format!(
                 "\x1b[{id};1H{}",
@@ -214,15 +257,23 @@ async fn mirrors_follow_the_hosts_image_storage() {
             )
         })
         .collect();
-    show(&mut a, pane, files.path(), "three", &seq, "shown-three").await;
-    wait_images(&mut a, pane, "the third image", |all| {
-        all.iter().any(|(p, _)| p.image_id == 3)
+    show(
+        &mut laptop,
+        pane,
+        files.path(),
+        "three",
+        &sequence,
+        "shown-three",
+    )
+    .await;
+    wait_images(&mut laptop, pane, "the third image", |all| {
+        all.iter().any(|(placement, _)| placement.image_id == 3)
     })
     .await;
-    let stored: Vec<u32> = images(&a, pane)
+    let stored: Vec<u32> = images(&laptop, pane)
         .iter()
         .filter(|(_, image)| image.is_some())
-        .map(|(p, _)| p.image_id)
+        .map(|(placement, _)| placement.image_id)
         .collect();
     assert_eq!(stored, [2, 3], "the host evicted the oldest image");
 }

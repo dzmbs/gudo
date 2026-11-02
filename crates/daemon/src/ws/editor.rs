@@ -1,10 +1,11 @@
-//! accepted Microsoft's licence in the app; VSCodium's Web Host (MIT, Open VSX) as the
-//! automatic fallback when that CLI cannot be had (the client decides, DAEMON.md §5.3) or as
-//! the host's `editor.default`; Gitpod's openvscode-server (MIT) only when asked for. The
-//! last two are downloaded on demand into the state directory and SHA-256 pinned. Each is
-//! bound to `127.0.0.1` with a random connection token, one server per workspace folder, and
-//! reached by the app through a port forward. The server belongs to the daemon (not a pane)
-//! and stops with it.
+//! The editor server: VS Code's `code serve-web` when the user has the `code` CLI and accepted
+//! Microsoft's licence in the app; VSCodium's Web Host (MIT, Open VSX) as the automatic fallback
+//! when that CLI cannot be had (the client decides, DAEMON.md §5.3) or as the host's
+//! `editor.default`; Gitpod's openvscode-server (MIT) only when asked for. The last two are
+//! downloaded on demand into the state directory and SHA-256 pinned. Each is bound to
+//! `127.0.0.1` with a random connection token, one server per workspace folder, and reached by
+//! the app through a port forward. The server belongs to the daemon (not a pane) and stops with
+//! it.
 //!
 //! "Open file at line" first uses the editor's own CLI channel: the server's extension host
 //! exports `VSCODE_IPC_HOOK_CLI`, and its bundled remote CLI (`bin/remote-cli/*`) with that
@@ -47,10 +48,10 @@ const OPENVSCODE_BUILDS: &[(&str, &str, &str)] = &[
         "36d9c14036489b63de84ebace837fcacf7e60e669a0dc715802c5443684ea4dc",
     ),
 ];
-/// The pinned VSCodium release (its Web Host, `vscodium-reh-web`, MIT, Open VSX).
+/// The pinned VSCodium Web Host (`vscodium-reh-web`) release.
 pub(crate) const VSCODIUM_VERSION: &str = "1.140.06880";
 /// `(target os, rust arch, release platform, SHA-256 of the tarball)`, from the release's
-/// published `.sha256` files (2026-10-19) and re-checked on download.
+/// published `.sha256` files and re-checked on download.
 const VSCODIUM_BUILDS: &[(&str, &str, &str, &str)] = &[
     (
         "linux",
@@ -77,17 +78,14 @@ const VSCODIUM_BUILDS: &[(&str, &str, &str, &str)] = &[
         "76062c1a3546852b0ecf1e9cb842cff21faa768b3e3d9fffbe18d27ec4c94619",
     ),
 ];
-/// How long a server may take to accept connections (`code serve-web` downloads Microsoft's
-/// server on its first run).
+/// Long because `code serve-web` downloads Microsoft's server on its first run.
 const START_TIMEOUT: Duration = Duration::from_secs(180);
 
 struct Running {
     /// `info.port` is the proxy's port when there is one, else the server's.
     info: EditorInstance,
-    /// The server's own port.
-    upstream: u16,
+    upstream_port: u16,
     child: Child,
-    /// Dropped (stopped) with the server.
     proxy: Option<EditorProxy>,
 }
 
@@ -104,28 +102,28 @@ impl Drop for Running {
 #[derive(Default)]
 pub(crate) struct Editors {
     running: tokio::sync::Mutex<HashMap<String, Running>>,
-    /// Serialises the openvscode download.
+    /// Serialises the openvscode and VSCodium downloads.
     install: tokio::sync::Mutex<()>,
     /// Compressed static assets, shared by every editor's proxy.
-    cache: std::sync::OnceLock<std::sync::Arc<AssetCache>>,
+    asset_cache: std::sync::OnceLock<std::sync::Arc<AssetCache>>,
     /// Microsoft's server, run directly.
     servers: Servers,
 }
 
-/// The VS Code CLI: the user's own, else the one the daemon installed from Microsoft.
-fn find_code(cfg: &Config) -> Option<PathBuf> {
-    find_user_code(cfg).or_else(|| super::tunnel::managed_cli(cfg))
+/// The user's own VS Code CLI, else the one the daemon installed from Microsoft.
+fn find_code(config: &Config) -> Option<PathBuf> {
+    find_user_code(config).or_else(|| super::tunnel::managed_cli(config))
 }
 
 /// The user's own VS Code CLI (`editor.code`, `PATH`, the usual install locations).
-pub(crate) fn find_user_code(cfg: &Config) -> Option<PathBuf> {
-    if let Some(code) = &cfg.code_cli {
+pub(crate) fn find_user_code(config: &Config) -> Option<PathBuf> {
+    if let Some(code) = &config.code_cli {
         return code.is_file().then(|| code.clone());
     }
-    let path = cfg.pane_var("PATH").unwrap_or_default();
-    let home = cfg.home();
+    let path = config.pane_var("PATH").unwrap_or_default();
+    let home = config.home();
     std::env::split_paths(&path)
-        .map(|d| d.join("code"))
+        .map(|dir| dir.join("code"))
         .chain([
             PathBuf::from("/usr/local/bin/code"),
             PathBuf::from("/opt/homebrew/bin/code"),
@@ -134,9 +132,10 @@ pub(crate) fn find_user_code(cfg: &Config) -> Option<PathBuf> {
             PathBuf::from("/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"),
             home.join("Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"),
         ])
-        .find(|p| p.is_file())
+        .find(|candidate| candidate.is_file())
 }
 
+/// `(release arch, SHA-256)` of the openvscode-server build for this host.
 fn openvscode_build() -> Option<(&'static str, &'static str)> {
     if !cfg!(target_os = "linux") {
         return None;
@@ -144,15 +143,15 @@ fn openvscode_build() -> Option<(&'static str, &'static str)> {
     OPENVSCODE_BUILDS
         .iter()
         .find(|(arch, _, _)| *arch == std::env::consts::ARCH)
-        .map(|&(_, rel, sha)| (rel, sha))
+        .map(|&(_, release_arch, sha256)| (release_arch, sha256))
 }
 
-fn openvscode_dir(cfg: &Config) -> Option<PathBuf> {
-    if let Some(dir) = &cfg.openvscode_dir {
+fn openvscode_dir(config: &Config) -> Option<PathBuf> {
+    if let Some(dir) = &config.openvscode_dir {
         return Some(dir.clone());
     }
     let (arch, _) = openvscode_build()?;
-    Some(cfg.state_dir.join("editors").join(format!(
+    Some(config.state_dir.join("editors").join(format!(
         "openvscode-server-{OPENVSCODE_VERSION}-linux-{arch}"
     )))
 }
@@ -166,16 +165,17 @@ fn vscodium_build() -> Option<(&'static str, &'static str)> {
     VSCODIUM_BUILDS
         .iter()
         .find(|(os, arch, _, _)| *os == std::env::consts::OS && *arch == std::env::consts::ARCH)
-        .map(|&(_, _, platform, sha)| (platform, sha))
+        .map(|&(_, _, platform, sha256)| (platform, sha256))
 }
 
-fn vscodium_dir(cfg: &Config) -> Option<PathBuf> {
-    if let Some(dir) = &cfg.vscodium_dir {
+fn vscodium_dir(config: &Config) -> Option<PathBuf> {
+    if let Some(dir) = &config.vscodium_dir {
         return Some(dir.clone());
     }
     let (platform, _) = vscodium_build()?;
     Some(
-        cfg.state_dir
+        config
+            .state_dir
             .join("editors")
             .join(format!("vscodium-reh-web-{platform}-{VSCODIUM_VERSION}")),
     )
@@ -190,13 +190,13 @@ fn token() -> String {
 }
 
 /// Percent-encodes a query value.
-fn encode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        if b.is_ascii_alphanumeric() || b"-_.~/".contains(&b) {
-            out.push(b as char);
+fn encode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-_.~/".contains(&byte) {
+            out.push(byte as char);
         } else {
-            out.push_str(&format!("%{b:02X}"));
+            out.push_str(&format!("%{byte:02X}"));
         }
     }
     out
@@ -208,23 +208,24 @@ fn url_path(token: &str, folder: &str) -> String {
 
 fn free_port() -> Result<u16, WsError> {
     std::net::TcpListener::bind(("127.0.0.1", 0))
-        .and_then(|l| l.local_addr())
-        .map(|a| a.port())
-        .map_err(|e| WsError::Failed(format!("no free port: {e}")))
+        .and_then(|listener| listener.local_addr())
+        .map(|addr| addr.port())
+        .map_err(|error| WsError::Failed(format!("no free port: {error}")))
 }
 
 impl Editors {
-    pub async fn status(&self, cfg: &Config) -> EditorList {
-        let code = find_code(cfg);
-        let ovs = openvscode_dir(cfg);
-        let ovs_installed = ovs.as_deref().is_some_and(|d| openvscode_bin(d).is_file());
-        let available =
-            vec![
+    pub async fn status(&self, config: &Config) -> EditorList {
+        let code = find_code(config);
+        let openvscode = openvscode_dir(config);
+        let openvscode_installed = openvscode
+            .as_deref()
+            .is_some_and(|dir| openvscode_bin(dir).is_file());
+        let available = vec![
             EditorAvailability {
                 kind: EditorKind::VsCode,
                 installed: code.is_some(),
                 downloadable: false,
-                path: code.map(|p| p.to_string_lossy().into_owned()),
+                path: code.map(|path| path.to_string_lossy().into_owned()),
                 version: None,
                 note: Some(
                     "Microsoft VS Code Server licence: single user, no hosting as a service; \
@@ -234,35 +235,35 @@ impl Editors {
             },
             EditorAvailability {
                 kind: EditorKind::OpenVsCode,
-                installed: ovs_installed,
-                downloadable: openvscode_build().is_some() && cfg.openvscode_dir.is_none(),
-                path: ovs
-                    .filter(|_| ovs_installed)
-                    .map(|d| openvscode_bin(&d).to_string_lossy().into_owned()),
-                version: cfg
+                installed: openvscode_installed,
+                downloadable: openvscode_build().is_some() && config.openvscode_dir.is_none(),
+                path: openvscode
+                    .filter(|_| openvscode_installed)
+                    .map(|dir| openvscode_bin(&dir).to_string_lossy().into_owned()),
+                version: config
                     .openvscode_dir
                     .is_none()
                     .then(|| OPENVSCODE_VERSION.to_owned()),
-                note: (openvscode_build().is_none() && cfg.openvscode_dir.is_none()).then(|| {
+                note: (openvscode_build().is_none() && config.openvscode_dir.is_none()).then(|| {
                     "openvscode-server publishes Linux builds only; install VS Code's `code` CLI"
                         .to_owned()
                 }),
             },
             {
-                let dir = vscodium_dir(cfg);
-                let installed = dir.as_deref().is_some_and(|d| vscodium_bin(d).is_file());
+                let dir = vscodium_dir(config);
+                let installed = dir.as_deref().is_some_and(|dir| vscodium_bin(dir).is_file());
                 EditorAvailability {
                     kind: EditorKind::Vscodium,
                     installed,
-                    downloadable: vscodium_build().is_some() && cfg.vscodium_dir.is_none(),
+                    downloadable: vscodium_build().is_some() && config.vscodium_dir.is_none(),
                     path: dir
                         .filter(|_| installed)
-                        .map(|d| vscodium_bin(&d).to_string_lossy().into_owned()),
-                    version: cfg
+                        .map(|dir| vscodium_bin(&dir).to_string_lossy().into_owned()),
+                    version: config
                         .vscodium_dir
                         .is_none()
                         .then(|| VSCODIUM_VERSION.to_owned()),
-                    note: Some(if vscodium_build().is_some() || cfg.vscodium_dir.is_some() {
+                    note: Some(if vscodium_build().is_some() || config.vscodium_dir.is_some() {
                         "VSCodium (MIT): extensions from Open VSX; no licence prompt, no sign-in"
                             .to_owned()
                     } else {
@@ -277,14 +278,14 @@ impl Editors {
         reap(&mut running);
         EditorList {
             available,
-            running: running.values().map(|r| r.info.clone()).collect(),
+            running: running.values().map(|editor| editor.info.clone()).collect(),
         }
     }
 
     pub async fn launch(
         &self,
-        cfg: &Config,
-        req: &EditorLaunch,
+        config: &Config,
+        request: &EditorLaunch,
         folder: &Path,
     ) -> Result<EditorInstance, WsError> {
         if !folder.is_dir() {
@@ -293,41 +294,41 @@ impl Editors {
                 folder.display()
             )));
         }
-        let folder_s = folder.to_string_lossy().into_owned();
+        let folder_key = folder.to_string_lossy().into_owned();
         let reusable = {
             let mut running = self.running.lock().await;
             reap(&mut running);
-            running.get(&folder_s).and_then(|r| {
-                let wanted = match req.choice {
+            running.get(&folder_key).and_then(|editor| {
+                let wanted = match request.choice {
                     EditorChoice::Auto => None,
-                    EditorChoice::Only(k) => Some(k),
+                    EditorChoice::Only(kind) => Some(kind),
                 };
                 wanted
-                    .is_none_or(|k| k == r.info.kind)
-                    .then(|| (r.info.clone(), r.upstream))
+                    .is_none_or(|kind| kind == editor.info.kind)
+                    .then(|| (editor.info.clone(), editor.upstream_port))
             })
         };
-        if let Some((info, upstream)) = reusable {
-            if accepts_token(upstream, &info.token).await {
+        if let Some((info, upstream_port)) = reusable {
+            if accepts_token(upstream_port, &info.token).await {
                 return Ok(info);
             }
-            // Alive but refusing its own token: replace it.
             tracing::warn!(folder = %folder.display(), pid = info.pid, "editor refuses its token; restarting it");
             let mut running = self.running.lock().await;
             if running
-                .get(&folder_s)
-                .is_some_and(|r| r.info.pid == info.pid)
+                .get(&folder_key)
+                .is_some_and(|editor| editor.info.pid == info.pid)
             {
-                running.remove(&folder_s);
+                running.remove(&folder_key);
             }
         }
-        let code = find_code(cfg);
-        // Auto is the configured default (`editor.default`): Microsoft's VS Code unless the
-        // owner chose VSCodium. It says what is missing instead of silently switching editors;
-        // openvscode-server is an explicit fallback only (12-vscode.md).
-        let kind = match req.choice {
-            EditorChoice::Only(k) => k,
-            EditorChoice::Auto if cfg.editor_default != EditorKind::VsCode => cfg.editor_default,
+        let code = find_code(config);
+        // Auto says what is missing instead of silently switching editors; openvscode-server
+        // is an explicit choice only.
+        let kind = match request.choice {
+            EditorChoice::Only(kind) => kind,
+            EditorChoice::Auto if config.editor_default != EditorKind::VsCode => {
+                config.editor_default
+            }
             EditorChoice::Auto if code.is_none() => {
                 return Err(WsError::Unavailable(
                     "the VS Code `code` CLI is not installed: install it (VsCodeCliInstall) \
@@ -339,33 +340,33 @@ impl Editors {
         };
         let port = free_port()?;
         let token = token();
-        let log_dir = cfg.state_dir.join("editors");
+        let log_dir = config.state_dir.join("editors");
         // From a private file, never the command line: other users of the host can read the
         // process list and reach the server on the shared loopback.
         let token_file = log_dir.join(format!("{port}.token"));
         fsutil::write_atomic(&token_file, token.as_bytes())
-            .map_err(|e| WsError::Failed(e.to_string()))?;
-        let mut cmd = match kind {
+            .map_err(|error| WsError::Failed(error.to_string()))?;
+        let mut command = match kind {
             EditorKind::VsCode => {
                 let code = code.ok_or_else(|| {
                     WsError::Unavailable("the VS Code `code` CLI is not installed".into())
                 })?;
-                if !req.accept_vscode_license {
+                if !request.accept_vscode_license {
                     return Err(WsError::Denied(
                         "code serve-web needs the Microsoft VS Code Server licence accepted \
                          (https://aka.ms/vscode-server-license)"
                             .into(),
                     ));
                 }
-                let direct = if cfg.vscode_serve_web {
+                let direct = if config.vscode_serve_web {
                     None
                 } else {
                     self.servers
-                        .ensure(cfg)
+                        .ensure(config)
                         .await
-                        .inspect_err(|e| {
+                        .inspect_err(|error| {
                             tracing::warn!(
-                                "no VS Code server to run directly ({e}); using code serve-web"
+                                "no VS Code server to run directly ({error}); using code serve-web"
                             )
                         })
                         .ok()
@@ -373,81 +374,86 @@ impl Editors {
                 match direct {
                     Some(dir) => vscode_server::command(&dir, port, &token_file),
                     None => {
-                        let mut cmd = Command::new(code);
-                        cmd.args(["serve-web", "--host", "127.0.0.1", "--port"])
+                        let mut command = Command::new(code);
+                        command
+                            .args(["serve-web", "--host", "127.0.0.1", "--port"])
                             .arg(port.to_string())
                             .arg("--connection-token-file")
                             .arg(&token_file)
                             .arg("--accept-server-license-terms");
-                        cmd
+                        command
                     }
                 }
             }
             EditorKind::OpenVsCode => {
-                let dir = self.ensure_openvscode(cfg).await?;
-                let mut cmd = Command::new(openvscode_bin(&dir));
-                cmd.args(["--host", "127.0.0.1", "--port"])
+                let dir = self.ensure_openvscode(config).await?;
+                let mut command = Command::new(openvscode_bin(&dir));
+                command
+                    .args(["--host", "127.0.0.1", "--port"])
                     .arg(port.to_string())
                     .arg("--connection-token-file")
                     .arg(&token_file)
                     .args(["--telemetry-level", "off"]);
-                cmd
+                command
             }
             // MIT, no server licence (its product.json has an empty `serverLicense`), so no
             // acceptance flag and never a prompt or sign-in.
             EditorKind::Vscodium => {
-                let dir = self.ensure_vscodium(cfg).await?;
-                let mut cmd = Command::new(vscodium_bin(&dir));
-                cmd.args(["--host", "127.0.0.1", "--port"])
+                let dir = self.ensure_vscodium(config).await?;
+                let mut command = Command::new(vscodium_bin(&dir));
+                command
+                    .args(["--host", "127.0.0.1", "--port"])
                     .arg(port.to_string())
                     .arg("--connection-token-file")
                     .arg(&token_file)
                     .args(["--telemetry-level", "off"]);
-                cmd
+                command
             }
         };
         let log_path = log_dir.join(format!("{kind:?}-{port}.log").to_lowercase());
-        let log = std::fs::File::create(&log_path).map_err(|e| WsError::Failed(e.to_string()))?;
-        let log_err = log
+        let log =
+            std::fs::File::create(&log_path).map_err(|error| WsError::Failed(error.to_string()))?;
+        let log_stderr = log
             .try_clone()
-            .map_err(|e| WsError::Failed(e.to_string()))?;
-        cmd.current_dir(folder)
+            .map_err(|error| WsError::Failed(error.to_string()))?;
+        command
+            .current_dir(folder)
             .stdin(Stdio::null())
             .stdout(log)
-            .stderr(log_err)
+            .stderr(log_stderr)
             .process_group(0)
             .kill_on_drop(true);
-        let child = cmd
+        let child = command
             .spawn()
-            .map_err(|e| WsError::Failed(format!("starting the editor: {e}")))?;
+            .map_err(|error| WsError::Failed(format!("starting the editor: {error}")))?;
         let pid = child.id().unwrap_or_default();
-        let mut run = Running {
+        let mut editor = Running {
             info: EditorInstance {
                 kind,
-                folder: folder_s.clone(),
+                folder: folder_key.clone(),
                 port,
                 token: token.clone(),
-                url_path: url_path(&token, &folder_s),
+                url_path: url_path(&token, &folder_key),
                 pid,
                 started_at: UnixMillis(crate::identity::now_millis()),
             },
-            upstream: port,
+            upstream_port: port,
             child,
             proxy: None,
         };
-        wait_ready(&mut run, &log_path).await?;
-        if cfg.editor_compress {
+        wait_ready(&mut editor, &log_path).await?;
+        if config.editor_compress {
             let cache = self
-                .cache
-                .get_or_init(|| AssetCache::new(cfg.state_dir.join("editors").join("cache")));
+                .asset_cache
+                .get_or_init(|| AssetCache::new(config.state_dir.join("editors").join("cache")));
             let proxy = EditorProxy::start(port, Some(std::sync::Arc::clone(cache)))
                 .await
-                .map_err(|e| WsError::Failed(format!("starting the editor proxy: {e}")))?;
-            run.info.port = proxy.port();
-            run.proxy = Some(proxy);
+                .map_err(|error| WsError::Failed(format!("starting the editor proxy: {error}")))?;
+            editor.info.port = proxy.port();
+            editor.proxy = Some(proxy);
         }
-        let info = run.info.clone();
-        self.running.lock().await.insert(folder_s, run);
+        let info = editor.info.clone();
+        self.running.lock().await.insert(folder_key, editor);
         tracing::info!(?kind, port, proxy = info.port, folder = %folder.display(), "editor started");
         Ok(info)
     }
@@ -462,7 +468,7 @@ impl Editors {
     }
 
     pub async fn stop_all(&self) {
-        if let Some(cache) = self.cache.get() {
+        if let Some(cache) = self.asset_cache.get() {
             cache.close();
         }
         self.running.lock().await.clear();
@@ -479,12 +485,12 @@ impl Editors {
             let mut running = self.running.lock().await;
             reap(&mut running);
             match folder {
-                Some(f) => running.get(f).map(|r| r.info.clone()),
+                Some(folder) => running.get(folder).map(|editor| editor.info.clone()),
                 None => running
                     .values()
-                    .filter(|r| path.starts_with(&r.info.folder))
-                    .max_by_key(|r| r.info.folder.len())
-                    .map(|r| r.info.clone()),
+                    .filter(|editor| path.starts_with(&editor.info.folder))
+                    .max_by_key(|editor| editor.info.folder.len())
+                    .map(|editor| editor.info.clone()),
             }
         }
         .ok_or_else(|| {
@@ -494,8 +500,8 @@ impl Editors {
             ))
         })?;
         let goto = match (line, column) {
-            (Some(l), Some(c)) => format!("{}:{l}:{c}", path.display()),
-            (Some(l), None) => format!("{}:{l}", path.display()),
+            (Some(line), Some(column)) => format!("{}:{line}:{column}", path.display()),
+            (Some(line), None) => format!("{}:{line}", path.display()),
             _ => path.display().to_string(),
         };
         let in_window = open_via_cli(instance.pid, &goto).await;
@@ -513,8 +519,8 @@ impl Editors {
     }
 
     /// Downloads, verifies and unpacks the pinned openvscode-server once.
-    async fn ensure_openvscode(&self, cfg: &Config) -> Result<PathBuf, WsError> {
-        let dir = openvscode_dir(cfg).ok_or_else(|| {
+    async fn ensure_openvscode(&self, config: &Config) -> Result<PathBuf, WsError> {
+        let dir = openvscode_dir(config).ok_or_else(|| {
             WsError::Unavailable(
                 "openvscode-server publishes Linux builds only (x86_64, arm64); on macOS install \
                  VS Code's `code` CLI and use code serve-web"
@@ -524,7 +530,7 @@ impl Editors {
         if openvscode_bin(&dir).is_file() {
             return Ok(dir);
         }
-        if cfg.openvscode_dir.is_some() {
+        if config.openvscode_dir.is_some() {
             return Err(WsError::NotFound(format!(
                 "{} not found",
                 openvscode_bin(&dir).display()
@@ -534,22 +540,24 @@ impl Editors {
         if openvscode_bin(&dir).is_file() {
             return Ok(dir);
         }
-        let (arch, sha) = openvscode_build().expect("dir implies a build");
+        let (arch, sha256) = openvscode_build().expect("dir implies a build");
         let name = format!("openvscode-server-{OPENVSCODE_VERSION}-linux-{arch}");
         let url = format!(
             "https://github.com/gitpod-io/openvscode-server/releases/download/\
              openvscode-server-{OPENVSCODE_VERSION}/{name}.tar.gz"
         );
-        let dir2 = dir.clone();
-        tokio::task::spawn_blocking(move || install(&url, sha, &name, Some(&name), &dir2))
-            .await
-            .map_err(|e| WsError::Failed(e.to_string()))??;
+        let install_dir = dir.clone();
+        tokio::task::spawn_blocking(move || {
+            install(&url, sha256, &name, Some(&name), &install_dir)
+        })
+        .await
+        .map_err(|error| WsError::Failed(error.to_string()))??;
         Ok(dir)
     }
 
     /// Downloads, verifies and unpacks the pinned VSCodium Web Host once.
-    async fn ensure_vscodium(&self, cfg: &Config) -> Result<PathBuf, WsError> {
-        let dir = vscodium_dir(cfg).ok_or_else(|| {
+    async fn ensure_vscodium(&self, config: &Config) -> Result<PathBuf, WsError> {
+        let dir = vscodium_dir(config).ok_or_else(|| {
             WsError::Unavailable(
                 "VSCodium publishes Web Host builds for Linux and macOS (x86_64, arm64) only"
                     .into(),
@@ -558,7 +566,7 @@ impl Editors {
         if vscodium_bin(&dir).is_file() {
             return Ok(dir);
         }
-        if cfg.vscodium_dir.is_some() {
+        if config.vscodium_dir.is_some() {
             return Err(WsError::NotFound(format!(
                 "{} not found",
                 vscodium_bin(&dir).display()
@@ -568,16 +576,16 @@ impl Editors {
         if vscodium_bin(&dir).is_file() {
             return Ok(dir);
         }
-        let (platform, sha) = vscodium_build().expect("dir implies a build");
+        let (platform, sha256) = vscodium_build().expect("dir implies a build");
         let name = format!("vscodium-reh-web-{platform}-{VSCODIUM_VERSION}");
         let url = format!(
             "https://github.com/VSCodium/vscodium/releases/download/{VSCODIUM_VERSION}/{name}.tar.gz"
         );
-        let dir2 = dir.clone();
+        let install_dir = dir.clone();
         // The tarball has no top-level directory: the staging directory is the server.
-        tokio::task::spawn_blocking(move || install(&url, sha, &name, None, &dir2))
+        tokio::task::spawn_blocking(move || install(&url, sha256, &name, None, &install_dir))
             .await
-            .map_err(|e| WsError::Failed(e.to_string()))??;
+            .map_err(|error| WsError::Failed(error.to_string()))??;
         Ok(dir)
     }
 }
@@ -596,8 +604,8 @@ async fn accepts_token(port: u16, token: &str) -> bool {
         );
         stream.write_all(request.as_bytes()).await.ok()?;
         let mut head = [0u8; 32];
-        let n = stream.read(&mut head).await.ok()?;
-        std::str::from_utf8(&head[..n])
+        let len = stream.read(&mut head).await.ok()?;
+        std::str::from_utf8(&head[..len])
             .ok()?
             .split_whitespace()
             .nth(1)?
@@ -614,9 +622,10 @@ async fn accepts_token(port: u16, token: &str) -> bool {
 /// Forgets servers that exited, and stops those no workbench has used for as long as one
 /// may stay away and still come back.
 fn reap(running: &mut HashMap<String, Running>) {
-    running.retain(|_, r| {
-        matches!(r.child.try_wait(), Ok(None))
-            && r.proxy
+    running.retain(|_, editor| {
+        matches!(editor.child.try_wait(), Ok(None))
+            && editor
+                .proxy
                 .as_ref()
                 .and_then(EditorProxy::idle_for)
                 .is_none_or(|idle| idle < vscode_server::RECONNECTION_GRACE)
@@ -624,16 +633,16 @@ fn reap(running: &mut HashMap<String, Running>) {
 }
 
 /// Waits until the server accepts connections, or fails with the end of its log.
-async fn wait_ready(run: &mut Running, log: &Path) -> Result<(), WsError> {
+async fn wait_ready(editor: &mut Running, log: &Path) -> Result<(), WsError> {
     let start = Instant::now();
     loop {
-        if let Ok(Some(status)) = run.child.try_wait() {
+        if let Ok(Some(status)) = editor.child.try_wait() {
             return Err(WsError::Failed(format!(
                 "the editor exited ({status}): {}",
                 log_tail(log)
             )));
         }
-        if tokio::net::TcpStream::connect(("127.0.0.1", run.upstream))
+        if tokio::net::TcpStream::connect(("127.0.0.1", editor.upstream_port))
             .await
             .is_ok()
         {
@@ -655,9 +664,9 @@ fn log_tail(path: &Path) -> String {
     tail.into_iter().rev().collect::<Vec<_>>().join(" | ")
 }
 
-fn json_escape(s: &str) -> String {
-    serde_json::to_string(s)
-        .map(|q| q[1..q.len() - 1].to_owned())
+fn json_escape(text: &str) -> String {
+    serde_json::to_string(text)
+        .map(|quoted| quoted[1..quoted.len() - 1].to_owned())
         .unwrap_or_default()
 }
 
@@ -674,8 +683,8 @@ pub(crate) async fn open_via_cli(server_pid: u32, goto: &str) -> bool {
                 let cli = std::fs::read_dir(server.join("bin/remote-cli"))
                     .ok()?
                     .filter_map(Result::ok)
-                    .map(|e| e.path())
-                    .find(|p| p.is_file())?;
+                    .map(|entry| entry.path())
+                    .find(|path| path.is_file())?;
                 Some((hook, cli))
             })
     })
@@ -685,7 +694,7 @@ pub(crate) async fn open_via_cli(server_pid: u32, goto: &str) -> bool {
     let Some((hook, cli)) = found else {
         return false;
     };
-    let run = Command::new(&cli)
+    let status = Command::new(&cli)
         .args(["--goto", goto])
         .env("VSCODE_IPC_HOOK_CLI", hook)
         .stdin(Stdio::null())
@@ -694,8 +703,8 @@ pub(crate) async fn open_via_cli(server_pid: u32, goto: &str) -> bool {
         .kill_on_drop(true)
         .status();
     matches!(
-        tokio::time::timeout(Duration::from_secs(15), run).await,
-        Ok(Ok(s)) if s.success()
+        tokio::time::timeout(Duration::from_secs(15), status).await,
+        Ok(Ok(status)) if status.success()
     )
 }
 
@@ -709,7 +718,7 @@ fn install(
     dir: &Path,
 ) -> Result<(), WsError> {
     let parent = dir.parent().expect("under the state dir");
-    std::fs::create_dir_all(parent).map_err(|e| WsError::Failed(e.to_string()))?;
+    std::fs::create_dir_all(parent).map_err(|error| WsError::Failed(error.to_string()))?;
     let tag = fsutil::hex(&fsutil::random::<4>());
     let tarball = parent.join(format!(".{name}-{tag}.tar.gz"));
     let staging = parent.join(format!(".{name}-{tag}"));
@@ -730,32 +739,33 @@ fn install(
                 .arg(url)
                 .status()
         });
-    if !fetched.is_ok_and(|s| s.success()) {
+    if !fetched.is_ok_and(|status| status.success()) {
         cleanup();
         return Err(WsError::Failed(format!(
             "downloading {url} failed (curl/wget)"
         )));
     }
-    let got = sha256_file(&tarball).map_err(|e| WsError::Failed(e.to_string()))?;
-    if got != sha256 {
+    let actual = sha256_file(&tarball).map_err(|error| WsError::Failed(error.to_string()))?;
+    if actual != sha256 {
         cleanup();
         return Err(WsError::Failed(format!(
-            "{name} checksum mismatch: got {got}, pinned {sha256}"
+            "{name} checksum mismatch: got {actual}, pinned {sha256}"
         )));
     }
-    std::fs::create_dir_all(&staging).map_err(|e| WsError::Failed(e.to_string()))?;
+    std::fs::create_dir_all(&staging).map_err(|error| WsError::Failed(error.to_string()))?;
     let unpacked = std::process::Command::new("tar")
         .arg("-xzf")
         .arg(&tarball)
         .arg("-C")
         .arg(&staging)
         .status();
-    if !unpacked.is_ok_and(|s| s.success()) {
+    if !unpacked.is_ok_and(|status| status.success()) {
         cleanup();
         return Err(WsError::Failed(format!("unpacking {name} failed")));
     }
-    let inner = inner.map_or_else(|| staging.clone(), |i| staging.join(i));
-    let result = std::fs::rename(&inner, dir).map_err(|e| WsError::Failed(e.to_string()));
+    let unpacked_dir = inner.map_or_else(|| staging.clone(), |inner| staging.join(inner));
+    let result =
+        std::fs::rename(&unpacked_dir, dir).map_err(|error| WsError::Failed(error.to_string()));
     cleanup();
     result
 }
@@ -763,16 +773,16 @@ fn install(
 pub(crate) fn sha256_file(path: &Path) -> std::io::Result<String> {
     use std::io::Read;
     let mut file = std::fs::File::open(path)?;
-    let mut ctx = ring::digest::Context::new(&ring::digest::SHA256);
-    let mut buf = vec![0; 1 << 16];
+    let mut digest = ring::digest::Context::new(&ring::digest::SHA256);
+    let mut chunk = vec![0; 1 << 16];
     loop {
-        let n = file.read(&mut buf)?;
-        if n == 0 {
+        let len = file.read(&mut chunk)?;
+        if len == 0 {
             break;
         }
-        ctx.update(&buf[..n]);
+        digest.update(&chunk[..len]);
     }
-    Ok(fsutil::hex(ctx.finish().as_ref()))
+    Ok(fsutil::hex(digest.finish().as_ref()))
 }
 
 #[cfg(test)]
@@ -782,10 +792,10 @@ mod tests {
     #[test]
     fn hashes_and_encodes() {
         let dir = tempfile::tempdir().unwrap();
-        let f = dir.path().join("x");
-        std::fs::write(&f, b"abc").unwrap();
+        let file = dir.path().join("x");
+        std::fs::write(&file, b"abc").unwrap();
         assert_eq!(
-            sha256_file(&f).unwrap(),
+            sha256_file(&file).unwrap(),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
         assert_eq!(url_path("t", "/a b"), "/?tkn=t&folder=/a%20b");
@@ -800,8 +810,8 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
-            let mut buf = [0u8; 512];
-            let _ = stream.read(&mut buf).await;
+            let mut request = [0u8; 512];
+            let _ = stream.read(&mut request).await;
             let reply = format!("HTTP/1.1 {status}\r\ncontent-length: 0\r\n\r\n");
             let _ = stream.write_all(reply.as_bytes()).await;
         });

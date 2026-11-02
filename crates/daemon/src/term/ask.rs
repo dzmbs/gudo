@@ -21,7 +21,6 @@ use crate::core::{Core, Event, lock};
 /// is cut, and a cut action is never approved blind from the lock screen.
 const NOTIFY_ACTION_CHARS: usize = 400;
 
-/// The owner's answer to a drive request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Answer {
     Once,
@@ -40,19 +39,17 @@ impl Answer {
     }
 }
 
-/// The label of a drive request's option.
 pub(crate) fn option_label(option: OptionId) -> Option<&'static str> {
     DriveAsk::OPTIONS
         .iter()
         .find(|(id, _)| *id == option)
-        .map(|(_, l)| *l)
+        .map(|(_, label)| *label)
 }
 
 struct Open {
     ask: DriveAsk,
     /// `Claude wants to type into ~/api · zsh`.
     title: String,
-    /// The exact action, in words.
     action: String,
     reply: oneshot::Sender<Answer>,
 }
@@ -71,7 +68,6 @@ pub(crate) struct Asks {
     granted: Mutex<HashSet<(PaneId, PaneId)>>,
 }
 
-/// What an approval needs to know about an open drive request.
 pub(crate) struct Facts {
     pub caller: PaneId,
     pub tool: &'static str,
@@ -87,11 +83,14 @@ impl Asks {
     /// `None` while the same pane already waits on one: an agent cannot queue up questions
     /// (or notifications) faster than the owner answers them.
     pub fn open(&self, ask: DriveAsk) -> Option<oneshot::Receiver<Answer>> {
-        let (reply, rx) = oneshot::channel();
+        let (reply, answer) = oneshot::channel();
         let title = ask.title();
         let action = ask.action.describe();
         let mut open = lock(&self.open);
-        if open.values().any(|o| o.ask.pane_id == ask.pane_id) {
+        if open
+            .values()
+            .any(|request| request.ask.pane_id == ask.pane_id)
+        {
             return None;
         }
         open.insert(
@@ -103,7 +102,7 @@ impl Asks {
                 reply,
             },
         );
-        Some(rx)
+        Some(answer)
     }
 
     /// Withdraws a request (expired, the caller hung up); `true` if it was still open.
@@ -112,24 +111,26 @@ impl Asks {
     }
 
     pub fn caller_of(&self, id: RequestId) -> Option<PaneId> {
-        lock(&self.open).get(&id).map(|o| o.ask.pane_id)
+        lock(&self.open).get(&id).map(|request| request.ask.pane_id)
     }
 
     pub fn facts(&self, id: RequestId) -> Option<Facts> {
-        lock(&self.open).get(&id).map(|o| Facts {
-            caller: o.ask.pane_id,
-            tool: tool(&o.ask.action),
-            summary: o.summary(),
+        lock(&self.open).get(&id).map(|request| Facts {
+            caller: request.ask.pane_id,
+            tool: tool(&request.ask.action),
+            summary: request.summary(),
         })
     }
 
     /// The blocker the asking pane shows while its request is open.
     pub fn blocker(&self, caller: PaneId) -> Option<Blocker> {
         let open = lock(&self.open);
-        let o = open.values().find(|o| o.ask.pane_id == caller)?;
+        let request = open
+            .values()
+            .find(|request| request.ask.pane_id == caller)?;
         Some(Blocker {
-            request_id: o.ask.request_id,
-            summary: o.summary(),
+            request_id: request.ask.request_id,
+            summary: request.summary(),
             options: DriveAsk::OPTIONS
                 .iter()
                 .map(|(id, label)| DecisionOption {
@@ -142,29 +143,33 @@ impl Asks {
 
     /// Every open request, for a connection that just attached.
     pub fn all(&self) -> Vec<DriveAsk> {
-        lock(&self.open).values().map(|o| o.ask.clone()).collect()
+        lock(&self.open)
+            .values()
+            .map(|request| request.ask.clone())
+            .collect()
     }
 
     /// The title and body of the request's notification, and whether its body shows the
     /// action whole (only then may it be approved from the lock screen).
     pub fn notice(&self, id: RequestId) -> Option<(String, String, bool)> {
         let open = lock(&self.open);
-        let o = open.get(&id)?;
-        let whole = o.action.chars().count() <= NOTIFY_ACTION_CHARS;
+        let request = open.get(&id)?;
+        let whole = request.action.chars().count() <= NOTIFY_ACTION_CHARS;
         let body = if whole {
-            o.action.clone()
+            request.action.clone()
         } else {
-            let cut: String = o.action.chars().take(NOTIFY_ACTION_CHARS).collect();
+            let cut: String = request.action.chars().take(NOTIFY_ACTION_CHARS).collect();
             format!("{cut}…")
         };
-        Some((o.title.clone(), body, whole))
+        Some((request.title.clone(), body, whole))
     }
 
     /// Ends every grant and request that involves `pane`, which closed.
     pub fn forget_pane(&self, pane: PaneId) {
         lock(&self.granted).retain(|&(caller, target)| caller != pane && target != pane);
         // Dropping the reply tells the waiting call the pane is gone.
-        lock(&self.open).retain(|_, o| o.ask.pane_id != pane && o.ask.target != pane);
+        lock(&self.open)
+            .retain(|_, request| request.ask.pane_id != pane && request.ask.target != pane);
     }
 
     /// Applies the owner's decision. The request is used up whatever the answer: a replay,
@@ -211,7 +216,6 @@ impl Asks {
     }
 }
 
-/// Tells everyone a request is no longer open.
 pub(crate) fn closed(core: &Core, request_id: RequestId, caller: PaneId) {
     core.emit(Event::Approval(proto::ApprovalPush::Drive(
         DrivePush::Closed { request_id },
@@ -225,7 +229,6 @@ pub(crate) fn agent_request(id: RequestId) -> agents::RequestId {
     agents::RequestId::new(format!("drive/{}", id.0))
 }
 
-/// The tool the request came from.
 pub(crate) fn tool(action: &DriveAction) -> &'static str {
     match action {
         DriveAction::Type { .. } => "pane_send",
@@ -259,7 +262,7 @@ mod tests {
             action: DriveAction::Close,
             expires_at: proto::UnixMillis(0),
         };
-        let mut rx = asks.open(ask(7)).unwrap();
+        let mut answer = asks.open(ask(7)).unwrap();
         assert!(
             asks.open(ask(9)).is_none(),
             "one question at a time per pane"
@@ -268,11 +271,11 @@ mod tests {
         assert_eq!(asks.facts(RequestId(7)).unwrap().tool, "pane_close");
         asks.forget_pane(PaneId(2));
         assert!(
-            rx.try_recv().is_err(),
+            answer.try_recv().is_err(),
             "closing the target withdraws the request"
         );
         assert!(asks.caller_of(RequestId(7)).is_none());
-        let _rx = asks.open(ask(8)).unwrap();
+        let _answer = asks.open(ask(8)).unwrap();
         assert!(asks.withdraw(RequestId(8)));
         assert!(!asks.withdraw(RequestId(8)));
     }

@@ -1,3 +1,4 @@
+//! Multiplayer end to end: an owner and guests on one daemon (relays off).
 //!
 //! Roles are enforced on input, prompts, decisions, layout ops, workspace requests and
 //! streams; the control lease admits one driver at a time; approvals are signed and audited;
@@ -24,7 +25,7 @@ const SESSION_START: &str =
     include_str!("../../../agents/tests/fixtures/claude/session_start_resume.json");
 
 async fn daemon(dir: &std::path::Path) -> Daemon {
-    start_with(dir, |c| c.lease_idle = Duration::from_secs(3)).await
+    start_with(dir, |config| config.lease_idle = Duration::from_secs(3)).await
 }
 
 fn spec(roles: Roles, label: &str) -> GrantSpec {
@@ -44,22 +45,22 @@ async fn invite(owner: &TestClient, spec: GrantSpec) -> Invite {
 
 /// A guest joined, attached and following `pane`.
 async fn guest(invite: &Invite, pane: PaneId) -> TestClient {
-    let mut g = TestClient::join(&invite.to_string(), ClientConfig::generate_key());
-    g.client.attach(None);
-    g.until("guest layout", |c| c.layout.is_some()).await;
-    g.follow(pane).await;
-    g
+    let mut joined = TestClient::join(&invite.to_string(), ClientConfig::generate_key());
+    joined.client.attach(None);
+    joined.until("guest layout", |c| c.layout.is_some()).await;
+    joined.follow(pane).await;
+    joined
 }
 
-fn rejected(c: &TestClient, pane: PaneId, reason: InputRejectReason) -> bool {
-    c.mp.iter().any(|e| {
-        matches!(e, MultiplayerEvent::InputRejected { pane_id, reason: r }
-            if *pane_id == pane && *r == reason)
+fn rejected(client: &TestClient, pane: PaneId, reason: InputRejectReason) -> bool {
+    client.mp.iter().any(|event| {
+        matches!(event, MultiplayerEvent::InputRejected { pane_id, reason: rejected }
+            if *pane_id == pane && *rejected == reason)
     })
 }
 
-fn lease_holder(c: &TestClient, pane: PaneId) -> Option<client_core::proto::PrincipalId> {
-    c.mp.iter().rev().find_map(|e| match e {
+fn lease_holder(client: &TestClient, pane: PaneId) -> Option<client_core::proto::PrincipalId> {
+    client.mp.iter().rev().find_map(|event| match event {
         MultiplayerEvent::Lease { lease } if lease.pane_id == pane => Some(lease.holder),
         _ => None,
     })?
@@ -116,7 +117,7 @@ async fn viewer_cannot_type_and_one_driver_holds_the_lease() {
         .client
         .participant_list()
         .into_iter()
-        .map(|p| p.name)
+        .map(|participant| participant.name)
         .collect();
     assert_eq!(names, ["owner", "bob", "carol"]);
 
@@ -128,7 +129,7 @@ async fn viewer_cannot_type_and_one_driver_holds_the_lease() {
         })
         .await;
     assert!(carol.mp.iter().any(
-        |e| matches!(e, MultiplayerEvent::Forbidden { reason, .. } if reason.contains("driver"))
+        |event| matches!(event, MultiplayerEvent::Forbidden { reason, .. } if reason.contains("driver"))
     ));
 
     // The owner types first and takes the free lease; everyone is told.
@@ -159,13 +160,13 @@ async fn viewer_cannot_type_and_one_driver_holds_the_lease() {
     owner
         .until("lease request", |c| {
             c.mp.iter().any(
-                |e| matches!(e, MultiplayerEvent::LeaseRequested { name, .. } if name == "bob"),
+                |event| matches!(event, MultiplayerEvent::LeaseRequested { name, .. } if name == "bob"),
             )
         })
         .await;
     let given = owner.client.answer_control(pane, true).await.unwrap();
     assert!(
-        matches!(given, LeaseOutcome::Granted(l) if l.holder == Some(bob_principal) && l.mode == LeaseMode::Leased)
+        matches!(given, LeaseOutcome::Granted(lease) if lease.holder == Some(bob_principal) && lease.mode == LeaseMode::Leased)
     );
     bob.type_line(pane, "echo bob-drives");
     carol.wait_text(pane, "bob-drives").await;
@@ -176,9 +177,9 @@ async fn viewer_cannot_type_and_one_driver_holds_the_lease() {
     owner.type_line(pane, "echo owner-blocked");
     owner
         .until("owner refused", |c| {
-            c.mp[before..].iter().any(|e| {
+            c.mp[before..].iter().any(|event| {
                 matches!(
-                    e,
+                    event,
                     MultiplayerEvent::InputRejected {
                         reason: InputRejectReason::NoLease,
                         ..
@@ -189,7 +190,9 @@ async fn viewer_cannot_type_and_one_driver_holds_the_lease() {
         .await;
     // The owner can force it.
     let forced = owner.client.take_control(pane, true).await.unwrap();
-    assert!(matches!(forced, LeaseOutcome::Granted(l) if l.holder == Some(owner_principal)));
+    assert!(
+        matches!(forced, LeaseOutcome::Granted(lease) if lease.holder == Some(owner_principal))
+    );
     // A driver cannot force.
     assert!(matches!(
         bob.client.take_control(pane, true).await,
@@ -208,7 +211,7 @@ async fn viewer_cannot_type_and_one_driver_holds_the_lease() {
     bob.client.release_control(pane).await.unwrap();
     owner
         .until("lease released", |c| {
-            c.mp.iter().rev().find_map(|e| match e {
+            c.mp.iter().rev().find_map(|event| match event {
                 MultiplayerEvent::Lease { lease } if lease.pane_id == pane => Some(lease.holder),
                 _ => None,
             }) == Some(None)
@@ -219,8 +222,8 @@ async fn viewer_cannot_type_and_one_driver_holds_the_lease() {
     bob.client.set_typing(pane, true);
     carol
         .until("typing indicator", |c| {
-            c.mp.iter().any(|e| {
-                matches!(e, MultiplayerEvent::Presence { presence }
+            c.mp.iter().any(|event| {
+                matches!(event, MultiplayerEvent::Presence { presence }
                     if presence.typing && presence.actor.principal == bob_principal
                         && presence.focus == Some(pane))
             })
@@ -324,7 +327,7 @@ async fn prompter_only_composes_to_agent_panes() {
     // Not into a shell pane, and no shell escapes, agent commands or control bytes.
     assert!(matches!(
         pat.client.prompt(shell_pane, "ls".into(), true).await,
-        Err(MpError::Forbidden(m)) if m.contains("agent panes only")
+        Err(MpError::Forbidden(message)) if message.contains("agent panes only")
     ));
     for bad in [
         "!rm -rf ~",
@@ -333,8 +336,11 @@ async fn prompter_only_composes_to_agent_panes() {
         "x\x03",
         "# memo",
     ] {
-        let r = pat.client.prompt(agent_pane, bad.into(), true).await;
-        assert!(matches!(r, Err(MpError::Invalid(_))), "{bad:?}: {r:?}");
+        let result = pat.client.prompt(agent_pane, bad.into(), true).await;
+        assert!(
+            matches!(result, Err(MpError::Invalid(_))),
+            "{bad:?}: {result:?}"
+        );
     }
     // Viewers cannot prompt at all.
     let vic = guest(
@@ -352,7 +358,7 @@ async fn prompter_only_composes_to_agent_panes() {
     let prompt = page
         .records
         .iter()
-        .find(|r| r.kind == AuditKind::Prompt)
+        .find(|record| record.kind == AuditKind::Prompt)
         .expect("prompt audited");
     assert!(prompt.detail.contains("16 chars"), "{}", prompt.detail);
     assert!(!prompt.detail.contains("prompted-ok"));
@@ -379,9 +385,9 @@ async fn approvals_are_signed_single_flight_and_audited() {
     let blocked = |c: &TestClient| {
         c.metas
             .get(&pane)
-            .and_then(|m| m.agent.clone())
-            .and_then(|a| match a.state {
-                AgentState::Blocked(b) => Some(b),
+            .and_then(|meta| meta.agent.clone())
+            .and_then(|agent| match agent.state {
+                AgentState::Blocked(prompt) => Some(prompt),
                 _ => None,
             })
     };
@@ -391,8 +397,9 @@ async fn approvals_are_signed_single_flight_and_audited() {
     // A viewer's decision is refused and the agent stays blocked.
     vic.client.decide(blocker.request_id, OptionId(0));
     vic.until("decision refused", |c| {
-        c.mp.iter()
-            .any(|e| matches!(e, MultiplayerEvent::Forbidden { what, .. } if what == "Decide"))
+        c.mp.iter().any(
+            |event| matches!(event, MultiplayerEvent::Forbidden { what, .. } if what == "Decide"),
+        )
     })
     .await;
     assert!(!waiting.is_finished());
@@ -410,7 +417,7 @@ async fn approvals_are_signed_single_flight_and_audited() {
         "allow"
     );
     vic.until("decided broadcast", |c| {
-        c.mp.iter().any(|e| matches!(e, MultiplayerEvent::Decided { decided } if decided.decided_by == ann_actor))
+        c.mp.iter().any(|event| matches!(event, MultiplayerEvent::Decided { decided } if decided.decided_by == ann_actor))
     })
     .await;
     // A late second decision loses.
@@ -418,7 +425,7 @@ async fn approvals_are_signed_single_flight_and_audited() {
     owner
         .until("already decided", |c| {
             c.mp.iter().any(
-                |e| matches!(e, MultiplayerEvent::AlreadyDecided { by, .. } if *by == ann_actor),
+                |event| matches!(event, MultiplayerEvent::AlreadyDecided { by, .. } if *by == ann_actor),
             )
         })
         .await;
@@ -429,7 +436,7 @@ async fn approvals_are_signed_single_flight_and_audited() {
     let record = page
         .records
         .iter()
-        .find(|r| r.kind == AuditKind::Approval)
+        .find(|record| record.kind == AuditKind::Approval)
         .expect("approval audited");
     assert_eq!(record.actor, Some(ann_actor));
     let approval = record.approval.as_ref().unwrap();
@@ -452,7 +459,11 @@ async fn approvals_are_signed_single_flight_and_audited() {
         )
     );
     // Refusals are audited too, and the file on disk is the same chain.
-    assert!(page.records.iter().any(|r| r.kind == AuditKind::Join));
+    assert!(
+        page.records
+            .iter()
+            .any(|record| record.kind == AuditKind::Join)
+    );
     let on_disk = std::fs::read_to_string(dir.path().join("audit/audit.jsonl")).unwrap();
     assert!(on_disk.contains("\"Approval\""));
     drop((ann, vic, owner));
@@ -480,7 +491,7 @@ async fn revocation_kicks_at_once_and_reaches_delegated_grants() {
     assert_eq!(dave_invite.chain.links.len(), 2);
     assert!(matches!(
         bob.client.create_invite(spec(Roles::OWNER, "eve"), "bob".into()).await,
-        Err(MpError::Invalid(m)) if m.contains("roles")
+        Err(MpError::Invalid(message)) if message.contains("roles")
     ));
     let mut dave = guest(&dave_invite, pane).await;
     assert_eq!(dave.client.me().unwrap().roles, Roles::VIEWER);
@@ -489,12 +500,14 @@ async fn revocation_kicks_at_once_and_reaches_delegated_grants() {
 
     let grants_list = owner.client.list_grants().await.unwrap();
     assert!(
-        grants_list
-            .iter()
-            .any(|g| g.grant.label == "dave" && g.parent == Some(bob_invite.chain.grant_id()))
+        grants_list.iter().any(|grant| grant.grant.label == "dave"
+            && grant.parent == Some(bob_invite.chain.grant_id()))
     );
     let devices = owner.client.list_devices().await.unwrap();
-    assert_eq!(devices.iter().filter(|d| d.connected > 0).count(), 4);
+    assert_eq!(
+        devices.iter().filter(|device| device.connected > 0).count(),
+        4
+    );
 
     // Revoking bob's grant disconnects bob and dave (attenuated from it) at once.
     let revoked = owner
@@ -512,12 +525,14 @@ async fn revocation_kicks_at_once_and_reaches_delegated_grants() {
     };
     assert_eq!(disconnected, 2);
     assert!(hit.contains(&dave_invite.chain.grant_id()));
-    for (name, c) in [("bob", &mut bob), ("dave", &mut dave)] {
-        c.until(&format!("{name} kicked"), |c| {
-            c.mp.iter().any(|e| matches!(e, MultiplayerEvent::Revoked))
-                && c.refused.iter().any(|r| r.contains("Revoked"))
-        })
-        .await;
+    for (name, kicked) in [("bob", &mut bob), ("dave", &mut dave)] {
+        kicked
+            .until(&format!("{name} kicked"), |c| {
+                c.mp.iter()
+                    .any(|event| matches!(event, MultiplayerEvent::Revoked))
+                    && c.refused.iter().any(|reason| reason.contains("Revoked"))
+            })
+            .await;
     }
     // Carol is unaffected; then her device is revoked.
     owner.type_line(pane, "echo still-here");
@@ -530,7 +545,7 @@ async fn revocation_kicks_at_once_and_reaches_delegated_grants() {
         .unwrap();
     carol
         .until("carol kicked", |c| {
-            c.refused.iter().any(|r| r.contains("Revoked"))
+            c.refused.iter().any(|reason| reason.contains("Revoked"))
         })
         .await;
     // The owner cannot revoke the device it is using.
@@ -540,9 +555,13 @@ async fn revocation_kicks_at_once_and_reaches_delegated_grants() {
         Err(MpError::Conflict(_))
     ));
     let grants_list = owner.client.list_grants().await.unwrap();
-    assert!(grants_list.iter().filter(|g| g.revoked).count() >= 2);
+    assert!(grants_list.iter().filter(|grant| grant.revoked).count() >= 2);
     let page = owner.client.audit(None, 200).await.unwrap();
-    assert!(page.records.iter().any(|r| r.kind == AuditKind::Revoked));
+    assert!(
+        page.records
+            .iter()
+            .any(|record| record.kind == AuditKind::Revoked)
+    );
     drop((bob, dave, carol, owner));
     daemon.shutdown().await;
 }
@@ -561,9 +580,11 @@ async fn expired_forged_escalated_and_used_up_grants_are_refused() {
         ..base.clone()
     };
     let refused = |invite: Invite| async move {
-        let mut c = TestClient::join(&invite.to_string(), ClientConfig::generate_key());
-        c.until("refusal", |c| !c.refused.is_empty()).await;
-        c.refused[0].clone()
+        let mut client = TestClient::join(&invite.to_string(), ClientConfig::generate_key());
+        client
+            .until("refusal", |client| !client.refused.is_empty())
+            .await;
+        client.refused[0].clone()
     };
     let now = now_millis();
 
@@ -631,7 +652,7 @@ async fn expired_forged_escalated_and_used_up_grants_are_refused() {
     let denials = page
         .records
         .iter()
-        .filter(|r| r.kind == AuditKind::Denied)
+        .filter(|record| record.kind == AuditKind::Denied)
         .count();
     assert!(denials >= 5, "{denials} denials");
     drop((first, owner));
@@ -670,7 +691,7 @@ async fn pane_scoped_guest_sees_only_its_pane() {
     pam.client.subscribe(private);
     pam.until("subscribe refused", |c| {
         c.mp.iter()
-            .any(|e| matches!(e, MultiplayerEvent::Forbidden { what, .. } if what == "Subscribe"))
+            .any(|event| matches!(event, MultiplayerEvent::Forbidden { what, .. } if what == "Subscribe"))
     })
     .await;
     pam.type_line(private, "echo leak");
@@ -707,11 +728,19 @@ async fn links_are_listed_shared_again_and_revoked() {
     let mut ann = guest(&once, pane).await;
 
     let grants = owner.client.list_grants().await.unwrap();
-    let listed = |id| grants.iter().find(|g| g.grant.grant_id == id).unwrap();
-    let (a, b) = (listed(once.chain.grant_id()), listed(open.chain.grant_id()));
-    assert_eq!((a.grant.max_uses, a.bound.len()), (Some(1), 1));
-    assert_eq!((b.grant.max_uses, b.bound.len()), (None, 0));
-    assert!(b.grant.roles.contains(Roles::DRIVER) && !b.revoked);
+    let listed = |id| {
+        grants
+            .iter()
+            .find(|grant| grant.grant.grant_id == id)
+            .unwrap()
+    };
+    let (single_use, reusable) = (listed(once.chain.grant_id()), listed(open.chain.grant_id()));
+    assert_eq!(
+        (single_use.grant.max_uses, single_use.bound.len()),
+        (Some(1), 1)
+    );
+    assert_eq!((reusable.grant.max_uses, reusable.bound.len()), (None, 0));
+    assert!(reusable.grant.roles.contains(Roles::DRIVER) && !reusable.revoked);
 
     // Its link again, the same invite the creator shared.
     let again = owner
@@ -741,7 +770,7 @@ async fn links_are_listed_shared_again_and_revoked() {
         .await
         .unwrap();
     ann.until("ann kicked", |c| {
-        c.refused.iter().any(|r| r.contains("Revoked"))
+        c.refused.iter().any(|reason| reason.contains("Revoked"))
     })
     .await;
     let mut late = TestClient::join(&once.to_string(), ClientConfig::generate_key());
@@ -754,7 +783,7 @@ async fn links_are_listed_shared_again_and_revoked() {
     assert!(
         grants
             .iter()
-            .any(|g| g.grant.grant_id == once.chain.grant_id() && g.revoked)
+            .any(|grant| grant.grant.grant_id == once.chain.grant_id() && grant.revoked)
     );
     drop((ann, bob, late, owner));
     daemon.shutdown().await;
@@ -791,7 +820,8 @@ async fn removing_a_person_keeps_the_link_for_everyone_else() {
     };
     assert_eq!(disconnected, 1);
     ann.until("ann removed", |c| {
-        c.mp.iter().any(|e| matches!(e, MultiplayerEvent::Revoked))
+        c.mp.iter()
+            .any(|event| matches!(event, MultiplayerEvent::Revoked))
     })
     .await;
     owner
@@ -799,7 +829,7 @@ async fn removing_a_person_keeps_the_link_for_everyone_else() {
             c.client
                 .participant_list()
                 .iter()
-                .all(|p| p.actor.device != ann_device)
+                .all(|participant| participant.actor.device != ann_device)
         })
         .await;
     // The same device cannot come back with the link; Bob is still here.
@@ -807,7 +837,7 @@ async fn removing_a_person_keeps_the_link_for_everyone_else() {
     let mut again = TestClient::join(&link.to_string(), ann_key);
     again
         .until("ann refused", |c| {
-            c.refused.iter().any(|r| r.contains("Revoked"))
+            c.refused.iter().any(|reason| reason.contains("Revoked"))
         })
         .await;
     owner.type_line(pane, "echo bob-stays");
@@ -819,7 +849,7 @@ async fn removing_a_person_keeps_the_link_for_everyone_else() {
             .await
             .unwrap()
             .iter()
-            .any(|g| g.revoked)
+            .any(|grant| grant.revoked)
     );
     drop((again, bob, owner));
     daemon.shutdown().await;

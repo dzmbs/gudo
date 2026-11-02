@@ -29,11 +29,11 @@ async fn spawn_relay() -> (Server, String, Vec<u8>) {
 }
 
 fn pem(der: &[u8]) -> String {
-    let b64 = data_encoding::BASE64.encode(der);
-    let lines: Vec<&str> = b64
+    let encoded = data_encoding::BASE64.encode(der);
+    let lines: Vec<&str> = encoded
         .as_bytes()
         .chunks(64)
-        .map(|c| std::str::from_utf8(c).unwrap())
+        .map(|chunk| std::str::from_utf8(chunk).unwrap())
         .collect();
     format!(
         "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n",
@@ -48,8 +48,8 @@ async fn daemon_and_client_connect_through_a_self_hosted_relay() {
     let ca = state.path().join("relay-ca.pem");
     std::fs::write(&ca, pem(&cert)).unwrap();
     let relay_url = url.clone();
-    let daemon = start_with(state.path(), move |c| {
-        c.relay = daemon::RelayMode::Custom(CustomRelays {
+    let daemon = start_with(state.path(), move |config| {
+        config.relay = daemon::RelayMode::Custom(CustomRelays {
             urls: vec![relay_url],
             auth_token: None,
             ca_files: vec![ca],
@@ -80,7 +80,7 @@ async fn daemon_and_client_connect_through_a_self_hosted_relay() {
     .to_string_with(&extras);
     let mut config = ClientConfig::new(ClientConfig::generate_key());
     config.relay = RelayMode::Default; // the ticket decides
-    let mut c = TestClient::connect_with(
+    let mut client = TestClient::connect_with(
         &relayed_only,
         config,
         ConnectOptions {
@@ -88,12 +88,13 @@ async fn daemon_and_client_connect_through_a_self_hosted_relay() {
             ..ConnectOptions::default()
         },
     );
-    c.until("connected through the relay", |c| c.connected > 0)
+    client
+        .until("connected through the relay", |client| client.connected > 0)
         .await;
-    let pane = c.attach_and_follow().await;
-    c.type_line(pane, "echo via-$((40+2))-relay");
-    c.wait_text(pane, "via-42-relay").await;
-    drop(c);
+    let pane = client.attach_and_follow().await;
+    client.type_line(pane, "echo via-$((40+2))-relay");
+    client.wait_text(pane, "via-42-relay").await;
+    drop(client);
     daemon.shutdown().await;
 }
 
@@ -106,8 +107,8 @@ async fn the_devices_own_relay_replaces_the_tickets() {
     let ca = state.path().join("relay-ca.pem");
     std::fs::write(&ca, pem(&cert)).unwrap();
     let relay_url = url.clone();
-    let daemon = start_with(state.path(), move |c| {
-        c.relay = daemon::RelayMode::Custom(CustomRelays {
+    let daemon = start_with(state.path(), move |config| {
+        config.relay = daemon::RelayMode::Custom(CustomRelays {
             urls: vec![relay_url],
             auth_token: None,
             ca_files: vec![ca],
@@ -127,7 +128,7 @@ async fn the_devices_own_relay_replaces_the_tickets() {
     .to_string();
     let mut config = ClientConfig::new(ClientConfig::generate_key());
     config.relay = RelayMode::Default;
-    let mut c = TestClient::connect_with(
+    let mut client = TestClient::connect_with(
         &bare,
         config,
         ConnectOptions {
@@ -136,12 +137,15 @@ async fn the_devices_own_relay_replaces_the_tickets() {
             ..ConnectOptions::default()
         },
     );
-    c.until("connected through the device's relay", |c| c.connected > 0)
+    client
+        .until("connected through the device's relay", |client| {
+            client.connected > 0
+        })
         .await;
-    let pane = c.attach_and_follow().await;
-    c.type_line(pane, "echo own-$((40+2))-relay");
-    c.wait_text(pane, "own-42-relay").await;
-    drop(c);
+    let pane = client.attach_and_follow().await;
+    client.type_line(pane, "echo own-$((40+2))-relay");
+    client.wait_text(pane, "own-42-relay").await;
+    drop(client);
     daemon.shutdown().await;
 }
 
@@ -154,8 +158,8 @@ async fn relay_settings_apply_to_a_running_client() {
     let ca = state.path().join("relay-ca.pem");
     std::fs::write(&ca, pem(&cert)).unwrap();
     let relay_url = url.clone();
-    let daemon = start_with(state.path(), move |c| {
-        c.relay = daemon::RelayMode::Custom(CustomRelays {
+    let daemon = start_with(state.path(), move |config| {
+        config.relay = daemon::RelayMode::Custom(CustomRelays {
             urls: vec![relay_url],
             auth_token: None,
             ca_files: vec![ca],
@@ -175,14 +179,18 @@ async fn relay_settings_apply_to_a_running_client() {
     // Direct only, and the ticket has no address: nothing to dial.
     let mut config = ClientConfig::new(ClientConfig::generate_key());
     config.relay = RelayMode::Disabled;
-    let mut c = TestClient::connect_with(&bare, config, ConnectOptions::default());
-    c.until("the first dial fails", |c| {
-        c.log.iter().any(|e| e.starts_with("Disconnected"))
-    })
-    .await;
-    assert_eq!(c.connected, 0, "unreachable without a relay");
+    let mut client = TestClient::connect_with(&bare, config, ConnectOptions::default());
+    client
+        .until("the first dial fails", |client| {
+            client
+                .log
+                .iter()
+                .any(|line| line.starts_with("Disconnected"))
+        })
+        .await;
+    assert_eq!(client.connected, 0, "unreachable without a relay");
 
-    c.client.set_relays(
+    client.client.set_relays(
         RelayMode::Default,
         &ConnectOptions {
             relay_ca_der: vec![cert],
@@ -190,12 +198,15 @@ async fn relay_settings_apply_to_a_running_client() {
             ..ConnectOptions::default()
         },
     );
-    c.until("connected after the settings changed", |c| c.connected > 0)
+    client
+        .until("connected after the settings changed", |client| {
+            client.connected > 0
+        })
         .await;
-    let pane = c.attach_and_follow().await;
-    c.type_line(pane, "echo switched-$((40+2))");
-    c.wait_text(pane, "switched-42").await;
-    drop(c);
+    let pane = client.attach_and_follow().await;
+    client.type_line(pane, "echo switched-$((40+2))");
+    client.wait_text(pane, "switched-42").await;
+    drop(client);
     daemon.shutdown().await;
 }
 
@@ -218,9 +229,11 @@ async fn local_only_daemons_hand_out_direct_tickets() {
     // A client left on default relays follows the ticket and dials directly.
     let mut config = ClientConfig::new(ClientConfig::generate_key());
     config.relay = RelayMode::Default;
-    let mut c = TestClient::connect_with(&link, config, ConnectOptions::default());
-    c.until("connected directly", |c| c.connected > 0).await;
-    drop(c);
+    let mut client = TestClient::connect_with(&link, config, ConnectOptions::default());
+    client
+        .until("connected directly", |client| client.connected > 0)
+        .await;
+    drop(client);
     daemon.shutdown().await;
 }
 
@@ -229,25 +242,25 @@ fn relay_settings_come_from_config_toml() {
     let state = tempfile::tempdir().unwrap();
     let write = |text: &str| std::fs::write(state.path().join("config.toml"), text).unwrap();
     let load = || {
-        let mut c = daemon::Config::new(state.path());
-        c.apply_user_file().map(|()| c)
+        let mut config = daemon::Config::new(state.path());
+        config.apply_user_file().map(|()| config)
     };
 
     write(
         "[relay]\nurls = [\"https://relay.example.com\"]\nauth_token = \"t\"\n[push]\nenabled = false\nrelay = \"https://push.example.com\"\ndelay_ms = 250\n",
     );
-    let c = load().unwrap();
+    let config = load().unwrap();
     assert_eq!(
-        c.relay,
+        config.relay,
         daemon::RelayMode::Custom(CustomRelays {
             urls: vec!["https://relay.example.com".into()],
             auth_token: Some("t".into()),
             ca_files: vec![],
         })
     );
-    assert!(!c.push.enabled);
-    assert_eq!(c.push.relay_url, "https://push.example.com");
-    assert_eq!(c.push.delay, Duration::from_millis(250));
+    assert!(!config.push.enabled);
+    assert_eq!(config.push.relay_url, "https://push.example.com");
+    assert_eq!(config.push.delay, Duration::from_millis(250));
 
     write("[relay]\nmode = \"local-only\"\n");
     assert_eq!(load().unwrap().relay, daemon::RelayMode::Disabled);
@@ -258,14 +271,14 @@ fn relay_settings_come_from_config_toml() {
 
     // `--no-relay` (set before the file is read) wins.
     write("[relay]\nurls = [\"https://relay.example.com\"]\n");
-    let mut c = daemon::Config::new(state.path());
-    c.relay = daemon::RelayMode::Disabled;
-    c.apply_user_file().unwrap();
-    assert_eq!(c.relay, daemon::RelayMode::Disabled);
+    let mut config = daemon::Config::new(state.path());
+    config.relay = daemon::RelayMode::Disabled;
+    config.apply_user_file().unwrap();
+    assert_eq!(config.relay, daemon::RelayMode::Disabled);
 
     // Defaults: the brand's push relay, on.
     std::fs::remove_file(state.path().join("config.toml")).unwrap();
-    let c = load().unwrap();
-    assert_eq!(c.push.relay_url, brand::PUSH_RELAY_URL);
-    assert!(c.push.enabled);
+    let config = load().unwrap();
+    assert_eq!(config.push.relay_url, brand::PUSH_RELAY_URL);
+    assert!(config.push.enabled);
 }

@@ -1,4 +1,5 @@
 //! Learning the session id of a Codex the daemon launched, so the pane can `codex resume` it
+//! after a daemon restart. Codex cannot be given an id, and without opt-in hooks it
 //! never reports one, but it writes its transcript to
 //! `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<timestamp>-<uuid>.jsonl`:
 //!
@@ -17,9 +18,9 @@ fn rollout_id(path: &Path) -> Option<String> {
     let stem = name.strip_prefix("rollout-")?.strip_suffix(".jsonl")?;
     let id = stem.get(stem.len().checked_sub(36)?..)?;
     let shape = id.len() == 36
-        && id.char_indices().all(|(i, c)| match i {
-            8 | 13 | 18 | 23 => c == '-',
-            _ => c.is_ascii_hexdigit(),
+        && id.char_indices().all(|(i, character)| match i {
+            8 | 13 | 18 | 23 => character == '-',
+            _ => character.is_ascii_hexdigit(),
         });
     shape.then(|| id.to_ascii_lowercase())
 }
@@ -29,8 +30,11 @@ pub(crate) fn from_open_files(root_pid: u32) -> Option<String> {
     procinfo::process_tree(root_pid)
         .into_iter()
         .flat_map(procinfo::open_files)
-        .filter(|p| p.components().any(|c| c.as_os_str() == "sessions"))
-        .find_map(|p| rollout_id(&p))
+        .filter(|path| {
+            path.components()
+                .any(|component| component.as_os_str() == "sessions")
+        })
+        .find_map(|path| rollout_id(&path))
 }
 
 /// The newest unclaimed rollout under `codex_home` started in `cwd` since `since`.
@@ -51,15 +55,15 @@ pub(crate) fn from_rollouts(
             let Some(id) = rollout_id(&path) else {
                 continue;
             };
-            let Ok(modified) = entry.metadata().and_then(|m| m.modified()) else {
+            let Ok(modified) = entry.metadata().and_then(|metadata| metadata.modified()) else {
                 continue;
             };
             // A little slack for coarse filesystem timestamps.
             if modified + std::time::Duration::from_secs(2) < since || claimed.contains(&id) {
                 continue;
             }
-            if session_cwd(&path).is_some_and(|c| c.canonicalize().unwrap_or(c) == cwd)
-                && best.as_ref().is_none_or(|(t, _)| modified > *t)
+            if session_cwd(&path).is_some_and(|dir| dir.canonicalize().unwrap_or(dir) == cwd)
+                && best.as_ref().is_none_or(|(newest, _)| modified > *newest)
             {
                 best = Some((modified, id));
             }
@@ -70,18 +74,23 @@ pub(crate) fn from_rollouts(
 
 /// The three most recent `YYYY/MM/DD` directories (sessions crossing midnight, time zones).
 fn day_dirs(sessions: &Path) -> Vec<PathBuf> {
-    fn newest(dir: &Path, n: usize) -> Vec<PathBuf> {
+    fn newest(dir: &Path, count: usize) -> Vec<PathBuf> {
         let mut names: Vec<PathBuf> = std::fs::read_dir(dir)
-            .map(|d| d.filter_map(Result::ok).map(|e| e.path()).collect())
+            .map(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .map(|entry| entry.path())
+                    .collect()
+            })
             .unwrap_or_default();
-        names.retain(|p| p.is_dir());
+        names.retain(|path| path.is_dir());
         names.sort();
-        names.into_iter().rev().take(n).collect()
+        names.into_iter().rev().take(count).collect()
     }
     newest(sessions, 2)
         .iter()
-        .flat_map(|y| newest(y, 2))
-        .flat_map(|m| newest(&m, 3))
+        .flat_map(|year| newest(year, 2))
+        .flat_map(|month| newest(&month, 3))
         .collect()
 }
 
@@ -107,9 +116,9 @@ mod tests {
 
     #[test]
     fn ids_come_from_rollout_names() {
-        let p = Path::new("/h/.codex/sessions/2026/10/18/rollout-2026-10-18T12-00-00-");
+        let path = Path::new("/h/.codex/sessions/2026/10/18/rollout-2026-10-18T12-00-00-");
         assert_eq!(
-            rollout_id(&p.with_file_name(format!("rollout-2026-10-18T12-00-00-{ID}.jsonl")))
+            rollout_id(&path.with_file_name(format!("rollout-2026-10-18T12-00-00-{ID}.jsonl")))
                 .as_deref(),
             Some(ID)
         );

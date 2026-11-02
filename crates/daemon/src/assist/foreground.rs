@@ -1,4 +1,4 @@
-//! D1: the foreground program of each pane, debounced.
+//! The foreground program of each pane, debounced.
 //!
 //! The PTY's foreground process group (`tcgetpgrp` on the master) is sampled every
 //! [`SAMPLE`]; a new program is reported once it has been in front for [`STABLE`], so `ls`
@@ -22,12 +22,11 @@ pub(crate) struct Tracker {
     candidate: Option<(Foreground, Instant)>,
 }
 
-fn same(a: &Foreground, b: &Foreground) -> bool {
-    a.pid == b.pid && a.name == b.name && a.argv == b.argv
+fn same(one: &Foreground, other: &Foreground) -> bool {
+    one.pid == other.pid && one.name == other.name && one.argv == other.argv
 }
 
 impl Tracker {
-    /// The reported program.
     pub fn current(&self) -> Option<&Foreground> {
         self.current.as_ref()
     }
@@ -39,13 +38,17 @@ impl Tracker {
         process: Option<pty::ForegroundProcess>,
         now: Instant,
     ) -> Option<Foreground> {
-        let seen = process.map(|p| foreground(pane, p))?;
-        if self.current.as_ref().is_some_and(|c| same(c, &seen)) {
+        let seen = process.map(|process| foreground(pane, process))?;
+        if self
+            .current
+            .as_ref()
+            .is_some_and(|current| same(current, &seen))
+        {
             self.candidate = None;
             return None;
         }
         let first = match &self.candidate {
-            Some((c, at)) if same(c, &seen) => *at,
+            Some((candidate, at)) if same(candidate, &seen) => *at,
             _ => {
                 self.candidate = Some((seen, now));
                 // The very first sample of a pane is reported at once.
@@ -58,20 +61,20 @@ impl Tracker {
         if now.duration_since(first) < STABLE {
             return None;
         }
-        let (fg, _) = self.candidate.take()?;
-        self.current = Some(fg.clone());
-        Some(fg)
+        let (program, _) = self.candidate.take()?;
+        self.current = Some(program.clone());
+        Some(program)
     }
 }
 
 /// Converts the PTY crate's view of the foreground group.
-pub(crate) fn foreground(pane: PaneId, p: pty::ForegroundProcess) -> Foreground {
-    let profile = ProgramProfile::classify(&p.name, &p.argv);
+pub(crate) fn foreground(pane: PaneId, process: pty::ForegroundProcess) -> Foreground {
+    let profile = ProgramProfile::classify(&process.name, &process.argv);
     Foreground {
         pane_id: pane,
-        pid: p.pid,
-        name: p.program().to_owned(),
-        argv: p.argv,
+        pid: process.pid,
+        name: process.program().to_owned(),
+        argv: process.argv,
         profile,
         since: UnixMillis(now_millis()),
     }
@@ -91,32 +94,38 @@ mod tests {
 
     #[test]
     fn short_lived_programs_are_not_reported() {
-        let mut t = Tracker::default();
-        let t0 = Instant::now();
-        let first = t.sample(PaneId(1), process(10, "zsh"), t0).unwrap();
+        let mut tracker = Tracker::default();
+        let start = Instant::now();
+        let first = tracker
+            .sample(PaneId(1), process(10, "zsh"), start)
+            .unwrap();
         assert_eq!(first.profile, ProgramProfile::Shell);
         // `ls` for one sample, then the shell again: nothing.
         assert!(
-            t.sample(PaneId(1), process(11, "ls"), t0 + SAMPLE)
+            tracker
+                .sample(PaneId(1), process(11, "ls"), start + SAMPLE)
                 .is_none()
         );
         assert!(
-            t.sample(PaneId(1), process(10, "zsh"), t0 + SAMPLE * 2)
+            tracker
+                .sample(PaneId(1), process(10, "zsh"), start + SAMPLE * 2)
                 .is_none()
         );
         // `vim` for long enough: reported once.
         assert!(
-            t.sample(PaneId(1), process(12, "vim"), t0 + SAMPLE * 3)
+            tracker
+                .sample(PaneId(1), process(12, "vim"), start + SAMPLE * 3)
                 .is_none()
         );
-        let vim = t
-            .sample(PaneId(1), process(12, "vim"), t0 + SAMPLE * 5)
+        let vim = tracker
+            .sample(PaneId(1), process(12, "vim"), start + SAMPLE * 5)
             .unwrap();
         assert_eq!(vim.profile, ProgramProfile::Vim);
         assert!(
-            t.sample(PaneId(1), process(12, "vim"), t0 + SAMPLE * 6)
+            tracker
+                .sample(PaneId(1), process(12, "vim"), start + SAMPLE * 6)
                 .is_none()
         );
-        assert_eq!(t.current().unwrap().pid, 12);
+        assert_eq!(tracker.current().unwrap().pid, 12);
     }
 }

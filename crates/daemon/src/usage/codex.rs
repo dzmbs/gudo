@@ -1,3 +1,4 @@
+//! Codex's rate limits.
 //!
 //! - **Rollouts** (local, written by Codex): an `event_msg` line with payload type
 //!   `token_count` is appended to `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl` after every
@@ -42,19 +43,21 @@ pub(crate) fn from_rollouts(codex_home: &Path) -> Option<AgentUsage> {
         files.extend(
             entries
                 .filter_map(Result::ok)
-                .map(|e| e.path())
-                .filter(|p| {
-                    p.file_name()
-                        .and_then(|n| n.to_str())
-                        .is_some_and(|n| n.starts_with("rollout-") && n.ends_with(".jsonl"))
+                .map(|entry| entry.path())
+                .filter(|path| {
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| {
+                            name.starts_with("rollout-") && name.ends_with(".jsonl")
+                        })
                 })
-                .filter_map(|p| Some((p.metadata().ok()?.modified().ok()?, p))),
+                .filter_map(|path| Some((path.metadata().ok()?.modified().ok()?, path))),
         );
         if files.len() >= MAX_FILES {
             break;
         }
     }
-    files.sort_by_key(|f| std::cmp::Reverse(f.0));
+    files.sort_by_key(|file| std::cmp::Reverse(file.0));
     files
         .iter()
         .take(MAX_FILES)
@@ -65,17 +68,22 @@ pub(crate) fn from_rollouts(codex_home: &Path) -> Option<AgentUsage> {
 fn day_dirs(sessions: &Path) -> Vec<PathBuf> {
     fn children(dir: &Path) -> Vec<PathBuf> {
         let mut names: Vec<PathBuf> = std::fs::read_dir(dir)
-            .map(|d| d.filter_map(Result::ok).map(|e| e.path()).collect())
+            .map(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .map(|entry| entry.path())
+                    .collect()
+            })
             .unwrap_or_default();
-        names.retain(|p| p.is_dir());
+        names.retain(|path| path.is_dir());
         names.sort();
         names.reverse();
         names
     }
     children(sessions)
         .iter()
-        .flat_map(|y| children(y))
-        .flat_map(|m| children(&m))
+        .flat_map(|year| children(year))
+        .flat_map(|month| children(&month))
         .take(MAX_DAYS)
         .collect()
 }
@@ -111,22 +119,28 @@ fn last_snapshot(path: &Path) -> Option<AgentUsage> {
 /// A rate-limit snapshot in either of Codex's spellings (rollout snake_case, app-server
 /// camelCase) as [`AgentUsage`]; `None` when it holds no window or belongs to
 /// another limit than the plan's main `codex` one.
-pub(crate) fn snapshot(v: &Value, at: Option<u64>, source: UsageSource) -> Option<AgentUsage> {
-    let str_of = |keys: &[&str]| keys.iter().find_map(|k| v.get(*k)?.as_str());
+pub(crate) fn snapshot(limits: &Value, at: Option<u64>, source: UsageSource) -> Option<AgentUsage> {
+    let str_of = |keys: &[&str]| keys.iter().find_map(|key| limits.get(*key)?.as_str());
     if str_of(&["limit_id", "limitId"]).is_some_and(|id| !id.is_empty() && id != "codex") {
         return None;
     }
     let mut windows: Vec<UsageWindow> = ["primary", "secondary"]
         .iter()
-        .filter_map(|k| v.get(*k).filter(|w| w.is_object()))
-        .filter_map(|w| window(w, at))
+        .filter_map(|key| limits.get(*key).filter(|value| value.is_object()))
+        .filter_map(|value| window(value, at))
         .collect();
     if windows.is_empty() {
         return None;
     }
-    windows.sort_by_key(|w| if w.minutes == 0 { u32::MAX } else { w.minutes });
+    windows.sort_by_key(|window| {
+        if window.minutes == 0 {
+            u32::MAX
+        } else {
+            window.minutes
+        }
+    });
     let plan = str_of(&["plan_type", "planType"])
-        .filter(|p| !p.is_empty() && *p != "unknown")
+        .filter(|plan| !plan.is_empty() && *plan != "unknown")
         .map(str::to_owned);
     Some(AgentUsage {
         agent: AgentKind::Codex,
@@ -138,20 +152,22 @@ pub(crate) fn snapshot(v: &Value, at: Option<u64>, source: UsageSource) -> Optio
     })
 }
 
-fn window(w: &Value, at: Option<u64>) -> Option<UsageWindow> {
-    let num = |keys: &[&str]| keys.iter().find_map(|k| w.get(*k)?.as_f64());
-    let used = num(&["used_percent", "usedPercent"])?;
-    let minutes = num(&["window_minutes", "windowDurationMins"])
-        .map_or(0, |m| m.clamp(0.0, f64::from(u32::MAX)) as u32);
+fn window(value: &Value, at: Option<u64>) -> Option<UsageWindow> {
+    let number = |keys: &[&str]| keys.iter().find_map(|key| value.get(*key)?.as_f64());
+    let used = number(&["used_percent", "usedPercent"])?;
+    let minutes = number(&["window_minutes", "windowDurationMins"])
+        .map_or(0, |minutes| minutes.clamp(0.0, f64::from(u32::MAX)) as u32);
     let absolute = ["resets_at", "resetsAt"]
         .iter()
-        .find_map(|k| match w.get(*k)? {
-            Value::Number(n) => n.as_f64().map(|s| (s.max(0.0) * 1000.0) as u64),
-            Value::String(s) => rfc3339_millis(s),
+        .find_map(|key| match value.get(*key)? {
+            Value::Number(seconds) => seconds
+                .as_f64()
+                .map(|seconds| (seconds.max(0.0) * 1000.0) as u64),
+            Value::String(timestamp) => rfc3339_millis(timestamp),
             _ => None,
         });
-    let relative =
-        num(&["resets_in_seconds"]).and_then(|s| Some(at? + (s.max(0.0) * 1000.0) as u64));
+    let relative = number(&["resets_in_seconds"])
+        .and_then(|seconds| Some(at? + (seconds.max(0.0) * 1000.0) as u64));
     Some(UsageWindow {
         name: window_name(minutes, None),
         minutes,
@@ -213,13 +229,16 @@ mod tests {
     #[test]
     fn app_server_shape() {
         let app: Value = serde_json::from_str(r#"{"limitId":"codex","primary":{"usedPercent":42,"windowDurationMins":10080,"resetsAt":1735689720},"secondary":{"usedPercent":5,"windowDurationMins":300,"resetsAt":1735693200},"planType":"pro"}"#).unwrap();
-        let u = snapshot(&app, Some(1), UsageSource::Cli).unwrap();
+        let usage = snapshot(&app, Some(1), UsageSource::Cli).unwrap();
         // Ordered by length, not position.
-        assert_eq!(u.windows[0].name, "5h");
-        assert_eq!(u.windows[1].name, "weekly");
-        assert_eq!(u.windows[1].used_permille, 420);
-        assert_eq!(u.plan.as_deref(), Some("pro"));
-        assert_eq!(u.windows[1].resets_at, Some(UnixMillis(1_735_689_720_000)));
+        assert_eq!(usage.windows[0].name, "5h");
+        assert_eq!(usage.windows[1].name, "weekly");
+        assert_eq!(usage.windows[1].used_permille, 420);
+        assert_eq!(usage.plan.as_deref(), Some("pro"));
+        assert_eq!(
+            usage.windows[1].resets_at,
+            Some(UnixMillis(1_735_689_720_000))
+        );
         let other: Value =
             serde_json::from_str(r#"{"limitId":"codex_other","primary":{"usedPercent":88}}"#)
                 .unwrap();
