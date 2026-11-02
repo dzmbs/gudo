@@ -171,7 +171,9 @@ impl Route {
 /// The product's own relay ([`brand::RELAY_URL`]), the default unless the app's relay settings or
 /// the ticket name others.
 fn default_relays() -> iroh::RelayMap {
-    iroh::RelayMap::try_from_iter([brand::RELAY_URL]).expect("the default relay URL parses")
+    iroh::RelayMap::try_from_iter([brand::RELAY_URL])
+        .expect("the default relay URL parses")
+        .with_auth_token(brand::RELAY_TOKEN.to_owned())
 }
 
 /// An endpoint builder for dialling along `route`, trusting `options.relay_ca_der` too.

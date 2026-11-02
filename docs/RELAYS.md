@@ -66,7 +66,28 @@ the addresses the daemon saw at pairing time; if they change (DHCP), pair again 
 while on the same network. Push notifications still need the push relay (docs/PUSH.md) unless
 `[push] enabled = false`.
 
-## 2. Run your own iroh-relay on a VPS (Docker)
+## 2. Our relay and its public token
+
+By default, apps and hosts use `relay.gudo.dev`. Most connections never touch it: devices try a
+direct path first and only fall back to the relay when a network blocks that (strict mobile
+carriers, office firewalls). The relay forwards encrypted QUIC packets between iroh endpoints. It
+cannot read or change them, and it never connects anywhere else on the internet.
+
+The relay asks for a token, `brand::RELAY_TOKEN` in `crates/brand/src/lib.rs`. **This token is not
+a secret.** It ships in every build and is public in this repository on purpose. It only keeps
+unrelated iroh apps from using our relay as theirs. It is not what protects your sessions: that is
+end-to-end encryption with keys that never leave your devices.
+
+What actually protects the relay from abuse:
+
+- a per-connection rate limit, set high enough for heavy use (32 MiB/s sustained, 64 MiB bursts);
+- a firewall limit on new connections per address, far above what one person makes;
+- blocking a single misbehaving endpoint by its key, without affecting anyone else.
+
+If you would rather not use our relay, run your own (below) or choose direct only in the app's
+network settings.
+
+## 3. Run your own iroh-relay on a VPS (Docker)
 
 Needs: a VPS with a public IPv4 (and ideally IPv6), a DNS name, ports **80/tcp, 443/tcp,
 7842/udp** open. 1 vCPU / 1 GB is plenty for a household; bandwidth is the cost driver.
@@ -121,7 +142,7 @@ Without Docker: `cargo install iroh-relay --version 1.3.0 --features server` and
 `IROH_RELAY_ACCESS_TOKEN`. For a quick LAN experiment,
 `iroh-relay --dev` serves plain HTTP on port 3340 (use `urls = ["http://host:3340"]`).
 
-## 3. Tests
+## 4. Tests
 
 `cargo test -p daemon --test it relays`:
 
@@ -139,7 +160,7 @@ Without Docker: `cargo install iroh-relay --version 1.3.0 --features server` and
 `cargo test -p proto --test golden ticket_extras` freezes the extension bytes and checks old
 parsers still read extended tickets.
 
-## 4. Not done
+## 5. Not done
 
 - The default relay `relay.gudo.dev` must be running before release: until it is, devices on
   different networks reach a default-mode daemon only over direct paths.

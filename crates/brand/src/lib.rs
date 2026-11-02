@@ -67,6 +67,12 @@ pub const SERVICE_LABEL: &str = "dev.gudo.hostd";
 /// app's relay settings name others. See `docs/RELAYS.md`.
 pub const RELAY_URL: &str = "https://relay.gudo.dev";
 
+/// Token the default relay asks for. Not a secret: it ships in every build and is public in this
+/// repository. It only keeps unrelated iroh apps off our relay; traffic stays end-to-end
+/// encrypted either way, and per-connection limits on the relay handle abuse. See
+/// `docs/RELAYS.md`.
+pub const RELAY_TOKEN: &str = "vpMx89kx8DZiOVUIP8aVBnCfbEUrMNzQfwVJKSBhRRI";
+
 /// The push relay (a Cloudflare Worker) daemons send sealed notifications to, unless
 /// `push.relay` in the daemon's `config.toml` names another. See `docs/PUSH.md`.
 pub const PUSH_RELAY_URL: &str = "https://push.gudo.dev";

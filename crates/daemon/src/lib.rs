@@ -348,7 +348,9 @@ fn sticky_binds(bind: Option<SocketAddr>, previous: &[SocketAddr]) -> Vec<Socket
 
 /// The product's own relay ([`brand::RELAY_URL`]), the default unless `config.toml` names others.
 fn default_relays() -> iroh::RelayMap {
-    iroh::RelayMap::try_from_iter([brand::RELAY_URL]).expect("the default relay URL parses")
+    iroh::RelayMap::try_from_iter([brand::RELAY_URL])
+        .expect("the default relay URL parses")
+        .with_auth_token(brand::RELAY_TOKEN.to_owned())
 }
 
 fn endpoint_builder(core: &Core) -> Result<iroh::endpoint::Builder, StartError> {
