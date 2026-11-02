@@ -1,5 +1,6 @@
 //! Coding-agent integration for the host daemon: pure logic, no I/O, no async, no clock.
 //!
+//! Design: docs/ARCHITECTURE.md D9–D13.
 //!
 //! - [`AgentEvent`] is the unified, versioned event schema shared by the PTY and structured lanes.
 //! - [`AgentAdapter`] is everything agent-specific: the launch recipe ([`LaunchSpec`]), hook-payload

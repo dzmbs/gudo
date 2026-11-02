@@ -52,9 +52,8 @@ pub(crate) fn truncate(text: &str, max: usize) -> String {
     }
 }
 
-/// Truncates a message for an event.
 pub(crate) fn message(text: Option<String>) -> Option<String> {
-    text.map(|t| truncate(&t, MAX_MESSAGE_CHARS))
+    text.map(|message| truncate(&message, MAX_MESSAGE_CHARS))
 }
 
 /// One line describing a tool call: the command, path, URL or description.
@@ -85,16 +84,16 @@ pub(crate) fn bounded_detail(value: &Value) -> Value {
             return Value::String("…".into());
         }
         match value {
-            Value::String(s) => Value::String(truncate(s, MAX_DETAIL_STRING_CHARS)),
+            Value::String(text) => Value::String(truncate(text, MAX_DETAIL_STRING_CHARS)),
             Value::Array(items) => items
                 .iter()
                 .take(MAX_DETAIL_ITEMS)
-                .map(|v| walk(v, depth + 1))
+                .map(|item| walk(item, depth + 1))
                 .collect(),
             Value::Object(map) => map
                 .iter()
                 .take(MAX_DETAIL_ITEMS)
-                .map(|(k, v)| (k.clone(), walk(v, depth + 1)))
+                .map(|(key, item)| (key.clone(), walk(item, depth + 1)))
                 .collect(),
             other => other.clone(),
         }

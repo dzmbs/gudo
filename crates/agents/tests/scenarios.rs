@@ -194,7 +194,7 @@ fn codex_without_hooks_runs_on_title_screen_and_osc9() {
     pane.screen("• Published.\n› ", "app", 9050);
     assert_eq!(pane.arbiter.status(), &Status::Idle);
     assert_eq!(pane.notified.last(), Some(&Notify::Done));
-    let kinds: Vec<EventKind> = pane.log.iter().map(|(k, _, _)| *k).collect();
+    let kinds: Vec<EventKind> = pane.log.iter().map(|(kind, _, _)| *kind).collect();
     assert_eq!(
         kinds,
         [
@@ -234,6 +234,6 @@ fn captured_claude_2_1_302_payloads_parse() {
         let signal = ClaudeCode::default()
             .parse_hook(&payload, Seq(1))
             .unwrap_or_else(|err| panic!("{name}: {err}"));
-        assert_eq!(signal.map(|s| s.kind), expected, "{name}");
+        assert_eq!(signal.map(|signal| signal.kind), expected, "{name}");
     }
 }

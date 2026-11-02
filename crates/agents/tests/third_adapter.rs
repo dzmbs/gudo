@@ -104,10 +104,10 @@ impl AgentAdapter for Pi {
                 session_id,
                 session_file,
             } => {
-                let mut s = signal(EventKind::SessionStarted);
-                s.session.native_id = Some(NativeSessionId::new(session_id));
-                s.session.transcript = Some(session_file.into());
-                s
+                let mut started = signal(EventKind::SessionStarted);
+                started.session.native_id = Some(NativeSessionId::new(session_id));
+                started.session.transcript = Some(session_file.into());
+                started
             }
             PiEvent::AgentStart => signal(EventKind::TurnStarted).with_claim(Claim::Working),
             PiEvent::ToolCall { tool, input } => {
@@ -193,29 +193,29 @@ fn a_third_agent_plugs_in_through_the_public_api() {
             Decision {
                 request_id,
                 choice: ApprovalChoice::AllowOnce,
-                actor: ActorId::new("owner"),
+                actor: ActorId::new("alice"),
             },
             UnixMillis(30),
         )
         .unwrap();
-    assert_eq!(decided.decided_by.as_str(), "owner");
+    assert_eq!(decided.decided_by.as_str(), "alice");
     let _ = feed(&mut arbiter, r#"{"event":"agent_start"}"#, 4, 40);
     let settled = feed(&mut arbiter, r#"{"event":"agent_settled"}"#, 5, 50);
     assert_eq!(settled.event.unwrap().kind, EventKind::TurnEnded);
     assert_eq!(settled.notify, Some(Notify::Done));
 
     let verdict = pi.detect_screen(ScreenInput::screen("╭─\n│ Working…\n╰─"));
-    let ScreenVerdict::State(m) = verdict else {
+    let ScreenVerdict::State(matched) = verdict else {
         panic!()
     };
-    assert_eq!(m.state, AgentState::Working);
+    assert_eq!(matched.state, AgentState::Working);
 
     // OSC 7501 reports from the pi extension use the adapter's app name with no extra code.
     let report = pi
         .parse_program_status("state=blocked:kind=question:app=pi")
         .unwrap();
     assert!(
-        matches!(report.claim, Some(Claim::Blocked(ref b)) if b.reason == BlockedReason::Question)
+        matches!(report.claim, Some(Claim::Blocked(ref blocker)) if blocker.reason == BlockedReason::Question)
     );
     assert_eq!(
         pi.parse_program_status("state=blocked:app=claude-code"),

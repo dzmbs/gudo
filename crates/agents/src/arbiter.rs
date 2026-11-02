@@ -1,3 +1,4 @@
+//! Per-pane arbitration of hook, in-band and screen evidence.
 //!
 //! The [`Arbiter`] is a deterministic state machine. It never reads a clock: every input carries
 //! `now`, and [`Arbiter::next_deadline`] says when the caller should call [`Arbiter::tick`] for the
@@ -46,7 +47,6 @@ use crate::signal::{Claim, Signal};
 /// Timing and trust settings for an [`Arbiter`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ArbiterConfig {
-    /// How far the agent's hooks are trusted.
     pub coverage: HookCoverage,
     /// How long a non-authoritative blocker must persist before it notifies. Default 1.5 s.
     pub blocked_debounce: Duration,
@@ -57,6 +57,7 @@ pub struct ArbiterConfig {
 }
 
 impl ArbiterConfig {
+    /// Returns the default timings for the given hook coverage.
     pub fn new(coverage: HookCoverage) -> Self {
         Self {
             coverage,
@@ -71,10 +72,7 @@ impl ArbiterConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Notify {
     /// The agent needs the user.
-    Blocked {
-        /// The request to answer.
-        request_id: RequestId,
-    },
+    Blocked { request_id: RequestId },
     /// A turn finished while nobody was looking.
     Done,
     /// A turn failed while nobody was looking.
@@ -95,12 +93,7 @@ pub struct Update {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DecisionError {
     /// Someone already answered this request.
-    AlreadyDecided {
-        /// Who answered first.
-        by: ActorId,
-        /// What they chose.
-        choice: ApprovalChoice,
-    },
+    AlreadyDecided { by: ActorId, choice: ApprovalChoice },
     /// The request is not the one currently showing (stale or unknown id).
     NotPending,
     /// The choice is not among the request's options.
@@ -296,6 +289,7 @@ impl Arbiter {
     }
 
     /// Creates an arbiter for a session resumed after a daemon restart. It starts `idle` and never
+    /// reports "done" until it has been seen working.
     pub fn restored(
         config: ArbiterConfig,
         pane_id: Option<PaneId>,
@@ -308,7 +302,6 @@ impl Arbiter {
         arbiter
     }
 
-    /// Returns the effective status.
     pub fn status(&self) -> &Status {
         &self.status
     }
@@ -391,15 +384,15 @@ impl Arbiter {
             match &signal.claim {
                 None => {}
                 Some(Claim::Release) => {
-                    if self.claim.as_ref().is_some_and(|cur| {
-                        cur.source == signal.source || signal.confidence >= cur.confidence
+                    if self.claim.as_ref().is_some_and(|current| {
+                        current.source == signal.source || signal.confidence >= current.confidence
                     }) {
                         self.claim = None;
                     }
                 }
                 Some(claim) => {
-                    let accept = self.claim.as_ref().is_none_or(|cur| {
-                        signal.confidence >= cur.confidence || shim_newer(cur, &signal)
+                    let accept = self.claim.as_ref().is_none_or(|current| {
+                        signal.confidence >= current.confidence || shim_newer(current, &signal)
                     });
                     if accept {
                         self.claim = Some(ClaimRecord {
@@ -428,16 +421,16 @@ impl Arbiter {
 
     /// Applies a screen-manifest verdict. Call it whenever the screen or title changes.
     pub fn observe_screen(&mut self, verdict: &ScreenVerdict, now: UnixMillis) -> Update {
-        let ScreenVerdict::State(m) = verdict else {
+        let ScreenVerdict::State(matched) = verdict else {
             return Update::default();
         };
         if self.process == Process::Exited {
             return Update::default();
         }
-        self.record_screen(m, now);
+        self.record_screen(matched, now);
         let cause = Cause::quiet(
-            m.source,
-            if m.is_visible() {
+            matched.source,
+            if matched.is_visible() {
                 Confidence::Strong
             } else {
                 Confidence::Weak
@@ -448,7 +441,10 @@ impl Arbiter {
 
     /// Re-evaluates time-based rules. Call it at [`Arbiter::next_deadline`].
     pub fn tick(&mut self, now: UnixMillis) -> Update {
-        let source = self.screen.as_ref().map_or(Source::Process, |s| s.source);
+        let source = self
+            .screen
+            .as_ref()
+            .map_or(Source::Process, |screen| screen.source);
         self.refresh(Cause::quiet(source, Confidence::Weak), false, now)
     }
 
@@ -482,14 +478,14 @@ impl Arbiter {
         decision: Decision,
         now: UnixMillis,
     ) -> Result<Decided, DecisionError> {
-        if let Some(d) = self
+        if let Some(earlier) = self
             .decided
             .as_ref()
-            .filter(|d| d.request_id == decision.request_id)
+            .filter(|earlier| earlier.request_id == decision.request_id)
         {
             return Err(DecisionError::AlreadyDecided {
-                by: d.decided_by.clone(),
-                choice: d.choice,
+                by: earlier.decided_by.clone(),
+                choice: earlier.choice,
             });
         }
         let Status::Blocked(blocked) = &self.status else {
@@ -502,7 +498,7 @@ impl Arbiter {
             .blocker
             .options
             .iter()
-            .any(|o| o.id == decision.choice)
+            .any(|option| option.id == decision.choice)
         {
             return Err(DecisionError::NotOffered);
         }
@@ -524,10 +520,10 @@ impl Arbiter {
             deadlines.push(since.saturating_add(self.config.blocked_debounce));
         }
         if let Some(claim) = &self.claim {
-            if let Some(screen) = self.screen.as_ref().filter(|s| {
-                s.visible
-                    && s.state == AgentState::Idle
-                    && s.since > claim.at
+            if let Some(screen) = self.screen.as_ref().filter(|screen| {
+                screen.visible
+                    && screen.state == AgentState::Idle
+                    && screen.since > claim.at
                     && matches!(claim.state(), AgentState::Working | AgentState::Blocked)
             }) {
                 deadlines.push(screen.since.saturating_add(self.config.idle_override));
@@ -543,24 +539,23 @@ impl Arbiter {
         deadlines.into_iter().min()
     }
 
-    fn record_screen(&mut self, m: &ScreenMatch, now: UnixMillis) {
-        if m.state == AgentState::Unknown {
+    fn record_screen(&mut self, matched: &ScreenMatch, now: UnixMillis) {
+        if matched.state == AgentState::Unknown {
             self.screen = None;
             return;
         }
-        let same = self
-            .screen
-            .as_ref()
-            .is_some_and(|s| s.state == m.state && s.visible == m.is_visible());
+        let same = self.screen.as_ref().is_some_and(|screen| {
+            screen.state == matched.state && screen.visible == matched.is_visible()
+        });
         if same {
-            if let Some(s) = &mut self.screen {
-                s.source = m.source;
+            if let Some(screen) = &mut self.screen {
+                screen.source = matched.source;
             }
         } else {
             self.screen = Some(ScreenRecord {
-                state: m.state,
-                visible: m.is_visible(),
-                source: m.source,
+                state: matched.state,
+                visible: matched.is_visible(),
+                source: matched.source,
                 since: now,
             });
         }
@@ -579,7 +574,7 @@ impl Arbiter {
         let mut stale = false;
         if let Some(claim) = &self.claim {
             let claim_state = claim.state();
-            if let Some(screen) = self.screen.as_ref().filter(|s| s.visible) {
+            if let Some(screen) = self.screen.as_ref().filter(|screen| screen.visible) {
                 let newer = screen.since > claim.at;
                 let screen_wins = match (screen.state, claim_state) {
                     (AgentState::Blocked, AgentState::Working) => true,
@@ -648,7 +643,7 @@ impl Arbiter {
     }
 
     fn mint_request(&mut self) -> RequestId {
-        let n = self.next_request;
+        let number = self.next_request;
         self.next_request += 1;
         let scope = self
             .pane_id
@@ -656,7 +651,7 @@ impl Arbiter {
             .map(PaneId::as_str)
             .or(self.session.native_id.as_ref().map(|id| id.as_str()))
             .unwrap_or("session");
-        RequestId::new(format!("{scope}/r{n}"))
+        RequestId::new(format!("{scope}/r{number}"))
     }
 
     fn refresh(&mut self, cause: Cause, fresh_claim: bool, now: UnixMillis) -> Update {
@@ -749,7 +744,9 @@ impl Arbiter {
         } else {
             (cause.source, cause.confidence, cause.seq)
         };
-        let (turn, subagent) = cause.signal.map_or((None, None), |s| (s.turn, s.subagent));
+        let (turn, subagent) = cause
+            .signal
+            .map_or((None, None), |signal| (signal.turn, signal.subagent));
         let event = AgentEvent {
             v: SchemaVersion,
             pane_id: self.pane_id.clone(),
@@ -770,8 +767,8 @@ impl Arbiter {
     }
 
     fn blocked_notification(&self) -> Option<Notify> {
-        self.status.blocked().map(|b| Notify::Blocked {
-            request_id: b.request_id.clone(),
+        self.status.blocked().map(|blocked| Notify::Blocked {
+            request_id: blocked.request_id.clone(),
         })
     }
 }
@@ -779,10 +776,10 @@ impl Arbiter {
 /// Hook socket reports and OSC 7501 reports come from the same shim and share its clock, so their
 /// sequence numbers order them even though the sources differ.
 fn shim_newer(current: &ClaimRecord, signal: &Signal) -> bool {
-    let shim = |s: Source| matches!(s, Source::Hook | Source::Osc7501);
-    shim(current.source)
-        && shim(signal.source)
-        && matches!((current.seq, signal.seq), (Some(a), Some(b)) if b > a)
+    let from_shim = |source: Source| matches!(source, Source::Hook | Source::Osc7501);
+    from_shim(current.source)
+        && from_shim(signal.source)
+        && matches!((current.seq, signal.seq), (Some(current_seq), Some(signal_seq)) if signal_seq > current_seq)
 }
 
 fn kind_fits(kind: EventKind, state: AgentState) -> bool {
@@ -817,11 +814,11 @@ mod tests {
 
     const T0: UnixMillis = UnixMillis(1_000_000);
 
-    fn at(ms: u64) -> UnixMillis {
-        UnixMillis(T0.0 + ms)
+    fn at(millis: u64) -> UnixMillis {
+        UnixMillis(T0.0 + millis)
     }
 
-    fn arbiter(coverage: HookCoverage) -> Arbiter {
+    fn new_arbiter(coverage: HookCoverage) -> Arbiter {
         Arbiter::new(
             ArbiterConfig::new(coverage),
             Some(PaneId::new("p1")),
@@ -837,14 +834,14 @@ mod tests {
     }
 
     fn permission(tool: &str) -> Blocker {
-        let mut b = Blocker::new(BlockedReason::Permission);
-        b.tool = Some(tool.into());
-        b.options = vec![
+        let mut blocker = Blocker::new(BlockedReason::Permission);
+        blocker.tool = Some(tool.into());
+        blocker.options = vec![
             ApprovalOption::new(ApprovalChoice::AllowOnce, "Yes"),
             ApprovalOption::new(ApprovalChoice::Deny, "No"),
         ];
-        b.answer_paths = vec![AnswerPath::HookDecision];
-        b
+        blocker.answer_paths = vec![AnswerPath::HookDecision];
+        blocker
     }
 
     fn screen(state: AgentState, visible: bool) -> ScreenVerdict {
@@ -856,13 +853,18 @@ mod tests {
         ))
     }
 
-    fn request_id(a: &Arbiter) -> RequestId {
-        a.status().blocked().expect("blocked").request_id.clone()
+    fn request_id(arbiter: &Arbiter) -> RequestId {
+        arbiter
+            .status()
+            .blocked()
+            .expect("blocked")
+            .request_id
+            .clone()
     }
 
-    fn decision(a: &Arbiter, choice: ApprovalChoice, actor: &str) -> Decision {
+    fn decision(arbiter: &Arbiter, choice: ApprovalChoice, actor: &str) -> Decision {
         Decision {
-            request_id: request_id(a),
+            request_id: request_id(arbiter),
             choice,
             actor: ActorId::new(actor),
         }
@@ -870,10 +872,10 @@ mod tests {
 
     #[test]
     fn starts_unknown_and_follows_hooks() {
-        let mut a = arbiter(HookCoverage::Partial);
-        assert_eq!(a.status(), &Status::Unknown);
-        let up = a.apply(hook(EventKind::TurnStarted, Claim::Working, 1), at(10));
-        let event = up.event.unwrap();
+        let mut arbiter = new_arbiter(HookCoverage::Partial);
+        assert_eq!(arbiter.status(), &Status::Unknown);
+        let update = arbiter.apply(hook(EventKind::TurnStarted, Claim::Working, 1), at(10));
+        let event = update.event.unwrap();
         assert_eq!(event.kind, EventKind::TurnStarted);
         assert_eq!(event.status, Status::Working);
         assert_eq!(event.source, Source::Hook);
@@ -884,272 +886,273 @@ mod tests {
 
     #[test]
     fn unchanged_state_emits_nothing() {
-        let mut a = arbiter(HookCoverage::Partial);
-        let _ = a.apply(hook(EventKind::TurnStarted, Claim::Working, 1), at(0));
-        let up = a.apply(hook(EventKind::ToolStarted, Claim::Working, 2), at(5));
-        assert_eq!(up, Update::default());
+        let mut arbiter = new_arbiter(HookCoverage::Partial);
+        let _ = arbiter.apply(hook(EventKind::TurnStarted, Claim::Working, 1), at(0));
+        let update = arbiter.apply(hook(EventKind::ToolStarted, Claim::Working, 2), at(5));
+        assert_eq!(update, Update::default());
     }
 
     #[test]
     fn process_truth_wins() {
-        let mut a = arbiter(HookCoverage::Partial);
-        let _ = a.apply(
+        let mut arbiter = new_arbiter(HookCoverage::Partial);
+        let _ = arbiter.apply(
             hook(EventKind::Blocked, Claim::Blocked(permission("Bash")), 1),
             at(0),
         );
-        let up = a.process_exited(at(5));
-        let event = up.event.unwrap();
+        let update = arbiter.process_exited(at(5));
+        let event = update.event.unwrap();
         assert_eq!(event.status, Status::Unknown);
         assert_eq!(event.kind, EventKind::SessionEnded);
         assert_eq!(event.source, Source::Process);
 
         // Late hooks and screens from the dead process change nothing.
         assert_eq!(
-            a.apply(hook(EventKind::TurnStarted, Claim::Working, 2), at(6)),
+            arbiter.apply(hook(EventKind::TurnStarted, Claim::Working, 2), at(6)),
             Update::default()
         );
         assert_eq!(
-            a.observe_screen(&screen(AgentState::Idle, true), at(7)),
+            arbiter.observe_screen(&screen(AgentState::Idle, true), at(7)),
             Update::default()
         );
-        assert_eq!(a.status(), &Status::Unknown);
+        assert_eq!(arbiter.status(), &Status::Unknown);
 
         // A new process starts from a clean slate.
-        a.process_started(at(10));
-        let _ = a.apply(hook(EventKind::TurnStarted, Claim::Working, 3), at(11));
-        assert_eq!(a.status(), &Status::Working);
+        arbiter.process_started(at(10));
+        let _ = arbiter.apply(hook(EventKind::TurnStarted, Claim::Working, 3), at(11));
+        assert_eq!(arbiter.status(), &Status::Working);
     }
 
     #[test]
     fn out_of_order_seq_is_dropped() {
-        let mut a = arbiter(HookCoverage::FullLifecycle);
-        let _ = a.apply(hook(EventKind::TurnEnded, Claim::Idle, 20), at(0));
-        let late = a.apply(hook(EventKind::TurnStarted, Claim::Working, 10), at(1));
+        let mut arbiter = new_arbiter(HookCoverage::FullLifecycle);
+        let _ = arbiter.apply(hook(EventKind::TurnEnded, Claim::Idle, 20), at(0));
+        let late = arbiter.apply(hook(EventKind::TurnStarted, Claim::Working, 10), at(1));
         assert_eq!(late, Update::default());
-        let dup = a.apply(hook(EventKind::TurnStarted, Claim::Working, 20), at(2));
+        let dup = arbiter.apply(hook(EventKind::TurnStarted, Claim::Working, 20), at(2));
         assert_eq!(dup, Update::default());
-        assert_eq!(a.status(), &Status::Idle);
+        assert_eq!(arbiter.status(), &Status::Idle);
     }
 
     #[test]
     fn seq_is_per_source() {
-        let mut a = arbiter(HookCoverage::FullLifecycle);
-        let _ = a.apply(hook(EventKind::TurnStarted, Claim::Working, 100), at(0));
+        let mut arbiter = new_arbiter(HookCoverage::FullLifecycle);
+        let _ = arbiter.apply(hook(EventKind::TurnStarted, Claim::Working, 100), at(0));
         let osc = Signal::new(Source::Osc7501, Confidence::Strong, EventKind::TurnStarted)
             .with_claim(Claim::Working)
             .with_seq(Seq(5));
-        let _ = a.apply(osc.clone(), at(1));
+        let _ = arbiter.apply(osc.clone(), at(1));
         // A repeated OSC seq is dropped even though the hook stream is far ahead.
-        assert_eq!(a.apply(osc, at(2)), Update::default());
+        assert_eq!(arbiter.apply(osc, at(2)), Update::default());
     }
 
     #[test]
     fn weaker_claims_do_not_override_stronger_ones() {
-        let mut a = arbiter(HookCoverage::Partial);
-        let _ = a.apply(
+        let mut arbiter = new_arbiter(HookCoverage::Partial);
+        let _ = arbiter.apply(
             hook(EventKind::Blocked, Claim::Blocked(permission("Bash")), 1),
             at(0),
         );
         let weak_idle = Signal::new(Source::Osc9, Confidence::Weak, EventKind::TurnEnded)
             .with_claim(Claim::Idle);
-        assert_eq!(a.apply(weak_idle, at(1)), Update::default());
-        assert_eq!(a.status().state(), AgentState::Blocked);
+        assert_eq!(arbiter.apply(weak_idle, at(1)), Update::default());
+        assert_eq!(arbiter.status().state(), AgentState::Blocked);
     }
 
     #[test]
     fn shim_seq_orders_osc7501_against_hooks() {
-        let mut a = arbiter(HookCoverage::Partial);
-        let _ = a.apply(hook(EventKind::TurnEnded, Claim::Idle, 50), at(0));
+        let mut arbiter = new_arbiter(HookCoverage::Partial);
+        let _ = arbiter.apply(hook(EventKind::TurnEnded, Claim::Idle, 50), at(0));
         // An OSC 7501 report written before the hook (older seq) arrives late through the PTY.
         let old = Signal::new(Source::Osc7501, Confidence::Strong, EventKind::TurnStarted)
             .with_claim(Claim::Working)
             .with_seq(Seq(40));
-        let _ = a.apply(old, at(1));
-        assert_eq!(a.status(), &Status::Idle);
+        let _ = arbiter.apply(old, at(1));
+        assert_eq!(arbiter.status(), &Status::Idle);
         // A newer one (socket down, shim fell back to the tty) is believed.
         let newer = Signal::new(Source::Osc7501, Confidence::Strong, EventKind::TurnStarted)
             .with_claim(Claim::Working)
             .with_seq(Seq(60));
-        let _ = a.apply(newer, at(2));
-        assert_eq!(a.status(), &Status::Working);
+        let _ = arbiter.apply(newer, at(2));
+        assert_eq!(arbiter.status(), &Status::Working);
     }
 
     #[test]
     fn release_withdraws_a_claim() {
-        let mut a = arbiter(HookCoverage::FullLifecycle);
+        let mut arbiter = new_arbiter(HookCoverage::FullLifecycle);
         let osc = |claim| {
             Signal::new(Source::Osc7501, Confidence::Strong, EventKind::TurnStarted)
                 .with_claim(claim)
         };
-        let _ = a.apply(osc(Claim::Working), at(0));
-        let _ = a.observe_screen(&screen(AgentState::Idle, false), at(1));
-        assert_eq!(a.status(), &Status::Working);
-        let _ = a.apply(osc(Claim::Release), at(2));
-        assert_eq!(a.status(), &Status::Idle, "falls back to the screen");
+        let _ = arbiter.apply(osc(Claim::Working), at(0));
+        let _ = arbiter.observe_screen(&screen(AgentState::Idle, false), at(1));
+        assert_eq!(arbiter.status(), &Status::Working);
+        let _ = arbiter.apply(osc(Claim::Release), at(2));
+        assert_eq!(arbiter.status(), &Status::Idle, "falls back to the screen");
     }
 
     #[test]
     fn authoritative_blocker_notifies_at_once() {
-        let mut a = arbiter(HookCoverage::Partial);
-        let up = a.apply(
+        let mut arbiter = new_arbiter(HookCoverage::Partial);
+        let update = arbiter.apply(
             hook(EventKind::Blocked, Claim::Blocked(permission("Bash")), 1),
             at(0),
         );
-        let id = request_id(&a);
+        let id = request_id(&arbiter);
         assert_eq!(id.as_str(), "p1/r1");
-        assert_eq!(up.notify, Some(Notify::Blocked { request_id: id }));
-        assert_eq!(up.event.unwrap().kind, EventKind::Blocked);
-        assert_eq!(a.next_deadline(), None);
+        assert_eq!(update.notify, Some(Notify::Blocked { request_id: id }));
+        assert_eq!(update.event.unwrap().kind, EventKind::Blocked);
+        assert_eq!(arbiter.next_deadline(), None);
     }
 
     #[test]
     fn non_authoritative_blocker_is_debounced() {
-        let mut a = arbiter(HookCoverage::Partial);
-        let up = a.observe_screen(&screen(AgentState::Blocked, true), at(0));
-        assert!(up.event.is_some());
-        assert_eq!(up.notify, None);
-        assert_eq!(a.next_deadline(), Some(at(1500)));
-        assert_eq!(a.tick(at(1499)).notify, None);
-        let up = a.tick(at(1500));
+        let mut arbiter = new_arbiter(HookCoverage::Partial);
+        let update = arbiter.observe_screen(&screen(AgentState::Blocked, true), at(0));
+        assert!(update.event.is_some());
+        assert_eq!(update.notify, None);
+        assert_eq!(arbiter.next_deadline(), Some(at(1500)));
+        assert_eq!(arbiter.tick(at(1499)).notify, None);
+        let update = arbiter.tick(at(1500));
         assert_eq!(
-            up.notify,
+            update.notify,
             Some(Notify::Blocked {
-                request_id: request_id(&a)
+                request_id: request_id(&arbiter)
             })
         );
-        assert_eq!(up.event, None);
-        assert_eq!(a.tick(at(5000)).notify, None, "notifies once");
+        assert_eq!(update.event, None);
+        assert_eq!(arbiter.tick(at(5000)).notify, None, "notifies once");
     }
 
     #[test]
     fn momentary_blocker_never_notifies() {
-        let mut a = arbiter(HookCoverage::Partial);
-        let _ = a.observe_screen(&screen(AgentState::Working, true), at(0));
-        let _ = a.observe_screen(&screen(AgentState::Blocked, true), at(100));
-        let _ = a.observe_screen(&screen(AgentState::Working, true), at(900));
-        assert_eq!(a.tick(at(2000)).notify, None);
-        assert_eq!(a.next_deadline(), None);
+        let mut arbiter = new_arbiter(HookCoverage::Partial);
+        let _ = arbiter.observe_screen(&screen(AgentState::Working, true), at(0));
+        let _ = arbiter.observe_screen(&screen(AgentState::Blocked, true), at(100));
+        let _ = arbiter.observe_screen(&screen(AgentState::Working, true), at(900));
+        assert_eq!(arbiter.tick(at(2000)).notify, None);
+        assert_eq!(arbiter.next_deadline(), None);
     }
 
     #[test]
     fn visible_blocker_overrides_a_working_claim() {
-        let mut a = arbiter(HookCoverage::FullLifecycle);
-        let _ = a.apply(hook(EventKind::TurnStarted, Claim::Working, 1), at(0));
-        let up = a.observe_screen(&screen(AgentState::Blocked, true), at(100));
-        assert_eq!(up.event.unwrap().source, Source::Screen);
-        assert_eq!(a.status().state(), AgentState::Blocked);
+        let mut arbiter = new_arbiter(HookCoverage::FullLifecycle);
+        let _ = arbiter.apply(hook(EventKind::TurnStarted, Claim::Working, 1), at(0));
+        let update = arbiter.observe_screen(&screen(AgentState::Blocked, true), at(100));
+        assert_eq!(update.event.unwrap().source, Source::Screen);
+        assert_eq!(arbiter.status().state(), AgentState::Blocked);
         // When the dialog closes, the still-valid hook claim is back in charge.
-        let _ = a.observe_screen(&screen(AgentState::Idle, false), at(200));
-        assert_eq!(a.status(), &Status::Working);
+        let _ = arbiter.observe_screen(&screen(AgentState::Idle, false), at(200));
+        assert_eq!(arbiter.status(), &Status::Working);
     }
 
     #[test]
     fn invisible_screen_never_overrides_a_claim() {
-        let mut a = arbiter(HookCoverage::Partial);
-        let _ = a.apply(hook(EventKind::TurnStarted, Claim::Working, 1), at(0));
-        let _ = a.observe_screen(&screen(AgentState::Idle, false), at(100));
-        assert_eq!(a.tick(at(60_000)).event, None);
-        assert_eq!(a.status(), &Status::Working);
+        let mut arbiter = new_arbiter(HookCoverage::Partial);
+        let _ = arbiter.apply(hook(EventKind::TurnStarted, Claim::Working, 1), at(0));
+        let _ = arbiter.observe_screen(&screen(AgentState::Idle, false), at(100));
+        assert_eq!(arbiter.tick(at(60_000)).event, None);
+        assert_eq!(arbiter.status(), &Status::Working);
     }
 
     #[test]
     fn visible_idle_prompt_overrides_a_stale_working_claim_after_two_seconds() {
         // Claude sends no hook when the user cancels with Esc.
-        let mut a = arbiter(HookCoverage::Partial);
-        let _ = a.apply(hook(EventKind::TurnStarted, Claim::Working, 1), at(0));
-        let _ = a.observe_screen(&screen(AgentState::Working, true), at(50));
+        let mut arbiter = new_arbiter(HookCoverage::Partial);
+        let _ = arbiter.apply(hook(EventKind::TurnStarted, Claim::Working, 1), at(0));
+        let _ = arbiter.observe_screen(&screen(AgentState::Working, true), at(50));
         assert_eq!(
-            a.observe_screen(&screen(AgentState::Idle, true), at(5000))
+            arbiter
+                .observe_screen(&screen(AgentState::Idle, true), at(5000))
                 .event,
             None
         );
-        assert_eq!(a.next_deadline(), Some(at(7000)));
-        assert_eq!(a.tick(at(6999)).event, None);
-        let up = a.tick(at(7000));
-        let event = up.event.unwrap();
+        assert_eq!(arbiter.next_deadline(), Some(at(7000)));
+        assert_eq!(arbiter.tick(at(6999)).event, None);
+        let update = arbiter.tick(at(7000));
+        let event = update.event.unwrap();
         assert_eq!(event.status, Status::Idle);
         assert_eq!(event.kind, EventKind::TurnEnded);
         assert_eq!(event.source, Source::Screen);
-        assert_eq!(up.notify, Some(Notify::Done));
+        assert_eq!(update.notify, Some(Notify::Done));
     }
 
     #[test]
     fn idle_prompt_seen_before_the_claim_does_not_override_it() {
         // The hook fires before the TUI redraws, so an idle prompt already on screen is older
         // evidence than the claim.
-        let mut a = arbiter(HookCoverage::FullLifecycle);
-        let _ = a.observe_screen(&screen(AgentState::Idle, true), at(0));
-        let _ = a.apply(hook(EventKind::TurnStarted, Claim::Working, 1), at(100));
-        let _ = a.observe_screen(&screen(AgentState::Idle, true), at(200));
-        assert_eq!(a.tick(at(10_000)).event, None);
-        assert_eq!(a.status(), &Status::Working);
+        let mut arbiter = new_arbiter(HookCoverage::FullLifecycle);
+        let _ = arbiter.observe_screen(&screen(AgentState::Idle, true), at(0));
+        let _ = arbiter.apply(hook(EventKind::TurnStarted, Claim::Working, 1), at(100));
+        let _ = arbiter.observe_screen(&screen(AgentState::Idle, true), at(200));
+        assert_eq!(arbiter.tick(at(10_000)).event, None);
+        assert_eq!(arbiter.status(), &Status::Working);
     }
 
     #[test]
     fn partial_coverage_leaves_blocked_when_the_screen_shows_work() {
-        let mut a = arbiter(HookCoverage::Partial);
-        let _ = a.observe_screen(&screen(AgentState::Working, true), at(0));
-        let _ = a.apply(
+        let mut arbiter = new_arbiter(HookCoverage::Partial);
+        let _ = arbiter.observe_screen(&screen(AgentState::Working, true), at(0));
+        let _ = arbiter.apply(
             hook(EventKind::Blocked, Claim::Blocked(permission("Bash")), 1),
             at(100),
         );
         // The spinner that was already showing is older than the claim: still blocked.
-        let _ = a.observe_screen(&screen(AgentState::Working, true), at(150));
-        assert_eq!(a.status().state(), AgentState::Blocked);
-        let _ = a.observe_screen(&screen(AgentState::Blocked, true), at(200));
+        let _ = arbiter.observe_screen(&screen(AgentState::Working, true), at(150));
+        assert_eq!(arbiter.status().state(), AgentState::Blocked);
+        let _ = arbiter.observe_screen(&screen(AgentState::Blocked, true), at(200));
         // Answered in the terminal: the spinner comes back.
-        let up = a.observe_screen(&screen(AgentState::Working, true), at(3000));
-        let event = up.event.unwrap();
+        let update = arbiter.observe_screen(&screen(AgentState::Working, true), at(3000));
+        let event = update.event.unwrap();
         assert_eq!(event.kind, EventKind::Unblocked);
         assert_eq!(event.status, Status::Working);
     }
 
     #[test]
     fn full_lifecycle_hooks_are_not_overridden_by_screen_work() {
-        let mut a = arbiter(HookCoverage::FullLifecycle);
-        let _ = a.apply(
+        let mut arbiter = new_arbiter(HookCoverage::FullLifecycle);
+        let _ = arbiter.apply(
             hook(EventKind::Blocked, Claim::Blocked(permission("Bash")), 1),
             at(0),
         );
-        let _ = a.observe_screen(&screen(AgentState::Working, true), at(500));
-        assert_eq!(a.status().state(), AgentState::Blocked);
+        let _ = arbiter.observe_screen(&screen(AgentState::Working, true), at(500));
+        assert_eq!(arbiter.status().state(), AgentState::Blocked);
     }
 
     #[test]
     fn answered_in_terminal_falls_back_to_idle_prompt() {
-        let mut a = arbiter(HookCoverage::FullLifecycle);
-        let _ = a.apply(
+        let mut arbiter = new_arbiter(HookCoverage::FullLifecycle);
+        let _ = arbiter.apply(
             hook(EventKind::Blocked, Claim::Blocked(permission("Bash")), 1),
             at(0),
         );
-        let _ = a.observe_screen(&screen(AgentState::Blocked, true), at(100));
-        let _ = a.observe_screen(&screen(AgentState::Idle, true), at(4000));
-        assert_eq!(a.status().state(), AgentState::Blocked);
-        let up = a.tick(at(6000));
-        assert_eq!(up.event.unwrap().kind, EventKind::Unblocked);
-        assert_eq!(a.status(), &Status::Idle);
+        let _ = arbiter.observe_screen(&screen(AgentState::Blocked, true), at(100));
+        let _ = arbiter.observe_screen(&screen(AgentState::Idle, true), at(4000));
+        assert_eq!(arbiter.status().state(), AgentState::Blocked);
+        let update = arbiter.tick(at(6000));
+        assert_eq!(update.event.unwrap().kind, EventKind::Unblocked);
+        assert_eq!(arbiter.status(), &Status::Idle);
     }
 
     #[test]
     fn screen_blocker_after_turn_end_wins() {
         // E.g. Codex's update dialog after a turn, which no hook reports.
-        let mut a = arbiter(HookCoverage::Partial);
-        let _ = a.apply(hook(EventKind::TurnEnded, Claim::Idle, 1), at(0));
-        let _ = a.observe_screen(&screen(AgentState::Blocked, true), at(100));
-        assert_eq!(a.status().state(), AgentState::Blocked);
+        let mut arbiter = new_arbiter(HookCoverage::Partial);
+        let _ = arbiter.apply(hook(EventKind::TurnEnded, Claim::Idle, 1), at(0));
+        let _ = arbiter.observe_screen(&screen(AgentState::Blocked, true), at(100));
+        assert_eq!(arbiter.status().state(), AgentState::Blocked);
     }
 
     #[test]
     fn hook_and_screen_share_one_request() {
-        let mut a = arbiter(HookCoverage::Partial);
-        let _ = a.observe_screen(&screen(AgentState::Blocked, true), at(0));
-        let first = request_id(&a);
-        let up = a.apply(
+        let mut arbiter = new_arbiter(HookCoverage::Partial);
+        let _ = arbiter.observe_screen(&screen(AgentState::Blocked, true), at(0));
+        let first = request_id(&arbiter);
+        let update = arbiter.apply(
             hook(EventKind::Blocked, Claim::Blocked(permission("Bash")), 1),
             at(50),
         );
-        assert_eq!(request_id(&a), first, "same dialog, same request");
-        let blocked = a.status().blocked().unwrap();
+        assert_eq!(request_id(&arbiter), first, "same dialog, same request");
+        let blocked = arbiter.status().blocked().unwrap();
         assert_eq!(blocked.blocker.reason, BlockedReason::Permission);
         assert_eq!(blocked.blocker.tool.as_deref(), Some("Bash"));
         assert!(
@@ -1164,47 +1167,51 @@ mod tests {
                 .answer_paths
                 .contains(&AnswerPath::HookDecision)
         );
-        assert_eq!(up.event.unwrap().kind, EventKind::Blocked, "enriched card");
+        assert_eq!(
+            update.event.unwrap().kind,
+            EventKind::Blocked,
+            "enriched card"
+        );
     }
 
     #[test]
     fn a_different_tool_is_a_new_request() {
-        let mut a = arbiter(HookCoverage::FullLifecycle);
-        let _ = a.apply(
+        let mut arbiter = new_arbiter(HookCoverage::FullLifecycle);
+        let _ = arbiter.apply(
             hook(EventKind::Blocked, Claim::Blocked(permission("Bash")), 1),
             at(0),
         );
-        let first = request_id(&a);
-        let up = a.apply(
+        let first = request_id(&arbiter);
+        let update = arbiter.apply(
             hook(EventKind::Blocked, Claim::Blocked(permission("Write")), 2),
             at(10),
         );
-        assert_ne!(request_id(&a), first);
-        assert!(matches!(up.notify, Some(Notify::Blocked { .. })));
+        assert_ne!(request_id(&arbiter), first);
+        assert!(matches!(update.notify, Some(Notify::Blocked { .. })));
     }
 
     #[test]
     fn first_decision_wins() {
-        let mut a = arbiter(HookCoverage::Partial);
-        let _ = a.apply(
+        let mut arbiter = new_arbiter(HookCoverage::Partial);
+        let _ = arbiter.apply(
             hook(EventKind::Blocked, Claim::Blocked(permission("Bash")), 1),
             at(0),
         );
-        let alice = decision(&a, ApprovalChoice::AllowOnce, "alice");
-        let bob = decision(&a, ApprovalChoice::Deny, "bob");
-        let decided = a.decide(alice, at(100)).unwrap();
+        let alice = decision(&arbiter, ApprovalChoice::AllowOnce, "alice");
+        let bob = decision(&arbiter, ApprovalChoice::Deny, "bob");
+        let decided = arbiter.decide(alice, at(100)).unwrap();
         assert_eq!(decided.decided_by, ActorId::new("alice"));
         assert_eq!(decided.choice, ApprovalChoice::AllowOnce);
         assert_eq!(decided.at, at(100));
         assert_eq!(
-            a.decide(bob, at(101)),
+            arbiter.decide(bob, at(101)),
             Err(DecisionError::AlreadyDecided {
                 by: ActorId::new("alice"),
                 choice: ApprovalChoice::AllowOnce
             })
         );
         assert_eq!(
-            a.status().state(),
+            arbiter.status().state(),
             AgentState::Blocked,
             "until evidence arrives"
         );
@@ -1212,163 +1219,181 @@ mod tests {
 
     #[test]
     fn late_deciders_still_learn_who_won_after_unblock() {
-        let mut a = arbiter(HookCoverage::Partial);
-        let _ = a.apply(
+        let mut arbiter = new_arbiter(HookCoverage::Partial);
+        let _ = arbiter.apply(
             hook(EventKind::Blocked, Claim::Blocked(permission("Bash")), 1),
             at(0),
         );
-        let late = decision(&a, ApprovalChoice::Deny, "bob");
-        a.decide(decision(&a, ApprovalChoice::AllowOnce, "alice"), at(1))
+        let late = decision(&arbiter, ApprovalChoice::Deny, "bob");
+        arbiter
+            .decide(
+                decision(&arbiter, ApprovalChoice::AllowOnce, "alice"),
+                at(1),
+            )
             .unwrap();
-        let _ = a.apply(hook(EventKind::TurnEnded, Claim::Idle, 2), at(2));
+        let _ = arbiter.apply(hook(EventKind::TurnEnded, Claim::Idle, 2), at(2));
         assert!(matches!(
-            a.decide(late, at(3)),
+            arbiter.decide(late, at(3)),
             Err(DecisionError::AlreadyDecided { .. })
         ));
     }
 
     #[test]
     fn decisions_are_validated() {
-        let mut a = arbiter(HookCoverage::Partial);
+        let mut arbiter = new_arbiter(HookCoverage::Partial);
         let stray = Decision {
             request_id: RequestId::new("p1/r9"),
             choice: ApprovalChoice::AllowOnce,
             actor: ActorId::new("alice"),
         };
         assert_eq!(
-            a.decide(stray.clone(), at(0)),
+            arbiter.decide(stray.clone(), at(0)),
             Err(DecisionError::NotPending)
         );
-        let _ = a.apply(
+        let _ = arbiter.apply(
             hook(EventKind::Blocked, Claim::Blocked(permission("Bash")), 1),
             at(0),
         );
-        assert_eq!(a.decide(stray, at(1)), Err(DecisionError::NotPending));
-        let session = decision(&a, ApprovalChoice::AllowSession, "alice");
-        assert_eq!(a.decide(session, at(1)), Err(DecisionError::NotOffered));
+        assert_eq!(arbiter.decide(stray, at(1)), Err(DecisionError::NotPending));
+        let session = decision(&arbiter, ApprovalChoice::AllowSession, "alice");
+        assert_eq!(
+            arbiter.decide(session, at(1)),
+            Err(DecisionError::NotOffered)
+        );
 
         // Screen-only blockers offer no options: "open the terminal".
-        let mut b = arbiter(HookCoverage::Partial);
-        let _ = b.observe_screen(&screen(AgentState::Blocked, true), at(0));
-        let any = decision(&b, ApprovalChoice::AllowOnce, "alice");
-        assert_eq!(b.decide(any, at(1)), Err(DecisionError::NotOffered));
+        let mut screen_only = new_arbiter(HookCoverage::Partial);
+        let _ = screen_only.observe_screen(&screen(AgentState::Blocked, true), at(0));
+        let any = decision(&screen_only, ApprovalChoice::AllowOnce, "alice");
+        assert_eq!(
+            screen_only.decide(any, at(1)),
+            Err(DecisionError::NotOffered)
+        );
     }
 
     #[test]
     fn same_dialog_after_a_decision_keeps_its_id_but_a_new_hook_request_does_not() {
-        let mut a = arbiter(HookCoverage::Partial);
-        let _ = a.apply(
+        let mut arbiter = new_arbiter(HookCoverage::Partial);
+        let _ = arbiter.apply(
             hook(EventKind::Blocked, Claim::Blocked(permission("Bash")), 1),
             at(0),
         );
-        let first = request_id(&a);
-        a.decide(decision(&a, ApprovalChoice::AllowOnce, "alice"), at(10))
+        let first = request_id(&arbiter);
+        arbiter
+            .decide(
+                decision(&arbiter, ApprovalChoice::AllowOnce, "alice"),
+                at(10),
+            )
             .unwrap();
         // The dialog is still drawn for a moment after the answer.
-        let _ = a.observe_screen(&screen(AgentState::Blocked, true), at(20));
-        assert_eq!(request_id(&a), first);
+        let _ = arbiter.observe_screen(&screen(AgentState::Blocked, true), at(20));
+        assert_eq!(request_id(&arbiter), first);
         // A second PermissionRequest for the same tool is a new request.
-        let _ = a.apply(
+        let _ = arbiter.apply(
             hook(EventKind::Blocked, Claim::Blocked(permission("Bash")), 2),
             at(30),
         );
-        assert_ne!(request_id(&a), first);
-        assert_eq!(a.decided(), None);
+        assert_ne!(request_id(&arbiter), first);
+        assert_eq!(arbiter.decided(), None);
     }
 
     #[test]
     fn unseen_done_is_set_only_when_nobody_is_viewing() {
-        let mut a = arbiter(HookCoverage::Partial);
-        a.viewed();
-        let _ = a.apply(hook(EventKind::TurnStarted, Claim::Working, 1), at(0));
-        let up = a.apply(hook(EventKind::TurnEnded, Claim::Idle, 2), at(10));
-        assert_eq!(up.notify, None);
-        assert!(!a.unseen_done());
+        let mut arbiter = new_arbiter(HookCoverage::Partial);
+        arbiter.viewed();
+        let _ = arbiter.apply(hook(EventKind::TurnStarted, Claim::Working, 1), at(0));
+        let update = arbiter.apply(hook(EventKind::TurnEnded, Claim::Idle, 2), at(10));
+        assert_eq!(update.notify, None);
+        assert!(!arbiter.unseen_done());
 
-        a.unviewed();
-        let _ = a.apply(hook(EventKind::TurnStarted, Claim::Working, 3), at(20));
-        let up = a.apply(hook(EventKind::TurnEnded, Claim::Idle, 4), at(30));
-        assert_eq!(up.notify, Some(Notify::Done));
-        assert!(a.unseen_done());
+        arbiter.unviewed();
+        let _ = arbiter.apply(hook(EventKind::TurnStarted, Claim::Working, 3), at(20));
+        let update = arbiter.apply(hook(EventKind::TurnEnded, Claim::Idle, 4), at(30));
+        assert_eq!(update.notify, Some(Notify::Done));
+        assert!(arbiter.unseen_done());
 
-        a.viewed();
-        assert!(!a.unseen_done());
+        arbiter.viewed();
+        assert!(!arbiter.unseen_done());
     }
 
     #[test]
     fn a_new_turn_clears_unseen_done() {
-        let mut a = arbiter(HookCoverage::Partial);
-        let _ = a.apply(hook(EventKind::TurnStarted, Claim::Working, 1), at(0));
-        let _ = a.apply(hook(EventKind::TurnEnded, Claim::Idle, 2), at(10));
-        assert!(a.unseen_done());
-        let _ = a.apply(hook(EventKind::TurnStarted, Claim::Working, 3), at(20));
-        assert!(!a.unseen_done());
+        let mut arbiter = new_arbiter(HookCoverage::Partial);
+        let _ = arbiter.apply(hook(EventKind::TurnStarted, Claim::Working, 1), at(0));
+        let _ = arbiter.apply(hook(EventKind::TurnEnded, Claim::Idle, 2), at(10));
+        assert!(arbiter.unseen_done());
+        let _ = arbiter.apply(hook(EventKind::TurnStarted, Claim::Working, 3), at(20));
+        assert!(!arbiter.unseen_done());
     }
 
     #[test]
     fn failed_turns_notify_as_failed() {
-        let mut a = arbiter(HookCoverage::Partial);
-        let _ = a.apply(hook(EventKind::TurnStarted, Claim::Working, 1), at(0));
-        let up = a.apply(hook(EventKind::Error, Claim::Error, 2), at(10));
-        assert_eq!(up.notify, Some(Notify::Failed));
-        assert_eq!(up.event.unwrap().kind, EventKind::Error);
+        let mut arbiter = new_arbiter(HookCoverage::Partial);
+        let _ = arbiter.apply(hook(EventKind::TurnStarted, Claim::Working, 1), at(0));
+        let update = arbiter.apply(hook(EventKind::Error, Claim::Error, 2), at(10));
+        assert_eq!(update.notify, Some(Notify::Failed));
+        assert_eq!(update.event.unwrap().kind, EventKind::Error);
     }
 
     #[test]
     fn idle_without_prior_work_is_not_done() {
-        let mut a = arbiter(HookCoverage::Partial);
-        let up = a.observe_screen(&screen(AgentState::Idle, true), at(0));
-        assert_eq!(up.notify, None);
-        assert!(!a.unseen_done());
+        let mut arbiter = new_arbiter(HookCoverage::Partial);
+        let update = arbiter.observe_screen(&screen(AgentState::Idle, true), at(0));
+        assert_eq!(update.notify, None);
+        assert!(!arbiter.unseen_done());
     }
 
     #[test]
     fn restored_sessions_never_report_done_until_they_work() {
-        let mut a = Arbiter::restored(
+        let mut arbiter = Arbiter::restored(
             ArbiterConfig::new(HookCoverage::Partial),
             Some(PaneId::new("p1")),
             SessionInfo::new(AgentKind::Claude, Lane::Pty),
             T0,
         );
-        assert_eq!(a.status(), &Status::Idle);
-        assert!(a.is_restored_unconfirmed());
-        assert_eq!(a.tick(at(10)), Update::default(), "no evidence keeps idle");
-        let _ = a.observe_screen(&screen(AgentState::Idle, true), at(20));
-        assert!(!a.unseen_done());
-        let _ = a.observe_screen(&screen(AgentState::Working, true), at(30));
-        assert!(!a.is_restored_unconfirmed());
-        let up = a.observe_screen(&screen(AgentState::Idle, true), at(40));
-        assert_eq!(up.notify, Some(Notify::Done));
+        assert_eq!(arbiter.status(), &Status::Idle);
+        assert!(arbiter.is_restored_unconfirmed());
+        assert_eq!(
+            arbiter.tick(at(10)),
+            Update::default(),
+            "no evidence keeps idle"
+        );
+        let _ = arbiter.observe_screen(&screen(AgentState::Idle, true), at(20));
+        assert!(!arbiter.unseen_done());
+        let _ = arbiter.observe_screen(&screen(AgentState::Working, true), at(30));
+        assert!(!arbiter.is_restored_unconfirmed());
+        let update = arbiter.observe_screen(&screen(AgentState::Idle, true), at(40));
+        assert_eq!(update.notify, Some(Notify::Done));
     }
 
     #[test]
     fn working_claims_go_stale_without_output() {
-        let mut a = arbiter(HookCoverage::FullLifecycle);
-        let _ = a.apply(hook(EventKind::TurnStarted, Claim::Working, 1), at(0));
+        let mut arbiter = new_arbiter(HookCoverage::FullLifecycle);
+        let _ = arbiter.apply(hook(EventKind::TurnStarted, Claim::Working, 1), at(0));
         let thirty_min = 30 * 60 * 1000;
-        a.pty_output(at(1000));
-        assert_eq!(a.next_deadline(), Some(at(1000 + thirty_min)));
-        assert_eq!(a.tick(at(thirty_min)).event, None);
-        let up = a.tick(at(1000 + thirty_min));
-        let event = up.event.unwrap();
+        arbiter.pty_output(at(1000));
+        assert_eq!(arbiter.next_deadline(), Some(at(1000 + thirty_min)));
+        assert_eq!(arbiter.tick(at(thirty_min)).event, None);
+        let update = arbiter.tick(at(1000 + thirty_min));
+        let event = update.event.unwrap();
         assert_eq!(event.kind, EventKind::Stale);
         assert_eq!(event.status, Status::Unknown);
     }
 
     #[test]
     fn blocked_never_goes_stale() {
-        let mut a = arbiter(HookCoverage::FullLifecycle);
-        let _ = a.apply(
+        let mut arbiter = new_arbiter(HookCoverage::FullLifecycle);
+        let _ = arbiter.apply(
             hook(EventKind::Blocked, Claim::Blocked(permission("Bash")), 1),
             at(0),
         );
-        assert_eq!(a.tick(at(10 * 60 * 60 * 1000)).event, None);
-        assert_eq!(a.status().state(), AgentState::Blocked);
+        assert_eq!(arbiter.tick(at(10 * 60 * 60 * 1000)).event, None);
+        assert_eq!(arbiter.status().state(), AgentState::Blocked);
     }
 
     #[test]
     fn session_facts_are_merged_and_force_an_event() {
-        let mut a = arbiter(HookCoverage::Partial);
+        let mut arbiter = new_arbiter(HookCoverage::Partial);
         let mut start = Signal::new(
             Source::Hook,
             Confidence::Authoritative,
@@ -1380,8 +1405,8 @@ mod tests {
             transcript: Some("/t/abc.jsonl".into()),
             cwd: Some("/src".into()),
         };
-        let up = a.apply(start, at(0));
-        let event = up.event.unwrap();
+        let update = arbiter.apply(start, at(0));
+        let event = update.event.unwrap();
         assert_eq!(event.kind, EventKind::SessionStarted);
         assert_eq!(event.status, Status::Unknown);
         assert_eq!(event.session.native_id, Some(NativeSessionId::new("abc")));
@@ -1393,99 +1418,106 @@ mod tests {
         )
         .with_seq(Seq(2));
         changed.session.native_id = Some(NativeSessionId::new("def"));
-        let event = a.apply(changed, at(1)).event.unwrap();
+        let event = arbiter.apply(changed, at(1)).event.unwrap();
         assert_eq!(event.kind, EventKind::SessionIdChanged);
-        assert_eq!(a.session().native_id, Some(NativeSessionId::new("def")));
         assert_eq!(
-            a.session().cwd.as_deref(),
+            arbiter.session().native_id,
+            Some(NativeSessionId::new("def"))
+        );
+        assert_eq!(
+            arbiter.session().cwd.as_deref(),
             Some(std::path::Path::new("/src"))
         );
     }
 
     #[test]
     fn subagent_signals_pass_through_without_changing_state() {
-        let mut a = arbiter(HookCoverage::Partial);
-        let _ = a.apply(hook(EventKind::TurnStarted, Claim::Working, 1), at(0));
-        let mut sub = hook(EventKind::TurnEnded, Claim::Idle, 2);
-        sub.subagent = Some(Subagent {
+        let mut arbiter = new_arbiter(HookCoverage::Partial);
+        let _ = arbiter.apply(hook(EventKind::TurnStarted, Claim::Working, 1), at(0));
+        let mut subagent = hook(EventKind::TurnEnded, Claim::Idle, 2);
+        subagent.subagent = Some(Subagent {
             id: SubagentId::new("def456"),
             agent_type: Some("Explore".into()),
         });
-        let up = a.apply(sub, at(10));
-        let event = up.event.unwrap();
+        let update = arbiter.apply(subagent, at(10));
+        let event = update.event.unwrap();
         assert_eq!(event.status, Status::Working);
         assert!(event.subagent.is_some());
-        assert_eq!(up.notify, None);
-        assert_eq!(a.status(), &Status::Working);
+        assert_eq!(update.notify, None);
+        assert_eq!(arbiter.status(), &Status::Working);
     }
 
     #[test]
     fn turn_details_arriving_after_the_screen_still_emit() {
-        let mut a = arbiter(HookCoverage::Partial);
-        let _ = a.apply(hook(EventKind::TurnStarted, Claim::Working, 1), at(0));
-        let _ = a.observe_screen(&screen(AgentState::Idle, true), at(1000));
-        let _ = a.tick(at(3000));
-        assert_eq!(a.status(), &Status::Idle);
+        let mut arbiter = new_arbiter(HookCoverage::Partial);
+        let _ = arbiter.apply(hook(EventKind::TurnStarted, Claim::Working, 1), at(0));
+        let _ = arbiter.observe_screen(&screen(AgentState::Idle, true), at(1000));
+        let _ = arbiter.tick(at(3000));
+        assert_eq!(arbiter.status(), &Status::Idle);
         let mut stop = hook(EventKind::TurnEnded, Claim::Idle, 2);
         stop.turn = Some(crate::Turn {
             outcome: crate::TurnOutcome::Completed,
             last_message: Some("done".into()),
         });
-        let event = a.apply(stop, at(3100)).event.unwrap();
+        let event = arbiter.apply(stop, at(3100)).event.unwrap();
         assert_eq!(event.kind, EventKind::TurnEnded);
         assert_eq!(event.turn.unwrap().last_message.as_deref(), Some("done"));
     }
 
     #[test]
     fn freeze_verdicts_are_ignored() {
-        let mut a = arbiter(HookCoverage::Partial);
-        let _ = a.observe_screen(&screen(AgentState::Working, true), at(0));
+        let mut arbiter = new_arbiter(HookCoverage::Partial);
+        let _ = arbiter.observe_screen(&screen(AgentState::Working, true), at(0));
         let freeze = ScreenVerdict::Freeze {
             rule_id: "transcript_viewer".into(),
         };
-        assert_eq!(a.observe_screen(&freeze, at(10)), Update::default());
-        assert_eq!(a.status(), &Status::Working);
+        assert_eq!(arbiter.observe_screen(&freeze, at(10)), Update::default());
+        assert_eq!(arbiter.status(), &Status::Working);
     }
 
     #[test]
     fn request_ids_fall_back_to_the_native_session() {
         let mut session = SessionInfo::new(AgentKind::Kimi, Lane::Acp);
         session.native_id = Some(NativeSessionId::new("k1"));
-        let mut a = Arbiter::new(
+        let mut arbiter = Arbiter::new(
             ArbiterConfig::new(HookCoverage::FullLifecycle),
             None,
             session,
             T0,
         );
-        let _ = a.apply(
+        let _ = arbiter.apply(
             hook(EventKind::Blocked, Claim::Blocked(permission("Bash")), 1),
             at(0),
         );
-        assert_eq!(request_id(&a).as_str(), "k1/r1");
+        assert_eq!(request_id(&arbiter).as_str(), "k1/r1");
     }
 
     /// A deterministic replay of a full Claude turn mixing every source.
     #[test]
     fn claude_turn_scenario() {
-        let mut a = arbiter(HookCoverage::Partial);
+        let mut arbiter = new_arbiter(HookCoverage::Partial);
         let mut log = Vec::new();
-        let mut push = |up: Update| {
-            if let Some(e) = up.event {
-                log.push((e.kind, e.status.state(), e.source));
+        let mut push = |update: Update| {
+            if let Some(event) = update.event {
+                log.push((event.kind, event.status.state(), event.source));
             }
         };
-        push(a.apply(hook(EventKind::TurnStarted, Claim::Working, 1), at(0)));
-        push(a.observe_screen(&screen(AgentState::Working, true), at(100)));
-        push(a.apply(
+        push(arbiter.apply(hook(EventKind::TurnStarted, Claim::Working, 1), at(0)));
+        push(arbiter.observe_screen(&screen(AgentState::Working, true), at(100)));
+        push(arbiter.apply(
             hook(EventKind::Blocked, Claim::Blocked(permission("Bash")), 2),
             at(5000),
         ));
-        push(a.observe_screen(&screen(AgentState::Blocked, true), at(5100)));
-        a.decide(decision(&a, ApprovalChoice::AllowOnce, "alice"), at(8000))
+        push(arbiter.observe_screen(&screen(AgentState::Blocked, true), at(5100)));
+        arbiter
+            .decide(
+                decision(&arbiter, ApprovalChoice::AllowOnce, "alice"),
+                at(8000),
+            )
             .unwrap();
-        push(a.observe_screen(&screen(AgentState::Working, true), at(8100)));
-        push(a.apply(hook(EventKind::TurnEnded, Claim::Idle, 3), at(20_000)));
-        push(a.observe_screen(&screen(AgentState::Idle, true), at(20_050)));
+        push(arbiter.observe_screen(&screen(AgentState::Working, true), at(8100)));
+        push(arbiter.apply(hook(EventKind::TurnEnded, Claim::Idle, 3), at(20_000)));
+        push(arbiter.observe_screen(&screen(AgentState::Idle, true), at(20_050)));
         assert_eq!(
             log,
             [
@@ -1495,6 +1527,6 @@ mod tests {
                 (EventKind::TurnEnded, AgentState::Idle, Source::Hook),
             ]
         );
-        assert!(a.unseen_done());
+        assert!(arbiter.unseen_done());
     }
 }

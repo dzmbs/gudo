@@ -1,3 +1,4 @@
+//! OpenAI Codex CLI.
 //!
 //! Codex hooks need trust hashes in the user's config, so v1 launches without them and reads state
 //! from the screen, the `[ ! ] Action Required` title and OSC 9 notifications, which per-run `-c`
@@ -36,7 +37,7 @@ const NOTIFICATION_OVERRIDES: [&str; 3] = [
 /// run only, next to the user's own `mcp_servers`.
 fn mcp_overrides(ctx: &LaunchContext) -> [String; 2] {
     let name = mcp_server_name();
-    let args: Vec<String> = mcp_args(ctx).iter().map(|a| toml_quote(a)).collect();
+    let args: Vec<String> = mcp_args(ctx).iter().map(|arg| toml_quote(arg)).collect();
     [
         format!(
             "mcp_servers.{name}.command={}",
@@ -46,7 +47,6 @@ fn mcp_overrides(ctx: &LaunchContext) -> [String; 2] {
     ]
 }
 
-/// The Codex CLI adapter.
 #[derive(Debug, Clone)]
 pub struct Codex {
     manifest: Manifest,
@@ -208,11 +208,11 @@ fn permission_options() -> Vec<ApprovalOption> {
 fn parse(payload: &[u8], seq: Seq) -> Result<Option<Signal>, HookError> {
     let Payload { common, event } = serde_json::from_slice(payload)?;
     let signal = |kind| {
-        let mut s = Signal::new(Source::Hook, Confidence::Authoritative, kind).with_seq(seq);
-        s.session = common.session();
-        s
+        let mut signal = Signal::new(Source::Hook, Confidence::Authoritative, kind).with_seq(seq);
+        signal.session = common.session();
+        signal
     };
-    let mut out = match event {
+    let mut parsed = match event {
         Event::SessionStart { source } => signal(match source {
             Some(SessionSource::Clear | SessionSource::Compact | SessionSource::Fork) => {
                 EventKind::SessionIdChanged
@@ -244,30 +244,30 @@ fn parse(payload: &[u8], seq: Seq) -> Result<Option<Signal>, HookError> {
         Event::Stop {
             last_assistant_message,
         } => {
-            let mut s = signal(EventKind::TurnEnded).with_claim(Claim::Idle);
-            s.turn = Some(Turn {
+            let mut stopped = signal(EventKind::TurnEnded).with_claim(Claim::Idle);
+            stopped.turn = Some(Turn {
                 outcome: TurnOutcome::Completed,
                 last_message: hook::message(last_assistant_message),
             });
-            s
+            stopped
         }
         Event::Interrupt {} => {
-            let mut s = signal(EventKind::Interrupted).with_claim(Claim::Idle);
-            s.turn = Some(Turn {
+            let mut interrupted = signal(EventKind::Interrupted).with_claim(Claim::Idle);
+            interrupted.turn = Some(Turn {
                 outcome: TurnOutcome::Cancelled,
                 last_message: None,
             });
-            s
+            interrupted
         }
         Event::SessionEnd {} => signal(EventKind::SessionEnded),
         Event::Other => return Ok(None),
     };
     if let Some(subagent) = common.subagent() {
-        out.claim = None;
-        out.turn = None;
-        out.subagent = Some(subagent);
+        parsed.claim = None;
+        parsed.turn = None;
+        parsed.subagent = Some(subagent);
     }
-    Ok(Some(out))
+    Ok(Some(parsed))
 }
 
 /// Maps the TUI's notification text (`codex-rs/tui/src/chatwidget/notifications.rs`) to a signal.
@@ -275,14 +275,14 @@ fn parse_osc9(body: &str) -> Option<Signal> {
     // `9;4;…` is ConEmu progress and other numeric subcommands are not notifications.
     if body
         .split_once(';')
-        .is_some_and(|(head, _)| !head.is_empty() && head.bytes().all(|b| b.is_ascii_digit()))
+        .is_some_and(|(head, _)| !head.is_empty() && head.bytes().all(|byte| byte.is_ascii_digit()))
     {
         return None;
     }
     let blocked = |reason, tool: Option<&str>, summary: &str| {
         let mut blocker = Blocker::new(reason);
         blocker.tool = tool.map(str::to_owned);
-        blocker.summary = Some(summary.to_owned()).filter(|s| !s.is_empty());
+        blocker.summary = Some(summary.to_owned()).filter(|summary| !summary.is_empty());
         blocker.answer_paths = vec![AnswerPath::Keystrokes];
         Signal::new(Source::Osc9, Confidence::Strong, EventKind::Blocked)
             .with_claim(Claim::Blocked(blocker))
@@ -312,7 +312,7 @@ fn parse_osc9(body: &str) -> Option<Signal> {
         Signal::new(Source::Osc9, Confidence::Weak, EventKind::TurnEnded).with_claim(Claim::Idle);
     signal.turn = Some(Turn {
         outcome: TurnOutcome::Completed,
-        last_message: Some(body.to_owned()).filter(|m| m != "Agent turn complete"),
+        last_message: Some(body.to_owned()).filter(|message| message != "Agent turn complete"),
     });
     Some(signal)
 }
@@ -341,9 +341,9 @@ impl AgentAdapter for Codex {
     fn launch(&self, ctx: &LaunchContext, mode: &LaunchMode) -> LaunchSpec {
         let mut args: Vec<OsString> = NOTIFICATION_OVERRIDES
             .iter()
-            .map(|o| (*o).to_owned())
+            .map(|setting| (*setting).to_owned())
             .chain(mcp_overrides(ctx))
-            .flat_map(|o| ["-c".into(), OsString::from(o)])
+            .flat_map(|setting| ["-c".into(), OsString::from(setting)])
             .collect();
         if let LaunchMode::Resume { session_id } = mode {
             args.extend(["resume".into(), session_id.as_str().into()]);
@@ -371,6 +371,11 @@ impl AgentAdapter for Codex {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::AgentState;
+    use crate::event::NativeSessionId;
+    use crate::launch::test_context;
+    use crate::manifest::{ScreenInput, ScreenVerdict};
 
     #[test]
     fn finds_a_user_registration_by_exact_name() {
@@ -384,11 +389,6 @@ mod tests {
         std::fs::write(&config, "mcp_servers.gudo_drawings.command = \"x\"\n").unwrap();
         assert!(Codex::user_mcp_registered(&config, "gudo_drawings"));
     }
-    use super::*;
-    use crate::AgentState;
-    use crate::event::NativeSessionId;
-    use crate::launch::test_context;
-    use crate::manifest::{ScreenInput, ScreenVerdict};
 
     macro_rules! fixture {
         ($name:literal) => {
@@ -404,9 +404,13 @@ mod tests {
     fn launch_and_sign_in_run_under_the_account() {
         let ctx = crate::launch::work_context();
         let spec = Codex::new().launch(&ctx, &LaunchMode::Fresh { session_id: None });
-        assert!(spec.env_pinned.iter().any(|(k, _)| k == "CODEX_HOME"));
-        assert!(spec.env_remove.iter().any(|v| v == "OPENAI_API_KEY"));
-        assert!(spec.env_remove.iter().any(|v| v == "CLAUDE_CONFIG_DIR"));
+        assert!(spec.env_pinned.iter().any(|(name, _)| name == "CODEX_HOME"));
+        assert!(spec.env_remove.iter().any(|name| name == "OPENAI_API_KEY"));
+        assert!(
+            spec.env_remove
+                .iter()
+                .any(|name| name == "CLAUDE_CONFIG_DIR")
+        );
         let remote = Codex::sign_in(&ctx, true);
         assert_eq!(remote.display_argv(), ["codex", "login", "--device-auth"]);
         assert_eq!(
@@ -438,7 +442,7 @@ mod tests {
             ]
         );
         assert!(spec.files.is_empty());
-        assert!(spec.env.iter().any(|(k, _)| k == "GUDO_HOOK"));
+        assert!(spec.env.iter().any(|(name, _)| name == "GUDO_HOOK"));
     }
 
     #[test]
@@ -455,27 +459,27 @@ mod tests {
     #[test]
     fn mcp_overrides_are_valid_toml_for_any_path() {
         let mut ctx = test_context();
-        ctx.hook_bin = r#"/Users/A "B"\x/gudo-hook"#.into();
-        ctx.state_dir = "/Users/A B/Library/Application Support/gudo".into();
+        ctx.hook_bin = r#"/home/A "B"\x/gudo-hook"#.into();
+        ctx.state_dir = "/home/A B/Application Support/gudo".into();
         let mut doc = toml::Table::new();
-        for o in mcp_overrides(&ctx) {
-            let (key, value) = o.split_once('=').unwrap();
+        for setting in mcp_overrides(&ctx) {
+            let (key, value) = setting.split_once('=').unwrap();
             let value: toml::Table = toml::from_str(&format!("v = {value}")).unwrap();
             doc.insert(key.rsplit('.').next().unwrap().into(), value["v"].clone());
         }
-        assert_eq!(doc["command"].as_str(), Some(r#"/Users/A "B"\x/gudo-hook"#));
+        assert_eq!(doc["command"].as_str(), Some(r#"/home/A "B"\x/gudo-hook"#));
         let args: Vec<&str> = doc["args"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|a| a.as_str().unwrap())
+            .map(|arg| arg.as_str().unwrap())
             .collect();
         assert_eq!(
             args,
             [
                 "mcp",
                 "--state",
-                "/Users/A B/Library/Application Support/gudo",
+                "/home/A B/Application Support/gudo",
                 "--pane",
                 "p_9f2"
             ]
@@ -496,11 +500,11 @@ mod tests {
             Some(Claim::Working)
         );
 
-        let Some(Claim::Blocked(b)) = hook(fixture!("permission_request")).claim else {
+        let Some(Claim::Blocked(blocker)) = hook(fixture!("permission_request")).claim else {
             panic!()
         };
-        assert_eq!(b.summary.as_deref(), Some("cargo publish --dry-run"));
-        assert_eq!(b.answer_paths[0], AnswerPath::HookDecision);
+        assert_eq!(blocker.summary.as_deref(), Some("cargo publish --dry-run"));
+        assert_eq!(blocker.answer_paths[0], AnswerPath::HookDecision);
 
         let stop = hook(fixture!("stop"));
         assert_eq!(
@@ -515,13 +519,16 @@ mod tests {
 
     #[test]
     fn osc9_approvals_block() {
-        let s = parse_osc9("Approval requested: cargo publish --dry-run").unwrap();
-        assert_eq!((s.source, s.confidence), (Source::Osc9, Confidence::Strong));
-        let Some(Claim::Blocked(b)) = s.claim else {
+        let signal = parse_osc9("Approval requested: cargo publish --dry-run").unwrap();
+        assert_eq!(
+            (signal.source, signal.confidence),
+            (Source::Osc9, Confidence::Strong)
+        );
+        let Some(Claim::Blocked(blocker)) = signal.claim else {
             panic!()
         };
-        assert_eq!(b.reason, BlockedReason::Permission);
-        assert_eq!(b.summary.as_deref(), Some("cargo publish --dry-run"));
+        assert_eq!(blocker.reason, BlockedReason::Permission);
+        assert_eq!(blocker.summary.as_deref(), Some("cargo publish --dry-run"));
 
         let Some(Claim::Blocked(edit)) =
             parse_osc9("Codex wants to edit src/main.rs").unwrap().claim
@@ -536,21 +543,22 @@ mod tests {
         };
         assert_eq!(mcp.reason, BlockedReason::Elicitation);
 
-        let Some(Claim::Blocked(q)) = parse_osc9("Question: Which database?").unwrap().claim else {
+        let Some(Claim::Blocked(question)) = parse_osc9("Question: Which database?").unwrap().claim
+        else {
             panic!()
         };
-        assert_eq!(q.reason, BlockedReason::Question);
+        assert_eq!(question.reason, BlockedReason::Question);
     }
 
     #[test]
     fn osc9_other_text_is_a_weak_turn_end() {
-        let s = parse_osc9("Fixed the failing test and pushed the branch.").unwrap();
+        let signal = parse_osc9("Fixed the failing test and pushed the branch.").unwrap();
         assert_eq!(
-            (s.kind, s.confidence),
+            (signal.kind, signal.confidence),
             (EventKind::TurnEnded, Confidence::Weak)
         );
         assert_eq!(
-            s.turn.unwrap().last_message.as_deref(),
+            signal.turn.unwrap().last_message.as_deref(),
             Some("Fixed the failing test and pushed the branch.")
         );
         assert_eq!(
@@ -575,7 +583,7 @@ mod tests {
             osc_title: title,
             osc_progress: "",
         }) {
-            ScreenVerdict::State(m) => (m.state, m.rule_id),
+            ScreenVerdict::State(matched) => (matched.state, matched.rule_id),
             ScreenVerdict::Freeze { rule_id } => (AgentState::Unknown, Some(rule_id)),
         }
     }
@@ -598,7 +606,7 @@ mod tests {
 
     #[test]
     fn screen_trust_dialog_blocks() {
-        let trust = "> You are in /Users/me/src/app\n\n  Do you trust the contents of this directory?\n\n  › 1. Yes, continue\n    2. No, quit\n\n  Press enter to continue";
+        let trust = "> You are in /home/me/src/app\n\n  Do you trust the contents of this directory?\n\n  › 1. Yes, continue\n    2. No, quit\n\n  Press enter to continue";
         assert_eq!(
             screen(trust, ""),
             (AgentState::Blocked, Some("trust_directory".into()))
