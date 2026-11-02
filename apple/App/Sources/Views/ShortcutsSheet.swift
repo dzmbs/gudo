@@ -2,7 +2,7 @@ import DesignSystem
 import SwiftUI
 
 /// Every app shortcut on one page (⌘/), built from `WorkspaceAction` so it never drifts from what
-/// too.
+/// the keys do. On iPad, holding ⌘ shows the system's own overlay too.
 struct ShortcutsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""

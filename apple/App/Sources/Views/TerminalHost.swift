@@ -9,12 +9,9 @@ import UIKit
 typealias PlatformView = UIView
 #endif
 
-/// Hosts a pane's long-lived `TerminalView`. Each representable gets its own container, and the
-/// pane's view lives in whichever of its containers is in a window (`Pane.placeView`). When the
-/// split tree changes (split, zoom, tab switch) SwiftUI creates and removes containers in no
-/// particular order; the view follows the one on screen, is never claimed by two representables,
-/// and its surface survives. When the pane gains focus its view takes first responder, subject to
-/// `Workspace.claimsKeyboardFocus`.
+/// Hosts a pane's long-lived `TerminalView`. Each representable gets its own container and the
+/// view lives in whichever one is in a window (`Pane.placeView`), because SwiftUI creates and
+/// removes containers in no particular order when the split tree changes.
 struct TerminalHost {
     let pane: Pane
     let isFocused: Bool
@@ -103,15 +100,12 @@ struct TerminalHost {
 }
 
 extension Pane {
-    /// Keeps `view` in a host container that is in a window: it moves to a container that joins
-    /// the window its current one is in, and to another on-screen host when its container leaves
-    /// the window; otherwise it stays put.
+    /// Keeps `view` in a host container that is in a window, preferring a newcomer joining the
+    /// same window.
     ///
-    /// The newcomer wins because SwiftUI rebuilds a pane's place (a NavigationStack swapping its
-    /// root at launch, an identity change) by inserting the new representable on top and keeping
-    /// the old one in the window while its removal animates, for most of a second. Staying in the
-    /// old container then left the live, topmost one empty: the terminal sat under it, and wheel
-    /// and clicks went to the empty container (less, vim and htop could not be scrolled).
+    /// The newcomer wins because SwiftUI rebuilds a pane's place by inserting the new
+    /// representable on top and keeping the old one in the window while its removal animates.
+    /// Staying in the old container would leave the topmost one empty, swallowing wheel and clicks.
     func placeView(joining newcomer: TerminalHost.Container? = nil) {
         let target: TerminalHost.Container
         if let current = view.superview as? TerminalHost.Container, current.window != nil, hosts.contains(current) {
@@ -132,10 +126,8 @@ extension Pane {
         target.addSubview(view)
         #if os(macOS)
         // AppKit hands first responder to the window as soon as the old container leaves it, so
-        // the view no longer knows it had the keyboard: the focused pane takes it back whenever
-        // nothing else in the window has it. Only the focused pane: taking first responder
-        // focuses the pane, and a pane moved into a new split (its sibling just took focus) had
-        // the keyboard a moment ago.
+        // the focused pane takes it back whenever nothing else in the window has it. Only the
+        // focused pane: taking first responder focuses the pane.
         if let window = target.window, isFocusedPane(),
            hadKeyboard || window.firstResponder == nil || window.firstResponder === window
         {

@@ -6,9 +6,6 @@ import SwiftUI
 import GameController
 #endif
 
-// Mixed tabs (panes from several hosts in one tab) and Two Columns in the window
-// (docs/APP-ARCHITECTURE.md §19; the model side is Model/MixedTabs.swift).
-
 /// A mixed tab's tree: each leaf resolves through its own host's workspace in this window.
 struct MixedTabTree: PaneTree {
     let model: WindowModel
@@ -119,10 +116,8 @@ struct FullScreenEditorView: View {
     }
 }
 
-/// Exit Full Screen: a glass capsule spelled out on entering, then (2.5 s on) a small glass ⤡
-/// that rests where it was last dragged, snapping to the nearest corner or edge. A pointer
-/// coming near spells it out again. Glass, a hairline and a soft shadow keep it legible on any
-/// workbench theme.
+/// Exit Full Screen: a capsule spelled out on entering, then a small ⤡ that rests where it was
+/// last dragged, snapping to the nearest corner or edge. A pointer coming near spells it out again.
 struct ExitFullScreenControl: View {
     /// Where it rests: a corner or the middle of an edge.
     enum Spot: String, CaseIterable {
@@ -607,7 +602,6 @@ struct TwoColumnsView: View {
 
     var body: some View {
         if let columns = model.columns {
-            // Across an open foldable's fold: one column per page, the crease between them.
             FoldPages {
                 column(columns.left, isLeft: true, isActive: model.currentColumnIsLeft)
                     .accessibilityIdentifier("column-left")

@@ -20,7 +20,7 @@ protocol PaneTree {
     var padding: CGFloat { get }
     /// The tree mixes hosts: each pane header names its host.
     var namesHosts: Bool { get }
-    /// The VS Code editor a leaf shows, when it is an editor leaf (§20).
+    /// The VS Code editor a leaf shows, when it is an editor leaf.
     func editor(_ leaf: PaneId) -> EditorMember?
     /// The page a leaf shows, when it is a browser leaf.
     func browser(_ leaf: PaneId) -> BrowserMember?
@@ -110,7 +110,8 @@ struct FloatScene: Equatable {
 /// pane keeps its view (terminal, header, program mark) whatever the layout does around it: a
 /// split, a close, a zoom, or lifting out into a window and docking back only move and resize
 /// it, in one spring with the panes making room, while the grids hold until it settles.
-/// Compact (default) is Ghostty's look: flush panes, a 1 pt divider in the background darkened
+/// Compact (default) is Ghostty's look: flush panes, a 1 pt divider, unfocused panes dimmed.
+/// Comfortable insets panes as rounded surfaces.
 struct SplitTreeView: View {
     let node: Node
     let tree: any PaneTree
@@ -420,15 +421,15 @@ private struct SplitDivider: View {
     var body: some View {
         let horizontal = divider.axis == .horizontal
         #if os(macOS)
-        let hit = DS.Size.dividerVisible + DS.Size.dividerHitPointer
+        let hitThickness = DS.Size.dividerVisible + DS.Size.dividerHitPointer
         #else
-        let hit = DS.Size.dividerHitTouch
+        let hitThickness = DS.Size.dividerHitTouch
         #endif
         Rectangle()
             .fill(paneStyle == .comfortable ? Color.clear : theme.splitDivider)
             .overlay {
                 Color.clear
-                    .frame(width: horizontal ? hit : nil, height: horizontal ? nil : hit)
+                    .frame(width: horizontal ? hitThickness : nil, height: horizontal ? nil : hitThickness)
                     .contentShape(Rectangle())
                     #if os(macOS)
                     .pointerStyle(horizontal ? .columnResize : .rowResize)
