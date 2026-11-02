@@ -110,6 +110,11 @@ enum MockAccounts {
     }
 }
 
+extension AgentAccount {
+    /// Unique across agents, for lists that show both.
+    var listId: String { "\(UsageText.name(agent))/\(id)" }
+}
+
 /// An account's colour: a dot in its palette colour (the same hues as projects).
 struct AccountDot: View {
     let color: UInt8
@@ -136,17 +141,13 @@ struct HostAccountsView: View {
         let name = DeviceHosts.name(hostId, hosts: hosts)
         Group {
             if let book = AccountHosts.book(hostId, hosts: hosts) {
-                List {
+                // A grouped form, as the other Settings panes: its footers wrap.
+                Form {
                     ForEach([AccountAgent.claude, .codex], id: \.self) { agent in
                         section(agent, book: book)
                     }
-                    Section {
-                        EmptyView()
-                    } footer: {
-                        Text("Each account is a folder on \(name) that only your user there can open. Signing in and out runs Claude Code's or Codex's own command in a terminal tab; this app never sees a password or token.")
-                    }
-                    .chromeRows()
                 }
+                .formStyle(.grouped)
                 .chromeGrouped()
             } else if AccountHosts.workspace(hostId, hosts: hosts) != nil {
                 ProgressView("Reading accounts…")
@@ -190,7 +191,7 @@ struct HostAccountsView: View {
     /// An account to rename; ids repeat across agents (each has a system account).
     private struct Renaming: Identifiable {
         let account: AgentAccount
-        var id: String { "\(UsageText.name(account.agent))/\(account.id)" }
+        var id: String { account.listId }
     }
 
     private struct AddingAgent: Identifiable {
@@ -201,7 +202,8 @@ struct HostAccountsView: View {
     @ViewBuilder private func section(_ agent: AccountAgent, book: AccountBook) -> some View {
         let hostDefault = book.defaultAccount(agent, project: nil)
         Section {
-            ForEach(book.accounts(of: agent), id: \.id) { account in
+            // Keyed by agent too: both agents have a `system` account, and one list holds both.
+            ForEach(book.accounts(of: agent), id: \.listId) { account in
                 AccountRow(account: account, isDefault: account.id == hostDefault && book.hasChoice(agent), usage: book.usage(agent, account.id))
                     .contextMenu { menu(account, isDefault: account.id == hostDefault) }
                     .accessibilityIdentifier("account-\(UsageText.name(agent))-\(account.label)")
@@ -211,12 +213,21 @@ struct HostAccountsView: View {
             } label: {
                 Label("Add \(UsageText.name(agent)) Account…", systemImage: "plus")
             }
-            .disabled(LaunchOptions.mock)
+            .buttonStyle(.borderless)
+            .foregroundStyle(DS.Palette.accent)
         } header: {
             Text(agent == .claude ? "Claude Code" : "Codex")
         } footer: {
-            if !book.hasChoice(agent) {
-                Text("Uses \(agent == .claude ? "~/.claude" : "~/.codex") on the host, as in its terminal.")
+            if !book.hasChoice(agent) || agent == .codex {
+            VStack(alignment: .leading, spacing: DS.Space.s) {
+                if !book.hasChoice(agent) {
+                    Text("Uses \(agent == .claude ? "~/.claude" : "~/.codex") on the host, as in its terminal.")
+                }
+                if agent == .codex {
+                    Text("Each account is a folder on \(DeviceHosts.name(hostId, hosts: hosts)) that only your user there can open. Signing in and out runs Claude Code's or Codex's own command in a terminal tab; this app never sees a password or token.")
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
             }
         }
         .chromeRows()
