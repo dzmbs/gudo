@@ -371,6 +371,7 @@ async fn handshake(inner: &Arc<Inner>, conn: Connection, v: u16) -> Result<Live,
             | Caps::WORKFLOWS
             | Caps::PRESENCE
             | Caps::PROJECTS
+            | Caps::TERMINAL_LIMITS
             | if crate::askpass::announces(&inner.options, crate::mp::is_guest(inner)) {
                 Caps::ASKPASS | Caps::ASKPASS_DRIVER
             } else {
@@ -412,6 +413,16 @@ async fn handshake(inner: &Arc<Inner>, conn: Connection, v: u16) -> Result<Live,
         _ => None,
     };
     *lock(&inner.daemon_info) = info;
+    let limits = match first {
+        Some(ServerCtl::TerminalLimits {
+            image_storage_bytes,
+        }) => {
+            first = recv::<ServerCtl>(&mut ctl_rx).await?;
+            Some(image_storage_bytes)
+        }
+        _ => None,
+    };
+    *lock(&inner.image_storage_bytes) = limits;
     let ours = u32::from(ghostty_vt::snapshot_format());
     match first {
         Some(ServerCtl::Welcome(welcome)) => {
@@ -1024,7 +1035,8 @@ fn snapshot_event(
     if !lock(&inner.wanted).subscribed.contains(&pane_id) {
         return None;
     }
-    let mirror = Mirror::from_snapshot(snap_gen, seq.0, &raw, keep_vt);
+    let images = crate::image_storage_limit(*lock(&inner.image_storage_bytes));
+    let mirror = Mirror::from_snapshot(snap_gen, seq.0, &raw, keep_vt, images);
     lock(&inner.mirrors).insert(pane_id, mirror);
     Some(ClientEvent::PaneSnapshot {
         pane_id,

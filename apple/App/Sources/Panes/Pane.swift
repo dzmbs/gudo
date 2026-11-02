@@ -147,6 +147,7 @@ final class Pane {
                 // Resume after a gap or first attach: the daemon's state replaces ours. A bad
                 // snapshot keeps what is on screen (stale beats blank) and is logged. The
                 // host's screen replacing a saved one keeps where that was scrolled to.
+                if let limit = backend.kittyImageStorageLimit { terminal.kittyImageStorageLimit = limit }
                 if savedShown.withLock({ $0 }), daemon?.isLive == true {
                     let bar = terminal.scrollbar
                     let back = bar.total - bar.offset - bar.visible

@@ -165,6 +165,13 @@ impl DaemonClient {
         self.core().daemon_info().map(Into::into)
     }
 
+    /// The kitty image storage per pane and screen the app's terminals keep for this host,
+    /// in bytes: the host's own up to a cap (`client_core::image_storage_limit`). Read before
+    /// each snapshot is restored; settled before the first one arrives.
+    pub fn image_storage_limit(&self) -> u64 {
+        self.core().image_storage_limit()
+    }
+
     /// Whether the last connection was admitted only to update the daemon (it draws
     /// terminals in a format this core does not read).
     pub fn is_incompatible(&self) -> bool {

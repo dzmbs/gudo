@@ -529,6 +529,7 @@ fn every_message_matches_its_frozen_bytes() {
     live_activity_messages(&mut c);
     browser_messages(&mut c);
     reopen_messages(&mut c);
+    terminal_limits_messages(&mut c);
 
     assert!(
         c.failures.is_empty(),
@@ -3306,5 +3307,22 @@ fn reopen_messages(c: &mut Checker) {
         "DaemonFeatures::REOPEN",
         DaemonFeatures::REOPEN,
         "0400000001808002",
+    );
+}
+
+/// The daemon's terminal limits (`Caps::TERMINAL_LIMITS`, bit 21; `ServerCtl::TerminalLimits`,
+/// appended after `Clipboard`).
+fn terminal_limits_messages(c: &mut Checker) {
+    c.check(
+        "Caps::TERMINAL_LIMITS",
+        Caps::TERMINAL_LIMITS,
+        "050000000180808001",
+    );
+    c.check(
+        "ServerCtl::TerminalLimits",
+        ServerCtl::TerminalLimits {
+            image_storage_bytes: 256 << 20,
+        },
+        "07000000013a8080808001",
     );
 }

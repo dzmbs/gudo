@@ -53,13 +53,20 @@ pub(crate) enum Applied {
 }
 
 impl Mirror {
-    /// A mirror restored from a READY snapshot taken at `seq`.
-    pub fn from_snapshot(snap_gen: SnapGen, seq: u64, snapshot: &[u8], keep_vt: bool) -> Self {
+    /// A mirror restored from a READY snapshot taken at `seq`, keeping `image_storage_bytes`
+    /// of kitty images per screen.
+    pub fn from_snapshot(
+        snap_gen: SnapGen,
+        seq: u64,
+        snapshot: &[u8],
+        keep_vt: bool,
+        image_storage_bytes: u64,
+    ) -> Self {
         let vt = keep_vt
             .then(|| {
                 // The daemon's own limit bounds the history a mirror can receive, so the
                 // mirror takes all of it (libghostty-vt's default would drop older pages).
-                StreamingRestore::new(snapshot)
+                StreamingRestore::with_image_storage_limit(snapshot, image_storage_bytes)
                     .and_then(|mut r| {
                         r.set_scrollback_max_bytes(None)?;
                         Ok(r)

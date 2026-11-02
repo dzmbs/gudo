@@ -40,6 +40,10 @@ nonisolated public protocol PaneBackend: Sendable {
     /// A VT on the host answers the program's queries (the daemon's): the pane's own terminal
     /// must not answer them again. False where the pane's terminal is the only one (SSH, local).
     var hostAnswersQueries: Bool { get }
+    /// The kitty image storage per screen of the host's VT, which the pane's terminal must
+    /// share (`Terminal.kittyImageStorageLimit`); nil where the pane's terminal is the only one.
+    /// Read before each snapshot is restored.
+    var kittyImageStorageLimit: UInt64? { get }
 }
 
 nonisolated extension PaneBackend {
@@ -69,6 +73,8 @@ nonisolated extension PaneBackend {
     public var sizeFollowsStream: Bool { false }
 
     public var hostAnswersQueries: Bool { false }
+
+    public var kittyImageStorageLimit: UInt64? { nil }
 
     public func foreground() -> PaneForeground? { nil }
 }

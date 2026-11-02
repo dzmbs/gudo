@@ -117,8 +117,8 @@ pub struct Config {
     /// Scrollback the daemon's VT keeps per pane, in bytes.
     pub scrollback_bytes: usize,
     /// Kitty graphics image storage per pane and screen, in bytes; 0 turns the protocol off
-    /// (`terminal.image_storage_mb` in `config.toml`). Clients keep the same default, so a
-    /// larger value may let them evict images the daemon still shows.
+    /// (`terminal.image_storage_mb` in `config.toml`). Sent to clients
+    /// (`ServerCtl::TerminalLimits`), whose mirrors follow it up to their own cap.
     pub image_storage_bytes: u64,
     /// Size of a pane no client has sized yet: (cols, rows).
     pub default_size: (u16, u16),

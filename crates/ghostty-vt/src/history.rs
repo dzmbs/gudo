@@ -94,6 +94,16 @@ impl StreamingRestore {
     /// Returns [`Error::InvalidValue`] if the bytes are not a complete READY section of this
     /// snapshot format, and [`Error::OutOfMemory`] if allocation fails.
     pub fn new(ready: &[u8]) -> Result<Self, Error> {
+        Self::with_image_storage_limit(ready, crate::KITTY_IMAGE_STORAGE_LIMIT)
+    }
+
+    /// Like [`new`](Self::new), with `image_storage_bytes` of kitty graphics storage per
+    /// restored screen instead of the default (a mirror follows its host's limit).
+    ///
+    /// # Errors
+    ///
+    /// As [`new`](Self::new).
+    pub fn with_image_storage_limit(ready: &[u8], image_storage_bytes: u64) -> Result<Self, Error> {
         crate::kitty::install_png_decoder();
         let mut source = Box::new(Source {
             data: ready.to_vec(),
@@ -124,7 +134,7 @@ impl StreamingRestore {
             };
             set(
                 ffi::GhosttySnapshotDecoderOption_GHOSTTY_SNAPSHOT_DECODER_OPT_KITTY_IMAGE_STORAGE_LIMIT,
-                ptr::from_ref(&crate::KITTY_IMAGE_STORAGE_LIMIT).cast(),
+                ptr::from_ref(&image_storage_bytes).cast(),
             )
             .map_err(free)?;
             set(
@@ -558,6 +568,28 @@ mod tests {
     /// A 2×2 RGBA image with id `id`, displayed at the cursor.
     fn image(id: u32) -> String {
         format!("\x1b_Ga=T,f=32,s=2,v=2,i={id},q=2;/wAA//8AAP//AAD//wAA/w==\x1b\\")
+    }
+
+    #[test]
+    fn restore_keeps_the_images_its_storage_limit_allows() -> Result<(), Error> {
+        let mut daemon = Terminal::new(20, 4)?;
+        daemon.resize(20, 4, (10, 20))?;
+        // Two 16-byte images within a host limit of 64 bytes.
+        daemon.set_kitty_image_storage_limit(64)?;
+        daemon.write(image(1).as_bytes());
+        daemon.write(image(2).as_bytes());
+        let snapshot = daemon.encode_snapshot()?;
+        let screen = screen_len(&snapshot).unwrap();
+        let kept = |limit| -> Result<usize, Error> {
+            let client = StreamingRestore::with_image_storage_limit(&snapshot[..screen], limit)?;
+            Ok([1, 2]
+                .into_iter()
+                .filter(|&id| client.terminal().kitty_image(id).is_some())
+                .count())
+        };
+        assert_eq!(kept(64)?, 2);
+        assert_eq!(kept(20)?, 1);
+        Ok(())
     }
 
     #[test]

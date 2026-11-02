@@ -437,6 +437,8 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap 
     public var sizeFollowsStream: Bool { true }
     /// The daemon's VT answers queries (docs/DAEMON.md "Threading model").
     public var hostAnswersQueries: Bool { true }
+    /// The host's, as its connection reported it before any snapshot (docs/DAEMON.md §7.10).
+    public var kittyImageStorageLimit: UInt64? { (client as? any TerminalLimitsClient)?.imageStorageLimit() }
     let client: any DaemonClientAPI
     let router: PaneRouter
     /// This window's tap on the pane's stream.

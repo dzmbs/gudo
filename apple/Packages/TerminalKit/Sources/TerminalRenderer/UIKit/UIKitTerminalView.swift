@@ -42,6 +42,7 @@ public final class TerminalView: UIView {
         didSet { if isSelected != oldValue { updateFocus() } }
     }
     private var focusObservers: [NSObjectProtocol] = []
+    private var kittyElements: [UInt32: UIAccessibilityElement] = [:]
     private var hoveredLinkTarget: TerminalLink?
     /// Where the last tap landed (view points), to anchor what it opens (a link's popover).
     public private(set) var lastTapLocation: CGPoint?
@@ -278,7 +279,7 @@ public final class TerminalView: UIView {
             screenElement.accessibilityFrameInContainerSpace = bounds
             // Views hosts add over the grid (the draw overlay, placement markers) come first.
             let hosted = subviews.filter { $0 !== startHandle && $0 !== endHandle && !$0.isHidden }.reversed()
-            var elements = Array(hosted) + [screenElement] + [startHandle, endHandle].filter { !$0.isHidden }
+            var elements = Array(hosted) + kittyImageElements() + [screenElement] + [startHandle, endHandle].filter { !$0.isHidden }
             #if DEBUG
             predictionElement.accessibilityFrameInContainerSpace = CGRect(x: 0, y: 0, width: 1, height: 1)
             elements.append(predictionElement)
@@ -286,6 +287,25 @@ public final class TerminalView: UIView {
             return elements
         }
         set {}
+    }
+
+    /// One element per kitty image on screen, topmost first, kept per image id so VoiceOver's
+    /// focus survives redraws.
+    private func kittyImageElements() -> [UIAccessibilityElement] {
+        var kept: [UInt32: UIAccessibilityElement] = [:]
+        let elements = surface.kittyImageFrames.reversed().map { frame in
+            let id = frame.placement.imageID
+            let element = kept[id] ?? kittyElements[id] ?? UIAccessibilityElement(accessibilityContainer: self)
+            element.accessibilityIdentifier = "kitty-image-\(id)"
+            element.accessibilityLabel = "Image"
+            element.accessibilityHint = "Touch and hold to drag it out"
+            element.accessibilityTraits = .image
+            element.accessibilityFrameInContainerSpace = frame.rect
+            kept[id] = element
+            return element
+        }
+        kittyElements = kept
+        return elements
     }
 
     // MARK: Bell
@@ -414,8 +434,8 @@ public final class TerminalView: UIView {
         switch press.state {
         case .began:
             menuPoint = point
-            // Inside the selection: keep it (a drag carries it out).
-            pressKeepsSelection = isSelected(point)
+            // Inside the selection or on an image: keep it (a drag carries it out).
+            pressKeepsSelection = isSelected(point) || surface.kittyImage(at: point) != nil
             if pressKeepsSelection { return }
             if surface.terminal.selectLinkOrWord(atViewport: surface.cell(at: point)) != nil {
                 UISelectionFeedbackGenerator().selectionChanged()
@@ -1230,11 +1250,40 @@ extension TerminalView: UIDragInteractionDelegate, UIDropInteractionDelegate {
     /// A drag that starts on the selection carries its text; anywhere else it does not start, so
     /// the terminal's own gestures keep the touch.
     public func dragInteraction(_ interaction: UIDragInteraction, itemsForBeginning session: any UIDragSession) -> [UIDragItem] {
-        guard isSelected(session.location(in: self)), let text = surface.terminal.selectionText(), !text.isEmpty else { return [] }
+        let point = session.location(in: self)
+        if !isSelected(point), let image = surface.kittyImage(at: point) {
+            return kittyDragItem(image.placement).map { [$0] } ?? []
+        }
+        guard isSelected(point), let text = surface.terminal.selectionText(), !text.isEmpty else { return [] }
         editMenu?.dismissMenu()
         let item = UIDragItem(itemProvider: NSItemProvider(object: text as NSString))
         item.localObject = self
         return [item]
+    }
+
+    /// An image printed with kitty graphics, as a PNG: into other apps, and onto other panes,
+    /// which upload it to their host.
+    private func kittyDragItem(_ placement: ImagePlacement) -> UIDragItem? {
+        guard let png = surface.terminal.kittyPNG(placement) else { return nil }
+        let provider = NSItemProvider(item: png as NSData, typeIdentifier: "public.png")
+        provider.suggestedName = "Image"
+        let item = UIDragItem(itemProvider: provider)
+        item.localObject = self
+        return item
+    }
+
+    public func dragInteraction(_ interaction: UIDragInteraction, previewForLifting item: UIDragItem, session: any UIDragSession) -> UITargetedDragPreview? {
+        // An image is drawn by Metal: lift a copy of it. A selection lifts the view, as before.
+        let point = session.location(in: self)
+        guard !isSelected(point), let frame = surface.kittyImage(at: point),
+              let png = surface.terminal.kittyPNG(frame.placement), let image = UIImage(data: png)
+        else { return UITargetedDragPreview(view: self) }
+        let view = UIImageView(image: image)
+        view.frame = frame.rect
+        view.contentMode = .scaleToFill
+        let parameters = UIDragPreviewParameters()
+        parameters.backgroundColor = .clear
+        return UITargetedDragPreview(view: view, parameters: parameters, target: UIDragPreviewTarget(container: self, center: CGPoint(x: frame.rect.midX, y: frame.rect.midY)))
     }
 
     /// Text and links. Images and files are the host's (a drawing placed in the pane), a

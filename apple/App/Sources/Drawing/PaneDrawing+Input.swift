@@ -194,7 +194,11 @@ extension PaneDrawing: UIGestureRecognizerDelegate, UIDropInteractionDelegate {
     // MARK: Drop
 
     func dropInteraction(_ interaction: UIDropInteraction, canHandle session: any UIDropSession) -> Bool {
-        !isReadOnly && session.hasItemsConforming(toTypeIdentifiers: [UTType.image.identifier, UTType.fileURL.identifier, UTType.excalidraw.identifier, UTType.json.identifier])
+        // An image lifted from this pane's own output and dropped back is a slip, not an import.
+        if let view = interaction.view, session.localDragSession?.items.contains(where: { $0.localObject as? UIView === view }) == true {
+            return false
+        }
+        return !isReadOnly && session.hasItemsConforming(toTypeIdentifiers: [UTType.image.identifier, UTType.fileURL.identifier, UTType.excalidraw.identifier, UTType.json.identifier])
     }
 
     func dropInteraction(_ interaction: UIDropInteraction, sessionDidUpdate session: any UIDropSession) -> UIDropProposal {

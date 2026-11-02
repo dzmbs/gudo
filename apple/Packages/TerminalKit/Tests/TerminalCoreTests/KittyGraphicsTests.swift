@@ -176,4 +176,45 @@ import UniformTypeIdentifiers
         #expect(CGImageDestinationFinalize(destination))
         return [UInt8](out as Data)
     }
+
+    /// Two 36 MiB images: more than the 64 MiB default holds, within a host's 128 MiB.
+    @Test func aMirrorKeepsTheImagesItsHostsLimitAllows() throws {
+        let side = 3072
+        // Transparent black, zlib-compressed (`o=z`) so the escape stays small: raw DEFLATE
+        // with the zlib header and the Adler-32 of all zeros (a = 1, b = length mod 65521).
+        let zeros = Data(count: side * side * 4)
+        let deflated = try (zeros as NSData).compressed(using: .zlib) as Data
+        let adler = UInt32(zeros.count % 65521) << 16 | 1
+        let zlib = [0x78, 0x01] + [UInt8](deflated) + withUnsafeBytes(of: adler.bigEndian, Array.init)
+        let images = (1...2).flatMap { id in apc("a=T,f=32,o=z,s=\(side),v=\(side),i=\(id),q=2", zlib) }
+        let stored = { (t: Terminal) in [UInt32(1), 2].filter { t.kittyImage(id: $0) != nil } }
+
+        let host = terminal()
+        host.kittyImageStorageLimit = 128 << 20
+        host.write(images)
+        #expect(stored(host) == [1, 2])
+
+        // A mirror at the default evicts the first image the host still places.
+        let fallback = terminal()
+        fallback.write(images)
+        #expect(stored(fallback) == [2])
+
+        // Following the host's limit, live and through a snapshot restored later.
+        let mirror = terminal()
+        mirror.kittyImageStorageLimit = 128 << 20
+        mirror.write(images)
+        #expect(stored(mirror) == [1, 2])
+        // The first image scrolled into history: its pixels come with the history pages.
+        let snapshot = try #require(host.encodeSnapshot())
+        let (screen, history) = try #require(Terminal.splitSnapshot(snapshot))
+        let restore = { (limit: UInt64?) throws -> Terminal in
+            let restored = Terminal(cols: 80, rows: 24) { _ in }
+            if let limit { restored.kittyImageStorageLimit = limit }
+            try restored.restore(snapshot: screen)
+            try restored.appendHistory(history)
+            return restored
+        }
+        #expect(stored(try restore(nil)) == [2])
+        #expect(stored(try restore(128 << 20)) == [1, 2])
+    }
 }
