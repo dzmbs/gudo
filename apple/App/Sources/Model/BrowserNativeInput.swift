@@ -4,28 +4,17 @@ import WebKit
 import AppKit
 #endif
 
-/// Real input for a page on the Mac: AppKit mouse and key events handed to the page's
-/// `WKWebView`, which WebKit treats as the user's own — `isTrusted` events, `:hover`, menus that
-/// open on hover, and pointer drags. The pointer on screen does not move. HTML drag and drop
-/// is left to the page script: its drag session follows the real pointer.
+/// AppKit mouse and key events handed to a page's `WKWebView`, which WebKit treats as the user's
+/// own (`isTrusted`, `:hover`, pointer drags) without moving the real pointer. HTML drag and drop
+/// is left to the page script, since its drag session follows the real pointer.
 ///
-/// The agent's tools ask for it per page and fall back to the page script when it is nil (iOS,
-/// which has no public way to do this; a page that is not on screen):
-///
-///     if let input = await BrowserNativeInput.for(page.page) {
-///         await input.click(at: point)          // CSS pixels in the viewport
-///     } else {
-///         // the page script's synthetic events
-///     }
-///
-/// Keys need the page to be first responder: `press` and `type` make it so for the call and
-/// then give the focus back.
+/// Nil on iOS (no public way to do this) and for pages not on screen; callers then fall back to
+/// the page script's synthetic events.
 @MainActor
 struct BrowserNativeInput {
     #if os(macOS)
     let view: WKWebView
 
-    /// The input of the view showing `page`, if it is in a window.
     static func `for`(_ page: any BrowserPageContent) async -> BrowserNativeInput? {
         let token = UUID().uuidString
         do {
@@ -46,13 +35,13 @@ struct BrowserNativeInput {
     private static let world = WKContentWorld.world(name: "gudo-input")
 
     private static func webViews(in view: NSView) -> [WKWebView] {
-        if let web = view as? WKWebView { return [web] }
+        if let webView = view as? WKWebView { return [webView] }
         return view.subviews.flatMap(webViews)
     }
 
     // MARK: Pointer
 
-    /// Hover needs the page's window to be key (WebKit ignores moves in other windows).
+    /// Hover needs the page's window to be key: WebKit ignores moves in other windows.
     func move(to point: CGPoint) async {
         send(.mouseMoved, at: point)
         await pause()
@@ -60,16 +49,15 @@ struct BrowserNativeInput {
 
     func click(at point: CGPoint, count: Int = 1, modifiers: NSEvent.ModifierFlags = []) async {
         await move(to: point)
-        for n in 1...max(1, count) {
-            send(.leftMouseDown, at: point, clicks: n, modifiers: modifiers)
-            send(.leftMouseUp, at: point, clicks: n, modifiers: modifiers)
+        for clickCount in 1...max(1, count) {
+            send(.leftMouseDown, at: point, clicks: clickCount, modifiers: modifiers)
+            send(.leftMouseUp, at: point, clicks: clickCount, modifiers: modifiers)
         }
         await pause()
     }
 
-    /// Presses at `from`, moves to `to` in steps, releases: pointer drags (sliders, sortable
-    /// lists, canvases). False, doing nothing, when `from` is an HTML drag source: that starts a
-    /// system drag session, which follows the real pointer rather than these events.
+    /// A pointer drag (sliders, sortable lists, canvases). False, doing nothing, when `from` is an
+    /// HTML drag source: that starts a system drag session, which follows the real pointer.
     @discardableResult
     func drag(from: CGPoint, to: CGPoint, steps: Int = 12) async -> Bool {
         let source = try? await view.evaluateJavaScript(
@@ -80,8 +68,8 @@ struct BrowserNativeInput {
         send(.leftMouseDown, at: from)
         await pause()
         for i in 1...max(1, steps) {
-            let t = Double(i) / Double(max(1, steps))
-            send(.leftMouseDragged, at: CGPoint(x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t))
+            let progress = Double(i) / Double(max(1, steps))
+            send(.leftMouseDragged, at: CGPoint(x: from.x + (to.x - from.x) * progress, y: from.y + (to.y - from.y) * progress))
             await pause(8)
         }
         send(.leftMouseUp, at: to)
@@ -101,26 +89,25 @@ struct BrowserNativeInput {
 
     // MARK: The page script's list
 
-    /// Runs what the page script listed instead of dispatching (`native` in `act`): moves,
-    /// clicks, keys, text, wheels and drags, in order.
-    func perform(_ ops: [[String: Any]]) async {
-        func number(_ op: [String: Any], _ key: String) -> Double { (op[key] as? NSNumber)?.doubleValue ?? 0 }
-        for op in ops {
-            let point = CGPoint(x: number(op, "x"), y: number(op, "y"))
-            switch op["op"] as? String {
+    /// Runs, in order, the events the page script listed instead of dispatching them.
+    func perform(_ operations: [[String: Any]]) async {
+        func number(_ operation: [String: Any], _ key: String) -> Double { (operation[key] as? NSNumber)?.doubleValue ?? 0 }
+        for operation in operations {
+            let point = CGPoint(x: number(operation, "x"), y: number(operation, "y"))
+            switch operation["op"] as? String {
             case "move": await move(to: point)
             case "click":
-                let names = op["modifiers"] as? [String] ?? []
+                let names = operation["modifiers"] as? [String] ?? []
                 var flags: NSEvent.ModifierFlags = []
                 if names.contains("shiftKey") { flags.insert(.shift) }
                 if names.contains("ctrlKey") { flags.insert(.control) }
                 if names.contains("altKey") { flags.insert(.option) }
                 if names.contains("metaKey") { flags.insert(.command) }
-                await click(at: point, count: Int(number(op, "count")), modifiers: flags)
-            case "key": await press(op["chord"] as? String ?? "")
-            case "text": await type(op["text"] as? String ?? "")
-            case "wheel": await scroll(at: point, dx: number(op, "dx"), dy: number(op, "dy"))
-            case "drag": await drag(from: point, to: CGPoint(x: number(op, "toX"), y: number(op, "toY")))
+                await click(at: point, count: Int(number(operation, "count")), modifiers: flags)
+            case "key": await press(operation["chord"] as? String ?? "")
+            case "text": await type(operation["text"] as? String ?? "")
+            case "wheel": await scroll(at: point, dx: number(operation, "dx"), dy: number(operation, "dy"))
+            case "drag": await drag(from: point, to: CGPoint(x: number(operation, "toX"), y: number(operation, "toY")))
             default: break
             }
         }
@@ -169,7 +156,6 @@ struct BrowserNativeInput {
         "\\": 0x2A, ",": 0x2B, "/": 0x2C, "n": 0x2D, "m": 0x2E, ".": 0x2F, "`": 0x32,
     ]
 
-    /// A key by its code (`kVK_Return` = 36), with modifiers.
     func press(keyCode: UInt16, characters: String, modifiers: NSEvent.ModifierFlags = []) async {
         await focused {
             for type in [NSEvent.EventType.keyDown, .keyUp] {
@@ -183,7 +169,7 @@ struct BrowserNativeInput {
         }
     }
 
-    /// Text as the input method commits it (any script, no key codes).
+    /// Text as the input method commits it, so any script works.
     func type(_ text: String) async {
         await focused { view.insertText(text) }
     }
@@ -216,15 +202,14 @@ struct BrowserNativeInput {
         }
     }
 
-    /// A viewport point (CSS pixels) in the window's coordinates.
     private func windowPoint(_ point: CGPoint) -> NSPoint {
         let zoom = view.pageZoom * view.magnification
         let local = NSPoint(x: point.x * zoom, y: view.isFlipped ? point.y * zoom : view.bounds.height - point.y * zoom)
         return view.convert(local, to: nil)
     }
 
-    private func pause(_ ms: Int = 30) async {
-        try? await Task.sleep(for: .milliseconds(ms))
+    private func pause(_ milliseconds: Int = 30) async {
+        try? await Task.sleep(for: .milliseconds(milliseconds))
     }
     #else
     static func `for`(_ page: any BrowserPageContent) async -> BrowserNativeInput? { nil }

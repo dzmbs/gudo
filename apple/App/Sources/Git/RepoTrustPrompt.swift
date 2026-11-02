@@ -7,22 +7,18 @@ import UIKit
 import AppKit
 #endif
 
-/// Asks the owner before a repository's own setup or teardown commands (`.gudo.json`) run
-/// for the first time or after they changed, like VS Code's workspace trust and `direnv allow`:
-/// a clone or an unpacked archive must not run commands just because a task started in it.
-/// The daemon keeps the trust; declining only skips the commands this time.
+/// Asks the owner before a repository's own setup or teardown commands (`.gudo.json`) run for
+/// the first time or after they changed: a clone must not run commands just because a task
+/// started in it. The daemon keeps the trust; declining only skips the commands this time.
 @MainActor
 enum RepoTrustPrompt {
     enum Moment {
-        /// A new task: the setup command runs first in its tab.
         case setup
-        /// Before a worktree is archived or deleted.
         case teardown
     }
 
-    /// Asks when `ask` needs it (nil: nothing to ask) and records the owner's trust. Returns
-    /// whether the commands will run. Guests are never asked: they cannot trust a host's
-    /// repositories, and the commands do not run for them.
+    /// Returns whether the commands will run; a nil `ask` means nothing needs trusting. Guests
+    /// are never asked: they cannot trust a host's repositories, and the commands don't run for them.
     @discardableResult
     static func confirm(_ ask: RepoHooksTrust?, moment: Moment, api: any DaemonRepoTrustAPI) async -> Bool {
         guard let ask else { return true }
@@ -36,7 +32,6 @@ enum RepoTrustPrompt {
         }
     }
 
-    /// The alert's words: the repository and every command it would run.
     static func text(for ask: RepoHooksTrust, moment: Moment) -> (title: String, message: String) {
         let name = (ask.repo as NSString).lastPathComponent
         let title = switch moment {

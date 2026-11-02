@@ -9,6 +9,7 @@ import UIKit
 import AppKit
 #endif
 
+/// Which agents the Inbox lists. Remembered per window.
 enum InboxFilter: String, CaseIterable, Identifiable {
     case all, needsYou, running, unread, errors
     var id: String { rawValue }
@@ -45,11 +46,10 @@ enum InboxFilter: String, CaseIterable, Identifiable {
     }
 }
 
-/// Agents: every agent across hosts, grouped "Needs you" / "Running" / "Finished", with
-/// approve, deny and reply inline so most requests never need the terminal (04-mobile-ux C4).
-/// Finished turns, failures and long commands come from each host's attention feed; what the
-/// inbox shows counts as seen on every device.
+/// Every agent across hosts, grouped "Needs you" / "Running" / "Finished", with approve, deny
+/// and reply inline. What the inbox shows counts as seen on every device.
 ///
+/// Keyboard: ↑/↓ move between rows, ↩ approves (or opens the pane), Esc or ⌘.
 /// denies, E edits the command before approving where the agent takes edited input, ⇧↩ approves
 /// all like it for the rest of the task.
 struct InboxView: View {
@@ -132,7 +132,7 @@ struct InboxView: View {
                     Label("New", systemImage: "plus")
                 }
                 .menuIndicator(.hidden)
-                // Toolbar controls are monochrome (DESIGN.md), never the accent.
+                // Toolbar controls are monochrome, never the accent.
                 .tint(.primary)
                 .help("New Agent (⇧⌘N) or New Terminal (⌘T)")
                 .accessibilityIdentifier("inbox-new")
@@ -199,7 +199,6 @@ struct InboxView: View {
     }
 
     private func list(_ items: [AgentItem], knocks: [KnockItem]) -> some View {
-        // list on the base, hairlines inset to the text column.
         ScrollViewReader { proxy in
             List {
                 // People asking to join a host this device owns (multiplayer knocks).
@@ -374,8 +373,8 @@ struct InboxView: View {
                 approvedCount += 1
                 advance(from: item)
                 model.agentToasts.dismiss(item: item.id)
-                if let like = feed.approvalOptions(item.id)?.likeThis ?? feed.autoApprovals(item.id).last?.label {
-                    model.toasts.show(Toast("Approving “\(like)” for this task", systemImage: "checkmark.seal.fill", style: .success))
+                if let ruleLabel = feed.approvalOptions(item.id)?.likeThis ?? feed.autoApprovals(item.id).last?.label {
+                    model.toasts.show(Toast("Approving “\(ruleLabel)” for this task", systemImage: "checkmark.seal.fill", style: .success))
                 }
             } catch {
                 model.toasts.show(Toast("Couldn't approve: \(ScreenError.describe(error))", systemImage: "exclamationmark.triangle.fill", style: .failure))
@@ -582,9 +581,8 @@ private struct InboxFilterBar: View {
     }
 }
 
-/// One agent: status glyph, agent and where it runs, age, prompt, then what it needs.
 /// What an Inbox row shows. Rows take their actions as closures, which SwiftUI cannot compare,
-/// so without this every visible row re-rendered on every feed update.
+/// so without this every visible row re-renders on every feed update.
 private struct InboxRowKey: Equatable {
     var item: AgentItem
     var approval: ApprovalContext?
@@ -602,7 +600,7 @@ private struct EquatableRow<Key: Equatable, Content: View>: View, Equatable {
 
     var body: some View { content() }
 
-    static func == (a: Self, b: Self) -> Bool { a.key == b.key }
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.key == rhs.key }
 }
 
 private struct InboxRow: View {
@@ -634,6 +632,7 @@ private struct InboxRow: View {
     @FocusState private var isComposerFocused: Bool
     @FocusState private var isEditFocused: Bool
 
+    /// A 16 pt glyph slot, then the text column (where separators start).
     static let glyphSlot: CGFloat = 16
     static let textColumn: CGFloat = glyphSlot + DS.Space.m
 
@@ -682,6 +681,7 @@ private struct InboxRow: View {
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(item.state == .error ? AnyShapeStyle(DS.Palette.error) : AnyShapeStyle(DS.Palette.textSecondary))
         } else {
+            // What needs you stays at full strength; the rest is muted.
             StatusIndicator(item.state, size: 13)
                 .opacity(item.state.needsYou ? 1 : DS.Opacity.mutedGlyph)
         }
@@ -714,8 +714,7 @@ private struct InboxRow: View {
         .foregroundStyle(DS.Palette.textTertiary)
     }
 
-    /// New dot, age, then the row's quick verbs, Reply and Open, as quiet icons (a capsule of
-    /// glass in every row would be a column of stickers).
+    /// New dot, age, then Reply and Open as quiet icons.
     private var trailing: some View {
         HStack(spacing: DS.Space.xs) {
             if item.unseen {
@@ -801,7 +800,7 @@ private struct InboxRow: View {
         }
     }
 
-    /// auto-approve in its menu). The focused row shows its keys.
+    /// Deny · Edit · Approve ▾. The focused row shows its keys.
     private var verbs: some View {
         let mayApprove = InboxView.mayApprove(approval)
         return HStack(spacing: DS.Space.s) {
@@ -845,11 +844,11 @@ private struct InboxRow: View {
                     .accessibilityLabel("More Allow Options")
                     .accessibilityIdentifier("inbox-allow-menu-\(item.id)")
                 }
-                if let like = options?.likeThis, mayApprove {
+                if let ruleLabel = options?.likeThis, mayApprove {
                     Menu {
                         Button("Approve All Like This for This Task", systemImage: "checkmark.seal", action: approveAll)
                             .accessibilityIdentifier("inbox-approve-all-\(item.id)")
-                        Text("“\(like)”, for \(AgentAutoApproval.minutes / 60) hour or \(AgentAutoApproval.turns) turns. Revoke it here any time.")
+                        Text("“\(ruleLabel)”, for \(AgentAutoApproval.minutes / 60) hour or \(AgentAutoApproval.turns) turns. Revoke it here any time.")
                     } label: {
                         Image(systemName: "chevron.down")
                             .font(.caption.weight(.semibold))
@@ -863,6 +862,7 @@ private struct InboxRow: View {
                 }
             }
         }
+        // Inline in a dense list: a row's height, not a form's.
         .controlSize(.small)
     }
 

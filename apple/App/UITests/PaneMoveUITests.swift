@@ -56,7 +56,7 @@ final class PaneMoveUITests: XCTestCase {
         add(attachment)
     }
 
-    /// Closes every tab but the first.
+    /// Closes every tab past the first `count`.
     private func closeExtraTabs(keeping count: Int) {
         while tabRows.count > count {
             app.typeKey("9", modifierFlags: .command)

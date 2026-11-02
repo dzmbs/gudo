@@ -1,8 +1,8 @@
 import DesignSystem
 import SwiftUI
 
-/// setting, by its title, its Ghostty config key ("cursor-style") and a few other words people use
-/// for it. Every word typed must match. A result jumps to its row and lights it for a moment.
+/// Settings search: one flat index of every setting, by its title, its Ghostty config key
+/// ("cursor-style") and a few other words people use for it. Every word typed must match.
 nonisolated struct SettingsEntry: Identifiable, Hashable, Sendable {
     /// The row's anchor (`settingAnchor`).
     var id: String

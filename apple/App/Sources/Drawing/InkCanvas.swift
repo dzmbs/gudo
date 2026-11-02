@@ -5,28 +5,27 @@ import PencilKit
 import UIKit
 import GudoCore
 
-/// Pencil (and, with Pen, finger) ink on the draw overlay: PencilKit draws the live stroke
-/// (Apple's latency and prediction), points stream to other clients every ~16 ms (`inkLive`),
-/// and on lift the stroke becomes an Excalidraw `freedraw` element in the overlay's scene.
+/// Pencil ink on the draw overlay: PencilKit draws the live stroke (for its latency and
+/// prediction), points stream to other clients every ~16 ms, and on lift the stroke becomes an
+/// Excalidraw `freedraw` element in the overlay's scene.
 ///
-/// says it has drawn the element (`inkApplied`), so the stroke never disappears:
-/// - elements made before the page has loaded its scene are held and sent once it has (sent
-///   earlier, the scene load replaced them: strokes vanished right after lifting on an iPad);
-/// - confirmed strokes are removed from PencilKit only between strokes (replacing the drawing
-///   while the Pencil is down cancels the stroke in flight);
+/// `InkHandoff` keeps the PencilKit stroke until the page says it has drawn the element, so the
+/// stroke never disappears:
+/// - elements made before the page has loaded its scene are held until it has, since the scene
+///   load would replace them;
+/// - confirmed strokes are removed from PencilKit only between strokes, because replacing the
+///   drawing while the Pencil is down cancels the stroke in flight;
 /// - unconfirmed elements are resent (the page de-duplicates by id);
 /// - strokes are matched by identity, not by count, so a stroke PencilKit reports late is still
 ///   converted.
-/// Every step logs to the `drawing` category (`ink:` lines) for device logs.
 @MainActor
 final class InkCanvasController: NSObject, PKCanvasViewDelegate {
     let canvas = InkCanvas()
     private weak var overlay: DrawOverlay?
     private var handoff = InkHandoff()
-    /// Converted elements by id (for resends) and their PencilKit strokes.
+    /// Converted elements by id, kept for resends, and their PencilKit strokes.
     private var elements: [String: [String: Any]] = [:]
     private var strokes: [String: StrokeKey] = [:]
-    /// PencilKit strokes already converted (or adopted).
     private var known: Set<StrokeKey> = []
     private var settingDrawing = false
     private let live = LiveInk()
@@ -55,8 +54,8 @@ final class InkCanvasController: NSObject, PKCanvasViewDelegate {
         }
     }
 
-    /// The overlay's tool (`DrawRouting`): Pen inks every touch; Select inks the Pencil only and
-    /// lets fingers through to the editor; other tools leave every touch to the editor.
+    /// Pen inks every touch; Select inks the Pencil only and lets fingers through to the editor;
+    /// other tools leave every touch to the editor.
     func setTool(_ tool: DrawTool) {
         let routing = DrawRouting.inkLayer(for: tool)
         canvas.isUserInteractionEnabled = routing.interactive
@@ -65,7 +64,7 @@ final class InkCanvasController: NSObject, PKCanvasViewDelegate {
         Self.log.info("ink: tool \(tool.rawValue, privacy: .public) (ink layer \(routing.interactive ? (routing.pencilOnly ? "pencil only" : "all touches") : "off", privacy: .public))")
     }
 
-    /// Two fingers came down: the terminal scrolls; drop the stroke the first finger started.
+    /// Two fingers scroll the terminal, so drop the stroke the first finger started.
     func cancelStroke() {
         let recognizer = canvas.drawingGestureRecognizer
         guard recognizer.isEnabled else { return }
@@ -86,11 +85,10 @@ final class InkCanvasController: NSObject, PKCanvasViewDelegate {
 
     // MARK: Page
 
-    /// The page has the scene: send the strokes held until now.
     func pageLoaded() {
-        let send = handoff.loaded(at: CACurrentMediaTime())
-        if !send.isEmpty { Self.log.info("ink: page loaded, sending \(send.count) held stroke(s)") }
-        post(send)
+        let held = handoff.loaded(at: CACurrentMediaTime())
+        if !held.isEmpty { Self.log.info("ink: page loaded, sending \(held.count) held stroke(s)") }
+        post(held)
         convertNew()
     }
 
@@ -98,8 +96,7 @@ final class InkCanvasController: NSObject, PKCanvasViewDelegate {
         handoff.reloading()
     }
 
-    /// The page drew these elements: drop their PencilKit strokes (one-frame overlap), or once
-    /// the Pencil lifts if it is down.
+    /// Drops the PencilKit strokes of elements the page drew, or once the Pencil lifts if it is down.
     func applied(ids: [String]) {
         let result = handoff.applied(ids, at: CACurrentMediaTime())
         for (id, latency) in result.latency {
@@ -115,7 +112,7 @@ final class InkCanvasController: NSObject, PKCanvasViewDelegate {
         }
     }
 
-    /// Waits until every converted stroke is in the scene (Done, Send), up to `timeout`.
+    /// Waits until every converted stroke is in the scene, up to `timeout`.
     func settle(timeout: Duration = .seconds(2)) async {
         convertNew()
         guard !handoff.isSettled else { return }
@@ -163,10 +160,10 @@ final class InkCanvasController: NSObject, PKCanvasViewDelegate {
 
     private func sample(_ touch: UITouch, in view: UIView) {
         guard let overlay, let geometry = overlay.currentGeometry, let artifactId = overlay.artifactId else { return }
-        let p = geometry.scene(fromView: touch.preciseLocation(in: view))
+        let point = geometry.scene(fromView: touch.preciseLocation(in: view))
         let pressure = touch.maximumPossibleForce > 0 ? min(1, touch.force / touch.maximumPossibleForce * 1.5) : 0.5
         live.add(InkPoint(
-            x: Float(p.x), y: Float(p.y), pressure: Float(max(pressure, 0.05)),
+            x: Float(point.x), y: Float(point.y), pressure: Float(max(pressure, 0.05)),
             altitude: Float(touch.altitudeAngle), azimuth: Float(touch.azimuthAngle(in: view)), tMs: 0),
             artifactId: artifactId, client: overlay.client)
     }
@@ -187,8 +184,7 @@ final class InkCanvasController: NSObject, PKCanvasViewDelegate {
         convertNew()
     }
 
-    /// Converts PencilKit strokes not converted yet (all of them once the overlay knows its
-    /// geometry).
+    /// Converts new PencilKit strokes once the overlay knows its geometry.
     func convertNew() {
         guard let overlay else { return }
         let fresh = canvas.drawing.strokes.filter { !known.contains(StrokeKey($0)) }
@@ -213,25 +209,25 @@ final class InkCanvasController: NSObject, PKCanvasViewDelegate {
             }
             elements[String(id)] = element
             strokes[String(id)] = key
-            let now2 = handoff.converted(String(id), at: now)
-            Self.log.info("ink: stroke \(String(id), privacy: .public) \(stroke.path.count) pts \(String(format: "%.0f", stroke.renderBounds.width), privacy: .public)×\(String(format: "%.0f", stroke.renderBounds.height), privacy: .public) pt → \(now2 ? "sent" : "held until the page loads", privacy: .public)")
-            if now2 { send.append(String(id)) }
+            let sentNow = handoff.converted(String(id), at: now)
+            Self.log.info("ink: stroke \(String(id), privacy: .public) \(stroke.path.count) pts \(String(format: "%.0f", stroke.renderBounds.width), privacy: .public)×\(String(format: "%.0f", stroke.renderBounds.height), privacy: .public) pt → \(sentNow ? "sent" : "held until the page loads", privacy: .public)")
+            if sentNow { send.append(String(id)) }
         }
         overlay.markEdited()
         post(send)
     }
 
-    /// The Pencil stroke that opened draw mode (captured by the terminal before the overlay
-    /// existed), in canvas points: added to PencilKit and converted like any other.
+    /// The Pencil stroke that opened draw mode, captured by the terminal before the overlay
+    /// existed, in canvas points.
     func adopt(_ samples: [PencilSample]) {
         guard samples.count >= 2, let start = samples.first?.time else { return }
         let ink = (canvas.tool as? PKInkingTool)?.ink ?? PKInk(.pen, color: .label)
         let base = (canvas.tool as? PKInkingTool)?.width ?? 3
-        let points = samples.map { s in
-            let width = base * (0.7 + 0.6 * min(1, s.force))
+        let points = samples.map { sample in
+            let width = base * (0.7 + 0.6 * min(1, sample.force))
             return PKStrokePoint(
-                location: s.location, timeOffset: s.time - start, size: CGSize(width: width, height: width),
-                opacity: 1, force: s.force, azimuth: s.azimuth, altitude: s.altitude)
+                location: sample.location, timeOffset: sample.time - start, size: CGSize(width: width, height: width),
+                opacity: 1, force: sample.force, azimuth: sample.azimuth, altitude: sample.altitude)
         }
         let stroke = PKStroke(ink: ink, path: PKStrokePath(controlPoints: points, creationDate: Date()))
         settingDrawing = true
@@ -255,7 +251,7 @@ struct StrokeKey: Hashable {
     }
 }
 
-/// A Pencil sample captured outside PencilKit (the touch that opens draw mode).
+/// A Pencil sample captured outside PencilKit, from the touch that opens draw mode.
 struct PencilSample {
     var location: CGPoint
     var time: TimeInterval
@@ -275,7 +271,7 @@ struct PencilSample {
 /// PencilKit's canvas. With Select it inks only the Pencil and lets fingers through to the
 /// editor underneath. Telling them apart relies on the new touch being in `event.allTouches`
 /// during hit-testing; when it is not, the touch goes to the editor, whose page turns a Pencil
-/// stroke into freedraw anyway (`entry.jsx`), so the Pencil still draws.
+/// stroke into freedraw anyway, so the Pencil still draws.
 final class InkCanvas: PKCanvasView {
     var fingersPassThrough = false
     private var loggedHitTest = false
@@ -293,7 +289,7 @@ final class InkCanvas: PKCanvasView {
     }
 }
 
-/// Watches the touches PencilKit inks (never recognizes, never cancels them).
+/// Watches the touches PencilKit inks; never recognizes or cancels them.
 private final class InkObserver: UIGestureRecognizer {
     var onSample: ((UITouch, UIView) -> Void)?
     var onEnd: (() -> Void)?
@@ -329,12 +325,13 @@ private final class InkObserver: UIGestureRecognizer {
 
     private func feed(_ touches: Set<UITouch>, _ event: UIEvent) {
         guard let view, let touch = touches.first else { return }
-        for t in event.coalescedTouches(for: touch) ?? [touch] { onSample?(t, view) }
+        for coalesced in event.coalescedTouches(for: touch) ?? [touch] { onSample?(coalesced, view) }
     }
 
     override func canPrevent(_ gesture: UIGestureRecognizer) -> Bool { false }
 }
 
+/// Chunks of live points sent every ~16 ms.
 @MainActor
 final class LiveInk {
     private var points: [InkPoint] = []

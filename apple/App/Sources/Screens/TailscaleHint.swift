@@ -7,8 +7,7 @@ import UIKit
 import AppKit
 #endif
 
-/// The Tailscale app on this device: whether it is installed, and opening it. A tailnet host
-/// (`HostKit.Tailscale`) is reachable only while it is connected here.
+/// The Tailscale app on this device; a tailnet host is reachable only while it is connected here.
 enum TailscaleApp {
     #if os(macOS)
     /// The standalone build and the Mac App Store build.
@@ -36,7 +35,7 @@ enum TailscaleApp {
     #endif
 }
 
-/// "Tailscale": a quiet outlined tag next to a tailnet host's name (the PR badge's shape).
+/// A quiet outlined tag next to a tailnet host's name.
 struct TailscaleTag: View {
     var body: some View {
         Text("Tailscale")

@@ -69,12 +69,12 @@ final class AgentLiveActivities {
             let state = AgentRunState(phase: phase, headline: headline, startedAt: started[key] ?? .now)
             guard activity.content.state.phase != phase || activity.content.state.headline != headline else { return }
             let id = activity.id
-            let title = "\(AgentKind(agent.kind).title) needs you"
-            let body = headline
+            let alertTitle = "\(AgentKind(agent.kind).title) needs you"
+            let alertBody = headline
             Task.detached {
                 guard let live = Activity<AgentRunAttributes>.activities.first(where: { $0.id == id }) else { return }
                 await live.update(ActivityContent(state: state, staleDate: .now + 15 * 60, relevanceScore: phase == .blocked ? 100 : 50),
-                                  alertConfiguration: phase == .blocked ? AlertConfiguration(title: "\(title)", body: "\(body)", sound: .default) : nil)
+                                  alertConfiguration: phase == .blocked ? AlertConfiguration(title: "\(alertTitle)", body: "\(alertBody)", sound: .default) : nil)
             }
             if phase.isFinal { end(key, phase: phase, headline: headline) }
         } else if phase == .working || phase == .blocked {

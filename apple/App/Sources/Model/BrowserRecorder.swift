@@ -3,17 +3,14 @@ import Foundation
 import ImageIO
 import WebKit
 
-/// Records agents' browser sessions (`ReplayStore`): each action the agent takes
-/// (`BrowserAgent.onAction`) with a picture of the page after it, and the page itself as rrweb
-/// events, from the first action until the agent leaves the page alone for a while.
+/// Records agents' browser sessions: each action with a picture of the page after it, and the
+/// page itself as rrweb events, until the agent leaves the page alone for a while.
 ///
-/// rrweb runs in a content world of its own, not the page's: it reads the same DOM (mutation
-/// observers, input and scroll events see everything), and nothing of it is visible to the
-/// page — no globals, no message handler, no patched prototypes. What an isolated world
-/// misses (style rules a page inserts through the CSSOM after the first snapshot) comes back
-/// with a fresh snapshot taken after actions. Frames from other origins record themselves
-/// and send their events through the app rather than `postMessage`, so a page never sees what
-/// its embedded frames (a payment form) recorded.
+/// rrweb runs in a content world of its own so nothing of it is visible to the page (no globals,
+/// handlers or patched prototypes). What an isolated world misses (CSSOM rules inserted after the
+/// first snapshot) comes back with fresh snapshots taken after actions. Frames from other origins
+/// send their events through the app rather than `postMessage`, so a page never sees what its
+/// embedded frames (a payment form) recorded.
 @MainActor
 final class BrowserRecorder {
     static let shared = BrowserRecorder()
@@ -30,9 +27,8 @@ final class BrowserRecorder {
         var full = false
     }
 
-    /// Sessions being recorded, by page (`BrowserPane.id`).
+    /// By `BrowserPane.id`.
     private var live: [UUID: Live] = [:]
-    /// Pages that can record, by id.
     private var pages: [UUID: WeakPage] = [:]
     private var saving: [UUID: Task<Void, Never>] = [:]
 
@@ -44,14 +40,14 @@ final class BrowserRecorder {
         BrowserAgent.shared.onAction = { [weak self] entry in self?.record(entry) }
     }
 
-    /// Readies a page's configuration: the recorder in every frame, idle until a session starts.
+    /// The recorder in every frame, idle until a session starts.
     static func install(in controller: WKUserContentController, page id: UUID) {
         controller.addUserScript(WKUserScript(source: rrweb, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: world))
         controller.addUserScript(WKUserScript(source: bootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: world))
         controller.addScriptMessageHandler(Handler(page: id), contentWorld: world, name: "gudoReplay")
     }
 
-    /// A page that can record (its configuration went through `install`).
+    /// The page's configuration must have gone through `install`.
     func attach(_ page: any BrowserPageContent, id: UUID) {
         pages = pages.filter { $0.value.page != nil }
         pages[id] = WeakPage(page: page)
@@ -59,10 +55,8 @@ final class BrowserRecorder {
 
     func isRecording(_ page: UUID) -> Bool { live[page] != nil }
 
-    /// Session ids being written now (cleanup leaves them alone).
+    /// Cleanup leaves these alone.
     var liveSessions: Set<UUID> { Set(live.values.map(\.session.id)) }
-
-    // MARK: Actions
 
     func record(_ entry: BrowserActionEntry) {
         guard ReplayStore.isEnabled, let page = pages[entry.page]?.page else { return }
@@ -105,7 +99,6 @@ final class BrowserRecorder {
         }
     }
 
-    /// Ends a page's session (its page closed, the agent left, it went idle).
     func finish(_ page: UUID) {
         guard let current = live.removeValue(forKey: page) else { return }
         let id = current.session.id
@@ -116,7 +109,6 @@ final class BrowserRecorder {
         }
     }
 
-    /// Waits for a session's pictures and events to be on disk.
     func flush(_ page: UUID) async {
         guard let webPage = pages[page]?.page, let id = live[page]?.session.id else { return }
         _ = try? await webPage.run("window.__gudoReplay && window.__gudoReplay.flush()", in: Self.world)
@@ -140,7 +132,7 @@ final class BrowserRecorder {
             }
             return nil
         case "frame":
-            // A frame from another origin: to the page's recorder, which places it.
+            // A cross-origin frame's events go to the page's recorder, which places them.
             guard !frame.isMainFrame, live[page] != nil, let webPage = pages[page]?.page, let message = body["message"] else { return nil }
             let origin = Self.origin(frame.securityOrigin)
             let url = frame.request.url?.absoluteString ?? ""
@@ -173,8 +165,6 @@ final class BrowserRecorder {
         }
     }
 
-    // MARK: Pictures
-
     /// The visible page as a JPEG at most 960 points wide.
     static func keyframe(_ page: any BrowserPageContent) async -> Data? {
         guard let size = try? await page.run("return [innerWidth, innerHeight]", in: world) as? [Double],
@@ -186,15 +176,13 @@ final class BrowserRecorder {
 
     nonisolated static func jpeg(_ data: Data, quality: Double = 0.6) -> Data? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil), let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
-        let out = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(out, "public.jpeg" as CFString, 1, nil) else { return nil }
+        let jpegData = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(jpegData, "public.jpeg" as CFString, 1, nil) else { return nil }
         CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
-        return CGImageDestinationFinalize(destination) ? out as Data : nil
+        return CGImageDestinationFinalize(destination) ? jpegData as Data : nil
     }
 
-    // MARK: Page scripts
-
-    /// rrweb's recorder (apple/scripts/build-agent-browser.sh), as `__gudoRRWeb`.
+    /// Built by apple/scripts/build-agent-browser.sh; exposes `__gudoRRWeb`.
     static let rrweb: String = {
         guard let url = Bundle.main.url(forResource: "rrweb-record", withExtension: "js"),
               let text = try? String(contentsOf: url, encoding: .utf8)
@@ -202,9 +190,8 @@ final class BrowserRecorder {
         return text
     }()
 
-    /// Asks the app whether the page records; if so, records it until it unloads. The page's
-    /// own frame emits; frames from the page's origin are recorded through it; frames from
-    /// other origins pass their events to the app instead of to their parent.
+    /// Records only if the app says so. Same-origin frames are recorded through the top frame;
+    /// cross-origin frames pass their events to the app instead of to their parent.
     static let bootstrap = #"""
     (() => {
       if (window.__gudoReplay || !window.__gudoRRWeb) return;

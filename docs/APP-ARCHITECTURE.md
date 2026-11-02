@@ -1,8 +1,9 @@
+# App architecture: data and control layer
 
-Status: 2026-10-18. The Apple app talks to real hosts: paired daemons over iroh and plain SSH,
+The Apple app talks to real hosts: paired daemons over iroh and plain SSH,
 with "just ssh" → "Install helper" → daemon. This document is the contract between the data
 layer (`apple/Packages/HostKit`, the `Workspace`/`Pane` glue in `apple/App`) and the views.
-Since 2026-10-19 the views are the design system's (docs/DESIGN.md), bound to these models
+The views are the design system's (docs/DESIGN.md), bound to these models
 through `WindowModel` and the adapters in `App/Sources/Model/LiveSources.swift`; §10 lists what
 is real and what still shows mock data.
 
@@ -33,11 +34,11 @@ All are `@MainActor @Observable`. Views never hold a socket or a `DaemonClient` 
 | `HostGroups` (HostKit, one per window) | `groups: [HostGroup]` (this device, then open hosts in open order, then hosts connected elsewhere: id, name, kind, `status`, `tabs`, `isReady`, `failure`), `tabs: [TabRef]` (the unified order), `openHosts`, `collapsed` | `open(id)` (never redials an open host), `close(id)`, `restore(ids)`, `tab(forShortcut:)`, `shortcutNumber(of:)`, `tab(after:offset:)`, `newTabHost(preferred:)` |
 | `Workspace` (App, one per window per host) | `session` (the window's view: `WindowLayoutStore`), `sharedLayout`, `panes` (this window's terminals), `title(of:)` (the tab's name), `context(of:)` (agent task → program → shell title → repo:branch → directory), `canOpenTabs` | `apply(op)`; unnamed tabs get a friendly name (`FriendlyName`, sent as a rename so a daemon keeps it for every device) |
 | `HostsModel` | `entries: [HostEntry]` (sorted: Needs you → pinned → recent), `installs[id]` (`InstallProgress.summary`), `installNotes[id]`, `sshConfigAliases`, `keys.keys`, `hostKeyPrompts.pending`, `network.isOffline` | `open(id)`, `pair(ticket, name:)`, `connectSSH(…)`, `installHelper(id)`, `loadSSHConfig(text)` / `loadUserSSHConfig()` (macOS) / `importSSHHosts(aliases)`, `rename`, `setPinned`, `disconnect`, `remove`, `foreground()/background()/networkChanged()` |
-| `HostEntry` (value) | `name`, `kind` (`.daemon`/`.ssh`), `address`, `status: ConnectionStatus`, `needsYou: String?`, `blockedAgents`, `canInstallHelper`, `pinned`, `lastConnected` | — |
-| `ConnectionStatus` (value) | `.idle/.connecting/.connected(rtt)/.reconnecting(attempt, reason)/.offline/.suspended/.needsAttention(reason)`; `summary` (words, A22), `isLive`, `needsUser` | — |
+| `HostEntry` (value) | `name`, `kind` (`.daemon`/`.ssh`), `address`, `status: ConnectionStatus`, `needsYou: String?`, `blockedAgents`, `canInstallHelper`, `pinned`, `lastConnected` | - |
+| `ConnectionStatus` (value) | `.idle/.connecting/.connected(rtt)/.reconnecting(attempt, reason)/.offline/.suspended/.needsAttention(reason)`; `summary` (words, A22), `isLive`, `needsUser` | - |
 | `any HostConnection` (`Workspace.host`) | `status`, `isReady` | `retry()` (R9) |
 | `DaemonConnection` | `blockedAgents`, `meta[pane]` (title, cwd, agent), `echoRoundTrip`, `timings` | `decide(requestId:optionId:)` |
-| `Pane` (App) | `connection: PaneConnection` (`.live` / `.stale(reason)`), `title`, `workingDirectory`, `foregroundProgram` | — |
+| `Pane` (App) | `connection: PaneConnection` (`.live` / `.stale(reason)`), `title`, `workingDirectory`, `foregroundProgram` | - |
 | `JustSSHFlow` | `destination`, `auth`, `password`, `rememberPassword`, `step`, `newKey` (`publicKey`, `authorizeCommand`, `sshCopyIdCommand(for:)`) | `endpoint()`, `generateKey()`, `generateSecureEnclaveKey()`, `importKey(pem:passphrase:label:)`, `connect()`, `authorizeOverSession(hostId:key:)` |
 | `HostKeyPrompts` | `pending: Prompt?` (`host`, `algorithm`, `fingerprint`, `expected` for a changed key) | `answer(Bool)` |
 | `PairingTicket` | `info` (`daemonId`, `addrs`, `relayUrl`, `expiresUnixMs`), `isExpired`, `defaultName` | `init(_ text)`, `init?(url:)` (deep link), QR payloads as text |
@@ -54,7 +55,7 @@ always calls `start(events:)` and handles, on the delivering thread:
 | `PaneEvent` | Pane does |
 |---|---|
 | `.output(Data)` | `terminal.write`, `surface.outputArrived()` |
-| `.snapshot(Data)` | `terminal.restore(snapshot:)` (TerminalCore, READY section) — never blanks: on failure the old screen stays |
+| `.snapshot(Data)` | `terminal.restore(snapshot:)` (TerminalCore, READY section): never blanks: on failure the old screen stays |
 | `.history(Data, done)` | `terminal.appendHistory(_:)` (prepends scrollback pages) |
 | `.resized(cols, rows)` | resizes the VT at that point of the stream (the remote PTY's size) |
 | `.connection(.live / .stale(reason))` | `Pane.connection` → `StalePaneOverlay` dims the pane |
@@ -71,7 +72,7 @@ the output past its `at_seq` (the echo), or after 40 ms if the input printed not
 does not report the foreground program yet, so `ForegroundProgramReporting` is not implemented
 (the title stands in).
 
-## 3. Connections and lifecycle (04 R1–R12)
+## 3. Connections and lifecycle (04 R1-R12)
 
 | Rule | Where |
 |---|---|
@@ -85,18 +86,18 @@ does not report the foreground program yet, so `ForegroundProgramReporting` is n
 | R11 end-to-end check | `DaemonIntegrationTests`, `DaemonUITests` type a marker and assert it comes back |
 | R12 output independent of views | `PaneRouter` buffers per pane until the view starts; VT lives in `Pane`, not the view; stale panes keep their content |
 
-Multi-host windows (2026-10-19): a window shows every open host at once. `HostGroups` keeps the
+Multi-host windows: a window shows every open host at once. `HostGroups` keeps the
 window's open hosts; `HostsModel.connections` keeps one `HostConnection` per host for as long as it
 is open, and `WindowModel.workspaces` one `Workspace` per open host (its panes stream in the
-background, R12), so selecting a tab on another host only changes `WindowModel.target` — no dial
+background, R12), so selecting a tab on another host only changes `WindowModel.target`: no dial
 (`DaemonConnection.dials` counts dials; `MultiHostUITests` asserts it stays put while switching).
 The iOS lifecycle is per app, not per window: `HostsModel.background()` suspends every connection,
 `foreground()` resumes every one at once (R1/R3/R5); plain-SSH hosts still reconnect instead
-(below). A failed `open` no longer leaves an idle connection behind: the group shows the reason
+(below). A failed `open` leaves no idle connection behind: the group shows the reason
 (`HostGroups.failures`). Per window, `WindowRoot` persists `openHosts`, `collapsedHosts` and
 `focusedTab` (`TabRef`) in scene storage, mirrored to user defaults for new scenes; launch
 reopens them and selects the tab once its host's layout arrives (`-restoreLastTarget NO`
-disables restore; design fixtures, `-mock` and dogfood runs skip it).
+disables restore; design fixtures, `-mock` and Dogfood runs skip it).
 
 Keyboard across hosts (iOS): one `KeyBar` for the app (`Workspace.sharedKeyBar`), so a host
 switch keeps the same input accessory view (no input-view reload, no second line editor competing
@@ -121,7 +122,7 @@ is pushed on every layout change (stream priorities).
 
 ## 4. Pairing, secrets, persistence
 
-- Device key: `DeviceIdentity.load` — generated once (`generateDeviceKey`), Keychain item
+- Device key: `DeviceIdentity.load`: generated once (`generateDeviceKey`), Keychain item
   `device-key`, `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, data-protection keychain.
 - Secrets (`SecretStore`): ticket per daemon host (`host.<id>.ticket`; after pairing it still
   names the daemon and the device grant is used), SSH passwords, private keys (`key.<id>`),
@@ -141,7 +142,7 @@ is pushed on every layout change (stream priorities).
   gzipped Linux daemons (`build/hostd/*.gz` → app resources), pairs with the returned ticket,
   keeps the SSH connection until the daemon's layout is ready, then swaps the host's connection;
   `WindowRoot` notices the new connection object and shows a workspace on it (same window,
-  same host). Bootstrap now enables systemd lingering itself (`loginctl --no-ask-password
+  same host). Bootstrap enables systemd lingering itself (`loginctl --no-ask-password
   enable-linger`), because without it the daemon dies with the installing SSH session.
 
 ## 5. Logs and diagnostics
@@ -170,47 +171,43 @@ disabled`; `-testMirror YES` (core VT mirror for pane text); DEBUG `-posture
 | `cd apple/Packages/HostKit && swift test` | unit tests with a fake `DaemonClientAPI` (layout conversion, store revisions/optimism, connection state machine, routing/buffering, prediction feed, hosts sorting/persistence, ssh_config import, keys, secrets) and `DaemonIntegrationTests` against a real local `gudo-hostd` (pair, echo, split, daemon restart → stale → live, suspend/resume, re-dial by saved ticket) |
 | `cd apple/Packages/TerminalKit && swift test --filter snapshot` | READY restore + history pages + live bytes |
 | `apple/scripts/daemon-ui-test.sh [udid]` | `DaemonUITests` on the iPad simulator against a local daemon, killed and restarted mid-test |
+| `xcodebuild … -only-testing:AppTests test` | the workspace screens' models against a fake `DaemonWorkspaceAPI`: inbox merge (live agents + attention, history, commands, answered requests, yes/no option matching), file listing with git letters, previews, uploads that never replace, rename/trash/mkdir/download, diff line numbers and side-by-side pairing, turns and review routing, editor phases (install → load → reuse → open file → stop), ports (sorting, same-port forward, fallback, reuse, offers), links mapping, errors in words. HostKit: `DaemonWorkspaceTests` (one listener per client, pushes, unseen, seen requests, RPC answer pairing, re-watch after reconnect) |
 | `apple/scripts/w3-ui-test.sh [udid] [test …]` | `W3UITests` on the iPad simulator against a local daemon set up by `w3-fixtures.sh` (HOME = a scratch dir with a git repo, a `claude` stand-in that drives the daemon's real hooks, a `code serve-web` stand-in): Files, Diff + notes, New Agent → Approve → finished summary → Reply → Open Pane → the turn's diff → review sent to the agent, Editor (workbench over the forward, ⌘P reaches the page, a path from Links opens at its line), a dev server offered and opened, Copy Last Command Output |
 | `apple/scripts/multihost-ui-test.sh [udid]` | `MultiHostUITests`: two local daemons in one window; click and ⌘1/⌘2/⇧⌘[ switches with the same connections and no stale overlay, ⌘T on the current host, one daemon killed → its group reconnecting while the other stays live, then back |
-| `HostGroupsTests` (HostKit) | the aggregation with fake connections: two daemons + one SSH host, open order, ⌘1–9 mapping, wraparound across hosts, status changes, no redial, lifecycle reaches every host, restore and failures |
+| `HostGroupsTests` (HostKit) | the aggregation with fake connections: two daemons + one SSH host, open order, ⌘1-9 mapping, wraparound across hosts, status changes, no redial, lifecycle reaches every host, restore and failures |
 | `TEST_RUNNER_SSH_TARGET=… TEST_RUNNER_SSH_KEY=… xcodebuild … -only-testing:AppUITests/RealHostUITests test` | just ssh → Install helper → daemon pane: ls, vim, Ctrl-C, htop, screenshots |
 | `MacDogfoodUITests` | Ctrl-C, Ctrl-Z, vim, resize during output, closing a tab kills its process (pgrep), local and daemon |
 
-## 8. Measurements (2026-10-18, M5 Max, iPad Pro 13" simulator iOS 27.0, debug builds)
+## 8. Measurements (M5 Max, iPad Pro 13" simulator iOS 27.0, debug builds)
 
-| | Local daemon (loopback, relays off) | Hetzner x86_64, Helsinki (ping 53.6 ms avg) |
+| | Local daemon (loopback, relays off) | Remote Linux x86_64 (ping 53.6 ms avg) |
 |---|---|---|
-| SSH connect + auth (just ssh, key) | — | 577–920 ms |
-| Bootstrap ("Install helper") | — | `Upgraded` 6.3 s (upload + restart), `Reused` 0.55 s |
-| iroh connect after the ticket (pair) | 0.27–0.31 s (app), 38–56 ms (HostKit test) | 0.34–0.55 s |
-| Dial → first paint (snapshot on screen) | 53–83 ms | 0.58–0.80 s |
-| Keystroke → echo | 0.4–0.6 ms (input→ack) | p50 65.6 ms, min 55, max 72 (20 keys) |
-| Daemon restart → pane live again | ≈1.0 s | — |
-| Suspend → resume (foreground) | 10–15 ms | — |
-
-`ipad-hetzner-{1-plain-ssh,2-installing,3-daemon-pane,4-ls,5-vim,6-ctrl-c,7-htop,8-done}.png`.
+| SSH connect + auth (just ssh, key) | - | 577-920 ms |
+| Bootstrap ("Install helper") | - | `Upgraded` 6.3 s (upload + restart), `Reused` 0.55 s |
+| iroh connect after the ticket (pair) | 0.27-0.31 s (app), 38-56 ms (HostKit test) | 0.34-0.55 s |
+| Dial → first paint (snapshot on screen) | 53-83 ms | 0.58-0.80 s |
+| Keystroke → echo | 0.4-0.6 ms (input→ack) | p50 65.6 ms, min 55, max 72 (20 keys) |
+| Daemon restart → pane live again | ≈1.0 s | - |
+| Suspend → resume (foreground) | 10-15 ms | - |
 
 ## 9. Gaps
 
-- macOS UI automation is approved now, but the Mac was locked for the whole 2026-10-19 merge run
-  ("Failed to activate application … Running Background"), so `MacDogfoodUITests`,
-  `ChromeUITests` and `testSidebarAppearsAfterSwitchingFromTabStrip` did not run on macOS. The
-  same behaviours run in-app: `apple/scripts/dogfood.sh Dogfood/core.json` (13/13). Run
+- The macOS UI tests (`MacDogfoodUITests`, `ChromeUITests`,
+  `testSidebarAppearsAfterSwitchingFromTabStrip`) need an unlocked Mac; on a locked one they
+  fail with "Failed to activate application … Running Background". The same behaviours run
+  in-app with `apple/scripts/dogfood.sh Dogfood/core.json`. On an unlocked Mac run
   `xcodebuild … -destination 'platform=macOS' -only-testing:AppUITests/MacDogfoodUITests
-  -only-testing:AppUITests/ChromeUITests -only-testing:AppUITests/WorkspaceUITests test` on an
-  unlocked Mac.
+  -only-testing:AppUITests/ChromeUITests -only-testing:AppUITests/WorkspaceUITests test`.
 - Keychain on ad-hoc signed Mac builds: no entitlement, so secrets fall back to owner-only files.
 - QR scanning is untested (no camera in the simulator). Tailscale hints are not implemented.
 - The daemon does not report the foreground program: key-bar profiles use the daemon's agent
   kind (`PaneMeta.agent`), else the title.
-- XCUITest idle waits are gone: on 2026-10-19 the longest "Wait for app to idle" in the whole iOS
-  suite was 0.9 s (≤ 0.1 s in most tests); `RealHostUITests` went from ≈14 min to 53 s,
-  `DaemonUITests` runs in 34 s, the 16 iOS UI tests in 280 s. Most likely, the repeating animations that kept
-  the app busy were the plain-SSH banner's `ProgressView` (a spinning `UIActivityIndicatorView`,
-  shown while a connection or install was in progress) and the design branch's mock spinners;
-  the design's `Spinner` draws from a `TimelineView` instead of a repeating Core Animation, and
-  the banner is gone. The secure-input badge still loops its gradient (only while a password is
-  read).
+- No repeating animation may keep the app busy, or XCUITest waits for idle on every step.
+  The longest "Wait for app to idle" in the iOS suite is 0.9 s (≤ 0.1 s in most tests);
+  `RealHostUITests` runs in 53 s, `DaemonUITests` in 34 s, the 16 iOS UI tests in 280 s. The
+  design's `Spinner` draws from a `TimelineView`, not a repeating Core Animation, and plain SSH
+  shows no `ProgressView`. The secure-input badge loops its gradient only while a password is
+  read.
 - Plain-SSH panes cannot be suspended on iOS (no serialized state); they reconnect instead.
 - Switching a host from SSH to daemon replaces the window's workspace (same window, same host):
   the plain-SSH shell is closed once the daemon's layout is ready, so its scrollback is not
@@ -222,7 +219,7 @@ disabled`; `-testMirror YES` (core VT mirror for pane text); DEBUG `-posture
 - macOS remote host: the app paired with a local daemon by `-testTicket` and attached (hosts.json,
   session 1); typing into it on macOS was not driven (no UI automation, see above).
 
-## 10. Design screens: real data vs mock (2026-10-19)
+## 10. Design screens: real data vs mock
 
 `WindowModel` picks the sources: the live adapters in `App/Sources/Model/LiveSources.swift`, or,
 with `-mock` (screenshots, `-screen <name>` fixtures), `App/Sources/Model/MockData.swift`. The
@@ -243,6 +240,7 @@ Real (HostKit / apple-ffi):
 | Share Session, presence, control, join, grants, audit | `MultiplayerSession` (§11): `Screens/InviteSheet.swift`, `Multiplayer/*` |
 | Local notifications, actions, Live Activity | `Notifications/*` over `DaemonConnection.workspaceEvents` (§12) |
 
+### Workspace screens
 
 The developer-workflow screens read the daemon through `Model/LiveWorkspaceSources.swift`. Each
 source resolves where it acts when asked (`HostContext`): the window's host when it is a
@@ -262,19 +260,21 @@ tested against fakes.
 | New Agent (`Git/NewTaskSheet.swift`, ⇧⌘N) | `LiveAgentFeed.launch` | connected daemons; `launchAgentPane` in a new tab (`newTabIn`) in the host's focused pane's directory, or in a fresh `worktreeCreate` (own branch and `PORT`); the sheet closes as soon as the pane exists and the window shows it; the first prompt is typed through `prompt` once the agent reports idle (≤ 60 s, a toast says if it could not be) |
 | Diff review (`Screens/DiffReviewView.swift`) | `LiveDiffSource` | `gitStatus` (repo, branch, ↑↓), `gitDiff` HEAD→worktree (untracked included) or staged, `listTurns` of the agent panes in the repo + `turnDiff` ("what this agent turn changed"); side by side on iPad/Mac (regular width; Layout menu: automatic/unified/side by side), unified on iPhone; monospace on the terminal background, palette green/red only; tap a line → note; notes → `sendReview` to the turn's agent (or the focused / first agent in the repo), Copy otherwise |
 | Files (`Screens/FilesBrowserView.swift`) | `LiveFileSource` | `fsList` + `gitStatus` letters (a directory with changes inside gets M), `fsStat` / `fsRead` preview (UTF-8 text up to 1 MiB with line numbers, images up to 24 MiB, else a card), `fsWatch` (reloads on change), New Folder `fsMkdir`, Rename `fsRename` (never overwrites), Move to Trash `fsDelete(.trash)`, upload from the Files picker or by drop `uploadFile(createNew)` ("name 2.ext" when taken) with progress, download `downloadFile` → share sheet (iOS) / ~/Downloads + Finder (Mac); Open in VS Code, Reveal in Terminal (`cd`), Insert Path |
-| Editor (`Screens/EditorView.swift`) | `LiveEditorSource` | `editorStatus` (is VS Code's CLI there?) → `openEditor(folder: <repo root or directory>, acceptVscodeLicense: true)` → a `WKWebView` on the forward, in an editor pane of the split tree (§20); steps "Set up VS Code on host (first run only) → Start the editor → Open the workbench" with seconds, never a licence prompt or sign-in, nothing about the VSCodium fallback; sessions kept per host+folder (closing leaves the server running; More → Stop Editor ends it, `closeEditor(stopServer:)`); a path from Links opens with `editorOpenInSession`; while an editor pane has the focus the app's ⌘ shortcuts step aside (except ⌘1–⌘9, ⌘W, ⌃⌘\`, §20) so every other key reaches VS Code |
+| Editor (`Screens/EditorView.swift`) | `LiveEditorSource` | `editorStatus` (is VS Code's CLI there?) → `openEditor(folder: <repo root or directory>, acceptVscodeLicense: true)` → a `WKWebView` on the forward, in an editor pane of the split tree (§20); steps "Set up VS Code on host (first run only) → Start the editor → Open the workbench" with seconds, never a licence prompt or sign-in, nothing about the VSCodium fallback; sessions kept per host+folder (closing leaves the server running; More → Stop Editor ends it, `closeEditor(stopServer:)`); a path from Links opens with `editorOpenInSession`; while an editor pane has the focus the app's ⌘ shortcuts step aside (except ⌘1-⌘9, ⌘W, ⌃⌘\`, §20) so every other key reaches VS Code |
 | Browser (`Screens/BrowserPorts.swift`, `BrowserView.swift`) | `LivePortSource` | `ports` / `.portsChanged` (HTTP first, process and pane); a new HTTP port on the window's host is offered ("localhost:5173 is up · Open", 15 s); Open → `forward(localPort: <same port>, .tcp)` (any free port when taken here; existing forwards reused) → in-app browser with back/forward/reload/share/Open in Safari; palette lists "Open localhost:N" |
 | Links & paths (`Screens/LinksSheet.swift`) | `LiveLinkSource` | `links(paneId:commands: 20)` (screen + the last 20 commands' output, paths resolved, missing ones dimmed); a path opens in VS Code at its line, a URL in the in-app browser (localhost through a forward); local panes: URLs and paths scanned from the visible text |
 | Palette | `PaletteCommands` | Copy Last Command Output (`commandOutput`, the output without the prompt), Open in VS Code, Dev Servers & Ports, Open localhost:N |
 | Scrollback search | `WindowModel.searchTotal` | the total over the whole scrollback from the daemon's `search` (debounced 180 ms); stepping through matches needs the renderer's highlights (not wired) |
 | Acknowledgements | `SettingsView` | VS Code licence, VS Code Server licence, Microsoft privacy statement (`vscodeLicenseUrl()` …) |
 
-Real host (Hetzner x86_64, 2026-10-19, iPad simulator, relays on): pair → connected 100 ms →
+Remote Linux host (x86_64, iPad simulator, relays on): pair → connected 100 ms →
 first paint 391 ms → `openEditor` (the `code` CLI installed from Microsoft in that call,
 `installedCli: true`, VS Code itself, no fallback) ready 1066 ms after Open → workbench loaded
-The 10–15 s first run of DAEMON.md §5.3 is a host without a cached VS Code server; this host
-(`*-editor-first-run-*` is the `-mock` first-run state).
+1418 ms after Open; no prompt, no sign-in.
+The 10-15 s first run of DAEMON.md §5.3 is a host without a cached VS Code server; this host
+already had `~/.vscode-server`.
 
+Gaps: VS Code's own light theme opens in a dark app (the workbench follows its own settings);
 a turn that goes blocked → (approved) → idle gets no `AgentDone` attention item from
 the daemon (DAEMON.md §5.8), so that row says "Waiting for your next prompt" without the agent's
 last message; scrollback search shows the daemon's total but cannot step through matches;
@@ -282,7 +282,7 @@ uploads take files from the Files picker and drops (no Photos picker); "Open in 
 forwarded localhost page works only while the app keeps the forward (iOS suspends it in the
 background); local (non-daemon) windows have no Files/Diff/Editor (they say so).
 
-
+## 11. Multiplayer (DAEMON.md §6)
 
 `DaemonConnection.multiplayer: MultiplayerSession` (HostKit, `@MainActor @Observable`) follows
 the connection's `MultiplayerListener` pushes in order (an `AsyncStream` pumped on the main
@@ -332,6 +332,7 @@ revoke records), `MultiplayerUITests` via `apple/scripts/multiplayer-ui-test.sh`
 guest joined through the `gudo` CLI: presence, invite + QR, grants, revoke, audit; the script
 then checks the guest's `gudo who --watch` was disconnected).
 
+## 12. Notifications (docs/PUSH.md)
 
 `NotifyKit` (package, no core): categories `AGENT_APPROVAL` (Approve / Deny with
 `.authenticationRequired`, Deny destructive, Open foreground), `AGENT_BLOCKED`, `AGENT_DONE`,
@@ -452,14 +453,14 @@ records the machine and renames a placeholder to `MachineName.display(hostname)`
 `ubuntu-32gb-hel1-2.example.com` → `ubuntu-32gb-hel1-2`; nothing for empty or `localhost`), once
 (source becomes `machine`). Records saved before this have no source: names that look like the
 app's ("Host …", "test daemon…", the SSH address without an alias) count as placeholders, any
-other name as the user's. The test hooks no longer name hosts "test daemon" (`-testTicketNames`
+other name as the user's. The test hooks do not name hosts "test daemon" (`-testTicketNames`
 still does). Hosts show "Ubuntu 24.04.1 LTS · x86_64" as their status line when idle.
 
 Tests: `HelperVersionTests` (the rules, the manifest, machine names, placeholders, renaming once,
 user names kept, advice following the connection, incompatible words) and
 `HelperUpdateIntegrationTests` (a real local daemon installed as a copy: named after this Mac,
 `.update` over the connection, `updateHelper` → restarted in place, layout and typing back;
-about 2.5–3 s). Daemon side: `cargo test -p daemon --test it upgrade`.
+about 2.5-3 s). Daemon side: `cargo test -p daemon --test it upgrade`.
 
 Gaps: no release signing key (hash plus a run of the new build is the check); the SSH path has only
 been exercised by the existing bootstrap tests, not by an update of a paired host; macOS hosts get
@@ -494,6 +495,7 @@ Tests: `AskpassSessionTests`, `AskpassCopyTests` (HostKit), `SecretEntryTests` (
 `AskpassUITests` against a local daemon (`apple/scripts/askpass-ui-test.sh`): `$SSH_ASKPASS`
 answered in the card, Cancel, and the chip at a `stty -echo; read` prompt.
 
+## 16. Agent usage meters
 
 `DaemonWorkspace.usage` holds a host's `AgentUsageReport` while something shows it:
 `beginWatchingUsage()` / `endWatchingUsage()` count viewers (the first sends `usageWatch`, the
@@ -532,7 +534,7 @@ locally, after the daemon's answer remotely; 5 s timeout); a tab closed elsewher
 its neighbour. Tests: `WindowLayoutStoreTests`.
 
 **Panes: a terminal per window, one stream per pane.** Two windows showing one pane each have a
-`Pane` (VT, renderer, view) — a view lives in one window only. The daemon keeps one subscription
+`Pane` (VT, renderer, view): a view lives in one window only. The daemon keeps one subscription
 per pane per connection, so the connection's `PaneRouter` fans each pane's stream out to taps
 (one `DaemonPaneBackend` per window): subscribe with the first, unsubscribe with the last; acks
 go to the tap whose keystroke they answer, hints to all, drawing offsets (`onOutputApplied`) per
@@ -570,7 +572,7 @@ host by id on the same device, else by daemon id, else by SSH address, and opens
 device has not paired: an alert names it and offers Add Host (SSH pre-filled; ticket otherwise).
 This device's own shell is never offered to other devices.
 
-Drawings ride along (2026-10-21): while a pane of the shown tab is in draw mode, or the focused
+Drawings ride along: while a pane of the shown tab is in draw mode, or the focused
 pane is a canvas pane, the payload's `drawing` names it (`artifact`, the `placement` being edited,
 `canvas`) and `pane` is that pane (`Workspace.drawingFocus`, kept by `PaneDrawing`). Continuing
 opens the host and pane, then (`WindowModel.continueDrawing`, retried while the pane connects and
@@ -609,13 +611,14 @@ simulator (`SBChamoisWindowingEnabled`) and runs `WindowsUITests`.
 Limits (need a device or a second device): real Split View / Slide Over and Stage Manager drags
 (UI tests narrow the window with the debug width and rotate the iPhone instead); a real external
 display (`xcrun simctl` cannot attach one; `ExternalDisplayTests` checks the scene configuration, the mirrored tab and the font scale); Handoff between
+two devices needs both signed by the same team (a free Personal Team works for one person's own
 devices, same Apple Account, Bluetooth and Wi-Fi on; ad-hoc "-" signed Mac builds have no team
 and cannot hand off); a daemon host continued on another device opens that device's attached
 session, so the tab and pane are found only when both attach the same session (else the host
 shows on its active tab). Drawing placements are routed per pane id by `DrawingHub`, so with a
 pane in two windows only the newest window's controller gets placement updates (drawing owner).
 
-Test status (2026-10-19, after merging main 8cf7810): `WindowsUITests` passes Handoff contents,
+Test status: `WindowsUITests` passes Handoff contents,
 both continuation cases, one-model-per-window + `-mock -screen splits`, and the iPhone rotation
 (compact ↔ regular, same pane, no overlay). Two iPad cases are open harness gaps:
 `testTwoWindowsOnOneHostTypeIndependently` opens the second window with ⌘N, follows the same
@@ -629,6 +632,7 @@ the keyboard), which the content check trips on. The same behaviours are covered
 `WindowsTests` and `WindowLayoutStoreTests`. Also seen: right after the system's "Open in…?"
 confirmation, focus can move to a tab's first pane (pre-existing focus restoration, not fixed).
 
+## 18. Command marks (OSC 133)
 
 Every daemon pane gets a `PaneCommandMarks` (App/Sources/Panes), attached next to `PaneDrawing`:
 
@@ -683,6 +687,7 @@ tab: id)`), so ⌘1…⌘9, ⇧⌘[ ], Go to Tab and focus restore treat them li
 shows them under **Mixed** at the window's top, each row naming its hosts with their glyphs (the
 link's state glyph while a host is down); the strip and the iPhone switcher list them too.
 
+**Decisions.**
 - *Where a host's panes live.* Each host's panes in a mixed tab live in one tab on that host, its
   **carrier**. The host layout stays the truth for pane lifetime: other windows and devices see
   the carrier as a plain tab (with the host's own arrangement of its panes); this window hides it
@@ -725,6 +730,7 @@ panes is forgotten rather than trusted (pane ids a restarted daemon reuses can s
 for the old ones; daemons do not keep sessions across restarts today, so this needs a session
 generation from the daemon to close fully).
 
+**Two Columns** (View ▸ Two Columns, the toolbar's Pane menu, the palette).
 Two tabs side by side, each column its own tab (any host, or a mixed tab), a 1 pt divider and a
 26 pt header per column. The current tab's column takes the keyboard; the other is dimmed like an
 unfocused split. Columns stay put: a tab picked in the sidebar replaces the current column's,
@@ -737,13 +743,13 @@ its fold. Never in compact width.
 Tests: `CompositeTabTests` (PaneLayout: tree mapping, split with host, ⌘D on a leaf, close,
 answers, strays, host down, dissolve, timeout, close tab, round trip), `HostGroupsTests.
 mixedTabsLeadAndHideTheirCarriers`, `FoldTests` (§24),
-`MixedTabsUITests` (iPad: `apple/scripts/mixed-ui-test.sh` starts two daemons on 47421/47422 —
+`MixedTabsUITests` (iPad: `apple/scripts/mixed-ui-test.sh` starts two daemons on 47421/47422:
 split with host, type in both, ⌘D/⌘W on beta, relaunch restores, kill alpha and beta keeps
 working; Two Columns with this iPad's echo shell).
 
 ## 20. VS Code editor panes
 
-editor was one full-window cover per window. It is now a pane kind of the split tree, like a canvas
+The editor is a pane kind of the split tree, like a canvas
 pane, but owned by the window rather than any host: any number of editors at once, on different
 folders, worktrees and hosts, in tabs of their own or beside terminals.
 
@@ -800,8 +806,8 @@ still holds its session. So:
 - The server: Microsoft's server is run directly with a 48 h reconnection grace and no idle stop
   while a workbench may come back (DAEMON.md §5.3), where serve-web ended sessions after its own
   hour-long idle stop or any VS Code update.
-- When the page cannot go on anyway — its web content process ended, or VS Code shows "Cannot
-  reconnect" (a user script watches its dialogs) — the pane recovers by itself: the last snapshot
+- When the page cannot go on anyway: its web content process ended, or VS Code shows "Cannot
+  reconnect" (a user script watches its dialogs): the pane recovers by itself: the last snapshot
   under "Resuming VS Code", the source opened again (a new session when the server was replaced),
   the page loaded again (`EditorPane.recover`).
 
@@ -809,9 +815,9 @@ still holds its session. So:
 it, so it passes the editor like ⌘W), the editor bar's Full Screen button, or the palette show the
 focused editor alone: no sidebar, tab strip, toolbar, editor bar or status bar, the workbench edge
 to edge (`WindowModel.isEditorFullScreen`, `FullScreenEditorView`; on iPhone the tab bar goes too).
-The way back never takes a key from VS Code (Escape is its): ⌃⌘F again, or the top edge — a pointer
-resting there or a tap brings up a glass Exit Full Screen button for three seconds. Full screen
-belongs to that editor while it has the focus: ⌘1–⌘9 or Return to Terminal leave it. On the Mac the
+The way back never takes a key from VS Code (Escape is its): ⌃⌘F again, or the top edge (a pointer
+resting there or a tap brings up a glass Exit Full Screen button for three seconds). Full screen
+belongs to that editor while it has the focus: ⌘1-⌘9 or Return to Terminal leave it. On the Mac the
 window enters native full screen with it (and leaves it, if it entered it).
 
 **Daemon.** `EditorLaunch` runs one server per folder with its own random connection token, reused
@@ -827,7 +833,7 @@ every key is VS Code's: the menu commands are disabled (as for the old cover) ex
 `WorkspaceAction.passesEditor`, and the Mac's shortcut monitor stands aside unless the key is one of
 those. On the iPad the web view's container answers those keys itself from the responder chain
 (`EditorWebHost`, as a terminal answers the app's shortcuts). What stays the app's, and why:
-- **⌘1–⌘9** (select tab / last tab): the way to any other tab. VS Code's own ⌘1–⌘8 only focus editor
+- **⌘1-⌘9** (select tab / last tab): the way to any other tab. VS Code's own ⌘1-⌘8 only focus editor
   groups (a browser takes them for its tabs in vscode.dev too).
 - **⌘W** closes the editor pane, as it closes vscode.dev's tab in a browser. Nothing is lost: the
   server keeps running and VS Code keeps unsaved changes (hot exit). The system's Close Window
@@ -934,7 +940,7 @@ events per session.
 rrweb runs in its own content world (`gudo-replay`), in every frame, idle until the app
 answers its hello with "record". An isolated world sees the same DOM (mutation observers, input
 and scroll events), and the page sees nothing: no globals, no message handler in its world, no
-patched prototypes. What it misses — style rules a page inserts through the CSSOM later — comes
+patched prototypes. What it misses, style rules a page inserts through the CSSOM later, comes
 back with a fresh full snapshot after actions (at most every 10 s). Frames from other origins
 record themselves; their world's own `parent` sends their events to the app, which hands them
 to the top frame's rrweb (its `message` listener is taken, never added to the page), so a page
@@ -951,7 +957,7 @@ session opens in place over the Replays list with a back button in the tool's ba
 browses in place: a push from a leaf would land in the window's navigation); an iOS sheet pushes.
 
 Sharing: a `.gudoreplay` file (exported type `<bundle prefix>.gudoreplay`, opened by the app) is one
-JSON document — `session` (the actions), `events` (rrweb) and `keyframes` (base64 JPEGs) — the
+JSON document, `session` (the actions), `events` (rrweb) and `keyframes` (base64 JPEGs), the
 same bytes for the same session. Export as Playwright Test (`ReplayPlaywright`) writes a
 TypeScript test: `page.goto`, then each step on its recorded locator (`getByRole(…).click()`,
 `.fill()`, `.check()`, `.selectOption()`, `keyboard.press`, `mouse.wheel`); without a locator it
@@ -989,7 +995,7 @@ settings in a folder of the App Group container, the tickets, this device's key 
 token in the shared Keychain group. `FilesLocations` publishes them whenever the hosts or the
 relay settings change and adds, renames and removes the domains to match (`DomainPlan`).
 
-Everything else is `FilesProviderKit` over the daemon's file RPCs (DAEMON.md §5.6–5.7):
+Everything else is `FilesProviderKit` over the daemon's file RPCs (DAEMON.md §5.6-5.7):
 - **Identity.** The daemon has no file ids that survive its own writes (an upload is a new
   inode), and Files wants an item to keep its identifier through renames, so identifiers are
   minted per path and saved (`ItemIdentifiers`): a rename or move made in Files keeps them, for
@@ -1023,8 +1029,8 @@ the extension, browse, create, edit, rename, fetch, delete).
 
 ## 23. Projects (tab groups across hosts) and sidebar reordering
 
-workspace groups, Arc folders, Safari and Chrome tab groups, the iOS "drop onto an app to make a
-folder").
+All the terminals of one app in one place, whatever host they run on (like Safari's tab groups,
+or the iOS "drop onto an app to make a folder").
 
 **Model.** A project is a named, coloured group of tabs: `ProjectInfo` (id, name, colour index,
 order, updated) and per tab a `Membership` (project id, rank). Any tab can join: a daemon tab, a
@@ -1043,8 +1049,7 @@ colour a moment and a collapsed project opens, so the join shows. A host's +, �
 palette's New Tab on Host make loose tabs. Restores never make one either: tab ids of this device
 and of plain-SSH hosts start over each run, so the window keeps their memberships only within the
 run that made them (`ProjectsState.launch`), and a plain-SSH host closed in the window drops
-them (its next connection numbers tabs afresh). Before, a relaunch's first two terminals took the
-ids of an earlier run's grouped tabs and appeared as a project of their own.
+them (its next connection numbers tabs afresh).
 
 **Names.** The repository root the tabs share (the daemon's repositories; on the Mac a `.git`
 above a local tab's folder), else their folder, else "New Project" (`ProjectNaming`). Home and
@@ -1146,6 +1151,7 @@ DAEMON.md.
 
 ## 24. Foldable (iPhone Duo)
 
+The design is in DESIGN.md "Foldable".
 
 ### Reading the fold
 
@@ -1279,6 +1285,7 @@ DEBUG only; the simulator folds only by hand in Device Hub.
 
 ## 25. Tab history: what a window opens with, recently closed tabs, idle tabs, multi-select
 
+Tabs behave like a browser's. Models in HostKit `TabHistory.swift`
 (pure, unit-tested), window actions in `Model/TabHistoryActions.swift`, views in
 `Views/TabHistoryViews.swift`.
 
@@ -1363,6 +1370,7 @@ captured by the in-process snapshots; the palette list shows the same entries.
 
 ## 26. Instant start: the saved workspace before the host answers
 
+Opening the app must show the workspace as it was left, at once, never an
 empty window waiting for the host (ARCHITECTURE.md §4 "Resume", §5 "Never a blank screen").
 
 **What is saved, per daemon host** (`CachedWorkspace`, HostKit `WorkspaceCache.swift`): the layout

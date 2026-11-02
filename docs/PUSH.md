@@ -3,6 +3,7 @@
 ARCHITECTURE D16: no accounts. One Cloudflare Worker (the **push relay**,
 `services/push-relay/`) holds the APNs key and forwards **end-to-end sealed** payloads. The
 relay learns an APNs token (inside a capability it issued itself), ciphertext, timing and a
+coarse category; Apple learns the same minus the category.
 
 ```
  app ──(1) POST /v1/register {apns token, env, daemon id}──▶ relay ──▶ {cap}
@@ -116,6 +117,7 @@ the device's iroh key from the Keychain, the host's ticket, and calls
 `client_core::push::send_action(_blocking)`: dial (direct addresses and relay from the
 ticket), `Hello` with the device grant, `PushAction { token, approve, sig }` where `sig =
 Ed25519(device key, "push-action/v1\0" || token || decision)`, wait for `PushDecided`, close.
+No session is attached; it fits the ~10 s background budget (not yet measured on a device). The daemon
 checks token signature, expiry, that the connection's device is the token's device, and the
 decision signature, then applies the decision as that device (`Decided.decided_by`) and marks
 the item seen everywhere. A second tap gets `Conflict`/`NotFound`; another device's token
@@ -148,7 +150,7 @@ One activity aggregates all agents of all hosts (04 open question 3). Channel:
   (`Opened.activity()`: running / blocked / done counts and a headline per host) using the same
   Keychain group.
 
-Daemon (`crates/daemon/src/notifier/activity.rs`, 2026-10-21): it summarises its agents (working,
+Daemon (`crates/daemon/src/notifier/activity.rs`): it summarises its agents (working,
 needing the user, finished turns nobody has seen, one headline: the first blocker, else the first
 working agent, else the last finished turn) and, after `activity_debounce` (1 s), sends each device:
 
@@ -182,6 +184,7 @@ finished, end, gone token, dismissal), the ignored `local_dev_relay_live_activit
 `NotifyKitTests.AgentsActivityTests` (shared vector, merging), `HostKitTests.PushRegistrationTests`.
 
 Remaining (paid account): real push-to-start and update tokens and delivery on a device, the
+widget decrypting on a locked phone, and latency and budget measurements.
 
 ## 7. Local development (no Apple account)
 
@@ -199,7 +202,7 @@ The fake APNs checks request shape, answers 410 for tokens starting with `dead` 
 `busy`. A real daemon uses it with `[push] relay = "http://127.0.0.1:8787"`. `wrangler dev`
 does not speak HTTP/2 to Apple; only the deployed Worker talks to real APNs.
 
-## 8. Owner: deploy (needs Cloudflare + the paid Apple Developer account)
+## 8. Deploy (needs Cloudflare + the paid Apple Developer account)
 
 Apple (developer.apple.com):
 
@@ -236,7 +239,7 @@ Cloudflare:
 8. Debug builds get sandbox tokens: the app must send `"env": "sandbox"` for Development
    builds and `"production"` for TestFlight/App Store.
 
-App side (2026-10-19, docs/APP-ARCHITECTURE.md §12): the `NotificationService` extension
+App side (docs/APP-ARCHITECTURE.md §12): the `NotificationService` extension
 (`NotifyKit.ServiceExtensionCore` over `PushContent.decrypt`, paired daemons and the sealing key
 from the shared app group / Keychain group), the four categories with Approve / Deny / Open,
 the action handler (`NotificationActionHandler`: local notifications → signed `decide`,
@@ -279,4 +282,5 @@ free account; APNs registration activates only with `PUSH_ENTITLEMENT = YES` and
   docs/security/services.md.
 - The relay sees the client IP at registration and daemon IPs on push; it does not log them
   (no invocation logs, no `console.log`).
+- Quiet hours, per-host mute and a webhook sink for self-hosters (ntfy)
   are not built.

@@ -1,5 +1,6 @@
 import XCTest
 
+/// The app's browser for a host, on the shared daemon fixtures (apple/scripts/w3-ui-test.sh with
 /// UI_TEST_CLASS=BrowserUITests): a program's sign-in through `BROWSER` opens the system's
 /// sign-in sheet, the provider's callback reaches the program on the host, and the sheet goes
 /// once the program stops waiting. Skipped without a ticket.
@@ -207,7 +208,7 @@ final class BrowserUITests: XCTestCase {
         field.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
     }
 
-    /// The address bar as in Chrome: after a page loads, a tap on the bar takes typing again,
+    /// The address bar: after a page loads, a tap on the bar takes typing again,
     /// shows the full address selected, and Return goes to what was typed; back and forward
     /// walk between the sites; pages are asked for in English.
     func testAddressBarGoesFromSiteToSite() throws {

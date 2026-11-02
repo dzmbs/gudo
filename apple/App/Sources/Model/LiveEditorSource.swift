@@ -7,8 +7,8 @@ import GudoCore
 
 private let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app", category: "editor")
 
-/// VS Code for one folder on one host: an editor pane's (`pinned`, docs/APP-ARCHITECTURE.md
-/// §20), or the window's focused pane's folder when nothing is pinned (tests).
+/// VS Code for one folder on one host: an editor pane's (`pinned`), or the window's focused
+/// pane's folder when nothing is pinned (tests).
 ///
 /// - Default: `openEditor` (`code serve-web` on the host, VSCodium where Microsoft's CLI cannot
 ///   run) over a local forward; one session per host and folder, reused when reopened. Never a
@@ -261,7 +261,6 @@ final class LiveEditorSource: EditorSource {
         }
     }
 
-    /// Follows the host's tunnel pushes (device code, running, failed).
     private func follow(_ hub: DaemonWorkspace, host: String) {
         if let tunnel, tunnel.hostId == host {
             self.tunnel?.opened = false
@@ -375,7 +374,7 @@ final class LiveEditorSource: EditorSource {
         } onChange: { [weak self, weak daemon] in
             Task { @MainActor [weak self, weak daemon] in
                 guard let self, let daemon, self.watching == watch, self.mode == .server else { return }
-                if let now = daemon.epoch, let epoch, now != epoch {
+                if let latest = daemon.epoch, let epoch, latest != epoch {
                     self.serverLost?("the host's helper restarted")
                 } else {
                     self.follow(daemon, epoch: epoch ?? daemon.epoch, watch: watch)

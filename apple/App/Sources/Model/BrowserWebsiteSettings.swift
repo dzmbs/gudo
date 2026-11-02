@@ -3,14 +3,12 @@ import SwiftUI
 import UIKit
 #endif
 
-/// The language pages are asked for (Settings ▸ Browser ▸ Language for Websites): sent as
-/// `Accept-Language` on the page's own navigations, since WebKit otherwise derives it from the
-/// device and sites then guess from the network's country. Empty is the system's.
+/// Sent as `Accept-Language`, since WebKit otherwise derives it from the device and sites then
+/// guess from the network's country. Empty is the system's.
 nonisolated enum WebsiteLanguage {
     static let key = "browserWebsiteLanguage"
     static let defaultTag = "en-US"
 
-    /// Tags offered, by name in English.
     static let tags = [
         "en-US", "en-GB", "de-DE", "fr-FR", "es-ES", "es-419", "it-IT", "pt-BR", "pt-PT", "nl-NL",
         "sv-SE", "da-DK", "nb-NO", "fi-FI", "pl-PL", "cs-CZ", "hu-HU", "ro-RO", "el-GR", "tr-TR",
@@ -37,9 +35,8 @@ nonisolated enum WebsiteLanguage {
     }
 }
 
-/// The country search results are for (Settings ▸ Browser ▸ Search Region). Sites read it from
-/// the network address; only search engines take it as a parameter (Google's `gl`, Bing's `cc`).
-/// Empty is the engine's own guess.
+/// The country search results are for; only search engines take it as a parameter. Empty is the
+/// engine's own guess.
 nonisolated enum SearchRegion {
     static let key = "browserSearchRegion"
 
@@ -57,12 +54,11 @@ nonisolated enum SearchRegion {
     }
 }
 
-/// Whether pages take the terminal theme's light or dark appearance (`prefers-color-scheme`)
-/// or the device's (Settings ▸ Browser ▸ Websites Follow Theme Appearance).
+/// Whether pages' `prefers-color-scheme` follows the terminal theme or the device.
 enum WebsiteAppearance {
     static let key = "browserWebsitesFollowTheme"
 
-    /// The device's own appearance: the window's is the theme's.
+    /// The device's appearance; the window's is the theme's.
     @MainActor static var systemScheme: ColorScheme {
         #if os(iOS)
         UIScreen.main.traitCollection.userInterfaceStyle == .dark ? .dark : .light
@@ -72,7 +68,6 @@ enum WebsiteAppearance {
     }
 }
 
-/// What a search URL carries besides the query: the interface language and the result region.
 nonisolated struct SearchLocale: Hashable, Sendable {
     var language = ""
     var region = ""

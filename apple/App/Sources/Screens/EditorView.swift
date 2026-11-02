@@ -8,34 +8,26 @@ import UIKit
 import AppKit
 #endif
 
-/// VS Code in a pane of the split tree (docs/APP-ARCHITECTURE.md §20): the host runs `code
-/// serve-web` for the pane's folder and the workbench loads over a local forward. No sign-in, no
-/// choice of editor — it opens like a terminal does. The first time on a host, Microsoft's
-/// licence terms come up once (the user's own acceptance, kept per host); the first run then
-/// installs VS Code's CLI there, which takes a few seconds, shown as the steps it is, not as a
-/// spinner. A VS Code Remote Tunnel through vscode.dev is the opt-in alternative (More menu, or
-/// when the editor cannot start): it signs in with the user's own account by device code.
-///
-/// The web view belongs to the pane's model (`EditorPane`), not to this view: switching tabs
-/// takes the view away and brings it back without reloading the workbench. While the pane has
-/// the focus every key (⌘P, ⌘⇧P, ⌘F, ⌘D …) goes to VS Code: the app's own shortcuts step aside,
-/// except ⌘1–⌘9, ⌘W and ⌃⌘` (`WorkspaceAction.passesEditor`).
+/// VS Code in a pane: the host runs `code serve-web` for the pane's folder and the workbench
+/// loads over a local forward; a VS Code Remote Tunnel through vscode.dev is the opt-in alternative.
+// Microsoft's licence terms are the user's own acceptance, asked once per host.
+// The web view belongs to `EditorPane`, not to this view, so a tab switch doesn't reload the
+// workbench. While focused, every key goes to VS Code except `WorkspaceAction.passesEditor`.
 struct EditorPaneView: View {
     let pane: EditorPane
-    /// Beside other panes: a slimmer bar, dimmed while another pane has the focus.
+    /// Beside other panes: a slimmer bar, dimmed while unfocused.
     var isSplit = false
     var isFocused = true
     var focus: () -> Void = {}
     var onClose: () -> Void
     /// "Stop Editor on <host>": ends the server there, then closes the pane.
     var onStop: () -> Void
-    /// Mac: opens the folder in desktop VS Code instead (nil when it is not installed).
+    /// Mac: opens the folder in desktop VS Code (nil when it is not installed).
     var openDesktop: (() -> Void)?
     /// A shortcut that leads out of VS Code, pressed while the web view has the keyboard.
     var performShortcut: (WorkspaceAction) -> Void = { _ in }
-    /// Full screen: the workbench alone, without this bar.
     var showsBar = true
-    /// Shows the editor full screen, or back (nil where it cannot be).
+    /// Nil where full screen isn't available.
     var toggleFullScreen: (() -> Void)?
 
     @Environment(\.terminalTheme) private var theme
@@ -145,8 +137,7 @@ struct EditorPaneView: View {
         .accessibilityIdentifier("editor-pane-\(pane.member.folderName)")
     }
 
-    /// The licence sheet comes up in the focused pane (two editors waiting on it never ask at
-    /// once; tapping the other brings its turn).
+    // Only the focused pane shows it, so two editors waiting on the licence never ask at once.
     private var licenceShown: Binding<Bool> {
         Binding(get: { isFocused && source.phase == .needsLicence }, set: { _ in })
     }
@@ -158,7 +149,7 @@ struct EditorPaneView: View {
         }, set: { _ in })
     }
 
-    /// A suspended editor coming back: its last picture, then the workbench.
+    /// A suspended editor coming back: its last snapshot until the workbench loads.
     @ViewBuilder private var resuming: some View {
         ZStack {
             theme.background
@@ -193,8 +184,6 @@ struct EditorPaneView: View {
         #endif
     }
 
-    /// The pane's strip on the terminal background: close, where, reload, more. 36 pt alone in
-    /// its tab, a pane header's 24 pt beside other panes.
     private var bar: some View {
         HStack(spacing: isSplit ? DS.Space.xs + 2 : DS.Space.s) {
             Button("Close Editor", systemImage: "xmark", action: onClose)
@@ -259,9 +248,7 @@ struct EditorPaneView: View {
     }
 }
 
-/// The wait for the editor as steps: install (first run only), start, open; each with its
-/// state and the seconds it has taken. Failures say why and offer Try Again (and the Remote
-/// Tunnel, when the default path is the one that failed).
+/// The wait for the editor as steps with elapsed seconds, or the failure with Try Again.
 private struct EditorProgress: View {
     let phase: EditorPhase
     let mode: EditorMode
@@ -437,9 +424,7 @@ private struct EditorProgress: View {
     }
 }
 
-
-/// An editor leaf of a split tree: the window's pane for it, closed and focused through the
-/// window.
+/// An editor leaf of a split tree, wired to the window.
 struct EditorLeafView: View {
     let member: EditorMember
     let isSplit: Bool
@@ -493,11 +478,10 @@ private enum EditorPasteboard {
     }
 }
 
-/// An editor pane's web view in SwiftUI. On iPad its container answers the shortcuts that lead
-/// out of VS Code (`WorkspaceAction.passesEditor`: ⌘1–⌘9, ⌘W, ⌃⌘`) from the responder chain, as
-/// a terminal answers the app's shortcuts itself: the system's own ⌘W (Close Window) in the main
-/// menu would otherwise win over the app's menu item while the web view has the keyboard. The
-/// Mac's shortcut monitor (`WorkspaceShortcuts`) does the same there.
+/// An editor pane's web view in SwiftUI.
+// On iPad the container answers `WorkspaceAction.passesEditor` shortcuts from the responder chain:
+// otherwise the system's ⌘W (Close Window) wins over the app's menu item while the web view has
+// the keyboard. On the Mac, `WorkspaceShortcuts` does the same.
 struct EditorWebHost: View {
     let webView: WKWebView
     var perform: (WorkspaceAction) -> Void
@@ -546,10 +530,10 @@ struct EditorWebHost: View {
     }
     #endif
 
-    /// Holds the editor's one web view. Several containers can exist for it at once (full
-    /// screen and back, a tab switch mid-transition): the newest one shows it, and one on its way
-    /// out never takes it back, or the editor would show nothing. A container leaving the window
-    /// hands it to one still there.
+    /// Holds the editor's one web view.
+    // Several containers can exist for it at once (full screen and back, a tab switch
+    // mid-transition): the newest shows it, one on its way out never takes it back, and one
+    // leaving the window hands it to one still there.
     final class Container: PlatformView {
         private static let owners = NSMapTable<WKWebView, Container>.weakToWeakObjects()
         private static let holders = NSMapTable<WKWebView, NSHashTable<Container>>.weakToStrongObjects()
@@ -557,19 +541,17 @@ struct EditorWebHost: View {
 
         static func owner(of webView: WKWebView) -> Container? { owners.object(forKey: webView) }
 
-        /// Becomes the one that shows `webView`.
         func claim(_ webView: WKWebView) {
             if self.webView !== webView {
                 self.webView = webView
-                let set = Self.holders.object(forKey: webView) ?? .weakObjects()
-                set.add(self)
-                Self.holders.setObject(set, forKey: webView)
+                let containers = Self.holders.object(forKey: webView) ?? .weakObjects()
+                containers.add(self)
+                Self.holders.setObject(containers, forKey: webView)
             }
             Self.owners.setObject(self, forKey: webView)
             attach(webView)
         }
 
-        /// Shows `webView` if this container is its owner (else it is another's now).
         func show(_ webView: WKWebView) {
             if self.webView !== webView || Self.owner(of: webView) == nil {
                 claim(webView)
@@ -591,8 +573,7 @@ struct EditorWebHost: View {
             report()
         }
 
-        /// Tells the pane whether its web view is on screen, in whichever container holds it
-        /// (a move resigns the keyboard: a focused pane takes it back then).
+        // A move resigns the keyboard, so the pane needs to hear when it is back on screen.
         var onShown: ((Bool) -> Void)?
 
         private func report() {
@@ -618,7 +599,6 @@ struct EditorWebHost: View {
             guard let webView else { return }
             defer { report() }
             if window != nil {
-                // Back on screen with no owner on screen: show it here.
                 if Self.owner(of: webView)?.window == nil { claim(webView) }
             } else if Self.owner(of: webView) === self,
                       let other = Self.holders.object(forKey: webView)?.allObjects.first(where: { $0 !== self && $0.window != nil }) {

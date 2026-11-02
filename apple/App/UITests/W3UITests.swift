@@ -423,7 +423,7 @@ final class W3UITests: XCTestCase {
         app.typeKey("c", modifierFlags: .control)
     }
 
-    /// S-BR1: a dev server opens at exactly the URL it printed (`http://web.localhost:48311`,
+    /// A dev server opens at exactly the URL it printed (`http://web.localhost:48311`,
     /// `http://localhost:48312`), through the host's proxy: the page's `location.origin` is that
     /// URL's, its cookie reaches the server and a websocket (HMR) echoes. `browser-routed` counts
     /// the connections the app sent to the host, so a direct load (same Mac) cannot pass for it.

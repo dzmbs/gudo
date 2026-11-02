@@ -134,8 +134,8 @@ final class BrowserReplayTests: XCTestCase {
     }
 
     func testPlaywrightFallbacksWithoutLocators() {
-        var s = ReplaySession(started: start, title: "It's here")
-        s.actions = [
+        var replay = ReplaySession(started: start, title: "It's here")
+        replay.actions = [
             action(0, "browser_click", ["target": ["type": "ref", "ref": "ref_4"]], role: "link", name: "Docs", nth: 1),
             action(1, "browser_click", ["target": ["type": "coordinate", "x": 120, "y": 340]]),
             action(2, "browser_hover", ["target": ["type": "ref", "ref": "ref_9"]], ref: "ref_9"),
@@ -146,7 +146,7 @@ final class BrowserReplayTests: XCTestCase {
             action(7, "browser_scroll", ["direction": "down", "amount": 2]),
             action(8, "browser_navigate", ["url": "back"], verdict: "did not load"),
         ]
-        let lines = ReplayPlaywright.test(for: s).split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        let lines = ReplayPlaywright.test(for: replay).split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
         XCTAssertTrue(lines.contains("test('It\\'s here', async ({ page }) => {"))
         XCTAssertEqual(lines.filter { $0.hasPrefix("await page.goto") }, ["await page.goto('https://shop.test/');"], "starts where the agent was")
         XCTAssertTrue(lines.contains("await page.getByRole('link', { name: 'Docs', exact: true }).nth(1).click(); // from the element's role and name (no locator was recorded)"))

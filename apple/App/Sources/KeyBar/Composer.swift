@@ -1,15 +1,12 @@
 #if os(iOS)
 import UIKit
 
-/// The agent composer (04-mobile-ux C5): a multi-line native text view above the key row. Return
-/// inserts a newline; the Send button or ⌘↩ submits. It is prose, so autocorrect and dictation stay
-/// on, unlike the terminal itself.
+/// A multi-line text view above the key row for writing to agents. Return inserts a newline; the
+/// Send button or ⌘↩ submits. It is prose, so autocorrect and dictation stay on, unlike the terminal.
 final class ComposerView: UIView, UITextViewDelegate {
-    /// Called with the text on Send / ⌘↩; the composer clears itself afterwards.
+    /// The composer clears itself after calling this.
     var onSubmit: ((String) -> Void)?
-    /// Called when the height the composer wants changes (it grows with its text).
     var onHeightChange: (() -> Void)?
-    /// Called when the user edits or submits the text (to keep the per-pane draft).
     var onTextChange: ((String) -> Void)?
 
     let textView = ComposerTextView()

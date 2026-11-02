@@ -65,8 +65,8 @@ final class WorkspaceUITests: XCTestCase {
     }
 
     /// Resizes a split with ⌃⌘→ and by dragging its divider, then rotates the iPad both ways while
-    /// split: the ratio must survive the rotation and splitting must keep working (a SwiftUI layout
-    /// cycle once crashed here).
+    /// split: the ratio must survive the rotation and splitting must keep working (guards against
+    /// a SwiftUI layout cycle).
     @MainActor
     func testRotationAndDividerResize() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .phone, "splits and dividers are the iPad and Mac layout")
@@ -141,7 +141,7 @@ final class WorkspaceUITests: XCTestCase {
     #endif
 
     #if os(macOS)
-    /// Owner bug: switching from the tab strip to vertical tabs showed no sidebar on macOS.
+    /// Switching from the tab strip to vertical tabs shows the sidebar on macOS.
     @MainActor
     func testSidebarAppearsAfterSwitchingFromTabStrip() throws {
         let app = XCUIApplication()

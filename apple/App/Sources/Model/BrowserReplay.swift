@@ -2,26 +2,19 @@ import Foundation
 import Observation
 import UniformTypeIdentifiers
 
-// Session Replay (docs/APP-ARCHITECTURE.md §21.1): what an agent did on a page, kept on the
-// device. A session is the agent's actions (`BrowserActionEntry`, with a Playwright locator
-// each), the page's rrweb events and one picture per action; it plays back in the Session
-// Replay viewer, travels as one `.gudoreplay` file and exports as a Playwright test.
-
-/// One recorded session: an agent driving one page.
+/// An agent driving one page: its actions, the page's rrweb events and one picture per action.
 nonisolated struct ReplaySession: Codable, Identifiable, Hashable, Sendable {
     var id: UUID
     var started: Date
     var ended: Date
-    /// The page's title at the last action.
     var title: String
-    /// The agent's pane, while it is the same one, and the page (`BrowserPane.id`).
     var hostId: String?
     var paneId: UInt64?
     var page: UUID?
     var actions: [ReplayAction] = []
-    /// Opened from a file: its page loads nothing from the network when it plays.
+    /// Opened from a file, so playback loads nothing from the network.
     var imported = false
-    /// Events stopped at the session's size cap; the actions go on.
+    /// Events stopped at the size cap; actions go on.
     var truncated = false
 
     var startURL: String? { actions.first?.urlBefore ?? actions.first?.urlAfter }
@@ -42,39 +35,36 @@ nonisolated struct ReplaySession: Codable, Identifiable, Hashable, Sendable {
     }
 
     init(from decoder: any Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = try c.decode(UUID.self, forKey: .id)
-        started = try c.decode(Date.self, forKey: .started)
-        ended = try c.decode(Date.self, forKey: .ended)
-        title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
-        hostId = try c.decodeIfPresent(String.self, forKey: .hostId)
-        paneId = try c.decodeIfPresent(UInt64.self, forKey: .paneId)
-        page = try c.decodeIfPresent(UUID.self, forKey: .page)
-        actions = try c.decodeIfPresent([ReplayAction].self, forKey: .actions) ?? []
-        imported = try c.decodeIfPresent(Bool.self, forKey: .imported) ?? false
-        truncated = try c.decodeIfPresent(Bool.self, forKey: .truncated) ?? false
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        started = try container.decode(Date.self, forKey: .started)
+        ended = try container.decode(Date.self, forKey: .ended)
+        title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
+        hostId = try container.decodeIfPresent(String.self, forKey: .hostId)
+        paneId = try container.decodeIfPresent(UInt64.self, forKey: .paneId)
+        page = try container.decodeIfPresent(UUID.self, forKey: .page)
+        actions = try container.decodeIfPresent([ReplayAction].self, forKey: .actions) ?? []
+        imported = try container.decodeIfPresent(Bool.self, forKey: .imported) ?? false
+        truncated = try container.decodeIfPresent(Bool.self, forKey: .truncated) ?? false
     }
 }
 
-/// One tool call in a session (`BrowserActionEntry`), with its picture.
 nonisolated struct ReplayAction: Codable, Identifiable, Hashable, Sendable {
     var id: Int
-    /// `browser_click`, …
     var tool: String
     var ref: String?
     var role: String?
     var name: String?
     var nth: Int?
-    /// The tool's arguments, JSON with sorted keys.
+    /// JSON with sorted keys.
     var args: String
     var urlBefore: String?
     var urlAfter: String?
     var time: Date
     var verdict: String
-    /// Playwright's selector and locator for the element, when it had one.
     var selector: String?
     var locator: String?
-    /// The picture after the action (a file of the session).
+    /// File name of the picture after the action.
     var keyframe: String?
 
     var kind: String { tool.hasPrefix("browser_") ? String(tool.dropFirst(8)) : tool }
@@ -83,7 +73,6 @@ nonisolated struct ReplayAction: Codable, Identifiable, Hashable, Sendable {
         (try? JSONSerialization.jsonObject(with: Data(args.utf8))) as? [String: Any] ?? [:]
     }
 
-    /// What it acted on, for the timeline: `button “Pay now”`, a ref, or a point.
     var target: String {
         if let role, let name, !name.isEmpty { return "\(role) “\(name)”" + ((nth ?? 0) > 0 ? " #\((nth ?? 0) + 1)" : "") }
         if let locator { return locator }
@@ -98,11 +87,10 @@ nonisolated struct ReplayAction: Codable, Identifiable, Hashable, Sendable {
         return ""
     }
 
-    /// Whether the action did what it meant to.
     var succeeded: Bool {
-        let v = verdict.lowercased()
-        return !(v.hasPrefix("fail") || v.hasPrefix("nothing") || v.contains("no observable effect") || v.contains("no effect")
-            || v.contains("did not") || v.contains("declined") || v.contains("error"))
+        let text = verdict.lowercased()
+        return !(text.hasPrefix("fail") || text.hasPrefix("nothing") || text.contains("no observable effect") || text.contains("no effect")
+            || text.contains("did not") || text.contains("declined") || text.contains("error"))
     }
 }
 
@@ -115,29 +103,24 @@ extension ReplayAction {
     }
 }
 
-// MARK: - The store
-
-/// Recorded sessions on the device: a folder each (`session.json`, `events.jsonl` with one
-/// rrweb event per line, `k<N>.jpg` pictures), within a total size and an age.
+/// A folder per session (`session.json`, `events.jsonl`, `k<N>.jpg`), within a total size and an age.
 @MainActor
 @Observable
 final class ReplayStore {
     static let shared = ReplayStore(root: AppData.replays)
 
-    /// Settings ▸ Browser ▸ Record Agent Sessions (on by default).
     static let enabledKey = "recordAgentBrowserSessions"
     static var isEnabled: Bool { UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true }
 
     nonisolated static let fileExtension = "gudoreplay"
-    /// The `.gudoreplay` file type (exported in Info.plist).
+    /// Exported in Info.plist.
     nonisolated static let fileType = UTType(exportedAs: (Bundle.main.object(forInfoDictionaryKey: "ReplayTypeIdentifier") as? String) ?? "dev.gudo.gudoreplay", conformingTo: .data)
 
     let root: URL
-    /// All sessions together stay under this many bytes; the oldest go first.
+    /// Total bytes; the oldest sessions go first.
     var capacity: Int
-    /// Sessions older than this go.
     var maxAge: TimeInterval
-    /// One session's events stop growing here (its actions and pictures go on).
+    /// One session's event bytes; its actions and pictures go on.
     var sessionEventCap: Int
 
     /// Newest first.
@@ -157,14 +140,12 @@ final class ReplayStore {
 
     func session(_ id: UUID) -> ReplaySession? { sessions.first { $0.id == id } }
 
-    /// Sessions of an agent's pane, newest first.
     func sessions(hostId: String, paneId: UInt64) -> [ReplaySession] {
         sessions.filter { $0.hostId == hostId && $0.paneId == paneId }
     }
 
     func reload() {
-        let fm = FileManager.default
-        let folders = (try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
+        let folders = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
         sessions = folders.compactMap { folder in
             guard let data = try? Data(contentsOf: folder.appending(path: "session.json")) else { return nil }
             return try? Self.decoder.decode(ReplaySession.self, from: data)
@@ -189,7 +170,7 @@ final class ReplayStore {
         }
     }
 
-    /// Appends rrweb events (one JSON object each). False once the session reached its cap.
+    /// False once the session reached its cap.
     @discardableResult
     func append(events: [String], to id: UUID) -> Bool {
         guard !events.isEmpty else { return true }
@@ -207,7 +188,6 @@ final class ReplayStore {
         return true
     }
 
-    /// Done writing a session's events.
     func close(_ id: UUID) {
         try? handles.removeValue(forKey: id)?.close()
     }
@@ -227,7 +207,6 @@ final class ReplayStore {
         return try? Data(contentsOf: directory(id).appending(path: name))
     }
 
-    /// The session's rrweb events as lines (one JSON object each).
     func eventLines(_ id: UUID) -> [Substring] {
         guard let data = try? Data(contentsOf: directory(id).appending(path: "events.jsonl")) else { return [] }
         return String(decoding: data, as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: true)
@@ -251,7 +230,7 @@ final class ReplayStore {
 
     var totalSize: Int { sessions.reduce(0) { $0 + size($1.id) } }
 
-    /// Drops sessions past their age, then the oldest until all fit (never one being recorded).
+    /// Never deletes a session being recorded.
     func cleanUp(keeping live: Set<UUID> = [], now: Date = .now) {
         for session in sessions where !live.contains(session.id) && now.timeIntervalSince(session.ended) > maxAge {
             delete(session.id)
@@ -265,7 +244,7 @@ final class ReplayStore {
 
     // MARK: `.gudoreplay` files
 
-    /// One file: `{"format":"gudoreplay","version":1,"session":…,"events":[…],"keyframes":{name: base64}}`,
+    /// `{"format":"gudoreplay","version":1,"session":…,"events":[…],"keyframes":{name: base64}}`,
     /// the same bytes for the same session.
     func bundle(_ id: UUID) throws -> Data {
         guard let session = session(id) else { throw CocoaError(.fileNoSuchFile) }
@@ -278,23 +257,23 @@ final class ReplayStore {
         exported.imported = false
         // Which host, pane and page recorded it means nothing on another device.
         (exported.hostId, exported.paneId, exported.page) = (nil, nil, nil)
-        var out = Data(#"{"format":"gudoreplay","version":1,"session":"#.utf8)
-        out += try encoder.encode(exported)
-        out += Data(#","events":["#.utf8)
+        var file = Data(#"{"format":"gudoreplay","version":1,"session":"#.utf8)
+        file += try encoder.encode(exported)
+        file += Data(#","events":["#.utf8)
         for (index, line) in events.enumerated() {
-            if index > 0 { out += Data(",".utf8) }
-            out += Data(line.utf8)
+            if index > 0 { file += Data(",".utf8) }
+            file += Data(line.utf8)
         }
-        out += Data(#"],"keyframes":{"#.utf8)
+        file += Data(#"],"keyframes":{"#.utf8)
         for (index, (name, data)) in keyframes.sorted(by: { $0.0 < $1.0 }).enumerated() {
-            if index > 0 { out += Data(",".utf8) }
-            out += Data("\"\(name)\":\"\(data.base64EncodedString())\"".utf8)
+            if index > 0 { file += Data(",".utf8) }
+            file += Data("\"\(name)\":\"\(data.base64EncodedString())\"".utf8)
         }
-        out += Data("}}".utf8)
-        return out
+        file += Data("}}".utf8)
+        return file
     }
 
-    /// Opens a `.gudoreplay` file as a new session on the device (a session already here opens as is).
+    /// A session already on the device opens as is.
     @discardableResult
     func importBundle(_ data: Data) throws -> ReplaySession {
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],

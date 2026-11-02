@@ -6,7 +6,7 @@ change anything on these paths.
 
 Goal: with nothing changing on screen, cost nothing, whatever the pane count. Under load, the
 focused pane stays smooth and background panes cost little. The slowest Mac to care about is a
-2019–2020 Intel Mac with integrated graphics and 8 GB, or a base M1 with 8 GB. On iPhone,
+2019-2020 Intel Mac with integrated graphics and 8 GB, or a base M1 with 8 GB. On iPhone,
 background panes should cost close to nothing.
 
 ## 1. How it is measured
@@ -24,7 +24,7 @@ directory and `--no-relay`, drives it with `gudo`, and samples the daemon proces
 | `profile.sh <bin> yes\|cat <out>` | `sample(1)` of the daemon under a flood; `busy.sh` with `PROFILE=<file>` samples the busy scenario |
 
 How each metric is taken:
-- **CPU %** is the daemon's CPU time (`ps -o time`) over the window (20–30 s), divided by wall time.
+- **CPU %** is the daemon's CPU time (`ps -o time`) over the window (20-30 s), divided by wall time.
 - **ctx/s** is the change in `top`'s cumulative `CSW` (context switches), divided by wall time. This is the stable
   stand-in for wakeups. `top`'s `IDLEW` swings with the rest of the machine's load, so it is not used.
 - **RSS** is `ps -o rss` at the end of the window.
@@ -55,7 +55,7 @@ polling its terminal modes once a second for 30 s, then stops.
 | 200 | 62.4 MB, 4.5 %, 736 | 61.2 MB, 0.0 %, 11 |
 | 200, one client attached | 63.3 MB, 4.6 %, 736 | 62.3 MB, 0.6 %, 38 |
 
-RSS is the same before and after: an idle pane costs about 0.2–0.3 MB in the daemon (PTY, ring,
+RSS is the same before and after: an idle pane costs about 0.2-0.3 MB in the daemon (PTY, ring,
 libghostty terminal), and that is all memory that is actually used.
 
 Before, every pane paid for itself many times a second, even with no client connected:
@@ -82,7 +82,7 @@ each. A macOS PTY master hands out at most 1 KiB per read, and waiting to batch 
 the writer: measured, a 0.5 ms pause per wake cut `yes` from 77 MB/s to 1.3 MB/s. So every KiB used to cost
 one poll sleep and one wakeup. Ghostty measured the same limit and bridges the gaps instead: after a full read it
 retries the read a few times before sleeping. Doing the same (16 retries) cut the context switches
-spent draining a 64 MB `cat` from 22–44 k to 2–13 k, at equal or lower CPU (0.3–0.8 CPU s either
+spent draining a 64 MB `cat` from 22-44 k to 2-13 k, at equal or lower CPU (0.3-0.8 CPU s either
 way; `drain.sh`, 3 runs each). In the busy run the daemon's context switches fell from 51 k/s to 18 k/s,
 at the same 176 % CPU. In a profile of the busy run, parsing, printing and scrollback page growth inside
 libghostty are most of the active samples. The rest was per-chunk work in the daemon:
@@ -93,8 +93,8 @@ libghostty are most of the active samples. The rest was per-chunk work in the da
 
 | Sessions | Client | Before: RSS, CPU, ctx/s | After: RSS, CPU, ctx/s |
 |---|---|---|---|
-| 5 Claude + 30 idle | none | — | 39 MB, 0.9 %, 369 |
-| 5 Claude + 30 idle | one | — | 41 MB, 2.4 %, 466 |
+| 5 Claude + 30 idle | none | - | 39 MB, 0.9 %, 369 |
+| 5 Claude + 30 idle | one | - | 41 MB, 2.4 %, 466 |
 | 10 Claude + 2 Kimi + 40 idle | none | 52 MB, 4.4 %, 850 | 52 MB, 3.1 %, 900 |
 | 10 Claude + 2 Kimi + 40 idle | one | 54 MB, 4.2 %, 933 | 53 MB, 4.7 %, 985 |
 | 20 Claude + 60 idle | none | 74 MB, 15.1 %, 2.4 k | 72 MB, 5.6 %, 2.0 k |
@@ -105,7 +105,7 @@ the daemon's threads sit in `poll`/`kevent`, and the top Rust frame is the echo-
 samples in 15 s.
 
 The daemon is not the bottleneck for agent work. Twenty concurrent Claude Code sessions cost it
-about 5–11 % of one core, and each agent's own Node process costs far more. Agent panes keep
+about 5-11 % of one core, and each agent's own Node process costs far more. Agent panes keep
 their 500 ms tick on purpose: the state arbiter's timers and agent-exit detection need it. The
 idle panes around them now cost nothing. The variance between runs is large because the agents' pace
 varies.
@@ -156,9 +156,9 @@ Guard: `SharedFontGridTests` checks the grid is shared and freed with its last s
 | The agent `Spinner` was a `TimelineView(.animation)`: every working agent's indicator rebuilt its view on every frame (120 Hz on ProMotion). A SwiftUI repeating animation then still ran on the main thread every frame | A Core Animation rotation on the arc's layer: the render server turns it, the main thread does nothing |
 | The working-title shimmer was a 30 Hz `TimelineView` rebuilding a per-glyph gradient: about 30 % of the main thread in Debug with 10 working titles, and XCUITest never saw the app idle (60 s stalls) | A gradient layer slid by Core Animation, masked by the text; same band, same phase. A sidebar of 12 working rows woke the main run loop 8299 times in 1 s before, under 15 after (`LayerAnimationTests`) |
 | The daemon re-sent a pane's metadata on every title set or agent event, and the app assigned it even when equal, which invalidated every view reading `meta` | Sent and assigned only when it changed |
-| Every terminal's display link asked for 60–120 Hz | 120 Hz only for the focused terminal; others stream output at up to 60 Hz. Every link still pauses when nothing changes. |
+| Every terminal's display link asked for 60-120 Hz | 120 Hz only for the focused terminal; others stream output at up to 60 Hz. Every link still pauses when nothing changes. |
 
-### Instant start (2026-10-31, M5 Max, debug builds; docs/APP-ARCHITECTURE.md §26)
+### Instant start (M5 Max, debug builds; docs/APP-ARCHITECTURE.md §26)
 
 A window opens on the workspace this device saved of each host, before the host answers.
 
@@ -166,10 +166,10 @@ A window opens on the workspace this device saved of each host, before the host 
 |---|---|
 | Saved workspace read, decoded and seeded into its connection (`model.open`, local daemon) | 1.0 ms median of 5 (cache file 1.4 KB, one pane) |
 | …then connected / daemon layout / the focused pane's live screen on it (local daemon, loopback) | 7.1 / 8.4 / 8.1 ms median of 5 (the screen comes before the layout: panes subscribe before attaching) |
-| First frame of a window on the saved workspace, no host connected (seed + window model + 3 panes + layout + draw, in-process offscreen) | 0.37–0.86 s first window of a test process; 0.17–0.36 s warm (three runs, machine shared with other builds) |
-| The same window on this device's plain shell, for comparison | 0.14–0.24 s warm |
+| First frame of a window on the saved workspace, no host connected (seed + window model + 3 panes + layout + draw, in-process offscreen) | 0.37-0.86 s first window of a test process; 0.17-0.36 s warm (three runs, machine shared with other builds) |
+| The same window on this device's plain shell, for comparison | 0.14-0.24 s warm |
 
-So the saved workspace costs about 1 ms to show and 0.03–0.1 s of drawing over an empty window
+So the saved workspace costs about 1 ms to show and 0.03-0.1 s of drawing over an empty window
 (three Metal surfaces and the host's sidebar rows, debug build); the rest is the window itself.
 Before, the window showed "Connecting to This Mac…" until the host's layout arrived. Reproduce:
 `GUDO_HOSTD_BIN=… swift test --filter instantStartShowsTheSavedWorkspaceThenGoesLive` (HostKit) and
@@ -186,7 +186,7 @@ is not launched by agents).
 Daemon:
 - **Floods are bounded by libghostty parsing (inherent).** A cheaper path for panes nobody watches would help:
   parse at a lower rate and coalesce. libghostty has to see every byte to stay correct, so the gain is
-  in batching (fewer, larger writes). Estimate: 10–30 % of flood CPU.
+  in batching (fewer, larger writes). Estimate: 10-30 % of flood CPU.
 - **Agent panes tick at 2 Hz.** Each tick reads the screen text when the screen changed. This could be
   driven by output plus the arbiter's next deadline, for a small gain (about 1 % CPU at 20 agents).
 - **The art tick (1 s) and the iroh endpoint** are the remaining idle wakeups (about 6/s, independent of the pane count).
@@ -195,7 +195,7 @@ App (not measured end to end, because the Mac app is not launched in the foregro
 - **App CPU and RSS with N panes and N agents.** This needs a headless host or an Instruments run by a person. The
   in-process numbers above cover memory per pane only.
 - **Client terminal scrollback.** Each pane keeps a 10 MB scrollback cap. Lowering it on iOS
-  (1–2 MB) and compacting background panes would save up to about 8 MB per busy pane.
+  (1-2 MB) and compacting background panes would save up to about 8 MB per busy pane.
 - **Ghostty-style gather/parse split.** Ghostty reads on one thread and parses 64 KiB batches on
   another, one lock per batch. With bridging in place, our remaining flood cost is parsing itself
   (libghostty, same code). A split would move it off the PTY thread but not shrink it. Worth it only if focused-pane
@@ -223,7 +223,7 @@ What we took, and from where:
   ([DisplayLink.zig](https://github.com/ghostty-org/ghostty/blob/main/src/renderer/DisplayLink.zig)).
   This is why pane ticks, the sampler, the port scan and the multiplayer tick sleep until something happens.
 - **Bridge the 1 KiB macOS PTY reads.** Ghostty: "the kernel tty output queue caps every read on the master at 1 KB";
-  its 8–16 immediate retries catch "over 90 % of the gaps" ([Exec.zig](https://github.com/ghostty-org/ghostty/blob/main/src/termio/Exec.zig)).
+  its 8-16 immediate retries catch "over 90 % of the gaps" ([Exec.zig](https://github.com/ghostty-org/ghostty/blob/main/src/termio/Exec.zig)).
   We adopted the retries alone.
 - **Share glyph atlases.** foot shares fonts and glyph caches across windows in server mode
   ([foot](https://codeberg.org/dnkl/foot)). Zed keeps one long-lived glyph atlas
@@ -249,6 +249,7 @@ Deliberately not adopted, and why:
   and costs nothing when idle.
 - **Buffer-age partial redraw** (Alacritty, [PR #5863](https://github.com/alacritty/alacritty/pull/5863)).
   `CAMetalLayer` exposes no buffer age, and a full instanced redraw of a pane is a fraction of
+  a millisecond.
   Our dirty-row cache already skips rebuilding unchanged rows.
 - **`displaySyncEnabled = false`** ([docs](https://developer.apple.com/documentation/quartzcore/cametallayer/displaysyncenabled)).
   It tears.

@@ -6,14 +6,10 @@ import SwiftUI
 import TerminalRenderer
 import UIKit
 
-/// An external display (docs/APP-ARCHITECTURE.md "Windows"). With Stage Manager, iPadOS gives it
-/// its own windows (ordinary scenes of `WindowGroup`, each a full window with its own layout).
-/// Without Stage Manager the display would mirror the iPad; instead the app gives it a scene of
-/// its own (`UIWindowSceneSessionRoleExternalDisplayNonInteractive`): a full-size window showing
-/// the tab the iPad shows, with its own terminals rendered at the display's scale, while the
-/// keyboard and touch stay on the iPad.
+/// An external display. With Stage Manager, iPadOS gives it ordinary windows. Without it the
+/// display would mirror the iPad; instead the app gives it a non-interactive scene showing the
+/// iPad's tab, rendered at the display's scale, while keyboard and touch stay on the iPad.
 enum ExternalDisplay {
-    /// The scene configuration for an external display's non-interactive role, nil for others.
     static func configuration(for session: UISceneSession) -> UISceneConfiguration? {
         configuration(for: session.role)
     }
@@ -25,17 +21,15 @@ enum ExternalDisplay {
         return configuration
     }
 
-    /// The tab the display shows for the iPad window's: the same, or for a mixed tab (which
-    /// belongs to its window) the focused pane's host tab.
+    /// The iPad window's tab, or for a mixed tab (which belongs to its window) the focused pane's host tab.
     static func mirroredTab(current: TabRef?, activeTab: TabId?, focusedGroup: String) -> TabRef? {
         guard let current else { return nil }
         guard current.hostId == HostGroups.mixedId else { return current }
         return activeTab.map { TabRef(hostId: focusedGroup, tab: $0) }
     }
 
-    /// The font that makes the iPad's grid fill the display: the iPad's size scaled by how much
-    /// larger the display's terminal area is, a hair under so the grid is never a column short.
-    /// Nil until both areas are known.
+    /// The font that makes the iPad's grid fill the display, a hair under so the grid is never a
+    /// column short. Nil until both areas are known.
     static func fontSize(_ source: CGFloat, presenterArea: CGSize, display: CGSize) -> CGFloat? {
         guard presenterArea.width > 0, presenterArea.height > 0, display.width > 0, display.height > 0 else { return nil }
         let scale = min(display.width / presenterArea.width, display.height / presenterArea.height) * 0.99
@@ -43,8 +37,7 @@ enum ExternalDisplay {
     }
 }
 
-/// The external display's window: a `WindowModel` of its own that follows the iPad's active
-/// window (host, tab, focused pane) and draws only the terminal.
+/// A `WindowModel` of its own that follows the iPad's active window and draws only the terminal.
 final class ExternalDisplaySceneDelegate: NSObject, UIWindowSceneDelegate {
     var window: UIWindow?
     private var model: WindowModel?
@@ -72,9 +65,8 @@ final class ExternalDisplaySceneDelegate: NSObject, UIWindowSceneDelegate {
     }
 }
 
-/// The presentation: the iPad window's tab, full size, no chrome. The terminals keep the
-/// pane's grid (the iPad drives the size, it has the keyboard) and scale their font so that
-/// grid fills the display.
+/// The iPad window's tab, full size, no chrome. The terminals keep the pane's grid (the iPad has
+/// the keyboard, so it drives the size) and scale their font so that grid fills the display.
 struct ExternalDisplayRoot: View {
     let model: WindowModel
     @AppStorage(TerminalPreferences.Key.theme) private var themeName = TerminalPreferences.Default.theme
@@ -101,15 +93,12 @@ struct ExternalDisplayRoot: View {
         }
         .background(theme.background.ignoresSafeArea())
         .environment(model)
-        // Chrome-free and all terminal: always the theme's own scheme.
         .chromeTheme(theme)
         .environment(\.horizontalSizeClass, .regular)
         .onGeometryChange(for: CGSize.self, of: { $0.size }) { size = $0 }
         .task { await follow() }
     }
 
-    /// Follows the iPad's active window: the same host, tab and focused pane, and a font that
-    /// fits its terminal area to this display.
     private func follow() async {
         while !Task.isCancelled {
             let presenter = AppModel.shared.openWindows.first { !$0.isPresentation && $0 === ActiveWindow.model }
@@ -126,7 +115,7 @@ struct ExternalDisplayRoot: View {
                 } onChange: {
                     once.run { resume.resume() }
                 }
-                // Also wake up now and then: the active window can change without any of these.
+                // The active window can change without any of these firing.
                 Task {
                     try? await Task.sleep(for: .seconds(1))
                     once.run { resume.resume() }
@@ -136,16 +125,14 @@ struct ExternalDisplayRoot: View {
     }
 
     private func mirror(_ presenter: WindowModel?) {
-        guard let presenter, let ref = ExternalDisplay.mirroredTab(
+        guard let presenter, let tab = ExternalDisplay.mirroredTab(
             current: presenter.currentTab, activeTab: presenter.workspace?.session.activeTabId,
             focusedGroup: presenter.currentGroupId)
         else { return }
         let pane = presenter.workspace?.focusedPane
-        if model.currentTab != ref || model.workspace?.focusedPane != pane {
-            model.select(ref, pane: pane)
+        if model.currentTab != tab || model.workspace?.focusedPane != pane {
+            model.select(tab, pane: pane)
         }
-        // Same grid, bigger cells: scale the iPad's font by how much larger this display's
-        // terminal area is (a hair under, so the grid is never a column short).
         guard let workspace = model.workspace, let source = presenter.workspace,
               let fontSize = ExternalDisplay.fontSize(source.appearance.fontSize, presenterArea: presenter.terminalArea, display: size)
         else { return }
@@ -155,7 +142,7 @@ struct ExternalDisplayRoot: View {
     }
 }
 
-/// Runs a closure once (a continuation resumed by whichever wake-up comes first).
+/// Resumes a continuation once, from whichever wake-up comes first.
 private final class Once: @unchecked Sendable {
     private var done = false
     private let lock = NSLock()

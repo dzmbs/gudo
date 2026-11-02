@@ -4,8 +4,8 @@ import WebKit
 import XCTest
 @testable import App
 
-/// VS Code editors as panes (docs/APP-ARCHITECTURE.md §20): the window's editors, where Open in
-/// VS Code puts one, the keys an editor leaves to the app, and suspending editors off screen.
+/// VS Code editors as panes: the window's editors, where Open in VS Code puts one, the keys an
+/// editor leaves to the app, and suspending editors off screen.
 @MainActor
 final class EditorPanesTests: XCTestCase {
     /// A source that records what the pane asks of it.
@@ -98,7 +98,7 @@ final class EditorPanesTests: XCTestCase {
     }
 
     /// Each host editor keeps its own cookies (its server's `vscode-tkn`): two folders' tokens
-    /// in one store overwrote each other and the servers answered "Forbidden". The tunnel's
+    /// in one store would overwrite each other and the servers answer "Forbidden". The tunnel's
     /// vscode.dev shares the app's store, so one sign-in serves every tunnel editor.
     func testEachHostEditorHasItsOwnDataStoreAndTheTunnelSharesOne() {
         let editors = EditorPanes(suspendAfter: .seconds(600)) { _ in FakeSource() }

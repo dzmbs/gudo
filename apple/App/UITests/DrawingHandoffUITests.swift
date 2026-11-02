@@ -2,7 +2,7 @@
 import XCTest
 
 /// Drawings in the window's Handoff activity and canvas panes in the app, against a real local
-/// `gudo-hostd` (docs/APP-ARCHITECTURE.md "Windows", docs/DAEMON.md §7.2):
+/// `gudo-hostd`:
 ///
 /// - draw mode puts the drawing (artifact, and the placement once one is reopened) into the
 ///   activity, on the drawing's pane; continuing that activity on "another device" (a fresh
@@ -144,9 +144,9 @@ final class DrawingHandoffUITests: XCTestCase {
         XCTAssertNil(open["placement"], "a new drawing has no placement yet")
         XCTAssertEqual(number(handoff(app)["pane"]).map(String.init), probe(app)["pane"], "on the drawing's pane")
         let artifact = try XCTUnwrap(number(open["artifact"]))
-        let rect = app.buttons["drawing.debugRect"]
-        XCTAssertTrue(rect.waitForExistence(timeout: 5))
-        tap(rect)
+        let debugRectangle = app.buttons["drawing.debugRect"]
+        XCTAssertTrue(debugRectangle.waitForExistence(timeout: 5))
+        tap(debugRectangle)
         sleep(1)
 
         // Done: placed, and the activity is back to the terminal alone.

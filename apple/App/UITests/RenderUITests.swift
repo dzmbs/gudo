@@ -3,7 +3,7 @@ import UIKit
 import XCTest
 
 /// The terminal draws its text, not only the cursor, every time it comes up: first launch and
-/// relaunches that restore the host (seen on Hetzner: after a relaunch only the cursor showed).
+/// relaunches that restore the host.
 /// Checks pixels, since the accessibility value comes from the model and stays right either way.
 /// The bug: a remote pane resized by layout while output from the old size was in flight, and
 /// bash's prompt redraw at the wrong size wiped the line (zsh reprints its prompt, hiding it).

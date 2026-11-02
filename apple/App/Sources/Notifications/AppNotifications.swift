@@ -74,10 +74,10 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
 
     /// Subscribes to every daemon connection's workspace pushes, now and as hosts connect.
     private func follow() {
-        var live: Set<String> = []
+        var connectedIds: Set<String> = []
         for (id, connection) in hosts.connections {
             guard let daemon = connection as? DaemonConnection else { continue }
-            live.insert(id)
+            connectedIds.insert(id)
             let identity = ObjectIdentifier(daemon)
             if subscriptions[id]?.connection == identity { continue }
             let token = daemon.workspaceEvents.observe { [weak self, weak daemon] event in
@@ -99,7 +99,7 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
             }
             subscriptions[id] = (identity, token)
         }
-        for id in subscriptions.keys where !live.contains(id) { subscriptions[id] = nil }
+        for id in subscriptions.keys where !connectedIds.contains(id) { subscriptions[id] = nil }
         withObservationTracking {
             _ = hosts.connections.keys.sorted()
         } onChange: {
@@ -328,7 +328,7 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
         let store = SharedPushStore(bundle: .main)
         if let key = try? hosts.pushSealKey() { store.setSealKey(key.secret) }
         store.setPairedDaemons(hosts.pairedDaemonIds)
-        let prefs = PushPrefs(approvals: prefs.approvals, blocked: prefs.blocked, done: prefs.done, failed: prefs.failed, commands: prefs.commands)
+        let pushPrefs = PushPrefs(approvals: prefs.approvals, blocked: prefs.blocked, done: prefs.done, failed: prefs.failed, commands: prefs.commands)
         #if os(iOS)
         let activityStart = AgentsLiveActivity.shared.startToken
         #else
@@ -337,7 +337,7 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
         for (id, connection) in hosts.connections where connection is DaemonConnection && hosts.record(id)?.isGuest == false {
             do {
                 _ = try await hosts.registerPush(
-                    hostId: id, apnsToken: token, environment: Self.apnsEnvironment, prefs: prefs, activityStartToken: activityStart)
+                    hostId: id, apnsToken: token, environment: Self.apnsEnvironment, prefs: pushPrefs, activityStartToken: activityStart)
             } catch {
                 Self.log.error("push registration host=\(id, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }

@@ -1,8 +1,6 @@
 import DesignSystem
 import SwiftUI
 
-/// Settings ▸ Git: how Merge PR merges, when hosts delete merged worktrees, and the global
-/// scripts (repository scripts live in the repository's `.<product>.json`).
 struct GitSettingsSection: View {
     @AppStorage(GitSettings.mergeStrategyKey) private var strategy = "merge"
     @AppStorage(GitSettings.autoDeleteDaysKey) private var autoDeleteDays = 7
@@ -77,7 +75,6 @@ struct GitSettingsSection: View {
     }
 }
 
-/// Name, command, symbol and tint of one global script.
 private struct ScriptEditor: View {
     @State var script: ScriptDef
     let save: (ScriptDef) -> Void

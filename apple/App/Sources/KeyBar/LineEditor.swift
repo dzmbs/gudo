@@ -4,10 +4,11 @@ import SwiftUI
 import UIKit
 import GudoCore
 
-/// §2.4–2.6). While the daemon reports the pane at a prompt, typing goes into a native text field
-/// (caret, loupe, selection, dictation, Scribble for free) and Return submits the whole line in
-/// one atomic write. Outside a prompt (a command runs, vim, htop) it hides and keys go straight
-/// to the terminal again.
+/// The line editor at the shell prompt, its smart row and the agent decision strip. While the
+/// daemon reports the pane at a prompt, typing goes into a native text field (caret, loupe,
+/// selection, dictation, Scribble for free) and Return submits the whole line in one atomic
+/// write. Outside a prompt (a command runs, vim, htop) it hides and keys go straight to the
+/// terminal again.
 ///
 /// The smart row shows host completions for the token at the caret: tap inserts, a vertical flick
 /// inserts and runs. For agents the decision strip turns a blocked tool call's options into big
@@ -27,13 +28,12 @@ final class LineEditorController: NSObject, UITextFieldDelegate {
     let decisionStrip = UIStackView()
     let field = ShortcutTextField()
 
-    /// The terminal the line belongs to (keys fall back to it).
+    /// The terminal keys fall back to.
     weak var terminal: UIResponder?
-    /// Asked to relayout the bar when rows appear or disappear.
     var onLayoutChange: (() -> Void)?
-    /// The line and caret as they change ("" once it is gone), for others to watch.
+    /// The line and caret as they change ("" once it is gone).
     var onDraft: ((String, Int) -> Void)?
-    /// Whether the bar's profile is a shell (only shells get the line editor).
+    /// Only shells get the line editor.
     var shellProfile = true {
         didSet { if shellProfile != oldValue { refresh() } }
     }
@@ -61,10 +61,9 @@ final class LineEditorController: NSObject, UITextFieldDelegate {
         refresh()
     }
 
-    /// Whether the editor owns typing right now.
     var isActive: Bool { !editorRow.isHidden }
 
-    /// The pane was focused (tapped): typing belongs to the editor while it shows.
+    /// Typing belongs to the editor while it shows.
     func paneFocused() {
         guard isActive, !field.isFirstResponder else { return }
         DispatchQueue.main.async { [weak self] in self?.field.becomeFirstResponder() }
@@ -72,16 +71,15 @@ final class LineEditorController: NSObject, UITextFieldDelegate {
 
     // MARK: Pane
 
-    /// Follows a new pane: stops watching the old one, watches the new one.
     func attach(_ assist: (any LineAssist)?) {
         guard assist !== self.assist else { return }
-        let old = self.assist
+        let previousAssist = self.assist
         self.assist = assist
         prompt = nil
         directAt = nil
         field.text = ""
         refresh()
-        if let old { Task { _ = try? await old.watchPrompt(false, onState: { _ in }) } }
+        if let previousAssist { Task { _ = try? await previousAssist.watchPrompt(false, onState: { _ in }) } }
         guard let assist else { return }
         Task { @MainActor [weak self] in
             let state = try? await assist.watchPrompt(true) { [weak self] state in
@@ -108,7 +106,6 @@ final class LineEditorController: NSObject, UITextFieldDelegate {
         refresh()
     }
 
-    /// Shows or hides the editor for the current prompt state.
     private func refresh() {
         var show = false
         if Self.enabled, shellProfile, let prompt, case .atPrompt = prompt.phase, directAt != prompt.promptId {
@@ -120,7 +117,6 @@ final class LineEditorController: NSObject, UITextFieldDelegate {
         smartRow.isHidden = !show
         if changed {
             if show {
-                // Typing continues in the editor if it was going to the terminal.
                 if terminal?.isFirstResponder == true { field.becomeFirstResponder() }
             } else if field.isFirstResponder {
                 terminal?.becomeFirstResponder()
@@ -217,7 +213,6 @@ final class LineEditorController: NSObject, UITextFieldDelegate {
         refresh()
     }
 
-    /// A wing key's character goes into the draft at the caret.
     func insert(_ text: String) {
         field.insertText(text)
         updateCompletions()
@@ -231,7 +226,6 @@ final class LineEditorController: NSObject, UITextFieldDelegate {
         return true
     }
 
-    /// Joystick ←/→ move the caret by a character inside the editor.
     func moveCaret(by offset: Int) {
         guard let range = field.selectedTextRange,
               let position = field.position(from: range.start, offset: offset)
@@ -323,12 +317,12 @@ final class LineEditorController: NSObject, UITextFieldDelegate {
             field.text = completion.text
         } else {
             let caret = field.selectedTextRange.map { field.offset(from: field.beginningOfDocument, to: $0.start) } ?? line.count
-            let chars = Array(line)
-            var start = min(caret, chars.count)
-            while start > 0, !chars[start - 1].isWhitespace { start -= 1 }
+            let characters = Array(line)
+            var start = min(caret, characters.count)
+            while start > 0, !characters[start - 1].isWhitespace { start -= 1 }
             let separator = completion.text.hasSuffix("/") ? "" : " "
-            let replaced = String(chars[..<start]) + completion.text + separator
-            field.text = replaced + String(chars[min(caret, chars.count)...])
+            let replaced = String(characters[..<start]) + completion.text + separator
+            field.text = replaced + String(characters[min(caret, characters.count)...])
             if let position = field.position(from: field.beginningOfDocument, offset: replaced.count) {
                 field.selectedTextRange = field.textRange(from: position, to: position)
             }
@@ -383,8 +377,8 @@ final class LineEditorController: NSObject, UITextFieldDelegate {
     private func decide(_ prompt: BlockedPrompt, index: Int) {
         guard let assist else { return }
         let option = prompt.options[index]
-        if let request = prompt.requestId, let id = option.optionId {
-            assist.decide(requestId: request, optionId: id)
+        if let requestId = prompt.requestId, let optionId = option.optionId {
+            assist.decide(requestId: requestId, optionId: optionId)
         } else {
             Task { try? await assist.answerBlocked(index: UInt32(index), label: option.label) }
         }
@@ -396,7 +390,7 @@ final class LineEditorController: NSObject, UITextFieldDelegate {
 private final class ChipButton: UIButton {
     let completion: Completion
     var onPick: ((_ run: Bool) -> Void)?
-    private var start: CGPoint = .zero
+    private var touchStart: CGPoint = .zero
 
     init(completion: Completion, style: KeyBarStyle) {
         self.completion = completion
@@ -417,7 +411,7 @@ private final class ChipButton: UIButton {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     override func beginTracking(_ touch: UITouch, with event: UIEvent?) -> Bool {
-        start = touch.location(in: self)
+        touchStart = touch.location(in: self)
         return super.beginTracking(touch, with: event)
     }
 
@@ -425,14 +419,14 @@ private final class ChipButton: UIButton {
         super.endTracking(touch, with: event)
         guard let touch else { return }
         let point = touch.location(in: self)
-        let flicked = abs(point.y - start.y) >= 12
+        let flicked = abs(point.y - touchStart.y) >= 12
         if flicked || bounds.contains(point) { onPick?(flicked) }
     }
 }
 
 /// The line editor's field. It lives in the keyboard's own window, outside the app's menu
-/// commands, so it answers the workspace shortcuts itself (⌘T, ⌘D, ⌘W, tabs, panes): otherwise
-/// every ⌘ shortcut was dead while it held the keyboard.
+/// commands, so it answers the workspace shortcuts itself (⌘T, ⌘D, ⌘W, tabs, panes); otherwise
+/// no ⌘ shortcut works while it holds the keyboard.
 final class ShortcutTextField: UITextField {
     private static let actions = WorkspaceAction.allShortcutActions
 

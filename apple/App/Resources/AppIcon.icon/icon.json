@@ -11,10 +11,10 @@
         {
           "glass" : true,
           "image-name" : "cursor.svg",
-          "name" : "cursor"
+          "name" : "orb"
         }
       ],
-      "name" : "Cursor",
+      "name" : "Orb",
       "shadow" : {
         "kind" : "layer-color",
         "opacity" : 0.5

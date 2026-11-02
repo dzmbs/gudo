@@ -110,7 +110,7 @@ struct CanvasLayout {
         bounds = CGRect(origin: .zero, size: size)
         metrics = Metrics(gap: gap, header: header, cell: cell, padding: padding, headers: headers)
         floatsHidden = floats.hidden
-        let zoomedWindow = zoomed.flatMap { z in floats.windows.first { $0.window.panes.contains(z) } }
+        let zoomedWindow = zoomed.flatMap { zoomedPane in floats.windows.first { $0.window.panes.contains(zoomedPane) } }
 
         // Tiled panes: the tree, the zoomed one over it at the tab's size.
         let zoomedTile = zoomed.flatMap { zoomedWindow == nil && node.contains($0) ? $0 : nil }
@@ -181,10 +181,10 @@ struct CanvasLayout {
     /// point) that stays still while it scales: so it shrinks onto the chip.
     static func shrink(_ window: CGRect, into chip: CGRect) -> (CGFloat, UnitPoint) {
         let scale = max(min(chip.width / max(window.width, 1), 1), 0.05)
-        // The fixed point p of a scale s about p that maps the window's centre onto the chip's.
-        let p = CGPoint(
+        // The fixed point of a scale about that point that maps the window's centre onto the chip's.
+        let fixedPoint = CGPoint(
             x: (chip.midX - scale * window.midX) / (1 - scale), y: (chip.midY - scale * window.midY) / (1 - scale))
-        return (scale, UnitPoint(x: (p.x - window.minX) / max(window.width, 1), y: (p.y - window.minY) / max(window.height, 1)))
+        return (scale, UnitPoint(x: (fixedPoint.x - window.minX) / max(window.width, 1), y: (fixedPoint.y - window.minY) / max(window.height, 1)))
     }
 
     /// `point`, a unit point of `outer`, as a unit point of `inner` (a pane in its window).
@@ -236,11 +236,11 @@ struct CanvasLayout {
     /// The canvas `session`'s active tab gets at this layout's size: what an op would lead to.
     init?(session: Session, like layout: CanvasLayout) {
         guard let tab = session.activeTab else { return nil }
-        let m = layout.metrics
+        let metrics = layout.metrics
         self.init(
             node: session.tiledRoot(of: tab) ?? tab.root, floats: FloatScene(session: session, tab: tab, hidden: layout.floatsHidden),
-            zoomed: tab.zoomed, focused: tab.focused, size: layout.bounds.size, gap: m.gap, header: m.header, cell: m.cell,
-            padding: m.padding, headers: m.headers)
+            zoomed: tab.zoomed, focused: tab.focused, size: layout.bounds.size, gap: metrics.gap, header: metrics.header, cell: metrics.cell,
+            padding: metrics.padding, headers: metrics.headers)
     }
 
     /// Each pane where it is and whether it shows: two layouts that draw the panes alike.
@@ -601,8 +601,8 @@ final class PaneArrangement {
         }
         var drop = zone(at: point)
         if let current = paneDrag?.drop, drop != current {
-            let h = Self.zoneHysteresis
-            let near = [CGPoint(x: -h, y: 0), CGPoint(x: h, y: 0), CGPoint(x: 0, y: -h), CGPoint(x: 0, y: h)]
+            let slack = Self.zoneHysteresis
+            let near = [CGPoint(x: -slack, y: 0), CGPoint(x: slack, y: 0), CGPoint(x: 0, y: -slack), CGPoint(x: 0, y: slack)]
             if near.contains(where: { zone(at: CGPoint(x: point.x + $0.x, y: point.y + $0.y)) == current }) { drop = current }
         }
         let starting = paneDrag == nil
@@ -799,16 +799,16 @@ struct FloatCardHandles: View {
     #endif
 
     var body: some View {
-        let f = card.frame
+        let frame = card.frame
         ZStack(alignment: .topLeading) {
-            handle([.left], CGRect(x: f.minX - edge / 2, y: f.minY + corner / 2, width: edge, height: max(0, f.height - corner)))
-            handle([.right], CGRect(x: f.maxX - edge / 2, y: f.minY + corner / 2, width: edge, height: max(0, f.height - corner)))
-            handle([.top], CGRect(x: f.minX + corner / 2, y: f.minY - edge / 2, width: max(0, f.width - corner), height: edge))
-            handle([.bottom], CGRect(x: f.minX + corner / 2, y: f.maxY - edge / 2, width: max(0, f.width - corner), height: edge))
-            handle([.left, .top], CGRect(x: f.minX - corner / 2, y: f.minY - corner / 2, width: corner, height: corner))
-            handle([.right, .top], CGRect(x: f.maxX - corner / 2, y: f.minY - corner / 2, width: corner, height: corner))
-            handle([.left, .bottom], CGRect(x: f.minX - corner / 2, y: f.maxY - corner / 2, width: corner, height: corner))
-            handle([.right, .bottom], CGRect(x: f.maxX - corner / 2, y: f.maxY - corner / 2, width: corner, height: corner))
+            handle([.left], CGRect(x: frame.minX - edge / 2, y: frame.minY + corner / 2, width: edge, height: max(0, frame.height - corner)))
+            handle([.right], CGRect(x: frame.maxX - edge / 2, y: frame.minY + corner / 2, width: edge, height: max(0, frame.height - corner)))
+            handle([.top], CGRect(x: frame.minX + corner / 2, y: frame.minY - edge / 2, width: max(0, frame.width - corner), height: edge))
+            handle([.bottom], CGRect(x: frame.minX + corner / 2, y: frame.maxY - edge / 2, width: max(0, frame.width - corner), height: edge))
+            handle([.left, .top], CGRect(x: frame.minX - corner / 2, y: frame.minY - corner / 2, width: corner, height: corner))
+            handle([.right, .top], CGRect(x: frame.maxX - corner / 2, y: frame.minY - corner / 2, width: corner, height: corner))
+            handle([.left, .bottom], CGRect(x: frame.minX - corner / 2, y: frame.maxY - corner / 2, width: corner, height: corner))
+            handle([.right, .bottom], CGRect(x: frame.maxX - corner / 2, y: frame.maxY - corner / 2, width: corner, height: corner))
         }
     }
 

@@ -3,10 +3,6 @@ import HostKit
 import SwiftUI
 import GudoCore
 
-// name ("Claude · 62% of 5h · resets 14:20"), a detail popover with every window, and the same
-// lines in the Inbox. Status UX §3: monochrome until it needs the user (amber above 80 %, red
-// when limited); nothing at all when unknown, with the reason in the popover.
-
 extension UsageTone {
     /// The meter's colour; nil keeps the surface's own quiet style.
     var color: ChromeStyle? {
@@ -150,9 +146,7 @@ private struct AgentUsageSection: View {
     }
 }
 
-/// The Inbox's plan usage: a quiet strip at the bottom with each reporting host's meters, there
-/// whether or not anything needs you; tapping a meter shows the host's detail. Watches those
-/// hosts while the Inbox is on screen; absent when nothing is known.
+/// The Inbox's plan usage strip. Watches the reporting hosts while on screen.
 struct InboxUsageStrip: View {
     @Environment(WindowModel.self) private var model
     @State private var watching: Set<String> = []

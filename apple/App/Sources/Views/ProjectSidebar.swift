@@ -4,10 +4,9 @@ import PaneLayout
 import SwiftUI
 import UniformTypeIdentifiers
 
-// The sidebar's tab list (docs/APP-ARCHITECTURE.md §23): projects, the window's own tabs, then
-// each host with its loose tabs, drawn as one flat list so a row moving between sections slides
-// instead of fading. Dragging shows the drop as a plan applied to the rows (`SidebarDrop`); the
-// drop commits that plan in the transaction that clears it, so nothing moves twice.
+// The sidebar's tab list is one flat list so a row moving between sections slides instead of
+// fading. Dragging shows the drop as a plan applied to the rows (`SidebarDrop`); the drop commits
+// that plan in the transaction that clears it, so nothing moves twice.
 
 /// One line of the list. Ids are stable across sections: a tab's row is the same view whether it
 /// sits in a project or under its host.
@@ -191,7 +190,7 @@ struct SidebarTabList: View {
     var body: some View {
         let drag = model.sidebarDrag
         let (items, sections) = model.sidebarItems(drop: drag.plan, projectMove: drag.projectMove, showsIntro: !introDismissed)
-        let numbers = Dictionary(model.groups.tabs.enumerated().map { ($1, $0 + 1) }, uniquingKeysWith: { a, _ in a })
+        let numbers = Dictionary(model.groups.tabs.enumerated().map { ($1, $0 + 1) }, uniquingKeysWith: { first, _ in first })
         let _ = geometry.record(items, sections)
         // Lazy: a host with hundreds of tabs lays out the rows in view, not every row on every
         // status change.
@@ -214,7 +213,7 @@ struct SidebarTabList: View {
 
 private extension SidebarGeometry {
     func record(_ items: [SidebarItem], _ sections: [SidebarSection]) {
-        self.items = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        self.items = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         frames = frames.filter { self.items[$0.key] != nil }
         self.sections = sections
     }
@@ -314,8 +313,8 @@ private struct SidebarTabRow: View {
                     .padding(.horizontal, DS.Space.s)
             }
             .scaleEffect(isGroupTarget ? 1.015 : 1)
-            // The dragged row leaves a gap where it will land (Finder, Safari): it never slides
-            // over its neighbours, they make room around it.
+            // The dragged row leaves a gap where it will land: it never slides over its
+            // neighbours, they make room around it.
             .opacity(drag.dragging == ref ? 0 : 1)
             .animation(DS.Motion.reorder, value: isGroupTarget)
             // Gone at once (the lifted preview covers it); back with a short fade on the drop.

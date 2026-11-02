@@ -4,10 +4,8 @@ import PaneLayout
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Handoff (docs/APP-ARCHITECTURE.md "Windows"): every window advertises what it shows (host,
-/// tab, pane) as an `NSUserActivity`, and continues activities from the owner's other devices
-/// and from tabs dragged out of another window. A host this device has not paired is named,
-/// with Add Host offered.
+/// Handoff: every window advertises what it shows as an `NSUserActivity`, and continues
+/// activities from the user's other devices and from tabs dragged out of another window.
 struct HandoffActivity: ViewModifier {
     let model: WindowModel
     let onContinue: (HandoffPayload) -> Void
@@ -81,8 +79,8 @@ struct SceneReader: UIViewRepresentable {
 
 #endif
 
-/// A tab row or chip as a drag: its reference as text (reordering within the host) and, on
-/// iPad, the window activity, so dropping it outside the window opens it in a new window.
+/// A tab as a drag: its reference as text and, on iPad, the window activity, so dropping it
+/// outside the window opens it in a new window.
 enum TabDrag {
     /// Marks the drag as a tab's or a project's: a terminal under it does not paste its text,
     /// and the sidebar and panes take only drags that carry it.
@@ -110,14 +108,13 @@ enum TabDrag {
         return provider
     }
 
-    /// A project header's drag.
     @MainActor
     static func provider(forProject id: String, in model: WindowModel) -> NSItemProvider {
         marked("project:\(id)", in: model)
     }
 
-    /// The text with the marker. A drag starting here also ends whatever drag another window
-    /// still remembers (SwiftUI reports no end for one let go where nothing takes it).
+    /// Also clears the drag other windows still remember: SwiftUI reports no end for a drag let
+    /// go where nothing takes it.
     @MainActor
     private static func marked(_ text: String, in model: WindowModel) -> NSItemProvider {
         for window in model.app.openWindows where window !== model {
@@ -134,13 +131,10 @@ enum TabDrag {
 }
 
 extension DropInfo {
-    /// The drag is a tab's or a project's from this app, not text from elsewhere.
     var isTabDrag: Bool { hasItemsConforming(to: [TabDrag.contentType]) }
 }
 
 extension View {
-    /// Drag a tab: reorder within its host, onto a pane's edge to merge it there; on iPad, drop
-    /// it outside the window for a new one.
     @ViewBuilder
     func tabDrag(_ ref: TabRef, model: WindowModel) -> some View {
         onDrag {
@@ -151,9 +145,7 @@ extension View {
 }
 
 /// UI tests only (`-windowProbe YES`): what the window shows and advertises, as JSON in an
-/// accessibility value: its width bucket, host, tab and focused pane, the Handoff payload, the
-/// last continued payload, how many cols × rows overlays a layout change showed, and how many
-/// resizes each pane sent.
+/// accessibility value.
 struct WindowProbe: View {
     @Environment(WindowModel.self) private var model
 
@@ -161,7 +153,6 @@ struct WindowProbe: View {
         if WindowProbe.isEnabled {
             HStack(spacing: 0) {
                 #if DEBUG
-                // Test controls: narrow / restore the window's content, bring window 1 forward.
                 Button("narrow") { model.debugWidth = 420 }
                     .accessibilityIdentifier("debug-narrow")
                 Button("wide") { model.debugWidth = nil }
@@ -196,14 +187,13 @@ struct WindowProbe: View {
             "tab": workspace?.session.activeTabId.map { String($0.rawValue) } ?? "",
             "pane": workspace?.focusedPane.map { String($0.rawValue) } ?? "",
             "overlays": String(model.resizeOverlayShows),
-            // The fold as the window reads it (iPhone Duo): posture, layout and the hinge.
             "posture": model.fold.posture.rawValue,
             "fold": model.foldLayout.name,
             "hinge": model.fold.hinge?.status.rawValue ?? "none",
             "windows": String(model.app.openWindows.count),
             "models": String(WindowModel.made),
             "multiWindow": String(WindowRequest.isSupported),
-            // Backend resizes per pane ("1:2 3:1"): one per layout change.
+            // Backend resizes per pane, e.g. "1:2 3:1".
             "resizes": (workspace?.panes ?? [:]).sorted { $0.key.rawValue < $1.key.rawValue }
                 .map { "\($0.key.rawValue):\($0.value.resizesSent)" }.joined(separator: " "),
         ]

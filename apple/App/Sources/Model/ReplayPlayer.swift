@@ -74,8 +74,8 @@ final class ReplayPlayer {
         isPlaying = false
     }
 
-    func seek(_ ms: Double) {
-        current = min(max(0, ms), duration)
+    func seek(_ milliseconds: Double) {
+        current = min(max(0, milliseconds), duration)
         call("replay.seek(args.t, args.p)", ["t": current, "p": isPlaying])
     }
 
@@ -121,8 +121,8 @@ final class ReplayPlayer {
         return try? await WKContentRuleListStore.default().compileContentRuleList(forIdentifier: "replay-offline", encodedContentRuleList: rules)
     }
 
-    private static func resource(_ name: String, _ ext: String) -> String {
-        Bundle.main.url(forResource: name, withExtension: ext).flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
+    private static func resource(_ name: String, _ fileExtension: String) -> String {
+        Bundle.main.url(forResource: name, withExtension: fileExtension).flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
     }
 
     static let html: String = """

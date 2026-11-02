@@ -1,9 +1,7 @@
 import Foundation
 
-/// Where the app keeps saved hosts, secrets, replays and this Mac's helper state. Launches by
-/// UI tests, unit tests, dogfood runs and screenshot scripts get a folder of their own, so they
-/// never read or change the user's hosts (paired throwaway daemons would otherwise stay listed
-/// as hosts that never connect).
+/// Where the app keeps its data. Test and tooling launches get a folder of their own so they
+/// never read or change the user's hosts.
 nonisolated enum AppData {
     /// The test folder, or nil for the user's own data.
     static let isolatedDirectory: URL? = isolatedDirectory(
@@ -15,9 +13,7 @@ nonisolated enum AppData {
 
     static var isIsolated: Bool { isolatedDirectory != nil }
 
-    /// `-hostsDirectory <path>` names the folder. Otherwise any test or tooling launch argument
-    /// picks a shared throwaway folder under the temporary directory (kept across relaunches
-    /// within a test), and a test runner's environment alone (hosted unit tests) another.
+    /// `-hostsDirectory <path>` names the folder; otherwise test launches get one under the temporary directory.
     static func isolatedDirectory(
         arguments: [String: Any], flags: [String], environment: [String: String], temporary: URL, bundleId: String
     ) -> URL? {
@@ -44,7 +40,6 @@ nonisolated enum AppData {
     /// Set by XCTest in a process it runs tests in.
     static let testEnvironment = ["XCTestConfigurationFilePath", "XCTestBundlePath", "XCTestSessionIdentifier"]
 
-    /// Session Replay files.
     static var replays: URL {
         (isolatedDirectory ?? URL.applicationSupportDirectory).appending(path: "Replays", directoryHint: .isDirectory)
     }

@@ -172,6 +172,7 @@ makes, and then without its old invites.
   other people's daemons, so a decompression bomb would otherwise exhaust a phone's memory.
 - The daemon accepts compressed data only from its owner (upgrades).
 
+## Residual risk and decisions
 
 - **A leaked ticket is owner access for up to 10 minutes.**
   - Our defences: a short time to live, single use, and an alert on the other devices.
@@ -205,6 +206,7 @@ makes, and then without its old invites.
 
 ## Validation
 
+Each attack runs against a real daemon in `crates/daemon/tests/it`
 unless noted, and each fix was mutation-checked: the guarded code was disabled and the test
 was confirmed to fail.
 

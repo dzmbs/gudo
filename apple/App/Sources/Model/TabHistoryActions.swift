@@ -5,9 +5,8 @@ import PaneLayout
 import SwiftUI
 import GudoCore
 
-// Tab history in a window (docs/APP-ARCHITECTURE.md §25): closing tabs into Recently Closed and
-// bringing them back where they were, "A New Terminal" at launch, the idle-tab suggestion, and
-// the sidebar's multi-selection.
+// Tab history in a window: closing tabs into Recently Closed and bringing them back where they
+// were, "A New Terminal" at launch, the idle-tab suggestion, and the sidebar's multi-selection.
 
 extension WindowModel {
     // MARK: Closing
@@ -88,7 +87,6 @@ extension WindowModel {
         isPaletteShown = true
     }
 
-    /// History ▸ Recently Closed ▸ a tab.
     func reopenClosed(_ id: UUID) {
         if let entry = recentlyClosed.take(id) { reopen([entry]) }
     }
@@ -330,7 +328,6 @@ extension WindowModel {
         (tabSelection.isMultiple || isSelectingTabs) && tabSelection.contains(ref)
     }
 
-    /// ⌘A in the sidebar, Select All Tabs.
     func selectAllTabs() {
         tabSelection.selectAll(groups.tabs)
     }

@@ -3,8 +3,6 @@ import Foundation
 import HostKit
 import PaneLayout
 
-// What the rows' actions (`RowActions`) do in a window, with Undo where a close can come back.
-
 extension WindowModel {
     /// Closes a host tab into Recently Closed. With `undoable`, Undo brings it back where it was
     /// (its agent resuming its session).
@@ -35,7 +33,6 @@ extension WindowModel {
         }
     }
 
-    /// Ends an agent: closes the pane it runs in.
     func stopAgent(pane: PaneId, onGroup id: String) {
         workspace(ofGroup: id)?.apply(.close(pane))
     }
@@ -46,7 +43,6 @@ extension WindowModel {
         Task { await daemon.workspace.markSeen(pane: pane.rawValue) }
     }
 
-    /// The toast that offers a close back for a few seconds.
     func offerUndo(_ message: String, _ undo: @escaping @MainActor @Sendable () -> Void) {
         toasts.show(Toast(message, systemImage: "xmark.circle", action: Toast.Action("Undo", perform: undo)))
     }

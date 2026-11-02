@@ -1,10 +1,8 @@
 import DesignSystem
 import SwiftUI
 
-/// Ghostty's bundled themes as a grid of small terminal windows, each in its own colours and
-/// framed on the chrome (the sheet itself wears the current theme, so a pick restyles it at once).
-/// Search and the Dark/Light filter stay pinned on an opaque bar; the current and recently used
-/// themes lead, then Dark and Light sections. The grid is lazy for the ~460 themes.
+/// Ghostty's bundled themes as a grid of small terminal windows, each in its own colours.
+/// The grid is lazy for the ~460 themes.
 struct ThemePicker: View {
     @Binding var selection: String
     @State private var query = ""
@@ -108,9 +106,8 @@ struct ThemePicker: View {
     }
 }
 
-/// A theme as a small terminal window in its own colours, framed so that a dark window sits on a
-/// light page as well as a light one on a dark page: a hairline in the chrome's ink and a soft
-/// shadow. The selected one has the accent ring, set off by a gap, and its name in full ink.
+/// A theme as a small terminal window in its own colours, framed so it reads on a light or a
+/// dark page.
 private struct ThemeTile: View {
     let theme: TerminalTheme
     let isSelected: Bool

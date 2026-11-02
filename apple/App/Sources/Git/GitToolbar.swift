@@ -3,9 +3,8 @@ import HostKit
 import SwiftUI
 import GudoCore
 
-/// The pull request of the focused pane's worktree, next to the host button: the PR glyph at
-/// 0.6 with its checks badge and `#42`. Hover (or click) opens the checks popover; the popover
-/// is where `gh` problems are said, once, with the command that fixes them.
+/// The pull request of the focused pane's worktree. Its popover is the one place `gh` problems
+/// are reported, with the command that fixes them.
 struct PRToolbarButton: View {
     let git: GitUI
     let worktree: WorktreeState
@@ -55,7 +54,6 @@ struct PRToolbarButton: View {
     }
 }
 
-/// one-line summary, `+/−`, the ring with "1 failed, 2 in progress", then one row per check.
 struct PRPopover: View {
     let git: GitUI
     let worktree: WorktreeState
@@ -124,10 +122,10 @@ struct PRPopover: View {
         case .open:
             parts.append(pr.mergeBlocker ?? (pr.mergeState == .unstable ? "Can merge; an optional check failed" : "Ready to merge"))
         case .merged:
-            if let at = worktree.mergedAtMs, worktree.managed {
+            if let mergedAtMs = worktree.mergedAtMs, worktree.managed {
                 let days = GitSettings.autoDeleteDays
                 parts.append(days > 0
-                    ? "Worktree deleted \(Date(timeIntervalSince1970: Double(at) / 1000 + Double(days) * 86_400).formatted(.relative(presentation: .named)))\(worktree.dirty ? " once its changes are dealt with" : "")"
+                    ? "Worktree deleted \(Date(timeIntervalSince1970: Double(mergedAtMs) / 1000 + Double(days) * 86_400).formatted(.relative(presentation: .named)))\(worktree.dirty ? " once its changes are dealt with" : "")"
                     : "Merged")
             }
         case .closed:
@@ -192,7 +190,6 @@ struct PRPopover: View {
     }
 }
 
-/// The worktree's `PORT` (what `$PORT` is in its panes) and Open localhost:PORT.
 struct WorktreePortRow: View {
     let port: UInt16
     let open: () -> Void
@@ -215,7 +212,6 @@ struct WorktreePortRow: View {
     }
 }
 
-/// One check: coloured symbol, name (a link to its page), the status word right-aligned.
 private struct CheckRow: View {
     let check: PrCheck
     @Environment(\.openURL) private var openURL
@@ -240,7 +236,6 @@ private struct CheckRow: View {
     }
 }
 
-/// `gh` is missing or signed out: what to run on the host, selectable, with Copy.
 struct GhHintView: View {
     let hint: GhHint
     @State private var copied = false
@@ -272,7 +267,6 @@ struct GhHintView: View {
     }
 }
 
-/// Run ▾ (⌘R runs the default script) and Open ▾ (VS Code, Files, Diff, GitHub).
 struct RunMenu: View {
     let git: GitUI
     let worktree: WorktreeState?
@@ -350,7 +344,7 @@ struct OpenInMenu: View {
     }
 }
 
-/// The confirmations of the git actions, attached once per window.
+/// Attached once per window.
 struct GitDialogs: ViewModifier {
     let git: GitUI
 
@@ -375,11 +369,11 @@ struct GitDialogs: ViewModifier {
             ) { pending in
                 Button(pending.kind == .archive ? "Archive with Changes" : "Delete Worktree", role: pending.kind == .delete ? .destructive : nil) {
                     git.pendingRemoval = nil
-                    guard let wt = git.hub(pending.host)?.worktree(pending.path) else { return }
+                    guard let worktree = git.hub(pending.host)?.worktree(pending.path) else { return }
                     if pending.kind == .archive {
-                        git.archive(wt, host: pending.host, confirmed: true)
+                        git.archive(worktree, host: pending.host, confirmed: true)
                     } else {
-                        git.delete(wt, host: pending.host, confirmed: true)
+                        git.delete(worktree, host: pending.host, confirmed: true)
                     }
                 }
                 Button("Cancel", role: .cancel) { git.pendingRemoval = nil }

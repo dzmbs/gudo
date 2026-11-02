@@ -4,9 +4,6 @@ import PaneLayout
 import SwiftUI
 import GudoCore
 
-// "Kim is typing" for raw keys, where people are scrolled, who is in each tab, and following a
-// person. Everything is read-only and quiet: color only where it names a person.
-
 /// Drafts others are writing for this pane, and who is typing in it.
 struct LivePaneActivity: View {
     let session: MultiplayerSession
@@ -31,7 +28,6 @@ struct LivePaneActivity: View {
     }
 }
 
-/// Someone's draft, as they type it: their name, the text and a caret in their color.
 struct DraftMirror: View {
     let peer: Peer
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -44,7 +40,6 @@ struct DraftMirror: View {
         let command = draft?.source == .lineEditor
         VStack(alignment: .leading, spacing: DS.Space.s) {
             HStack(spacing: DS.Space.s) {
-                // The name tag (Figma's cursor label): who is writing, in their colour.
                 Text(peer.firstName)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.white)
@@ -61,10 +56,10 @@ struct DraftMirror: View {
                 }
             }
             TimelineView(.periodic(from: .now, by: 0.55)) { context in
-                let on = reduceMotion || peer.typing != nil
+                let caretVisible = reduceMotion || peer.typing != nil
                     || Int(context.date.timeIntervalSinceReferenceDate / 0.55).isMultiple(of: 2)
                 // A thin bar like the system's caret, never a block.
-                let caretMark = Text("\u{2009}|\u{2009}").fontWeight(.light).foregroundStyle(on ? AnyShapeStyle(color) : AnyShapeStyle(.clear))
+                let caretMark = Text("\u{2009}|\u{2009}").fontWeight(.light).foregroundStyle(caretVisible ? AnyShapeStyle(color) : AnyShapeStyle(.clear))
                 Text("\(String(text.prefix(caret)))\(caretMark)\(String(text.dropFirst(caret)))")
                     .font(command ? DS.Font.literal : .callout)
                     .foregroundStyle(DS.Palette.text)
@@ -120,16 +115,16 @@ struct TypingPill: View {
     }
 }
 
-/// People in this pane who are scrolled back, and how far: a quiet chip per person.
+/// A chip per person scrolled back in this pane, with how far.
 struct ViewportMarkers: View {
     let session: MultiplayerSession
     let pane: UInt64
 
     var body: some View {
-        let back = session.viewers(of: pane).filter { ($0.viewport?.paneId == pane) && ($0.viewport?.fromBottom ?? 0) > 0 }
-        if !back.isEmpty {
+        let scrolledBack = session.viewers(of: pane).filter { ($0.viewport?.paneId == pane) && ($0.viewport?.fromBottom ?? 0) > 0 }
+        if !scrolledBack.isEmpty {
             VStack(alignment: .leading, spacing: DS.Space.xs) {
-                ForEach(back.prefix(3), id: \.peer) { peer in
+                ForEach(scrolledBack.prefix(3), id: \.peer) { peer in
                     let rows = Int(peer.viewport?.fromBottom ?? 0)
                     HStack(spacing: DS.Space.xs) {
                         Circle().fill(peer.avatar.color).frame(width: 6, height: 6)
@@ -150,23 +145,22 @@ struct ViewportMarkers: View {
     }
 }
 
-/// Small avatars of the people whose focus is in a tab.
 struct TabPresence: View {
     let workspace: Workspace?
     let panes: [PaneId]
 
-    /// "Kim Lee, Rex Diaz here", for the tab's accessibility value; empty when nobody is.
+    /// "Kim Lee, Sam Diaz here", for the tab's accessibility value; empty when nobody is.
     @MainActor static func value(_ workspace: Workspace?, _ panes: [PaneId]) -> String {
         guard let session = workspace?.multiplayer else { return "" }
-        let ids = Set(panes.map(\.rawValue))
-        let names = session.others.filter { $0.focus.map(ids.contains) ?? false }.map(\.name)
+        let paneIds = Set(panes.map(\.rawValue))
+        let names = session.others.filter { $0.focus.map(paneIds.contains) ?? false }.map(\.name)
         return names.isEmpty ? "" : names.joined(separator: ", ") + " here"
     }
 
     var body: some View {
         if let session = workspace?.multiplayer {
-            let ids = Set(panes.map(\.rawValue))
-            let people = session.others.filter { $0.focus.map(ids.contains) ?? false }
+            let paneIds = Set(panes.map(\.rawValue))
+            let people = session.others.filter { $0.focus.map(paneIds.contains) ?? false }
             if !people.isEmpty {
                 PresenceStack(people.map(\.avatar), size: 16)
                 .accessibilityElement(children: .ignore)
@@ -214,9 +208,8 @@ struct FollowPill: View {
     }
 }
 
-/// An agent's permission request in a shared session, on its pane for everyone: what it wants,
-/// who may answer under the session's rules, the answer buttons for those who may, and who
-/// answered once someone did. The host takes the first valid answer; a late one is told.
+/// An agent's permission request on its pane, shown to everyone in a shared session. The host
+/// takes the first valid answer.
 struct SharedApproval: View {
     let workspace: Workspace
     let session: MultiplayerSession
@@ -314,8 +307,8 @@ struct SharedApproval: View {
         var names: [String] = []
         var seen = Set<String>()
         for person in session.participants where seen.insert(person.actor.principal).inserted {
-            let owner = person.roles.contains(.owner)
-            guard owner || (!ownersOnly && person.roles.contains(.approver)) else { continue }
+            let isOwner = person.roles.contains(.owner)
+            guard isOwner || (!ownersOnly && person.roles.contains(.approver)) else { continue }
             names.append(person.actor.principal == session.myPrincipal ? "you" : person.name.split(separator: " ").first.map(String.init) ?? person.name)
         }
         guard !names.isEmpty else { return "Nobody here can answer" }
@@ -344,7 +337,6 @@ struct SharedApproval: View {
     }
 }
 
-/// Follow and stop-following entries for a menu: one per other person here.
 struct FollowMenuItems: View {
     let session: MultiplayerSession
 
