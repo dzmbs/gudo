@@ -36,7 +36,13 @@ This serves `_headers`, clean URLs and `404.html` the way Pages does. Use https:
 | `appcast.xml` | Sparkle feed for the Mac app (empty until the first release) |
 | `install.sh` | The Linux host installer behind `curl -fsSL https://gudo.dev/install.sh \| sh` |
 | `_headers` | CSP, HSTS, nosniff, no referrer, no framing; content types for AASA, appcast and the script |
-| `assets/` | `site.css`, three small scripts, JetBrains Mono (subset, SIL OFL 1.1, `assets/fonts/OFL.txt`) |
+| `assets/` | `site.css`, small scripts, JetBrains Mono (subset, SIL OFL 1.1, `assets/fonts/OFL.txt`) |
+| `assets/hero.js` | Home page only: the iPad demo (a canned shell, Claude Code, the approval card, palette, splits), the scroll tilt fallback and the card spotlight. All local; nothing typed leaves the page |
+
+The home hero is the app drawn in HTML inside an iPad frame (an iPhone under 700 px wide). It
+tilts flat on scroll with a CSS scroll-driven animation; `theme.js` marks browsers without one
+(`no-sda`) and `hero.js` drives the same tilt from scroll. Under Reduce Motion the device is flat
+and the demo shows its final state, still interactive.
 
 The header and footer are repeated in each page. Change them everywhere at once.
 
