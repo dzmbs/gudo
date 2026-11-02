@@ -13,59 +13,59 @@ private func session() -> Session {
 
 @Suite struct PaneMoveTests {
     @Test func moveToNewTabGoesRightAfterItsTab() {
-        var s = session()
-        s.apply(.movePaneToNewTab(PaneId(3)))
-        #expect(s.tabs.count == 3)
-        #expect(s.tabs[0].root == .leaf(PaneId(1)))
-        #expect(s.tabs[0].focused == PaneId(1))
-        #expect(s.tabs[1].root == .leaf(PaneId(3)))
-        #expect(s.activeTabId == s.tabs[1].id)
-        #expect(s.tabs[2].root == .leaf(PaneId(4)))
+        var layout = session()
+        layout.apply(.movePaneToNewTab(PaneId(3)))
+        #expect(layout.tabs.count == 3)
+        #expect(layout.tabs[0].root == .leaf(PaneId(1)))
+        #expect(layout.tabs[0].focused == PaneId(1))
+        #expect(layout.tabs[1].root == .leaf(PaneId(3)))
+        #expect(layout.activeTabId == layout.tabs[1].id)
+        #expect(layout.tabs[2].root == .leaf(PaneId(4)))
     }
 
     @Test func aTabsOnlyPaneStays() {
-        var s = session()
-        let before = s
-        s.apply(.movePaneToNewTab(PaneId(4)))
-        #expect(s == before)
+        var layout = session()
+        let before = layout
+        layout.apply(.movePaneToNewTab(PaneId(4)))
+        #expect(layout == before)
     }
 
     @Test func movePaneSplitsTheTargetOnItsSide() {
-        var s = session()
-        s.apply(.movePane(PaneId(3), beside: PaneId(4), side: .up))
-        #expect(s.tabs[0].root == .leaf(PaneId(1)))
-        #expect(s.tabs[1].root == .split(axis: .vertical, ratio: 0.5, first: .leaf(PaneId(3)), second: .leaf(PaneId(4))))
-        #expect(s.activeTab?.focused == PaneId(3))
+        var layout = session()
+        layout.apply(.movePane(PaneId(3), beside: PaneId(4), side: .up))
+        #expect(layout.tabs[0].root == .leaf(PaneId(1)))
+        #expect(layout.tabs[1].root == .split(axis: .vertical, ratio: 0.5, first: .leaf(PaneId(3)), second: .leaf(PaneId(4))))
+        #expect(layout.activeTab?.focused == PaneId(3))
         // Its tab's only pane: the tab goes.
-        s.apply(.movePane(PaneId(1), beside: PaneId(4), side: .right))
-        #expect(s.tabs.count == 1)
-        #expect(s.panes == [PaneId(1), PaneId(3), PaneId(4)])
+        layout.apply(.movePane(PaneId(1), beside: PaneId(4), side: .right))
+        #expect(layout.tabs.count == 1)
+        #expect(layout.panes == [PaneId(1), PaneId(3), PaneId(4)])
         // Beside itself: nothing.
-        let before = s
-        s.apply(.movePane(PaneId(1), beside: PaneId(1), side: .left))
-        #expect(s == before)
+        let before = layout
+        layout.apply(.movePane(PaneId(1), beside: PaneId(1), side: .left))
+        #expect(layout == before)
     }
 
     @Test func mergeTabKeepsItsArrangementAndFocus() {
-        var s = session()
-        s.apply(.mergeTab(s.tabs[0].id, beside: PaneId(4), side: .left))
-        #expect(s.tabs.count == 1)
-        #expect(s.tabs[0].root == .split(
+        var layout = session()
+        layout.apply(.mergeTab(layout.tabs[0].id, beside: PaneId(4), side: .left))
+        #expect(layout.tabs.count == 1)
+        #expect(layout.tabs[0].root == .split(
             axis: .horizontal, ratio: 0.5,
             first: .split(axis: .horizontal, ratio: 0.5, first: .leaf(PaneId(1)), second: .leaf(PaneId(3))),
             second: .leaf(PaneId(4))))
-        #expect(s.activeTab?.focused == PaneId(3))
+        #expect(layout.activeTab?.focused == PaneId(3))
         // Into itself: nothing.
-        let before = s
-        s.apply(.mergeTab(s.tabs[0].id, beside: PaneId(4), side: .left))
-        #expect(s == before)
+        let before = layout
+        layout.apply(.mergeTab(layout.tabs[0].id, beside: PaneId(4), side: .left))
+        #expect(layout == before)
     }
 
     @Test func zoomOnTheMovedPaneIsDropped() {
-        var s = session()
-        s.apply(.toggleZoom)
-        s.apply(.movePaneToNewTab(PaneId(3)))
-        #expect(s.tabs[0].zoomed == nil)
+        var layout = session()
+        layout.apply(.toggleZoom)
+        layout.apply(.movePaneToNewTab(PaneId(3)))
+        #expect(layout.tabs[0].zoomed == nil)
     }
 
     @MainActor @Test func theWindowFollowsAMovedPane() {

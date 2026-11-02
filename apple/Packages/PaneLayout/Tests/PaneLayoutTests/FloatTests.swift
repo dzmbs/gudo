@@ -8,181 +8,181 @@ import Testing
 @Suite struct FloatTests {
     /// p1 | p2 | p3.
     private func three() -> (Session, [PaneId]) {
-        var s = Session()
-        let p1 = s.activeTab!.focused
-        s.apply(.split(p1, .horizontal))
-        let p2 = s.activeTab!.focused
-        s.apply(.split(p2, .horizontal))
-        let p3 = s.activeTab!.focused
-        return (s, [p1, p2, p3])
+        var layout = Session()
+        let p1 = layout.activeTab!.focused
+        layout.apply(.split(p1, .horizontal))
+        let p2 = layout.activeTab!.focused
+        layout.apply(.split(p2, .horizontal))
+        let p3 = layout.activeTab!.focused
+        return (layout, [p1, p2, p3])
     }
 
-    private func tiled(_ s: Session) -> [PaneId] {
-        s.tiledRoot(of: s.activeTab!)?.panes ?? []
+    private func tiled(_ layout: Session) -> [PaneId] {
+        layout.tiledRoot(of: layout.activeTab!)?.panes ?? []
     }
 
-    private func windows(_ s: Session) -> [[PaneId]] {
-        s.floats.map(\.panes)
+    private func windows(_ layout: Session) -> [[PaneId]] {
+        layout.floats.map(\.panes)
     }
 
     /// Every window is one subtree of one tab, back to front, and every tab keeps a tiled pane.
-    private func checkInvariants(_ s: Session, sourceLocation: SourceLocation = #_sourceLocation) {
-        for window in s.floats {
-            let tab = s.tab(containing: window.panes[0])
+    private func checkInvariants(_ layout: Session, sourceLocation: SourceLocation = #_sourceLocation) {
+        for window in layout.floats {
+            let tab = layout.tab(containing: window.panes[0])
             #expect(tab?.root.subtree(of: window.panes)?.panes == window.panes, sourceLocation: sourceLocation)
         }
-        for tab in s.tabs { #expect(s.tiledRoot(of: tab) != nil, sourceLocation: sourceLocation) }
-        let zs = s.floats.map(\.z)
-        #expect(zs == zs.sorted() && Set(zs).count == zs.count, sourceLocation: sourceLocation)
+        for tab in layout.tabs { #expect(layout.tiledRoot(of: tab) != nil, sourceLocation: sourceLocation) }
+        let stackOrder = layout.floats.map(\.z)
+        #expect(stackOrder == stackOrder.sorted() && Set(stackOrder).count == stackOrder.count, sourceLocation: sourceLocation)
     }
 
     @Test func aPaneFloatsAndDocksBackWhereItWas() {
-        var (s, p) = three()
-        let tree = s.activeTab!.root
-        s.apply(.float(p[1], frame: nil))
-        #expect(windows(s) == [[p[1]]])
-        #expect(tiled(s) == [p[0], p[2]])
-        #expect(s.activeTab!.root == tree, "the tree is what older clients see")
-        s.apply(.dock(p[1], beside: nil, side: .right))
-        #expect(s.floats.isEmpty)
-        #expect(s.activeTab!.focused == p[1])
-        #expect(s.activeTab!.root == tree)
+        var (layout, panes) = three()
+        let tree = layout.activeTab!.root
+        layout.apply(.float(panes[1], frame: nil))
+        #expect(windows(layout) == [[panes[1]]])
+        #expect(tiled(layout) == [panes[0], panes[2]])
+        #expect(layout.activeTab!.root == tree, "the tree is what older clients see")
+        layout.apply(.dock(panes[1], beside: nil, side: .right))
+        #expect(layout.floats.isEmpty)
+        #expect(layout.activeTab!.focused == panes[1])
+        #expect(layout.activeTab!.root == tree)
 
-        s.apply(.float(p[0], frame: nil))
-        s.apply(.float(p[1], frame: nil))
-        s.apply(.float(p[2], frame: nil))
-        #expect(tiled(s) == [p[2]], "a tab keeps a tiled pane")
-        checkInvariants(s)
+        layout.apply(.float(panes[0], frame: nil))
+        layout.apply(.float(panes[1], frame: nil))
+        layout.apply(.float(panes[2], frame: nil))
+        #expect(tiled(layout) == [panes[2]], "a tab keeps a tiled pane")
+        checkInvariants(layout)
     }
 
     @Test func newFloatsCascadeAndNeverStealFocus() {
-        var (s, p) = three()
-        s.apply(.focus(p[0]))
-        s.apply(.newFloat(beside: p[2], frame: nil, focus: false))
-        s.apply(.newFloat(beside: p[0], frame: nil, focus: false))
-        #expect(s.activeTab!.focused == p[0])
-        #expect(s.floats.count == 2)
-        #expect(s.floats[0].frame != s.floats[1].frame)
-        #expect(Array(s.activeTab!.root.panes.prefix(3)) == p)
-        s.apply(.newFloat(beside: p[0], frame: nil, focus: true))
-        #expect(s.activeTab!.focused == s.floats.last!.panes[0])
-        checkInvariants(s)
+        var (layout, panes) = three()
+        layout.apply(.focus(panes[0]))
+        layout.apply(.newFloat(beside: panes[2], frame: nil, focus: false))
+        layout.apply(.newFloat(beside: panes[0], frame: nil, focus: false))
+        #expect(layout.activeTab!.focused == panes[0])
+        #expect(layout.floats.count == 2)
+        #expect(layout.floats[0].frame != layout.floats[1].frame)
+        #expect(Array(layout.activeTab!.root.panes.prefix(3)) == panes)
+        layout.apply(.newFloat(beside: panes[0], frame: nil, focus: true))
+        #expect(layout.activeTab!.focused == layout.floats.last!.panes[0])
+        checkInvariants(layout)
     }
 
     @Test func focusRaisesAndRestoresFromTheTray() {
-        var (s, p) = three()
-        s.apply(.float(p[0], frame: nil))
-        s.apply(.float(p[1], frame: nil))
-        s.apply(.setFloat(p[0], frame: nil, minimized: true, pinned: nil))
-        s.apply(.focus(p[0]))
-        #expect(windows(s) == [[p[1]], [p[0]]])
-        #expect(s.floats[1].minimized == false)
-        s.apply(.setFloat(p[0], frame: nil, minimized: true, pinned: true))
-        #expect(s.activeTab!.focused == p[2], "focus goes back to the tiled panes")
-        #expect(s.floats[1].pinned)
-        checkInvariants(s)
+        var (layout, panes) = three()
+        layout.apply(.float(panes[0], frame: nil))
+        layout.apply(.float(panes[1], frame: nil))
+        layout.apply(.setFloat(panes[0], frame: nil, minimized: true, pinned: nil))
+        layout.apply(.focus(panes[0]))
+        #expect(windows(layout) == [[panes[1]], [panes[0]]])
+        #expect(layout.floats[1].minimized == false)
+        layout.apply(.setFloat(panes[0], frame: nil, minimized: true, pinned: true))
+        #expect(layout.activeTab!.focused == panes[2], "focus goes back to the tiled panes")
+        #expect(layout.floats[1].pinned)
+        checkInvariants(layout)
     }
 
     @Test func windowsHoldSplitsAndPanesMoveInAndOut() {
-        var (s, p) = three()
-        s.apply(.newFloat(beside: p[0], frame: nil, focus: true))
-        let f = s.activeTab!.focused
-        s.apply(.split(f, .vertical))
-        let g = s.activeTab!.focused
-        #expect(windows(s) == [[f, g]])
-        s.apply(.movePane(p[1], beside: g, side: .right))
-        #expect(windows(s) == [[f, g, p[1]]])
-        #expect(tiled(s) == [p[0], p[2]])
-        s.apply(.movePane(f, beside: p[0], side: .down))
-        #expect(windows(s) == [[g, p[1]]])
-        #expect(tiled(s) == [p[0], f, p[2]])
-        s.apply(.float(p[1], frame: nil))
-        #expect(windows(s) == [[g], [p[1]]])
-        #expect(s.floats[1].frame.x > s.floats[0].frame.x)
-        checkInvariants(s)
+        var (layout, panes) = three()
+        layout.apply(.newFloat(beside: panes[0], frame: nil, focus: true))
+        let windowPane = layout.activeTab!.focused
+        layout.apply(.split(windowPane, .vertical))
+        let splitPane = layout.activeTab!.focused
+        #expect(windows(layout) == [[windowPane, splitPane]])
+        layout.apply(.movePane(panes[1], beside: splitPane, side: .right))
+        #expect(windows(layout) == [[windowPane, splitPane, panes[1]]])
+        #expect(tiled(layout) == [panes[0], panes[2]])
+        layout.apply(.movePane(windowPane, beside: panes[0], side: .down))
+        #expect(windows(layout) == [[splitPane, panes[1]]])
+        #expect(tiled(layout) == [panes[0], windowPane, panes[2]])
+        layout.apply(.float(panes[1], frame: nil))
+        #expect(windows(layout) == [[splitPane], [panes[1]]])
+        #expect(layout.floats[1].frame.x > layout.floats[0].frame.x)
+        checkInvariants(layout)
     }
 
     @Test func dockingBesideAPaneKeepsTheWindowsSplits() {
-        var (s, p) = three()
-        s.apply(.newFloat(beside: p[0], frame: nil, focus: true))
-        let f = s.activeTab!.focused
-        s.apply(.split(f, .vertical))
-        let g = s.activeTab!.focused
-        s.apply(.dock(g, beside: p[2], side: .down))
-        #expect(s.floats.isEmpty)
-        #expect(s.activeTab!.root.subtree(of: [p[2], f, g]) == .split(
-            axis: .vertical, ratio: 0.5, first: .leaf(p[2]),
-            second: .split(axis: .vertical, ratio: 0.5, first: .leaf(f), second: .leaf(g))))
-        #expect(s.activeTab!.focused == g)
-        checkInvariants(s)
+        var (layout, panes) = three()
+        layout.apply(.newFloat(beside: panes[0], frame: nil, focus: true))
+        let windowPane = layout.activeTab!.focused
+        layout.apply(.split(windowPane, .vertical))
+        let splitPane = layout.activeTab!.focused
+        layout.apply(.dock(splitPane, beside: panes[2], side: .down))
+        #expect(layout.floats.isEmpty)
+        #expect(layout.activeTab!.root.subtree(of: [panes[2], windowPane, splitPane]) == .split(
+            axis: .vertical, ratio: 0.5, first: .leaf(panes[2]),
+            second: .split(axis: .vertical, ratio: 0.5, first: .leaf(windowPane), second: .leaf(splitPane))))
+        #expect(layout.activeTab!.focused == splitPane)
+        checkInvariants(layout)
     }
 
     @Test func theLastTiledPaneClosingDocksTheFrontWindow() {
-        var s = Session()
-        let p1 = s.activeTab!.focused
-        s.apply(.newFloat(beside: p1, frame: nil, focus: false))
-        let a = s.floats[0].panes[0]
-        s.apply(.newFloat(beside: p1, frame: nil, focus: false))
-        let b = s.floats[1].panes[0]
-        s.apply(.close(p1))
-        #expect(windows(s) == [[a]])
-        #expect(tiled(s) == [b])
-        checkInvariants(s)
+        var layout = Session()
+        let p1 = layout.activeTab!.focused
+        layout.apply(.newFloat(beside: p1, frame: nil, focus: false))
+        let backWindowPane = layout.floats[0].panes[0]
+        layout.apply(.newFloat(beside: p1, frame: nil, focus: false))
+        let frontWindowPane = layout.floats[1].panes[0]
+        layout.apply(.close(p1))
+        #expect(windows(layout) == [[backWindowPane]])
+        #expect(tiled(layout) == [frontWindowPane])
+        checkInvariants(layout)
     }
 
     @Test func panesMoveToAWholeEdge() {
-        var (s, p) = three()
-        let id = s.activeTab!.id
-        s.apply(.movePaneToEdge(p[2], tab: id, side: .up))
-        guard case .split(.vertical, _, .leaf(let top), _) = s.activeTab!.root else {
-            Issue.record("not along the top: \(s.activeTab!.root)")
+        var (layout, panes) = three()
+        let tabId = layout.activeTab!.id
+        layout.apply(.movePaneToEdge(panes[2], tab: tabId, side: .up))
+        guard case .split(.vertical, _, .leaf(let top), _) = layout.activeTab!.root else {
+            Issue.record("not along the top: \(layout.activeTab!.root)")
             return
         }
-        #expect(top == p[2])
-        #expect(s.activeTab!.focused == p[2])
+        #expect(top == panes[2])
+        #expect(layout.activeTab!.focused == panes[2])
     }
 
     @Test func focusMovesWithinItsLayer() {
-        var (s, p) = three()
-        s.apply(.float(p[1], frame: nil))
-        s.apply(.focus(p[0]))
-        s.apply(.focusDirection(.right))
-        #expect(s.activeTab!.focused == p[2], "over the floating pane's slot")
-        s.apply(.focus(p[1]))
-        s.apply(.focusDirection(.left))
-        #expect(s.activeTab!.focused == p[1], "a one-pane window's edge")
+        var (layout, panes) = three()
+        layout.apply(.float(panes[1], frame: nil))
+        layout.apply(.focus(panes[0]))
+        layout.apply(.focusDirection(.right))
+        #expect(layout.activeTab!.focused == panes[2], "over the floating pane's slot")
+        layout.apply(.focus(panes[1]))
+        layout.apply(.focusDirection(.left))
+        #expect(layout.activeTab!.focused == panes[1], "a one-pane window's edge")
     }
 
     @Test func framesStayInsideTheTab() {
-        var (s, p) = three()
-        s.apply(.float(p[1], frame: FloatFrame(x: 0.95, y: -1, width: 0.5, height: 0.01)))
-        #expect(s.floats[0].frame == FloatFrame(x: 0.5, y: 0, width: 0.5, height: FloatFrame.minimumSide))
-        s.apply(.setFloat(p[1], frame: FloatFrame(x: .nan, y: 0, width: 1, height: 1), minimized: nil, pinned: nil))
-        #expect(s.floats[0].frame.x == 0.5, "a frame that is not finite is ignored")
+        var (layout, panes) = three()
+        layout.apply(.float(panes[1], frame: FloatFrame(x: 0.95, y: -1, width: 0.5, height: 0.01)))
+        #expect(layout.floats[0].frame == FloatFrame(x: 0.5, y: 0, width: 0.5, height: FloatFrame.minimumSide))
+        layout.apply(.setFloat(panes[1], frame: FloatFrame(x: .nan, y: 0, width: 1, height: 1), minimized: nil, pinned: nil))
+        #expect(layout.floats[0].frame.x == 0.5, "a frame that is not finite is ignored")
     }
 
     @Test func layoutsSavedBeforeFloatsStillDecode() throws {
-        let (s, _) = three()
-        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(s)) as! [String: Any]
+        let (layout, _) = three()
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(layout)) as! [String: Any]
         json["floats"] = nil
         json["lastFloat"] = nil
         let decoded = try JSONDecoder().decode(Session.self, from: JSONSerialization.data(withJSONObject: json))
-        #expect(decoded == s)
+        #expect(decoded == layout)
     }
 }
 
 extension FloatTests {
     @Test func dividersMoveOnlyWithinTheirLayer() {
         // (p1 | p2) | p3 with p2 floating: on screen p1 | p3.
-        var s = Session()
-        let p1 = s.activeTab!.focused
-        s.apply(.split(p1, .horizontal))
-        s.apply(.split(p1, .horizontal))
-        let p2 = s.activeTab!.focused
-        s.apply(.float(p2, frame: nil))
-        s.apply(.resize(p1, .right, amount: 0.1))
-        guard case .split(_, let ratio, .split(_, let hidden, _, _), _) = s.activeTab!.root else {
-            Issue.record("shape: \(s.activeTab!.root)")
+        var layout = Session()
+        let p1 = layout.activeTab!.focused
+        layout.apply(.split(p1, .horizontal))
+        layout.apply(.split(p1, .horizontal))
+        let p2 = layout.activeTab!.focused
+        layout.apply(.float(p2, frame: nil))
+        layout.apply(.resize(p1, .right, amount: 0.1))
+        guard case .split(_, let ratio, .split(_, let hidden, _, _), _) = layout.activeTab!.root else {
+            Issue.record("shape: \(layout.activeTab!.root)")
             return
         }
         #expect(abs(ratio - 0.6) < 1e-9, "the divider on screen moved")

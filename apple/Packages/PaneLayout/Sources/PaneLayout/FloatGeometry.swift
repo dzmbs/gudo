@@ -58,39 +58,43 @@ public enum FloatGeometry {
     public static func snap(
         _ rect: CGRect, in bounds: CGRect, others: [CGRect], moving: Edges = .all
     ) -> (rect: CGRect, guides: [Guide]) {
-        var out = rect
+        var snapped = rect
         var guides: [Guide] = []
         let verticals = lines(bounds: bounds, others: others, vertical: true)
         let horizontals = lines(bounds: bounds, others: others, vertical: false)
 
-        if let (dx, guide) = best(lo: rect.minX, hi: rect.maxX, lines: verticals, lo: moving.contains(.left), hi: moving.contains(.right)) {
+        if let (dx, guide) = nearest(
+            start: rect.minX, end: rect.maxX, lines: verticals, moveStart: moving.contains(.left), moveEnd: moving.contains(.right)
+        ) {
             if moving.contains(.left) && moving.contains(.right) {
-                out.origin.x += dx
+                snapped.origin.x += dx
             } else if moving.contains(.left) {
-                out.origin.x += dx
-                out.size.width -= dx
+                snapped.origin.x += dx
+                snapped.size.width -= dx
             } else {
-                out.size.width += dx
+                snapped.size.width += dx
             }
             guides.append(guide)
         }
-        if let (dy, guide) = best(lo: rect.minY, hi: rect.maxY, lines: horizontals, lo: moving.contains(.top), hi: moving.contains(.bottom)) {
+        if let (dy, guide) = nearest(
+            start: rect.minY, end: rect.maxY, lines: horizontals, moveStart: moving.contains(.top), moveEnd: moving.contains(.bottom)
+        ) {
             if moving.contains(.top) && moving.contains(.bottom) {
-                out.origin.y += dy
+                snapped.origin.y += dy
             } else if moving.contains(.top) {
-                out.origin.y += dy
-                out.size.height -= dy
+                snapped.origin.y += dy
+                snapped.size.height -= dy
             } else {
-                out.size.height += dy
+                snapped.size.height += dy
             }
             guides.append(guide)
         }
-        return (out, guides)
+        return (snapped, guides)
     }
 
     private static func lines(bounds: CGRect, others: [CGRect], vertical: Bool) -> [Line] {
-        let lo = vertical ? bounds.minX : bounds.minY
-        let hi = vertical ? bounds.maxX : bounds.maxY
+        let low = vertical ? bounds.minX : bounds.minY
+        let high = vertical ? bounds.maxX : bounds.maxY
         let spanFrom = vertical ? bounds.minY : bounds.minX
         let spanTo = vertical ? bounds.maxY : bounds.maxX
         let axis: Guide.Axis = vertical ? .vertical : .horizontal
@@ -98,35 +102,35 @@ public enum FloatGeometry {
             Guide(axis: axis, position: at, from: from, to: to)
         }
         var lines = [
-            Line(value: lo + edgeMargin, leading: true, guide: guide(lo + edgeMargin)),
-            Line(value: hi - edgeMargin, leading: false, guide: guide(hi - edgeMargin)),
+            Line(value: low + edgeMargin, leading: true, guide: guide(low + edgeMargin)),
+            Line(value: high - edgeMargin, leading: false, guide: guide(high - edgeMargin)),
         ]
         // Halves and thirds: either edge may sit on them.
         for fraction in [1.0 / 3, 0.5, 2.0 / 3] {
-            let at = lo + (hi - lo) * fraction
+            let at = low + (high - low) * fraction
             lines.append(Line(value: at, leading: nil, guide: guide(at)))
         }
         for other in others {
-            let (a, b) = vertical ? (other.minX, other.maxX) : (other.minY, other.maxY)
+            let (near, far) = vertical ? (other.minX, other.maxX) : (other.minY, other.maxY)
             let (from, to) = vertical ? (other.minY, other.maxY) : (other.minX, other.maxX)
             // Aligned with its edges, or beside it with a gap.
             lines += [
-                Line(value: a, leading: true, guide: guide(a, from, to)),
-                Line(value: b, leading: false, guide: guide(b, from, to)),
-                Line(value: b + windowGap, leading: true, guide: guide(b, from, to)),
-                Line(value: a - windowGap, leading: false, guide: guide(a, from, to)),
+                Line(value: near, leading: true, guide: guide(near, from, to)),
+                Line(value: far, leading: false, guide: guide(far, from, to)),
+                Line(value: far + windowGap, leading: true, guide: guide(far, from, to)),
+                Line(value: near - windowGap, leading: false, guide: guide(near, from, to)),
             ]
         }
         return lines
     }
 
     /// The smallest move that puts a moving edge on a line, if within reach.
-    private static func best(lo: CGFloat, hi: CGFloat, lines: [Line], lo moveLo: Bool, hi moveHi: Bool) -> (CGFloat, Guide)? {
+    private static func nearest(start: CGFloat, end: CGFloat, lines: [Line], moveStart: Bool, moveEnd: Bool) -> (CGFloat, Guide)? {
         var found: (CGFloat, Guide)?
         for line in lines {
             var candidates: [CGFloat] = []
-            if moveLo, line.leading != false { candidates.append(line.value - lo) }
-            if moveHi, line.leading != true { candidates.append(line.value - hi) }
+            if moveStart, line.leading != false { candidates.append(line.value - start) }
+            if moveEnd, line.leading != true { candidates.append(line.value - end) }
             for delta in candidates where abs(delta) <= snapDistance {
                 if found.map({ abs(delta) < abs($0.0) }) ?? true { found = (delta, line.guide) }
             }
@@ -141,22 +145,22 @@ public enum FloatGeometry {
     public static func projected(_ rect: CGRect, velocity: CGVector, in bounds: CGRect) -> CGRect {
         // UIScrollView.DecelerationRate.normal (0.998 per ms): distance = v · r / (1 − r) / 1000.
         let carry = 0.998 / (1 - 0.998) / 1000
-        var out = rect.offsetBy(dx: velocity.dx * carry, dy: velocity.dy * carry)
-        out.origin.x = min(max(out.minX, bounds.minX + edgeMargin), bounds.maxX - edgeMargin - out.width)
-        out.origin.y = min(max(out.minY, bounds.minY + edgeMargin), bounds.maxY - edgeMargin - out.height)
-        return out
+        var landed = rect.offsetBy(dx: velocity.dx * carry, dy: velocity.dy * carry)
+        landed.origin.x = min(max(landed.minX, bounds.minX + edgeMargin), bounds.maxX - edgeMargin - landed.width)
+        landed.origin.y = min(max(landed.minY, bounds.minY + edgeMargin), bounds.maxY - edgeMargin - landed.height)
+        return landed
     }
 
     /// `rect` with `edges` moved by `translation`, no smaller than `minimumSize` and inside
     /// `bounds`.
     public static func resized(_ rect: CGRect, edges: Edges, by translation: CGSize, in bounds: CGRect) -> CGRect {
-        let minW = min(minimumSize.width, bounds.width)
-        let minH = min(minimumSize.height, bounds.height)
+        let minWidth = min(minimumSize.width, bounds.width)
+        let minHeight = min(minimumSize.height, bounds.height)
         var minX = rect.minX, maxX = rect.maxX, minY = rect.minY, maxY = rect.maxY
-        if edges.contains(.left) { minX = min(max(rect.minX + translation.width, bounds.minX), maxX - minW) }
-        if edges.contains(.right) { maxX = max(min(rect.maxX + translation.width, bounds.maxX), minX + minW) }
-        if edges.contains(.top) { minY = min(max(rect.minY + translation.height, bounds.minY), maxY - minH) }
-        if edges.contains(.bottom) { maxY = max(min(rect.maxY + translation.height, bounds.maxY), minY + minH) }
+        if edges.contains(.left) { minX = min(max(rect.minX + translation.width, bounds.minX), maxX - minWidth) }
+        if edges.contains(.right) { maxX = max(min(rect.maxX + translation.width, bounds.maxX), minX + minWidth) }
+        if edges.contains(.top) { minY = min(max(rect.minY + translation.height, bounds.minY), maxY - minHeight) }
+        if edges.contains(.bottom) { maxY = max(min(rect.maxY + translation.height, bounds.maxY), minY + minHeight) }
         return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
     }
 
@@ -173,7 +177,6 @@ public enum FloatGeometry {
 
     // MARK: Drop zones
 
-    /// Where a dragged pane lands.
     public enum Drop: Hashable, Sendable {
         /// Beside `pane` on `side`: the target's half on that side.
         case beside(PaneId, Direction)
@@ -207,11 +210,11 @@ public enum FloatGeometry {
         return .beside(pane, side(of: point, in: rect))
     }
 
-    /// The side of `rect` nearest `point`, by its diagonals (Ghostty's four triangles).
+    /// The side of `rect` nearest `point`, by its diagonals (four triangles).
     public static func side(of point: CGPoint, in rect: CGRect) -> Direction {
-        let x = rect.width > 0 ? (point.x - rect.minX) / rect.width : 0.5
-        let y = rect.height > 0 ? (point.y - rect.minY) / rect.height : 0.5
-        let distances: [(Direction, CGFloat)] = [(.left, x), (.right, 1 - x), (.up, y), (.down, 1 - y)]
+        let fractionX = rect.width > 0 ? (point.x - rect.minX) / rect.width : 0.5
+        let fractionY = rect.height > 0 ? (point.y - rect.minY) / rect.height : 0.5
+        let distances: [(Direction, CGFloat)] = [(.left, fractionX), (.right, 1 - fractionX), (.up, fractionY), (.down, 1 - fractionY)]
         return distances.min { $0.1 < $1.1 }!.0
     }
 
@@ -288,8 +291,8 @@ public enum FloatGeometry {
     public static func pipCorner(for center: CGPoint, velocity: CGVector, corners: [CGRect]) -> CGRect? {
         let carry = 0.99 / (1 - 0.99) / 1000
         let target = CGPoint(x: center.x + velocity.dx * carry, y: center.y + velocity.dy * carry)
-        return corners.min { a, b in
-            hypot(a.midX - target.x, a.midY - target.y) < hypot(b.midX - target.x, b.midY - target.y)
+        return corners.min { lhs, rhs in
+            hypot(lhs.midX - target.x, lhs.midY - target.y) < hypot(rhs.midX - target.x, rhs.midY - target.y)
         }
     }
 }

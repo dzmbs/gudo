@@ -40,7 +40,7 @@ public final class WindowLayoutStore: LayoutStore {
     public init(base: any LayoutStore, selecting tab: TabId? = nil) {
         self.base = base
         let session = base.session
-        activeTabId = tab.flatMap { id in session.tabs.contains { $0.id == id } ? id : nil } ?? session.activeTabId
+        activeTabId = tab.flatMap { tabId in session.tabs.contains { $0.id == tabId } ? tabId : nil } ?? session.activeTabId
         if let activeTabId { lastActiveIndex = session.tabs.firstIndex { $0.id == activeTabId } }
         follow()
     }
@@ -48,8 +48,8 @@ public final class WindowLayoutStore: LayoutStore {
     public var session: Session {
         let shared = base.session
         let key = Composed.Key(shared: shared, active: activeTabId, focused: focusedPanes)
-        // Views read this once per sidebar row: composing each time made a render O(tabs²).
-        // Unchanged arrays and dictionaries compare by identity, so a hit costs next to nothing.
+        // Views read this once per sidebar row: composing on every read would make a render
+        // O(tabs²). Unchanged arrays and dictionaries compare by identity, so a hit is cheap.
         if let composed, composed.key == key { return composed.session }
         let session = compose(shared)
         composed = Composed(key: key, session: session)
@@ -66,7 +66,6 @@ public final class WindowLayoutStore: LayoutStore {
         var session: Session
     }
 
-    /// The last composition and what it was made from.
     @ObservationIgnored private var composed: Composed?
 
     /// What this window shows of the host: the focused pane and every visible pane.
@@ -122,7 +121,6 @@ public final class WindowLayoutStore: LayoutStore {
         }
     }
 
-    /// Selects a tab (its focused pane in this window).
     public func select(tab id: TabId) {
         guard let tab = session.tabs.first(where: { $0.id == id }) else { return }
         apply(.focus(tab.focused))
