@@ -35,7 +35,7 @@ def chunk(i):
     if kind == "unicode":
         # Emoji, ZWJ sequences, flags, CJK, combining marks stacked deep, RTL, wide/narrow mix.
         parts = [
-            "👩‍👩‍👧‍👦", "🇺🇳", "e" + "́" * 40, "漢字かな", "‮abc", "a‍b",
+            "👩‍👩‍👧‍👦", "🇺🇳", "e" + "́" * 40, "漢字かな", "\u202eabc", "a‍b",
             "\U0001F600" * 3, "กิ์" * 5, "️" * 10, "각",
         ]
         return ("".join(rnd.choice(parts) for _ in range(20)) + "\r\n").encode()
