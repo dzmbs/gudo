@@ -185,8 +185,8 @@ enum DesignFixtures {
                 workspace.notices[panes[0]] = PaneNotice(secureInput: true)
             }
         case "file-preview": model.sheet = .files
-        case "editor-licence":
-            // Needs `-mockEditorPhase licence`.
+        case "editor-licence", "editor-pane":
+            // `editor-licence` needs `-mockEditorPhase licence`, `editor-pane` `-mockEditorURL`.
             model.openEditor()
         default:
             if screen == "ticket" { model.addHost(mode: .ticket) } else if screen == "themes" || screen == "devices" { model.sheet = .settings } else if let route = SheetRoute(rawValue: screen) { model.sheet = route }

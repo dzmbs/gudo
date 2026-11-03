@@ -285,14 +285,21 @@ final class MockFileSource: FileSource {
 @Observable
 final class MockEditorSource: EditorSource {
     /// `-mockEditorPhase licence`: Microsoft's terms first (design review of the licence sheet).
-    var phase: EditorPhase = LaunchArguments().string(forKey: "mockEditorPhase") == "licence" ? .needsLicence : .installing
+    /// `-mockEditorURL <url>`: a real workbench at that address (a VS Code server on this Mac).
+    var phase: EditorPhase = {
+        let arguments = LaunchArguments()
+        if let url = arguments.string(forKey: "mockEditorURL").flatMap(URL.init(string:)) { return .loading(url) }
+        return arguments.string(forKey: "mockEditorPhase") == "licence" ? .needsLicence : .installing
+    }()
     var folder: String { "~/projects/gudo" }
     var hostName: String { "studio" }
     var unavailableReason: String? { nil }
     var pendingURL: URL?
     func open() async {}
     func open(path: String, line: Int?, column: Int?) async {}
-    func didLoad() {}
+    func didLoad() {
+        if case .loading(let url) = phase { phase = .ready(url) }
+    }
     func close(stopServer: Bool) async {}
     var mode: EditorMode { .server }
     var tunnelDesktopURI: URL? { nil }
