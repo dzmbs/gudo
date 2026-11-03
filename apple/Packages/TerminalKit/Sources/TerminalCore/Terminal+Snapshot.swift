@@ -31,6 +31,7 @@ extension Terminal {
             terminal = handle
             restoreState = restore
             ghostty_terminal_free(old)
+            synchronizedOutput.restart(inUpdate: Self.mode(handle, 2026), now: .now)
             // Image pixels that came with the screen; a bad record ends the restore, not the screen.
             if restore.push(Data()).code != GHOSTTY_SUCCESS {
                 restore.free()
@@ -91,10 +92,11 @@ extension Terminal {
         }
     }
 
-    /// A complete snapshot of this terminal (tests and diagnostics; the daemon encodes the real
-    /// ones).
+    /// A complete snapshot of this terminal, a held synchronized update included (another
+    /// window's copy of a pane starts from it; tests and diagnostics).
     public func encodeSnapshot() -> Data? {
         withHandle { handle in
+            if synchronizedOutput.isHolding { synchronizedOutput.release(parseLocked) }
             var pointer: UnsafeMutablePointer<UInt8>?
             var length = 0
             guard ghostty_snapshot_encode_alloc(handle, nil, &pointer, &length) == GHOSTTY_SUCCESS,

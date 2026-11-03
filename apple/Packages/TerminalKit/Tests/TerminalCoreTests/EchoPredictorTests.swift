@@ -186,20 +186,72 @@ struct EchoPredictorTests {
         #expect(p.stats.confirmed == 1)
     }
 
-    @Test func insertingInTheMiddleShiftsTheRest() {
+    @Test func neverMovesTextTheProgramDrew() {
         let clock = FakeClock(), screen = FakeScreen(cols: 10)
         screen.prompt("$ ac")
         screen.cursor.x = 3
         let p = makePredictor(clock)
         settle(p, screen)
-        #expect(p.predict(.text("b"), screen: screen))
-        #expect(p.overlay.map(\.text) == ["b", "c"])
-        #expect(p.overlay.map(\.x) == [3, 4])
-        screen.type("b")
-        settle(p, screen)
-        #expect(screen.line == "$ abc")
+        // The shell may shift "c" right, or it may be an autosuggestion it replaces: unknown.
+        #expect(!p.predict(.text("b"), screen: screen))
         #expect(p.overlay.isEmpty)
+    }
+
+    @Test func typingAlongAnAutosuggestionOverwritesInPlace() {
+        let clock = FakeClock(), screen = FakeScreen(cols: 12)
+        screen.prompt("$ clea")
+        screen.cells[0][6] = "r"  // the suggestion's rest, drawn dim by the shell
+        let p = makePredictor(clock)
+        settle(p, screen)
+        #expect(p.predict(.text("r"), screen: screen))
+        // Not "clearr": the suggested "r" stays where it is.
+        #expect(p.overlay == [PredictedCell(x: 6, y: 0, text: "r", underlined: false)])
+        #expect(p.predictedCursor! == (7, 0))
+        clock.advance(0.1)
+        screen.cursor.x = 7  // the shell accepted the suggested character
+        settle(p, screen)
+        #expect(!p.isActive)
+        #expect(p.stats.confirmed == 1)
         #expect(p.stats.mispredicted == 0)
+    }
+
+    @Test func typingAgainstAnAutosuggestionIsNotPredicted() {
+        let clock = FakeClock(), screen = FakeScreen(cols: 12)
+        screen.prompt("$ cl")
+        screen.cells[0][4] = "e"
+        screen.cells[0][5] = "a"
+        screen.cells[0][6] = "r"
+        let p = makePredictor(clock)
+        settle(p, screen)
+        #expect(!p.predict(.text("s"), screen: screen))
+        #expect(!p.predict(.backspace, screen: screen))
+        #expect(p.overlay.isEmpty)
+    }
+
+    @Test func typingBeforeARightPromptFillsOnlyTheCursorCell() {
+        let clock = FakeClock(), screen = FakeScreen(cols: 12)
+        screen.prompt("$ ")
+        screen.cells[0][9] = "1"
+        screen.cells[0][10] = "2"
+        let p = makePredictor(clock)
+        settle(p, screen)
+        #expect(p.predict(.text("l"), screen: screen))
+        #expect(p.predict(.text("s"), screen: screen))
+        #expect(p.overlay.map(\.x) == [2, 3])
+        #expect(p.overlay.map(\.text) == ["l", "s"])
+    }
+
+    @Test func insertingInsideThePredictedRunShiftsTheRunOnly() {
+        let clock = FakeClock(), screen = FakeScreen(cols: 10)
+        screen.prompt("$ ")
+        let p = makePredictor(clock)
+        settle(p, screen)
+        #expect(p.predict(.text("a"), screen: screen))
+        #expect(p.predict(.text("c"), screen: screen))
+        #expect(p.predict(.cursorLeft, screen: screen))
+        #expect(p.predict(.text("b"), screen: screen))
+        #expect(p.overlay.map(\.text) == ["a", "b", "c"])
+        #expect(p.overlay.map(\.x) == [2, 3, 4])
     }
 
     @Test func refusesInsertWhenTheLineIsFull() {
@@ -385,32 +437,72 @@ struct EchoPredictorTests {
         #expect(p.predict(.text("b"), screen: screen))
     }
 
-    @Test func underlinesOnlySlowUnconfirmedCells() {
+    @Test func underlinesOnlyCellsWhoseEchoIsLate() {
         let clock = FakeClock(), screen = FakeScreen()
         screen.prompt("$ ")
-        let slow = makePredictor(clock, rtt: 0.2)
-        settle(slow, screen)
-        #expect(slow.predict(.text("a"), screen: screen))
-        #expect(slow.overlay.first?.underlined == false)  // shown instantly
-        clock.advance(0.06)
-        #expect(slow.overlay.first?.underlined == true)
-
-        let fast = makePredictor(clock, rtt: 0.02)
-        settle(fast, screen)
-        #expect(fast.predict(.text("a"), screen: screen))
-        clock.advance(0.5)
-        #expect(fast.overlay.first?.underlined == false)
+        let p = makePredictor(clock, rtt: 0.2)
+        settle(p, screen)
+        #expect(p.predict(.text("a"), screen: screen))
+        #expect(p.overlay.first?.underlined == false)  // shown instantly
+        clock.advance(0.3)  // longer than the round trip, as echoes on this link normally take
+        #expect(p.overlay.first?.underlined == false)
+        clock.advance(0.2)  // a round trip and a quarter second: late
+        #expect(p.overlay.first?.underlined == true)
     }
 
-    @Test func minimumDisplayRTTHidesTheOverlay() {
+    @Test func fastLinkShowsOnlyTheRealScreen() {
         let clock = FakeClock(), screen = FakeScreen()
         screen.prompt("$ ")
         let p = makePredictor(clock, rtt: 0.01)
-        p.configuration.minimumDisplayRTT = 0.03
+        settle(p, screen)
+        #expect(p.predict(.text("a"), screen: screen))
+        #expect(p.isActive)
+        #expect(p.overlay.isEmpty)
+        #expect(p.predictedCursor == nil)
+        clock.advance(0.01)
+        screen.type("a")
+        settle(p, screen)
+        #expect(!p.isActive)
+        #expect(p.stats.confirmed == 1)
+    }
+
+    @Test func nothingIsDrawnBeforeTheRoundTripIsKnown() {
+        let clock = FakeClock(), screen = FakeScreen()
+        screen.prompt("$ ")
+        let p = EchoPredictor(now: { clock.t })
+        p.update(hint: shellPrompt)
         settle(p, screen)
         #expect(p.predict(.text("a"), screen: screen))
         #expect(p.overlay.isEmpty)
-        #expect(p.predictedCursor == nil)
+    }
+
+    @Test func displayFollowsTheRoundTripWithHysteresis() {
+        let clock = FakeClock(), screen = FakeScreen()
+        screen.prompt("$ ")
+        let p = makePredictor(clock, rtt: 0.01)
+        settle(p, screen)
+        #expect(!p.displaysPredictions)
+        p.updateRTT(seconds: 0.025)
+        #expect(!p.displaysPredictions)
+        p.updateRTT(seconds: 0.040)
+        #expect(p.displaysPredictions)
+        p.updateRTT(seconds: 0.025)
+        #expect(p.displaysPredictions)
+        p.updateRTT(seconds: 0.015)
+        #expect(!p.displaysPredictions)
+    }
+
+    @Test func aStallOnAFastLinkShowsThePrediction() {
+        let clock = FakeClock(), screen = FakeScreen()
+        screen.prompt("$ ")
+        let p = makePredictor(clock, rtt: 0.01)
+        settle(p, screen)
+        #expect(p.predict(.text("a"), screen: screen))
+        clock.advance(0.1)
+        #expect(p.overlay.isEmpty)
+        clock.advance(0.2)
+        #expect(p.overlay.map(\.text) == ["a"])
+        #expect(p.predictedCursor! == (3, 0))
     }
 
     @Test func idleTerminalPredictsOnlyTheFirstKeystroke() {

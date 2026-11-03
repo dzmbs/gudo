@@ -116,6 +116,8 @@ public final class Terminal: @unchecked Sendable {
     /// The decoder of the last restored snapshot while its history is still arriving (guarded by
     /// `lock`); see `Terminal+Snapshot.swift`.
     var restoreState: SnapshotRestore?
+    /// Output of a synchronized update not parsed yet (guarded by `lock`).
+    var synchronizedOutput = SynchronizedOutput()
 
     /// - Parameter writePty: called synchronously from `write(_:)` (on the writer's thread) with
     ///   query replies, and from `paste(_:)`. Must not call back into this terminal.
@@ -273,14 +275,36 @@ public final class Terminal: @unchecked Sendable {
         effects.events.withLock { $0 = events }
     }
 
-    /// Feeds raw PTY output through the VT parser.
+    /// Feeds raw PTY output through the VT parser. A synchronized update (mode 2026) is parsed
+    /// once it is complete (`SynchronizedOutput`).
     public func write(_ bytes: UnsafeRawBufferPointer) {
         guard let base = bytes.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
+        let answersQueries = answersQueries
         lock.withLock { _ in
-            effects.parsing.store(true, ordering: .relaxed)
-            ghostty_terminal_vt_write(terminal, base, bytes.count)
-            effects.parsing.store(false, ordering: .relaxed)
+            synchronizedOutput.take(
+                UnsafeBufferPointer(start: base, count: bytes.count), answersQueries: answersQueries, now: { .now },
+                parse: parseLocked)
         }
+    }
+
+    /// Whether output of an unfinished synchronized update is waiting.
+    public var isHoldingOutput: Bool {
+        lock.withLock { _ in synchronizedOutput.isHolding }
+    }
+
+    /// Parses a synchronized update that has waited too long for its end. Returns whether the
+    /// screen may have changed.
+    @discardableResult
+    public func releaseExpiredHeldOutput(now: ContinuousClock.Instant = .now) -> Bool {
+        lock.withLock { _ in synchronizedOutput.releaseIfExpired(now: now, parseLocked) }
+    }
+
+    /// Parses `bytes`; the caller holds `lock`.
+    func parseLocked(_ bytes: UnsafeBufferPointer<UInt8>) {
+        guard let base = bytes.baseAddress, !bytes.isEmpty else { return }
+        effects.parsing.store(true, ordering: .relaxed)
+        ghostty_terminal_vt_write(terminal, base, bytes.count)
+        effects.parsing.store(false, ordering: .relaxed)
     }
 
     public func write(_ bytes: some Sequence<UInt8>) {
@@ -289,8 +313,13 @@ public final class Terminal: @unchecked Sendable {
 
     /// Resizes the grid. Cell pixel sizes feed pixel-size reports (CSI 14/16 t) and size kitty
     /// images; a mirror of a remote pane uses the host's, so images move the cursor alike.
+    /// A held synchronized update is parsed first, at the size it was written for (a resize ends
+    /// the update, as in Ghostty).
     public func resize(cols: UInt16, rows: UInt16, cellWidth: UInt32, cellHeight: UInt32) {
-        lock.withLock { _ in _ = ghostty_terminal_resize(terminal, cols, rows, cellWidth, cellHeight) }
+        lock.withLock { _ in
+            if synchronizedOutput.isHolding { synchronizedOutput.release(parseLocked) }
+            _ = ghostty_terminal_resize(terminal, cols, rows, cellWidth, cellHeight)
+        }
     }
 
     /// Scrolls the viewport through scrollback. Negative values scroll up (towards history).
