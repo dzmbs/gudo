@@ -1,4 +1,7 @@
 import CryptoKit
+#if canImport(UIKit)
+import UIKit
+#endif
 import DesignSystem
 import GudoCore
 import HostKit
@@ -385,13 +388,21 @@ struct CreateSSHKeySheet: View {
             }
             #if os(macOS)
             .frame(width: 440, height: 380)
+            #else
+            .phoneDetents([.medium, .large])
             #endif
         }
         .chromeSheetBackground()
     }
 
     private var defaultName: String {
-        suggestedName.isEmpty ? "\(Brand.name) key" : suggestedName
+        guard suggestedName.isEmpty else { return suggestedName }
+        #if os(macOS)
+        let device = Host.current().localizedName ?? "Mac"
+        #else
+        let device = UIDevice.current.name
+        #endif
+        return "\(Brand.name) on \(device)"
     }
 
     private var kindFooter: String {

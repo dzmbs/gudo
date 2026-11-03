@@ -23,7 +23,7 @@ struct SSHHostFormSections: View {
         if let key = flow.newKey { NewKeySection(flow: flow, key: key) }
         testSection
             .sheet(isPresented: $creatingKey) {
-                CreateSSHKeySheet(keys: flow.hosts.keys, suggestedName: (try? flow.endpoint().display) ?? "") { key in
+                CreateSSHKeySheet(keys: flow.hosts.keys, suggestedName: "") { key in
                     flow.select(key)
                 }
             }
@@ -341,14 +341,16 @@ private struct SSHSignInSection: View {
         switch flow.auth {
         case .password, .agent: nil
         case .agentKey(let fingerprint):
-            inventory.agentKeys.first { $0.fingerprint == fingerprint }.map { "\(SSHKeyText.typeName($0.algorithm)) · \($0.fingerprint)" }
+            inventory.agentKeys.first { $0.fingerprint == fingerprint }.map {
+                "\(SSHKeyText.typeName($0.algorithm)) · \(SSHKeyRowText.shortFingerprint($0.fingerprint))"
+            }
         case .keyFile(let path):
             inventory.localKey(at: path).map { key in
                 [SSHKeyText.typeName(key.info.algorithm), key.info.comment, key.encrypted ? "passphrase" : nil]
                     .compactMap { $0?.isEmpty == false ? $0 : nil }.joined(separator: " · ")
             } ?? path
         case .key(let id):
-            flow.hosts.keys.key(id).map { "\($0.typeName) · \($0.fingerprint)" }
+            flow.hosts.keys.key(id).map { "\($0.typeName) · \(SSHKeyRowText.shortFingerprint($0.fingerprint))" }
         }
     }
 
