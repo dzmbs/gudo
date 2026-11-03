@@ -47,8 +47,8 @@ final class PhoneUITests: XCTestCase {
         newProject.tap()
 
         openSwitcher(app)
-        let project = app.buttons["Project"]
-        XCTAssertTrue(project.waitForExistence(timeout: 5), "the project's menu is in its section")
+        let project = projectRow(app, "New Project")
+        XCTAssertTrue(project.waitForExistence(timeout: 5), "the project leads its section")
         project.tap()
         for item in ["Rename…", "New Terminal", "Ungroup", "Close All Tabs"] {
             XCTAssertTrue(app.buttons[item].waitForExistence(timeout: 5), item)
@@ -57,11 +57,48 @@ final class PhoneUITests: XCTestCase {
         let field = app.alerts.textFields.firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 5), "the rename prompt")
         field.clearAndType("web")
-        app.alerts.buttons["Rename"].tap()
+        app.alerts.buttons["Done"].tap()
 
         openSwitcher(app)
-        let header = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'web · '")).firstMatch
-        XCTAssertTrue(header.waitForExistence(timeout: 5), "the section has the new name")
+        XCTAssertTrue(projectRow(app, "web").waitForExistence(timeout: 5), "the section has the new name")
+    }
+
+    /// Show All opens every project, tab and agent on a page of its own; picking a tab there
+    /// shows it and closes the page.
+    func testShowAllOpensTheTabOverview() throws {
+        let app = try launch(["-mock", "-screen", "projects"])
+        openSwitcher(app)
+        XCTAssertTrue(projectRow(app, "acme-app").waitForExistence(timeout: 10), "projects lead the menu")
+        XCTAssertEqual(projectRow(app, "acme-app").label, "acme-app, 2 hosts · 3 tabs", "where its tabs are")
+        XCTAssertTrue(app.buttons["web, hetzner"].exists, "a tab of a project across hosts names its host")
+        XCTAssertTrue(projectRow(app, "infra").exists)
+        shot(app, "switcher-menu")
+        app.buttons["Show All"].tap()
+
+        let overview = app.descendants(matching: .any)["tab-overview"].firstMatch
+        XCTAssertTrue(overview.waitForExistence(timeout: 5), "the tab overview")
+        XCTAssertTrue(app.descendants(matching: .any)["project-acme-app"].waitForExistence(timeout: 5), "projects as in the sidebar")
+        XCTAssertTrue(app.descendants(matching: .any)["host-group-studio"].exists, "hosts with their loose tabs")
+        shot(app, "tab-overview")
+
+        let row = app.descendants(matching: .any)["tab-row-2"].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        row.tap()
+        XCTAssertTrue(overview.waitForNonExistence(timeout: 5), "showing a tab closes the overview")
+        let switcher = app.descendants(matching: .any)["tab-switcher"].firstMatch
+        XCTAssertTrue(switcher.label.contains("web"), "tab 2 is on screen: \(switcher.label)")
+    }
+
+    /// A project's first line in the switcher: its name, then where its tabs are.
+    private func projectRow(_ app: XCUIApplication, _ name: String) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "\(name), ")).firstMatch
+    }
+
+    private func shot(_ app: XCUIApplication, _ name: String) {
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 }
 
