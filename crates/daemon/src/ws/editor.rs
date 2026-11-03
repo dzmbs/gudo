@@ -202,8 +202,14 @@ fn encode(value: &str) -> String {
     out
 }
 
-fn url_path(token: &str, folder: &str) -> String {
-    format!("/?tkn={token}&folder={}", encode(folder))
+/// The workbench for `folder`, or an empty one when `folder` holds the home directory: a
+/// workspace there would have the editor search and index everything under home.
+fn url_path(token: &str, folder: &Path, home: &Path) -> String {
+    if super::paths::holds_home(folder, home) {
+        format!("/?tkn={token}")
+    } else {
+        format!("/?tkn={token}&folder={}", encode(&folder.to_string_lossy()))
+    }
 }
 
 fn free_port() -> Result<u16, WsError> {
@@ -433,7 +439,7 @@ impl Editors {
                 folder: folder_key.clone(),
                 port,
                 token: token.clone(),
-                url_path: url_path(&token, &folder_key),
+                url_path: url_path(&token, folder, &config.home()),
                 pid,
                 started_at: UnixMillis(crate::identity::now_millis()),
             },
@@ -798,7 +804,24 @@ mod tests {
             sha256_file(&file).unwrap(),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
-        assert_eq!(url_path("t", "/a b"), "/?tkn=t&folder=/a%20b");
+        let home = dir.path().join("me");
+        assert_eq!(
+            url_path("t", Path::new("/a b"), &home),
+            "/?tkn=t&folder=/a%20b"
+        );
+    }
+
+    #[test]
+    fn opens_no_workspace_on_home_or_above() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("me");
+        let project = home.join("projects/app");
+        std::fs::create_dir_all(&project).unwrap();
+
+        assert_eq!(url_path("t", &home, &home), "/?tkn=t");
+        assert_eq!(url_path("t", root.path(), &home), "/?tkn=t");
+        assert_eq!(url_path("t", Path::new("/"), &home), "/?tkn=t");
+        assert!(url_path("t", &project, &home).ends_with("/me/projects/app"));
     }
 
     /// A one-shot server answering with `status`; its port.
