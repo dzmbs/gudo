@@ -158,6 +158,10 @@ private struct PaneHeaderButtons: View {
             HeaderButton("Split Down", systemImage: "rectangle.split.1x2", shortcut: WorkspaceAction.splitDown) {
                 act { WorkspaceAction.splitDown.perform(on: workspace, window: model) }
             }
+            HeaderButton(WorkspaceAction.openBrowser.title, systemImage: "globe", shortcut: WorkspaceAction.openBrowser) {
+                act { model.openBrowser(besidePane: id, onGroup: workspace.groupId) }
+            }
+            .accessibilityIdentifier("pane-browser-button")
             if model.activeMixedTab == nil {
                 HeaderButton(
                     window == nil ? "Float Pane" : "Dock Pane", systemImage: "square.on.square",

@@ -659,6 +659,11 @@ struct PaneMenuItems: View {
         Divider()
         Button("Find…", systemImage: "magnifyingglass") { focusThen { model.isSearchShown = true } }
         Button("Links & Paths…", systemImage: "link") { focusThen { model.sheet = .links } }
+        if let target = pane ?? workspace.focusedPane {
+            Button(WorkspaceAction.openBrowser.title, systemImage: "globe") {
+                focusThen { model.openBrowser(besidePane: target, onGroup: workspace.groupId) }
+            }
+        }
         Button("Share Session…", systemImage: "person.crop.circle.badge.plus") { model.sheet = .invite }
         Divider()
         Button("Close Pane", systemImage: "xmark", role: .destructive) {

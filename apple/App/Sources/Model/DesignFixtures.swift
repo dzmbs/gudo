@@ -155,6 +155,17 @@ enum DesignFixtures {
                     ports.ports = found
                 }
             }
+        case "browser-beside":
+            // `-page <url>` loads a site in it.
+            try? await Task.sleep(for: .seconds(1))
+            WorkspaceAction.openBrowser.perform(on: workspace, window: model)
+            guard let url = LaunchArguments().string(forKey: "page").flatMap(URL.init(string:)) else { return }
+            guard model.opensToolsAsLeaves else {
+                model.browserURL = url
+                return
+            }
+            for _ in 0..<50 where model.focusedBrowser == nil { try? await Task.sleep(for: .milliseconds(100)) }
+            model.focusedBrowser?.load(url)
         case "presence-notice":
             // Needs `-mockPresence YES`.
             try? await Task.sleep(for: .seconds(1))

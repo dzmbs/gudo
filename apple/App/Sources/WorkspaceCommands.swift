@@ -57,7 +57,7 @@ struct WorkspaceCommands: Commands {
             Divider()
             buttons(WorkspaceAction.drawActions)
             Divider()
-            buttons([.links])
+            buttons(WorkspaceAction.browserActions + [.links])
             #if os(macOS)
             Divider()
             Button("Open in New Window") {

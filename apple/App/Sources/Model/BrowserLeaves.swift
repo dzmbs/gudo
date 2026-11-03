@@ -43,7 +43,7 @@ extension WindowModel {
     /// Opens a page in the pane's tab, which comes forward.
     @discardableResult
     func openBrowser(_ url: URL, beside pane: HostPane) -> BrowserMember {
-        let member = BrowserMember(hostId: pane.hostId, url: url.absoluteString)
+        let member = BrowserMember(hostId: pane.hostId == HostGroups.localId ? nil : pane.hostId, url: url.absoluteString)
         destination = .terminal
         if sheet == .browser { sheet = nil }
         if let tab = composites.tab(containing: pane), let leaf = tab.leaf(for: pane) {
@@ -62,6 +62,38 @@ extension WindowModel {
             focus(Self.mixedRef(composites.openBrowser(member)))
         }
         return member
+    }
+
+    /// A page beside the pane: the dev server the pane runs, else the start page.
+    func openBrowser(besidePane pane: PaneId, onGroup groupId: String) {
+        let server = devServer(ofPane: pane, onGroup: groupId)
+        guard opensToolsAsLeaves else {
+            if let server { Task { await openPort(server) } } else {
+                browserURL = nil
+                sheet = .browser
+            }
+            return
+        }
+        openBrowser(server.map(DevServerRouting.pageURL) ?? URL(string: "about:blank")!, beside: HostPane(hostId: groupId, pane: pane))
+    }
+
+    func openBrowserBesideFocusedPane() {
+        guard destination == .terminal else { return }
+        if let mixed = activeMixed {
+            if let member = mixed.focusedMember {
+                openBrowser(besidePane: member.pane, onGroup: member.hostId)
+            } else {
+                openBrowser(URL(string: "about:blank")!, hostId: mixed.focusedBrowser?.hostId, placement: .split)
+            }
+        } else if let workspace, let pane = workspace.focusedPane {
+            openBrowser(besidePane: pane, onGroup: workspace.groupId)
+        }
+    }
+
+    private func devServer(ofPane pane: PaneId, onGroup groupId: String) -> DetectedPort? {
+        guard let context = HostContext.host(groupId, app: app) else { return nil }
+        let owned = context.hub.ports.filter { $0.paneId.map { PaneId($0) } == pane }
+        return LivePortSource.ports(owned, meta: context.daemon.meta.all).first(where: \.isHTTP)
     }
 
     /// A page opened by `window.open` or `target=_blank`, as a new leaf beside its opener.
@@ -114,8 +146,8 @@ extension WindowModel {
             ("browser-tab", "New Browser Tab", "globe", nil, { [weak self] in
                 self?.openBrowser(start, hostId: self?.workspace?.hostId, placement: .tab)
             }),
-            ("browser-split", "Open Browser Beside", "rectangle.split.2x1", nil, { [weak self] in
-                self?.openBrowser(start, hostId: self?.workspace?.hostId, placement: .split)
+            ("browser-split", WorkspaceAction.openBrowser.title, "rectangle.split.2x1", WorkspaceAction.openBrowser.shortcut.symbols, { [weak self] in
+                self?.openBrowserBesideFocusedPane()
             }),
         ]
     }

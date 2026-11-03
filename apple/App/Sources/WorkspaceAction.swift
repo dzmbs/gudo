@@ -48,6 +48,8 @@ enum WorkspaceAction: Hashable {
     case movePane(Direction)
     /// A split along the focused pane's longer side.
     case splitBestFit
+    /// A browser beside the focused pane, on the dev server it runs.
+    case openBrowser
 
     static let fileActions: [Self] = [.newTab, .newTabOnHost, .newAgent, .newProject, .splitRight, .splitDown, .splitWithHost, .closePane]
     static let paneActions: [Self] = [.toggleZoom, .splitBestFit, .movePaneToNewTab] + Direction.allCases.map(Self.focus)
@@ -55,6 +57,7 @@ enum WorkspaceAction: Hashable {
         + [.previousPrompt, .nextPrompt, .returnToTerminal, .fullScreenEditor]
     static let floatActions: [Self] = [.toggleFloat, .minimizeFloat, .cycleFloats, .toggleFloatsHidden]
     static let drawActions: [Self] = [.draw, .newCanvas]
+    static let browserActions: [Self] = [.openBrowser]
     static let tabActions: [Self] = [.previousTab, .nextTab] + (1...8).map(Self.selectTab) + [.lastTab, .goToTab, .moveTabUp, .moveTabDown]
     static let hostActions: [Self] = (1...9).map(Self.selectHost)
     static let historyActions: [Self] = [.reopenClosedTab]
@@ -62,7 +65,7 @@ enum WorkspaceAction: Hashable {
     /// Every app shortcut. The terminal answers these itself while it has the keyboard (iPad):
     /// UIKit asks the first responder first, so they never depend on the responder chain reaching
     /// the scene's menu commands, which it can miss right after the window switched hosts.
-    static let allShortcutActions: [Self] = fileActions + paneActions + drawActions + tabActions + hostActions + windowActions + historyActions + floatActions + [.newWindow]
+    static let allShortcutActions: [Self] = fileActions + paneActions + drawActions + browserActions + tabActions + hostActions + windowActions + historyActions + floatActions + [.newWindow]
 
     /// Whether the shortcut stays the app's while a VS Code pane has the keyboard:
     /// ⌘1–⌘9 switch tabs (VS Code's own ⌘1–⌘8 focus editor
@@ -124,6 +127,7 @@ enum WorkspaceAction: Hashable {
         case .focusPreviousPane: "Focus Previous Pane"
         case .movePane(let direction): "Move Pane \(direction.moveName)"
         case .splitBestFit: "Split Pane Best Fit"
+        case .openBrowser: "Open Browser Beside"
         }
     }
 
@@ -194,6 +198,8 @@ enum WorkspaceAction: Hashable {
         // ⌥⌘arrows move focus and ⌃⌘arrows dividers; ⇧ takes the pane along.
         case .movePane(let direction): KeyboardShortcut(direction.arrow, modifiers: [.command, .option, .shift])
         case .splitBestFit: KeyboardShortcut(.return, modifiers: .command)
+        // Free in the app and the systems; ⌘B beside it is the sidebar.
+        case .openBrowser: KeyboardShortcut("b", modifiers: [.command, .shift])
         }
     }
 
@@ -241,6 +247,7 @@ enum WorkspaceAction: Hashable {
         case .focusPreviousPane: window.focusPane(offset: -1)
         case .movePane(let direction): window.movePane(direction)
         case .splitBestFit: window.splitBestFit()
+        case .openBrowser: window.openBrowserBesideFocusedPane()
         case .resize(let direction) where window.focusedFloats: _ = window.resizeFloat(direction)
         case .closePane: window.closeFocusedPaneOrTab()
         case .returnToTerminal: window.returnToTerminal()
@@ -267,7 +274,7 @@ enum WorkspaceAction: Hashable {
         case .selectTab(let number): workspace.selectTab(at: number - 1)
         case .lastTab: workspace.selectTab(at: nil)
         case .goToTab, .moveTabUp, .moveTabDown, .newWindow, .newAgent, .newProject, .splitWithHost, .returnToTerminal, .fullScreenEditor, .selectHost, .reopenClosedTab: break
-        case .toggleFloat, .minimizeFloat, .cycleFloats, .toggleFloatsHidden, .movePane: break
+        case .toggleFloat, .minimizeFloat, .cycleFloats, .toggleFloatsHidden, .movePane, .openBrowser: break
         case .focusNextPane: workspace.apply(.focusDirection(.right))
         case .focusPreviousPane: workspace.apply(.focusDirection(.left))
         case .splitBestFit: workspace.split(.horizontal)

@@ -85,6 +85,17 @@ final class SplitWebLeavesTests: XCTestCase {
         XCTAssertEqual(model.activeMixed?.browsers.count, 1)
     }
 
+    func testOpenBrowserPutsAPageBesideTheFocusedPane() async throws {
+        let workspace = try XCTUnwrap(model.workspace)
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        try perform(.openBrowser)
+        let mixed = try XCTUnwrap(model.activeMixed)
+        XCTAssertEqual(mixed.browsers.count, 1)
+        XCTAssertEqual(mixed.members.values.map(\.pane), [pane])
+        XCTAssertEqual(mixed.browsers.values.first?.url, "about:blank", "no dev server in the pane: the start page")
+        XCTAssertNotNil(mixed.focusedBrowser)
+    }
+
     func testBrowserBesideRightAfterClose() async throws {
         try perform(.splitRight)
         await pump(0.03)
