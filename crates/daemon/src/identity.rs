@@ -339,10 +339,18 @@ impl Identity {
                     this_computer,
                 };
                 // A fresh ticket brings a removed device back, but not its old invites: they
-                // stay void by its removal time (`removed_at`).
+                // stay void by its removal time (`removed_at`) and its new `paired_at`. A
+                // device still paired keeps its pairing time, and so its invites.
                 self.update_devices(|list, _| {
+                    let paired_at = list
+                        .iter()
+                        .find(|paired| paired.device == device_hex)
+                        .map_or(entry.paired_at, |paired| paired.paired_at);
                     list.retain(|paired| paired.device != device_hex);
-                    list.push(entry);
+                    list.push(DeviceEntry {
+                        paired_at,
+                        ..entry
+                    });
                     true
                 })
                 .map_err(|error| {
@@ -390,6 +398,17 @@ impl Identity {
             .list
             .iter()
             .any(|paired| paired.device == hex_id)
+    }
+
+    /// When `device`'s current pairing began, if it is a paired owner device.
+    pub fn paired_at(&self, device: DeviceId) -> Option<UnixMillis> {
+        self.refresh();
+        let hex_id = hex(&device.0);
+        self.lock_devices()
+            .list
+            .iter()
+            .find(|paired| paired.device == hex_id)
+            .map(|paired| UnixMillis(paired.paired_at))
     }
 
     pub fn paired(&self) -> Vec<Owner> {

@@ -61,6 +61,10 @@ use ring::signature::{Ed25519KeyPair, KeyPair};
 /// The longest chain the daemon accepts (root included).
 pub const MAX_DEPTH: usize = 8;
 
+/// How far ahead of the verifier's clock a root grant may be dated. Removal voids chains by
+/// their root's date, so a root dated far ahead would outlive the removal of its signer.
+pub const MAX_CLOCK_SKEW_MS: u64 = 5 * 60 * 1000;
+
 /// A device's Ed25519 signing key.
 pub struct DeviceKey {
     pair: Ed25519KeyPair,
@@ -319,12 +323,22 @@ pub enum GrantError {
     /// The same grant id appears twice.
     #[error("link {0}: duplicate grant id")]
     Duplicate(usize),
+    /// The root is dated further ahead than [`MAX_CLOCK_SKEW_MS`].
+    #[error("root grant dated ahead of the daemon's clock")]
+    FutureDated,
 }
 
 /// What the daemon knows that a chain alone does not say.
 pub trait Authority {
     /// Whether `issuer` may sign root grants (an owner device or the daemon).
     fn is_root(&self, issuer: DeviceId) -> bool;
+
+    /// Whether `root` is a root grant to honour. The default asks only [`Authority::is_root`]
+    /// of its issuer; the daemon also checks that it was signed under the issuer's current
+    /// pairing.
+    fn root_trusted(&self, root: &Grant) -> bool {
+        self.is_root(root.issuer)
+    }
 
     /// Whether `device` redeemed (was bound to) the unbound grant `grant`.
     fn holds(&self, grant: GrantId, device: DeviceId) -> bool;
@@ -530,7 +544,10 @@ pub fn verify(
             return Err(GrantError::Expired(index));
         }
         if index == 0 {
-            if !authority.is_root(grant.issuer) {
+            if grant.issued_at.0 > now.0.saturating_add(MAX_CLOCK_SKEW_MS) {
+                return Err(GrantError::FutureDated);
+            }
+            if !authority.root_trusted(grant) {
                 return Err(GrantError::UntrustedRoot);
             }
         } else {

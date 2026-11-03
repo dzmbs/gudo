@@ -118,6 +118,16 @@ makes, and then without its old invites.
   used: roots come from owner devices or the daemon, while a guest could date its own links
   freely. So a removed device's old invites stay void even if it pairs again, and nothing
   needs to be unblocked by hand.
+- **Roots cannot be dated ahead.** The root's date is chosen by whoever signs it, so a thief
+  holding a phone for a while could otherwise date invites after the removal to come. Two
+  checks stop that. A root dated more than 5 minutes ahead of the daemon's clock is refused
+  (`GrantError::FutureDated`). And each owner device's root grants count only if the daemon
+  first recorded them (the app registers every invite as it signs it) during that device's
+  current pairing (`paired_at` in `devices.json`): a re-pairing after removal starts a new
+  pairing, so an invite signed under an earlier one stays void whatever date it carries, and
+  a root never registered is refused. A device paired again while still paired keeps its
+  pairing time and its invites. Existing pairings count from their recorded pairing time, so
+  invites registered under them keep working.
 - **Coming back.** An owner device returns only with a fresh pairing ticket (the client falls
   back to the ticket's secret when its device grant is refused as revoked). A revoked guest
   returns only through an invite whose root was signed after the revocation, by an owner, the
@@ -157,7 +167,9 @@ makes, and then without its old invites.
     context (`Grant::SIGNING_CONTEXT`; approvals use `approval-v1\0`).
   - Signatures are checked with `verify_strict`, which rejects small-order keys and
     non-canonical points.
-  - The root's issuer must be byte-equal to the daemon key or to a paired owner device.
+  - The root's issuer must be byte-equal to the daemon key or to a paired owner device, its
+    date no more than 5 minutes ahead, and, for an owner device, it must have been registered
+    during the device's current pairing.
   - Every child must be signed by the holder of its parent: the parent's `bind`, or the
     device the parent was bound to when first used.
   - Every child may only narrow its parent: roles, scope, expiry and number of uses.
@@ -267,6 +279,7 @@ was confirmed to fail.
 | Guest chain whose signer was unpaired or revoked | `security::unpairing_from_the_cli_closes_the_device_and_its_invites`, `security::revoking_an_owner_device_closes_the_guests_it_invited` |
 | Revoked guest reusing a multi-use link | `access::a_revoked_guest_returns_only_by_a_newer_invite` |
 | Delegate forward-dating its child link before removal | `props::removal_voids_older_chains_only` (unit) |
+| Owner device forward-dating root invites before removal, then paired again | `access::a_forward_dated_invite_does_not_outlive_a_re_pairing`, `props::roots_dated_ahead_are_refused` (unit) |
 | Chain rooted at a stranger's key | `redteam::a_chain_rooted_at_a_stranger_key_is_refused` |
 | Small-order key; non-canonical `S`; wrong-length signatures | `grants::tests::small_order_keys_prove_nothing`, `props::non_canonical_signatures_are_refused` (unit) |
 | Single-use invite raced by six devices | `redteam::a_raced_single_use_invite_admits_one_device` |

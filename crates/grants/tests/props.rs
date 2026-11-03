@@ -420,3 +420,32 @@ fn removal_voids_older_chains_only() {
     );
     assert!(verify(&again, DAEMON, delegate.device_id(), later, &reset).is_ok());
 }
+
+/// Removal voids chains by their root's date, so a root may not be dated past the clock skew;
+/// a delegate's own links may carry any date.
+#[test]
+fn roots_dated_ahead_are_refused() {
+    let owner = DeviceKey::generate();
+    let delegate = DeviceKey::generate();
+    let authority = owner_authority(&owner);
+    let mut spec = GrantSpec::new(Roles::VIEWER, Scope::Daemon);
+    spec.delegate = true;
+    spec.max_uses = None;
+    spec.bind = Some(delegate.device_id());
+    let at = |ahead: u64| UnixMillis(NOW.0 + ahead);
+    let skew = grants::MAX_CLOCK_SKEW_MS;
+
+    let within = issue(&owner, DAEMON, &spec, at(skew));
+    assert!(verify(&within, DAEMON, delegate.device_id(), NOW, &authority).is_ok());
+    let ahead = issue(&owner, DAEMON, &spec, at(skew + 1));
+    assert_eq!(
+        verify(&ahead, DAEMON, delegate.device_id(), NOW, &authority).unwrap_err(),
+        GrantError::FutureDated
+    );
+    assert!(verify(&ahead, DAEMON, delegate.device_id(), at(1), &authority).is_ok());
+
+    let child = GrantSpec::new(Roles::VIEWER, Scope::Daemon);
+    let delegated = attenuate(&within, &delegate, &child, at(10 * skew)).unwrap();
+    let third = DeviceKey::generate().device_id();
+    assert!(verify(&delegated, DAEMON, third, NOW, &authority).is_ok());
+}

@@ -3,8 +3,8 @@
 
 use std::time::Duration;
 
-use client_core::grants::GrantSpec;
-use client_core::proto::{RevokeTarget, Roles, Scope, UnixMillis};
+use client_core::grants::{self, DeviceKey, GrantSpec};
+use client_core::proto::{Invite, RevokeTarget, Roles, Scope, UnixMillis};
 use client_core::{ClientConfig, MultiplayerEvent, now_millis};
 
 use crate::support::{TestClient, start, start_with, ticket};
@@ -108,6 +108,64 @@ async fn re_pairing_after_cli_unpair_does_not_revive_old_invites() {
     phone.attach_and_follow().await;
     drop(refused(&old_invite, ClientConfig::generate_key()).await);
     drop(phone);
+    daemon.shutdown().await;
+}
+
+/// Someone holding a phone for a while signs invites dated ahead, hoping they outlive the
+/// phone's removal once it is paired again. Roots dated past the clock skew are refused, and
+/// invites signed under an earlier pairing stay void after the device pairs again.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_forward_dated_invite_does_not_outlive_a_re_pairing() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path()).await;
+    let key = ClientConfig::generate_key();
+    let mut phone = TestClient::connect(&ticket(&daemon), key.clone());
+    phone.attach_and_follow().await;
+    let base: Invite = invite(&phone, Roles::VIEWER).await.parse().unwrap();
+    let signer = DeviceKey::from_seed(&key).unwrap();
+    let dated = |minutes_ahead: u64| {
+        let mut spec = GrantSpec::new(Roles::VIEWER, Scope::Daemon);
+        spec.max_uses = None;
+        spec.expires = Some(UnixMillis(now_millis().0 + 86_400_000));
+        grants::issue(
+            &signer,
+            base.daemon_id,
+            &spec,
+            UnixMillis(now_millis().0 + minutes_ahead * 60_000),
+        )
+    };
+    let link = |chain| {
+        Invite {
+            chain,
+            ..base.clone()
+        }
+        .to_string()
+    };
+
+    let far = dated(60);
+    assert!(phone.client.register_grant(far.clone()).await.is_err());
+    drop(refused(&link(far), ClientConfig::generate_key()).await);
+
+    let registered = dated(3);
+    phone
+        .client
+        .register_grant(registered.clone())
+        .await
+        .expect("within the skew");
+    let never_registered = dated(3);
+
+    let device = phone.client.me().unwrap().actor.device;
+    daemon::unpair_device(dir.path(), &hex(&device.0)[..16]).expect("unpair");
+    phone.until("signed out", is_revoked).await;
+    drop(phone);
+    let mut phone = TestClient::connect(&ticket(&daemon), key);
+    phone.attach_and_follow().await;
+
+    drop(refused(&link(registered), ClientConfig::generate_key()).await);
+    drop(refused(&link(never_registered), ClientConfig::generate_key()).await);
+    let fresh = invite(&phone, Roles::VIEWER).await;
+    let guest = joined(&fresh, ClientConfig::generate_key()).await;
+    drop((phone, guest));
     daemon.shutdown().await;
 }
 

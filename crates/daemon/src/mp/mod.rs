@@ -326,6 +326,11 @@ impl Store {
         self.revoked_grants.contains(&hex(&id.0))
     }
 
+    /// When the daemon first recorded `id`.
+    fn first_seen(&self, id: GrantId) -> Option<UnixMillis> {
+        self.grant(id).map(|grant| UnixMillis(grant.registered_at))
+    }
+
     fn guest_removed_at(&self, device: DeviceId) -> Option<UnixMillis> {
         self.removed_devices
             .get(&hex(&device.0))
@@ -385,11 +390,22 @@ fn unhex_vec(text: &str) -> Option<Vec<u8>> {
 struct DaemonAuthority<'a> {
     core: &'a Core,
     store: &'a Store,
+    /// A root being registered, and when: it is first seen now.
+    registering: Option<(GrantId, UnixMillis)>,
 }
 
 impl Authority for DaemonAuthority<'_> {
     fn is_root(&self, issuer: DeviceId) -> bool {
         issuer == self.core.identity.daemon_device() || self.core.identity.is_owner_device(issuer)
+    }
+
+    fn root_trusted(&self, root: &proto::Grant) -> bool {
+        let first_seen = self.store.first_seen(root.grant_id).or_else(|| {
+            self.registering
+                .filter(|(id, _)| *id == root.grant_id)
+                .map(|(_, at)| at)
+        });
+        root_trusted(&self.core.identity, root.issuer, first_seen)
     }
 
     fn holds(&self, grant: GrantId, device: DeviceId) -> bool {
@@ -414,6 +430,19 @@ impl Authority for DaemonAuthority<'_> {
     fn void_before(&self) -> Option<UnixMillis> {
         self.store.void_before.map(UnixMillis)
     }
+}
+
+/// Whether `issuer` may root a chain the daemon first saw at `first_seen`: the daemon itself,
+/// or an owner device whose current pairing began by then. Owner devices register what they
+/// sign as they sign it, so a root never seen, or seen under an earlier pairing of the same
+/// key, stays void however it is dated.
+fn root_trusted(identity: &Identity, issuer: DeviceId, first_seen: Option<UnixMillis>) -> bool {
+    issuer == identity.daemon_device()
+        || first_seen.is_some_and(|seen| {
+            identity
+                .paired_at(issuer)
+                .is_some_and(|paired| paired <= seen)
+        })
 }
 
 /// When `device` was last unpaired or revoked.
@@ -694,7 +723,7 @@ impl Mp {
         presenter: DeviceId,
         depth: usize,
     ) -> bool {
-        self.chain_trusted(issuers)
+        self.chain_trusted(store, ids, issuers, root_signed)
             && store
                 .void_before
                 .is_none_or(|void_before| root_signed.0 > void_before)
@@ -758,6 +787,7 @@ impl Mp {
             let authority = DaemonAuthority {
                 core,
                 store: &store,
+                registering: None,
             };
             grants::verify(&chain, core.identity.daemon_id(), device, now, &authority)
         };
@@ -892,11 +922,22 @@ impl Mp {
         )
     }
 
-    /// Whether a chain signed by `issuers` (root first) still has a trusted root.
-    fn chain_trusted(&self, issuers: &[DeviceId]) -> bool {
-        issuers.first().is_some_and(|&root| {
-            root == self.identity.daemon_device() || self.identity.is_owner_device(root)
-        })
+    /// Whether the chain `ids`, signed by `issuers` (root first), still has a trusted root.
+    /// Without ids it is an owner device acting itself at `root_signed`.
+    fn chain_trusted(
+        &self,
+        store: &Store,
+        ids: &[GrantId],
+        issuers: &[DeviceId],
+        root_signed: UnixMillis,
+    ) -> bool {
+        let first_seen = match ids.first() {
+            Some(&root) => store.first_seen(root),
+            None => Some(root_signed),
+        };
+        issuers
+            .first()
+            .is_some_and(|&root| root_trusted(&self.identity, root, first_seen))
     }
 
     /// A connection joined; `heartbeats` when it announced live presence.
@@ -1148,6 +1189,7 @@ impl Mp {
             let authority = DaemonAuthority {
                 core,
                 store: &store,
+                registering: (chain.links.len() == 1).then_some((leaf.grant_id, now)),
             };
             grants::verify(chain, core.identity.daemon_id(), presenter, now, &authority)
                 .map_err(|error| MpError::Invalid(error.to_string()))?;
