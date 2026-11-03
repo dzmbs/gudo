@@ -88,8 +88,19 @@ export interface Pane {
   altScreen: boolean;
   secretPrompt: boolean;
   exited: boolean;
+  /** `tmux`, `screen`, `zellij` or `byobu` runs there (`tmux-control`: `tmux -CC`). */
+  multiplexer?: string | null;
   lastCommand?: Command;
   cursor: string;
+}
+
+/** The visible screen of a full-screen program. Rows count from 0 at the top. */
+export interface Screen {
+  cols: number;
+  rows: number;
+  cursor: { row: number; col: number; visible: boolean };
+  /** Runs set apart by reverse video or their own background: selected items, status bars. */
+  highlights: Array<{ row: number; col: number; text: string; inverse: boolean }>;
 }
 
 export interface RunResult {
@@ -100,8 +111,9 @@ export interface RunResult {
 }
 
 export interface WaitResult {
-  status: "matched" | "prompt" | "exited" | "quiet" | "status" | "closed" | "timeout";
+  status: "matched" | "gone" | "prompt" | "exited" | "quiet" | "status" | "closed" | "timeout";
   output: Output;
+  screen?: Screen;
   match?: { line: string; groups: Array<string | null> };
   command?: Command;
 }
@@ -203,8 +215,8 @@ export class Terminal {
     split: (options: { of?: PaneRef; direction?: "right" | "down"; cwd?: string; command?: string; agent?: "claude" | "codex"; focus?: boolean } = {}): Promise<Pane> =>
       this.call<{ pane: Pane }>("pane_split", options).then((result) => result.pane),
     read: (pane: PaneRef, options: { since?: string; command?: number | "last"; screen?: boolean; tail?: number; grep?: string; context?: number; maxBytes?: number } = {}) =>
-      this.call<{ output: Output; altScreen: boolean; atPrompt: boolean; command?: Command }>("pane_read", { pane, ...options }),
-    wait: (pane: PaneRef, until: { match?: string; since?: string; prompt?: boolean; quietMs?: number; exit?: number; status?: string[]; timeoutMs?: number; maxBytes?: number }): Promise<WaitResult> =>
+      this.call<{ output: Output; altScreen: boolean; atPrompt: boolean; command?: Command; screen?: Screen }>("pane_read", { pane, ...options }),
+    wait: (pane: PaneRef, until: { match?: string; screen?: boolean; gone?: boolean; since?: string; prompt?: boolean; quietMs?: number; exit?: number; status?: string[]; timeoutMs?: number; maxBytes?: number }): Promise<WaitResult> =>
       this.call("pane_wait", { pane, ...until }),
     /** In a pane the user opened, waits for the user's yes. */
     send: (pane: PaneRef, input: { text?: string; keys?: string[]; submit?: boolean }) =>

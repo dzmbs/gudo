@@ -71,12 +71,26 @@ fn pane_schema() -> Value {
             "secretPrompt": { "type": "boolean", "description": "A password is being asked for; input is refused." },
             "exited": { "type": "boolean" },
             "foreground": { "type": ["object", "null"], "properties": { "pid": { "type": "integer" }, "name": { "type": "string" } } },
+            "multiplexer": { "type": ["string", "null"], "description": "tmux, screen, zellij or byobu runs in the pane (tmux-control: tmux -CC). Its shells report no prompts here, so drive it with pane_send and wait on the screen." },
             "lastCommand": { "anyOf": [command_schema(), { "type": "null" }] },
             "cursor": { "type": "string" },
             "status": status_schema(),
             "float": float_schema(),
         },
         "required": ["id", "kind", "isSelf", "createdByYou", "scopes", "atPrompt", "altScreen", "cursor"],
+    })
+}
+
+fn screen_schema() -> Value {
+    json!({
+        "type": ["object", "null"],
+        "description": "The visible screen: its size, the cursor (rows from 0 at the top), and the runs a full-screen program sets apart (reverse video or their own background), which is how menus and pickers show the selected item.",
+        "properties": {
+            "cols": { "type": "integer" },
+            "rows": { "type": "integer" },
+            "cursor": { "type": "object", "properties": { "row": { "type": "integer" }, "col": { "type": "integer" }, "visible": { "type": "boolean" } } },
+            "highlights": { "type": "array", "items": { "type": "object", "properties": { "row": { "type": "integer" }, "col": { "type": "integer" }, "text": { "type": "string" }, "inverse": { "type": "boolean" } } } },
+        },
     })
 }
 
@@ -227,7 +241,7 @@ fn tools_list() -> Vec<Tool> {
         Tool {
             name: "pane_read",
             title: "Read a terminal pane's output",
-            description: "Read a terminal pane's output: the last lines (default 80), only what came after a cursor (`since`, from an earlier result), one command's output and exit code (`command`: an id or \"last\"), or the screen of a full-screen program. Filter with a regex (`grep`).",
+            description: "Read a terminal pane's output: the last lines (default 80), only what came after a cursor (`since`, from an earlier result), one command's output and exit code (`command`: an id or \"last\"), or the screen of a full-screen program, with its cursor and the items it highlights (a menu's selection). Filter with a regex (`grep`).",
             input: object(
                 json!({
                     "pane": pane_ref("Default: this pane."),
@@ -248,6 +262,7 @@ fn tools_list() -> Vec<Tool> {
                     "altScreen": { "type": "boolean" },
                     "atPrompt": { "type": "boolean" },
                     "command": { "anyOf": [command_schema(), { "type": "null" }] },
+                    "screen": screen_schema(),
                 },
                 "required": ["output", "altScreen", "atPrompt"],
             }),
@@ -258,11 +273,13 @@ fn tools_list() -> Vec<Tool> {
         Tool {
             name: "pane_wait",
             title: "Wait for a terminal pane",
-            description: "Wait until a terminal pane prints a line matching a regex (returns the line and its groups, e.g. a server's port), its shell is back at the prompt, it has been quiet for a while, a command exits, or its program reports a status (an agent blocked or done). Only output after `since` (default: now) counts. Times out with status timeout, not an error.",
+            description: "Wait until a terminal pane prints a line matching a regex (returns the line and its groups, e.g. a server's port), its shell is back at the prompt, it has been quiet for a while, a command exits, or its program reports a status (an agent blocked or done). Only output after `since` (default: now) counts. For full-screen programs (TUIs, tmux) use `screen: true`: the regex is matched against the visible screen, now and after every change, and `gone: true` waits until it is no longer shown (a spinner, a dialog). Times out with status timeout, not an error.",
             input: object(
                 json!({
                     "pane": pane_ref("Default: this pane."),
                     "match": { "type": "string", "description": "A regex, matched line by line." },
+                    "screen": { "type": "boolean", "description": "Match against the visible screen (already shown counts) instead of new output." },
+                    "gone": { "type": "boolean", "description": "With screen: until the match is no longer on the screen." },
                     "since": { "type": "string", "description": "A cursor; default now." },
                     "prompt": { "type": "boolean", "description": "Until the shell is back at its prompt." },
                     "quietMs": { "type": "integer", "description": "Until no output for this long." },
@@ -276,11 +293,12 @@ fn tools_list() -> Vec<Tool> {
             output: json!({
                 "type": "object",
                 "properties": {
-                    "status": { "type": "string", "enum": ["matched", "prompt", "exited", "quiet", "status", "closed", "timeout"] },
+                    "status": { "type": "string", "enum": ["matched", "gone", "prompt", "exited", "quiet", "status", "closed", "timeout"] },
                     "programStatus": status_schema(),
                     "match": { "type": "object", "properties": { "line": { "type": "string" }, "groups": { "type": "array", "items": { "type": ["string", "null"] } } } },
                     "command": { "anyOf": [command_schema(), { "type": "null" }] },
                     "output": output_schema(),
+                    "screen": screen_schema(),
                 },
                 "required": ["status", "output"],
             }),
@@ -681,12 +699,53 @@ fn summary(tool: &str, result: &Value) -> String {
     if text.is_empty() {
         out.push_str("(no output)");
     } else {
-        // Longer than any backtick run in the output, so printed text cannot close the
-        // block and pose as the tool's own words.
-        let fence = "`".repeat(longest_run(text, '`').max(2) + 1);
-        out.push_str(&format!("{fence}\n{text}\n{fence}"));
+        out.push_str(&fenced(text));
+    }
+    if let Some(screen) = result.get("screen").filter(|screen| screen.is_object()) {
+        out.push_str(&screen_summary(screen));
     }
     out.push_str(&format!("\ncursor: {cursor}"));
+    out
+}
+
+/// Longer than any backtick run in the text, so printed text cannot close the block and
+/// pose as the tool's own words.
+fn fenced(text: &str) -> String {
+    let fence = "`".repeat(longest_run(text, '`').max(2) + 1);
+    format!("{fence}\n{text}\n{fence}")
+}
+
+fn screen_summary(screen: &Value) -> String {
+    let number = |pointer: &str| screen.pointer(pointer).and_then(Value::as_u64).unwrap_or(0);
+    let mut out = format!(
+        "\nscreen {}x{}, cursor at row {} column {}{}",
+        number("/cols"),
+        number("/rows"),
+        number("/cursor/row"),
+        number("/cursor/col"),
+        if screen.pointer("/cursor/visible") == Some(&Value::Bool(false)) {
+            " (hidden)"
+        } else {
+            ""
+        },
+    );
+    let highlights: Vec<String> = screen["highlights"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|highlight| {
+            format!(
+                "row {} column {}: {}",
+                highlight["row"].as_u64().unwrap_or(0),
+                highlight["col"].as_u64().unwrap_or(0),
+                highlight["text"].as_str().unwrap_or_default(),
+            )
+        })
+        .collect();
+    if !highlights.is_empty() {
+        out.push_str("\nhighlighted (selected items, status bars):\n");
+        out.push_str(&fenced(&highlights.join("\n")));
+    }
     out
 }
 
@@ -721,6 +780,22 @@ mod tests {
             .map(|tool| tool.name)
             .collect();
         assert_eq!(acting, agents::ACTING_TOOLS);
+    }
+
+    #[test]
+    fn screen_reads_show_the_cursor_and_highlights_inside_a_fence() {
+        let result = json!({
+            "output": { "text": "  apples\n> pears", "lines": 2, "truncated": false, "cursor": "c5" },
+            "screen": {
+                "cols": 20, "rows": 4,
+                "cursor": { "row": 2, "col": 7, "visible": false },
+                "highlights": [{ "row": 1, "col": 0, "text": "> pears ```", "inverse": true }],
+            },
+        });
+        assert_eq!(
+            summary("pane_read", &result),
+            "```\n  apples\n> pears\n```\nscreen 20x4, cursor at row 2 column 7 (hidden)\nhighlighted (selected items, status bars):\n````\nrow 1 column 0: > pears ```\n````\ncursor: c5"
+        );
     }
 
     #[test]

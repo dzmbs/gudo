@@ -314,6 +314,113 @@ async fn any_program_reports_its_status_and_agents_wait_for_it() {
     assert!(agent.ok("whoami", json!({})).await["pane"]["status"].is_null());
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn an_agent_drives_a_full_screen_program_by_what_it_shows() {
+    let Some(zsh) = zsh() else {
+        eprintln!("skipping: zsh not installed");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let menu = dir.path().join("menu.zsh");
+    std::fs::write(
+        &menu,
+        "printf '\\e[?1049h\\e[H  apples\\r\\n\\e[7m> pears\\e[0m\\r\\n  plums'\n\
+         read -k1\n\
+         printf '\\e[2;1H  pears \\e[3;1H\\e[7m> plums\\e[0m\\e[?25l'\n\
+         read -k1\n\
+         printf '\\e[?25h\\e[?1049l'\n",
+    )
+    .unwrap();
+    let daemon = start_with(dir.path(), |config| config.shell = Some(zsh)).await;
+    let mut user = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let agent_pane = user.attach_and_follow().await;
+    let agent = Caller {
+        socket: daemon.hook_socket().to_owned(),
+        token: std::fs::read_to_string(dir.path().join("hook.token")).unwrap(),
+        pane: agent_pane.0.to_string(),
+    };
+    let worker = agent.ok("cmd_run", json!({ "command": "true" })).await["pane"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    assert_eq!(
+        agent
+            .refused(
+                "pane_wait",
+                json!({ "pane": worker, "match": "x", "gone": true })
+            )
+            .await,
+        TermErrorCode::InvalidArgs
+    );
+
+    agent
+        .ok(
+            "pane_send",
+            json!({ "pane": worker, "text": format!("zsh {}", menu.display()), "submit": true }),
+        )
+        .await;
+    let shown = agent
+        .ok(
+            "pane_wait",
+            json!({ "pane": worker, "screen": true, "match": "^> (\\w+)", "timeoutMs": 5000 }),
+        )
+        .await;
+    assert_eq!(shown["status"], "matched", "{shown}");
+    assert_eq!(shown["match"]["groups"][0], "pears");
+    // What is already on the screen counts: no new output is needed.
+    let again = agent
+        .ok(
+            "pane_wait",
+            json!({ "pane": worker, "screen": true, "match": "^> pears", "timeoutMs": 1000 }),
+        )
+        .await;
+    assert_eq!(again["status"], "matched", "{again}");
+
+    let read = agent.ok("pane_read", json!({ "pane": worker })).await;
+    assert_eq!(read["altScreen"], true, "{read}");
+    let screen = &read["screen"];
+    assert_eq!(screen["highlights"][0]["text"], "> pears", "{read}");
+    assert_eq!(screen["highlights"][0]["row"], 1);
+    assert_eq!(screen["highlights"][0]["inverse"], true);
+    assert_eq!(screen["cursor"]["row"], 2);
+
+    agent
+        .ok("pane_send", json!({ "pane": worker, "keys": ["x"] }))
+        .await;
+    let moved = agent
+        .ok(
+            "pane_wait",
+            json!({ "pane": worker, "screen": true, "gone": true, "match": "^> pears", "timeoutMs": 5000 }),
+        )
+        .await;
+    assert_eq!(moved["status"], "gone", "{moved}");
+    assert_eq!(
+        moved["screen"]["highlights"][0]["text"], "> plums",
+        "{moved}"
+    );
+    assert_eq!(moved["screen"]["cursor"]["visible"], false, "{moved}");
+
+    agent
+        .ok("pane_send", json!({ "pane": worker, "keys": ["x"] }))
+        .await;
+    let back = agent
+        .ok(
+            "pane_wait",
+            json!({ "pane": worker, "prompt": true, "timeoutMs": 5000 }),
+        )
+        .await;
+    assert_eq!(back["status"], "prompt", "{back}");
+    let list = agent.ok("pane_list", json!({})).await;
+    let listed = list["panes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|pane| pane["id"] == worker)
+        .unwrap();
+    assert!(listed["multiplexer"].is_null(), "{listed}");
+}
+
 /// Hooks a worker's Claude would send, stamped for `pane`.
 async fn claude_hook(
     socket: &Path,

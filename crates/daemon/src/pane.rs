@@ -492,6 +492,10 @@ impl Pane {
             .unwrap_or_default()
     }
 
+    pub(crate) fn screen_view(&self) -> crate::term::ScreenView {
+        crate::term::screen_view(&lock(&self.vt).term)
+    }
+
     /// The text of the cursor's row on the primary screen, for spotting password prompts;
     /// `None` on the alternate screen.
     pub fn cursor_line(&self) -> Option<String> {

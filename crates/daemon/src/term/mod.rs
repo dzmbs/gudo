@@ -13,6 +13,7 @@
 pub(crate) mod ask;
 pub(crate) mod events;
 mod output;
+mod screen;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -33,6 +34,7 @@ use crate::core::{Core, Event, PaneEntry, lock};
 
 pub(crate) use output::visible;
 pub use output::{Output, SOURCE_SHARED};
+pub(crate) use screen::{ScreenView, view as screen_view};
 
 pub const TERM_VERSION: u32 = 1;
 
@@ -625,6 +627,13 @@ struct WaitArgs {
     pane: Option<String>,
     #[serde(default, rename = "match")]
     pattern: Option<String>,
+    /// `match` looks at the visible screen, as it is now and after each change, instead of
+    /// at the output that comes after `since`.
+    #[serde(default)]
+    screen: bool,
+    /// Until `match` is no longer on the screen.
+    #[serde(default)]
+    gone: bool,
     #[serde(default)]
     since: Option<String>,
     #[serde(default)]
@@ -1058,11 +1067,10 @@ impl CallContext {
             PaneLaunch::Command { .. } => "command",
             _ => "shell",
         };
-        let foreground = self
-            .core
-            .assist
-            .foreground(entry)
-            .map(|foreground| json!({ "pid": foreground.pid, "name": foreground.name }));
+        let foreground = self.core.assist.foreground(entry);
+        let multiplexer = foreground.as_ref().and_then(multiplexer);
+        let foreground =
+            foreground.map(|foreground| json!({ "pid": foreground.pid, "name": foreground.name }));
         let session = self.core.session_of_pane(id).unwrap_or_default();
         let layout = lock(&self.core.layout).snapshot(session);
         let tab_id = layout.and_then(|layout| {
@@ -1093,6 +1101,7 @@ impl CallContext {
             "secretPrompt": entry.pane.echo().is_hidden_input(),
             "exited": meta.as_ref().and_then(|meta| meta.exit).is_some(),
             "foreground": foreground,
+            "multiplexer": multiplexer,
             "lastCommand": last,
             "status": status(&self.core, id, entry),
             "cursor": output::cursor(entry.pane.head()),
@@ -1368,6 +1377,7 @@ impl CallContext {
         let max = max_bytes(args.max_bytes);
         let alt = entry.pane.alt_screen();
         let mut command = None;
+        let mut screen = None;
         let (mut text, at) = if let Some(since) = &args.since {
             let since = output::parse_cursor(since).ok_or_else(|| {
                 ToolError::new(ErrorCode::InvalidArgs, "a cursor looks like c1234")
@@ -1386,6 +1396,7 @@ impl CallContext {
             command = Some(CommandInfo::of(&found.mark));
             (found.text, entry.pane.head())
         } else if args.screen || alt {
+            screen = Some(entry.pane.screen_view());
             (entry.pane.screen_text(), entry.pane.head())
         } else {
             self.tail(&entry, args.tail.unwrap_or(DEFAULT_TAIL)).await?
@@ -1401,6 +1412,7 @@ impl CallContext {
             "altScreen": alt,
             "atPrompt": line.view.phase == Phase::Prompt,
             "command": command,
+            "screen": screen,
         }))
     }
 
@@ -1418,7 +1430,7 @@ impl CallContext {
             Some(target) => {
                 let (pane, entry) = self.resolve(Some(target))?;
                 if !self.drives(pane) && Self::busy(&entry) {
-                    return Err(pane_busy(pane));
+                    return Err(pane_busy(pane, &entry, &self.core));
                 }
                 let action = DriveAction::Run {
                     command: line.clone(),
@@ -1440,7 +1452,7 @@ impl CallContext {
             tokio::time::sleep(TICK).await;
         }
         if Self::busy(&entry) {
-            return Err(pane_busy(pane));
+            return Err(pane_busy(pane, &entry, &self.core));
         }
         if entry.pane.echo().is_hidden_input() {
             return Err(secret_prompt(pane));
@@ -1527,6 +1539,18 @@ impl CallContext {
                 "wait for what? give match, prompt, quietMs, exit or status",
             ));
         }
+        if (args.screen || args.gone) && regex.is_none() {
+            return Err(ToolError::new(
+                ErrorCode::InvalidArgs,
+                "screen and gone need a match",
+            ));
+        }
+        if args.gone && !args.screen {
+            return Err(
+                ToolError::new(ErrorCode::InvalidArgs, "gone looks at the screen")
+                    .hint("add screen: true"),
+            );
+        }
         if let Some(bad) = args
             .status
             .iter()
@@ -1560,24 +1584,30 @@ impl CallContext {
             let mut text = None;
             let due = matched_at.is_none_or(|matched| matched.elapsed() >= MATCH_EVERY)
                 || Instant::now() + TICK >= deadline;
-            if let Some(regex) = regex.as_ref().filter(|_| fresh && due) {
+            if let Some(regex) = regex.as_ref().filter(|_| args.screen && fresh && due) {
+                let shown = visible(&entry.pane.screen_text());
+                fresh = false;
+                matched_at = Some(Instant::now());
+                let found = first_match(regex, &shown);
+                if found.is_some() != args.gone {
+                    let mut done = json!({
+                        "status": if args.gone { "gone" } else { "matched" },
+                        "output": Output::new(shown, max, position(&subscriber)).shared(self.shared(pane)),
+                        "screen": entry.pane.screen_view(),
+                    });
+                    if let Some((line, groups)) = found {
+                        done["match"] = json!({ "line": line, "groups": groups });
+                    }
+                    return Ok(done);
+                }
+            }
+            if let Some(regex) = regex.as_ref().filter(|_| !args.screen && fresh && due) {
                 // Rendering is the costly part: off the async workers, and at most every
                 // MATCH_EVERY however fast the pane prints.
                 let rendered = output::visible(&output::render_bounded(bytes.clone(), cols).await);
                 fresh = false;
                 matched_at = Some(Instant::now());
-                if let Some(found) = rendered.lines().find_map(|line| {
-                    regex.captures(line).map(|captures| {
-                        (
-                            line.to_owned(),
-                            captures
-                                .iter()
-                                .skip(1)
-                                .map(|group| group.map(|group| group.as_str().to_owned()))
-                                .collect::<Vec<_>>(),
-                        )
-                    })
-                }) {
+                if let Some(found) = first_match(regex, &rendered) {
                     return Ok(json!({
                         "status": "matched",
                         "match": { "line": found.0, "groups": found.1 },
@@ -2256,16 +2286,58 @@ fn agent_blocked(pane: PaneId, info: &Value) -> ToolError {
     .hint("the user answers it on their device; agent_wait tells you when it moves on")
 }
 
+/// The first line `regex` matches, with its capture groups.
+fn first_match(regex: &Regex, text: &str) -> Option<(String, Vec<Option<String>>)> {
+    text.lines().find_map(|line| {
+        regex.captures(line).map(|captures| {
+            (
+                line.to_owned(),
+                captures
+                    .iter()
+                    .skip(1)
+                    .map(|group| group.map(|group| group.as_str().to_owned()))
+                    .collect(),
+            )
+        })
+    })
+}
+
 fn closed() -> ToolError {
     ToolError::new(ErrorCode::Closed, "the pane has exited")
 }
 
-fn pane_busy(pane: PaneId) -> ToolError {
-    ToolError::new(
+/// Which terminal multiplexer runs in the foreground, if one does: `tmux`, `screen`, `zellij`
+/// or `byobu`, with `tmux-control` for `tmux -CC`.
+fn multiplexer(foreground: &proto::Foreground) -> Option<Value> {
+    if foreground.profile != proto::ProgramProfile::Tmux {
+        return None;
+    }
+    let name = foreground.name.trim_start_matches('-');
+    let control = name == "tmux"
+        && foreground
+            .argv
+            .iter()
+            .skip(1)
+            .filter_map(|arg| arg.strip_prefix('-'))
+            .any(|flags| {
+                flags.chars().all(|flag| flag.is_ascii_alphabetic()) && flags.contains('C')
+            });
+    Some(json!(if control { "tmux-control" } else { name }))
+}
+
+fn pane_busy(pane: PaneId, entry: &PaneEntry, core: &Core) -> ToolError {
+    let error = ToolError::new(
         ErrorCode::PaneBusy,
         format!("{} is running a command", pane_ref(pane)),
-    )
-    .hint("wait for it with pane_wait {prompt: true}, or run in a new pane")
+    );
+    match core.assist.foreground(entry).as_ref().and_then(multiplexer) {
+        Some(name) => error.hint(format!(
+            "{} runs {}, whose shells report no prompts here: type with pane_send, wait with pane_wait {{screen: true, match}} and read with pane_read {{screen: true}}, or run in a new pane",
+            pane_ref(pane),
+            name.as_str().unwrap_or("a multiplexer"),
+        )),
+        None => error.hint("wait for it with pane_wait {prompt: true}, or run in a new pane"),
+    }
 }
 
 fn secret_prompt(pane: PaneId) -> ToolError {
@@ -2463,6 +2535,32 @@ mod tests {
         assert_eq!(parse_key("f5").unwrap().key, ghostty_vt::Key::F5.0);
         assert!(parse_key("hyper+x").is_err());
         assert!(parse_key("ab").is_err());
+    }
+
+    #[test]
+    fn multiplexers_are_named_and_tmux_control_mode_is_told_apart() {
+        let foreground = |argv: &[&str]| {
+            let argv: Vec<String> = argv.iter().map(|arg| arg.to_string()).collect();
+            proto::Foreground {
+                pane_id: PaneId(1),
+                pid: 1,
+                name: argv[0].clone(),
+                profile: proto::ProgramProfile::classify(&argv[0], &argv),
+                argv,
+                since: proto::UnixMillis(0),
+            }
+        };
+        assert_eq!(multiplexer(&foreground(&["tmux"])), Some(json!("tmux")));
+        assert_eq!(
+            multiplexer(&foreground(&["tmux", "-L", "work", "-CC", "attach"])),
+            Some(json!("tmux-control"))
+        );
+        assert_eq!(
+            multiplexer(&foreground(&["tmux", "new", "-c", "/tmp"])),
+            Some(json!("tmux"))
+        );
+        assert_eq!(multiplexer(&foreground(&["zellij"])), Some(json!("zellij")));
+        assert_eq!(multiplexer(&foreground(&["vim", "-C"])), None);
     }
 
     #[test]
