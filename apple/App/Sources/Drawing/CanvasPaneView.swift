@@ -40,6 +40,10 @@ final class CanvasPaneView {
             let pane = PaneId(drawing.paneId)
             if workspace.focusedPane != pane { workspace.apply(.focus(pane)) }
         }
+        editor.onFileChanged = { [weak drawing] path in
+            guard let drawing else { return }
+            drawing.workspace?.canvasTitles[PaneId(drawing.paneId)] = path.map(DrawingFile.title(ofPath:)) ?? DrawingFile.untitled
+        }
         #if os(iOS)
         view.accessibilityIdentifier = "drawing.canvas"
         #else
@@ -48,6 +52,10 @@ final class CanvasPaneView {
     }
 
     func start() { editor.start() }
+
+    var ownsKeyboard: Bool { editor.ownsKeyboard }
+
+    func takeKeyboard() { editor.takeKeyboard() }
 
     /// Debug: calls a bridge function once the editor is up.
     func call(_ function: String, _ argument: Any) { editor.call(function, argument) }
@@ -75,6 +83,8 @@ final class CanvasEditor: NSObject {
     let artifactId: UInt64?
     let view = OverlayContainer()
     var onFocus: (() -> Void)?
+    /// The drawing's file on the host, once known and after each rename (here or elsewhere).
+    var onFileChanged: ((String?) -> Void)?
     /// Set when the editor is presented on its own (iPhone), for its Done button.
     var onDone: (() -> Void)? {
         didSet { chrome.showsDone = onDone != nil }
@@ -171,14 +181,41 @@ final class CanvasEditor: NSObject {
         destinationsTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshDestinations() }
         }
+        sync.onAppStateChanged = { [weak self, weak sync] in
+            guard let self, let sync else { return }
+            followFile(sync.appState[DrawingFile.pathKey] as? String)
+        }
         let theme = context.dark ? "dark" : "light"
         Task {
             await sync.load(mode: "canvas", theme: theme, viewport: nil)
-            guard !closed, let path = sync.appState[DrawingFile.pathKey] as? String, !path.isEmpty else { return }
-            saver = DrawingFileSaver(path: path, artifactId: artifactId, client: context.hub.client, files: context.files)
-            chrome.fileName = (path as NSString).lastPathComponent
-            view.setNeedsLayoutSoon()
+            guard !closed else { return }
+            followFile(sync.appState[DrawingFile.pathKey] as? String)
         }
+    }
+
+    private func followFile(_ path: String?) {
+        guard let artifactId, let path, !path.isEmpty else {
+            onFileChanged?(nil)
+            return
+        }
+        if let saver {
+            guard saver.path != path else { return }
+            saver.follow(path)
+        } else {
+            saver = DrawingFileSaver(path: path, artifactId: artifactId, client: context.hub.client, files: context.files)
+        }
+        chrome.fileName = (path as NSString).lastPathComponent
+        view.setNeedsLayoutSoon()
+        onFileChanged?(path)
+    }
+
+    var ownsKeyboard: Bool { web.webView.ownsKeyboard }
+
+    /// Takes the keyboard from the terminal behind, so its software keyboard and key bar go
+    /// away while hardware keys reach the editor and the app's shortcuts.
+    func takeKeyboard() {
+        guard !closed else { return }
+        web.webView.claimKeyboard()
     }
 
     func call(_ function: String, _ argument: Any) {
@@ -348,6 +385,7 @@ final class CanvasEditor: NSObject {
                 sync?.setAppState([DrawingFile.pathKey: path])
                 chrome.fileName = name
                 view.setNeedsLayoutSoon()
+                onFileChanged?(path)
             } catch {
                 toast("Could not rename the drawing: \(ScreenError.describe(error))", failure: true)
             }
@@ -435,6 +473,11 @@ final class DrawingFileSaver {
             dirty = true
             CanvasWebView.log.error("drawing file: \(String(describing: error), privacy: .public)")
         }
+    }
+
+    /// The file moved on another device.
+    func follow(_ renamed: String) {
+        path = renamed
     }
 
     func rename(to name: String) async throws -> String {

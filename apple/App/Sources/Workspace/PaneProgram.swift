@@ -6,10 +6,11 @@ extension Workspace {
     /// The sidebar group this workspace's tabs belong to (its host, or this device).
     var groupId: String { hostId ?? HostGroups.localId }
 
-    /// What a pane runs, for its mark: the reported foreground program (daemon `tcgetpgrp`, the
-    /// local PTY), else a program its title names (Claude Code's "✳ task", "vim README.md"),
-    /// else its shell, else a plain shell.
+    /// What a pane runs, for its mark: the drawing in a canvas pane, else the reported foreground
+    /// program (daemon `tcgetpgrp`, the local PTY), else a program its title names (Claude
+    /// Code's "✳ task", "vim README.md"), else its shell, else a plain shell.
     func programIdentity(of id: PaneId) -> ProgramIdentity {
+        if let drawing = canvasTitles[id] { return .drawing(drawing) }
         guard let pane = panes[id] else { return .shell }
         if let program = reportedProgram(of: pane) { return ProgramCatalog.identity(process: program) }
         if let titled = ProgramCatalog.identity(title: pane.title) { return titled }
@@ -17,6 +18,12 @@ extension Workspace {
             return ProgramCatalog.identity(process: shell)
         }
         return .shell
+    }
+}
+
+extension ProgramIdentity {
+    static func drawing(_ title: String) -> ProgramIdentity {
+        ProgramIdentity(id: "drawing", displayName: title, kind: .drawing)
     }
 }
 

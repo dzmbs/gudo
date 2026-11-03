@@ -40,7 +40,7 @@ struct PaneHeader: View {
         HStack(spacing: DS.Space.row) {
             ProgramMark(program, size: 12)
                 .foregroundStyle(isFocused ? DS.Palette.text : DS.Palette.textSecondary)
-            // Shells keep their own word ("zsh", "canvas"); programs their display name.
+            // Shells keep their own word ("zsh"); programs their display name.
             Text(program.isShell ? workspace.programName(of: id) : program.displayName)
                 .font(.caption.weight(isFocused ? .semibold : .regular))
                 .foregroundStyle(isFocused ? DS.Palette.text : DS.Palette.textSecondary)

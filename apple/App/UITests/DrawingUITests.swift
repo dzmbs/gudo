@@ -270,6 +270,38 @@ final class DrawingUITests: XCTestCase {
         sleep(2)
     }
 
+    /// A drawing takes the keyboard from the terminal: the software keyboard and key bar go away,
+    /// hardware shortcuts keep working, the pane is named after the file, and the keyboard comes
+    /// back with a tap on the terminal.
+    func testNewDrawingSendsTheKeyboardAway() throws {
+        let app = launch(try ticket())
+        let terminal = element(app, preparePane(app).identifier)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 10), "typing into the terminal")
+        app.typeKey("d", modifierFlags: [.command, .control, .shift])
+        XCTAssertTrue(element(app, "canvas.toolbar").waitForExistence(timeout: 30), "the canvas opens")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5), "the keyboard and key bar go away")
+        let phone = element(app, "drawing.sheet").exists
+        if !phone {
+            let header = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'drawing-' AND NOT (label ENDSWITH '.excalidraw')")).firstMatch
+            XCTAssertTrue(header.waitForExistence(timeout: 10), "the pane is named after its file")
+        }
+        sleep(2)
+        shot(app, "new-drawing-keyboard")
+
+        if phone {
+            tap(element(app, "canvas.done"))
+            XCTAssertTrue(element(app, "drawing.sheet").waitForNonExistence(timeout: 5))
+            return
+        }
+        terminal.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5)).tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 10), "the terminal has the keyboard again")
+
+        tap(element(app, "drawing.canvas"))
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5), "focusing the drawing sends it away again")
+        app.typeKey("k", modifierFlags: .command)
+        XCTAssertTrue(app.textFields.matching(identifier: "command-palette").firstMatch.waitForExistence(timeout: 5), "shortcuts still work")
+    }
+
     /// New Drawing opens a floating canvas (full screen on iPhone) saved as a dated
     /// `.excalidraw` file, with Send to Agent and Rename in the app's glass.
     func testNewDrawingOpensAFloatingCanvas() throws {

@@ -149,6 +149,7 @@ enum DrawingDocuments {
         let workspace = host.workspace
         guard let anchor = workspace.focusedPane ?? workspace.session.activeTab?.focused else { return }
         let launch = GudoCore.PaneLaunch.canvas(artifactId: artifactId)
+        host.hub.focusWhenOpened(artifactId)
         if workspace.canFloat {
             _ = host.client.op(op: .newFloat(paneId: anchor.rawValue, launch: launch, frame: nil, focus: true, closeWhenDone: false))
         } else {
@@ -211,6 +212,11 @@ final class DrawingSheet: UIViewController {
         editor.view.autoresizingMask = []
         view.addSubview(editor.view)
         editor.start()
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        editor.takeKeyboard()
     }
 
     override func viewDidLayoutSubviews() {

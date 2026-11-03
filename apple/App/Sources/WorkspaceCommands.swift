@@ -181,7 +181,7 @@ enum ActiveWindow {
     static func model(editingIn window: NSWindow) -> WindowModel? {
         models.allObjects.first { model in
             guard let webView = model.focusedEditor?.webView, webView.window === window else { return false }
-            return model.editorHasKeys && EditorPane.hasKeyboard(webView)
+            return model.editorHasKeys && webView.ownsKeyboard
         }
     }
 

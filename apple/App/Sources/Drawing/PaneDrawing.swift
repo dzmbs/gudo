@@ -833,12 +833,28 @@ final class PaneDrawing: NSObject {
             canvas.view.frame = view.bounds
             view.addSubview(canvas.view)
             self.canvas = canvas
+            if workspace?.canvasTitles[PaneId(paneId)] == nil { workspace?.canvasTitles[PaneId(paneId)] = DrawingFile.untitled }
             canvas.start()
+            if hub.takeFocusRequest(for: artifact) {
+                // After this turn: a pane being made is not focused in the middle of the layout pass.
+                Task { @MainActor [weak self] in
+                    guard let self, let workspace else { return }
+                    workspace.apply(.focus(PaneId(paneId)))
+                }
+            }
+            if workspace?.focusedPane == PaneId(paneId) { canvas.takeKeyboard() }
         } else if artifact == nil, let canvas {
             canvas.close()
             self.canvas = nil
+            workspace?.canvasTitles[PaneId(paneId)] = nil
         }
         publishDrawingFocus()
+    }
+
+    /// The canvas covering `pane`, which takes the keyboard in the terminal's place.
+    static func canvas(in pane: Pane) -> CanvasPaneView? {
+        guard let drawing = of(pane.id), drawing.pane === pane else { return nil }
+        return drawing.canvas
     }
 
     // MARK: Handoff

@@ -63,6 +63,9 @@ final class Workspace {
     /// Drawings open in this window's panes: draw mode, or a canvas pane (set by
     /// `PaneDrawing`; the window's Handoff activity carries the one in view).
     var drawingFocus: [PaneId: HandoffPayload.Drawing] = [:]
+    /// Canvas panes by the drawing they show, named for headers, lists and the window title
+    /// (set by `PaneDrawing`).
+    var canvasTitles: [PaneId: String] = [:]
     /// What runs in each pane (program and directory), refreshed about once a second.
     private(set) var foregrounds: [PaneId: PaneForeground] = [:]
     /// Until when grid changes come from the software keyboard rather than the user.
@@ -309,11 +312,13 @@ final class Workspace {
         return "Shell"
     }
 
-    /// The live line under a tab's name: what its agent (or a program's own report) says it is
-    /// doing, else the program running in the focused pane, else the program's own title
-    /// (OSC 0/2), else the git checkout as `repo:branch`, else the directory.
+    /// The live line under a tab's name: the drawing in a focused canvas pane, else what its
+    /// agent (or a program's own report) says it is doing, else the program running in the
+    /// focused pane, else the program's own title (OSC 0/2), else the git checkout as
+    /// `repo:branch`, else the directory.
     func context(of tab: Tab) -> String? {
         let paneId = tab.focused
+        if let drawing = canvasTitles[paneId] { return drawing }
         let name = title(of: tab)
         if let daemon = host as? DaemonConnection, let agent = daemon.meta[paneId]?.agent {
             let kind = agent.kind.prefix(1).uppercased() + agent.kind.dropFirst()
@@ -373,7 +378,7 @@ final class Workspace {
     /// What a pane runs, for headers and lists: the reported program, else what the PTY says,
     /// else "shell". Never the pane id, which UI tests use as the terminal's identifier.
     func programName(of pane: PaneId) -> String {
-        if PaneDrawing.of(pane)?.canvas != nil { return "canvas" }
+        if let title = canvasTitles[pane] { return title }
         if let program = self.pane(pane)?.foregroundProgram { return program }
         if let program = foregrounds[pane]?.program, !program.isEmpty { return program }
         return "shell"
@@ -546,6 +551,7 @@ final class Workspace {
             if grids[id] != nil { grids[id] = nil }
             if notices[id] != nil { notices[id] = nil }
             if foregrounds[id] != nil { foregrounds[id] = nil }
+            if canvasTitles[id] != nil { canvasTitles[id] = nil }
             changed = true
         }
         if failures.keys.contains(where: { !live.contains($0) }) { failures = failures.filter { live.contains($0.key) } }

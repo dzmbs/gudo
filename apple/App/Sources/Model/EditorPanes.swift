@@ -261,36 +261,12 @@ final class EditorPane: Identifiable {
 
     func takeKeyboard() {
         guard let webView, isWorkbenchVisible else { return }
-        Task { @MainActor in
-            for attempt in 0..<20 {
-                if attempt > 0 { try? await Task.sleep(for: .milliseconds(16)) }
-                guard webView.window != nil else { continue }
-                #if os(macOS)
-                if !Self.hasKeyboard(webView) { webView.window?.makeFirstResponder(webView) }
-                #else
-                if !webView.isFirstResponder, !(webView.findFirstResponder() != nil) { webView.becomeFirstResponder() }
-                #endif
-                return
-            }
-        }
+        webView.claimKeyboard()
     }
 
     func releaseKeyboard() {
-        guard let webView else { return }
-        #if os(macOS)
-        if Self.hasKeyboard(webView) { webView.window?.makeFirstResponder(nil) }
-        #else
-        webView.endEditing(true)
-        _ = webView.resignFirstResponder()
-        #endif
+        webView?.releaseKeyboard()
     }
-
-    #if os(macOS)
-    static func hasKeyboard(_ webView: WKWebView) -> Bool {
-        guard let responder = webView.window?.firstResponder as? NSView else { return false }
-        return responder === webView || responder.isDescendant(of: webView)
-    }
-    #endif
 
     // MARK: Touches
 
@@ -342,15 +318,6 @@ private final class TouchRelay: NSObject, UIGestureRecognizerDelegate {
     }
 }
 
-private extension UIView {
-    func findFirstResponder() -> UIView? {
-        if isFirstResponder { return self }
-        for subview in subviews {
-            if let found = subview.findFirstResponder() { return found }
-        }
-        return nil
-    }
-}
 #endif
 
 /// A window's open editors, made when a leaf is first shown so a relaunch loads none until looked at.

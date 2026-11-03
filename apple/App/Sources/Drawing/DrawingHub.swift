@@ -19,6 +19,8 @@ final class DrawingHub {
     /// Open editors (overlay or canvas) by artifact.
     private var scenes: [UInt64: [WeakScene]] = [:]
     private var images: [String: Task<InlineImagePixels?, Never>] = [:]
+    /// Drawings this device just opened, whose canvas pane takes focus once it is made.
+    private var focusRequests: Set<UInt64> = []
     /// Encoded images by hash, for copies, drags and drops (what the placements show).
     private var pngs: [String: Data] = [:]
 
@@ -66,6 +68,16 @@ final class DrawingHub {
 
     private func pane(_ id: UInt64) -> PaneDrawing? { panes.object(forKey: NSNumber(value: id)) }
 
+    /// The window's own focus stays where it was when the host makes a pane, so a drawing opened
+    /// here asks for its canvas pane to be focused when it appears.
+    func focusWhenOpened(_ artifactId: UInt64) {
+        focusRequests.insert(artifactId)
+    }
+
+    func takeFocusRequest(for artifactId: UInt64) -> Bool {
+        focusRequests.remove(artifactId) != nil
+    }
+
     /// Records a placement this client just made, before its `Placed` push arrives.
     func noteLocal(_ placement: Placement, replacing: UInt64?) {
         if let replacing { placements[placement.paneId]?[replacing] = nil }
@@ -98,8 +110,11 @@ final class DrawingHub {
         case .unplaced(let paneId, let placementId):
             placements[paneId]?[placementId] = nil
             pane(paneId)?.placementsChanged()
-        case .excalidraw(let artifactId, _, let elements, _, let files):
-            for scene in scenes[artifactId] ?? [] { scene.value?.applyRemote(elements: elements, files: files) }
+        case .excalidraw(let artifactId, _, let elements, let appState, let files):
+            for scene in scenes[artifactId] ?? [] {
+                if let appState { scene.value?.applyRemote(appState: appState) }
+                scene.value?.applyRemote(elements: elements, files: files)
+            }
             for pane in panes.objectEnumerator()?.allObjects as? [PaneDrawing] ?? [] { pane.peerInk.finish(artifactId: artifactId) }
         case .ink(let ink):
             let anchorPane = infos[ink.artifactId]?.anchor?.paneId
@@ -200,6 +215,8 @@ final class SceneSync {
     /// The scene's live elements' types by id, as this editor knows them.
     private(set) var liveElements: [String: String] = [:]
     var onElementsChanged: (() -> Void)?
+    /// Another device changed the app state (a rename moves the drawing's file).
+    var onAppStateChanged: (() -> Void)?
 
     init(artifactId: UInt64, sessionId: UInt64, hub: DrawingHub, web: CanvasWebView) {
         self.artifactId = artifactId
@@ -317,6 +334,12 @@ final class SceneSync {
 
     func settle() async {
         await chain?.value
+    }
+
+    func applyRemote(appState json: String) {
+        guard let state = Self.object(json) as? [String: Any] else { return }
+        appState.merge(state) { $1 }
+        onAppStateChanged?()
     }
 
     /// Reconciles pushes and winners into the editor without entering its undo stack.

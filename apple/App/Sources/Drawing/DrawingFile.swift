@@ -24,6 +24,14 @@ nonisolated enum DrawingFile {
         return (trimmed as NSString).pathExtension.lowercased() == fileExtension ? trimmed : "\(trimmed).\(fileExtension)"
     }
 
+    /// What a drawing is called in headers and lists: its file name without the extension.
+    static func title(ofPath path: String) -> String {
+        ((path as NSString).lastPathComponent as NSString).deletingPathExtension
+    }
+
+    /// A canvas not kept in a file.
+    static let untitled = "Drawing"
+
     static func isDrawing(_ path: String) -> Bool {
         (path as NSString).pathExtension.lowercased() == fileExtension
     }

@@ -5,7 +5,7 @@ import Foundation
 /// its kind.
 nonisolated public struct ProgramIdentity: Hashable, Sendable {
     public enum Kind: String, Hashable, Sendable {
-        case shell, agent, editor, monitor, vcs, container, language, database, multiplexer, remote, other
+        case shell, agent, editor, monitor, vcs, container, language, database, multiplexer, remote, drawing, other
 
         /// The neutral glyph for programs of this kind without a shipped logo.
         public var symbol: String {
@@ -20,6 +20,7 @@ nonisolated public struct ProgramIdentity: Hashable, Sendable {
             case .database: "cylinder"
             case .multiplexer: "rectangle.split.3x1"
             case .remote: "network"
+            case .drawing: "scribble.variable"
             }
         }
     }
