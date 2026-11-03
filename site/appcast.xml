@@ -10,6 +10,16 @@
     <description>Updates for Gudo for Mac.</description>
     <language>en</language>
     <item>
+      <title>Version 0.1.3</title>
+      <pubDate>Tue, 03 Nov 2026 17:02:50 +0100</pubDate>
+      <sparkle:version>807</sparkle:version>
+      <sparkle:shortVersionString>0.1.3</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <sparkle:releaseNotesLink>https://github.com/dzmbs/gudo/releases/tag/v0.1.3</sparkle:releaseNotesLink>
+      <enclosure url="https://github.com/dzmbs/gudo/releases/download/v0.1.3/Gudo.dmg" length="66361581" type="application/octet-stream"
+                 sparkle:edSignature="jHO2JVpQxwzAOf4kbmcFZNyrqj/7TQEo0agc/isxNv7ghzFEa1ohAr0IbE0ii/UP8pO9Ms8lV7rp7t5ytGS9CA==" />
+    </item>
+    <item>
       <title>Version 0.1.2</title>
       <pubDate>Tue, 03 Nov 2026 15:52:25 +0100</pubDate>
       <sparkle:version>799</sparkle:version>
