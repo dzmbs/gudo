@@ -27,7 +27,7 @@
 //! 6. **Notifications.** Entering `blocked` notifies at once when the evidence is authoritative,
 //!    else after it persists for [`ArbiterConfig::blocked_debounce`]. `working → idle|error` sets
 //!    `unseen_done` and notifies unless a client is viewing the pane or the session was restored
-//!    and has not worked since. Subagents never notify.
+//!    and has not worked since. Subagents and turns the user interrupted never notify.
 //! 7. **Single-response approvals.** The first valid [`Decision`] for a request wins; later ones
 //!    get [`DecisionError::AlreadyDecided`] naming the winner.
 
@@ -39,7 +39,7 @@ use crate::adapter::HookCoverage;
 use crate::event::{
     ActorId, AgentEvent, AgentState, AnswerPath, ApprovalChoice, Blocked, BlockedReason, Blocker,
     Confidence, Decided, Decision, EventKind, PaneId, RequestId, SchemaVersion, Seq, SessionInfo,
-    Source, Status, UnixMillis,
+    Source, Status, TurnOutcome, UnixMillis,
 };
 use crate::manifest::{ScreenMatch, ScreenVerdict};
 use crate::signal::{Claim, Signal};
@@ -707,10 +707,18 @@ impl Arbiter {
             self.restored_unconfirmed = false;
             self.unseen_done = false;
         }
+        let stopped_by_user = cause.kind == Some(EventKind::Interrupted)
+            || cause.signal.as_ref().is_some_and(|signal| {
+                signal
+                    .turn
+                    .as_ref()
+                    .is_some_and(|turn| turn.outcome == TurnOutcome::Cancelled)
+            });
         if old_state == AgentState::Working
             && matches!(new_state, AgentState::Idle | AgentState::Error)
             && !self.restored_unconfirmed
             && !self.viewed
+            && !stopped_by_user
         {
             self.unseen_done = true;
             notify = notify.or(Some(if new_state == AgentState::Error {
@@ -1314,6 +1322,16 @@ mod tests {
 
         arbiter.viewed();
         assert!(!arbiter.unseen_done());
+    }
+
+    #[test]
+    fn an_interrupted_turn_does_not_notify() {
+        let mut arbiter = new_arbiter(HookCoverage::Partial);
+        let _ = arbiter.apply(hook(EventKind::TurnStarted, Claim::Working, 1), at(0));
+        let update = arbiter.apply(hook(EventKind::Interrupted, Claim::Idle, 2), at(10));
+        assert_eq!(update.notify, None);
+        assert!(!arbiter.unseen_done());
+        assert_eq!(arbiter.status(), &Status::Idle);
     }
 
     #[test]

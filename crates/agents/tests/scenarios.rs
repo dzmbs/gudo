@@ -220,6 +220,57 @@ fn codex_opt_in_hooks_are_authoritative_for_blocking() {
 }
 
 #[test]
+fn claude_finished_turn_notifies_once_from_the_stop_hook() {
+    let mut pane = Pane::new(ClaudeCode::new());
+    pane.hook(&fixture("claude", "user_prompt_submit"), 1, 0);
+    pane.hook(&fixture("claude", "subagent_stop"), 2, 1000);
+    assert!(pane.notified.is_empty(), "a subagent finishing is not the turn");
+    assert_eq!(pane.arbiter.status(), &Status::Working);
+    pane.hook(&fixture("claude", "stop"), 3, 2000);
+    assert_eq!(pane.notified, [Notify::Done]);
+    pane.hook(&fixture("claude", "notification_idle_prompt"), 4, 62_000);
+    assert_eq!(pane.notified, [Notify::Done], "idle_prompt only confirms idle");
+}
+
+#[test]
+fn claude_permission_prompt_notifies_at_once() {
+    let mut pane = Pane::new(ClaudeCode::new());
+    pane.hook(&fixture("claude", "user_prompt_submit"), 1, 0);
+    pane.hook(&fixture("claude", "notification_permission_prompt"), 2, 500);
+    assert!(matches!(pane.notified.as_slice(), [Notify::Blocked { .. }]));
+}
+
+#[test]
+fn codex_notify_program_finishes_the_turn_once() {
+    let mut pane = Pane::new(Codex::new());
+    pane.screen("› ", "app", 0);
+    pane.screen("• Working (2s • esc to interrupt)\n› ", "⠋ app", 1000);
+    pane.hook(&fixture("codex", "notify_agent_turn_complete"), 1, 5000);
+    assert_eq!(pane.arbiter.status(), &Status::Idle);
+    assert_eq!(pane.notified, [Notify::Done]);
+    pane.osc9("Rename complete and verified `cargo build` succeeds.", 5010);
+    pane.screen("• Done.\n› ", "app", 5050);
+    assert_eq!(pane.notified, [Notify::Done]);
+    assert_eq!(
+        pane.arbiter
+            .session()
+            .native_id
+            .as_ref()
+            .map(|id| id.as_str()),
+        Some("b5f6c1c2-1111-2222-3333-444455556666")
+    );
+}
+
+#[test]
+fn codex_interrupted_by_the_user_does_not_notify() {
+    let mut pane = Pane::new(Codex::new());
+    pane.hook(&fixture("codex", "user_prompt_submit"), 1, 0);
+    pane.hook(&fixture("codex", "interrupt"), 2, 300);
+    assert_eq!(pane.arbiter.status(), &Status::Idle);
+    assert!(pane.notified.is_empty());
+}
+
+#[test]
 fn captured_claude_2_1_302_payloads_parse() {
     let cases = [
         ("session_start", Some(EventKind::SessionStarted)),

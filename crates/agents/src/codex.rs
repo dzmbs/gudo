@@ -2,7 +2,10 @@
 //!
 //! Codex hooks need trust hashes in the user's config, so v1 launches without them and reads state
 //! from the screen, the `[ ! ] Action Required` title and OSC 9 notifications, which per-run `-c`
-//! flags turn on. Hook payloads are still parsed for users who opt into the marker-block install.
+//! flags turn on. A finished turn also comes from Codex's own `notify` program
+//! (`agent-turn-complete`, with the last message), which a per-run `-c` points at the hook shim;
+//! the shim then runs the user's own `notify` too. Hook payloads are still parsed for users who
+//! opt into the marker-block install.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -32,6 +35,18 @@ const NOTIFICATION_OVERRIDES: [&str; 3] = [
     r#"tui.notification_method="osc9""#,
     r#"tui.notification_condition="always""#,
 ];
+
+/// The hook event name the shim reports for Codex's `notify` program.
+pub const NOTIFY_EVENT: &str = "notify";
+
+/// `-c` override that runs `<hook_bin> codex notify <json>` when a turn completes.
+fn notify_override(ctx: &LaunchContext) -> String {
+    format!(
+        "notify=[{},\"codex\",{}]",
+        toml_quote(&ctx.hook_bin.to_string_lossy()),
+        toml_quote(NOTIFY_EVENT)
+    )
+}
 
 /// `-c` overrides that add the daemon's drawings MCP server (docs/DAEMON.md §7.12) for this
 /// run only, next to the user's own `mcp_servers`.
@@ -205,7 +220,47 @@ fn permission_options() -> Vec<ApprovalOption> {
     ]
 }
 
+/// What Codex passes its `notify` program (Codex docs, advanced configuration, `notify`).
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+enum Notification {
+    #[serde(rename = "agent-turn-complete", rename_all = "kebab-case")]
+    AgentTurnComplete {
+        thread_id: Option<String>,
+        cwd: Option<PathBuf>,
+        last_assistant_message: Option<String>,
+    },
+    #[serde(other)]
+    Other,
+}
+
+fn parse_notification(payload: &[u8], seq: Seq) -> Result<Option<Signal>, HookError> {
+    let Notification::AgentTurnComplete {
+        thread_id,
+        cwd,
+        last_assistant_message,
+    } = serde_json::from_slice(payload)?
+    else {
+        return Ok(None);
+    };
+    let mut signal = Signal::new(Source::Hook, Confidence::Authoritative, EventKind::TurnEnded)
+        .with_seq(seq)
+        .with_claim(Claim::Idle);
+    signal.session.native_id = thread_id.map(crate::NativeSessionId::new);
+    signal.session.cwd = cwd;
+    signal.turn = Some(Turn {
+        outcome: TurnOutcome::Completed,
+        last_message: hook::message(last_assistant_message),
+    });
+    Ok(Some(signal))
+}
+
 fn parse(payload: &[u8], seq: Seq) -> Result<Option<Signal>, HookError> {
+    let is_notification = serde_json::from_slice::<serde_json::Map<String, Value>>(payload)
+        .is_ok_and(|fields| fields.contains_key("type") && !fields.contains_key("hook_event_name"));
+    if is_notification {
+        return parse_notification(payload, seq);
+    }
     let Payload { common, event } = serde_json::from_slice(payload)?;
     let signal = |kind| {
         let mut signal = Signal::new(Source::Hook, Confidence::Authoritative, kind).with_seq(seq);
@@ -334,7 +389,7 @@ impl AgentAdapter for Codex {
         &self.manifest
     }
 
-    /// `codex -c <notifications…> -c <drawings MCP server…> [resume <id>]`. Codex cannot pin a
+    /// `codex -c <notifications…> -c <notify> -c <drawings MCP server…> [resume <id>]`. Codex cannot pin a
     /// new session id, so a `Fresh` id is ignored; the id arrives later from a hook or the rollout
     /// file. Resume must run with the same `CODEX_HOME` that created the session: the account's,
     /// or for the system account the inherited one, untouched.
@@ -342,6 +397,7 @@ impl AgentAdapter for Codex {
         let mut args: Vec<OsString> = NOTIFICATION_OVERRIDES
             .iter()
             .map(|setting| (*setting).to_owned())
+            .chain(std::iter::once(notify_override(ctx)))
             .chain(mcp_overrides(ctx))
             .flat_map(|setting| ["-c".into(), OsString::from(setting)])
             .collect();
@@ -436,6 +492,8 @@ mod tests {
                 "-c",
                 r#"tui.notification_condition="always""#,
                 "-c",
+                r#"notify=["/opt/gudo/bin/gudo-hook","codex","notify"]"#,
+                "-c",
                 r#"mcp_servers.gudo.command="/opt/gudo/bin/gudo-hook""#,
                 "-c",
                 r#"mcp_servers.gudo.args=["mcp","--state","/state","--pane","p_9f2"]"#,
@@ -453,7 +511,7 @@ mod tests {
                 session_id: NativeSessionId::new("0199a213"),
             },
         );
-        assert_eq!(spec.display_argv()[11..], ["resume", "0199a213"]);
+        assert_eq!(spec.display_argv()[13..], ["resume", "0199a213"]);
     }
 
     #[test]
@@ -515,6 +573,53 @@ mod tests {
         let interrupt = hook(fixture!("interrupt"));
         assert_eq!(interrupt.kind, EventKind::Interrupted);
         assert_eq!(interrupt.turn.unwrap().outcome, TurnOutcome::Cancelled);
+    }
+
+    #[test]
+    fn the_notify_program_reports_a_finished_turn() {
+        let done = hook(fixture!("notify_agent_turn_complete"));
+        assert_eq!(
+            (done.kind, done.claim, done.source, done.confidence),
+            (
+                EventKind::TurnEnded,
+                Some(Claim::Idle),
+                Source::Hook,
+                Confidence::Authoritative
+            )
+        );
+        assert_eq!(
+            done.session.native_id.unwrap().as_str(),
+            "b5f6c1c2-1111-2222-3333-444455556666"
+        );
+        let turn = done.turn.unwrap();
+        assert_eq!(turn.outcome, TurnOutcome::Completed);
+        assert_eq!(
+            turn.last_message.as_deref(),
+            Some("Rename complete and verified `cargo build` succeeds.")
+        );
+        assert!(
+            Codex::new()
+                .parse_hook(br#"{"type":"approval-requested"}"#, Seq(1))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn the_notify_override_is_valid_toml_for_any_path() {
+        let mut ctx = test_context();
+        ctx.hook_bin = r#"/home/A "B"\x/gudo-hook"#.into();
+        let setting = notify_override(&ctx);
+        let (key, value) = setting.split_once('=').unwrap();
+        assert_eq!(key, "notify");
+        let doc: toml::Table = toml::from_str(&format!("v = {value}")).unwrap();
+        let argv: Vec<&str> = doc["v"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|arg| arg.as_str().unwrap())
+            .collect();
+        assert_eq!(argv, [r#"/home/A "B"\x/gudo-hook"#, "codex", "notify"]);
     }
 
     #[test]
