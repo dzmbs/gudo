@@ -117,7 +117,8 @@ async fn install_reuse_upgrade() {
     assert_eq!(again.daemon_id, first.daemon_id, "same daemon identity");
     assert_ne!(again.ticket, first.ticket, "a fresh one-time secret");
 
-    // A different build (one trailing byte; still a valid ELF) → upgraded and restarted.
+    // A different build (one trailing byte; still a valid ELF) → upgraded and restarted in
+    // place: the same service process, its sessions kept.
     let pid_before = main_pid(&connection).await;
     let mut other = binary.clone();
     other.push(0);
@@ -133,16 +134,28 @@ async fn install_reuse_upgrade() {
     .await
     .unwrap();
     assert_eq!(upgraded.action, InstallAction::Upgraded);
-    assert_eq!(upgraded.service, ServiceMode::Service);
+    assert_eq!(upgraded.service, ServiceMode::AlreadyRunning);
     assert_eq!(upgraded.sha256, ssh::sha256_hex(&other));
     assert_eq!(
         upgraded.daemon_id, first.daemon_id,
         "state survives the upgrade"
     );
-    assert_ne!(
+    assert_eq!(
         main_pid(&connection).await,
         pid_before,
-        "the daemon was restarted"
+        "the daemon restarted in place"
+    );
+    let running = connection
+        .exec(&format!(
+            "sha256sum /proc/{}/exe | cut -d' ' -f1",
+            pid_before.trim()
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        running.stdout_text().trim(),
+        ssh::sha256_hex(&other),
+        "it runs the new build"
     );
 
     // Back to the original build for the other tests.

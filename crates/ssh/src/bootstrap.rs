@@ -12,8 +12,10 @@
 //!    only replaces it if it is not older (rollback protection: an older app on another
 //!    device must not quietly reinstate an older helper), unless
 //!    [`BootstrapOptions::allow_downgrade`].
-//! 3. **Service** (if uploaded or not running): `gudo-hostd service install` (systemd
-//!    `--user` / LaunchAgent, restarting an older daemon). Without a service manager
+//! 3. **Service** (if uploaded or not running): a running daemon is first asked to restart
+//!    into the new build in place (`gudo-hostd restart`), keeping its sessions; else
+//!    `gudo-hostd service install` (systemd `--user` / LaunchAgent, restarting an older
+//!    daemon). Without a service manager
 //!    (containers, macOS without a GUI login) the daemon is started detached instead.
 //! 4. **Pair**: `gudo-hostd pair --json --wait 30` mints a one-time ticket once the
 //!    daemon has recorded its endpoint.
@@ -191,7 +193,7 @@ pub enum ServiceMode {
     /// Started detached because no service manager was usable; it will not come back
     /// after a reboot.
     Detached,
-    /// It was already running; left alone.
+    /// It was already running; left alone, or restarted in place into the new build.
     AlreadyRunning,
 }
 
@@ -315,7 +317,16 @@ pub async fn bootstrap(
         );
     }
     let kept = matches!(action, InstallAction::Reused | InstallAction::KeptNewer);
-    let service = if kept && probe.running {
+    // A running daemon that can restart in place hands its sessions to the new build;
+    // otherwise (it predates that, or the new build cannot take them over) the service
+    // restarts it below, ending them.
+    let restarted_in_place = action == InstallAction::Upgraded
+        && probe.running
+        && connection
+            .exec(&sh_command(&format!("{hostd} restart 2>&1")))
+            .await?
+            .success();
+    let service = if (kept || restarted_in_place) && probe.running {
         ServiceMode::AlreadyRunning
     } else {
         step(BootstrapStep::Starting);
