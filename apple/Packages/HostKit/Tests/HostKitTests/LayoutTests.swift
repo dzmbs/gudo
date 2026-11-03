@@ -95,6 +95,51 @@ import GudoCore
         #expect(store.session.activeTab?.focused == PaneId(1))
     }
 
+    @Test func aZoomNeverShowsUndoneByAnEarlierEcho() {
+        var sent: [GudoCore.LayoutOp] = []
+        let store = DaemonLayoutStore { sent.append($0); return UInt64(sent.count) }
+        store.receive(sampleLayout(revision: 1, focused: 3))
+
+        // The header's Zoom button: focus the pane, then zoom it.
+        store.apply(.focus(PaneId(2)))
+        store.apply(.toggleZoom)
+        #expect(store.session.activeTab?.zoomed == PaneId(2))
+        // The daemon's layout after the focus, before the zoom: still zoomed here.
+        store.receive(sampleLayout(revision: 2, focused: 2))
+        #expect(store.session.activeTab?.zoomed == PaneId(2))
+        // Its layout after the zoom, then the answers.
+        store.receive(sampleLayout(revision: 3, focused: 2, zoomed: 2))
+        #expect(store.session.activeTab?.zoomed == PaneId(2))
+        store.acknowledge(1, failed: false)
+        store.acknowledge(2, failed: false)
+        #expect(store.session.activeTab?.zoomed == PaneId(2))
+
+        // Back: the echo of the zoom does not zoom it again.
+        store.apply(.toggleZoom)
+        #expect(store.session.activeTab?.zoomed == nil)
+        store.receive(sampleLayout(revision: 4, focused: 2, zoomed: 2))
+        #expect(store.session.activeTab?.zoomed == nil)
+        store.receive(sampleLayout(revision: 5, focused: 2))
+        store.acknowledge(3, failed: false)
+        #expect(store.session.activeTab?.zoomed == nil)
+
+        // A refused zoom goes.
+        store.apply(.toggleZoom)
+        store.acknowledge(4, failed: true)
+        #expect(store.session.activeTab?.zoomed == nil)
+    }
+
+    @Test func directionalFocusHoldsUntilTheDaemonHasIt() {
+        var sent: [GudoCore.LayoutOp] = []
+        let store = DaemonLayoutStore { sent.append($0); return UInt64(sent.count) }
+        store.receive(sampleLayout(revision: 1, focused: 1))
+        store.apply(.focusDirection(.right))
+        let moved = store.session.activeTab?.focused
+        #expect(moved != PaneId(1))
+        store.receive(sampleLayout(revision: 2, focused: 1))
+        #expect(store.session.activeTab?.focused == moved)
+    }
+
     @Test func zoomedTabsShowOnlyTheZoomedPane() {
         let store = DaemonLayoutStore { _ in 0 }
         store.receive(sampleLayout(zoomed: 2))

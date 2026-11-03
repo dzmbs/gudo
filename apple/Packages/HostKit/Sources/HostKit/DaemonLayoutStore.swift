@@ -31,6 +31,9 @@ public final class DaemonLayoutStore: LayoutStore {
     private enum Pending {
         case layout(PaneLayout.LayoutOp)
         case project(ProjectChange)
+        /// A zoom toggled here, as the state it leads to: a layout that arrives before the
+        /// daemon has applied it (the echo of an earlier op) must not draw it undone.
+        case zoom(PaneId?, tab: TabId)
     }
 
     @ObservationIgnored private var revision: UInt64?
@@ -67,7 +70,13 @@ public final class DaemonLayoutStore: LayoutStore {
             if next != session { session = next }
         }
         let id = send(daemonOp)
-        if LayoutConversion.isReplayable(op) { pending.append((id, .layout(op))) }
+        if LayoutConversion.isReplayable(op) {
+            pending.append((id, .layout(op)))
+        } else if case .toggleZoom = op, let tab = session.activeTab {
+            pending.append((id, .zoom(tab.zoomed, tab: tab.id)))
+        } else if case .focusDirection = op, let tab = session.activeTab {
+            pending.append((id, .layout(.focus(tab.focused))))
+        }
     }
 
     /// Changes the session's projects: shown at once, sent to the daemon.
@@ -203,6 +212,7 @@ public final class DaemonLayoutStore: LayoutStore {
             switch change {
             case .layout(let op): next.apply(op)
             case .project(let change): nextProjects.apply(change)
+            case .zoom(let pane, let tab): next.setZoom(pane, inTab: tab)
             }
         }
         nextProjects.keep(tabs: Set(next.tabs.map(\.id)))

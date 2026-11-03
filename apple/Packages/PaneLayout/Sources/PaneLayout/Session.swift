@@ -345,6 +345,16 @@ public struct Session: Hashable, Sendable, Codable {
         }
     }
 
+    /// Zooms `pane` in `tab`, or unzooms it (nil): a state, so it can be applied again to a
+    /// layout that already shows it.
+    public mutating func setZoom(_ pane: PaneId?, inTab tab: TabId) {
+        updateTab(tab) { tab in
+            guard let pane else { return tab.zoomed = nil }
+            guard case .split = tab.root, tab.root.contains(pane) else { return }
+            tab.zoomed = pane
+        }
+    }
+
     private mutating func toggleZoom() {
         guard let tab = activeTab, case .split = tab.root else { return }
         updateTab(tab.id) { $0.zoomed = $0.zoomed == nil ? $0.focused : nil }
