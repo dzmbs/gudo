@@ -293,6 +293,16 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
         return (dark, light)
     }
 
+    /// A selected row on `surface`, both states from the accent: emphasized (its window active)
+    /// the solid prominent fill under its own label, unemphasized the soft accent tint under the
+    /// main text. The text reads on the fill at 4.5:1 either way.
+    func rowSelection(on surface: ThemeColor, emphasized: Bool) -> (fill: ThemeColor, text: ThemeColor) {
+        if emphasized { return (prominent, onProminent) }
+        let level = scheme == .light ? Self.selectionLevels.light : Self.selectionLevels.dark
+        let (_, fill) = Self.selection(accent: accent, on: surface, text: foreground, level: level)
+        return (fill, fill.blended(with: foreground, Self.textLevels.primary))
+    }
+
     static func hueDistance(_ a: Double, _ b: Double) -> Double {
         let difference = abs(a - b).truncatingRemainder(dividingBy: 360)
         return difference > 180 ? 360 - difference : difference

@@ -57,8 +57,10 @@ public struct SheetScaffold<Content: View, Accessory: View>: View {
         #if os(macOS)
         VStack(alignment: .leading, spacing: 0) {
             SheetHeader(title, subtitle: subtitle)
+            // A sheet taller than its content keeps the title at the top and the buttons at the
+            // bottom; the slack goes between them, never above the title.
             content
-                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             if cancel != nil || primary != nil || Accessory.self != EmptyView.self {
                 HStack(spacing: DS.Space.m) {
                     accessory

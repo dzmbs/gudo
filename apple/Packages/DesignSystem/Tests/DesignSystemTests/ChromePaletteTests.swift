@@ -193,6 +193,39 @@ struct ChromePaletteTests {
         #expect(failures.isEmpty, "\(failures.prefix(10))")
     }
 
+    /// A selected row is the accent in both states, never the system's grey, and its text reads
+    /// at 4.5:1 on every surface a list sits on, under every theme and window scheme.
+    @Test(arguments: [nil, ColorScheme.light, .dark])
+    func rowSelectionIsTheAccentAndReadable(scheme: ColorScheme?) {
+        var failures: [String] = []
+        for theme in Self.themes {
+            let chrome = ChromePalette(theme: theme, scheme: scheme)
+            for surface in [chrome.sidebar, chrome.groupedPage, chrome.groupedRow] {
+                for emphasized in [true, false] {
+                    let (fill, text) = chrome.rowSelection(on: surface, emphasized: emphasized)
+                    if text.contrast(with: fill) < ChromePalette.minimumTextContrast {
+                        failures.append("\(theme.name) \(emphasized ? "emphasized" : "unemphasized") \(text) on \(fill)")
+                    }
+                    let tintedTowardAccent = ThemeColor.deltaE2000(fill, chrome.accent) < ThemeColor.deltaE2000(surface, chrome.accent)
+                    if !tintedTowardAccent {
+                        failures.append("\(theme.name) \(emphasized ? "emphasized" : "unemphasized") fill \(fill) is not the accent")
+                    }
+                }
+            }
+        }
+        #expect(failures.isEmpty, "\(failures.prefix(10))")
+    }
+
+    @Test func emphasizedRowSelectionIsTheProminentFill() {
+        let chrome = ChromePalette(theme: .ghosttyDefault)
+        let (fill, text) = chrome.rowSelection(on: chrome.sidebar, emphasized: true)
+        #expect(fill == chrome.prominent)
+        #expect(text == chrome.onProminent)
+        let (soft, _) = chrome.rowSelection(on: chrome.sidebar, emphasized: false)
+        #expect(soft != fill)
+        #expect(soft.luminance > chrome.sidebar.luminance)
+    }
+
     /// The four themes the screenshots use, printed for review.
     @Test func reviewThemes() {
         for name in ["Ghostty Default", "Alabaster", "iTerm2 Solarized Light", "3024 Day", "Atom One Light", "Gruvbox Dark", "Dracula", "Nord"] {

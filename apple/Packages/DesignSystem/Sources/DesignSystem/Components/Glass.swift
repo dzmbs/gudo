@@ -142,8 +142,7 @@ public struct RowButtonStyle: ButtonStyle {
     }
 
     private func fill(_ pressed: Bool) -> AnyShapeStyle {
-        if isSelected { return AnyShapeStyle(DS.Palette.selection) }
-        if pressed { return AnyShapeStyle(DS.Palette.pressedFill) }
+        if isSelected || pressed { return AnyShapeStyle(DS.Palette.selection) }
         if isHovered { return AnyShapeStyle(DS.Palette.hoverFill) }
         return AnyShapeStyle(Color.clear)
     }
@@ -155,6 +154,55 @@ public extension ButtonStyle where Self == RowButtonStyle {
     static func paletteRow(selected: Bool) -> RowButtonStyle {
         RowButtonStyle(isSelected: selected, cornerRadius: DS.Radius.paletteRow)
     }
+}
+
+/// A sidebar row as the platform draws a selected one, in the theme's accent: the solid accent
+/// with its own label while the window is active, the soft accent tint once it is not (where the
+/// system would turn grey).
+public struct SidebarRowButtonStyle: ButtonStyle {
+    var isSelected: Bool
+    @State private var isHovered = false
+
+    public init(isSelected: Bool) {
+        self.isSelected = isSelected
+    }
+
+    public func makeBody(configuration: Configuration) -> some View {
+        SidebarRowBody(configuration: configuration, isSelected: isSelected, isHovered: isHovered)
+            .onHover { isHovered = $0 }
+    }
+}
+
+private struct SidebarRowBody: View {
+    let configuration: ButtonStyleConfiguration
+    let isSelected: Bool
+    let isHovered: Bool
+    @Environment(\.chrome) private var chrome
+    #if os(macOS)
+    @Environment(\.appearsActive) private var appearsActive
+    #else
+    private let appearsActive = true
+    #endif
+
+    var body: some View {
+        let selection = chrome.rowSelection(on: chrome.sidebar, emphasized: appearsActive)
+        configuration.label
+            .foregroundStyle(isSelected ? AnyShapeStyle(selection.text.color) : AnyShapeStyle(DS.Palette.text))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(.rect)
+            .background(RoundedRectangle(cornerRadius: DS.Radius.control).fill(fill(selection.fill.color)))
+    }
+
+    private func fill(_ selected: Color) -> AnyShapeStyle {
+        if isSelected { return AnyShapeStyle(selected) }
+        if configuration.isPressed { return AnyShapeStyle(DS.Palette.selection) }
+        if isHovered { return AnyShapeStyle(DS.Palette.hoverFill) }
+        return AnyShapeStyle(Color.clear)
+    }
+}
+
+public extension ButtonStyle where Self == SidebarRowButtonStyle {
+    static func sidebarRow(selected: Bool) -> SidebarRowButtonStyle { SidebarRowButtonStyle(isSelected: selected) }
 }
 
 public extension View {
