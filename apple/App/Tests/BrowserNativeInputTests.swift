@@ -58,6 +58,15 @@ final class BrowserNativeInputTests: XCTestCase {
         return page
     }
 
+    private func isActive(_ page: WebPage, view: WKWebView) async throws -> Bool {
+        window?.makeFirstResponder(view)
+        for _ in 0..<20 {
+            if try await page.callJavaScript("return document.hasFocus()") as? Bool == true { return true }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        return false
+    }
+
     private func log(_ page: WebPage) async throws -> [String] {
         try await page.callJavaScript("return log.splice(0)") as? [String] ?? []
     }
@@ -110,12 +119,14 @@ final class BrowserNativeInputTests: XCTestCase {
         let found = await BrowserNativeInput.for(page)
         let input = try XCTUnwrap(found, "the page's view is found")
 
+        // WebKit hit-tests moves without a button only while the page is active, which a test run
+        // in the background never is; in the app the page's window is key while the user watches.
+        // Activation is asynchronous, so it is read from the page before the moves.
+        let active = try await isActive(page, view: input.view)
         await input.move(to: CGPoint(x: 70, y: 35))
         await input.move(to: CGPoint(x: 80, y: 40))
         try await Task.sleep(for: .milliseconds(300))
-        // WebKit takes moves without a button only in the key window, which a test run in the
-        // background never has; in the app the page's window is key while the user watches.
-        if window?.isKeyWindow == true {
+        if active {
             let hovered = try await page.callJavaScript("return [getComputedStyle(hover).backgroundColor, getComputedStyle(menu).display]") as? [String]
             XCTAssertEqual(hovered, ["rgb(0, 128, 0)", "block"], ":hover holds and opens the menu")
             let over = try await log(page)
