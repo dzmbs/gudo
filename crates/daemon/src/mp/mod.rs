@@ -11,10 +11,10 @@
 pub(crate) mod approvals;
 pub(crate) mod audit;
 mod join_denials;
-mod knock_limit;
 pub(crate) mod policy;
 mod presence;
 pub(crate) mod prompt;
+pub(crate) mod rate_limit;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -543,8 +543,12 @@ pub(crate) struct Mp {
     leases: Mutex<HashMap<PaneId, LeaseState>>,
     knocks: Mutex<BTreeMap<KnockId, PendingKnock>>,
     /// How many knocks each invite may still bring, and when its refusals were audited.
-    knock_limits: Mutex<knock_limit::KnockLimits>,
+    knock_limits: Mutex<rate_limit::KnockLimits>,
     join_denials: Mutex<join_denials::JoinDenials>,
+    /// How many prompts each guest may still send into agents.
+    prompt_limits: Mutex<rate_limit::PrincipalLimits>,
+    /// How many joins and leaves of each guest device are still audited one by one.
+    visit_limits: Mutex<rate_limit::RateLimits<DeviceId>>,
     /// Owner devices that just paired and were not announced yet, with when.
     unannounced: Mutex<HashMap<DeviceId, (PrincipalId, UnixMillis)>>,
     next_knock: AtomicU64,
@@ -594,8 +598,10 @@ impl Mp {
             live: Mutex::new(HashMap::new()),
             leases: Mutex::new(HashMap::new()),
             knocks: Mutex::new(BTreeMap::new()),
-            knock_limits: Mutex::default(),
+            knock_limits: Mutex::new(rate_limit::KnockLimits::new(rate_limit::KNOCKS)),
             join_denials: Mutex::default(),
+            prompt_limits: Mutex::new(rate_limit::PrincipalLimits::new(rate_limit::PROMPTS)),
+            visit_limits: Mutex::new(rate_limit::RateLimits::new(rate_limit::VISITS)),
             unannounced: Mutex::new(HashMap::new()),
             next_knock: AtomicU64::new(1),
             approvals: approvals::Approvals::default(),
@@ -963,20 +969,78 @@ impl Mp {
                 conn,
             },
         );
-        self.audit.append(
-            AuditKind::Join,
-            AuditEntry {
-                detail: format!(
-                    "{} joined as {} on {}",
-                    authz.name,
-                    authz.roles.names(),
-                    authz.scope
-                ),
-                ..authz.audit()
-            },
-        );
+        if let Some(more) = self.visit_note(authz) {
+            self.audit.append(
+                AuditKind::Join,
+                AuditEntry {
+                    detail: format!(
+                        "{} joined as {} on {}{more}",
+                        authz.name,
+                        authz.roles.names(),
+                        authz.scope
+                    ),
+                    ..authz.audit()
+                },
+            );
+        }
         self.record_seen(core, authz.actor.device, false);
         core.emit(Event::Participants);
+    }
+
+    /// Whether a join or leave goes to the audit log, and what it adds about the ones left
+    /// out: a guest reconnecting in a loop is recorded at most once a minute past its burst.
+    fn visit_note(&self, authz: &Authz) -> Option<String> {
+        if authz.grant_ids.is_empty() {
+            return Some(String::new());
+        }
+        let device = authz.actor.device;
+        let now = std::time::Instant::now();
+        let mut limits = lock(&self.visit_limits);
+        if limits.admit(device, now) {
+            return Some(String::new());
+        }
+        match limits.refused(device, now) {
+            rate_limit::Refusal::Audit { left_out } => Some(format!(
+                " (rapid reconnects: {left_out} more joins and leaves not recorded)"
+            )),
+            rate_limit::Refusal::Quiet => None,
+        }
+    }
+
+    /// Takes one prompt (a composer message, review notes, an artifact sent to an agent) from
+    /// a guest's budget; owner devices are not limited. Refusals are audited at most once a
+    /// minute.
+    ///
+    /// # Errors
+    ///
+    /// [`MpError::Failed`] when the guest sent too many too fast.
+    pub fn admit_prompt(&self, authz: &Authz, owner: bool) -> Result<(), MpError> {
+        if owner {
+            return Ok(());
+        }
+        let principal = authz.actor.principal;
+        let now = std::time::Instant::now();
+        let mut limits = lock(&self.prompt_limits);
+        if limits.admit(principal, now) {
+            return Ok(());
+        }
+        if let rate_limit::Refusal::Audit { left_out } = limits.refused(principal, now) {
+            drop(limits);
+            let more = rate_limit::Refusal::left_out_note(left_out);
+            self.audit.append(
+                AuditKind::Denied,
+                AuditEntry {
+                    detail: format!(
+                        "prompt from {} refused: too many too fast{more}",
+                        authz.name
+                    ),
+                    ..authz.audit()
+                },
+            );
+        }
+        Err(MpError::Failed(
+            "Too many messages in a row. Wait a few seconds and send again.".into(),
+        ))
     }
 
     /// Records when a paired device came or went, off the connection's task: the write is
@@ -1002,13 +1066,15 @@ impl Mp {
             return;
         };
         self.record_seen(core, live.authz.actor.device, true);
-        self.audit.append(
-            AuditKind::Leave,
-            AuditEntry {
-                detail: format!("{} left", live.name),
-                ..live.authz.audit()
-            },
-        );
+        if let Some(more) = self.visit_note(&live.authz) {
+            self.audit.append(
+                AuditKind::Leave,
+                AuditEntry {
+                    detail: format!("{} left{more}", live.name),
+                    ..live.authz.audit()
+                },
+            );
+        }
         // The lease goes when the holder's last device leaves.
         let principal = live.authz.actor.principal;
         if !self.principal_connected(principal) {
@@ -1549,11 +1615,8 @@ impl Mp {
                     by: None,
                 }));
             }
-            if let knock_limit::Refusal::Audit { left_out } = refusal {
-                let more = match left_out {
-                    0 => String::new(),
-                    left_out => format!(" ({left_out} more refused since the last record)"),
-                };
+            if let rate_limit::Refusal::Audit { left_out } = refusal {
+                let more = rate_limit::Refusal::left_out_note(left_out);
                 self.audit.append(
                     AuditKind::Denied,
                     AuditEntry {

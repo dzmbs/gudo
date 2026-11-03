@@ -1001,3 +1001,101 @@ async fn removing_a_person_keeps_the_link_for_everyone_else() {
     drop((again, bob, owner));
     daemon.shutdown().await;
 }
+
+/// A prompter pasting at line rate would burn the owner's agent quota and grow the audit log:
+/// past a short burst it is refused, and the refusals are audited once, with a count.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_prompt_flood_is_cut_and_audited_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = daemon(dir.path()).await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let agent_pane = owner.attach_and_follow().await;
+    hook(
+        daemon.hook_socket(),
+        &hook_request(dir.path(), agent_pane, "SessionStart", SESSION_START),
+    )
+    .await;
+    start_fake_agent(
+        &mut owner,
+        agent_pane,
+        "while read line; do echo \"agent-read:$line\"; done",
+    )
+    .await;
+    let pat = guest(
+        &invite(&owner, spec(Roles::PROMPTER, "pat")).await,
+        agent_pane,
+    )
+    .await;
+
+    let mut sent = 0;
+    let mut refused = 0;
+    for round in 0..30 {
+        match pat
+            .client
+            .prompt(agent_pane, format!("echo flood-{round}"), false)
+            .await
+        {
+            Ok(_) => sent += 1,
+            Err(MpError::Failed(message)) => {
+                assert!(message.contains("Wait a few seconds"), "{message}");
+                refused += 1;
+            }
+            Err(other) => panic!("{other:?}"),
+        }
+    }
+    assert_eq!((sent, refused), (5, 25));
+    for round in 0..10 {
+        owner
+            .client
+            .prompt(agent_pane, format!("echo owner-{round}"), false)
+            .await
+            .expect("the owner is not limited");
+    }
+
+    let page = owner.client.audit(None, 200).await.unwrap();
+    let denied: Vec<_> = page
+        .records
+        .iter()
+        .filter(|record| record.kind == AuditKind::Denied && record.detail.contains("prompt"))
+        .collect();
+    assert_eq!(denied.len(), 1, "{denied:#?}");
+    let prompts = page
+        .records
+        .iter()
+        .filter(|record| record.kind == AuditKind::Prompt)
+        .count();
+    assert_eq!(prompts, 15);
+    drop((pat, owner));
+    daemon.shutdown().await;
+}
+
+/// A guest reconnecting in a loop is recorded a few times, then counted, not written per visit.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reconnect_loop_does_not_grow_the_audit_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = daemon(dir.path()).await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    owner.attach_and_follow().await;
+    let link = invite(&owner, spec(Roles::VIEWER, "loop")).await;
+    let key = ClientConfig::generate_key();
+    for _ in 0..15 {
+        let mut visit = TestClient::join(&link.to_string(), key.clone());
+        visit.client.attach(None);
+        visit.until("guest layout", |c| c.layout.is_some()).await;
+        drop(visit);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let page = owner.client.audit(None, 500).await.unwrap();
+    let visits = page
+        .records
+        .iter()
+        .filter(|record| {
+            matches!(record.kind, AuditKind::Join | AuditKind::Leave)
+                && record.detail.starts_with("loop")
+        })
+        .count();
+    assert!(visits <= 12, "{visits} join and leave records");
+    drop(owner);
+    daemon.shutdown().await;
+}

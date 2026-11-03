@@ -240,6 +240,14 @@ makes, and then without its old invites.
   has whitespace collapsed (`identity::clean_display_name`), so a name cannot reorder or hide
   text to pass for another participant in lists, approval ballots, the audit log or "Bob is
   driving" prompts.
+- **Guests are rate limited where they could spend the owner's resources.** Prompts, review
+  notes and artifacts sent into an agent from a guest (not an owner device) take a token from
+  a per-principal bucket: 5 at once, then one every 2 s, which a person typing never reaches
+  but a script pasting 16 KiB prompts at line rate does (it would burn the owner's agent quota
+  and grow the audit log). A refusal says to wait and is audited at most once a minute with a
+  count. Joins and leaves of a guest device are audited one by one for a burst of 10, then
+  once a minute with a count, so a valid guest reconnecting in a loop cannot grow
+  `audit.jsonl` without bound (`mp::rate_limit`, shared with the knock limit).
 
 ### Parsing and denial of service
 
@@ -326,6 +334,7 @@ was confirmed to fail.
 | Prompter or Approver sending a review whose opening line is a `!` shell command; control bytes in notes or quotes | `multiplayer::review_notes_obey_the_prompt_rules`, `multiplayer::prompter_only_composes_to_agent_panes` |
 | Prompt or review sent just after the agent exited, while the pane is still marked an agent | `multiplayer::text_for_an_agent_that_just_exited_reaches_nobody` |
 | Bidi, zero-width and control characters in invite labels and `SetName` | `redteam::names_cannot_hide_or_reorder_text`, `devices::*` |
+| Prompter pasting prompts at line rate; guest reconnecting in a loop | `multiplayer::a_prompt_flood_is_cut_and_audited_once`, `multiplayer::a_reconnect_loop_does_not_grow_the_audit_log`, `mp::rate_limit::tests::*` (unit) |
 | Pane-scoped guest marking, focusing or watching to clear the owner's attention items | `redteam::a_guest_cannot_mark_the_owners_attention_seen`, `ws::attention::tests::*` (unit) |
 | zstd bomb / huge declared length from a hostile daemon | `client-core conn::tests::inflating_is_bounded` (unit) |
 | Random and mangled bytes as every wire type, ticket and invite | `proto/tests/decode_untrusted.rs` (proptest) |

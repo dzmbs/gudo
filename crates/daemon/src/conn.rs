@@ -1825,6 +1825,9 @@ impl Client {
                     self.visible_artifact(id)?;
                 }
                 let pane_id = send.pane_id;
+                core.mp
+                    .admit_prompt(&self.authz, self.ws.owner)
+                    .map_err(|error| ArtifactError::Failed(error.to_string()))?;
                 let (sent, events) = crate::art::send::send(core, self.actor, send).await?;
                 for event in events {
                     if let ArtifactEvent::Created(info) = &event {
@@ -2510,6 +2513,12 @@ impl Client {
         let (need, target) = policy::workspace(&request);
         self.allow(need, target)
             .map_err(|error| WsError::Denied(error.to_string()))?;
+        if matches!(request, WorkspaceRequest::SendReview(_)) {
+            self.core
+                .mp
+                .admit_prompt(&self.authz, self.ws.owner)
+                .map_err(|error| WsError::Failed(error.to_string()))?;
+        }
         // A prompter may review an agent's turns and send it notes, but only into an agent
         // that holds the terminal as they are written, and only under the standard opening
         // line: how a prompt starts decides whether the agent takes it as a shell command or
@@ -2783,6 +2792,7 @@ impl Client {
                 "prompts go to agent panes only; this pane runs a shell".into(),
             ));
         }
+        self.core.mp.admit_prompt(&self.authz, self.ws.owner)?;
         let bytes = entry.pane.encode_input(InputPayload::Paste(text.clone()));
         entry
             .pane
