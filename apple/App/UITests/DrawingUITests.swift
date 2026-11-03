@@ -235,6 +235,76 @@ final class DrawingUITests: XCTestCase {
         sleep(2)
     }
 
+    /// Sketching covers the tab: the other pane dims and takes no input (a drag there never
+    /// selects text), and a tap on it moves the sketch there before anything is drawn. A Pencil
+    /// touch-down cannot be synthesised in the simulator; it goes through the shield to the
+    /// pane's own Pencil recognizer, the path `PencilCaptureGesture` covers.
+    func testSketchCoversTheTabAndATapMovesIt() throws {
+        let app = launch(try ticket())
+        _ = preparePane(app)
+        app.typeKey("d", modifierFlags: .command)
+        let split = panes(app)
+        expectation(for: NSPredicate(format: "count >= 2"), evaluatedWith: split)
+        waitForExpectations(timeout: 15)
+        sleep(2)
+        let overlays = app.buttons.matching(identifier: "drawing.done")
+
+        _ = openDrawMode(app)
+        let shield = app.descendants(matching: .any).matching(identifier: "drawing.shield").firstMatch
+        XCTAssertTrue(shield.waitForExistence(timeout: 5), "the other pane is shielded")
+        XCTAssertEqual(shield.label, "Sketch on this pane")
+        let shieldedFirst = shield.frame
+        shot(app, "sketch-shield")
+
+        tap(shield)
+        sleep(3)
+        XCTAssertEqual(overlays.count, 1, "still one sketch")
+        let moved = app.descendants(matching: .any).matching(identifier: "drawing.shield").firstMatch
+        XCTAssertTrue(moved.waitForExistence(timeout: 5))
+        XCTAssertNotEqual(moved.frame.midX, shieldedFirst.midX, "the sketch moved: the first pane is shielded now")
+        shot(app, "sketch-moved")
+
+        tap(app.buttons["drawing.cancel"])
+        XCTAssertTrue(moved.waitForNonExistence(timeout: 10), "the shields go with the sketch")
+        app.typeKey("w", modifierFlags: .command)
+        sleep(2)
+    }
+
+    /// New Drawing opens a floating canvas (full screen on iPhone) saved as a dated
+    /// `.excalidraw` file, with Send to Agent and Rename in the app's glass.
+    func testNewDrawingOpensAFloatingCanvas() throws {
+        let app = launch(try ticket())
+        _ = preparePane(app)
+        app.typeKey("d", modifierFlags: [.command, .control, .shift])
+        let toolbar = element(app, "canvas.toolbar")
+        XCTAssertTrue(toolbar.waitForExistence(timeout: 30), "the canvas opens")
+        let name = element(app, "canvas.name")
+        if name.waitForExistence(timeout: 10) {
+            XCTAssertTrue(name.label.hasPrefix("drawing-"), name.label)
+        }
+        let phone = element(app, "drawing.sheet").exists
+        XCTAssertTrue(phone || element(app, "drawing.canvas").exists)
+        sleep(3)
+        shot(app, "new-drawing")
+        tap(element(app, "canvas.send"))
+        sleep(1)
+        shot(app, "new-drawing-send")
+        tap(element(app, "drawing.canvas").exists ? element(app, "drawing.canvas") : element(app, "drawing.sheet"))
+        sleep(1)
+        tap(element(app, "canvas.more"))
+        XCTAssertTrue(app.descendants(matching: .any)["canvas.rename"].waitForExistence(timeout: 5))
+        shot(app, "new-drawing-more")
+        tap(element(app, "drawing.canvas").exists ? element(app, "drawing.canvas") : element(app, "drawing.sheet"))
+        sleep(1)
+        if phone {
+            tap(element(app, "canvas.done"))
+            XCTAssertTrue(element(app, "drawing.sheet").waitForNonExistence(timeout: 5))
+        } else {
+            app.typeKey("w", modifierFlags: .command)
+        }
+        sleep(2)
+    }
+
     /// Mean luminance (0…255) of `frame` (points) in a screenshot.
     private func luminance(_ screenshot: XCUIScreenshot, in frame: CGRect, of app: XCUIApplication) -> Double {
         guard let image = screenshot.image.cgImage else { return 0 }

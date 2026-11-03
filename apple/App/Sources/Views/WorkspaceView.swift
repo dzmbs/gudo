@@ -520,22 +520,26 @@ private struct TerminalToolbar: ToolbarContent {
                 Toggle("Two Columns", systemImage: "rectangle.split.2x1", isOn: Binding(
                     get: { model.isTwoColumns }, set: { _ in model.toggleTwoColumns() }))
                     .accessibilityIdentifier("two-columns")
-                #if os(macOS)
-                Button("Draw on Pane", systemImage: "pencil.tip") { DrawingCommands.toggleDrawing(in: workspace) }
-                    .disabled(!DrawingCommands.canDraw(in: workspace))
-                #endif
             }
             .help("Pane: split, zoom, close, Two Columns")
             .menuIndicator(.hidden)
             .disabled((workspace.focusedPane == nil && model.activeMixed == nil) || model.destination != .terminal)
             .accessibilityIdentifier("pane-menu")
-            #if os(iOS)
-            // On the Mac drawing is in the Pane menu.
-            Button("Draw", systemImage: "pencil.tip") { DrawingCommands.toggleDrawing(in: workspace) }
-                .help("Draw on Pane (⌃⌘D)")
-                .disabled(!DrawingCommands.canDraw(in: workspace) || model.destination != .terminal)
-                .accessibilityIdentifier("draw-button")
-            #endif
+            Menu {
+                Button("Sketch on Pane", systemImage: "pencil.tip") { DrawingCommands.toggleDrawing(in: workspace) }
+                    .disabled(!DrawingCommands.canDraw(in: workspace))
+                    .accessibilityIdentifier("draw-sketch")
+                Button("New Drawing", systemImage: "scribble.variable") { DrawingDocuments.newDrawing(window: model) }
+                    .disabled(!DrawingDocuments.canCreate(in: model))
+                    .accessibilityIdentifier("draw-new-drawing")
+            } label: {
+                Label("Sketch on Pane", systemImage: "pencil.tip")
+            } primaryAction: {
+                DrawingCommands.toggleDrawing(in: workspace)
+            }
+            .help("Sketch on Pane (⌃⌘D)")
+            .disabled(model.destination != .terminal || (!DrawingCommands.canDraw(in: workspace) && !DrawingDocuments.canCreate(in: model)))
+            .accessibilityIdentifier("draw-button")
             Button("Command Palette", systemImage: "command") { model.isPaletteShown = true }
                 .help("Command Palette (⌘K)")
                 .accessibilityIdentifier("open-palette")

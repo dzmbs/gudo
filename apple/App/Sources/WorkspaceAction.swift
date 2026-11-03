@@ -25,8 +25,8 @@ enum WorkspaceAction: Hashable {
     case previousTab, nextTab, selectTab(Int), lastTab, goToTab
     case moveTabUp, moveTabDown
     case selectHost(Int)
-    /// The draw overlay on the focused pane, and a canvas split.
-    case draw, newCanvas
+    /// A sketch on the focused pane, and a standalone drawing in a floating canvas window.
+    case draw, newDrawing
     /// A new window with this window's hosts, on its tab.
     case newWindow
     case commandPalette, commandPaletteGhostty, find, links, inbox, hosts
@@ -56,7 +56,7 @@ enum WorkspaceAction: Hashable {
         + [.focusNextPane, .focusPreviousPane] + Direction.allCases.map(Self.movePane) + Direction.allCases.map(Self.resize)
         + [.previousPrompt, .nextPrompt, .returnToTerminal, .fullScreenEditor]
     static let floatActions: [Self] = [.toggleFloat, .minimizeFloat, .cycleFloats, .toggleFloatsHidden]
-    static let drawActions: [Self] = [.draw, .newCanvas]
+    static let drawActions: [Self] = [.draw, .newDrawing]
     static let browserActions: [Self] = [.openBrowser]
     static let tabActions: [Self] = [.previousTab, .nextTab] + (1...8).map(Self.selectTab) + [.lastTab, .goToTab, .moveTabUp, .moveTabDown]
     static let hostActions: [Self] = (1...9).map(Self.selectHost)
@@ -105,8 +105,8 @@ enum WorkspaceAction: Hashable {
         case .goToTab: "Go to Tab…"
         case .moveTabUp: "Move Tab Up"
         case .moveTabDown: "Move Tab Down"
-        case .draw: "Draw on Pane"
-        case .newCanvas: "New Canvas Split"
+        case .draw: "Sketch on Pane"
+        case .newDrawing: "New Drawing"
         case .newWindow: "New Window"
         case .commandPalette, .commandPaletteGhostty: "Command Palette"
         case .find: "Find…"
@@ -168,7 +168,7 @@ enum WorkspaceAction: Hashable {
         case .moveTabDown: KeyboardShortcut(.downArrow, modifiers: [.command, .control, .shift])
         // ⇧⌘D is Ghostty's Split Down.
         case .draw: KeyboardShortcut("d", modifiers: [.command, .control])
-        case .newCanvas: KeyboardShortcut("d", modifiers: [.command, .control, .shift])
+        case .newDrawing: KeyboardShortcut("d", modifiers: [.command, .control, .shift])
         case .newWindow: KeyboardShortcut("n")
         // ⇧⌘P is Ghostty's palette key.
         case .commandPalette: KeyboardShortcut("k")
@@ -253,6 +253,7 @@ enum WorkspaceAction: Hashable {
         case .returnToTerminal: window.returnToTerminal()
         case .fullScreenEditor: window.toggleEditorFullScreen()
         case .movePaneToNewTab: window.movePaneToNewTab()
+        case .newDrawing: DrawingDocuments.newDrawing(window: window)
         default: perform(on: window.workspace ?? workspace)
         }
     }
@@ -279,7 +280,7 @@ enum WorkspaceAction: Hashable {
         case .focusPreviousPane: workspace.apply(.focusDirection(.left))
         case .splitBestFit: workspace.split(.horizontal)
         case .draw: DrawingCommands.toggleDrawing(in: workspace)
-        case .newCanvas: DrawingCommands.newCanvas(in: workspace)
+        case .newDrawing: if let window = ActiveWindow.model { DrawingDocuments.newDrawing(window: window) }
         case .commandPalette, .commandPaletteGhostty, .find, .findNext, .findPrevious, .links, .inbox, .jumpToWaitingAgent, .hosts, .toggleSidebar, .shortcuts: break
         }
     }

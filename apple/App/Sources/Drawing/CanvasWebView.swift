@@ -96,10 +96,14 @@ final class CanvasWebView: NSObject, WKScriptMessageHandler, WKNavigationDelegat
     }
 
     /// `bounds` in scene px fixes the exported area; `scale` is image pixels per scene px.
-    func export(format: String = "png", scale: CGFloat, bounds: CGRect?, background: Bool = false) async -> (data: Data, count: Int)? {
+    /// `selectionOnly` exports the selected elements when there are any.
+    func export(format: String = "png", scale: CGFloat, bounds: CGRect?, background: Bool = false, selectionOnly: Bool = false) async -> (data: Data, count: Int)? {
         await waitUntilReady()
         let id = UUID().uuidString
-        var argument: [String: Any] = ["requestId": id, "format": format, "scale": Double(scale), "exportPadding": 0, "background": background]
+        var argument: [String: Any] = [
+            "requestId": id, "format": format, "scale": Double(scale), "exportPadding": 0, "background": background,
+            "selectionOnly": selectionOnly,
+        ]
         if let bounds {
             argument["bounds"] = ["x": bounds.minX, "y": bounds.minY, "width": bounds.width, "height": bounds.height]
         }

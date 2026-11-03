@@ -822,7 +822,7 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
                 self?.apply()
             },
         ] + (onDraw.map { draw in
-            [UIAction(title: "Draw on Pane", image: UIImage(systemName: "pencil.and.scribble")) { _ in draw() }]
+            [UIAction(title: "Sketch on Pane", image: UIImage(systemName: "pencil.tip")) { _ in draw() }]
         } ?? []))
         let hide = !compact ? [] : [UIAction(title: "Hide Keyboard", image: UIImage(systemName: "keyboard.chevron.compact.down")) { [weak self] _ in
             _ = self?.target?.resignFirstResponder()

@@ -680,6 +680,42 @@ final class MacSnapshotTests: XCTestCase {
         window.close()
     }
 
+    /// The sketch toolbar (Send to the pane's own agent, or a Send To menu), a shielded pane's
+    /// hint, and a standalone drawing's chrome.
+    func testDrawingChrome() async throws {
+        guard wanted("drawing") else { return }
+        let agent = AgentDestination(hostId: "h1", hostName: "studio", pane: 2, agent: .claude, title: "Claude Code", sameHost: true)
+        let withAgent = OverlayModel()
+        withAgent.primary = agent
+        withAgent.destinations = [agent]
+        withAgent.loaded = true
+        let withoutAgent = OverlayModel()
+        withoutAgent.destinations = [agent]
+        withoutAgent.loaded = true
+        let canvas = CanvasChromeModel()
+        canvas.fileName = "drawing-2026-11-03-1412.excalidraw"
+        canvas.destinations = [agent]
+        let window = makeWindow(ThemedRoot {
+            VStack(spacing: 28) {
+                OverlayToolbar(model: withAgent)
+                OverlayToolbar(model: withoutAgent)
+                ZStack {
+                    Color.black.opacity(0.28)
+                    SketchHereHint()
+                }
+                .frame(width: 420, height: 120)
+                CanvasChrome(model: canvas)
+            }
+            .padding(32)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .chromeBackground(DS.Palette.base)
+            .chromeContent()
+        }, size: CGSize(width: 900, height: 520))
+        await pump(1.5)
+        try capture(window, "drawing")
+        window.close()
+    }
+
     func testSettings() async throws {
         try await settings("settings")
         try await settings("settings-theme", SettingsNavigation(path: [.theme]))

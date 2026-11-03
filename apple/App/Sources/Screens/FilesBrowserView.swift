@@ -60,7 +60,12 @@ struct FilesBrowserView: View {
     }
 
     private var actions: FileActions {
-        FileActions(openInEditor: onOpenInEditor, revealInTerminal: onRevealInTerminal, insertPath: onInsertPath)
+        FileActions(
+            openInEditor: onOpenInEditor, revealInTerminal: onRevealInTerminal, insertPath: onInsertPath,
+            openDrawing: DrawingDocuments.canCreate(in: model) ? { [model, leaf] path in
+                if leaf == nil { model.sheet = nil }
+                DrawingDocuments.open(path: path, window: model)
+            } : nil)
     }
 }
 
@@ -68,6 +73,8 @@ struct FileActions {
     var openInEditor: ((String) -> Void)?
     var revealInTerminal: (String) -> Void
     var insertPath: (String) -> Void
+    /// Opens an `.excalidraw` file in a canvas.
+    var openDrawing: ((String) -> Void)?
 }
 
 /// A pushed directory; wrapped so the destination does not claim every `String` in the stack.
@@ -438,6 +445,9 @@ private struct DirectoryListing: View {
         // Nested rows by path: names repeat across folders.
         .accessibilityIdentifier(depth == 0 ? "file-\(entry.name)" : "file-\(entry.path)")
         .contextMenu {
+            if !entry.isDirectory, DrawingFile.isDrawing(entry.name), let open = actions.openDrawing {
+                Button("Open Drawing", systemImage: "scribble.variable") { open(entry.path) }
+            }
             if !entry.isDirectory, let open = actions.openInEditor {
                 Button("Open in VS Code", systemImage: "chevron.left.forwardslash.chevron.right") { open(entry.path) }
             }
@@ -765,6 +775,11 @@ struct FilePreviewScreen: View {
     private var folder: String { source.display((entry.path as NSString).deletingLastPathComponent) }
 
     @ViewBuilder private var actionButtons: some View {
+        if DrawingFile.isDrawing(entry.name), let open = actions.openDrawing {
+            Button("Open Drawing", systemImage: "scribble.variable") { open(entry.path) }
+                .help("Open Drawing")
+                .accessibilityIdentifier("file-open-drawing")
+        }
         if let open = actions.openInEditor {
             Button("Open in VS Code", systemImage: "chevron.left.forwardslash.chevron.right") { open(entry.path) }
                 .help("Open in VS Code")
