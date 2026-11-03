@@ -21,7 +21,6 @@ struct KeyBarStyle {
     var minimumButtonWidth: CGFloat
     /// The fixed spine keys (`esc ctl alt tab`, the profile glyph).
     var spineKeyWidth: CGFloat
-    var joystickWidth: CGFloat
     /// The small flick glyph in a key's corner.
     var alternateFont: UIFont
     /// Key labels (`esc`, `~`, `^C`): monospaced so `ctl` and `alt` line up.
@@ -51,7 +50,6 @@ struct KeyBarStyle {
             compactButtonHeight: 24,
             minimumButtonWidth: 40,
             spineKeyWidth: isPad ? 52 : 42,
-            joystickWidth: 52,
             alternateFont: .monospacedSystemFont(ofSize: 10, weight: .medium),
             keyFont: .monospacedSystemFont(ofSize: isPad ? 16 : 15, weight: .medium),
             alternateColor: .secondaryLabel,
