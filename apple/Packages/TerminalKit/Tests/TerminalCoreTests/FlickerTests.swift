@@ -117,6 +117,103 @@ struct ZshLineEditingTests {
     }
 }
 
+// MARK: zsh right prompt (RPROMPT) with powerline glyphs
+
+/// What zsh writes, as captured from zsh 5.9 in a 40-column PTY: a powerline left prompt, the
+/// right prompt drawn at the right edge (one column of indent), and the cursor moved back after
+/// the left prompt.
+private let rightPromptCols: UInt16 = 40
+private let leftPrompt = "/ \u{E0B0} "
+private let leftPromptWidth = 4
+
+private struct RightPrompt: CustomTestStringConvertible {
+    var text: String
+    var width: Int
+
+    var start: Int { Int(rightPromptCols) - 1 - width }
+    var draw: String {
+        "\(esc)[J\(leftPrompt)\(esc)[K\(esc)[\(start - leftPromptWidth)C\(text)\(esc)[\(start + width - leftPromptWidth)D"
+    }
+    var testDescription: String { text }
+
+    /// A separator, ✓, the time and a wide clock emoji.
+    static let withClock = RightPrompt(text: "\u{E0B2} \u{2713} 10:09 \u{1F558}", width: 12)
+    /// Powerline separators and narrow text only.
+    static let narrow = RightPrompt(text: "\u{E0B2} \u{2713} \u{E0B3} 10:09", width: 11)
+}
+
+/// zsh's echo of one typed character at column `x`: the character, and once the buffer reaches
+/// the cell before the right prompt, an erase of the rest of the line, which removes it.
+private func zshRightPromptEcho(_ character: Character, at x: Int, prompt: RightPrompt) -> [UInt8] {
+    Array((String(character) + (x >= prompt.start - 1 ? "\(esc)[K" : "")).utf8)
+}
+
+/// Types `command` toward the right prompt over a link with `rtt`, the echo cut at `cut` bytes,
+/// and checks every presented frame: the buffer typed so far, then blanks, then either the whole
+/// right prompt where zsh drew it or nothing; never a moved separator or half a prompt.
+private func typeTowardRightPrompt(_ command: String, prompt: RightPrompt, rtt: Double, cut: Int, acknowledged: Bool) {
+    let clock = Clock()
+    let terminal = Terminal(cols: rightPromptCols, rows: 2) { _ in }
+    let predictor = EchoPredictor(now: { clock.t })
+    predictor.update(hint: EchoHint(echo: false, canonical: false, atPrompt: true, altScreen: false))
+    predictor.updateRTT(seconds: rtt)
+    terminal.write(Array(prompt.draw.utf8))
+    predictor.reconcile(screen: terminal)
+    let leftWidth = leftPromptWidth
+    let rightPromptStart = prompt.start
+    let rightPrompt = prompt.text
+    #expect(presentedRow(terminal, row: 0) == leftPrompt + String(repeating: " ", count: rightPromptStart - leftWidth) + rightPrompt)
+
+    var typed = ""
+    for character in command {
+        let x = leftWidth + typed.count
+        typed.append(character)
+        predictor.predict(.text(String(character)), screen: terminal)
+        let seq = predictor.lastInputSeq
+        check(typed)
+        clock.t += rtt
+        let echo = zshRightPromptEcho(character, at: x, prompt: prompt)
+        let at = min(cut, echo.count)
+        for piece in [Array(echo[..<at]), Array(echo[at...])] {
+            terminal.write(piece)
+            predictor.reconcile(screen: terminal)
+            check(typed)
+        }
+        if acknowledged {
+            predictor.acknowledge(upTo: seq)
+            predictor.reconcile(screen: terminal)
+        }
+        check(typed)
+    }
+    #expect(predictor.stats.mispredicted == 0)
+    #expect(presentedRow(terminal, row: 0) == leftPrompt + command)
+
+    func check(_ typed: String) {
+        let row = presentedRow(terminal, predictor, row: 0)
+        let cells = Array(row)
+        let left = String(cells.prefix(rightPromptStart))
+        let right = String(cells.dropFirst(rightPromptStart))
+        var buffer = String(left.dropFirst(leftWidth))
+        while buffer.hasSuffix(" ") { buffer.removeLast() }
+        #expect(left.hasPrefix(leftPrompt), "the left prompt moved: \(row.debugDescription)")
+        #expect(typed.hasPrefix(buffer), "presented \(row.debugDescription) after typing \(typed.debugDescription)")
+        let typedPastStart = String(typed.dropFirst(rightPromptStart - leftWidth))
+        #expect(right == rightPrompt || right.isEmpty || typedPastStart.hasPrefix(right),
+                "the right prompt was cut or moved: \(row.debugDescription)")
+    }
+}
+
+@Suite("No flicker: zsh right prompt")
+struct ZshRightPromptTests {
+    @Test(arguments: [RightPrompt.withClock, .narrow], [0.005, 0.1, 0.3])
+    fileprivate func typingIntoTheRightPrompt(prompt: RightPrompt, rtt: Double) {
+        for cut in 0...4 {
+            typeTowardRightPrompt("echo abcdefghijklmnopqrstuvwxyz", prompt: prompt, rtt: rtt, cut: cut, acknowledged: false)
+            typeTowardRightPrompt("echo abcdefghijklmnopqrstuvwxyz", prompt: prompt, rtt: rtt, cut: cut, acknowledged: true)
+        }
+    }
+}
+
 // MARK: Synchronized output (mode 2026)
 
 private func frame(_ name: String, rows: Int = 4) -> [String] {
