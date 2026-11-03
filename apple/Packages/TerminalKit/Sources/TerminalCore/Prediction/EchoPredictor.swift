@@ -110,8 +110,14 @@ public struct PredictionStats: Equatable, Sendable {
 /// - Predict only when the hint allows it (`EchoHint.allowsPrediction`), not on the alt screen, not
 ///   during the suppression epoch after a misprediction, and not while an earlier unpredictable
 ///   input (Enter, Tab, ...) is still unprocessed.
-/// - Printable single-cell characters at the cursor (inserting in the middle of the line shifts the
-///   rest right), and Backspace / ← / → inside the predicted run. Never the last column (wrap).
+/// - Printable single-cell characters at the cursor, and Backspace / ← / → inside the predicted run.
+///   Never the last column (wrap). Text the program drew right of the cursor (an autosuggestion, a
+///   right prompt, the rest of the line) is never moved: typing over it is predicted only where the
+///   cell is empty or already shows the typed character, so a shell that completes or redraws the
+///   line does not contradict what was drawn.
+/// - Drawn only where it hides latency someone could see: above `showAboveRTT` (hidden again below
+///   `hideBelowRTT`), or once a keystroke waited `stallDelay` for its echo. On a faster link the
+///   echo lands within a frame or two and only the real screen is shown.
 /// - Residual race: while earlier keystrokes are outstanding and no output arrived for
 ///   `idleOutputLimit`, stop predicting (a program may have gone silent into hidden input).
 /// - A cell is confirmed when the screen shows it (a cell that already showed the predicted text
@@ -123,11 +129,15 @@ public struct PredictionStats: Equatable, Sendable {
 public final class EchoPredictor {
     public struct Configuration: Sendable {
         public var enabled = true
-        /// Above this RTT, cells unconfirmed for `underlineGrace` are underlined.
-        public var underlineRTT: Double = 0.080
-        public var underlineGrace: Double = 0.050
-        /// Below this RTT nothing is drawn (the echo arrives before the next frame anyway).
-        public var minimumDisplayRTT: Double = 0
+        /// Predictions are drawn once the round trip rises above this...
+        public var showAboveRTT: Double = 0.030
+        /// ...and hidden again once it falls below this.
+        public var hideBelowRTT: Double = 0.020
+        /// On a link too fast to draw predictions, a keystroke still unconfirmed this long is
+        /// drawn anyway (the link stalled).
+        public var stallDelay: Double = 0.250
+        /// A cell still unconfirmed this long past one round trip is underlined: its echo is late.
+        public var underlineDelay: Double = 0.250
         /// Added to 2·RTT before an unacknowledged mismatch counts as a misprediction.
         public var confirmGrace: Double = 0.250
         /// No output for this long with keystrokes outstanding stops prediction (the program
@@ -174,6 +184,8 @@ public final class EchoPredictor {
     public private(set) var hint: EchoHint?
     /// The latest round-trip estimate in seconds, nil until the backend reports one.
     public private(set) var rtt: Double?
+    /// The round trip is long enough for predictions to be drawn (`showAboveRTT`/`hideBelowRTT`).
+    public private(set) var displaysPredictions = false
     /// Sequence number of the most recent input (1-based; the first input is 1).
     public private(set) var lastInputSeq: UInt64 = 0
     /// Highest input sequence the backend acknowledged.
@@ -208,7 +220,13 @@ public final class EchoPredictor {
     }
 
     public func updateRTT(seconds: Double) {
-        rtt = max(0, seconds)
+        let rtt = max(0, seconds)
+        self.rtt = rtt
+        if rtt > configuration.showAboveRTT {
+            displaysPredictions = true
+        } else if rtt < configuration.hideBelowRTT {
+            displaysPredictions = false
+        }
     }
 
     /// The backend processed inputs up to `seq`, and the output they produced has been applied to
@@ -278,6 +296,10 @@ public final class EchoPredictor {
         func isWide(_ column: Int) -> Bool {
             run.cells[column] == nil && screen.isWide(atX: column, y: y)
         }
+        /// The program drew something at or right of `column` that the run did not predict.
+        func hasProgramText(from column: Int) -> Bool {
+            (column..<cols).contains { run.cells[$0] == nil && !screen.text(atX: $0, y: y).isEmpty }
+        }
         func set(_ column: Int, _ text: String) {
             let original = run.cells[column]?.original ?? screen.text(atX: column, y: y)
             run.cells[column] = Expectation(text: text, original: original, seq: seq, createdAt: time)
@@ -285,12 +307,16 @@ public final class EchoPredictor {
 
         switch input {
         case .text(let text):
-            guard PredictedInput.isPredictableText(text), x < cols - 1 else { return false }
-            let rest = Array(x..<cols)
-            guard !rest.contains(where: isWide) else { return false }
-            let old = rest.map(current)
-            if old.contains(where: { !$0.isEmpty }) {
-                // Inserting in the middle of the line: the rest moves right, and must not fall off.
+            guard PredictedInput.isPredictableText(text), x < cols - 1, !isWide(x), x == 0 || !isWide(x - 1) else { return false }
+            if hasProgramText(from: x) {
+                // Only where the program's text needs no moving: an empty cell (the gap before a
+                // right prompt) or the very character typed (accepting an autosuggestion).
+                guard run.cells[x] == nil, current(x).isEmpty || current(x) == text else { return false }
+            } else {
+                let rest = Array(x..<cols)
+                guard !rest.contains(where: isWide) else { return false }
+                let old = rest.map(current)
+                // Inserting inside the predicted run: the rest of it moves right, and must not fall off.
                 guard old.last == "" else { return false }
                 for column in stride(from: cols - 1, to: x, by: -1) where old[column - x] != old[column - 1 - x] {
                     set(column, old[column - 1 - x])
@@ -301,7 +327,7 @@ public final class EchoPredictor {
             let rightmost = run.cells.filter { !$0.value.text.isEmpty }.keys.max() ?? x
             run.endX = max(run.endX, rightmost + 1)
         case .backspace:
-            guard self.run != nil, x > run.startX else { return false }
+            guard self.run != nil, x > run.startX, !hasProgramText(from: x) else { return false }
             let target = x - 1
             let rest = Array(target..<cols)
             guard !rest.contains(where: isWide) else { return false }
@@ -425,13 +451,11 @@ public final class EchoPredictor {
 
     /// Cells to draw over the terminal, sorted by row then column.
     public var overlay: [PredictedCell] {
-        let rtt = effectiveRTT
-        guard rtt >= configuration.minimumDisplayRTT else { return [] }
         let time = now()
+        guard isShown(at: time) else { return [] }
+        let late = effectiveRTT + configuration.underlineDelay
         func cell(_ x: Int, _ y: Int, _ expectation: Expectation) -> PredictedCell {
-            PredictedCell(
-                x: x, y: y, text: expectation.text,
-                underlined: rtt > configuration.underlineRTT && time - expectation.createdAt >= configuration.underlineGrace)
+            PredictedCell(x: x, y: y, text: expectation.text, underlined: time - expectation.createdAt >= late)
         }
         var cells = abandoned.map { cell($0.x, $0.y, $0.expectation) }
         if let run {
@@ -442,8 +466,14 @@ public final class EchoPredictor {
 
     /// Where to draw the cursor while predictions are outstanding, or nil to use the terminal's.
     public var predictedCursor: (x: Int, y: Int)? {
-        guard let run, effectiveRTT >= configuration.minimumDisplayRTT else { return nil }
+        guard let run, isShown(at: now()) else { return nil }
         return (run.cursorX, run.y)
+    }
+
+    private func isShown(at time: Double) -> Bool {
+        if displaysPredictions { return true }
+        let waiting = abandoned.map(\.expectation.createdAt) + (run?.cells.values.map(\.createdAt) ?? [])
+        return waiting.min().map { time - $0 >= configuration.stallDelay } ?? false
     }
 
     /// Whether anything is shown or pending, so the caller knows to keep calling
