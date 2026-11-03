@@ -130,7 +130,8 @@ public extension DS {
 
         /// No overshoot. Each terminal shows its last frame on the way and draws at its new size
         /// once there (`splitSettle`, when a spring this stiff is within a point).
-        public static let split = Animation.spring(duration: splitDuration, bounce: 0)
+        public static let split = Animation.spring(splitSpring)
+        public static let splitSpring = Spring(duration: splitDuration, bounce: 0)
         public static let splitDuration = 0.3
         public static let splitSettle = 0.42
         public static let banner = Animation.spring(response: 0.42, dampingFraction: 0.82)

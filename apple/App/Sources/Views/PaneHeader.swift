@@ -115,7 +115,7 @@ struct PaneHeader: View {
 
     private func zoom() {
         focus()
-        withAnimation(DS.Motion.lift) { WorkspaceAction.toggleZoom.perform(on: workspace, window: model) }
+        withAnimation(DS.Motion.split) { WorkspaceAction.toggleZoom.perform(on: workspace, window: model) }
     }
 
     /// Moves the pane's window when it is the window's only pane; otherwise drags the pane to
@@ -181,7 +181,7 @@ private struct PaneHeaderButtons: View {
                 systemImage: zoomed ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
                 shortcut: WorkspaceAction.toggleZoom, lit: zoomed
             ) {
-                act { withAnimation(DS.Motion.lift) { WorkspaceAction.toggleZoom.perform(on: workspace, window: model) } }
+                act { withAnimation(DS.Motion.split) { WorkspaceAction.toggleZoom.perform(on: workspace, window: model) } }
             }
             HeaderButton("Close Pane", systemImage: "xmark", shortcut: WorkspaceAction.closePane) {
                 act { WorkspaceAction.closePane.perform(on: workspace, window: model) }
@@ -268,7 +268,7 @@ struct PaneContextItems: View {
             FloatMenuItems(workspace: workspace, model: model, pane: pane)
         }
         Button("Zoom Pane", systemImage: "arrow.up.left.and.arrow.down.right") {
-            focusThen { withAnimation(DS.Motion.lift) { WorkspaceAction.toggleZoom.perform(on: workspace, window: model) } }
+            focusThen { withAnimation(DS.Motion.split) { WorkspaceAction.toggleZoom.perform(on: workspace, window: model) } }
         }
         if WindowSupport.multipleWindows, model.activeMixedTab == nil {
             Button("Pop Out to Window", systemImage: "macwindow.badge.plus") { model.popOut(pane, in: workspace) }

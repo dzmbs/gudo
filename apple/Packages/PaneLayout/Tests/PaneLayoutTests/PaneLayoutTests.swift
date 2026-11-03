@@ -89,6 +89,22 @@ private func grid() -> Session {
         #expect(session.activeTab!.zoomed == p1)
     }
 
+    @Test func aZoomSetTwiceStaysSet() {
+        var session = grid()
+        let tab = session.activeTab!.id
+        session.setZoom(p1, inTab: tab)
+        session.setZoom(p1, inTab: tab)
+        #expect(session.activeTab!.zoomed == p1)
+        session.setZoom(nil, inTab: tab)
+        session.setZoom(nil, inTab: tab)
+        #expect(session.activeTab!.zoomed == nil)
+        session.setZoom(PaneId(99), inTab: tab)
+        #expect(session.activeTab!.zoomed == nil, "not in the tab")
+        var single = Session()
+        single.setZoom(p1, inTab: single.activeTab!.id)
+        #expect(single.activeTab!.zoomed == nil, "a tab of one pane")
+    }
+
     @Test func closingTheZoomedPaneUnzooms() {
         var session = grid()
         session.apply(.toggleZoom)
