@@ -5,5 +5,9 @@
   "assets": {
     "directory": "site",
     "not_found_handling": "404-page"
-  }
+  },
+  "routes": [
+    { "pattern": "gudo.dev", "custom_domain": true },
+    { "pattern": "www.gudo.dev", "custom_domain": true }
+  ]
 }
