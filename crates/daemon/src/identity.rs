@@ -55,6 +55,9 @@ struct DeviceEntry {
     /// When it last connected or disconnected, Unix ms.
     #[serde(default, skip_serializing_if = "is_zero")]
     last_seen: u64,
+    /// Paired with a ticket minted for the app on this computer (`pair --local`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    this_computer: bool,
 }
 
 impl DeviceEntry {
@@ -69,6 +72,10 @@ impl DeviceEntry {
 
 fn is_zero(value: &u64) -> bool {
     *value == 0
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// How long a connection's arrival may go unrecorded in `last_seen`, so reconnects do not
@@ -86,6 +93,15 @@ struct PairingEntry {
     secret: String,
     principal: String,
     expires: u64,
+    #[serde(default, skip_serializing_if = "is_false")]
+    this_computer: bool,
+}
+
+/// What a consumed pairing secret was minted for.
+#[derive(Debug, PartialEq, Eq)]
+struct Pairing {
+    principal: PrincipalId,
+    this_computer: bool,
 }
 
 /// Where a running daemon can be reached; written at startup for `pair` and `status`.
@@ -272,7 +288,10 @@ impl Identity {
                     .as_slice()
                     .try_into()
                     .map_err(|_| RefuseReason::InvalidGrant)?;
-                let principal = consume_pairing_secret(&self.dir, PairingSecret(secret))
+                let Pairing {
+                    principal,
+                    this_computer,
+                } = consume_pairing_secret(&self.dir, PairingSecret(secret))
                     .map_err(|_| RefuseReason::InvalidGrant)?
                     .ok_or(RefuseReason::InvalidGrant)?;
                 let entry = DeviceEntry {
@@ -282,6 +301,7 @@ impl Identity {
                     name: String::new(),
                     label: String::new(),
                     last_seen: 0,
+                    this_computer,
                 };
                 // A fresh ticket brings a removed device back, but not its old invites: they
                 // stay void by its removal time (`removed_at`).
@@ -481,8 +501,9 @@ fn load_or_create_owner(dir: &Path) -> io::Result<PrincipalId> {
     Ok(principal)
 }
 
-/// Removes `secret` from the pending list if present and unexpired, returning its principal.
-fn consume_pairing_secret(dir: &Path, secret: PairingSecret) -> io::Result<Option<PrincipalId>> {
+/// Removes `secret` from the pending list if present and unexpired, returning what it was
+/// minted for.
+fn consume_pairing_secret(dir: &Path, secret: PairingSecret) -> io::Result<Option<Pairing>> {
     let path = dir.join(PAIRING_FILE);
     fsutil::with_lock(&path, || {
         let mut entries: Vec<PairingEntry> = read_json(&path)?.unwrap_or_default();
@@ -493,13 +514,19 @@ fn consume_pairing_secret(dir: &Path, secret: PairingSecret) -> io::Result<Optio
                 && unhex::<16>(&entry.secret)
                     .is_some_and(|stored| fsutil::constant_eq(&stored, &secret.0))
         });
-        let principal = found.and_then(|i| unhex(&entries.remove(i).principal).map(PrincipalId));
+        let pairing = found.and_then(|i| {
+            let entry = entries.remove(i);
+            unhex(&entry.principal).map(|principal| Pairing {
+                principal: PrincipalId(principal),
+                this_computer: entry.this_computer,
+            })
+        });
         entries.retain(|entry| entry.expires > now);
         // A wrong guess costs no disk write: anyone who knows the daemon id can send them.
         if entries.len() != before {
             write_json(&path, &entries)?;
         }
-        Ok(principal)
+        Ok(pairing)
     })
 }
 
@@ -528,6 +555,10 @@ pub fn endpoint_info(state_dir: &Path) -> io::Result<Option<EndpointInfo>> {
 /// Returns [`io::ErrorKind::NotFound`] if no daemon has recorded its endpoint yet, or any
 /// error reading or writing the state files.
 pub fn mint_ticket(state_dir: &Path, ttl: Duration) -> io::Result<Ticket> {
+    mint(state_dir, ttl, false)
+}
+
+fn mint(state_dir: &Path, ttl: Duration, this_computer: bool) -> io::Result<Ticket> {
     let info = endpoint_info(state_dir)?.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
@@ -550,6 +581,7 @@ pub fn mint_ticket(state_dir: &Path, ttl: Duration) -> io::Result<Ticket> {
             secret: hex(&secret.0),
             principal: hex(&owner.0),
             expires,
+            this_computer,
         });
         write_json(&path, &entries)
     })?;
@@ -571,7 +603,19 @@ pub fn mint_ticket(state_dir: &Path, ttl: Duration) -> io::Result<Ticket> {
 ///
 /// As [`mint_ticket`].
 pub fn mint_ticket_text(state_dir: &Path, ttl: Duration) -> io::Result<String> {
-    let ticket = mint_ticket(state_dir, ttl)?;
+    ticket_text(state_dir, mint(state_dir, ttl, false)?)
+}
+
+/// [`mint_ticket_text`] for the app on this computer: the device it pairs is listed as such.
+///
+/// # Errors
+///
+/// As [`mint_ticket`].
+pub fn mint_this_computer_ticket_text(state_dir: &Path, ttl: Duration) -> io::Result<String> {
+    ticket_text(state_dir, mint(state_dir, ttl, true)?)
+}
+
+fn ticket_text(state_dir: &Path, ticket: Ticket) -> io::Result<String> {
     let relays = endpoint_info(state_dir)?
         .map(|info| info.relays)
         .unwrap_or_default();
@@ -594,6 +638,8 @@ pub struct PairedDevice {
     pub own_name: String,
     /// When it last connected or disconnected, Unix ms; 0 if never recorded.
     pub last_seen: u64,
+    /// The app on this computer (paired with `pair --local`).
+    pub this_computer: bool,
 }
 
 impl From<DeviceEntry> for PairedDevice {
@@ -604,6 +650,7 @@ impl From<DeviceEntry> for PairedDevice {
             device: entry.device,
             paired_at: entry.paired_at,
             last_seen: entry.last_seen,
+            this_computer: entry.this_computer,
         }
     }
 }
@@ -866,6 +913,38 @@ mod tests {
         );
         assert!(!identity.is_owner_device(lost));
         assert!(identity.is_owner_device(new));
+
+        pair(lost);
+        assert!(
+            identity.is_owner_device(lost),
+            "a ticket minted after the removal pairs the device again"
+        );
+    }
+
+    /// The app on this computer pairs with its own kind of ticket and is listed as such; a
+    /// device paired with a plain ticket is not.
+    #[test]
+    fn the_app_on_this_computer_is_marked() {
+        let dir = started_daemon();
+        let identity = Identity::load_or_create(dir.path()).expect("identity");
+        let owner = load_or_create_owner(dir.path()).expect("owner");
+        let app = DeviceId([4; 32]);
+        let phone = DeviceId([5; 32]);
+        let local = mint_this_computer_ticket_text(dir.path(), PAIRING_TTL).expect("mint");
+        let local = Ticket::parse_with_extras(&local).expect("ticket").0;
+        identity
+            .authorize(app, owner, &pairing_grant(local.secret))
+            .expect("pairs");
+        let plain = mint_ticket(dir.path(), PAIRING_TTL).expect("mint").secret;
+        identity
+            .authorize(phone, owner, &pairing_grant(plain))
+            .expect("pairs");
+        let marked: Vec<(String, bool)> = list_paired(dir.path())
+            .expect("list")
+            .into_iter()
+            .map(|paired| (paired.device, paired.this_computer))
+            .collect();
+        assert_eq!(marked, [(hex(&app.0), true), (hex(&phone.0), false)]);
     }
 
     #[test]

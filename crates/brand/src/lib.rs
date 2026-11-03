@@ -22,6 +22,9 @@ pub const HOOK_BIN: &str = "gudo-hook";
 /// prefix of names the daemon gives things on the host (branches, refs, repo config files).
 pub const DIR_NAME: &str = "gudo";
 
+/// How `devices` lists the app's own device on the computer it runs on.
+pub const THIS_COMPUTER_APP: &str = "This Mac (Gudo app)";
+
 /// Directory name under macOS's `~/Library/Application Support` and `~/Library/Logs`.
 pub const MAC_DIR_NAME: &str = "Gudo";
 

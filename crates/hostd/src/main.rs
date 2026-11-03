@@ -450,7 +450,12 @@ fn pair(state_dir: &Path, ttl: Duration, json: bool, wait: Duration, local: bool
     if !wait.is_zero() {
         wait_for_endpoint(state_dir, wait)?;
     }
-    let mut text = daemon::mint_ticket_text(state_dir, ttl)
+    let mint = if local {
+        daemon::mint_this_computer_ticket_text
+    } else {
+        daemon::mint_ticket_text
+    };
+    let mut text = mint(state_dir, ttl)
         .with_context(|| format!("minting a ticket in {}", state_dir.display()))?;
     let (mut ticket, extras) = proto::Ticket::parse_with_extras(&text)?;
     if local {

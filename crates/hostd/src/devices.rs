@@ -51,7 +51,10 @@ pub fn kind(device: &PairedDevice) -> &'static str {
 }
 
 pub fn display_name(device: &PairedDevice) -> &str {
-    if device.name.is_empty() {
+    let renamed = !device.name.is_empty() && device.name != device.own_name;
+    if device.this_computer && !renamed {
+        brand::THIS_COMPUTER_APP
+    } else if device.name.is_empty() {
         "Unnamed device"
     } else {
         &device.name
@@ -87,6 +90,7 @@ pub fn json_list(devices: &[PairedDevice]) -> String {
                 "kind": kind(device),
                 "paired_at_ms": device.paired_at,
                 "last_seen_ms": (device.last_seen != 0).then_some(device.last_seen),
+                "this_computer": device.this_computer,
             })
         })
         .collect();
@@ -542,6 +546,10 @@ fn interactive(state_dir: &Path, devices: Vec<PairedDevice>) -> Result<()> {
                 }
                 Action::Remove { device } => {
                     list.status = Some(match daemon::unpair_device(state_dir, &device) {
+                        Ok(removed) if removed.this_computer => format!(
+                            "Removed {}. The app pairs again when it next connects.",
+                            display_name(&removed)
+                        ),
                         Ok(removed) => format!("Removed {}.", display_name(&removed)),
                         Err(error) => format!("Could not remove: {error}"),
                     });
@@ -617,6 +625,7 @@ mod tests {
             name: name.into(),
             own_name: own_name.into(),
             last_seen: 0,
+            this_computer: false,
         }
     }
 
@@ -647,6 +656,15 @@ mod tests {
             table(&[], NOW),
             "No devices paired yet. Run `gudo pair` to pair one.\n"
         );
+    }
+
+    #[test]
+    fn the_app_on_this_computer_is_named_for_what_it_is() {
+        let mut app = device(&"c3".repeat(32), "Studio", "Studio", 1);
+        app.this_computer = true;
+        assert_eq!(display_name(&app), "This Mac (Gudo app)");
+        app.name = "Desk app".into();
+        assert_eq!(display_name(&app), "Desk app", "the owner's name stands");
     }
 
     #[test]
