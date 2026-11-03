@@ -222,10 +222,18 @@ final class LocalHelper {
         } else if Self.runningEndpoint(in: stateDirectory) == nil {
             try await launch(binary)
         } else if keepsRunning, agent.status == .enabled, !isRegistered(binary) {
-            // An older build's login item still runs: it is replaced, never restarted, because
-            // launchd only spawns the exact build that was registered.
-            try await stopLoginItem()
-            try await launch(binary)
+            if await Self.restartInPlace(binary: binary, stateDirectory: stateDirectory) {
+                // The running helper became this build (same process, so launchd keeps it)
+                // and its sessions kept running. The login item is registered again the next
+                // time the helper is not running (`startLoginItem`).
+                launched = false
+                Self.log.info("helper: restarted into this build, sessions kept")
+            } else {
+                // A helper that cannot restart in place is replaced, never restarted, because
+                // launchd only spawns the exact build that was registered.
+                try await stopLoginItem()
+                try await launch(binary)
+            }
         } else {
             launched = false
         }
@@ -373,6 +381,19 @@ final class LocalHelper {
             try await Task.sleep(for: .milliseconds(100))
         }
         throw HelperError.didNotStart
+    }
+
+    /// Asks the running helper to hand its sessions to the build now in the app and become it
+    /// (`restart`): false when it cannot (a build from before this, or the new build cannot
+    /// take the sessions over), which leaves it running as it was.
+    private static func restartInPlace(binary: URL, stateDirectory: URL) async -> Bool {
+        do {
+            _ = try await Self.output(binary, ["--state-dir", stateDirectory.path, "restart"])
+            return true
+        } catch {
+            Self.log.info("helper: no restart in place (\(String(describing: error), privacy: .public))")
+            return false
+        }
     }
 
     /// A one-time ticket from the helper itself, with loopback addresses (works offline).

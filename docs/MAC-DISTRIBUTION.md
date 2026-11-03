@@ -31,6 +31,19 @@ notarization refuses any build that has it.
 that constraint follows the team, so updates keep the login item. Ad-hoc builds change
 their hash with every build.
 
+After an app update the running helper is still the old build, its file replaced inside the
+new bundle. On the next launch the app runs the new bundled helper's `restart`
+(`LocalHelper.restartInPlace`): the running helper checks the new file (`build-info`), hands
+its sessions over and `exec`s it at the same path (docs/DAEMON.md "Hot upgrade"). `exec` keeps
+the pid, so launchd's job (`KeepAlive`, `BundleProgram`) still owns the process and nothing
+is spawned, so the registered code is not consulted; the sessions keep running. The login
+item is not registered again then (that would stop the job); the app registers it again the
+next time it finds the helper not running. A helper from before this, or a new build that
+cannot take the sessions over, is replaced as before: unregister (stopping it), register,
+start. The exec-in-place path never writes into the bundle: an upgrade streamed over the
+connection stays refused for a helper inside an app bundle, because rewriting the file would
+break the app's signature.
+
 ### Where the Mac app keeps secrets
 
 The device key, pairing tickets, SSH keys and saved passwords go to the Keychain
