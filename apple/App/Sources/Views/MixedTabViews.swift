@@ -422,7 +422,7 @@ struct MixedHostsLine: View {
                 }
             }
         }
-        .font(DS.Font.sidebarSubtitle)
+        .font(SidebarFont.subtitle)
         .foregroundStyle(DS.Palette.textSecondary)
     }
 }
@@ -450,7 +450,7 @@ struct MixedTabRow: View {
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: DS.Space.gap10) {
                 Text("\(number)")
-                    .font(DS.Font.sidebarSubtitle.monospacedDigit())
+                    .font(SidebarFont.subtitle.monospacedDigit())
                     .foregroundStyle(isActive ? DS.Palette.textSecondary : DS.Palette.textTertiary)
                     .frame(width: 20, alignment: .trailing)
                     .lineLimit(1)
@@ -458,7 +458,7 @@ struct MixedTabRow: View {
                     HStack(spacing: DS.Space.row) {
                         TabLeadingMark(program: program, state: isActive ? nil : state, favicon: model.favicon(ofMixedTab: tab))
                         Text(title)
-                            .font(DS.Font.sidebarTitle)
+                            .font(SidebarFont.title)
                             .foregroundStyle(.primary)
                             .lineLimit(1)
                             .truncationMode(.middle)

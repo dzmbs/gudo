@@ -158,3 +158,88 @@ final class ProjectSidebarTests: XCTestCase {
         XCTAssertEqual(model.projects.first?.tabs[1], app.tabs[0], "past the end: stays")
     }
 }
+
+/// A tab in a repository is a tab first: it keeps its row, its number and its drags, and its
+/// worktree only adds context to the row.
+@MainActor
+final class RepositoryTabsTests: XCTestCase {
+    private var model: WindowModel!
+
+    override func setUp() async throws {
+        model = WindowModel(app: .shared)
+        model.start()
+        DesignFixtures.repositories(model)
+    }
+
+    override func tearDown() async throws {
+        model.close()
+        for id in ["fixture-studio", "fixture-hetzner", "fixture-box"] { AppModel.shared.hosts.disconnect(id) }
+    }
+
+    private func ref(_ title: String) throws -> TabRef {
+        let group = try XCTUnwrap(model.groups.group("fixture-studio"))
+        let tab = try XCTUnwrap(group.tabs.first { $0.title == title })
+        return group.ref(tab.id)
+    }
+
+    private var items: [SidebarItem] { model.sidebarItems(drop: nil, projectMove: nil).items }
+
+    private var rows: [TabRef] {
+        items.compactMap { if case .row(let ref, _) = $0 { ref } else { nil } }
+    }
+
+    func testEveryTabInARepositoryKeepsItsRow() throws {
+        let logs = try ref("logs")
+        let claude = try ref("claude")
+        let app = try XCTUnwrap(model.projects.first { $0.name == "acme-app" })
+        XCTAssertNotNil(model.groups.repoSidebar(for: try XCTUnwrap(model.groups.group("fixture-studio")))?.repos.first)
+        XCTAssertTrue(items.contains(.row(logs, .host("fixture-studio"))))
+        XCTAssertTrue(items.contains(.row(claude, .project(app.id))))
+        let allTabs = model.groups.groups.flatMap { group in group.tabs.map { group.ref($0.id) } }
+        XCTAssertEqual(Set(rows), Set(allTabs))
+        XCTAssertEqual(rows.count, allTabs.count, "each tab once")
+        // The worktrees without tabs come after the host's tabs, never in their place.
+        let reposIndex = try XCTUnwrap(items.firstIndex(of: .hostRepos("fixture-studio")))
+        XCTAssertLessThan(try XCTUnwrap(items.firstIndex(of: .row(logs, .host("fixture-studio")))), reposIndex)
+    }
+
+    func testRowsAndNumbersFollowTheSidebar() throws {
+        XCTAssertEqual(rows, model.groups.tabs)
+        XCTAssertNotNil(model.groups.shortcutNumber(of: try ref("logs")))
+    }
+
+    func testGitContextAttachesToTheTabsRow() throws {
+        let logs = try XCTUnwrap(model.groups.worktree(of: try ref("logs")))
+        XCTAssertEqual(logs.branch, "fix/retry")
+        XCTAssertEqual(logs.visiblePR?.number, 42)
+        let claude = try XCTUnwrap(model.groups.worktree(of: try ref("claude")))
+        XCTAssertEqual([claude.branch, "\(claude.added)", "\(claude.removed)"], ["main", "121", "2"])
+        XCTAssertEqual(TabGitBadges.accessibilityValue(claude), "branch main, +121 −2")
+        XCTAssertNil(model.groups.worktree(of: try ref("api-server")))
+    }
+
+    func testARepositoryTabDropsIntoAProject() throws {
+        let logs = try ref("logs")
+        let infra = try XCTUnwrap(model.projects.first { $0.name == "infra" })
+        let drop = SidebarDrop.insert(logs, into: .project(infra.id), at: 0)
+        let preview = model.sidebarItems(drop: drop, projectMove: nil).items.map(\.id)
+        model.commit(drop)
+        XCTAssertEqual(items.map(\.id), preview)
+        XCTAssertEqual(model.groups.project(infra.id)?.tabs.first, logs)
+        XCTAssertTrue(items.contains(.row(logs, .project(infra.id))))
+        XCTAssertEqual(model.groups.worktree(of: logs)?.branch, "fix/retry", "context stays with the tab")
+
+        model.removeFromProject(logs)
+        XCTAssertTrue(items.contains(.row(logs, .host("fixture-studio"))))
+    }
+
+    func testReorderingMovesRepositoryTabsLikeAnyOther() throws {
+        let logs = try ref("logs")
+        model.removeFromProject(try ref("claude"))
+        let rows = { [model] in model!.groups.sections.first { $0.container == .host("fixture-studio") }?.rows ?? [] }
+        let index = try XCTUnwrap(rows().firstIndex(of: logs))
+        XCTAssertGreaterThan(index, 0)
+        model.groups.moveTab(logs, by: -1)
+        XCTAssertEqual(rows().firstIndex(of: logs), index - 1)
+    }
+}

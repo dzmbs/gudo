@@ -9,14 +9,16 @@ public struct ListRow<Leading: View, Trailing: View>: View {
     let leading: Leading
     let trailing: Trailing
     var subtitleIsLiteral = false
+    var titleFont = DS.Font.rowTitle
 
     public init(
-        _ title: Text, subtitle: Text? = nil, literalSubtitle: Bool = false,
+        _ title: Text, subtitle: Text? = nil, literalSubtitle: Bool = false, titleFont: SwiftUI.Font? = nil,
         @ViewBuilder leading: () -> Leading, @ViewBuilder trailing: () -> Trailing
     ) {
         self.title = title
         self.subtitle = subtitle
         self.subtitleIsLiteral = literalSubtitle
+        if let titleFont { self.titleFont = titleFont }
         self.leading = leading()
         self.trailing = trailing()
     }
@@ -27,7 +29,7 @@ public struct ListRow<Leading: View, Trailing: View>: View {
                 .frame(width: 22, alignment: .center)
             VStack(alignment: .leading, spacing: 2) {
                 title
-                    .font(DS.Font.rowTitle)
+                    .font(titleFont)
                     .lineLimit(1)
                 if let subtitle {
                     subtitle

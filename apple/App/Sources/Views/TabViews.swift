@@ -78,7 +78,7 @@ struct WorkspaceSidebar: View {
         return Button {
             withAnimation(DS.Motion.snappy) { model.destination = destination }
         } label: {
-            ListRow(Text(destination.title)) {
+            ListRow(Text(destination.title), titleFont: SidebarFont.title) {
                 Image(systemName: destination.systemImage)
                     .foregroundStyle(selected ? DS.Palette.text : DS.Palette.textSecondary)
             } trailing: {
@@ -146,6 +146,65 @@ private struct SidebarRowStyle: ViewModifier {
     }
 }
 
+/// The sidebar's text at Apple's sidebar sizes. Touch: the body and subheadline text styles, so
+/// Dynamic Type applies. Mac: the sidebar size chosen in System Settings (11, 13 or 15 pt rows,
+/// as the system's source lists draw them). Weight never changes with selection; the fill shows it.
+@MainActor
+enum SidebarFont {
+    #if os(macOS)
+    static var title: Font { .system(size: SidebarSize.shared.metrics.title) }
+    static var subtitle: Font { .system(size: SidebarSize.shared.metrics.subtitle) }
+    static var section: Font { .system(size: SidebarSize.shared.metrics.section, weight: .semibold) }
+    #else
+    static let title = Font.body
+    static let subtitle = Font.subheadline
+    static let section = Font.subheadline.weight(.semibold)
+    #endif
+}
+
+#if os(macOS)
+/// System Settings › Appearance › Sidebar icon size, kept current while the app runs.
+@MainActor
+@Observable
+final class SidebarSize {
+    static let shared = SidebarSize()
+
+    struct Metrics: Equatable {
+        var title: CGFloat
+        var subtitle: CGFloat
+        var section: CGFloat
+    }
+
+    /// `NSTableViewDefaultSizeMode`: 1 small, 2 medium (also when unset), 3 large.
+    private(set) var mode = SidebarSize.storedMode
+
+    var metrics: Metrics {
+        switch mode {
+        case 1: Metrics(title: 11, subtitle: 10, section: 10)
+        case 3: Metrics(title: 15, subtitle: 12, section: 13)
+        default: Metrics(title: 13, subtitle: 10, section: 11)
+        }
+    }
+
+    private init() {
+        for name in [UserDefaults.didChangeNotification, NSApplication.didBecomeActiveNotification] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { SidebarSize.shared.refresh() }
+            }
+        }
+    }
+
+    private func refresh() {
+        let stored = Self.storedMode
+        if stored != mode { mode = stored }
+    }
+
+    private static var storedMode: Int {
+        UserDefaults.standard.integer(forKey: "NSTableViewDefaultSizeMode")
+    }
+}
+#endif
+
 /// The highlight behind a selected sidebar row.
 struct SelectionFill: View {
     let isSelected: Bool
@@ -210,12 +269,12 @@ private struct HostGroupHeader: View {
                     healthy: Image(systemName: group.isLocal ? "laptopcomputer" : "server.rack")
                         .foregroundStyle(DS.Palette.textSecondary).opacity(DS.Opacity.mutedGlyph))
                     // The header's own text style, so the glyph grows with Dynamic Type.
-                    .font(DS.Font.section.weight(.regular))
+                    .font(SidebarFont.section.weight(.regular))
                     .imageScale(.small)
                     .frame(minWidth: 16)
                     .help(group.failure ?? (live ? group.name : state.title))
                 Text(group.name)
-                    .font(DS.Font.section)
+                    .font(SidebarFont.section)
                     .foregroundStyle(live ? DS.Palette.textSecondary : DS.Palette.textTertiary)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -581,13 +640,14 @@ struct TabRow: View {
         let context = workspace?.context(of: tab)
         let running = workspace?.runningCommand(of: tab)
         let program = model.programIdentity(of: tab, onGroup: group.id)
+        let worktree = model.groups.worktree(of: ref)
 
         Button {
             model.clickTab(ref, modifiers: ClickModifiers.current)
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: DS.Space.gap10) {
                 Text("\(number)")
-                    .font(DS.Font.sidebarSubtitle.monospacedDigit())
+                    .font(SidebarFont.subtitle.monospacedDigit())
                     .foregroundStyle(isActive ? DS.Palette.textSecondary : DS.Palette.textTertiary)
                     .frame(width: numberWidth, alignment: .trailing)
                     .lineLimit(1)
@@ -597,7 +657,7 @@ struct TabRow: View {
                     HStack(spacing: DS.Space.row) {
                         TabLeadingMark(program: program, state: isActive ? nil : state)
                         Text(title)
-                            .font(DS.Font.sidebarTitle)
+                            .font(SidebarFont.title)
                             .lineLimit(1)
                             // A path keeps its end: the directory you are in.
                             .truncationMode(title.hasPrefix("/") || title.hasPrefix("~") ? .head : .middle)
@@ -611,10 +671,11 @@ struct TabRow: View {
                     }
                     let informative = context.flatMap { Self.isInformative($0, title: title) ? $0 : nil }
                     // In a project it leads with the host, which the section header doesn't name.
-                    TabSubtitle(context: showsHost ? [group.name, informative].compactMap(\.self).joined(separator: " · ") : informative, running: running)
+                    TabSubtitle(context: informative, running: running, worktree: worktree, host: showsHost ? group.name : nil)
                         .padding(.leading, ProgramMark.rowSlot + DS.Space.row)
                 }
                 Spacer(minLength: DS.Space.xs)
+                if let worktree { TabGitBadges(worktree: worktree, selected: isActive) }
                 TabPresence(workspace: workspace, panes: tab.root.panes)
                 if model.isSelectingTabs {
                     let selected = model.tabSelection.contains(ref)
@@ -638,7 +699,7 @@ struct TabRow: View {
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(TabLeadingMark.label(title: title, program: program, state: isActive ? nil : state, host: group.name))
-        .accessibilityValue([running.map { "Running: \($0.command ?? "a command")" } ?? context ?? "", TabPresence.value(workspace, tab.root.panes)]
+        .accessibilityValue([worktree.map(TabGitBadges.accessibilityValue) ?? "", running.map { "Running: \($0.command ?? "a command")" } ?? context ?? "", TabPresence.value(workspace, tab.root.panes)]
             .filter { !$0.isEmpty }.joined(separator: "; "))
         .accessibilityAddTraits(isActive || model.isInMultipleSelection(ref) ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("tab-row-\(number)")
@@ -651,6 +712,9 @@ struct TabRow: View {
                         .accessibilityIdentifier("open-in-new-window")
                 }
                 if let workspace { MergeIntoTabMenu(workspace: workspace, tab: tab.id) }
+                if let worktree {
+                    Button("New Agent in \(worktree.repoName)", systemImage: "sparkle") { model.newAgent(onGroup: group.id, repo: worktree.repo) }
+                }
                 Divider()
                 ProjectMenuItems(model: model, ref: ref)
                 Divider()
@@ -732,7 +796,7 @@ struct GroupAgents: View {
                                     .opacity(DS.Opacity.mutedGlyph)
                                 let name = program.isShell ? "agent" : program.displayName
                                 Text(name)
-                                    .font(DS.Font.sidebarSubtitle)
+                                    .font(SidebarFont.subtitle)
                                     .lineLimit(1)
                                     .shimmering(row.state == .working, text: name)
                             }
@@ -855,7 +919,7 @@ private struct SidebarFooter: View {
             } label: {
                 Label(WorkspaceAction.newProject.title, systemImage: "plus")
                     .labelStyle(.titleAndIcon)
-                    .font(DS.Font.sidebarSubtitle)
+                    .font(SidebarFont.subtitle)
             }
             .buttonStyle(.bar)
             .foregroundStyle(DS.Palette.textSecondary)

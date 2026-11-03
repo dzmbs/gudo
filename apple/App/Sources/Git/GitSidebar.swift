@@ -9,13 +9,10 @@ import AppKit
 
 enum GitRow {
     #if os(macOS)
-    static let title = Font.body
     static let slot: CGFloat = 16
     #else
-    static let title = Font.subheadline
     static let slot: CGFloat = 18
     #endif
-    static let subtitle = Font.footnote
     static let indent: CGFloat = 14
     static let selectedFill = DS.Palette.selectedFill
 }
@@ -86,19 +83,83 @@ private struct GitRowStyle: ViewModifier {
     }
 }
 
-struct RepoSectionHeader: View {
+/// A tab's worktree on its row's second line: the branch, with the pull request's glyph when
+/// there is one.
+struct TabBranchLabel: View {
+    let worktree: WorktreeState
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: worktree.visiblePR?.kind.systemImage ?? "arrow.triangle.branch")
+                .imageScale(.small)
+            Text(worktree.displayBranch)
+                .truncationMode(.middle)
+        }
+        .lineLimit(1)
+    }
+}
+
+/// A tab's worktree at its row's trailing edge: uncommitted lines and the pull request number.
+struct TabGitBadges: View {
+    let worktree: WorktreeState
+    let selected: Bool
+
+    var body: some View {
+        HStack(spacing: DS.Space.row) {
+            DiffStat(added: worktree.added, removed: worktree.removed, selected: selected)
+            if let pr = worktree.visiblePR {
+                Text("#\(pr.number)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(DS.Palette.textSecondary)
+            }
+        }
+        .fixedSize()
+    }
+
+    /// "main, +121 −2, pull request 42 open, 3 successful checks".
+    static func accessibilityValue(_ worktree: WorktreeState) -> String {
+        var parts = ["branch \(worktree.displayBranch)"]
+        if worktree.added > 0 || worktree.removed > 0 { parts.append("+\(worktree.added) −\(worktree.removed)") }
+        if let pr = worktree.visiblePR { parts.append("pull request \(pr.number) \(pr.stateWord), \(pr.checksSummary.words)") }
+        return parts.joined(separator: ", ")
+    }
+}
+
+/// A repository whose worktrees have no tab here: one quiet line that shows them under it.
+private struct RepoFoldRow: View {
     let repo: RepoSidebar.Repo
+    let fold: WorktreeFold
     let host: String
+    let expanded: Bool
+    let toggle: () -> Void
     @Environment(WindowModel.self) private var model
     @State private var hovered = false
 
     var body: some View {
         HStack(spacing: 6) {
-            Text(repo.name)
-                .font(DS.Font.section)
-                .foregroundStyle(DS.Palette.textSecondary)
-                .lineLimit(1)
-            Spacer(minLength: DS.Space.xs)
+            Button(action: toggle) {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                        .frame(width: GitRow.slot)
+                    Text(repo.name)
+                        .font(SidebarFont.subtitle.weight(.medium))
+                        .foregroundStyle(DS.Palette.textSecondary)
+                        .lineLimit(1)
+                    Text("\(fold.folded.count) more")
+                        .fixedSize()
+                        .font(SidebarFont.subtitle)
+                        .lineLimit(1)
+                    Spacer(minLength: DS.Space.xs)
+                }
+                .foregroundStyle(DS.Palette.textTertiary)
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(repo.name), \(fold.foldedTitle)")
+            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+            .accessibilityHint(expanded ? "Hides them" : "Shows them")
             Button("New Agent in \(repo.name)", systemImage: "plus") {
                 model.newAgent(onGroup: host, repo: repo.id)
             }
@@ -114,46 +175,32 @@ struct RepoSectionHeader: View {
             .help("New Agent in \(repo.name) (⇧⌘N)")
             .accessibilityIdentifier("repo-new-agent-\(repo.name)")
         }
-        .padding(.leading, DS.Space.l + DS.Space.xs)
-        .padding(.trailing, DS.Space.l)
-        .padding(.top, DS.Space.m)
-        .padding(.bottom, DS.Space.xs)
-        .contentShape(.rect)
+        .modifier(GitRowStyle(selected: false))
         .onHover { hovered = $0 }
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("repo-header-\(repo.name)")
+        .accessibilityIdentifier("more-worktrees-\(repo.name)")
     }
 }
 
-/// With one tab the row is that tab; with none it is quiet and opens a tab.
+/// A worktree without a tab: its branch, changes and pull request; a tap opens a tab in it.
 struct WorktreeRow: View {
     let worktree: WorktreeState
     let host: String
-    /// The tab the row stands for (its only tab, or the first of several).
-    let tab: Tab?
-    let number: Int?
-    let isActive: Bool
-    let agent: DesignSystem.AgentState?
     @Environment(WindowModel.self) private var model
 
     var body: some View {
         let pr = worktree.visiblePR
-        let idle = tab == nil
         let port = model.git.port(of: worktree, host: host)
         Button {
-            if let tab {
-                withAnimation(DS.Motion.snappy) { model.focus(TabRef(hostId: host, tab: tab.id)) }
-            } else {
-                model.git.openTab(in: worktree.path, name: worktree.name, host: host)
-            }
+            model.git.openTab(in: worktree.path, name: worktree.name, host: host)
         } label: {
             HStack(spacing: 6) {
-                BranchGlyph(pr: pr, selected: isActive)
+                BranchGlyph(pr: pr)
                     .frame(width: GitRow.slot)
                 VStack(alignment: .leading, spacing: 0) {
                     Text(worktree.displayBranch)
-                        .font(GitRow.title)
-                        .foregroundStyle(idle ? DS.Palette.textSecondary : DS.Palette.text)
+                        .font(SidebarFont.title)
+                        .foregroundStyle(DS.Palette.textSecondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     if worktree.subtitle != nil || port != nil {
@@ -168,20 +215,20 @@ struct WorktreeRow: View {
                                     .help("PORT \(port): what $PORT is in this worktree's panes")
                             }
                         }
-                        .font(GitRow.subtitle)
+                        .font(SidebarFont.subtitle)
                         .foregroundStyle(DS.Palette.textTertiary)
                         .lineLimit(1)
                     }
                 }
                 Spacer(minLength: DS.Space.xs)
-                Accessories(worktree: worktree, pr: pr, agent: isActive ? nil : agent, selected: isActive, number: number)
+                TabGitBadges(worktree: worktree, selected: false)
             }
-            .modifier(GitRowStyle(selected: isActive))
+            .modifier(GitRowStyle(selected: false, depth: 1))
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityLabel(port: port))
-        .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
+        .accessibilityHint("Opens a tab in it")
         .accessibilityIdentifier("worktree-row-\(worktree.displayBranch)")
         .rowActions(RowActions(.worktree(isMain: worktree.main)), id: "worktree-\(host)-\(worktree.path)", name: worktree.displayBranch) { action in
             switch action {
@@ -190,85 +237,28 @@ struct WorktreeRow: View {
             default: break
             }
         } menu: {
-            WorktreeMenu(worktree: worktree, host: host, tab: tab)
+            WorktreeMenu(worktree: worktree, host: host)
         }
     }
 
     private func accessibilityLabel(port: UInt16?) -> String {
-        var parts = [worktree.displayBranch]
-        if let subtitle = worktree.subtitle { parts.append(subtitle) }
-        if let port { parts.append("PORT \(port)") }
-        if worktree.added > 0 || worktree.removed > 0 { parts.append("+\(worktree.added) −\(worktree.removed)") }
-        if let pr = worktree.visiblePR { parts.append("pull request \(pr.number) \(pr.stateWord), \(pr.checksSummary.words)") }
-        if let agent { parts.append(agent.title) }
+        var parts = [worktree.subtitle, port.map { "PORT \($0)" }].compactMap(\.self)
+        parts.insert(TabGitBadges.accessibilityValue(worktree), at: 0)
         return parts.joined(separator: ", ")
-    }
-}
-
-struct WorktreeTabRow: View {
-    let tab: Tab
-    let host: String
-    let number: Int?
-    let isActive: Bool
-    let agent: DesignSystem.AgentState?
-    @Environment(WindowModel.self) private var model
-
-    var body: some View {
-        let workspace = model.workspace(ofGroup: host)
-        let title = workspace?.title(of: tab) ?? tab.title ?? "Shell"
-        Button {
-            withAnimation(DS.Motion.snappy) { model.focus(TabRef(hostId: host, tab: tab.id)) }
-        } label: {
-            HStack(spacing: 6) {
-                TabLeadingMark(program: model.programIdentity(of: tab, onGroup: host), state: isActive ? nil : agent)
-                Text(title)
-                    .font(GitRow.subtitle)
-                    .foregroundStyle(isActive ? DS.Palette.text : DS.Palette.textSecondary)
-                    .lineLimit(1)
-                Spacer(minLength: DS.Space.xs)
-                if CommandKeyState.shared.held, let number {
-                    Text("⌘\(number)").font(.caption).foregroundStyle(DS.Palette.textSecondary)
-                }
-            }
-            .modifier(GitRowStyle(selected: isActive, depth: 1))
-        }
-        .buttonStyle(.plain)
-        .tabDrag(TabRef(hostId: host, tab: tab.id), model: model)
-        .accessibilityLabel(title)
-        .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
-        .accessibilityIdentifier("worktree-tab-\(number ?? 0)")
-        .rowActions(actions, id: "\(host)/\(tab.id)", name: title) { action in
-            let ref = TabRef(hostId: host, tab: tab.id)
-            switch action {
-            case .rename:
-                model.focus(ref)
-                workspace?.renamingTab = tab.id
-            case .closeTab:
-                model.closeTab(ref, undoable: actions.undoable.contains(.closeTab))
-            default: break
-            }
-        } menu: {
-            if let workspace { MergeIntoTabMenu(workspace: workspace, tab: tab.id) }
-        }
-    }
-
-    private var actions: RowActions {
-        RowActions(.terminalTab(isBusy: agent == .working || agent == .blocked))
     }
 }
 
 private struct BranchGlyph: View {
     let pr: PullRequest?
-    let selected: Bool
 
     var body: some View {
         Image(systemName: pr?.kind.systemImage ?? "arrow.triangle.branch")
-            .font(GitRow.subtitle.weight(.medium))
-            .foregroundStyle(selected || pr == nil ? AnyShapeStyle(DS.Palette.textSecondary) : AnyShapeStyle(pr!.kind.color))
-            .opacity(selected ? 1 : DS.Opacity.mutedGlyph)
+            .font(SidebarFont.subtitle.weight(.medium))
+            .foregroundStyle(pr.map { AnyShapeStyle($0.kind.color) } ?? AnyShapeStyle(DS.Palette.textSecondary))
+            .opacity(DS.Opacity.mutedGlyph)
             .overlay(alignment: .bottomTrailing) {
                 if let pr, pr.state == .open {
-                    CheckBadge(pr.checkKinds, selected: selected)
+                    CheckBadge(pr.checkKinds, selected: false)
                         .font(.system(size: 7, weight: .black))
                         .frame(width: 10, height: 10)
                         .offset(x: 3, y: 3)
@@ -278,41 +268,9 @@ private struct BranchGlyph: View {
     }
 }
 
-/// Fixed size so the title takes the squeeze; ⌘ held swaps it for ⌘N by opacity, without reflow.
-private struct Accessories: View {
-    let worktree: WorktreeState
-    let pr: PullRequest?
-    let agent: DesignSystem.AgentState?
-    let selected: Bool
-    let number: Int?
-
-    var body: some View {
-        let held = CommandKeyState.shared.held && number != nil
-        ZStack(alignment: .trailing) {
-            HStack(spacing: DS.Space.row) {
-                DiffStat(added: worktree.added, removed: worktree.removed, selected: selected)
-                if let pr {
-                    Text("#\(pr.number)")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(DS.Palette.textSecondary)
-                }
-                if let agent {
-                    AgentGlyph(state: agent)
-                }
-            }
-            .opacity(held ? 0 : 1)
-            if held, let number {
-                Text("⌘\(number)").font(.caption).foregroundStyle(DS.Palette.textSecondary)
-            }
-        }
-        .fixedSize()
-    }
-}
-
 private struct WorktreeMenu: View {
     let worktree: WorktreeState
     let host: String
-    let tab: Tab?
     @Environment(WindowModel.self) private var model
 
     var body: some View {
@@ -324,7 +282,7 @@ private struct WorktreeMenu: View {
             Button("Open #\(pr.number) on GitHub", systemImage: "arrow.up.right.square") { git.openOnGitHub(pr) }
         }
         if let port = git.port(of: worktree, host: host) {
-            Button("Open localhost:\(String(port))", systemImage: "globe") { git.openPort(of: worktree, host: host, tab: tab) }
+            Button("Open localhost:\(String(port))", systemImage: "globe") { git.openPort(of: worktree, host: host) }
         }
         let scripts = git.scripts(for: worktree)
         if !scripts.isEmpty {
@@ -342,111 +300,35 @@ private struct WorktreeMenu: View {
         if let port = git.port(of: worktree, host: host) {
             Button("Copy PORT", systemImage: "number") { Pasteboard.copy(String(port)) }
         }
-        if let tab {
-            Divider()
-            Button("Rename Tab…", systemImage: "pencil") {
-                model.focus(TabRef(hostId: host, tab: tab.id))
-                model.workspace(ofGroup: host)?.renamingTab = tab.id
-            }
-            Button(RowAction.closeTab.title, systemImage: RowAction.closeTab.systemImage) {
-                model.closeTab(TabRef(hostId: host, tab: tab.id), undoable: true)
-            }
-        }
     }
 }
 
-/// The row a repository's idle worktrees fold behind; a tap shows them under it.
-private struct MoreWorktreesRow: View {
-    let title: String
-    let expanded: Bool
-    let toggle: () -> Void
-
-    var body: some View {
-        Button(action: toggle) {
-            HStack(spacing: 6) {
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .rotationEffect(.degrees(expanded ? 90 : 0))
-                    .frame(width: GitRow.slot)
-                Text(title)
-                    .font(GitRow.subtitle)
-                    .lineLimit(1)
-                Spacer(minLength: DS.Space.xs)
-            }
-            .foregroundStyle(DS.Palette.textTertiary)
-            .modifier(GitRowStyle(selected: false))
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(title)
-        .accessibilityValue(expanded ? "Expanded" : "Collapsed")
-        .accessibilityHint(expanded ? "Hides them" : "Shows them")
-    }
-}
-
-/// One host's tabs outside a repository, then each repository with its worktrees.
-struct RepoGroupsView<LooseRow: View>: View {
+/// After a host's tabs: each repository with tabs here, folded to one line, opening to its
+/// worktrees that have no tab. Tabs are never drawn here; they keep their own rows.
+struct RepoWorktreesView: View {
     let group: HostGroup
     let sidebar: RepoSidebar
-    let numbers: [TabRef: Int]
-    @ViewBuilder let looseRow: (Tab) -> LooseRow
-    @Environment(WindowModel.self) private var model
     private var folds: WorktreeFoldStore { .shared }
 
     var body: some View {
-        let tabs = Dictionary(group.tabs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(sidebar.looseTabs, id: \.self) { id in
-                if let tab = tabs[id] { looseRow(tab) }
-            }
             ForEach(sidebar.repos) { repo in
                 let fold = WorktreeFold(repo)
-                let expanded = folds.isExpanded(repo: repo.id, host: group.id)
-                RepoSectionHeader(repo: repo, host: group.id)
-                ForEach(fold.shown) { worktree in
-                    worktreeRows(worktree, tabs: tabs)
-                }
                 if !fold.folded.isEmpty {
-                    MoreWorktreesRow(title: fold.foldedTitle, expanded: expanded) {
+                    let expanded = folds.isExpanded(repo: repo.id, host: group.id)
+                    RepoFoldRow(repo: repo, fold: fold, host: group.id, expanded: expanded) {
                         withAnimation(DS.Motion.snappy) { folds.toggle(repo: repo.id, host: group.id) }
                     }
-                    .accessibilityIdentifier("more-worktrees-\(repo.name)")
                     if expanded {
                         ForEach(fold.folded) { worktree in
-                            worktreeRows(worktree, tabs: tabs)
+                            WorktreeRow(worktree: worktree.state, host: group.id)
                         }
                     }
                 }
             }
         }
+        .padding(.top, DS.Space.xs)
         .opacity(group.showsAsLive ? 1 : 0.6)
-    }
-
-    @ViewBuilder
-    private func worktreeRows(_ worktree: RepoSidebar.Worktree, tabs: [TabId: Tab]) -> some View {
-        let rowTabs = worktree.tabs.compactMap { tabs[$0] }
-        let first = rowTabs.first
-        WorktreeRow(
-            worktree: worktree.state, host: group.id, tab: first,
-            number: first.flatMap { numbers[group.ref($0.id)] },
-            isActive: rowTabs.count == 1 && first.map(isActive) == true,
-            agent: rowTabs.count == 1 ? first.flatMap(agentState) : rowTabs.compactMap(agentState).min { AgentGlyph.priority($0) < AgentGlyph.priority($1) })
-        if rowTabs.count > 1 {
-            ForEach(rowTabs) { tab in
-                WorktreeTabRow(
-                    tab: tab, host: group.id, number: numbers[group.ref(tab.id)],
-                    isActive: isActive(tab), agent: agentState(tab))
-            }
-        }
-    }
-
-    private func isActive(_ tab: Tab) -> Bool {
-        model.destination == .terminal && model.currentTab == group.ref(tab.id)
-    }
-
-    private func agentState(_ tab: Tab) -> DesignSystem.AgentState? {
-        tab.root.panes
-            .compactMap { model.agentState(ofPane: $0, onGroup: group.id) }
-            .min { AgentGlyph.priority($0) < AgentGlyph.priority($1) }
     }
 }
 
@@ -469,7 +351,7 @@ struct NeedsYouSection: View {
             LazyVStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 6) {
                     SectionDot(DS.Palette.attention)
-                    Text("Needs you").font(DS.Font.section).foregroundStyle(DS.Palette.textSecondary)
+                    Text("Needs you").font(SidebarFont.section).foregroundStyle(DS.Palette.textSecondary)
                 }
                 .padding(.leading, DS.Space.l + DS.Space.xs)
                 .padding(.top, DS.Space.m)
@@ -482,9 +364,9 @@ struct NeedsYouSection: View {
                         HStack(spacing: 6) {
                             AgentGlyph(state: item.state).frame(width: GitRow.slot)
                             VStack(alignment: .leading, spacing: 0) {
-                                Text(title).font(GitRow.title).lineLimit(1)
+                                Text(title).font(SidebarFont.title).lineLimit(1)
                                 Text([item.host, item.context].compactMap(\.self).joined(separator: " · "))
-                                    .font(GitRow.subtitle)
+                                    .font(SidebarFont.subtitle)
                                     .foregroundStyle(DS.Palette.textTertiary)
                                     .lineLimit(1)
                             }

@@ -15,48 +15,68 @@ extension Workspace {
     }
 }
 
-/// A tab row's second line: its context, or a shell command running for a few seconds and for
-/// how long ("cargo build · 1m 12s").
+/// A tab row's second line: its worktree's branch, which stands for its folder, or else its context;
+/// then a shell command running for a few seconds and for how long ("cargo build · 1m 12s").
 struct TabSubtitle: View {
     let context: String?
     let running: CommandMark?
+    var worktree: WorktreeState?
+    /// Leads the line in a project, whose header does not name the host.
+    var host: String?
 
     /// Quick commands never show: the line would flicker on every `ls`.
     static let threshold = 3
 
     var body: some View {
-        if let running {
-            TimelineView(.periodic(from: .now, by: 1)) { timeline in
-                let seconds = Int(timeline.date.timeIntervalSince1970 - Double(running.startedAtMs) / 1000)
-                if seconds >= Self.threshold {
-                    HStack(spacing: 0) {
-                        Text(running.command ?? "command")
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                        Text(" · \(CommandBlocks.elapsed(seconds: seconds))")
-                            .monospacedDigit()
-                            .fixedSize()
-                    }
-                    .font(DS.Font.sidebarSubtitle)
-                    .foregroundStyle(DS.Palette.textTertiary)
-                    .accessibilityElement(children: .combine)
-                    .accessibilityLabel("\(running.command ?? "A command") running for \(CommandBlocks.elapsed(seconds: seconds))")
-                } else {
-                    contextLine
-                }
+        HStack(spacing: 0) {
+            if let host {
+                Text(host).layoutPriority(1)
             }
-        } else {
-            contextLine
+            if let worktree {
+                if host != nil { Text(" · ").fixedSize() }
+                TabBranchLabel(worktree: worktree)
+                    .layoutPriority(2)
+            }
+            if let running {
+                TimelineView(.periodic(from: .now, by: 1)) { timeline in
+                    let seconds = Int(timeline.date.timeIntervalSince1970 - Double(running.startedAtMs) / 1000)
+                    if seconds >= Self.threshold {
+                        HStack(spacing: 0) {
+                            separator
+                            Text(running.command ?? "command")
+                                .truncationMode(.tail)
+                            Text(" · \(CommandBlocks.elapsed(seconds: seconds))")
+                                .monospacedDigit()
+                                .fixedSize()
+                        }
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel("\(running.command ?? "A command") running for \(CommandBlocks.elapsed(seconds: seconds))")
+                    } else {
+                        contextLine
+                    }
+                }
+            } else {
+                contextLine
+            }
         }
+        .font(SidebarFont.subtitle)
+        .foregroundStyle(DS.Palette.textTertiary)
+        .lineLimit(1)
+    }
+
+    @ViewBuilder private var separator: some View {
+        if worktree != nil || host != nil { Text(" · ").fixedSize() }
     }
 
     /// Always one line, so a row keeps its height while its context comes and goes.
-    private var contextLine: some View {
-        Text(context ?? " ")
-            .font(DS.Font.sidebarSubtitle)
-            .foregroundStyle(DS.Palette.textTertiary)
-            .lineLimit(1)
-            .truncationMode(.head)
-            .accessibilityHidden(context == nil)
+    @ViewBuilder private var contextLine: some View {
+        if let context, worktree == nil {
+            HStack(spacing: 0) {
+                separator
+                Text(context).truncationMode(.head)
+            }
+        } else if worktree == nil && host == nil {
+            Text(verbatim: " ").accessibilityHidden(true)
+        }
     }
 }

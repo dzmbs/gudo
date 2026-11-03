@@ -345,6 +345,19 @@ final class MacSnapshotTests: XCTestCase {
         for id in ["fixture-studio", "fixture-hetzner", "fixture-box"] { AppModel.shared.hosts.disconnect(id) }
     }
 
+    /// Tabs in a repository keep their rows with the branch and changes on them; the worktrees
+    /// without tabs fold after the host's tabs.
+    func testRepositoryTabs() async throws {
+        try await window("repositories", screen: "repositories")
+        try await window("repositories-expanded", screen: "repositories") { _ in
+            let folds = WorktreeFoldStore.shared
+            if !folds.isExpanded(repo: "/src/harness-lab", host: "fixture-studio") { folds.toggle(repo: "/src/harness-lab", host: "fixture-studio") }
+        }
+        let folds = WorktreeFoldStore.shared
+        if folds.isExpanded(repo: "/src/harness-lab", host: "fixture-studio") { folds.toggle(repo: "/src/harness-lab", host: "fixture-studio") }
+        for id in ["fixture-studio", "fixture-hetzner", "fixture-box"] { AppModel.shared.hosts.disconnect(id) }
+    }
+
     /// Making projects: the first-run hint, New Project's name field and empty line, what a drop
     /// says it will do, a terminal joining from ⌘T, and the sidebar that leaves.
     func testProjectsUX() async throws {

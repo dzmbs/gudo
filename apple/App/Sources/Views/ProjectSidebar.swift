@@ -24,7 +24,7 @@ enum SidebarItem: Identifiable, Hashable {
     /// "Close 6 Idle Tabs".
     case idleTabs(Int)
     case hostHeader(String)
-    /// A daemon's loose tabs grouped by repository (drawn as one block).
+    /// A daemon's worktrees that have no tab, by repository, after its tabs (drawn as one block).
     case hostRepos(String)
     case hostPlaceholder(String)
     case hostAgents(String)
@@ -162,16 +162,12 @@ extension WindowModel {
             items.append(.windowHeader(kind))
             items += refs.map { .row($0, .window) }
         }
-        let grouped = Set(self.projects.flatMap(\.tabs))
         for group in hostGroups {
             items.append(.hostHeader(group.id))
             guard !self.groups.collapsed.contains(group.id) else { continue }
-            let loose = rows(.host(group.id))
-            let looseTabs = group.tabs.filter { !grouped.contains(group.ref($0.id)) }
-            if self.groups.repoSidebar(for: group, tabs: looseTabs).map({ !$0.repos.isEmpty }) == true {
+            items += rows(.host(group.id)).map { .row($0, .host(group.id)) }
+            if let sidebar = self.groups.repoSidebar(for: group), sidebar.repos.contains(where: { !WorktreeFold($0).folded.isEmpty }) {
                 items.append(.hostRepos(group.id))
-            } else {
-                items += loose.map { .row($0, .host(group.id)) }
             }
             if group.tabs.isEmpty { items.append(.hostPlaceholder(group.id)) }
             items.append(.hostAgents(group.id))
@@ -280,7 +276,7 @@ private struct SidebarItemView: View {
         case .hostHeader(let id):
             if let group = model.groups.group(id) { HostGroupHeaderItem(group: group) }
         case .hostRepos(let id):
-            if let group = model.groups.group(id) { HostReposItem(group: group, numbers: numbers) }
+            if let group = model.groups.group(id) { HostReposItem(group: group) }
         case .hostPlaceholder(let id):
             if let group = model.groups.group(id) { GroupPlaceholder(group: group) }
         case .hostAgents(let id):
@@ -393,7 +389,7 @@ private struct DragLiftPreview: View {
     var body: some View {
         HStack(spacing: DS.Space.row) {
             if let systemImage { Image(systemName: systemImage).foregroundStyle(DS.Palette.textSecondary) }
-            Text(title).font(DS.Font.sidebarTitle).lineLimit(1)
+            Text(title).font(SidebarFont.title).lineLimit(1)
         }
         .padding(.horizontal, DS.Space.m)
         .padding(.vertical, DS.Space.s)
@@ -463,9 +459,14 @@ private struct SidebarDropDelegate: DropDelegate {
             let rows = geometry.section(.project(id)).rows
             if !rows.contains(ref) { next = .insert(ref, into: .project(id), at: rows.count) }
             if model.groups.collapsedProjects.contains(id) { springTarget = id }
-        case .hostHeader(let id), .hostRepos(let id), .hostPlaceholder(let id):
+        case .hostHeader(let id), .hostPlaceholder(let id):
             if ref.hostId == id, !geometry.section(.host(id)).rows.contains(ref) {
                 next = .insert(ref, into: .host(id), at: 0)
+            }
+        case .hostRepos(let id):
+            let rows = geometry.section(.host(id)).rows
+            if ref.hostId == id, !rows.contains(ref) {
+                next = .insert(ref, into: .host(id), at: rows.count)
             }
         case .windowHeader:
             if ref.hostId == HostGroups.mixedId, !geometry.section(.window).rows.contains(ref) {
@@ -535,7 +536,7 @@ private struct ProjectHeader: View {
                 nameField
             } else {
                 Text(project.name)
-                    .font(DS.Font.section)
+                    .font(SidebarFont.section)
                     .foregroundStyle(DS.Palette.textSecondary)
                     .lineLimit(1)
                     .layoutPriority(-1)
@@ -602,7 +603,7 @@ private struct ProjectHeader: View {
     private var nameField: some View {
         TextField("Project Name", text: $draft, selection: $selection)
             .textFieldStyle(.plain)
-            .font(DS.Font.section)
+            .font(SidebarFont.section)
             .foregroundStyle(DS.Palette.text)
             .focused($fieldFocused)
             .onSubmit { finishRename() }
@@ -721,7 +722,7 @@ private struct SuggestionRow: View {
                     // Tabs of a folder that already has a project join it.
                     let joins = model.existingProject(for: suggestion) != nil
                     Text("\(joins ? "Add" : "Group") \(suggestion.tabs.count) tabs \(joins ? "to" : "in") \(Text(suggestion.name).foregroundStyle(DS.Palette.textSecondary))")
-                        .font(DS.Font.sidebarSubtitle)
+                        .font(SidebarFont.subtitle)
                         .foregroundStyle(DS.Palette.textTertiary)
                         .lineLimit(1)
                     Spacer(minLength: DS.Space.xs)
@@ -758,7 +759,7 @@ private struct ProjectEmptyRow: View {
                     .foregroundStyle(DS.Palette.textTertiary)
                     .frame(width: 16)
                 Text(dropping ? "Drop to add" : "Drag tabs here or press +")
-                    .font(DS.Font.sidebarSubtitle)
+                    .font(SidebarFont.subtitle)
                     .foregroundStyle(DS.Palette.textTertiary)
                     .lineLimit(1)
                     .contentTransition(.opacity)
@@ -794,10 +795,10 @@ struct ProjectsIntroRow: View {
                 .padding(.top, 1)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Group tabs into projects")
-                    .font(DS.Font.sidebarSubtitle.weight(.semibold))
+                    .font(SidebarFont.subtitle.weight(.semibold))
                     .foregroundStyle(DS.Palette.textSecondary)
                 Text("Drop a tab onto another tab, from any host.")
-                    .font(DS.Font.sidebarSubtitle)
+                    .font(SidebarFont.subtitle)
                     .foregroundStyle(DS.Palette.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -827,13 +828,13 @@ private struct WindowTabsHeader: View {
     var body: some View {
         HStack(spacing: DS.Space.s) {
             Image(systemName: kind.systemImage)
-                .font(DS.Font.section.weight(.regular))
+                .font(SidebarFont.section.weight(.regular))
                 .imageScale(.small)
                 .foregroundStyle(DS.Palette.textSecondary)
                 .opacity(DS.Opacity.mutedGlyph)
                 .frame(width: 16)
             Text(kind.title)
-                .font(DS.Font.section)
+                .font(SidebarFont.section)
                 .foregroundStyle(DS.Palette.textSecondary)
             Spacer()
         }
@@ -847,22 +848,13 @@ private struct WindowTabsHeader: View {
     }
 }
 
-/// A daemon's loose tabs grouped by repository and worktree.
 private struct HostReposItem: View {
     let group: HostGroup
-    let numbers: [TabRef: Int]
     @Environment(WindowModel.self) private var model
-    @Environment(SidebarDragState.self) private var drag
 
     var body: some View {
-        let grouped = Set(model.projects.flatMap(\.tabs))
-        let loose = group.tabs.filter { !grouped.contains(group.ref($0.id)) }
-        if let sidebar = model.groups.repoSidebar(for: group, tabs: loose) {
-            RepoGroupsView(group: group, sidebar: sidebar, numbers: numbers) { tab in
-                let ref = group.ref(tab.id)
-                TabRow(tab: tab, ref: ref, number: numbers[ref] ?? 0, group: group, showsHost: false)
-                    .sidebarTabDrag(ref, model: model, drag: drag, title: model.title(ofTab: ref))
-            }
+        if let sidebar = model.groups.repoSidebar(for: group) {
+            RepoWorktreesView(group: group, sidebar: sidebar)
         }
     }
 }

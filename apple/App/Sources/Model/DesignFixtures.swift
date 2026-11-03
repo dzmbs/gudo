@@ -1,5 +1,10 @@
 import DesignSystem
 import Foundation
+import struct GudoCore.PaneRepo
+import struct GudoCore.PrCheck
+import struct GudoCore.PullRequest
+import struct GudoCore.RepoSnapshot
+import struct GudoCore.WorktreeState
 import HostKit
 import PaneLayout
 import SwiftUI
@@ -79,6 +84,7 @@ enum DesignFixtures {
             projects(model)
             model.sheet = .tabs
         case "project-hosts": projectHosts(model)
+        case "repositories": repositories(model)
         case "tab-history": tabHistory(model)
         case "tab-selection": tabSelection(model)
         case "inbox": model.destination = .inbox
@@ -263,6 +269,37 @@ enum DesignFixtures {
             model.app.hosts.attachPreview(record, connection: PreviewConnection(tabs: tabs))
             try? model.groups.open(record.id)
         }
+    }
+
+    /// The projects fixture with studio's tabs in a repository: "claude" on main with changes,
+    /// "logs" in a worktree with a pull request, three worktrees without tabs.
+    static func repositories(_ model: WindowModel) {
+        projects(model)
+        guard let connection = model.app.hosts.connection("fixture-studio") as? PreviewConnection else { return }
+        let tabs = connection.layout.session.tabs
+        func worktree(_ name: String, branch: String, main: Bool = false, added: UInt32 = 0, removed: UInt32 = 0, pr: PullRequest? = nil) -> WorktreeState {
+            WorktreeState(
+                path: main ? "/src/harness-lab" : "/src/harness-lab-\(name)", repo: "/src/harness-lab", repoName: "harness-lab",
+                name: main ? "harness-lab" : name, main: main, branch: branch, head: "549e23f0a1", upstream: nil, ahead: 0, behind: 0,
+                added: added, removed: removed, changedFiles: added > 0 ? 3 : 0, dirty: added > 0, pr: pr, scripts: [],
+                setup: nil, teardown: nil, managed: !main, mergedAtMs: nil, updatedAtMs: 1)
+        }
+        let pr = PullRequest(
+            number: 42, title: "Retry flaky runs", state: .open, draft: false, url: "https://github.com/acme/harness-lab/pull/42",
+            headRef: "fix/retry", additions: 18, deletions: 4, mergeState: .clean,
+            checks: [PrCheck(name: "test", status: .success, url: nil, workflow: nil)], fetchedAtMs: 0)
+        let placed = zip(tabs.filter { $0.title == "claude" || $0.title == "logs" }, ["/src/harness-lab", "/src/harness-lab-retry"])
+        connection.repoSnapshot = RepoSnapshot(
+            rev: 1,
+            panes: placed.flatMap { tab, path in tab.root.panes.map { PaneRepo(paneId: $0.rawValue, worktree: path) } },
+            worktrees: [
+                worktree("harness-lab", branch: "main", main: true, added: 121, removed: 2),
+                worktree("retry", branch: "fix/retry", added: 18, removed: 4, pr: pr),
+                worktree("bench", branch: "bench/v2"),
+                worktree("docs", branch: "docs/setup", added: 8),
+                worktree("cache", branch: "perf/cache"),
+            ],
+            gh: .unknown)
     }
 
     private static func splits(_ workspace: Workspace) {

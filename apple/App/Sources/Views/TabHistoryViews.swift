@@ -87,7 +87,7 @@ private struct SidebarNoticeRow: View {
                         .foregroundStyle(DS.Palette.textSecondary)
                         .frame(width: 16)
                     Text(title)
-                        .font(DS.Font.sidebarSubtitle)
+                        .font(SidebarFont.subtitle)
                         .foregroundStyle(DS.Palette.textSecondary)
                         .lineLimit(1)
                     Spacer(minLength: DS.Space.xs)
@@ -120,7 +120,7 @@ struct TabSelectionBar: View {
         let count = model.tabSelection.selected.count
         HStack(spacing: DS.Space.m) {
             Text(count == 0 ? "Select Tabs" : count == 1 ? "1 Tab" : "\(count) Tabs")
-                .font(DS.Font.sidebarSubtitle.weight(.semibold))
+                .font(SidebarFont.subtitle.weight(.semibold))
                 .foregroundStyle(DS.Palette.textSecondary)
                 .contentTransition(.numericText())
             Spacer(minLength: DS.Space.xs)

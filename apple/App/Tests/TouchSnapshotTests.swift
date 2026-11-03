@@ -250,58 +250,35 @@ final class TouchSnapshotTests: XCTestCase {
         model.close()
     }
 
-    /// A repository with many worktrees: the ones with tabs, then the rest folded and opened.
-    func testWorktreeFold() async throws {
+    /// Tabs in a repository keep their rows, with the branch and changes on them; the
+    /// repository's worktrees without tabs fold after the host's tabs, then open.
+    func testRepositoryTabs() async throws {
         let theme = mode == "light" ? "Apple System Colors Light" : "Ghostty Default"
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let model = WindowModel(app: .shared)
         model.start()
-        DesignFixtures.projectHosts(model)
+        DesignFixtures.repositories(model)
         defer { for id in ["fixture-studio", "fixture-hetzner", "fixture-box"] { AppModel.shared.hosts.disconnect(id) } }
         await pump(0.5)
         let group = try XCTUnwrap(model.groups.group("fixture-studio"))
-        let worktree = { (name: String, branch: String?, main: Bool, added: UInt32, removed: UInt32) in
-            WorktreeState(
-                path: main ? "/src/acme" : "/src/acme-\(name)", repo: "/src/acme", repoName: "acme", name: main ? "acme" : name,
-                main: main, branch: branch, head: "549e23f0a1", upstream: nil, ahead: 0, behind: 0, added: added, removed: removed,
-                changedFiles: added > 0 ? 1 : 0, dirty: added > 0, pr: nil, scripts: [], setup: nil, teardown: nil,
-                managed: !main, mergedAtMs: nil, updatedAtMs: 1)
-        }
-        let worktrees = [
-            worktree("acme", "main", true, 29804, 48),
-            worktree("base", nil, false, 0, 0),
-            worktree("bench", "bench/v0", false, 0, 0),
-            worktree("bonds", "fix/bond-worker", false, 8, 0),
-            worktree("campaign", "campaign/all", false, 0, 0),
-            worktree("engine", "engine", false, 1512, 0),
-            worktree("tcp", "fix/tcp-ip-options", false, 0, 0),
-            worktree("code", "harness/code", false, 0, 0),
-            worktree("learn", "harness/learn", false, 0, 0),
-            worktree("worker", "harness/worker", false, 0, 0),
-        ]
-        let tabs = group.tabs
-        let panes = [(tabs[0], "/src/acme-bonds"), (tabs[1], "/src/acme-bonds"), (tabs[2], "/src/acme-engine")]
-            .flatMap { tab, path in tab.root.panes.map { PaneRepo(paneId: $0.rawValue, worktree: path) } }
-        let sidebar = RepoSidebar.build(tabs: tabs, snapshot: RepoSnapshot(rev: 1, panes: panes, worktrees: worktrees, gh: .unknown))
+        if let logs = group.tabs.first(where: { $0.title == "logs" }) { model.focus(group.ref(logs.id)) }
 
         let window = UIWindow(windowScene: scene)
-        window.frame = CGRect(x: 0, y: 0, width: SidebarWidth.standard + 40, height: 640)
-        window.rootViewController = UIHostingController(rootView: ScrollView {
-            RepoGroupsView(group: group, sidebar: sidebar, numbers: [:]) { _ in EmptyView() }
-        }
-            .background(DS.Palette.sidebar)
+        window.frame = CGRect(x: 0, y: 0, width: SidebarWidth.standard + 40, height: scene.screen.bounds.height)
+        window.rootViewController = UIHostingController(rootView: WorkspaceSidebar()
             .environment(model)
             .environment(\.horizontalSizeClass, .regular)
             .chromeTheme(ThemeCatalog.theme(named: theme), windowTheme: .auto))
         window.isHidden = false
         let folds = WorktreeFoldStore.shared
-        if folds.isExpanded(repo: "/src/acme", host: group.id) { folds.toggle(repo: "/src/acme", host: group.id) }
+        let repo = "/src/harness-lab"
+        if folds.isExpanded(repo: repo, host: group.id) { folds.toggle(repo: repo, host: group.id) }
+        await pump(1.5)
+        try capture(window, "repo-tabs")
+        folds.toggle(repo: repo, host: group.id)
         await pump(1)
-        try capture(window, "worktrees-folded")
-        folds.toggle(repo: "/src/acme", host: group.id)
-        await pump(1)
-        try capture(window, "worktrees-expanded")
-        folds.toggle(repo: "/src/acme", host: group.id)
+        try capture(window, "repo-tabs-expanded")
+        folds.toggle(repo: repo, host: group.id)
         window.isHidden = true
         model.close()
     }

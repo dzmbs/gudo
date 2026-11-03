@@ -10,15 +10,6 @@ public extension DS {
         public static let rowTitle = SwiftUI.Font.body
         public static let rowTitleEmphasis = SwiftUI.Font.body.weight(.medium)
         public static let rowSubtitle = SwiftUI.Font.subheadline
-        /// Dense on the Mac (13 / 10), one step up on touch (15 / 13). Weight never changes with
-        /// selection; the fill shows it.
-        #if os(macOS)
-        public static let sidebarTitle = SwiftUI.Font.body
-        public static let sidebarSubtitle = SwiftUI.Font.caption
-        #else
-        public static let sidebarTitle = SwiftUI.Font.subheadline
-        public static let sidebarSubtitle = SwiftUI.Font.footnote
-        #endif
         #if os(macOS)
         public static let tabTitle = SwiftUI.Font.callout
         #else
