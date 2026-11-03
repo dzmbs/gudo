@@ -20,7 +20,7 @@ final class ThemeAppearanceTests: XCTestCase {
 
     private func pump(_ seconds: Double = 1) async { try? await Task.sleep(for: .seconds(seconds)) }
 
-    /// The SSH sheet's "Create or Import…" pop-down, as the app presents it.
+    /// The SSH sheet's "Sign In With" pop-up, as the app presents it.
     private func presentPairingSheet() async throws -> NSView {
         let model = WindowModel(app: .shared)
         let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 900, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
@@ -37,16 +37,16 @@ final class ThemeAppearanceTests: XCTestCase {
         self.window = window
         await pump(1.5)
         let sheet = try XCTUnwrap(window.attachedSheet, "the sheet opens")
-        // The form makes rows as they scroll in: Authentication is below the fold.
+        // The form makes rows as they scroll in: Sign In is below the fold.
         let scroll = try XCTUnwrap(scrollView(in: sheet.contentView!))
         scroll.documentView?.scroll(NSPoint(x: 0, y: scroll.documentView!.bounds.maxY))
         await pump()
-        return try XCTUnwrap(popUp(titled: "Create or Import…", in: sheet.contentView!.superview!), "the pop-down is drawn")
+        return try XCTUnwrap(popUp(in: sheet.contentView!.superview!), "the pop-up is drawn")
     }
 
-    private func popUp(titled title: String, in view: NSView) -> NSView? {
-        if let button = view as? NSButton, button.title == title { return button }
-        return view.subviews.lazy.compactMap { self.popUp(titled: title, in: $0) }.first
+    private func popUp(in view: NSView) -> NSView? {
+        if let button = view as? NSPopUpButton { return button }
+        return view.subviews.lazy.compactMap { self.popUp(in: $0) }.first
     }
 
     private func scrollView(in view: NSView) -> NSScrollView? {
