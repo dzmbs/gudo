@@ -100,6 +100,7 @@ final class EditorPane: Identifiable {
         browser.onLoad = { [weak self] in self?.workbenchLoaded() }
         browser.onFail = { [weak self] reason in self?.pageFailed(reason) }
         browser.onLost = { [weak self] reason in self?.recover(reason) }
+        browser.desktopURI = { [weak self] in self?.source.tunnelDesktopURI }
         watchTouches(browser.webView)
         self.browser = browser
         return browser

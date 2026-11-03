@@ -94,7 +94,13 @@ and terminal SSH-integration bugs).
   user's own browsing. Host A's pages cannot see host B's cookies or storage, or the user's
   sessions. Removing a host deletes its store.
 - The VS Code web view hands only `vscode:`, `vscode-insiders:`, `mailto:` and `tel:` links to
-  the system, and only from the main frame.
+  the system, only from the main frame and only from a link the user clicked: a page cannot
+  start another app by itself. Only the exact desktop address of the open tunnel, as the daemon
+  gave it, opens straight away; any other such link asks first ("Open in VS Code?"), showing
+  the whole address, since a crafted `vscode:` link can clone a repository or connect desktop
+  VS Code to someone else's tunnel. Its sign-in popup's "Open in Browser" opens web pages only.
+  The browser pane and the canvas never hand a page's non-web link to the system (the canvas
+  opens only clicked web links).
 - A repository's own setup and teardown commands run only once the owner trusts them in the
   app ("Run Setup Commands for repo?", listing them).
 - The Excalidraw canvas:
@@ -221,8 +227,9 @@ by removing it).
     bridge and is ignored; the page navigating to a site, `data:` or `file:` stays put.
   - `testTheCanvasMainFrameStaysInItsBundle`.
   - `testTheEditorWebViewHandsOnlyItsSchemesToTheSystem`: the editor's navigation decision
-    itself, for web pages, its schemes in the main frame and in a frame, and files, other
-    apps' and this app's links.
+    itself, for web pages, its schemes clicked and not clicked, in the main frame and in a
+    frame, the tunnel's own desktop address against crafted ones, and files, other apps' and
+    this app's links.
   - `testAHostsCopyIsPlainTextNamedByItsPane` (macOS), `testTheRepositoryTrustAlertListsEveryCommand`.
   - `testToolingHooksAreNeverReadFromSavedDefaults`: scans the app's sources; every tooling
     hook and `test…` key is read through `LaunchArguments`.

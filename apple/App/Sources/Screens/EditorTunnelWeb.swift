@@ -1,6 +1,7 @@
 import Observation
 import os
 import SwiftUI
+import TerminalCore
 import WebKit
 #if canImport(UIKit)
 import UIKit
@@ -146,31 +147,75 @@ final class TunnelBrowser: NSObject, WKUIDelegate, WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
         let url = navigationAction.request.url
-        switch Self.decision(for: url, mainFrame: navigationAction.targetFrame?.isMainFrame ?? true) {
+        let decision = Self.decision(
+            for: url, mainFrame: navigationAction.targetFrame?.isMainFrame ?? true,
+            clicked: navigationAction.navigationType == .linkActivated, desktopURI: desktopURI?())
+        switch decision {
         case .allow: return .allow
         case .cancel: return .cancel
         case .openExternally:
             if let url { Self.openExternally(url) }
             return .cancel
+        case .confirm:
+            if let url { Task { @MainActor in Self.confirmOpen(url, from: webView) } }
+            return .cancel
         }
     }
+
+    /// Desktop VS Code's address for the tunnel this page shows, as the daemon gave it.
+    @ObservationIgnored var desktopURI: (@MainActor () -> URL?)?
 
     enum NavigationDecision: Equatable {
         case allow
         case cancel
         /// Cancel, and hand the link to the app that owns its scheme.
         case openExternally
+        /// Cancel, and hand the link on only once the user said so, seeing where it goes.
+        case confirm
     }
 
-    /// Extensions' web views are untrusted content, so only the main frame may hand links to
-    /// other apps, and only for `externalSchemes` (never `file:` or this app's own links).
-    static func decision(for url: URL?, mainFrame: Bool) -> NavigationDecision {
-        guard let scheme = url?.scheme?.lowercased() else { return .allow }
+    /// Web content (the workbench, extensions, whatever they load) is untrusted, so it starts
+    /// another app only from a link the user clicked in the main frame, and only for
+    /// `externalSchemes` (never `file:` or this app's own links). Only the exact desktop address
+    /// of this tunnel opens without asking: a crafted `vscode:` link can clone a repository or
+    /// connect to someone else's tunnel.
+    static func decision(for url: URL?, mainFrame: Bool, clicked: Bool, desktopURI: URL?) -> NavigationDecision {
+        guard let url, let scheme = url.scheme?.lowercased() else { return .allow }
         if ["http", "https", "about", "blob", "data"].contains(scheme) { return .allow }
-        return mainFrame && externalSchemes.contains(scheme) ? .openExternally : .cancel
+        guard mainFrame, clicked, externalSchemes.contains(scheme) else { return .cancel }
+        return url.absoluteString == desktopURI?.absoluteString ? .openExternally : .confirm
     }
 
     static let externalSchemes: Set<String> = ["vscode", "vscode-insiders", "mailto", "tel"]
+
+    static func confirmation(for url: URL) -> (title: String, message: String) {
+        let title = switch url.scheme?.lowercased() {
+        case "vscode": "Open in VS Code?"
+        case "vscode-insiders": "Open in VS Code Insiders?"
+        case "mailto": "Open in Mail?"
+        default: "Open This Link?"
+        }
+        return (title, LinkSafety.display(url) + "\n\nThe editor page asked to open this.")
+    }
+
+    private static func confirmOpen(_ url: URL, from webView: WKWebView) {
+        let text = confirmation(for: url)
+        #if os(macOS)
+        let alert = NSAlert()
+        alert.messageText = text.title
+        alert.informativeText = text.message
+        alert.addButton(withTitle: "Open")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn { openExternally(url) }
+        #else
+        let alert = UIAlertController(title: text.title, message: text.message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Open", style: .default) { _ in openExternally(url) })
+        var presenter = webView.window?.rootViewController
+        while let next = presenter?.presentedViewController { presenter = next }
+        presenter?.present(alert, animated: true)
+        #endif
+    }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         if webView === self.webView { isLoading = true }
@@ -293,7 +338,7 @@ struct EditorPopupSheet: View {
                     }
                     ToolbarItem(placement: .primaryAction) {
                         Button("Open in Browser", systemImage: "safari") {
-                            if let url = popup.webView.url { TunnelBrowser.openExternally(url) }
+                            if let url = popup.webView.url, HostLinks.mayOpen(url) { TunnelBrowser.openExternally(url) }
                             close()
                         }
                         .help("Continue in your browser")
