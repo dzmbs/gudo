@@ -2,6 +2,7 @@
 import Darwin
 import Foundation
 import LocalPTY
+import TerminalCore
 
 /// The user's login shell on a local PTY.
 nonisolated final class LocalPTYBackend: PaneBackend {
@@ -10,9 +11,12 @@ nonisolated final class LocalPTYBackend: PaneBackend {
 
     init() throws {
         var environment = ProcessInfo.processInfo.environment
-        environment["TERM"] = "xterm-256color"
+        // As a host's daemon names its panes' terminal (`crates/daemon/src/theme.rs`).
+        environment["TERM"] = Terminal.terminfoName
         environment["COLORTERM"] = "truecolor"
-        environment["TERM_PROGRAM"] = Brand.name
+        environment["TERM_PROGRAM"] = "ghostty"
+        environment["TERM_PROGRAM_VERSION"] = Terminal.ghosttyVersion
+        environment["LC_TERMINAL"] = Brand.name
         let shell = environment["SHELL"] ?? "/bin/zsh"
         pty = try PTY(
             argv: [shell, "-l"], environment: environment, workingDirectory: NSHomeDirectory(), cols: 80, rows: 24)

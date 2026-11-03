@@ -96,6 +96,8 @@ public final class Terminal: @unchecked Sendable {
         let shellIntegrated = Atomic<Bool>(false)
         /// The alternate screen was active after the last parse.
         let altScreen = Atomic<Bool>(false)
+        /// The theme's background is dark: the color scheme programs are told.
+        let darkScheme = Atomic<Bool>(true)
 
         init(writePty: @escaping @Sendable (UnsafeRawBufferPointer) -> Void) {
             self.writePty = writePty
@@ -168,6 +170,8 @@ public final class Terminal: @unchecked Sendable {
         }
         ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_WRITE_PTY, unsafeBitCast(onWritePty, to: UnsafeRawPointer.self))
         Self.installEventCallbacks(terminal)
+        Self.installQueryReplies(terminal)
+        effects.darkScheme.store(isDark(configuration.background), ordering: .relaxed)
 
         var scrollback = configuration.scrollbackBytes
         ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, &scrollback)
@@ -206,13 +210,20 @@ public final class Terminal: @unchecked Sendable {
     }
 
     /// Replaces the default colors and cursor of a running terminal (a theme change); the next
-    /// render redraws every row. The scrollback limit stays the one it was created with.
+    /// render redraws every row, and a program that asked for color scheme reports (mode 2031)
+    /// hears of a switch between light and dark. The scrollback limit stays the one it was
+    /// created with.
     public func setDefaults(_ configuration: Configuration) {
         lock.withLock { _ in
             let scrollbackBytes = self.configuration.scrollbackBytes
             self.configuration = configuration
             self.configuration.scrollbackBytes = scrollbackBytes
             Self.applyDefaults(terminal, configuration)
+            let dark = Self.isDark(configuration.background)
+            guard effects.darkScheme.exchange(dark, ordering: .relaxed) != dark, answersQueries else { return }
+            var reports = GhosttyTerminalModeConfig(mode: ghostty_mode_new(2031, false), value: false)
+            guard ghostty_terminal_get(terminal, GHOSTTY_TERMINAL_DATA_MODE, &reports) == GHOSTTY_SUCCESS, reports.value else { return }
+            Array((dark ? "\u{1B}[?997;1n" : "\u{1B}[?997;2n").utf8).withUnsafeBytes { effects.writePty($0) }
         }
     }
 
