@@ -154,7 +154,7 @@ struct GraceSpinner: View {
 }
 
 /// Over a host's panes while the link is not live. The last frame stays: undimmed for a 2 s
-/// grace, then dimmed. Short trouble is a one-line notice at the top right; a card with actions
+/// grace, then dimmed. Trouble past a 1 s grace is a one-line notice at the top right; a card with actions
 /// appears only for a failure or a link gone for 40 s. Live, slow and paused links show nothing
 /// here.
 private struct ConnectionOverlayModifier: ViewModifier {
@@ -166,7 +166,10 @@ private struct ConnectionOverlayModifier: ViewModifier {
     let onRetry: () -> Void
     let onDisconnect: () -> Void
 
-    /// How long a link may be down before the pane dims and before the card replaces the notice.
+    /// How long a link may be on its way or down before a notice says so, before the pane dims,
+    /// and before the card replaces the notice. A quick connect shows nothing. The notice grace
+    /// sits just under the timeline's 1 s tick so it shows on the first tick past it.
+    static let noticeAfter: TimeInterval = 0.9
     static let dimAfter: TimeInterval = 2
     static let cardAfter: TimeInterval = 40
 
@@ -220,11 +223,14 @@ private struct ConnectionOverlayModifier: ViewModifier {
             result.dimmed = false
             if downFor >= Self.dimAfter { result.notice = NoticeCopy(before: "Connecting to ", host: hostName, after: "…") }
         case .connecting(let phase):
+            guard downFor >= Self.noticeAfter else { break }
             result.notice = phase.map { NoticeCopy(before: "\($0.trimmingCharacters(in: ["…"])) on ", host: hostName, after: "…") }
                 ?? NoticeCopy(before: "Connecting to ", host: hostName, after: "…")
         case .reconnecting(_, let since):
             let goneFor = now.timeIntervalSince(since)
-            if goneFor >= Self.cardAfter {
+            if downFor < Self.noticeAfter {
+                break
+            } else if goneFor >= Self.cardAfter {
                 result.card = CardCopy(
                     title: "Lost connection to \(hostName)",
                     detail: "Sessions keep running on the host. Reconnecting automatically.",

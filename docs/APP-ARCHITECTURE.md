@@ -423,11 +423,18 @@ id>.hostd.plist`, `BundleProgram`). At launch it registers the agent with `SMApp
 login, survives quitting the app), or runs the daemon as its child when Settings ▸ This Mac ▸ Keep
 Sessions Running in the Background is off or the login item is not allowed. The daemon uses its
 default folder (`~/Library/Application Support/<name>`, where `gudo` and the agent hooks look); a
-daemon already running there (`hostd service install`) is used as is. The app pairs once with a
-`pair --json --local` ticket (loopback addresses: works offline) as the owner, saved as a host with
-`thisDevice` and named "This Mac": listed first, no helper-update offers (a new app build restarts
-the login item: `launchctl kickstart -k`), and an empty plain local group gives way to it (plain
-shells still open stay until closed). Stop Helper ends it and brings back a plain shell. Test
+daemon already running there that is not an app's (`hostd service install`, a `run` in a
+terminal: its executable is outside any `.app`) is used as is, and the app's own login item is
+unregistered so launchd does not keep starting one that cannot take the folder. The app pairs
+once with a `pair --json --local` ticket (loopback addresses: works offline; `gudo devices` lists
+the device as "This Mac (Gudo app)") as the owner, saved as a host with `thisDevice` and named
+"This Mac": listed first, no helper-update offers (a new app build restarts the login item:
+`launchctl kickstart -k`), and an empty plain local group gives way to it (plain shells still
+open stay until closed). When the helper refuses the app's device as removed (`InvalidGrant`,
+`Revoked`: `gudo devices` removed it, or its pairing was lost), `HostsModel.onThisDeviceRemoved`
+has `LocalHelper.pairAgain` mint a fresh local ticket and pair again without asking; the host
+shows as connecting meanwhile, and the refusal (in words) only if that fails. Remote hosts never
+pair again on their own. Stop Helper ends it and brings back a plain shell. Test
 launches (`AppData`) never start it unless `-localHelper YES`, and then only as a child in the test
 folder (`apple/Dogfood/this-mac.json`). iPhone and iPad have no helper.
 
@@ -1442,8 +1449,10 @@ that changed while connecting never receives the "y" meant for another.
 
 **This Mac.** The helper usually already runs as a login item: `AppModel.connectEarly` dials it
 in `AppModel.init`, before any window, when its `endpoint.json` names a live process with the
-paired daemon id; the helper's own start (login item checks, pairing) runs as before and retries
-an early dial that failed. `LaunchTimeline` logs process start → first frame → live (category
+paired daemon id; the helper's own start (login item checks, pairing) runs as before and redials
+at once a dial that started before it was up (a redial cancels a dial in flight). A connection
+on its way shows nothing for a 1 s grace: no notice, no "Connecting to…" page, saved tabs at
+full strength (`HostGroup.showsAsLive`). `LaunchTimeline` logs process start → first frame → live (category
 `launch`). Numbers: docs/PERFORMANCE.md "Instant start".
 
 **Scroll position.** A pane saved scrolled back keeps that position when it goes live: the

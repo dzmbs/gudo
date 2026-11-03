@@ -268,7 +268,16 @@ pub(crate) async fn supervise(inner: Arc<Inner>) {
             endpoint = bind_until_ok(&inner).await;
             *lock(&inner.endpoint) = Some(endpoint.clone());
         }
-        match connect_once(&inner, &endpoint).await {
+        // A redial asked for meanwhile starts over now: the daemon may have just come up
+        // where this dial found nothing (the Mac app's own helper starting at launch).
+        let attempt = tokio::select! {
+            result = connect_once(&inner, &endpoint) => Some(result),
+            () = inner.reconnect.notified() => None,
+        };
+        let Some(result) = attempt else {
+            continue;
+        };
+        match result {
             Ok(live) => {
                 let connected_at = tokio::time::Instant::now();
                 let reason = run(&inner, live).await;

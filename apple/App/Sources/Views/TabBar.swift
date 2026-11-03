@@ -127,7 +127,7 @@ private struct TabChip: View {
             // Inactive tabs dim by opacity rather than colour, so glyph colours survive.
             .font(DS.Font.tabTitle)
             .foregroundStyle(.primary)
-            .opacity((isActive ? 1 : isHovered ? DS.Opacity.inactiveHover : DS.Opacity.inactive) * (group.isLocal || group.status.isLive ? 1 : 0.6))
+            .opacity((isActive ? 1 : isHovered ? DS.Opacity.inactiveHover : DS.Opacity.inactive) * (group.showsAsLive ? 1 : 0.6))
             .padding(.horizontal, 40)
 
             HStack(spacing: 0) {

@@ -26,9 +26,10 @@ nonisolated func temporaryDirectory() -> URL {
         let connection = DaemonConnection(hostId: "b", ticket: "t") { _, listener in FakeClient(listener: listener) }
         try connection.connect()
         model.connections["b"] = connection
-        connection.handle(.refused(reason: "unknown device"))
+        connection.handle(.refused(reason: "InvalidGrant"))
         #expect(model.entries.first?.id == "b")
-        #expect(model.entries.first?.needsYou?.contains("unknown device") == true)
+        #expect(model.entries.first?.needsYou?.contains("isn't paired with this host anymore") == true)
+        #expect(model.entries.first?.needsYou?.contains("InvalidGrant") == false)
         #expect(model.entries.first { $0.id == "a" }?.canInstallHelper == true)
 
         // Everything but secrets is saved as JSON and comes back.

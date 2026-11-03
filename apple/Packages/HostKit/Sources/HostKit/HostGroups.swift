@@ -43,6 +43,10 @@ nonisolated public struct HostGroup: Identifiable, Equatable, Sendable {
 
     public var isLocal: Bool { kind == .local }
 
+    /// Drawn at full strength: live, this device's shells, or its saved tabs on the way to live
+    /// (instant start: a launch never flashes them dimmed).
+    public var showsAsLive: Bool { isLocal || status.isLive || (isCached && status.isConnecting) }
+
     public func ref(_ tab: TabId) -> TabRef { TabRef(hostId: id, tab: tab) }
 }
 

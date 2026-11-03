@@ -655,13 +655,30 @@ struct ActiveTabView: View {
 }
 
 /// A host's window before there is a session to show, with actions only when something failed.
+/// A quick connect shows nothing: the words wait for a 1 s grace, a failure does not.
 private struct ConnectingView: View {
     let hostName: String
     let state: ConnectionState
     let onRetry: () -> Void
     let onDisconnect: () -> Void
+    @State private var isGraceOver = false
 
     var body: some View {
+        Group {
+            if isGraceOver || state.isFailure {
+                details
+            } else {
+                Color.clear
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .task {
+            try? await Task.sleep(for: .seconds(1))
+            isGraceOver = true
+        }
+    }
+
+    private var details: some View {
         VStack(spacing: DS.Space.m) {
             ConnectionGlyph(state)
                 .font(.title)

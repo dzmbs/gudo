@@ -138,7 +138,7 @@ import GudoCore
         try await eventually("live", timeout: .seconds(30)) { connection.status.isLive }
         let live = ContinuousClock.now - up
         print("this Mac: helper up \(up - started) after its start, live \(live) after that")
-        #expect(live < .seconds(1))
+        #expect(live < .milliseconds(200))
     }
 
     @Test func anEmptyLocalGroupGivesWayToTheHelper() {

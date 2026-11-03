@@ -389,7 +389,7 @@ struct RepoGroupsView<LooseRow: View>: View {
                 }
             }
         }
-        .opacity(group.status.isLive || group.isLocal ? 1 : 0.6)
+        .opacity(group.showsAsLive ? 1 : 0.6)
     }
 
     private func isActive(_ tab: Tab) -> Bool {

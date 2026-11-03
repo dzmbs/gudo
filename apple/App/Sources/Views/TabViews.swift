@@ -198,7 +198,7 @@ private struct HostGroupHeader: View {
 
     var body: some View {
         let state = group.connectionState
-        let live = group.isLocal || group.status.isLive
+        let live = group.showsAsLive
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: DS.Space.s) {
                 ConnectionGlyph(
@@ -627,7 +627,7 @@ struct TabRow: View {
                         .transition(.opacity)
                 }
             }
-            .opacity(group.status.isLive || group.isLocal ? 1 : 0.6)
+            .opacity(group.showsAsLive ? 1 : 0.6)
             // In Select mode only the checks say what is selected.
             .sidebarRow(selected: isActive && !model.isSelectingTabs)
         }
