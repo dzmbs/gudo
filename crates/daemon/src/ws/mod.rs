@@ -15,7 +15,7 @@ mod paths;
 pub(crate) mod ports;
 pub(crate) mod repo;
 mod repo_ops;
-mod review;
+pub(crate) mod review;
 pub(crate) mod trust;
 pub(crate) mod tunnel;
 pub(crate) mod turns;
@@ -29,11 +29,10 @@ pub(crate) use tunnel::DEFAULT_UPDATE_URL as VSCODE_UPDATE_URL;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use proto::{
-    AgentKind, AttentionKind, CommandMark, InputPayload, PaneId, PaneLaunch, ServerCtl,
-    WorkspaceRequest, WorkspaceResponse, WsError,
+    AgentKind, AttentionKind, CommandMark, PaneId, PaneLaunch, ServerCtl, WorkspaceRequest,
+    WorkspaceResponse, WsError,
 };
 use tokio::sync::mpsc;
 
@@ -236,29 +235,16 @@ pub(crate) async fn handle(
                 .await
                 .map(Response::GitDiff)
         }
-        Request::SendReview(review) => {
-            let entry = core
-                .pane(review.pane_id)
-                .ok_or_else(|| WsError::NotFound(format!("pane {}", review.pane_id)))?;
-            if review.notes.is_empty() {
-                return Err(WsError::Invalid("no notes".into()));
-            }
-            let prompt = review::format_prompt(review.preamble.as_deref(), &review.notes);
-            crate::mp::prompt::check_review(&prompt)
-                .map_err(|error| WsError::Invalid(error.to_string()))?;
-            let bytes = entry.pane.encode_input(InputPayload::Paste(prompt.clone()));
-            entry
-                .pane
-                .write(bytes)
-                .await
-                .map_err(|_| WsError::NotFound(format!("pane {} exited", review.pane_id)))?;
-            if review.submit {
-                // Let the agent's input box take the paste before Enter arrives.
-                tokio::time::sleep(Duration::from_millis(80)).await;
-                let _ = entry.pane.write(b"\r".to_vec()).await;
-            }
-            Ok(Response::ReviewSent { prompt })
-        }
+        Request::SendReview(review) => review::send(
+            core,
+            review.pane_id,
+            review.preamble.as_deref(),
+            &review.notes,
+            review.submit,
+            false,
+        )
+        .await
+        .map(|prompt| Response::ReviewSent { prompt }),
         Request::WorktreeCreate(mut create) => {
             let repo = existing_dir(&policy, &create.repo)?;
             create.repo = repo.to_string_lossy().into_owned();

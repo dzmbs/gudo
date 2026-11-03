@@ -325,6 +325,11 @@ impl AgentRuntime {
         self.pid = Some(pid);
     }
 
+    /// The agent's process (its process group's leader), once seen in the foreground.
+    pub fn pid(&self) -> Option<u32> {
+        self.pid
+    }
+
     /// Follows the agent's process through the pane's foreground job: `true` once the process
     /// seen there has exited, or, if it was never seen, once the pane is back at its own shell
     /// (`at_shell`). The shell outlives the agent, and hooks don't report every exit (Claude

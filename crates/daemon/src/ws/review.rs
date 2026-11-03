@@ -1,7 +1,11 @@
 //! Review notes → an agent prompt: `path:L-L`, the quoted lines, then the note, numbered, in one
 //! message the agent can act on.
 
-use proto::ReviewNote;
+use std::time::Duration;
+
+use proto::{InputPayload, PaneId, ReviewNote, WsError};
+
+use crate::core::Core;
 
 const DEFAULT_PREAMBLE: &str = "I reviewed your changes. Please address these notes:";
 
@@ -40,6 +44,53 @@ pub(crate) fn format_prompt(preamble: Option<&str>, notes: &[ReviewNote]) -> Str
         }
     }
     prompt
+}
+
+/// Formats `notes` into one prompt, checks it like any prompt and types it into `pane_id`,
+/// with Enter when `submit`. With `agent_only` (a sender who may not drive the pane) the pane's
+/// agent must hold the terminal at the moment of each write, or nothing is written.
+///
+/// # Errors
+///
+/// [`WsError::Invalid`] for no notes or a prompt the check refuses, [`WsError::Denied`] when
+/// `agent_only` and no agent holds the terminal, [`WsError::NotFound`] for a pane that is gone.
+pub(crate) async fn send(
+    core: &Core,
+    pane_id: PaneId,
+    preamble: Option<&str>,
+    notes: &[ReviewNote],
+    submit: bool,
+    agent_only: bool,
+) -> Result<String, WsError> {
+    let entry = core
+        .pane(pane_id)
+        .ok_or_else(|| WsError::NotFound(format!("pane {pane_id}")))?;
+    if notes.is_empty() {
+        return Err(WsError::Invalid("no notes".into()));
+    }
+    let prompt = format_prompt(preamble, notes);
+    crate::mp::prompt::check_review(&prompt)
+        .map_err(|error| WsError::Invalid(error.to_string()))?;
+    let agent_holds = || !agent_only || core.agent_has_terminal(pane_id);
+    if !agent_holds() {
+        return Err(WsError::Denied(
+            "review notes from a prompter go to agent panes only".into(),
+        ));
+    }
+    let bytes = entry.pane.encode_input(InputPayload::Paste(prompt.clone()));
+    entry
+        .pane
+        .write(bytes)
+        .await
+        .map_err(|_| WsError::NotFound(format!("pane {pane_id} exited")))?;
+    if submit {
+        // Let the agent's input box take the paste before Enter arrives.
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        if agent_holds() {
+            let _ = entry.pane.write(b"\r".to_vec()).await;
+        }
+    }
+    Ok(prompt)
 }
 
 /// Quoted code is the file's, not the reviewer's: a stray control character in it is shown,

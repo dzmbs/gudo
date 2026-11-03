@@ -2476,21 +2476,25 @@ impl Client {
         let (need, target) = policy::workspace(&request);
         self.allow(need, target)
             .map_err(|error| WsError::Denied(error.to_string()))?;
-        let mut request = request;
-        // A prompter may review an agent's turns and send it notes, but only into an agent,
-        // and only under the standard opening line: how a prompt starts decides whether the
-        // agent takes it as a shell command or one of its own commands.
-        if let WorkspaceRequest::SendReview(review) = &mut request
+        // A prompter may review an agent's turns and send it notes, but only into an agent
+        // that holds the terminal as they are written, and only under the standard opening
+        // line: how a prompt starts decides whether the agent takes it as a shell command or
+        // one of its own commands.
+        if let WorkspaceRequest::SendReview(review) = &request
             && self
                 .allow(Need::Drive, Target::Pane(review.pane_id))
                 .is_err()
         {
-            if !self.core.is_agent_pane(review.pane_id) {
-                return Err(WsError::Denied(
-                    "review notes from a prompter go to agent panes only".into(),
-                ));
-            }
-            review.preamble = None;
+            return crate::ws::review::send(
+                &self.core,
+                review.pane_id,
+                None,
+                &review.notes,
+                review.submit,
+                true,
+            )
+            .await
+            .map(|prompt| WorkspaceResponse::ReviewSent { prompt });
         }
         let result = crate::ws::handle(&self.core, &self.ws, request).await?;
         Ok(match result {
@@ -2736,12 +2740,15 @@ impl Client {
             .core
             .pane(pane_id)
             .ok_or_else(|| MpError::NotFound(format!("pane {pane_id}")))?;
-        if !self.core.is_agent_pane(pane_id) {
+        crate::mp::prompt::check(&text).map_err(|error| MpError::Invalid(error.to_string()))?;
+        // Checked right before each write: the agent may have exited a moment ago, leaving its
+        // shell in front.
+        let agent_holds = || self.core.agent_has_terminal(pane_id);
+        if !agent_holds() {
             return Err(MpError::Forbidden(
                 "prompts go to agent panes only; this pane runs a shell".into(),
             ));
         }
-        crate::mp::prompt::check(&text).map_err(|error| MpError::Invalid(error.to_string()))?;
         let bytes = entry.pane.encode_input(InputPayload::Paste(text.clone()));
         entry
             .pane
@@ -2751,7 +2758,9 @@ impl Client {
         if submit {
             // Let the agent's input box take the paste before Enter arrives.
             tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-            let _ = entry.pane.write(b"\r".to_vec()).await;
+            if agent_holds() {
+                let _ = entry.pane.write(b"\r".to_vec()).await;
+            }
         }
         let digest = grants::sha256(&[text.as_bytes()]);
         self.core.mp.audit.append(

@@ -283,10 +283,16 @@ async fn prompter_only_composes_to_agent_panes() {
     let daemon = daemon(dir.path()).await;
     let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
     let agent_pane = owner.attach_and_follow().await;
-    // A Claude hook marks the pane as an agent pane (its program here is still `sh`).
+    // A Claude hook marks the pane as an agent pane; a line reader stands in for the agent.
     hook(
         daemon.hook_socket(),
         &hook_request(dir.path(), agent_pane, "SessionStart", SESSION_START),
+    )
+    .await;
+    start_fake_agent(
+        &mut owner,
+        agent_pane,
+        "while read line; do echo \"agent-read:$line\"; done",
     )
     .await;
     let OpOutcome::PaneCreated {
@@ -366,6 +372,56 @@ async fn prompter_only_composes_to_agent_panes() {
     daemon.shutdown().await;
 }
 
+/// Runs `script` as the pane's foreground job in place of an agent, once it is up.
+async fn start_fake_agent(owner: &mut TestClient, pane: PaneId, script: &str) {
+    owner.type_line(pane, &format!("sh -c 'echo AGENT\"\"-UP; {script}'"));
+    owner.wait_text(pane, "AGENT-UP").await;
+}
+
+/// The agent quits and the pane is back at its shell before the daemon notices: a prompter's
+/// next prompt or review is refused at the moment of writing, and nothing reaches the shell.
+#[tokio::test(flavor = "multi_thread")]
+async fn text_for_an_agent_that_just_exited_reaches_nobody() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = daemon(dir.path()).await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = owner.attach_and_follow().await;
+    hook(
+        daemon.hook_socket(),
+        &hook_request(dir.path(), pane, "SessionStart", SESSION_START),
+    )
+    .await;
+    start_fake_agent(&mut owner, pane, "read line; echo \"agent-read:$line\"").await;
+    let pat = guest(&invite(&owner, spec(Roles::PROMPTER, "pat")).await, pane).await;
+
+    pat.client.prompt(pane, "first".into(), true).await.unwrap();
+    owner.wait_text(pane, "agent-read:first").await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let leaked = pat
+        .client
+        .prompt(pane, "echo LEAKED-$((6*7))".into(), true)
+        .await;
+    assert!(
+        matches!(&leaked, Err(MpError::Forbidden(message)) if message.contains("agent panes only")),
+        "{leaked:?}"
+    );
+    let reviewed = pat
+        .client
+        .send_review(review(pane, None, "echo REVIEW-$((6*7))"))
+        .await;
+    assert!(matches!(&reviewed, Err(WsError::Denied(_))), "{reviewed:?}");
+    owner.type_line(pane, "echo shell-$((1+1))");
+    owner.wait_text(pane, "shell-2").await;
+    let text = owner.text(pane);
+    assert!(
+        !text.contains("LEAKED") && !text.contains("REVIEW"),
+        "{text}"
+    );
+    drop((pat, owner));
+    daemon.shutdown().await;
+}
+
 fn review(pane_id: PaneId, preamble: Option<&str>, note: &str) -> ReviewRequest {
     ReviewRequest {
         pane_id,
@@ -391,6 +447,12 @@ async fn review_notes_obey_the_prompt_rules() {
     hook(
         daemon.hook_socket(),
         &hook_request(dir.path(), agent_pane, "SessionStart", SESSION_START),
+    )
+    .await;
+    start_fake_agent(
+        &mut owner,
+        agent_pane,
+        "while read line; do echo \"agent-read:$line\"; done",
     )
     .await;
     let marker = dir.path().join("pwned");

@@ -220,6 +220,14 @@ makes, and then without its old invites.
   `!` shell escape, `#` memory note or `/` command beyond a read-only few). A review from a
   guest who cannot drive the pane always opens with the standard line; a custom opening line
   is the owner's or a driver's. Code quoted in a review has its control characters replaced.
+  The pane is checked again right before each write (the paste, then Enter): the terminal's
+  foreground process group must be the agent's process, or, before that process was seen,
+  anything but the pane's own shell. An agent that just exited leaves its shell in front
+  before the daemon marks the pane a shell again, so the check is made at the moment of
+  writing, not from that mark. What remains is the kernel's own window: the agent can exit
+  between the `tcgetpgrp` check and its next read, and bytes already in the terminal's input
+  queue are then read by the shell. That window is the time to queue one write, and the Enter
+  that would run them is checked separately 80 ms later.
   A sketch sent to an agent pastes only a path the daemon wrote, escaped, without Enter. The
   agents' own drive tools are covered in agent-terminal.md.
 
@@ -306,6 +314,7 @@ was confirmed to fail.
 | Guest roles on `ctl`, workspace, bulk (upload), forwards and layout | `security::each_guest_role_gets_exactly_what_the_table_allows` |
 | Guest roles typing raw input (`input` stream) | `redteam::only_drivers_type_into_a_pane` |
 | Prompter or Approver sending a review whose opening line is a `!` shell command; control bytes in notes or quotes | `multiplayer::review_notes_obey_the_prompt_rules`, `multiplayer::prompter_only_composes_to_agent_panes` |
+| Prompt or review sent just after the agent exited, while the pane is still marked an agent | `multiplayer::text_for_an_agent_that_just_exited_reaches_nobody` |
 | zstd bomb / huge declared length from a hostile daemon | `client-core conn::tests::inflating_is_bounded` (unit) |
 | Random and mangled bytes as every wire type, ticket and invite | `proto/tests/decode_untrusted.rs` (proptest) |
 

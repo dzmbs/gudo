@@ -723,6 +723,28 @@ impl Core {
     }
 
     /// Whether an agent runs (or ran) in the pane.
+    /// Whether text written to `pane` right now reaches its agent rather than a shell: the
+    /// terminal's foreground process group is the agent's process, or, before that process was
+    /// seen, anything but the pane's own shell. Checked just before each write of text from
+    /// someone who may not drive the pane, since an agent can exit at any moment and the pane
+    /// is marked a shell again only on the next tick.
+    pub fn agent_has_terminal(&self, pane: PaneId) -> bool {
+        if !self.is_agent_pane(pane) {
+            return false;
+        }
+        let Some(entry) = self.pane(pane) else {
+            return false;
+        };
+        let pty = entry.pane.pty();
+        let Some(foreground) = pty.foreground_pgid() else {
+            return false;
+        };
+        match lock(&entry.agent).as_ref().and_then(AgentRuntime::pid) {
+            Some(agent) => foreground == agent,
+            None => foreground != pty.pid(),
+        }
+    }
+
     pub fn is_agent_pane(&self, pane: PaneId) -> bool {
         self.pane(pane).is_some_and(|entry| {
             lock(&entry.agent).is_some()
