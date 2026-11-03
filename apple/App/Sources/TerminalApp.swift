@@ -84,12 +84,16 @@ struct TerminalApp: App {
         .handlesExternalEvents(matching: [])
         .defaultLaunchBehavior(.suppressed)
 
-        Settings {
+        // A window rather than a `Settings` scene: that one keeps the preferences toolbar (title
+        // centred, items in a row under it) whatever style it is given.
+        Window("Settings", id: SettingsWindow.id) {
             SettingsView()
         }
-        // A titlebar as tall as the main window's, so the traffic lights keep the system's
-        // margin inside the sidebar's rounded corner.
         .windowToolbarStyle(.unified)
+        .windowResizability(.contentMinSize)
+        .restorationBehavior(.disabled)
+        .defaultLaunchBehavior(.suppressed)
+        .commandsRemoved()
         #endif
     }
 }

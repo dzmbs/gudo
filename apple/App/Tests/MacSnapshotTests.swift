@@ -493,6 +493,21 @@ final class MacSnapshotTests: XCTestCase {
             try await window(route, screen: route)
         }
         try await window("ticket", screen: "ticket")
+        try await window("pair-device", screen: "pair-device")
+        try await window("sharing", screen: "sharing")
+        try await withArgument("shareRoute", "grants") { try await window("invite-grants", screen: "invite") }
+    }
+
+    private func withArgument(_ key: String, _ value: String, _ body: () async throws -> Void) async rethrows {
+        var arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        arguments[key] = value
+        UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
+        defer {
+            var arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+            arguments[key] = nil
+            UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
+        }
+        try await body()
     }
 
     /// Form sheets are as tall as their rows: macOS 26 centres a sheet shorter than its window,
@@ -721,6 +736,9 @@ final class MacSnapshotTests: XCTestCase {
         try await settings("settings-theme", SettingsNavigation(path: [.theme]))
         try await settings("settings-acknowledgements", SettingsNavigation(pane: .about, path: [.acknowledgements]))
         try await settings("settings-privacy", SettingsNavigation(pane: .privacy))
+        try await settings("settings-about", SettingsNavigation(pane: .about))
+        try await settings("settings-devices", SettingsNavigation(pane: .devices, path: [.hostDevices("studio")]))
+        try await settings("settings-acknowledgements-scrolled", SettingsNavigation(pane: .about, path: [.acknowledgements]), scrolledBy: 260)
     }
 
     /// Agent accounts: Settings › Agents with the hosts, one host's accounts, and a pane under
@@ -1147,12 +1165,22 @@ final class MacSnapshotTests: XCTestCase {
         window.close()
     }
 
-    private func settings(_ name: String, _ navigation: SettingsNavigation = SettingsNavigation()) async throws {
+    private func settings(_ name: String, _ navigation: SettingsNavigation = SettingsNavigation(), scrolledBy offset: CGFloat = 0) async throws {
         guard wanted(name) else { return }
         let window = makeWindow(ThemedRoot { SettingsView(navigation: navigation) }, size: CGSize(width: 820, height: 560))
         await pump(1.5)
+        if offset > 0, let content = window.contentView, let scroll = Self.scrollViews(in: content).max(by: { $0.frame.width < $1.frame.width }) {
+            let clip = scroll.contentView
+            clip.scroll(to: NSPoint(x: 0, y: clip.bounds.origin.y + offset))
+            scroll.reflectScrolledClipView(clip)
+            await pump(1)
+        }
         try capture(window, name)
         window.close()
+    }
+
+    private static func scrollViews(in view: NSView) -> [NSScrollView] {
+        (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap(scrollViews(in:))
     }
 }
 #endif

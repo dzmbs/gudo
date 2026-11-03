@@ -144,9 +144,9 @@ final class ProjectSidebarTests: XCTestCase {
         model.newTab(onGroup: app.tabs[2].hostId)
         XCTAssertNil(model.sheet)
 
-        model.sheet = .settings
+        model.sheet = .shortcuts
         model.focus(app.tabs[0])
-        XCTAssertEqual(model.sheet, .settings, "only the overview closes")
+        XCTAssertEqual(model.sheet, .shortcuts, "only the overview closes")
     }
 
     func testMoveTabKeysStayWithinTheSection() throws {

@@ -74,6 +74,13 @@ final class WindowModel {
         didSet {
             // Browsing tools open beside the pane, or in a window of their own (`ToolLeaves.swift`).
             if let route = sheet, presentTool(route) { sheet = nil }
+            #if os(macOS)
+            // Settings is a window of its own on the Mac.
+            if sheet == .settings {
+                sheet = nil
+                SettingsLink.shared.bringForward()
+            }
+            #endif
         }
     }
     /// Opens a tool window (macOS), set by the window's view.

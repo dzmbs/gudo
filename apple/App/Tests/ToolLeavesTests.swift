@@ -76,8 +76,19 @@ final class ToolLeavesTests: XCTestCase {
 
     func testOtherSheetsStaySheets() {
         let model = WindowModel(app: .shared)
-        model.sheet = .settings
-        XCTAssertEqual(model.sheet, .settings)
+        model.sheet = .shortcuts
+        XCTAssertEqual(model.sheet, .shortcuts)
         model.sheet = nil
     }
+
+    #if os(macOS)
+    /// Settings is its own window on the Mac, never a sheet over the workspace.
+    func testSettingsOpensItsWindowOnTheMac() {
+        let model = WindowModel(app: .shared)
+        let requests = SettingsLink.shared.openRequests
+        model.sheet = .settings
+        XCTAssertNil(model.sheet)
+        XCTAssertEqual(SettingsLink.shared.openRequests, requests + 1)
+    }
+    #endif
 }

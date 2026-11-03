@@ -873,7 +873,7 @@ struct GroupAgents: View {
 private struct SidebarFooter: View {
     @Environment(WindowModel.self) private var model
     #if os(macOS)
-    @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
     #endif
 
     var body: some View {
@@ -929,7 +929,7 @@ private struct SidebarFooter: View {
             trailing()
             Button("Settings", systemImage: "gearshape") {
                 #if os(macOS)
-                openSettings()
+                openWindow(id: SettingsWindow.id)
                 #else
                 model.sheet = .settings
                 #endif

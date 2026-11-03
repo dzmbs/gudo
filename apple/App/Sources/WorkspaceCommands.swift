@@ -36,6 +36,9 @@ struct WorkspaceCommands: Commands {
         CommandGroup(after: .appInfo) {
             CheckForUpdatesButton(updater: AppUpdater.shared)
         }
+        CommandGroup(replacing: .appSettings) {
+            SettingsMenuItem()
+        }
         CommandGroup(after: .appSettings) {
             if CommandLineTool.helper != nil {
                 Button("Install Command Line Tool…") { CommandLineTool.installAndReport() }

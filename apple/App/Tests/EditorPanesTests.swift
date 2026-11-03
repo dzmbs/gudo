@@ -187,7 +187,7 @@ final class EditorPanesTests: XCTestCase {
         XCTAssertFalse(model.editorHasKeys, "not before the workbench is up")
         model.editors.pane(for: proj).isWorkbenchVisible = true
         XCTAssertTrue(model.editorHasKeys)
-        model.sheet = .settings
+        model.sheet = .shortcuts
         XCTAssertFalse(model.editorHasKeys)
         model.sheet = nil
 

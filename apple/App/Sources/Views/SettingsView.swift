@@ -49,10 +49,7 @@ struct SettingsView: View {
                         .padding(.top, DS.Space.xs)
                         .padding(.bottom, DS.Space.s)
                     if query.isEmpty {
-                        List(SettingsPane.allCases, selection: $navigation.pane) { pane in
-                            Label(pane.title, systemImage: pane.systemImage)
-                                .tag(pane)
-                        }
+                        SettingsSidebar(selection: $navigation.pane)
                     } else {
                         // Results replace the panes while searching; the search stays.
                         let results = SettingsIndex.search(query)
@@ -88,6 +85,8 @@ struct SettingsView: View {
                         }
                     }
                 }
+                // Rows pass under the title bar's edge, never over the title.
+                .scrollEdgeEffectStyle(.hard, for: .top)
             }
             .onAppear(perform: followLink)
             .onChange(of: SettingsLink.shared.pending) { followLink() }
@@ -109,7 +108,6 @@ struct SettingsView: View {
                     }
                 }
             }
-            .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
             // A pinned ideal size: the window opens at one size whichever pane's form is longer.
             .frame(minWidth: 720, idealWidth: 720, minHeight: 480, idealHeight: 560)
         }
@@ -254,20 +252,40 @@ final class SettingsLink {
     func open(_ page: SettingsPage) {
         pending = page
         #if os(macOS)
-        openRequests += 1
+        bringForward()
         #else
         ActiveWindow.model?.sheet = .settings
         #endif
     }
+
+    #if os(macOS)
+    func bringForward() {
+        openRequests += 1
+    }
+    #endif
 }
 
 #if os(macOS)
-/// Opens the Settings window when `SettingsLink` asks (only a view can call `openSettings`).
+enum SettingsWindow {
+    static let id = "settings"
+}
+
+/// Opens the Settings window when `SettingsLink` asks (only a view can open a window).
 struct SettingsLinkOpener: ViewModifier {
-    @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
 
     func body(content: Content) -> some View {
-        content.onChange(of: SettingsLink.shared.openRequests) { openSettings() }
+        content.onChange(of: SettingsLink.shared.openRequests) { openWindow(id: SettingsWindow.id) }
+    }
+}
+
+/// The app menu's Settings… (⌘,), which a `Window` scene does not add itself.
+struct SettingsMenuItem: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("Settings…") { openWindow(id: SettingsWindow.id) }
+            .keyboardShortcut(",", modifiers: .command)
     }
 }
 #endif
@@ -675,6 +693,53 @@ private struct AboutSection: View {
 }
 
 #if os(macOS)
+/// The panes, selected in the theme's accent whether or not the window is active; ↑ and ↓ move
+/// through them.
+private struct SettingsSidebar: View {
+    @Binding var selection: SettingsPane
+    private static let rowHeight: CGFloat = 32
+    private static let iconWidth: CGFloat = 22
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                ForEach(SettingsPane.allCases) { pane in
+                    let isSelected = pane == selection
+                    Button { selection = pane } label: {
+                        HStack(spacing: DS.Space.s) {
+                            Image(systemName: pane.systemImage)
+                                .frame(width: Self.iconWidth)
+                            Text(pane.title)
+                                .lineLimit(1)
+                        }
+                        .padding(.horizontal, DS.Space.s)
+                        .frame(height: Self.rowHeight)
+                    }
+                    .buttonStyle(.sidebarRow(selected: isSelected))
+                    .accessibilityAddTraits(isSelected ? .isSelected : [])
+                    .accessibilityIdentifier("settings-pane-\(pane.rawValue)")
+                }
+            }
+            .padding(.horizontal, DS.Space.m)
+            .padding(.vertical, DS.Space.xs)
+        }
+        .scrollIndicators(.never)
+        .focusable()
+        .focusEffectDisabled()
+        .onMoveCommand(perform: move)
+    }
+
+    private func move(_ direction: MoveCommandDirection) {
+        let panes = SettingsPane.allCases
+        guard let index = panes.firstIndex(of: selection) else { return }
+        switch direction {
+        case .up where index > panes.startIndex: selection = panes[index - 1]
+        case .down where index < panes.endIndex - 1: selection = panes[index + 1]
+        default: break
+        }
+    }
+}
+
 /// The sidebar's search (System Settings': above the panes, under the traffic lights).
 private struct SettingsSearchField: View {
     @Binding var query: String
@@ -805,13 +870,15 @@ private struct KeyBarProfilesView: View {
 
 private struct AcknowledgementsView: View {
     var body: some View {
-        List {
-            ack("Ghostty", "MIT · terminal core (libghostty-vt), split, overlay and palette designs")
-            ack("JetBrains Mono", "SIL Open Font License 1.1 · terminal font")
-            ack("Nerd Fonts", "MIT and per-icon-set licenses · symbols in the terminal font")
-            ack("iTerm2-Color-Schemes", "MIT · terminal themes, as bundled by Ghostty")
-            ack("Orca", "MIT · key bar and reconnect behaviour")
-            ack("Warp UI framework", "MIT · Copyright (C) 2020-2026 Denver Technologies, Inc. · the “working” shimmer")
+        Form {
+            Section {
+                ack("Ghostty", "MIT · terminal core (libghostty-vt), split, overlay and palette designs")
+                ack("JetBrains Mono", "SIL Open Font License 1.1 · terminal font")
+                ack("Nerd Fonts", "MIT and per-icon-set licenses · symbols in the terminal font")
+                ack("iTerm2-Color-Schemes", "MIT · terminal themes, as bundled by Ghostty")
+                ack("Orca", "MIT · key bar and reconnect behaviour")
+                ack("Warp UI framework", "MIT · Copyright (C) 2020-2026 Denver Technologies, Inc. · the “working” shimmer")
+            }
             Section {
                 ack("Git logo", "Jason Long · CC BY 3.0 · creativecommons.org/licenses/by/3.0")
                 ack("Neovim logo", "Jason Long · CC BY 3.0 · creativecommons.org/licenses/by/3.0")
@@ -858,6 +925,7 @@ private struct AcknowledgementsView: View {
                 Text("Full licence texts for the open-source code inside the app and its host helper.")
             }
         }
+        .formStyle(.grouped)
         .chromeGrouped()
         .navigationTitle("Acknowledgements")
     }
