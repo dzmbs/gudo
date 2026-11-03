@@ -835,13 +835,16 @@ private struct WelcomeView: View {
 
     private func welcomeRow(_ title: String, systemImage: String, keys: [String]?, action: @escaping () -> Void) -> some View {
         Button(action: action) {
+            // With shortcuts, a list read down its left edge with the keys on the right; without
+            // (iPhone), each action centred under the centred title and button.
             HStack(spacing: DS.Space.gap10) {
+                if !showsShortcuts { Spacer(minLength: 0) }
                 Image(systemName: systemImage)
                     .frame(width: 16)
                     .foregroundStyle(.primary)
                     .opacity(DS.Opacity.mutedGlyph)
                 Text(title).foregroundStyle(.primary)
-                Spacer()
+                Spacer(minLength: 0)
                 if let keys, showsShortcuts { ShortcutLabel(keys).font(.subheadline) }
             }
             .font(.body)
