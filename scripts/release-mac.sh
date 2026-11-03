@@ -6,11 +6,15 @@
 #
 # Output in apple/build/release-mac/: the DMG, the static Linux helpers and SHA256SUMS, the
 # files a GitHub release `v<version>` carries (site/download and site/install.sh link to them).
+# It also adds the release to site/appcast.xml, the Mac app's update feed (Sparkle), with the
+# DMG's EdDSA signature; publishing the release and deploying the site stay manual.
 #
 # Needs the "Developer ID Application" identity of the team in the login Keychain and the App
 # Store Connect API key there too (service `$ASC_KEYCHAIN_SERVICE`, the .p8 contents
 # base64-encoded), which notarytool uses. The Mac build has no push, App Groups or Keychain
-# groups, so it needs no provisioning profile. SKIP_RUST=1 reuses the Rust builds already made.
+# groups, so it needs no provisioning profile. The EdDSA key that signs updates is in the login
+# Keychain too (Sparkle's generate_keys put it there; its public half is SUPublicEDKey in
+# apple/project.yml). SKIP_RUST=1 reuses the Rust builds already made.
 set -euo pipefail
 
 ASC_KEY_ID="${ASC_KEY_ID:-48K8RU3L66}"
@@ -28,6 +32,9 @@ work_dir="$apple_dir/build/release-mac-work"
 output_dir="$apple_dir/build/release-mac"
 archive_path="$work_dir/$brand_name.xcarchive"
 dmg="$output_dir/$brand_name.dmg"
+appcast="$repo_root/site/appcast.xml"
+github_repo="${GITHUB_REPO:-dzmbs/gudo}"
+sparkle_bin="$work_dir/sparkle-bin"
 
 fail() { echo "error: $*" >&2; exit 1; }
 
@@ -77,10 +84,14 @@ PLIST
 
 xcodebuild -exportArchive \
   -archivePath "$archive_path" -exportPath "$work_dir/export" -exportOptionsPlist "$export_options"
+ditto "$work_dir/DerivedData/SourcePackages/artifacts/sparkle/Sparkle/bin" "$sparkle_bin"
 rm -rf "$work_dir/DerivedData"
 app="$work_dir/export/$brand_name.app"
 [ -d "$app" ] || fail "export made no $brand_name.app"
 version="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$app/Contents/Info.plist")"
+public_key="$(/usr/libexec/PlistBuddy -c 'Print SUPublicEDKey' "$app/Contents/Info.plist")"
+[ "$("$sparkle_bin/generate_keys" -p)" = "$public_key" ] \
+  || fail "the Keychain's update signing key does not match the app's SUPublicEDKey"
 
 echo "==> checking signatures"
 codesign --verify --deep --strict --verbose=2 "$app"
@@ -138,6 +149,19 @@ hdiutil attach "$dmg" -nobrowse -readonly -mountpoint "$mount_point" >/dev/null
 spctl -a -t exec -vv "$mount_point/$brand_name.app" || { hdiutil detach "$mount_point" >/dev/null; exit 1; }
 hdiutil detach "$mount_point" >/dev/null
 rmdir "$mount_point"
+
+echo "==> update feed"
+# The first run asks to let sign_update use the key: Always Allow.
+ed_signature="$("$sparkle_bin/sign_update" -p "$dmg")" || fail "sign_update could not sign the DMG"
+minimum_system="$(/usr/libexec/PlistBuddy -c 'Print LSMinimumSystemVersion' "$app/Contents/Info.plist")"
+python3 -I "$repo_root/scripts/appcast-item.py" "$appcast" \
+  --title "Version $version" \
+  --version "$build_number" --short-version "$version" \
+  --minimum-system "$minimum_system" \
+  --release-notes "https://github.com/$github_repo/releases/tag/v$version" \
+  --url "https://github.com/$github_repo/releases/download/v$version/$(basename "$dmg")" \
+  --length "$(stat -f %z "$dmg")" --signature "$ed_signature"
+echo "    ${appcast#"$repo_root/"}: $version ($build_number)"
 
 echo "==> release assets"
 for arch in x86_64 aarch64; do
