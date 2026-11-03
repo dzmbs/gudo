@@ -27,12 +27,20 @@ use crate::osc::Osc;
 use crate::pane::{Pane, VtEvent};
 use crate::persist;
 use crate::shell::ShellIntegration;
+use crate::ws::Viewer;
 
 /// How long a float that closes when its work is done stays to show the outcome.
 const FLOAT_LINGER: std::time::Duration = std::time::Duration::from_millis(2500);
 
 /// Identifies one client connection for the daemon's lifetime.
 pub(crate) type ConnId = u64;
+
+/// The panes a connection shows (focused and visible), and whose they are.
+pub(crate) struct View {
+    pub device: proto::DeviceId,
+    pub viewer: Viewer,
+    pub panes: Vec<PaneId>,
+}
 
 /// Something every connection may need to forward. Payload-free variants are re-read from the
 /// current state by the receiver, so a burst of changes costs one fresh read each.
@@ -54,8 +62,13 @@ pub(crate) enum Event {
     CommandUnseen(CommandMark),
     /// The detected ports changed (read the list from `ws.ports`).
     Ports,
-    /// The attention feed changed.
+    /// An attention item was added (`Added`, as the owner sees it).
     Attention(proto::AttentionUpdate),
+    /// Attention items were marked seen by `by`, or by everyone (`None`).
+    AttentionSeen {
+        by: Option<Viewer>,
+        ids: Vec<u64>,
+    },
     /// The VS Code tunnel changed state.
     VsCodeTunnel(proto::VsCodeTunnelStatus),
     /// Someone joined, left, renamed or changed focus (read the list from `mp`).
@@ -262,8 +275,8 @@ pub(crate) struct Core {
     pub shutting_down: AtomicBool,
     pub hooks: HookServer,
     shell: Option<ShellIntegration>,
-    /// Panes each connection shows (focused and visible), with the device it belongs to.
-    views: Mutex<HashMap<ConnId, (proto::DeviceId, Vec<PaneId>)>>,
+    /// Panes each connection shows (focused and visible).
+    views: Mutex<HashMap<ConnId, View>>,
     /// Developer-workflow state: ports, attention, turns, editors, worktrees.
     pub ws: crate::ws::Ws,
     /// Push registrations and delivery (docs/PUSH.md).
@@ -396,15 +409,32 @@ impl Core {
     }
 
     /// Records the panes `conn` shows.
-    pub fn set_view(&self, conn: ConnId, device: proto::DeviceId, panes: Vec<PaneId>) {
-        lock(&self.views).insert(conn, (device, panes));
+    pub fn set_view(&self, conn: ConnId, view: View) {
+        lock(&self.views).insert(conn, view);
     }
 
-    /// Whether any connected client shows `pane`.
-    pub fn pane_seen(&self, pane: PaneId) -> bool {
+    /// Who shows `pane` now.
+    pub fn pane_viewers(&self, pane: PaneId) -> Vec<Viewer> {
+        let views = lock(&self.views);
+        let mut viewers: Vec<Viewer> = views
+            .values()
+            .filter(|view| view.panes.contains(&pane))
+            .map(|view| view.viewer)
+            .collect();
+        viewers.sort_unstable_by_key(|viewer| match viewer {
+            Viewer::Owner => None,
+            Viewer::Guest(principal) => Some(principal.0),
+        });
+        viewers.dedup();
+        viewers
+    }
+
+    /// Whether one of the owner's devices shows `pane` (a guest watching it does not stand in
+    /// for the owner).
+    pub fn owner_shows(&self, pane: PaneId) -> bool {
         lock(&self.views)
             .values()
-            .any(|(_, panes)| panes.contains(&pane))
+            .any(|view| view.viewer == Viewer::Owner && view.panes.contains(&pane))
     }
 
     /// Whether `device` is connected and showing some pane of this host (the app is in the
@@ -412,7 +442,7 @@ impl Core {
     pub fn device_active(&self, device: proto::DeviceId) -> bool {
         lock(&self.views)
             .values()
-            .any(|(viewer, panes)| *viewer == device && !panes.is_empty())
+            .any(|view| view.device == device && !view.panes.is_empty())
     }
 
     pub fn emit(&self, event: Event) {
@@ -495,7 +525,7 @@ impl Core {
     pub fn viewed_panes(&self) -> HashSet<PaneId> {
         lock(&self.views)
             .values()
-            .flat_map(|(_, panes)| panes.iter().copied())
+            .flat_map(|view| view.panes.iter().copied())
             .collect()
     }
 
@@ -2239,7 +2269,7 @@ fn handle_command(core: &Core, entry: &PaneEntry, update: CommandUpdate) {
             let long = mark.finished.is_some_and(|finished| {
                 finished.duration_ms >= core.cfg.long_command.as_millis() as u64
             });
-            if long && !core.pane_seen(mark.pane_id) {
+            if long && !core.owner_shows(mark.pane_id) {
                 core.emit(Event::CommandUnseen(mark.clone()));
                 crate::ws::command_unseen(core, &mark);
             }

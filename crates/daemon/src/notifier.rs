@@ -542,9 +542,7 @@ pub(crate) fn action(
         up_to: None,
         pane_id: None,
     };
-    if let Some(update) = core.ws.attention.mark(&seen) {
-        core.emit(Event::Attention(update));
-    }
+    crate::ws::mark_seen(core, crate::ws::Viewer::Owner, &seen, |_| true);
     Ok(decided)
 }
 

@@ -963,11 +963,14 @@ running), Linux 705 / 393 MB/s.
 One feed per daemon for local notifications and the inbox: `AgentBlocked{agent, request_id}`,
 `AgentDone`, `AgentFailed` (from the arbiter's own notification decisions) and `CommandFinished(mark)` (the long command finished unseen; also still
 sent as `CommandFinishedUnseen`). Items carry pane, session, title, body (last assistant
-message, blocker summary), `seen` and `while_viewed` (a client showed the pane: no
-notification needed; such items start seen). `seen` is shared by all devices: set by
-`AttentionSeen{ids, up_to, pane_id}`, by any client focusing the pane, and for blocked items
-when the agent leaves the blocked state. Every change is pushed as `Attention(Added{item,
-unseen} | Seen{ids, unseen})`, so `unseen` is the per-host badge; the app sums hosts. The last
+message, blocker summary), `seen` and `while_viewed` (the viewer showed the pane: no
+notification needed; such items start seen). `seen` is per viewer: the owner's devices share
+one, each guest has its own, limited to panes in its scope. It is set by
+`AttentionSeen{ids, up_to, pane_id}`, by focusing the pane, and for everyone on blocked items
+when the agent leaves the blocked state. Pushes follow the owner's `seen` only, so a guest
+cannot silence them. Every change is pushed to the viewer's connections as
+`Attention(Added{item, unseen} | Seen{ids, unseen})`, so `unseen` is the per-host badge; the
+app sums hosts. The last
 500 items are kept in memory (not across daemon restarts). Gap (agents crate): a turn that goes
 straight from blocked to idle (approval answered in the terminal, no tool hook in between)
 produces no `Done`.
@@ -1354,7 +1357,7 @@ with an id get the error in their answer (`OpError::Forbidden`, `WsError::Denied
 | `Op`: `NewFloat`, `DockPane` | driver | the pane's whole session in scope |
 | `Op`: `FloatPane`, `SetFloat` | driver | the pane's tab in scope |
 | `Op`: `CreateSession`; `Attach` that would create a session | **owner** | daemon |
-| `Workspace`: `ListPorts`, `AttentionList`, `AttentionSeen` | any role | answers filtered to scope |
+| `Workspace`: `ListPorts`, `AttentionList`, `AttentionSeen` | any role | answers filtered to scope; a guest's `seen` is its own |
 | `Workspace`: `ListTurns`, `TurnDiff` | prompter, driver or approver | pane in scope |
 | `Workspace`: `SendReview` | prompter, driver or approver (non-drivers: agent panes only) | pane in scope |
 | `Workspace`: git, `Fs*` (read, write, watch), worktrees, `EditorStatus`, `EditorOpen`, `VsCodeTunnelStatus`, `VsCodeTunnelOpen` | driver | host |

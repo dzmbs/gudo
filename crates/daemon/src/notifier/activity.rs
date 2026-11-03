@@ -101,7 +101,14 @@ pub(crate) fn summarize(core: &Core) -> Summary {
     // Finished turns nobody has looked at yet, one per pane, unless that agent works again.
     let mut done_panes = Vec::new();
     let mut done_line = None;
-    for item in core.ws.attention.list().items.iter().rev() {
+    for item in core
+        .ws
+        .attention
+        .list_for(crate::ws::Viewer::Owner)
+        .items
+        .iter()
+        .rev()
+    {
         let agent = match &item.kind {
             AttentionKind::AgentDone { agent } => format!("{agent} finished"),
             AttentionKind::AgentFailed { agent } => format!("{agent} failed"),
@@ -233,7 +240,11 @@ pub(super) fn token_changed(core: &Core, device: &str, cap: Option<String>) {
 fn relevant(event: &Event) -> bool {
     matches!(
         event,
-        Event::PaneMeta(_) | Event::PaneClosed(_) | Event::Agent { .. } | Event::Attention(_)
+        Event::PaneMeta(_)
+            | Event::PaneClosed(_)
+            | Event::Agent { .. }
+            | Event::Attention(_)
+            | Event::AttentionSeen { .. }
     )
 }
 

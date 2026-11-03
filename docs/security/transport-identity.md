@@ -230,6 +230,11 @@ makes, and then without its old invites.
   that would run them is checked separately 80 ms later.
   A sketch sent to an agent pastes only a path the daemon wrote, escaped, without Enter. The
   agents' own drive tools are covered in agent-terminal.md.
+- **Attention is per viewer.** "Seen" on the attention feed belongs to whoever marked it: the
+  owner's devices share one, each guest has its own, and a guest marks or counts only items of
+  panes in its scope. A guest marking, focusing or merely watching a pane never makes the
+  owner's item seen, so it cannot silence the owner's notifications or pushes, which follow
+  the owner's "seen" only. Push registration and notification actions are owner-only.
 
 ### Parsing and denial of service
 
@@ -315,6 +320,7 @@ was confirmed to fail.
 | Guest roles typing raw input (`input` stream) | `redteam::only_drivers_type_into_a_pane` |
 | Prompter or Approver sending a review whose opening line is a `!` shell command; control bytes in notes or quotes | `multiplayer::review_notes_obey_the_prompt_rules`, `multiplayer::prompter_only_composes_to_agent_panes` |
 | Prompt or review sent just after the agent exited, while the pane is still marked an agent | `multiplayer::text_for_an_agent_that_just_exited_reaches_nobody` |
+| Pane-scoped guest marking, focusing or watching to clear the owner's attention items | `redteam::a_guest_cannot_mark_the_owners_attention_seen`, `ws::attention::tests::*` (unit) |
 | zstd bomb / huge declared length from a hostile daemon | `client-core conn::tests::inflating_is_bounded` (unit) |
 | Random and mangled bytes as every wire type, ticket and invite | `proto/tests/decode_untrusted.rs` (proptest) |
 

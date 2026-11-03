@@ -36,7 +36,7 @@ use proto::{
 };
 use tokio::sync::mpsc;
 
-pub(crate) use attention::{Attention, NewItem};
+pub(crate) use attention::{Attention, NewItem, Viewer};
 pub(crate) use files::{serve_download, serve_upload};
 pub(crate) use paths::Policy;
 pub(crate) use watch::Watch;
@@ -109,6 +109,10 @@ pub(crate) struct ConnCtx {
     pub caps: proto::Caps,
     /// A paired owner device, not a guest (whatever roles a guest's grant names).
     pub owner: bool,
+    /// Whose attention "seen" this connection reads and records.
+    pub viewer: Viewer,
+    /// The panes it may see.
+    pub scope: proto::Scope,
 }
 
 async fn blocking<T: Send + 'static>(
@@ -449,12 +453,12 @@ pub(crate) async fn handle(
             let root = ws.worktree_root.clone();
             repo_ops::handle(core, &policy, &root, request).await
         }
-        Request::AttentionList => Ok(Response::Attention(ws.attention.list())),
+        Request::AttentionList => Ok(Response::Attention(ws.attention.list_for(conn.viewer))),
         Request::AttentionSeen(seen) => {
-            if let Some(update) = ws.attention.mark(&seen) {
-                core.emit(Event::Attention(update));
-            }
-            Ok(Response::Attention(ws.attention.list()))
+            mark_seen(core, conn.viewer, &seen, |pane| {
+                core.scope_within(proto::Scope::Pane(pane), conn.scope)
+            });
+            Ok(Response::Attention(ws.attention.list_for(conn.viewer)))
         }
         Request::UsageWatch(options) => Ok(Response::AgentUsage(
             ws.usage.watch(&conn.ctl, conn.caps, options).await,
@@ -637,7 +641,7 @@ pub(crate) fn command_unseen(core: &Core, mark: &CommandMark) {
         kind: AttentionKind::CommandFinished(mark.clone()),
         title: format!("{command} {status}"),
         body,
-        while_viewed: false,
+        viewers: core.pane_viewers(mark.pane_id),
     });
     core.emit(Event::Attention(update));
 }
@@ -728,7 +732,7 @@ pub(crate) fn agent_notice(core: &Core, pane: PaneId, agent: AgentKind, notice: 
         kind,
         title,
         body: body.chars().take(500).collect(),
-        while_viewed: core.pane_seen(pane),
+        viewers: core.pane_viewers(pane),
     });
     core.emit(Event::Attention(update));
 }
@@ -751,28 +755,43 @@ pub(crate) fn drive_notice(
         },
         title,
         body,
-        while_viewed: core.pane_seen(pane),
+        viewers: core.pane_viewers(pane),
     });
     core.emit(Event::Attention(update));
 }
 
 /// The agent left the blocked state: its blocked items are no longer actionable.
 pub(crate) fn agent_unblocked(core: &Core, pane: PaneId) {
-    if let Some(update) = core.ws.attention.resolve_blocked(pane) {
-        core.emit(Event::Attention(update));
+    let ids = core.ws.attention.resolve_blocked(pane);
+    if !ids.is_empty() {
+        core.emit(Event::AttentionSeen { by: None, ids });
     }
 }
 
-/// A client focused a pane: its items count as seen everywhere.
-pub(crate) fn pane_focused(core: &Core, pane: PaneId) {
+/// Marks items seen by `viewer`, limited to the panes it may see, and tells its clients.
+pub(crate) fn mark_seen(
+    core: &Core,
+    viewer: Viewer,
+    which: &proto::AttentionSeen,
+    visible: impl Fn(PaneId) -> bool,
+) {
+    let ids = core.ws.attention.mark(viewer, which, visible);
+    if !ids.is_empty() {
+        core.emit(Event::AttentionSeen {
+            by: Some(viewer),
+            ids,
+        });
+    }
+}
+
+/// A client focused a pane in its scope: its items count as seen by that client's viewer.
+pub(crate) fn pane_focused(core: &Core, viewer: Viewer, pane: PaneId) {
     let seen = proto::AttentionSeen {
         ids: Vec::new(),
         up_to: None,
         pane_id: Some(pane),
     };
-    if let Some(update) = core.ws.attention.mark(&seen) {
-        core.emit(Event::Attention(update));
-    }
+    mark_seen(core, viewer, &seen, |item_pane| item_pane == pane);
 }
 
 #[cfg(test)]

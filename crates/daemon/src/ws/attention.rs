@@ -1,32 +1,82 @@
 //! The attention feed: agents blocked or done and long commands finished unseen, as one list
 //! the app turns into local notifications and an inbox.
 //!
-//! Items are kept in memory (the last [`MAX_ITEMS`]). "Seen" is shared by all devices: an
-//! item is seen when a client marks it, when any client focuses its pane, or (for a blocked
-//! agent) when the blocker goes away. An item that happened while a client showed the pane
-//! starts out seen, so it never notifies.
+//! Items are kept in memory (the last [`MAX_ITEMS`]). "Seen" is per [`Viewer`]: the owner's
+//! devices share one, each guest has its own. An item is seen by a viewer when it marks it,
+//! when it focuses the item's pane, or when it showed the pane as the item happened; a blocked
+//! agent's item is seen by everyone once the blocker goes away. Pushes and the owner's
+//! notifications follow the owner's "seen" only, so no guest can silence them.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::Mutex;
 
 use proto::{
-    AttentionItem, AttentionKind, AttentionList, AttentionSeen, AttentionUpdate, PaneId, SessionId,
-    UnixMillis,
+    AttentionItem, AttentionKind, AttentionList, AttentionSeen, AttentionUpdate, PaneId,
+    PrincipalId, SessionId, UnixMillis,
 };
 
 use crate::core::lock;
 
 pub(crate) const MAX_ITEMS: usize = 500;
 
+/// Whose "seen" an action records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum Viewer {
+    Owner,
+    Guest(PrincipalId),
+}
+
+/// An item with the owner's "seen" in `item` and every guest's beside it.
+struct Entry {
+    item: AttentionItem,
+    resolved: bool,
+    guests_viewing: HashSet<PrincipalId>,
+    guests_seen: HashSet<PrincipalId>,
+}
+
+impl Entry {
+    fn seen_by(&self, viewer: Viewer) -> bool {
+        match viewer {
+            Viewer::Owner => self.item.seen,
+            Viewer::Guest(principal) => self.resolved || self.guests_seen.contains(&principal),
+        }
+    }
+
+    fn as_seen_by(&self, viewer: Viewer) -> AttentionItem {
+        let mut item = self.item.clone();
+        if let Viewer::Guest(principal) = viewer {
+            item.seen = self.seen_by(viewer);
+            item.while_viewed = self.guests_viewing.contains(&principal);
+        }
+        item
+    }
+
+    fn mark_seen_by(&mut self, viewer: Viewer) -> bool {
+        if self.seen_by(viewer) {
+            return false;
+        }
+        match viewer {
+            Viewer::Owner => self.item.seen = true,
+            Viewer::Guest(principal) => {
+                self.guests_seen.insert(principal);
+            }
+        }
+        true
+    }
+}
+
 #[derive(Default)]
 struct Inner {
-    items: VecDeque<AttentionItem>,
+    entries: VecDeque<Entry>,
     next_id: u64,
 }
 
 impl Inner {
-    fn unseen(&self) -> u32 {
-        self.items.iter().filter(|item| !item.seen).count() as u32
+    fn unseen_by(&self, viewer: Viewer, visible: impl Fn(PaneId) -> bool) -> u32 {
+        self.entries
+            .iter()
+            .filter(|entry| visible(entry.item.pane_id) && !entry.seen_by(viewer))
+            .count() as u32
     }
 }
 
@@ -42,14 +92,24 @@ pub(crate) struct NewItem {
     pub kind: AttentionKind,
     pub title: String,
     pub body: String,
-    pub while_viewed: bool,
+    /// Who shows the pane as it happens (it starts seen for them).
+    pub viewers: Vec<Viewer>,
 }
 
 impl Attention {
-    /// Returns the update to broadcast.
+    /// Returns the update to broadcast, as the owner sees it.
     pub fn add(&self, new: NewItem) -> AttentionUpdate {
         let mut inner = lock(&self.inner);
         inner.next_id += 1;
+        let owner_viewing = new.viewers.contains(&Viewer::Owner);
+        let guests_viewing: HashSet<PrincipalId> = new
+            .viewers
+            .iter()
+            .filter_map(|viewer| match viewer {
+                Viewer::Guest(principal) => Some(*principal),
+                Viewer::Owner => None,
+            })
+            .collect();
         let item = AttentionItem {
             id: inner.next_id,
             at: UnixMillis(crate::identity::now_millis()),
@@ -58,73 +118,121 @@ impl Attention {
             kind: new.kind,
             title: new.title,
             body: new.body,
-            seen: new.while_viewed,
-            while_viewed: new.while_viewed,
+            seen: owner_viewing,
+            while_viewed: owner_viewing,
         };
-        inner.items.push_back(item.clone());
-        while inner.items.len() > MAX_ITEMS {
-            inner.items.pop_front();
+        inner.entries.push_back(Entry {
+            item: item.clone(),
+            resolved: false,
+            guests_seen: guests_viewing.clone(),
+            guests_viewing,
+        });
+        while inner.entries.len() > MAX_ITEMS {
+            inner.entries.pop_front();
         }
         AttentionUpdate::Added {
             item,
-            unseen: inner.unseen(),
+            unseen: inner.unseen_by(Viewer::Owner, |_| true),
         }
     }
 
-    pub fn list(&self) -> AttentionList {
+    /// Every item as `viewer` sees it (the caller filters to its scope).
+    pub fn list_for(&self, viewer: Viewer) -> AttentionList {
         let inner = lock(&self.inner);
         AttentionList {
-            items: inner.items.iter().cloned().collect(),
-            unseen: inner.unseen(),
+            items: inner
+                .entries
+                .iter()
+                .map(|entry| entry.as_seen_by(viewer))
+                .collect(),
+            unseen: inner.unseen_by(viewer, |_| true),
         }
     }
 
+    /// The owner's view of an item.
     pub fn get(&self, id: u64) -> Option<AttentionItem> {
-        lock(&self.inner)
-            .items
-            .iter()
-            .find(|item| item.id == id)
-            .cloned()
+        self.find(id, |entry| entry.item.clone())
     }
 
-    /// Whether an unseen item newer than `id` exists for the same pane (a push for `id` would
-    /// be superseded by that one's).
+    /// `item` as `viewer` sees it now.
+    pub fn as_seen_by(&self, viewer: Viewer, item: &AttentionItem) -> AttentionItem {
+        self.find(item.id, |entry| entry.as_seen_by(viewer))
+            .unwrap_or_else(|| item.clone())
+    }
+
+    pub fn pane_of(&self, id: u64) -> Option<PaneId> {
+        self.find(id, |entry| entry.item.pane_id)
+    }
+
+    pub fn unseen_by(&self, viewer: Viewer, visible: impl Fn(PaneId) -> bool) -> u32 {
+        let visible = self.visible_panes(visible);
+        lock(&self.inner).unseen_by(viewer, |pane| visible.contains(&pane))
+    }
+
+    /// `visible` may take the layout lock, so it runs outside this store's.
+    fn visible_panes(&self, visible: impl Fn(PaneId) -> bool) -> HashSet<PaneId> {
+        let panes: HashSet<PaneId> = lock(&self.inner)
+            .entries
+            .iter()
+            .map(|entry| entry.item.pane_id)
+            .collect();
+        panes.into_iter().filter(|&pane| visible(pane)).collect()
+    }
+
+    fn find<T>(&self, id: u64, read: impl FnOnce(&Entry) -> T) -> Option<T> {
+        lock(&self.inner)
+            .entries
+            .iter()
+            .find(|entry| entry.item.id == id)
+            .map(read)
+    }
+
+    /// Whether an item newer than `id` exists for the same pane that the owner has not seen
+    /// (a push for `id` would be superseded by that one's).
     pub fn superseded(&self, id: u64, pane: PaneId) -> bool {
         lock(&self.inner)
-            .items
+            .entries
             .iter()
-            .any(|item| item.id > id && item.pane_id == pane && !item.seen)
+            .any(|entry| entry.item.id > id && entry.item.pane_id == pane && !entry.item.seen)
     }
 
-    /// Marks matching unseen items seen; `None` if nothing changed.
-    pub fn mark(&self, which: &AttentionSeen) -> Option<AttentionUpdate> {
-        self.mark_where(|item| {
-            which.ids.contains(&item.id)
-                || which.up_to.is_some_and(|up_to| item.id <= up_to)
-                || which.pane_id == Some(item.pane_id)
-        })
-    }
-
-    /// Marks a pane's blocked-agent items seen (the blocker went away).
-    pub fn resolve_blocked(&self, pane: PaneId) -> Option<AttentionUpdate> {
-        self.mark_where(|item| {
-            item.pane_id == pane && matches!(item.kind, AttentionKind::AgentBlocked { .. })
-        })
-    }
-
-    fn mark_where(&self, matches: impl Fn(&AttentionItem) -> bool) -> Option<AttentionUpdate> {
+    /// Marks matching items of panes `visible` to `viewer` seen by it; returns their ids.
+    pub fn mark(
+        &self,
+        viewer: Viewer,
+        which: &AttentionSeen,
+        visible: impl Fn(PaneId) -> bool,
+    ) -> Vec<u64> {
+        let visible = self.visible_panes(visible);
         let mut inner = lock(&self.inner);
         let mut ids = Vec::new();
-        for item in inner.items.iter_mut().filter(|item| !item.seen) {
-            if matches(item) {
-                item.seen = true;
-                ids.push(item.id);
+        for entry in &mut inner.entries {
+            let item = &entry.item;
+            let matches = which.ids.contains(&item.id)
+                || which.up_to.is_some_and(|up_to| item.id <= up_to)
+                || which.pane_id == Some(item.pane_id);
+            if matches && visible.contains(&item.pane_id) && entry.mark_seen_by(viewer) {
+                ids.push(entry.item.id);
             }
         }
-        (!ids.is_empty()).then(|| AttentionUpdate::Seen {
-            ids,
-            unseen: inner.unseen(),
-        })
+        ids
+    }
+
+    /// Marks a pane's blocked-agent items seen by everyone (the blocker went away).
+    pub fn resolve_blocked(&self, pane: PaneId) -> Vec<u64> {
+        let mut inner = lock(&self.inner);
+        let mut ids = Vec::new();
+        for entry in &mut inner.entries {
+            if entry.item.pane_id == pane
+                && matches!(entry.item.kind, AttentionKind::AgentBlocked { .. })
+                && !entry.resolved
+            {
+                entry.resolved = true;
+                entry.item.seen = true;
+                ids.push(entry.item.id);
+            }
+        }
+        ids
     }
 }
 
@@ -132,14 +240,22 @@ impl Attention {
 mod tests {
     use super::*;
 
-    fn item(pane: u64, kind: AttentionKind, viewed: bool) -> NewItem {
+    fn item(pane: u64, kind: AttentionKind, viewers: Vec<Viewer>) -> NewItem {
         NewItem {
             pane_id: PaneId(pane),
             session_id: None,
             kind,
             title: "t".into(),
             body: String::new(),
-            while_viewed: viewed,
+            viewers,
+        }
+    }
+
+    fn pane_seen(pane: u64) -> AttentionSeen {
+        AttentionSeen {
+            ids: vec![],
+            up_to: None,
+            pane_id: Some(PaneId(pane)),
         }
     }
 
@@ -153,32 +269,70 @@ mod tests {
         let done = AttentionKind::AgentDone {
             agent: "claude".into(),
         };
-        attention.add(item(1, blocked.clone(), false));
-        attention.add(item(2, done.clone(), false));
-        let AttentionUpdate::Added { unseen, .. } = attention.add(item(2, done, true)) else {
+        attention.add(item(1, blocked.clone(), vec![]));
+        attention.add(item(2, done.clone(), vec![]));
+        let AttentionUpdate::Added { unseen, .. } =
+            attention.add(item(2, done, vec![Viewer::Owner]))
+        else {
             panic!()
         };
         assert_eq!(unseen, 2, "an item that happened in view starts seen");
+        assert_eq!(attention.resolve_blocked(PaneId(1)), vec![1]);
+        assert!(attention.resolve_blocked(PaneId(1)).is_empty());
         assert_eq!(
-            attention.resolve_blocked(PaneId(1)),
-            Some(AttentionUpdate::Seen {
-                ids: vec![1],
-                unseen: 1
-            })
+            attention.mark(Viewer::Owner, &pane_seen(2), |_| true),
+            vec![2]
         );
-        assert_eq!(attention.resolve_blocked(PaneId(1)), None);
-        let seen = AttentionSeen {
+        assert_eq!(attention.list_for(Viewer::Owner).unseen, 0);
+        assert_eq!(attention.list_for(Viewer::Owner).items.len(), 3);
+    }
+
+    #[test]
+    fn each_viewer_has_its_own_seen() {
+        let attention = Attention::default();
+        let alice = Viewer::Guest(PrincipalId([1; 16]));
+        let bob = Viewer::Guest(PrincipalId([2; 16]));
+        let done = AttentionKind::AgentDone {
+            agent: "claude".into(),
+        };
+        attention.add(item(1, done.clone(), vec![alice]));
+        attention.add(item(2, done, vec![]));
+        assert_eq!(attention.list_for(Viewer::Owner).unseen, 2);
+        assert_eq!(attention.list_for(alice).unseen, 1);
+        assert!(attention.list_for(alice).items[0].while_viewed);
+
+        let everything = AttentionSeen {
             ids: vec![],
-            up_to: None,
-            pane_id: Some(PaneId(2)),
+            up_to: Some(u64::MAX),
+            pane_id: None,
         };
         assert_eq!(
-            attention.mark(&seen),
-            Some(AttentionUpdate::Seen {
-                ids: vec![2],
-                unseen: 0
-            })
+            attention.mark(alice, &everything, |pane| pane == PaneId(1)),
+            Vec::<u64>::new(),
+            "outside its scope nothing is marked"
         );
-        assert_eq!(attention.list().items.len(), 3);
+        assert_eq!(attention.mark(bob, &everything, |_| true), vec![1, 2]);
+        assert_eq!(attention.list_for(Viewer::Owner).unseen, 2);
+        assert_eq!(attention.list_for(alice).unseen, 1);
+        assert_eq!(attention.list_for(bob).unseen, 0);
+        assert!(!attention.superseded(1, PaneId(1)));
+    }
+
+    #[test]
+    fn a_resolved_blocker_is_seen_by_everyone() {
+        let attention = Attention::default();
+        let guest = Viewer::Guest(PrincipalId([1; 16]));
+        attention.add(item(
+            1,
+            AttentionKind::AgentBlocked {
+                agent: "claude".into(),
+                request_id: None,
+            },
+            vec![],
+        ));
+        assert_eq!(attention.list_for(guest).unseen, 1);
+        attention.resolve_blocked(PaneId(1));
+        assert_eq!(attention.list_for(guest).unseen, 0);
+        assert_eq!(attention.list_for(Viewer::Owner).unseen, 0);
     }
 }

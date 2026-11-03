@@ -6,11 +6,15 @@ use std::time::Duration;
 use client_core::grants::{DeviceKey, GrantSpec, issue};
 use client_core::knock::knock;
 use client_core::proto::{
-    AuditKind, History, Invite, InviteTerms, PaneId, Roles, Scope, UnixMillis,
+    AttentionKind, AttentionList, AttentionSeen, AuditKind, Axis, History, Invite, InviteTerms,
+    LayoutOp, OpOutcome, PaneId, PaneLaunch, Roles, Scope, UnixMillis,
 };
 use client_core::{ClientConfig, ConnectOptions, MultiplayerEvent, RelayMode, now_millis};
+use daemon::{Daemon, HookRequest};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::UnixStream;
 
-use crate::support::{TestClient, start, ticket};
+use crate::support::{TestClient, start, start_with, ticket};
 
 async fn invite_with(owner: &TestClient, spec: GrantSpec, terms: InviteTerms) -> String {
     owner
@@ -299,5 +303,178 @@ async fn only_drivers_type_into_a_pane() {
         assert!(!text.contains(&format!("typed-by-{mark}")), "{text}");
     }
     drop(owner);
+    daemon.shutdown().await;
+}
+
+async fn claude_hook(
+    daemon: &Daemon,
+    state: &std::path::Path,
+    pane: PaneId,
+    event: &str,
+    payload: serde_json::Value,
+) {
+    let request = HookRequest {
+        v: 1,
+        token: std::fs::read_to_string(state.join("hook.token")).unwrap(),
+        pane: pane.0.to_string(),
+        agent: "claude".into(),
+        event: event.into(),
+        seq: now_millis().0,
+        payload,
+    };
+    let mut stream = UnixStream::connect(daemon.hook_socket()).await.unwrap();
+    let mut line = serde_json::to_vec(&request).unwrap();
+    line.push(b'\n');
+    stream.write_all(&line).await.unwrap();
+    let mut answer = String::new();
+    BufReader::new(stream).read_line(&mut answer).await.unwrap();
+}
+
+async fn pane_guest(owner: &TestClient, pane: PaneId, label: &str) -> TestClient {
+    let mut spec = GrantSpec::new(Roles::VIEWER, Scope::Pane(pane));
+    spec.label = label.into();
+    spec.expires = Some(UnixMillis(now_millis().0 + 3_600_000));
+    let invite = owner
+        .client
+        .create_invite(spec, "owner".into())
+        .await
+        .unwrap();
+    let mut guest = TestClient::join(&invite.to_string(), ClientConfig::generate_key());
+    guest.client.attach(None);
+    guest.until("guest layout", |c| c.layout.is_some()).await;
+    guest
+}
+
+fn blocked_seen(list: &AttentionList, pane: PaneId) -> Option<bool> {
+    list.items
+        .iter()
+        .find(|item| {
+            item.pane_id == pane && matches!(item.kind, AttentionKind::AgentBlocked { .. })
+        })
+        .map(|item| item.seen)
+}
+
+/// A guest's "seen" (marking, focusing, merely watching) is its own: it never clears the
+/// owner's unseen items, which would silence the owner's notifications and pushes.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_guest_cannot_mark_the_owners_attention_seen() {
+    let state = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join(".config")).unwrap();
+    let daemon = start_with(state.path(), |config| {
+        config.pane_env.insert(
+            0,
+            ("HOME".into(), home.path().to_string_lossy().into_owned()),
+        );
+    })
+    .await;
+
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    owner.until("connected", |c| c.connected > 0).await;
+    let shown = owner.attach_and_follow().await;
+    let OpOutcome::PaneCreated { pane_id: blocked } = owner
+        .op(LayoutOp::Split {
+            pane_id: shown,
+            axis: Axis::Vertical,
+            launch: PaneLaunch::Shell { cwd: None },
+        })
+        .await
+    else {
+        panic!("split")
+    };
+    owner.client.set_view(Some(shown), vec![shown]);
+
+    let elsewhere = pane_guest(&owner, shown, "elsewhere").await;
+    let watcher = pane_guest(&owner, blocked, "watcher").await;
+    watcher.client.set_view(Some(blocked), vec![blocked]);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let cwd = home.path().to_string_lossy().into_owned();
+    claude_hook(
+        &daemon,
+        state.path(),
+        blocked,
+        "UserPromptSubmit",
+        serde_json::json!({
+            "session_id": "s", "cwd": cwd, "hook_event_name": "UserPromptSubmit", "prompt": "go",
+        }),
+    )
+    .await;
+    claude_hook(
+        &daemon,
+        state.path(),
+        blocked,
+        "Notification",
+        serde_json::json!({
+            "session_id": "s", "cwd": cwd, "hook_event_name": "Notification",
+            "message": "Claude needs your permission to use Bash",
+            "notification_type": "permission_prompt",
+        }),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let list = owner.client.attention_list().await.unwrap();
+    assert_eq!(
+        blocked_seen(&list, blocked),
+        Some(false),
+        "a guest watching the pane does not make it seen for the owner: {list:#?}"
+    );
+    assert_eq!(list.unseen, 1);
+    let watcher_list = watcher.client.attention_list().await.unwrap();
+    assert_eq!(
+        blocked_seen(&watcher_list, blocked),
+        Some(true),
+        "{watcher_list:#?}"
+    );
+    assert_eq!(watcher_list.unseen, 0);
+
+    let everything = AttentionSeen {
+        ids: vec![],
+        up_to: Some(u64::MAX),
+        pane_id: None,
+    };
+    let by_pane = AttentionSeen {
+        ids: vec![],
+        up_to: None,
+        pane_id: Some(blocked),
+    };
+    let elsewhere_list = elsewhere
+        .client
+        .attention_seen(everything.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        blocked_seen(&elsewhere_list, blocked),
+        None,
+        "{elsewhere_list:#?}"
+    );
+    elsewhere
+        .client
+        .attention_seen(by_pane.clone())
+        .await
+        .unwrap();
+    watcher
+        .client
+        .attention_seen(everything.clone())
+        .await
+        .unwrap();
+    watcher.client.attention_seen(by_pane).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let list = owner.client.attention_list().await.unwrap();
+    assert_eq!(
+        blocked_seen(&list, blocked),
+        Some(false),
+        "guests' marks stay their own: {list:#?}"
+    );
+    assert_eq!(list.unseen, 1);
+
+    let list = owner.client.attention_seen(everything).await.unwrap();
+    assert_eq!(list.unseen, 0, "the owner's own mark still works");
+
+    drop(owner);
+    drop(elsewhere);
+    drop(watcher);
     daemon.shutdown().await;
 }

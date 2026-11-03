@@ -17,11 +17,12 @@ use proto::{
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::{AbortHandle, JoinSet};
 
-use crate::core::{ConnId, Core, Event, lock};
+use crate::core::{ConnId, Core, Event, View, lock};
 use crate::forward;
 use crate::mp::{Authz, Knocker, Mailbox, Need, Redeemed, Target, policy};
 use crate::net::{self, NetError};
 use crate::stream::{Class, PaneStream, Start, StreamCmd, priority};
+use crate::ws::Viewer;
 
 struct Subscription {
     acks: watch::Sender<Seq>,
@@ -185,12 +186,19 @@ async fn run(
     }
 
     let (ctl, ctl_out) = mpsc::unbounded_channel();
+    let owner = is_owner(&core, &authz);
     let ws = crate::ws::ConnCtx {
         ctl: ctl.clone(),
         watches: Arc::default(),
         actor: authz.actor,
         caps: hello.caps,
-        owner: is_owner(&core, &authz),
+        owner,
+        viewer: if owner {
+            Viewer::Owner
+        } else {
+            Viewer::Guest(authz.actor.principal)
+        },
+        scope: authz.scope,
     };
     let id = core.next_conn_id();
     let _ = ctl.send(ServerCtl::Joined(authz.join_info(&authz.name)));
@@ -1008,14 +1016,32 @@ impl Client {
             Event::Ports => self.send(ServerCtl::PortsChanged {
                 ports: self.scoped_ports(self.core.ws.ports.current()),
             }),
-            Event::Attention(update) => {
-                let visible = match &update {
-                    proto::AttentionUpdate::Added { item, .. } => self.pane_allowed(item.pane_id),
-                    proto::AttentionUpdate::Seen { .. } => true,
-                };
-                if visible {
-                    self.send(ServerCtl::Attention(update));
+            Event::Attention(proto::AttentionUpdate::Added { item, .. }) => {
+                if self.pane_allowed(item.pane_id) {
+                    let attention = &self.core.ws.attention;
+                    self.send(ServerCtl::Attention(proto::AttentionUpdate::Added {
+                        item: attention.as_seen_by(self.ws.viewer, &item),
+                        unseen: attention.unseen_by(self.ws.viewer, |pane| self.pane_allowed(pane)),
+                    }));
                 }
+            }
+            Event::AttentionSeen { by, mut ids }
+                if by.is_none_or(|viewer| viewer == self.ws.viewer) =>
+            {
+                let attention = &self.core.ws.attention;
+                ids.retain(|&id| {
+                    attention
+                        .pane_of(id)
+                        .is_some_and(|pane| self.pane_allowed(pane))
+                });
+                if !ids.is_empty() {
+                    self.send(ServerCtl::Attention(proto::AttentionUpdate::Seen {
+                        ids,
+                        unseen: attention.unseen_by(self.ws.viewer, |pane| self.pane_allowed(pane)),
+                    }));
+                }
+            }
+            Event::Attention(proto::AttentionUpdate::Seen { .. }) | Event::AttentionSeen { .. } => {
             }
             Event::VsCodeTunnel(status) => {
                 if self.allow(Need::Drive, Target::Host).is_ok() {
@@ -2009,7 +2035,14 @@ impl Client {
             panes.extend(state.focus);
             panes
         };
-        self.core.set_view(self.id, self.actor.device, panes);
+        self.core.set_view(
+            self.id,
+            View {
+                device: self.actor.device,
+                viewer: self.ws.viewer,
+                panes,
+            },
+        );
     }
 
     /// Runs a pane query off the async threads and sends its answer.
@@ -2141,7 +2174,7 @@ impl Client {
             ClientCtl::Focus { pane_id } => {
                 let pane_id = pane_id.filter(|&pane| self.pane_allowed(pane));
                 if let Some(pane) = pane_id {
-                    crate::ws::pane_focused(&self.core, pane);
+                    crate::ws::pane_focused(&self.core, self.ws.viewer, pane);
                     // A quiet terminal stopped polling its modes: fresh ones before typing.
                     if let Some(entry) = self.core.pane(pane) {
                         entry.pane.pty().refresh_echo();
