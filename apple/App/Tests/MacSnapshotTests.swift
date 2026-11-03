@@ -23,6 +23,10 @@ final class MacSnapshotTests: XCTestCase {
     }
 
     private var mode: String { environment["SNAPSHOT_MODE"] ?? "dark" }
+    /// `SNAPSHOT_THEME` picks another terminal theme than the mode's default.
+    private var themeName: String {
+        environment["SNAPSHOT_THEME"] ?? (mode == "light" ? "Apple System Colors Light" : "Ghostty Default")
+    }
     /// The fixture's window, for captures made while it runs.
     private var current: NSWindow?
 
@@ -43,7 +47,7 @@ final class MacSnapshotTests: XCTestCase {
     }
 
     private func makeWindow(_ root: some View, size: CGSize) -> NSWindow {
-        let theme = mode == "light" ? "Apple System Colors Light" : "Ghostty Default"
+        let theme = themeName
         // The argument domain: it wins over the app's saved settings and is never written to
         // disk, so a snapshot run leaves the real app's theme alone.
         var arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
@@ -120,7 +124,7 @@ final class MacSnapshotTests: XCTestCase {
             let crop = CGRect(x: rect.minX * scale, y: rect.minY * scale, width: rect.width * scale, height: rect.height * scale)
             if let part = image.cropping(to: crop) { context.draw(part, in: pixels(rect)) }
         }
-        let theme = ThemeCatalog.theme(named: mode == "light" ? "Apple System Colors Light" : "Ghostty Default")
+        let theme = ThemeCatalog.theme(named: themeName)
         let dark = mode != "light"
         // Canvas points to window points, from a pane's terminal and its leaf.
         guard let (anchorPane, anchor) = workspace.panes.first(where: { pane, _ in
@@ -1007,6 +1011,91 @@ final class MacSnapshotTests: XCTestCase {
             XCTAssertEqual(arrangement.layout?.leaf(bottom)?.frame, lit, "dropped where it was lit")
             _ = workspace
         }
+    }
+
+    // MARK: Updates
+
+    private final class IdleUpdater: UpdateChecking {
+        var canCheckForUpdates = true
+        var automaticallyChecksForUpdates = true
+        var automaticallyDownloadsUpdates = false
+        var allowsAutomaticUpdates: Bool { true }
+        func checkForUpdates() {}
+    }
+
+    /// The sidebar's update control: in the window with its notes open, then each state at the
+    /// sidebar's width.
+    func testUpdateCard() async throws {
+        let suite = "update-card-snapshot"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let saved = AppUpdater.shared
+        defer { AppUpdater.shared = saved }
+        let offer = UpdateOffer(
+            version: "815", displayVersion: "0.1.4",
+            notes: "• Updates arrive in the sidebar\n• Faster reconnects after sleep\n• Fixes a crash when closing a split")
+        func prompt(_ configure: (UpdatePrompt) -> Void) -> UpdatePrompt {
+            let prompt = UpdatePrompt(defaults: defaults, upToDateDuration: .seconds(600))
+            prompt.isMinimized = false
+            configure(prompt)
+            return prompt
+        }
+        func offered(_ prompt: UpdatePrompt, stage: UpdateStage = .notDownloaded) {
+            prompt.found(offer, stage: stage, userInitiated: false) { _ in }
+        }
+
+        AppUpdater.shared = AppUpdater(updater: IdleUpdater(), prompt: prompt { offered($0); $0.toggleNotes() })
+        try await window("update-sidebar")
+
+        guard wanted("update-states") else { return }
+        let states: [[UpdatePrompt]] = [
+            [
+                prompt { offered($0) },
+                prompt { offered($0); $0.accept(); $0.downloadExpects(1000); $0.downloadReceived(420) },
+                prompt { offered($0, stage: .downloaded) },
+                prompt { $0.checkStarted {} },
+            ],
+            [
+                prompt { $0.checkStarted {}; $0.notFound(upToDate: true, message: "") },
+                prompt { $0.checkStarted {}; $0.notFound(upToDate: false, message: "The update feed could not be reached.") },
+                prompt { offered($0); $0.accept(); $0.extractionStarted(); $0.extractionProgressed(0.7) },
+                prompt { offered($0); $0.isMinimized = true },
+            ],
+        ]
+        let window = makeWindow(ThemedRoot {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(states.indices, id: \.self) { row in
+                    HStack(alignment: .bottom, spacing: 0) {
+                        ForEach(states[row].indices, id: \.self) { column in
+                            let state = states[row][column]
+                            VStack(spacing: DS.Space.s) {
+                                Spacer(minLength: 0)
+                                if state.showsCard { UpdateCard(prompt: state) }
+                                HStack(spacing: DS.Space.s) {
+                                    Label("New Project", systemImage: "plus")
+                                        .font(DS.Font.sidebarSubtitle)
+                                        .foregroundStyle(DS.Palette.textSecondary)
+                                    Spacer()
+                                    if state.showsIndicator { UpdateIndicator(prompt: state) }
+                                    Image(systemName: "gearshape").foregroundStyle(DS.Palette.textSecondary).frame(width: 26, height: 26)
+                                }
+                                .padding(.horizontal, DS.Space.l)
+                                .padding(.bottom, DS.Space.s)
+                            }
+                            .frame(width: SidebarWidth.standard, height: 290)
+                            .chromeBackground(DS.Palette.sidebar)
+                            .padding(DS.Space.s)
+                        }
+                    }
+                }
+            }
+            .padding(DS.Space.s)
+            .chromeContent()
+            .chromeBackground(DS.Palette.base)
+        }, size: CGSize(width: 4 * (SidebarWidth.standard + 16) + 16, height: 2 * 306 + 16 + 28))
+        await pump(1.5)
+        try capture(window, "update-states")
+        window.close()
     }
 
     private func settings(_ name: String, _ navigation: SettingsNavigation = SettingsNavigation()) async throws {

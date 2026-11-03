@@ -813,6 +813,42 @@ private struct SidebarFooter: View {
     #endif
 
     var body: some View {
+        #if os(macOS)
+        let update = AppUpdater.shared.prompt
+        VStack(spacing: DS.Space.s) {
+            if update.showsCard {
+                UpdateCard(prompt: update)
+                    .movingTransition(.bottom)
+            }
+            buttons(update: update)
+        }
+        .padding(.top, update.showsCard ? DS.Space.s : 0)
+        .animation(DS.Motion.snappy, value: update.showsCard)
+        .background(UpdateSidebarAnchor(model: model))
+        // Opaque: rows scroll under it.
+        .chromeBackground(DS.Palette.sidebar)
+        #else
+        buttons()
+            .chromeBackground(DS.Palette.sidebar)
+        #endif
+    }
+
+    #if os(macOS)
+    private func buttons(update: UpdatePrompt) -> some View {
+        buttonRow {
+            if update.showsIndicator {
+                UpdateIndicator(prompt: update)
+                    .transition(.scale(scale: 0.6).combined(with: .opacity))
+            }
+        }
+    }
+    #else
+    private func buttons() -> some View {
+        buttonRow { EmptyView() }
+    }
+    #endif
+
+    private func buttonRow(@ViewBuilder trailing: () -> some View) -> some View {
         HStack(spacing: DS.Space.s) {
             Button {
                 withAnimation(DS.Motion.reorder) { model.newEmptyProject() }
@@ -826,6 +862,7 @@ private struct SidebarFooter: View {
             .help("New Project (⌃⌘N)")
             .accessibilityIdentifier("sidebar-new-project")
             Spacer()
+            trailing()
             Button("Settings", systemImage: "gearshape") {
                 #if os(macOS)
                 openSettings()
@@ -839,8 +876,6 @@ private struct SidebarFooter: View {
         }
         .padding(.horizontal, DS.Space.l)
         .padding(.vertical, DS.Space.s)
-        // Opaque: rows scroll under it.
-        .chromeBackground(DS.Palette.sidebar)
     }
 }
 
