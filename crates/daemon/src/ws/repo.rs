@@ -482,13 +482,15 @@ impl Tracker {
             })
             .collect();
         if !stale.is_empty() {
+            let home = self.core.cfg.home();
             let answers = tokio::task::spawn_blocking(move || {
                 stale
                     .into_iter()
                     .map(|cwd| {
                         let root = super::git::toplevel(Path::new(&cwd))
                             .ok()
-                            .map(|root| root.canonicalize().unwrap_or(root));
+                            .map(|root| root.canonicalize().unwrap_or(root))
+                            .filter(|root| !super::paths::holds_home(root, &home));
                         (cwd, root)
                     })
                     .collect::<Vec<_>>()

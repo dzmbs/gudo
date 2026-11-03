@@ -650,6 +650,36 @@ async fn clients_without_the_capability_get_no_snapshot() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn a_repository_at_home_is_not_tracked() {
+    let (_state, state) = canonical_tempdir();
+    let (_home, home) = canonical_tempdir();
+    let repo = repo(&home, None);
+    run_git(&home, &["init", "-q"]);
+    let notes = home.join("notes");
+    std::fs::create_dir_all(&notes).unwrap();
+    let daemon = start(&state, &home, None).await;
+    let (mut client, mut events) = watcher(&daemon).await;
+    client.attach_and_follow().await;
+    let in_home = tab_in(&mut client, &notes).await;
+    let in_repo = tab_in(&mut client, &repo).await;
+    let snapshot = snapshot_where(&mut events, "the pane in the repo", |snapshot| {
+        snapshot.panes.iter().any(|pane| pane.pane_id == in_repo)
+    })
+    .await;
+    assert!(
+        !snapshot.panes.iter().any(|pane| pane.pane_id == in_home),
+        "{snapshot:#?}"
+    );
+    assert!(
+        !snapshot
+            .worktrees
+            .iter()
+            .any(|worktree| Path::new(&worktree.path) == home),
+        "{snapshot:#?}"
+    );
+}
+
 /// Trusts the commands a new task in `repo` would run.
 async fn trust_new_task(client: &TestClient, repo: &Path) {
     let hooks = client
