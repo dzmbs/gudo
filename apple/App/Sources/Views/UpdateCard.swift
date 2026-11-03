@@ -18,7 +18,7 @@ struct UpdateCard: View {
             if prompt.showsNotes, let notes = prompt.offer?.notes {
                 ScrollView {
                     Text(notes)
-                        .font(DS.Font.sidebarSubtitle)
+                        .font(DS.Font.meta)
                         .foregroundStyle(DS.Palette.textSecondary)
                         .lineSpacing(2)
                         .textSelection(.enabled)
@@ -68,12 +68,12 @@ struct UpdateCard: View {
             UpdateGlyph(phase: prompt.phase, size: 26)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title)
-                    .font(DS.Font.sidebarTitle.weight(.semibold))
+                    .font(DS.Font.rowTitle.weight(.semibold))
                     .foregroundStyle(DS.Palette.text)
                     .lineLimit(1)
                 if let subtitle {
                     Text(subtitle)
-                        .font(DS.Font.sidebarSubtitle.monospacedDigit())
+                        .font(DS.Font.meta)
                         .foregroundStyle(DS.Palette.textTertiary)
                         .lineLimit(3)
                         .fixedSize(horizontal: false, vertical: true)
@@ -362,7 +362,7 @@ private struct UpdateActionButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(DS.Font.sidebarSubtitle.weight(.semibold))
+            .font(DS.Font.meta.weight(.semibold))
             .foregroundStyle(DS.Palette.onProminent)
             .lineLimit(1)
             .padding(.horizontal, DS.Space.gap10)
