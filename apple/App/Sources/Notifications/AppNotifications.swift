@@ -111,6 +111,9 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
                 let hostName = hosts.record(id)?.name ?? "your host"
                 Task { await self.security.post(device, hostId: id, hostName: hostName, session: daemon.multiplayer) }
             }
+            daemon.multiplayer.onGuestAnswered = { [weak self] answer in
+                Task { await self?.postGuestAnswer(answer, hostId: id) }
+            }
             daemon.multiplayer.onHostAlert = { [weak self] alert in
                 guard let self else { return }
                 let hostName = hosts.record(id)?.name ?? "Your host"
@@ -331,6 +334,21 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
     }
 
     nonisolated static let knockHostKey = "knockHost"
+
+    /// Someone else answered an agent's request on a host this device owns. Posted whatever the
+    /// notification preferences or what was seen say, so no guest answers unnoticed; in front,
+    /// the toast says it.
+    func postGuestAnswer(_ answer: GuestAnswer, hostId: String) async {
+        guard !appIsActive, await isAuthorized() else { return }
+        let note = AttentionNote(
+            hostId: hostId, hostName: hosts.record(hostId)?.name ?? "Host", itemId: 0, paneId: answer.paneId,
+            kind: .blocked, title: MultiplayerSession.guestAnswerTitle(answer), body: answer.summary)
+        let content = LocalNotifications.content(for: note)
+        let request = UNNotificationRequest(
+            identifier: "answer-\(hostId)-\(answer.paneId)-\(answer.atMs)", content: content, trigger: nil)
+        try? await UNUserNotificationCenter.current().add(request)
+        Self.log.info("posted guest answer host=\(hostId, privacy: .public) pane=\(answer.paneId)")
+    }
 
     private func clearDelivered(hostId: String) {
         Task {

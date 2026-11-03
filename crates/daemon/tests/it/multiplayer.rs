@@ -567,6 +567,21 @@ async fn approvals_are_signed_single_flight_and_audited() {
         c.mp.iter().any(|event| matches!(event, MultiplayerEvent::Decided { decided } if decided.decided_by == ann_actor))
     })
     .await;
+    // The owner is told a guest answered, whatever it has seen; other guests are not.
+    owner
+        .until("guest answer alert", |c| {
+            c.mp.iter().any(|event| {
+                matches!(event, MultiplayerEvent::GuestAnswered { answer }
+                    if answer.by == ann_actor && answer.name == "ann" && answer.answer == "Yes"
+                        && answer.pane_id == pane)
+            })
+        })
+        .await;
+    assert!(
+        !vic.mp
+            .iter()
+            .any(|event| matches!(event, MultiplayerEvent::GuestAnswered { .. }))
+    );
     // A late second decision loses.
     owner.client.decide(blocker.request_id, OptionId(1));
     owner

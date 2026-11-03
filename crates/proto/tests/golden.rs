@@ -532,6 +532,7 @@ fn every_message_matches_its_frozen_bytes() {
     browser_messages(&mut checker);
     reopen_messages(&mut checker);
     terminal_limits_messages(&mut checker);
+    guest_answer_messages(&mut checker);
 
     assert!(
         checker.failures.is_empty(),
@@ -3354,5 +3355,27 @@ fn terminal_limits_messages(checker: &mut Checker) {
             image_storage_bytes: 256 << 20,
         },
         "07000000013d8080808001",
+    );
+}
+
+/// A guest's answer told to owner devices (`Caps::ANSWER_ALERTS`, bit 26;
+/// `ServerCtl::GuestAnswered`, appended after `TerminalLimits`).
+fn guest_answer_messages(checker: &mut Checker) {
+    checker.check(
+        "Caps::ANSWER_ALERTS",
+        Caps::ANSWER_ALERTS,
+        "050000000180808020",
+    );
+    checker.check(
+        "ServerCtl::GuestAnswered",
+        ServerCtl::GuestAnswered(GuestAnswer {
+            pane_id: PANE,
+            by: ACTOR,
+            name: "bob".into(),
+            answer: "Yes".into(),
+            summary: "rm".into(),
+            at: UnixMillis(5),
+        }),
+        "3f000000013e0311111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222203626f620359657302726d05",
     );
 }

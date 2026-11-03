@@ -335,6 +335,9 @@ bitset! {
         /// reconnecting with the `Welcome`'s resume token, sends again what was not yet
         /// acknowledged; the daemon applies each number once (`DaemonFeatures::INPUT_RESUME`).
         INPUT_RESUME = 25;
+        /// On an owner device, wants `ServerCtl::GuestAnswered` whenever someone else answers
+        /// an agent's request.
+        ANSWER_ALERTS = 26;
     }
 }
 

@@ -555,6 +555,9 @@ pub(crate) async fn run(core: Arc<Core>) {
             Ok(Event::Attention(AttentionUpdate::Added { item, .. })) if !item.seen => {
                 tokio::spawn(deliver(Arc::clone(&core), item));
             }
+            Ok(Event::GuestAnswered(answer)) => {
+                tokio::spawn(deliver_answer(Arc::clone(&core), answer));
+            }
             Ok(_) | Err(RecvError::Lagged(_)) => {}
             Err(RecvError::Closed) => return,
         }
@@ -729,20 +732,68 @@ async fn deliver(core: Arc<Core>, item: AttentionItem) {
                 &host,
             )
             .await;
-            match result {
-                Ok(()) => {
-                    lock(&core.push.errors).remove(&registration.device);
-                }
-                Err(SendError::Gone) => {
-                    tracing::info!(device = %&registration.device[..8], "push token gone; unregistering");
-                    core.push.remove(&registration.device);
-                }
-                Err(SendError::Failed(why)) => {
-                    tracing::warn!(device = %&registration.device[..8], "push failed: {why}");
-                    lock(&core.push.errors).insert(registration.device.clone(), why);
-                }
-            }
+            record_result(&core, &registration, result);
         });
+    }
+}
+
+/// Someone other than the owner answered an agent's request: every owner device hears of it
+/// at once, whatever it has seen, is looking at or has turned off.
+async fn deliver_answer(core: Arc<Core>, answer: proto::GuestAnswer) {
+    if !core.cfg.push.enabled || lock(&core.push.registrations).is_empty() {
+        return;
+    }
+    let item = AttentionItem {
+        id: 0,
+        at: answer.at,
+        pane_id: answer.pane_id,
+        session_id: core.session_of_pane(answer.pane_id),
+        kind: AttentionKind::AgentBlocked {
+            agent: String::new(),
+            request_id: None,
+        },
+        title: format!("{} chose \u{201c}{}\u{201d}", answer.name, answer.answer),
+        body: answer.summary,
+        seen: false,
+        while_viewed: false,
+    };
+    let host = crate::ws::tunnel::hostname();
+    for registration in targets(&core) {
+        let Some(device) = unhex::<32>(&registration.device).map(DeviceId) else {
+            continue;
+        };
+        let core = Arc::clone(&core);
+        let (item, host) = (item.clone(), host.clone());
+        tokio::spawn(async move {
+            loop {
+                let wait =
+                    match lock(&core.push.budgets).spend(&registration.device, Instant::now()) {
+                        Ok(()) => break,
+                        Err(wait) => wait,
+                    };
+                tokio::time::sleep(wait).await;
+            }
+            let mut note = notification(&core, device, &item, push::Kind::Blocked, None, &host);
+            note.title.clone_from(&item.title);
+            let result = send_note(&core, &registration, note).await;
+            record_result(&core, &registration, result);
+        });
+    }
+}
+
+fn record_result(core: &Core, registration: &Registration, result: Result<(), SendError>) {
+    match result {
+        Ok(()) => {
+            lock(&core.push.errors).remove(&registration.device);
+        }
+        Err(SendError::Gone) => {
+            tracing::info!(device = %&registration.device[..8], "push token gone; unregistering");
+            core.push.remove(&registration.device);
+        }
+        Err(SendError::Failed(why)) => {
+            tracing::warn!(device = %&registration.device[..8], "push failed: {why}");
+            lock(&core.push.errors).insert(registration.device.clone(), why);
+        }
     }
 }
 
@@ -910,10 +961,19 @@ async fn send(
     buttons: Option<&crate::agent::ApprovalButtons>,
     host: &str,
 ) -> Result<(), SendError> {
+    let note = notification(core, device, item, kind, buttons, host);
+    send_note(core, registration, note).await
+}
+
+/// Seals `note` to the device and posts it, collapsing with earlier pushes for its pane.
+async fn send_note(
+    core: &Core,
+    registration: &Registration,
+    mut note: push::Notification,
+) -> Result<(), SendError> {
     let seal_key = unhex::<32>(&registration.seal_key)
         .ok_or_else(|| SendError::Failed("bad sealing key on file".into()))?;
     let seed = core.identity.secret.to_bytes();
-    let mut note = notification(core, device, item, kind, buttons, host);
     if note.body.ends_with('…') {
         open_only(&mut note);
     }
@@ -932,7 +992,7 @@ async fn send(
         }
     };
     let kind = note.kind;
-    let collapse = push::collapse_id(&seed, item.pane_id, kind.category());
+    let collapse = push::collapse_id(&seed, PaneId(note.pane), kind.category());
     let attempts = core.cfg.push.attempts;
     post(core, registration, attempts, || push::RelayRequest {
         v: push::RelayRequest::VERSION,

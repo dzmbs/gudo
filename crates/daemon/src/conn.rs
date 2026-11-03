@@ -1214,6 +1214,11 @@ impl Client {
                     self.send(ServerCtl::DevicePaired(info));
                 }
             }
+            Event::GuestAnswered(answer) => {
+                if self.caps.contains(Caps::ANSWER_ALERTS) && self.ws.owner {
+                    self.send(ServerCtl::GuestAnswered(answer));
+                }
+            }
             Event::ApprovalPolicy(session_id, policy) => {
                 if self.caps.contains(Caps::APPROVAL_POLICY)
                     && lock(&self.state).session == Some(session_id)
@@ -1371,6 +1376,11 @@ impl Client {
                 }
                 let signature = decide.sig.clone();
                 let record = |decided: &proto::Decided, details: &crate::agent::DecidedRequest| {
+                    self.answered(
+                        decided.pane_id,
+                        &details.option,
+                        &format!("{original} → {input}"),
+                    );
                     self.core.mp.audit.append(
                         AuditKind::Approval,
                         crate::mp::AuditEntry {
@@ -2473,6 +2483,7 @@ impl Client {
             Err(error) => return refuse(error.to_string()),
         }
         let record = |decided: &proto::Decided, details: &crate::agent::DecidedRequest| {
+            self.answered(decided.pane_id, &details.option, &details.summary);
             let signed = proto::approval_signing_bytes(
                 daemon,
                 decide.request_id,
@@ -2578,8 +2589,12 @@ impl Client {
             conn: self.id,
             actor: self.actor,
         };
+        let asked = audit
+            .as_ref()
+            .and_then(|(pane, _)| self.blocker_summary(*pane));
         let result = crate::assist::handle(&self.core, caller, request).await;
         if let (Some((pane, label)), Ok(_)) = (audit, &result) {
+            self.answered(pane, &label, asked.as_deref().unwrap_or_default());
             let name = self.core.mp.name_of(self.id);
             self.core.mp.audit.append(
                 AuditKind::Approval,
@@ -2591,6 +2606,31 @@ impl Client {
             );
         }
         result
+    }
+
+    /// Tells the owner's devices (and their pushes) that someone else answered an agent's
+    /// request, whatever they have seen: no guest answers for the owner unnoticed.
+    fn answered(&self, pane_id: PaneId, answer: &str, summary: &str) {
+        if self.ws.owner {
+            return;
+        }
+        self.core
+            .emit(crate::core::Event::GuestAnswered(proto::GuestAnswer {
+                pane_id,
+                by: self.actor,
+                name: self.core.mp.name_of(self.id),
+                answer: answer.to_owned(),
+                summary: summary.to_owned(),
+                at: proto::UnixMillis(crate::identity::now_millis()),
+            }));
+    }
+
+    /// What the agent in `pane` is blocked on, as its status says.
+    fn blocker_summary(&self, pane: PaneId) -> Option<String> {
+        match self.core.pane_meta(pane)?.agent?.state {
+            proto::AgentState::Blocked(blocker) => Some(blocker.summary),
+            _ => None,
+        }
     }
 
     /// Whether this connection may answer a dialog read off a pane's screen under the

@@ -250,6 +250,8 @@ public final class MultiplayerSession {
     @ObservationIgnored public var onKnockArrived: ((Knock) -> Void)?
     /// Called when another owner device pairs with the host, for a notification.
     @ObservationIgnored public var onDevicePaired: ((DeviceInfo) -> Void)?
+    /// Called when someone other than the owner answers an agent's request, for a notification.
+    @ObservationIgnored public var onGuestAnswered: ((GuestAnswer) -> Void)?
     /// Owner devices that paired while this session ran, by key, with when.
     public private(set) var freshPairings: [String: Date] = [:]
     /// When the last pairing code made here stops working: a device pairing before then was
@@ -315,6 +317,8 @@ public final class MultiplayerSession {
             case devicePaired(String)
             /// The host reported something the owner must act on.
             case hostAlert(title: String)
+            /// Someone other than the owner answered an agent's request in this pane.
+            case guestAnswered(pane: UInt64)
             /// People came or went (by person, not device).
             case arrived([String])
             case left([String])
@@ -463,6 +467,9 @@ public final class MultiplayerSession {
                 post(.hostAlert(title: alert.title), alert.title, failure: true)
             }
             onHostAlert?(alert)
+        case .guestAnswered(let answer):
+            post(.guestAnswered(pane: answer.paneId), Self.guestAnswerTitle(answer), failure: false)
+            onGuestAnswered?(answer)
         case .knockAdded(let knock):
             if let index = knocks.firstIndex(where: { $0.knockId == knock.knockId }) {
                 knocks[index] = knock
@@ -1102,6 +1109,11 @@ public final class MultiplayerSession {
         guard now - lastBlockedNotice > .seconds(3) else { return }
         lastBlockedNotice = now
         post(kind, message, failure: false)
+    }
+
+    /// "Ann chose “Yes”", for the toast and the notification.
+    public static func guestAnswerTitle(_ answer: GuestAnswer) -> String {
+        "\(answer.name) chose \u{201C}\(answer.answer)\u{201D}"
     }
 
     private func post(_ kind: Notice.Kind, _ message: String, failure: Bool) {

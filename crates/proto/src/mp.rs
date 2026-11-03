@@ -984,6 +984,22 @@ pub struct HostAlert {
     pub body: String,
 }
 
+/// Someone other than the owner answered an agent's request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuestAnswer {
+    /// The pane whose agent asked.
+    pub pane_id: PaneId,
+    /// Who answered.
+    pub by: Actor,
+    /// Their display name.
+    pub name: String,
+    /// The option they chose ("Yes", "Allow once", "No").
+    pub answer: String,
+    /// What the agent asked.
+    pub summary: String,
+    pub at: UnixMillis,
+}
+
 /// Kinds of [`HostAlert`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HostAlertKind {

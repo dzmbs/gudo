@@ -1521,3 +1521,68 @@ async fn finished_pushes_follow_agent_rules_debounce_and_pane_interval() {
     drop(device_a);
     daemon.shutdown().await;
 }
+
+/// A guest answering an agent's request is pushed to every owner device at once, even when
+/// the owner shows that pane (its approval item was seen, so it pushed nothing itself).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_guests_answer_is_always_pushed_to_the_owner() {
+    use client_core::GrantSpec;
+    use client_core::proto::{Roles, Scope, UnixMillis};
+
+    let state = tempfile::tempdir().unwrap();
+    let mut relay = FakeRelay::start().await;
+    let daemon = start(state.path(), &relay, 200).await;
+    let link = ticket(&daemon);
+    let mut owner = device(&link, "cap-owner", PushPrefs::default()).await;
+    let pane = owner.client.attach_and_follow().await;
+    owner.client.client.set_view(Some(pane), vec![pane]);
+
+    let mut spec = GrantSpec::new(Roles::APPROVER | Roles::VIEWER, Scope::Daemon);
+    spec.label = "ann".into();
+    spec.expires = Some(UnixMillis(client_core::now_millis().0 + 3_600_000));
+    let invite = owner
+        .client
+        .client
+        .create_invite(spec, "owner".into())
+        .await
+        .unwrap();
+    let mut ann = TestClient::join(&invite.to_string(), ClientConfig::generate_key());
+    ann.client.attach(None);
+    ann.until("joined", |c| c.layout.is_some()).await;
+    ann.client.set_view(Some(pane), vec![pane]);
+
+    let mut payload: serde_json::Value = serde_json::from_str(PERMISSION).unwrap();
+    payload["cwd"] = "/".into();
+    let waiting = hook(&daemon, state.path(), pane, "PermissionRequest", payload).await;
+    let blocked = |c: &TestClient| {
+        c.metas
+            .get(&pane)
+            .and_then(|meta| meta.agent.clone())
+            .and_then(|agent| match agent.state {
+                AgentState::Blocked(blocker) => Some(blocker),
+                _ => None,
+            })
+    };
+    ann.until("blocked", |c| blocked(c).is_some()).await;
+    let blocker = blocked(&ann).unwrap();
+    relay
+        .quiet(Duration::from_millis(600), "the owner shows the pane")
+        .await;
+
+    ann.client.decide(blocker.request_id, blocker.options[0].id);
+    tokio::time::timeout(Duration::from_secs(10), waiting)
+        .await
+        .expect("the hook is answered")
+        .unwrap();
+    let request = verify(&relay.next("the guest's answer").await, &daemon);
+    assert_eq!(request.cap, "cap-owner");
+    let note = client_core::push::open_notification(&owner.seal_secret, &request.sealed).unwrap();
+    assert_eq!(note.title, "ann chose \u{201c}Yes\u{201d}");
+    assert!(note.body.contains("rm -rf node_modules"), "{note:?}");
+    assert_eq!(note.pane, pane.0);
+    assert!(note.action.is_none(), "nothing left to approve");
+
+    drop(ann);
+    drop(owner);
+    daemon.shutdown().await;
+}

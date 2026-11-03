@@ -235,6 +235,12 @@ makes, and then without its old invites.
   panes in its scope. A guest marking, focusing or merely watching a pane never makes the
   owner's item seen, so it cannot silence the owner's notifications or pushes, which follow
   the owner's "seen" only. Push registration and notification actions are owner-only.
+- **No guest answers for the owner unnoticed.** When anyone but a paired owner device answers
+  an agent's request (a signed decision, an edited approval, or an option picked on screen),
+  every owner device is told at once, whatever it has seen, is looking at or has turned off:
+  a push ("Ann chose “Yes”" with what was asked) and `ServerCtl::GuestAnswered` for
+  `Caps::ANSWER_ALERTS`, which the app shows as a toast in front and a local notification
+  behind.
 - **Names are cleaned.** Every name someone chooses (device names, `SetName`, knock names,
   invite labels, also when read back from disk) loses control and bidi/format characters and
   has whitespace collapsed (`identity::clean_display_name`), so a name cannot reorder or hide
@@ -335,6 +341,7 @@ was confirmed to fail.
 | Prompt or review sent just after the agent exited, while the pane is still marked an agent | `multiplayer::text_for_an_agent_that_just_exited_reaches_nobody` |
 | Bidi, zero-width and control characters in invite labels and `SetName` | `redteam::names_cannot_hide_or_reorder_text`, `devices::*` |
 | Prompter pasting prompts at line rate; guest reconnecting in a loop | `multiplayer::a_prompt_flood_is_cut_and_audited_once`, `multiplayer::a_reconnect_loop_does_not_grow_the_audit_log`, `mp::rate_limit::tests::*` (unit) |
+| Guest approving while the owner looks elsewhere or has seen the request | `notify::a_guests_answer_is_always_pushed_to_the_owner`, `multiplayer::approvals_are_signed_single_flight_and_audited` |
 | Pane-scoped guest marking, focusing or watching to clear the owner's attention items | `redteam::a_guest_cannot_mark_the_owners_attention_seen`, `ws::attention::tests::*` (unit) |
 | zstd bomb / huge declared length from a hostile daemon | `client-core conn::tests::inflating_is_bounded` (unit) |
 | Random and mangled bytes as every wire type, ticket and invite | `proto/tests/decode_untrusted.rs` (proptest) |

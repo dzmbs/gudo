@@ -625,6 +625,10 @@ pub enum ServerCtl {
         /// Kitty graphics image storage per pane and screen, in bytes (0: images off).
         image_storage_bytes: u64,
     },
+    /// Someone other than the owner answered an agent's request (a decision, or an option
+    /// picked on screen), to owner devices with [`Caps::ANSWER_ALERTS`], so no guest ever
+    /// answers for the owner unnoticed.
+    GuestAnswered(crate::mp::GuestAnswer),
 }
 
 /// Longest clipboard write a program may make (OSC 52), in bytes of decoded text.

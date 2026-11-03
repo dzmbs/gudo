@@ -98,6 +98,8 @@ pub(crate) enum Event {
     Knock(proto::KnockUpdate),
     /// An owner device paired.
     DevicePaired(proto::DeviceInfo),
+    /// Someone other than the owner answered an agent's request.
+    GuestAnswered(proto::GuestAnswer),
     /// A session's approval policy changed.
     ApprovalPolicy(SessionId, proto::ApprovalPolicy),
     /// An open approval request's votes or claim changed.

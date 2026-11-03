@@ -476,6 +476,34 @@ pub struct HostAlert {
     pub body: String,
 }
 
+/// Someone other than the owner answered an agent's request.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GuestAnswer {
+    /// The pane whose agent asked.
+    pub pane_id: u64,
+    pub by: Actor,
+    /// Their display name.
+    pub name: String,
+    /// The option they chose ("Yes", "Allow once", "No").
+    pub answer: String,
+    /// What the agent asked.
+    pub summary: String,
+    pub at_ms: u64,
+}
+
+impl From<proto::GuestAnswer> for GuestAnswer {
+    fn from(answer: proto::GuestAnswer) -> Self {
+        Self {
+            pane_id: answer.pane_id.0,
+            by: answer.by.into(),
+            name: answer.name,
+            answer: answer.answer,
+            summary: answer.summary,
+            at_ms: answer.at.0,
+        }
+    }
+}
+
 /// Kinds of [`HostAlert`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum HostAlertKind {
@@ -827,6 +855,11 @@ pub enum MultiplayerEvent {
     HostAlert {
         alert: HostAlert,
     },
+    /// Someone other than the owner answered an agent's request (owner devices only): notify,
+    /// whatever was seen, so no guest answers for the owner unnoticed.
+    GuestAnswered {
+        answer: GuestAnswer,
+    },
     /// Someone knocked, or a knock changed (owner devices): replace any entry with its id.
     KnockAdded {
         knock: crate::mp2::Knock,
@@ -903,6 +936,9 @@ impl From<client_core::MultiplayerEvent> for MultiplayerEvent {
             },
             E::HostAlert { alert } => Self::HostAlert {
                 alert: alert.into(),
+            },
+            E::GuestAnswered { answer } => Self::GuestAnswered {
+                answer: answer.into(),
             },
             E::Knock {
                 update: proto::KnockUpdate::Added(knock),

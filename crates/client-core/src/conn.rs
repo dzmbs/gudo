@@ -414,7 +414,12 @@ async fn handshake(
             | if crate::mp::is_guest(inner) {
                 Caps::EMPTY
             } else {
-                Caps::KNOCK | Caps::DEVICE_ALERTS | Caps::HOST_ALERTS | Caps::DRIVE_ASKS | Caps::ACCOUNTS
+                Caps::KNOCK
+                    | Caps::DEVICE_ALERTS
+                    | Caps::HOST_ALERTS
+                    | Caps::DRIVE_ASKS
+                    | Caps::ACCOUNTS
+                    | Caps::ANSWER_ALERTS
             }
             | Caps::APPROVALS
             | Caps::WORKFLOWS
