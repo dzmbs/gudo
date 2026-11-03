@@ -293,12 +293,12 @@ final class Workspace {
     static let signposter = OSSignposter(subsystem: Bundle.main.bundleIdentifier ?? "app", category: .pointsOfInterest)
 
     /// The tab's name: the user's rename, else the friendly name it got when it was created
-    /// ("quiet-otter"). With Settings ▸ "Title from shell", a program's OSC 0/2 title replaces a
-    /// generated name (never a rename).
+    /// ("quiet-otter"). With Settings ▸ "Title from shell", a program's OSC 0/2 title, else the
+    /// directory, replaces a generated name (never a rename).
     func title(of tab: Tab) -> String {
         if let title = tab.title {
             if UserDefaults.standard.bool(forKey: TabNaming.titleFromShell), FriendlyName.isGenerated(title),
-               let shell = pane(tab.focused)?.title, !shell.isEmpty
+               let shell = pane(tab.focused)?.title.nonEmpty ?? directory(of: tab)
             {
                 return shell
             }

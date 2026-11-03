@@ -350,8 +350,12 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
   `Workspace/FriendlyName.swift`, curated lists), stable, and sent to the daemon as a rename so
   every device shows it. A user rename always wins. The context line is the agent's task, else
   the foreground program, else the program's OSC 0/2 title, else `repo:branch` (local), else the
-  directory. Settings ▸ "Tab Title from Shell" (`title-from-shell`) lets an OSC title replace a
-  generated name.
+  directory. Settings ▸ "Tab Title from Shell" (`title-from-shell`) lets an OSC title (else the
+  directory) replace a generated name. Under shell integration (OSC 133) the OSC title counts
+  only while a program holds the alternate screen (`Terminal.shownTitle`): the shell retitles the
+  terminal for every command, so a quick `ls` would otherwise flash its name. This follows the
+  terminal's state in stream order, never a delay; a long command without a screen of its own
+  shows on the running-command line instead.
 - A group's agents: every pane of that host whose program reports status, across its tabs:
   glyph, program, tab number, state word right-aligned in its color. Tap
   focuses the pane, switching hosts if needed.

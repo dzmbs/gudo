@@ -16,7 +16,8 @@ final class Pane {
     /// SwiftUI host containers showing this pane.
     @ObservationIgnored let hosts = NSHashTable<TerminalHost.Container>.weakObjects()
 
-    /// OSC 0/2 title ("" until the program sets one).
+    /// The program's OSC 0/2 title as tabs show it (`Terminal.shownTitle`): "" until a program
+    /// sets one, and at a shell prompt with shell integration.
     private(set) var title = ""
     /// OSC 7 working directory, as a path ("" until the shell reports one).
     private(set) var workingDirectory = ""
@@ -157,6 +158,7 @@ final class Pane {
                     Pane.log.error("snapshot restore failed: \(String(describing: error), privacy: .public)")
                 }
                 surface.outputArrived()
+                title.signal()
                 leaveSaved()
                 restoreScroll(false)
             case .history(let records, let done):
@@ -259,7 +261,7 @@ final class Pane {
     }
 
     private func refreshTitle() {
-        let title = view.surface.terminal.title
+        let title = view.surface.terminal.shownTitle
         guard title != self.title else { return }
         self.title = title
         onContextChange?()
