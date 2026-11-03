@@ -592,6 +592,11 @@ async fn run(inner: &Arc<Inner>, live: Live) -> String {
                 session_id: wanted.session,
             });
         }
+        if let Some(colors) = &wanted.colors
+            && inner.daemon_has(proto::DaemonFeatures::TERMINAL_COLORS)
+        {
+            messages.push(ClientCtl::TerminalColors(colors.clone()));
+        }
         messages.push(ClientCtl::Visible {
             pane_ids: wanted.visible.clone(),
         });

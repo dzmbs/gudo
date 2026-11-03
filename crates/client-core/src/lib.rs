@@ -410,6 +410,7 @@ pub(crate) struct Wanted {
     pub focus: Option<PaneId>,
     pub visible: Vec<PaneId>,
     pub sizes: HashMap<PaneId, PaneSize>,
+    pub colors: Option<proto::TerminalColors>,
 }
 
 /// Something for the live connection to send.
@@ -496,6 +497,13 @@ impl Inner {
 
     fn send(&self, ctl: ClientCtl) {
         let _ = self.outgoing_tx.send(Outgoing::Ctl(ctl));
+    }
+
+    /// Whether the daemon of the current (or last) connection announced `feature`.
+    pub(crate) fn daemon_has(&self, feature: proto::DaemonFeatures) -> bool {
+        lock(&self.daemon_info)
+            .as_ref()
+            .is_some_and(|info| info.features.contains(feature))
     }
 }
 
@@ -753,6 +761,20 @@ impl Client {
         }
         self.inner.send(ClientCtl::Visible { pane_ids: visible });
         self.inner.send(ClientCtl::Focus { pane_id: focused });
+    }
+
+    /// This device's terminal theme, which programs asking a pane for its colors are told
+    /// while this client uses the pane. Kept across reconnects; daemons without
+    /// [`DaemonFeatures::TERMINAL_COLORS`](proto::DaemonFeatures::TERMINAL_COLORS) are not
+    /// sent it.
+    pub fn set_terminal_colors(&self, colors: proto::TerminalColors) {
+        lock(&self.inner.wanted).colors = Some(colors.clone());
+        if self
+            .inner
+            .daemon_has(proto::DaemonFeatures::TERMINAL_COLORS)
+        {
+            self.inner.send(ClientCtl::TerminalColors(colors));
+        }
     }
 
     /// This client's size for a pane. The PTY takes it when this client types.

@@ -11,7 +11,7 @@ use crate::bytes::Bytes;
 use crate::types::{
     AgentKind, AttachVia, Axis, CommandList, CommandMark, CommandOutput, EchoHint, KeyEvent,
     LayoutOp, Links, MouseEvent, OpErrorCode, OpOutcome, PaneMeta, PaneSize, ProgramReport,
-    RpcError, SearchPage, SearchQuery, SessionLayout, SessionSummary,
+    RpcError, SearchPage, SearchQuery, SessionLayout, SessionSummary, TerminalColors,
 };
 use crate::ws_types::{ForwardInfo, ForwardTarget, WorkspaceError};
 use crate::{on_runtime, runtime};
@@ -751,6 +751,12 @@ impl DaemonClient {
             focused.map(PaneId),
             visible.into_iter().map(PaneId).collect(),
         );
+    }
+
+    /// This device's terminal theme: programs asking a pane it uses for its colors get these.
+    /// Kept across reconnects.
+    pub fn set_terminal_colors(&self, colors: TerminalColors) {
+        self.inner.set_terminal_colors(colors.into());
     }
 
     /// This client's size for a pane; the PTY takes it when this client types.

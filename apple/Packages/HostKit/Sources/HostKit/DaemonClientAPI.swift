@@ -37,6 +37,14 @@ nonisolated public protocol RelaySettingsClient: AnyObject, Sendable {
 
 extension DaemonClient: RelaySettingsClient {}
 
+/// A client that tells the daemon this device's terminal theme (`DaemonClient.setTerminalColors`).
+/// Not part of `DaemonClientAPI` so test fakes need not implement it.
+nonisolated public protocol TerminalColorsClient: AnyObject, Sendable {
+    func setTerminalColors(colors: TerminalColors)
+}
+
+extension DaemonClient: TerminalColorsClient {}
+
 /// A client that keeps a live connection across a network change, letting it move to a path
 /// that works (`DaemonClient.networkChanged`). Not part of `DaemonClientAPI` so test fakes need
 /// not implement it; those redial instead.

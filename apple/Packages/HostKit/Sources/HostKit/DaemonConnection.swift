@@ -212,6 +212,7 @@ public final class DaemonConnection: HostConnection {
         Self.log.info("dialing host=\(self.hostId, privacy: .public)")
         let client = try dialer(ticket, listener)
         self.client = client
+        pushTerminalColors()
         if let multiplayerClient = client as? any MultiplayerClientAPI { multiplayer.attach(multiplayerClient) }
         if let askpassClient = client as? any AskpassClientAPI { askpass.attach(askpassClient) }
         if let approvalClient = client as? any ApprovalClientAPI { approvals.attach(approvalClient) }
@@ -223,6 +224,17 @@ public final class DaemonConnection: HostConnection {
                 self?.handle(event)
             }
         }
+    }
+
+    /// This device's terminal theme: programs in the host's panes that ask for their colors
+    /// are told it while this device uses the pane. Kept across reconnects.
+    @ObservationIgnored public var terminalColors: TerminalColors? {
+        didSet { if terminalColors != oldValue { pushTerminalColors() } }
+    }
+
+    private func pushTerminalColors() {
+        guard let terminalColors, let client = client as? any TerminalColorsClient else { return }
+        client.setTerminalColors(colors: terminalColors)
     }
 
     /// Types `text` into a pane as a paste, then Return (a code a program waits for).

@@ -29,6 +29,32 @@ impl From<proto::PaneSize> for PaneSize {
     }
 }
 
+/// A terminal theme's colors, each `0xRRGGBB`.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct TerminalColors {
+    pub foreground: u32,
+    pub background: u32,
+    /// `None`: the cursor takes the foreground color.
+    pub cursor: Option<u32>,
+    /// All 256 palette colors, or none for the default palette.
+    pub palette: Vec<u32>,
+}
+
+impl From<TerminalColors> for proto::TerminalColors {
+    fn from(colors: TerminalColors) -> Self {
+        let rgb = |color: u32| {
+            let [_, red, green, blue] = color.to_be_bytes();
+            [red, green, blue]
+        };
+        Self {
+            foreground: rgb(colors.foreground),
+            background: rgb(colors.background),
+            cursor: colors.cursor.map(rgb),
+            palette: colors.palette.into_iter().map(rgb).collect(),
+        }
+    }
+}
+
 impl From<PaneSize> for proto::PaneSize {
     fn from(pane_size: PaneSize) -> Self {
         Self {

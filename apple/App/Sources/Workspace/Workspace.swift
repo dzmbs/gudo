@@ -95,7 +95,10 @@ final class Workspace {
     #endif
     /// Terminal appearance for every pane (the design layer may replace it).
     @ObservationIgnored var appearance = TerminalAppearance.fromPreferences() {
-        didSet { for pane in made.values { pane.view.surface.appearance = appearance } }
+        didSet {
+            for pane in made.values { pane.view.surface.appearance = appearance }
+            announceTerminalColors()
+        }
     }
     /// One terminal cell in points, once a pane has laid out: split sizes snap to whole cells so
     /// panes waste no partial cells (the remainder becomes padding).
@@ -199,6 +202,7 @@ final class Workspace {
 
     private func start() {
         reconcilePanes()
+        announceTerminalColors()
         if let daemon = host as? DaemonConnection {
             // Daemon panes report through the daemon's metadata: follow it, never a timer.
             followMeta(of: daemon)
