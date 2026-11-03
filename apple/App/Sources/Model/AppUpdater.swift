@@ -1,6 +1,7 @@
 #if os(macOS)
-import Foundation
+import AppKit
 import Observation
+import OSLog
 import Sparkle
 
 /// What the Mac app's update controls need from Sparkle's updater.
@@ -20,34 +21,59 @@ extension SPUUpdater: UpdateChecking {}
 /// `SUPublicEDKey` (both in the Info.plist). Checks run on Sparkle's daily schedule unless
 /// turned off in Settings ▸ About. Only release builds start the updater: a local build would
 /// offer to replace itself with the published app.
+///
+/// An update found on the schedule is offered in the sidebar (`UpdatePrompt`, `UpdateCard`),
+/// not in windows of its own; `UpdateUserDriver` decides where each session plays out.
 @MainActor
 @Observable
 final class AppUpdater {
     static var shared = AppUpdater()
 
     static let checkTitle = "Check for Updates…"
+    private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app", category: "updates")
 
     private(set) var canCheckForUpdates = false
+    let prompt: UpdatePrompt
     @ObservationIgnored private let updater: UpdateChecking?
-    @ObservationIgnored private let controller: SPUStandardUpdaterController?
+    @ObservationIgnored private var userDriver: UpdateUserDriver?
     @ObservationIgnored private var observation: NSKeyValueObservation?
+    @ObservationIgnored private var sidebars: [SidebarWindow] = []
 
-    init(updater: UpdateChecking) {
+    /// A window whose sidebar shows the update control.
+    private struct SidebarWindow {
+        let window: Weak<NSWindow>
+        let model: Weak<WindowModel>
+
+        var showsSidebar: Bool {
+            guard window.value != nil, let model = model.value else { return false }
+            return model.isSidebarShown && !model.isEditorFullScreen
+        }
+    }
+
+    init(updater: UpdateChecking, prompt: UpdatePrompt = UpdatePrompt()) {
         self.updater = updater
-        controller = nil
+        self.prompt = prompt
         canCheckForUpdates = updater.canCheckForUpdates
     }
 
     private init() {
+        prompt = UpdatePrompt()
         guard Self.startsUpdater else {
             updater = nil
-            controller = nil
             return
         }
-        let controller = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
-        self.controller = controller
-        updater = controller.updater
-        observation = controller.updater.observe(\.canCheckForUpdates, options: [.initial, .new]) { [weak self] updater, _ in
+        let userDriver = UpdateUserDriver(prompt: prompt) { AppUpdater.shared.sidebarIsFrontmost }
+        let updater = SPUUpdater(hostBundle: .main, applicationBundle: .main, userDriver: userDriver, delegate: nil)
+        self.userDriver = userDriver
+        self.updater = updater
+        prompt.openURL = { NSWorkspace.shared.open($0) }
+        prompt.reveal = { AppUpdater.shared.revealSidebar() }
+        do {
+            try updater.start()
+        } catch {
+            Self.log.error("updater did not start: \(error.localizedDescription, privacy: .public)")
+        }
+        observation = updater.observe(\.canCheckForUpdates, options: [.initial, .new]) { [weak self] updater, _ in
             MainActor.assumeIsolated { self?.canCheckForUpdates = updater.canCheckForUpdates }
         }
     }
@@ -89,9 +115,34 @@ final class AppUpdater {
         return updater?.allowsAutomaticUpdates ?? false
     }
 
-    /// Checks now and shows Sparkle's standard window with the result.
+    /// Checks now. The answer shows in the sidebar when the key window shows one, else in the
+    /// updater's standard window.
     func checkForUpdates() {
         updater?.checkForUpdates()
+    }
+
+    func registerSidebar(in window: NSWindow, model: WindowModel) {
+        sidebars.removeAll { $0.window.value == nil || $0.window.value === window }
+        sidebars.append(SidebarWindow(window: Weak(window), model: Weak(model)))
+    }
+
+    var sidebarIsFrontmost: Bool {
+        guard let key = NSApp.keyWindow else { return false }
+        return sidebars.contains { $0.window.value === key && $0.showsSidebar }
+    }
+
+    /// The key window's sidebar, else the front-most window's, shown and brought forward.
+    func revealSidebar() {
+        let ordered = NSApp.orderedWindows
+        func depth(_ entry: SidebarWindow) -> Int {
+            ordered.firstIndex { $0 === entry.window.value } ?? .max
+        }
+        guard let entry = sidebars.filter({ $0.window.value != nil && $0.model.value != nil }).min(by: { depth($0) < depth($1) }),
+              let window = entry.window.value, let model = entry.model.value
+        else { return }
+        if !model.isSidebarShown { model.isSidebarShown = true }
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate()
     }
 }
 #endif
