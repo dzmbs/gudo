@@ -36,6 +36,7 @@ struct HostsView: View {
     @State private var renaming: HostSummary?
     @State private var newName = ""
     @State private var importingFile = false
+    @State private var editing: HostRecord?
     @FocusState private var isQuickConnectFocused: Bool
 
     var body: some View {
@@ -96,6 +97,9 @@ struct HostsView: View {
         }
         .sheet(isPresented: Binding(get: { !(live?.sshConfigAliases.isEmpty ?? true) }, set: { if !$0 { live?.clearSSHConfigAliases() } })) {
             if let live { SSHConfigImportSheet(hosts: live) }
+        }
+        .sheet(item: $editing) { record in
+            if let live { EditSSHHostSheet(hosts: live, record: record) }
         }
     }
 
@@ -166,6 +170,10 @@ struct HostsView: View {
             }
             if let helper = host.helper, helper.canUpdate, host.progress == nil {
                 Button("Update Helper", systemImage: "arrow.down.circle") { updateHelper(host) }
+            }
+            if let record = live?.record(host.id), record.kind == .ssh, record.ssh != nil {
+                Button("Edit…", systemImage: "slider.horizontal.3") { editing = record }
+                    .accessibilityIdentifier("host-edit")
             }
             Button("Rename…", systemImage: "pencil") {
                 newName = host.name

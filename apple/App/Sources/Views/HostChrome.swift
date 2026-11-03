@@ -270,7 +270,7 @@ struct HostKeyPromptModifier: ViewModifier {
     func body(content: Content) -> some View {
         content.alert(
             prompts.pending?.isChange == true ? "Host Key Changed" : "Trust This Host?",
-            isPresented: Binding(get: { prompts.pending != nil }, set: { if !$0, prompts.pending != nil { prompts.answer(false) } }),
+            isPresented: Binding(get: { prompts.pending != nil && prompts.presenters == 0 }, set: { if !$0, prompts.pending != nil, prompts.presenters == 0 { prompts.answer(false) } }),
             presenting: prompts.pending
         ) { prompt in
             if prompt.isChange {

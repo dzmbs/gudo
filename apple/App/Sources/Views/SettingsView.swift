@@ -169,6 +169,7 @@ struct SettingsView: View {
             KeyboardSection().chromeRows()
             AppLockSection().chromeRows()
             PasswordsSection().chromeRows()
+            SSHKeysSettingsSection().chromeRows()
             VoiceSettingsSection().chromeRows()
             NotificationsSection().chromeRows()
             AccountsSettingsSection().chromeRows()
@@ -205,7 +206,7 @@ struct SettingsView: View {
         case .keyboard: KeyboardSection(); VoiceSettingsSection()
         case .browser: BrowserSettingsSection(); ReplaySettingsSection()
         case .notifications: NotificationsSection()
-        case .privacy: AppLockSection(); PasswordsSection()
+        case .privacy: AppLockSection(); PasswordsSection(); SSHKeysSettingsSection()
         case .agents: AccountsSettingsSection(); AgentToolsSection()
         case .git: GitSettingsSection()
         case .network: NetworkSettingsSection()
@@ -219,7 +220,7 @@ struct SettingsView: View {
 
 /// Pages pushed onto the Settings stack by value.
 enum SettingsPage: Hashable {
-    case theme, lightTheme, darkTheme, keyBarProfiles, acknowledgements
+    case theme, lightTheme, darkTheme, keyBarProfiles, acknowledgements, sshKeys
     /// A host's paired devices and guests.
     case hostDevices(String)
     /// A host's agent accounts.
@@ -232,6 +233,7 @@ enum SettingsPage: Hashable {
         case .theme, .lightTheme, .darkTheme: .appearance
         case .keyBarProfiles: .keyboard
         case .acknowledgements: .about
+        case .sshKeys: .privacy
         case .hostDevices: .devices
         case .hostAccounts: .agents
         }
@@ -308,6 +310,7 @@ private struct SettingsPageView: View {
                 KeyBarProfilesView()
                 #endif
             case .acknowledgements: AcknowledgementsView()
+            case .sshKeys: SSHKeysView(hosts: AppModel.shared.hosts)
             case .hostDevices(let id): HostDevicesView(hostId: id)
             case .hostAccounts(let id): HostAccountsView(hostId: id)
             }

@@ -50,7 +50,6 @@ struct PairingSheet: View {
     @State private var pairedCount = 0
     @State private var flow: JustSSHFlow?
     @State private var camera = CameraAccess()
-    @State private var importingKey = false
     @FocusState private var focus: Field?
 
     private enum Field { case destination, password, ticket }
@@ -67,8 +66,7 @@ struct PairingSheet: View {
         _ticket = State(initialValue: ticket)
         _flow = State(initialValue: live.map { hosts in
             let flow = JustSSHFlow(hosts: hosts)
-            // A key the app already holds beats a password prompt.
-            if let key = hosts.keys.keys.first { flow.auth = .key(id: key.id) }
+            flow.destination = destination
             return flow
         })
     }
@@ -90,8 +88,12 @@ struct PairingSheet: View {
             Form {
                 switch mode {
                 case .ssh:
-                    sshSection.chromeRows()
-                    if let flow, let live { SSHAuthSections(flow: flow, keys: live.keys.keys, importingKey: $importingKey, confirm: confirm).chromeRows() }
+                    if let flow {
+                        SSHHostFormSections(flow: flow, submit: confirm).chromeRows()
+                        sshStatusSection.chromeRows()
+                    } else {
+                        sshSection.chromeRows()
+                    }
                 case .ticket: ticketSection.chromeRows()
                 case .scan: scanSection
                 }
@@ -114,7 +116,7 @@ struct PairingSheet: View {
                     .padding(.bottom, DS.Space.s)
             }
             #endif
-            .macFittedForm(maxHeight: 520, step: formStep)
+            .macFittedForm(maxHeight: mode == .ssh && live != nil ? 600 : 520, step: formStep)
             .onAppear { focusField() }
             .onChange(of: mode) {
                 error = nil
@@ -129,12 +131,6 @@ struct PairingSheet: View {
                 focus = nil
             }
             .sensoryFeedback(DS.Haptic.success, trigger: pairedCount)
-            .fileImporter(isPresented: $importingKey, allowedContentTypes: [.data, .plainText, .item]) { result in
-                guard let flow, case .success(let url) = result else { return }
-                let scoped = url.startAccessingSecurityScopedResource()
-                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-                run { try flow.importKey(pem: try Data(contentsOf: url), passphrase: nil, label: url.lastPathComponent) }
-            }
             .modifier(OptionalHostKeyPrompts(prompts: live?.hostKeyPrompts))
         }
         #if os(iOS)
@@ -151,7 +147,7 @@ struct PairingSheet: View {
     #if os(macOS)
     private var macHeight: CGFloat {
         switch mode {
-        case .ssh: live == nil ? 340 : 590
+        case .ssh: live == nil ? 340 : 640
         case .ticket, .scan: 350
         }
     }
@@ -213,9 +209,22 @@ struct PairingSheet: View {
         }
     }
 
+    /// Progress and errors of Connect, under the form.
+    private var sshStatusSection: some View {
+        Section {
+        } footer: {
+            VStack(alignment: .leading, spacing: DS.Space.s) {
+                footer(default: Text("Opens a plain SSH shell at once. Install the helper afterwards to keep sessions running while this device sleeps."))
+                if error != nil, flow?.typedHost.map({ Tailscale.isTailnet(host: $0) }) == true {
+                    TailscaleHint()
+                }
+            }
+        }
+    }
+
     /// Changes that add or remove rows: the sheet may resize for these only.
     private var formStep: [AnyHashable] {
-        [mode, isTailnet, (try? PairingTicket(ticket)) != nil, !linkTicket.isEmpty && ticket == linkTicket, error != nil, flow?.auth]
+        [mode, isTailnet, (try? PairingTicket(ticket)) != nil, !linkTicket.isEmpty && ticket == linkTicket, error != nil]
     }
 
     /// The destination is a tailnet address or MagicDNS name (100.64.0.0/10, `*.ts.net`).
@@ -365,7 +374,7 @@ struct PairingSheet: View {
         } else if showsProgress {
             HStack(spacing: DS.Space.s) {
                 ProgressView().controlSize(.small)
-                Text(mode == .ssh ? "Connecting to \(parsed?.host ?? "host")…" : "Pairing…")
+                Text(mode == .ssh ? "Connecting to \(flow?.typedHost ?? parsed?.host ?? "host")…" : "Pairing…")
             }
             .foregroundStyle(DS.Palette.textSecondary)
         } else {
@@ -378,7 +387,7 @@ struct PairingSheet: View {
     private var canConfirm: Bool {
         guard !isBusy else { return false }
         switch mode {
-        case .ssh: return parsed != nil
+        case .ssh: return flow.map { (try? $0.endpoint()) != nil } ?? (parsed != nil)
         case .ticket: return !ticket.isEmpty
         case .scan: return false
         }
@@ -386,7 +395,7 @@ struct PairingSheet: View {
 
     private func focusField() {
         switch mode {
-        case .ssh: focus = .destination
+        case .ssh: focus = flow == nil ? .destination : nil
         // A ticket from a link or a scan is there to confirm: the keyboard would cover its host.
         case .ticket: focus = ticket.isEmpty ? .ticket : nil
         case .scan: focus = nil
@@ -404,7 +413,6 @@ struct PairingSheet: View {
                 dismiss()
                 return
             }
-            flow.destination = destination
             busy {
                 await flow.connect()
                 switch flow.step {
@@ -452,104 +460,16 @@ struct PairingSheet: View {
             isBusy = false
         }
     }
-
-    private func run(_ body: () throws -> Void) {
-        do {
-            try body()
-            error = nil
-        } catch {
-            self.error = error.localizedDescription
-        }
-    }
 }
 
-/// How to sign in to an SSH host: a saved key, a password (saved for reconnects), a new key
-/// (ed25519 or Secure Enclave) with its public half to install, or a key file.
-private struct SSHAuthSections: View {
-    @Bindable var flow: JustSSHFlow
-    let keys: [SSHKey]
-    @Binding var importingKey: Bool
-    let confirm: () -> Void
-
-    var body: some View {
-        Section {
-            Picker("Sign In With", selection: $flow.auth) {
-                Text("Password").tag(JustSSHFlow.AuthChoice.password)
-                ForEach(keys) { key in
-                    Text(key.label).tag(JustSSHFlow.AuthChoice.key(id: key.id))
-                }
-                #if os(macOS)
-                Text("ssh-agent").tag(JustSSHFlow.AuthChoice.agent)
-                #endif
-            }
-            if flow.auth == .password {
-                SecureField("Password", text: $flow.password)
-                    .onSubmit(confirm)
-                    .accessibilityIdentifier("ssh-password")
-                Toggle("Remember Password", isOn: $flow.rememberPassword)
-            }
-            #if os(macOS)
-            // A labelled pop-down, as System Settings draws one.
-            LabeledContent("New Key") {
-                newKeyMenu {
-                    Text("Create or Import…")
-                }
-                .menuStyle(.button)
-                .buttonStyle(.bordered)
-                .fixedSize()
-            }
-            #else
-            newKeyMenu {
-                Label("New Key", systemImage: "key.badge.plus")
-            }
-            #endif
-        } header: {
-            SectionTitle("Authentication")
-        }
-        if let key = flow.newKey {
-            Section {
-                Text(key.publicKey)
-                    .font(DS.Font.literalSmall)
-                    .textSelection(.enabled)
-                    .lineLimit(4)
-                    .truncationMode(.middle)
-                Button("Copy Public Key", systemImage: "doc.on.doc") { copy(key.publicKey) }
-                Button("Copy Install Command", systemImage: "terminal") { copy(key.authorizeCommand) }
-                if let endpoint = try? flow.endpoint() {
-                    Button("Copy ssh-copy-id Command", systemImage: "terminal") { copy(key.sshCopyIdCommand(for: endpoint)) }
-                }
-            } header: {
-                SectionTitle("Public key")
-            } footer: {
-                Text("Add it to ~/.ssh/authorized_keys on the host, or connect once with a password and install it from there.")
-                .foregroundStyle(DS.Palette.textSecondary)
-            }
-        }
-    }
-
-    private func newKeyMenu(@ViewBuilder label: () -> some View) -> some View {
-        Menu {
-            Button("Generate Key (ed25519)", systemImage: "key") { run { try flow.generateKey() } }
-            Button("Generate Secure Enclave Key", systemImage: "lock.shield") { run { try flow.generateSecureEnclaveKey() } }
-            Button("Import Key File…", systemImage: "doc.badge.plus") { importingKey = true }
-        } label: {
-            label()
-        }
-    }
-
-    private func run(_ body: () throws -> Void) {
-        try? body()
-    }
-}
-
-/// Host-key prompts presented from inside a sheet (an alert on the window under it would not
-/// show while the sheet is up).
+/// The host-key step presented from inside the sheet (the window's alert would not show while
+/// the sheet is up).
 private struct OptionalHostKeyPrompts: ViewModifier {
     let prompts: HostKeyPrompts?
 
     func body(content: Content) -> some View {
         if let prompts {
-            content.modifier(HostKeyPromptModifier(prompts: prompts))
+            content.modifier(HostKeyTrustModifier(prompts: prompts))
         } else {
             content
         }

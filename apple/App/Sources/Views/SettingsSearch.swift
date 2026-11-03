@@ -25,7 +25,7 @@ nonisolated struct SettingsEntry: Identifiable, Hashable, Sendable {
 
 /// The groups of Settings (the iOS form's sections; on the Mac, inside its panes).
 nonisolated enum SettingsSection: String, Sendable {
-    case appearance, tabs, font, cursor, splits, links, browser, keyboard, appLock, passwords, voice, notifications, bell, accounts, agentTools, git, network, devices, thisMac, about
+    case appearance, tabs, font, cursor, splits, links, browser, keyboard, appLock, passwords, sshKeys, voice, notifications, bell, accounts, agentTools, git, network, devices, thisMac, about
 
     var title: String {
         switch self {
@@ -39,6 +39,7 @@ nonisolated enum SettingsSection: String, Sendable {
         case .keyboard: "Keyboard"
         case .appLock: "App Lock"
         case .passwords: "Passwords"
+        case .sshKeys: "SSH"
         case .voice: "Voice"
         case .notifications: "Notifications"
         case .bell: "Bell"
@@ -57,7 +58,7 @@ nonisolated enum SettingsSection: String, Sendable {
         switch self {
         case .appearance, .tabs: .appearance
         case .font, .cursor, .splits, .links: .terminal
-        case .appLock, .passwords: .privacy
+        case .appLock, .passwords, .sshKeys: .privacy
         case .browser: .browser
         case .keyboard, .voice: .keyboard
         case .notifications, .bell: .notifications
@@ -91,6 +92,7 @@ enum SettingsIndex {
             .init(id: "app-lock", title: "Require Face ID", section: .appLock, synonyms: ["face id", "touch id", "optic id", "passcode", "password", "lock", "privacy", "security"]),
             .init(id: "app-lock-grace", title: "Lock", section: .appLock, synonyms: ["lock", "background", "timeout", "minutes", "immediately"]),
             .init(id: "saved-passwords", title: "Saved Passwords", section: .passwords, synonyms: ["sudo", "ssh", "askpass", "keychain", "forget"]),
+            .init(id: "ssh-keys", title: "SSH Keys", section: .sshKeys, synonyms: ["key", "ssh", "secure enclave", "ed25519", "rsa", "authorized_keys", "agent", "import", "generate"]),
             .init(id: "dictation", title: "Dictation", section: .voice, synonyms: ["voice", "speech", "microphone", "language"]),
             .init(id: "notify-approvals", title: "Approval Requests", section: .notifications, synonyms: ["notification", "approve", "deny", "push"]),
             .init(id: "notify-blocked", title: "Agent Needs You", section: .notifications, synonyms: ["notification", "question", "blocked", "waiting", "permission"]),
