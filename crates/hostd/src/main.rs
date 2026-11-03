@@ -5,7 +5,8 @@
 //! gudo-hostd pair                print a one-time pairing ticket (text + QR)
 //! gudo-hostd pair --json --wait 30   the same as JSON, once the daemon is up
 //! gudo-hostd status              is it running, where, how many devices
-//! gudo-hostd devices             the paired owner devices
+//! gudo-hostd devices [--json]    the paired owner devices: in a terminal, pair, rename, remove
+//! gudo-hostd rename <key> <name> name one
 //! gudo-hostd unpair <key>        remove one (a lost phone); live connections close at once
 //! gudo-hostd service install     run at login (systemd --user / launchd)
 //! gudo-hostd service uninstall
@@ -16,8 +17,12 @@
 //!
 //! `run` restarts itself in place (`exec`, same PID) when its owner installs a new build over
 //! the connection (docs/DAEMON.md "Updating the daemon").
+//!
+//! Run through a link named `gudo` (the install script and the Mac app make one), it is the
+//! same program under the short name: `gudo pair`, `gudo devices`.
 
 mod askpass;
+mod devices;
 mod service;
 
 use std::fs::OpenOptions;
@@ -76,8 +81,22 @@ enum Command {
     },
     /// Show whether the daemon is running.
     Status,
-    /// List the paired owner devices (guests are managed in the app).
-    Devices,
+    /// The paired owner devices (guests are managed in the app). In a terminal: pair a new
+    /// one, rename or remove them.
+    Devices {
+        /// Print one JSON array instead.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Name a paired device, here and in the apps. An empty name goes back to the device's
+    /// own.
+    Rename {
+        /// The device key, or its first 8 or more hex digits (see `devices`).
+        device: String,
+        /// The new name.
+        #[arg(num_args = 0..)]
+        name: Vec<String>,
+    },
     /// Remove a paired device, for example a lost phone: its connections close within a
     /// second, invites it signed stop working, and it needs a new ticket to come back.
     Unpair {
@@ -114,7 +133,7 @@ fn main() -> Result<()> {
     if args.first().is_some_and(|arg| arg == "askpass") {
         std::process::exit(askpass::main(&args[1..]));
     }
-    let cli = Cli::parse();
+    let cli = parse_cli();
     let state_dir = daemon::migrate::current_state_dir(
         cli.state_dir
             .or_else(|| brand::var_os("STATE_DIR").map(PathBuf::from))
@@ -139,7 +158,8 @@ fn main() -> Result<()> {
             local,
         ),
         Command::Status => status(&state_dir),
-        Command::Devices => devices(&state_dir),
+        Command::Devices { json } => devices::run(&state_dir, json),
+        Command::Rename { device, name } => devices::rename(&state_dir, &device, &name.join(" ")),
         Command::Unpair { device } => {
             let removed = daemon::unpair_device(&state_dir, &device)
                 .with_context(|| format!("unpairing in {}", state_dir.display()))?;
@@ -157,6 +177,26 @@ fn main() -> Result<()> {
             ServiceAction::Uninstall => service::uninstall(),
         },
     }
+}
+
+/// The arguments, under the short name when run through a link named [`brand::CLI_BIN`].
+fn parse_cli() -> Cli {
+    use clap::{CommandFactory, FromArgMatches};
+    let invoked_as = std::env::args_os()
+        .next()
+        .map(PathBuf::from)
+        .and_then(|path| path.file_name().map(|name| name.to_owned()));
+    if invoked_as.as_deref() != Some(std::ffi::OsStr::new(brand::CLI_BIN)) {
+        return Cli::parse();
+    }
+    let command = ["run", "build-info", "licenses"].into_iter().fold(
+        Cli::command()
+            .name(brand::CLI_BIN)
+            .bin_name(brand::CLI_BIN)
+            .about("Pair and manage the devices that open this computer in Gudo"),
+        |command, hidden| command.mut_subcommand(hidden, |subcommand| subcommand.hide(true)),
+    );
+    Cli::from_arg_matches(&command.get_matches()).unwrap_or_else(|error| error.exit())
 }
 
 fn run(
@@ -189,6 +229,9 @@ fn run(
     // "… (deleted)".
     let exe = upgradable_exe();
     config.self_exe.clone_from(&exe);
+    config.cli_exe = std::env::current_exe()
+        .and_then(|exe| exe.canonicalize())
+        .ok();
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -443,6 +486,7 @@ fn pair(state_dir: &Path, ttl: Duration, json: bool, wait: Duration, local: bool
         );
     }
     print_ticket(&text);
+    eprintln!("On your iPhone or iPad, open Gudo, tap Add Host, then Scan.");
     eprintln!("Valid for {} minutes, for one device.", ttl.as_secs() / 60);
     Ok(())
 }
@@ -494,20 +538,27 @@ fn wait_for_endpoint(state_dir: &Path, wait: Duration) -> Result<()> {
 
 /// Prints the ticket as a QR code (Unicode half blocks, works over SSH) and as text.
 fn print_ticket(ticket: &str) {
-    // Upper case lets the QR use alphanumeric mode, about 40 % smaller; parsing ignores case.
-    match qrcode::QrCode::new(ticket.to_ascii_uppercase().as_bytes()) {
-        Ok(code) => {
-            let qr = code
-                .render::<qrcode::render::unicode::Dense1x2>()
-                .dark_color(qrcode::render::unicode::Dense1x2::Light)
-                .light_color(qrcode::render::unicode::Dense1x2::Dark)
-                .quiet_zone(true)
-                .build();
-            println!("{qr}");
-        }
-        Err(error) => eprintln!("(no QR code: {error})"),
+    for line in qr_lines(ticket) {
+        println!("{line}");
     }
     println!("{ticket}");
+}
+
+/// The ticket as QR code lines of Unicode half blocks; none if it cannot be encoded.
+fn qr_lines(ticket: &str) -> Vec<String> {
+    // Upper case lets the QR use alphanumeric mode, about 40 % smaller; parsing ignores case.
+    match qrcode::QrCode::new(ticket.to_ascii_uppercase().as_bytes()) {
+        Ok(code) => code
+            .render::<qrcode::render::unicode::Dense1x2>()
+            .dark_color(qrcode::render::unicode::Dense1x2::Light)
+            .light_color(qrcode::render::unicode::Dense1x2::Dark)
+            .quiet_zone(true)
+            .build()
+            .lines()
+            .map(str::to_owned)
+            .collect(),
+        Err(_) => Vec::new(),
+    }
 }
 
 fn status(state_dir: &Path) -> Result<()> {
@@ -534,26 +585,6 @@ fn status(state_dir: &Path) -> Result<()> {
         println!("relay:     {relay}");
     }
     println!("paired devices: {}", daemon::paired_devices(state_dir)?);
-    Ok(())
-}
-
-fn devices(state_dir: &Path) -> Result<()> {
-    let devices = daemon::list_paired(state_dir)?;
-    if devices.is_empty() {
-        println!("no paired devices; run `{} pair`", brand::DAEMON_BIN);
-    }
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_millis() as u64);
-    for paired in devices {
-        let days = now.saturating_sub(paired.paired_at) / 86_400_000;
-        let name = if paired.name.is_empty() {
-            "gudo"
-        } else {
-            &paired.name
-        };
-        println!("{}  {name}  paired {days} day(s) ago", paired.device);
-    }
     Ok(())
 }
 

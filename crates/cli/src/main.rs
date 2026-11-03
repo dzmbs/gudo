@@ -1,6 +1,8 @@
 //! `gudo`: a small developer client for testing the daemon end to end without the app.
 //!
 //! ```text
+//! gudo pair                     show a QR code to pair a device with this computer's daemon
+//! gudo devices                  this computer's paired devices: pair, rename, remove
 //! gudo pair <ticket>            remember a daemon (and create this machine's device key)
 //! gudo attach                   show the focused pane in this terminal (Ctrl-] detaches)
 //! gudo ls                       sessions, tabs and panes
@@ -106,8 +108,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Save a pairing ticket and pair this machine with the daemon.
-    Pair { ticket: String },
+    /// Without a ticket: show a QR code to pair a phone or iPad with the daemon on this
+    /// computer. With one: save it and pair this machine with that daemon.
+    Pair { ticket: Option<String> },
+    /// The devices paired with the daemon on this computer: pair, rename, remove.
+    Devices,
     /// Save an invite and join the daemon as a guest under its grant. A knock invite asks
     /// the owner first and waits for their answer.
     Join {
@@ -420,6 +425,21 @@ fn main() -> Result<()> {
     runtime.block_on(run(cli))
 }
 
+/// Runs the host daemon's own command (`pair`, `devices`), found next to this program or on
+/// `PATH`, in this terminal, and exits with its status.
+fn host_tool(args: &[&str]) -> Result<()> {
+    let beside = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join(brand::DAEMON_BIN)))
+        .filter(|path| path.is_file());
+    let program = beside.unwrap_or_else(|| PathBuf::from(brand::DAEMON_BIN));
+    let status = std::process::Command::new(&program)
+        .args(args)
+        .status()
+        .with_context(|| format!("running {}", program.display()))?;
+    std::process::exit(status.code().unwrap_or(1))
+}
+
 /// A connected, attached client and what it has heard.
 struct Conn {
     client: Client,
@@ -603,7 +623,16 @@ async fn run(cli: Cli) -> Result<()> {
     if let Cmd::Daemon { action } = &cli.command {
         return daemon_cmd(&cli, action).await;
     }
-    if let Cmd::Pair { ticket } = &cli.command {
+    match &cli.command {
+        Cmd::Pair { ticket: None } => return host_tool(&["pair"]),
+        Cmd::Devices if cli.json => return host_tool(&["devices", "--json"]),
+        Cmd::Devices => return host_tool(&["devices"]),
+        _ => {}
+    }
+    if let Cmd::Pair {
+        ticket: Some(ticket),
+    } = &cli.command
+    {
         ticket
             .parse::<client_core::proto::Ticket>()
             .context("not a pairing ticket")?;
@@ -649,7 +678,7 @@ async fn run(cli: Cli) -> Result<()> {
     };
     let shell = PaneLaunch::Shell { cwd: None };
     let outcome = match cli.command {
-        Cmd::Pair { .. } | Cmd::Join { .. } | Cmd::Daemon { .. } => {
+        Cmd::Pair { .. } | Cmd::Devices | Cmd::Join { .. } | Cmd::Daemon { .. } => {
             unreachable!("handled above")
         }
         Cmd::Mp(cmd) => return mp::run(&mut conn, cmd).await,

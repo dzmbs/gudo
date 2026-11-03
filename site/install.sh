@@ -4,7 +4,8 @@
 #   curl -fsSL https://gudo.dev/install.sh | sh
 #
 # It downloads the static binary for this CPU from the GitHub release, checks it against the
-# release's SHA256SUMS, and puts it in ~/.local/bin. No sudo, nothing else is changed.
+# release's SHA256SUMS, and puts it in ~/.local/bin with a short `gudo` link to it. No sudo,
+# nothing else is changed.
 #
 #   GUDO_VERSION=0.1.0       install that release instead of the latest
 #   GUDO_INSTALL_DIR=DIR     install somewhere else (default ~/.local/bin)
@@ -83,10 +84,20 @@ main() {
   say "Installed $dir/gudo-hostd"
   "$dir/gudo-hostd" build-info 2>/dev/null || true
 
+  # `gudo` is the same program under its short name: `gudo pair`, `gudo devices`.
+  if [ ! -e "$dir/gudo" ] || [ -L "$dir/gudo" ]; then
+    ln -sf gudo-hostd "$dir/gudo"
+    gudo="gudo"
+  else
+    say "Kept the existing $dir/gudo; use gudo-hostd for the commands below."
+    gudo="gudo-hostd"
+  fi
+
   case ":$PATH:" in
     *":$dir:"*) bin="gudo-hostd" ;;
     *)
       bin="$dir/gudo-hostd"
+      gudo="$dir/$gudo"
       say ""
       say "$dir is not on your PATH. Add it in your shell profile:"
       say "  export PATH=\"$dir:\$PATH\"" ;;
@@ -95,7 +106,8 @@ main() {
   say ""
   say "Next:"
   say "  $bin service install    # run it in the background (systemd --user)"
-  say "  $bin pair               # show a QR code to pair the Gudo app"
+  say "  $gudo pair               # show a QR code to pair the Gudo app"
+  say "  $gudo devices            # see, rename or remove paired devices"
   say ""
   say "To keep it running after you log out: sudo loginctl enable-linger \$USER"
 }
