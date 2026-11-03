@@ -6,8 +6,8 @@ use std::time::Duration;
 use client_core::knock::{KnockOutcome, knock};
 use client_core::proto::{
     Admit, AgentState, ApprovalMode, ApprovalPolicy, AuditKind, Blocker, CaseMode, History, Invite,
-    InviteTerms, KnockOutcome as Outcome, KnockUpdate, MpError, OptionId, PaneId, Risk, Roles,
-    Scope, SearchMode, SearchQuery, UnixMillis,
+    InviteTerms, KnockOutcome as Outcome, KnockUpdate, MpError, OptionId, PaneId, RevokeTarget,
+    Risk, Roles, Scope, SearchMode, SearchQuery, UnixMillis,
 };
 use client_core::{ClientConfig, ClientEvent, ConnectOptions, GrantSpec, MultiplayerEvent};
 use client_core::{RelayMode, now_millis};
@@ -228,6 +228,99 @@ async fn knocking_waits_for_the_owner_who_admits_or_turns_away() {
             .any(|detail| detail.contains("Max stopped waiting"))
     );
     drop((owner, kim, old, thief));
+    daemon.shutdown().await;
+}
+
+fn revoked(client: &TestClient) -> bool {
+    client
+        .mp
+        .iter()
+        .any(|event| matches!(event, MultiplayerEvent::Revoked))
+}
+
+/// `name` knocks on `link` and `answerer` lets them in as a viewer; returns them attached.
+async fn let_in(link: &str, answerer: &mut TestClient, name: &str) -> TestClient {
+    let (knocking, key) = start_knock(link, name);
+    answerer
+        .until("knock arrives", |c| knocks_named(c, name).is_some())
+        .await;
+    let knock_id = knocks_named(answerer, name).unwrap().knock_id;
+    answerer
+        .client
+        .answer_knock(
+            knock_id,
+            Some(Admit {
+                roles: Roles::VIEWER,
+                history: History::Full,
+                expires: None,
+            }),
+        )
+        .await
+        .unwrap();
+    let KnockOutcome::Admitted(grant) = knocking.await.unwrap() else {
+        panic!("{name} was not admitted");
+    };
+    let mut guest = TestClient::join(&grant.to_string(), key);
+    guest.client.attach(None);
+    guest
+        .until("admitted guest attached", |c| c.layout.is_some())
+        .await;
+    guest
+}
+
+/// A guest let in through a knock leaves with whoever vouched for them: the invite they knocked
+/// on, the owner device that signed it, and the owner device that let them in.
+#[tokio::test(flavor = "multi_thread")]
+async fn knock_admitted_guests_leave_with_their_sponsors() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = daemon(dir.path()).await;
+    let mut phone = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    phone.attach_and_follow().await;
+    let mut ipad = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    ipad.client.attach(None);
+    ipad.until("ipad attached", |c| c.layout.is_some()).await;
+    let terms = InviteTerms {
+        knock: true,
+        history: History::Full,
+    };
+    let from_phone = invite(&phone, spec(Roles::VIEWER, ""), terms).await;
+    let from_phone_again = invite(&phone, spec(Roles::VIEWER, ""), terms).await;
+    let from_ipad = invite(&ipad, spec(Roles::VIEWER, ""), terms).await;
+
+    let mut kim = let_in(&from_phone, &mut phone, "Kim").await;
+    let mut lee = let_in(&from_phone_again, &mut ipad, "Lee").await;
+    let mut max = let_in(&from_ipad, &mut phone, "Max").await;
+    let ned = let_in(&from_phone_again, &mut phone, "Ned").await;
+
+    let knocked_on = Invite::parse_with_terms(&from_phone)
+        .unwrap()
+        .0
+        .chain
+        .grant_id();
+    phone
+        .client
+        .revoke(RevokeTarget::Grant(knocked_on))
+        .await
+        .unwrap();
+    kim.until("revoking the invite closes who it let in", revoked)
+        .await;
+
+    let ipad_device = ipad.client.me().unwrap().actor.device;
+    phone
+        .client
+        .revoke(RevokeTarget::Device(ipad_device))
+        .await
+        .unwrap();
+    lee.until("removing the admitting device closes its guest", revoked)
+        .await;
+    max.until("removing the inviting device closes its guest", revoked)
+        .await;
+    max.until("and it cannot come back", |c| !c.refused.is_empty())
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!revoked(&ned), "a guest whose sponsors stand stays");
+    assert!(ned.client.me().is_some());
+    drop((phone, ipad, kim, lee, max, ned));
     daemon.shutdown().await;
 }
 

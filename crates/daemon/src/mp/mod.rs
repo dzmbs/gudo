@@ -176,6 +176,68 @@ struct StoredGrant {
     /// When each bound device first redeemed it, Unix ms, by device hex.
     #[serde(default)]
     redeemed_at: BTreeMap<String, u64>,
+    /// For a grant the daemon minted to let a knocker in: who vouched for them (the invite
+    /// they knocked on, the owner who answered). The grant holds only while all of them do.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    sponsors: Vec<Lineage>,
+}
+
+/// A chain as the live checks see it ([`Mp::chain_live`]), kept by hex.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct Lineage {
+    grant_ids: Vec<String>,
+    issuers: Vec<String>,
+    root_signed: u64,
+    presenter: String,
+}
+
+impl Lineage {
+    fn new(
+        grant_ids: &[GrantId],
+        issuers: &[DeviceId],
+        root_signed: UnixMillis,
+        presenter: DeviceId,
+    ) -> Self {
+        Self {
+            grant_ids: grant_ids.iter().map(|id| hex(&id.0)).collect(),
+            issuers: issuers.iter().map(|device| hex(&device.0)).collect(),
+            root_signed: root_signed.0,
+            presenter: hex(&presenter.0),
+        }
+    }
+
+    /// The owner device or guest chain `authz` acts under, as of `now`.
+    fn of(authz: &Authz, now: UnixMillis) -> Self {
+        if authz.grant_ids.is_empty() {
+            Self::new(&[], &[authz.actor.device], now, authz.actor.device)
+        } else {
+            Self::new(
+                &authz.grant_ids,
+                &authz.issuers,
+                authz.root_signed,
+                authz.actor.device,
+            )
+        }
+    }
+
+    fn decode(&self) -> Option<(Vec<GrantId>, Vec<DeviceId>, UnixMillis, DeviceId)> {
+        let grant_ids = self
+            .grant_ids
+            .iter()
+            .map(|id| unhex(id).map(GrantId))
+            .collect::<Option<_>>()?;
+        let issuers = self
+            .issuers
+            .iter()
+            .map(|device| unhex(device).map(DeviceId))
+            .collect::<Option<_>>()?;
+        Some((
+            grant_ids,
+            issuers,
+            UnixMillis(self.root_signed),
+            DeviceId(unhex(&self.presenter)?),
+        ))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -283,6 +345,7 @@ impl Store {
             registered_at: now_millis(),
             terms: InviteTerms::default(),
             redeemed_at: BTreeMap::new(),
+            sponsors: Vec::new(),
         });
         self.grants.last_mut().expect("just pushed")
     }
@@ -608,7 +671,7 @@ impl Mp {
     /// Whether the chain `ids`, signed by `issuers` (root first, root signed at
     /// `root_signed`) and presented by `presenter`, is still in force: unexpired, no link
     /// revoked, its root still trusted, and no device in it removed since the root was
-    /// signed.
+    /// signed, nor any sponsor of a link gone (a knock admission's invite or answerer).
     fn chain_live(
         &self,
         store: &Store,
@@ -619,7 +682,19 @@ impl Mp {
         expires: Option<UnixMillis>,
     ) -> bool {
         expires.is_none_or(|expires| expires.0 > now_millis())
-            && self.chain_trusted(issuers)
+            && self.lineage_live(store, ids, issuers, root_signed, presenter, 0)
+    }
+
+    fn lineage_live(
+        &self,
+        store: &Store,
+        ids: &[GrantId],
+        issuers: &[DeviceId],
+        root_signed: UnixMillis,
+        presenter: DeviceId,
+        depth: usize,
+    ) -> bool {
+        self.chain_trusted(issuers)
             && store
                 .void_before
                 .is_none_or(|void_before| root_signed.0 > void_before)
@@ -627,6 +702,23 @@ impl Mp {
             && issuers.iter().chain([&presenter]).all(|&device| {
                 removed_at(&self.identity, store, device)
                     .is_none_or(|removed| root_signed > removed)
+            })
+            && self.sponsors_live(store, ids, depth)
+    }
+
+    /// Whether every sponsor of the links `ids` still stands. Expiry is not checked: an
+    /// invite running out does not end the stays it already granted.
+    fn sponsors_live(&self, store: &Store, ids: &[GrantId], depth: usize) -> bool {
+        ids.iter()
+            .filter_map(|&id| store.grant(id))
+            .flat_map(|grant| &grant.sponsors)
+            .all(|sponsor| {
+                depth < grants::MAX_DEPTH
+                    && sponsor
+                        .decode()
+                        .is_some_and(|(ids, issuers, signed, presenter)| {
+                            self.lineage_live(store, &ids, &issuers, signed, presenter, depth + 1)
+                        })
             })
     }
 
@@ -680,6 +772,11 @@ impl Mp {
                 });
             }
         };
+        if !self.sponsors_live(&store, &verified.ids, 0) {
+            drop(store);
+            deny("the invite or owner that let this guest in was removed".into());
+            return Err(RefuseReason::Revoked);
+        }
         let device_hex = hex(&device.0);
         let issuers: Vec<DeviceId> = chain.links.iter().map(|link| link.grant.issuer).collect();
         let root_signed = chain.links[0].grant.issued_at;
@@ -1111,22 +1208,22 @@ impl Mp {
                 .len()
                 .checked_sub(2)
                 .map(|i| chain.links[i].grant.grant_id),
-            revoked: chain
-                .links
-                .iter()
-                .any(|link| store.grant_revoked(link.grant.grant_id))
-                || !self.chain_live(
-                    store,
-                    &[],
-                    &chain
-                        .links
-                        .iter()
-                        .map(|link| link.grant.issuer)
-                        .collect::<Vec<_>>(),
-                    chain.links[0].grant.issued_at,
-                    leaf.issuer,
-                    None,
-                ),
+            revoked: !self.chain_live(
+                store,
+                &chain
+                    .links
+                    .iter()
+                    .map(|link| link.grant.grant_id)
+                    .collect::<Vec<_>>(),
+                &chain
+                    .links
+                    .iter()
+                    .map(|link| link.grant.issuer)
+                    .collect::<Vec<_>>(),
+                chain.links[0].grant.issued_at,
+                leaf.issuer,
+                None,
+            ),
             grant: leaf,
             bound,
         }
@@ -1556,7 +1653,16 @@ impl Mp {
         );
         let (answer, outcome, response) = match admit {
             Some(admit) if invite_valid => {
-                let (chain, info) = self.admit(core, knock, admit, now)?;
+                let sponsors = vec![
+                    Lineage::new(
+                        &pending.grant_ids,
+                        &pending.issuers,
+                        pending.root_signed,
+                        knock.actor.device,
+                    ),
+                    Lineage::of(by, now),
+                ];
+                let (chain, info) = self.admit(core, knock, admit, now, sponsors)?;
                 (
                     KnockAnswer::Admitted(chain),
                     KnockOutcome::Admitted { roles: admit.roles },
@@ -1611,6 +1717,7 @@ impl Mp {
         knock: &Knock,
         admit: Admit,
         now: UnixMillis,
+        sponsors: Vec<Lineage>,
     ) -> Result<(GrantChain, GrantInfo), MpError> {
         let key = DeviceKey::from_seed(&core.identity.secret.to_bytes())
             .map_err(|error| MpError::Failed(error.to_string()))?;
@@ -1633,6 +1740,7 @@ impl Mp {
             knock: false,
             history: admit.history,
         };
+        record.sponsors = sponsors;
         self.save(&mut store);
         let info = self.info(&store, &chain);
         Ok((chain, info))

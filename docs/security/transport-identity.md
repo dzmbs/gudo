@@ -171,6 +171,14 @@ makes, and then without its old invites.
 - **Knock invites.** Opening a knock invite only puts the knocker in a lobby until an owner
   answers. At most 8 knocks wait per invite, and a knock is dropped when its invite's chain
   stops being valid.
+- **Knock admissions keep their sponsors.** Letting a knocker in mints a fresh grant signed by
+  the daemon, and that grant records who vouched for the guest: the invite chain they knocked
+  on and the owner device (or guest chain) that answered. The live checks hold the admitted
+  grant to both, so revoking the invite, removing the device that signed it or removing the
+  device that answered closes the admitted guest at once, like any other revocation. The
+  invite merely expiring does not: the stay was granted with its own expiry. Admissions made
+  by daemons before this rule have no recorded sponsors and keep their own expiry (a week by
+  default).
 - **The grant store fails closed for guests, not for the owner.** If `grants.json` cannot be
   read, the daemon still starts (refusing to start would lock the owner out of a remote
   machine). The file is moved aside as `grants.json.unreadable-<time>`, never overwritten,
@@ -264,6 +272,7 @@ was confirmed to fail.
 | Single-use invite raced by six devices | `redteam::a_raced_single_use_invite_admits_one_device` |
 | Invite used after expiry; guest inside at expiry | `redteam::an_expired_invite_admits_nobody_and_ends_its_sessions` |
 | Knock spam (12 knocks on one link) | `redteam::knock_spam_is_capped_per_invite` |
+| Knock-admitted guest staying after its invite, the invite's signer or the answering device is removed | `multiplayer_mp2::knock_admitted_guests_leave_with_their_sponsors` |
 | Silent connections; strangers filling the pre-`Hello` pool | `security::a_connection_that_never_says_hello_is_closed`, `access::a_paired_device_connects_while_strangers_fill_the_pre_hello_slots`, `preauth::tests::*` (unit, per-address and IPv4-mapped/IPv6 /64 accounting) |
 | Damaged `grants.json` | `access::a_damaged_grant_store_fails_closed_for_guests_only` |
 | Guest roles on `ctl`, workspace, bulk (upload), forwards and layout | `security::each_guest_role_gets_exactly_what_the_table_allows` |
