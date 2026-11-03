@@ -364,17 +364,77 @@ final class FontGrid {
         epoch += 1
     }
 
+    /// The face and glyph for a cluster, choosing between a text and a color face by Unicode's
+    /// emoji presentation, as Ghostty does: a symbol without `Emoji_Presentation` (✳ ❤ ✔) is
+    /// text in the foreground color unless VS16 follows it; one with it (⚡ ⌚ 🕘) is a color
+    /// emoji unless VS15 follows it.
     private func resolve(_ text: String, style: FontStyle) -> (face: Int, glyph: CGGlyph)? {
-        let utf16 = Array(text.utf16)
         let primary = faces[style.rawValue]
-        if utf16.count == 1 || (utf16.count == 2 && text.unicodeScalars.count == 1),
-           let glyph = glyphInFace(primary, utf16)
-        {
-            return (style.rawValue, glyph)
-        }
+        var scalars = Array(text.unicodeScalars)
+        let presentation = EmojiPresentation(scalars)
+        if scalars.count == 2, scalars[1] == EmojiPresentation.textSelector { scalars.removeLast() }
 
-        // Fallback (emoji, CJK, symbols) and multi-codepoint clusters: let CoreText pick the face
-        // and shape the cluster, then take its first glyph.
+        if scalars.count == 1 {
+            let utf16 = Array(String(scalars[0]).utf16)
+            if presentation == .emoji, let hit = colorFallback(utf16, primary: primary) { return hit }
+            if let glyph = glyphInFace(primary, utf16) { return (style.rawValue, glyph) }
+            if presentation == .text, let hit = textFallback(utf16, primary: primary) { return hit }
+        }
+        return cascade(text, primary: primary)
+    }
+
+    /// The face CoreText picks for a single character when it is a color one, else the system's
+    /// emoji face (the primary face may draw the character as text).
+    private func colorFallback(_ utf16: [UInt16], primary: CTFont) -> (face: Int, glyph: CGGlyph)? {
+        let string = String(utf16CodeUnits: utf16, count: utf16.count) as CFString
+        let preferred = CTFontCreateForString(primary, string, CFRange(location: 0, length: utf16.count))
+        let emoji = CTFontCreateWithName("AppleColorEmoji" as CFString, CTFontGetSize(primary), nil)
+        for font in [preferred, emoji] where CTFontGetSymbolicTraits(font).contains(.traitColorGlyphs) {
+            if let glyph = glyphInFace(font, utf16) { return (faceIndex(for: font), glyph) }
+        }
+        return nil
+    }
+
+    /// A text face for a character CoreText would draw from a color face: the system's choice
+    /// when it is not one, else the first face of the cascade that is not.
+    private func textFallback(_ utf16: [UInt16], primary: CTFont) -> (face: Int, glyph: CGGlyph)? {
+        let string = String(utf16CodeUnits: utf16, count: utf16.count) as CFString
+        let preferred = CTFontCreateForString(primary, string, CFRange(location: 0, length: utf16.count))
+        func textGlyph(in faces: [CTFont]) -> (face: Int, glyph: CGGlyph)? {
+            for font in faces where !CTFontGetSymbolicTraits(font).contains(.traitColorGlyphs) {
+                if let glyph = glyphInFace(font, utf16) { return (faceIndex(for: font), glyph) }
+            }
+            return nil
+        }
+        return textGlyph(in: [preferred] + symbolFaces(size: CTFontGetSize(primary)))
+            ?? textGlyph(in: cascadeFaces(primary))
+    }
+
+    private var symbolFacesCache: [CTFont]?
+    private var cascadeFacesCache: [CTFont]?
+
+    /// The system's text faces for dingbats, arrows and math symbols.
+    private func symbolFaces(size: CGFloat) -> [CTFont] {
+        if let symbolFacesCache { return symbolFacesCache }
+        let faces = ["ZapfDingbatsITC", "AppleSymbols", "Menlo-Regular", "STIXTwoMath-Regular"].compactMap { name -> CTFont? in
+            let font = CTFontCreateWithName(name as CFString, size, nil)
+            return CTFontCopyPostScriptName(font) as String == name ? font : nil
+        }
+        symbolFacesCache = faces
+        return faces
+    }
+
+    private func cascadeFaces(_ primary: CTFont) -> [CTFont] {
+        if let cascadeFacesCache { return cascadeFacesCache }
+        let faces = (CTFontCopyDefaultCascadeListForLanguages(primary, nil) as? [CTFontDescriptor] ?? [])
+            .map { CTFontCreateWithFontDescriptor($0, CTFontGetSize(primary), nil) }
+        cascadeFacesCache = faces
+        return faces
+    }
+
+    /// Fallback (emoji, CJK, symbols) and multi-codepoint clusters: CoreText picks the face and
+    /// shapes the cluster; its first glyph is drawn.
+    private func cascade(_ text: String, primary: CTFont) -> (face: Int, glyph: CGGlyph)? {
         let attributed = CFAttributedStringCreate(nil, text as CFString, [kCTFontAttributeName: primary] as CFDictionary)!
         let line = CTLineCreateWithAttributedString(attributed)
         guard let run = (CTLineGetGlyphRuns(line) as? [CTRun])?.first, CTRunGetGlyphCount(run) > 0 else { return nil }
