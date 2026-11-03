@@ -66,7 +66,8 @@ tokio = { version = "1.53.3", default-features = false, features = ["rt-multi-th
 
 # SSH (crates/ssh, D7): russh on ring, the crypto provider iroh already uses (no aws-lc). RSA for
 # imported keys, flate2 for `zlib@openssh.com` and gzip-compressed uploads.
-russh = { version = "0.64.1", default-features = false, features = ["ring", "rsa", "flate2"] }
+# 0.65 fixes hostile-server EXT_INFO memory exhaustion and zero-packet-size write hangs.
+russh = { version = "0.65.0", default-features = false, features = ["ring", "rsa", "flate2"] }
 ring = "0.17.14"
 flate2 = "1"
 # The editor's compressing proxy (crates/daemon/src/ws/editor_proxy.rs): HTTP/1.1 on hyper
