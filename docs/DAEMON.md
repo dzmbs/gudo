@@ -253,7 +253,12 @@ policy is always `LastInput` for now.
   not the connection's (`InputRejected{Role}`). Paired devices are `Owner` on the whole
   daemon; guests join with signed grants (`v = CHAIN`, §6).
 - Pairing secrets are compared in constant time, consumed under the lock (one device per
-  secret), and expire server-side; a wrong guess rewrites nothing. The daemon prints a
+  secret), and expire server-side; a wrong guess rewrites nothing.
+- `pair --uses <n>` (2 to 20, at most 30 days) mints a reusable secret for a demo host: each
+  distinct device takes one use under the same lock, the devices it paired are kept in its
+  `pairing.json` entry, and a device removed since it was minted is refused. `pair --list`
+  shows pending tickets by id and use count; `pair --revoke <id|all>` withdraws them.
+  docs/security/transport-identity.md has the trade-off. The daemon prints a
   startup ticket only to a terminal, never into a service log.
 - `devices.json` changes go through `devices.lock` and start from the file as it is, so a
   pairing never brings back a device `hostd unpair` just removed. The daemon re-reads the

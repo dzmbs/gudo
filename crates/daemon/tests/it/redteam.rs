@@ -59,6 +59,47 @@ async fn a_raced_pairing_ticket_pairs_one_device() {
     daemon.shutdown().await;
 }
 
+/// A reusable demo-host ticket raced by more devices than it has uses pairs exactly its uses;
+/// each new device is announced to the owner devices already connected, and revoking it stops
+/// later devices.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_raced_reusable_ticket_pairs_its_uses_and_announces_each() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path()).await;
+    let (link, id) =
+        daemon::mint_reusable_ticket_text(dir.path(), daemon::PAIRING_TTL, 4).expect("mint");
+    let mut first = TestClient::connect(&link, ClientConfig::generate_key());
+    first.attach_and_follow().await;
+    let mut racers: Vec<TestClient> = (0..6)
+        .map(|_| TestClient::connect(&link, ClientConfig::generate_key()))
+        .collect();
+    assert_eq!(admitted(&mut racers).await, 3);
+    assert_eq!(daemon.paired_devices(), 4);
+    for racer in racers.iter().filter(|racer| racer.client.me().is_some()) {
+        let device = racer.client.me().unwrap().actor.device;
+        first
+            .until("pairing announced", |client| {
+                client.mp.iter().any(|event| {
+                    matches!(event, MultiplayerEvent::DevicePaired { device: paired } if paired.device == device)
+                })
+            })
+            .await;
+    }
+    drop(racers);
+
+    let (revoked_link, revoked_id) =
+        daemon::mint_reusable_ticket_text(dir.path(), daemon::PAIRING_TTL, 4).expect("mint");
+    assert_ne!(revoked_id, id);
+    daemon::revoke_pairing_tickets(dir.path(), Some(&revoked_id)).expect("revoke");
+    let mut late = vec![
+        TestClient::connect(&link, ClientConfig::generate_key()),
+        TestClient::connect(&revoked_link, ClientConfig::generate_key()),
+    ];
+    assert_eq!(admitted(&mut late).await, 0);
+    drop((first, late));
+    daemon.shutdown().await;
+}
+
 /// A single-use invite redeemed by several devices at the same moment admits one.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_raced_single_use_invite_admits_one_device() {

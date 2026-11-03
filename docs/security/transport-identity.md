@@ -7,7 +7,7 @@
 - **The owner allowlist** (`devices.json`): every device on it is a full owner, with a shell as
   the user.
 - **Pairing secrets** (`pairing.json`, the `gudo://pair/…` ticket and QR code): one secret
-  makes one new owner device.
+  makes one new owner device (a reusable demo-host ticket, up to 20).
 - **Grant chains and invite links** (`grants.json`, `gudo://join/…`): each is access for a
   guest, from viewing up to driving or approving.
 - **The audit log** (`audit/audit.jsonl`, hash-chained): what happened and who did it.
@@ -73,6 +73,19 @@
   makes its holder an owner (`tests/it/devices.rs`). The app shows it as a QR code with a
   countdown, copies the link as a concealed, expiring clipboard item, and never logs it
   (`PairingCode`'s `Debug` leaves the link out). The new device is announced as above.
+- **Reusable tickets, for demo hosts only.** `gudo pair --uses <n> --minutes <m>` mints one
+  secret that pairs up to `n` distinct devices (2 to 20) for at most 30 days. It exists for a
+  host shared on purpose, such as the throwaway box App Review pairs with
+  (`scripts/demo-host`). The checks are the same as for a single-use secret: constant-time
+  compare, server-side expiry, and every use taken under `pairing.lock` in the same step as
+  the check, so a race never pairs more than `n` (a concurrency test covers this). The devices
+  it paired are kept in `pairing.json`, so the count survives restarts; the same device
+  presenting it again takes no second use. A device removed after the ticket was minted
+  cannot come back on it. Every pairing is announced like any other. `gudo pair --list`
+  shows the pending tickets by id and use count (never the secret), and `gudo pair --revoke
+  <id|all>` withdraws them at once; devices already paired stay until removed with
+  `gudo unpair` or `gudo devices`. The default stays 10 minutes and one device. A daemon
+  older than this feature reads such an entry as single use, which fails safe.
 - **Names.** The owner can rename a paired device (`MpRequest::RenameDevice`, `hostd rename`);
   the name is a label for people only and changes no access. Names are trimmed, stripped of
   control characters and capped at 64 characters.
@@ -191,6 +204,12 @@ makes, and then without its old invites.
     device to warn.
   - A pairing notification arrives only on owner devices that are connected (or connect
     later and list devices). There is no push for it yet.
+- **A reusable ticket is a shared secret.** Anyone who sees it (review notes, a screenshot,
+  a forwarded email) becomes an owner of that host, with a shell as its user, until it expires,
+  runs out of uses or is revoked; the pairing alert reaches only owner devices that are
+  connected. That is acceptable only on a disposable host with nothing of value: an
+  unprivileged user with no sudo and no secrets, resource limits, SSH closed to everyone but
+  the operator, and torn down after use. Never mint one on a real computer.
 - **Pre-`Hello` limits.**
   - Trusted devices are not counted, but a direct connection from one still needs a
     handshake slot. An attacker with many addresses (32+ IPv4 hosts or IPv6 /64s) holding
@@ -224,6 +243,8 @@ was confirmed to fail.
 | Attack | Test |
 |---|---|
 | Pairing secret raced by six devices; replay after use | `redteam::a_raced_pairing_ticket_pairs_one_device` |
+| Reusable ticket raced by six devices with three uses left; each pairing announced; revoked ticket | `redteam::a_raced_reusable_ticket_pairs_its_uses_and_announces_each` |
+| Reusable ticket: uses, bounds, expiry, revoke, removed device, 30-way race | `identity::tests::a_reusable_ticket_pairs_distinct_devices_up_to_its_uses`, `reusable_tickets_are_bounded`, `an_expired_reusable_ticket_is_refused`, `revoked_tickets_pair_no_more_devices`, `an_unpaired_device_cannot_reuse_a_shared_ticket`, `a_raced_reusable_ticket_pairs_exactly_its_uses` (unit) |
 | Expired secret; wrong guesses cause no disk write | `identity::tests::expired_pairing_secrets_are_refused`, `wrong_pairing_secrets_cost_no_write` (unit) |
 | Removed owner device reconnecting on its old pairing | `access::a_removed_device_cannot_reconnect_on_its_old_pairing` |
 | Re-paired device's old invites (app removal, CLI unpair) | `access::a_removed_device_returns_only_by_a_new_ticket_and_without_its_invites`, `access::re_pairing_after_cli_unpair_does_not_revive_old_invites` |

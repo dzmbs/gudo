@@ -1,4 +1,4 @@
-//! Daemon key, owner principal, paired devices and one-time pairing secrets.
+//! Daemon key, owner principal, paired devices and pairing secrets.
 //!
 //! Everything is a small file in the state directory, so `hostd pair` (a separate process)
 //! can mint a secret that the running daemon accepts:
@@ -9,7 +9,7 @@
 //! | `owner.json` | the owner principal |
 //! | `devices.json` | the device allowlist |
 //! | `unpaired.json` | when each removed device was removed (changed under `devices.lock`) |
-//! | `pairing.json` | unused pairing secrets with expiry (changed under `pairing.lock`) |
+//! | `pairing.json` | pending pairing secrets with expiry and uses (changed under `pairing.lock`) |
 //! | `endpoint.json` | where the running daemon listens (written by `run`) |
 
 use std::collections::BTreeMap;
@@ -35,6 +35,12 @@ const ENDPOINT_FILE: &str = "endpoint.json";
 
 /// Default lifetime of a pairing ticket.
 pub const PAIRING_TTL: Duration = Duration::from_secs(10 * 60);
+
+/// The most devices one reusable ticket may pair.
+pub const MAX_TICKET_USES: u32 = 20;
+
+/// The longest a reusable ticket may stay valid.
+pub const MAX_REUSABLE_TICKET_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
 #[derive(Debug, Serialize, Deserialize)]
 struct OwnerFile {
@@ -95,6 +101,29 @@ struct PairingEntry {
     expires: u64,
     #[serde(default, skip_serializing_if = "is_false")]
     this_computer: bool,
+    /// Names the ticket for `pair --list` and `pair --revoke`; unrelated to the secret.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    id: String,
+    /// How many devices it may pair; 0 (older files) and 1 mean once. A daemon that predates
+    /// this field consumes the whole entry on first use, which fails safe.
+    #[serde(default, skip_serializing_if = "is_single_use")]
+    uses: u32,
+    /// The devices a reusable ticket paired, hex: each counts once.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    paired: Vec<String>,
+    /// When it was minted, Unix ms; a device removed since then cannot reuse it.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    minted: u64,
+}
+
+impl PairingEntry {
+    fn reusable(&self) -> bool {
+        self.uses > 1
+    }
+}
+
+fn is_single_use(uses: &u32) -> bool {
+    *uses <= 1
 }
 
 /// What a consumed pairing secret was minted for.
@@ -288,12 +317,18 @@ impl Identity {
                     .as_slice()
                     .try_into()
                     .map_err(|_| RefuseReason::InvalidGrant)?;
+                let removed_at = self.removed_at(device).map(|at| at.0);
                 let Pairing {
                     principal,
                     this_computer,
-                } = consume_pairing_secret(&self.dir, PairingSecret(secret))
-                    .map_err(|_| RefuseReason::InvalidGrant)?
-                    .ok_or(RefuseReason::InvalidGrant)?;
+                } = consume_pairing_secret(
+                    &self.dir,
+                    PairingSecret(secret),
+                    &device_hex,
+                    removed_at,
+                )
+                .map_err(|_| RefuseReason::InvalidGrant)?
+                .ok_or(RefuseReason::InvalidGrant)?;
                 let entry = DeviceEntry {
                     device: device_hex.clone(),
                     principal: hex(&principal.0),
@@ -501,32 +536,58 @@ fn load_or_create_owner(dir: &Path) -> io::Result<PrincipalId> {
     Ok(principal)
 }
 
-/// Removes `secret` from the pending list if present and unexpired, returning what it was
-/// minted for.
-fn consume_pairing_secret(dir: &Path, secret: PairingSecret) -> io::Result<Option<Pairing>> {
+/// Uses `secret` for `device` if it is pending and unexpired, returning what it was minted for.
+/// A single-use secret is removed. A reusable one counts each distinct device once, is removed
+/// when its last use is taken, and refuses a device removed (`removed_at`) since it was minted.
+fn consume_pairing_secret(
+    dir: &Path,
+    secret: PairingSecret,
+    device: &str,
+    removed_at: Option<u64>,
+) -> io::Result<Option<Pairing>> {
     let path = dir.join(PAIRING_FILE);
     fsutil::with_lock(&path, || {
         let mut entries: Vec<PairingEntry> = read_json(&path)?.unwrap_or_default();
         let before = entries.len();
         let now = now_millis();
+        entries.retain(|entry| entry.expires > now);
+        let mut changed = entries.len() != before;
         let found = entries.iter().position(|entry| {
-            entry.expires > now
-                && unhex::<16>(&entry.secret)
-                    .is_some_and(|stored| fsutil::constant_eq(&stored, &secret.0))
+            unhex::<16>(&entry.secret).is_some_and(|stored| fsutil::constant_eq(&stored, &secret.0))
         });
-        let pairing = found.and_then(|i| {
-            let entry = entries.remove(i);
+        let pairing = match found {
+            None => None,
+            Some(index) if !entries[index].reusable() => {
+                changed = true;
+                Some(entries.remove(index))
+            }
+            Some(index) => {
+                let entry = &mut entries[index];
+                if removed_at.is_some_and(|removed| removed >= entry.minted) {
+                    None
+                } else {
+                    if !entry.paired.iter().any(|paired| paired == device) {
+                        entry.paired.push(device.to_owned());
+                        changed = true;
+                    }
+                    let entry = entry.clone();
+                    if entry.paired.len() >= entry.uses as usize {
+                        entries.remove(index);
+                    }
+                    Some(entry)
+                }
+            }
+        };
+        // A wrong guess costs no disk write: anyone who knows the daemon id can send them.
+        if changed {
+            write_json(&path, &entries)?;
+        }
+        Ok(pairing.and_then(|entry| {
             unhex(&entry.principal).map(|principal| Pairing {
                 principal: PrincipalId(principal),
                 this_computer: entry.this_computer,
             })
-        });
-        entries.retain(|entry| entry.expires > now);
-        // A wrong guess costs no disk write: anyone who knows the daemon id can send them.
-        if entries.len() != before {
-            write_json(&path, &entries)?;
-        }
-        Ok(pairing)
+        }))
     })
 }
 
@@ -555,10 +616,15 @@ pub fn endpoint_info(state_dir: &Path) -> io::Result<Option<EndpointInfo>> {
 /// Returns [`io::ErrorKind::NotFound`] if no daemon has recorded its endpoint yet, or any
 /// error reading or writing the state files.
 pub fn mint_ticket(state_dir: &Path, ttl: Duration) -> io::Result<Ticket> {
-    mint(state_dir, ttl, false)
+    mint(state_dir, ttl, false, 1).map(|(ticket, _)| ticket)
 }
 
-fn mint(state_dir: &Path, ttl: Duration, this_computer: bool) -> io::Result<Ticket> {
+fn mint(
+    state_dir: &Path,
+    ttl: Duration,
+    this_computer: bool,
+    uses: u32,
+) -> io::Result<(Ticket, String)> {
     let info = endpoint_info(state_dir)?.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
@@ -571,7 +637,9 @@ fn mint(state_dir: &Path, ttl: Duration, this_computer: bool) -> io::Result<Tick
     );
     let owner = load_or_create_owner(state_dir)?;
     let secret = PairingSecret(fsutil::random::<16>());
-    let expires = now_millis() + ttl.as_millis() as u64;
+    let id = hex(&fsutil::random::<4>());
+    let minted = now_millis();
+    let expires = minted + ttl.as_millis() as u64;
     let path = state_dir.join(PAIRING_FILE);
     fsutil::with_lock(&path, || {
         let mut entries: Vec<PairingEntry> = read_json(&path)?.unwrap_or_default();
@@ -582,10 +650,14 @@ fn mint(state_dir: &Path, ttl: Duration, this_computer: bool) -> io::Result<Tick
             principal: hex(&owner.0),
             expires,
             this_computer,
+            id: id.clone(),
+            uses,
+            paired: Vec::new(),
+            minted,
         });
         write_json(&path, &entries)
     })?;
-    Ok(Ticket {
+    let ticket = Ticket {
         v: Ticket::VERSION,
         daemon_id,
         addrs: info.addrs,
@@ -593,7 +665,8 @@ fn mint(state_dir: &Path, ttl: Duration, this_computer: bool) -> io::Result<Tick
         principal: owner,
         secret,
         expires: UnixMillis(expires),
-    })
+    };
+    Ok((ticket, id))
 }
 
 /// [`mint_ticket`] as text, with the running daemon's relay choice appended
@@ -603,7 +676,40 @@ fn mint(state_dir: &Path, ttl: Duration, this_computer: bool) -> io::Result<Tick
 ///
 /// As [`mint_ticket`].
 pub fn mint_ticket_text(state_dir: &Path, ttl: Duration) -> io::Result<String> {
-    ticket_text(state_dir, mint(state_dir, ttl, false)?)
+    ticket_text(state_dir, mint(state_dir, ttl, false, 1)?.0)
+}
+
+/// A ticket that pairs up to `uses` distinct devices within `ttl`, for a host shared on
+/// purpose (a demo host). Its secret is shared by everyone who sees it: see
+/// docs/security/transport-identity.md. Returns the ticket text and its id for
+/// [`revoke_pairing_tickets`].
+///
+/// # Errors
+///
+/// [`io::ErrorKind::InvalidInput`] unless `uses` is 2 to [`MAX_TICKET_USES`] and `ttl` at most
+/// [`MAX_REUSABLE_TICKET_TTL`]; otherwise as [`mint_ticket`].
+pub fn mint_reusable_ticket_text(
+    state_dir: &Path,
+    ttl: Duration,
+    uses: u32,
+) -> io::Result<(String, String)> {
+    if !(2..=MAX_TICKET_USES).contains(&uses) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("a reusable ticket pairs 2 to {MAX_TICKET_USES} devices"),
+        ));
+    }
+    if ttl > MAX_REUSABLE_TICKET_TTL {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "a reusable ticket lasts at most {} days",
+                MAX_REUSABLE_TICKET_TTL.as_secs() / 86_400
+            ),
+        ));
+    }
+    let (ticket, id) = mint(state_dir, ttl, false, uses)?;
+    Ok((ticket_text(state_dir, ticket)?, id))
 }
 
 /// [`mint_ticket_text`] for the app on this computer: the device it pairs is listed as such.
@@ -612,7 +718,85 @@ pub fn mint_ticket_text(state_dir: &Path, ttl: Duration) -> io::Result<String> {
 ///
 /// As [`mint_ticket`].
 pub fn mint_this_computer_ticket_text(state_dir: &Path, ttl: Duration) -> io::Result<String> {
-    ticket_text(state_dir, mint(state_dir, ttl, true)?)
+    ticket_text(state_dir, mint(state_dir, ttl, true, 1)?.0)
+}
+
+/// An unexpired pairing ticket, as `hostd pair --list` shows it. The secret is never listed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingTicket {
+    /// Names the ticket for [`revoke_pairing_tickets`]; empty for tickets minted by older
+    /// builds.
+    pub id: String,
+    /// How many devices it may pair in all.
+    pub uses: u32,
+    /// How many it has paired.
+    pub used: u32,
+    /// Unix ms.
+    pub expires: u64,
+    /// Minted for the app on this computer (`pair --local`).
+    pub this_computer: bool,
+}
+
+/// The pairing tickets still able to pair a device.
+///
+/// # Errors
+///
+/// Returns an error if `pairing.json` is unreadable.
+pub fn pending_pairing_tickets(state_dir: &Path) -> io::Result<Vec<PendingTicket>> {
+    let now = now_millis();
+    Ok(
+        read_json::<Vec<PairingEntry>>(&state_dir.join(PAIRING_FILE))?
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|entry| entry.expires > now)
+            .map(|entry| PendingTicket {
+                uses: entry.uses.max(1),
+                used: entry.paired.len() as u32,
+                id: entry.id,
+                expires: entry.expires,
+                this_computer: entry.this_computer,
+            })
+            .collect(),
+    )
+}
+
+/// Withdraws the pending ticket named `id`, or every pending ticket when `id` is `None`, so it
+/// pairs no more devices. Devices it already paired stay paired: remove them with
+/// [`unpair_device`]. Returns how many were withdrawn.
+///
+/// # Errors
+///
+/// [`io::ErrorKind::NotFound`] if `id` names no pending ticket, or any error reading or
+/// writing `pairing.json`.
+pub fn revoke_pairing_tickets(state_dir: &Path, id: Option<&str>) -> io::Result<usize> {
+    let path = state_dir.join(PAIRING_FILE);
+    let id = id.map(|id| id.trim().to_ascii_lowercase());
+    fsutil::with_lock(&path, || {
+        let mut entries: Vec<PairingEntry> = read_json(&path)?.unwrap_or_default();
+        let before = entries.len();
+        let now = now_millis();
+        let mut revoked = 0;
+        entries.retain(|entry| {
+            let unexpired = entry.expires > now;
+            let named = id.as_deref().is_none_or(|id| entry.id == id);
+            if unexpired && named {
+                revoked += 1;
+            }
+            unexpired && !named
+        });
+        if let Some(id) = &id
+            && revoked == 0
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("no pending ticket {id}"),
+            ));
+        }
+        if entries.len() != before {
+            write_json(&path, &entries)?;
+        }
+        Ok(revoked)
+    })
 }
 
 fn ticket_text(state_dir: &Path, ticket: Ticket) -> io::Result<String> {
@@ -771,6 +955,11 @@ mod tests {
 
     use super::*;
 
+    /// Uses `secret` for a fresh device, as a single-use ticket sees it.
+    fn consume(dir: &Path, secret: PairingSecret) -> io::Result<Option<Pairing>> {
+        consume_pairing_secret(dir, secret, &hex(&fsutil::random::<32>()), None)
+    }
+
     /// A state dir as a started daemon leaves it: key, owner and `endpoint.json`.
     fn started_daemon() -> tempfile::TempDir {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -819,7 +1008,7 @@ mod tests {
                         chunk
                             .iter()
                             .filter(|secret| {
-                                consume_pairing_secret(dir, PairingSecret(secret.0))
+                                consume(dir, PairingSecret(secret.0))
                                     .expect("consume")
                                     .is_some()
                             })
@@ -837,9 +1026,7 @@ mod tests {
                 .sum();
             for secret in late {
                 assert!(
-                    consume_pairing_secret(dir, secret)
-                        .expect("consume")
-                        .is_some(),
+                    consume(dir, secret).expect("consume").is_some(),
                     "a ticket minted while others paired is still valid"
                 );
             }
@@ -848,7 +1035,7 @@ mod tests {
         assert_eq!(consumed, minted.len(), "every minted secret pairs");
         for secret in &minted {
             assert_eq!(
-                consume_pairing_secret(dir, PairingSecret(secret.0)).expect("consume"),
+                consume(dir, PairingSecret(secret.0)).expect("consume"),
                 None,
                 "a secret pairs once"
             );
@@ -979,20 +1166,13 @@ mod tests {
             let mut guess = secret.0;
             guess[15] ^= i + 1;
             assert_eq!(
-                consume_pairing_secret(dir.path(), PairingSecret(guess)).expect("consume"),
+                consume(dir.path(), PairingSecret(guess)).expect("consume"),
                 None
             );
         }
         assert_eq!(stamp(&path).expect("stat"), before);
-        assert!(
-            consume_pairing_secret(dir.path(), secret)
-                .expect("consume")
-                .is_some()
-        );
-        assert_eq!(
-            consume_pairing_secret(dir.path(), secret).expect("consume"),
-            None
-        );
+        assert!(consume(dir.path(), secret).expect("consume").is_some());
+        assert_eq!(consume(dir.path(), secret).expect("consume"), None);
     }
 
     /// An expired ticket is refused by the daemon, whatever the ticket text says.
@@ -1003,10 +1183,7 @@ mod tests {
             .expect("mint")
             .secret;
         thread::sleep(Duration::from_millis(5));
-        assert_eq!(
-            consume_pairing_secret(dir.path(), secret).expect("consume"),
-            None
-        );
+        assert_eq!(consume(dir.path(), secret).expect("consume"), None);
     }
 
     /// The owner's name for a device stands over what the device says about itself, from the
@@ -1075,5 +1252,194 @@ mod tests {
         for file in [KEY_FILE, OWNER_FILE, DEVICES_FILE, PAIRING_FILE] {
             assert_eq!(mode(file), 0o600, "{file}");
         }
+    }
+
+    fn reusable_secret(dir: &Path, ttl: Duration, uses: u32) -> (PairingSecret, String) {
+        let (text, id) = mint_reusable_ticket_text(dir, ttl, uses).expect("mint");
+        (
+            Ticket::parse_with_extras(&text).expect("ticket").0.secret,
+            id,
+        )
+    }
+
+    /// A reusable ticket pairs up to its number of distinct devices, each counted once, then
+    /// nothing more; the default ticket stays single use.
+    #[test]
+    fn a_reusable_ticket_pairs_distinct_devices_up_to_its_uses() {
+        let dir = started_daemon();
+        let identity = Identity::load_or_create(dir.path()).expect("identity");
+        let owner = load_or_create_owner(dir.path()).expect("owner");
+        let (secret, id) = reusable_secret(dir.path(), PAIRING_TTL, 3);
+        let pair = |byte| identity.authorize(DeviceId([byte; 32]), owner, &pairing_grant(secret));
+
+        assert_eq!(pair(1), Ok(owner));
+        assert_eq!(pair(1), Ok(owner), "the same device again takes no use");
+        assert_eq!(pair(2), Ok(owner));
+        let pending = pending_pairing_tickets(dir.path()).expect("list");
+        assert_eq!(
+            (pending[0].id.as_str(), pending[0].used, pending[0].uses),
+            (id.as_str(), 2, 3),
+            "the count is kept on disk"
+        );
+        assert_eq!(pair(3), Ok(owner));
+        assert_eq!(pair(4), Err(RefuseReason::InvalidGrant), "all uses taken");
+        assert!(
+            pending_pairing_tickets(dir.path())
+                .expect("list")
+                .is_empty()
+        );
+        assert_eq!(identity.device_count(), 3);
+
+        let single = mint_ticket(dir.path(), PAIRING_TTL).expect("mint").secret;
+        let listed = pending_pairing_tickets(dir.path()).expect("list");
+        assert_eq!((listed[0].uses, listed[0].used), (1, 0));
+        assert!(consume(dir.path(), single).expect("consume").is_some());
+        assert_eq!(consume(dir.path(), single).expect("consume"), None);
+    }
+
+    /// Reusable tickets are bounded in uses and lifetime.
+    #[test]
+    fn reusable_tickets_are_bounded() {
+        let dir = started_daemon();
+        let kind = |ttl, uses| {
+            mint_reusable_ticket_text(dir.path(), ttl, uses)
+                .unwrap_err()
+                .kind()
+        };
+        assert_eq!(kind(PAIRING_TTL, 1), io::ErrorKind::InvalidInput);
+        assert_eq!(
+            kind(PAIRING_TTL, MAX_TICKET_USES + 1),
+            io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            kind(MAX_REUSABLE_TICKET_TTL + Duration::from_secs(1), 2),
+            io::ErrorKind::InvalidInput
+        );
+        assert!(
+            pending_pairing_tickets(dir.path())
+                .expect("list")
+                .is_empty()
+        );
+        mint_reusable_ticket_text(dir.path(), MAX_REUSABLE_TICKET_TTL, MAX_TICKET_USES)
+            .expect("the bounds themselves are allowed");
+    }
+
+    /// An expired reusable ticket pairs nobody, even with uses left.
+    #[test]
+    fn an_expired_reusable_ticket_is_refused() {
+        let dir = started_daemon();
+        let (secret, _) = reusable_secret(dir.path(), Duration::ZERO, 5);
+        thread::sleep(Duration::from_millis(5));
+        assert_eq!(consume(dir.path(), secret).expect("consume"), None);
+        assert!(
+            pending_pairing_tickets(dir.path())
+                .expect("list")
+                .is_empty()
+        );
+    }
+
+    /// Revoking stops a ticket at once, by id or all together; devices it paired stay paired
+    /// until removed.
+    #[test]
+    fn revoked_tickets_pair_no_more_devices() {
+        let dir = started_daemon();
+        let identity = Identity::load_or_create(dir.path()).expect("identity");
+        let owner = load_or_create_owner(dir.path()).expect("owner");
+        let (first, first_id) = reusable_secret(dir.path(), PAIRING_TTL, 5);
+        let (second, _) = reusable_secret(dir.path(), PAIRING_TTL, 5);
+        let single = mint_ticket(dir.path(), PAIRING_TTL).expect("mint").secret;
+        identity
+            .authorize(DeviceId([1; 32]), owner, &pairing_grant(first))
+            .expect("pairs");
+
+        assert_eq!(
+            revoke_pairing_tickets(dir.path(), Some("00000000"))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
+        assert_eq!(
+            revoke_pairing_tickets(dir.path(), Some(&first_id.to_ascii_uppercase()))
+                .expect("revoke"),
+            1
+        );
+        assert_eq!(
+            identity.authorize(DeviceId([2; 32]), owner, &pairing_grant(first)),
+            Err(RefuseReason::InvalidGrant)
+        );
+        assert!(identity.is_owner_device(DeviceId([1; 32])));
+
+        assert_eq!(revoke_pairing_tickets(dir.path(), None).expect("revoke"), 2);
+        for secret in [second, single] {
+            assert_eq!(
+                identity.authorize(DeviceId([3; 32]), owner, &pairing_grant(secret)),
+                Err(RefuseReason::InvalidGrant)
+            );
+        }
+    }
+
+    /// A device removed from the allowlist cannot come back on a reusable ticket minted before
+    /// its removal; other devices still can, and a newer ticket brings it back.
+    #[test]
+    fn an_unpaired_device_cannot_reuse_a_shared_ticket() {
+        let dir = started_daemon();
+        let identity = Identity::load_or_create(dir.path()).expect("identity");
+        let owner = load_or_create_owner(dir.path()).expect("owner");
+        let (secret, _) = reusable_secret(dir.path(), PAIRING_TTL, 5);
+        let lost = DeviceId([1; 32]);
+        identity
+            .authorize(lost, owner, &pairing_grant(secret))
+            .expect("pairs");
+        unpair_device(dir.path(), &hex(&lost.0)).expect("unpair");
+
+        assert_eq!(
+            identity.authorize(lost, owner, &pairing_grant(secret)),
+            Err(RefuseReason::InvalidGrant)
+        );
+        assert!(!identity.is_owner_device(lost));
+        identity
+            .authorize(DeviceId([2; 32]), owner, &pairing_grant(secret))
+            .expect("another device still pairs");
+
+        thread::sleep(Duration::from_millis(2));
+        let (newer, _) = reusable_secret(dir.path(), PAIRING_TTL, 2);
+        identity
+            .authorize(lost, owner, &pairing_grant(newer))
+            .expect("a newer ticket pairs it again");
+    }
+
+    /// Many devices race one reusable ticket: exactly its number of uses pair, and the count on
+    /// disk matches.
+    #[test]
+    fn a_raced_reusable_ticket_pairs_exactly_its_uses() {
+        let dir = started_daemon();
+        let dir = dir.path();
+        let (secret, _) = reusable_secret(dir, PAIRING_TTL, MAX_TICKET_USES);
+        let other = mint_ticket(dir, PAIRING_TTL).expect("mint").secret;
+        let paired: usize = thread::scope(|scope| {
+            let racers: Vec<_> = (0..MAX_TICKET_USES as u8 + 10)
+                .map(|byte| {
+                    scope.spawn(move || {
+                        consume_pairing_secret(dir, secret, &hex(&[byte; 32]), None)
+                            .expect("consume")
+                            .is_some()
+                    })
+                })
+                .collect();
+            let late = mint_ticket(dir, PAIRING_TTL).expect("mint").secret;
+            let paired = racers
+                .into_iter()
+                .map(|racer| racer.join().expect("racer"))
+                .filter(|&paired| paired)
+                .count();
+            assert!(
+                consume(dir, late).expect("consume").is_some(),
+                "a ticket minted during the race survives it"
+            );
+            paired
+        });
+        assert_eq!(paired, MAX_TICKET_USES as usize);
+        assert!(consume(dir, other).expect("consume").is_some());
+        assert!(pending_pairing_tickets(dir).expect("list").is_empty());
     }
 }

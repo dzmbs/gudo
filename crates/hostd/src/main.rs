@@ -4,6 +4,8 @@
 //! gudo-hostd run                 serve until SIGINT/SIGTERM
 //! gudo-hostd pair                print a one-time pairing ticket (text + QR)
 //! gudo-hostd pair --json --wait 30   the same as JSON, once the daemon is up
+//! gudo-hostd pair --uses 5 --minutes 1440   one ticket for up to 5 devices (a demo host)
+//! gudo-hostd pair --list | --revoke <id|all>   the pending tickets; withdraw them
 //! gudo-hostd status              is it running, where, how many devices
 //! gudo-hostd devices [--json]    the paired owner devices: in a terminal, pair, rename, remove
 //! gudo-hostd rename <key> <name> name one
@@ -66,6 +68,23 @@ enum Command {
         /// Minutes the ticket stays valid.
         #[arg(long, default_value_t = 10)]
         minutes: u64,
+        /// Devices the ticket may pair, for a host shared on purpose such as a demo host.
+        /// Anyone who sees it can pair until it expires, runs out or is revoked. Above 1 it
+        /// lasts at most 30 days.
+        #[arg(
+            long,
+            default_value_t = 1,
+            value_parser = clap::value_parser!(u32).range(1..=i64::from(daemon::MAX_TICKET_USES)),
+            conflicts_with = "local"
+        )]
+        uses: u32,
+        /// List the pending tickets (never their secrets) instead.
+        #[arg(long, conflicts_with_all = ["revoke", "local", "wait"])]
+        list: bool,
+        /// Withdraw the pending ticket with this id (see --list), or every one with `all`.
+        /// Devices it paired stay paired; remove them with `unpair`.
+        #[arg(long, value_name = "ID", conflicts_with_all = ["json", "local", "wait"])]
+        revoke: Option<String>,
         /// Print one JSON object (ticket, daemon id, expiry, addresses) instead, for tools
         /// such as the app's SSH bootstrap.
         #[arg(long)]
@@ -146,13 +165,22 @@ fn main() -> Result<()> {
             shell,
         } => run(state_dir, bind, no_relay, shell),
         Command::Pair {
+            list: true, json, ..
+        } => pending_tickets(&state_dir, json),
+        Command::Pair {
+            revoke: Some(id), ..
+        } => revoke_tickets(&state_dir, &id),
+        Command::Pair {
             minutes,
+            uses,
             json,
             wait,
             local,
+            ..
         } => pair(
             &state_dir,
             Duration::from_secs(minutes * 60),
+            uses,
             json,
             Duration::from_secs(wait),
             local,
@@ -446,17 +474,26 @@ fn login_shell() -> Option<PathBuf> {
     }
 }
 
-fn pair(state_dir: &Path, ttl: Duration, json: bool, wait: Duration, local: bool) -> Result<()> {
+fn pair(
+    state_dir: &Path,
+    ttl: Duration,
+    uses: u32,
+    json: bool,
+    wait: Duration,
+    local: bool,
+) -> Result<()> {
     if !wait.is_zero() {
         wait_for_endpoint(state_dir, wait)?;
     }
-    let mint = if local {
-        daemon::mint_this_computer_ticket_text
+    let minted = if uses > 1 {
+        daemon::mint_reusable_ticket_text(state_dir, ttl, uses).map(|(text, id)| (text, Some(id)))
+    } else if local {
+        daemon::mint_this_computer_ticket_text(state_dir, ttl).map(|text| (text, None))
     } else {
-        daemon::mint_ticket_text
+        daemon::mint_ticket_text(state_dir, ttl).map(|text| (text, None))
     };
-    let mut text = mint(state_dir, ttl)
-        .with_context(|| format!("minting a ticket in {}", state_dir.display()))?;
+    let (mut text, reusable_id) =
+        minted.with_context(|| format!("minting a ticket in {}", state_dir.display()))?;
     let (mut ticket, extras) = proto::Ticket::parse_with_extras(&text)?;
     if local {
         let bound = daemon::endpoint_info(state_dir)?
@@ -480,6 +517,8 @@ fn pair(state_dir: &Path, ttl: Duration, json: bool, wait: Duration, local: bool
             "relays": relays_label(&extras.relays),
             "running": info.is_some_and(|info| pid_alive(info.pid)),
             "version": env!("CARGO_PKG_VERSION"),
+            "uses": uses,
+            "ticket_id": reusable_id,
         });
         println!("{out}");
         return Ok(());
@@ -492,8 +531,85 @@ fn pair(state_dir: &Path, ttl: Duration, json: bool, wait: Duration, local: bool
     }
     print_ticket(&text);
     eprintln!("On your iPhone or iPad, open Gudo, tap Add Host, then Scan.");
-    eprintln!("Valid for {} minutes, for one device.", ttl.as_secs() / 60);
+    match reusable_id {
+        None => eprintln!("Valid for {} minutes, for one device.", ttl.as_secs() / 60),
+        Some(id) => {
+            eprintln!(
+                "Valid for {}, for up to {uses} devices. Anyone with this code can pair.",
+                lifetime_label(ttl.as_secs() / 60)
+            );
+            eprintln!(
+                "Ticket {id}. Revoke it with `{} pair --revoke {id}`.",
+                brand::CLI_BIN
+            );
+        }
+    }
     Ok(())
+}
+
+fn pending_tickets(state_dir: &Path, json: bool) -> Result<()> {
+    let tickets = daemon::pending_pairing_tickets(state_dir)
+        .with_context(|| format!("reading tickets in {}", state_dir.display()))?;
+    if json {
+        let list: Vec<_> = tickets
+            .iter()
+            .map(|ticket| {
+                serde_json::json!({
+                    "id": ticket.id,
+                    "uses": ticket.uses,
+                    "used": ticket.used,
+                    "expires_unix_ms": ticket.expires,
+                    "this_computer": ticket.this_computer,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::Value::Array(list));
+        return Ok(());
+    }
+    if tickets.is_empty() {
+        println!("No pending tickets.");
+        return Ok(());
+    }
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis() as u64);
+    println!("{:<10}{:<8}EXPIRES", "ID", "USED");
+    for ticket in &tickets {
+        let id = if ticket.id.is_empty() {
+            "-"
+        } else {
+            &ticket.id
+        };
+        println!(
+            "{:<10}{:<8}in {}",
+            id,
+            format!("{}/{}", ticket.used, ticket.uses),
+            lifetime_label(ticket.expires.saturating_sub(now_ms).div_ceil(60_000))
+        );
+    }
+    Ok(())
+}
+
+fn revoke_tickets(state_dir: &Path, id: &str) -> Result<()> {
+    let id = (!id.eq_ignore_ascii_case("all")).then_some(id);
+    let revoked = daemon::revoke_pairing_tickets(state_dir, id)
+        .with_context(|| format!("revoking tickets in {}", state_dir.display()))?;
+    println!(
+        "revoked {revoked} {}",
+        if revoked == 1 { "ticket" } else { "tickets" }
+    );
+    Ok(())
+}
+
+/// "under a minute", "45 minutes", "6 hours", "30 days".
+fn lifetime_label(minutes: u64) -> String {
+    match minutes {
+        0 => "under a minute".into(),
+        1 => "1 minute".into(),
+        2..120 => format!("{minutes} minutes"),
+        120..2880 => format!("{} hours", minutes / 60),
+        _ => format!("{} days", minutes / 1440),
+    }
 }
 
 /// Loopback addresses on the ports of the sockets bound on every interface (or on loopback).
