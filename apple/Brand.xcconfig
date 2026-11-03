@@ -10,6 +10,8 @@ BRAND_URL_SCHEME = gudo
 BRAND_WEB_DOMAIN = gudo.dev
 // The bundled helper (`Contents/MacOS/<this>`); must match crates/brand DAEMON_BIN.
 BRAND_DAEMON_BIN = gudo-hostd
+// The short command for the helper (a link to it); must match crates/brand CLI_BIN.
+BRAND_CLI_BIN = gudo
 
 // The Apple developer team. Release builds sign with it; Debug builds keep signing to run
 // locally (ad-hoc), so they build and run without the team's certificates.

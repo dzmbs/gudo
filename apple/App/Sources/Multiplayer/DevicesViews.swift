@@ -5,6 +5,7 @@ import GudoCore
 
 struct DevicesSettingsSection: View {
     private let hosts = AppModel.shared.hosts
+    @State private var pairing: PairDeviceRequest?
 
     var body: some View {
         let owned = DeviceHosts.owned(hosts)
@@ -12,6 +13,15 @@ struct DevicesSettingsSection: View {
             if owned.isEmpty {
                 Text("No paired hosts. Hosts you pair with list their devices here.")
                     .foregroundStyle(DS.Palette.textSecondary)
+            }
+            if let target = PairDeviceTarget.host(preferring: nil, window: nil) {
+                Button {
+                    pairing = PairDeviceRequest(hostId: target)
+                } label: {
+                    Label(PairDeviceRequest.title(for: target), systemImage: "qrcode")
+                }
+                .accessibilityIdentifier("devices-pair")
+                .settingAnchor("devices-pair")
             }
             ForEach(owned, id: \.id) { host in
                 NavigationLink(value: SettingsPage.hostDevices(host.id)) {
@@ -26,9 +36,10 @@ struct DevicesSettingsSection: View {
         } header: {
             Text("Paired Devices")
         } footer: {
-            Text("Every device that can open a host as its owner, and every guest. Remove any you don't recognise.")
+            Text("Every device that can open a host as its owner, and every guest. Rename them, or remove any you don't recognise.")
         }
         .settingAnchor("devices")
+        .sheet(item: $pairing) { request in PairDeviceSheet(hostId: request.hostId) }
     }
 
     private func summary(_ id: String) -> String {
@@ -71,20 +82,34 @@ struct HostDevicesView: View {
     let hostId: String
     private let hosts = AppModel.shared.hosts
     @State private var removing: DeviceInfo?
+    @State private var renaming: DeviceInfo?
+    @State private var pairing: PairDeviceRequest?
 
     var body: some View {
         let name = DeviceHosts.name(hostId, hosts: hosts)
         Group {
             if let session = DeviceHosts.session(hostId, hosts: hosts), session.me != nil {
                 if session.isOwner {
+                    let pair = session.canManageDevices ? { pairing = PairDeviceRequest(hostId: hostId) } : nil
                     List {
                         HostAlertsSection(session: session)
-                        DevicesSections(session: session, hostName: name, removing: $removing)
+                        DevicesSections(session: session, hostName: name, removing: $removing, renaming: $renaming, onPair: pair)
                     }
                     .chromeGrouped()
                     .modifier(RemoveDeviceDialog(session: session, hostName: name, device: $removing))
+                    .modifier(RenameDeviceDialog(session: session, device: $renaming))
                     .refreshable { await session.refreshGrants() }
                     .task { await session.refreshGrants() }
+                    .toolbar {
+                        if let pair {
+                            ToolbarItem(placement: .primaryAction) {
+                                Button("Pair a Device", systemImage: "qrcode", action: pair)
+                                    .help("Pair a Device")
+                                    .accessibilityIdentifier("host-devices-pair")
+                            }
+                        }
+                    }
+                    .sheet(item: $pairing) { request in PairDeviceSheet(hostId: request.hostId) }
                 } else {
                     EmptyState("Owner Devices Only", systemImage: "lock", message: "You joined \(name) with an invite. Only its owner sees and removes devices.") {
                         EmptyView()
@@ -106,17 +131,26 @@ struct HostDevicesView: View {
     }
 }
 
-/// Owner devices and guests with Remove, shared by Settings › Devices and Access & Grants.
+/// Owner devices and guests with Rename and Remove, shared by Settings › Devices and Access &
+/// Grants.
 struct DevicesSections: View {
     let session: MultiplayerSession
     let hostName: String
     @Binding var removing: DeviceInfo?
+    var renaming: Binding<DeviceInfo?>?
+    var onPair: (() -> Void)?
 
     var body: some View {
         Section {
             ForEach(session.ownerDevices, id: \.device) { row($0) }
             if session.ownerDevices.isEmpty {
                 Text("Loading devices…").foregroundStyle(DS.Palette.textSecondary)
+            }
+            if let onPair {
+                Button(action: onPair) {
+                    Label("Pair a Device…", systemImage: "plus.circle")
+                }
+                .accessibilityIdentifier("devices-pair-row")
             }
         } header: {
             SectionTitle("Owner Devices", count: session.ownerDevices.filter { !$0.revoked }.count)
@@ -141,7 +175,8 @@ struct DevicesSections: View {
         DeviceRow(
             device: device, name: session.displayName(of: device), deviceClass: deviceClass(device),
             isMe: session.isThisDevice(device), pairedNow: session.freshPairings[device.device],
-            onRemove: session.canRemove(device) ? { removing = device } : nil)
+            onRemove: session.canRemove(device) ? { removing = device } : nil,
+            onRename: canRename(device) ? { renaming?.wrappedValue = device } : nil)
             .swipeActions {
                 if session.canRemove(device) {
                     // Red, not `.destructive`: the row stays until the removal is confirmed.
@@ -149,12 +184,25 @@ struct DevicesSections: View {
                         .tint(.red)
                 }
             }
+            .swipeActions(edge: .leading) {
+                if canRename(device) {
+                    Button("Rename") { renaming?.wrappedValue = device }
+                        .tint(.accentColor)
+                }
+            }
             .contextMenu {
+                if canRename(device) {
+                    Button("Rename…", systemImage: "pencil") { renaming?.wrappedValue = device }
+                }
                 Button("Copy Device Key", systemImage: "doc.on.doc") { Pasteboard.copy(device.device) }
                 if session.canRemove(device) {
                     Button("Remove…", systemImage: "minus.circle", role: .destructive) { removing = device }
                 }
             }
+    }
+
+    private func canRename(_ device: DeviceInfo) -> Bool {
+        renaming != nil && session.canRename(device)
     }
 
     private func deviceClass(_ device: DeviceInfo) -> DeviceClass? {
@@ -229,6 +277,55 @@ struct RemoveDeviceDialog: ViewModifier {
     }
 }
 
+/// Rename: the name every device of the owner sees for it; empty goes back to its own.
+struct RenameDeviceDialog: ViewModifier {
+    let session: MultiplayerSession
+    @Binding var device: DeviceInfo?
+    @State private var name = ""
+
+    func body(content: Content) -> some View {
+        content
+            .alert("Rename Device", isPresented: Binding(get: { device != nil }, set: { if !$0 { device = nil } }), presenting: device) { device in
+                TextField("Name", text: $name)
+                    .accessibilityIdentifier("rename-device-field")
+                Button("Rename") { rename(device) }
+                    .keyboardShortcut(.defaultAction)
+                Button("Cancel", role: .cancel) {}
+            } message: { device in
+                Text("Shown for \(session.displayName(of: device)) on every device that opens this host. Leave empty to use the name it gives itself.")
+            }
+            .onChange(of: device?.device) { name = device.map(session.displayName(of:)) ?? "" }
+    }
+
+    private func rename(_ device: DeviceInfo) {
+        let newName = name
+        Task {
+            if await session.renameDevice(device, to: newName) {
+                ActiveWindow.model?.toasts.show(Toast("Renamed to \(newName.isEmpty ? "its own name" : newName)", systemImage: "pencil", style: .success))
+            }
+        }
+    }
+}
+
+/// A host to show Pair a Device for.
+struct PairDeviceRequest: Identifiable {
+    let hostId: String
+    var id: String { hostId }
+
+    /// "Pair a Phone or iPad…" for This Mac, "Pair a Device with studio…" otherwise.
+    @MainActor static func title(for hostId: String) -> String {
+        let hosts = AppModel.shared.hosts
+        if hostId == hosts.thisDeviceId {
+            #if os(macOS)
+            return "Pair a Phone or iPad…"
+            #else
+            return "Pair a Device…"
+            #endif
+        }
+        return "Pair a Device with \(DeviceHosts.name(hostId, hosts: hosts))…"
+    }
+}
+
 private struct DeviceRow: View {
     let device: DeviceInfo
     let name: String
@@ -237,6 +334,7 @@ private struct DeviceRow: View {
     /// Set when it paired while this session ran.
     let pairedNow: Date?
     let onRemove: (() -> Void)?
+    let onRename: (() -> Void)?
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
@@ -292,6 +390,7 @@ private struct DeviceRow: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityActions {
+            if let onRename { Button("Rename…", action: onRename) }
             if let onRemove { Button("Remove…", action: onRemove) }
         }
         .accessibilityIdentifier("device-\(device.device.prefix(8))")

@@ -42,12 +42,17 @@ struct HostsView: View {
         let hosts = directory.hosts
         Group {
             if hosts.isEmpty {
-                EmptyState(
-                    "No Hosts", systemImage: "server.rack",
-                    message: "Add a machine running the daemon, or connect to any SSH host with user@host."
-                ) {
+                EmptyState("No Hosts", systemImage: "server.rack", message: PairingHint.message) {
+                    #if os(iOS)
+                    Button("Scan Pairing Code", systemImage: "qrcode.viewfinder") { model.addHost(mode: .scan) }
+                        .buttonStyle(.primaryGlass)
+                        .accessibilityIdentifier("hosts-scan")
+                    Button("Add Host", action: onAdd)
+                        .buttonStyle(.glass)
+                    #else
                     Button("Add Host", action: onAdd)
                         .buttonStyle(.primaryGlass)
+                    #endif
                 }
             } else {
                 list(hosts)
@@ -166,6 +171,10 @@ struct HostsView: View {
                 newName = host.name
                 renaming = host
             }
+        }
+        if live != nil, PairDeviceTarget.owns(host.id) {
+            Button("Pair a Device…", systemImage: "qrcode") { model.pairDevice(hostId: host.id) }
+            Button("Devices…", systemImage: "laptopcomputer.and.iphone") { SettingsLink.shared.open(.hostDevices(host.id)) }
         }
         if host.isTailscale, TailscaleApp.isInstalled {
             Button("Open Tailscale", systemImage: "arrow.up.forward.app", action: TailscaleApp.open)

@@ -33,6 +33,11 @@ struct WorkspaceCommands: Commands {
         CommandGroup(after: .newItem) {
             buttons(WorkspaceAction.fileActions)
         }
+        CommandGroup(after: .appSettings) {
+            if CommandLineTool.helper != nil {
+                Button("Install Command Line Tool…") { CommandLineTool.installAndReport() }
+            }
+        }
         #endif
         CommandGroup(after: .textEditing) {
             buttons([.find, .findNext, .findPrevious])
@@ -123,6 +128,7 @@ struct WorkspaceCommands: Commands {
                 buttons(WorkspaceAction.hostActions)
             }
             Button("Add Host…") { model?.addHost() }
+            Button("Pair a Device…") { model?.pairDevice() }
             Divider()
         }
     }

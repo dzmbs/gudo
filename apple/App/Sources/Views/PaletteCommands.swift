@@ -76,6 +76,7 @@ enum PaletteCommands {
             ("inbox", "Go to Agents", Destination.inbox.systemImage, WorkspaceAction.inbox.shortcut.symbols, { model.destination = .inbox }),
             ("hosts", "Go to Hosts", "server.rack", nil, { model.destination = .hosts }),
             ("add-host", "Add Host", "plus.circle", nil, { model.addHost() }),
+            ("pair-device", "Pair a Device", "qrcode", nil, { model.pairDevice() }),
             ("settings", "Settings", "gearshape", ["⌘", ","], { model.sheet = .settings }),
             ("shortcuts", "Keyboard Shortcuts", "keyboard", ["⌘", "/"], { model.sheet = .shortcuts }),
             ("replays", "Session Replays", "play.rectangle.on.rectangle", nil, { model.showReplays(.all) }),
@@ -86,7 +87,14 @@ enum PaletteCommands {
             ("tab-bar", TabPlacement.showsTabBar ? "Hide Tab Bar When the Sidebar Is Hidden" : "Show Tab Bar When the Sidebar Is Hidden",
              "rectangle.topthird.inset.filled", nil, { TabPlacement.showsTabBar.toggle() }),
         ]
-        for (id, title, image, keys, run) in tools + model.editorPaletteExtras + model.browserPaletteExtras {
+        #if os(macOS)
+        let commandLine: [(String, String, String, [String]?, () -> Void)] = CommandLineTool.helper == nil ? [] : [
+            ("install-cli", "Install Command Line Tool", "terminal", nil, { CommandLineTool.installAndReport() }),
+        ]
+        #else
+        let commandLine: [(String, String, String, [String]?, () -> Void)] = []
+        #endif
+        for (id, title, image, keys, run) in tools + commandLine + model.editorPaletteExtras + model.browserPaletteExtras {
             commands.append(PaletteCommand(id: id, title: title, section: "Go", systemImage: image, shortcut: keys, action: run))
         }
 

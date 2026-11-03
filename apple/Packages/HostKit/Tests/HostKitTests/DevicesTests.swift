@@ -110,6 +110,46 @@ private func settle(_ condition: () -> Bool) async throws {
         #expect(session.freshPairings[laptop.device] == nil)
     }
 
+    @Test func ownerDevicesPairAnotherDeviceAndExpectIt() async throws {
+        let client = FakeMultiplayerClient()
+        let session = ownerSession([thisIPad], client: client)
+        #expect(!session.canManageDevices, "an older host can't make codes")
+        client.state.withLock { $0.managesDevices = true }
+        #expect(session.canManageDevices)
+
+        let code = try #require(await session.makePairingCode())
+        #expect(code.link == "gudo://pair/code1" && code.qrPayload == "GUDO://PAIR/CODE1")
+        #expect(session.pairingCodeExpiry.map { $0 > .now } == true)
+
+        let phone = device("c", "iPhone", ago: 0)
+        session.apply(.devicePaired(device: phone))
+        #expect(session.notice?.message == "iPhone paired with this host.", "a pairing made from here is expected")
+    }
+
+    @Test func guestsNeverPairOrRename() async {
+        let client = FakeMultiplayerClient()
+        client.state.withLock { $0.managesDevices = true }
+        let session = MultiplayerSession()
+        session.attach(client)
+        session.apply(.joined(info: JoinInfo(actor: me, name: "Kim", roles: [.owner, .driver], scope: .daemon, grantId: "g1", expiresMs: nil)))
+        #expect(!session.canManageDevices)
+        #expect(!session.canRename(device("b", "Studio Mac", ago: 0)))
+    }
+
+    @Test func renamingAsksTheHostAndRefreshes() async throws {
+        let mac = device("b", "Studio Mac", ago: 10 * day)
+        let guest = device("e", "Kim", kind: .guest, ago: 1 * day)
+        let client = FakeMultiplayerClient()
+        client.state.withLock { $0.managesDevices = true }
+        let session = ownerSession([thisIPad, mac, guest], client: client)
+
+        #expect(session.canRename(mac) && !session.canRename(guest))
+        #expect(await session.renameDevice(mac, to: "  Desk Mac "))
+        #expect(client.state.withLock { $0.renamed.map(\.1) } == ["Desk Mac"])
+        try await settle { session.devices.contains { $0.name == "Desk Mac" } }
+        #expect(await session.renameDevice(guest, to: "x") == false)
+    }
+
     @Test func aStandingHostAlertIsAnnouncedOncePerRun() {
         let session = ownerSession([thisIPad])
         var pushes = 0

@@ -5,6 +5,8 @@ nonisolated enum Brand {
     static let name = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? ""
     /// The host daemon's executable name (`gudo-hostd`), bundled and installed on hosts.
     static let daemonBinary = Bundle.main.object(forInfoDictionaryKey: "BrandDaemonBinary") as? String ?? ""
+    /// The helper's short command (`gudo pair`, `gudo devices`): a link to the helper.
+    static let commandLineTool = Bundle.main.object(forInfoDictionaryKey: "BrandCommandLineTool") as? String ?? ""
     /// The web domain whose `/pair#…` and `/join#…` links open the app (universal links).
     static let webDomain = Bundle.main.object(forInfoDictionaryKey: "BrandWebDomain") as? String ?? ""
 

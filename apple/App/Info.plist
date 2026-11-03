@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>BrandCommandLineTool</key>
+	<string>$(BRAND_CLI_BIN)</string>
 	<key>BrandDaemonBinary</key>
 	<string>$(BRAND_DAEMON_BIN)</string>
 	<key>BrandWebDomain</key>

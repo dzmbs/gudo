@@ -8,6 +8,7 @@ import SwiftUI
 struct ThisMacSettingsSection: View {
     private let helper = AppModel.shared.localHelper
     @State private var keepsRunning = true
+    @State private var commandLineTool = CommandLineTool.Status.notInstalled
 
     var body: some View {
         if let helper {
@@ -28,6 +29,24 @@ struct ThisMacSettingsSection: View {
                         Button("Open Login Items") { SMAppService.openSystemSettingsLoginItems() }
                     }
                     .font(DS.Font.rowDetail)
+                }
+                if CommandLineTool.helper != nil {
+                    LabeledContent {
+                        if commandLineTool == .installed {
+                            Text("Installed").foregroundStyle(DS.Palette.textSecondary)
+                        } else {
+                            Button("Install…") {
+                                CommandLineTool.installAndReport()
+                                commandLineTool = CommandLineTool.status()
+                            }
+                            .accessibilityIdentifier("settings-this-mac-install-cli")
+                        }
+                    } label: {
+                        Text("Command Line Tool")
+                        Text("\(Brand.commandLineTool) pair and \(Brand.commandLineTool) devices in any terminal")
+                    }
+                    .settingAnchor("this-mac-command-line-tool")
+                    .onAppear { commandLineTool = CommandLineTool.status() }
                 }
                 if helper.isEnabled && helper.state != .off {
                     Button("Stop Helper", role: .destructive) { helper.stop() }
