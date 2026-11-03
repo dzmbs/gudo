@@ -3,11 +3,12 @@ import SwiftUI
 import UIKit
 #endif
 
-/// Sent as `Accept-Language`, since WebKit otherwise derives it from the device and sites then
-/// guess from the network's country. Empty is the system's.
+/// Sent as `Accept-Language`. Empty is the system's: WebKit sends the preferred languages the
+/// way Safari does. A bare `en-US` reads as an unset browser to Google, which then answers in
+/// the network country's language.
 nonisolated enum WebsiteLanguage {
     static let key = "browserWebsiteLanguage"
-    static let defaultTag = "en-US"
+    static let defaultTag = ""
 
     static let tags = [
         "en-US", "en-GB", "de-DE", "fr-FR", "es-ES", "es-419", "it-IT", "pt-BR", "pt-PT", "nl-NL",
@@ -74,5 +75,29 @@ nonisolated struct SearchLocale: Hashable, Sendable {
 
     static var current: SearchLocale {
         SearchLocale(language: WebsiteLanguage.current, region: SearchRegion.current)
+    }
+}
+
+/// Safari's own product tokens after WebKit's: without them Google and others serve their basic
+/// pages for old browsers. An iPad shows desktop pages, as Safari does there.
+enum BrowserUserAgent {
+    @MainActor static var applicationName: String {
+        #if os(iOS)
+        applicationName(safariVersion: safariVersion, mobile: UIDevice.current.userInterfaceIdiom == .phone)
+        #else
+        applicationName(safariVersion: safariVersion, mobile: false)
+        #endif
+    }
+
+    nonisolated static func applicationName(safariVersion: String, mobile: Bool) -> String {
+        mobile ? "Version/\(safariVersion) Mobile/15E148 Safari/604.1" : "Version/\(safariVersion) Safari/605.1.15"
+    }
+
+    /// Safari's version is the system's since 26.
+    nonisolated static var safariVersion: String {
+        let version = ProcessInfo.processInfo.operatingSystemVersion
+        return version.patchVersion == 0
+            ? "\(version.majorVersion).\(version.minorVersion)"
+            : "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)"
     }
 }

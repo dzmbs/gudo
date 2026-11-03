@@ -72,6 +72,7 @@ final class BrowserPane: Identifiable {
         initialURL = url
         var configuration = WebPage.Configuration()
         if let dataStore { configuration.websiteDataStore = dataStore }
+        configuration.applicationNameForUserAgent = BrowserUserAgent.applicationName
         self.dataStore = configuration.websiteDataStore
         BrowserAgentScript.install(in: configuration.userContentController, frames: frames)
         BrowserRecorder.install(in: configuration.userContentController, page: id)
