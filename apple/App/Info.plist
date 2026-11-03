@@ -77,6 +77,16 @@
 			</dict>
 		</dict>
 	</dict>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>Commands you run in the terminal can use files on your Desktop.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Commands you run in the terminal can use files in your Documents folder.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>Commands you run in the terminal can use files in your Downloads folder.</string>
+	<key>NSNetworkVolumesUsageDescription</key>
+	<string>Commands you run in the terminal can use files on network drives.</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>Commands you run in the terminal can use files on removable drives.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>NSSupportsLiveActivitiesFrequentUpdates</key>
