@@ -749,9 +749,10 @@ private struct KeyBarProfilesView: View {
     }
 
     private func caps(_ profile: KeyBarProfile) -> [AnyView] {
-        // Capsule A is the same in every profile; capsule B follows it, in priority order.
-        let spine = ["esc", "ctrl", "alt", "⇥"].map { AnyView(KeyCap($0)) }
-        let wing = profile.keys.map { key -> AnyView in
+        // The pinned keys are the same in every profile; the profile's keys, then the favourites, follow.
+        let spine = ["esc", "ctrl", "⇥", "^C"].map { AnyView(KeyCap($0)) }
+        var seen = KeyCatalog.pinnedIDs
+        let wing = (profile.keys + FavouriteKeys.shared.keys).filter { seen.insert($0.id).inserted }.map { key -> AnyView in
             if let title = key.title {
                 return AnyView(KeyCap(title))
             }

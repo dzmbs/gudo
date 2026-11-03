@@ -25,6 +25,9 @@ public final class TerminalView: UIView {
     public var takeLatchedModifiers: (() -> KeyModifiers)?
     /// Shown above the software keyboard while this view is first responder.
     public var keyBar: UIView?
+    /// Shown in place of the software keyboard while set (a keys panel); call
+    /// `reloadInputViews()` after changing it.
+    public var keyPanel: UIView?
     /// Which Option keys act as Meta (Ghostty's `macos-option-as-alt`).
     public var optionAsMeta = OptionAsMeta.none
     /// Visual flash plus a haptic on BEL.
@@ -327,6 +330,7 @@ public final class TerminalView: UIView {
         TerminalSurface.holdGrids(for: .milliseconds(700))
     }
     override public var inputAccessoryView: UIView? { keyBar }
+    override public var inputView: UIView? { keyPanel }
 
     @discardableResult
     override public func becomeFirstResponder() -> Bool {

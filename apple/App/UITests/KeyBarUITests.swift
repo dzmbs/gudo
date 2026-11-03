@@ -21,7 +21,7 @@ final class KeyBarUITests: XCTestCase {
         XCTAssertTrue(waitFor(profile, value: "Vim"))
         XCTAssertTrue(app.buttons["keybar-colon"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["keybar-ctrl"].exists)
-        XCTAssertFalse(app.buttons["keybar-pipe"].exists)
+        XCTAssertTrue(app.buttons["keybar-pipe"].exists, "the favourites follow the profile's keys")
         XCTAssertFalse(element(app, "keybar-composer").exists, "no composer for vim")
 
         app.buttons["keybar-esc"].tap()
@@ -111,18 +111,19 @@ final class KeyBarUITests: XCTestCase {
         hold()
     }
 
-    /// esc, ctrl and tab are pinned in the same place in every profile, the arrows lead the
-    /// scrolling keys, a key's second character is in its long-press menu, and ctrl locks on a
+    /// esc, ctrl, tab and ^C are pinned in the same place in every profile, the joystick sits
+    /// beside the row, a key's second character is in its long-press menu, and ctrl locks on a
     /// double tap.
     @MainActor
     func testPinnedKeysStayLongPressSendsAlternateAndCtrlLocks() throws {
         let app = launch()
-        let pinned = ["keybar-esc", "keybar-ctrl", "keybar-tab"]
+        let pinned = ["keybar-esc", "keybar-ctrl", "keybar-tab", "keybar-ctrl-c"]
         XCTAssertTrue(element(app, "keybar-tab").waitForExistence(timeout: 5))
         let shellFrames = pinned.map { element(app, $0).frame }
-        for id in ["keybar-left", "keybar-down", "keybar-up", "keybar-right", "keybar-tilde"] {
-            XCTAssertTrue(app.buttons[id].isHittable, "\(id) is on the bar")
+        for id in ["keybar-ctrl-c", "keybar-tilde", "keybar-joystick", "keybar-hide-keyboard"] {
+            XCTAssertTrue(element(app, id).isHittable, "\(id) is on the bar")
         }
+        XCTAssertFalse(app.buttons["keybar-home"].exists, "Home and the paging keys are in the keys panel")
 
         app.typeText("title vim main.swift\n")
         XCTAssertTrue(waitFor(app.buttons["keybar-profile"], value: "Vim"))
@@ -156,15 +157,15 @@ final class KeyBarUITests: XCTestCase {
         hold()
     }
 
-    /// The keys past the edge are a swipe away: the strip scrolls to the paging keys.
+    /// The keys past the edge are a swipe away: the strip scrolls to the last favourite.
     @MainActor
     func testStripScrollsToTheRest() throws {
         let app = launch()
-        let pageDown = app.buttons["keybar-pgdn"]
-        XCTAssertTrue(pageDown.waitForExistence(timeout: 5))
+        let last = app.buttons["keybar-paste"]
+        XCTAssertTrue(last.waitForExistence(timeout: 5))
         let strip = element(app, "keybar-strip")
-        for _ in 0..<4 where !pageDown.isHittable { strip.swipeLeft() }
-        XCTAssertTrue(pageDown.isHittable, "the last key is reachable")
+        for _ in 0..<4 where !last.isHittable { strip.swipeLeft() }
+        XCTAssertTrue(last.isHittable, "the last key is reachable")
         XCTAssertTrue(app.buttons["keybar-esc"].isHittable, "esc stays while the rest scrolls")
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = "strip"
@@ -180,7 +181,7 @@ final class KeyBarUITests: XCTestCase {
         defer { XCUIDevice.shared.orientation = .portrait }
         let alt = app.buttons["keybar-alt"]
         XCTAssertTrue(alt.waitForExistence(timeout: 5), "alt is pinned in landscape")
-        let ids = ["keybar-esc", "keybar-ctrl", "keybar-alt", "keybar-tab", "keybar-left", "keybar-down", "keybar-up", "keybar-right", "keybar-tilde", "keybar-pipe", "keybar-profile"]
+        let ids = ["keybar-esc", "keybar-ctrl", "keybar-alt", "keybar-tab", "keybar-ctrl-c", "keybar-tilde", "keybar-joystick", "keybar-profile", "keybar-hide-keyboard"]
         let frames = ids.map { element(app, $0).frame }
         let screen = app.windows.firstMatch.frame
         for (id, frame) in zip(ids, frames) {
@@ -215,19 +216,161 @@ final class KeyBarUITests: XCTestCase {
         XCTAssertLessThanOrEqual(esc.frame.height, 34, "a slim pill: \(esc.frame)")
         app.typeText("title claude\n")
         XCTAssertFalse(element(app, "keybar-composer").exists, "no composer by default")
-        XCTAssertFalse(app.buttons["keybar-left"].exists, "only the pill with a hardware keyboard")
+        XCTAssertFalse(element(app, "keybar-joystick").isHittable, "only the pill with a hardware keyboard")
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = "hardware-pill"
         attachment.lifetime = .keepAlways
         add(attachment)
     }
 
+    /// Tapping the joystick swaps the keyboard for the keys panel at the same height: the
+    /// terminal neither moves nor resizes, the panel's keys type, and back to the keyboard keeps
+    /// it still too.
     @MainActor
-    private func launch() -> XCUIApplication {
+    func testKeysPanelReplacesTheKeyboardWithoutMovingTheTerminal() throws {
+        let app = launch(probe: true)
+        let joystick = element(app, "keybar-joystick")
+        XCTAssertTrue(joystick.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "the software keyboard is up")
+        let pane = element(app, "pane-1")
+        let paneFrame = pane.frame
+        let barFrame = element(app, "keybar-esc").frame
+        let resizes = settledResizes(app)
+        snapshot(app, "1-keyboard")
+
+        joystick.tap()
+        let panel = element(app, "keypanel")
+        XCTAssertTrue(panel.waitForExistence(timeout: 5))
+        XCTAssertEqual(joystick.value as? String, "Keys open")
+        XCTAssertEqual(pane.frame, paneFrame, "the terminal stays where it was")
+        XCTAssertEqual(element(app, "keybar-esc").frame, barFrame, "the bar stays where it was")
+        XCTAssertEqual(settledResizes(app), resizes, "no resize for the panel")
+        snapshot(app, "2-panel")
+
+        let symbols = element(app, "keypanel-rbrace")
+        for _ in 0..<6 where !(symbols.exists && symbols.isHittable) { element(app, "keypanel-keys").swipeUp() }
+        symbols.tap()
+        expectScreen(app, containing: "}")
+
+        element(app, "keypanel-keyboard").tap()
+        XCTAssertTrue(panel.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "the keyboard is back")
+        XCTAssertEqual(pane.frame, paneFrame)
+        XCTAssertEqual(settledResizes(app), resizes, "no resize back to the keyboard")
+    }
+
+    /// Edit in the panel adds a key to the bar and removes it again; Reset brings the defaults
+    /// back. The choice is saved on the device.
+    @MainActor
+    func testEditBarAddsRemovesAndResets() throws {
+        let app = launch()
+        let joystick = element(app, "keybar-joystick")
+        XCTAssertTrue(joystick.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        joystick.tap()
+        XCTAssertTrue(element(app, "keypanel").waitForExistence(timeout: 5))
+        element(app, "keypanel-edit").tap()
+        let reset = element(app, "keypanel-reset")
+        XCTAssertTrue(reset.waitForExistence(timeout: 5))
+        if reset.isEnabled { reset.tap() }
+        XCTAssertTrue(element(app, "keypanel-bar-tilde").waitForExistence(timeout: 5), "the bar's keys lead the editor")
+        snapshot(app, "3-edit")
+
+        let keys = element(app, "keypanel-keys")
+        let fiveInPanel = element(app, "keypanel-f5")
+        for _ in 0..<8 where !(fiveInPanel.exists && fiveInPanel.isHittable) { keys.swipeUp() }
+        fiveInPanel.tap()
+        XCTAssertTrue(app.buttons["keybar-f5"].waitForExistence(timeout: 5), "F5 joins the bar")
+
+        let tildeInBar = element(app, "keypanel-bar-tilde")
+        for _ in 0..<8 where !(tildeInBar.exists && tildeInBar.isHittable) { keys.swipeDown() }
+        tildeInBar.tap()
+        XCTAssertTrue(app.buttons["keybar-tilde"].waitForNonExistence(timeout: 5), "~ leaves the bar")
+
+        reset.tap()
+        XCTAssertTrue(app.buttons["keybar-tilde"].waitForExistence(timeout: 5), "reset brings ~ back")
+        XCTAssertFalse(app.buttons["keybar-f5"].exists, "and drops F5")
+        element(app, "keypanel-edit").tap()
+        element(app, "keypanel-keyboard").tap()
+        XCTAssertTrue(element(app, "keypanel").waitForNonExistence(timeout: 5))
+    }
+
+    /// ^C has its own key; a drag from the joystick (arrows) does not open the panel; a swipe
+    /// down on the bar hides the keyboard and a tap on the terminal brings it back.
+    @MainActor
+    func testInterruptJoystickDragAndSwipeDownHidesKeyboard() throws {
+        let app = launch()
+        let joystick = element(app, "keybar-joystick")
+        XCTAssertTrue(joystick.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        app.typeText("sleep")
+        app.buttons["keybar-ctrl-c"].tap()
+        expectScreen(app, containing: "^C")
+        let start = joystick.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: -40, dy: 0)))
+        XCTAssertFalse(element(app, "keypanel").waitForExistence(timeout: 1), "a drag sends arrows, it does not open the panel")
+
+        let bar = element(app, "keybar-tab")
+        bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2))
+            .press(forDuration: 0.01, thenDragTo: bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 3)))
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5), "the keyboard goes down")
+        element(app, "pane-1").tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "a tap on the terminal brings it back")
+    }
+
+    @MainActor
+    private func expectScreen(_ app: XCUIApplication, containing text: String) {
+        let pane = element(app, "pane-1-screen")
+        let predicate = NSPredicate(format: "value CONTAINS %@", text)
+        XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: pane)], timeout: 5), .completed,
+                       "pane shows \(text): \(String(describing: pane.value))")
+    }
+
+    /// Screenshots for review: attached, and written to `KEYBAR_SCREENSHOTS` when set.
+    @MainActor
+    private func snapshot(_ app: XCUIApplication, _ name: String) {
+        let screenshot = app.screenshot()
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        guard let directory = ProcessInfo.processInfo.environment["KEYBAR_SCREENSHOTS"] else { return }
+        let device = UIDevice.current.userInterfaceIdiom == .pad ? "ipad" : "iphone"
+        try? screenshot.pngRepresentation.write(to: URL(fileURLWithPath: directory).appendingPathComponent("\(device)-\(name).png"))
+    }
+
+    @MainActor
+    private func settledResizes(_ app: XCUIApplication) -> [UInt64: Int] {
+        var last = resizes(app)
+        for _ in 0..<10 {
+            Thread.sleep(forTimeInterval: 1)
+            let now = resizes(app)
+            if now == last { return now }
+            last = now
+        }
+        return last
+    }
+
+    @MainActor
+    private func resizes(_ app: XCUIApplication) -> [UInt64: Int] {
+        let probe = app.descendants(matching: .any)["window-probe"]
+        guard let text = probe.value as? String, let data = text.data(using: .utf8),
+              let fields = try? JSONDecoder().decode([String: String].self, from: data) else { return [:] }
+        var counts: [UInt64: Int] = [:]
+        for pair in (fields["resizes"] ?? "").split(separator: " ") {
+            let parts = pair.split(separator: ":")
+            if parts.count == 2, let pane = UInt64(parts[0]), let count = Int(parts[1]) { counts[pane] = count }
+        }
+        return counts
+    }
+
+    @MainActor
+    private func launch(probe: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         // The simulator may report a hardware keyboard; these tests are about the full bar.
         app.launchArguments += ["-keyBar.fullWithHardwareKeyboard", "YES"]
         app.launchArguments += ["-restoreLastTarget", "NO", "-localEcho", "YES"]
+        if probe { app.launchArguments += ["-windowProbe", "YES"] }
         app.launch()
         let pane1 = element(app, "pane-1")
         XCTAssertTrue(pane1.waitForExistence(timeout: 10))
