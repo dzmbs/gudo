@@ -40,6 +40,7 @@ mod conn;
 mod core;
 mod forward;
 mod fsutil;
+mod hook_launcher;
 mod identity;
 mod input;
 mod layout;
@@ -131,6 +132,10 @@ impl Daemon {
     pub async fn start(mut config: Config) -> Result<Self, StartError> {
         limits::raise_fd_limit();
         config.apply_user_file()?;
+        match hook_launcher::install(&config.state_dir, &config.hook_bin()) {
+            Ok(launcher) => config.hook_bin = Some(launcher),
+            Err(error) => tracing::warn!("writing the hook launcher: {error}"),
+        }
         let identity = Arc::new(Identity::load_or_create(&config.state_dir)?);
         let (creators, (layout, records, closed)) = match persist::load(&config.state_dir)? {
             Some(mut saved) => (saved.take_creators(), saved.into_parts()),
@@ -151,6 +156,7 @@ impl Daemon {
             config.presence,
         )?;
         let core = Core::new(config, identity, layout, hooks, shell, mp);
+        repair_hook_paths(&core);
         let mut tasks = vec![HookServer::listen(&core)?];
         core::restore(&core, records, closed);
         core.term
@@ -275,6 +281,48 @@ impl Daemon {
         self.core.kill_panes(&panes);
         self.core.hooks.remove_socket();
     }
+}
+
+/// Points hook and MCP server paths that earlier daemons wrote at this daemon's launcher.
+fn repair_hook_paths(core: &Core) {
+    let config = &core.cfg;
+    let home = config.home();
+    let account_dirs = |agent: proto::AgentKind| -> Vec<std::path::PathBuf> {
+        core.ws
+            .accounts
+            .list()
+            .into_iter()
+            .filter(|account| account.agent == agent && !account.is_system())
+            .map(|account| core.ws.accounts.dir(agent, &account.id))
+            .collect()
+    };
+    let system_dir = |var: &str| config.pane_var(var).map(std::path::PathBuf::from);
+    let claude_configs: Vec<_> = std::iter::once(agents::ClaudeCode::user_config_file(
+        &home,
+        system_dir(agents::CLAUDE_DIR_VAR).as_deref(),
+    ))
+    .chain(
+        account_dirs(proto::AgentKind::Claude)
+            .iter()
+            .map(|dir| agents::ClaudeCode::user_config_file(&home, Some(dir))),
+    )
+    .collect();
+    let codex_configs: Vec<_> = std::iter::once(agents::Codex::config_file(
+        &home,
+        system_dir(agents::CODEX_DIR_VAR).as_deref(),
+    ))
+    .chain(
+        account_dirs(proto::AgentKind::Codex)
+            .iter()
+            .map(|dir| agents::Codex::config_file(&home, Some(dir))),
+    )
+    .collect();
+    hook_launcher::repair(
+        &config.state_dir,
+        &config.hook_bin(),
+        &claude_configs,
+        &codex_configs,
+    );
 }
 
 async fn bind(core: &Core) -> Result<Endpoint, StartError> {
