@@ -15,7 +15,7 @@ struct GrantsView: View {
     private var ended: [GrantInfo] { session.grants.filter { $0.revoked || isExpired($0) }.sorted { $0.grant.issuedAtMs > $1.grant.issuedAtMs } }
 
     var body: some View {
-        List {
+        Form {
             HostAlertsSection(session: session)
             Section {
                 if active.isEmpty {
@@ -49,6 +49,7 @@ struct GrantsView: View {
                 .chromeRows()
             }
         }
+        .formStyle(.grouped)
         .chromeGrouped()
         .navigationTitle("Access & Grants")
         .refreshable { await session.refreshGrants() }
@@ -200,9 +201,12 @@ struct AuditLogView: View {
     }
 
     var body: some View {
-        List {
+        Form {
             Section {
                 chainStatus
+                #if os(macOS)
+                FilterField(text: $query, prompt: "Filter by person, tool or command")
+                #endif
                 Picker("Show", selection: $filter) {
                     ForEach(Filter.allCases) { Text($0.title).tag($0) }
                 }
@@ -232,9 +236,12 @@ struct AuditLogView: View {
             }
             .chromeRows()
         }
+        .formStyle(.grouped)
         .chromeGrouped()
         .navigationTitle("Audit Log")
+        #if os(iOS)
         .searchable(text: $query, prompt: "Filter by person, tool or command")
+        #endif
         .refreshable { await session.loadAudit() }
         .task { await session.loadAudit() }
         .accessibilityIdentifier("audit-list")

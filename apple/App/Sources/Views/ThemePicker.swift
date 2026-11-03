@@ -52,17 +52,19 @@ struct ThemePicker: View {
             .padding(.horizontal, DS.Space.xl)
             .padding(.vertical, DS.Space.m)
         }
-        .safeAreaInset(edge: .top, spacing: 0) {
+        // Part of the bar: tiles pass under it through the bar's edge effect.
+        .safeAreaBar(edge: .top) {
             Picker("Appearance", selection: $filter) {
                 ForEach(Filter.allCases) { Text($0.rawValue).tag($0) }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            #if os(macOS)
+            .fixedSize()
+            .frame(maxWidth: .infinity)
+            #endif
             .padding(.horizontal, DS.Space.xl)
             .padding(.vertical, DS.Space.s)
-            // Opaque, so tiles never show through as they scroll under it.
-            .background(DS.Palette.groupedPage)
-            .overlay(alignment: .bottom) { Rectangle().fill(DS.Palette.hairline).frame(height: 1) }
         }
         .chromeGrouped()
         .sensoryFeedback(.selection, trigger: selection)

@@ -8,18 +8,8 @@ struct SharingSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        NavigationStack {
+        SheetScaffold("Sharing", primary: SheetAction("Done", identifier: "sharing-done") { dismiss() }) {
             content
-                .navigationTitle("Sharing")
-                #if os(iOS)
-                .navigationBarTitleDisplayMode(.inline)
-                #endif
-                .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { dismiss() }
-                            .accessibilityIdentifier("sharing-done")
-                    }
-                }
         }
         .macMinimumSize(width: 560, height: 560)
     }

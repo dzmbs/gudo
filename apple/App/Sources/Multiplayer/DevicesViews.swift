@@ -91,10 +91,11 @@ struct HostDevicesView: View {
             if let session = DeviceHosts.session(hostId, hosts: hosts), session.me != nil {
                 if session.isOwner {
                     let pair = session.canManageDevices ? { pairing = PairDeviceRequest(hostId: hostId) } : nil
-                    List {
+                    Form {
                         HostAlertsSection(session: session)
                         DevicesSections(session: session, hostName: name, removing: $removing, renaming: $renaming, onPair: pair)
                     }
+                    .formStyle(.grouped)
                     .chromeGrouped()
                     .modifier(RemoveDeviceDialog(session: session, hostName: name, device: $removing))
                     .modifier(RenameDeviceDialog(session: session, device: $renaming))
@@ -148,8 +149,10 @@ struct DevicesSections: View {
             }
             if let onPair {
                 Button(action: onPair) {
-                    Label("Pair a Device…", systemImage: "plus.circle")
+                    Label("Pair a Device…", systemImage: "plus")
                 }
+                .buttonStyle(.borderless)
+                .foregroundStyle(DS.Palette.accent)
                 .accessibilityIdentifier("devices-pair-row")
             }
         } header: {

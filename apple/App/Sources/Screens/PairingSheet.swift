@@ -88,13 +88,6 @@ struct PairingSheet: View {
             }
         ) {
             Form {
-                #if os(iOS)
-                Section {
-                    methodPicker
-                        .listRowBackground(Color.clear)
-                        .listRowInsets(EdgeInsets())
-                }
-                #endif
                 switch mode {
                 case .ssh:
                     sshSection.chromeRows()
@@ -112,6 +105,13 @@ struct PairingSheet: View {
                     .fixedSize()
                     .frame(maxWidth: .infinity)
                     .padding(.top, DS.Space.m)
+            }
+            #else
+            // Under the navigation bar, part of it: the form scrolls beneath both.
+            .safeAreaBar(edge: .top) {
+                methodPicker
+                    .padding(.horizontal, DS.Space.xl)
+                    .padding(.bottom, DS.Space.s)
             }
             #endif
             .macFittedForm(maxHeight: 520, step: formStep)

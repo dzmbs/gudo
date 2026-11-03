@@ -23,7 +23,14 @@ struct InviteSheet: View {
 
     var body: some View {
         #if os(macOS)
-        SheetScaffold("Share Session", primary: SheetAction("Done", identifier: "share-done") { dismiss() }) {
+        // One header: a pushed page takes the sheet's title, and Back sits on the buttons' line.
+        SheetScaffold(path.last?.title ?? "Share Session", primary: SheetAction("Done", identifier: "share-done") { dismiss() }) {
+            if !path.isEmpty {
+                Button("Back", systemImage: "chevron.left") { path.removeLast() }
+                    .keyboardShortcut("[", modifiers: .command)
+                    .accessibilityIdentifier("share-back")
+            }
+        } content: {
             NavigationStack(path: $path) { root }
         }
         .frame(width: 560, height: 680)
@@ -49,10 +56,15 @@ struct InviteSheet: View {
         if let session = workspace.multiplayer {
             ShareRoot(workspace: workspace, session: session)
                 .navigationDestination(for: ShareRoute.self) { route in
-                    switch route {
-                    case .grants: GrantsView(session: session, hostName: DeviceHosts.name(workspace.hostId ?? "", hosts: AppModel.shared.hosts))
-                    case .audit: AuditLogView(session: session)
+                    Group {
+                        switch route {
+                        case .grants: GrantsView(session: session, hostName: DeviceHosts.name(workspace.hostId ?? "", hosts: AppModel.shared.hosts))
+                        case .audit: AuditLogView(session: session)
+                        }
                     }
+                    #if os(macOS)
+                    .toolbarVisibility(.hidden, for: .windowToolbar)
+                    #endif
                 }
         } else {
             EmptyState(
@@ -66,6 +78,13 @@ struct InviteSheet: View {
 
 enum ShareRoute: String, Hashable {
     case grants, audit
+
+    var title: String {
+        switch self {
+        case .grants: "Access & Grants"
+        case .audit: "Audit Log"
+        }
+    }
 }
 
 private struct ShareRoot: View {
@@ -561,12 +580,19 @@ private struct PersonRow: View {
     let session: MultiplayerSession
     let workspace: Workspace
     var onRemove: (() -> Void)?
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    /// On a phone Remove is the row's swipe and menu: the row keeps its room for the name.
+    private var showsRemove: Bool { sizeClass != .compact }
+    #else
+    private let showsRemove = true
+    #endif
 
     var body: some View {
         let isMe = person.actor.principal == session.myPrincipal
         HStack(spacing: DS.Space.s) {
             info(isMe: isMe)
-            if let onRemove {
+            if let onRemove, showsRemove {
                 Button("Remove", role: .destructive, action: onRemove)
                     .buttonStyle(QuietButtonStyle())
                     .accessibilityIdentifier("remove-\(person.name)")
