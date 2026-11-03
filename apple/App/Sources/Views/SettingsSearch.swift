@@ -117,6 +117,8 @@ enum SettingsIndex {
             .init(id: "devices-pair", title: "Pair a Device", section: .devices, synonyms: ["pair", "qr", "code", "phone", "ipad", "iphone", "add device", "rename"]),
             .init(id: "version", title: "Version", section: .about, synonyms: ["build", "about"]),
             .init(id: "acknowledgements", title: "Acknowledgements", section: .about, synonyms: ["licenses", "licences", "credits", "open source"]),
+            .init(id: "privacy-policy", title: "Privacy Policy", section: .about, synonyms: ["privacy", "data"]),
+            .init(id: "support", title: "Support", section: .about, synonyms: ["help", "contact", "feedback"]),
         ]
         #if os(iOS)
         entries += [

@@ -630,6 +630,14 @@ private struct AboutSection: View {
                 .settingAnchor("version")
             NavigationLink("Acknowledgements", value: SettingsPage.acknowledgements)
                 .settingAnchor("acknowledgements")
+            if let privacy = URL(string: "https://\(Brand.webDomain)/privacy/") {
+                Link("Privacy Policy", destination: privacy)
+                    .settingAnchor("privacy-policy")
+            }
+            if let support = URL(string: "https://\(Brand.webDomain)/support/") {
+                Link("Support", destination: support)
+                    .settingAnchor("support")
+            }
         } header: {
             PaneSectionTitle("About")
         }
