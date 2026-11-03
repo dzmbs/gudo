@@ -436,6 +436,7 @@ final class PaneDrawing: NSObject {
         overlay.view.frame = view.bounds
         view.addSubview(overlay.view)
         publishDrawingFocus()
+        SketchMode.shared.began(on: self)
         if let tray = trayView {
             #if os(iOS)
             view.bringSubviewToFront(tray)
@@ -459,6 +460,7 @@ final class PaneDrawing: NSObject {
         overlay = nil
         hiddenPlacement = nil
         publishDrawingFocus()
+        SketchMode.shared.ended(on: self)
         if Self.active === self, !isWriting { Self.active = nil }
         // Give the keyboard back only if the terminal had it, so the software one never pops up.
         guard keyboardBeforeOverlay else { return }
@@ -886,8 +888,7 @@ final class PaneDrawing: NSObject {
 
     /// From the terminal's background, for the canvas and the overlay's theme.
     var isDarkTheme: Bool {
-        let background = pane?.view.surface.appearance.background ?? RGB(r: 0x28, g: 0x2C, b: 0x34)
-        return 0.2126 * Double(background.r) + 0.7152 * Double(background.g) + 0.0722 * Double(background.b) < 128
+        (pane?.view.surface.appearance.background ?? RGB(r: 0x28, g: 0x2C, b: 0x34)).isDark
     }
 
     // MARK: Peer ink
@@ -942,6 +943,12 @@ final class PaneDrawing: NSObject {
 
     static func acceptsFile(named name: String) -> Bool {
         ["png", "jpg", "jpeg", "excalidraw"].contains((name as NSString).pathExtension.lowercased())
+    }
+}
+
+extension RGB {
+    var isDark: Bool {
+        0.2126 * Double(r) + 0.7152 * Double(g) + 0.0722 * Double(b) < 128
     }
 }
 

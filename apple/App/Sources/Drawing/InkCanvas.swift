@@ -5,9 +5,9 @@ import PencilKit
 import UIKit
 import GudoCore
 
-/// Pencil ink on the draw overlay: PencilKit draws the live stroke (for its latency and
+/// Pencil ink on the draw overlay and canvas panes: PencilKit draws the live stroke (for its latency and
 /// prediction), points stream to other clients every ~16 ms, and on lift the stroke becomes an
-/// Excalidraw `freedraw` element in the overlay's scene.
+/// Excalidraw `freedraw` element in the scene.
 ///
 /// `InkHandoff` keeps the PencilKit stroke until the page says it has drawn the element, so the
 /// stroke never disappears:
@@ -18,10 +18,21 @@ import GudoCore
 /// - unconfirmed elements are resent (the page de-duplicates by id);
 /// - strokes are matched by identity, not by count, so a stroke PencilKit reports late is still
 ///   converted.
+/// Where converted ink goes: the draw overlay or a canvas pane.
+@MainActor
+protocol InkHost: AnyObject {
+    /// Maps view points to scene px; nil until the editor has placed its scene.
+    var currentGeometry: OverlayGeometry? { get }
+    var artifactId: UInt64? { get }
+    var client: DaemonClient { get }
+    func addInk(_ elements: [[String: Any]])
+    func markEdited()
+}
+
 @MainActor
 final class InkCanvasController: NSObject, PKCanvasViewDelegate {
     let canvas = InkCanvas()
-    private weak var overlay: DrawOverlay?
+    private weak var host: (any InkHost)?
     private var handoff = InkHandoff()
     /// Converted elements by id, kept for resends, and their PencilKit strokes.
     private var elements: [String: [String: Any]] = [:]
@@ -33,8 +44,8 @@ final class InkCanvasController: NSObject, PKCanvasViewDelegate {
     private var settleWaiters: [CheckedContinuation<Void, Never>] = []
     private static let log = CanvasWebView.log
 
-    init(overlay: DrawOverlay) {
-        self.overlay = overlay
+    init(host: any InkHost) {
+        self.host = host
         super.init()
         canvas.delegate = self
         canvas.backgroundColor = .clear
@@ -133,7 +144,7 @@ final class InkCanvasController: NSObject, PKCanvasViewDelegate {
     private func post(_ ids: [String]) {
         let list = ids.compactMap { elements[$0] }
         guard !list.isEmpty else { return }
-        overlay?.addInk(list)
+        host?.addInk(list)
     }
 
     private func resendOverdue() {
@@ -159,13 +170,13 @@ final class InkCanvasController: NSObject, PKCanvasViewDelegate {
     // MARK: Live ink
 
     private func sample(_ touch: UITouch, in view: UIView) {
-        guard let overlay, let geometry = overlay.currentGeometry, let artifactId = overlay.artifactId else { return }
+        guard let host, let geometry = host.currentGeometry, let artifactId = host.artifactId else { return }
         let point = geometry.scene(fromView: touch.preciseLocation(in: view))
         let pressure = touch.maximumPossibleForce > 0 ? min(1, touch.force / touch.maximumPossibleForce * 1.5) : 0.5
         live.add(InkPoint(
             x: Float(point.x), y: Float(point.y), pressure: Float(max(pressure, 0.05)),
             altitude: Float(touch.altitudeAngle), azimuth: Float(touch.azimuthAngle(in: view)), tMs: 0),
-            artifactId: artifactId, client: overlay.client)
+            artifactId: artifactId, client: host.client)
     }
 
     // MARK: Commit
@@ -184,13 +195,13 @@ final class InkCanvasController: NSObject, PKCanvasViewDelegate {
         convertNew()
     }
 
-    /// Converts new PencilKit strokes once the overlay knows its geometry.
+    /// Converts new PencilKit strokes once the host knows its geometry.
     func convertNew() {
-        guard let overlay else { return }
+        guard let host else { return }
         let fresh = canvas.drawing.strokes.filter { !known.contains(StrokeKey($0)) }
         guard !fresh.isEmpty else { return }
-        guard let geometry = overlay.currentGeometry else {
-            Self.log.info("ink: \(fresh.count) stroke(s) wait for the overlay's geometry")
+        guard let geometry = host.currentGeometry else {
+            Self.log.info("ink: \(fresh.count) stroke(s) wait for the scene geometry")
             return
         }
         var send: [String] = []
@@ -213,7 +224,7 @@ final class InkCanvasController: NSObject, PKCanvasViewDelegate {
             Self.log.info("ink: stroke \(String(id), privacy: .public) \(stroke.path.count) pts \(String(format: "%.0f", stroke.renderBounds.width), privacy: .public)×\(String(format: "%.0f", stroke.renderBounds.height), privacy: .public) pt → \(sentNow ? "sent" : "held until the page loads", privacy: .public)")
             if sentNow { send.append(String(id)) }
         }
-        overlay.markEdited()
+        host.markEdited()
         post(send)
     }
 

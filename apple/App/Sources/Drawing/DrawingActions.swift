@@ -183,29 +183,13 @@ extension PaneDrawing {
         workspace.flatMap { ActiveWindow.model(for: $0) } ?? ActiveWindow.model
     }
 
-    /// Every agent pane on every daemon host this window shows: the default target first, then
-    /// this host's, then other hosts'.
+    /// Every agent pane on every daemon host this window shows: this pane's first, then its tab's,
+    /// this host's, other hosts'.
     func agentDestinations() -> [AgentDestination] {
         guard let window else { return [] }
-        let thisHost = workspace?.hostId
-        var result: [AgentDestination] = []
-        for group in window.groups.groups where !group.isLocal {
-            guard let daemon = window.app.hosts.connection(group.id) as? DaemonConnection, daemon.status.isLive else { continue }
-            let tabs = daemon.layout.session.tabs
-            for (pane, meta) in daemon.meta.all {
-                guard let agent = meta.agent, meta.exit == nil else { continue }
-                guard let tab = tabs.first(where: { $0.root.panes.contains(pane) }) else { continue }
-                result.append(AgentDestination(
-                    hostId: group.id, hostName: group.name, pane: pane.rawValue, agent: AgentKind(agent.kind),
-                    title: tab.title ?? meta.title, sameHost: group.id == thisHost))
-            }
-        }
-        let preferred = agentTarget()?.pane
-        func sortKey(_ destination: AgentDestination) -> (Int, String, UInt64) {
-            let rank = destination.sameHost && destination.pane == preferred ? 0 : destination.sameHost ? 1 : 2
-            return (rank, destination.hostName, destination.pane)
-        }
-        return result.sorted { sortKey($0) < sortKey($1) }
+        let pane = PaneId(paneId)
+        let tabPanes = workspace?.session.tab(containing: pane)?.root.panes.map(\.rawValue) ?? []
+        return AgentDestination.all(in: window, hostId: workspace?.hostId, target: agentTarget()?.pane ?? paneId, tabPanes: Set(tabPanes))
     }
 
     /// An agent in this pane or its tab.
@@ -224,16 +208,7 @@ extension PaneDrawing {
         case .keep:
             return .kept
         case .send(let destination):
-            if destination.sameHost {
-                _ = try await hub.client.sendToAgent(paneId: destination.pane, artifactId: artifactId, version: nil, png: png)
-            } else {
-                guard let daemon = window?.app.hosts.connection(destination.hostId) as? DaemonConnection,
-                      let client = daemon.workspace.api as? DaemonClient
-                else { throw ArtifactError.Disconnected }
-                _ = try await client.sendToAgent(paneId: destination.pane, artifactId: nil, version: nil, png: png)
-            }
-            window?.reveal(host: destination.hostId, pane: destination.pane)
-            CanvasWebView.log.info("drawing sent to \(destination.agent.rawValue, privacy: .public) pane \(destination.pane) on \(destination.hostName, privacy: .private)")
+            try await AgentDestination.send(png, artifactId: artifactId, to: destination, hub: hub, window: window)
             return .sent(destination.agent.title)
         case .start(let kind):
             try await startAgent(kind, artifactId: artifactId, png: png)
@@ -354,6 +329,42 @@ extension PaneDrawing {
         }
         _ = try await hub.client.sendToAgent(paneId: pane, artifactId: artifactId, version: nil, png: png)
         CanvasWebView.log.info("drawing attached to a new \(kind.rawValue, privacy: .public) in pane \(pane)")
+    }
+}
+
+extension AgentDestination {
+    /// Every agent pane on every live daemon host `window` shows, ordered by `SketchTargeting`.
+    @MainActor
+    static func all(in window: WindowModel, hostId: String?, target: UInt64?, tabPanes: Set<UInt64>) -> [AgentDestination] {
+        var result: [AgentDestination] = []
+        for group in window.groups.groups where !group.isLocal {
+            guard let daemon = window.app.hosts.connection(group.id) as? DaemonConnection, daemon.status.isLive else { continue }
+            let tabs = daemon.layout.session.tabs
+            for (pane, meta) in daemon.meta.all {
+                guard let agent = meta.agent, meta.exit == nil else { continue }
+                guard let tab = tabs.first(where: { $0.root.panes.contains(pane) }) else { continue }
+                result.append(AgentDestination(
+                    hostId: group.id, hostName: group.name, pane: pane.rawValue, agent: AgentKind(agent.kind),
+                    title: tab.title ?? meta.title, sameHost: group.id == hostId))
+            }
+        }
+        return SketchTargeting.ordered(result, target: target, tabPanes: tabPanes)
+    }
+
+    /// Attaches `png` to the agent's prompt; on the drawing's own host the agent gets the
+    /// drawing itself, elsewhere the image is uploaded.
+    @MainActor
+    static func send(_ png: Data, artifactId: UInt64?, to destination: AgentDestination, hub: DrawingHub, window: WindowModel?) async throws {
+        if destination.sameHost {
+            _ = try await hub.client.sendToAgent(paneId: destination.pane, artifactId: artifactId, version: nil, png: png)
+        } else {
+            guard let daemon = window?.app.hosts.connection(destination.hostId) as? DaemonConnection,
+                  let client = daemon.workspace.api as? DaemonClient
+            else { throw ArtifactError.Disconnected }
+            _ = try await client.sendToAgent(paneId: destination.pane, artifactId: nil, version: nil, png: png)
+        }
+        window?.reveal(host: destination.hostId, pane: destination.pane)
+        CanvasWebView.log.info("drawing sent to \(destination.agent.rawValue, privacy: .public) pane \(destination.pane) on \(destination.hostName, privacy: .private)")
     }
 }
 

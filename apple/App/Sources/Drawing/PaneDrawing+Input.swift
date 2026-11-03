@@ -371,7 +371,7 @@ final class PlacementMarker: UIView, UIDragInteractionDelegate {
     }
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        guard let drawing, drawing.isIdle else { return nil }
+        guard let drawing, drawing.isIdle, !SketchMode.shared.isSketching else { return nil }
         // The Pencil draws over the output, drawings included.
         if event?.allTouches?.contains(where: { $0.type == .pencil }) == true { return nil }
         return super.hitTest(point, with: event)
@@ -569,7 +569,7 @@ final class PlacementMarker: NSView, NSDraggingSource {
     override var isFlipped: Bool { true }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard let drawing, drawing.isIdle else { return nil }
+        guard let drawing, drawing.isIdle, !SketchMode.shared.isSketching else { return nil }
         return super.hitTest(point)
     }
 

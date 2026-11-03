@@ -509,10 +509,13 @@ private struct PaneLeaf: View {
     var body: some View {
         if let editor = tree.editor(leaf) {
             EditorLeafView(member: editor, isSplit: isSplit, isFocused: tree.focusedLeaf == leaf, focus: { tree.focus(leaf: leaf) })
+                .overlay { SketchLeafShield(leaf: leaf, workspace: tree.resolve(leaf)?.workspace) }
         } else if let browser = tree.browser(leaf) {
             BrowserLeafView(member: browser, isFocused: tree.focusedLeaf == leaf, focus: { tree.focus(leaf: leaf) })
+                .overlay { SketchLeafShield(leaf: leaf, workspace: tree.resolve(leaf)?.workspace) }
         } else if let tool = tree.tool(leaf) {
             ToolLeafView(member: tool, isSplit: isSplit, isFocused: tree.focusedLeaf == leaf, focus: { tree.focus(leaf: leaf) })
+                .overlay { SketchLeafShield(leaf: leaf, workspace: tree.resolve(leaf)?.workspace) }
         } else if let (workspace, pane) = tree.resolve(leaf) {
             PaneSlot(
                 id: pane, workspace: workspace, isSplit: isSplit, isFocused: tree.focusedLeaf == leaf,

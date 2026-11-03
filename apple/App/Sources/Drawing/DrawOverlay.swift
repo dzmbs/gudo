@@ -42,8 +42,7 @@ final class DrawOverlay: NSObject {
     private(set) var isEdited = false
     private var closeHandlers: [(Placement?) -> Void] = []
     private var placed: Placement?
-    /// The tool before a Pencil double tap switched to the eraser.
-    private var toolBeforeEraser: DrawTool?
+    private var pencilSwitch = PencilToolSwitch()
     /// Agents start and stop while the overlay is open.
     private var destinationsTimer: Timer?
     #if os(iOS)
@@ -89,7 +88,7 @@ final class DrawOverlay: NSObject {
         #if os(iOS)
         model.canWrite = UIDevice.current.userInterfaceIdiom == .pad && !model.readOnly
         if !model.readOnly {
-            let ink = InkCanvasController(overlay: self)
+            let ink = InkCanvasController(host: self)
             ink.canvas.frame = view.bounds
             view.addSubview(ink.canvas)
             self.ink = ink
@@ -367,7 +366,7 @@ final class DrawOverlay: NSObject {
 
     func refreshDestinations() {
         let list = drawing.agentDestinations()
-        let primary = drawing.primaryDestination(in: list)
+        let primary = SketchTargeting.primary(target: drawing.paneId, in: list)
         let canStart = drawing.canStartAgent
         // Assigned only on change: the toolbar's width follows the Send label, so it re-lays out.
         if model.destinations != list { model.destinations = list }
@@ -544,6 +543,8 @@ final class DrawOverlay: NSObject {
 }
 
 #if os(iOS)
+extension DrawOverlay: InkHost {}
+
 extension DrawOverlay: UIGestureRecognizerDelegate, UIPencilInteractionDelegate {
     @objc private func twoFingerPan(_ pan: UIPanGestureRecognizer) {
         guard let surface = drawing.surface, let cell = surface.cellSize else { return }
@@ -569,14 +570,19 @@ extension DrawOverlay: UIGestureRecognizerDelegate, UIPencilInteractionDelegate 
         true
     }
 
-    /// Pencil double tap or squeeze toggles the eraser.
+    /// Pencil double tap and squeeze do what the user chose in Settings ▸ Apple Pencil.
     func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveTap tap: UIPencilInteraction.Tap) {
-        if model.tool == .eraser {
-            setTool(toolBeforeEraser ?? .pen)
-        } else {
-            toolBeforeEraser = model.tool
-            setTool(.eraser)
-        }
+        respondToPencil(PencilPreference(UIPencilInteraction.preferredTapAction))
+    }
+
+    func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze) {
+        guard squeeze.phase == .ended else { return }
+        respondToPencil(PencilPreference(UIPencilInteraction.preferredSqueezeAction))
+    }
+
+    private func respondToPencil(_ preference: PencilPreference) {
+        guard !model.readOnly, let tool = pencilSwitch.respond(to: preference, current: model.tool) else { return }
+        setTool(tool)
     }
 }
 #endif
@@ -813,3 +819,16 @@ final class AnchorMark: PlatformView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 }
+
+#if os(iOS)
+extension PencilPreference {
+    init(_ action: UIPencilPreferredAction) {
+        switch action {
+        case .switchEraser: self = .switchEraser
+        case .switchPrevious: self = .switchPrevious
+        case .showColorPalette, .showInkAttributes, .showContextualPalette: self = .showPalette
+        default: self = .ignore
+        }
+    }
+}
+#endif
