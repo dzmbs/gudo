@@ -869,6 +869,10 @@ private struct SheetContent: View {
             ShortcutsSheet()
         case .replays:
             SessionReplaysSheet(request: model.replayRequest)
+        case .tabs:
+            #if os(iOS)
+            TabOverview(workspace: workspace)
+            #endif
         }
     }
 

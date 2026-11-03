@@ -75,6 +75,9 @@ enum DesignFixtures {
         switch screen {
         case "hosts": model.destination = .hosts
         case "projects": projects(model)
+        case "tab-overview":
+            projects(model)
+            model.sheet = .tabs
         case "project-hosts": projectHosts(model)
         case "tab-history": tabHistory(model)
         case "tab-selection": tabSelection(model)

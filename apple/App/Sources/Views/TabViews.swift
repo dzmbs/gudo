@@ -12,20 +12,24 @@ import SwiftUI
 /// clashes with a dark terminal next to it.
 struct WorkspaceSidebar: View {
     @Environment(WindowModel.self) private var model
+    /// Inbox and Hosts on top; the tab overview leaves them to the iPhone's tab bar.
+    var showsDestinations = true
     @State private var swipe = RowSwipeState()
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                VStack(spacing: 0) {
-                    destinationRow(.inbox) {
-                        CountBadge(model.needsYouCount)
+                if showsDestinations {
+                    VStack(spacing: 0) {
+                        destinationRow(.inbox) {
+                            CountBadge(model.needsYouCount)
+                        }
+                        destinationRow(.hosts) {
+                            Text("\(model.hosts.hosts.count)").font(DS.Font.meta).foregroundStyle(DS.Palette.textTertiary)
+                        }
                     }
-                    destinationRow(.hosts) {
-                        Text("\(model.hosts.hosts.count)").font(DS.Font.meta).foregroundStyle(DS.Palette.textTertiary)
-                    }
+                    .padding(.top, DS.Space.s)
                 }
-                .padding(.top, DS.Space.s)
 
                 // Tabs whose agent waits or failed, on any host, hoisted.
                 NeedsYouSection()
@@ -876,6 +880,7 @@ private struct ConnectionProbe: View {
 struct CompactTerminalView: View {
     let workspace: Workspace
     @Environment(WindowModel.self) private var model
+    @Environment(\.self) private var environment
 
     var body: some View {
         VStack(spacing: 0) {
@@ -886,7 +891,8 @@ struct CompactTerminalView: View {
         .chromeBackground(DS.Palette.base)
         .modifier(ProjectNamingAlert())
         #if os(iOS)
-        .sheet(isPresented: Binding(get: { model.isSelectingTabs }, set: { if !$0 { model.endTabSelection() } })) {
+        // The tab overview selects in its own list.
+        .sheet(isPresented: Binding(get: { model.isSelectingTabs && model.sheet != .tabs }, set: { if !$0 { model.endTabSelection() } })) {
             CompactTabSelection()
                 .environment(model)
                 .chromeSheetBackground()
@@ -921,58 +927,54 @@ struct CompactTerminalView: View {
     }
 
     private var tabSwitcher: some View {
-        let groups = model.groups.groups
         let total = model.groups.tabs.count
-        let projects = model.projects
-        let grouped = Set(projects.flatMap(\.tabs))
-        let windowTabs = model.groups.mixedTabs.filter { !grouped.contains($0) }
         let restorable = model.groups.restorableTabs.count
         return Menu {
-            Section {
-                if restorable > 0 {
-                    Button(restorable == 1 ? "Restore 1 Tab" : "Restore \(restorable) Tabs", systemImage: "arrow.counterclockwise") { model.restoreHiddenTabs() }
-                }
-                if !model.idleTabs.isEmpty {
-                    Button("Close \(model.idleTabs.count) Idle Tabs", systemImage: "moon.zzz") { model.closeIdleTabs() }
-                }
-                if !model.recentlyClosed.tabs.isEmpty {
-                    Menu("Recently Closed", systemImage: "clock.arrow.circlepath") {
-                        RecentlyClosedMenuItems(model: model, limit: 10)
-                    }
-                }
-                if total > 1 {
-                    Button("Select Tabs…", systemImage: "checkmark.circle") { model.isSelectingTabs = true }
-                }
+            ControlGroup {
+                Button("Select", systemImage: "checkmark.circle") { model.isSelectingTabs = true }
+                    .disabled(total < 2)
+                Button(WorkspaceAction.newProject.title, systemImage: "folder.badge.plus") { model.newEmptyProject() }
+                Button("Show All", systemImage: "arrow.up.left.and.arrow.down.right") { model.sheet = .tabs }
             }
-            // Projects first, as in the sidebar.
-            ForEach(projects) { project in
-                Section(project.tabs.isEmpty ? project.name
-                    : "\(project.name) · \(project.hosts.count > 1 ? "\(project.hosts.count) hosts" : model.groupName(project.hosts.first ?? ""))")
-                {
-                    ForEach(project.tabs, id: \.self) { ref in switcherItem(ref) }
-                    Button("New Terminal in \(project.name)", systemImage: "plus") { model.newTab(inProject: project.id) }
-                    // The sidebar header's menu: there is no header to hold it here.
-                    Menu {
-                        ProjectMenu(project: project, collapsed: nil) { model.namingProject = project.id }
-                    } label: {
-                        Label("Project", systemImage: "folder")
-                    }
-                    .accessibilityIdentifier("switcher-project-\(project.name)")
-                }
-            }
-            if !windowTabs.isEmpty {
-                Section("This Window") {
-                    ForEach(windowTabs, id: \.self) { ref in switcherItem(ref) }
-                }
-            }
-            ForEach(groups) { group in
+            if restorable > 0 || !model.idleTabs.isEmpty || !model.recentlyClosed.tabs.isEmpty {
                 Section {
-                    ForEach(model.groups.looseTabs(of: group, grouped: grouped), id: \.self) { ref in switcherItem(ref) }
-                    if group.isLocal || group.isReady {
-                        Button("New Terminal on \(group.name)", systemImage: "plus") { model.newTab(onGroup: group.id) }
+                    if restorable > 0 {
+                        Button(restorable == 1 ? "Restore 1 Tab" : "Restore \(restorable) Tabs", systemImage: "arrow.counterclockwise") { model.restoreHiddenTabs() }
                     }
-                } header: {
-                    Text(group.name)
+                    if !model.idleTabs.isEmpty {
+                        Button("Close \(model.idleTabs.count) Idle Tabs", systemImage: "moon.zzz") { model.closeIdleTabs() }
+                    }
+                    if !model.recentlyClosed.tabs.isEmpty {
+                        Menu("Recently Closed", systemImage: "clock.arrow.circlepath") {
+                            RecentlyClosedMenuItems(model: model, limit: 10)
+                        }
+                    }
+                }
+            }
+            ForEach(model.switcherSections) { section in
+                switch section.kind {
+                case .project(let id):
+                    if let project = model.groups.project(id) {
+                        Section {
+                            projectItem(project)
+                            ForEach(section.tabs, id: \.self) { ref in
+                                switcherItem(ref, showsHost: project.hosts.count > 1)
+                            }
+                        }
+                    }
+                case .window:
+                    Section("This Window") {
+                        ForEach(section.tabs, id: \.self) { ref in switcherItem(ref) }
+                    }
+                case .host(let id):
+                    if let group = model.groups.group(id) {
+                        Section(group.name) {
+                            ForEach(section.tabs, id: \.self) { ref in switcherItem(ref) }
+                            if group.isLocal || group.isReady {
+                                Button("New Terminal on \(group.name)", systemImage: "plus") { model.newTab(onGroup: group.id) }
+                            }
+                        }
+                    }
                 }
             }
             if let tab = workspace.session.activeTab {
@@ -1017,32 +1019,63 @@ struct CompactTerminalView: View {
             .frame(minHeight: 30)
             .contentShape(.rect)
         }
+        .menuOrder(.fixed)
         .accessibilityIdentifier("tab-switcher")
     }
 
-    /// A tab in the switcher: its title with a checkmark when current, the agent's state glyph
-    /// while it has something to say, else the program's mark.
-    @ViewBuilder private func switcherItem(_ ref: TabRef) -> some View {
-        Button {
+    /// A tab in the switcher: its title (and host, in a project across hosts) with a checkmark
+    /// when current, the agent's state glyph while it has something to say, else the program's
+    /// mark.
+    private func switcherItem(_ ref: TabRef, showsHost: Bool = false) -> some View {
+        let title = model.title(ofTab: ref)
+        return Button {
             model.focus(ref)
         } label: {
-            let title = model.title(ofTab: ref)
-            if model.currentTab == ref {
-                Label(title, systemImage: "checkmark")
-            } else if let mixed = ref.hostId == HostGroups.mixedId ? model.composites.tab(ref.tab) : nil {
-                Label(title, systemImage: mixed.isEditorOnly ? "chevron.left.forwardslash.chevron.right" : mixed.isBrowserOnly ? "globe" : "rectangle.split.2x1")
-            } else if let tab = model.groups.group(ref.hostId)?.tabs.first(where: { $0.id == ref.tab }) {
-                if let state = tab.root.panes.compactMap({ model.agentState(ofPane: $0, onGroup: ref.hostId) }).min(by: { $0.urgency < $1.urgency }),
-                   state != .idle, state != .unknown
-                {
-                    Label(title, systemImage: state == .blocked ? "questionmark.circle.fill" : state == .error ? "xmark.circle.fill" : state == .done ? "checkmark.circle.fill" : "circle.dotted")
-                } else {
-                    let program = model.programIdentity(of: tab, onGroup: ref.hostId)
-                    Label { Text(title) } icon: { program.image }
-                        .accessibilityLabel("\(title), \(program.displayName)")
-                }
-            }
+            Text(title)
+            if showsHost { Text(model.groupName(ref.hostId)) }
+            switcherIcon(ref)
         }
+    }
+
+    private func switcherIcon(_ ref: TabRef) -> Image {
+        if model.currentTab == ref { return Image(systemName: "checkmark") }
+        if let mixed = ref.hostId == HostGroups.mixedId ? model.composites.tab(ref.tab) : nil {
+            return Image(systemName: mixed.isEditorOnly ? "chevron.left.forwardslash.chevron.right" : mixed.isBrowserOnly ? "globe" : "rectangle.split.2x1")
+        }
+        guard let tab = model.groups.group(ref.hostId)?.tabs.first(where: { $0.id == ref.tab }) else { return Image(systemName: "terminal") }
+        if let state = switcherAgentState(tab, ref: ref) {
+            return Image(systemName: state == .blocked ? "questionmark.circle.fill" : state == .error ? "xmark.circle.fill" : state == .done ? "checkmark.circle.fill" : "circle.dotted")
+        }
+        return model.programIdentity(of: tab, onGroup: ref.hostId).image
+    }
+
+    private func switcherAgentState(_ tab: Tab, ref: TabRef) -> AgentState? {
+        let state = tab.root.panes.compactMap { model.agentState(ofPane: $0, onGroup: ref.hostId) }.min { $0.urgency < $1.urgency }
+        return state == .idle || state == .unknown ? nil : state
+    }
+
+    /// A project's first line in the switcher: its colour, name and where its tabs are; its
+    /// menu holds what the sidebar header's does.
+    private func projectItem(_ project: Project) -> some View {
+        Menu {
+            ProjectMenu(project: project, collapsed: nil) { model.namingProject = project.id }
+        } label: {
+            Text(project.name)
+            Text(model.switcherSubtitle(of: project))
+            projectIcon(project.color)
+        }
+    }
+
+    /// The project's colour on a folder. A menu draws its icons in one colour unless the image
+    /// carries its own.
+    private func projectIcon(_ color: Int) -> Image {
+        #if os(iOS)
+        let tint = UIColor(Color(DS.Palette.project(color).resolve(in: environment)))
+        if let folder = UIImage(systemName: "folder.fill")?.withTintColor(tint, renderingMode: .alwaysOriginal) {
+            return Image(uiImage: folder)
+        }
+        #endif
+        return Image(systemName: "folder.fill")
     }
 
     private func paneSwitcher(_ tab: Tab) -> some View {
@@ -1095,7 +1128,8 @@ private struct ProjectNamingAlert: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .alert("Name Project", isPresented: Binding(get: { model.namingProject != nil }, set: { if !$0 { model.namingProject = nil } })) {
+            // The tab overview names a project in place, as the sidebar does.
+            .alert("Name Project", isPresented: Binding(get: { model.namingProject != nil && model.sheet != .tabs }, set: { if !$0 { model.namingProject = nil } })) {
                 TextField("Project Name", text: $draft)
                 Button("Done") { if let id = model.namingProject { model.renameProject(id, to: draft) } }
                 Button("Cancel", role: .cancel) {}
