@@ -2,6 +2,8 @@
 
 mod access;
 mod accounts;
+mod agent_terminal;
+mod agent_tui_parity;
 mod agents;
 mod approvals;
 mod artifacts;

@@ -7,7 +7,9 @@
 # Needs the "Apple Distribution" identity in the login Keychain and the App Store Connect API key
 # there too (service `$ASC_KEYCHAIN_SERVICE`, the .p8 contents base64-encoded). Signing is manual
 # with App Store profiles the API creates, so no Xcode account sign-in is involved.
-# SKIP_RUST=1 reuses the GudoCore xcframework already built.
+# SKIP_RUST=1 reuses the GudoCore xcframework already built. Codex and Claude Code, when
+# installed, are launched to their start screen first to check they render as in Ghostty
+# (scripts/agent-tui-parity.sh); SKIP_AGENT_TUI_PARITY=1 skips that.
 set -euo pipefail
 
 ASC_KEY_ID="${ASC_KEY_ID:-48K8RU3L66}"
@@ -42,6 +44,10 @@ api_key_base64 | node "$repo_root/scripts/asc-profiles.mjs" IOS_APP_STORE DISTRI
 
 if [ "${SKIP_RUST:-0}" != 1 ]; then
   (cd "$repo_root" && cargo xtask build-xcframework)
+fi
+echo "==> coding agents render as in Ghostty"
+if [ "${SKIP_AGENT_TUI_PARITY:-0}" != 1 ]; then
+  "$repo_root/scripts/agent-tui-parity.sh"
 fi
 (cd "$apple_dir" && xcodegen generate --quiet)
 

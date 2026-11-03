@@ -15,7 +15,9 @@
 # groups, so it needs no provisioning profile. The EdDSA key that signs updates is in the login
 # Keychain too (Sparkle's generate_keys put it there; its public half is SUPublicEDKey in
 # apple/project.yml). SKIP_RUST=1 reuses the Rust builds already made. RELEASE_SUMMARY names a
-# plain-text file of short notes, one change per line, shown in the app's update card.
+# plain-text file of short notes, one change per line, shown in the app's update card. Codex and
+# Claude Code, when installed, are launched to their start screen first to check they render as
+# in Ghostty (scripts/agent-tui-parity.sh); SKIP_AGENT_TUI_PARITY=1 skips that.
 set -euo pipefail
 
 ASC_KEY_ID="${ASC_KEY_ID:-48K8RU3L66}"
@@ -55,6 +57,10 @@ for arch in x86_64 aarch64; do
   [ -f "$apple_dir/build/hostd/$daemon_bin-$arch-linux.gz" ] || fail "no $arch Linux helper; run cargo xtask build-hostd-linux"
 done
 
+echo "==> coding agents render as in Ghostty"
+if [ "${SKIP_AGENT_TUI_PARITY:-0}" != 1 ]; then
+  "$repo_root/scripts/agent-tui-parity.sh"
+fi
 (cd "$apple_dir" && xcodegen generate --quiet)
 
 rm -rf "$work_dir" "$output_dir"
