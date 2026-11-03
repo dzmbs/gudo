@@ -224,12 +224,19 @@ fn claude_finished_turn_notifies_once_from_the_stop_hook() {
     let mut pane = Pane::new(ClaudeCode::new());
     pane.hook(&fixture("claude", "user_prompt_submit"), 1, 0);
     pane.hook(&fixture("claude", "subagent_stop"), 2, 1000);
-    assert!(pane.notified.is_empty(), "a subagent finishing is not the turn");
+    assert!(
+        pane.notified.is_empty(),
+        "a subagent finishing is not the turn"
+    );
     assert_eq!(pane.arbiter.status(), &Status::Working);
     pane.hook(&fixture("claude", "stop"), 3, 2000);
     assert_eq!(pane.notified, [Notify::Done]);
     pane.hook(&fixture("claude", "notification_idle_prompt"), 4, 62_000);
-    assert_eq!(pane.notified, [Notify::Done], "idle_prompt only confirms idle");
+    assert_eq!(
+        pane.notified,
+        [Notify::Done],
+        "idle_prompt only confirms idle"
+    );
 }
 
 #[test]

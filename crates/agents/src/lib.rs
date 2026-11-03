@@ -30,7 +30,7 @@ mod signal;
 pub use adapter::{AgentAdapter, HookCoverage, HookError};
 pub use arbiter::{Arbiter, ArbiterConfig, DecisionError, Notify, Update};
 pub use claude::ClaudeCode;
-pub use codex::Codex;
+pub use codex::{Codex, NOTIFY_EVENT as CODEX_NOTIFY_EVENT};
 pub use event::{
     ActorId, AgentEvent, AgentKind, AgentState, AnswerPath, ApprovalChoice, ApprovalOption,
     Blocked, BlockedReason, Blocker, Confidence, Decided, Decision, EventKind, Lane,

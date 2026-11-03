@@ -243,9 +243,13 @@ fn parse_notification(payload: &[u8], seq: Seq) -> Result<Option<Signal>, HookEr
     else {
         return Ok(None);
     };
-    let mut signal = Signal::new(Source::Hook, Confidence::Authoritative, EventKind::TurnEnded)
-        .with_seq(seq)
-        .with_claim(Claim::Idle);
+    let mut signal = Signal::new(
+        Source::Hook,
+        Confidence::Authoritative,
+        EventKind::TurnEnded,
+    )
+    .with_seq(seq)
+    .with_claim(Claim::Idle);
     signal.session.native_id = thread_id.map(crate::NativeSessionId::new);
     signal.session.cwd = cwd;
     signal.turn = Some(Turn {

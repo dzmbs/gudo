@@ -7,6 +7,10 @@
 //! the user's own `statusLine` command from their Claude settings with the same input and lets
 //! it print, so the status line looks as the user set it up.
 //!
+//! `gudo-hook codex notify <json>` is Codex's `notify` program in sessions the daemon launches:
+//! the payload is the last argument (Codex gives no stdin), goes to the daemon, then the shim
+//! runs the user's own `notify` from their Codex `config.toml` with the same argument.
+//!
 //! It never fails the agent: any error prints nothing and exits 0, so a missing daemon only
 //! means the agent falls back to its own prompts.
 //!
@@ -28,7 +32,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use daemon::{HookRequest, HookResponse, STATUS_LINE_EVENT};
+use daemon::{CODEX_NOTIFY_EVENT, HookRequest, HookResponse, STATUS_LINE_EVENT};
 use serde_json::Value;
 
 fn main() {
@@ -40,8 +44,17 @@ fn main() {
         Some("browser") => std::process::exit(browser::cli(&args[1..])),
         _ => {}
     }
+    let codex_notify = args.first().map(String::as_str) == Some("codex")
+        && args.get(1).map(String::as_str) == Some(CODEX_NOTIFY_EVENT);
     let mut payload = Vec::new();
-    let _ = std::io::stdin().take(4 << 20).read_to_end(&mut payload);
+    if codex_notify {
+        payload = args
+            .get(2)
+            .map(|json| json.as_bytes().to_vec())
+            .unwrap_or_default();
+    } else {
+        let _ = std::io::stdin().take(4 << 20).read_to_end(&mut payload);
+    }
     let status_line = args.get(1).map(String::as_str) == Some(STATUS_LINE_EVENT);
     if let Err(error) = relay(&args, &payload, status_line)
         && brand::var_os("HOOK_DEBUG").is_some()
@@ -50,6 +63,9 @@ fn main() {
     }
     if status_line {
         user_status_line(&payload);
+    }
+    if codex_notify && let Some(json) = args.get(2) {
+        user_codex_notify(json);
     }
 }
 
@@ -126,6 +142,41 @@ fn user_status_line(raw: &[u8]) {
     let _ = child.wait();
 }
 
+/// Starts the user's own Codex `notify` program (`notify = [...]` in the account's or the
+/// user's `config.toml`) with the payload as its last argument, as Codex would have, and leaves
+/// it running.
+fn user_codex_notify(json: &str) {
+    let codex_home = config_dir_from(brand::var_os("ACCOUNT_DIR"), std::env::var_os("CODEX_HOME"))
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".codex")));
+    let Some(argv) = codex_home.and_then(|home| user_notify_command(&home.join("config.toml")))
+    else {
+        return;
+    };
+    let _ = Command::new(&argv[0])
+        .args(&argv[1..])
+        .arg(json)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+}
+
+fn user_notify_command(config: &std::path::Path) -> Option<Vec<String>> {
+    let text = std::fs::read_to_string(config).ok()?;
+    let table: toml::Table = text.parse().ok()?;
+    let argv: Vec<String> = table
+        .get("notify")?
+        .as_array()?
+        .iter()
+        .map(|arg| arg.as_str().map(str::to_owned))
+        .collect::<Option<_>>()?;
+    let ours = argv.first().is_some_and(|program| {
+        let name = std::path::Path::new(program).file_name();
+        name.is_some_and(|name| name == brand::HOOK_BIN || name == brand::legacy::HOOK_BIN)
+    });
+    (!argv.is_empty() && !ours).then_some(argv)
+}
+
 /// The pane's Claude configuration directory: its account's (`GUDO_ACCOUNT_DIR`, which Claude's
 /// subprocess scrub leaves alone), else `CLAUDE_CONFIG_DIR`; `None` means `~/.claude`.
 fn user_config_dir() -> Option<PathBuf> {
@@ -191,6 +242,33 @@ mod tests {
             Some(PathBuf::from("/h/.claude"))
         );
         assert_eq!(config_dir_from(dir(""), None), None);
+    }
+
+    #[test]
+    fn finds_the_users_codex_notify_but_never_ours() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config.toml");
+        assert_eq!(user_notify_command(&config), None);
+        std::fs::write(
+            &config,
+            "model = \"o3\"\nnotify = [\"python3\", \"/h/notify.py\"]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            user_notify_command(&config),
+            Some(vec!["python3".to_owned(), "/h/notify.py".to_owned()])
+        );
+        std::fs::write(
+            &config,
+            format!(
+                "notify = [\"/s/bin/{}\", \"codex\", \"notify\"]\n",
+                brand::HOOK_BIN
+            ),
+        )
+        .unwrap();
+        assert_eq!(user_notify_command(&config), None);
+        std::fs::write(&config, "notify = []\n").unwrap();
+        assert_eq!(user_notify_command(&config), None);
     }
 
     #[test]

@@ -78,6 +78,7 @@ use proto::{DaemonId, DeviceId, Ticket};
 use tokio::task::JoinHandle;
 
 pub use agent::{HookRequest, HookResponse, PERMISSION_WAIT, STATUS_LINE_EVENT};
+pub use agents::CODEX_NOTIFY_EVENT;
 pub use art::pull::{
     PULL_FORMATS, PULL_MAX, PULL_VERSION, PullCall, PullExport, PullFormat, PullOp, PullReply,
     PullSummary,
