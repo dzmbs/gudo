@@ -48,6 +48,8 @@ Details of the push design: docs/PUSH.md.
 - **Unauthenticated `/v1/register`.** Anyone with a device's APNs token can bind it to a daemon
   of their own and send it placeholder alerts ("Approval needed"), up to the per-token budget
   (300 alerts an hour). They cannot show real-looking content or make Approve do anything.
+  Registrations themselves are rate-limited per client address. An external review (2026)
+  raised this again; it is accepted for launch and App Attest below is the planned fix.
   Signing registrations with the device key would not help: the relay has no accounts and
   cannot know which device key belongs to the token. Follow-ups, best first:
   1. **App Attest** on `/v1/register` (DCAppAttestService; the Worker verifies the attestation
