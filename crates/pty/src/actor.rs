@@ -15,14 +15,16 @@ mod io_loop;
 mod wait;
 
 use std::io;
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsRawFd, OwnedFd, RawFd};
+use std::os::unix::process::ExitStatusExt;
 use std::process::{Command, ExitStatus};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 use std::{fmt, thread};
 
 use bytes::Bytes;
-use rustix::process::Pid;
+use rustix::process::{Pid, WaitId, WaitIdOptions};
 use tokio::sync::{Semaphore, mpsc, watch};
 
 use crate::foreground::{self, ForegroundProcess};
@@ -194,6 +196,8 @@ struct Shared {
     output: watch::Sender<OutputState>,
     echo: watch::Sender<EchoState>,
     shutdown: AtomicBool,
+    /// Asks the I/O thread to stop for [`PtyActor::hand_off`].
+    handing_off: AtomicBool,
     /// One permit per input byte that may still be queued ([`MAX_QUEUED_INPUT`]); the I/O
     /// thread gives them back as the child takes the bytes.
     input_budget: Semaphore,
@@ -212,12 +216,27 @@ impl Shared {
 struct Process {
     pid: Pid,
     reaped: Mutex<bool>,
+    /// Set under `reaped` by [`PtyActor::hand_off`]: the child is left for the next process.
+    handed_off: AtomicBool,
     exit: watch::Sender<Option<Result<ExitStatus, i32>>>,
 }
 
 impl Process {
+    fn new(pid: Pid) -> Self {
+        Self {
+            pid,
+            reaped: Mutex::new(false),
+            handed_off: AtomicBool::new(false),
+            exit: watch::Sender::new(None),
+        }
+    }
+
     fn reaped(&self) -> MutexGuard<'_, bool> {
         self.reaped.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn handed_off(&self) -> bool {
+        self.handed_off.load(Ordering::Acquire)
     }
 }
 
@@ -249,6 +268,43 @@ pub struct PtyActor {
     process: Arc<Process>,
     input: mpsc::Sender<Input>,
     waker: io_loop::Waker,
+    io_thread: Mutex<Option<thread::JoinHandle<Vec<u8>>>>,
+}
+
+/// A PTY stopped by [`PtyActor::hand_off`], for the program that replaces this process with
+/// `exec` to continue with [`PtyActor::adopt`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandedOff {
+    /// The master, still open in this process (the actor's drop closes it if no `exec`
+    /// follows).
+    pub master: RawFd,
+    /// The child: a session leader whose controlling terminal is the PTY.
+    pub pid: u32,
+    pub ring_capacity: usize,
+    pub head: Seq,
+    /// The ring's retained output, from its oldest offset to `head`.
+    pub retained: Bytes,
+    /// Input accepted but not yet taken by the child, in order.
+    pub unsent_input: Vec<u8>,
+    /// The child's raw wait status if it had already been reaped (its pid may be reused).
+    pub exit_status: Option<i32>,
+}
+
+/// Why [`PtyActor::adopt`] refused a descriptor or process.
+#[derive(Debug, thiserror::Error)]
+pub enum AdoptError {
+    /// The descriptor is not a PTY master.
+    #[error("descriptor {0} is not a pseudo-terminal master")]
+    NotAMaster(RawFd),
+    /// The process is not a child of this one (it was reaped, or never was).
+    #[error("process {0} is not a child of this process")]
+    NotAChild(u32),
+    /// The retained output does not fit the ring described.
+    #[error("the output history does not match its ring")]
+    Ring,
+    /// A thread could not start, or a descriptor could not be set up.
+    #[error(transparent)]
+    Io(#[from] io::Error),
 }
 
 /// Queued input and the budget permits it holds.
@@ -280,33 +336,116 @@ impl PtyActor {
     pub fn spawn(command: Command, options: SpawnOptions) -> io::Result<Self> {
         let ring = OutputRing::new(options.ring_capacity);
         let spawn::Spawned { master, child } = spawn::spawn(command, options.size)?;
+        let pid = Pid::from_child(&child);
+        Self::start(
+            master,
+            pid,
+            ring,
+            wait::Reap::Spawned(child),
+            None,
+            options.output_hook,
+        )
+    }
+
+    /// Continues a PTY that the program this process ran before its `exec` stopped with
+    /// [`hand_off`](Self::hand_off): `master` is the master descriptor, inherited across
+    /// `exec`, and the child is still a child of this process (`exec` keeps the pid).
+    ///
+    /// Output offsets continue at `handed_off.head` with the same history, and the unsent
+    /// input is written first. The master is made close-on-exec again at once, so programs
+    /// this process starts later never inherit it.
+    ///
+    /// # Errors
+    ///
+    /// [`AdoptError::NotAMaster`] if `master` is not a PTY master; [`AdoptError::NotAChild`]
+    /// if the pid is not an unreaped child of this process (it must then never be signalled,
+    /// as it may belong to someone else); [`AdoptError::Ring`] if the history does not fit
+    /// the ring; an I/O error if a thread cannot start. `master` is closed on error.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `handed_off.ring_capacity` is zero.
+    pub fn adopt(
+        master: OwnedFd,
+        handed_off: &HandedOff,
+        output_hook: Option<OutputHook>,
+    ) -> Result<Self, AdoptError> {
+        let exit = handed_off.exit_status.map(ExitStatus::from_raw);
+        let Some(pid) = child_pid(handed_off.pid).filter(|&pid| exit.is_some() || is_child(pid))
+        else {
+            return Err(AdoptError::NotAChild(handed_off.pid));
+        };
+        // From here on a running child is ours: if it cannot be continued, it ends like a
+        // closed pane rather than running on unseen.
+        let end_child_on = |error: AdoptError| {
+            if exit.is_none() {
+                give_up(pid, GIVE_UP_GRACE);
+            }
+            error
+        };
+        let raw = master.as_raw_fd();
+        rustix::io::fcntl_setfd(&master, rustix::io::FdFlags::CLOEXEC)
+            .map_err(|error| end_child_on(io::Error::from(error).into()))?;
+        rustix::pty::ptsname(&master, Vec::new())
+            .map_err(|_| end_child_on(AdoptError::NotAMaster(raw)))?;
+        let ring = OutputRing::resume(
+            handed_off.ring_capacity,
+            handed_off.head,
+            &handed_off.retained,
+        )
+        .ok_or_else(|| end_child_on(AdoptError::Ring))?;
+        let actor = Self::start(master, pid, ring, wait::Reap::Adopted, exit, output_hook)
+            .map_err(|error| end_child_on(error.into()))?;
+        if !handed_off.unsent_input.is_empty() {
+            let input = Bytes::copy_from_slice(&handed_off.unsent_input);
+            if let Err(TryWriteError::Full(input) | TryWriteError::Closed(input)) =
+                actor.try_write(input)
+            {
+                tracing::debug!(len = input.len(), "dropped input from before the hand-off");
+            }
+        }
+        Ok(actor)
+    }
+
+    fn start(
+        master: OwnedFd,
+        pid: Pid,
+        ring: OutputRing,
+        reap: wait::Reap,
+        exited: Option<ExitStatus>,
+        output_hook: Option<OutputHook>,
+    ) -> io::Result<Self> {
         rustix::fs::fcntl_setfl(&master, rustix::fs::OFlags::NONBLOCK)?;
         let master = Arc::new(master);
-
-        let pid = Pid::from_child(&child);
-        let process = Arc::new(Process {
-            pid,
-            reaped: Mutex::new(false),
-            exit: watch::Sender::new(None),
-        });
+        let process = Arc::new(Process::new(pid));
         let initial_echo = EchoState::read(&*master).unwrap_or_default();
+        let head = ring.head();
         let shared = Arc::new(Shared {
             ring: Mutex::new(ring),
             output: watch::Sender::new(OutputState {
-                head: Seq::ZERO,
+                head,
                 closed: false,
             }),
             echo: watch::Sender::new(initial_echo),
             shutdown: AtomicBool::new(false),
+            handing_off: AtomicBool::new(false),
             input_budget: Semaphore::new(MAX_QUEUED_INPUT),
         });
 
-        thread::Builder::new()
-            .name(format!("pty-wait-{}", pid.as_raw_nonzero()))
-            .spawn({
-                let process = Arc::clone(&process);
-                move || wait::run(child, &process)
-            })?;
+        match exited {
+            Some(status) => {
+                *process.reaped() = true;
+                process.exit.send_replace(Some(Ok(status)));
+            }
+            None => {
+                thread::Builder::new()
+                    .name(format!("pty-wait-{}", pid.as_raw_nonzero()))
+                    .spawn({
+                        let process = Arc::clone(&process);
+                        move || wait::run(reap, &process)
+                    })?;
+            }
+        }
 
         let (input, input_rx) = mpsc::channel(INPUT_QUEUE);
         let (waker, wake_rx) = io_loop::wake_pipe()?;
@@ -315,15 +454,20 @@ impl PtyActor {
             wake_rx,
             input_rx,
             Arc::clone(&shared),
-            options.output_hook,
+            output_hook,
         );
         let started = thread::Builder::new()
             .name(format!("pty-io-{}", pid.as_raw_nonzero()))
             .spawn(move || io_loop.run());
-        if let Err(err) = started {
-            let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
-            return Err(err);
-        }
+        let io_thread = match started {
+            Ok(handle) => handle,
+            Err(err) => {
+                if !*process.reaped() {
+                    let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+                }
+                return Err(err);
+            }
+        };
 
         Ok(Self {
             master,
@@ -331,7 +475,79 @@ impl PtyActor {
             process,
             input,
             waker,
+            io_thread: Mutex::new(Some(io_thread)),
         })
+    }
+
+    /// Stops this PTY for the program that replaces this process with `exec`, which continues
+    /// it with [`adopt`](Self::adopt), and returns what that needs.
+    ///
+    /// Reading and writing stop at once (new output waits in the kernel for the next reader)
+    /// and the child is no longer reaped here, so its pid stays reserved until the next
+    /// program reaps it. Nothing is closed: the master stays open and close-on-exec, and the
+    /// caller clears `FD_CLOEXEC` on exactly the masters it passes on, right before `exec`.
+    /// Writes fail from now on.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the I/O thread had panicked; the PTY is stopped anyway.
+    pub fn hand_off(&self) -> io::Result<HandedOff> {
+        let exit_status = {
+            let reaped = self.process.reaped();
+            self.process.handed_off.store(true, Ordering::Release);
+            if *reaped {
+                self.process
+                    .exit
+                    .borrow()
+                    .and_then(Result::ok)
+                    .map(ExitStatusExt::into_raw)
+            } else {
+                None
+            }
+        };
+        self.shared.handing_off.store(true, Ordering::Release);
+        self.waker.wake();
+        let io_thread = self
+            .io_thread
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        let unsent_input = match io_thread.map(thread::JoinHandle::join) {
+            Some(Ok(unsent)) => unsent,
+            Some(Err(_)) => return Err(io::Error::other("the pty I/O thread panicked")),
+            None => Vec::new(),
+        };
+        let ring = self.shared.ring();
+        let retained = ring
+            .read_from(ring.oldest())
+            .expect("the oldest offset is always readable")
+            .data;
+        Ok(HandedOff {
+            master: self.master.as_raw_fd(),
+            pid: self.pid(),
+            ring_capacity: ring.capacity(),
+            head: ring.head(),
+            retained,
+            unsent_input,
+            exit_status,
+        })
+    }
+
+    /// Ends the child of a PTY stopped with [`hand_off`](Self::hand_off) when no `exec`
+    /// follows after all: hangs up its session, kills the session's process group if it still
+    /// runs after `grace`, and reaps it. Blocks until then; does nothing before a hand-off or
+    /// once the child is reaped.
+    pub fn end_handed_off(&self, grace: Duration) {
+        let mut reaped = self.process.reaped();
+        if *reaped || !self.process.handed_off() {
+            return;
+        }
+        hang_up(self.process.pid);
+        let status = end_child(self.process.pid, grace);
+        *reaped = true;
+        self.process
+            .exit
+            .send_replace(Some(status.ok_or(libc::ECHILD)));
     }
 
     /// Returns the child's process id.
@@ -548,6 +764,100 @@ impl PtyActor {
     /// whether [`foreground_process`](Self::foreground_process) may have changed.
     pub fn foreground_pgid(&self) -> Option<u32> {
         foreground::foreground_pgid(&*self.master, self.pid())
+    }
+}
+
+/// `pid` as a process id that could be a child: positive and not init.
+fn child_pid(pid: u32) -> Option<Pid> {
+    i32::try_from(pid)
+        .ok()
+        .filter(|&raw| raw > 1)
+        .and_then(Pid::from_raw)
+}
+
+/// Whether `pid` is a child of this process that has not been reaped (running, stopped or a
+/// zombie).
+fn is_child(pid: Pid) -> bool {
+    loop {
+        match rustix::process::waitid(
+            WaitId::Pid(pid),
+            WaitIdOptions::EXITED
+                | WaitIdOptions::STOPPED
+                | WaitIdOptions::CONTINUED
+                | WaitIdOptions::NOHANG
+                | WaitIdOptions::NOWAIT,
+        ) {
+            Ok(_) => return true,
+            Err(rustix::io::Errno::INTR) => continue,
+            Err(_) => return false,
+        }
+    }
+}
+
+/// Ends a PTY handed off by the program this process ran before its `exec` that will not be
+/// continued (it could not be adopted, or nothing wants it), as closing a pane would: hangs
+/// up the child's session, closes the master and, after `grace`, kills the session's process
+/// group if it still runs. The child is reaped, on a thread of its own, so no zombie stays.
+/// Only an unreaped child of this process is ever signalled.
+pub fn abandon(master: OwnedFd, pid: u32, grace: Duration) {
+    let Some(pid) = child_pid(pid).filter(|&pid| is_child(pid)) else {
+        drop(master);
+        return;
+    };
+    drop(master);
+    give_up(pid, grace);
+}
+
+/// How long a child that cannot be adopted may outlive its hangup.
+const GIVE_UP_GRACE: Duration = Duration::from_secs(3);
+
+/// Hangs up an unreaped child and ends and reaps it on a thread of its own.
+fn give_up(pid: Pid, grace: Duration) {
+    hang_up(pid);
+    let raw = pid.as_raw_nonzero().get();
+    if let Err(err) = thread::Builder::new()
+        .name(format!("pty-abandon-{raw}"))
+        .spawn(move || end_child(pid, grace))
+    {
+        tracing::warn!(pid = raw, %err, "no thread to reap an abandoned pane; killing it");
+        let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+    }
+}
+
+fn hang_up(pid: Pid) {
+    let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::HUP);
+    let _ = rustix::process::kill_process(pid, rustix::process::Signal::HUP);
+}
+
+/// Waits up to `grace` for an unreaped child that was hung up to exit, kills its process
+/// group if it has not, and reaps it. Blocks until it is reaped.
+fn end_child(pid: Pid, grace: Duration) -> Option<ExitStatus> {
+    let raw = pid.as_raw_nonzero().get();
+    let deadline = Instant::now() + grace;
+    let mut status = 0;
+    loop {
+        // SAFETY: waitpid writes the status through a valid pointer to a local.
+        match unsafe { libc::waitpid(raw, &mut status, libc::WNOHANG) } {
+            0 => {}
+            -1 if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted => continue,
+            -1 => return None,
+            _ => return Some(ExitStatus::from_raw(status)),
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    // Still unreaped, so the pid is still the child's.
+    let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+    let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+    loop {
+        // SAFETY: as above.
+        match unsafe { libc::waitpid(raw, &mut status, 0) } {
+            -1 if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted => {}
+            -1 => return None,
+            _ => return Some(ExitStatus::from_raw(status)),
+        }
     }
 }
 

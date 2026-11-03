@@ -2,6 +2,7 @@
 
 mod echo_state;
 mod foreground;
+mod handoff;
 mod lifecycle;
 mod ring;
 mod support;

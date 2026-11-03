@@ -89,11 +89,16 @@ impl IoLoop {
         }
     }
 
-    pub(super) fn run(mut self) {
+    /// Runs until the child side hangs up, the actor is dropped or the PTY is handed off.
+    /// Returns the input it was handed but could not write yet, for the hand-off.
+    pub(super) fn run(mut self) -> Vec<u8> {
         let mut read_buf = vec![0u8; READ_CHUNK];
         let mut last_activity = Instant::now();
         let mut echo_read: Option<Instant> = None;
         loop {
+            if self.shared.handing_off.load(Ordering::Acquire) {
+                return self.stop_for_hand_off();
+            }
             if self.shared.shutdown.load(Ordering::Acquire) || !self.take_input() {
                 break;
             }
@@ -144,6 +149,20 @@ impl IoLoop {
         self.input.close();
         self.shared.input_budget.close();
         self.shared.output.send_modify(|state| state.closed = true);
+        Vec::new()
+    }
+
+    /// Stops reading and writing without closing anything: output stays in the kernel's
+    /// buffer for the next reader, and input not yet written is returned in order.
+    fn stop_for_hand_off(mut self) -> Vec<u8> {
+        self.input.close();
+        self.shared.input_budget.close();
+        self.take_input();
+        self.flush_input();
+        self.pending
+            .drain(..)
+            .flat_map(|input| input.data)
+            .collect()
     }
 
     /// Moves queued input into `pending`. Returns `false` once the actor handle is gone.

@@ -130,6 +130,39 @@ impl OutputRing {
         }
     }
 
+    /// Recreates a ring of `capacity` whose head is `head` and whose retained bytes are
+    /// `retained`, as [`read_from`](Self::read_from) at [`oldest`](Self::oldest) returned them:
+    /// offsets carry on where an earlier ring left off.
+    ///
+    /// Returns `None` unless `retained` is exactly what such a ring holds (the last
+    /// `min(head, capacity)` bytes), so no offset ever reads bytes that were not written.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `capacity` is zero.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pty::{OutputRing, Seq};
+    ///
+    /// let mut ring = OutputRing::new(4);
+    /// ring.push(b"abcdef");
+    /// let retained = ring.read_from(ring.oldest()).unwrap().data;
+    /// let resumed = OutputRing::resume(4, ring.head(), &retained).unwrap();
+    /// assert_eq!(resumed.oldest(), Seq::new(2));
+    /// assert_eq!(&resumed.read_from(Seq::new(3)).unwrap().data[..], b"def");
+    /// ```
+    pub fn resume(capacity: usize, head: Seq, retained: &[u8]) -> Option<Self> {
+        let mut ring = Self::new(capacity);
+        if retained.len() as u64 != head.0.min(capacity as u64) {
+            return None;
+        }
+        ring.head = head.0 - retained.len() as u64;
+        ring.push(retained);
+        Some(ring)
+    }
+
     /// Returns the maximum number of bytes retained.
     pub fn capacity(&self) -> usize {
         self.bytes.len()
@@ -261,6 +294,28 @@ mod tests {
                 oldest: Seq::new(2)
             })
         );
+    }
+
+    #[test]
+    fn resumes_where_another_ring_left_off() {
+        for written in [0usize, 3, 5, 12] {
+            let mut ring = OutputRing::new(5);
+            let data: Vec<u8> = (0..written as u8).collect();
+            ring.push(&data);
+            let retained = ring.read_from(ring.oldest()).unwrap().data;
+            let mut resumed = OutputRing::resume(5, ring.head(), &retained).unwrap();
+            assert_eq!(resumed.head(), ring.head());
+            assert_eq!(resumed.oldest(), ring.oldest());
+            assert_eq!(resumed.read_from(ring.oldest()).unwrap().data, retained);
+            resumed.push(b"xy");
+            ring.push(b"xy");
+            assert_eq!(
+                resumed.read_from(ring.oldest()).unwrap(),
+                ring.read_from(ring.oldest()).unwrap()
+            );
+        }
+        assert!(OutputRing::resume(5, Seq::new(12), b"abc").is_none());
+        assert!(OutputRing::resume(5, Seq::new(2), b"abc").is_none());
     }
 
     #[test]
