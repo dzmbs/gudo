@@ -19,6 +19,10 @@ struct TerminalApp: App {
     init() {
         _ = AppModel.launchedAt
         TerminalPreferences.WindowTheme.migrate()
+        // `-resetFontSize` (UI tests): forget a size a pinch kept.
+        if ProcessInfo.processInfo.arguments.contains("-resetFontSize") {
+            UserDefaults.standard.removeObject(forKey: TerminalPreferences.Key.fontSize)
+        }
         #if os(macOS)
         // Tabs are ours (⌘T); AppKit's window tabbing would compete for the same shortcuts.
         NSWindow.allowsAutomaticWindowTabbing = false

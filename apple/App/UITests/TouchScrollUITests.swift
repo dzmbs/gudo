@@ -12,7 +12,7 @@ final class TouchScrollUITests: XCTestCase {
     @MainActor
     private func launch() -> (XCUIApplication, XCUIElement) {
         let app = XCUIApplication()
-        app.launchArguments += ["-restoreLastTarget", "NO", "-localEcho", "YES", "-font-size", "13"]
+        app.launchArguments += ["-restoreLastTarget", "NO", "-localEcho", "YES", "-resetFontSize"]
         app.launch()
         let pane = app.descendants(matching: .any)["pane-1"].firstMatch
         XCTAssertTrue(pane.waitForExistence(timeout: 10))
@@ -96,6 +96,9 @@ final class TouchScrollUITests: XCTestCase {
         XCTAssertNotEqual(toast.label, "13 pt")
         XCTAssertTrue(toast.label.hasSuffix(" pt"), toast.label)
         shot(app, "pinched")
+        // The size is kept across launches: back to the default for the tests after this one.
+        app.terminate()
+        app.launch()
     }
 }
 #endif
