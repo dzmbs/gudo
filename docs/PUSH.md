@@ -70,6 +70,8 @@ relay = "https://push.example.com"     # default: brand::PUSH_RELAY_URL
 delay_ms = 3000
 ```
 
+Section 9 covers what notifies for agents and how repeats are kept down.
+
 Kinds → categories: approval (agent blocked on a hook request with Allow/Deny options) →
 `AGENT_APPROVAL` (Approve, Deny, Open); other blocked → `AGENT_BLOCKED` (Open); done/failed →
 `AGENT_DONE`; long command → `COMMAND_DONE`. The relay sees only `approval | blocked | done |
@@ -86,8 +88,8 @@ plaintext = 0x01 || Ed25519(daemon key, "push-payload/v1\0" || json)[64] || json
 
 The NSE opens it with the device key, parses the JSON, checks `daemon` is a paired host and
 verifies the signature with that key (HPKE base mode alone does not authenticate the sender).
-It then sets title, subtitle (host), body, **category from the payload** (never trusting the
-relay's), thread (per host) and interruption level. On any failure the relay's placeholder
+It then sets title, subtitle (place and host), body, **category from the payload** (never trusting
+the relay's), thread (per pane) and interruption level. On any failure the relay's placeholder
 text stays ("Approval needed" / "An agent is waiting for you.").
 
 Shared vectors: `crates/push/tests/vectors/push-v1.json` (generated; the Swift package keeps a
@@ -255,7 +257,55 @@ free account; APNs registration activates only with `PUSH_ENTITLEMENT = YES` and
    `8SP2H5J666.dev.gudo.shared` and `group.dev.gudo.app` (`BRAND_TEAM_ID`); give the App and
    NotificationService targets provisioning profiles for the team; `xcodegen`. Release builds need `aps-environment = production`.
 
-## 9. Security notes
+## 9. Agent finished and agent needs you
+
+What notifies, and where it comes from. Official agent signals are used wherever the agent has
+one; the screen is a fallback only.
+
+| Agent | Needs you | Finished |
+|---|---|---|
+| Claude Code | `PermissionRequest` hook, `Notification` hook with `permission_prompt` / `elicitation_dialog`, `PreToolUse` for `AskUserQuestion` | `Stop` hook (`last_assistant_message`; not sent on a user interrupt), `StopFailure` (failed); `idle_prompt` only confirms idle |
+| Codex | `tui.notifications` `approval-requested` (OSC 9), the `[ ! ] Action Required` title; `PermissionRequest` with opt-in hooks | `notify` program `agent-turn-complete` (`last-assistant-message`, `thread-id`), set per run with `-c notify=[<hook shim>, "codex", "notify"]`; `tui.notifications` `agent-turn-complete` (OSC 9) and the title as fallbacks; opt-in `Stop` hook |
+| Others (OSC 7501 reporters) | their own status reports | their own status reports |
+
+Codex lifecycle hooks need the user to trust them (`/hooks`), so the daemon does not install them;
+`notify` needs no trust. The shim (`gudo-hook codex notify <json>`, payload as the last argument,
+no stdin) relays it to the daemon, then starts the user's own `notify` from the account's or the
+user's `config.toml` with the same argument, so a user's notifier keeps working. Codex marks
+`notify` as legacy in its source; if it goes, the OSC 9 and title fallbacks still end the turn.
+
+Noise rules (daemon, `notifier.rs`, and the same in the app for local notes):
+
+- Subagents never notify (`SubagentStop`, hooks with `agent_id`); a turn the user interrupted
+  never notifies (Codex `Interrupt`, any turn outcome `cancelled`; Claude sends no `Stop` then).
+- A finished turn is pushed after `push.delay` only if the agent is not working again (a stop
+  hook or queued input continued it) and nobody saw the item.
+- At most one finished push per pane per device every `push.pane_interval` (30 s): one that comes
+  sooner waits, and a newer one for the pane replaces it. Needs-you pushes are never held back.
+- Per device: `PushPrefs` per kind, then `PushAgents` rules per agent (`needs_you` covers
+  approvals and questions, `finished` done and failed; `*` is every agent without a rule).
+  Daemons offering `DaemonFeatures::PUSH_AGENTS` keep the rules with the registration.
+
+Content: title `Claude Code finished` / `Codex needs you`; `place` (the pane's project, else its
+tab's name, else its directory) shown before the host in the subtitle; body for a finished turn
+the first line of the last message with Markdown marks removed (140 characters), else
+`Finished`; thread per pane (`<daemon>.pane.<pane>`), APNs collapse id per pane and category;
+time-sensitive only for needs you. Tapping opens the pane.
+
+Hosts: any host's daemon pushes, Linux included; Linux needs no desktop notifications of its own.
+
+## 10. Macs
+
+The Mac app posts local notifications for every connected host (This Mac included) with the same
+rules, as long as it runs. Developer ID builds (`scripts/release-mac.sh`) use
+`PUSH_ENTITLEMENT=NO`: no APNs token, so no pushes reach a Mac whose app is quit. Enabling it
+needs the owner: an App ID with Push Notifications for the Mac bundle, a Developer ID
+provisioning profile carrying `com.apple.developer.aps-environment` (production) and the shared
+keychain and app groups, then `PUSH_ENTITLEMENT=YES` in the Mac release. No Notification Service
+Extension exists for macOS yet; a Mac push would show the relay's placeholder text until one is
+added.
+
+## 11. Security notes
 
 - The relay can drop, delay or replay-to-APNs what it receives, and sees timing and size; it
   cannot read or forge content (sender signature inside the ciphertext) or trigger actions

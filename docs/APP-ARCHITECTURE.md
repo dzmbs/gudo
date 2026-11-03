@@ -349,9 +349,13 @@ then checks the guest's `gudo who --watch` was disconnected).
 
 `NotifyKit` (package, no core): categories `AGENT_APPROVAL` (Approve / Deny with
 `.authenticationRequired`, Deny destructive, Open foreground), `AGENT_BLOCKED`, `AGENT_DONE`,
-`COMMAND_DONE`; `NotificationPrefs` per kind (+ only in the background); `AttentionNote` →
-`LocalNotifications.content` (one request per pane, thread per host, time-sensitive for
-approvals); `NotificationActionHandler` over `NotificationActionClient` (local → signed
+`COMMAND_DONE`; `NotificationPrefs` per kind, per agent (`agents`, keyed by the daemon's
+agent name, `*` for the rest: needs you, finished) and only in the background (default off);
+`AttentionNote` → `LocalNotifications.content` (one request and one thread per pane, title
+"Claude Code finished" / "… needs you", subtitle project or tab · host, a finished turn's body is
+its last message's first line, time-sensitive only for needs you); `LocalNotifications.shouldPost`
+(kind and agent switches, never the pane on screen, in the background not when a push brings it)
+and `PaneNotePacer` (one finished note per pane per 30 s, the newest); `NotificationActionHandler` over `NotificationActionClient` (local → signed
 `decide` on the live connection, push → `sendPushAction` on a one-shot connection, Open →
 the pane); `ServiceExtensionCore` (PushCrypto + paired-daemon check) and `SharedPushStore`
 (Keychain group + app group, nil without the entitlement); `AgentRunAttributes` /
@@ -360,20 +364,28 @@ the pane); `ServiceExtensionCore` (PushCrypto + paired-daemon check) and `Shared
 App: `AppNotifications` (delegate set in `AppDelegate` before launch finishes) subscribes to
 every daemon's `DaemonConnection.workspaceEvents` (`WorkspaceEventHub`, one
 `WorkspaceListener` fanned out; other features can `observe` it too), posts
-`.attention(.added)` items that are unseen and not `whileViewed` when the app is not active
-(approval options from `PaneMeta.agent`), clears a host's delivered notes and sets the badge
-from `unseen`. Permission is asked right after the user pairs a new host (`HostsModel.onFirstPairing`;
+`.attention(.added)` items that are unseen (approval options from `PaneMeta.agent`), clears a
+host's delivered notes and sets the badge from `unseen`. Foreground suppression is per pane and
+per device: a pane this device shows while the app is frontmost (on a Mac, the active app;
+`DaemonConnection.reportedView`) never notifies, any other pane does, as a banner
+(`willPresent`); another device showing the pane does not count. A finished turn waits 2 s and
+is dropped if it was seen or the agent is working again, then is paced per pane. In the
+background, a host that pushes to this device (push builds) is left to the push, so the note
+does not show twice; a push for a pane noted locally in the last minute is not shown again. Permission is asked right after the user pairs a new host (`HostsModel.onFirstPairing`;
 Apple's "ask in context"), never when a note fires while the app is away (it is then just not
 posted). `-notificationPrompt NO` skips the ask; runs with the UI tests' pairing hooks skip it
 unless `-notificationPrompt YES`. Approve / Deny from a notification also marks the item seen
 (`NotificationActionClient.markSeen`), so the badge takes the daemon's new count at once. Settings ▸
-Notifications edits the prefs. `AgentLiveActivities` (iOS) starts an activity per agent run,
+Notifications edits the prefs (By Agent: Needs You and Finished / Needs You / Finished / Off
+for Claude Code, Codex and other agents); a change re-registers pushes two seconds later, with the
+relay capabilities issued this run reused (`HostsModel.pushCapabilities`). `AgentLiveActivities` (iOS) starts an activity per agent run,
 updates it on blocked / done and ends it ten minutes after; `AgentActivityWidget` draws it.
 `<scheme>://open/<host>/<pane>` (activity, notification tap) focuses the pane.
 
 Push: `NotificationService` (app extension, iOS) calls `ServiceExtensionCore.shared()`.
 Registration (`HostsModel.registerPush`: relay `/v1/register` → `pushRegister` with the
-sealing key; `sendPushDecision` for the lock screen) runs only when the build has the
+sealing key, then `pushAgents` with the per-agent rules for daemons offering
+`DaemonFeatures::PUSH_AGENTS`; `sendPushDecision` for the lock screen) runs only when the build has the
 entitlement: `Brand.xcconfig` `PUSH_ENTITLEMENT = YES` (→ Swift `PUSH_YES`,
 `registerForRemoteNotifications`), `PUSH_ENTITLEMENTS_FILE = App/Push.entitlements`,
 `PUSH_KEYCHAIN_GROUP`, `PUSH_APP_GROUP`. The default (`NO`, free account) builds and runs
@@ -382,7 +394,14 @@ everything else unchanged.
 Tests: `cd apple/Packages/NotifyKit && swift test` (NSE decrypt of every shared vector,
 category from the payload, placeholder kept for the three rejects, an unpaired daemon and no
 key; the handler with a fake client for local and push Approve / Deny / Open, an expired
-token, a refusal; local content per kind; prefs; categories).
+token, a refusal; local content per kind; prefs per kind and per agent, older saved prefs,
+foreground suppression per pane, first-line summaries, pacing; categories).
+
+Macs: the Developer ID build (`scripts/release-mac.sh`) is built with `PUSH_ENTITLEMENT=NO`, so a
+Mac gets agent notifications from every connected host (This Mac included) only while the app is
+running, as local notifications. Pushes to a Mac with
+the app quit would need the push entitlement in a provisioning profile for the Developer ID app
+(see docs/PUSH.md §10).
 
 ## 13. Push-to-talk dictation (VoiceKit)
 

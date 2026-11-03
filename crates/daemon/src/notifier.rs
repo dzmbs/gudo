@@ -89,7 +89,7 @@ struct Budget {
     every: Duration,
 }
 
-/// Alerts the relay accepts (docs/PUSH.md §9): per daemon 30 at once then one every 3 s, per
+/// Alerts the relay accepts (docs/PUSH.md §11): per daemon 30 at once then one every 3 s, per
 /// device 30 then one every 12 s. Past them it only refuses (and retries pile up), so pushes
 /// past them wait their turn instead.
 const DAEMON_ALERTS: Budget = Budget {
