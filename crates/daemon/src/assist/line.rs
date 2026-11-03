@@ -150,7 +150,11 @@ pub(crate) fn read(screen: &Screen, view: &LineView) -> Reading {
                     cell.text.clone()
                 },
                 at: Point { y, x },
-                style: cell.style,
+                // Suggestions are told apart by their text's look, not by a background.
+                style: CellStyle {
+                    bg: Color::Default,
+                    ..cell.style
+                },
             });
         }
         let past_cursor = y >= cursor.y;

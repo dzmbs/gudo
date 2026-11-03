@@ -26,6 +26,7 @@ pub enum Color {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct CellStyle {
     pub fg: Color,
+    pub bg: Color,
     /// SGR 2: faint (dim).
     pub faint: bool,
     pub bold: bool,
@@ -159,6 +160,10 @@ fn read_cell(grid_ref: &ffi::GhosttyGridRef) -> Result<Cell, Error> {
             (&raw mut semantic).cast(),
         ))?;
     }
+    let mut style = style(grid_ref)?;
+    if let Some(bg) = background_only(cell)? {
+        style.bg = bg;
+    }
     Ok(Cell {
         text: graphemes(grid_ref)?,
         width: match wide {
@@ -167,13 +172,54 @@ fn read_cell(grid_ref: &ffi::GhosttyGridRef) -> Result<Cell, Error> {
             ffi::GhosttyCellWide_GHOSTTY_CELL_WIDE_SPACER_HEAD => CellWidth::SpacerHead,
             _ => CellWidth::Narrow,
         },
-        style: style(grid_ref)?,
+        style,
         semantic: match semantic {
             ffi::GhosttyCellSemanticContent_GHOSTTY_CELL_SEMANTIC_INPUT => Semantic::Input,
             ffi::GhosttyCellSemanticContent_GHOSTTY_CELL_SEMANTIC_PROMPT => Semantic::Prompt,
             _ => Semantic::Output,
         },
     })
+}
+
+/// The color of a cell that holds no text, only a background (erased with a color set):
+/// such cells keep it in their content rather than in a style.
+fn background_only(cell: ffi::GhosttyCell) -> Result<Option<Color>, Error> {
+    let mut tag: ffi::GhosttyCellContentTag = 0;
+    // SAFETY: CONTENT_TAG writes a `GhosttyCellContentTag` (`c_int`).
+    Error::check(unsafe {
+        ffi::ghostty_cell_get(
+            cell,
+            ffi::GhosttyCellData_GHOSTTY_CELL_DATA_CONTENT_TAG,
+            (&raw mut tag).cast(),
+        )
+    })?;
+    match tag {
+        ffi::GhosttyCellContentTag_GHOSTTY_CELL_CONTENT_BG_COLOR_PALETTE => {
+            let mut index: ffi::GhosttyColorPaletteIndex = 0;
+            // SAFETY: COLOR_PALETTE writes a `GhosttyColorPaletteIndex`, valid for this tag.
+            Error::check(unsafe {
+                ffi::ghostty_cell_get(
+                    cell,
+                    ffi::GhosttyCellData_GHOSTTY_CELL_DATA_COLOR_PALETTE,
+                    (&raw mut index).cast(),
+                )
+            })?;
+            Ok(Some(Color::Palette(index)))
+        }
+        ffi::GhosttyCellContentTag_GHOSTTY_CELL_CONTENT_BG_COLOR_RGB => {
+            let mut rgb = ffi::GhosttyColorRgb { r: 0, g: 0, b: 0 };
+            // SAFETY: COLOR_RGB writes a `GhosttyColorRgb`, valid for this tag.
+            Error::check(unsafe {
+                ffi::ghostty_cell_get(
+                    cell,
+                    ffi::GhosttyCellData_GHOSTTY_CELL_DATA_COLOR_RGB,
+                    (&raw mut rgb).cast(),
+                )
+            })?;
+            Ok(Some(Color::Rgb(rgb.r, rgb.g, rgb.b)))
+        }
+        _ => Ok(None),
+    }
 }
 
 fn graphemes(grid_ref: &ffi::GhosttyGridRef) -> Result<String, Error> {
@@ -218,6 +264,7 @@ fn style(grid_ref: &ffi::GhosttyGridRef) -> Result<CellStyle, Error> {
     Error::check(unsafe { ffi::ghostty_grid_ref_style(grid_ref, &mut raw) })?;
     Ok(CellStyle {
         fg: color(raw.fg_color),
+        bg: color(raw.bg_color),
         faint: raw.faint,
         bold: raw.bold,
         italic: raw.italic,
@@ -258,9 +305,26 @@ mod tests {
         assert_eq!(row.cells[3].width, CellWidth::SpacerTail);
         assert!(row.cells[3].text.is_empty());
         assert_eq!(row.cells[5].style.fg, Color::Rgb(10, 20, 30));
+        assert_eq!(row.cells[5].style.bg, Color::Default);
         let next = terminal.row(1).unwrap();
         assert!(!next.wrapped);
         assert_eq!(next.cells[0].text, "z");
         assert!(terminal.row(99).is_err());
+    }
+
+    #[test]
+    fn rows_report_background_colors() {
+        let mut terminal = Terminal::new(6, 1).unwrap();
+        terminal.write(b"a\x1b[44mb\x1b[48;2;1;2;3mc\x1b[0;7md");
+        let cells = terminal.row(0).unwrap().cells;
+        assert_eq!(cells[0].style.bg, Color::Default);
+        assert_eq!(cells[1].style.bg, Color::Palette(4));
+        assert_eq!(cells[2].style.bg, Color::Rgb(1, 2, 3));
+        assert!(cells[3].style.inverse);
+        assert_eq!(cells[3].style.bg, Color::Default);
+        terminal.write(b"\x1b[0;45m\x1b[2K");
+        let erased = terminal.row(0).unwrap().cells;
+        assert!(erased[0].is_blank());
+        assert_eq!(erased[0].style.bg, Color::Palette(5));
     }
 }
