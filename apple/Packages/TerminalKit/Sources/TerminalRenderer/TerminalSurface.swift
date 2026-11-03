@@ -1087,12 +1087,16 @@ public final class TerminalSurface {
         // Over budget: stay dirty and try again on a later tick.
         guard Self.renderBudget.mayRender(focused: isFocused, now: CACurrentMediaTime()) else { return }
         wakePending.store(false, ordering: .releasing)
+        if terminal.releaseExpiredHeldOutput() { outputArrived() }
         let start = CACurrentMediaTime()
         let rendered = renderIfDirty()
         Self.renderBudget.spend(CACurrentMediaTime() - start)
-        // Keep ticking while predictions wait for confirmation, so their timeouts fire, and while
-        // a search is still working through the scrollback.
-        if !rendered, !(predictor?.isActive ?? false), search?.status.isComplete ?? true { link.isPaused = true }
+        // Keep ticking while predictions wait for confirmation, so their timeouts fire, while a
+        // search is still working through the scrollback, and while a synchronized update is
+        // held, so it is shown when it times out.
+        if !rendered, !(predictor?.isActive ?? false), search?.status.isComplete ?? true, !terminal.isHoldingOutput {
+            link.isPaused = true
+        }
     }
 
     private func currentOverlay(cursor: RenderState.Cursor) -> FrameOverlay {

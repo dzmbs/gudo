@@ -100,7 +100,7 @@ extension Terminal {
         }
     }
 
-    private static func mode(_ handle: GhosttyTerminal, _ value: UInt16, ansi: Bool = false) -> Bool {
+    static func mode(_ handle: GhosttyTerminal, _ value: UInt16, ansi: Bool = false) -> Bool {
         var config = GhosttyTerminalModeConfig(mode: ghostty_mode_new(value, ansi), value: false)
         ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_MODE, &config)
         return config.value
