@@ -109,6 +109,8 @@ enum PaletteCommands {
                 systemImage: "globe") { Task { await model.openPort(port) } })
         }
 
+        commands += worktrees(model: model)
+
         let open = Set(model.groups.groups.map(\.id))
         for host in model.hosts.hosts where !open.contains(host.id) && !host.isLocal {
             commands.append(PaletteCommand(
@@ -209,6 +211,30 @@ enum PaletteCommands {
                 state: states.min { $0.urgency < $1.urgency },
                 shortcut: shortcut
             ) { model.focus(ref) }
+        }
+    }
+
+    /// Every worktree on every host, the sidebar's folded ones too: its tab, else a new one in it.
+    static func worktrees(model: WindowModel) -> [PaletteCommand] {
+        model.groups.groups.flatMap { group -> [PaletteCommand] in
+            guard let snapshot = model.groups.repoSnapshot(for: group) else { return [] }
+            let sidebar = RepoSidebar.build(tabs: group.tabs, snapshot: snapshot)
+            let firstTab = Dictionary(
+                sidebar.repos.flatMap(\.worktrees).compactMap { worktree in worktree.tabs.first.map { (worktree.id, $0) } },
+                uniquingKeysWith: { first, _ in first })
+            return snapshot.worktrees.map { worktree in
+                let subtitle = [worktree.repoName, worktree.subtitle, group.name].compactMap(\.self).joined(separator: " · ")
+                return PaletteCommand(
+                    id: "worktree-\(group.id)-\(worktree.path)", title: worktree.displayBranch, subtitle: subtitle,
+                    section: "Worktrees", systemImage: "arrow.triangle.branch"
+                ) {
+                    if let tab = firstTab[worktree.path] {
+                        model.focus(group.ref(tab))
+                    } else {
+                        model.git.openTab(in: worktree.path, name: worktree.name, host: group.id)
+                    }
+                }
+            }
         }
     }
 
