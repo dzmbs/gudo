@@ -1425,7 +1425,7 @@ Used by:
   blake3 1.8.7 (https://github.com/BLAKE3-team/BLAKE3)
   russh-cryptovec 0.62.0 (https://github.com/warp-tech/russh)
   russh-util 0.52.0 (https://github.com/warp-tech/russh)
-  russh 0.64.1 (https://github.com/warp-tech/russh)
+  russh 0.65.0 (https://github.com/warp-tech/russh)
   ryu 1.0.23 (https://github.com/dtolnay/ryu)
   sync_wrapper 1.0.2 (https://github.com/Actyx/sync_wrapper)
 
