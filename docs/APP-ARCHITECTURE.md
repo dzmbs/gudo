@@ -72,6 +72,19 @@ the output past its `at_seq` (the echo), or after 40 ms if the input printed not
 does not report the foreground program yet, so `ForegroundProgramReporting` is not implemented
 (the title stands in).
 
+Predictions are drawn only when they hide latency someone could see: round trip above 30 ms
+(hidden again below 20 ms), or a keystroke unconfirmed for 250 ms (a stall). They never move text
+the shell drew right of the cursor (autosuggestions, right prompts): over such text only an empty
+cell or the same character is predicted. A cell is underlined only once its echo is late (a round
+trip plus 250 ms). `FlickerTests` replays zsh with highlighting and autosuggestions cut at every
+byte and checks every presented frame.
+
+Synchronized output (mode 2026): `Terminal.write` holds the bytes between `CSI ? 2026 h` and
+`CSI ? 2026 l` and parses them in one piece (`SynchronizedOutput`), so no reader of the terminal
+sees a half-drawn TUI frame however the stream was cut. A hold ends after 1 s (Ghostty's limit;
+the surface keeps ticking to release it), past 4 MiB, on resize, and at a CSI query when the
+terminal answers queries itself.
+
 ## 3. Connections and lifecycle (04 R1-R12)
 
 | Rule | Where |
