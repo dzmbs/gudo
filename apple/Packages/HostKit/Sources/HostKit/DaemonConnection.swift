@@ -639,7 +639,7 @@ public enum HostError: Error, Equatable, LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .notConnected: "The host is not connected. It will resume when it is back."
-        case .badTicket(let reason): "That is not a valid pairing ticket: \(reason)"
+        case .badTicket: "That isn't a valid pairing ticket. Copy the whole ticket again from the host."
         case .missingSecret(let what): "Missing \(what)"
         }
     }

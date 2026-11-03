@@ -86,6 +86,7 @@ nonisolated func temporaryDirectory() -> URL {
 @Suite struct PairingAndKeysTests {
     @Test func badTicketsAreRejected() {
         #expect(throws: HostError.self) { try PairingTicket("hello") }
+        #expect(throws: HostError.badTicket("not a pairing ticket")) { try PairingTicket("hello world!") }
         #expect(PairingTicket(url: URL(string: "https://example.com/pair/x")!) == nil)
     }
 

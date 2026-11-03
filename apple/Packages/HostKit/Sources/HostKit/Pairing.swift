@@ -28,8 +28,10 @@ nonisolated public struct PairingTicket: Sendable, Equatable {
         let compact = input.filter { !$0.isWhitespace }
         do {
             info = try inspectPairTicket(ticket: compact)
+        } catch let ClientError.Ticket(message) {
+            throw .badTicket(message)
         } catch {
-            throw .badTicket(String(describing: error))
+            throw .badTicket("not a pairing ticket")
         }
         text = compact
     }
