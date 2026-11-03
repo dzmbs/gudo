@@ -29,8 +29,8 @@ struct CapsuleMetrics: Equatable {
         }
         if width < 500 {
             return CapsuleMetrics(
-                bandHeight: 52, capsuleHeight: 40, padding: 6, minimumSlot: 30, slotPadding: 14,
-                fontSize: 13, gap: 8, margin: 12, showsAlt: false)
+                bandHeight: 48, capsuleHeight: 38, padding: 5, minimumSlot: 30, slotPadding: 14,
+                fontSize: 13, gap: 6, margin: 10, showsAlt: false)
         }
         // A phone this wide is the iPhone Duo's inner screen: a phone's reach, a smaller key.
         let phone = !isPad && width < 900

@@ -31,6 +31,8 @@ struct KeySpec: Identifiable {
     var output: Output
     var alternate: Output?
     var alternateTitle: String?
+    /// What the key does, in plain words, under its label in the keys panel.
+    var caption: String?
 
     func events(latched: KeyModifiers, alternate useAlternate: Bool = false) -> [KeyEvent] {
         Self.events(useAlternate ? (alternate ?? output) : output, latched: latched)
@@ -57,6 +59,12 @@ struct KeySpec: Identifiable {
         key.alternate = alternate
         key.alternateTitle = title
         key.repeatable = false
+        return key
+    }
+
+    func captioned(_ caption: String) -> KeySpec {
+        var key = self
+        key.caption = caption
         return key
     }
 }
@@ -89,6 +97,7 @@ extension KeySpec {
     static let shiftTab = key("shift-tab", .tab, mods: .shift, symbol: "arrow.left.to.line", label: "Shift Tab")
     static let mode = key("mode", .tab, mods: .shift, title: "⇧tab", label: "Shift Tab, switch mode")
     static let enter = key("enter", .enter, symbol: "return", label: "Return")
+    static let newline = key("shift-enter", .enter, mods: .shift, title: "⇧↩\u{FE0E}", label: "Shift Return, new line")
     static let up = key("up", .arrowUp, symbol: "arrow.up", label: "Up arrow", repeatable: true)
     static let down = key("down", .arrowDown, symbol: "arrow.down", label: "Down arrow", repeatable: true)
     static let left = key("left", .arrowLeft, symbol: "arrow.left", label: "Left arrow", repeatable: true)
@@ -129,16 +138,10 @@ struct KeyBarProfile: Identifiable, Equatable {
 
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
 
+    /// No keys of its own: a shell shows the user's favourites (`FavouriteKeys`).
     static let shell = KeyBarProfile(
         id: "shell", name: "Shell", programs: ["bash", "zsh", "fish", "sh", "dash", "nu", "pwsh"], titlePattern: nil,
-        keys: [
-            .pair("tilde", "~", "$", label: "Tilde"), .pair("pipe", "|", "&", label: "Vertical bar"),
-            .pair("slash", "/", "\\", label: "Slash"), .pair("dash", "-", "_", label: "Hyphen"),
-            .backspace, .paste, .text("backslash", "\\", label: "Backslash"),
-            .pair("backtick", "`", "'", label: "Backtick"), .pair("star", "*", "?", label: "Star"),
-            .pair("dollar", "$", "#", label: "Dollar"), .pair("gt", ">", "<", label: "Greater than"),
-            .ctrlPair("r", "s", label: "Control R, history search"),
-        ])
+        keys: [])
 
     static let vim = KeyBarProfile(
         id: "vim", name: "Vim", programs: ["vim", "nvim", "vi", "view", "vimdiff", "hx", "micro"], titlePattern: #"\bn?vim?\b"#,
@@ -188,7 +191,7 @@ struct KeyBarProfile: Identifiable, Equatable {
         // Claude Code titles its terminal "✳ <task>" (a spinner glyph while working).
         titlePattern: #"\bclaude\b|^[✳✻✽✶✢·]\s"#,
         keys: [
-            .mode, .pair("slash", "/", "#", label: "Slash command"), .pair("at", "@", "!", label: "Mention file"),
+            .mode, .pair("slash", "/", "#", label: "Slash command"), .newline, .pair("at", "@", "!", label: "Mention file"),
             .text("bang", "!", label: "Bash mode"), .backspace, .ctrlPair("c", "r", label: "Control C"),
             .paste, .text("hash", "#", label: "Memory"), .ctrlPair("o", "b", label: "Control O, expand"),
             .rewind.flick(.key(.arrowUp, []), title: "↑"),

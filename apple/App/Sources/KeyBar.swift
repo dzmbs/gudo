@@ -11,16 +11,19 @@ import VoiceKit
 /// The keys above the software keyboard: one slim Liquid Glass row floating over the terminal.
 ///
 /// ```
-/// ( esc  ctrl  ⇥ │ ←  ↓  ↑  →  ~  |  /  -  …  Home  End  PgUp  PgDn )  (⋯)
-///   pinned          scrolls sideways: arrows, the profile's keys, paging
+/// ( esc  ctrl  ⇥  ^C │ ~  |  /  -  ^R  … )  (✥) (⋯) (⌄)
+///   pinned             scrolls: the profile's keys, then the user's favourites
 /// ```
 ///
-/// - `esc ctrl ⇥` (and `alt` where there is room) never move; the rest scrolls, faded at the edge
-///   while more keys wait. Only the keys after the arrows change with the profile.
-/// - A key's second character is in its long-press menu. Arrows and ⌫ repeat while held.
+/// - `esc ctrl ⇥ ^C` (and `alt` where there is room) never move; the rest scrolls, faded at the
+///   edge while more keys wait. A program's profile puts its keys before the favourites.
+/// - ✥ sends arrows while dragged from it (repeating, faster further out); a tap opens the keys
+///   panel in place of the keyboard, at the keyboard's height, where the favourites are edited.
+/// - A key's second character is in its long-press menu. ⌫ repeats while held.
 /// - `ctrl` and `alt` are one-shot: tap and they apply to the next key (from the bar, the software
 ///   keyboard or the arrows). Double-tap or long-press locks (solid); tap again to clear.
-/// - ⋯ holds the key set, the panels (composer, snippets, line editor) and drawing.
+/// - ⋯ holds the key set, the panels (composer, snippets, line editor) and drawing. ⌄, or a swipe
+///   down on the bar, hides the keyboard.
 /// - With a hardware keyboard (the Magic Keyboard has no Esc) only a slim `esc ⌃ ⋯` pill stays,
 ///   at the trailing edge; Settings can hide it or keep the full bar.
 ///
@@ -62,6 +65,10 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
     weak var target: TerminalView? {
         didSet {
             guard oldValue !== target else { return }
+            if panelShown {
+                if let oldValue { detachPanel(from: oldValue) }
+                panelShown = false
+            }
             lineEditor.terminal = target
             apply()
             // Focus may have crossed a fold: the bar follows it to the other page.
@@ -113,6 +120,15 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
     /// keyboard attached, it then gets the full bar.
     private var softwareKeyboardShown = false
     private var snippetsShown = false
+    private var panelShown = false
+    private var panelWidth: CGFloat = 0
+    private var savedShortcuts: (leading: [UIBarButtonItemGroup], trailing: [UIBarButtonItemGroup])?
+    /// The on-screen keyboard's height without this bar, last seen at this bar width: the keys
+    /// panel takes it.
+    private var softwareKeyboardHeight: (barWidth: CGFloat, height: CGFloat)?
+    /// A one-shot Ctrl or Alt taken when a joystick drag starts and kept for the whole drag.
+    private var dragModifiers: KeyModifiers = []
+    private let favourites: FavouriteKeys
     private var metrics = CapsuleMetrics.for(width: 400, compactHeight: false, isPad: false)
 
     private let panelCard = UIVisualEffectView(effect: UIGlassEffect())
@@ -133,9 +149,11 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
     private let ctrlKey: CapsuleKey
     private let altKey: CapsuleKey
     private let tabKey: CapsuleKey
-    private var arrowKeys: [CapsuleKey] = []
-    private var pagingKeys: [(spec: KeySpec, view: CapsuleKey)] = []
-    private var profileKeys: [(spec: KeySpec, view: CapsuleKey)] = []
+    private let interruptKey: CapsuleKey
+    /// The scrolling keys: the profile's, then the favourites.
+    private var rowKeys: [(spec: KeySpec, view: CapsuleKey)] = []
+    private let joystick = JoystickView()
+    private lazy var keyPanel = makeKeyPanel()
     private let menuButton = UIButton()
     private let hideButton = UIButton()
     private let micButton = UIButton()
@@ -143,9 +161,10 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
     private let hideCircle: CircleView
     private let micCircle: CircleView
 
-    init(style: KeyBarStyle = .default, snippets: SnippetStore = .shared) {
+    init(style: KeyBarStyle = .default, snippets: SnippetStore = .shared, favourites: FavouriteKeys = .shared) {
         self.style = style
         self.snippets = snippets
+        self.favourites = favourites
         composer = ComposerView(style: style)
         lineEditor = LineEditorController(style: style)
         let metrics = metrics
@@ -155,6 +174,7 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
         ctrlKey = CapsuleKey(metrics: metrics)
         altKey = CapsuleKey(metrics: metrics)
         tabKey = CapsuleKey(metrics: metrics)
+        interruptKey = CapsuleKey(metrics: metrics)
         menuCircle = CircleView(content: menuButton)
         hideCircle = CircleView(content: hideButton)
         micCircle = CircleView(content: micButton)
@@ -211,6 +231,8 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
             }
         }
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardFrameChanged(_:)), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillHide), name: UIResponder.keyboardWillHideNotification, object: nil)
+        favourites.onChange = { [weak self] in self?.rebuildRowKeys() }
         // Posted on the writing thread, which need not be main.
         settingsObserver = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification, object: nil, queue: .main
@@ -233,6 +255,8 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
         for case let key as UIButton in allSubviews(of: self) { key.setNeedsUpdateConfiguration() }
         configureCircles()
         strip.applyInk()
+        joystick.applyInk()
+        if panelShown { keyPanel.applyTheme() }
     }
 
     var enableInputClicksWhenVisible: Bool { true }
@@ -264,6 +288,15 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
             applyMetrics()
         }
         layoutPanelCard()
+        if panelShown, panelWidth != bounds.width {
+            panelWidth = bounds.width
+            // Rotated with the panel open: it takes the keyboard's height for the new width.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, panelShown else { return }
+                keyPanel.frame.size.height = panelHeight()
+                target?.reloadInputViews()
+            }
+        }
     }
 
     /// The span the bar uses: all of it, or across an open foldable's fold only the page under
@@ -332,11 +365,12 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
     /// Brings the views in line with the focused pane's state.
     private func apply() {
         let state = state
-        let profileChanged = profile != state.profile || profileKeys.isEmpty
+        let profileChanged = profile != state.profile || rowKeys.isEmpty
         profile = state.profile
         lineEditor.shellProfile = profile.id == "shell" && !showsComposer(state)
         lineEditor.agentProfile = isAgent
-        if profileChanged { rebuildProfileKeys() }
+        if profileChanged { rebuildRowKeys() }
+        joystick.isActive = panelShown
         if composer.text != state.draft { composer.text = state.draft }
         composer.isHidden = !showsComposer(state)
         snippetScroll.isHidden = !snippetsShown || compact
@@ -355,7 +389,7 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
     private func applyMetrics() {
         strip.metrics = metrics
         pill.metrics = metrics
-        for key in [escKey, ctrlKey, altKey, tabKey] + arrowKeys + pagingKeys.map(\.view) + profileKeys.map(\.view) {
+        for key in [escKey, ctrlKey, altKey, tabKey, interruptKey] + rowKeys.map(\.view) {
             key.metrics = metrics
         }
         configureCircles()
@@ -365,6 +399,7 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
     private func configureCircles() {
         menuButton.configuration = circleConfiguration(symbol: "ellipsis")
         hideButton.configuration = circleConfiguration(symbol: "keyboard.chevron.compact.down")
+        joystick.setSymbolConfiguration(metrics.symbolConfiguration)
         updateMic()
     }
 
@@ -388,6 +423,7 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
               let screen = window?.windowScene?.screen ?? (notification.object as? UIScreen) ?? window?.screen else { return }
         let visible = frame.intersection(screen.bounds).height
         let shown = visible - bounds.height > 120
+        if shown, !panelShown { softwareKeyboardHeight = (bounds.width, visible - bounds.height) }
         guard shown != softwareKeyboardShown else { return }
         softwareKeyboardShown = shown
         apply()
@@ -472,17 +508,33 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
         ])
         updateModifiers()
 
-        arrowKeys = [(KeySpec.left, PhysicalKey.arrowLeft), (.down, .arrowDown), (.up, .arrowUp), (.right, .arrowRight)].map { spec, physical in
-            let view = CapsuleKey(metrics: metrics)
-            view.symbol = spec.symbol
-            view.accessibilityIdentifier = "keybar-" + spec.id
-            view.accessibilityLabel = spec.accessibilityLabel
-            view.onDown = { [weak self] in self?.pressArrow(physical) }
-            view.onUp = { [weak self] in self?.repeater.stop() }
-            view.onCancel = { [weak self] in self?.repeater.stop() }
-            return view
+        configure(interruptKey, for: KeyCatalog.interrupt, idPrefix: "keybar-")
+
+        joystick.accessibilityIdentifier = "keybar-joystick"
+        joystick.accessibilityLabel = "Arrow keys"
+        joystick.accessibilityHint = "Drag for arrows. Tap for all keys."
+        joystick.onDragStart = { [weak self] in
+            guard let self else { return }
+            dragModifiers = takeLatchedModifiers()
         }
-        pagingKeys = [KeySpec.home, .end, .pageUp, .pageDown].map { ($0, keyCap(for: $0, idPrefix: "keybar-")) }
+        joystick.onArrow = { [weak self] key, isRepeat in
+            guard let self else { return }
+            sendArrow(key, modifiers: dragModifiers, isRepeat: isRepeat)
+        }
+        joystick.onTap = { [weak self] in self?.togglePanel() }
+        joystick.accessibilityCustomActions = [
+            ("Up", PhysicalKey.arrowUp), ("Down", .arrowDown), ("Left", .arrowLeft), ("Right", .arrowRight),
+        ].map { name, key in
+            UIAccessibilityCustomAction(name: name) { [weak self] _ in
+                guard let self else { return false }
+                sendArrow(key, modifiers: takeLatchedModifiers(), isRepeat: false)
+                return true
+            }
+        }
+
+        let swipeDown = UISwipeGestureRecognizer(target: self, action: #selector(swipedDown))
+        swipeDown.direction = .down
+        band.addGestureRecognizer(swipeDown)
 
         menuButton.accessibilityIdentifier = "keybar-profile"
         menuButton.accessibilityLabel = "Keys and panels"
@@ -492,7 +544,7 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
         hideButton.addAction(UIAction { [weak self] _ in _ = self?.target?.resignFirstResponder() }, for: .touchUpInside)
 
         configureMic()
-        for view in [strip, pill, micCircle, menuCircle, hideCircle] as [UIView] { band.addSubview(view) }
+        for view in [strip, pill, micCircle, joystick, menuCircle, hideCircle] as [UIView] { band.addSubview(view) }
     }
 
     private func circleConfiguration(symbol: String) -> UIButton.Configuration {
@@ -514,9 +566,8 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
             return
         }
         pill.isHidden = true
-        let pinned: [CapsuleKey] = [escKey, ctrlKey] + (metrics.showsAlt ? [altKey] : []) + [tabKey]
-        let profileIds = Set(profileKeys.map(\.spec.id))
-        let scrolling = arrowKeys + profileKeys.map(\.view) + pagingKeys.filter { !profileIds.contains($0.spec.id) }.map(\.view)
+        let pinned: [CapsuleKey] = [escKey, ctrlKey] + (metrics.showsAlt ? [altKey] : []) + [tabKey, interruptKey]
+        let scrolling = rowKeys.map(\.view)
         let pinnedSlots = pinned.map { metrics.slotWidth(title: $0.title, symbol: $0.symbol) }
         let scrollingSlots = scrolling.map { metrics.slotWidth(title: $0.title, symbol: $0.symbol) }
         altKey.isHidden = !metrics.showsAlt
@@ -525,10 +576,8 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
         // Hold-to-talk where there is room; narrow iPhones have the keyboard's own mic.
         let showsMic = metrics.showsAlt && VoiceSettings.load().isEnabled
         micCircle.isHidden = !showsMic
-        hideCircle.isHidden = !metrics.showsAlt
-        menuCircle.isHidden = false
-        strip.isHidden = false
-        let circles: [UIView] = (showsMic ? [micCircle] : []) + [menuCircle] + (metrics.showsAlt ? [hideCircle] : [])
+        for view in [hideCircle, menuCircle, joystick, strip] as [UIView] { view.isHidden = false }
+        let circles: [UIView] = (showsMic ? [micCircle] : []) + [joystick, menuCircle, hideCircle]
         let circlesWidth = CGFloat(circles.count) * (capsuleHeight + metrics.gap)
         let available = width - 2 * metrics.margin - circlesWidth
         let natural = KeyStripView.width(pinned: pinnedSlots, scrolling: scrollingSlots, metrics: metrics)
@@ -549,7 +598,7 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
     /// has no Esc key; ⌘. sends Esc as well.
     private func layoutPill(width: CGFloat) {
         let metrics = self.metrics
-        for view in [strip, hideCircle, micCircle] as [UIView] { view.isHidden = true }
+        for view in [strip, hideCircle, micCircle, joystick] as [UIView] { view.isHidden = true }
         guard hardwareMode == .minimal else {
             pill.isHidden = true
             menuCircle.isHidden = true
@@ -577,10 +626,14 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
 
     // MARK: Keys
 
-    /// The profile's keys, built once per profile change (a cross-fade, back at the strip's start).
-    private func rebuildProfileKeys() {
-        profileKeys.forEach { $0.view.removeFromSuperview() }
-        profileKeys = profile.keys.map { ($0, keyCap(for: $0, idPrefix: "keybar-")) }
+    /// The scrolling keys, built again when the profile or the favourites change (a cross-fade,
+    /// back at the strip's start). The profile's keys come first, without repeating a favourite
+    /// or a pinned key.
+    private func rebuildRowKeys() {
+        rowKeys.forEach { $0.view.removeFromSuperview() }
+        var seen = KeyCatalog.pinnedIDs
+        let keys = profile.keys + favourites.keys
+        rowKeys = keys.filter { seen.insert($0.id).inserted }.map { ($0, keyCap(for: $0, idPrefix: "keybar-")) }
         UIView.transition(with: strip, duration: UIAccessibility.isReduceMotionEnabled ? 0 : 0.18,
                           options: .transitionCrossDissolve) {
             self.layoutBand()
@@ -588,10 +641,16 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
             self.strip.scrollToStart()
         }
         UIAccessibility.post(notification: .layoutChanged, argument: profile.name)
+        if panelShown { keyPanel.reload() }
     }
 
     private func keyCap(for key: KeySpec, idPrefix: String) -> CapsuleKey {
         let view = CapsuleKey(metrics: metrics)
+        configure(view, for: key, idPrefix: idPrefix)
+        return view
+    }
+
+    private func configure(_ view: CapsuleKey, for key: KeySpec, idPrefix: String) {
         view.title = key.title
         view.symbol = key.symbol
         view.accessibilityIdentifier = idPrefix + key.id
@@ -611,7 +670,6 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
             }]
             _ = alternate
         }
-        return view
     }
 
     private func send(_ key: KeySpec, alternate: Bool = false) {
@@ -713,6 +771,7 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
         // The key announces Latched / Locked itself; off is ours to say.
         if ctrl == .off { ctrlKey.accessibilityValue = "off" }
         if alt == .off { altKey.accessibilityValue = "off" }
+        joystick.modifiers = (ctrl != .off ? "⌃" : "") + (alt != .off ? "⌥" : "")
         // Without an alt key (narrow bars) the ctrl menu offers Option.
         ctrlKey.menu = UIMenu(children: [
             UIAction(title: "Lock Control", image: UIImage(systemName: "lock")) { [weak self] _ in self?.ctrl = .locked },
@@ -723,14 +782,6 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
     }
 
     // MARK: Arrows
-
-    /// An arrow key went down: it takes the latched modifiers (a one-shot Ctrl turns the whole
-    /// hold into word jumps) and repeats while held.
-    private func pressArrow(_ key: PhysicalKey) {
-        let modifiers = takeLatchedModifiers()
-        sendArrow(key, modifiers: modifiers, isRepeat: false)
-        repeater.start { [weak self] in self?.sendArrow(key, modifiers: modifiers, isRepeat: true) }
-    }
 
     private func sendArrow(_ key: PhysicalKey, modifiers: KeyModifiers, isRepeat: Bool) {
         guard let target else { return }
@@ -773,14 +824,23 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
         ] + (onDraw.map { draw in
             [UIAction(title: "Draw on Pane", image: UIImage(systemName: "pencil.and.scribble")) { _ in draw() }]
         } ?? []))
-        let hide = metrics.showsAlt && !compact ? [] : [UIAction(title: "Hide Keyboard", image: UIImage(systemName: "keyboard.chevron.compact.down")) { [weak self] _ in
+        let hide = !compact ? [] : [UIAction(title: "Hide Keyboard", image: UIImage(systemName: "keyboard.chevron.compact.down")) { [weak self] _ in
             _ = self?.target?.resignFirstResponder()
         }]
+        let keys = UIMenu(options: .displayInline, children: [
+            UIAction(title: "All Keys", image: UIImage(systemName: "keyboard.badge.ellipsis"), state: panelShown ? .on : .off) { [weak self] _ in
+                self?.togglePanel()
+            },
+            UIAction(title: "Edit Bar", image: UIImage(systemName: "slider.horizontal.3")) { [weak self] _ in
+                self?.showPanel(editing: true)
+            },
+        ])
         let keySets = [automatic, UIMenu(options: .displayInline, children: choices)]
         // No menu title: on a menu long enough to scroll, UIKit draws it over the first rows.
         menuButton.menu = bounds.width >= Self.wideWidth
-            ? UIMenu(children: keySets + [panels, UIMenu(options: .displayInline, children: hide)])
+            ? UIMenu(children: [keys] + keySets + [panels, UIMenu(options: .displayInline, children: hide)])
             : UIMenu(children: [
+                keys,
                 UIMenu(title: "Key Set", subtitle: profile.name, image: UIImage(systemName: "keyboard"), children: keySets),
                 panels,
                 UIMenu(options: .displayInline, children: hide),
@@ -793,6 +853,98 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
         state.composerOn = nil
         self.state = state
         apply()
+    }
+
+    // MARK: Keys panel
+
+    private func makeKeyPanel() -> KeyPanel {
+        let panel = KeyPanel(favourites: favourites)
+        panel.onPress = { [weak self] key in
+            guard let self else { return }
+            if key.repeatable {
+                pressRepeating(key)
+            } else {
+                send(key)
+            }
+        }
+        panel.onRelease = { [weak self] in self?.repeater.stop() }
+        panel.onKeyboard = { [weak self] in self?.hidePanel() }
+        return panel
+    }
+
+    private func togglePanel() {
+        if panelShown {
+            hidePanel()
+        } else {
+            showPanel(editing: false)
+        }
+    }
+
+    /// Swaps the keyboard for the panel at the keyboard's own height, so the terminal stays put.
+    private func showPanel(editing: Bool) {
+        guard let target else { return }
+        keyPanel.frame.size.height = panelHeight()
+        panelWidth = bounds.width
+        keyPanel.applyTheme()
+        keyPanel.setEditing(editing)
+        guard !panelShown else { return }
+        panelShown = true
+        if composer.textView.isFirstResponder { target.becomeFirstResponder() }
+        attachPanel(to: target)
+        if target.isFirstResponder {
+            target.reloadInputViews()
+        } else {
+            target.becomeFirstResponder()
+        }
+        apply()
+        UIAccessibility.post(notification: .screenChanged, argument: keyPanel)
+    }
+
+    private func hidePanel() {
+        guard panelShown else { return }
+        panelShown = false
+        repeater.stop()
+        guard let target else { return }
+        detachPanel(from: target)
+        target.reloadInputViews()
+        apply()
+    }
+
+    /// The iPad shortcuts bar (undo, redo, paste) goes while the panel shows: the panel takes the
+    /// whole height the keyboard had, shortcuts bar included, so nothing above it moves.
+    private func attachPanel(to terminal: TerminalView) {
+        let assistant = terminal.inputAssistantItem
+        savedShortcuts = (assistant.leadingBarButtonGroups, assistant.trailingBarButtonGroups)
+        assistant.leadingBarButtonGroups = []
+        assistant.trailingBarButtonGroups = []
+        terminal.keyPanel = keyPanel
+    }
+
+    private func detachPanel(from terminal: TerminalView) {
+        terminal.keyPanel = nil
+        guard let savedShortcuts else { return }
+        terminal.inputAssistantItem.leadingBarButtonGroups = savedShortcuts.leading
+        terminal.inputAssistantItem.trailingBarButtonGroups = savedShortcuts.trailing
+        self.savedShortcuts = nil
+    }
+
+    private func panelHeight() -> CGFloat {
+        if let softwareKeyboardHeight, softwareKeyboardHeight.barWidth == bounds.width { return softwareKeyboardHeight.height }
+        let landscape = traitCollection.verticalSizeClass == .compact
+        if traitCollection.userInterfaceIdiom == .pad { return landscape ? 400 : 320 }
+        return landscape ? 200 : 300
+    }
+
+    /// Without a first responder the panel is gone: the next focus brings the keyboard.
+    @objc private func keyboardWillHide() {
+        guard panelShown, let target, !target.isFirstResponder else { return }
+        panelShown = false
+        detachPanel(from: target)
+        apply()
+    }
+
+    @objc private func swipedDown() {
+        _ = target?.resignFirstResponder()
     }
 
     // MARK: Composer
