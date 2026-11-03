@@ -403,5 +403,8 @@ bitset! {
         DEVICE_MANAGEMENT = 20;
         /// Answers `WorkspaceRequest::PushAgents` (which agents a device wants pushed).
         PUSH_AGENTS = 21;
+        /// Answers programs' color queries with the theme clients send in
+        /// `ClientCtl::TerminalColors`.
+        TERMINAL_COLORS = 22;
     }
 }

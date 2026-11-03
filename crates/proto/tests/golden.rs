@@ -533,6 +533,7 @@ fn every_message_matches_its_frozen_bytes() {
     reopen_messages(&mut checker);
     terminal_limits_messages(&mut checker);
     guest_answer_messages(&mut checker);
+    terminal_colors_messages(&mut checker);
 
     assert!(
         checker.failures.is_empty(),
@@ -3377,5 +3378,25 @@ fn guest_answer_messages(checker: &mut Checker) {
             at: UnixMillis(5),
         }),
         "3f000000013e0311111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222203626f620359657302726d05",
+    );
+}
+
+/// Theme colors for programs' color queries (`DaemonFeatures::TERMINAL_COLORS`, bit 22;
+/// `ClientCtl::TerminalColors`, appended after `Peer`).
+fn terminal_colors_messages(checker: &mut Checker) {
+    checker.check(
+        "DaemonFeatures::TERMINAL_COLORS",
+        DaemonFeatures::TERMINAL_COLORS,
+        "050000000180808002",
+    );
+    checker.check(
+        "ClientCtl::TerminalColors",
+        ClientCtl::TerminalColors(TerminalColors {
+            foreground: [0xff, 0xff, 0xff],
+            background: [0x28, 0x2c, 0x34],
+            cursor: Some([0x52, 0x6f, 0xff]),
+            palette: vec![[0, 0, 0], [0xcc, 0x66, 0x66]],
+        }),
+        "13000000011effffff282c3401526fff02000000cc6666",
     );
 }

@@ -246,6 +246,23 @@ pub enum ClientCtl {
     /// This connection's own presence: draft, viewport, following, activity (see
     /// [`crate::peer`]). Needs [`Caps::PRESENCE`] for the answers; not answered.
     Peer(crate::peer::PeerUpdate),
+    /// The colors of this device's terminal theme, sent to daemons with
+    /// [`DaemonFeatures::TERMINAL_COLORS`](crate::DaemonFeatures::TERMINAL_COLORS) after
+    /// attaching and whenever the theme changes. Programs asking a pane for its colors
+    /// (OSC 4, 10, 11, 12) or color scheme get the theme of the device that last focused or
+    /// typed into it. Not answered.
+    TerminalColors(TerminalColors),
+}
+
+/// A terminal theme's colors, each `[red, green, blue]`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalColors {
+    pub foreground: [u8; 3],
+    pub background: [u8; 3],
+    /// `None`: the cursor takes the foreground color.
+    pub cursor: Option<[u8; 3]>,
+    /// All 256 palette colors, or none for the default palette.
+    pub palette: Vec<[u8; 3]>,
 }
 
 /// Opens a session. Always the first frame on `ctl`.
