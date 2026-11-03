@@ -87,6 +87,7 @@ extension KeySpec {
     static let esc = key("esc", .escape, title: "esc", label: "Escape")
     static let tab = key("tab", .tab, symbol: "arrow.right.to.line", label: "Tab")
     static let shiftTab = key("shift-tab", .tab, mods: .shift, symbol: "arrow.left.to.line", label: "Shift Tab")
+    static let mode = key("mode", .tab, mods: .shift, title: "⇧tab", label: "Shift Tab, switch mode")
     static let enter = key("enter", .enter, symbol: "return", label: "Return")
     static let up = key("up", .arrowUp, symbol: "arrow.up", label: "Up arrow", repeatable: true)
     static let down = key("down", .arrowDown, symbol: "arrow.down", label: "Down arrow", repeatable: true)
@@ -113,8 +114,8 @@ extension KeySpec {
     }
 }
 
-/// A context-aware key set. Profiles only replace capsule B: capsule A
-/// (`esc ctrl alt ⇥`) and the arrow circle are the same everywhere. Matched by foreground program,
+/// A context-aware key set. Profiles only change the scrolling keys after the arrows;
+/// `esc ctrl alt ⇥` and the arrows are the same everywhere. Matched by foreground program,
 /// else by title.
 struct KeyBarProfile: Identifiable, Equatable {
     var id: String
@@ -123,11 +124,8 @@ struct KeyBarProfile: Identifiable, Equatable {
     var programs: Set<String>
     /// Matched against the lowercased title when the program is unknown.
     var titlePattern: String?
-    /// Capsule B, in priority order: narrow bars show the first ones (never fewer than four) and
-    /// the rest are in the bar's menu.
+    /// Most used first: a narrow bar shows the first ones and scrolls to the rest.
     var keys: [KeySpec]
-    /// Agents default to the composer; shells and TUIs to direct input.
-    var prefersComposer = false
 
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
 
@@ -190,12 +188,11 @@ struct KeyBarProfile: Identifiable, Equatable {
         // Claude Code titles its terminal "✳ <task>" (a spinner glyph while working).
         titlePattern: #"\bclaude\b|^[✳✻✽✶✢·]\s"#,
         keys: [
-            .pair("slash", "/", "#", label: "Slash command"), .pair("at", "@", "!", label: "Mention file"),
+            .mode, .pair("slash", "/", "#", label: "Slash command"), .pair("at", "@", "!", label: "Mention file"),
             .text("bang", "!", label: "Bash mode"), .backspace, .ctrlPair("c", "r", label: "Control C"),
             .paste, .text("hash", "#", label: "Memory"), .ctrlPair("o", "b", label: "Control O, expand"),
             .rewind.flick(.key(.arrowUp, []), title: "↑"),
-        ],
-        prefersComposer: true)
+        ])
 
     static let codex = KeyBarProfile(
         id: "codex", name: "Codex", programs: ["codex"], titlePattern: #"\bcodex\b"#,
@@ -204,8 +201,7 @@ struct KeyBarProfile: Identifiable, Equatable {
             .backspace, .ctrlPair("c", "j", label: "Control C"), .enter,
             .paste, .ctrl("j", label: "Control J, newline"), .ctrlPair("t", "o", label: "Control T, transcript"),
             .rewind.flick(.key(.arrowUp, []), title: "↑"),
-        ],
-        prefersComposer: true)
+        ])
 
     static let repl = KeyBarProfile(
         id: "repl", name: "REPL",

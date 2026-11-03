@@ -8,31 +8,26 @@ import UIKit
 import GudoCore
 import VoiceKit
 
-/// The keys above the software keyboard: no full-width slab, only
-/// floating Liquid Glass shapes over the terminal, centred on the keyboard.
+/// The keys above the software keyboard: one slim Liquid Glass row floating over the terminal.
 ///
 /// ```
-/// ( esc  ctrl  alt  ⇥ )   ( ~  |  /  -  ⌫  ⎘ … )   ( ← ↓ ↑ → )   (✥) (⋯) (⌄)
-///   capsule A: control      capsule B: the profile    C: wide only   circles
+/// ( esc  ctrl  ⇥ │ ←  ↓  ↑  →  ~  |  /  -  …  Home  End  PgUp  PgDn )  (⋯)
+///   pinned          scrolls sideways: arrows, the profile's keys, paging
 /// ```
 ///
-/// - Capsule A and the circles are identical in every profile; only capsule B changes, keeping
-///   its place. B's keys are in priority order: a narrow bar shows the first ones (never fewer
-///   than four) and the rest are under ⋯ ▸ More Keys. Nothing scrolls.
-/// - A key's second character is in its long-press menu (no glyphs drawn in corners).
+/// - `esc ctrl ⇥` (and `alt` where there is room) never move; the rest scrolls, faded at the edge
+///   while more keys wait. Only the keys after the arrows change with the profile.
+/// - A key's second character is in its long-press menu. Arrows and ⌫ repeat while held.
 /// - `ctrl` and `alt` are one-shot: tap and they apply to the next key (from the bar, the software
-///   keyboard or the arrows). Double-tap or long-press locks; tap again to clear.
-/// - ✥ sends arrows by dragging from wherever the touch started, faster the further the finger
-///   goes; tapping it opens the arrow pad (← ↓ ↑ → Home End PgUp PgDn).
-/// - ⋯ holds the key set, the panels (composer, snippets, line editor, arrow pad), drawing and the
-///   keys that did not fit.
+///   keyboard or the arrows). Double-tap or long-press locks (solid); tap again to clear.
+/// - ⋯ holds the key set, the panels (composer, snippets, line editor) and drawing.
 /// - With a hardware keyboard (the Magic Keyboard has no Esc) only a slim `esc ⌃ ⋯` pill stays,
 ///   at the trailing edge; Settings can hide it or keep the full bar.
 ///
-/// Above the capsules, on one glass card: the composer, snippets, the arrow pad and the line
-/// editor, when shown. Per pane (keyed by its terminal view) the bar remembers a manual profile
-/// choice, the composer on/off choice and the composer draft.
-final class KeyBar: UIInputView {
+/// Above the row, on one glass card: the composer, snippets and the line editor, when shown. Per
+/// pane (keyed by its terminal view) the bar remembers a manual profile choice, the composer
+/// on/off choice and the composer draft.
+final class KeyBar: UIInputView, UIInputViewAudioFeedback {
     private typealias Latch = CapsuleKey.Latch
 
     private struct PaneState {
@@ -118,7 +113,6 @@ final class KeyBar: UIInputView {
     /// keyboard attached, it then gets the full bar.
     private var softwareKeyboardShown = false
     private var snippetsShown = false
-    private var arrowPadShown = false
     private var metrics = CapsuleMetrics.for(width: 400, compactHeight: false, isPad: false)
 
     private let panelCard = UIVisualEffectView(effect: UIGlassEffect())
@@ -127,25 +121,21 @@ final class KeyBar: UIInputView {
     private let lineEditor: LineEditorController
     private let snippetScroll = UIScrollView()
     private let snippetStack = UIStackView()
-    private let arrowPadRow = BandView()
-    private let arrowPad: CapsuleView
     private let band = BandView()
     private var bandHeight: NSLayoutConstraint!
     private var columnLeading: NSLayoutConstraint!
     private var columnTrailing: NSLayoutConstraint!
 
-    private let capsuleA: CapsuleView
-    private let capsuleB: CapsuleView
-    private let capsuleC: CapsuleView
+    private let strip: KeyStripView
+    /// The slim hardware-keyboard pill (`esc ⌃`).
+    private let pill: CapsuleView
     private let escKey: CapsuleKey
     private let ctrlKey: CapsuleKey
     private let altKey: CapsuleKey
     private let tabKey: CapsuleKey
-    private let composerKey: CapsuleKey
-    /// Capsule B's keys for the current profile, all of them; the visible prefix is laid out.
+    private var arrowKeys: [CapsuleKey] = []
+    private var pagingKeys: [(spec: KeySpec, view: CapsuleKey)] = []
     private var profileKeys: [(spec: KeySpec, view: CapsuleKey)] = []
-    private var visibleProfileKeys = 0
-    private let joystick = JoystickView()
     private let menuButton = UIButton()
     private let hideButton = UIButton()
     private let micButton = UIButton()
@@ -159,15 +149,12 @@ final class KeyBar: UIInputView {
         composer = ComposerView(style: style)
         lineEditor = LineEditorController(style: style)
         let metrics = metrics
-        capsuleA = CapsuleView(metrics: metrics)
-        capsuleB = CapsuleView(metrics: metrics)
-        capsuleC = CapsuleView(metrics: metrics)
-        arrowPad = CapsuleView(metrics: metrics)
+        strip = KeyStripView(metrics: metrics)
+        pill = CapsuleView(metrics: metrics)
         escKey = CapsuleKey(metrics: metrics)
         ctrlKey = CapsuleKey(metrics: metrics)
         altKey = CapsuleKey(metrics: metrics)
         tabKey = CapsuleKey(metrics: metrics)
-        composerKey = CapsuleKey(metrics: metrics)
         menuCircle = CircleView(content: menuButton)
         hideCircle = CircleView(content: hideButton)
         micCircle = CircleView(content: micButton)
@@ -209,9 +196,6 @@ final class KeyBar: UIInputView {
         configureSnippetRow()
         column.addArrangedSubview(snippetScroll)
 
-        configureArrowPad()
-        column.addArrangedSubview(arrowPadRow)
-
         lineEditor.onLayoutChange = { [weak self] in self?.relayout() }
         lineEditor.onDraft = { [weak self] text, caret in self?.onDraft?(text, caret, .lineEditor) }
         column.insertArrangedSubview(lineEditor.decisionStrip, at: 1)
@@ -239,7 +223,7 @@ final class KeyBar: UIInputView {
 
     /// The terminal theme's scheme, ink and accent (`KeyBarTheme`): the bar floats over the
     /// terminal, so it reads as part of it whatever the window's chrome does. The ink is baked
-    /// into the keys' configurations and the joystick, so a new theme redraws them.
+    /// into the keys' configurations and the strip's divider, so a new theme redraws them.
     private func applyTheme() {
         let chrome = KeyBarTheme.chrome
         guard chrome != appliedTheme else { return }
@@ -248,8 +232,10 @@ final class KeyBar: UIInputView {
         tintColor = KeyBarTheme.accent
         for case let key as UIButton in allSubviews(of: self) { key.setNeedsUpdateConfiguration() }
         configureCircles()
-        joystick.applyInk()
+        strip.applyInk()
     }
+
+    var enableInputClicksWhenVisible: Bool { true }
 
     private var appliedTheme: ChromePalette?
     private var settingsObserver: NSObjectProtocol?
@@ -336,10 +322,9 @@ final class KeyBar: UIInputView {
         hardwareKeyboard && !softwareKeyboardShown && hardwareMode != .full
     }
 
-    /// The composer shows where the user turned it on, else for agents on the software keyboard
-    /// only: with a hardware keyboard the terminal takes the typing.
+    /// Only where the user turned it on (⋯ ▸ Composer): by default the terminal takes the typing.
     private func showsComposer(_ state: PaneState) -> Bool {
-        state.composerOn ?? (state.profile.prefersComposer && !compact)
+        state.composerOn ?? false
     }
 
     private var isAgent: Bool { profile.id == "claude" || profile.id == "codex" }
@@ -354,11 +339,7 @@ final class KeyBar: UIInputView {
         if profileChanged { rebuildProfileKeys() }
         if composer.text != state.draft { composer.text = state.draft }
         composer.isHidden = !showsComposer(state)
-        composerKey.isOn = showsComposer(state)
-        composerKey.accessibilityValue = showsComposer(state) ? "on" : "off"
         snippetScroll.isHidden = !snippetsShown || compact
-        arrowPadRow.isHidden = !arrowPadShown || compact
-        joystick.isActive = arrowPadShown
         if compact {
             ctrl = .off
             alt = .off
@@ -372,10 +353,11 @@ final class KeyBar: UIInputView {
     }
 
     private func applyMetrics() {
-        for capsule in [capsuleA, capsuleB, capsuleC, arrowPad] { capsule.metrics = metrics }
-        for key in [escKey, ctrlKey, altKey, tabKey, composerKey] + profileKeys.map(\.view) { key.metrics = metrics }
-        for case let key as CapsuleKey in capsuleC.keys + arrowPad.keys { key.metrics = metrics }
-        joystick.diameter = metrics.capsuleHeight
+        strip.metrics = metrics
+        pill.metrics = metrics
+        for key in [escKey, ctrlKey, altKey, tabKey] + arrowKeys + pagingKeys.map(\.view) + profileKeys.map(\.view) {
+            key.metrics = metrics
+        }
         configureCircles()
         apply()
     }
@@ -416,8 +398,8 @@ final class KeyBar: UIInputView {
         // The panels' frames are the column's to set: lay it out first, or the card is drawn
         // where they were before a panel came or went.
         column.layoutIfNeeded()
-        let panels: [UIView] = [composer, lineEditor.decisionStrip, snippetScroll, arrowPadRow, lineEditor.smartRow, lineEditor.editorRow]
-        let frames = panels.filter { !$0.isHidden && $0.superview != nil && $0.bounds.height > 0 && $0 !== arrowPadRow }
+        let panels: [UIView] = [composer, lineEditor.decisionStrip, snippetScroll, lineEditor.smartRow, lineEditor.editorRow]
+        let frames = panels.filter { !$0.isHidden && $0.superview != nil && $0.bounds.height > 0 }
             .map { $0.convert($0.bounds, to: self) }
         guard let first = frames.first else {
             panelCard.isHidden = true
@@ -490,29 +472,17 @@ final class KeyBar: UIInputView {
         ])
         updateModifiers()
 
-        composerKey.symbol = "text.bubble"
-        composerKey.accessibilityIdentifier = "keybar-composer-toggle"
-        composerKey.accessibilityLabel = "Composer"
-        composerKey.onTap = { [weak self] in self?.toggleComposer() }
-
-        for key in [KeySpec.left, .down, .up, .right] {
-            let view = keyCap(for: key, idPrefix: "keybar-")
-            capsuleC.setKeys(capsuleC.keys + [view])
+        arrowKeys = [(KeySpec.left, PhysicalKey.arrowLeft), (.down, .arrowDown), (.up, .arrowUp), (.right, .arrowRight)].map { spec, physical in
+            let view = CapsuleKey(metrics: metrics)
+            view.symbol = spec.symbol
+            view.accessibilityIdentifier = "keybar-" + spec.id
+            view.accessibilityLabel = spec.accessibilityLabel
+            view.onDown = { [weak self] in self?.pressArrow(physical) }
+            view.onUp = { [weak self] in self?.repeater.stop() }
+            view.onCancel = { [weak self] in self?.repeater.stop() }
+            return view
         }
-
-        joystick.accessibilityIdentifier = "keybar-joystick"
-        joystick.accessibilityLabel = "Arrow keys"
-        joystick.accessibilityHint = "Drag for arrows. Tap for the arrow pad."
-        joystick.onArrow = { [weak self] key, isRepeat in self?.arrow(key, isRepeat: isRepeat) }
-        joystick.onTap = { [weak self] in self?.toggleArrowPad() }
-        joystick.accessibilityCustomActions = [
-            ("Up", PhysicalKey.arrowUp), ("Down", .arrowDown), ("Left", .arrowLeft), ("Right", .arrowRight),
-        ].map { name, key in
-            UIAccessibilityCustomAction(name: name) { [weak self] _ in
-                self?.arrow(key, isRepeat: false)
-                return true
-            }
-        }
+        pagingKeys = [KeySpec.home, .end, .pageUp, .pageDown].map { ($0, keyCap(for: $0, idPrefix: "keybar-")) }
 
         menuButton.accessibilityIdentifier = "keybar-profile"
         menuButton.accessibilityLabel = "Keys and panels"
@@ -522,7 +492,7 @@ final class KeyBar: UIInputView {
         hideButton.addAction(UIAction { [weak self] _ in _ = self?.target?.resignFirstResponder() }, for: .touchUpInside)
 
         configureMic()
-        for view in [capsuleA, capsuleB, capsuleC, micCircle, joystick, menuCircle, hideCircle] as [UIView] { band.addSubview(view) }
+        for view in [strip, pill, micCircle, menuCircle, hideCircle] as [UIView] { band.addSubview(view) }
     }
 
     private func circleConfiguration(symbol: String) -> UIButton.Configuration {
@@ -533,7 +503,7 @@ final class KeyBar: UIInputView {
         return configuration
     }
 
-    /// Places the capsules and circles, centred, from the current metrics and profile.
+    /// Places the strip and the circles, centred, from the current metrics and profile.
     private func layoutBand() {
         let width = band.bounds.width
         guard width > 0 else { return }
@@ -543,82 +513,45 @@ final class KeyBar: UIInputView {
             layoutPill(width: width)
             return
         }
-        let aKeys: [CapsuleKey] = [escKey, ctrlKey] + (metrics.showsAlt ? [altKey] : []) + [tabKey]
-        let aSlots = aKeys.map { metrics.slotWidth(title: $0.title, symbol: $0.symbol) }
-        let aWidth = CapsuleView.width(slots: aSlots, metrics: metrics)
-        let cSlots = capsuleC.keys.map { _ in metrics.minimumSlot }
-        let cWidth = metrics.showsArrowKeys ? CapsuleView.width(slots: cSlots, metrics: metrics) : 0
+        pill.isHidden = true
+        let pinned: [CapsuleKey] = [escKey, ctrlKey] + (metrics.showsAlt ? [altKey] : []) + [tabKey]
+        let profileIds = Set(profileKeys.map(\.spec.id))
+        let scrolling = arrowKeys + profileKeys.map(\.view) + pagingKeys.filter { !profileIds.contains($0.spec.id) }.map(\.view)
+        let pinnedSlots = pinned.map { metrics.slotWidth(title: $0.title, symbol: $0.symbol) }
+        let scrollingSlots = scrolling.map { metrics.slotWidth(title: $0.title, symbol: $0.symbol) }
+        altKey.isHidden = !metrics.showsAlt
+        for view in scrolling { view.isHidden = false }
+
         // Hold-to-talk where there is room; narrow iPhones have the keyboard's own mic.
         let showsMic = metrics.showsAlt && VoiceSettings.load().isEnabled
         micCircle.isHidden = !showsMic
-        let circles: [UIView] = (showsMic ? [micCircle] : []) + [joystick, menuCircle] + (metrics.showsAlt ? [hideCircle] : [])
-        let circlesWidth = CGFloat(circles.count) * capsuleHeight + CGFloat(circles.count - 1) * metrics.gap
-        let fixed = aWidth + metrics.gap + (metrics.showsArrowKeys ? cWidth + metrics.gap : 0) + metrics.gap + circlesWidth
-        let budget = width - 2 * metrics.margin - fixed
-
-        // Capsule B has one width per width bucket, whatever the profile, so nothing else moves
-        // when the keys change: the composer toggle for agents, then the profile's keys by
-        // priority while they fit (never fewer than four), spread evenly over the width.
-        let nominalSlots: CGFloat = width < 500 ? 5 : width < 900 ? 8 : 10
-        let bWidth = min(budget, CapsuleView.width(slots: Array(repeating: metrics.minimumSlot + 4, count: Int(nominalSlots)), metrics: metrics))
-        let inner = bWidth - 2 * metrics.padding
-        let leading: [CapsuleKey] = isAgent || showsComposer(state) ? [composerKey] : []
-        var bViews: [CapsuleKey] = leading
-        var natural = leading.map { metrics.slotWidth(title: $0.title, symbol: $0.symbol) }
-        var shown = 0
-        for (spec, view) in profileKeys {
-            let slot = metrics.slotWidth(title: spec.title, symbol: spec.symbol)
-            guard natural.reduce(0, +) + slot <= inner || shown < 4 else { break }
-            bViews.append(view)
-            natural.append(slot)
-            shown += 1
-        }
-        if shown != visibleProfileKeys {
-            visibleProfileKeys = shown
-            updateMenu()
-        }
-        for (_, view) in profileKeys.dropFirst(shown) { view.isHidden = true }
-        for view in bViews { view.isHidden = false }
-        // Keys keep their natural spacing (a little extra at most); the capsule hugs them, so a
-        // profile with fewer keys only narrows capsule B from its trailing side.
-        let spare = min(6, max(0, inner - natural.reduce(0, +)) / CGFloat(max(natural.count, 1)))
-        let bSlots = natural.map { $0 + spare }
-        let bCapsule = CapsuleView.width(slots: bSlots, metrics: metrics)
-
-        altKey.isHidden = !metrics.showsAlt
-        capsuleA.setKeys(aKeys)
-        capsuleB.setKeys(bViews)
-        capsuleC.isHidden = !metrics.showsArrowKeys
         hideCircle.isHidden = !metrics.showsAlt
-        for view in [capsuleA, capsuleB, joystick, menuCircle] as [UIView] { view.isHidden = false }
+        menuCircle.isHidden = false
+        strip.isHidden = false
+        let circles: [UIView] = (showsMic ? [micCircle] : []) + [menuCircle] + (metrics.showsAlt ? [hideCircle] : [])
+        let circlesWidth = CGFloat(circles.count) * (capsuleHeight + metrics.gap)
+        let available = width - 2 * metrics.margin - circlesWidth
+        let natural = KeyStripView.width(pinned: pinnedSlots, scrolling: scrollingSlots, metrics: metrics)
+        let stripWidth = min(natural, available)
 
-        // Centred on the nominal width, so capsule A and the circles stay put across profiles.
-        let total = aWidth + metrics.gap + max(bWidth, bCapsule) + (metrics.showsArrowKeys ? metrics.gap + cWidth : 0) + metrics.gap + circlesWidth
-        var x = max(metrics.margin, (width - total) / 2)
+        strip.setKeys(pinned: pinned, pinnedSlots: pinnedSlots, scrolling: scrolling, scrollingSlots: scrollingSlots)
+        var x = max(metrics.margin, (width - stripWidth - circlesWidth) / 2)
         let y = (band.bounds.height - capsuleHeight) / 2
-        func place(_ view: UIView, width: CGFloat) {
-            view.frame = CGRect(x: x, y: y, width: width, height: capsuleHeight)
-            x += width + metrics.gap
+        strip.frame = CGRect(x: x, y: y, width: stripWidth, height: capsuleHeight)
+        x += stripWidth + metrics.gap
+        for circle in circles {
+            circle.frame = CGRect(x: x, y: y, width: capsuleHeight, height: capsuleHeight)
+            x += capsuleHeight + metrics.gap
         }
-        place(capsuleA, width: aWidth)
-        capsuleA.layout(slots: aSlots)
-        capsuleB.frame = CGRect(x: x, y: y, width: bCapsule, height: capsuleHeight)
-        capsuleB.layout(slots: bSlots)
-        x += max(bWidth, bCapsule) + metrics.gap
-        if metrics.showsArrowKeys {
-            place(capsuleC, width: cWidth)
-            capsuleC.layout(slots: cSlots)
-        }
-        for circle in circles { place(circle, width: capsuleHeight) }
     }
 
-    /// Hardware keyboard: one slim pill at the trailing edge, `esc ⌃` (+ the composer for
-    /// agents) and ⋯. The Magic Keyboard has no Esc key; ⌘. sends Esc as well.
+    /// Hardware keyboard: one slim pill at the trailing edge, `esc ⌃` and ⋯. The Magic Keyboard
+    /// has no Esc key; ⌘. sends Esc as well.
     private func layoutPill(width: CGFloat) {
         let metrics = self.metrics
-        for view in [capsuleB, capsuleC, joystick, hideCircle, micCircle] as [UIView] { view.isHidden = true }
+        for view in [strip, hideCircle, micCircle] as [UIView] { view.isHidden = true }
         guard hardwareMode == .minimal else {
-            capsuleA.isHidden = true
+            pill.isHidden = true
             menuCircle.isHidden = true
             return
         }
@@ -626,8 +559,7 @@ final class KeyBar: UIInputView {
         pillMetrics.capsuleHeight = metrics.pillHeight
         pillMetrics.padding = 4
         pillMetrics.minimumSlot = 30
-        let keys: [CapsuleKey] = [escKey, ctrlKey] + (isAgent ? [composerKey] : [])
-        altKey.isHidden = true
+        let keys: [CapsuleKey] = [escKey, ctrlKey]
         let slots = keys.map { pillMetrics.slotWidth(title: $0.title, symbol: $0.symbol) }
         let pillWidth = CapsuleView.width(slots: slots, metrics: pillMetrics)
         let pillHeight = metrics.pillHeight
@@ -635,23 +567,26 @@ final class KeyBar: UIInputView {
         let menuX = width - metrics.margin - pillHeight
         menuCircle.isHidden = false
         menuCircle.frame = CGRect(x: menuX, y: y, width: pillHeight, height: pillHeight)
-        capsuleA.isHidden = false
-        capsuleA.metrics = pillMetrics
-        capsuleA.setKeys(keys)
-        capsuleA.frame = CGRect(x: menuX - 6 - pillWidth, y: y, width: pillWidth, height: pillHeight)
-        capsuleA.layout(slots: slots)
-        capsuleA.metrics = metrics
+        pill.isHidden = false
+        pill.metrics = pillMetrics
+        if pill.keys != keys as [UIView] || keys.contains(where: { $0.superview !== pill }) { pill.setKeys(keys) }
+        pill.frame = CGRect(x: menuX - 6 - pillWidth, y: y, width: pillWidth, height: pillHeight)
+        pill.layout(slots: slots)
+        pill.metrics = metrics
     }
 
     // MARK: Keys
 
-    /// Capsule B's views for the profile, built once per profile change (a cross-fade).
+    /// The profile's keys, built once per profile change (a cross-fade, back at the strip's start).
     private func rebuildProfileKeys() {
         profileKeys.forEach { $0.view.removeFromSuperview() }
         profileKeys = profile.keys.map { ($0, keyCap(for: $0, idPrefix: "keybar-")) }
-        visibleProfileKeys = 0
-        UIView.transition(with: capsuleB, duration: UIAccessibility.isReduceMotionEnabled ? 0 : 0.18,
-                          options: .transitionCrossDissolve) { self.layoutBand() }
+        UIView.transition(with: strip, duration: UIAccessibility.isReduceMotionEnabled ? 0 : 0.18,
+                          options: .transitionCrossDissolve) {
+            self.layoutBand()
+            self.strip.layoutIfNeeded()
+            self.strip.scrollToStart()
+        }
         UIAccessibility.post(notification: .layoutChanged, argument: profile.name)
     }
 
@@ -785,14 +720,19 @@ final class KeyBar: UIInputView {
             UIAction(title: "Option for Next Key", image: UIImage(systemName: "option")) { [weak self] _ in self?.alt = .oneShot },
             UIAction(title: "Lock Option", image: UIImage(systemName: "lock")) { [weak self] _ in self?.alt = .locked },
         ]))
-        joystick.modifiers = (ctrl != .off ? "⌃" : "") + (alt != .off ? "⌥" : "")
     }
 
     // MARK: Arrows
 
-    /// An arrow from the joystick or the arrow keys. Modifiers stay latched for the whole drag and
-    /// are released when it ends, so a one-shot Ctrl turns a whole drag into word jumps.
-    private func arrow(_ key: PhysicalKey, isRepeat: Bool) {
+    /// An arrow key went down: it takes the latched modifiers (a one-shot Ctrl turns the whole
+    /// hold into word jumps) and repeats while held.
+    private func pressArrow(_ key: PhysicalKey) {
+        let modifiers = takeLatchedModifiers()
+        sendArrow(key, modifiers: modifiers, isRepeat: false)
+        repeater.start { [weak self] in self?.sendArrow(key, modifiers: modifiers, isRepeat: true) }
+    }
+
+    private func sendArrow(_ key: PhysicalKey, modifiers: KeyModifiers, isRepeat: Bool) {
         guard let target else { return }
         if lineEditor.isActive {
             // ←/→ move the caret in the draft; ↑/↓ are the shell's history.
@@ -802,38 +742,9 @@ final class KeyBar: UIInputView {
             }
             lineEditor.leaveToShell()
         }
-        var modifiers: KeyModifiers = []
-        if ctrl != .off { modifiers.insert(.control) }
-        if alt != .off { modifiers.insert(.alt) }
         var event = KeyEvent.press(key, mods: modifiers)
         if isRepeat { event.action = .repeat }
         target.send(event)
-    }
-
-    /// The arrow pad: one tap per arrow, Home/End and paging, on a capsule above the band; stays
-    /// open until ✥ is tapped again.
-    private func configureArrowPad() {
-        arrowPadRow.isHidden = true
-        arrowPadRow.heightAnchor.constraint(equalToConstant: 48).isActive = true
-        arrowPad.setKeys([KeySpec.left, .down, .up, .right, .home, .end, .pageUp, .pageDown].map { keyCap(for: $0, idPrefix: "keybar-pad-") })
-        arrowPadRow.addSubview(arrowPad)
-        arrowPadRow.onLayout = { [weak self] in
-            guard let self else { return }
-            let metrics = self.metrics
-            let slots = arrowPad.keys.map { view in
-                let key = view as? CapsuleKey
-                return max(metrics.minimumSlot + 4, metrics.slotWidth(title: key?.title, symbol: key?.symbol))
-            }
-            let width = min(CapsuleView.width(slots: slots, metrics: metrics), arrowPadRow.bounds.width - 2 * metrics.margin)
-            arrowPad.frame = CGRect(x: (arrowPadRow.bounds.width - width) / 2, y: (48 - metrics.capsuleHeight) / 2,
-                                    width: width, height: metrics.capsuleHeight)
-            arrowPad.layout(slots: slots)
-        }
-    }
-
-    private func toggleArrowPad() {
-        arrowPadShown.toggle()
-        apply()
     }
 
     // MARK: Menu
@@ -859,27 +770,20 @@ final class KeyBar: UIInputView {
                 UserDefaults.standard.set(!LineEditorController.enabled, forKey: LineEditorController.enabledKey)
                 self?.apply()
             },
-            UIAction(title: "Arrow Pad", image: UIImage(systemName: "arrow.up.and.down.and.arrow.left.and.right"), state: arrowPadShown ? .on : .off) { [weak self] _ in
-                self?.toggleArrowPad()
-            },
         ] + (onDraw.map { draw in
             [UIAction(title: "Draw on Pane", image: UIImage(systemName: "pencil.and.scribble")) { _ in draw() }]
         } ?? []))
-        let hidden = profileKeys.dropFirst(visibleProfileKeys)
-        let more = hidden.isEmpty ? [] : [UIMenu(title: "More Keys", image: UIImage(systemName: "keyboard"), children: hidden.map { key, _ in
-            UIAction(title: key.title ?? key.accessibilityLabel) { [weak self] _ in self?.send(key) }
-        })]
         let hide = metrics.showsAlt && !compact ? [] : [UIAction(title: "Hide Keyboard", image: UIImage(systemName: "keyboard.chevron.compact.down")) { [weak self] _ in
             _ = self?.target?.resignFirstResponder()
         }]
         let keySets = [automatic, UIMenu(options: .displayInline, children: choices)]
         // No menu title: on a menu long enough to scroll, UIKit draws it over the first rows.
         menuButton.menu = bounds.width >= Self.wideWidth
-            ? UIMenu(children: keySets + [panels, UIMenu(options: .displayInline, children: more + hide)])
+            ? UIMenu(children: keySets + [panels, UIMenu(options: .displayInline, children: hide)])
             : UIMenu(children: [
                 UIMenu(title: "Key Set", subtitle: profile.name, image: UIImage(systemName: "keyboard"), children: keySets),
                 panels,
-                UIMenu(options: .displayInline, children: more + hide),
+                UIMenu(options: .displayInline, children: hide),
             ])
     }
 
@@ -897,6 +801,7 @@ final class KeyBar: UIInputView {
         var state = state
         state.composerOn = !showsComposer(state)
         self.state = state
+        if !showsComposer(state), composer.textView.isFirstResponder { target?.becomeFirstResponder() }
         apply()
         if showsComposer(state) { composer.textView.becomeFirstResponder() }
     }
@@ -1001,164 +906,6 @@ private final class CircleView: UIView {
 
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         bounds.insetBy(dx: -2, dy: -6).contains(point)
-    }
-}
-
-/// The arrow joystick, a glass circle: drag from wherever the touch starts.
-/// Past an 8 pt dead zone it sends one arrow along the dominant axis, then repeats at 12/s
-/// (8–30 pt), 25/s (30–60 pt) or 50/s (beyond) after 350 ms. A direction change sends one arrow at
-/// once and restarts the repeat. Tracking continues outside the circle; lifting stops before the
-/// next tick. A tap (no drag) calls `onTap`. While dragging, a dot leans toward the direction.
-private final class JoystickView: UIView {
-    var onArrow: ((PhysicalKey, _ isRepeat: Bool) -> Void)?
-    var onTap: (() -> Void)?
-    var diameter: CGFloat = 40 {
-        didSet { setNeedsLayout() }
-    }
-    /// The arrow pad is open (drawn active).
-    var isActive = false {
-        didSet { if isActive != oldValue { updateLook() } }
-    }
-    /// Latched modifiers shown on the joystick ("⌃", "⌥").
-    var modifiers = "" {
-        didSet { if modifiers != oldValue { updateLook() } }
-    }
-
-    private static let deadZone: CGFloat = 8
-    private static let repeatDelay = Duration.milliseconds(350)
-
-    private let glass = UIVisualEffectView(effect: UIGlassEffect())
-    private let icon = UIImageView()
-    private let label = UILabel()
-    private let dot = UIView()
-    private var origin: CGPoint = .zero
-    private var direction: PhysicalKey?
-    private var distance: CGFloat = 0
-    private var repeatTask: Task<Void, Never>?
-    private var lastTick = ContinuousClock.now
-    private let selection = UISelectionFeedbackGenerator()
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        glass.isUserInteractionEnabled = false
-        glass.clipsToBounds = true
-        addSubview(glass)
-        icon.image = UIImage(systemName: "arrow.up.and.down.and.arrow.left.and.right",
-                             withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .medium))
-        icon.contentMode = .center
-        addSubview(icon)
-        label.font = .systemFont(ofSize: 11, weight: .semibold)
-        label.textAlignment = .center
-        addSubview(label)
-        dot.layer.cornerRadius = 3
-        dot.isHidden = true
-        addSubview(dot)
-        isAccessibilityElement = true
-        accessibilityTraits = .button
-        updateLook()
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        glass.frame = bounds
-        glass.layer.cornerRadius = bounds.height / 2
-        icon.frame = bounds
-        label.frame = CGRect(x: 0, y: bounds.height - 14, width: bounds.width, height: 12)
-    }
-
-    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
-        bounds.insetBy(dx: -2, dy: -6).contains(point)
-    }
-
-    func applyInk() {
-        icon.tintColor = KeyBarTheme.ink.withAlphaComponent(0.9)
-        dot.backgroundColor = KeyBarTheme.ink
-    }
-
-    private func updateLook() {
-        label.text = modifiers
-        glass.backgroundColor = isActive || !modifiers.isEmpty ? tintColor.withAlphaComponent(0.22) : .clear
-        accessibilityValue = isActive ? "Arrow pad open" : nil
-    }
-
-    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard let touch = touches.first else { return }
-        origin = touch.location(in: self)
-        direction = nil
-        distance = 0
-        selection.prepare()
-        icon.alpha = 0.6
-    }
-
-    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard let touch = touches.first else { return }
-        let point = touch.location(in: self)
-        let deltaX = point.x - origin.x
-        let deltaY = point.y - origin.y
-        distance = max(abs(deltaX), abs(deltaY))
-        guard distance >= Self.deadZone else { return }
-        let next: PhysicalKey = abs(deltaX) >= abs(deltaY) ? (deltaX > 0 ? .arrowRight : .arrowLeft) : (deltaY > 0 ? .arrowDown : .arrowUp)
-        showDot(toward: next)
-        guard next != direction else { return }
-        direction = next
-        fire(next, isRepeat: false)
-        startRepeating()
-    }
-
-    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        let wasTap = direction == nil
-        stop()
-        if wasTap { onTap?() }
-    }
-
-    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        stop()
-    }
-
-    private func showDot(toward key: PhysicalKey) {
-        let offset: CGFloat = bounds.width / 2 - 8
-        let center = CGPoint(x: bounds.midX, y: bounds.midY)
-        let point = switch key {
-        case .arrowLeft: CGPoint(x: center.x - offset, y: center.y)
-        case .arrowRight: CGPoint(x: center.x + offset, y: center.y)
-        case .arrowUp: CGPoint(x: center.x, y: center.y - offset)
-        default: CGPoint(x: center.x, y: center.y + offset)
-        }
-        dot.frame = CGRect(x: point.x - 3, y: point.y - 3, width: 6, height: 6)
-        dot.isHidden = false
-    }
-
-    private func stop() {
-        repeatTask?.cancel()
-        repeatTask = nil
-        direction = nil
-        dot.isHidden = true
-        icon.alpha = 1
-    }
-
-    private func startRepeating() {
-        repeatTask?.cancel()
-        repeatTask = Task { [weak self] in
-            guard (try? await Task.sleep(for: Self.repeatDelay)) != nil else { return }
-            while let self, !Task.isCancelled, let direction = self.direction {
-                fire(direction, isRepeat: true)
-                let rate: Double = distance < 30 ? 12 : distance < 60 ? 25 : 50
-                guard (try? await Task.sleep(for: .milliseconds(Int(1000 / rate)))) != nil else { return }
-            }
-        }
-    }
-
-    private func fire(_ key: PhysicalKey, isRepeat: Bool) {
-        onArrow?(key, isRepeat)
-        // A selection tick at most every 66 ms (15 Hz), never per key at 50/s.
-        let now = ContinuousClock.now
-        if now - lastTick >= .milliseconds(66) {
-            selection.selectionChanged()
-            lastTick = now
-        }
     }
 }
 #endif

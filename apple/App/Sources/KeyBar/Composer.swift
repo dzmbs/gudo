@@ -50,6 +50,11 @@ final class ComposerView: UIView, UITextViewDelegate {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
+        // An empty non-scrolling text view would hug its zero-width text and hand the row to Send.
+        textView.setContentHuggingPriority(.defaultLow - 1, for: .horizontal)
+        textView.setContentCompressionResistancePriority(.defaultLow - 1, for: .horizontal)
+        sendButton.setContentHuggingPriority(.required, for: .horizontal)
+        sendButton.setContentCompressionResistancePriority(.required, for: .horizontal)
         heightConstraint = textView.heightAnchor.constraint(equalToConstant: lineHeight(lines: 1))
         NSLayoutConstraint.activate([
             heightConstraint,

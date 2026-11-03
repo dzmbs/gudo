@@ -1,7 +1,7 @@
 #if os(iOS)
 import XCTest
 
-/// The context-aware key bar over the software keyboard: profile switching from
+/// The key bar over the software keyboard: profile switching from
 /// the pane title, the agent composer, and snippets. Titles are set through the iOS echo backend's
 /// `title <text>` command, which emits OSC 2 like a program would.
 final class KeyBarUITests: XCTestCase {
@@ -28,10 +28,13 @@ final class KeyBarUITests: XCTestCase {
         app.typeText("title claude\n")
         XCTAssertTrue(waitFor(profile, value: "Claude Code"))
         XCTAssertTrue(app.buttons["keybar-at"].waitForExistence(timeout: 5), "Claude's keys replace the shell's")
+        XCTAssertTrue(app.buttons["keybar-mode"].exists, "Shift Tab cycles Claude's modes")
         let composer = element(app, "keybar-composer")
-        XCTAssertTrue(composer.waitForExistence(timeout: 5), "agents default to the composer")
-        XCTAssertEqual(app.buttons["keybar-composer-toggle"].value as? String, "on")
+        XCTAssertFalse(composer.exists, "the terminal takes the typing until the composer is turned on")
 
+        toggleComposer(app)
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(composer.frame.width, app.buttons["keybar-composer-send"].frame.width * 3, "the field, not Send, takes the row")
         composer.tap()
         composer.typeText("explain this repo\nin two lines")
         XCTAssertTrue(app.buttons["keybar-profile"].exists, "the bar stays while the composer types")
@@ -39,13 +42,22 @@ final class KeyBarUITests: XCTestCase {
         XCTAssertEqual(composer.value as? String ?? "", "", "Send clears the composer")
         add(XCTAttachment(screenshot: app.screenshot()))
 
-        // Back to a shell: the composer goes away again.
-        app.buttons["keybar-composer-toggle"].tap()
+        toggleComposer(app)
         XCTAssertTrue(composer.waitForNonExistence(timeout: 5))
         element(app, "pane-1").tap()
         app.typeText("title zsh ~/src\n")
         XCTAssertTrue(waitFor(profile, value: "Shell"))
         hold()
+    }
+
+    @MainActor
+    private func toggleComposer(_ app: XCUIApplication) {
+        app.buttons["keybar-profile"].tap()
+        // The composer's own text view is labelled Composer too.
+        let item = app.descendants(matching: .any).matching(NSPredicate(
+            format: "label == 'Composer' AND elementType != %d", XCUIElement.ElementType.textView.rawValue)).firstMatch
+        XCTAssertTrue(item.waitForExistence(timeout: 5))
+        item.tap()
     }
 
     @MainActor
@@ -99,25 +111,29 @@ final class KeyBarUITests: XCTestCase {
         hold()
     }
 
-    /// Capsule A and the arrow circle sit in the same place in every profile, a
-    /// key's second character is in its long-press menu, and tapping ✥ opens the arrow pad.
+    /// esc, ctrl and tab are pinned in the same place in every profile, the arrows lead the
+    /// scrolling keys, a key's second character is in its long-press menu, and ctrl locks on a
+    /// double tap.
     @MainActor
-    func testCapsuleAIsFixedLongPressSendsAlternateAndJoystickOpensPad() throws {
+    func testPinnedKeysStayLongPressSendsAlternateAndCtrlLocks() throws {
         let app = launch()
-        let fixed = ["keybar-esc", "keybar-ctrl", "keybar-tab", "keybar-joystick"]
-        XCTAssertTrue(element(app, "keybar-joystick").waitForExistence(timeout: 5))
-        let shellFrames = fixed.map { element(app, $0).frame }
+        let pinned = ["keybar-esc", "keybar-ctrl", "keybar-tab"]
+        XCTAssertTrue(element(app, "keybar-tab").waitForExistence(timeout: 5))
+        let shellFrames = pinned.map { element(app, $0).frame }
+        for id in ["keybar-left", "keybar-down", "keybar-up", "keybar-right", "keybar-tilde"] {
+            XCTAssertTrue(app.buttons[id].isHittable, "\(id) is on the bar")
+        }
 
         app.typeText("title vim main.swift\n")
         XCTAssertTrue(waitFor(app.buttons["keybar-profile"], value: "Vim"))
         XCTAssertTrue(app.buttons["keybar-colon"].waitForExistence(timeout: 5))
-        XCTAssertEqual(fixed.map { element(app, $0).frame }, shellFrames, "capsule A and ✥ never move between profiles")
+        XCTAssertEqual(pinned.map { element(app, $0).frame }, shellFrames, "the pinned keys never move between profiles")
 
         app.typeText("title zsh ~/src\n")
         XCTAssertTrue(waitFor(app.buttons["keybar-profile"], value: "Shell"))
         let pipe = app.buttons["keybar-pipe"]
         XCTAssertTrue(pipe.waitForExistence(timeout: 5))
-        XCTAssertLessThanOrEqual(pipe.frame.height, 48, "a key in a slim capsule, not a slab: \(pipe.frame)")
+        XCTAssertLessThanOrEqual(pipe.frame.height, 48, "a key in a slim row, not a slab: \(pipe.frame)")
         // Long-press: the alternate (&) in a menu; tap: the key itself (|).
         pipe.press(forDuration: 0.8)
         let alternate = app.buttons["&"].firstMatch
@@ -129,38 +145,42 @@ final class KeyBarUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: pane)], timeout: 5), .completed,
                        "menu sent the alternate (&), tap the key (|); pane: \(String(describing: pane.value))")
 
-        let joystick = element(app, "keybar-joystick")
-        joystick.tap()
-        XCTAssertTrue(app.buttons["keybar-pad-home"].waitForExistence(timeout: 5), "tap opens the arrow pad")
-        joystick.tap()
-        XCTAssertTrue(app.buttons["keybar-pad-home"].waitForNonExistence(timeout: 5), "tap again closes it")
+        let ctrl = app.buttons["keybar-ctrl"]
+        ctrl.doubleTap()
+        XCTAssertEqual(ctrl.value as? String, "Locked")
+        app.typeText("a")
+        XCTAssertEqual(ctrl.value as? String, "Locked", "a locked ctrl stays for the next key")
+        ctrl.tap()
+        XCTAssertEqual(ctrl.value as? String, "off")
         add(XCTAttachment(screenshot: app.screenshot()))
         hold()
     }
 
-    /// Never fewer than four profile keys, whatever the width.
+    /// The keys past the edge are a swipe away: the strip scrolls to the paging keys.
     @MainActor
-    func testProfileCapsuleKeepsAtLeastFourKeys() throws {
+    func testStripScrollsToTheRest() throws {
         let app = launch()
-        XCTAssertTrue(app.buttons["keybar-tilde"].waitForExistence(timeout: 5))
-        for id in ["keybar-tilde", "keybar-pipe", "keybar-slash", "keybar-dash"] {
-            XCTAssertTrue(app.buttons[id].isHittable, "\(id) is on the bar")
-        }
+        let pageDown = app.buttons["keybar-pgdn"]
+        XCTAssertTrue(pageDown.waitForExistence(timeout: 5))
+        let strip = element(app, "keybar-strip")
+        for _ in 0..<4 where !pageDown.isHittable { strip.swipeLeft() }
+        XCTAssertTrue(pageDown.isHittable, "the last key is reachable")
+        XCTAssertTrue(app.buttons["keybar-esc"].isHittable, "esc stays while the rest scrolls")
         let attachment = XCTAttachment(screenshot: app.screenshot())
-        attachment.name = "capsules"
+        attachment.name = "strip"
         attachment.lifetime = .keepAlways
         add(attachment)
     }
 
-    /// Landscape: every capsule key is on screen, nothing overlaps, and alt joins capsule A.
+    /// Landscape: the row's leading keys are on screen, nothing overlaps, and alt is pinned.
     @MainActor
     func testLandscapeKeepsCapsulesApart() throws {
         let app = launch()
         XCUIDevice.shared.orientation = .landscapeLeft
         defer { XCUIDevice.shared.orientation = .portrait }
         let alt = app.buttons["keybar-alt"]
-        XCTAssertTrue(alt.waitForExistence(timeout: 5), "alt joins capsule A in landscape")
-        let ids = ["keybar-esc", "keybar-ctrl", "keybar-alt", "keybar-tab", "keybar-tilde", "keybar-pipe", "keybar-slash", "keybar-dash", "keybar-joystick", "keybar-profile"]
+        XCTAssertTrue(alt.waitForExistence(timeout: 5), "alt is pinned in landscape")
+        let ids = ["keybar-esc", "keybar-ctrl", "keybar-alt", "keybar-tab", "keybar-left", "keybar-down", "keybar-up", "keybar-right", "keybar-tilde", "keybar-pipe", "keybar-profile"]
         let frames = ids.map { element(app, $0).frame }
         let screen = app.windows.firstMatch.frame
         for (id, frame) in zip(ids, frames) {
@@ -193,12 +213,9 @@ final class KeyBarUITests: XCTestCase {
         try XCTSkipIf(app.buttons["keybar-tilde"].exists, "no hardware keyboard: the full bar is shown")
         XCTAssertTrue(app.buttons["keybar-ctrl"].exists)
         XCTAssertLessThanOrEqual(esc.frame.height, 34, "a slim pill: \(esc.frame)")
-        XCTAssertFalse(app.buttons["keybar-composer-toggle"].exists, "no composer toggle for a shell")
         app.typeText("title claude\n")
-        let toggle = app.buttons["keybar-composer-toggle"]
-        XCTAssertTrue(toggle.waitForExistence(timeout: 5), "agents keep the composer toggle")
-        XCTAssertLessThan(toggle.frame.width, 80, "a key, not the whole row: \(toggle.frame)")
-        XCTAssertFalse(element(app, "keybar-composer").exists, "no composer by default with a hardware keyboard")
+        XCTAssertFalse(element(app, "keybar-composer").exists, "no composer by default")
+        XCTAssertFalse(app.buttons["keybar-left"].exists, "only the pill with a hardware keyboard")
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = "hardware-pill"
         attachment.lifetime = .keepAlways
