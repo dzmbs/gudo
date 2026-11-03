@@ -30,16 +30,28 @@ final class TunnelBrowser: NSObject, WKUIDelegate, WKNavigationDelegate {
 
     static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app", category: "editor")
 
-    init(dataStore: WKWebsiteDataStore = .default()) {
+    /// `phoneLayout`: VS Code's defaults for a phone (`EditorPhoneLayout`).
+    init(dataStore: WKWebsiteDataStore = .default(), phoneLayout: Bool = false) {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = dataStore
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
         let relay = LostRelay()
         configuration.userContentController.add(relay, name: LostRelay.name)
-        configuration.userContentController.addUserScript(LostRelay.script)
-        webView = WKWebView(frame: .zero, configuration: configuration)
+        #if canImport(UIKit)
+        let webView = phoneLayout ? EditorWebView(frame: .zero, configuration: configuration) : WKWebView(frame: .zero, configuration: configuration)
+        #else
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        #endif
+        self.webView = webView
+        self.phoneLayout = phoneLayout
         super.init()
         relay.browser = self
+        installUserScripts()
+        #if canImport(UIKit)
+        (webView as? EditorWebView)?.keyRow = EditorKeyRow(
+            press: { [weak self] key in self?.press(key) },
+            dismiss: { [weak webView] in webView?.endEditing(true) })
+        #endif
         webView.uiDelegate = self
         webView.navigationDelegate = self
         webView.allowsBackForwardNavigationGestures = false
@@ -54,6 +66,61 @@ final class TunnelBrowser: NSObject, WKUIDelegate, WKNavigationDelegate {
     }
 
     func reload() { webView.reload() }
+
+    @ObservationIgnored private let phoneLayout: Bool
+    @ObservationIgnored private var viewport: String?
+
+    private func installUserScripts() {
+        let controller = webView.configuration.userContentController
+        controller.removeAllUserScripts()
+        controller.addUserScript(LostRelay.script)
+        guard phoneLayout else { return }
+        controller.addUserScript(EditorPhoneLayout.userScript)
+        if let viewport { controller.addUserScript(EditorPhoneLayout.viewportUserScript(viewport)) }
+    }
+
+    @ObservationIgnored private var fittedSize: CGSize?
+
+    /// Lays the workbench out for a pane of this size, now and in pages loaded later.
+    func fit(to size: CGSize) {
+        guard phoneLayout else { return }
+        fittedSize = size
+        guard let content = EditorPhoneLayout.viewport(for: size, zoom: EditorPhoneLayout.zoom), content != viewport else { return }
+        viewport = content
+        installUserScripts()
+        webView.evaluateJavaScript(EditorPhoneLayout.viewportScript(content, createsMissing: true))
+    }
+
+    var canZoom: (in: Bool, out: Bool) {
+        let zoom = EditorPhoneLayout.zoom
+        return (EditorPhoneLayout.zoom(from: zoom, by: 1) != nil, EditorPhoneLayout.zoom(from: zoom, by: -1) != nil)
+    }
+
+    /// +1 zooms in, -1 out, 0 back to fitting the pane.
+    func zoom(by direction: Int) {
+        let zoom = direction == 0 ? 1 : EditorPhoneLayout.zoom(from: EditorPhoneLayout.zoom, by: direction)
+        guard let zoom else { return }
+        UserDefaults.standard.set(Double(zoom), forKey: EditorPhoneLayout.zoomKey)
+        if let fittedSize { fit(to: fittedSize) }
+    }
+
+    func run(_ command: EditorPhoneLayout.Command) {
+        evaluate(EditorPhoneLayout.script(for: command), name: command.rawValue)
+    }
+
+    func press(_ key: EditorPhoneLayout.Key) {
+        evaluate(EditorPhoneLayout.script(for: key), name: key.code)
+    }
+
+    private func evaluate(_ script: String, name: String) {
+        Task { @MainActor in
+            do {
+                _ = try await webView.callAsyncJavaScript(script, arguments: [:], in: nil, contentWorld: .page)
+            } catch {
+                Self.log.error("editor \(name, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+            }
+        }
+    }
 
     // MARK: WKUIDelegate
 

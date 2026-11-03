@@ -96,7 +96,7 @@ final class EditorPane: Identifiable {
             ? WKWebsiteDataStore(forIdentifier: WKWebsiteDataStore.stableIdentifier("gudo-editor:\(member.hostId):\(member.folder)"))
             : .default()
         browserIsIsolated = isolated
-        let browser = TunnelBrowser(dataStore: store)
+        let browser = TunnelBrowser(dataStore: store, phoneLayout: EditorPhoneLayout.isPhone)
         browser.onLoad = { [weak self] in self?.workbenchLoaded() }
         browser.onFail = { [weak self] reason in self?.pageFailed(reason) }
         browser.onLost = { [weak self] reason in self?.recover(reason) }

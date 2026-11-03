@@ -35,6 +35,8 @@ struct EditorPaneView: View {
     @AppStorage(TerminalPreferences.Key.unfocusedSplitOpacity) private var unfocusedOpacity = TerminalPreferences.Default.unfocusedSplitOpacity
 
     private var source: any EditorSource { pane.source }
+    /// The editor's own commands in the bar, which has no room for the host's name.
+    private var isPhone: Bool { EditorPhoneLayout.isPhone && !isSplit }
 
     var body: some View {
         @Bindable var pane = pane
@@ -42,10 +44,12 @@ struct EditorPaneView: View {
             if showsBar { bar }
             ZStack {
                 if let browser = pane.browser {
-                    EditorWebHost(webView: browser.webView, perform: performShortcut) { shown in
+                    EditorWebHost(webView: browser.webView, perform: performShortcut, onShown: { shown in
                         if pane.isWebViewShown != shown { pane.isWebViewShown = shown }
                         if shown, isFocused { pane.takeKeyboard() }
-                    }
+                    }, onResize: { size in
+                        browser.fit(to: size)
+                    })
                     .opacity(pane.isWorkbenchVisible ? 1 : 0)
                     .accessibilityIdentifier("editor-web")
                     .accessibilityValue(pane.isWebViewShown ? "showing" : "empty")
@@ -189,23 +193,34 @@ struct EditorPaneView: View {
             Button("Close Editor", systemImage: "xmark", action: onClose)
                 .help("Close the editor (⌘W; it keeps running on the host)")
                 .accessibilityIdentifier("editor-close")
-            Image(systemName: source.mode == .tunnel ? "point.3.connected.trianglepath.dotted" : "chevron.left.forwardslash.chevron.right")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(DS.Palette.textSecondary)
-                .help(source.mode == .tunnel ? "Through a VS Code Remote Tunnel (vscode.dev)" : "VS Code")
+            if !isPhone {
+                Image(systemName: source.mode == .tunnel ? "point.3.connected.trianglepath.dotted" : "chevron.left.forwardslash.chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(DS.Palette.textSecondary)
+                    .help(source.mode == .tunnel ? "Through a VS Code Remote Tunnel (vscode.dev)" : "VS Code")
+            }
             HStack(alignment: .firstTextBaseline, spacing: DS.Space.xs) {
                 Text(verbatim: pane.member.folderName)
                     .font(isSplit ? .caption.weight(isFocused ? .semibold : .regular) : .callout.weight(.medium))
                     .foregroundStyle((isFocused ? DS.Palette.text : DS.Palette.textSecondary))
-                Text(verbatim: source.hostName)
-                    .font(DS.Font.literalSmall)
-                    .foregroundStyle(DS.Palette.textSecondary)
+                if !isPhone {
+                    Text(verbatim: source.hostName)
+                        .font(DS.Font.literalSmall)
+                        .foregroundStyle(DS.Palette.textSecondary)
+                }
             }
             .lineLimit(1)
             Spacer(minLength: DS.Space.s)
             if pane.isWorkbenchVisible {
-                Button("Reload", systemImage: "arrow.clockwise") { pane.browser?.reload() }
-                    .help("Reload the workbench")
+                if isPhone {
+                    ForEach(EditorPhoneLayout.Command.allCases, id: \.self) { command in
+                        Button(command.title, systemImage: command.systemImage) { pane.browser?.run(command) }
+                            .accessibilityIdentifier("editor-\(command.rawValue)")
+                    }
+                } else {
+                    Button("Reload", systemImage: "arrow.clockwise") { pane.browser?.reload() }
+                        .help("Reload the workbench")
+                }
             }
             if let toggleFullScreen {
                 Button("Full Screen", systemImage: "arrow.up.left.and.arrow.down.right", action: toggleFullScreen)
@@ -213,6 +228,15 @@ struct EditorPaneView: View {
                     .accessibilityIdentifier("editor-full-screen")
             }
             Menu("More", systemImage: "ellipsis") {
+                if isPhone, pane.isWorkbenchVisible, let browser = pane.browser {
+                    Button("Zoom In", systemImage: "plus.magnifyingglass") { browser.zoom(by: 1) }
+                        .disabled(!browser.canZoom.in)
+                    Button("Zoom Out", systemImage: "minus.magnifyingglass") { browser.zoom(by: -1) }
+                        .disabled(!browser.canZoom.out)
+                    Button("Fit to Screen", systemImage: "arrow.up.left.and.down.right.magnifyingglass") { browser.zoom(by: 0) }
+                    Button("Reload", systemImage: "arrow.clockwise") { browser.reload() }
+                    Divider()
+                }
                 Button("Copy Folder Path", systemImage: "doc.on.doc") { EditorPasteboard.copy(pane.member.folder) }
                 #if os(macOS)
                 if source.mode == .tunnel, let uri = source.tunnelDesktopURI {
@@ -487,8 +511,16 @@ struct EditorWebHost: View {
     var perform: (WorkspaceAction) -> Void
     /// Whether the web view is on screen (in this or a newer view of the same editor).
     var onShown: (Bool) -> Void = { _ in }
+    /// iOS: the pane's size without the keyboard, whenever it lays out.
+    var onResize: ((CGSize) -> Void)?
 
-    var body: some View { Representable(webView: webView, perform: perform, onShown: onShown) }
+    var body: some View {
+        #if canImport(UIKit)
+        Representable(webView: webView, perform: perform, onShown: onShown, onResize: onResize)
+        #else
+        Representable(webView: webView, perform: perform, onShown: onShown)
+        #endif
+    }
 
     #if canImport(UIKit)
     private struct Representable: UIViewRepresentable {
@@ -496,10 +528,13 @@ struct EditorWebHost: View {
         let perform: (WorkspaceAction) -> Void
         let onShown: (Bool) -> Void
 
+        let onResize: ((CGSize) -> Void)?
+
         func makeUIView(context: Context) -> Container {
             let container = Container()
             container.perform = perform
             container.onShown = onShown
+            container.onResize = onResize
             container.claim(webView)
             return container
         }
@@ -507,7 +542,9 @@ struct EditorWebHost: View {
         func updateUIView(_ container: Container, context: Context) {
             container.perform = perform
             container.onShown = onShown
+            container.onResize = onResize
             container.show(webView)
+            container.setNeedsLayout()
         }
     }
     #else
@@ -607,6 +644,18 @@ struct EditorWebHost: View {
         }
 
         #if canImport(UIKit)
+        var onResize: ((CGSize) -> Void)?
+        /// The pane's height without the keyboard, so showing it never rescales the workbench.
+        private var fullHeight: (width: CGFloat, height: CGFloat) = (0, 0)
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            guard let webView, webView.superview === self, bounds.width > 0 else { return }
+            if fullHeight.width != bounds.width { fullHeight = (bounds.width, 0) }
+            fullHeight.height = max(fullHeight.height, bounds.height)
+            onResize?(CGSize(width: bounds.width, height: fullHeight.height))
+        }
+
         static let actions = WorkspaceAction.allShortcutActions.filter(\.passesEditor)
         var perform: ((WorkspaceAction) -> Void)?
 
