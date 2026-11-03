@@ -98,6 +98,7 @@ final class AppModel {
         #if os(macOS)
         helper?.onReady = { [weak self] id in self?.thisDeviceReady(id) }
         helper?.onUnavailable = { [weak self] in self?.thisDeviceUnavailable() }
+        hosts.onThisDeviceRemoved = { [weak helper] _ in helper?.pairAgain() ?? false }
         helper?.start()
         if let helper { connectEarly(helper) }
         #endif
@@ -216,8 +217,16 @@ final class AppModel {
 
     /// Every window shows This Mac's helper in place of an empty local workspace.
     private func thisDeviceReady(_ id: String) {
-        // Dialled early, maybe before the helper was up: retry now rather than after a backoff.
-        if let connection = hosts.connection(id), case .reconnecting = connection.status { connection.retry() }
+        // Dialled early, maybe before the helper was up: dial again now rather than wait for
+        // that attempt or a backoff.
+        if let connection = hosts.connection(id) as? DaemonConnection {
+            let dialledTooEarly = localHelper?.startedAt.flatMap { started in connection.timings.dialStarted.map { $0 < started } } ?? false
+            switch connection.status {
+            case .reconnecting: connection.retry()
+            case .connecting(.dialing) where dialledTooEarly: connection.retry()
+            default: break
+            }
+        }
         for window in openWindows { window.openThisDevice(id) }
     }
 

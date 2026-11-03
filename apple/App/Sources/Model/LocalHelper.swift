@@ -34,6 +34,11 @@ final class LocalHelper {
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private var child: Process?
     @ObservationIgnored private var task: Task<Void, Never>?
+    /// When this app last started the helper (a dial from before then found nothing to reach).
+    @ObservationIgnored private(set) var startedAt: ContinuousClock.Instant?
+    @ObservationIgnored private var pairsAgainAfterTask = false
+    @ObservationIgnored private var isPairingAgain = false
+    @ObservationIgnored private var pairingAgainFailed: ContinuousClock.Instant?
     /// The host became ready (each window opens it).
     @ObservationIgnored var onReady: ((String) -> Void)?
     /// The helper stopped or failed to start.
@@ -93,7 +98,7 @@ final class LocalHelper {
         guard state != .running || hosts.thisDeviceId == nil else { return }
         state = .starting
         task = Task {
-            defer { task = nil }
+            defer { finishTask() }
             do {
                 let id = try await run()
                 state = .running
@@ -105,6 +110,58 @@ final class LocalHelper {
                 onUnavailable?()
             }
         }
+    }
+
+    /// The helper no longer knows this app's device (removed from its devices, or the pairing
+    /// was lost): pairs again with a fresh ticket from the helper, without asking. Anyone who
+    /// can run the helper on its folder can mint one, as this user on this Mac can. False when
+    /// it won't (turned off, or it just failed): the host then asks the user.
+    @discardableResult
+    func pairAgain() -> Bool {
+        // A refusal of the pairing itself must not start another.
+        guard isEnabled, !isPairingAgain, let binary else { return false }
+        if let failed = pairingAgainFailed, ContinuousClock.now - failed < .seconds(10) { return false }
+        guard task == nil else {
+            pairsAgainAfterTask = true
+            return true
+        }
+        Self.log.info("helper: this Mac's device was removed; pairing again")
+        isPairingAgain = true
+        task = Task {
+            defer {
+                isPairingAgain = false
+                finishTask()
+            }
+            do {
+                let ticket = try await Self.mintTicket(binary: binary, stateDirectory: stateDirectory)
+                let id = try await hosts.pairThisDevice(try PairingTicket(ticket), name: WindowModel.deviceName)
+                pairingAgainFailed = nil
+                state = .running
+                onReady?(id)
+            } catch {
+                Self.log.error("helper: pairing again failed: \(String(describing: error), privacy: .public)")
+                pairingAgainFailed = .now
+                showRefusal()
+            }
+        }
+        return true
+    }
+
+    private func finishTask() {
+        task = nil
+        guard pairsAgainAfterTask else { return }
+        pairsAgainAfterTask = false
+        guard let id = hosts.thisDeviceId, let connection = hosts.connection(id) as? DaemonConnection,
+              connection.refusal.map(DaemonConnection.meansDeviceRemoved) == true
+        else { return }
+        if !pairAgain() { showRefusal() }
+    }
+
+    /// A connection left waiting for a pairing that did not happen dials again, and this time
+    /// shows the refusal.
+    private func showRefusal() {
+        guard let id = hosts.thisDeviceId, let connection = hosts.connection(id), connection.status.isConnecting else { return }
+        connection.retry()
     }
 
     /// Stops the helper (its sessions end) and leaves it off until started again.
@@ -152,15 +209,28 @@ final class LocalHelper {
     private func run() async throws -> String {
         guard let binary else { throw HelperError.notBundled }
         if !isIsolated { await retireLegacyHelper() }
-        if Self.runningEndpoint(in: stateDirectory) == nil {
+        var launched = true
+        if let running = Self.runningEndpoint(in: stateDirectory), !Self.isAppHelper(pid: running.pid) {
+            launched = false
+            // A daemon the user runs on this folder (`service install`, `run`) serves This Mac.
+            // The app's login item could only fail to take the folder, again and again.
+            if !isIsolated, agent.status == .enabled {
+                try? await agent.unregister()
+                defaults.removeObject(forKey: Self.registeredKey)
+            }
+            Self.log.info("helper: using the daemon already running on the folder (pid \(running.pid))")
+        } else if Self.runningEndpoint(in: stateDirectory) == nil {
             try await launch(binary)
         } else if keepsRunning, agent.status == .enabled, !isRegistered(binary) {
             // An older build's login item still runs: it is replaced, never restarted, because
             // launchd only spawns the exact build that was registered.
             try await stopLoginItem()
             try await launch(binary)
+        } else {
+            launched = false
         }
         let endpoint = try await waitForEndpoint()
+        if launched { startedAt = .now }
         if let id = hosts.thisDeviceId, hosts.record(id)?.daemonId == endpoint.daemonId { return id }
         let ticket = try await Self.mintTicket(binary: binary, stateDirectory: stateDirectory)
         return try await hosts.pairThisDevice(try PairingTicket(ticket), name: WindowModel.deviceName)
@@ -285,6 +355,14 @@ final class LocalHelper {
               endpoint.pid > 0, kill(endpoint.pid, 0) == 0
         else { return nil }
         return endpoint
+    }
+
+    /// Whether `pid` runs a helper bundled in an app (this one or another build), not a daemon
+    /// the user installed or started from a terminal.
+    nonisolated static func isAppHelper(pid: Int32) -> Bool {
+        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN) * 4)
+        guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return true }
+        return String(cString: buffer).contains(".app/Contents/")
     }
 
     private func waitForEndpoint(timeout: Duration = .seconds(30)) async throws -> Endpoint {

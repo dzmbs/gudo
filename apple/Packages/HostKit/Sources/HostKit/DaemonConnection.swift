@@ -85,6 +85,15 @@ public final class DaemonConnection: HostConnection {
     public private(set) var daemonInfo: DaemonInfo?
     /// A `daemonInfo` event arrived (with or without info).
     public private(set) var daemonInfoReported = false
+    /// The daemon's reason for refusing this device (`InvalidGrant`, `Revoked`…), until a
+    /// connection works again. The status carries words for people.
+    public private(set) var refusal: String?
+    /// Called on the main actor with the daemon's reason whenever it refuses this device;
+    /// true when that is being taken care of (This Mac pairs again): the status then stays
+    /// connecting rather than asking the user.
+    @ObservationIgnored public var onRefused: ((String) -> Bool)?
+    /// Dials with an invite (a guest), not as a paired device.
+    @ObservationIgnored public var isGuest = false
     /// Why the core cannot work with this daemon (it draws terminals in another format), until
     /// a connection works again. The daemon may still accept an update over this connection.
     public private(set) var incompatibility: String?
@@ -393,6 +402,20 @@ public final class DaemonConnection: HostConnection {
     /// The status line while the core and the daemon cannot work together.
     static let incompatibleWords = "This host's helper needs an update"
 
+    /// The daemon no longer knows this device: it was removed, or the ticket it paired with
+    /// was used up or expired.
+    nonisolated public static func meansDeviceRemoved(_ refusal: String) -> Bool {
+        refusal == "InvalidGrant" || refusal == "Revoked"
+    }
+
+    /// Words for a refusal, never the daemon's reason itself (a protocol name).
+    nonisolated static func refusalWords(_ refusal: String, guest: Bool = false) -> String {
+        if guest, meansDeviceRemoved(refusal) { return "This invite isn't valid anymore. Ask the host for a new one." }
+        if meansDeviceRemoved(refusal) { return "This device isn't paired with this host anymore. Pair it again with a new ticket." }
+        if refusal.hasPrefix("DeviceMismatch") { return "The host couldn't verify this device. Try again." }
+        return "The host turned this device away. Try again, or pair it again with a new ticket."
+    }
+
     /// Sends a daemon build (an executable or its gzip) to the daemon, which checks it, swaps
     /// it in and restarts; the connection then drops and comes back by itself on the new
     /// build. Owner devices only.
@@ -451,6 +474,7 @@ public final class DaemonConnection: HostConnection {
             Self.log.error("incompatible host=\(self.hostId, privacy: .public): \(reason, privacy: .public)")
         case .connected(let epoch, let resumed):
             incompatibility = nil
+            refusal = nil
             if let previous = self.epoch, previous != epoch { layout.resetRevision() }
             self.epoch = epoch
             attempt = 0
@@ -473,8 +497,14 @@ public final class DaemonConnection: HostConnection {
             status = .reconnecting(attempt: attempt, reason: reason)
             Self.log.info("disconnected host=\(self.hostId, privacy: .public): \(reason, privacy: .public)")
         case .refused(let reason):
-            status = .needsAttention(reason: incompatibility == nil ? "Refused: \(reason)" : Self.incompatibleWords)
             Self.log.error("refused host=\(self.hostId, privacy: .public): \(reason, privacy: .public)")
+            if incompatibility == nil {
+                refusal = reason
+                status = onRefused?(reason) == true
+                    ? .connecting(.dialing) : .needsAttention(reason: Self.refusalWords(reason, guest: isGuest))
+            } else {
+                status = .needsAttention(reason: Self.incompatibleWords)
+            }
         case .attached(let session, let via, let missing):
             attachSession = session
             onAttached?(session)

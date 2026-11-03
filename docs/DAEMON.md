@@ -281,6 +281,10 @@ policy is always `LastInput` for now.
 - Removal is recorded with its time (`unpaired.json`, under the `devices.json` lock). A chain
   counts only if its root was signed after the removal of every device in it, so a removed
   device's invites stay void; a fresh ticket pairs the device again, without them.
+- A `pair --local` ticket is for the app on this computer: the device it pairs is marked
+  `this_computer` (`pairing.json` and `devices.json`, absent otherwise) and `devices` lists it
+  as "This Mac (Gudo app)" unless the owner named it. Removing it is allowed; the Mac app then
+  pairs again by itself with a fresh local ticket.
 - Before the `Hello`, a connection is counted against limits overall and per source address
   (IPv6: per /64; `Config::pre_auth`): 1024 / 32 in the QUIC handshake, then 128 / 16 for
   keys the daemon does not trust. Paired owner devices and guests bound to a live grant are

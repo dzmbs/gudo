@@ -42,7 +42,11 @@ nonisolated final class LocalDaemon {
             ?? repoRoot.appending(path: "target/debug/gudo-hostd")
     }
 
-    init(binary: URL? = nil) throws {
+    /// Run the way the Mac app runs its own helper: relays on, every interface, `pair --local`.
+    let isThisMacHelper: Bool
+
+    init(binary: URL? = nil, isThisMacHelper: Bool = false) throws {
+        self.isThisMacHelper = isThisMacHelper
         self.binary = binary ?? Self.defaultBinary
         guard FileManager.default.isExecutableFile(atPath: self.binary.path) else {
             throw TestError("no daemon at \(self.binary.path): run `cargo build -p hostd` first")
@@ -56,7 +60,9 @@ nonisolated final class LocalDaemon {
     func start() throws {
         let process = Process()
         process.executableURL = binary
-        process.arguments = ["--state-dir", stateDir.path, "run", "--no-relay", "--bind", "127.0.0.1:\(port)", "--shell", "/bin/sh"]
+        process.arguments = isThisMacHelper
+            ? ["--state-dir", stateDir.path, "run", "--shell", "/bin/sh"]
+            : ["--state-dir", stateDir.path, "run", "--no-relay", "--bind", "127.0.0.1:\(port)", "--shell", "/bin/sh"]
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try process.run()
@@ -81,7 +87,7 @@ nonisolated final class LocalDaemon {
             let pipe = Pipe()
             let pair = Process()
             pair.executableURL = binary
-            pair.arguments = ["--state-dir", stateDir.path, "pair", "--json"]
+            pair.arguments = ["--state-dir", stateDir.path, "pair", "--json"] + (isThisMacHelper ? ["--local"] : [])
             pair.standardOutput = pipe
             pair.standardError = FileHandle.nullDevice
             try pair.run()
@@ -97,6 +103,29 @@ nonisolated final class LocalDaemon {
             try await Task.sleep(for: .milliseconds(100))
         }
         throw TestError("the daemon did not come up")
+    }
+
+    /// Removes every paired device, as `gudo devices` does.
+    func unpairEveryDevice() throws {
+        let list = try run(["devices", "--json"])
+        let devices = try JSONSerialization.jsonObject(with: list) as? [[String: Any]] ?? []
+        for device in devices.compactMap({ $0["device"] as? String }) {
+            _ = try run(["unpair", String(device.prefix(16))])
+        }
+    }
+
+    private func run(_ arguments: [String]) throws -> Data {
+        let pipe = Pipe()
+        let process = Process()
+        process.executableURL = binary
+        process.arguments = ["--state-dir", stateDir.path] + arguments
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { throw TestError("\(arguments.joined(separator: " ")) failed") }
+        return data
     }
 
     deinit {

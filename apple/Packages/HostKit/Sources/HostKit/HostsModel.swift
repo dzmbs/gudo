@@ -89,6 +89,11 @@ public final class HostsModel {
     /// A program in a pane of a host copied text (OSC 52) after this device typed into it:
     /// the host, the pane and the text.
     @ObservationIgnored public var onClipboard: ((String, PaneId, String) -> Void)?
+    /// This device's own helper no longer knows this device (removed with `devices`, or its
+    /// pairing was lost): the app pairs it again from the helper itself, and returns true when
+    /// it does (the host then shows as connecting, not refused). Remote hosts never pair again
+    /// on their own.
+    @ObservationIgnored public var onThisDeviceRemoved: ((String) -> Bool)?
     /// Where daemon hosts' workspaces are saved for instant start (nil: not saved).
     @ObservationIgnored public var workspaceCache: WorkspaceCacheStore?
     private static let log = Logger(subsystem: Log.subsystem, category: "hosts")
@@ -198,6 +203,11 @@ public final class HostsModel {
         connection.onDaemonInfo = { [weak self] info in self?.daemonReported(record.id, info) }
         connection.browser.onPush = { [weak self] push in self?.onBrowserPush?(record.id, push) }
         connection.onClipboard = { [weak self] pane, text in self?.onClipboard?(record.id, pane, text) }
+        connection.isGuest = record.isGuest
+        connection.onRefused = { [weak self] reason in
+            guard let self, DaemonConnection.meansDeviceRemoved(reason), self.record(record.id)?.isThisDevice == true else { return false }
+            return self.onThisDeviceRemoved?(record.id) ?? false
+        }
         // A guest's view of someone else's host is never kept on this device.
         if !record.isGuest,
            let cached = workspaceCache?.load(hostId: record.id, daemonId: record.daemonId, sessionId: record.sessionId)
@@ -441,6 +451,8 @@ public final class HostsModel {
                 try? secrets.remove(record.ticketKey)
                 records.removeAll { $0.id == record.id }
                 persist()
+            } else {
+                previous?.close()
             }
             throw error
         }
@@ -509,7 +521,9 @@ public final class HostsModel {
         let deadline = ContinuousClock.now + timeout
         while ContinuousClock.now < deadline {
             if connection.isReady { return }
-            if case .needsAttention(let reason) = connection.status { throw PairingError.refused(reason) }
+            if case .needsAttention(let reason) = connection.status {
+                throw PairingError.refused(connection.refusal.flatMap { DaemonConnection.meansDeviceRemoved($0) ? $0 : nil } ?? reason)
+            }
             try await Task.sleep(for: .milliseconds(25))
         }
         throw PairingError.timedOut
@@ -810,9 +824,9 @@ public enum PairingError: Error, Equatable, LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .refused(let reason) where reason.contains("InvalidGrant"):
+        case .refused(let reason) where DaemonConnection.meansDeviceRemoved(reason):
             "This ticket was already used or has expired. Ask the host for a new one (its helper's `pair` command)."
-        case .refused(let reason): "The host refused this device (\(reason)). Ask it for a new ticket (its helper's `pair` command)."
+        case .refused(let reason): reason
         case .timedOut: "The host did not answer. Check that it is running and reachable."
         case .turnedAway: "The owner didn't let you in."
         }
