@@ -581,8 +581,9 @@ public final class HostsModel {
     /// Updates a daemon host's helper to the app's build (docs/APP-ARCHITECTURE.md §14): over
     /// its saved SSH login when it was set up from SSH (upload and restart, as "Install Helper"
     /// does), else over the daemon connection (the daemon checks the build, swaps it in and
-    /// restarts itself; owner only). Returns once the host is back on the new build. Panes come
-    /// back from the daemon's saved layout and agents resume; shells restart.
+    /// restarts itself; owner only). Returns once the host is back on the new build. A daemon
+    /// that can hand off keeps its panes' programs running; an older one restores the layout and
+    /// restarts the shells.
     public func updateHelper(_ id: String) async throws {
         guard let record = record(id), let advice = helperAdvice(id), advice.canUpdate else {
             throw HelperUpdateError.unavailable
@@ -592,7 +593,7 @@ public final class HostsModel {
         helperUpdates[id] = HelperUpdateProgress(step: .preparing)
         defer { helperUpdates[id] = nil }
         let daemon = connections[id] as? DaemonConnection
-        let previous = daemon?.epoch
+        let previousConnections = daemon?.connectionCount
         switch advice.method {
         case .ssh:
             guard try await updateOverSSH(record) else { return }
@@ -613,11 +614,12 @@ public final class HostsModel {
         }
         helperUpdates[id]?.step = .restarting
         connections[id]?.retry()
-        // Back when a new daemon run answers and the session is open again.
+        // Back when the daemon has been reconnected to and the session is open again. A hot
+        // upgrade keeps the daemon run's epoch, so the reconnection itself is the signal.
         let deadline = ContinuousClock.now + .seconds(60)
         while ContinuousClock.now < deadline {
             if let daemon = connections[id] as? DaemonConnection, daemon.status.isLive,
-               daemon.epoch != previous || previous == nil {
+               previousConnections.map({ daemon.connectionCount > $0 }) ?? true {
                 Self.log.info("helper updated host=\(id, privacy: .public) to \(daemon.daemonInfo?.build ?? "?", privacy: .public) in \((ContinuousClock.now - started) / .milliseconds(1), format: .fixed(precision: 0)) ms")
                 return
             }

@@ -128,8 +128,10 @@ public final class DaemonConnection: HostConnection {
     }
     /// The most often pane metadata reaches views while it keeps changing.
     static let paneStatusInterval = Duration.milliseconds(50)
-    /// The daemon run (changes when the daemon restarts).
+    /// The daemon run (changes when the daemon restarts cold; a hot upgrade keeps it).
     public private(set) var epoch: UInt64?
+    /// How many times this connection has (re)connected to a daemon.
+    public private(set) var connectionCount = 0
     @ObservationIgnored private var attachSession: UInt64?
     @ObservationIgnored private var lastView: (UInt64?, [UInt64])?
     @ObservationIgnored private var attempt: UInt32 = 0
@@ -477,6 +479,7 @@ public final class DaemonConnection: HostConnection {
             refusal = nil
             if let previous = self.epoch, previous != epoch { layout.resetRevision() }
             self.epoch = epoch
+            connectionCount += 1
             attempt = 0
             if let start = timings.dialStarted { timings.connected = .now - start }
             Self.log.info("connected host=\(self.hostId, privacy: .public) resumed=\(resumed) after \(self.timings.connected.map { $0 / .milliseconds(1) } ?? -1, format: .fixed(precision: 1)) ms")

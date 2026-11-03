@@ -7,8 +7,8 @@ import GudoCore
 /// "Update Helper" end to end on this Mac: a real `gudo-hostd` installed as a copy in a
 /// scratch directory reports its build and host name; the app's manifest says it bundles a
 /// newer build for this platform; `HostsModel.updateHelper` streams it over the daemon
-/// connection; the daemon checks it, swaps it in and restarts in place (`exec`); the same
-/// connection comes back on a new daemon run with the layout restored.
+/// connection; the daemon checks it, swaps it in and restarts in place (`exec`), handing its
+/// panes over; the same connection comes back to the same daemon run with the layout kept.
 @MainActor
 @Suite(.serialized) struct HelperUpdateIntegrationTests {
     @Test func updateOverTheConnectionAndComeBack() async throws {
@@ -51,12 +51,14 @@ import GudoCore
         connection.layout.apply(.split(try #require(connection.layout.session.activeTab?.focused), .horizontal))
         try await eventually("split", timeout: .seconds(10)) { connection.layout.session.panes.count == 2 }
         let epoch = connection.epoch
+        let connections = connection.connectionCount
         let started = ContinuousClock.now
         try await model.updateHelper(hostId)
         print("helper update over the connection: \(ContinuousClock.now - started)")
 
-        // A new daemon run, live, with the layout it saved.
-        #expect(connection.epoch != epoch)
+        // Reconnected, live, and the run carried over: the panes were handed over, not restarted.
+        #expect(connection.connectionCount > connections)
+        #expect(connection.epoch == epoch)
         #expect(connection.status.isLive)
         try await eventually("layout restored", timeout: .seconds(10)) { connection.layout.session.panes.count == 2 }
         #expect(model.helperUpdates[hostId] == nil)
