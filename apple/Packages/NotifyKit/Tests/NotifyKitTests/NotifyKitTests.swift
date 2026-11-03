@@ -69,7 +69,7 @@ private func placeholder(_ sealed: String) -> UNMutableNotificationContent {
             #expect(processed.subtitle == expected.host)
             #expect(processed.body == expected.body)
             #expect(processed.categoryIdentifier == payload.category)
-            #expect(processed.threadIdentifier == expected.daemon)
+            #expect(processed.threadIdentifier == "\(expected.daemon).pane.\(expected.pane)")
             // The handler reads the opened payload back; the sealed blob is gone.
             #expect(processed.userInfo[PushContent.sealedKey] == nil)
             #expect(PushContent.payload(from: processed.userInfo) == expected)
@@ -279,13 +279,27 @@ private final class FakeClient: NotificationActionClient {
         let approval = AttentionNote(
             hostId: "h1", hostName: "studio", itemId: 1, paneId: 2,
             kind: .approval(requestId: 3, approve: .init(id: 1, label: "Yes"), deny: .init(id: 2, label: "No")),
-            title: "", body: "rm -rf build", agent: "Claude Code")
+            title: "", body: "rm -rf build", agent: "Claude Code", agentId: "claude", place: "api")
         let content = LocalNotifications.content(for: approval)
-        #expect(content.title == "Approval needed")
-        #expect(content.subtitle == "Claude Code · studio")
+        #expect(content.title == "Claude Code needs you")
+        #expect(content.subtitle == "api · studio")
+        #expect(content.body == "rm -rf build")
         #expect(content.categoryIdentifier == "AGENT_APPROVAL")
-        #expect(content.threadIdentifier == "h1")
+        #expect(content.threadIdentifier == "h1.pane.2")
         #expect(content.interruptionLevel == .timeSensitive)
+
+        var finished = approval
+        finished.kind = .done
+        finished.body = "## Renamed `foo` to **bar**\n\nAll 12 call sites updated."
+        let done = LocalNotifications.content(for: finished)
+        #expect(done.title == "Claude Code finished")
+        #expect(done.body == "Renamed foo to bar")
+        #expect(done.interruptionLevel == .active)
+        #expect(done.categoryIdentifier == "AGENT_DONE")
+        finished.body = ""
+        #expect(LocalNotifications.content(for: finished).body == "Finished")
+        finished.place = nil
+        #expect(LocalNotifications.content(for: finished).subtitle == "studio")
 
         var blocked = approval
         blocked.kind = .approval(requestId: 3, approve: nil, deny: nil)
@@ -294,10 +308,10 @@ private final class FakeClient: NotificationActionClient {
         var command = approval
         command.kind = .command
         command.title = "cargo test finished"
-        let done = LocalNotifications.content(for: command)
-        #expect(done.categoryIdentifier == "COMMAND_DONE")
-        #expect(done.interruptionLevel == .active)
-        #expect(done.title == "cargo test finished")
+        let commandContent = LocalNotifications.content(for: command)
+        #expect(commandContent.categoryIdentifier == "COMMAND_DONE")
+        #expect(commandContent.interruptionLevel == .active)
+        #expect(commandContent.title == "cargo test finished")
         #expect(LocalNotifications.identifier(hostId: "h1", paneId: 2) == "pane.h1.2")
     }
 
@@ -318,10 +332,12 @@ private final class FakeClient: NotificationActionClient {
         var prefs = NotificationPrefs()
         let note = AttentionNote(hostId: "h", hostName: "s", itemId: 1, paneId: 1, kind: .done, title: "t", body: "b")
         #expect(LocalNotifications.shouldPost(note, prefs: prefs, appIsActive: false))
+        #expect(LocalNotifications.shouldPost(note, prefs: prefs, appIsActive: true))
+        prefs.onlyInBackground = true
         #expect(!LocalNotifications.shouldPost(note, prefs: prefs, appIsActive: true))
+        prefs.onlyInBackground = false
         prefs.done = false
         #expect(!LocalNotifications.shouldPost(note, prefs: prefs, appIsActive: false))
-        prefs.onlyInBackground = false
         var command = note
         command.kind = .command
         #expect(LocalNotifications.shouldPost(command, prefs: prefs, appIsActive: true))
@@ -329,6 +345,68 @@ private final class FakeClient: NotificationActionClient {
         let defaults = UserDefaults(suiteName: "notifykit-tests-\(UUID().uuidString)")!
         prefs.save(to: defaults)
         #expect(NotificationPrefs.load(from: defaults) == prefs)
+    }
+
+    /// The pane the user is looking at never notifies; other panes do, as banners. In the
+    /// background a host that pushes here covers it.
+    @Test func foregroundSuppressionIsPerPane() {
+        let prefs = NotificationPrefs()
+        let note = AttentionNote(hostId: "h", hostName: "s", itemId: 1, paneId: 1, kind: .done, title: "", body: "b",
+                                 agent: "Codex", agentId: "codex")
+        #expect(!LocalNotifications.shouldPost(note, prefs: prefs, appIsActive: true, paneOnScreen: true))
+        #expect(LocalNotifications.shouldPost(note, prefs: prefs, appIsActive: true, paneOnScreen: false))
+        #expect(!LocalNotifications.shouldPost(note, prefs: prefs, appIsActive: false, pushCoversBackground: true))
+        #expect(LocalNotifications.shouldPost(note, prefs: prefs, appIsActive: false, pushCoversBackground: false))
+        #expect(LocalNotifications.presentation(paneOnScreen: true) == [])
+        #expect(LocalNotifications.presentation(paneOnScreen: false) == [.banner, .list, .sound])
+    }
+
+    @Test func agentPrefsFilterNeedsYouAndFinishedPerAgent() {
+        var prefs = NotificationPrefs()
+        prefs.agents["codex"] = AgentNotificationPrefs(needsYou: true, finished: false)
+        prefs.agents[NotificationPrefs.otherAgents] = AgentNotificationPrefs(needsYou: false, finished: true)
+        #expect(prefs.allows(.blocked, agent: "codex"))
+        #expect(prefs.allows(.approval, agent: "codex"))
+        #expect(!prefs.allows(.done, agent: "codex"))
+        #expect(!prefs.allows(.failed, agent: "codex"))
+        #expect(prefs.allows(.done, agent: "claude"), "falls back to the other agents")
+        #expect(!prefs.allows(.blocked, agent: "claude"))
+        #expect(prefs.allows(.command, agent: nil))
+        prefs.agents = ["claude": AgentNotificationPrefs()]
+        prefs.done = false
+        #expect(!prefs.allows(.done, agent: "claude"), "the kind switch wins")
+
+        let note = AttentionNote(hostId: "h", hostName: "s", itemId: 1, paneId: 1, kind: .done, title: "", body: "b",
+                                 agent: "Claude Code", agentId: "claude")
+        #expect(!LocalNotifications.shouldPost(note, prefs: prefs, appIsActive: false))
+    }
+
+    /// Preferences saved by builds before per-agent choices keep their switches.
+    @Test func olderSavedPrefsStillLoad() throws {
+        let defaults = try #require(UserDefaults(suiteName: "notifykit-tests-\(UUID().uuidString)"))
+        defaults.set(Data(#"{"approvals":true,"blocked":false,"done":true,"failed":true,"commands":false,"onlyInBackground":true}"#.utf8),
+                     forKey: "notification-prefs")
+        let prefs = NotificationPrefs.load(from: defaults)
+        #expect(!prefs.blocked && !prefs.commands && prefs.onlyInBackground)
+        #expect(prefs.agents.isEmpty)
+        #expect(prefs.allows(.done, agent: "codex"))
+    }
+
+    @Test func summariesTakeTheFirstLineWithWords() {
+        #expect(LocalNotifications.summaryLine("\n  - Renamed `foo` to **bar**.\nMore.") == "Renamed foo to bar.")
+        #expect(LocalNotifications.summaryLine("---\n\n```\n") == nil)
+        let long = String(repeating: "word ", count: 100)
+        #expect(LocalNotifications.summaryLine(long)?.count ?? 0 <= 141)
+    }
+
+    @Test func finishedNotesArePacedPerPane() {
+        var pacer = PaneNotePacer(interval: .seconds(30))
+        let start = ContinuousClock.now
+        #expect(pacer.wait(for: "a", now: start) == .zero)
+        pacer.posted("a", at: start)
+        #expect(pacer.wait(for: "a", now: start + .seconds(10)) == .seconds(20))
+        #expect(pacer.wait(for: "b", now: start + .seconds(10)) == .zero)
+        #expect(pacer.wait(for: "a", now: start + .seconds(31)) == .zero)
     }
 
     @Test func categoriesCarryTheActions() {

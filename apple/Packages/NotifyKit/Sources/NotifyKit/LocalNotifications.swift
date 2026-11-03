@@ -31,9 +31,17 @@ public struct AttentionNote: Equatable, Sendable {
     public var kind: Kind
     public var title: String
     public var body: String
+    /// The agent's display name ("Claude Code").
     public var agent: String?
+    /// The daemon's name for the agent (`claude`), which per-agent preferences use.
+    public var agentId: String?
+    /// The pane's project, tab or directory.
+    public var place: String?
 
-    public init(hostId: String, hostName: String, itemId: UInt64, paneId: UInt64, kind: Kind, title: String, body: String, agent: String? = nil) {
+    public init(
+        hostId: String, hostName: String, itemId: UInt64, paneId: UInt64, kind: Kind, title: String, body: String,
+        agent: String? = nil, agentId: String? = nil, place: String? = nil
+    ) {
         self.hostId = hostId
         self.hostName = hostName
         self.itemId = itemId
@@ -42,6 +50,17 @@ public struct AttentionNote: Equatable, Sendable {
         self.title = title
         self.body = body
         self.agent = agent
+        self.agentId = agentId
+        self.place = place
+    }
+
+    /// Finished (or failed) turns, which wait out a turn that goes straight on and are paced
+    /// per pane.
+    public var isFinished: Bool {
+        switch kind {
+        case .done, .failed: true
+        default: false
+        }
     }
 
     /// An approval whose summary was cut (`…`) is Open only, matching the daemon's push: approve
@@ -69,14 +88,19 @@ public enum LocalNotifications {
         "pane.\(hostId).\(paneId)"
     }
 
+    /// Notification Center groups each pane's notes together.
+    public static func thread(hostId: String, paneId: UInt64) -> String {
+        "\(hostId).pane.\(paneId)"
+    }
+
     public static func content(for note: AttentionNote) -> UNMutableNotificationContent {
         let content = UNMutableNotificationContent()
         content.title = note.title.isEmpty ? defaultTitle(note) : note.title
-        content.subtitle = [note.agent, note.hostName].compactMap { $0 }.joined(separator: " · ")
-        content.body = note.body
+        content.subtitle = [note.place, note.hostName].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+        content.body = body(note)
         content.categoryIdentifier = note.pushKind.categoryIdentifier
-        content.threadIdentifier = note.hostId
-        content.sound = note.pushKind == .approval || note.pushKind == .blocked ? .default : nil
+        content.threadIdentifier = thread(hostId: note.hostId, paneId: note.paneId)
+        content.sound = .default
         content.interruptionLevel = switch note.pushKind {
         case .approval, .blocked: .timeSensitive
         case .done, .failed, .command: .active
@@ -97,19 +121,78 @@ public enum LocalNotifications {
     }
 
     static func defaultTitle(_ note: AttentionNote) -> String {
-        switch note.pushKind {
-        case .approval: "Approval needed"
-        case .blocked: "An agent is waiting for you"
-        case .done: "Agent finished"
-        case .failed: "Agent failed"
+        let agent = note.agent ?? "Agent"
+        return switch note.pushKind {
+        case .approval, .blocked: "\(agent) needs you"
+        case .done: "\(agent) finished"
+        case .failed: "\(agent) failed"
         case .command: "Command finished"
         }
     }
 
-    /// A visible terminal alerts by itself, so by default only post while the app isn't active.
-    public static func shouldPost(_ note: AttentionNote, prefs: NotificationPrefs, appIsActive: Bool) -> Bool {
-        guard prefs.allows(note.pushKind) else { return false }
-        return !(prefs.onlyInBackground && appIsActive)
+    /// A finished turn says the first line of its last message; the rest is in the app.
+    static func body(_ note: AttentionNote) -> String {
+        switch note.kind {
+        case .done: summaryLine(note.body) ?? "Finished"
+        case .failed: summaryLine(note.body) ?? "The turn ended with an error."
+        default: note.body
+        }
+    }
+
+    static let summaryLimit = 140
+
+    /// The first line with words in it, without Markdown heading, list, quote and emphasis
+    /// marks, cut to ``summaryLimit`` characters.
+    public static func summaryLine(_ message: String) -> String? {
+        let line = message.split(whereSeparator: \.isNewline).lazy
+            .map { $0.trimmingCharacters(in: .whitespaces).drop { "#>-*+".contains($0) }.trimmingCharacters(in: .whitespaces) }
+            .first { $0.contains { $0.isLetter || $0.isNumber } }
+        guard let line else { return nil }
+        let plain = line.replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "`", with: "")
+            .filter { !$0.unicodeScalars.contains { $0.properties.generalCategory == .format || $0.properties.generalCategory == .control } }
+        guard plain.count > summaryLimit else { return plain }
+        return String(plain.prefix(summaryLimit)).trimmingCharacters(in: .whitespaces) + "…"
+    }
+
+    /// Whether to post `note` now. Never for a kind or agent switched off, nor for a pane on
+    /// screen in front (the user is looking at it), nor in front at all with "only in the
+    /// background". In the background, a host that pushes to this device covers it, so the
+    /// note would only be a second copy.
+    public static func shouldPost(
+        _ note: AttentionNote, prefs: NotificationPrefs, appIsActive: Bool,
+        paneOnScreen: Bool = false, pushCoversBackground: Bool = false
+    ) -> Bool {
+        guard prefs.allows(note.pushKind, agent: note.agentId) else { return false }
+        if appIsActive { return !prefs.onlyInBackground && !paneOnScreen }
+        return !pushCoversBackground
+    }
+
+    /// How a note shows while the app is in front: not at all for the pane on screen, else as
+    /// a banner.
+    public static func presentation(paneOnScreen: Bool) -> UNNotificationPresentationOptions {
+        paneOnScreen ? [] : [.banner, .list, .sound]
+    }
+}
+
+/// Paces finished-turn notes per pane: at most one per ``interval``; one that comes sooner waits
+/// for the rest of it (and is replaced by a newer one meanwhile).
+public struct PaneNotePacer: Sendable {
+    public var interval: Duration
+    private var lastPosted: [String: ContinuousClock.Instant] = [:]
+
+    public init(interval: Duration = .seconds(30)) {
+        self.interval = interval
+    }
+
+    /// How long a note for `key` must wait at `now`.
+    public func wait(for key: String, now: ContinuousClock.Instant) -> Duration {
+        guard let last = lastPosted[key] else { return .zero }
+        let elapsed = now - last
+        return elapsed >= interval ? .zero : interval - elapsed
+    }
+
+    public mutating func posted(_ key: String, at now: ContinuousClock.Instant) {
+        lastPosted[key] = now
     }
 }
 
