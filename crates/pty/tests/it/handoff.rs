@@ -15,6 +15,17 @@ fn inherited(master: i32) -> OwnedFd {
     rustix::io::dup(borrowed).expect("dup")
 }
 
+/// Whether `pid` is still an unreaped child of this process.
+fn child_of_ours(pid: u32) -> bool {
+    rustix::process::waitid(
+        rustix::process::WaitId::Pid(rustix::process::Pid::from_raw(pid as i32).unwrap()),
+        rustix::process::WaitIdOptions::EXITED
+            | rustix::process::WaitIdOptions::NOHANG
+            | rustix::process::WaitIdOptions::NOWAIT,
+    )
+    .is_ok()
+}
+
 fn cloexec(fd: &OwnedFd) -> bool {
     rustix::io::fcntl_getfd(fd)
         .unwrap()
@@ -101,12 +112,7 @@ async fn adoption_refuses_strangers() {
     let old = spawn(&["/bin/sleep", "30"]);
     let handed = old.hand_off().unwrap();
 
-    let (read, _write) = rustix::pipe::pipe().unwrap();
-    assert!(matches!(
-        PtyActor::adopt(read, &handed, None),
-        Err(AdoptError::NotAMaster(_))
-    ));
-
+    // A process that is not ours is refused and never signalled.
     let mut not_ours = handed.clone();
     not_ours.pid = std::os::unix::process::parent_id();
     assert!(matches!(
@@ -118,13 +124,29 @@ async fn adoption_refuses_strangers() {
         PtyActor::adopt(inherited(handed.master), &not_ours, None),
         Err(AdoptError::NotAChild(_))
     ));
+    assert!(child_of_ours(handed.pid), "the real child is untouched");
 
-    let mut torn = handed.clone();
+    // A child of ours that cannot be continued ends rather than running on unseen.
+    let first = spawn(&["/bin/sleep", "30"]);
+    let not_a_master = first.hand_off().unwrap();
+    let (read, _write) = rustix::pipe::pipe().unwrap();
+    assert!(matches!(
+        PtyActor::adopt(read, &not_a_master, None),
+        Err(AdoptError::NotAMaster(_))
+    ));
+    let second = spawn(&["/bin/sleep", "30"]);
+    let mut torn = second.hand_off().unwrap();
     torn.head = Seq::new(torn.head.get() + 5);
     assert!(matches!(
-        PtyActor::adopt(inherited(handed.master), &torn, None),
+        PtyActor::adopt(inherited(torn.master), &torn, None),
         Err(AdoptError::Ring)
     ));
+    within("children that cannot be adopted end", async {
+        while child_of_ours(not_a_master.pid) || child_of_ours(torn.pid) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
 
     let master = inherited(handed.master);
     assert!(!cloexec(&master));
