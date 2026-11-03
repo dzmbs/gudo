@@ -13,7 +13,9 @@ use std::process::Command;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use ghostty_vt::{KeyEncoder, MouseEncoder, Screen, Terminal, TextRegion, Wrap, history_chunk};
+use ghostty_vt::{
+    DefaultColors, KeyEncoder, MouseEncoder, Screen, Terminal, TextRegion, Wrap, history_chunk,
+};
 use proto::{
     CommandList, CommandOutput, InputPayload, LinkSource, Links, PaneId, PaneSize, PrincipalId,
     RpcError, SearchPage, SearchQuery, Seq, SnapGen, UnixMillis,
@@ -175,12 +177,15 @@ struct View {
 type StartedVt = (Arc<Mutex<Vt>>, Arc<LatestMeta>, mpsc::Receiver<VtEvent>);
 
 impl Vt {
-    /// The terminal side of a pane whose output is at `seq`, with the pane task's inbox.
+    /// The terminal side of a pane whose output is at `seq`, with the pane task's inbox. It
+    /// answers queries as the pane's terminal, in `colors`.
+    #[allow(clippy::too_many_arguments)]
     fn start(
         pane: PaneId,
         mut term: Terminal,
         size: PaneSize,
         limits: VtLimits,
+        colors: &DefaultColors,
         seq: Seq,
         resize_count: u64,
         resizes: Vec<ResizeRecord>,
@@ -196,6 +201,9 @@ impl Vt {
             replies.send(VtEvent::Reply(bytes.to_vec()));
         }))
         .map_err(io::Error::other)?;
+        term.answer_queries(&crate::theme::identity())
+            .map_err(io::Error::other)?;
+        term.set_default_colors(colors).map_err(io::Error::other)?;
         term.record_semantic_prompts().map_err(io::Error::other)?;
         let alt = term.active_screen() == Screen::Alternate;
         let vt = Self {
@@ -343,10 +351,12 @@ impl Pane {
         size: PaneSize,
         ring_capacity: usize,
         limits: VtLimits,
+        colors: &DefaultColors,
     ) -> io::Result<(Arc<Self>, mpsc::Receiver<VtEvent>)> {
         let size = with_pixels(size);
         let term = new_terminal(size, limits).map_err(io::Error::other)?;
-        let (vt, latest, events_rx) = Vt::start(id, term, size, limits, Seq(0), 0, Vec::new())?;
+        let (vt, latest, events_rx) =
+            Vt::start(id, term, size, limits, colors, Seq(0), 0, Vec::new())?;
         let hook_vt = Arc::clone(&vt);
         let options = SpawnOptions::new(win_size(size))
             .ring_capacity(ring_capacity)
@@ -415,6 +425,7 @@ impl Pane {
         state: &PaneHandOff,
         fresh_gen: SnapGen,
         limits: VtLimits,
+        colors: &DefaultColors,
     ) -> Result<(Arc<Self>, mpsc::Receiver<VtEvent>), pty::AdoptError> {
         let size = with_pixels(state.size);
         let restored = state.snapshot.as_deref().and_then(|snapshot| {
@@ -437,6 +448,7 @@ impl Pane {
                 term,
                 size,
                 limits,
+                colors,
                 Seq(state.pty.head.get()),
                 state.resize_count,
                 state.resizes.clone(),
@@ -458,6 +470,13 @@ impl Pane {
 
     pub fn pty(&self) -> &PtyActor {
         &self.pty
+    }
+
+    /// Answers the program's color queries with `colors` from now on.
+    pub fn set_colors(&self, colors: &DefaultColors) {
+        if let Err(error) = lock(&self.vt).term.set_default_colors(colors) {
+            tracing::warn!(pane = %self.id, "colors not applied: {error}");
+        }
     }
 
     pub fn latest_meta(&self) -> &LatestMeta {
@@ -1249,8 +1268,16 @@ mod tests {
             scrollback_bytes: 1 << 20,
             image_storage_bytes: 1 << 20,
         };
-        let (pane, _events) =
-            Pane::spawn(PaneId(1), SnapGen(1), command, size, 1 << 20, limits).unwrap();
+        let (pane, _events) = Pane::spawn(
+            PaneId(1),
+            SnapGen(1),
+            command,
+            size,
+            1 << 20,
+            limits,
+            &DefaultColors::default(),
+        )
+        .unwrap();
         let pane = Arc::new(pane);
         while pane.head().0 < 4 << 20 {
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -1339,8 +1366,16 @@ mod tests {
             scrollback_bytes: 1 << 20,
             image_storage_bytes: 1 << 20,
         };
-        let (pane, events) =
-            Pane::spawn(PaneId(1), SnapGen(1), command, size, 1 << 20, limits).unwrap();
+        let (pane, events) = Pane::spawn(
+            PaneId(1),
+            SnapGen(1),
+            command,
+            size,
+            1 << 20,
+            limits,
+            &DefaultColors::default(),
+        )
+        .unwrap();
         tokio::time::timeout(Duration::from_secs(60), pane.pty().wait())
             .await
             .unwrap()

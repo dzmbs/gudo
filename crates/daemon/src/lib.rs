@@ -60,6 +60,7 @@ mod scan;
 mod shell;
 mod stream;
 mod term;
+mod theme;
 mod upgrade;
 mod usage;
 mod ws;

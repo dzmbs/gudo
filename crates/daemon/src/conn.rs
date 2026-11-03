@@ -325,7 +325,8 @@ pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {
         | DaemonFeatures::ACCOUNTS
         | DaemonFeatures::INPUT_RESUME
         | DaemonFeatures::DEVICE_MANAGEMENT
-        | DaemonFeatures::PUSH_AGENTS;
+        | DaemonFeatures::PUSH_AGENTS
+        | DaemonFeatures::TERMINAL_COLORS;
     if core.cfg.push.enabled && core.cfg.push.live_activity {
         features |= DaemonFeatures::LIVE_ACTIVITY;
     }
@@ -864,6 +865,7 @@ async fn read_input(client: &Arc<Client>, mut stream: RecvStream) -> Result<(), 
             }
         };
         lock(&entry.meta).typed_by = Some(client.id);
+        client.core.theme_used(client.id, &entry);
         client.core.mp.typed(&client.core, client.id, input.pane_id);
         if let Some(subscription) = lock(&client.state).subscriptions.get(&input.pane_id) {
             let _ = subscription.cmds.send(StreamCmd::InputAck {
@@ -2151,6 +2153,16 @@ impl Client {
         self.core.mp.heard(&self.core, self.id);
         match message {
             ClientCtl::Hello(_) => {}
+            ClientCtl::TerminalColors(colors) => {
+                // Only someone who may type into panes chooses what their programs are told,
+                // and only someone with the whole host or session for panes nobody used.
+                if self.allow(Need::Drive, Target::Any).is_ok()
+                    && let Some(colors) = crate::theme::default_colors(&colors)
+                {
+                    let everywhere = self.allow(Need::Drive, Target::Host).is_ok();
+                    self.core.theme_announced(self.id, colors, everywhere);
+                }
+            }
             ClientCtl::Peer(update) => {
                 // Drafts are typed to be sent: the same roles as the composer path.
                 let allowed = match &update {
@@ -2191,6 +2203,9 @@ impl Client {
                     // A quiet terminal stopped polling its modes: fresh ones before typing.
                     if let Some(entry) = self.core.pane(pane) {
                         entry.pane.pty().refresh_echo();
+                        if self.allow(Need::Drive, Target::Pane(pane)).is_ok() {
+                            self.core.theme_used(self.id, &entry);
+                        }
                     }
                 }
                 lock(&self.state).focus = pane_id;

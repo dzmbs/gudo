@@ -126,6 +126,50 @@ impl OscScanner {
     }
 }
 
+/// A ConEmu progress report, `OSC 9 ; 4 ; <state> [; <percent>]`, as Ghostty reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Progress {
+    /// State 0: no progress any more.
+    Remove,
+    /// State 1: this far along.
+    Set(u8),
+    /// State 2: the operation failed, at this point if given.
+    Error(Option<u8>),
+    /// State 3: working, extent unknown.
+    Indeterminate,
+    /// State 4: paused, at this point if given.
+    Paused(Option<u8>),
+}
+
+impl Progress {
+    /// Parses the body after `9;`. Percentages above 100 are 100; a missing one is 0 for
+    /// state 1, as in Ghostty.
+    pub fn parse(body: &str) -> Option<Self> {
+        let mut fields = body.strip_prefix("4;")?.split(';');
+        let state = fields.next()?;
+        let percent = match fields.next() {
+            None | Some("") => None,
+            Some(value) => Some(value.parse::<u32>().ok()?.min(100) as u8),
+        };
+        Some(match state {
+            "0" => Self::Remove,
+            "1" => Self::Set(percent.unwrap_or(0)),
+            "2" => Self::Error(percent),
+            "3" => Self::Indeterminate,
+            "4" => Self::Paused(percent),
+            _ => return None,
+        })
+    }
+
+    pub fn percent(self) -> Option<u8> {
+        match self {
+            Self::Set(percent) => Some(percent),
+            Self::Error(percent) | Self::Paused(percent) => percent,
+            Self::Remove | Self::Indeterminate => None,
+        }
+    }
+}
+
 /// The text of an OSC 52 write, `<targets>;<base64>`: UTF-8 of at most
 /// [`proto::MAX_CLIPBOARD_BYTES`]. A query (`?`) asks to read the clipboard and is never
 /// answered; an empty, oversized or undecodable payload changes nothing.
@@ -267,6 +311,21 @@ mod tests {
         let big = "y".repeat(proto::MAX_CLIPBOARD_BYTES);
         let seq = format!("\x1b]52;c;{}\x07", b64(&big));
         assert_eq!(scan(&[seq.as_bytes()]), [Osc::Clipboard(big)]);
+    }
+
+    #[test]
+    fn progress_reports_parse_as_ghostty_reads_them() {
+        assert_eq!(Progress::parse("4;1;50"), Some(Progress::Set(50)));
+        assert_eq!(Progress::parse("4;1;250"), Some(Progress::Set(100)));
+        assert_eq!(Progress::parse("4;1"), Some(Progress::Set(0)));
+        assert_eq!(Progress::parse("4;0"), Some(Progress::Remove));
+        assert_eq!(Progress::parse("4;0;0"), Some(Progress::Remove));
+        assert_eq!(Progress::parse("4;2"), Some(Progress::Error(None)));
+        assert_eq!(Progress::parse("4;3;"), Some(Progress::Indeterminate));
+        assert_eq!(Progress::parse("4;4;20"), Some(Progress::Paused(Some(20))));
+        for body in ["4;5;1", "4;1;x", "4", "Approval requested: ls", "44;1;2"] {
+            assert_eq!(Progress::parse(body), None, "{body}");
+        }
     }
 
     #[test]

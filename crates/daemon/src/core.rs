@@ -175,12 +175,17 @@ pub(crate) struct MetaState {
     pub sized_by: Option<(ConnId, PrincipalId)>,
     /// The connection that typed into the pane last; `None` once an agent typed, or it left.
     pub typed_by: Option<ConnId>,
+    /// The connection whose theme the pane's color replies use; `None`: the latest theme.
+    pub theme_by: Option<ConnId>,
     pub at_prompt: bool,
     pub last_hint: Option<(EchoHint, Prediction)>,
     /// The password prompt on the cursor row while input is hidden (`askpass::detect`).
     pub secret_prompt: Option<String>,
-    /// The program's own last OSC 7501 report (or `status_set`), whatever the program.
+    /// The program's own last OSC 7501 report (or `status_set`), whatever the program, or
+    /// its progress report (OSC 9;4) when it sends no status of its own.
     pub program: Option<agents::ProgramStatus>,
+    /// `program` came from a progress report.
+    pub program_from_progress: bool,
     /// Turns the pane's agent has finished, and the last one.
     pub turns: u64,
     pub last_turn: Option<LastTurn>,
@@ -298,6 +303,8 @@ pub(crate) struct Core {
     pub askpass: crate::askpass::Askpass,
     /// URLs and browser tools for the app (`browser`).
     pub browser: crate::browser::Browser,
+    /// Clients' terminal themes, for programs' color queries (`theme`).
+    pub themes: crate::theme::Themes,
     /// Auto-approve rules and the open requests' extras (`approve`).
     pub approvals: crate::approve::Approvals,
     connected: AtomicUsize,
@@ -355,6 +362,7 @@ impl Core {
             ),
             approvals: crate::approve::Approvals::default(),
             browser: crate::browser::Browser::install(&config.state_dir, &config.hook_bin()),
+            themes: crate::theme::Themes::default(),
             cfg: config,
             connected: AtomicUsize::new(0),
             device_conns: Mutex::default(),
@@ -552,7 +560,42 @@ impl Core {
             if meta.typed_by == Some(conn) {
                 meta.typed_by = None;
             }
+            if meta.theme_by == Some(conn) {
+                meta.theme_by = None;
+            }
         }
+        self.themes.forget(conn);
+    }
+
+    /// `conn` announced its theme: panes it used last show it, and with `everywhere` (a grant
+    /// over the whole host or session) so do panes no client used and panes started later.
+    pub fn theme_announced(
+        &self,
+        conn: ConnId,
+        colors: ghostty_vt::DefaultColors,
+        everywhere: bool,
+    ) {
+        let colors = self.themes.announce(conn, colors, everywhere);
+        for (_, entry) in self.pane_entries() {
+            let shown_by = lock(&entry.meta).theme_by;
+            if shown_by == Some(conn) || (everywhere && shown_by.is_none()) {
+                entry.pane.set_colors(&colors);
+            }
+        }
+    }
+
+    /// `conn` focused or typed into a pane: its color replies follow `conn`'s theme.
+    pub fn theme_used(&self, conn: ConnId, entry: &PaneEntry) {
+        let Some(colors) = self.themes.of(conn) else {
+            return;
+        };
+        let mut meta = lock(&entry.meta);
+        if meta.theme_by == Some(conn) {
+            return;
+        }
+        meta.theme_by = Some(conn);
+        drop(meta);
+        entry.pane.set_colors(&colors);
     }
 
     pub fn sessions_message(&self, scope: Scope) -> ServerCtl {
@@ -813,7 +856,68 @@ impl Core {
 
     /// Records the program's own top-level report (`Clear` removes it) and tells clients
     /// when what they see changes.
-    pub fn set_program(&self, entry: &PaneEntry, mut status: agents::ProgramStatus) {
+    pub fn set_program(&self, entry: &PaneEntry, status: agents::ProgramStatus) {
+        let state = status.state;
+        if self.record_program(entry, status, false)
+            && matches!(
+                state,
+                agents::ProgramState::Done | agents::ProgramState::Error
+            )
+        {
+            self.work_done(entry.pane.id);
+        }
+    }
+
+    /// Shows a progress report (OSC 9;4) as the program's status, or as the percentage of
+    /// the status it reports itself. A progress bar never says the work is done.
+    pub fn set_progress(&self, entry: &PaneEntry, progress: crate::osc::Progress) {
+        use crate::osc::Progress;
+        use agents::ProgramState;
+        let own = {
+            let meta = lock(&entry.meta);
+            meta.program.clone().filter(|_| !meta.program_from_progress)
+        };
+        let (status, from_progress) = match own {
+            Some(mut status) => {
+                if matches!(status.state, ProgramState::Working | ProgramState::Blocked) {
+                    status.progress = progress.percent();
+                }
+                (status, false)
+            }
+            None => {
+                let state = match progress {
+                    Progress::Remove => ProgramState::Clear,
+                    Progress::Error(_) => ProgramState::Error,
+                    Progress::Set(_) | Progress::Indeterminate | Progress::Paused(_) => {
+                        ProgramState::Working
+                    }
+                };
+                let mut status = agents::ProgramStatus::new(state);
+                status.progress = progress
+                    .percent()
+                    .filter(|_| state == ProgramState::Working);
+                (status, true)
+            }
+        };
+        self.record_program(entry, status, from_progress);
+    }
+
+    /// The shell is back at its prompt: a progress bar the program left behind goes, as in
+    /// Ghostty.
+    pub fn prompt_returned(&self, entry: &PaneEntry) {
+        if lock(&entry.meta).program_from_progress {
+            let cleared = agents::ProgramStatus::new(agents::ProgramState::Clear);
+            self.record_program(entry, cleared, false);
+        }
+    }
+
+    /// Stores the program's status; returns whether what clients see changed (they are told).
+    fn record_program(
+        &self,
+        entry: &PaneEntry,
+        mut status: agents::ProgramStatus,
+        from_progress: bool,
+    ) -> bool {
         // Any program's words, shown in status lines, the Inbox and to agents: as they print.
         let clean = |text: Option<String>| {
             text.map(|text| proto::clean_prompt_text(&text, PROGRAM_TEXT_CHARS))
@@ -822,21 +926,16 @@ impl Core {
         status.msg = clean(status.msg);
         status.title = clean(status.title);
         let status = (status.state != agents::ProgramState::Clear).then_some(status);
-        let status_state = status.as_ref().map(|status| status.state);
         let mut meta = lock(&entry.meta);
         let changed = meta.program.as_ref().and_then(program_report)
             != status.as_ref().and_then(program_report);
+        meta.program_from_progress = from_progress && status.is_some();
         meta.program = status;
         drop(meta);
         if changed {
             self.emit(Event::ProgramStatus(entry.pane.id));
-            if matches!(
-                status_state,
-                Some(agents::ProgramState::Done | agents::ProgramState::Error)
-            ) {
-                self.work_done(entry.pane.id);
-            }
         }
+        changed
     }
 
     pub fn echo_hint(&self, id: PaneId) -> Option<EchoHintAt> {
@@ -1560,8 +1659,7 @@ impl Core {
                 crate::limits::restore_for_child,
             );
         }
-        command.env("TERM", "xterm-256color");
-        command.env("COLORTERM", "truecolor");
+        crate::theme::apply_pane_env(&mut command);
         command.env(brand::env_var("PANE_ID"), id.0.to_string());
         for (key, value) in self
             .askpass
@@ -1601,6 +1699,7 @@ impl Core {
                 scrollback_bytes: self.cfg.scrollback_bytes,
                 image_storage_bytes: self.cfg.image_storage_bytes,
             },
+            &self.themes.current(),
         )
         .map_err(|error| (OpError::SpawnFailed, error.to_string()))?;
         let record = PaneRecord {
@@ -1690,6 +1789,7 @@ impl Core {
                 scrollback_bytes: self.cfg.scrollback_bytes,
                 image_storage_bytes: self.cfg.image_storage_bytes,
             },
+            &self.themes.current(),
         )?;
         let agent = carried
             .agent
@@ -2235,6 +2335,10 @@ fn handle_osc(core: &Core, entry: &PaneEntry, osc: Osc) -> bool {
             }
         }
         Osc::Notify(body) => {
+            if let Some(progress) = crate::osc::Progress::parse(&body) {
+                core.set_progress(entry, progress);
+                return false;
+            }
             let event = lock(&entry.agent)
                 .as_mut()
                 .and_then(|runtime| runtime.osc9(&body));
@@ -2265,6 +2369,9 @@ fn handle_command(core: &Core, entry: &PaneEntry, update: CommandUpdate) {
         // 133;C: the command runs and owns the terminal.
         CommandUpdate::AtPrompt(at_prompt) => {
             lock(&entry.meta).at_prompt = at_prompt;
+            if at_prompt {
+                core.prompt_returned(entry);
+            }
             refresh_hint(core, entry);
         }
         CommandUpdate::Mark(mark) => {
