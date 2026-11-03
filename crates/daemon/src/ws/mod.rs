@@ -174,7 +174,19 @@ pub(crate) async fn handle(
         | Request::AccountCheck { .. }
         | Request::AccountSetDefault { .. }) => accounts(core, request).await,
         Request::ListPorts => Ok(Response::Ports(ports::scan(core).await)),
-        Request::EditorStatus => Ok(Response::Editors(ws.editors.status(&core.cfg).await)),
+        Request::EditorStatus => {
+            let mut editors = ws.editors.status(&core.cfg).await;
+            if !conn.owner {
+                // The token opens the owner's editor as the owner, beyond any guest's scope.
+                for running in &mut editors.running {
+                    running.port = 0;
+                    running.token.clear();
+                    running.url_path.clear();
+                    running.pid = 0;
+                }
+            }
+            Ok(Response::Editors(editors))
+        }
         Request::EditorLaunch(launch) => {
             let folder = existing_dir(&policy, &launch.folder)?;
             let folder = folder.canonicalize().unwrap_or(folder);

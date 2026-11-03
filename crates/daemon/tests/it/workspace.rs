@@ -7,13 +7,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+use client_core::grants::GrantSpec;
 use client_core::proto::{
     AttentionKind, AttentionSeen, AttentionUpdate, Axis, DeleteMode, DiffBase, EditorChoice,
     EditorKind, EditorLaunch, FileChange, FileKind, ForwardTarget, GitDiffRequest, LayoutOp,
-    LineKind, OpOutcome, PaneLaunch, PortKind, ReviewNote, ReviewRequest, WorktreeCreate,
-    WriteTarget, WsError,
+    LineKind, OpOutcome, PaneLaunch, PortKind, ReviewNote, ReviewRequest, RevokeTarget, Roles,
+    Scope, UnixMillis, WorktreeCreate, WriteTarget, WsError,
 };
-use client_core::{ClientConfig, WorkspaceEvent, WorkspaceEventQueue};
+use client_core::{ClientConfig, WorkspaceEvent, WorkspaceEventQueue, now_millis};
 use daemon::{Daemon, HookRequest};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream, UnixListener, UnixStream};
@@ -2110,5 +2111,116 @@ async fn real_openvscode_server_downloads_and_serves() {
         opened.in_window, opened.url_path
     );
     drop(client);
+    daemon.shutdown().await;
+}
+
+/// The editor's connection token opens it as the owner, beyond any grant: a driver guest sees
+/// that an editor runs, never its token or port.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_guest_sees_no_editor_token_or_port() {
+    if !have("python3") {
+        eprintln!("skipping: python3 not installed");
+        return;
+    }
+    let (_state, state) = canonical_tempdir();
+    let (_home, home) = canonical_tempdir();
+    let codium = home.join("codium");
+    install_fake(&codium.join("bin/codium-server"));
+    let (codium2, home2, state2) = (codium.clone(), home.clone(), state.clone());
+    let daemon = start_with(&state, move |config| {
+        config.pane_env.push(("HOME".into(), path_string(&home2)));
+        config.fs_allow.push(home2);
+        config.code_cli = Some(state2.join("no-such-code"));
+        config.vscodium_dir = Some(codium2);
+        config.editor_default = EditorKind::Vscodium;
+    })
+    .await;
+    let owner = connected(&daemon).await;
+    let folder = home.join("project");
+    std::fs::create_dir_all(&folder).unwrap();
+    let editor = owner
+        .client
+        .editor_launch(EditorLaunch {
+            folder: path_string(&folder),
+            choice: EditorChoice::Only(EditorKind::Vscodium),
+            accept_vscode_license: false,
+        })
+        .await
+        .unwrap();
+    assert!(!editor.token.is_empty());
+
+    let mut spec = GrantSpec::new(Roles::DRIVER, Scope::Daemon);
+    spec.expires = Some(UnixMillis(now_millis().0 + 3_600_000));
+    let invite = owner
+        .client
+        .create_invite(spec, "owner".into())
+        .await
+        .unwrap();
+    let mut guest = TestClient::join(&invite.to_string(), ClientConfig::generate_key());
+    guest.until("joined", |c| c.connected > 0).await;
+    let seen = guest.client.editor_status().await.unwrap();
+    let running = seen
+        .running
+        .iter()
+        .find(|running| running.folder == editor.folder)
+        .expect("the guest sees that it runs");
+    assert_eq!(running.port, 0);
+    assert!(running.token.is_empty() && running.url_path.is_empty());
+    let owners = owner.client.editor_status().await.unwrap();
+    assert!(
+        owners
+            .running
+            .iter()
+            .any(|running| running.token == editor.token)
+    );
+
+    drop(guest);
+    drop(owner);
+    daemon.shutdown().await;
+}
+
+/// Forwards ride the guest's connection: revoking the grant cuts the ones already open.
+#[tokio::test(flavor = "multi_thread")]
+async fn revoking_a_guest_cuts_its_open_forwards() {
+    let state = tempfile::tempdir().unwrap();
+    let daemon = start_with(state.path(), |_| {}).await;
+    let server = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = server.local_addr().unwrap().port();
+    let owner = connected(&daemon).await;
+    let mut spec = GrantSpec::new(Roles::DRIVER, Scope::Daemon);
+    spec.expires = Some(UnixMillis(now_millis().0 + 3_600_000));
+    let invite = owner
+        .client
+        .create_invite(spec, "owner".into())
+        .await
+        .unwrap();
+    let mut guest = TestClient::join(&invite.to_string(), ClientConfig::generate_key());
+    guest.until("joined", |c| c.connected > 0).await;
+    let local = guest
+        .client
+        .forward(0, ForwardTarget::Tcp { port })
+        .unwrap();
+    let mut client_side = TcpStream::connect(("127.0.0.1", local)).await.unwrap();
+    client_side.write_all(b"hello").await.unwrap();
+    let (mut server_side, _) = tokio::time::timeout(Duration::from_secs(10), server.accept())
+        .await
+        .expect("forward reached the server")
+        .unwrap();
+    let mut hello = [0; 5];
+    server_side.read_exact(&mut hello).await.unwrap();
+
+    owner
+        .client
+        .revoke(RevokeTarget::Grant(invite.chain.grant_id()))
+        .await
+        .unwrap();
+    let mut byte = [0; 1];
+    let read = tokio::time::timeout(Duration::from_secs(5), server_side.read(&mut byte))
+        .await
+        .expect("the forward closes once the grant is revoked");
+    assert!(matches!(read, Ok(0) | Err(_)), "{read:?}");
+
+    drop(guest);
+    drop(owner);
     daemon.shutdown().await;
 }

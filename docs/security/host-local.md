@@ -111,7 +111,11 @@ forwards need Driver with a host-wide grant, so Viewers and pane-scoped guests c
 in a 0600 file (`--connection-token-file`), not on the command line. Other users could read it
 from the process list and reach the server on the shared loopback (VS Code
 GHSA-54p6-6j68-j5vr). The compressing proxy refuses any `Host` that is not loopback, so DNS
-rebinding cannot reach the editor (Ollama CVE-2024-28224, Tailscale TS-2022-004).
+rebinding cannot reach the editor (Ollama CVE-2024-28224, Tailscale TS-2022-004). Starting
+and stopping editors is the owner's; `EditorStatus` shows a guest only that an editor runs,
+with no token, port or URL, since the token opens it as the owner beyond any grant. Forwards
+ride the guest's connection, which is closed when its grant is revoked or expires, so open
+forwards end with it.
 
 **State and temporary files.**
 
@@ -234,6 +238,9 @@ Each test runs the attack against the real code (real git, real sockets, a real 
   `workspace::the_state_dir_stays_out_of_reach_inside_an_allowed_root` (it): reads, listings
   and writes by path, `.`, `//`, symlink and other case; renaming or deleting its parents;
   a Unix forward to the hook socket.
+- `workspace::a_guest_sees_no_editor_token_or_port` and
+  `workspace::revoking_a_guest_cuts_its_open_forwards` (it): a driver guest reading the
+  owner's editor token; a forward kept open past the guest's revocation.
 - `ws::files::tests::a_client_cannot_create_setuid_files`. On macOS the kernel already drops
   setuid on create, so this test can only fail on Linux.
 - `ws::editor_proxy::http_tests::refuses_hosts_that_are_not_loopback` and
