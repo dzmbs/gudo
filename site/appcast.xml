@@ -9,5 +9,15 @@
     <link>https://gudo.dev/appcast.xml</link>
     <description>Updates for Gudo for Mac.</description>
     <language>en</language>
+    <item>
+      <title>Version 0.1.1</title>
+      <pubDate>Tue, 03 Nov 2026 15:33:56 +0100</pubDate>
+      <sparkle:version>797</sparkle:version>
+      <sparkle:shortVersionString>0.1.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <sparkle:releaseNotesLink>https://github.com/dzmbs/gudo/releases/tag/v0.1.1</sparkle:releaseNotesLink>
+      <enclosure url="https://github.com/dzmbs/gudo/releases/download/v0.1.1/Gudo.dmg" length="66331366" type="application/octet-stream"
+                 sparkle:edSignature="FMHhcL8s+Sw2OPkjoScjqOEaq+I4S5g9PGLUHL6rdwa8depeRAQw7vFASzzPEVnsySyG4rQTQViDWuiyOPS8AQ==" />
+    </item>
   </channel>
 </rss>
