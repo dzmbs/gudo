@@ -76,7 +76,7 @@
       <p>The script finds the build for your CPU in the latest GitHub release, checks its SHA-256, and puts <code>gudo-hostd</code> in <code>~/.local/bin</code>. It doesn&#39;t use sudo or touch anything else. <a href="/install.sh">Read the script</a> before you run it.</p>
       <p>Then start it as a service and pair your device:</p>
       <div class="cmd"><code>gudo-hostd service install</code><button class="copy" type="button" aria-label="Copy command">Copy</button></div>
-      <div class="cmd"><code>gudo-hostd pair</code><button class="copy" type="button" aria-label="Copy command">Copy</button></div>
+      <div class="cmd"><code>gudo pair</code><button class="copy" type="button" aria-label="Copy command">Copy</button></div>
       <p><code>pair</code> prints a QR code and a one-time ticket that lasts 10 minutes. Scan the code in Gudo, or paste the ticket. To keep the host running after you log out and start it at boot, run once:</p>
       <div class="cmd"><code>sudo loginctl enable-linger $USER</code><button class="copy" type="button" aria-label="Copy command">Copy</button></div>
 
