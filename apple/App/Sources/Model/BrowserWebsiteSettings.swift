@@ -55,17 +55,29 @@ nonisolated enum SearchRegion {
     }
 }
 
-/// Whether pages' `prefers-color-scheme` follows the terminal theme or the device.
-enum WebsiteAppearance {
-    static let key = "browserWebsitesFollowTheme"
+/// The scheme pages get for `prefers-color-scheme`. Pages without a dark style stay as they are:
+/// WebKit has no public way to darken them.
+nonisolated enum BrowserAppearance: String, CaseIterable, Identifiable {
+    case matchTheme, light, dark
 
-    /// The device's appearance; the window's is the theme's.
-    @MainActor static var systemScheme: ColorScheme {
-        #if os(iOS)
-        UIScreen.main.traitCollection.userInterfaceStyle == .dark ? .dark : .light
-        #else
-        UserDefaults.standard.string(forKey: "AppleInterfaceStyle") == "Dark" ? .dark : .light
-        #endif
+    static let key = "browserAppearance"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .matchTheme: "Match Theme"
+        case .light: "Light"
+        case .dark: "Dark"
+        }
+    }
+
+    func scheme(theme: ColorScheme) -> ColorScheme {
+        switch self {
+        case .matchTheme: theme
+        case .light: .light
+        case .dark: .dark
+        }
     }
 }
 

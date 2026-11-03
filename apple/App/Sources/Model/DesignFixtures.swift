@@ -156,16 +156,18 @@ enum DesignFixtures {
                 }
             }
         case "browser-beside":
-            // `-page <url>` loads a site in it.
+            // `-page <url>` opens a site instead of the start page.
             try? await Task.sleep(for: .seconds(1))
-            WorkspaceAction.openBrowser.perform(on: workspace, window: model)
-            guard let url = LaunchArguments().string(forKey: "page").flatMap(URL.init(string:)) else { return }
-            guard model.opensToolsAsLeaves else {
-                model.browserURL = url
+            guard let url = LaunchArguments().string(forKey: "page").flatMap(URL.init(string:)), let pane = workspace.focusedPane else {
+                WorkspaceAction.openBrowser.perform(on: workspace, window: model)
                 return
             }
-            for _ in 0..<50 where model.focusedBrowser == nil { try? await Task.sleep(for: .milliseconds(100)) }
-            model.focusedBrowser?.load(url)
+            if model.opensToolsAsLeaves {
+                model.openBrowser(url, beside: HostPane(hostId: workspace.groupId, pane: pane))
+            } else {
+                model.browserURL = url
+                model.sheet = .browser
+            }
         case "presence-notice":
             // Needs `-mockPresence YES`.
             try? await Task.sleep(for: .seconds(1))

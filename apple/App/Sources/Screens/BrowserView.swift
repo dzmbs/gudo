@@ -63,9 +63,9 @@ struct BrowserView: View {
         _hold = State(initialValue: BrowserPane.ViewHold(pane))
     }
     @Environment(WindowModel.self) private var model: WindowModel?
-    @Environment(\.colorScheme) private var chromeScheme
+    @Environment(\.terminalTheme) private var theme
     @AppStorage(SearchEngine.key) private var engine = SearchEngine.google
-    @AppStorage(WebsiteAppearance.key) private var followsTheme = true
+    @AppStorage(BrowserAppearance.key) private var appearance = BrowserAppearance.matchTheme
     /// The page's short address until edited.
     @State private var address = ""
     @State private var addressSelection: TextSelection?
@@ -105,13 +105,15 @@ struct BrowserView: View {
                         if pane.mayShow(in: hold.id) {
                             WebView(web)
                                 .webViewBackForwardNavigationGestures(.enabled)
-                                .environment(\.colorScheme, followsTheme ? chromeScheme : WebsiteAppearance.systemScheme)
+                                .webViewContentBackground(isBlank ? .hidden : .visible)
+                                .environment(\.colorScheme, pageScheme)
                         }
                     } else if let popup = pane.popupPage {
-                        PopupWebView(page: popup, colorScheme: followsTheme ? chromeScheme : WebsiteAppearance.systemScheme)
+                        PopupWebView(page: popup, colorScheme: pageScheme)
                     }
                 }
                 .ignoresSafeArea(edges: isCompact ? .bottom : [])
+                .background(theme.background, ignoresSafeAreaEdges: isCompact ? .bottom : [])
                 if showsStart { startPage }
             }
             .overlay(alignment: isCompact ? .bottom : .top) {
@@ -178,6 +180,8 @@ struct BrowserView: View {
         view.onOpenAsTab = action
         return view
     }
+
+    private var pageScheme: ColorScheme { appearance.scheme(theme: theme.colorScheme) }
 
     private var isBlank: Bool { (page.url ?? initialURL).absoluteString == "about:blank" }
     private var showsStart: Bool { isBlank && !leavingStart }

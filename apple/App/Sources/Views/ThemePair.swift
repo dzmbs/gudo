@@ -49,7 +49,7 @@ enum ThemePair {
         let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
         return (scene?.traitCollection ?? UITraitCollection.current).userInterfaceStyle == .dark
         #else
-        return WebsiteAppearance.systemScheme == .dark
+        return UserDefaults.standard.string(forKey: "AppleInterfaceStyle") == "Dark"
         #endif
     }
 }

@@ -102,7 +102,7 @@ enum SettingsIndex {
             .init(id: "search-engine", title: "Search Engine", section: .browser, synonyms: ["browser", "google", "duckduckgo", "bing", "kagi", "brave", "search"]),
             .init(id: "website-language", title: "Language for Websites", section: .browser, synonyms: ["browser", "language", "english", "accept-language", "locale"]),
             .init(id: "search-region", title: "Search Region", section: .browser, synonyms: ["browser", "region", "country", "google", "bing"]),
-            .init(id: "website-appearance", title: "Websites Follow Theme Appearance", section: .browser, synonyms: ["browser", "dark", "light", "theme", "color scheme"]),
+            .init(id: "website-appearance", title: "Browser Appearance", section: .browser, synonyms: ["browser", "websites", "dark", "light", "theme", "color scheme", "dark mode"]),
             .init(id: "browser-history", title: "Clear Browsing History", section: .browser, synonyms: ["browser", "history", "recent", "frequent"]),
             .init(id: "accounts", title: "Agent Accounts", section: .accounts, synonyms: ["account", "sign in", "login", "personal", "work", "claude", "codex"]),
             .init(id: "agent-tools", title: "Browser and Drawings for Agents Started in a Terminal", section: .agentTools, synonyms: ["mcp", "claude", "codex", "browser", "drawings", "tools"]),

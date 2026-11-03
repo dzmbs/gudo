@@ -1,3 +1,4 @@
+import SwiftUI
 import WebKit
 import XCTest
 @testable import App
@@ -15,6 +16,13 @@ final class BrowserCompatibilityTests: XCTestCase {
     func testWebsitesGetTheSystemLanguagesUnlessOneIsChosen() {
         XCTAssertEqual(WebsiteLanguage.defaultTag, "")
         XCTAssertNil(WebsiteLanguage.acceptLanguage(WebsiteLanguage.defaultTag))
+    }
+
+    func testMatchThemeFollowsTheTerminalTheme() {
+        XCTAssertEqual(BrowserAppearance.matchTheme.scheme(theme: .dark), .dark)
+        XCTAssertEqual(BrowserAppearance.matchTheme.scheme(theme: .light), .light)
+        XCTAssertEqual(BrowserAppearance.light.scheme(theme: .dark), .light)
+        XCTAssertEqual(BrowserAppearance.dark.scheme(theme: .light), .dark)
     }
 
     func testGoogleServesItsCurrentHomePage() async throws {

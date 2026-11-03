@@ -230,7 +230,7 @@ struct BrowserSettingsSection: View {
     @AppStorage(SearchEngine.key) private var engine = SearchEngine.google
     @AppStorage(WebsiteLanguage.key) private var language = WebsiteLanguage.defaultTag
     @AppStorage(SearchRegion.key) private var region = ""
-    @AppStorage(WebsiteAppearance.key) private var followsTheme = true
+    @AppStorage(BrowserAppearance.key) private var appearance = BrowserAppearance.matchTheme
 
     var body: some View {
         Section {
@@ -250,15 +250,17 @@ struct BrowserSettingsSection: View {
                 ForEach(SearchRegion.codes, id: \.self) { Text(SearchRegion.name($0)).tag($0) }
             }
             .settingAnchor("search-region")
-            Toggle("Websites Follow Theme Appearance", isOn: $followsTheme)
-                .settingAnchor("website-appearance")
+            Picker("Browser Appearance", selection: $appearance) {
+                ForEach(BrowserAppearance.allCases) { Text($0.title).tag($0) }
+            }
+            .settingAnchor("website-appearance")
             Button("Clear Browsing History", role: .destructive) { BrowserHistory.shared.clear() }
                 .disabled(BrowserHistory.shared.entries.isEmpty)
                 .settingAnchor("browser-history")
         } header: {
             Text("Browser")
         } footer: {
-            Text("What you type in a browser tab's address field that isn't an address searches here. Websites are asked for pages in the language chosen; the region sets where Google and Bing results are for, which they otherwise guess from your network. Visited pages stay on this device.")
+            Text("What you type in a browser tab's address field that isn't an address searches here. Websites are asked for pages in the language chosen; the region sets where Google and Bing results are for, which they otherwise guess from your network. Websites that have a dark style use it when the appearance is dark. Visited pages stay on this device.")
         }
     }
 }

@@ -96,6 +96,19 @@ final class SplitWebLeavesTests: XCTestCase {
         XCTAssertNotNil(mixed.focusedBrowser)
     }
 
+    func testPagesTakeTheChosenAppearance() async throws {
+        defer { UserDefaults.standard.removeObject(forKey: BrowserAppearance.key) }
+        let html = "<style>@media (prefers-color-scheme: dark) { body { background: black } }</style><p>Page"
+        let pane = try await openBeside(URL(string: "data:text/html," + html.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!))
+        for _ in 0..<50 where pane.page.isLoading || pane.page.url?.scheme != "data" { await pump(0.1) }
+        for appearance in [BrowserAppearance.dark, .light, .dark] {
+            UserDefaults.standard.set(appearance.rawValue, forKey: BrowserAppearance.key)
+            await pump(0.5)
+            let dark = try await pane.page.run("return matchMedia('(prefers-color-scheme: dark)').matches", in: .page) as? Bool
+            XCTAssertEqual(dark, appearance == .dark, appearance.title)
+        }
+    }
+
     func testBrowserBesideRightAfterClose() async throws {
         try perform(.splitRight)
         await pump(0.03)
