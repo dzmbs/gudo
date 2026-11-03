@@ -300,6 +300,7 @@ async fn a_paired_device_connects_while_strangers_fill_the_pre_hello_slots() {
             handshakes_per_addr: 64,
             strangers: 4,
             strangers_per_addr: 4,
+            ..Default::default()
         };
     })
     .await;
@@ -347,6 +348,93 @@ async fn a_paired_device_connects_while_strangers_fill_the_pre_hello_slots() {
         endpoint.close().await;
     }
     daemon.shutdown().await;
+}
+
+/// A guest whose grant was revoked or ran out is a stranger again: it waits in the strangers'
+/// pool like anyone else instead of skipping it as a trusted device does.
+#[tokio::test(flavor = "multi_thread")]
+async fn revoked_and_expired_guests_count_as_strangers() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start_with(dir.path(), |config| {
+        config.hello_timeout = Duration::from_secs(30);
+        config.pre_auth = daemon::PreAuthLimits {
+            handshakes: 64,
+            handshakes_per_addr: 64,
+            strangers: 2,
+            strangers_per_addr: 2,
+            ..Default::default()
+        };
+    })
+    .await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    owner.attach_and_follow().await;
+
+    let revoked_key = ClientConfig::generate_key();
+    let link = invite(&owner, Roles::VIEWER).await;
+    let mut revoked = joined(&link, revoked_key.clone()).await;
+    let grant = link.parse::<Invite>().unwrap().chain.grant_id();
+    owner
+        .client
+        .revoke(RevokeTarget::Grant(grant))
+        .await
+        .unwrap();
+    revoked.until("revoked", is_revoked).await;
+    drop(revoked);
+
+    let expired_key = ClientConfig::generate_key();
+    let mut spec = GrantSpec::new(Roles::VIEWER, Scope::Daemon);
+    spec.expires = Some(UnixMillis(now_millis().0 + 1_500));
+    let short = owner
+        .client
+        .create_invite(spec, "owner".into())
+        .await
+        .unwrap()
+        .to_string();
+    drop(joined(&short, expired_key.clone()).await);
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let id = iroh::EndpointId::from_bytes(&daemon.daemon_id().0).unwrap();
+    let mut address = iroh::EndpointAddr::new(id);
+    for socket in daemon.bound_sockets() {
+        address = address.with_ip_addr(socket);
+    }
+    let mut strangers = Vec::new();
+    for _ in 0..2 {
+        let endpoint = stranger().await;
+        let connection = endpoint
+            .connect(address.clone(), client_core::proto::ALPN)
+            .await
+            .expect("a stranger gets a slot");
+        strangers.push((endpoint, connection));
+    }
+    for key in [revoked_key, expired_key] {
+        let endpoint = endpoint_with(&key).await;
+        if let Ok(connection) = endpoint
+            .connect(address.clone(), client_core::proto::ALPN)
+            .await
+        {
+            tokio::time::timeout(Duration::from_secs(5), connection.closed())
+                .await
+                .expect("a former guest waits behind the strangers");
+        }
+        endpoint.close().await;
+    }
+    drop(owner);
+    for (endpoint, _) in strangers {
+        endpoint.close().await;
+    }
+    daemon.shutdown().await;
+}
+
+async fn endpoint_with(key: &[u8]) -> iroh::Endpoint {
+    iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
+        .secret_key(iroh::SecretKey::from_bytes(key.try_into().unwrap()))
+        .clear_ip_transports()
+        .bind_addr("127.0.0.1:0".parse::<std::net::SocketAddr>().unwrap())
+        .unwrap()
+        .bind()
+        .await
+        .unwrap()
 }
 
 async fn stranger() -> iroh::Endpoint {

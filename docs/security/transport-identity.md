@@ -154,8 +154,17 @@ makes, and then without its old invites.
   - Each connection has 10 s for the handshake and 10 s more for its `Hello`.
 - **Trusted devices skip the strangers' pool.** The TLS handshake proves the client's key
   before the `Hello`, and a relay names it even before the handshake. A paired owner device,
-  or a guest bound to a grant it was not removed from since, is not counted, so strangers
-  filling the pool cannot lock the owner out.
+  or a guest bound to a grant whose chain passes every live check (not expired, revoked or cut
+  off by a removal), is not counted, so strangers filling the pool cannot lock the owner out.
+  A revoked or expired guest is a stranger again.
+- **Refused strangers pay.** A refused `Hello` keeps its pre-`Hello` slot until the peer is
+  gone, and spends a failure budget of its address and of its key: 20 at once, then one every
+  3 s. With either spent, a stranger is closed right after the TLS handshake, before any grant
+  is checked or anything written. A trusted device behind the same address is not affected,
+  since the check runs once its key is proven.
+- **Refusals in the audit log are coalesced.** A device's refused joins are recorded at most
+  once a minute, and all of them together 20 at once, then one every 3 s; the next record
+  says how many were left out.
 - **Refused peers.** A refused peer's `DaemonInfo` contains only versions. It has no host name,
   OS name or build.
 
@@ -243,7 +252,11 @@ makes, and then without its old invites.
     handshake slot. An attacker with many addresses (32+ IPv4 hosts or IPv6 /64s) holding
     stalled handshakes can fill the handshake pool and delay a direct reconnect; through a
     relay a trusted device skips it.
-  - Traffic through a relay has no per-IP accounting.
+  - Traffic through a relay has no per-IP accounting, so the failure budget there is per key
+    only; fresh keys are free, and only the stranger pool and the audit coalescing bound them.
+  - A stranger who spends the failure budget of a shared address (a NAT, a campus network)
+    also delays a legitimate guest's first join from it, for up to a minute. Paired devices
+    and admitted guests are not affected.
   - Running our own relays with an auth token (`RelayMode::Custom`) narrows who can reach the
     daemon at all.
 - **Delegation and use counts.** A delegable grant lets its holder mint as many narrower child
@@ -287,6 +300,8 @@ was confirmed to fail.
 | Knock spam (12 knocks on one link) | `redteam::knock_spam_is_capped_per_invite` |
 | Knock-admitted guest staying after its invite, the invite's signer or the answering device is removed | `multiplayer_mp2::knock_admitted_guests_leave_with_their_sponsors` |
 | Silent connections; strangers filling the pre-`Hello` pool | `security::a_connection_that_never_says_hello_is_closed`, `access::a_paired_device_connects_while_strangers_fill_the_pre_hello_slots`, `preauth::tests::*` (unit, per-address and IPv4-mapped/IPv6 /64 accounting) |
+| Revoked or expired guest skipping the strangers' pool | `access::revoked_and_expired_guests_count_as_strangers` |
+| Stranger retrying made-up invites (grant checks, audit growth) | `redteam::refused_joins_spend_a_budget_and_are_audited_sparingly`, `preauth::tests::refused_strangers_spend_their_address_and_key`, `failure_budgets_refill_and_stay_bounded`, `mp::join_denials::tests::*` (unit) |
 | Damaged `grants.json` | `access::a_damaged_grant_store_fails_closed_for_guests_only` |
 | Guest roles on `ctl`, workspace, bulk (upload), forwards and layout | `security::each_guest_role_gets_exactly_what_the_table_allows` |
 | Guest roles typing raw input (`input` stream) | `redteam::only_drivers_type_into_a_pane` |

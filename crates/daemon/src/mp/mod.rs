@@ -10,6 +10,7 @@
 
 pub(crate) mod approvals;
 pub(crate) mod audit;
+mod join_denials;
 mod knock_limit;
 pub(crate) mod policy;
 mod presence;
@@ -543,6 +544,7 @@ pub(crate) struct Mp {
     knocks: Mutex<BTreeMap<KnockId, PendingKnock>>,
     /// How many knocks each invite may still bring, and when its refusals were audited.
     knock_limits: Mutex<knock_limit::KnockLimits>,
+    join_denials: Mutex<join_denials::JoinDenials>,
     /// Owner devices that just paired and were not announced yet, with when.
     unannounced: Mutex<HashMap<DeviceId, (PrincipalId, UnixMillis)>>,
     next_knock: AtomicU64,
@@ -593,6 +595,7 @@ impl Mp {
             leases: Mutex::new(HashMap::new()),
             knocks: Mutex::new(BTreeMap::new()),
             knock_limits: Mutex::default(),
+            join_denials: Mutex::default(),
             unannounced: Mutex::new(HashMap::new()),
             next_knock: AtomicU64::new(1),
             approvals: approvals::Approvals::default(),
@@ -654,23 +657,9 @@ impl Mp {
     }
 
     /// Whether `device` is trusted already: a paired owner device, or a guest bound to a
-    /// grant it has not been removed from since.
+    /// grant whose chain is still in force (not expired, revoked or cut off by a removal).
     pub fn known_device(&self, device: DeviceId) -> bool {
-        if self.identity.is_owner_device(device) {
-            return true;
-        }
-        let device_hex = hex(&device.0);
-        let store = lock(&self.store);
-        let removed = removed_at(&self.identity, &store, device);
-        store.grants.iter().any(|grant| {
-            grant.bound.contains(&device_hex)
-                && removed.is_none_or(|removed| {
-                    grant
-                        .redeemed_at
-                        .get(&device_hex)
-                        .is_some_and(|&at| at > removed.0)
-                })
-        })
+        self.identity.is_owner_device(device) || self.holds_live_grant(&lock(&self.store), device)
     }
 
     /// What owner devices should be told about the store when they connect.
@@ -764,11 +753,18 @@ impl Mp {
     ) -> Result<Redeemed, RefuseReason> {
         let actor = grants::guest_actor(device);
         let deny = |why: String| {
+            let Some(left_out) = lock(&self.join_denials).audit(device, Instant::now()) else {
+                return;
+            };
+            let more = match left_out {
+                0 => String::new(),
+                left_out => format!(" ({left_out} more refused since the last record)"),
+            };
             self.audit.append(
                 AuditKind::Denied,
                 AuditEntry {
                     actor: Some(actor),
-                    detail: format!("join refused: {why}"),
+                    detail: format!("join refused: {why}{more}"),
                     ..AuditEntry::default()
                 },
             );
@@ -1883,31 +1879,37 @@ impl Mp {
             if grants::guest_principal(device) != principal {
                 return false;
             }
-            store
-                .grants
-                .iter()
-                .filter(|grant| grant.bound.contains(&guest.device))
-                .filter_map(Store::chain_of)
-                .any(|chain| {
-                    let ids: Vec<GrantId> =
-                        chain.links.iter().map(|link| link.grant.grant_id).collect();
-                    let issuers: Vec<DeviceId> =
-                        chain.links.iter().map(|link| link.grant.issuer).collect();
-                    let expires = chain
-                        .links
-                        .iter()
-                        .filter_map(|link| link.grant.expires)
-                        .min();
-                    self.chain_live(
-                        &store,
-                        &ids,
-                        &issuers,
-                        chain.links[0].grant.issued_at,
-                        device,
-                        expires,
-                    )
-                })
+            self.holds_live_grant(&store, device)
         })
+    }
+
+    /// Whether `device` is bound to a grant whose chain is still in force for it.
+    fn holds_live_grant(&self, store: &Store, device: DeviceId) -> bool {
+        let device_hex = hex(&device.0);
+        store
+            .grants
+            .iter()
+            .filter(|grant| grant.bound.contains(&device_hex))
+            .filter_map(Store::chain_of)
+            .any(|chain| {
+                let ids: Vec<GrantId> =
+                    chain.links.iter().map(|link| link.grant.grant_id).collect();
+                let issuers: Vec<DeviceId> =
+                    chain.links.iter().map(|link| link.grant.issuer).collect();
+                let expires = chain
+                    .links
+                    .iter()
+                    .filter_map(|link| link.grant.expires)
+                    .min();
+                self.chain_live(
+                    store,
+                    &ids,
+                    &issuers,
+                    chain.links[0].grant.issued_at,
+                    device,
+                    expires,
+                )
+            })
     }
 
     pub fn lease(&self, pane: PaneId) -> Lease {

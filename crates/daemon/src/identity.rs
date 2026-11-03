@@ -347,10 +347,7 @@ impl Identity {
                         .find(|paired| paired.device == device_hex)
                         .map_or(entry.paired_at, |paired| paired.paired_at);
                     list.retain(|paired| paired.device != device_hex);
-                    list.push(DeviceEntry {
-                        paired_at,
-                        ..entry
-                    });
+                    list.push(DeviceEntry { paired_at, ..entry });
                     true
                 })
                 .map_err(|error| {

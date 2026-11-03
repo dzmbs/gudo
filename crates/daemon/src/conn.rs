@@ -117,10 +117,20 @@ async fn run(
     else {
         return Ok(());
     };
-    drop(pending);
     let _ = ctl_tx.set_priority(priority::CTL);
     let device = DeviceId(*conn.remote_id().as_bytes());
     let handshake = handshake(&core, &hello, device);
+    // A refused peer keeps its pre-`Hello` slot until it is gone, and spends its budget.
+    let _pending = match &handshake {
+        Ok(_) => {
+            drop(pending);
+            None
+        }
+        Err(_) => {
+            pending.refused(device.0);
+            Some(pending)
+        }
+    };
     if hello.caps.contains(Caps::DAEMON_INFO) {
         let mut info = daemon_info(&core);
         if !matches!(handshake, Ok(Admission::Join(..))) {
@@ -147,7 +157,7 @@ async fn run(
         Err(reason) => {
             net::send(&mut ctl_tx, &ServerCtl::Refused { reason }).await?;
             let _ = ctl_tx.finish();
-            let _ = ctl_tx.stopped().await;
+            let _ = tokio::time::timeout(core.cfg.hello_timeout, ctl_tx.stopped()).await;
             return Ok(());
         }
     };

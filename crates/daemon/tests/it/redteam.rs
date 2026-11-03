@@ -5,7 +5,9 @@ use std::time::Duration;
 
 use client_core::grants::{DeviceKey, GrantSpec, issue};
 use client_core::knock::knock;
-use client_core::proto::{History, Invite, InviteTerms, PaneId, Roles, Scope, UnixMillis};
+use client_core::proto::{
+    AuditKind, History, Invite, InviteTerms, PaneId, Roles, Scope, UnixMillis,
+};
 use client_core::{ClientConfig, ConnectOptions, MultiplayerEvent, RelayMode, now_millis};
 
 use crate::support::{TestClient, start, ticket};
@@ -162,6 +164,59 @@ async fn a_chain_rooted_at_a_stranger_key_is_refused() {
     let mut guest = vec![TestClient::join(&forged.to_string(), attacker)];
     assert_eq!(admitted(&mut guest).await, 0);
     drop((owner, guest));
+    daemon.shutdown().await;
+}
+
+/// A stranger retrying made-up invites from one address spends a small budget and is then
+/// turned away before its `Hello`: no more grant checks and no more audit records, while the
+/// owner still gets in.
+#[tokio::test(flavor = "multi_thread")]
+async fn refused_joins_spend_a_budget_and_are_audited_sparingly() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = crate::support::start_with(dir.path(), |config| {
+        config.pre_auth.failures = 4;
+        config.pre_auth.failure_every = Duration::from_secs(3600);
+    })
+    .await;
+    let owner_key = ClientConfig::generate_key();
+    let pairing = ticket(&daemon);
+    let mut owner = TestClient::connect(&pairing, owner_key.clone());
+    owner.attach_and_follow().await;
+    let real = invite_with(&owner, spec(Roles::VIEWER), InviteTerms::default()).await;
+    let base = Invite::parse_with_terms(&real).unwrap().0;
+
+    let mut refusals = 0;
+    for _ in 0..10 {
+        let attacker = ClientConfig::generate_key();
+        let key = DeviceKey::from_seed(&attacker).unwrap();
+        let mut forged = base.clone();
+        forged.chain = issue(&key, forged.daemon_id, &spec(Roles::OWNER), now_millis());
+        let mut guest = TestClient::join(&forged.to_string(), attacker);
+        let answered = tokio::time::timeout(
+            Duration::from_secs(2),
+            guest.until("refused", |c| !c.refused.is_empty()),
+        )
+        .await;
+        refusals += usize::from(answered.is_ok());
+        assert!(guest.client.me().is_none());
+    }
+    // A refused client may retry once on its own; each retry spends the budget too.
+    assert!(
+        (1..=4).contains(&refusals),
+        "past the budget nothing is checked or answered: {refusals}"
+    );
+
+    let page = owner.client.audit(None, 200).await.unwrap();
+    let denials = page
+        .records
+        .iter()
+        .filter(|record| record.kind == AuditKind::Denied)
+        .count();
+    assert!((1..=4).contains(&denials), "{denials} denials audited");
+    drop(owner);
+    let mut owner = TestClient::connect(&pairing, owner_key);
+    owner.attach_and_follow().await;
+    drop(owner);
     daemon.shutdown().await;
 }
 

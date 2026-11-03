@@ -659,10 +659,9 @@ async fn accept_loop(core: Arc<Core>, endpoint: Endpoint) {
             };
             match handshake {
                 Ok(Ok(connection)) => {
-                    let known = core
-                        .mp
-                        .known_device(DeviceId(*connection.remote_id().as_bytes()));
-                    match slot.authenticated(known) {
+                    let key = *connection.remote_id().as_bytes();
+                    let known = core.mp.known_device(DeviceId(key));
+                    match slot.authenticated(key, known) {
                         Some(slot) => conn::serve(core, connection, slot).await,
                         None => {
                             tracing::debug!("closing connection: too many unauthenticated");
