@@ -790,25 +790,11 @@ struct FloatCardHandles: View {
     let card: CanvasLayout.Card
     @Environment(PaneArrangement.self) private var arrangement
 
-    #if os(macOS)
-    private let edge: CGFloat = 6
-    private let corner: CGFloat = 14
-    #else
-    private let edge: CGFloat = 14
-    private let corner: CGFloat = 28
-    #endif
-
     var body: some View {
-        let frame = card.frame
         ZStack(alignment: .topLeading) {
-            handle([.left], CGRect(x: frame.minX - edge / 2, y: frame.minY + corner / 2, width: edge, height: max(0, frame.height - corner)))
-            handle([.right], CGRect(x: frame.maxX - edge / 2, y: frame.minY + corner / 2, width: edge, height: max(0, frame.height - corner)))
-            handle([.top], CGRect(x: frame.minX + corner / 2, y: frame.minY - edge / 2, width: max(0, frame.width - corner), height: edge))
-            handle([.bottom], CGRect(x: frame.minX + corner / 2, y: frame.maxY - edge / 2, width: max(0, frame.width - corner), height: edge))
-            handle([.left, .top], CGRect(x: frame.minX - corner / 2, y: frame.minY - corner / 2, width: corner, height: corner))
-            handle([.right, .top], CGRect(x: frame.maxX - corner / 2, y: frame.minY - corner / 2, width: corner, height: corner))
-            handle([.left, .bottom], CGRect(x: frame.minX - corner / 2, y: frame.maxY - corner / 2, width: corner, height: corner))
-            handle([.right, .bottom], CGRect(x: frame.maxX - corner / 2, y: frame.maxY - corner / 2, width: corner, height: corner))
+            ForEach(Array(ResizeZones.window(card.frame).enumerated()), id: \.offset) { _, handle in
+                self.handle(handle.edges, handle.zone)
+            }
         }
     }
 

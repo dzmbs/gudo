@@ -309,15 +309,10 @@ private struct SidebarDivider: View {
             .ignoresSafeArea()
             .overlay {
                 Color.clear
-                    // The split dividers' hit widths: 1 + 6 for a pointer, 20 for a finger.
-                    #if os(iOS)
-                    .frame(width: 20)
-                    #else
-                    .frame(width: 7)
-                    #endif
+                    .frame(width: ResizeZones.dividerThickness(gap: DS.Size.hairline(scale: displayScale)))
                     .contentShape(.rect)
                     #if os(macOS)
-                    .onHover { inside in if inside { NSCursor.columnResize.push() } else { NSCursor.pop() } }
+                    .pointerStyle(.columnResize)
                     #endif
                     .gesture(
                         DragGesture(minimumDistance: 1, coordinateSpace: .global)

@@ -1527,9 +1527,20 @@ top-left, until the view is within a point of its new size and the program's out
 quiet; only then does it draw, at its new size. No frame on the way reallocates a drawable or
 reflows. A zoomed pane grows over its neighbours (z above them, `CanvasLayout.zoomZ`), which
 stay laid out under it until it has settled; a new pane comes in under the panes making room
-for it. The sidebar holds frames the same way without a known end (`holdFrames`) and changes
+for it. A zoom is one critically damped spring (`DS.Motion.splitSpring`) from start to end:
+against a host, `DaemonLayoutStore` replays a zoom the host has not answered as the state it
+leads to (`Session.setZoom`), so the echo of an earlier op (the focus a header's Zoom button
+sends first) never draws it undone mid-flight. The sidebar holds frames the same way without a known end (`holdFrames`) and changes
 grids once it settles. A minimized window's panes sit hidden inside their chip's frame, so
 restoring grows them out of it.
+
+**Resize zones (`Views/ResizeZones.swift`).** Every divider (the sidebar's too) is held 6 pt
+either side of its gap on a Mac and 22 pt on iPad (44 pt in all); a window's edges 6 pt outside
+and 3 pt inside, its corners 10 + 8 (iPad 30 + 14, corners 30 + 22), mostly outside so its
+header's buttons and the text at its edge stay within reach. The Mac shows the system resize
+pointers; the iPad pointer highlights the line. A terminal sets its own pointer only where a
+click would land on it (`AppKitTerminalView.isUnderPointer`), as its tracking area also hears
+moves under the zones drawn over its edge.
 
 **Arranging (`PaneArrangement`, one per window: `WindowModel.arrangement`).** Live state only:
 frames of windows following the hand (`live`, not animated), snap `guides`, the dragged pane
@@ -1568,7 +1579,9 @@ Tests: PaneLayout `FloatTests`, `FloatGeometryTests`; App `PaneArrangementTests`
 regions and their ops, every zone lighting exactly the frame its drop gives, a pane dragged out
 of a two-pane split, zone hysteresis, edges, the Float target, snapping, dock after a dwell,
 resize limits, the tray keeping a pane's size), `PaneResizeTests` (a zoom resizes a pane once,
-before it moves); TerminalKit `LayoutMotionTests`; daemon `layout` unit tests and `tests/it/floats.rs`; snapshots
+before it moves), `ZoomMotionTests` (each edge of a zooming pane heads one way per display
+frame, against a host whose layouts arrive on the way), `ResizeZoneTests` (zone geometry; a zone
+over a terminal is the hit there); TerminalKit `LayoutMotionTests`; daemon `layout` unit tests and `tests/it/floats.rs`; snapshots
 `MacSnapshotTests.testFloating*`, `TouchSnapshotTests.testFloating` (DESIGN.md "Floating
 panes").
 ## 27. Agent accounts (DAEMON.md §5.15)

@@ -420,11 +420,7 @@ private struct SplitDivider: View {
 
     var body: some View {
         let horizontal = divider.axis == .horizontal
-        #if os(macOS)
-        let hitThickness = DS.Size.dividerVisible + DS.Size.dividerHitPointer
-        #else
-        let hitThickness = DS.Size.dividerHitTouch
-        #endif
+        let hitThickness = ResizeZones.dividerThickness(gap: horizontal ? divider.frame.width : divider.frame.height)
         Rectangle()
             .fill(paneStyle == .comfortable ? Color.clear : theme.splitDivider)
             .overlay {
@@ -434,6 +430,8 @@ private struct SplitDivider: View {
                     #if os(macOS)
                     .pointerStyle(horizontal ? .columnResize : .rowResize)
                     #else
+                    // The pointer takes the line's shape, not the whole zone's.
+                    .contentShape(.hoverEffect, DividerBar(along: divider.axis))
                     .hoverEffect(.highlight)
                     #endif
                     .gesture(drag)
@@ -471,6 +469,21 @@ private struct SplitDivider: View {
         withAnimation(DS.Motion.snappy) { move(by: 0.5 - divider.ratio) }
     }
 }
+
+#if os(iOS)
+/// A divider's line as the iPad pointer highlights it: a short-ended bar a few points wide.
+nonisolated private struct DividerBar: Shape {
+    let along: PaneLayout.Axis
+
+    func path(in rect: CGRect) -> Path {
+        let thickness: CGFloat = 6
+        let bar = along == .horizontal
+            ? CGRect(x: rect.midX - thickness / 2, y: rect.minY, width: thickness, height: rect.height)
+            : CGRect(x: rect.minX, y: rect.midY - thickness / 2, width: rect.width, height: thickness)
+        return Path(roundedRect: bar, cornerRadius: thickness / 2)
+    }
+}
+#endif
 
 /// Sizes the leading side of a split to a whole number of terminal cells plus the pane padding,
 /// so it shows no partial cell; the trailing side takes the rest (its remainder becomes padding).

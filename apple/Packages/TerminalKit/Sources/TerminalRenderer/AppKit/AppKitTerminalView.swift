@@ -339,6 +339,12 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
     }
 
     override public func mouseMoved(with event: NSEvent) {
+        // The tracking area reports moves under views drawn over this one too (a divider's
+        // resize zone): those keep their own pointer.
+        guard isUnderPointer(event) else {
+            if lastMousePoint != nil { mouseExited(with: event) }
+            return
+        }
         let location = point(event)
         lastMousePoint = location
         onPointerMoved?(location)
@@ -346,6 +352,12 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         if surface.reportsMouse(shift: event.modifierFlags.contains(.shift)) {
             emit(surface.mouse(.motion, button: nil, at: location, mods: KeyModifiers(event.modifierFlags)))
         }
+    }
+
+    /// Whether a click at the event's location would land on this view.
+    private func isUnderPointer(_ event: NSEvent) -> Bool {
+        guard let frameView = window?.contentView?.superview, let hit = frameView.hitTest(event.locationInWindow) else { return true }
+        return hit === self || hit.isDescendant(of: self)
     }
 
     override public func mouseExited(with event: NSEvent) {
