@@ -819,7 +819,7 @@ impl Mp {
             }
             return Ok(Redeemed::Knock(Knocker {
                 actor,
-                name: leaf.label.clone(),
+                name: crate::identity::clean_display_name(&leaf.label),
                 grant_ids: verified.ids,
                 issuers,
                 root_signed,
@@ -849,10 +849,11 @@ impl Mp {
                 .copied()
                 .unwrap_or(now.0),
         );
-        let name = if leaf.label.is_empty() {
+        let label = crate::identity::clean_display_name(&leaf.label);
+        let name = if label.is_empty() {
             format!("guest-{}", &device_hex[..6])
         } else {
-            leaf.label.clone()
+            label
         };
         if let Some(guest) = store
             .guests
@@ -1094,7 +1095,7 @@ impl Mp {
     }
 
     pub fn set_name(&self, core: &Core, id: ConnId, name: String) {
-        let name: String = name.trim().chars().take(64).collect();
+        let name = crate::identity::clean_display_name(&name);
         let owner_device = lock(&self.live).get_mut(&id).and_then(|connection| {
             connection.name.clone_from(&name);
             connection
@@ -1217,7 +1218,7 @@ impl Mp {
                     format!(
                         "grant {} for {:?}: {} on {}{extra}",
                         short(&leaf.grant_id.0),
-                        leaf.label,
+                        crate::identity::clean_display_name(&leaf.label),
                         leaf.roles.names(),
                         leaf.scope
                     )
@@ -1229,7 +1230,8 @@ impl Mp {
     }
 
     fn info(&self, store: &Store, chain: &GrantChain) -> GrantInfo {
-        let leaf = chain.leaf().cloned().expect("non-empty chain");
+        let mut leaf = chain.leaf().cloned().expect("non-empty chain");
+        leaf.label = crate::identity::clean_display_name(&leaf.label);
         let bound = store
             .grant(leaf.grant_id)
             .map(|grant| {
@@ -1349,7 +1351,7 @@ impl Mp {
                 device,
                 principal: grants::guest_principal(device),
                 kind: DeviceKind::Guest,
-                name: guest.name.clone(),
+                name: crate::identity::clean_display_name(&guest.name),
                 first_seen: UnixMillis(guest.first_seen),
                 grant_id: unhex(&guest.grant).map(GrantId),
                 revoked: store
@@ -1616,7 +1618,7 @@ impl Mp {
     }
 
     pub fn rename_knock(&self, core: &Core, id: KnockId, name: &str) {
-        let name: String = name.trim().chars().take(64).collect();
+        let name = crate::identity::clean_display_name(name);
         if name.is_empty() {
             return;
         }

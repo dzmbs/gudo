@@ -95,7 +95,7 @@ pub use fsutil::create_private_temp_file;
 pub use handoff::{HANDOFF_ENV, HANDOFF_READS, HANDOFF_VERSION, HandOff, Inherited};
 pub use identity::{
     DEVICE_NAME_MAX, EndpointInfo, MAX_REUSABLE_TICKET_TTL, MAX_TICKET_USES, PAIRING_TTL,
-    PairedDevice, PendingTicket, clean_device_name, endpoint_info, list_paired,
+    PairedDevice, PendingTicket, clean_display_name, endpoint_info, list_paired,
     mint_reusable_ticket_text, mint_this_computer_ticket_text, mint_ticket, mint_ticket_text,
     paired_devices, pending_pairing_tickets, rename_device, revoke_pairing_tickets, unpair_device,
 };

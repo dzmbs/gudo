@@ -478,3 +478,54 @@ async fn a_guest_cannot_mark_the_owners_attention_seen() {
     drop(watcher);
     daemon.shutdown().await;
 }
+
+/// Names reach other people's screens (participants, ballots, prompts "Bob is driving"), so
+/// bidi and format characters that could make one name pass for another are dropped.
+#[tokio::test(flavor = "multi_thread")]
+async fn names_cannot_hide_or_reorder_text() {
+    let state = tempfile::tempdir().unwrap();
+    let daemon = start(state.path()).await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    owner.until("connected", |c| c.connected > 0).await;
+    let mut invite = spec(Roles::VIEWER);
+    invite.label = "alice\u{202e}evad\u{200b}".into();
+    let link = invite_with(&owner, invite, InviteTerms::default()).await;
+    let mut guest = TestClient::join(&link, ClientConfig::generate_key());
+    guest.until("joined", |c| c.connected > 0).await;
+
+    let names = |participants: Vec<client_core::proto::Participant>| {
+        participants
+            .into_iter()
+            .map(|participant| participant.name)
+            .collect::<Vec<_>>()
+    };
+    let listed = names(owner.client.participants().await.unwrap());
+    assert!(listed.contains(&"aliceevad".to_owned()), "{listed:?}");
+    let labels: Vec<String> = owner
+        .client
+        .list_grants()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|info| info.grant.label)
+        .collect();
+    assert!(labels.contains(&"aliceevad".to_owned()), "{labels:?}");
+
+    guest
+        .client
+        .set_name("bob\u{2067}\u{7} \t\n x\u{e0041}".into())
+        .await
+        .unwrap();
+    let listed = names(owner.client.participants().await.unwrap());
+    assert!(listed.contains(&"bob x".to_owned()), "{listed:?}");
+    assert!(
+        listed
+            .iter()
+            .all(|name| !name.chars().any(client_core::proto::is_invisible_format)),
+        "{listed:?}"
+    );
+
+    drop(owner);
+    drop(guest);
+    daemon.shutdown().await;
+}

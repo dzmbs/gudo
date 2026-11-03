@@ -67,12 +67,12 @@ struct DeviceEntry {
 }
 
 impl DeviceEntry {
-    fn display_name(&self) -> &str {
-        if self.label.is_empty() {
+    fn display_name(&self) -> String {
+        clean_display_name(if self.label.is_empty() {
             &self.name
         } else {
             &self.label
-        }
+        })
     }
 }
 
@@ -417,7 +417,7 @@ impl Identity {
                 Some(Owner {
                     device: DeviceId(unhex(&paired.device)?),
                     principal: PrincipalId(unhex(&paired.principal)?),
-                    name: paired.display_name().to_owned(),
+                    name: paired.display_name(),
                     paired_at: UnixMillis(paired.paired_at),
                 })
             })
@@ -436,6 +436,8 @@ impl Identity {
     /// Records what a paired device calls itself. No-op for other devices or an unchanged
     /// name.
     pub fn set_name(&self, device: DeviceId, name: &str) {
+        let name = clean_display_name(name);
+        let name = name.as_str();
         let hex_id = hex(&device.0);
         let known = self
             .lock_devices()
@@ -460,7 +462,7 @@ impl Identity {
     /// device gave. Returns whether it is paired.
     pub fn rename(&self, device: DeviceId, label: &str) -> io::Result<bool> {
         let hex_id = hex(&device.0);
-        let label = clean_device_name(label);
+        let label = clean_display_name(label);
         let mut found = false;
         self.update_devices(|list, _| {
             let Some(paired) = list.iter_mut().find(|paired| paired.device == hex_id) else {
@@ -845,8 +847,8 @@ pub struct PairedDevice {
 impl From<DeviceEntry> for PairedDevice {
     fn from(entry: DeviceEntry) -> Self {
         Self {
-            name: entry.display_name().to_owned(),
-            own_name: entry.name,
+            name: entry.display_name(),
+            own_name: clean_display_name(&entry.name),
             device: entry.device,
             paired_at: entry.paired_at,
             last_seen: entry.last_seen,
@@ -855,16 +857,43 @@ impl From<DeviceEntry> for PairedDevice {
     }
 }
 
-/// A device name as stored: trimmed, without control characters, at most
-/// [`DEVICE_NAME_MAX`] characters.
-pub fn clean_device_name(name: &str) -> String {
-    name.trim()
-        .chars()
-        .filter(|character| !character.is_control())
-        .take(DEVICE_NAME_MAX)
-        .collect::<String>()
-        .trim_end()
-        .to_owned()
+/// A name someone chose (a device, participant, knocker or invite label) as stored and shown
+/// to others: without control or bidi/format characters (no reordering or hiding text to pass
+/// for someone else), whitespace runs collapsed, at most [`DEVICE_NAME_MAX`] characters.
+///
+/// # Examples
+///
+/// ```
+/// use daemon::clean_display_name;
+///
+/// assert_eq!(clean_display_name("  alice\u{202e}evad \n x"), "aliceevad x");
+/// assert_eq!(clean_display_name("\u{200b}"), "");
+/// ```
+pub fn clean_display_name(name: &str) -> String {
+    let mut cleaned = String::new();
+    let mut count = 0;
+    let mut pending_space = false;
+    for character in name.chars() {
+        if character.is_whitespace() {
+            pending_space = count > 0;
+            continue;
+        }
+        if character.is_control() || proto::is_invisible_format(character) {
+            continue;
+        }
+        let needed = if pending_space { 2 } else { 1 };
+        if count + needed > DEVICE_NAME_MAX {
+            break;
+        }
+        if pending_space {
+            cleaned.push(' ');
+            count += 1;
+            pending_space = false;
+        }
+        cleaned.push(character);
+        count += 1;
+    }
+    cleaned
 }
 
 /// The devices on the owner allowlist.
@@ -928,7 +957,7 @@ pub fn rename_device(state_dir: &Path, prefix: &str, name: &str) -> io::Result<P
     fsutil::with_lock(&path, || {
         let mut list: Vec<DeviceEntry> = read_json(&path)?.unwrap_or_default();
         let index = find_device(&list, &prefix)?;
-        let label = clean_device_name(name);
+        let label = clean_display_name(name);
         if list[index].label != label {
             list[index].label = label;
             write_json(&path, &list)?;
@@ -1220,9 +1249,9 @@ mod tests {
         let listed = &list_paired(dir.path()).expect("list")[0];
         assert_eq!(
             (listed.name.as_str(), listed.own_name.as_str()),
-            ("Workphone", "iPhone 16")
+            ("Work phone", "iPhone 16")
         );
-        assert_eq!(identity.paired()[0].name, "Workphone");
+        assert_eq!(identity.paired()[0].name, "Work phone");
 
         let renamed = rename_device(dir.path(), &hex(&device.0)[..8], "").expect("rename");
         assert_eq!(renamed.name, "iPhone 16", "empty goes back to its own name");
