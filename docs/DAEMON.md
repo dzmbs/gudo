@@ -2383,6 +2383,20 @@ Agents drive the terminal they run in through `gudo-hook mcp`: one `TermCall {v,
   OSC 133 mark to the exit code and the command's own output. Shells without integration report
   `status: unknown` after the output settles. Waits default to 30 s and stop at 240 s with
   `status: timeout`, never an error.
+- **Screens.** Full-screen programs (TUIs, pickers, agents' own dialogs, multiplexers) redraw
+  in place, so their new output is no line-by-line text. `pane_read` of the screen (`screen:
+  true`, or any read while the alternate screen is up) adds `screen {cols, rows, cursor {row,
+  col, visible}, highlights}`: highlights are runs of cells drawn in reverse video or on a
+  background of their own (the background most of the screen shares does not count), which is
+  how menus and pickers show the selection; at most 64, each at most 240 characters, cleaned
+  like all output (`term/screen.rs`). `pane_wait {screen: true, match}` matches the regex
+  against the visible screen, at once and after every change, and `gone: true` waits until it
+  is no longer shown (a spinner, a dialog closing); both answer with the screen. The MCP text
+  lists the cursor and the highlights after the output, inside their own fence.
+- **Multiplexers.** Pane listings carry `multiplexer`: `tmux`, `screen`, `zellij` or `byobu`
+  when one is the foreground program (`tmux-control` for `tmux -CC`). Its shells report no
+  prompts to this pane, so `cmd_run` there is refused as busy with a hint to drive it with
+  `pane_send` and the screen waits instead.
 - **Status.** Any program's last OSC 7501 report about itself (no `id=`) is the pane's
   `status`, whatever the program; panes without one show their agent integration's state.
   `pane_wait {status: [...]}` waits for it, and `status_set` reports it for agents that cannot
@@ -2422,7 +2436,9 @@ Agents drive the terminal they run in through `gudo-hook mcp`: one `TermCall {v,
   prompt asks about. The server is `gudo` (`agents::mcp_server_name`); registering with
   an agent removes a registration under the old `gudo_drawings` first. Other harnesses add
   it by hand, e.g. pi: `pi mcp add gudo -- gudo-hook mcp` from a pane.
-- **Tests.** `tests/it/term.rs`; `tests/it/drive.rs` (allow once runs exactly the shown action,
+- **Tests.** `tests/it/term.rs` (`an_agent_drives_a_full_screen_program_by_what_it_shows`:
+  screen waits that see what is already shown, `gone`, highlights and the cursor);
+  `term::screen::tests`; `tests/it/drive.rs` (allow once runs exactly the shown action,
   a replayed answer unlocks nothing, deny, for this pane, the password prompt refused anyway, the
   audit records; a guest approver refused and not sent the request; expiry and hang-up withdraw
   it; ownership kept across a restart; events scoped to the session and to a guest's grant; the
@@ -2472,6 +2488,48 @@ says yes). `term.run(cmd)`, `term.panes.list/split/read/wait/send/close`,
 `tests/it/drive.rs::the_typescript_client_drives_a_real_daemon`. We chose TypeScript over a
 Rust module: scripts that drive panes are mostly JS/Python/shell, and Rust callers already have
 `daemon::TermCall`.
+
+### tmux control mode (design only, not built)
+
+Goal: `tmux -CC` in a pane (or "Attach tmux session" on a host) shows tmux's windows as tabs
+and its panes as native panes: the app's own splits, scrollback, search, selection and key
+bar, and the tmux session survives the app and the daemon.
+
+- **Protocol.** In control mode tmux writes `ESC P 1000 p`, then lines: `%begin/%end/%error`
+  around each command's reply, `%output %<pane> <octal-escaped bytes>` (or `%extended-output`
+  with `refresh-client -f pause-after`), `%layout-change @<window> <layout>`, `%window-add`,
+  `%window-close`, `%window-renamed`, `%session-changed`, `%pane-mode-changed`, `%exit`; the
+  client sends tmux commands, one per line (`send-keys -H -t %3 1b 5b 41`, `refresh-client -C
+  <cols>x<rows>`, `split-window`, `capture-pane -p -e -J -S -<n> -t %3` for history).
+  libghostty-vt reports the DCS boundaries (`ghostty_terminal_vt_write_until`), so the daemon
+  can lift the stream out of the pane's VT exactly where it starts and ends.
+- **Where it lives.** In the daemon, not the app: the daemon already owns VTs, layouts, history
+  and every client's view, so phones, Macs and agents all see the same native panes and
+  nothing about tmux reaches the apps' protocol. A `TmuxGateway` per control-mode pane parses
+  the lines, keeps the command queue (replies are in order), and owns one virtual pane per tmux
+  pane.
+- **What the pane model needs.** `Pane` wraps a `PtyActor` today. A tmux pane needs the same
+  `Pane` (ring, VT, snapshots, marks, search, `subscribe_from`) fed from `%output` instead of a
+  PTY: split `PtyActor` into an output source (ring + output hook + `write` + `resize`) with
+  two backends, the PTY and a gateway channel whose `write` becomes `send-keys -H` and whose
+  `resize` becomes `refresh-client -C` (tmux sizes windows, not panes; its layout is
+  authoritative, so a tmux tab's split ratios come from `%layout-change` and the app's divider
+  drags turn into `resize-pane`). Foreground process, echo state and signals come from tmux
+  formats (`#{pane_current_command}`, `#{pane_pid}`) instead of the PTY.
+- **Layout.** A tmux window becomes a tab marked `tmux: <session>`; its layout string maps to
+  `LayoutNode` splits (tmux's `{}`/`[]` are horizontal/vertical, sizes in cells). Tabs of a
+  gateway are not persisted in `layout.json`: on restart the daemon runs `tmux -CC attach -t
+  <session>` again in the gateway pane and rebuilds them, so tmux stays the source of truth.
+- **Agents and security.** Virtual panes are ordinary panes to the terminal tools, so drive
+  asks, password-prompt refusal (from the virtual pane's VT; no termios, so only detected
+  prompts) and guest scopes apply unchanged. Closing a tmux pane from the app is `kill-pane`,
+  asked like any close of a user's pane. `%exit` or the gateway pane closing turns the tabs
+  back into nothing; tmux keeps running.
+- **Steps.** (1) the control-mode parser and layout parser with fixture tests from real tmux
+  3.3–3.5 output; (2) the `PtyActor` split behind a trait, no behavior change; (3) the gateway
+  with one window, read-only; (4) input, resize and new windows; (5) attach from the host's
+  session list in the app. Until then, `multiplexer: "tmux-control"` tells agents and the app
+  what runs there.
 
 ### Cross-host tools (design only, not built)
 
