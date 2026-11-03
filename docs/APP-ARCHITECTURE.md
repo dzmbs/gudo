@@ -876,6 +876,24 @@ to Tab and Two Columns' headers do the same. The window's target follows the foc
 so ⌘T, Files and the toolbar act there. A host going down dims its editor leaves with its connection
 overlay, as for its terminals.
 
+**iPhone.** VS Code is laid out as in a small desktop window and scaled to fit (`EditorPhoneLayout`):
+the page's viewport is set to the pane's width at a fixed scale that gives the workbench at least
+600 × 400 CSS px (about 80 columns with the sidebar closed; 0.6 to 0.7 in portrait on a 12 mini to a
+17 Pro Max, up to 1 in landscape), in steps of 0.05, ignoring the keyboard's height so it never
+rescales. `WKWebView.pageZoom` was tried first: on iOS it shrinks the drawing without widening the
+layout viewport. The scale is fixed (no pinch) because iOS zooms into any focused field with text
+under 16 px, which is every VS Code input; More ▸ Zoom In / Zoom Out / Fit to Screen steps it
+instead (one setting for all editors). Phone defaults go in as the workbench's
+`configurationDefaults` (a user script edits the page's `vscode-workbench-web-configuration`
+before VS Code reads it): word wrap on, no minimap or sticky scroll, font 13, activity bar at the
+top of the sidebar, Chat's secondary sidebar hidden. The user's own settings still win and nothing
+is written to their files. The first time a folder opens on the phone the sidebar is closed
+(VS Code remembers it from then on). The pane's bar trades the host name and Reload (now in More)
+for Explorer, Search, Go to File and Command Palette, which press VS Code's own keys in the page
+(⇧⌘E, ⇧⌘F, ⌘P, ⇧⌘P; Explorer and Search hide the sidebar when it already shows them); the
+software keyboard carries esc, tab, arrows and Hide Keyboard (`EditorKeyRow`) in place of the
+browser's form controls. iPad and Mac are unchanged.
+
 Tests: `EditorLeafTests` (PaneLayout: editor tab, beside a host tab, closing back to the host tab,
 last editor, editors across hosts and ⌘D on an editor, dropping a host, order, round trip and old
 saves), `EditorPanesTests` (one pane per editor and pruning, the web view kept across hide/show,
