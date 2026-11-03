@@ -33,7 +33,7 @@ use std::time::Duration;
 use iroh::endpoint::Connection;
 use proto::{
     Caps, ClientCtl, Decided, Hello, LinkClass, PushActionRequest, PushActivityToken,
-    PushRegistration, PushStatus, ServerCtl, SignedGrant, Ticket, WorkspaceRequest,
+    PushAgentRule, PushRegistration, PushStatus, ServerCtl, SignedGrant, Ticket, WorkspaceRequest,
     WorkspaceResponse, WsError,
 };
 
@@ -91,6 +91,17 @@ impl Client {
             self.workspace(WorkspaceRequest::PushActivity(PushActivityToken { cap }))
                 .await?,
         )
+    }
+
+    /// Which agents this device wants pushed, replacing its earlier rules. Needs a push
+    /// registration and a daemon offering [`proto::DaemonFeatures::PUSH_AGENTS`].
+    ///
+    /// # Errors
+    ///
+    /// [`WsError::NotFound`] without a push registration, [`WsError::Invalid`] for too many
+    /// rules, [`WsError::Disconnected`].
+    pub async fn push_agents(&self, rules: Vec<PushAgentRule>) -> Result<PushStatus, WsError> {
+        status(self.workspace(WorkspaceRequest::PushAgents(rules)).await?)
     }
 }
 

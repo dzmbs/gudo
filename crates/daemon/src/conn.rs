@@ -316,7 +316,8 @@ pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {
         | DaemonFeatures::REOPEN
         | DaemonFeatures::ACCOUNTS
         | DaemonFeatures::INPUT_RESUME
-        | DaemonFeatures::DEVICE_MANAGEMENT;
+        | DaemonFeatures::DEVICE_MANAGEMENT
+        | DaemonFeatures::PUSH_AGENTS;
     if core.cfg.push.enabled && core.cfg.push.live_activity {
         features |= DaemonFeatures::LIVE_ACTIVITY;
     }

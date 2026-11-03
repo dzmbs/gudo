@@ -36,6 +36,7 @@ fn notification(kind: Kind, action: Option<ActionOffer>) -> Notification {
             Kind::Failed => "claude failed".into(),
             Kind::Command => "cargo test succeeded".into(),
         },
+        place: None,
         body: "Bash: git push --force — «ünïcödé» ✓".into(),
         at: 1_760_000_000_000,
         action,

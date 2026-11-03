@@ -292,6 +292,16 @@ impl Layout {
             .find_map(|tab| has_leaf(&tab.root, pane).then_some(tab.tab_id))
     }
 
+    /// The name the user gave the tab holding `pane`, if any.
+    pub fn tab_name_of_pane(&self, pane: PaneId) -> Option<String> {
+        self.sessions
+            .iter()
+            .flat_map(|session| &session.tabs)
+            .find(|tab| has_leaf(&tab.root, pane))
+            .map(|tab| tab.name.clone())
+            .filter(|name| !name.trim().is_empty())
+    }
+
     /// The project of the tab holding `pane`, if it is in one.
     pub fn project_of_pane(&self, pane: PaneId) -> Option<String> {
         let tab = self.tab_of_pane(pane)?;

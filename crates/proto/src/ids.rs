@@ -398,5 +398,7 @@ bitset! {
         /// Answers `MpRequest::PairingTicket` and `MpRequest::RenameDevice` from paired owner
         /// devices.
         DEVICE_MANAGEMENT = 20;
+        /// Answers `WorkspaceRequest::PushAgents` (which agents a device wants pushed).
+        PUSH_AGENTS = 21;
     }
 }

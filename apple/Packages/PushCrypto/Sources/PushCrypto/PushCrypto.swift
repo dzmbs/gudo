@@ -173,6 +173,8 @@ public struct PushNotification: Codable, Equatable, Sendable {
     public var pane: UInt64
     public var session: UInt64?
     public var title: String
+    /// The pane's project, tab or directory (daemons from before it leave it out).
+    public var place: String?
     public var body: String
     /// Unix ms.
     public var at: UInt64

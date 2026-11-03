@@ -138,6 +138,7 @@ async fn start_at(
         config.push.relay_url = url;
         config.push.delay = Duration::from_millis(delay_ms);
         config.push.backoff = Duration::from_millis(50);
+        config.push.pane_interval = Duration::from_millis(100);
     })
     .await
 }
@@ -1377,5 +1378,146 @@ async fn a_drive_request_is_answered_from_the_lock_screen() {
     assert!(note.action.is_none(), "{note:?}");
     assert!(!note.body.contains("evil.example"), "{note:?}");
     drop((device_a, device_b));
+    daemon.shutdown().await;
+}
+
+/// "Finished" pushes: named after the agent with the message's first line, held back while the
+/// agent goes straight on, one per pane per interval (the newest), and off for an agent the
+/// device turned off while its "needs you" still comes.
+#[tokio::test(flavor = "multi_thread")]
+async fn finished_pushes_follow_agent_rules_debounce_and_pane_interval() {
+    let state = tempfile::tempdir().unwrap();
+    let mut relay = FakeRelay::start().await;
+    let url = relay.url.clone();
+    let daemon = start_with(state.path(), move |config| {
+        config.push.relay_url = url;
+        config.push.delay = Duration::from_millis(300);
+        config.push.backoff = Duration::from_millis(50);
+        config.push.pane_interval = Duration::from_millis(2500);
+    })
+    .await;
+    let mut device_a = device(&ticket(&daemon), "cap-a", PushPrefs::default()).await;
+    let (_shown, hidden) = two_panes(&mut device_a.client).await;
+    device_a.client.client.set_view(None, vec![]);
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+    let prompt = serde_json::json!({
+        "session_id": "s", "cwd": home, "hook_event_name": "UserPromptSubmit", "prompt": "go",
+    });
+    let stop = |message: &str| {
+        serde_json::json!({
+            "session_id": "s", "cwd": home, "hook_event_name": "Stop",
+            "last_assistant_message": message,
+        })
+    };
+    let open = |received: &Received| {
+        let request = verify(received, &daemon);
+        client_core::push::open_notification(&device_a.seal_secret, &request.sealed).unwrap()
+    };
+
+    hook(
+        &daemon,
+        state.path(),
+        hidden,
+        "UserPromptSubmit",
+        prompt.clone(),
+    )
+    .await;
+    hook(&daemon, state.path(), hidden, "Stop", stop("Checking.")).await;
+    hook(
+        &daemon,
+        state.path(),
+        hidden,
+        "UserPromptSubmit",
+        prompt.clone(),
+    )
+    .await;
+    relay
+        .quiet(Duration::from_millis(900), "the agent went straight on")
+        .await;
+
+    hook(
+        &daemon,
+        state.path(),
+        hidden,
+        "Stop",
+        stop("## Renamed `foo` to **bar**\n\nAll 12 call sites updated."),
+    )
+    .await;
+    let note = open(&relay.next("finished").await);
+    assert_eq!(note.kind, push::Kind::Done);
+    assert_eq!(note.title, "Claude Code finished");
+    assert_eq!(note.body, "Renamed foo to bar");
+
+    hook(
+        &daemon,
+        state.path(),
+        hidden,
+        "UserPromptSubmit",
+        prompt.clone(),
+    )
+    .await;
+    hook(&daemon, state.path(), hidden, "Stop", stop("First.")).await;
+    hook(
+        &daemon,
+        state.path(),
+        hidden,
+        "UserPromptSubmit",
+        prompt.clone(),
+    )
+    .await;
+    hook(&daemon, state.path(), hidden, "Stop", stop("Second.")).await;
+    relay
+        .quiet(Duration::from_millis(1200), "within the pane's interval")
+        .await;
+    let note = open(&relay.next("the newest after the interval").await);
+    assert_eq!(note.body, "Second.");
+    relay
+        .quiet(Duration::from_millis(1500), "the older one was replaced")
+        .await;
+
+    let status = device_a
+        .client
+        .client
+        .push_agents(vec![client_core::proto::PushAgentRule {
+            agent: "claude".into(),
+            needs_you: true,
+            finished: false,
+        }])
+        .await
+        .unwrap();
+    assert!(status.registered.is_some());
+    tokio::time::sleep(Duration::from_millis(2600)).await;
+    hook(
+        &daemon,
+        state.path(),
+        hidden,
+        "UserPromptSubmit",
+        prompt.clone(),
+    )
+    .await;
+    hook(&daemon, state.path(), hidden, "Stop", stop("Muted.")).await;
+    relay
+        .quiet(
+            Duration::from_millis(1200),
+            "finished is off for this agent",
+        )
+        .await;
+    hook(&daemon, state.path(), hidden, "UserPromptSubmit", prompt).await;
+    hook(
+        &daemon,
+        state.path(),
+        hidden,
+        "Notification",
+        serde_json::json!({
+            "session_id": "s", "cwd": home, "hook_event_name": "Notification",
+            "message": "Claude needs your permission", "title": "Permission needed",
+            "notification_type": "permission_prompt",
+        }),
+    )
+    .await;
+    let note = open(&relay.next("needs you").await);
+    assert_eq!(note.kind, push::Kind::Blocked);
+    assert_eq!(note.title, "Claude Code needs you");
+    drop(device_a);
     daemon.shutdown().await;
 }

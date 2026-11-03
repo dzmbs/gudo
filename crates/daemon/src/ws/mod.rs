@@ -421,6 +421,9 @@ pub(crate) async fn handle(
         Request::PushActivity(token) => Ok(Response::Push(crate::notifier::activity_token(
             core, conn.actor, token,
         )?)),
+        Request::PushAgents(rules) => Ok(Response::Push(crate::notifier::agent_rules(
+            core, conn.actor, rules,
+        )?)),
         Request::PushAction(action) => {
             crate::notifier::action(core, conn.actor, &action).map(Response::PushDecided)
         }

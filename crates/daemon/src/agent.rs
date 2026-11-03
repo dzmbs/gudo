@@ -228,6 +228,10 @@ impl AgentRuntime {
         self.kind
     }
 
+    pub fn state(&self) -> agents::AgentState {
+        self.arbiter.status().state()
+    }
+
     pub fn is_blocked(&self) -> bool {
         self.arbiter.status().blocked().is_some()
     }

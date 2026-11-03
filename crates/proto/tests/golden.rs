@@ -528,6 +528,7 @@ fn every_message_matches_its_frozen_bytes() {
     artifact_messages_2(&mut checker);
     artifact_history_messages(&mut checker);
     live_activity_messages(&mut checker);
+    push_agent_messages(&mut checker);
     browser_messages(&mut checker);
     reopen_messages(&mut checker);
     terminal_limits_messages(&mut checker);
@@ -3229,6 +3230,35 @@ fn live_activity_messages(checker: &mut Checker) {
             req: WorkspaceRequest::PushActivity(PushActivityToken { cap: None }),
         },
         "050000000115092f00",
+    );
+}
+
+/// Per-agent push rules: `DaemonFeatures::PUSH_AGENTS` (bit 21) and
+/// `WorkspaceRequest::PushAgents` (appended after `AccountSetDefault`).
+fn push_agent_messages(checker: &mut Checker) {
+    checker.check(
+        "DaemonFeatures::PUSH_AGENTS",
+        DaemonFeatures::PUSH_AGENTS,
+        "050000000180808001",
+    );
+    checker.check(
+        "ClientCtl::Workspace(PushAgents)",
+        ClientCtl::Workspace {
+            req_id: 9,
+            req: WorkspaceRequest::PushAgents(vec![
+                PushAgentRule {
+                    agent: "codex".into(),
+                    needs_you: true,
+                    finished: false,
+                },
+                PushAgentRule {
+                    agent: PushAgentRule::OTHER.into(),
+                    needs_you: false,
+                    finished: true,
+                },
+            ]),
+        },
+        "110000000115093c0205636f6465780100012a0001",
     );
 }
 

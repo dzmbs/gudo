@@ -28,7 +28,8 @@
 //!     item: 1,
 //!     pane: 4,
 //!     session: None,
-//!     title: "claude finished".into(),
+//!     title: "Claude Code finished".into(),
+//!     place: Some("api".into()),
 //!     body: "All tests pass.".into(),
 //!     at: 1_700_000_000_000,
 //!     action: None,
@@ -231,8 +232,11 @@ pub struct Notification {
     /// The pane's session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<u64>,
-    /// Title ("claude needs you").
+    /// Title ("Claude Code needs you").
     pub title: String,
+    /// Where it happened on the host, for display: the pane's tab or project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<String>,
     /// Body (the blocker summary or the agent's last message).
     pub body: String,
     /// When it happened, Unix ms.

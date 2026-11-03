@@ -310,6 +310,11 @@ pub enum WorkspaceRequest {
         /// The account; `None` clears the default.
         account: Option<String>,
     },
+    /// Which agents this device wants pushed, after its [`WorkspaceRequest::PushRegister`] →
+    /// [`WorkspaceResponse::Push`]. Replaces the device's earlier rules; kept across
+    /// re-registration. Only daemons offering
+    /// [`DaemonFeatures::PUSH_AGENTS`](crate::DaemonFeatures::PUSH_AGENTS) understand it.
+    PushAgents(Vec<PushAgentRule>),
 }
 
 /// The answer to a [`WorkspaceRequest`].
@@ -1198,6 +1203,23 @@ pub struct PushActivityToken {
     /// The capability the relay issued for the activity's push token (`kind: "activity"`);
     /// `None`: the activity ended or was dismissed.
     pub cap: Option<String>,
+}
+
+/// One agent's notifications on a device ([`WorkspaceRequest::PushAgents`]), on top of
+/// [`PushPrefs`]: an agent without a rule notifies as the prefs say.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushAgentRule {
+    /// The agent's name in [`AttentionKind`] (`claude`, `codex`), or [`PushAgentRule::OTHER`].
+    pub agent: String,
+    /// It needs the user: an approval or a question.
+    pub needs_you: bool,
+    /// Its turn finished or failed.
+    pub finished: bool,
+}
+
+impl PushAgentRule {
+    /// The rule for agents without one of their own.
+    pub const OTHER: &str = "*";
 }
 
 /// Which attention items a device wants pushed.

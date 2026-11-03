@@ -1200,6 +1200,27 @@ impl From<proto::PushPrefs> for PushPrefs {
     }
 }
 
+/// One agent's notifications on a device, on top of [`PushPrefs`].
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct PushAgentRule {
+    /// The agent's name in attention items (`claude`, `codex`), or `*` for any other agent.
+    pub agent: String,
+    /// It needs the user: an approval or a question.
+    pub needs_you: bool,
+    /// Its turn finished or failed.
+    pub finished: bool,
+}
+
+impl From<PushAgentRule> for proto::PushAgentRule {
+    fn from(rule: PushAgentRule) -> Self {
+        Self {
+            agent: rule.agent,
+            needs_you: rule.needs_you,
+            finished: rule.finished,
+        }
+    }
+}
+
 /// A device's push registration with one daemon. `Debug` leaves the capabilities out.
 #[derive(Clone, PartialEq, Eq, uniffi::Record)]
 pub struct PushRegistration {

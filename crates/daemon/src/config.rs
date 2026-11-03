@@ -73,6 +73,9 @@ pub struct PushConfig {
     pub activity_interval: Duration,
     /// How long every agent must stay idle before the Live Activity ends.
     pub activity_end_after: Duration,
+    /// Least time between two "finished" pushes for one pane to a device: a pane that keeps
+    /// finishing short turns sends the newest when the time is up, not one each.
+    pub pane_interval: Duration,
 }
 
 impl Default for PushConfig {
@@ -88,6 +91,7 @@ impl Default for PushConfig {
             activity_debounce: Duration::from_secs(1),
             activity_interval: Duration::from_secs(15),
             activity_end_after: Duration::from_secs(120),
+            pane_interval: Duration::from_secs(30),
         }
     }
 }

@@ -15,7 +15,7 @@ import UserNotifications
 /// ```
 ///
 /// The relay sends `{"aps": {..., "mutable-content": 1}, "s": <sealed>, "v": 1}` with a
-/// placeholder alert. On success the title, subtitle (host), body, category, thread and
+/// placeholder alert. On success the title, subtitle (place and host), body, category, thread (per pane) and
 /// interruption level come from the decrypted payload, and `userInfo["push"]` holds the
 /// decrypted JSON (with the daemon's signature) for the action handler. On any failure the
 /// placeholder stays.
@@ -62,11 +62,11 @@ public enum PushContent {
         to content: UNMutableNotificationContent
     ) {
         content.title = note.title
-        content.subtitle = note.host
+        content.subtitle = [note.place, note.host].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
         content.body = note.body
         // The category comes from the signed payload, not from the relay.
         content.categoryIdentifier = note.kind.categoryIdentifier
-        content.threadIdentifier = note.daemon
+        content.threadIdentifier = "\(note.daemon).pane.\(note.pane)"
         switch note.kind {
         case .approval, .blocked:
             content.interruptionLevel = .timeSensitive

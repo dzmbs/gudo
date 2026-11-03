@@ -26,8 +26,8 @@ use std::time::{Duration, Instant};
 
 use proto::{
     Actor, AttentionItem, AttentionKind, AttentionSeen, AttentionUpdate, Decide, Decided, DeviceId,
-    PushActionRequest, PushActivityToken, PushPrefs, PushRegistration, PushStatus, UnixMillis,
-    WsError,
+    PaneId, PushActionRequest, PushActivityToken, PushAgentRule, PushPrefs, PushRegistration,
+    PushStatus, UnixMillis, WsError,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
@@ -39,6 +39,10 @@ use crate::identity::now_millis;
 const STORE_FILE: &str = "push.json";
 /// Longest capability accepted (the relay's are about 200 bytes).
 const MAX_CAP_LEN: usize = 4096;
+/// Most per-agent rules a device may keep.
+const MAX_AGENT_RULES: usize = 32;
+/// Longest one-line summary in a "finished" notification, in characters.
+const SUMMARY_CHARS: usize = 140;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct Registration {
@@ -55,6 +59,9 @@ struct Registration {
     /// The running Live Activity's update capability (`PushActivity`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     activity_update_cap: Option<String>,
+    /// Per-agent choices (`PushAgents`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    agents: Vec<PushAgentRule>,
     registered_at: u64,
 }
 
@@ -71,6 +78,8 @@ pub(crate) struct Push {
     activities: Mutex<HashMap<String, activity::DeviceState>>,
     /// What is left of the relay's alert budgets.
     budgets: Mutex<Budgets>,
+    /// When each device was last sent a "finished" push for a pane.
+    finished_sent: Mutex<HashMap<(String, PaneId), Instant>>,
 }
 
 /// A rate the push relay enforces: `burst` at once, then one every `every`.
@@ -188,6 +197,7 @@ impl Push {
             activity_wake: tokio::sync::Notify::new(),
             activities: Mutex::new(HashMap::new()),
             budgets: Mutex::new(Budgets::new(Instant::now())),
+            finished_sent: Mutex::new(HashMap::new()),
         }
     }
 
@@ -297,11 +307,15 @@ pub(crate) fn register(
     let device = hex(&actor.device.0);
     {
         let mut registrations = lock(&core.push.registrations);
-        // A running Live Activity outlives a re-registration (each launch).
-        let activity_update_cap = registrations
+        // A running Live Activity and the agent rules outlive a re-registration (each launch).
+        let existing = registrations
             .iter()
-            .find(|existing| existing.device == device)
-            .and_then(|existing| existing.activity_update_cap.clone());
+            .find(|existing| existing.device == device);
+        let activity_update_cap =
+            existing.and_then(|existing| existing.activity_update_cap.clone());
+        let agents = existing
+            .map(|existing| existing.agents.clone())
+            .unwrap_or_default();
         registrations.retain(|existing| existing.device != device);
         registrations.push(Registration {
             device: device.clone(),
@@ -311,6 +325,7 @@ pub(crate) fn register(
             prefs: registration.prefs,
             activity_cap: registration.activity_cap,
             activity_update_cap,
+            agents,
             registered_at: now_millis(),
         });
         core.push.save(&registrations);
@@ -341,6 +356,30 @@ pub(crate) fn activity_token(
         return Err(WsError::NotFound("register for push first".into()));
     }
     activity::token_changed(core, &device, token.cap);
+    Ok(status(core, actor.device))
+}
+
+/// `PushAgents`: which agents the asking device wants pushed.
+pub(crate) fn agent_rules(
+    core: &Core,
+    actor: Actor,
+    rules: Vec<PushAgentRule>,
+) -> Result<PushStatus, WsError> {
+    if rules.len() > MAX_AGENT_RULES || rules.iter().any(|rule| rule.agent.len() > 64) {
+        return Err(WsError::Invalid("too many agent rules".into()));
+    }
+    let device = hex(&actor.device.0);
+    if !lock(&core.push.registrations)
+        .iter()
+        .any(|registration| registration.device == device)
+    {
+        return Err(WsError::NotFound("register for push first".into()));
+    }
+    core.push.update(&device, |registration| {
+        let changed = registration.agents != rules;
+        registration.agents = rules;
+        changed
+    });
     Ok(status(core, actor.device))
 }
 
@@ -575,6 +614,40 @@ fn wants(prefs: &PushPrefs, kind: push::Kind) -> bool {
     }
 }
 
+/// The agent an item is about (`claude`, `codex`), if any.
+fn agent_of(item: &AttentionItem) -> Option<&str> {
+    match &item.kind {
+        AttentionKind::AgentBlocked { agent, .. }
+        | AttentionKind::AgentDone { agent }
+        | AttentionKind::AgentFailed { agent } => Some(agent),
+        AttentionKind::CommandFinished(_) => None,
+    }
+}
+
+/// [`wants`], then the device's rule for the agent (or for other agents).
+fn registration_wants(registration: &Registration, kind: push::Kind, agent: Option<&str>) -> bool {
+    if !wants(&registration.prefs, kind) {
+        return false;
+    }
+    let Some(agent) = agent else {
+        return true;
+    };
+    let rules = &registration.agents;
+    let rule = rules
+        .iter()
+        .find(|rule| rule.agent == agent)
+        .or_else(|| rules.iter().find(|rule| rule.agent == PushAgentRule::OTHER));
+    rule.is_none_or(|rule| match kind {
+        push::Kind::Approval | push::Kind::Blocked => rule.needs_you,
+        push::Kind::Done | push::Kind::Failed => rule.finished,
+        push::Kind::Command => true,
+    })
+}
+
+fn is_finished(kind: push::Kind) -> bool {
+    matches!(kind, push::Kind::Done | push::Kind::Failed)
+}
+
 /// Debounce: not seen meanwhile (a client focused the pane, the blocker went away), and no
 /// newer item for the same pane that will be pushed instead.
 fn still_due(core: &Core, item: &AttentionItem) -> bool {
@@ -583,6 +656,19 @@ fn still_due(core: &Core, item: &AttentionItem) -> bool {
         .get(item.id)
         .is_some_and(|current| !current.seen)
         && !core.ws.attention.superseded(item.id, item.pane_id)
+        && !(matches!(
+            item.kind,
+            AttentionKind::AgentDone { .. } | AttentionKind::AgentFailed { .. }
+        ) && agent_working(core, item.pane_id))
+}
+
+/// A turn that ended and went straight on (a stop hook, queued input) is not finished.
+fn agent_working(core: &Core, pane: PaneId) -> bool {
+    core.pane(pane).is_some_and(|entry| {
+        lock(&entry.agent)
+            .as_ref()
+            .is_some_and(|agent| agent.state() == agents::AgentState::Working)
+    })
 }
 
 async fn deliver(core: Arc<Core>, item: AttentionItem) {
@@ -596,7 +682,7 @@ async fn deliver(core: Arc<Core>, item: AttentionItem) {
     let (kind, buttons) = classify(&core, &item);
     let host = crate::ws::tunnel::hostname();
     for registration in targets(&core) {
-        if !wants(&registration.prefs, kind) {
+        if !registration_wants(&registration, kind, agent_of(&item)) {
             continue;
         }
         let Some(device) = unhex::<32>(&registration.device).map(DeviceId) else {
@@ -609,6 +695,20 @@ async fn deliver(core: Arc<Core>, item: AttentionItem) {
         let core = Arc::clone(&core);
         let (item, host, buttons) = (item.clone(), host.clone(), buttons.clone());
         tokio::spawn(async move {
+            if is_finished(kind) {
+                let key = (registration.device.clone(), item.pane_id);
+                let last = lock(&core.push.finished_sent).get(&key).copied();
+                if let Some(last) = last {
+                    let wait = core.cfg.push.pane_interval.saturating_sub(last.elapsed());
+                    if !wait.is_zero() {
+                        tokio::time::sleep(wait).await;
+                        if !still_due(&core, &item) || core.device_active(device) {
+                            return;
+                        }
+                    }
+                }
+                lock(&core.push.finished_sent).insert(key, Instant::now());
+            }
             // Past the relay's budget a push waits its turn, and goes only if still due.
             loop {
                 let wait =
@@ -708,11 +808,89 @@ fn notification(
         item: item.id,
         pane: item.pane_id.0,
         session: item.session_id.map(|session| session.0),
-        title: item.title.clone(),
-        body: item.body.clone(),
+        title: title(core, item),
+        place: place(core, item.pane_id),
+        body: body(item),
         at: item.at.0,
         action,
     }
+}
+
+/// The agent's product name.
+fn agent_name(agent: &str) -> String {
+    match agent {
+        "claude" => "Claude Code".to_owned(),
+        "codex" => "Codex".to_owned(),
+        other => {
+            let mut chars = other.chars();
+            chars
+                .next()
+                .map(|first| first.to_uppercase().chain(chars).collect())
+                .unwrap_or_else(|| "Agent".to_owned())
+        }
+    }
+}
+
+/// A drive request keeps its own title (what the agent wants to do).
+fn title(core: &Core, item: &AttentionItem) -> String {
+    match &item.kind {
+        AttentionKind::AgentBlocked {
+            request_id: Some(request),
+            ..
+        } if core.term.asks.caller_of(*request).is_some() => item.title.clone(),
+        AttentionKind::AgentBlocked { agent, .. } => format!("{} needs you", agent_name(agent)),
+        AttentionKind::AgentDone { agent } => format!("{} finished", agent_name(agent)),
+        AttentionKind::AgentFailed { agent } => format!("{} failed", agent_name(agent)),
+        AttentionKind::CommandFinished(_) => item.title.clone(),
+    }
+}
+
+/// A finished turn says its first line; the rest of the message is in the app.
+fn body(item: &AttentionItem) -> String {
+    match &item.kind {
+        AttentionKind::AgentDone { .. } => {
+            summary_line(&item.body).unwrap_or_else(|| "Finished".to_owned())
+        }
+        AttentionKind::AgentFailed { .. } => {
+            summary_line(&item.body).unwrap_or_else(|| "The turn ended with an error.".to_owned())
+        }
+        _ => item.body.clone(),
+    }
+}
+
+/// The first line of a message with words in it, without Markdown heading, list and emphasis
+/// marks, cut to [`SUMMARY_CHARS`].
+fn summary_line(message: &str) -> Option<String> {
+    let line = message
+        .lines()
+        .map(|line| {
+            line.trim()
+                .trim_start_matches(['#', '>', '-', '*', '+'])
+                .trim()
+        })
+        .find(|line| line.chars().any(char::is_alphanumeric))?;
+    let plain = line.replace("**", "").replace('`', "");
+    let clean = proto::clean_prompt_text(&plain, SUMMARY_CHARS);
+    (!clean.is_empty()).then_some(clean)
+}
+
+/// The pane's project, else its tab's name, else its directory's name.
+fn place(core: &Core, pane: PaneId) -> Option<String> {
+    let named = {
+        let layout = lock(&core.layout);
+        layout
+            .project_of_pane(pane)
+            .or_else(|| layout.tab_name_of_pane(pane))
+    };
+    let name = named.or_else(|| {
+        let entry = core.pane(pane)?;
+        let cwd = lock(&entry.meta).cwd.clone()?;
+        std::path::Path::new(&cwd)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+    })?;
+    let clean = proto::clean_prompt_text(&name, 60);
+    (!clean.is_empty()).then_some(clean)
 }
 
 /// Lock-screen Approve only for what the notification shows in full: an approval whose summary
@@ -871,6 +1049,89 @@ mod tests {
         assert!(wants(&prefs, push::Kind::Failed));
     }
 
+    fn registration(agents: Vec<PushAgentRule>) -> Registration {
+        Registration {
+            device: "ab".repeat(32),
+            cap: "cap".into(),
+            seal_key: "cd".repeat(32),
+            relay_url: None,
+            prefs: PushPrefs::default(),
+            activity_cap: None,
+            activity_update_cap: None,
+            agents,
+            registered_at: 1,
+        }
+    }
+
+    fn rule(agent: &str, needs_you: bool, finished: bool) -> PushAgentRule {
+        PushAgentRule {
+            agent: agent.into(),
+            needs_you,
+            finished,
+        }
+    }
+
+    #[test]
+    fn agent_rules_filter_per_agent_with_a_fallback() {
+        let everything = registration(Vec::new());
+        assert!(registration_wants(
+            &everything,
+            push::Kind::Done,
+            Some("codex")
+        ));
+
+        let rules = registration(vec![
+            rule("codex", true, false),
+            rule(PushAgentRule::OTHER, false, true),
+        ]);
+        assert!(registration_wants(
+            &rules,
+            push::Kind::Approval,
+            Some("codex")
+        ));
+        assert!(registration_wants(
+            &rules,
+            push::Kind::Blocked,
+            Some("codex")
+        ));
+        assert!(!registration_wants(&rules, push::Kind::Done, Some("codex")));
+        assert!(!registration_wants(
+            &rules,
+            push::Kind::Failed,
+            Some("codex")
+        ));
+        assert!(registration_wants(&rules, push::Kind::Done, Some("claude")));
+        assert!(!registration_wants(
+            &rules,
+            push::Kind::Blocked,
+            Some("claude")
+        ));
+        assert!(registration_wants(&rules, push::Kind::Command, None));
+
+        let mut off = registration(vec![rule("claude", true, true)]);
+        off.prefs.done = false;
+        assert!(!registration_wants(&off, push::Kind::Done, Some("claude")));
+    }
+
+    #[test]
+    fn finished_turns_say_their_first_line() {
+        assert_eq!(
+            summary_line("## Summary\n\nRenamed `foo` to **bar** in 12 files.\n- Tests pass")
+                .as_deref(),
+            Some("Summary")
+        );
+        assert_eq!(
+            summary_line("\n  - Renamed `foo` to **bar**.\nMore.").as_deref(),
+            Some("Renamed foo to bar.")
+        );
+        assert_eq!(summary_line("---\n\n```\n"), None);
+        let long = "word ".repeat(100);
+        assert!(summary_line(&long).unwrap().chars().count() <= SUMMARY_CHARS + 1);
+        assert_eq!(agent_name("claude"), "Claude Code");
+        assert_eq!(agent_name("codex"), "Codex");
+        assert_eq!(agent_name("pi"), "Pi");
+    }
+
     #[test]
     fn alerts_stay_within_the_relays_budgets() {
         let start = Instant::now();
@@ -911,6 +1172,7 @@ mod tests {
             prefs: PushPrefs::default(),
             activity_cap: None,
             activity_update_cap: Some("u".into()),
+            agents: vec![rule("codex", true, false)],
             registered_at: 1,
         };
         lock(&push.registrations).push(registration.clone());

@@ -428,6 +428,28 @@ impl DaemonClient {
             .await
     }
 
+    /// Which agents this device wants pushed, after [`push_register`](Self::push_register).
+    /// Only for daemons that [`offers_push_agents`](Self::offers_push_agents).
+    ///
+    /// # Errors
+    ///
+    /// `NotFound` without a push registration; the daemon's other [`WorkspaceError`]s.
+    pub async fn push_agents(
+        &self,
+        rules: Vec<crate::ws_types::PushAgentRule>,
+    ) -> Result<PushStatus, WorkspaceError> {
+        let rules = rules.into_iter().map(Into::into).collect();
+        self.ws_call(|client| async move { client.push_agents(rules).await })
+            .await
+    }
+
+    /// Whether the daemon answers [`push_agents`](Self::push_agents).
+    pub fn offers_push_agents(&self) -> bool {
+        self.inner
+            .daemon_info()
+            .is_some_and(|i| i.features.contains(proto::DaemonFeatures::PUSH_AGENTS))
+    }
+
     /// Whether the daemon sends the agents Live Activity and answers
     /// [`push_activity`](Self::push_activity).
     pub fn offers_live_activity(&self) -> bool {
