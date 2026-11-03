@@ -14,7 +14,8 @@
 # base64-encoded), which notarytool uses. The Mac build has no push, App Groups or Keychain
 # groups, so it needs no provisioning profile. The EdDSA key that signs updates is in the login
 # Keychain too (Sparkle's generate_keys put it there; its public half is SUPublicEDKey in
-# apple/project.yml). SKIP_RUST=1 reuses the Rust builds already made.
+# apple/project.yml). SKIP_RUST=1 reuses the Rust builds already made. RELEASE_SUMMARY names a
+# plain-text file of short notes, one change per line, shown in the app's update card.
 set -euo pipefail
 
 ASC_KEY_ID="${ASC_KEY_ID:-48K8RU3L66}"
@@ -175,7 +176,8 @@ python3 -I "$repo_root/scripts/appcast-item.py" "$appcast" \
   --minimum-system "$minimum_system" \
   --release-notes "https://github.com/$github_repo/releases/tag/v$version" \
   --url "https://github.com/$github_repo/releases/download/v$version/$(basename "$dmg")" \
-  --length "$(stat -f %z "$dmg")" --signature "$ed_signature"
+  --length "$(stat -f %z "$dmg")" --signature "$ed_signature" \
+  ${RELEASE_SUMMARY:+--description "$(cat "$RELEASE_SUMMARY")"}
 echo "    ${appcast#"$repo_root/"}: $version ($build_number)"
 
 echo "==> release assets"

@@ -30,7 +30,8 @@ def item_xml(args: argparse.Namespace) -> str:
         f"      <sparkle:shortVersionString>{escape(args.short_version)}</sparkle:shortVersionString>\n"
         f"      <sparkle:minimumSystemVersion>{escape(args.minimum_system)}</sparkle:minimumSystemVersion>\n"
         f"      <sparkle:releaseNotesLink>{escape(args.release_notes)}</sparkle:releaseNotesLink>\n"
-        f"      <enclosure url={quoteattr(args.url)} length={quoteattr(str(args.length))}"
+        + (f"      <description>{escape(args.description)}</description>\n" if args.description else "")
+        + f"      <enclosure url={quoteattr(args.url)} length={quoteattr(str(args.length))}"
         ' type="application/octet-stream"\n'
         f"                 sparkle:edSignature={quoteattr(args.signature)} />\n"
         "    </item>\n"
@@ -48,6 +49,7 @@ def main() -> int:
     for option in ("title", "version", "short-version", "minimum-system", "release-notes", "url", "signature"):
         parser.add_argument(f"--{option}", required=True)
     parser.add_argument("--length", type=int, required=True)
+    parser.add_argument("--description", help="short plain-text notes, one change per line")
     args = parser.parse_args()
 
     with open(args.appcast, encoding="utf-8") as file:
