@@ -49,7 +49,7 @@ struct NotificationPrefsSection: View {
         let permission = status == .denied ? "Notifications are off for this app in System Settings. " : ""
         let push = AppNotifications.pushEnabled
             ? "Hosts push these to this device even when the app is closed (end-to-end encrypted through the relay)."
-            : "This build alerts while the app is running in the background. Lock-screen pushes need a build with the push entitlement."
+            : "Alerts arrive while the app is open or running in the background."
         return permission + push
     }
 }

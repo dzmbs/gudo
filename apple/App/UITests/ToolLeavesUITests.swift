@@ -29,7 +29,7 @@ final class ToolLeavesUITests: XCTestCase {
         // The keyboard going down with the palette must not cost the terminal its screen.
         Thread.sleep(forTimeInterval: 1)
         let screen = app.descendants(matching: .any)["pane-1-screen"].firstMatch
-        XCTAssertTrue((screen.value as? String ?? "").contains("local echo"), "screen: \(String(describing: screen.value))")
+        XCTAssertTrue((screen.value as? String ?? "").contains("sample shell"), "screen: \(String(describing: screen.value))")
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = "tool-leaf-changes"
         shot.lifetime = .keepAlways

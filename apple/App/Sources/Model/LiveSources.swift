@@ -37,7 +37,7 @@ final class LiveHostDirectory: HostDirectory {
         #if os(macOS)
         let address = "\(NSUserName())@localhost · login shell"
         #else
-        let address = "scratch shell · local echo"
+        let address = "sample shell"
         #endif
         return HostSummary(
             id: Self.localId, name: WindowModel.deviceName, address: address, kind: .local, connection: .connected,
