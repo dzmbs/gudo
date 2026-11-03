@@ -9,8 +9,9 @@ import UIKit
 /// - the software keyboard and IMEs through `UITextInput`. Marked text is drawn inline at the
 ///   cursor by the renderer and never sent; committed text goes to the PTY at once;
 /// - touch: tap focuses (or clicks, or opens a link after confirmation), double/triple tap and
-///   long-press select a word/line with drag handles and the edit menu, one-finger drag scrolls
-///   with momentum (alt screen: arrow keys; mouse mode: drag events), two fingers send the wheel;
+///   long-press select a word/line with drag handles and the edit menu, one or two fingers
+///   scroll with momentum (mouse mode: wheel events; alt screen: arrow keys), pinch sets the
+///   font size;
 /// - pointer (iPad trackpad/mouse): click-drag selects (⌥ for a block, ⇧-click extends, edge
 ///   auto-scroll), hover underlines links and reports motion in any-event mode, the wheel follows
 ///   the same mouse-mode routing. Shift always selects instead of reporting.
@@ -68,6 +69,19 @@ public final class TerminalView: UIView {
     private var momentumVelocity: CGFloat = 0
     private var momentumPoint = CGPoint.zero
     private var lastMomentumTime: CFTimeInterval = 0
+    /// The touch that just began stopped a fling: its tap only stops it, like `UIScrollView`.
+    private var touchStoppedMomentum = false
+
+    // Pinch
+    /// The font sizes pinching may reach, the Settings stepper's range.
+    public static let fontSizeRange: ClosedRange<CGFloat> = 8...32
+    /// A pinch chose a new font size. The view already draws at it; the host keeps it.
+    public var onFontSizeChange: ((CGFloat) -> Void)?
+    private var pinchStartSize: CGFloat = 0
+    /// The fingers scrolling now zoomed on the way: they lift without a fling.
+    private var scrollJoinedPinch = false
+    private lazy var pinchGesture = UIPinchGestureRecognizer(target: self, action: #selector(pinched(_:)))
+    private lazy var scrollGesture = UIPanGestureRecognizer(target: self, action: #selector(panned(_:)))
 
     // Selection
     private lazy var selectionGesture = SelectionGesture(terminal: surface.terminal)
@@ -79,12 +93,11 @@ public final class TerminalView: UIView {
     private var autoscrollTask: Task<Void, Never>?
     private var lastPointerLocation = CGPoint.zero
     private var pointerDragRectangle = false
-    private var touchMouseDrag = false
     /// A long-press began inside the selection: it stays as it is, for a drag out.
     private var pressKeepsSelection = false
     /// The edit menu is up only to offer Paste (the key bar's paste key).
     private var menuOffersPaste = false
-    private let copiedToast = CopiedToast()
+    private let toast = CapsuleToast()
 
 
     /// IME composition in progress (marked text) and the selection inside it, in UTF-16 units.
@@ -137,7 +150,7 @@ public final class TerminalView: UIView {
         drag.isEnabled = true
         addInteraction(drag)
         addInteraction(UIDropInteraction(delegate: self))
-        addSubview(copiedToast)
+        addSubview(toast)
         PasteboardOrigin.observe()
         MemoryPressure.observe()
 
@@ -156,7 +169,7 @@ public final class TerminalView: UIView {
         CATransaction.commit()
         surface.layout(size: bounds.size, scale: traitCollection.displayScale)
         layoutSelectionHandles()
-        copiedToast.center = CGPoint(x: bounds.midX, y: bounds.minY + 28)
+        toast.center = CGPoint(x: bounds.midX, y: bounds.minY + 28)
     }
 
     /// Ghostty's focus: a solid, blinking cursor only in the focused terminal of the key window
@@ -376,11 +389,15 @@ public final class TerminalView: UIView {
         addGestureRecognizer(secondary)
 
         // Touch drags and the scroll wheel / two-finger trackpad scroll (no touches).
-        let pan = UIPanGestureRecognizer(target: self, action: #selector(panned(_:)))
-        pan.allowedScrollTypesMask = .all
-        pan.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
-        pan.maximumNumberOfTouches = 2
-        addGestureRecognizer(pan)
+        scrollGesture.allowedScrollTypesMask = .all
+        scrollGesture.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+        scrollGesture.maximumNumberOfTouches = 2
+        scrollGesture.delegate = self
+        addGestureRecognizer(scrollGesture)
+
+        // With the two-finger scroll: fingers that spread zoom even after they began to scroll.
+        pinchGesture.delegate = self
+        addGestureRecognizer(pinchGesture)
 
         // Pointer click-drag: selection, or mouse drags for the program.
         let pointerDrag = UIPanGestureRecognizer(target: self, action: #selector(pointerDragged(_:)))
@@ -392,6 +409,7 @@ public final class TerminalView: UIView {
     }
 
     override public func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        touchStoppedMomentum = momentumLink != nil
         stopMomentum()
         super.touchesBegan(touches, with: event)
     }
@@ -399,6 +417,10 @@ public final class TerminalView: UIView {
     @objc private func tapped(_ tap: UITapGestureRecognizer) {
         let point = tap.location(in: self)
         lastTapLocation = point
+        if touchStoppedMomentum {
+            touchStoppedMomentum = false
+            return
+        }
         let shift = tap.modifierFlags.contains(.shift)
         menuPoint = nil
         if !isFirstResponder { becomeFirstResponder() }
@@ -474,36 +496,30 @@ public final class TerminalView: UIView {
         editMenu?.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
     }
 
-    /// One finger scrolls (alt screen: arrows; mouse mode: drag), two fingers or the wheel send
-    /// wheel events in mouse mode. Ends with momentum, like `UIScrollView`.
+    /// A touch drag (one or two fingers) and the trackpad or wheel scroll, never a mouse drag:
+    /// a program tracking the mouse gets wheel events, the alt screen arrow keys, the shell's
+    /// screen its scrollback (`TerminalSurface.wheel`). Selecting is a long-press, and the
+    /// pointer's click-drag. Ends with momentum, like `UIScrollView`.
     @objc private func panned(_ pan: UIPanGestureRecognizer) {
         let point = pan.location(in: self)
-        let isWheel = pan.numberOfTouches == 0 || pan.numberOfTouches >= 2
         let mods = KeyModifiers(pan.modifierFlags)
+        if pinchGesture.state == .began || pinchGesture.state == .changed {
+            scrollJoinedPinch = true
+            pan.setTranslation(.zero, in: self)
+            return
+        }
         switch pan.state {
         case .began:
             stopMomentum()
-            touchMouseDrag = !isWheel && surface.reportsMouse(shift: pan.modifierFlags.contains(.shift))
-            if touchMouseDrag {
-                let start = CGPoint(x: point.x - pan.translation(in: self).x, y: point.y - pan.translation(in: self).y)
-                emit(surface.mouse(.press, button: .left, at: start, mods: mods))
-            }
+            scrollJoinedPinch = false
+            fallthrough
         case .changed:
-            if touchMouseDrag {
-                emit(surface.mouse(.motion, button: .left, at: point, mods: mods))
-                return
-            }
             scroll(points: pan.translation(in: self).y, at: point, mods: mods)
             pan.setTranslation(.zero, in: self)
         case .ended, .cancelled:
-            if touchMouseDrag {
-                emit(surface.mouse(.release, button: .left, at: point, mods: mods))
-                touchMouseDrag = false
-                return
-            }
             scroll(points: pan.translation(in: self).y, at: point, mods: mods)
             let velocity = pan.velocity(in: self).y
-            if pan.state == .ended, abs(velocity) > 80 { startMomentum(velocity: velocity, at: point) }
+            if pan.state == .ended, !scrollJoinedPinch, abs(velocity) > 80 { startMomentum(velocity: velocity, at: point) }
             else { scrollRemainder = 0 }
         default:
             break
@@ -518,6 +534,49 @@ public final class TerminalView: UIView {
         guard whole != 0 else { return }
         scrollRemainder -= CGFloat(whole)
         emit(surface.wheel(rows: -whole, at: point, mods: mods))
+    }
+
+    /// Zooms the drawn grid with the fingers and settles on a whole point size when they lift,
+    /// so the program sees one resize, not one per step.
+    @objc private func pinched(_ pinch: UIPinchGestureRecognizer) {
+        switch pinch.state {
+        case .began:
+            stopMomentum()
+            scrollJoinedPinch = true
+            pinchStartSize = surface.fontSize
+            clipsToBounds = true
+            fallthrough
+        case .changed:
+            let size = Self.fontSize(pinching: pinchStartSize, scale: pinch.scale)
+            let zoom = size / surface.fontSize
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            surface.layer.anchorPoint = .zero
+            surface.layer.position = bounds.origin
+            surface.layer.setAffineTransform(CGAffineTransform(scaleX: zoom, y: zoom))
+            CATransaction.commit()
+            toast.show("\(Int(size)) pt", symbol: "textformat.size", lingering: true)
+        case .ended, .cancelled, .failed:
+            let size = Self.fontSize(pinching: pinchStartSize, scale: pinch.scale)
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            surface.layer.setAffineTransform(.identity)
+            surface.layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+            surface.layer.frame = bounds
+            CATransaction.commit()
+            clipsToBounds = false
+            guard pinch.state == .ended, size != surface.fontSize else { return toast.hide() }
+            toast.show("\(Int(size)) pt", symbol: "textformat.size")
+            surface.appearance.fontSize = size
+            onFontSizeChange?(size)
+        default:
+            break
+        }
+    }
+
+    /// The whole point size a pinch from `start` by `scale` reaches, within `fontSizeRange`.
+    static func fontSize(pinching start: CGFloat, scale: CGFloat) -> CGFloat {
+        min(max((start * scale).rounded(), fontSizeRange.lowerBound), fontSizeRange.upperBound)
     }
 
     private func startMomentum(velocity: CGFloat, at point: CGPoint) {
@@ -754,7 +813,7 @@ public final class TerminalView: UIView {
         guard let text = surface.terminal.selectionText(), !text.isEmpty else { return }
         UIPasteboard.general.string = text
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        copiedToast.show()
+        toast.show("Copied", symbol: "checkmark")
     }
 
     /// The key bar's paste key. A button's read of the pasteboard is programmatic: iOS answers it
@@ -1244,6 +1303,14 @@ extension KeyModifiers {
     }
 }
 
+extension TerminalView: UIGestureRecognizerDelegate {
+    public func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+    ) -> Bool {
+        Set([gestureRecognizer, other].map(ObjectIdentifier.init)) == Set([pinchGesture, scrollGesture].map(ObjectIdentifier.init))
+    }
+}
+
 extension TerminalView: UIScribbleInteractionDelegate {
     public func scribbleInteraction(_ interaction: UIScribbleInteraction, shouldBeginAt location: CGPoint) -> Bool {
         allowsHandwriting
@@ -1351,23 +1418,17 @@ private enum MemoryPressure {
     }
 }
 
-/// A brief "Copied" capsule at the top of the terminal.
-private final class CopiedToast: UIView {
+/// A brief capsule at the top of the terminal: "Copied", or the font size while pinching.
+private final class CapsuleToast: UIView {
     private var hideTask: Task<Void, Never>?
+    private let label = UILabel()
+    private let glass = UIVisualEffectView(effect: UIGlassEffect())
 
     init() {
         super.init(frame: CGRect(x: 0, y: 0, width: 108, height: 34))
-        let glass = UIVisualEffectView(effect: UIGlassEffect())
-        glass.frame = bounds
-        glass.layer.cornerRadius = bounds.height / 2
         glass.layer.cornerCurve = .continuous
         glass.clipsToBounds = true
         addSubview(glass)
-        let label = UILabel(frame: bounds)
-        let symbol = UIImage(systemName: "checkmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold))
-        let text = NSMutableAttributedString(attachment: NSTextAttachment(image: symbol ?? UIImage()))
-        text.append(NSAttributedString(string: " Copied"))
-        label.attributedText = text
         label.font = .systemFont(ofSize: 15, weight: .medium)
         label.textAlignment = .center
         glass.contentView.addSubview(label)
@@ -1375,25 +1436,47 @@ private final class CopiedToast: UIView {
         isHidden = true
         alpha = 0
         isAccessibilityElement = true
-        accessibilityLabel = "Copied"
-        accessibilityIdentifier = "terminal-copied"
+        accessibilityIdentifier = "terminal-toast"
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    func show() {
+    /// `lingering`: stays until `hide()` (a pinch in progress) instead of fading by itself.
+    func show(_ text: String, symbol: String, lingering: Bool = false) {
+        let image = UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold))
+        let attributed = NSMutableAttributedString(attachment: NSTextAttachment(image: image ?? UIImage()))
+        attributed.append(NSAttributedString(string: " " + text))
+        label.attributedText = attributed
+        let width = max(108, label.intrinsicContentSize.width + 36)
+        let center = self.center
+        bounds.size.width = width
+        self.center = center
+        glass.frame = bounds
+        glass.layer.cornerRadius = bounds.height / 2
+        label.frame = bounds
+        accessibilityLabel = text
+
         superview?.bringSubviewToFront(self)
+        let appearing = isHidden || alpha < 1
         isHidden = false
-        UIView.animate(withDuration: 0.15) { self.alpha = 1 }
-        UIAccessibility.post(notification: .announcement, argument: "Copied")
+        if appearing {
+            UIView.animate(withDuration: 0.15) { self.alpha = 1 }
+            UIAccessibility.post(notification: .announcement, argument: text)
+        }
         hideTask?.cancel()
+        guard !lingering else { return }
         hideTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(1.2))
-            guard let self, !Task.isCancelled else { return }
-            UIView.animate(withDuration: 0.3) { self.alpha = 0 } completion: { _ in
-                if self.alpha == 0 { self.isHidden = true }
-            }
+            guard !Task.isCancelled else { return }
+            self?.hide()
+        }
+    }
+
+    func hide() {
+        hideTask?.cancel()
+        UIView.animate(withDuration: 0.3) { self.alpha = 0 } completion: { _ in
+            if self.alpha == 0 { self.isHidden = true }
         }
     }
 }

@@ -653,6 +653,9 @@ final class Workspace {
                 input: action.shortcut.key.uiKeyInput, modifierFlags: action.shortcut.modifiers.uiKeyModifierFlags,
                 action: #selector(TerminalView.performAppKeyCommand(_:)))
         }
+        pane.view.onFontSizeChange = { size in
+            UserDefaults.standard.set(Double(size), forKey: TerminalPreferences.Key.fontSize)
+        }
         pane.view.onFind = { [weak self] in
             guard let self else { return }
             ActiveWindow.model(for: self)?.isSearchShown = true

@@ -15,6 +15,8 @@ nonisolated final class EchoBackend: PaneBackend {
         var cols = 80
         /// A prompt with a right-aligned part (zsh's RPROMPT), redrawn at each new width.
         var rightPrompt: (left: String, leftWidth: Int, right: String, rightWidth: Int)?
+        /// `mouse` turned on SGR mouse reporting: reports arrive as input and are printed.
+        var reportsMouse = false
     }
 
     /// Draws `left` with `right` at the right edge, redrawn after every resize as zsh does on SIGWINCH.
@@ -105,17 +107,27 @@ nonisolated final class EchoBackend: PaneBackend {
 
     private func handle(_ input: [UInt8]) {
         // Escape sequences (arrows, function keys) would move the cursor if echoed; a shell's line
-        // editor would interpret them, this stand-in ignores them.
-        guard input.first != 0x1B else { return }
+        // editor would interpret them, this stand-in ignores them. Mouse reports show as `cat -v`
+        // would print them.
+        if input.first == 0x1B {
+            if state.withLock({ $0.reportsMouse }) { emit(Array("^[".utf8) + input.dropFirst() + Array("\r\n".utf8)) }
+            return
+        }
         var output: [UInt8] = []
         state.withLock { state in
             for byte in input {
                 switch byte {
                 case 0x0D:
                     output += Array("\r\n".utf8)
+                    let line = String(decoding: state.line, as: UTF8.self)
                     if state.line.starts(with: Array("title ".utf8)) {
                         // `title <text>` sets the title (OSC 2).
                         output += Array("\u{1b}]2;".utf8) + state.line.dropFirst(6) + [0x07]
+                    } else if line.hasPrefix("seq "), let count = Int(line.dropFirst(4)), (1...10_000).contains(count) {
+                        output += Array((1...count).map { "row \($0)\r\n" }.joined().utf8)
+                    } else if line == "mouse" {
+                        state.reportsMouse = true
+                        output += Array("\u{1b}[?1000h\u{1b}[?1006h".utf8)
                     } else if !state.line.isEmpty {
                         output += Array("\u{1b}[2mecho:\u{1b}[0m ".utf8) + state.line + Array("\r\n".utf8)
                     }
