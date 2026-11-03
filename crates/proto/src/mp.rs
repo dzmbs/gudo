@@ -358,6 +358,16 @@ pub enum MpRequest {
     /// [`MpResponse::InviteLink`]. Owner only; daemons with
     /// [`DaemonFeatures::INVITE_LINKS`](crate::DaemonFeatures::INVITE_LINKS).
     InviteLink(GrantId),
+    /// Mints a one-time pairing ticket, as `hostd pair` does, for the owner to show another
+    /// of their devices → [`MpResponse::PairingTicket`]. Paired owner devices only, never
+    /// guests; daemons with
+    /// [`DaemonFeatures::DEVICE_MANAGEMENT`](crate::DaemonFeatures::DEVICE_MANAGEMENT).
+    PairingTicket,
+    /// Names a paired owner device for everyone who lists devices, over what the device calls
+    /// itself; an empty name goes back to that → [`MpResponse::Done`]. Paired owner devices
+    /// only; daemons with
+    /// [`DaemonFeatures::DEVICE_MANAGEMENT`](crate::DaemonFeatures::DEVICE_MANAGEMENT).
+    RenameDevice { device: DeviceId, name: String },
 }
 
 /// Answer to [`MpRequest::TakeControl`] and friends.
@@ -417,6 +427,11 @@ pub enum MpResponse {
         /// The chain, root first.
         chain: GrantChain,
         terms: InviteTerms,
+    },
+    /// A one-time pairing ticket (`<scheme>://pair/…`) and when it stops working.
+    PairingTicket {
+        ticket: String,
+        expires: UnixMillis,
     },
 }
 

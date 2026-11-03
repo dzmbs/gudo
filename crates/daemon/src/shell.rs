@@ -51,8 +51,8 @@ const FILES: &[(&str, &str)] = &[
 ];
 
 /// Features the scripts enable: a blinking bar cursor at the prompt and titles from the
-/// running command and directory. `sudo`, `ssh-*` and `path` need the Ghostty binary and
-/// terminfo, which hosts don't have.
+/// running command and directory; `path` too when the CLI is linked. `sudo` and `ssh-*` need
+/// the Ghostty binary and terminfo, which hosts don't have.
 const FEATURES: &str = "cursor:blink,title";
 
 /// A shell Ghostty's scripts integrate with.
@@ -89,6 +89,9 @@ pub(crate) struct Injection {
 #[derive(Debug, Clone)]
 pub(crate) struct ShellIntegration {
     dir: PathBuf,
+    /// Appended to `PATH` after the shell's startup files (Ghostty's `path` feature), which
+    /// often set `PATH` from scratch.
+    bin_dir: Option<PathBuf>,
 }
 
 impl ShellIntegration {
@@ -102,7 +105,36 @@ impl ShellIntegration {
             }
             fsutil::write_atomic(&path, contents.as_bytes())?;
         }
-        Ok(Self { dir })
+        Ok(Self { dir, bin_dir: None })
+    }
+
+    /// Links `<state_dir>/bin/<CLI_BIN>` to `exe` and adds that directory to panes' `PATH`.
+    pub fn link_cli(&mut self, state_dir: &Path, exe: &Path) -> io::Result<()> {
+        let bin_dir = state_dir.join("bin");
+        std::fs::create_dir_all(&bin_dir)?;
+        let link = bin_dir.join(brand::CLI_BIN);
+        if std::fs::read_link(&link).ok().as_deref() != Some(exe) {
+            let staged = bin_dir.join(format!(".{}.new", brand::CLI_BIN));
+            let _ = std::fs::remove_file(&staged);
+            std::os::unix::fs::symlink(exe, &staged)?;
+            std::fs::rename(&staged, &link)?;
+        }
+        self.bin_dir = Some(bin_dir);
+        Ok(())
+    }
+
+    /// `PATH` for a pane: `path` with the CLI's directory at the end, if it is not there.
+    pub fn pane_path(&self, path: Option<OsString>) -> Option<OsString> {
+        let bin_dir = self.bin_dir.as_ref()?;
+        let mut parts: Vec<PathBuf> = path
+            .as_deref()
+            .map(|path| std::env::split_paths(path).collect())
+            .unwrap_or_default();
+        if parts.contains(bin_dir) {
+            return path;
+        }
+        parts.push(bin_dir.clone());
+        std::env::join_paths(parts).ok()
     }
 
     /// The injection for `shell`, given the environment the pane would otherwise get
@@ -116,9 +148,20 @@ impl ShellIntegration {
         let path = |relative: &str| self.dir.join(relative).to_string_lossy().into_owned();
         let existing = |name: &str| lookup(name).map(|value| value.to_string_lossy().into_owned());
         let mut injection = Injection::default();
-        injection
-            .env
-            .push(("GHOSTTY_SHELL_FEATURES".into(), FEATURES.into()));
+        match &self.bin_dir {
+            Some(bin_dir) => {
+                injection
+                    .env
+                    .push(("GHOSTTY_SHELL_FEATURES".into(), format!("{FEATURES},path")));
+                injection.env.push((
+                    "GHOSTTY_BIN_DIR".into(),
+                    bin_dir.to_string_lossy().into_owned(),
+                ));
+            }
+            None => injection
+                .env
+                .push(("GHOSTTY_SHELL_FEATURES".into(), FEATURES.into())),
+        }
         match kind {
             Shell::Zsh => {
                 if let Some(old) = existing("ZDOTDIR") {
@@ -236,5 +279,48 @@ mod tests {
             .1;
         assert!(xdg.ends_with(":/usr/local/share:/usr/share"), "{xdg}");
         assert!(integration.injection(Path::new("/bin/sh"), env).is_none());
+    }
+
+    #[test]
+    fn panes_find_the_cli_after_their_startup_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut integration = ShellIntegration::install(dir.path()).unwrap();
+        assert_eq!(integration.pane_path(Some("/usr/bin".into())), None);
+        let features = |integration: &ShellIntegration| {
+            integration
+                .injection(Path::new("/bin/zsh"), |_| None)
+                .unwrap()
+                .env
+                .into_iter()
+                .find(|(name, _)| name == "GHOSTTY_SHELL_FEATURES")
+                .unwrap()
+                .1
+        };
+        assert!(!features(&integration).contains("path"));
+
+        let exe = dir.path().join("hostd");
+        std::fs::write(&exe, b"").unwrap();
+        integration.link_cli(dir.path(), &exe).unwrap();
+        integration.link_cli(dir.path(), &exe).unwrap();
+        let bin_dir = dir.path().join("bin");
+        assert_eq!(
+            std::fs::read_link(bin_dir.join(brand::CLI_BIN)).unwrap(),
+            exe
+        );
+        assert!(features(&integration).ends_with(",path"));
+        let zsh = integration
+            .injection(Path::new("/bin/zsh"), |_| None)
+            .unwrap();
+        assert!(
+            zsh.env
+                .contains(&("GHOSTTY_BIN_DIR".into(), bin_dir.to_string_lossy().into()))
+        );
+
+        let path = integration.pane_path(Some("/usr/bin:/bin".into())).unwrap();
+        assert_eq!(
+            path,
+            OsString::from(format!("/usr/bin:/bin:{}", bin_dir.display()))
+        );
+        assert_eq!(integration.pane_path(Some(path.clone())), Some(path));
     }
 }

@@ -742,6 +742,26 @@ pub struct CreatedInvite {
     pub expires_ms: Option<u64>,
 }
 
+/// A one-time pairing ticket for another of the owner's devices. `Debug` leaves the link out:
+/// whoever holds it can pair as an owner.
+#[derive(Clone, PartialEq, Eq, uniffi::Record)]
+pub struct PairingCode {
+    /// The link (`gudo://pair/…`).
+    pub link: String,
+    /// The link upper-cased, for a compact QR code (parsing ignores case).
+    pub qr_payload: String,
+    /// Expiry, Unix ms.
+    pub expires_ms: u64,
+}
+
+impl std::fmt::Debug for PairingCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PairingCode")
+            .field("expires_ms", &self.expires_ms)
+            .finish_non_exhaustive()
+    }
+}
+
 impl std::fmt::Debug for CreatedInvite {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CreatedInvite")
@@ -1132,6 +1152,44 @@ impl DaemonClient {
     ) -> Result<String, MultiplayerError> {
         let id = proto::GrantId(unhex("grant id", &grant_id)?);
         self.mp_call(|client| async move { client.invite_link(id, inviter).await })
+            .await
+    }
+
+    /// Whether the host makes pairing tickets and renames devices for this device's owner
+    /// ([`Self::pairing_code`], [`Self::rename_device`]).
+    pub fn can_manage_devices(&self) -> bool {
+        self.core().can_manage_devices()
+    }
+
+    /// A one-time pairing ticket to show another device (paired owner devices only).
+    ///
+    /// # Errors
+    ///
+    /// `Failed` when the host is too old; `Forbidden` for guests.
+    pub async fn pairing_code(&self) -> Result<PairingCode, MultiplayerError> {
+        let (link, expires): (String, proto::UnixMillis) = self
+            .mp_call(|client| async move { client.pairing_ticket().await })
+            .await?;
+        Ok(PairingCode {
+            qr_payload: link.to_ascii_uppercase(),
+            link,
+            expires_ms: expires.0,
+        })
+    }
+
+    /// Names a paired owner device for everyone; an empty name goes back to the device's own
+    /// (paired owner devices only).
+    ///
+    /// # Errors
+    ///
+    /// `Invalid` for a malformed id; `Failed` when the host is too old; the daemon's refusal.
+    pub async fn rename_device(
+        &self,
+        device: String,
+        name: String,
+    ) -> Result<(), MultiplayerError> {
+        let device = proto::DeviceId(unhex("device id", &device)?);
+        self.mp_call(|client| async move { client.rename_device(device, name).await })
             .await
     }
 

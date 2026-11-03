@@ -264,6 +264,20 @@ policy is always `LastInput` for now.
   (`ServerCtl::DevicePaired`, `Caps::DEVICE_ALERTS`) once the new device says its name
   (`SetName`, kept in `devices.json`) or after 3 s, so a pairing from a phished ticket is
   seen and can be revoked.
+- A paired owner device can pair another one without a terminal: `MpRequest::PairingTicket`
+  mints a ticket exactly as `hostd pair` does (same `pairing.json`, lock, expiry and single
+  use) and returns its text; `MpRequest::RenameDevice` sets the name the owner chose
+  (`label` in `devices.json`), which stands over what the device says with `SetName`. Both
+  need a paired owner device (`grant_id` none): a guest is refused whatever roles its grant
+  carries. Offered as `DaemonFeatures::DEVICE_MANAGEMENT`; clients ask older daemons for
+  neither. `devices.json` also keeps `last_seen` (when a device last came or went, written
+  off the connection task, at most every 5 minutes on arrival).
+- `hostd devices` is a full-screen list in a terminal (pair with a QR code inline, rename,
+  remove), a table otherwise, JSON with `--json`; `hostd rename <key prefix> <name>`. Run
+  through a link named `gudo` the binary is the same program (`gudo pair`, `gudo devices`):
+  the install script makes the link next to it, and the daemon links `<state>/bin/gudo` to
+  itself and appends that directory to every pane's `PATH` (and, through shell integration,
+  after the shell's startup files: Ghostty's `path` feature with `GHOSTTY_BIN_DIR`).
 - Removal is recorded with its time (`unpaired.json`, under the `devices.json` lock). A chain
   counts only if its root was signed after the removal of every device in it, so a removed
   device's invites stay void; a fresh ticket pairs the device again, without them.

@@ -305,7 +305,8 @@ pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {
         | DaemonFeatures::REPO_TRUST
         | DaemonFeatures::REOPEN
         | DaemonFeatures::ACCOUNTS
-        | DaemonFeatures::INPUT_RESUME;
+        | DaemonFeatures::INPUT_RESUME
+        | DaemonFeatures::DEVICE_MANAGEMENT;
     if core.cfg.push.enabled && core.cfg.push.live_activity {
         features |= DaemonFeatures::LIVE_ACTIVITY;
     }
@@ -2590,6 +2591,18 @@ impl Client {
         Ok(MpResponse::Approval(status))
     }
 
+    /// Paired owner devices only: a guest, whatever roles its grant carries, never makes
+    /// another device an owner.
+    fn require_owner_device(&self, action: &str) -> Result<(), MpError> {
+        self.allow(Need::Own, Target::Daemon)?;
+        if !is_owner(&self.core, &self.authz) {
+            return Err(MpError::Forbidden(format!(
+                "only the host's own devices can {action}"
+            )));
+        }
+        Ok(())
+    }
+
     async fn multiplayer(&self, request: MpRequest) -> Result<MpResponse, MpError> {
         let core = &self.core;
         let mp = &core.mp;
@@ -2649,6 +2662,14 @@ impl Client {
             MpRequest::ListDevices => {
                 self.allow(Need::Own, Target::Daemon)?;
                 Ok(MpResponse::Devices(mp.list_devices(core)))
+            }
+            MpRequest::PairingTicket => {
+                self.require_owner_device("pair a device")?;
+                mp.pairing_ticket(core, &self.authz)
+            }
+            MpRequest::RenameDevice { device, name } => {
+                self.require_owner_device("rename a device")?;
+                mp.rename_device(core, device, &name)
             }
             MpRequest::Revoke(target) => {
                 self.allow(Need::Own, Target::Daemon)?;

@@ -1061,6 +1061,11 @@ mod tests {
             grant_id: "g".into(),
             expires_ms: None,
         };
+        let pairing = crate::mp::PairingCode {
+            link: "gudo://pair/pairing-secret".into(),
+            qr_payload: "GUDO://PAIR/PAIRING-SECRET".into(),
+            expires_ms: 0,
+        };
         let editor = crate::ws_types::EditorInstance {
             kind: crate::ws_types::EditorKind::VsCode,
             folder: "/srv".into(),
@@ -1083,12 +1088,14 @@ mod tests {
             },
             activity_cap: Some("activity-cap-value".into()),
         };
-        let text = format!("{seal:?} {offer:?} {invite:?} {editor:?} {registration:?}");
+        let text = format!("{seal:?} {offer:?} {invite:?} {pairing:?} {editor:?} {registration:?}");
         for secret in [
             "171",
             "action-token-value",
             "invite-secret",
             "INVITE-SECRET",
+            "pairing-secret",
+            "PAIRING-SECRET",
             "editor-token-value",
             "relay-cap-value",
             "activity-cap-value",

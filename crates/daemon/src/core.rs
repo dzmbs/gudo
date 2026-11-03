@@ -1506,6 +1506,13 @@ impl Core {
         for (key, value) in &self.cfg.pane_env {
             command.env(key, OsString::from(value));
         }
+        if let Some(path) = self
+            .shell
+            .as_ref()
+            .and_then(|integration| integration.pane_path(self.cfg.pane_var("PATH")))
+        {
+            command.env("PATH", path);
+        }
         for (key, value) in &inject_env {
             command.env(key, value);
         }

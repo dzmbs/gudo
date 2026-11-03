@@ -66,6 +66,16 @@
   the new device, so it can lie; the time and the alert itself cannot be suppressed by it.
 - **Pairing links ask first.** A `…://pair/…` link only opens the Add Host sheet, which shows
   the host and asks before pairing (`LinkSecurityTests`).
+- **Pairing from a paired device.** An owner device may ask the daemon for a ticket over its
+  connection (`MpRequest::PairingTicket`, "Pair a Device" in the apps). The daemon mints it
+  through the same path as `hostd pair`, so the secret, expiry and single use are the same.
+  Only paired owner devices may ask; a guest is refused even with every role, since a ticket
+  makes its holder an owner (`tests/it/devices.rs`). The app shows it as a QR code with a
+  countdown, copies the link as a concealed, expiring clipboard item, and never logs it
+  (`PairingCode`'s `Debug` leaves the link out). The new device is announced as above.
+- **Names.** The owner can rename a paired device (`MpRequest::RenameDevice`, `hostd rename`);
+  the name is a label for people only and changes no access. Names are trimmed, stripped of
+  control characters and capped at 64 characters.
 
 ### Device lifecycle (lost phone)
 
@@ -77,7 +87,8 @@ makes, and then without its old invites.
   (`Revoke(Device)`). This closes the device's connections at once. Its later connection
   attempts on the old pairing are refused with `Revoked`.
 - **On the host:**
-  - `gudo-hostd devices` lists the owner devices.
+  - `gudo devices` (or `gudo-hostd devices`) lists the owner devices; in a terminal it is a
+    full-screen list that removes one after asking.
   - `gudo-hostd unpair <key prefix>` removes one.
   - The daemon re-reads `devices.json` whenever the file changes, so removal takes effect
     within 0.5 s without a restart.

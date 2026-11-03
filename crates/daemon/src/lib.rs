@@ -90,8 +90,8 @@ pub use config::{ArtifactLimits, AskpassConfig, Config, RelayMode, default_state
 pub use config::{CustomRelays, PresenceTimes, PushConfig, RepoConfig};
 pub use fsutil::create_private_temp_file;
 pub use identity::{
-    EndpointInfo, PAIRING_TTL, PairedDevice, endpoint_info, list_paired, mint_ticket,
-    mint_ticket_text, paired_devices, unpair_device,
+    DEVICE_NAME_MAX, EndpointInfo, PAIRING_TTL, PairedDevice, clean_device_name, endpoint_info,
+    list_paired, mint_ticket, mint_ticket_text, paired_devices, rename_device, unpair_device,
 };
 pub use preauth::PreAuthLimits;
 pub use procinfo::inherited_env_var;
@@ -138,7 +138,14 @@ impl Daemon {
         };
         let hooks = HookServer::new(&config.state_dir, config.hook_bin())?;
         let shell = match shell::ShellIntegration::install(&config.state_dir) {
-            Ok(integration) => Some(integration),
+            Ok(mut integration) => {
+                if let Some(exe) = &config.cli_exe
+                    && let Err(error) = integration.link_cli(&config.state_dir, exe)
+                {
+                    tracing::warn!("linking {} for panes: {error}", brand::CLI_BIN);
+                }
+                Some(integration)
+            }
             Err(error) => {
                 tracing::warn!("installing shell integration scripts: {error}");
                 None

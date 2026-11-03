@@ -840,13 +840,33 @@ impl Mp {
                 ..authz.audit()
             },
         );
+        self.record_seen(core, authz.actor.device, false);
         core.emit(Event::Participants);
+    }
+
+    /// Records when a paired device came or went, off the connection's task: the write is
+    /// synced to disk. Not while shutting down, which must free the endpoint at once.
+    fn record_seen(&self, core: &Core, device: DeviceId, leaving: bool) {
+        if core
+            .shutting_down
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return;
+        }
+        let identity = Arc::clone(&self.identity);
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                runtime.spawn_blocking(move || identity.seen(device, leaving));
+            }
+            Err(_) => identity.seen(device, leaving),
+        }
     }
 
     pub fn leave(&self, core: &Core, id: ConnId) {
         let Some(live) = lock(&self.live).remove(&id) else {
             return;
         };
+        self.record_seen(core, live.authz.actor.device, true);
         self.audit.append(
             AuditKind::Leave,
             AuditEntry {
@@ -1134,6 +1154,35 @@ impl Mp {
             chain,
             terms: stored.terms,
         })
+    }
+
+    /// A one-time pairing ticket for another of the owner's devices, valid for
+    /// [`PAIRING_TTL`](crate::PAIRING_TTL).
+    pub fn pairing_ticket(&self, core: &Core, by: &Authz) -> Result<MpResponse, MpError> {
+        let ticket = crate::identity::mint_ticket_text(&core.cfg.state_dir, crate::PAIRING_TTL)
+            .map_err(|error| MpError::Failed(format!("could not make a pairing code: {error}")))?;
+        let expires = proto::Ticket::parse_with_extras(&ticket)
+            .map(|(parsed, _)| parsed.expires)
+            .map_err(|error| MpError::Failed(error.to_string()))?;
+        tracing::info!(device = ?by.actor.device, "an owner device made a pairing ticket");
+        Ok(MpResponse::PairingTicket { ticket, expires })
+    }
+
+    /// Names a paired owner device for everyone who lists devices.
+    pub fn rename_device(
+        &self,
+        core: &Core,
+        device: DeviceId,
+        name: &str,
+    ) -> Result<MpResponse, MpError> {
+        match self.identity.rename(device, name) {
+            Ok(true) => {
+                core.emit(Event::Participants);
+                Ok(MpResponse::Done)
+            }
+            Ok(false) => Err(MpError::NotFound("no such paired device".into())),
+            Err(error) => Err(MpError::Failed(format!("could not save the name: {error}"))),
+        }
     }
 
     pub fn list_devices(&self, core: &Core) -> Vec<DeviceInfo> {
