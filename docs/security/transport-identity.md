@@ -185,6 +185,14 @@ makes, and then without its old invites.
   role against requests from across the table: prompt, files, upload, forward, editor, lease,
   push, usage, grants, devices, audit, revoke, knocks, approval rules, split, close and new
   session.
+- **What reaches an agent's input.** A Prompter or Approver writes into an agent only as
+  text, never as a command: prompts and review notes go to agent panes only, as one bracketed
+  paste, and the whole text must pass the prompt check (no control characters, no leading
+  `!` shell escape, `#` memory note or `/` command beyond a read-only few). A review from a
+  guest who cannot drive the pane always opens with the standard line; a custom opening line
+  is the owner's or a driver's. Code quoted in a review has its control characters replaced.
+  A sketch sent to an agent pastes only a path the daemon wrote, escaped, without Enter. The
+  agents' own drive tools are covered in agent-terminal.md.
 
 ### Parsing and denial of service
 
@@ -260,6 +268,7 @@ was confirmed to fail.
 | Damaged `grants.json` | `access::a_damaged_grant_store_fails_closed_for_guests_only` |
 | Guest roles on `ctl`, workspace, bulk (upload), forwards and layout | `security::each_guest_role_gets_exactly_what_the_table_allows` |
 | Guest roles typing raw input (`input` stream) | `redteam::only_drivers_type_into_a_pane` |
+| Prompter or Approver sending a review whose opening line is a `!` shell command; control bytes in notes or quotes | `multiplayer::review_notes_obey_the_prompt_rules`, `multiplayer::prompter_only_composes_to_agent_panes` |
 | zstd bomb / huge declared length from a hostile daemon | `client-core conn::tests::inflating_is_bounded` (unit) |
 | Random and mangled bytes as every wire type, ticket and invite | `proto/tests/decode_untrusted.rs` (proptest) |
 

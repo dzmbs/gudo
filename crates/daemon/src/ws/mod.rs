@@ -244,6 +244,8 @@ pub(crate) async fn handle(
                 return Err(WsError::Invalid("no notes".into()));
             }
             let prompt = review::format_prompt(review.preamble.as_deref(), &review.notes);
+            crate::mp::prompt::check_review(&prompt)
+                .map_err(|error| WsError::Invalid(error.to_string()))?;
             let bytes = entry.pane.encode_input(InputPayload::Paste(prompt.clone()));
             entry
                 .pane

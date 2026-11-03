@@ -31,7 +31,7 @@ pub(crate) fn format_prompt(preamble: Option<&str>, notes: &[ReviewNote]) -> Str
         if let Some(quote) = note.quote.as_deref().filter(|text| !text.trim().is_empty()) {
             for line in quote.trim_end_matches('\n').lines() {
                 prompt.push_str("\n   > ");
-                prompt.push_str(line);
+                prompt.extend(line.chars().map(visible));
             }
         }
         for line in note.note.trim().lines() {
@@ -40,6 +40,16 @@ pub(crate) fn format_prompt(preamble: Option<&str>, notes: &[ReviewNote]) -> Str
         }
     }
     prompt
+}
+
+/// Quoted code is the file's, not the reviewer's: a stray control character in it is shown,
+/// never sent to the agent's terminal.
+fn visible(character: char) -> char {
+    if character.is_control() && character != '\t' {
+        char::REPLACEMENT_CHARACTER
+    } else {
+        character
+    }
 }
 
 #[cfg(test)]

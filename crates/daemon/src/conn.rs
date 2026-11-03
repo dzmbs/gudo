@@ -2466,16 +2466,21 @@ impl Client {
         let (need, target) = policy::workspace(&request);
         self.allow(need, target)
             .map_err(|error| WsError::Denied(error.to_string()))?;
-        // A prompter may review an agent's turns and send it notes, but only into an agent.
-        if let WorkspaceRequest::SendReview(review) = &request
+        let mut request = request;
+        // A prompter may review an agent's turns and send it notes, but only into an agent,
+        // and only under the standard opening line: how a prompt starts decides whether the
+        // agent takes it as a shell command or one of its own commands.
+        if let WorkspaceRequest::SendReview(review) = &mut request
             && self
                 .allow(Need::Drive, Target::Pane(review.pane_id))
                 .is_err()
-            && !self.core.is_agent_pane(review.pane_id)
         {
-            return Err(WsError::Denied(
-                "review notes from a prompter go to agent panes only".into(),
-            ));
+            if !self.core.is_agent_pane(review.pane_id) {
+                return Err(WsError::Denied(
+                    "review notes from a prompter go to agent panes only".into(),
+                ));
+            }
+            review.preamble = None;
         }
         let result = crate::ws::handle(&self.core, &self.ws, request).await?;
         Ok(match result {
