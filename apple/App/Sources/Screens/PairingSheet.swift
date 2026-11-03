@@ -49,6 +49,7 @@ struct PairingSheet: View {
     @State private var error: String?
     @State private var pairedCount = 0
     @State private var flow: JustSSHFlow?
+    @State private var camera = CameraAccess()
     @State private var importingKey = false
     @FocusState private var focus: Field?
 
@@ -332,7 +333,7 @@ struct PairingSheet: View {
         Section {
             // A code shows its ticket and host to confirm, as a pasted ticket or a link does:
             // anyone can print a QR code.
-            Viewfinder(scanning: live != nil && !isBusy) { payload in
+            Viewfinder(scanning: live != nil && !isBusy, camera: camera) { payload in
                 ticket = payload.trimmingCharacters(in: .whitespacesAndNewlines)
                 mode = .ticket
             }
@@ -341,10 +342,18 @@ struct PairingSheet: View {
             .listRowBackground(Color.clear)
             .listRowInsets(EdgeInsets())
         } footer: {
-            footer(default: Text(Viewfinder.hasCamera || live == nil
-                ? "Point the camera at the code, then check the host and pair. The host shows its code with \(Text(verbatim: "\(Brand.daemonBinary) pair").font(DS.Font.literalSmall))."
-                : "This device has no camera for scanning. Paste the ticket instead, or open the pairing link on this device."))
+            footer(default: Text(scanFooter))
         }
+    }
+
+    private var scanFooter: LocalizedStringKey {
+        if !Viewfinder.hasCamera, live != nil {
+            return "This device has no camera for scanning. Paste the ticket instead, or open the pairing link on this device."
+        }
+        if live != nil, camera.isOff {
+            return "You can also paste the ticket in the Ticket tab, or open the pairing link on this device."
+        }
+        return "Point the camera at the code, then check the host and pair. The host shows its code with \(Text(verbatim: "\(Brand.daemonBinary) pair").font(DS.Font.literalSmall))."
     }
 
     @ViewBuilder
@@ -579,15 +588,18 @@ private struct SSHDestination {
 }
 
 /// The camera viewfinder: VisionKit's live QR scanner behind corner brackets where a camera
-/// exists, else a dark square with the brackets and a hint.
+/// exists and may be used, else a dark square with the brackets and a hint, or the way to turn
+/// camera access back on.
 private struct Viewfinder: View {
     /// Whether to run the camera (the real hosts model is present and nothing is pairing).
     let scanning: Bool
+    let camera: CameraAccess
     let found: (String) -> Void
+    @Environment(\.scenePhase) private var scenePhase
 
     static var hasCamera: Bool {
         #if os(iOS)
-        QRScannerView.isAvailable
+        DataScannerViewController.isSupported || CameraAccess.simulated != nil
         #else
         false
         #endif
@@ -598,15 +610,22 @@ private struct Viewfinder: View {
             RoundedRectangle(cornerRadius: DS.Radius.panel)
                 .fill(.black)
             #if os(iOS)
-            if scanning, Self.hasCamera {
+            if isLive {
                 QRScannerView(found: found)
                     .clipShape(.rect(cornerRadius: DS.Radius.panel))
+                    .accessibilityLabel("Camera viewfinder. Point at the QR code shown by the host.")
             }
             #endif
             CornerBrackets()
-                .stroke(.white.opacity(0.9), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+                .stroke(.white.opacity(isAccessOff ? 0.3 : 0.9), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
                 .padding(48)
-            if !(scanning && Self.hasCamera) {
+                .accessibilityHidden(true)
+            #if os(iOS)
+            if isAccessOff {
+                CameraAccessOffView(restricted: camera.status == .restricted)
+            }
+            #endif
+            if !isLive, !isAccessOff {
                 VStack(spacing: DS.Space.s) {
                     Image(systemName: "qrcode.viewfinder")
                         .font(.largeTitle.weight(.light))
@@ -616,11 +635,28 @@ private struct Viewfinder: View {
                 }
                 .foregroundStyle(.white.opacity(0.7))
                 .padding(.horizontal, 72)
+                .accessibilityElement(children: .combine)
             }
         }
         .aspectRatio(1, contentMode: .fit)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Camera viewfinder. Point at the QR code shown by the host.")
+        .task(id: scanning) {
+            if scanning, Self.hasCamera { await camera.requestIfUndetermined() }
+        }
+        .onChange(of: scenePhase) {
+            if scenePhase == .active { camera.refresh() }
+        }
+    }
+
+    private var isLive: Bool {
+        #if os(iOS)
+        scanning && camera.status == .allowed && QRScannerView.isAvailable
+        #else
+        false
+        #endif
+    }
+
+    private var isAccessOff: Bool {
+        scanning && Self.hasCamera && camera.isOff
     }
 }
 

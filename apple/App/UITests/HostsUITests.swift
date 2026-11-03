@@ -87,6 +87,24 @@ final class HostsUITests: XCTestCase {
         shot("add-host-tailscale-failed")
     }
 
+    #if os(iOS)
+    /// With camera access off, Scan says so and links to Settings instead of a dead viewfinder.
+    func testScanWithCameraAccessOffLinksToSettings() throws {
+        launch(hostsDirectory: try hostsDirectory([]), extra: ["-simulateCameraAccess", "denied"])
+        let add = element("hosts-add")
+        XCTAssertTrue(add.waitForExistence(timeout: 20))
+        press(add)
+        let scan = app.buttons["Scan"].firstMatch
+        XCTAssertTrue(scan.waitForExistence(timeout: 10))
+        press(scan)
+        XCTAssertTrue(app.staticTexts["Camera access is off"].waitForExistence(timeout: 5))
+        XCTAssertTrue(element("camera-open-settings").exists, "the way to turn it back on")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'paste the ticket'")).firstMatch.exists,
+                      "pasting stays offered")
+        shot("add-host-scan-camera-off")
+    }
+    #endif
+
     func testSSHConfigImportListsTagsAndSavesHosts() throws {
         // The file is read as Hosts → Import reads one (`-testSSHConfig`: the simulator's
         // pasteboard prompt and file picker cannot be driven reliably); the sheet is the real one.
