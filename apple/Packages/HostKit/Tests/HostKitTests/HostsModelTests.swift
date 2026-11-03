@@ -183,7 +183,9 @@ nonisolated func temporaryDirectory() -> URL {
     }
 
     @Test func justSSHParsesDestinations() throws {
-        let model = HostsModel(secrets: MemorySecretStore(), repository: HostRepository(directory: temporaryDirectory()))
+        var configuration = HostsModel.Configuration()
+        configuration.sshInventory = SSHInventory.Source()
+        let model = HostsModel(secrets: MemorySecretStore(), repository: HostRepository(directory: temporaryDirectory()), configuration: configuration)
         let flow = JustSSHFlow(hosts: model)
         flow.destination = " mira@example.com:2222 "
         let endpoint = try flow.endpoint()

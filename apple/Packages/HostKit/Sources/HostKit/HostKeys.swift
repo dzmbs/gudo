@@ -24,6 +24,9 @@ public final class HostKeyPrompts {
     public private(set) var pending: Prompt?
     /// Trust first-contact keys without asking (UI tests). Changed keys are still refused.
     public var trustNewHostsAutomatically = false
+    /// Screens showing the prompt themselves (the SSH host form); the window's own alert
+    /// stays down while any does.
+    public var presenters = 0
 
     @ObservationIgnored private var queue: [(Prompt, (Bool) -> Void)] = []
 

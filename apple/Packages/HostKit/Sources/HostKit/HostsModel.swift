@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Observation
 import os
@@ -55,6 +56,8 @@ public final class HostsModel {
     public private(set) var sshConfigAliases: [SshHostConfig] = []
     /// How daemons are reached (Settings › Network), for every daemon connection.
     public private(set) var relaySettings: RelaySettings
+    /// ssh_config hosts, local and agent keys, known hosts: for the SSH host form and routes.
+    public let sshInventory: SSHInventory
 
     public struct Configuration: Sendable {
         /// Relay use for daemon connections (`.disabled` for LAN-only tests).
@@ -69,6 +72,8 @@ public final class HostsModel {
         /// Holds every event from a daemon back this long, in order: a slow link on loopback
         /// (UI tests of echo prediction).
         public var linkDelay: Duration?
+        /// Where the SSH host form's suggestions and keys come from (nil: this device).
+        public var sshInventory: SSHInventory.Source?
         public init() {}
     }
 
@@ -108,6 +113,11 @@ public final class HostsModel {
         records = repository.load()
         relaySettings = RelaySettings.load(directory: repository.directory, secrets: secrets)
         keys = KeyStore(secrets: secrets, directory: repository.directory)
+        if let source = configuration.sshInventory {
+            sshInventory = SSHInventory(source: source)
+        } else {
+            sshInventory = SSHInventory.live { [repository] in repository.loadSSHConfig() }
+        }
         network.onChange = { [weak self] in self?.networkChanged() }
     }
 
@@ -301,16 +311,17 @@ public final class HostsModel {
         try setRelaySettings(settings)
     }
 
-    private func openSSH(_ record: HostRecord, password: String?) throws -> SshConnection {
+    private func openSSH(_ record: HostRecord, password: String?, passphrase: String? = nil) throws -> SshConnection {
         guard let endpoint = record.ssh else { throw HostError.notConnected }
         // Credentials first: a host without them must not keep an idle connection.
-        let target = try target(for: endpoint)
-        let auth = try auth(for: record, password: password)
+        let route = try route(for: endpoint)
+        let auth = try auth(for: record, password: password, passphrase: passphrase)
         let connection = SshConnection(hostId: record.id)
         connections[record.id] = connection
         do {
             try connection.connect(
-                target: target, auth: auth, knownHosts: knownHosts, hostKeys: .ask(delegate: hostKeyPrompts.delegate()))
+                target: route.target, auth: auth, jumpAuth: jumpAuth(for: route, then: auth),
+                knownHosts: knownHosts, hostKeys: .ask(delegate: hostKeyPrompts.delegate()))
         } catch {
             connections[record.id] = nil
             throw error
@@ -319,14 +330,31 @@ public final class HostsModel {
     }
 
     func target(for endpoint: SSHEndpoint) throws -> SshTarget {
-        if let alias = endpoint.alias, let text = repository.loadSSHConfig() {
-            let config = try SshConfigFile.parse(text: text, home: Self.homeDirectory, localUser: endpoint.user)
-            return try config.target(destination: alias, defaultUser: endpoint.user)
-        }
-        return SshTarget(jumps: [], host: SshHostSpec(host: endpoint.host, port: endpoint.port, user: endpoint.user, hostKeyAlias: nil))
+        try route(for: endpoint).target
     }
 
-    func auth(for record: HostRecord, password: String?) throws -> [SshAuth] {
+    /// The route to a host: its ssh_config alias (or any `Host` patterns matching its address)
+    /// resolved, with the endpoint's own user, port and jump hosts winning.
+    func route(for endpoint: SSHEndpoint) throws -> SshRoute {
+        let config = sshConfig(for: endpoint)
+        let destination = SSHAddress.text(user: endpoint.user, host: endpoint.alias ?? endpoint.host, port: endpoint.port)
+        return try config.route(destination: destination, defaultUser: endpoint.user, proxyJump: endpoint.proxyJump)
+    }
+
+    /// The live `~/.ssh/config` when it has the alias (or the host has none), else the
+    /// imported copy, else an empty config.
+    private func sshConfig(for endpoint: SSHEndpoint) -> SshConfigFile {
+        if let live = sshInventory.config, endpoint.alias.map({ sshInventory.configHost($0) != nil }) ?? true {
+            return live
+        }
+        if let text = repository.loadSSHConfig(),
+           let imported = try? SshConfigFile.parse(text: text, home: Self.homeDirectory, localUser: endpoint.user) {
+            return imported
+        }
+        return (try? SshConfigFile.parse(text: "", home: Self.homeDirectory, localUser: endpoint.user))!
+    }
+
+    func auth(for record: HostRecord, password: String?, passphrase: String? = nil) throws -> [SshAuth] {
         guard let endpoint = record.ssh else { return [] }
         switch endpoint.identity {
         case .password:
@@ -335,11 +363,63 @@ public final class HostsModel {
             }
             return [.password(password: password)]
         case .key(let id), .secureEnclave(let id):
-            return [try keys.auth(for: id)]
+            return [try keys.auth(for: id, passphrase: passphrase)]
         case .keyFile(let path):
-            return [.keyFile(path: path, passphrase: nil)]
+            return [try keyFileAuth(path: path, passphrase: passphrase, identityAgent: identityAgent(for: endpoint))]
         case .agent:
-            return [.agent(socketPath: nil)]
+            guard let socket = identityAgent(for: endpoint) else { return [] }
+            if let fingerprint = endpoint.agentKey {
+                return [.agentKey(socketPath: socket.path, fingerprint: fingerprint)]
+            }
+            return [.agent(socketPath: socket.path)]
+        }
+    }
+
+    /// A key file, or the agent's copy of it when the agent has unlocked it. An encrypted
+    /// file needs its passphrase: given now, or saved with the host.
+    private func keyFileAuth(path: String, passphrase: String?, identityAgent: AgentSocket?) throws -> SshAuth {
+        if let key = sshInventory.localKey(at: path), let identityAgent, sshInventory.agentHolds(fingerprint: key.info.fingerprint) {
+            return .agentKey(socketPath: identityAgent.path, fingerprint: key.info.fingerprint)
+        }
+        let encrypted = (try? Data(contentsOf: URL(fileURLWithPath: path))).map { privateKeyIsEncrypted(pem: $0) } ?? false
+        guard encrypted else { return .keyFile(path: path, passphrase: nil) }
+        guard let passphrase = try passphrase ?? secrets.string(for: Self.passphraseKey(path)) else {
+            throw HostError.missingSecret("passphrase for \((path as NSString).lastPathComponent)")
+        }
+        return .keyFile(path: path, passphrase: passphrase)
+    }
+
+    /// Where a key file's passphrase is saved (by path, so every host using it shares it).
+    static func passphraseKey(_ path: String) -> String {
+        let digest = SHA256.hash(data: Data(path.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
+        return "keyfile.\(digest).passphrase"
+    }
+
+    /// The agent to ask: `IdentityAgent` from ssh_config, else `$SSH_AUTH_SOCK` (path nil);
+    /// nil when the config says `IdentityAgent none` or the device has no agent.
+    private struct AgentSocket { var path: String? }
+
+    private func identityAgent(for endpoint: SSHEndpoint) -> AgentSocket? {
+        guard sshInventory.isDesktop else { return nil }
+        let configured = sshConfig(for: endpoint).resolve(alias: endpoint.alias ?? endpoint.host).identityAgent
+        switch configured {
+        case "none", "None", "NONE": return nil
+        case "SSH_AUTH_SOCK", "$SSH_AUTH_SOCK", nil: return AgentSocket(path: nil)
+        case let path?: return AgentSocket(path: path)
+        }
+    }
+
+    /// What each jump host signs in with: its own `IdentityFile`s, the agent, then the
+    /// destination's credentials (the same login often works on a bastion). On iOS, the
+    /// destination's.
+    func jumpAuth(for route: SshRoute, then destinationAuth: [SshAuth]) -> [[SshAuth]] {
+        guard sshInventory.isDesktop else { return [] }
+        return route.jumpIdentityFiles.map { files in
+            var methods: [SshAuth] = files
+                .filter { FileManager.default.fileExists(atPath: $0) }
+                .compactMap { try? keyFileAuth(path: $0, passphrase: nil, identityAgent: AgentSocket(path: nil)) }
+            methods.append(.agent(socketPath: nil))
+            return methods + destinationAuth
         }
     }
 
@@ -538,22 +618,95 @@ public final class HostsModel {
     /// saved for reconnects when `rememberPassword`.
     @discardableResult
     public func connectSSH(
-        _ endpoint: SSHEndpoint, name: String? = nil, password: String? = nil, rememberPassword: Bool = true
+        _ endpoint: SSHEndpoint, name: String? = nil, password: String? = nil, rememberPassword: Bool = true,
+        passphrase: String? = nil, rememberPassphrase: Bool = true, hostId: String? = nil
     ) throws -> String {
-        let existing = records.first { $0.ssh?.host == endpoint.host && $0.ssh?.user == endpoint.user && $0.ssh?.port == endpoint.port }
-        var record = existing ?? HostRecord(name: name ?? endpoint.host, kind: .ssh, ssh: endpoint)
-        if existing == nil { record.nameSource = name == nil ? .placeholder : .user }
+        let existing = hostId.flatMap(record) ?? records.first {
+            $0.ssh?.host == endpoint.host && $0.ssh?.user == endpoint.user && $0.ssh?.port == endpoint.port
+        }
+        var record = existing ?? HostRecord(name: name ?? endpoint.alias ?? endpoint.host, kind: .ssh, ssh: endpoint)
+        if existing == nil {
+            record.nameSource = name == nil && endpoint.alias == nil ? .placeholder : .user
+        } else if let name, !name.isEmpty, name != record.name {
+            record.name = name
+            record.nameSource = .user
+        }
         record.ssh = endpoint
-        if let password, rememberPassword { try secrets.set(password, for: record.passwordKey) }
+        try saveSecrets(for: record, password: password, rememberPassword: rememberPassword, passphrase: passphrase, rememberPassphrase: rememberPassphrase)
         upsert(record)
         disconnect(record.id)
         if record.kind == .daemon {
             try open(record.id)
         } else {
-            _ = try openSSH(record, password: password)
+            _ = try openSSH(record, password: password, passphrase: passphrase)
             touch(record.id)
         }
         return record.id
+    }
+
+    /// Saves an SSH host's changed login without connecting (Edit Host). A live plain-SSH
+    /// connection is redialled with it.
+    public func updateSSH(
+        _ hostId: String, endpoint: SSHEndpoint, name: String?, password: String? = nil, rememberPassword: Bool = true,
+        passphrase: String? = nil, rememberPassphrase: Bool = true
+    ) throws {
+        guard var record = record(hostId) else { throw HostError.notConnected }
+        record.ssh = endpoint
+        if let name, !name.isEmpty, name != record.name {
+            record.name = name
+            record.nameSource = .user
+        }
+        try saveSecrets(for: record, password: password, rememberPassword: rememberPassword, passphrase: passphrase, rememberPassphrase: rememberPassphrase)
+        upsert(record)
+        if record.kind == .ssh, connections[hostId] != nil {
+            disconnect(hostId)
+            _ = try openSSH(record, password: password, passphrase: passphrase)
+        }
+    }
+
+    private func saveSecrets(
+        for record: HostRecord, password: String?, rememberPassword: Bool, passphrase: String?, rememberPassphrase: Bool
+    ) throws {
+        if let password, rememberPassword { try secrets.set(password, for: record.passwordKey) }
+        guard let passphrase, rememberPassphrase else { return }
+        switch record.ssh?.identity {
+        case .keyFile(let path): try secrets.set(passphrase, for: Self.passphraseKey(path))
+        case .key(let id): try keys.savePassphrase(passphrase, for: id)
+        default: break
+        }
+    }
+
+    /// Plain-SSH hosts with a live, signed-in session: where "Add to Server" can install a key.
+    public var authorizableHosts: [HostRecord] {
+        records.filter { record in
+            guard let connection = connections[record.id] as? SshConnection, connection.session != nil else { return false }
+            if case .connected = connection.status { return true }
+            return false
+        }
+    }
+
+    /// Appends a public key to `~/.ssh/authorized_keys` on a host over its live SSH session
+    /// (what `ssh-copy-id` does); a key already there is not added twice.
+    public func authorize(_ publicKey: String, onHost hostId: String) async throws {
+        guard let ssh = connections[hostId] as? SshConnection, let session = ssh.session else {
+            throw HostError.notConnected
+        }
+        let output = try await session.exec(command: try sshAuthorizeKeyCommand(publicKey: publicKey))
+        guard output.exitStatus == 0 else {
+            throw JustSSHError.remote(String(decoding: output.stderr, as: UTF8.self))
+        }
+    }
+
+    /// Dials once, signs in and hangs up, without saving anything: "Test Connection". The
+    /// host-key prompt comes up as for a real connection. Returns how long it took.
+    public func testSSH(_ endpoint: SSHEndpoint, password: String? = nil, passphrase: String? = nil) async throws -> Duration {
+        let record = HostRecord(id: "test", name: endpoint.host, kind: .ssh, ssh: endpoint)
+        let route = try route(for: endpoint)
+        let auth = try auth(for: record, password: password, passphrase: passphrase)
+        let milliseconds = try await testSshConnection(
+            target: route.target, auth: auth, knownHosts: knownHosts, hostKeys: .ask(delegate: hostKeyPrompts.delegate()),
+            options: defaultSshOptions(), jumpAuth: jumpAuth(for: route, then: auth))
+        return .milliseconds(Int64(clamping: milliseconds))
     }
 
     /// Installs (or reuses/upgrades) the helper on an SSH host over its live session, pairs
@@ -636,9 +789,12 @@ public final class HostsModel {
     /// helper restarted (false: it already ran the bundled build).
     private func updateOverSSH(_ record: HostRecord) async throws -> Bool {
         guard let endpoint = record.ssh else { throw HelperUpdateError.unavailable }
+        let route = try route(for: endpoint)
+        let auth = try auth(for: record, password: nil)
         let session = try SshSession.start(
-            target: try target(for: endpoint), auth: try auth(for: record, password: nil), knownHosts: knownHosts,
-            hostKeys: .ask(delegate: hostKeyPrompts.delegate()), options: defaultSshOptions(), listener: SshStateStream())
+            target: route.target, auth: auth, knownHosts: knownHosts,
+            hostKeys: .ask(delegate: hostKeyPrompts.delegate()), options: defaultSshOptions(), listener: SshStateStream(),
+            jumpAuth: jumpAuth(for: route, then: auth))
         defer { session.close() }
         helperUpdates[record.id]?.step = .connectingSSH
         try await session.connected()
@@ -704,7 +860,7 @@ public final class HostsModel {
     }
     #endif
 
-    nonisolated static var homeDirectory: String {
+    nonisolated public static var homeDirectory: String {
         #if os(macOS)
         // The real home, not a sandbox container.
         String(cString: getpwuid(getuid()).pointee.pw_dir)

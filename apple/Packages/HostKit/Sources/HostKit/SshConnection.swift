@@ -31,15 +31,15 @@ public final class SshConnection: HostConnection {
     /// Starts the session. Connection problems arrive as `status`; this throws only for a key
     /// that cannot be decoded.
     public func connect(
-        target: SshTarget, auth: [SshAuth], knownHosts: KnownHostsStore, hostKeys: HostKeyPolicy,
-        options: SshOptions = defaultSshOptions()
+        target: SshTarget, auth: [SshAuth], jumpAuth: [[SshAuth]] = [], knownHosts: KnownHostsStore,
+        hostKeys: HostKeyPolicy, options: SshOptions = defaultSshOptions()
     ) throws {
         let states = SshStateStream()
         status = .connecting(.dialing)
         let started = ContinuousClock.now
         session = try SshSession.start(
             target: target, auth: auth, knownHosts: knownHosts, hostKeys: hostKeys, options: options,
-            listener: states)
+            listener: states, jumpAuth: jumpAuth)
         pump = Task { [weak self] in
             var logged = false
             for await state in states.states {

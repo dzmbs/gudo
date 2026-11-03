@@ -95,13 +95,23 @@ nonisolated public struct SSHEndpoint: Codable, Hashable, Sendable {
     public var alias: String?
     /// How to authenticate.
     public var identity: SSHIdentity
+    /// Jump hosts in `-J` syntax (`admin@bastion:22,hop2`), or `none`. nil: the
+    /// `~/.ssh/config` alias decides.
+    public var proxyJump: String?
+    /// With `.agent`: offer only this agent key (`SHA256:…`), never the others.
+    public var agentKey: String?
 
-    public init(user: String, host: String, port: UInt16 = 22, alias: String? = nil, identity: SSHIdentity) {
+    public init(
+        user: String, host: String, port: UInt16 = 22, alias: String? = nil, identity: SSHIdentity,
+        proxyJump: String? = nil, agentKey: String? = nil
+    ) {
         self.user = user
         self.host = host
         self.port = port
         self.alias = alias
         self.identity = identity
+        self.proxyJump = proxyJump
+        self.agentKey = agentKey
     }
 
     /// `user@host[:port]`.

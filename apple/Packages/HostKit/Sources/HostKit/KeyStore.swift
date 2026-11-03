@@ -23,8 +23,29 @@ nonisolated public struct SSHKey: Codable, Identifiable, Hashable, Sendable {
     /// `SHA256:…`.
     public var fingerprint: String
     public var created = Date()
+    /// The private key is protected by a passphrase. Optional so older `keys.json` decode.
+    public var encrypted: Bool?
 
     var secretKey: String { "key.\(id)" }
+    var passphraseKey: String { secretKey + ".passphrase" }
+
+    /// `ssh-ed25519`, `ecdsa-sha2-nistp256`, `ssh-rsa`.
+    public var algorithm: String {
+        String(publicKey.prefix { $0 != " " })
+    }
+
+    /// How the key type reads in a list.
+    public var typeName: String {
+        switch algorithm {
+        case "ssh-ed25519": "Ed25519"
+        case "ssh-rsa": "RSA"
+        case "ecdsa-sha2-nistp256": kind == .secureEnclave ? "Secure Enclave" : "ECDSA P-256"
+        case "ecdsa-sha2-nistp384": "ECDSA P-384"
+        case "ecdsa-sha2-nistp521": "ECDSA P-521"
+        case let other where other.hasPrefix("sk-"): "Security Key"
+        default: algorithm
+        }
+    }
 
     /// Appends the key to `~/.ssh/authorized_keys` on a host (what `ssh-copy-id` does), safe
     /// to paste into a shell there.
@@ -76,15 +97,39 @@ public final class KeyStore {
         keys.first { $0.id == id }
     }
 
-    /// A new ed25519 key, private part stored as OpenSSH PEM.
-    public func generate(label: String) throws -> SSHKey {
-        let generated = try generateEd25519Key(comment: label)
-        let key = SSHKey(
+    /// A new key, its private part stored as OpenSSH PEM in the Keychain, encrypted with
+    /// `passphrase` if one is given. The passphrase is kept only when `rememberPassphrase`;
+    /// otherwise it is asked for at each new connection.
+    public func generate(
+        label: String, type: SshKeyType = .ed25519, passphrase: String? = nil, rememberPassphrase: Bool = false
+    ) throws -> SSHKey {
+        let passphrase = passphrase.flatMap { $0.isEmpty ? nil : $0 }
+        let generated = try generateSshKey(keyType: type, comment: label, passphrase: passphrase)
+        var key = SSHKey(
             id: UUID().uuidString, label: label, kind: .generated,
             publicKey: generated.publicKey, fingerprint: generated.fingerprint)
+        key.encrypted = passphrase != nil ? true : nil
         try secrets.set(generated.privateKey, for: key.secretKey)
+        if let passphrase, rememberPassphrase { try secrets.set(passphrase, for: key.passphraseKey) }
         try add(key)
         return key
+    }
+
+    /// The key is encrypted and its passphrase is not saved: ask for it.
+    public func needsPassphrase(_ id: String) -> Bool {
+        guard let key = key(id), key.encrypted == true else { return false }
+        return (try? secrets.string(for: key.passphraseKey)) == nil
+    }
+
+    public func savePassphrase(_ passphrase: String, for id: String) throws {
+        guard let key = key(id) else { throw KeyStoreError.unknownKey(id) }
+        try secrets.set(passphrase, for: key.passphraseKey)
+    }
+
+    public func rename(_ id: String, to label: String) throws {
+        guard let index = keys.firstIndex(where: { $0.id == id }), !label.isEmpty else { return }
+        keys[index].label = label
+        try save()
     }
 
     /// Imports a private key (OpenSSH/PEM). An encrypted key needs its passphrase, which is
@@ -92,11 +137,12 @@ public final class KeyStore {
     public func importKey(pem: Data, passphrase: String?, label: String) throws -> SSHKey {
         let info = try inspectPrivateKey(pem: pem, passphrase: passphrase)
         if let existing = keys.first(where: { $0.fingerprint == info.fingerprint }) { return existing }
-        let key = SSHKey(
+        var key = SSHKey(
             id: UUID().uuidString, label: label, kind: .imported,
             publicKey: info.publicKey, fingerprint: info.fingerprint)
+        key.encrypted = passphrase != nil ? true : nil
         try secrets.set(pem, for: key.secretKey)
-        if let passphrase { try secrets.set(passphrase, for: key.secretKey + ".passphrase") }
+        if let passphrase { try secrets.set(passphrase, for: key.passphraseKey) }
         try add(key)
         return key
     }
@@ -117,19 +163,23 @@ public final class KeyStore {
     public func remove(_ id: String) throws {
         guard let key = key(id) else { return }
         try secrets.remove(key.secretKey)
-        try? secrets.remove(key.secretKey + ".passphrase")
+        try? secrets.remove(key.passphraseKey)
         keys.removeAll { $0.id == id }
         try save()
     }
 
-    /// The credential for a key.
-    public func auth(for id: String) throws -> SshAuth {
+    /// The credential for a key. An encrypted key uses `passphrase`, else the saved one.
+    public func auth(for id: String, passphrase: String? = nil) throws -> SshAuth {
         guard let key = key(id), let secret = try secrets.data(for: key.secretKey) else {
             throw KeyStoreError.unknownKey(id)
         }
         switch key.kind {
         case .generated, .imported:
-            return .keyData(pem: secret, passphrase: try secrets.string(for: key.secretKey + ".passphrase"))
+            let saved = try secrets.string(for: key.passphraseKey)
+            if key.encrypted == true, passphrase == nil, saved == nil {
+                throw HostError.missingSecret("passphrase for \(key.label)")
+            }
+            return .keyData(pem: secret, passphrase: passphrase ?? saved)
         case .secureEnclave:
             let privateKey = try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: secret)
             return .signer(signer: SecureEnclaveSigner(key: privateKey, comment: key.label))
@@ -187,5 +237,9 @@ nonisolated public final class SecureEnclaveSigner: SshSigner {
         } catch {
             throw .Failed(message: error.localizedDescription)
         }
+    }
+
+    public func signSecurityKey(data: Data) throws(SignerError) -> SecurityKeyAssertion {
+        throw .Failed(message: "A Secure Enclave key is not a security key")
     }
 }
