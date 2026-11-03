@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import os
 import PaneLayout
+import GudoCore
 
 /// A tab anywhere in a window: the host it lives on (`HostGroups.localId` for this device) and
 /// its id there. Tab ids are per host, so two hosts can both have a "tab 1".
@@ -174,12 +175,18 @@ public final class HostGroups {
     /// A daemon group's tabs grouped by repository and worktree, once the daemon has sent its
     /// repository snapshot (nil otherwise: draw the tabs flat). `tabs` defaults to all of them.
     public func repoSidebar(for group: HostGroup, tabs: [Tab]? = nil) -> RepoSidebar? {
+        guard let snapshot = repoSnapshot(for: group) else { return nil }
+        return RepoSidebar.build(tabs: tabs ?? group.tabs, snapshot: snapshot)
+    }
+
+    /// A daemon group's repositories and worktrees, nil until the daemon has sent any.
+    public func repoSnapshot(for group: HostGroup) -> RepoSnapshot? {
         guard group.kind == .daemon,
               let connection = hosts.connection(group.id) as? DaemonConnection,
               let snapshot = connection.existingWorkspace?.repos,
               !snapshot.worktrees.isEmpty
         else { return nil }
-        return RepoSidebar.build(tabs: tabs ?? group.tabs, snapshot: snapshot)
+        return snapshot
     }
 
     // MARK: Projects

@@ -355,6 +355,34 @@ private struct WorktreeMenu: View {
     }
 }
 
+/// The row a repository's idle worktrees fold behind; a tap shows them under it.
+private struct MoreWorktreesRow: View {
+    let title: String
+    let expanded: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        Button(action: toggle) {
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .rotationEffect(.degrees(expanded ? 90 : 0))
+                    .frame(width: GitRow.slot)
+                Text(title)
+                    .font(GitRow.subtitle)
+                    .lineLimit(1)
+                Spacer(minLength: DS.Space.xs)
+            }
+            .foregroundStyle(DS.Palette.textTertiary)
+            .modifier(GitRowStyle(selected: false))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+        .accessibilityHint(expanded ? "Hides them" : "Shows them")
+    }
+}
+
 /// One host's tabs outside a repository, then each repository with its worktrees.
 struct RepoGroupsView<LooseRow: View>: View {
     let group: HostGroup
@@ -362,6 +390,7 @@ struct RepoGroupsView<LooseRow: View>: View {
     let numbers: [TabRef: Int]
     @ViewBuilder let looseRow: (Tab) -> LooseRow
     @Environment(WindowModel.self) private var model
+    private var folds: WorktreeFoldStore { .shared }
 
     var body: some View {
         let tabs = Dictionary(group.tabs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -370,26 +399,44 @@ struct RepoGroupsView<LooseRow: View>: View {
                 if let tab = tabs[id] { looseRow(tab) }
             }
             ForEach(sidebar.repos) { repo in
+                let fold = WorktreeFold(repo)
+                let expanded = folds.isExpanded(repo: repo.id, host: group.id)
                 RepoSectionHeader(repo: repo, host: group.id)
-                ForEach(repo.worktrees) { worktree in
-                    let rowTabs = worktree.tabs.compactMap { tabs[$0] }
-                    let first = rowTabs.first
-                    WorktreeRow(
-                        worktree: worktree.state, host: group.id, tab: first,
-                        number: first.flatMap { numbers[group.ref($0.id)] },
-                        isActive: rowTabs.count == 1 && first.map(isActive) == true,
-                        agent: rowTabs.count == 1 ? first.flatMap(agentState) : rowTabs.compactMap(agentState).min { AgentGlyph.priority($0) < AgentGlyph.priority($1) })
-                    if rowTabs.count > 1 {
-                        ForEach(rowTabs) { tab in
-                            WorktreeTabRow(
-                                tab: tab, host: group.id, number: numbers[group.ref(tab.id)],
-                                isActive: isActive(tab), agent: agentState(tab))
+                ForEach(fold.shown) { worktree in
+                    worktreeRows(worktree, tabs: tabs)
+                }
+                if !fold.folded.isEmpty {
+                    MoreWorktreesRow(title: fold.foldedTitle, expanded: expanded) {
+                        withAnimation(DS.Motion.snappy) { folds.toggle(repo: repo.id, host: group.id) }
+                    }
+                    .accessibilityIdentifier("more-worktrees-\(repo.name)")
+                    if expanded {
+                        ForEach(fold.folded) { worktree in
+                            worktreeRows(worktree, tabs: tabs)
                         }
                     }
                 }
             }
         }
         .opacity(group.showsAsLive ? 1 : 0.6)
+    }
+
+    @ViewBuilder
+    private func worktreeRows(_ worktree: RepoSidebar.Worktree, tabs: [TabId: Tab]) -> some View {
+        let rowTabs = worktree.tabs.compactMap { tabs[$0] }
+        let first = rowTabs.first
+        WorktreeRow(
+            worktree: worktree.state, host: group.id, tab: first,
+            number: first.flatMap { numbers[group.ref($0.id)] },
+            isActive: rowTabs.count == 1 && first.map(isActive) == true,
+            agent: rowTabs.count == 1 ? first.flatMap(agentState) : rowTabs.compactMap(agentState).min { AgentGlyph.priority($0) < AgentGlyph.priority($1) })
+        if rowTabs.count > 1 {
+            ForEach(rowTabs) { tab in
+                WorktreeTabRow(
+                    tab: tab, host: group.id, number: numbers[group.ref(tab.id)],
+                    isActive: isActive(tab), agent: agentState(tab))
+            }
+        }
     }
 
     private func isActive(_ tab: Tab) -> Bool {
