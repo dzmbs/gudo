@@ -41,6 +41,9 @@ packages:
     path: Packages/VoiceKit
   FilesProviderKit:
     path: Packages/FilesProviderKit
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    exactVersion: 2.10.1
 targets:
   App:
     type: application
@@ -113,6 +116,11 @@ targets:
         BrandWebDomain: $(BRAND_WEB_DOMAIN)
         BrandDaemonBinary: $(BRAND_DAEMON_BIN)
         BrandCommandLineTool: $(BRAND_CLI_BIN)
+        # The Mac app's updates (Sparkle, AppUpdater): the feed scripts/release-mac.sh writes,
+        # and the public half of the EdDSA key it signs each DMG with.
+        SUFeedURL: https://$(BRAND_WEB_DOMAIN)/appcast.xml
+        SUPublicEDKey: ozc0EMrqWTR2XSAobq9cWWT+7Un0rgp48uiqmyg3QbA=
+        SUEnableAutomaticChecks: true
         # `.excalidraw` scenes: drawings dragged, copied and exported out of the app (with a
         # PNG alongside), and dropped or pasted in. Excalidraw declares no UTI; imported, not
         # owned.
@@ -152,7 +160,7 @@ targets:
         CODE_SIGN_IDENTITY: "-"
         PRODUCT_BUNDLE_IDENTIFIER: $(BRAND_BUNDLE_ID_PREFIX).app
         PROVISIONING_PROFILE_SPECIFIER: $(RELEASE_PROFILE_APP)
-        MARKETING_VERSION: "0.1.0"
+        MARKETING_VERSION: "0.1.1"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
         GENERATE_INFOPLIST_FILE: YES
@@ -265,6 +273,9 @@ targets:
       - package: FilesProviderKit
         product: FilesProviderKit
         destinationFilters: [iOS]
+      - package: Sparkle
+        product: Sparkle
+        destinationFilters: [macOS]
       - target: NotificationService
         destinationFilters: [iOS]
       # FilesProvider is embedded only with a paid team (FILES_PROVIDER = YES): its own bundle id
@@ -294,7 +305,7 @@ targets:
         PROVISIONING_PROFILE_SPECIFIER: $(RELEASE_PROFILE_NOTIFICATIONS)
         PRODUCT_NAME: NotificationService
         CODE_SIGN_IDENTITY: "-"
-        MARKETING_VERSION: "0.1.0"
+        MARKETING_VERSION: "0.1.1"
         CURRENT_PROJECT_VERSION: "1"
         TARGETED_DEVICE_FAMILY: "1,2"
         CODE_SIGN_ENTITLEMENTS: $(PUSH_ENTITLEMENTS_FILE)
@@ -327,7 +338,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(BRAND_BUNDLE_ID_PREFIX).app.files
         PRODUCT_NAME: FilesProvider
         CODE_SIGN_IDENTITY: "-"
-        MARKETING_VERSION: "0.1.0"
+        MARKETING_VERSION: "0.1.1"
         CURRENT_PROJECT_VERSION: "1"
         TARGETED_DEVICE_FAMILY: "1,2"
         APPLICATION_EXTENSION_API_ONLY: YES
@@ -358,7 +369,7 @@ targets:
         PROVISIONING_PROFILE_SPECIFIER: $(RELEASE_PROFILE_AGENTS)
         PRODUCT_NAME: AgentActivityWidget
         CODE_SIGN_IDENTITY: "-"
-        MARKETING_VERSION: "0.1.0"
+        MARKETING_VERSION: "0.1.1"
         CURRENT_PROJECT_VERSION: "1"
         TARGETED_DEVICE_FAMILY: "1,2"
         APPLICATION_EXTENSION_API_ONLY: YES

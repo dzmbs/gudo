@@ -88,9 +88,13 @@ enum PaletteCommands {
              "rectangle.topthird.inset.filled", nil, { TabPlacement.showsTabBar.toggle() }),
         ]
         #if os(macOS)
-        let commandLine: [(String, String, String, [String]?, () -> Void)] = CommandLineTool.helper == nil ? [] : [
+        var commandLine: [(String, String, String, [String]?, () -> Void)] = CommandLineTool.helper == nil ? [] : [
             ("install-cli", "Install Command Line Tool", "terminal", nil, { CommandLineTool.installAndReport() }),
         ]
+        let updater = AppUpdater.shared
+        if updater.isAvailable {
+            commandLine.append(("check-for-updates", "Check for Updates", "arrow.down.circle", nil, { updater.checkForUpdates() }))
+        }
         #else
         let commandLine: [(String, String, String, [String]?, () -> Void)] = []
         #endif

@@ -187,3 +187,12 @@ NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FO
 DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
+
+## Sparkle
+
+Source: https://github.com/sparkle-project/Sparkle 2.10.1, linked unmodified into the Mac app as
+`Sparkle.framework` (a Swift package binary) for its updates (`App/Sources/Model/AppUpdater.swift`).
+MIT License, Copyright (c) 2006-2013 Andy Matuschak and the other holders listed in its licence,
+which also carries the notices of the code Sparkle includes (bsdiff, sais-lite, ed25519 and
+others). Full text: `scripts/notices/mac-app.txt`, shipped in
+`App/Resources/THIRD_PARTY_NOTICES.txt`.

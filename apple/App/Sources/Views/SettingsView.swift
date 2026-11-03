@@ -624,10 +624,40 @@ private struct NotificationsSection: View {
 }
 
 private struct AboutSection: View {
+    #if os(macOS)
+    private let updater = AppUpdater.shared
+    #endif
+    private let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+
     var body: some View {
         Section {
-            LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")
+            #if os(macOS)
+            if updater.isAvailable {
+                LabeledContent("Version") {
+                    HStack(spacing: DS.Space.s) {
+                        Text(version).foregroundStyle(DS.Palette.textSecondary)
+                        Button(AppUpdater.checkTitle) { updater.checkForUpdates() }
+                            .disabled(!updater.canCheckForUpdates)
+                            .accessibilityIdentifier("settings-check-for-updates")
+                    }
+                }
                 .settingAnchor("version")
+                @Bindable var updater = updater
+                Toggle("Check for Updates Automatically", isOn: $updater.checksAutomatically)
+                    .accessibilityIdentifier("settings-updates-check-automatically")
+                    .settingAnchor("updates-check-automatically")
+                Toggle("Download and Install Updates Automatically", isOn: $updater.downloadsAutomatically)
+                    .disabled(!updater.allowsAutomaticDownloads)
+                    .accessibilityIdentifier("settings-updates-download-automatically")
+                    .settingAnchor("updates-download-automatically")
+            } else {
+                LabeledContent("Version", value: version)
+                    .settingAnchor("version")
+            }
+            #else
+            LabeledContent("Version", value: version)
+                .settingAnchor("version")
+            #endif
             NavigationLink("Acknowledgements", value: SettingsPage.acknowledgements)
                 .settingAnchor("acknowledgements")
             if let privacy = URL(string: "https://\(Brand.webDomain)/privacy/") {

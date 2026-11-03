@@ -33,6 +33,9 @@ struct WorkspaceCommands: Commands {
         CommandGroup(after: .newItem) {
             buttons(WorkspaceAction.fileActions)
         }
+        CommandGroup(after: .appInfo) {
+            CheckForUpdatesButton(updater: AppUpdater.shared)
+        }
         CommandGroup(after: .appSettings) {
             if CommandLineTool.helper != nil {
                 Button("Install Command Line Tool…") { CommandLineTool.installAndReport() }
@@ -190,3 +193,15 @@ enum ActiveWindow {
     }
     #endif
 }
+
+#if os(macOS)
+/// The app menu's Check for Updates…, off while Sparkle is busy (or in builds that don't update).
+struct CheckForUpdatesButton: View {
+    let updater: AppUpdater
+
+    var body: some View {
+        Button(AppUpdater.checkTitle) { updater.checkForUpdates() }
+            .disabled(!updater.canCheckForUpdates)
+    }
+}
+#endif

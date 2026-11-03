@@ -4,7 +4,8 @@
 //!   licenses`): the native code it links (`scripts/notices/native.txt`, kept by hand) and its
 //!   Rust crates.
 //! - `apple/App/Resources/THIRD_PARTY_NOTICES.txt`, bundled in the app: the same plus the
-//!   app's Rust core and the npm packages in the Excalidraw and agent browser bundles.
+//!   Mac app's frameworks (`scripts/notices/mac-app.txt`, kept by hand), the app's Rust core and
+//!   the npm packages in the Excalidraw and agent browser bundles.
 //!
 //! Rust crates come from `cargo about` (`about.toml`, `about.hbs`); npm packages from each
 //! bundle's lockfile, installed with `npm ci --ignore-scripts` into `target/notices`. With
@@ -24,6 +25,7 @@ const RULE: &str =
 pub fn notices(check: bool) -> Result<()> {
     let root = root();
     let native = fs::read_to_string(root.join("scripts/notices/native.txt"))?;
+    let mac_app = fs::read_to_string(root.join("scripts/notices/mac-app.txt"))?;
     let hostd = rust_crates("crates/hostd/Cargo.toml")?;
     let core = rust_crates("crates/apple-ffi/Cargo.toml")?;
     let excalidraw = npm_packages("excalidraw", false)?;
@@ -36,6 +38,7 @@ pub fn notices(check: bool) -> Result<()> {
     .concat();
     let app = [
         section("Native code linked into the app and its helpers", &native),
+        section("Frameworks in the Mac app", &mac_app),
         section("Rust crates in the app (GudoCore)", &core),
         section("Rust crates in the bundled helpers (gudo-hostd)", &hostd),
         section("npm packages in the Excalidraw canvas bundle", &excalidraw),

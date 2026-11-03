@@ -101,6 +101,12 @@
 	<string>$(PUSH_KEYCHAIN_GROUP)</string>
 	<key>ReplayTypeIdentifier</key>
 	<string>$(BRAND_BUNDLE_ID_PREFIX).gudoreplay</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://$(BRAND_WEB_DOMAIN)/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>ozc0EMrqWTR2XSAobq9cWWT+7Un0rgp48uiqmyg3QbA=</string>
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>

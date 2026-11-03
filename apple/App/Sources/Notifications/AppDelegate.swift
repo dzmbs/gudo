@@ -72,6 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppLockCovers.shared.install()
+        _ = AppUpdater.shared
         #if PUSH_YES
         NSApplication.shared.registerForRemoteNotifications()
         #endif

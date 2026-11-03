@@ -135,6 +135,12 @@ enum SettingsIndex {
             .init(id: "this-mac-helper", title: "Stop Helper", section: .thisMac, synonyms: ["helper", "daemon", "start", "local"]),
             .init(id: "this-mac-command-line-tool", title: "Command Line Tool", section: .thisMac, synonyms: ["cli", "terminal", "shell", "path", "pair", "devices"]),
         ]
+        if AppUpdater.shared.isAvailable {
+            entries += [
+                .init(id: "updates-check-automatically", title: "Check for Updates Automatically", section: .about, synonyms: ["update", "upgrade", "sparkle", "new version"]),
+                .init(id: "updates-download-automatically", title: "Download and Install Updates Automatically", section: .about, synonyms: ["update", "upgrade", "install"]),
+            ]
+        }
         #endif
         return entries
     }()
