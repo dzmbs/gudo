@@ -62,7 +62,8 @@ public final class Terminal: @unchecked Sendable {
     /// `write(_:)`, with the terminal locked: they must not call back into the terminal (read the
     /// title or pwd later, e.g. after hopping to the main actor).
     public struct Events: Sendable {
-        /// OSC 0/2 changed the title.
+        /// OSC 0/2 changed the title, or the alternate screen was entered or left in a terminal
+        /// with shell integration (which decides `shownTitle`).
         public var titleChanged: (@Sendable () -> Void)?
         /// OSC 7 (or OSC 9 / 1337 CurrentDir) changed the working directory.
         public var pwdChanged: (@Sendable () -> Void)?
@@ -91,6 +92,10 @@ public final class Terminal: @unchecked Sendable {
         let parsing = Atomic<Bool>(false)
         /// Kitty image storage per screen, for every handle (restored ones included).
         let imageStorageLimit = Atomic<UInt64>(KittyGraphics.storageLimit)
+        /// The shell marks its prompts and commands (OSC 133).
+        let shellIntegrated = Atomic<Bool>(false)
+        /// The alternate screen was active after the last parse.
+        let altScreen = Atomic<Bool>(false)
 
         init(writePty: @escaping @Sendable (UnsafeRawBufferPointer) -> Void) {
             self.writePty = writePty
@@ -231,7 +236,9 @@ public final class Terminal: @unchecked Sendable {
             Effects.from(userdata)?.events.withLock { $0.bell }?()
         }
         let prompt: GhosttyTerminalSemanticPromptFn = { _, userdata, event in
-            guard let event, let handler = Effects.from(userdata)?.events.withLock({ $0.semanticPrompt }) else { return }
+            guard let effects = Effects.from(userdata) else { return }
+            effects.shellIntegrated.store(true, ordering: .relaxed)
+            guard let event, let handler = effects.events.withLock({ $0.semanticPrompt }) else { return }
             let step: SemanticPromptStep? = switch event.pointee.kind {
             case GHOSTTY_SEMANTIC_PROMPT_PROMPT_START: .promptStart
             case GHOSTTY_SEMANTIC_PROMPT_INPUT_START: .inputStart
@@ -305,6 +312,12 @@ public final class Terminal: @unchecked Sendable {
         effects.parsing.store(true, ordering: .relaxed)
         ghostty_terminal_vt_write(terminal, base, bytes.count)
         effects.parsing.store(false, ordering: .relaxed)
+        let altScreen = Self.isAltScreen(terminal)
+        if effects.altScreen.exchange(altScreen, ordering: .relaxed) != altScreen,
+           effects.shellIntegrated.load(ordering: .relaxed)
+        {
+            effects.events.withLock { $0.titleChanged }?()
+        }
     }
 
     public func write(_ bytes: some Sequence<UInt8>) {

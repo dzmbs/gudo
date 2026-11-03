@@ -32,6 +32,8 @@ extension Terminal {
             restoreState = restore
             ghostty_terminal_free(old)
             synchronizedOutput.restart(inUpdate: Self.mode(handle, 2026), now: .now)
+            effects.altScreen.store(Self.isAltScreen(handle), ordering: .relaxed)
+            if Self.isCursorAtPrompt(handle) { effects.shellIntegrated.store(true, ordering: .relaxed) }
             // Image pixels that came with the screen; a bad record ends the restore, not the screen.
             if restore.push(Data()).code != GHOSTTY_SUCCESS {
                 restore.free()

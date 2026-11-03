@@ -38,6 +38,15 @@ extension Terminal {
     /// and it reaches tabs, window titles and notifications); "" when none was set.
     public var title: String { Self.printable(string(GHOSTTY_TERMINAL_DATA_TITLE), max: 512) }
 
+    /// The title a tab shows. A shell with integration retitles the terminal for every command
+    /// it runs and back at its prompt, so `ls` would flash its name: such a terminal shows a
+    /// title only while a program holds the alternate screen (vim, htop, less), and "" otherwise.
+    /// Without shell integration, the title as set.
+    public var shownTitle: String {
+        if effects.shellIntegrated.load(ordering: .relaxed), !withHandle(Self.isAltScreen) { return "" }
+        return title
+    }
+
     /// OSC 7 working directory (usually a `file://host/path` URL); "" when none was set or
     /// when it, or the path it encodes, holds characters that do not print.
     public var pwd: String {
@@ -89,15 +98,25 @@ extension Terminal {
             var tracking = false
             ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_MOUSE_TRACKING, &tracking)
             modes.mouseTracking = tracking
-            var screen = GHOSTTY_TERMINAL_SCREEN_PRIMARY
-            ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN, &screen)
-            modes.altScreen = screen == GHOSTTY_TERMINAL_SCREEN_ALTERNATE
+            modes.altScreen = Self.isAltScreen(handle)
             modes.bracketedPaste = Self.mode(handle, 2004)
             modes.alternateScroll = Self.mode(handle, 1007)
             modes.focusEvents = Self.mode(handle, 1004)
             modes.cursorKeysApplication = Self.mode(handle, 1)
             return modes
         }
+    }
+
+    static func isAltScreen(_ handle: GhosttyTerminal) -> Bool {
+        var screen = GHOSTTY_TERMINAL_SCREEN_PRIMARY
+        ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN, &screen)
+        return screen == GHOSTTY_TERMINAL_SCREEN_ALTERNATE
+    }
+
+    static func isCursorAtPrompt(_ handle: GhosttyTerminal) -> Bool {
+        var value = false
+        ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_CURSOR_AT_PROMPT, &value)
+        return value
     }
 
     static func mode(_ handle: GhosttyTerminal, _ value: UInt16, ansi: Bool = false) -> Bool {
@@ -108,13 +127,7 @@ extension Terminal {
 
     /// Whether the cursor is in a shell prompt or its input area per OSC 133 marks (false without
     /// shell integration or on the alt screen).
-    public var cursorAtPrompt: Bool {
-        withHandle { handle in
-            var value = false
-            ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_CURSOR_AT_PROMPT, &value)
-            return value
-        }
-    }
+    public var cursorAtPrompt: Bool { withHandle(Self.isCursorAtPrompt) }
 
     /// Cursor position in the active area (the bottom `rows` rows), regardless of scrolling.
     public var cursorPosition: GridPoint {
