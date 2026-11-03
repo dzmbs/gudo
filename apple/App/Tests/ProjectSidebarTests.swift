@@ -101,6 +101,54 @@ final class ProjectSidebarTests: XCTestCase {
         XCTAssertEqual(model.groupLabel(logs, onto: try XCTUnwrap(loose.first)), "Group")
     }
 
+    /// The iPhone switcher: projects first, as in the sidebar, then each host's other tabs;
+    /// every tab once, in ⌘-number order.
+    func testSwitcherListsProjectsThenHostsWithEveryTabOnce() throws {
+        let sections = model.switcherSections
+        let projectIds = model.projects.map(\.id)
+        XCTAssertEqual(sections.prefix(projectIds.count).map(\.kind), projectIds.map { .project($0) })
+        XCTAssertEqual(sections.dropFirst(projectIds.count).map(\.kind), model.groups.groups.map { .host($0.id) })
+        let listed = sections.flatMap(\.tabs)
+        XCTAssertEqual(listed, model.groups.tabs)
+        XCTAssertEqual(Set(listed).count, listed.count)
+
+        let sidebarOrder = ids().compactMap { id in id.hasPrefix("project/") || id.hasPrefix("host/") ? id : nil }
+        let switcherOrder = sections.map { section -> String in
+            switch section.kind {
+            case .project(let id): SidebarItem.projectHeader(id).id
+            case .host(let id): SidebarItem.hostHeader(id).id
+            case .window: "window"
+            }
+        }
+        XCTAssertEqual(switcherOrder, sidebarOrder)
+
+        let app = try XCTUnwrap(model.projects.first { $0.name == "acme-app" })
+        XCTAssertEqual(model.switcherSubtitle(of: app), "2 hosts · 3 tabs")
+        model.newEmptyProject()
+        XCTAssertEqual(model.switcherSubtitle(of: try XCTUnwrap(model.projects.last)), "No tabs")
+    }
+
+    /// The tab overview closes once a tab is shown or made, and stays while tabs are closed or
+    /// moved under it.
+    func testShowingATabClosesTheTabOverview() throws {
+        let app = try XCTUnwrap(model.projects.first)
+        let infra = try XCTUnwrap(model.projects.last)
+        model.sheet = .tabs
+        model.move(app.tabs[0], toProject: infra.id)
+        model.closeTab(app.tabs[1], undoable: false)
+        XCTAssertEqual(model.sheet, .tabs)
+        model.focus(app.tabs[2])
+        XCTAssertNil(model.sheet)
+
+        model.sheet = .tabs
+        model.newTab(onGroup: app.tabs[2].hostId)
+        XCTAssertNil(model.sheet)
+
+        model.sheet = .settings
+        model.focus(app.tabs[0])
+        XCTAssertEqual(model.sheet, .settings, "only the overview closes")
+    }
+
     func testMoveTabKeysStayWithinTheSection() throws {
         let app = try XCTUnwrap(model.projects.first)
         model.focus(app.tabs[0])

@@ -48,6 +48,8 @@ enum PaletteMode: Equatable {
 /// Modal surfaces. One at a time, like the system's own sheets.
 enum SheetRoute: String, Identifiable {
     case pairing, pairDevice, launchAgent, invite, sharing, join, links, diff, files, browser, editor, settings, shortcuts, replays
+    /// Every tab, project and agent on a page of its own (compact width).
+    case tabs
     var id: String { rawValue }
 }
 
@@ -583,6 +585,7 @@ final class WindowModel {
     /// and the host selects the tab.
     func focus(_ ref: TabRef) {
         if ref != currentTab { noteLeavingTab() }
+        leaveTabOverview()
         // A tab kept out of sight at launch comes back once it is asked for.
         groups.unhide(ref)
         destination = .terminal
@@ -601,6 +604,7 @@ final class WindowModel {
            let leaf = mixed.leaf(for: HostPane(hostId: id, pane: pane))
         {
             destination = .terminal
+            leaveTabOverview()
             focusLeaf(leaf, inMixedTab: mixed.id)
             return
         }
@@ -627,9 +631,15 @@ final class WindowModel {
             return
         }
         destination = .terminal
+        leaveTabOverview()
         activeMixedTab = nil
         if host != currentGroupId { show(host == HostGroups.localId ? .local : .host(host)) }
         workspace?.apply(.newTab)
+    }
+
+    /// Showing a tab ends the tab overview, as picking one in the system's tab overviews does.
+    private func leaveTabOverview() {
+        if sheet == .tabs { sheet = nil }
     }
 
     /// ⇧⌘N or a +'s New Agent: the New Agent sheet, on `host` (and `repo`) when given.

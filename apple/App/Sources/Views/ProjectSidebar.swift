@@ -180,6 +180,41 @@ extension WindowModel {
     }
 }
 
+/// A section of the compact tab switcher: a project's tabs, the window's own, or a host's tabs
+/// outside any project.
+struct SwitcherSection: Identifiable, Equatable {
+    enum Kind: Hashable {
+        case project(String)
+        case window
+        case host(String)
+    }
+
+    let kind: Kind
+    let tabs: [TabRef]
+    var id: Kind { kind }
+}
+
+extension WindowModel {
+    /// The switcher's sections in the sidebar's order: projects, the window's tabs, then hosts.
+    /// Every tab is listed once.
+    var switcherSections: [SwitcherSection] {
+        let grouped = Set(projects.flatMap(\.tabs))
+        var sections = projects.map { SwitcherSection(kind: .project($0.id), tabs: $0.tabs) }
+        let windowTabs = groups.mixedTabs.filter { !grouped.contains($0) }
+        if !windowTabs.isEmpty { sections.append(SwitcherSection(kind: .window, tabs: windowTabs)) }
+        sections += groups.groups.map { SwitcherSection(kind: .host($0.id), tabs: groups.looseTabs(of: $0, grouped: grouped)) }
+        return sections
+    }
+
+    /// Under a project's name in the switcher: where its tabs run and how many there are.
+    func switcherSubtitle(of project: Project) -> String {
+        guard !project.tabs.isEmpty else { return "No tabs" }
+        let count = project.tabs.count == 1 ? "1 tab" : "\(project.tabs.count) tabs"
+        let hosts = project.hosts.count > 1 ? "\(project.hosts.count) hosts" : groupName(project.hosts.first ?? "")
+        return "\(hosts) · \(count)"
+    }
+}
+
 /// The list itself, with one drop target over all of it.
 struct SidebarTabList: View {
     @Environment(WindowModel.self) private var model
