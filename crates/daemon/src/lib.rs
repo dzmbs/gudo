@@ -91,9 +91,10 @@ pub use config::{ArtifactLimits, AskpassConfig, Config, RelayMode, default_state
 pub use config::{CustomRelays, PresenceTimes, PushConfig, RepoConfig};
 pub use fsutil::create_private_temp_file;
 pub use identity::{
-    DEVICE_NAME_MAX, EndpointInfo, PAIRING_TTL, PairedDevice, clean_device_name, endpoint_info,
-    list_paired, mint_this_computer_ticket_text, mint_ticket, mint_ticket_text, paired_devices,
-    rename_device, unpair_device,
+    DEVICE_NAME_MAX, EndpointInfo, MAX_REUSABLE_TICKET_TTL, MAX_TICKET_USES, PAIRING_TTL,
+    PairedDevice, PendingTicket, clean_device_name, endpoint_info, list_paired,
+    mint_reusable_ticket_text, mint_this_computer_ticket_text, mint_ticket, mint_ticket_text,
+    paired_devices, pending_pairing_tickets, rename_device, revoke_pairing_tickets, unpair_device,
 };
 pub use preauth::PreAuthLimits;
 pub use procinfo::inherited_env_var;
