@@ -2,7 +2,10 @@
 
 use std::time::{Duration, Instant};
 
-use ssh::{Connection, HostSpec, PtyRequest, ShellEvent, ShellOutput, Target, UploadEncoding};
+use ssh::{
+    AuthMethod, Connection, Credentials, HostSpec, PtyRequest, SecretKey, ShellEvent, ShellOutput,
+    SshError, Target, UploadEncoding,
+};
 
 use crate::common::env;
 
@@ -210,4 +213,42 @@ async fn proxy_jump_chain() {
         .await
         .unwrap();
     assert!(connection.exec("true").await.unwrap().success());
+}
+
+#[tokio::test]
+#[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
+async fn jump_hosts_sign_in_with_their_own_credentials() {
+    let env = env();
+    let config = ssh::SshConfig::parse(&format!(
+        "Host vm\n  HostName {}\n  User {}\n  IdentityFile {}\n",
+        env.host,
+        env.user,
+        env.keys.join("id_ecdsa").display()
+    ))
+    .unwrap();
+    let route = config
+        .route(&format!("{}@127.0.0.1", env.user), Some("vm"), "nobody")
+        .unwrap();
+    assert_eq!(route.target.jumps.len(), 1);
+    let jump_keys: Vec<AuthMethod> = route.jump_identity_files[0]
+        .iter()
+        .map(|path| AuthMethod::Key(SecretKey::load(path, None).unwrap()))
+        .collect();
+
+    // The destination only takes the password; the jump host only gets its own key.
+    let mut options =
+        env.options(Credentials::new().with(AuthMethod::Password(env.password.clone())));
+    options.jump_credentials = vec![Credentials { methods: jump_keys }];
+    let connection = Connection::connect(&route.target, &options).await.unwrap();
+    assert!(connection.exec("true").await.unwrap().success());
+
+    // A jump host given only a wrong password fails at the jump, not at the destination.
+    options.jump_credentials = vec![Credentials::new().with(AuthMethod::Password("wrong".into()))];
+    let error = Connection::connect(&route.target, &options)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&error, SshError::AuthFailed { host, .. } if *host == env.host),
+        "{error}"
+    );
 }

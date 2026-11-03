@@ -11,7 +11,7 @@ publish.workspace = true
 brand.workspace = true
 data-encoding.workspace = true
 flate2.workspace = true
-getrandom.workspace = true
+getrandom = { workspace = true, features = ["sys_rng"] }
 proto.workspace = true
 ring.workspace = true
 russh.workspace = true
@@ -23,7 +23,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 data-encoding.workspace = true
-getrandom.workspace = true
+getrandom = { workspace = true, features = ["sys_rng"] }
 p256.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["net", "io-util", "fs", "process"] }

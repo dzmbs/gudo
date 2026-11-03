@@ -64,8 +64,11 @@ impl Default for Timeouts {
 /// Everything needed to dial a [`Target`].
 #[derive(Clone, Debug)]
 pub struct ConnectOptions {
-    /// Tried in order on every hop.
+    /// Tried in order on the destination, and on every jump host without its own entry
+    /// in `jump_credentials`.
     pub credentials: Credentials,
+    /// Per jump host, in the order of [`Target::jumps`]: what that hop signs in with.
+    pub jump_credentials: Vec<Credentials>,
     pub known_hosts: Arc<KnownHosts>,
     pub host_key_policy: HostKeyPolicy,
     pub keepalive: Keepalive,
@@ -83,11 +86,25 @@ impl ConnectOptions {
     ) -> Self {
         Self {
             credentials,
+            jump_credentials: Vec::new(),
             known_hosts,
             host_key_policy,
             keepalive: Keepalive::default(),
             timeouts: Timeouts::default(),
             compression: false,
+        }
+    }
+}
+
+impl ConnectOptions {
+    /// What hop `index` of a route (jumps first, the destination last) signs in with.
+    fn credentials_for_hop(&self, index: usize, target: &Target) -> &Credentials {
+        if index < target.jumps.len() {
+            self.jump_credentials
+                .get(index)
+                .unwrap_or(&self.credentials)
+        } else {
+            &self.credentials
         }
     }
 }
@@ -206,7 +223,14 @@ impl Connection {
             let handle = match jumps.last() {
                 None => {
                     let tcp = tcp_connect(hop, options.timeouts.connect).await?;
-                    handshake(tcp, hop, options, &dead).await?
+                    handshake(
+                        tcp,
+                        hop,
+                        options.credentials_for_hop(i, target),
+                        options,
+                        &dead,
+                    )
+                    .await?
                 }
                 Some(previous) => {
                     let channel = tokio::time::timeout(
@@ -228,7 +252,8 @@ impl Connection {
                             hop.port
                         ))
                     })?;
-                    handshake(channel.into_stream(), hop, options, &dead).await?
+                    let credentials = options.credentials_for_hop(i, target);
+                    handshake(channel.into_stream(), hop, credentials, options, &dead).await?
                 }
             };
             jumps.push(handle);
@@ -522,6 +547,7 @@ fn interleave_families(addresses: Vec<SocketAddr>) -> Vec<SocketAddr> {
 async fn handshake<S>(
     stream: S,
     spec: &HostSpec,
+    credentials: &Credentials,
     options: &ConnectOptions,
     dead: &Arc<watch::Sender<Option<String>>>,
 ) -> Result<Handle<ClientHandler>, SshError>
@@ -618,7 +644,7 @@ where
 
     tokio::time::timeout(
         options.timeouts.auth,
-        authenticate(&mut handle, spec, &options.credentials),
+        authenticate(&mut handle, spec, credentials),
     )
     .await
     .map_err(|_| SshError::Timeout("authenticating"))??;

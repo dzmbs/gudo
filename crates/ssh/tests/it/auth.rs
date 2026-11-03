@@ -98,6 +98,22 @@ async fn ssh_agent() {
         .await
         .unwrap();
     assert_eq!(user, env.user);
+
+    let held = ssh::agent_keys(Some(socket.clone())).await.unwrap();
+    assert_eq!(held.len(), 1);
+    assert_eq!(held[0].comment, "untest-ed25519");
+    let only = |fingerprint: &str| {
+        Credentials::new().with(AuthMethod::AgentKey {
+            socket: Some(socket.clone()),
+            fingerprint: fingerprint.to_owned(),
+        })
+    };
+    assert_eq!(whoami(only(&held[0].fingerprint)).await.unwrap(), env.user);
+    let other = env.key("id_ecdsa").fingerprint();
+    assert!(matches!(
+        whoami(only(&other)).await,
+        Err(ssh::SshError::AuthFailed { .. })
+    ));
     agent.kill().await.unwrap();
 }
 

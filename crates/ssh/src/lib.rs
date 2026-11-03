@@ -41,7 +41,9 @@ mod bootstrap;
 mod channel;
 mod client;
 mod config;
+mod discovery;
 mod error;
+mod host_input;
 mod keys;
 mod known_hosts;
 mod session;
@@ -58,9 +60,16 @@ pub use channel::{
     sha256_hex, shell_quote,
 };
 pub use client::{ConnectOptions, Connection, Keepalive, Timeouts};
-pub use config::{HostConfig, SshConfig};
+pub use config::{HostConfig, Route, SshConfig};
+pub use discovery::{
+    KnownHostName, LocalKey, PublicKeyInfo, agent_keys, known_host_names, local_keys,
+};
 pub use error::SshError;
-pub use keys::{ExternalSigner, GeneratedKey, SecretKey, SignerError, generate_ed25519};
+pub use host_input::HostInput;
+pub use keys::{
+    ExternalSigner, GeneratedKey, KeyType, SecretKey, SecurityKeySignature, SignerError,
+    authorize_key_command, generate_ed25519, generate_key,
+};
 pub use known_hosts::{
     HostKeyInfo, HostKeyPolicy, HostKeyPrompt, HostKeyStatus, KnownHosts, KnownHostsListener,
     fingerprint, host_name,

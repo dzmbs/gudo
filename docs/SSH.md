@@ -12,13 +12,17 @@ export them as async functions and callback interfaces without wrappers.
 
 | | |
 |---|---|
-| `SshConfig::{parse, load, load_default}` → `resolve(alias)`, `target(dest, user)`, `host_aliases()` (for import), `with_home` | `~/.ssh/config` with OpenSSH semantics: `Host` (`*`, `?`, `!`), `Match host/originalhost/user/all`, `Include` (globs, scoped like OpenSSH), first value wins; `HostName` (`%h`), `User`, `Port`, `IdentityFile` (accumulates, `~`/`%d %u %h %r %p`), `ProxyJump` (chains, `none`), `ServerAliveInterval`, `ServerAliveCountMax`, `ConnectTimeout`, `HostKeyAlias`, `ForwardAgent`, `SetEnv`. Unknown keys are listed in `HostConfig::ignored` |
-| `Destination` | `[ssh://][user@]host[:port]`, `[v6]:port` (the "just ssh" field) |
+| `SshConfig::{parse, load, load_default}` → `resolve(alias)`, `target(dest, user)`, `host_aliases()` (for import), `with_home` | `~/.ssh/config` with OpenSSH semantics: `Host` (`*`, `?`, `!`), `Match host/originalhost/user/all`, `Include` (globs, scoped like OpenSSH), first value wins; `HostName` (`%h`), `User`, `Port`, `IdentityFile` (accumulates, `~`/`%d %u %h %r %p`), `ProxyJump` (chains, `none`), `IdentitiesOnly`, `IdentityAgent`, `ServerAliveInterval`, `ServerAliveCountMax`, `ConnectTimeout`, `HostKeyAlias`, `ForwardAgent`, `SetEnv`. Unknown keys are listed in `HostConfig::ignored` |
+| `SshConfig::route(dest, proxy_jump, user)` → `Route { target, jump_identity_files }` | the route with an optional `-J` override, and each jump host's own `IdentityFile`s |
+| `Destination` | `[ssh://][user@]host[:port]`, `[v6]:port` |
+| `HostInput::parse` | the host field: an alias, a destination, or a pasted `ssh -p 2222 -i key -J jump user@host cmd` (options after the host count, `-l`/`-p` win, as in ssh(1)) |
+| `local_keys(dir)`, `agent_keys(socket)`, `known_host_names(text)`, `PublicKeyInfo::parse` | what a desktop already has: key pairs in `~/.ssh` (type, comment, fingerprint, encrypted), agent identities, plain known_hosts names. Private keys are only checked for encryption |
 | `Target { jumps, host: HostSpec }` | route, outermost jump first |
-| `Credentials` of `AuthMethod`s, tried in order | `Agent(path or $SSH_AUTH_SOCK)`, `Key(SecretKey)`, `External(Arc<dyn ExternalSigner>)`, `Password` (then keyboard-interactive answering password prompts: macOS/PAM), `Interactive(responder)` (OTP, Tailscale check mode). `Credentials::openssh_defaults(files)` mimics `ssh` on a desktop |
+| `Credentials` of `AuthMethod`s, tried in order (per jump host: `ConnectOptions::jump_credentials`) | `Agent(path or $SSH_AUTH_SOCK)`, `AgentKey { socket, fingerprint }` (one agent identity only, so a full agent cannot hit `MaxAuthTries`), `Key(SecretKey)`, `External(Arc<dyn ExternalSigner>)`, `Password` (then keyboard-interactive answering password prompts: macOS/PAM), `Interactive(responder)` (OTP, Tailscale check mode). `Credentials::openssh_defaults(files)` mimics `ssh` on a desktop |
 | `SecretKey::{decode, load, is_encrypted}` | OpenSSH/PKCS#8/PKCS#1/SEC1 PEM; ed25519, ecdsa P-256/384/521, rsa (rsa-sha2-512/256 per server-sig-algs); passphrases |
-| `generate_ed25519(comment)` → `GeneratedKey` | private PEM, `authorized_keys` line, `SHA256:` fingerprint |
-| `ExternalSigner` | `public_key()` (OpenSSH line) + `sign(data)` → raw signature (`r‖s` as CryptoKit gives, or DER; 64 bytes for Ed25519). Runs on a blocking thread, so it may wait for Face ID. A failing signer skips that method |
+| `generate_key(Ed25519 \| Rsa4096, comment, passphrase)` → `GeneratedKey` | private PEM (encrypted like `ssh-keygen` with a passphrase), `authorized_keys` line, `SHA256:` fingerprint |
+| `authorize_key_command(public_key)` | `ssh-copy-id` as one `sh` command: validated, quoted, appended once, `700`/`600` |
+| `ExternalSigner` | `public_key()` (OpenSSH line) + `sign(data)` → raw signature (`r‖s` as CryptoKit gives, or DER; 64 bytes for Ed25519). Runs on a blocking thread, so it may wait for Face ID. A failing signer skips that method. For `sk-ecdsa-sha2-nistp256@openssh.com` / `sk-ssh-ed25519@openssh.com` keys, `sign_security_key(data)` returns a CTAP2 assertion (signature, flags, counter) and the crate encodes the PROTOCOL.u2f blob |
 | `KnownHosts::{in_memory, from_text, open}` | OpenSSH known_hosts: patterns, `[host]:port`, hashed `\|1\|` entries, `@revoked`; `check`, `add`, `pin`, `replace`, `remove`, `to_text`; `with_listener(KnownHostsListener)` reports every change (the app persists the text) |
 | `HostKeyPolicy::{Strict, AcceptNew, Ask(prompt)}` | `Ask` calls `HostKeyPrompt::trust_new_host(HostKeyInfo)` after the key exchange and before any credential is sent; for a changed (unpinned) key it calls `trust_changed_host(info, expected)` (default: refuse, i.e. `HostKeyMismatch`; `true` replaces the record) |
 | `Connection::connect(&Target, &ConnectOptions)` | one live, authenticated connection; clones share it |
@@ -152,6 +156,9 @@ key with the Secure Enclave's output format (raw `r‖s` and DER).
 
 - macOS as the bootstrap *target* is implemented (paths, LaunchAgent, detached fallback) but
   not exercised end to end here: it needs a test account on a Mac with Remote Login.
+- Security keys: the signature format is done and tested against a software authenticator;
+  the apps have no CTAP2 transport yet (planned: Yubico's yubikit-swift, Apache 2.0: USB HID
+  on the Mac, NFC and Lightning on iOS), so `sign_security_key` is not implemented there.
 - No `ProxyCommand` (no subprocesses on iOS; 10 §4.2), no agent forwarding, no port
   forwarding over SSH yet (the daemon does forwarding over iroh), no host certificates.
 - An installed binary whose daemon was not restarted after an interrupted upgrade reads as

@@ -42,6 +42,12 @@ pub enum AuthMethod {
     /// Every identity in an ssh-agent: the socket at this path, or `$SSH_AUTH_SOCK`
     /// when `None` (skipped if neither exists).
     Agent(Option<PathBuf>),
+    /// One identity of an ssh-agent, by `SHA256:` fingerprint: never offers the others,
+    /// so an agent holding many keys cannot exhaust the server's `MaxAuthTries`.
+    AgentKey {
+        socket: Option<PathBuf>,
+        fingerprint: String,
+    },
     /// A decoded private key.
     Key(SecretKey),
     /// A key held by the app (Secure Enclave P-256).
@@ -56,7 +62,7 @@ pub enum AuthMethod {
 impl AuthMethod {
     fn label(&self) -> &'static str {
         match self {
-            Self::Agent(_) => "agent",
+            Self::Agent(_) | Self::AgentKey { .. } => "agent",
             Self::Key(_) => "publickey",
             Self::External(_) => "external-key",
             Self::Password(_) => "password",
@@ -67,7 +73,9 @@ impl AuthMethod {
     fn allowed_by(&self, methods: &MethodSet) -> bool {
         let has = |kind: MethodKind| methods.contains(&kind);
         match self {
-            Self::Agent(_) | Self::Key(_) | Self::External(_) => has(MethodKind::PublicKey),
+            Self::Agent(_) | Self::AgentKey { .. } | Self::Key(_) | Self::External(_) => {
+                has(MethodKind::PublicKey)
+            }
             Self::Password(_) => has(MethodKind::Password) || has(MethodKind::KeyboardInteractive),
             Self::Interactive(_) => has(MethodKind::KeyboardInteractive),
         }
@@ -79,6 +87,10 @@ impl std::fmt::Debug for AuthMethod {
         match self {
             Self::Key(key) => write!(f, "Key({})", key.fingerprint()),
             Self::Agent(socket) => write!(f, "Agent({socket:?})"),
+            Self::AgentKey {
+                socket,
+                fingerprint,
+            } => write!(f, "AgentKey({socket:?}, {fingerprint})"),
             other => f.write_str(other.label()),
         }
     }
@@ -150,7 +162,14 @@ pub(crate) async fn authenticate(
                     .authenticate_publickey(user, PrivateKeyWithHashAlg::new(key.0.clone(), hash))
                     .await?
             }
-            AuthMethod::Agent(path) => match agent_auth(handle, user, path.as_ref()).await? {
+            AuthMethod::Agent(path) => match agent_auth(handle, user, path.as_ref(), None).await? {
+                Some(result) => result,
+                None => continue,
+            },
+            AuthMethod::AgentKey {
+                socket,
+                fingerprint,
+            } => match agent_auth(handle, user, socket.as_ref(), Some(fingerprint)).await? {
                 Some(result) => result,
                 None => continue,
             },
@@ -273,6 +292,7 @@ async fn agent_auth(
     handle: &mut Handle<ClientHandler>,
     user: &str,
     path: Option<&PathBuf>,
+    only_fingerprint: Option<&str>,
 ) -> Result<Option<AuthResult>, SshError> {
     let path = match path {
         Some(path) => path.clone(),
@@ -295,6 +315,9 @@ async fn agent_auth(
     let mut last_result = None;
     for identity in identities {
         let key = identity.public_key().into_owned();
+        if only_fingerprint.is_some_and(|wanted| crate::fingerprint(&key) != wanted) {
+            continue;
+        }
         let hash = rsa_hash(handle, key.algorithm()).await?;
         let result = handle
             .authenticate_publickey_with(user, key, hash, &mut agent)

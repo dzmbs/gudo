@@ -86,6 +86,10 @@ pub struct HostConfig {
     pub forward_agent: bool,
     /// `SetEnv` pairs.
     pub set_env: Vec<(String, String)>,
+    /// `IdentitiesOnly yes`: offer only the `IdentityFile`s, not every agent key.
+    pub identities_only: bool,
+    /// `IdentityAgent` socket path (`~` expanded), or `none`.
+    pub identity_agent: Option<String>,
     /// Keys set for this host that this crate does not apply (shown as "ignored").
     pub ignored: Vec<String>,
 }
@@ -323,7 +327,9 @@ impl SshConfig {
                 | "serveralivecountmax"
                 | "connecttimeout"
                 | "hostkeyalias"
-                | "forwardagent" => {
+                | "forwardagent"
+                | "identitiesonly"
+                | "identityagent" => {
                     values
                         .entry(directive.key.as_str())
                         .or_insert(&directive.args);
@@ -389,6 +395,13 @@ impl SshConfig {
             }
             _ => Vec::new(),
         };
+        let identity_agent = first("identityagent").map(|agent| {
+            let agent = expand_percent(agent, &tokens);
+            match &self.home {
+                Some(home) => expand_tilde(&agent, home),
+                None => agent,
+            }
+        });
         let seconds = |key: &str| {
             first(key)
                 .and_then(|value| value.parse().ok())
@@ -409,6 +422,9 @@ impl SshConfig {
             forward_agent: first("forwardagent")
                 .is_some_and(|value| value.eq_ignore_ascii_case("yes")),
             set_env,
+            identities_only: first("identitiesonly")
+                .is_some_and(|value| value.eq_ignore_ascii_case("yes")),
+            identity_agent,
             ignored,
         }
     }
@@ -433,16 +449,52 @@ impl SshConfig {
     /// assert_eq!(target.to_string(), "me@10.0.0.5 via admin@bastion:2222");
     /// ```
     pub fn target(&self, destination: &str, default_user: &str) -> Result<Target, SshError> {
-        let destination: Destination = destination.parse()?;
-        self.route(&destination, default_user, 0)
+        Ok(self.route(destination, None, default_user)?.target)
     }
 
-    fn route(
+    /// As [`target`](Self::target), with `proxy_jump` (`-J` syntax, or `none`) in place of
+    /// the config's `ProxyJump` for the destination, and the `IdentityFile`s each jump host
+    /// names, so every hop can sign in with its own keys.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SshError::Config`] for an unparsable destination or hop, or a jump loop.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let config = ssh::SshConfig::parse("Host bastion\n  IdentityFile /keys/bastion\n").unwrap();
+    /// let route = config.route("root@10.0.0.5", Some("admin@bastion"), "me").unwrap();
+    /// assert_eq!(route.target.to_string(), "root@10.0.0.5 via admin@bastion");
+    /// assert_eq!(route.jump_identity_files, [vec!["/keys/bastion".to_owned()]]);
+    /// ```
+    pub fn route(
+        &self,
+        destination: &str,
+        proxy_jump: Option<&str>,
+        default_user: &str,
+    ) -> Result<Route, SshError> {
+        let destination: Destination = destination.parse()?;
+        let proxy_jump = proxy_jump.map(parse_proxy_jump).transpose()?;
+        let mut hops = self.hops(&destination, proxy_jump, default_user, 0)?;
+        let (host, _) = hops.pop().expect("a route has at least one hop");
+        let (jumps, jump_identity_files) = hops.into_iter().unzip();
+        Ok(Route {
+            target: Target { jumps, host },
+            jump_identity_files,
+        })
+    }
+
+    /// Every hop to `destination` in dialling order, the destination last, each with its
+    /// `IdentityFile`s. The first jump's own `ProxyJump` is followed recursively (like
+    /// `ssh -J`); later hops' are not.
+    fn hops(
         &self,
         destination: &Destination,
+        proxy_jump: Option<Vec<Destination>>,
         default_user: &str,
         depth: usize,
-    ) -> Result<Target, SshError> {
+    ) -> Result<Vec<(HostSpec, Vec<String>)>, SshError> {
         if depth > MAX_JUMPS {
             return Err(SshError::Config(format!(
                 "ProxyJump loop at {}",
@@ -451,24 +503,48 @@ impl SshConfig {
         }
         let config = self.resolve(&destination.host);
         let host = host_spec(destination, &config, default_user);
-        let mut jumps = Vec::new();
-        if let Some((first, rest)) = config.proxy_jump.split_first() {
-            let first_route = self.route(first, default_user, depth + 1)?;
-            jumps.extend(first_route.jumps);
-            jumps.push(first_route.host);
+        let proxy_jump = proxy_jump.unwrap_or_else(|| config.proxy_jump.clone());
+        let mut hops = Vec::new();
+        if let Some((first, rest)) = proxy_jump.split_first() {
+            hops.extend(self.hops(first, None, default_user, depth + 1)?);
             for hop in rest {
                 let hop_config = self.resolve(&hop.host);
-                jumps.push(host_spec(hop, &hop_config, default_user));
+                hops.push((
+                    host_spec(hop, &hop_config, default_user),
+                    hop_config.identity_files,
+                ));
             }
-            if jumps.len() > MAX_JUMPS {
+            if hops.len() > MAX_JUMPS {
                 return Err(SshError::Config(format!(
                     "too many jump hosts for {}",
                     destination.host
                 )));
             }
         }
-        Ok(Target { jumps, host })
+        hops.push((host, config.identity_files));
+        Ok(hops)
     }
+}
+
+/// A [`Target`] and what each of its jump hosts signs in with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Route {
+    pub target: Target,
+    /// `IdentityFile`s per jump host, in the order of `target.jumps`.
+    pub jump_identity_files: Vec<Vec<String>>,
+}
+
+/// `-J` syntax: comma-separated `[user@]host[:port]` hops, or `none`.
+fn parse_proxy_jump(text: &str) -> Result<Vec<Destination>, SshError> {
+    let text = text.trim();
+    if text.is_empty() || text.eq_ignore_ascii_case("none") {
+        return Ok(Vec::new());
+    }
+    text.split(',')
+        .map(str::trim)
+        .filter(|hop| !hop.is_empty())
+        .map(str::parse)
+        .collect()
 }
 
 fn host_spec(destination: &Destination, config: &HostConfig, default_user: &str) -> HostSpec {
@@ -883,5 +959,65 @@ Host *
             host.set_env,
             [("A".into(), "1".into()), ("B".into(), "two".into())]
         );
+    }
+
+    #[test]
+    fn aliases_from_includes() {
+        let home = tempfile::tempdir().unwrap();
+        let ssh = home.path().join(".ssh");
+        std::fs::create_dir_all(ssh.join("hosts")).unwrap();
+        std::fs::write(ssh.join("hosts/work"), "Host build *.internal\n User ci\n").unwrap();
+        std::fs::write(ssh.join("config"), "Include hosts/*\nHost prod !evil\n").unwrap();
+        let config = SshConfig::load(ssh.join("config"), Some(home.path().to_owned())).unwrap();
+        assert_eq!(config.host_aliases(), ["build", "prod"]);
+        assert_eq!(config.resolve("x.internal").user.as_deref(), Some("ci"));
+    }
+
+    #[test]
+    fn route_overrides_proxy_jump_and_keeps_jump_keys() {
+        let config = SshConfig::parse(
+            "Host inner\n HostName 10.0.0.5\n ProxyJump gw\n IdentityFile /k/inner\n\
+             Host gw\n HostName gw.example.com\n User jumper\n IdentityFile /k/gw\n\
+             Host edge\n IdentityFile /k/edge\n",
+        )
+        .unwrap();
+        let route = config.route("inner", None, "me").unwrap();
+        assert_eq!(
+            route.target.to_string(),
+            "me@10.0.0.5 via jumper@gw.example.com"
+        );
+        assert_eq!(route.jump_identity_files, [vec!["/k/gw".to_owned()]]);
+
+        let route = config
+            .route("root@inner:2222", Some("edge,admin@gw:22"), "me")
+            .unwrap();
+        assert_eq!(
+            route.target.to_string(),
+            "root@10.0.0.5:2222 via me@edge,admin@gw.example.com"
+        );
+        assert_eq!(
+            route.jump_identity_files,
+            [vec!["/k/edge".to_owned()], vec!["/k/gw".to_owned()]]
+        );
+
+        let route = config.route("inner", Some("none"), "me").unwrap();
+        assert!(route.target.jumps.is_empty());
+        assert!(config.route("inner", Some("bad host"), "me").is_err());
+    }
+
+    #[test]
+    fn identities_only_and_identity_agent() {
+        let mut config = SshConfig::parse(
+            "Host op\n IdentitiesOnly yes\n IdentityAgent ~/.1password/agent.sock\n",
+        )
+        .unwrap();
+        config.home = Some(PathBuf::from("/home/me"));
+        let host = config.resolve("op");
+        assert!(host.identities_only);
+        assert_eq!(
+            host.identity_agent.as_deref(),
+            Some("/home/me/.1password/agent.sock")
+        );
+        assert!(!config.resolve("other").identities_only);
     }
 }

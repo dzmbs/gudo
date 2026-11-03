@@ -272,6 +272,10 @@ pub struct SshHostConfig {
     pub set_env: Vec<EnvVar>,
     /// Keywords present but not supported.
     pub ignored: Vec<String>,
+    /// `IdentitiesOnly yes`.
+    pub identities_only: bool,
+    /// `IdentityAgent` socket path, or `none`.
+    pub identity_agent: Option<String>,
 }
 
 fn destination_text(destination: &ssh::Destination) -> String {
@@ -314,6 +318,8 @@ impl From<ssh::HostConfig> for SshHostConfig {
                 .map(|(name, value)| EnvVar { name, value })
                 .collect(),
             ignored: host_config.ignored,
+            identities_only: host_config.identities_only,
+            identity_agent: host_config.identity_agent,
         }
     }
 }
@@ -369,10 +375,227 @@ impl SshConfigFile {
         Ok(self.inner.target(&destination, &default_user)?.into())
     }
 
+    /// The route to `destination` with `proxy_jump` (`-J` syntax, `none`, or `nil` for the
+    /// config's own) and the `IdentityFile`s each jump host names.
+    ///
+    /// # Errors
+    ///
+    /// [`SshError::Config`] for a bad destination or hop, or a `ProxyJump` loop.
+    #[uniffi::method(default(proxy_jump = None))]
+    pub fn route(
+        &self,
+        destination: String,
+        default_user: String,
+        proxy_jump: Option<String>,
+    ) -> Result<SshRoute, SshError> {
+        let route = self
+            .inner
+            .route(&destination, proxy_jump.as_deref(), &default_user)?;
+        Ok(SshRoute {
+            target: route.target.into(),
+            jump_identity_files: route.jump_identity_files,
+        })
+    }
+
     /// Problems found while parsing (unfollowed includes).
     pub fn warnings(&self) -> Vec<String> {
         self.inner.warnings().to_vec()
     }
+}
+
+#[uniffi::export]
+impl SshConfigFile {
+    /// Reads a config file from disk, following `Include`s relative to `home/.ssh`
+    /// (macOS). A missing file is an empty config.
+    ///
+    /// # Errors
+    ///
+    /// [`SshError::Io`] if it exists but cannot be read, [`SshError::Config`] for a
+    /// malformed line.
+    #[uniffi::constructor(default(local_user = None))]
+    pub fn load(
+        path: String,
+        home: String,
+        local_user: Option<String>,
+    ) -> Result<Arc<Self>, SshError> {
+        let mut inner = if std::path::Path::new(&path).exists() {
+            ssh::SshConfig::load(&path, Some(home.into()))?
+        } else {
+            ssh::SshConfig::default().with_home(home)
+        };
+        if let Some(user) = local_user {
+            inner = inner.with_local_user(user);
+        }
+        Ok(Arc::new(Self { inner }))
+    }
+}
+
+/// A route and what its jump hosts sign in with.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct SshRoute {
+    pub target: SshTarget,
+    /// `IdentityFile`s per jump host, in the order of `target.jumps`.
+    pub jump_identity_files: Vec<Vec<String>>,
+}
+
+/// A host field's text: alias, `user@host:port`, `ssh://…` or a pasted `ssh …` command.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct SshHostInput {
+    pub user: Option<String>,
+    /// Host, address or ssh_config alias.
+    pub host: String,
+    pub port: Option<u16>,
+    /// `-i`.
+    pub identity_file: Option<String>,
+    /// `-J`, as written.
+    pub proxy_jump: Option<String>,
+}
+
+/// Parses a host field.
+///
+/// # Errors
+///
+/// [`SshError::Config`] if it names no host or a port is not a number.
+#[uniffi::export]
+pub fn parse_ssh_host_input(text: String) -> Result<SshHostInput, SshError> {
+    let input = ssh::HostInput::parse(&text)?;
+    Ok(SshHostInput {
+        user: input.user,
+        host: input.host,
+        port: input.port,
+        identity_file: input.identity_file,
+        proxy_jump: input.proxy_jump,
+    })
+}
+
+/// A public key as a key picker shows it.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct SshPublicKeyInfo {
+    /// OpenSSH line, comment included.
+    pub public_key: String,
+    /// `ssh-ed25519`, `ecdsa-sha2-nistp256`, `sk-ssh-ed25519@openssh.com`, …
+    pub algorithm: String,
+    pub comment: String,
+    /// `SHA256:…`.
+    pub fingerprint: String,
+}
+
+impl From<ssh::PublicKeyInfo> for SshPublicKeyInfo {
+    fn from(info: ssh::PublicKeyInfo) -> Self {
+        Self {
+            public_key: info.public_key,
+            algorithm: info.algorithm,
+            comment: info.comment,
+            fingerprint: info.fingerprint,
+        }
+    }
+}
+
+/// Reads an OpenSSH public key line.
+///
+/// # Errors
+///
+/// [`SshError::Key`] if it is not one.
+#[uniffi::export]
+pub fn parse_ssh_public_key(line: String) -> Result<SshPublicKeyInfo, SshError> {
+    Ok(ssh::PublicKeyInfo::parse(&line)?.into())
+}
+
+/// A key pair on disk (`name` with `name.pub`).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct SshLocalKey {
+    /// The private key file.
+    pub path: String,
+    pub info: SshPublicKeyInfo,
+    /// Needs a passphrase.
+    pub encrypted: bool,
+}
+
+/// The key pairs in `directory` (`~/.ssh`), by file name. Private keys stay where they are.
+#[uniffi::export]
+pub fn list_local_ssh_keys(directory: String) -> Vec<SshLocalKey> {
+    ssh::local_keys(std::path::Path::new(&directory))
+        .into_iter()
+        .map(|key| SshLocalKey {
+            path: key.path.display().to_string(),
+            info: key.info.into(),
+            encrypted: key.encrypted,
+        })
+        .collect()
+}
+
+/// The identities an ssh-agent holds (`nil`: `$SSH_AUTH_SOCK`); empty without an agent.
+///
+/// # Errors
+///
+/// [`SshError::Signer`] if the agent's answer is unreadable.
+#[uniffi::export(default(socket_path = None))]
+pub async fn list_agent_ssh_keys(
+    socket_path: Option<String>,
+) -> Result<Vec<SshPublicKeyInfo>, SshError> {
+    let keys = on_runtime(ssh::agent_keys(socket_path.map(Into::into))).await?;
+    Ok(keys.into_iter().map(Into::into).collect())
+}
+
+/// A host named in plain text in known_hosts.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct SshKnownHostName {
+    pub host: String,
+    pub port: u16,
+}
+
+/// The concrete hosts in known_hosts text (hashed entries and patterns skipped).
+#[uniffi::export]
+pub fn known_ssh_host_names(text: String) -> Vec<SshKnownHostName> {
+    ssh::known_host_names(&text)
+        .into_iter()
+        .map(|name| SshKnownHostName {
+            host: name.host,
+            port: name.port,
+        })
+        .collect()
+}
+
+/// Key types generated in software.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum SshKeyType {
+    Ed25519,
+    /// For servers that accept nothing newer; takes seconds.
+    Rsa4096,
+}
+
+/// Generates a key pair, its private key encrypted with `passphrase` if one is given.
+///
+/// # Errors
+///
+/// [`SshError::Key`] if the random source or encoder fails.
+#[uniffi::export(default(passphrase = None))]
+pub fn generate_ssh_key(
+    key_type: SshKeyType,
+    comment: String,
+    passphrase: Option<String>,
+) -> Result<GeneratedSshKey, SshError> {
+    let key_type = match key_type {
+        SshKeyType::Ed25519 => ssh::KeyType::Ed25519,
+        SshKeyType::Rsa4096 => ssh::KeyType::Rsa4096,
+    };
+    let key = ssh::generate_key(key_type, &comment, passphrase.as_deref())?;
+    Ok(GeneratedSshKey {
+        private_key: key.private_key.into_bytes().into(),
+        public_key: key.public_key,
+        fingerprint: key.fingerprint,
+    })
+}
+
+/// The shell command that adds `public_key` to `~/.ssh/authorized_keys` once (run it
+/// with [`SshSession::exec`]).
+///
+/// # Errors
+///
+/// [`SshError::Key`] if `public_key` is not one public key line.
+#[uniffi::export]
+pub fn ssh_authorize_key_command(public_key: String) -> Result<String, SshError> {
+    Ok(ssh::authorize_key_command(&public_key)?)
 }
 
 /// A new key pair for the Keychain. `Debug` leaves the private key out.
@@ -484,6 +707,22 @@ pub trait SshSigner: Send + Sync {
     /// a SHA-256 signature, as `P256.Signing.PrivateKey.signature(for:)` makes; for Ed25519
     /// the 64-byte signature.
     fn sign(&self, data: Bytes) -> Result<Bytes, SignerError>;
+
+    /// For a FIDO2 security key (`sk-…` public key): a CTAP2 assertion with `rpId` = the
+    /// key's application (`ssh:`) and `clientDataHash` = SHA-256 of `data`. Other signers
+    /// throw.
+    fn sign_security_key(&self, data: Bytes) -> Result<SecurityKeyAssertion, SignerError>;
+}
+
+/// A security key's answer to one assertion.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct SecurityKeyAssertion {
+    /// ECDSA `r ‖ s` or DER, or the 64-byte Ed25519 signature.
+    pub signature: Bytes,
+    /// Authenticator data flags (byte 32 of authenticatorData).
+    pub flags: u8,
+    /// Signature counter (bytes 33-36 of authenticatorData, big-endian).
+    pub counter: u32,
 }
 
 struct SignerAdapter(Arc<dyn SshSigner>);
@@ -497,6 +736,20 @@ impl ssh::ExternalSigner for SignerAdapter {
         self.0
             .sign(data.into())
             .map(Into::into)
+            .map_err(|e| ssh::SignerError(e.to_string()))
+    }
+
+    fn sign_security_key(
+        &self,
+        data: Vec<u8>,
+    ) -> Result<ssh::SecurityKeySignature, ssh::SignerError> {
+        self.0
+            .sign_security_key(data.into())
+            .map(|assertion| ssh::SecurityKeySignature {
+                signature: assertion.signature.into(),
+                flags: assertion.flags,
+                counter: assertion.counter,
+            })
             .map_err(|e| ssh::SignerError(e.to_string()))
     }
 }
@@ -564,6 +817,12 @@ pub enum SshAuth {
     Signer { signer: Arc<dyn SshSigner> },
     /// Every identity of an ssh-agent (`nil`: `$SSH_AUTH_SOCK`). macOS only.
     Agent { socket_path: Option<String> },
+    /// One ssh-agent identity, by `SHA256:` fingerprint; the agent's other keys are not
+    /// offered. macOS only.
+    AgentKey {
+        socket_path: Option<String>,
+        fingerprint: String,
+    },
     /// Keyboard-interactive with arbitrary prompts.
     Interactive {
         /// Answers the prompts.
@@ -586,6 +845,13 @@ fn credentials(auth: Vec<SshAuth>) -> Result<ssh::Credentials, SshError> {
                 ssh::AuthMethod::External(Arc::new(SignerAdapter(signer)))
             }
             SshAuth::Agent { socket_path } => ssh::AuthMethod::Agent(socket_path.map(Into::into)),
+            SshAuth::AgentKey {
+                socket_path,
+                fingerprint,
+            } => ssh::AuthMethod::AgentKey {
+                socket: socket_path.map(Into::into),
+                fingerprint,
+            },
             SshAuth::Interactive { responder } => {
                 ssh::AuthMethod::Interactive(Arc::new(ResponderAdapter(responder)))
             }
@@ -840,6 +1106,63 @@ impl Default for SshOptions {
 #[uniffi::export]
 pub fn default_ssh_options() -> SshOptions {
     SshOptions::default()
+}
+
+fn connect_options(
+    auth: Vec<SshAuth>,
+    jump_auth: Vec<Vec<SshAuth>>,
+    known_hosts: &KnownHostsStore,
+    host_keys: HostKeyPolicy,
+    options: &SshOptions,
+) -> Result<ssh::ConnectOptions, SshError> {
+    let mut connect = ssh::ConnectOptions::new(
+        credentials(auth)?,
+        Arc::clone(&known_hosts.inner),
+        host_keys.into(),
+    );
+    connect.jump_credentials = jump_auth
+        .into_iter()
+        .map(credentials)
+        .collect::<Result<_, _>>()?;
+    connect.keepalive = ssh::Keepalive {
+        interval: Duration::from_millis(options.keepalive_interval_ms),
+        count_max: options.keepalive_count_max,
+        probe_timeout: Duration::from_millis(options.probe_timeout_ms),
+    };
+    connect.timeouts = ssh::Timeouts {
+        connect: Duration::from_millis(options.connect_timeout_ms),
+        handshake: Duration::from_millis(options.handshake_timeout_ms),
+        auth: Duration::from_millis(options.auth_timeout_ms),
+    };
+    connect.compression = options.compression;
+    Ok(connect)
+}
+
+/// Dials `target` once, signs in and hangs up: "Test Connection" before saving a host.
+/// Host-key prompts and pinning work as for a session. Returns how long it took, ms.
+///
+/// # Errors
+///
+/// The first failure, unretried: unreachable, timeout, host key, authentication.
+#[uniffi::export(default(jump_auth = []))]
+pub async fn test_ssh_connection(
+    target: SshTarget,
+    auth: Vec<SshAuth>,
+    known_hosts: Arc<KnownHostsStore>,
+    host_keys: HostKeyPolicy,
+    options: SshOptions,
+    jump_auth: Vec<Vec<SshAuth>>,
+) -> Result<u64, SshError> {
+    let connect = connect_options(auth, jump_auth, &known_hosts, host_keys, &options)?;
+    let target: ssh::Target = target.into();
+    on_runtime(async move {
+        let started = std::time::Instant::now();
+        let connection = ssh::Connection::connect(&target, &connect).await?;
+        let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        connection.disconnect().await;
+        Ok(elapsed)
+    })
+    .await
 }
 
 /// Where an [`SshSession`] is.
@@ -1135,7 +1458,7 @@ impl SshSession {
     ///
     /// [`SshError::Key`] / [`SshError::KeyEncrypted`] if a key in `auth` cannot be decoded
     /// (nothing is dialled then). Connection problems arrive as states.
-    #[uniffi::constructor(default(listener = None))]
+    #[uniffi::constructor(default(listener = None, jump_auth = []))]
     pub fn start(
         target: SshTarget,
         auth: Vec<SshAuth>,
@@ -1143,23 +1466,9 @@ impl SshSession {
         host_keys: HostKeyPolicy,
         options: SshOptions,
         listener: Option<Arc<dyn SshSessionListener>>,
+        jump_auth: Vec<Vec<SshAuth>>,
     ) -> Result<Arc<Self>, SshError> {
-        let mut connect = ssh::ConnectOptions::new(
-            credentials(auth)?,
-            Arc::clone(&known_hosts.inner),
-            host_keys.into(),
-        );
-        connect.keepalive = ssh::Keepalive {
-            interval: Duration::from_millis(options.keepalive_interval_ms),
-            count_max: options.keepalive_count_max,
-            probe_timeout: Duration::from_millis(options.probe_timeout_ms),
-        };
-        connect.timeouts = ssh::Timeouts {
-            connect: Duration::from_millis(options.connect_timeout_ms),
-            handshake: Duration::from_millis(options.handshake_timeout_ms),
-            auth: Duration::from_millis(options.auth_timeout_ms),
-        };
-        connect.compression = options.compression;
+        let connect = connect_options(auth, jump_auth, &known_hosts, host_keys, &options)?;
         let policy = ssh::ReconnectPolicy {
             background_attempts: options.background_attempts,
             ..ssh::ReconnectPolicy::default()
