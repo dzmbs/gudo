@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="canvas.css">
 <style>
   html, body, #root { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
+  /* Canvas: a band at the top for the host's glass controls, so they never cover the editor's tools. */
+  body[data-mode="canvas"] #root { box-sizing: border-box; padding-top: 56px; }
   body { -webkit-user-select: none; -webkit-touch-callout: none; }
   /* Overlay: the terminal shows through; the host draws Done / Cancel / Send. */
   body[data-mode="overlay"] .excalidraw,
@@ -23,6 +25,8 @@
   body[data-mode="overlay"] .welcome-screen-center,
   body[data-mode="overlay"] .welcome-screen-decor,
   body[data-mode="overlay"] .HintViewer,
+  body[data-mode="canvas"] .default-sidebar-trigger,
+  body[data-mode="canvas"] .sidebar-trigger,
   body .excalidraw .help-icon,
   body .excalidraw .welcome-screen-decor { display: none !important; }
   /* Overlay: none of Excalidraw's own chrome, which would cover the first terminal rows;

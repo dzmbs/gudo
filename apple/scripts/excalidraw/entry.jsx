@@ -112,10 +112,13 @@ function applyRemote({ elements = [], files = [] }) {
 function sceneLoaded() {
   if (state.loaded || !state.api) return;
   state.loaded = true;
-  // Never Excalidraw's pen mode: once a Pencil touched the page it stopped fingers from drawing
-  // shapes (App `allowOnPointerDown`). Touch routing belongs to the host.
-  state.api.updateScene({ appState: { penMode: false, penDetected: true }, captureUpdate: CaptureUpdateAction.NEVER });
+  // The overlay never uses Excalidraw's pen mode: once a Pencil touched the page it stopped
+  // fingers from drawing shapes (App `allowOnPointerDown`). Touch routing belongs to the host.
+  if (state.config?.mode === "overlay") {
+    state.api.updateScene({ appState: { penMode: false, penDetected: true }, captureUpdate: CaptureUpdateAction.NEVER });
+  }
   if (state.tool) applyTool();
+  postViewport();
   const waiting = state.waiting;
   state.waiting = [];
   for (const work of waiting) work();
@@ -207,6 +210,19 @@ function revert() {
   post({ type: "reverted", count });
 }
 
+// Canvas panes: once a Pencil is in use, fingers pan and zoom instead of drawing.
+function setPenMode({ enabled }) {
+  state.api?.updateScene({ appState: { penMode: !!enabled, penDetected: true }, captureUpdate: CaptureUpdateAction.NEVER });
+}
+
+// Where the canvas pane's scene sits in the page, for the host's Pencil layer.
+function postViewport() {
+  const api = state.api;
+  if (!api || state.config?.mode !== "canvas") return;
+  const app = api.getAppState();
+  post({ type: "viewport", scrollX: app.scrollX, scrollY: app.scrollY, zoom: app.zoom.value, offsetLeft: app.offsetLeft, offsetTop: app.offsetTop });
+}
+
 function setTheme({ theme }) {
   document.body.dataset.theme = theme;
   if (state.config) {
@@ -266,11 +282,14 @@ function boundsElement({ x, y, width, height }) {
   ])[0];
 }
 
-async function exportImage({ requestId, format = "png", scale = 2, exportPadding = 0, bounds = null, background = false }) {
+async function exportImage({ requestId, format = "png", scale = 2, exportPadding = 0, bounds = null, background = false, selectionOnly = false }) {
   const api = state.api;
   if (!api) return post({ type: "export", requestId, error: "not loaded" });
   try {
-    const drawn = api.getSceneElements();
+    const scene = api.getSceneElements();
+    const selected = api.getAppState().selectedElementIds || {};
+    const picked = selectionOnly ? scene.filter((e) => selected[e.id]) : [];
+    const drawn = picked.length ? picked : scene;
     const elements = bounds ? [...drawn, boundsElement(bounds)] : drawn;
     const appState = {
       ...api.getAppState(),
@@ -350,7 +369,7 @@ function snapshot() {
   return JSON.stringify({ elements: api ? api.getSceneElements() : [], tool: api?.getAppState().activeTool.type });
 }
 
-window.canvas = { load, applyRemote, addElements, setViewport, setTool, setTheme, exportImage, bounds, flushNow, revert, debugRect, debugArrow, debugSkeleton, snapshot };
+window.canvas = { load, applyRemote, addElements, setViewport, setTool, setTheme, setPenMode, exportImage, bounds, flushNow, revert, debugRect, debugArrow, debugSkeleton, snapshot };
 
 // MARK: JS → Swift
 
@@ -370,7 +389,7 @@ function flush() {
 function onChange(elements, appState, files) {
   if (!state.loaded && state.api && appState && !appState.isLoading) queueMicrotask(sceneLoaded);
   if (state.loaded && appState) {
-    if (appState.penMode) {
+    if (appState.penMode && state.config?.mode === "overlay") {
       queueMicrotask(() => state.api?.updateScene({ appState: { penMode: false }, captureUpdate: CaptureUpdateAction.NEVER }));
     }
     // Keep the host's toolbar in step with the editor (keyboard letters, the editor going back
@@ -406,6 +425,10 @@ function onPointerUpdate({ pointer }) {
 
 // The overlay's viewport belongs to the terminal: Excalidraw must not pan or zoom it.
 function onScrollChange(scrollX, scrollY, zoom) {
+  if (state.config?.mode === "canvas") {
+    queueMicrotask(postViewport);
+    return;
+  }
   const viewport = state.viewport;
   if (state.config?.mode !== "overlay" || !viewport) return;
   const want = { x: viewport.originX / viewport.zoom, y: viewport.originY / viewport.zoom };
@@ -626,3 +649,6 @@ function Editor() {
 }
 
 createRoot(document.getElementById("root")).render(<Editor />);
+
+// The editor measures its offsets after a resize; the host's Pencil layer needs them.
+window.addEventListener("resize", () => setTimeout(postViewport, 100));
