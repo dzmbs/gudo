@@ -9,12 +9,15 @@ import GudoCore
 import UserNotifications
 #if canImport(UIKit)
 import UIKit
+#elseif canImport(AppKit)
+import AppKit
 #endif
 
 /// Notifications while the app is alive: every daemon's attention feed (agent blocked or done,
-/// a long command finished unseen) becomes a local notification when the app is not in front,
-/// with Approve / Deny / Open wired to the signed `decide` (local) or `sendPushAction` (push).
-/// Remote push registration runs only in builds with the push entitlement (`PUSH_YES`).
+/// a long command finished unseen) becomes a local notification, except for the pane on screen
+/// and, in the background, hosts that push to this device; with Approve / Deny / Open wired to
+/// the signed `decide` (local) or `sendPushAction` (push). Remote push registration runs only
+/// in builds with the push entitlement (`PUSH_YES`).
 @MainActor
 final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
     static let shared = AppNotifications()
@@ -23,7 +26,11 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
     /// Whether a window of the app is active (set from the scene phase).
     var appIsActive = true
     var prefs = NotificationPrefs.load() {
-        didSet { prefs.save() }
+        didSet {
+            guard prefs != oldValue else { return }
+            prefs.save()
+            prefsChanged()
+        }
     }
     /// The APNs token, once registered (push builds only).
     private(set) var apnsToken: Data?
@@ -37,6 +44,18 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
     /// Attention notes, posted one at a time, newest per pane (a burst is not a task per item).
     private lazy var notes = NoteQueue<AttentionNote> { [weak self] note in await self?.post(note) }
     private lazy var security = HostSecurityNotifier { [weak self] in await self?.isAuthorized() ?? false }
+    /// Items some device saw, per host, so a finished turn held back for a moment is dropped.
+    private var seenItems: [String: Set<UInt64>] = [:]
+    /// Finished-turn notes, at most one per pane per interval (the newest).
+    private var pacer = PaneNotePacer()
+    private var newestFinished: [String: UInt64] = [:]
+    /// When a note was last posted per pane, so a push for the same moment does not show twice.
+    private var postedAt: [String: ContinuousClock.Instant] = [:]
+    /// Hosts that push to this device.
+    private var pushingHosts: Set<String> = []
+    private var reregistration: Task<Void, Never>?
+    /// How long a finished turn waits for the agent to go straight on.
+    static let finishedSettle: Duration = .seconds(2)
 
     /// Registers categories and the delegate (before launch finishes, so actions on a cold
     /// start reach the handler) and starts following the hosts' attention feeds.
@@ -113,7 +132,8 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
         case .added(let item, let count):
             unseen[hostId] = count
             updateBadge()
-            guard !item.seen, !item.whileViewed else { return }
+            // Another device showing the pane does not count: only this device's own screen.
+            guard !item.seen else { return }
             Task {
                 // The pane's agent state comes on another stream and can land just after the
                 // item: an approval waits for its options, or it would lose Approve / Deny.
@@ -121,13 +141,37 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
                     await Self.settle { Self.blockedOptions(daemon.meta[PaneId(item.paneId)]?.agent, request: request) != nil }
                 }
                 guard let note = note(for: item, hostId: hostId, daemon: daemon) else { return }
+                if note.isFinished, await !finishedStillDue(note, daemon: daemon) { return }
                 notes.enqueue(note, key: LocalNotifications.identifier(hostId: note.hostId, paneId: note.paneId))
             }
-        case .seen(_, let count):
+        case .seen(let ids, let count):
             unseen[hostId] = count
+            seenItems[hostId, default: []].formUnion(ids)
+            if seenItems[hostId, default: []].count > 2000 { seenItems[hostId] = Set(ids) }
             updateBadge()
             if count == 0 { clearDelivered(hostId: hostId) }
         }
+    }
+
+    /// A finished turn waits a moment and goes only if nobody saw it and the agent did not go
+    /// straight on; one per pane per interval, the newest.
+    private func finishedStillDue(_ note: AttentionNote, daemon: DaemonConnection) async -> Bool {
+        let key = LocalNotifications.identifier(hostId: note.hostId, paneId: note.paneId)
+        newestFinished[key] = note.itemId
+        try? await Task.sleep(for: Self.finishedSettle)
+        let wait = pacer.wait(for: key, now: .now)
+        if wait > .zero { try? await Task.sleep(for: wait) }
+        guard newestFinished[key] == note.itemId,
+              !(seenItems[note.hostId]?.contains(note.itemId) ?? false),
+              !Self.isWorking(daemon.meta[PaneId(note.paneId)]?.agent)
+        else { return false }
+        newestFinished[key] = nil
+        pacer.posted(key, at: .now)
+        return true
+    }
+
+    static func isWorking(_ agent: AgentStatus?) -> Bool {
+        if case .running? = agent?.state { true } else { false }
     }
 
     /// The daemon's item as a note: approval options come from the pane's agent state.
@@ -137,8 +181,21 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
         } else {
             nil
         }
-        return Self.note(for: item, hostId: hostId, hostName: hosts.record(hostId)?.name ?? "Host",
-                         agentState: daemon.meta[PaneId(item.paneId)]?.agent, drive: drive)
+        var note = Self.note(for: item, hostId: hostId, hostName: hosts.record(hostId)?.name ?? "Host",
+                             agentState: daemon.meta[PaneId(item.paneId)]?.agent, drive: drive)
+        note.place = Self.place(
+            tabTitle: daemon.layout.session.tab(containing: PaneId(item.paneId))?.title,
+            directory: daemon.meta[PaneId(item.paneId)]?.cwd)
+        return note
+    }
+
+    /// The tab's own name, else the pane's directory's.
+    static func place(tabTitle: String?, directory: String?) -> String? {
+        if let tabTitle = tabTitle?.trimmingCharacters(in: .whitespaces), !tabTitle.isEmpty { return tabTitle }
+        guard let directory, !directory.isEmpty else { return nil }
+        let path = directory.hasPrefix("file://") ? URL(string: directory)?.path ?? directory : directory
+        let name = (path as NSString).lastPathComponent
+        return name.isEmpty || name == "/" ? nil : name
     }
 
     /// The note for `item`. A drive request (an agent asking to drive one of the user's panes)
@@ -149,18 +206,21 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
     ) -> AttentionNote {
         let kind: AttentionNote.Kind
         var agent: String?
+        var agentId: String?
         switch item.kind {
         case .agentBlocked(let name, let request?) where drive?.id == request:
             agent = AgentKind(name).title
+            agentId = name
             if let drive {
                 kind = .approval(requestId: request, approve: .init(id: drive.allowOnce, label: "Allow once"),
                                  deny: .init(id: drive.deny, label: "Deny"))
                 return AttentionNote(hostId: hostId, hostName: hostName, itemId: item.id, paneId: item.paneId,
-                                     kind: kind, title: drive.title, body: drive.action, agent: agent)
+                                     kind: kind, title: drive.title, body: drive.action, agent: agent, agentId: agentId)
             }
             kind = .blocked
         case .agentBlocked(let name, let request):
             agent = AgentKind(name).title
+            agentId = name
             if let request, case .blocked(_, _, let options) = agentState?.state, !options.isEmpty {
                 let approve = options.first { Self.isAllow($0.label) } ?? options.first
                 let deny = options.first { Self.isDeny($0.label) } ?? options.last
@@ -173,17 +233,19 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
             }
         case .agentDone(let name):
             agent = AgentKind(name).title
+            agentId = name
             kind = .done
         case .agentFailed(let name):
             agent = AgentKind(name).title
+            agentId = name
             kind = .failed
         case .commandFinished:
             kind = .command
         }
-        // An agent's item is titled by its kind ("Approval needed"); the agent's name is in the
-        // subtitle already, where the daemon's title would repeat it lowercased ("claude needs you").
+        // An agent's item is titled with its product name ("Claude Code finished"), not the
+        // daemon's lowercased one ("claude finished").
         return AttentionNote(hostId: hostId, hostName: hostName, itemId: item.id, paneId: item.paneId, kind: kind,
-                             title: agent == nil ? item.title : "", body: item.body, agent: agent)
+                             title: agent == nil ? item.title : "", body: item.body, agent: agent, agentId: agentId)
     }
 
     /// The options of the request an agent is blocked on, once its state says so.
@@ -210,9 +272,37 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
         return ["deny", "no", "reject", "decline", "cancel"].contains { lower.hasPrefix($0) || lower.contains(" \($0)") }
     }
 
-    /// Posts a note if the preferences and the permission allow it and the app is not in front.
+    /// The user is in the app: in front, and on a Mac the active app (a window left visible
+    /// behind another app is not being looked at).
+    var isFrontmost: Bool {
+        #if os(macOS)
+        appIsActive && NSApplication.shared.isActive
+        #else
+        appIsActive
+        #endif
+    }
+
+    /// Whether this device shows `pane` of the host to the user right now.
+    func isOnScreen(hostId: String, pane: UInt64) -> Bool {
+        guard isFrontmost, let daemon = hosts.connection(hostId) as? DaemonConnection else { return false }
+        return daemon.reportedView?.visible.contains(pane) ?? false
+    }
+
+    /// A host pushes to this device and, with no window of it on screen, will push this note.
+    func pushCovers(hostId: String) -> Bool {
+        guard pushingHosts.contains(hostId), let daemon = hosts.connection(hostId) as? DaemonConnection else { return false }
+        return daemon.reportedView?.visible.isEmpty ?? true
+    }
+
+    /// Posts a note if the preferences and the permission allow it, its pane is not on screen,
+    /// and in the background no push brings it already.
     func post(_ note: AttentionNote) async {
-        guard LocalNotifications.shouldPost(note, prefs: prefs, appIsActive: appIsActive), await isAuthorized() else { return }
+        let allowed = LocalNotifications.shouldPost(
+            note, prefs: prefs, appIsActive: isFrontmost,
+            paneOnScreen: isOnScreen(hostId: note.hostId, pane: note.paneId),
+            pushCoversBackground: pushCovers(hostId: note.hostId))
+        guard allowed, await isAuthorized() else { return }
+        postedAt[LocalNotifications.identifier(hostId: note.hostId, paneId: note.paneId)] = .now
         let request = UNNotificationRequest(
             identifier: LocalNotifications.identifier(hostId: note.hostId, paneId: note.paneId),
             content: LocalNotifications.content(for: note), trigger: nil)
@@ -245,7 +335,9 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
     private func clearDelivered(hostId: String) {
         Task {
             let center = UNUserNotificationCenter.current()
-            let ids = await center.deliveredNotifications().filter { $0.request.content.threadIdentifier == hostId }.map(\.request.identifier)
+            let ids = await center.deliveredNotifications()
+                .filter { $0.request.content.threadIdentifier == hostId || $0.request.content.threadIdentifier.hasPrefix("\(hostId).pane.") }
+                .map(\.request.identifier)
             center.removeDeliveredNotifications(withIdentifiers: ids)
         }
     }
@@ -274,11 +366,31 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
 
     // MARK: UNUserNotificationCenterDelegate
 
+    /// In front: nothing for the pane on screen, a banner for the rest. A push for a pane this
+    /// app just alerted about locally shows once.
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter, willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
-        // In front, the terminal and the Inbox show it already; keep it in the list only.
-        [.list]
+        let content = notification.request.content
+        let remote = notification.request.trigger is UNPushNotificationTrigger
+        let target = NotificationTarget(userInfo: content.userInfo, remote: remote)
+        return await MainActor.run { AppNotifications.shared.presentation(for: target) }
+    }
+
+    func presentation(for target: NotificationTarget?) -> UNNotificationPresentationOptions {
+        switch target {
+        case .local(let hostId, let paneId, _, _, _, _):
+            return LocalNotifications.presentation(paneOnScreen: isOnScreen(hostId: hostId, pane: paneId))
+        case .push(let push):
+            guard let hostId = hosts.records.first(where: { $0.daemonId?.lowercased() == push.daemon.lowercased() })?.id else {
+                return [.banner, .list, .sound]
+            }
+            let key = LocalNotifications.identifier(hostId: hostId, paneId: push.pane)
+            if let posted = postedAt[key], ContinuousClock.now - posted < .seconds(60) { return [] }
+            return LocalNotifications.presentation(paneOnScreen: isOnScreen(hostId: hostId, pane: push.pane))
+        case nil:
+            return [.list]
+        }
     }
 
     /// The completion handler goes back on the main thread: UIKit asserts it there (it updates
@@ -329,6 +441,7 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
         if let key = try? hosts.pushSealKey() { store.setSealKey(key.secret) }
         store.setPairedDaemons(hosts.pairedDaemonIds)
         let pushPrefs = PushPrefs(approvals: prefs.approvals, blocked: prefs.blocked, done: prefs.done, failed: prefs.failed, commands: prefs.commands)
+        let agentRules = Self.agentRules(prefs)
         #if os(iOS)
         let activityStart = AgentsLiveActivity.shared.startToken
         #else
@@ -337,7 +450,9 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
         for (id, connection) in hosts.connections where connection is DaemonConnection && hosts.record(id)?.isGuest == false {
             do {
                 _ = try await hosts.registerPush(
-                    hostId: id, apnsToken: token, environment: Self.apnsEnvironment, prefs: pushPrefs, activityStartToken: activityStart)
+                    hostId: id, apnsToken: token, environment: Self.apnsEnvironment, prefs: pushPrefs,
+                    agentRules: agentRules, activityStartToken: activityStart)
+                pushingHosts.insert(id)
             } catch {
                 Self.log.error("push registration host=\(id, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
@@ -346,6 +461,24 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
         // A running agents activity's token, for daemons that connected since it started.
         if AgentsLiveActivity.shared.updateToken != nil { await AgentsLiveActivity.shared.sendUpdateToken() }
         #endif
+    }
+
+    /// The per-agent choices as the daemons take them.
+    static func agentRules(_ prefs: NotificationPrefs) -> [PushAgentRule] {
+        prefs.agents.keys.sorted().compactMap { name in
+            prefs.agents[name].map { PushAgentRule(agent: name, needsYou: $0.needsYou, finished: $0.finished) }
+        }
+    }
+
+    /// Pushes follow the new choices: registered again a moment after the last change.
+    private func prefsChanged() {
+        guard apnsToken != nil else { return }
+        reregistration?.cancel()
+        reregistration = Task {
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            await registerPush()
+        }
     }
 
     /// Development builds get sandbox tokens; TestFlight and the App Store production ones.

@@ -16,6 +16,10 @@ nonisolated public protocol PushClientAPI: AnyObject, Sendable {
     func pushActivity(cap: String?) async throws -> PushStatus
     /// The daemon sends the agents Live Activity.
     func offersLiveActivity() -> Bool
+    /// Which agents this device wants pushed (after registering).
+    func pushAgents(rules: [PushAgentRule]) async throws -> PushStatus
+    /// The daemon takes per-agent rules.
+    func offersPushAgents() -> Bool
 }
 
 extension DaemonClient: PushClientAPI {}
@@ -59,26 +63,40 @@ extension HostsModel {
     /// Registers this device's APNs token with the relay for one connected daemon, then the
     /// capability and sealing key with the daemon. Re-run on every launch and token change.
     /// `activityStartToken` (ActivityKit push-to-start) lets the daemon start the agents Live
-    /// Activity; it is sent only to daemons that offer Live Activities.
+    /// Activity; it is sent only to daemons that offer Live Activities. `agentRules` go to
+    /// daemons that take them (older ones push every agent as `prefs` say).
     public func registerPush(
         hostId: String, apnsToken: Data, environment: ApnsEnvironment, prefs: PushPrefs,
-        activityStartToken: Data? = nil,
+        agentRules: [PushAgentRule] = [], activityStartToken: Data? = nil,
         relayURL: URL = URL(string: defaultPushRelayUrl())!, session: URLSession = .shared
     ) async throws -> PushStatus {
         guard let record = record(hostId), let daemonId = record.daemonId, !record.isGuest,
               let connection = connection(hostId) as? DaemonConnection, let client = connection.push
         else { throw PushRegistrationError.notConnected }
         let relay = PushRelay(url: relayURL, session: session)
-        let cap = try await relay.capability(token: apnsToken, environment: environment, daemonId: daemonId, kind: .alert)
+        let cap = try await cachedCapability(relay, token: apnsToken, environment: environment, daemonId: daemonId, kind: .alert)
         var activityCap: String?
         if let activityStartToken, client.offersLiveActivity() {
-            activityCap = try await relay.capability(token: activityStartToken, environment: environment, daemonId: daemonId, kind: .activity)
+            activityCap = try await cachedCapability(relay, token: activityStartToken, environment: environment, daemonId: daemonId, kind: .activity)
         }
         let key = try pushSealKey()
-        let status = try await client.pushRegister(registration: PushRegistration(
+        var status = try await client.pushRegister(registration: PushRegistration(
             cap: cap, sealKey: key.publicKey, relayUrl: relayURL.absoluteString, prefs: prefs, activityCap: activityCap))
+        if client.offersPushAgents() {
+            status = try await client.pushAgents(rules: agentRules)
+        }
         Self.pushLog.info("push registered host=\(hostId, privacy: .public) devices=\(status.devices) activity=\(activityCap != nil)")
         return status
+    }
+
+    private func cachedCapability(
+        _ relay: PushRelay, token: Data, environment: ApnsEnvironment, daemonId: String, kind: PushCapKind
+    ) async throws -> String {
+        let key = "\(relay.url.absoluteString)|\(daemonId)|\(token.base64EncodedString())|\(environment)|\(kind)"
+        if let cap = pushCapabilities[key] { return cap }
+        let cap = try await relay.capability(token: token, environment: environment, daemonId: daemonId, kind: kind)
+        pushCapabilities[key] = cap
+        return cap
     }
 
     /// Hands one connected daemon the running agents Live Activity's push token (through a

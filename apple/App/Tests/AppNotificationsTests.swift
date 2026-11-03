@@ -72,6 +72,35 @@ final class AppNotificationsTests: XCTestCase {
         }
     }
 
+    /// A finished turn is titled with the agent's product name, carries the daemon's agent name
+    /// for the per-agent choices, and says the first line of the last message.
+    func testAFinishedTurnNamesTheAgentAndSummarizes() {
+        let item = AttentionItem(
+            id: 5, atMs: 0, paneId: 3, sessionId: nil, kind: .agentDone(agent: "codex"),
+            title: "codex finished", body: "Published the crate.\n\nDetails follow.", seen: false, whileViewed: false)
+        var note = AppNotifications.note(for: item, hostId: "h", hostName: "studio", agentState: nil, drive: nil)
+        note.place = AppNotifications.place(tabTitle: nil, directory: "file://studio/Users/me/src/api")
+        XCTAssertEqual(note.agentId, "codex")
+        let content = LocalNotifications.content(for: note)
+        XCTAssertEqual(content.title, "Codex finished")
+        XCTAssertEqual(content.subtitle, "api · studio")
+        XCTAssertEqual(content.body, "Published the crate.")
+        XCTAssertEqual(AppNotifications.place(tabTitle: " Release ", directory: "/x/y"), "Release")
+        XCTAssertNil(AppNotifications.place(tabTitle: "", directory: "/"))
+    }
+
+    func testAgentChoicesBecomePushRules() {
+        var prefs = NotificationPrefs()
+        prefs.agents["codex"] = AgentNotificationPrefs(needsYou: true, finished: false)
+        prefs.agents[NotificationPrefs.otherAgents] = AgentNotificationPrefs(needsYou: false, finished: false)
+        XCTAssertEqual(AppNotifications.agentRules(prefs), [
+            PushAgentRule(agent: "*", needsYou: false, finished: false),
+            PushAgentRule(agent: "codex", needsYou: true, finished: false),
+        ])
+        XCTAssertEqual(AgentNotificationChoice(prefs.agent("claude")), .off, "the other agents' choice")
+        XCTAssertEqual(AgentNotificationChoice(prefs.agent("codex")), .needsYou)
+    }
+
     /// Permission is asked right after pairing, once; a note firing while the app is away
     /// never asks (it would come out of nowhere), it just is not posted.
     func testPermissionIsAskedAfterPairingNeverWhenANoteFires() async {

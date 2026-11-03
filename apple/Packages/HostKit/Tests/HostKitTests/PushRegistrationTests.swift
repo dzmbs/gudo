@@ -8,6 +8,7 @@ import GudoCore
 nonisolated private enum PushLog {
     static let registrations = Mutex<[PushRegistration]>([])
     static let activityCaps = Mutex<[String?]>([])
+    static let agentRules = Mutex<[[PushAgentRule]]>([])
     static let offers = Atomic<Bool>(true)
 }
 
@@ -30,6 +31,13 @@ extension FakeClient: PushClientAPI {
     }
 
     func offersLiveActivity() -> Bool { PushLog.offers.load(ordering: .relaxed) }
+
+    func pushAgents(rules: [PushAgentRule]) async throws -> PushStatus {
+        PushLog.agentRules.withLock { $0.append(rules) }
+        return Self.status
+    }
+
+    func offersPushAgents() -> Bool { PushLog.offers.load(ordering: .relaxed) }
 }
 
 /// A push relay answering `/v1/register` with a capability naming the kind and token.
@@ -77,6 +85,7 @@ nonisolated private final class RelayStub: URLProtocol {
     private func model() throws -> HostsModel {
         PushLog.registrations.withLock { $0.removeAll() }
         PushLog.activityCaps.withLock { $0.removeAll() }
+        PushLog.agentRules.withLock { $0.removeAll() }
         RelayStub.bodies.withLock { $0.removeAll() }
         let model = HostsModel(secrets: MemorySecretStore(), repository: HostRepository(directory: temporaryDirectory()))
         model.upsert(HostRecord(id: "d", name: "studio", kind: .daemon, daemonId: String(repeating: "ab", count: 32)))
@@ -93,8 +102,10 @@ nonisolated private final class RelayStub: URLProtocol {
         PushLog.offers.store(true, ordering: .relaxed)
         _ = try await model.registerPush(
             hostId: "d", apnsToken: Data([0xAA, 0xBB, 0, 1, 2, 3, 4, 5]), environment: .sandbox, prefs: PushPrefs(approvals: true, blocked: true, done: true, failed: true, commands: true),
+            agentRules: [PushAgentRule(agent: "codex", needsYou: true, finished: false)],
             activityStartToken: Data([0xCC, 0xDD, 0, 1, 2, 3, 4, 5]), relayURL: relay, session: RelayStub.session)
         let registration = try #require(PushLog.registrations.withLock { $0.last })
+        #expect(PushLog.agentRules.withLock { $0 } == [[PushAgentRule(agent: "codex", needsYou: true, finished: false)]])
         #expect(registration.cap == "cap-alert-aabb")
         #expect(registration.activityCap == "cap-activity-ccdd")
         #expect(registration.sealKey.count == 32)
@@ -108,7 +119,8 @@ nonisolated private final class RelayStub: URLProtocol {
             hostId: "d", apnsToken: Data([0xAA, 0xBB, 0, 1, 2, 3, 4, 5]), environment: .sandbox, prefs: PushPrefs(approvals: true, blocked: true, done: true, failed: true, commands: true),
             activityStartToken: Data([0xCC, 0xDD, 0, 1, 2, 3, 4, 5]), relayURL: relay, session: RelayStub.session)
         #expect(PushLog.registrations.withLock { $0.last?.activityCap } == nil)
-        #expect(RelayStub.bodies.withLock { $0.count } == 3)
+        #expect(PushLog.agentRules.withLock { $0.count } == 1, "an older daemon gets no agent rules")
+        #expect(RelayStub.bodies.withLock { $0.count } == 2, "the alert capability is reused this run")
     }
 
     @Test func handsOverAndWithdrawsTheRunningActivity() async throws {

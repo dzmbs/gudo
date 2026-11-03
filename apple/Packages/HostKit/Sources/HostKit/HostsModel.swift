@@ -72,6 +72,9 @@ public final class HostsModel {
         public init() {}
     }
 
+    /// Relay capabilities issued this run, by daemon, token, environment and kind: registering
+    /// again with a daemon (new preferences) does not spend the relay's registration budget.
+    @ObservationIgnored var pushCapabilities: [String: String] = [:]
     @ObservationIgnored public let secrets: any SecretStore
     @ObservationIgnored private let repository: HostRepository
     @ObservationIgnored private let configuration: Configuration
