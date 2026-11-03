@@ -39,17 +39,22 @@ mod error;
 mod history;
 mod input;
 mod kitty;
+mod replies;
 mod snapshot;
 mod terminal;
 
 pub use cells::{Cell, CellStyle, CellWidth, Color, Row, Semantic};
 pub use error::Error;
+pub use ghostty_vt_sys::GHOSTTY_VERSION;
 pub use history::{StreamingRestore, count_pages, history_chunk, history_chunks};
 pub use input::{
     Key, KeyAction, KeyEncoder, KeyEvent, Mods, MouseAction, MouseButton, MouseEncoder, MouseEvent,
     char_width, encode_paste, paste_is_safe,
 };
 pub use kitty::{ImageFormat, KITTY_IMAGE_STORAGE_LIMIT, KittyImage, KittyPlacement};
+pub use replies::{
+    COLOR_SCHEME_REPORTS, ColorScheme, DefaultColors, GRAPHEME_CLUSTERS, Identity, Rgb,
+};
 pub use snapshot::{HistoryPage, Restore, SnapshotDecoder, ready_len, screen_len, snapshot_format};
 pub use terminal::{
     CONTINUATION_MAX_BYTES, Cursor, Mode, PinId, Point, PromptKind, ReplySink, Screen,

@@ -61,6 +61,8 @@ fn main() {
         String::from_utf8_lossy(&prepared.stderr)
     );
     let version = String::from_utf8_lossy(&prepared.stdout).trim().to_owned();
+    let release = version.split('+').next().unwrap_or(&version);
+    println!("cargo:rustc-env=GHOSTTY_VERSION={release}");
 
     let status = Command::new(&zig)
         .current_dir(&source)

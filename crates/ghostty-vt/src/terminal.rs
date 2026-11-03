@@ -55,11 +55,12 @@ pub type ReplySink = Box<dyn FnMut(&[u8]) + Send>;
 
 /// State the C callbacks reach through the terminal's userdata pointer.
 #[derive(Default)]
-struct Callbacks {
+pub(crate) struct Callbacks {
     reply: Option<ReplySink>,
     /// Shell-integration events seen during the current `write`, with the cursor tracked at
     /// the moment each arrived.
     prompts: Vec<RawPrompt>,
+    pub(crate) replies: crate::replies::ReplyState,
 }
 
 struct RawPrompt {
@@ -182,6 +183,10 @@ impl Mode {
     /// An ANSI mode (`CSI n h`).
     pub const fn ansi(value: u16) -> Self {
         Self((value & 0x7fff) | 0x8000)
+    }
+
+    pub(crate) const fn raw(self) -> u16 {
+        self.0
     }
 }
 
@@ -676,8 +681,21 @@ impl Terminal {
         id
     }
 
+    /// Sends `bytes` to the reply sink, as the terminal's own replies go.
+    pub(crate) fn reply(&mut self, bytes: &[u8]) -> Result<(), Error> {
+        if let Some(sink) = self.callbacks()?.reply.as_mut() {
+            sink(bytes);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn replies(&self) -> Option<&crate::replies::ReplyState> {
+        // SAFETY: non-null `callbacks` is owned by `self`; `&self` excludes a running `write`.
+        (!self.callbacks.is_null()).then(|| unsafe { &(*self.callbacks).replies })
+    }
+
     /// The callback state, allocating and installing it on first use.
-    fn callbacks(&mut self) -> Result<&mut Callbacks, Error> {
+    pub(crate) fn callbacks(&mut self) -> Result<&mut Callbacks, Error> {
         if self.callbacks.is_null() {
             let allocated = Box::into_raw(Box::<Callbacks>::default());
             // SAFETY: the handle is live; USERDATA takes the pointer value itself, which stays
@@ -858,7 +876,7 @@ impl Terminal {
     /// # Safety
     ///
     /// `T` must be the output type libghostty-vt documents for `data`.
-    unsafe fn get<T: Default>(&self, data: ffi::GhosttyTerminalData) -> T {
+    pub(crate) unsafe fn get<T: Default>(&self, data: ffi::GhosttyTerminalData) -> T {
         let mut value = T::default();
         // SAFETY: the handle is live and the caller guarantees `T` matches `data`.
         let result =

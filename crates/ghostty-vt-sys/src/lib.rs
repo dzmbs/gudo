@@ -13,4 +13,7 @@
     unsafe_op_in_unsafe_fn
 )]
 
+/// The Ghostty release the library is built from (`vendor/ghostty/build.zig.zon`).
+pub const GHOSTTY_VERSION: &str = env!("GHOSTTY_VERSION");
+
 include!("bindings.rs");
