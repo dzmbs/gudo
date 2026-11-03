@@ -157,6 +157,14 @@ fn real_prefix(path: &Path) -> PathBuf {
     }
 }
 
+/// Whether indexing `folder` (an editor workspace, a repository's status) would walk the whole
+/// home directory: `folder` is home or one of its ancestors. On macOS that walk reaches
+/// Desktop, Documents, Downloads, iCloud Drive and other apps' data, each behind a privacy
+/// prompt the user never asked for.
+pub(crate) fn holds_home(folder: &Path, home: &Path) -> bool {
+    canonical(home).starts_with(canonical(folder))
+}
+
 /// Maps an I/O error to the closest [`WsError`], naming `path`.
 pub(crate) fn io_error(path: &Path, error: &std::io::Error) -> WsError {
     use std::io::ErrorKind;
@@ -175,6 +183,20 @@ pub(crate) fn io_error(path: &Path, error: &std::io::Error) -> WsError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn home_and_its_ancestors_hold_home() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("me");
+        std::fs::create_dir_all(home.join("projects/app")).unwrap();
+        std::fs::create_dir_all(home.join("Documents")).unwrap();
+
+        assert!(holds_home(&home, &home));
+        assert!(holds_home(root.path(), &home));
+        assert!(holds_home(Path::new("/"), &home));
+        assert!(!holds_home(&home.join("projects/app"), &home));
+        assert!(!holds_home(&home.join("Documents"), &home));
+    }
 
     #[test]
     fn confines_paths_to_the_roots() {

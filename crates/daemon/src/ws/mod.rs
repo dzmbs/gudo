@@ -414,7 +414,7 @@ pub(crate) async fn handle(
                 None => workspace_folder(&path),
             };
             ws.tunnel
-                .open(&folder, &path, open.line, open.column)
+                .open(&folder, &core.cfg.home(), &path, open.line, open.column)
                 .await
                 .map(Response::VsCodeTunnelOpened)
         }

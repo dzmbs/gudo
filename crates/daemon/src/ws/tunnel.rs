@@ -268,6 +268,7 @@ impl Tunnel {
     pub async fn open(
         &self,
         folder: &Path,
+        home: &Path,
         path: &Path,
         line: Option<u32>,
         column: Option<u32>,
@@ -302,7 +303,7 @@ impl Tunnel {
             _ => false,
         };
         Ok(VsCodeTunnelOpened {
-            web_url: format!("{base_url}/tunnel/{name}{}", url_path(&folder_text)),
+            web_url: workbench_url(base_url, &name, folder, home),
             desktop_uri: format!(
                 "vscode://vscode-remote/tunnel+{name}{}{suffix}",
                 url_path(&path_text)
@@ -794,6 +795,19 @@ fn valid_name(name: &str) -> Result<String, WsError> {
 }
 
 /// Percent-encodes a path for a URL, keeping `/`.
+/// The tunnel's workbench on `folder`, or an empty one when `folder` holds the home directory
+/// (the editor would search and index everything under home).
+fn workbench_url(base_url: &str, name: &str, folder: &Path, home: &Path) -> String {
+    if super::paths::holds_home(folder, home) {
+        format!("{base_url}/tunnel/{name}")
+    } else {
+        format!(
+            "{base_url}/tunnel/{name}{}",
+            url_path(&folder.to_string_lossy())
+        )
+    }
+}
+
 fn url_path(path: &str) -> String {
     let mut out = String::with_capacity(path.len());
     if !path.starts_with('/') {
@@ -1111,5 +1125,24 @@ mod tests {
         assert!(valid_name("x".repeat(21).as_str()).is_err());
         assert_eq!(url_path("/a b/c#d"), "/a%20b/c%23d");
         assert_eq!(strip_ansi("\x1b[1mhi\x1b[0m\r"), "hi");
+    }
+
+    #[test]
+    fn tunnel_workbench_skips_home_as_a_workspace() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("me");
+        let project = home.join("app");
+        std::fs::create_dir_all(&project).unwrap();
+        let base = "https://vscode.dev";
+
+        assert_eq!(
+            workbench_url(base, "box", &home, &home),
+            "https://vscode.dev/tunnel/box"
+        );
+        assert_eq!(
+            workbench_url(base, "box", root.path(), &home),
+            "https://vscode.dev/tunnel/box"
+        );
+        assert!(workbench_url(base, "box", &project, &home).ends_with("/me/app"));
     }
 }

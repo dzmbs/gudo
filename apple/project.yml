@@ -87,6 +87,13 @@ targets:
             localhost:
               NSIncludesSubdomains: true
               NSExceptionAllowsInsecureHTTPLoads: true
+        # Shown when a shell or agent in a terminal first reads there (the helper's prompts are
+        # attributed to the app).
+        NSDesktopFolderUsageDescription: Commands you run in the terminal can use files on your Desktop.
+        NSDocumentsFolderUsageDescription: Commands you run in the terminal can use files in your Documents folder.
+        NSDownloadsFolderUsageDescription: Commands you run in the terminal can use files in your Downloads folder.
+        NSRemovableVolumesUsageDescription: Commands you run in the terminal can use files on removable drives.
+        NSNetworkVolumesUsageDescription: Commands you run in the terminal can use files on network drives.
         # Agent runs on the Lock Screen and in the Dynamic Island (AgentActivityWidget).
         NSSupportsLiveActivities: true
         # The daemons' agents Live Activity pushes "needs you" at priority 10 (docs/PUSH.md §6).
