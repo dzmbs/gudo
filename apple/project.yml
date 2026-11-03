@@ -143,12 +143,14 @@ targets:
         PRODUCT_MODULE_NAME: App
         CODE_SIGN_IDENTITY: "-"
         PRODUCT_BUNDLE_IDENTIFIER: $(BRAND_BUNDLE_ID_PREFIX).app
+        PROVISIONING_PROFILE_SPECIFIER: $(RELEASE_PROFILE_APP)
         MARKETING_VERSION: "0.1"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: $(BRAND_NAME)
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
         # Pairing QR codes (VisionKit DataScannerViewController).
@@ -281,6 +283,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(BRAND_BUNDLE_ID_PREFIX).app.notification-service
+        PROVISIONING_PROFILE_SPECIFIER: $(RELEASE_PROFILE_NOTIFICATIONS)
         PRODUCT_NAME: NotificationService
         CODE_SIGN_IDENTITY: "-"
         MARKETING_VERSION: "0.1"
@@ -344,6 +347,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(BRAND_BUNDLE_ID_PREFIX).app.agent-activity
+        PROVISIONING_PROFILE_SPECIFIER: $(RELEASE_PROFILE_AGENTS)
         PRODUCT_NAME: AgentActivityWidget
         CODE_SIGN_IDENTITY: "-"
         MARKETING_VERSION: "0.1"
