@@ -113,6 +113,21 @@ while IFS= read -r -d '' file; do
   echo "    signed: ${file#"$app/"}"
 done < <(find "$app" -type f -print0)
 
+echo "==> checking linked libraries resolve inside the app"
+executable="$app/Contents/MacOS/$brand_name"
+rpaths=()
+while IFS= read -r rpath; do
+  rpaths+=("${rpath/@executable_path/$app/Contents/MacOS}")
+done < <(otool -l "$executable" | awk '/cmd LC_RPATH/ { getline; getline; print $2 }')
+while IFS= read -r library; do
+  found=""
+  for rpath in "${rpaths[@]}"; do
+    [ -e "$rpath/${library#@rpath/}" ] && found=1
+  done
+  [ -n "$found" ] || fail "$library does not resolve from the app's run paths: ${rpaths[*]}"
+  echo "    resolves: $library"
+done < <(otool -L "$executable" | awk '$1 ~ /^@rpath\// { print $1 }')
+
 echo "==> making $(basename "$dmg")"
 staging="$work_dir/dmg"
 mkdir -p "$staging"
