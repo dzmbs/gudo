@@ -6,8 +6,21 @@ import Foundation
 nonisolated struct LaunchArguments {
     private let values: [String: Any]
 
-    init(_ values: [String: Any] = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)) {
+    init(_ values: [String: Any] = Self.launchValues) {
         self.values = values
+    }
+
+    /// Whether this build takes test hooks at all: iPhone and iPad release builds never do.
+    static var acceptsTestHooks: Bool {
+        #if DEBUG || os(macOS)
+        true
+        #else
+        false
+        #endif
+    }
+
+    private static var launchValues: [String: Any] {
+        acceptsTestHooks ? UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain) : [:]
     }
 
     func string(forKey key: String) -> String? {

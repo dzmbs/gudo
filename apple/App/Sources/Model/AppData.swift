@@ -5,8 +5,8 @@ import Foundation
 nonisolated enum AppData {
     /// The test folder, or nil for the user's own data.
     static let isolatedDirectory: URL? = isolatedDirectory(
-        arguments: UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain),
-        flags: ProcessInfo.processInfo.arguments,
+        arguments: LaunchArguments.acceptsTestHooks ? UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain) : [:],
+        flags: LaunchArguments.acceptsTestHooks ? ProcessInfo.processInfo.arguments : [],
         environment: ProcessInfo.processInfo.environment,
         temporary: FileManager.default.temporaryDirectory,
         bundleId: Bundle.main.bundleIdentifier ?? "app")

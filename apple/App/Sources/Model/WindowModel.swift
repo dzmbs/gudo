@@ -456,12 +456,18 @@ final class WindowModel {
     /// The window's host as the chrome names it: the host's name, or this device.
     var hostName: String {
         if LaunchOptions.mock { return connectionOverride == nil ? Self.deviceName : "studio" }
-        guard let id = workspace?.hostId else { return Self.deviceName }
+        guard let id = workspace?.hostId else { return showsNoHost ? "No Host" : Self.deviceName }
         return app.hosts.record(id)?.name ?? id
     }
 
+    /// The window shows no host and this device has no shell of its own (iPhone and iPad before
+    /// a host is added).
+    var showsNoHost: Bool { workspace?.hostId == nil && !LaunchOptions.hasLocalShell }
+
     /// Why New Tab and splits do nothing right now.
-    var layoutUnavailableHelp: String { "Not available until \(hostName) is connected" }
+    var layoutUnavailableHelp: String {
+        showsNoHost ? "Add a host to open terminals" : "Not available until \(hostName) is connected"
+    }
 
     /// Whether the window shows a remote host.
     var isRemote: Bool { workspace?.isRemote ?? false }
@@ -1086,7 +1092,8 @@ struct NewAgentSeed {
 /// hosts, agents and statuses; `-screen <name>` opens straight to one screen.
 enum LaunchOptions {
     /// `-mock`, or `GUDO_MOCK` in the environment (in-process snapshot tests).
-    static let mock = ProcessInfo.processInfo.arguments.contains("-mock") || ProcessInfo.processInfo.environment["GUDO_MOCK"] != nil
+    static let mock = LaunchArguments.acceptsTestHooks
+        && (ProcessInfo.processInfo.arguments.contains("-mock") || ProcessInfo.processInfo.environment["GUDO_MOCK"] != nil)
     /// Hosting unit tests: no windows of its own, never active.
     static let isTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
     static let screen: String? = LaunchArguments().string(forKey: "screen")

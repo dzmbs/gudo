@@ -21,7 +21,7 @@ struct HostToolbarButton: View {
         } label: {
             // A plain stack, not a Label: iPad toolbars reduce a Label to its icon.
             HostSwitcherLabel(model.hostName) {
-                ConnectionGlyph(model.connection, healthy: Image(systemName: WindowModel.symbol(forHost: model.currentGroupId, kind: nil)))
+                ConnectionGlyph(model.connection, healthy: Image(systemName: model.showsNoHost ? "server.rack" : WindowModel.symbol(forHost: model.currentGroupId, kind: nil)))
             }
         }
         .buttonStyle(.plain)
