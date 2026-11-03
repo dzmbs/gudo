@@ -100,6 +100,10 @@ enum Command {
     },
     /// Show whether the daemon is running.
     Status,
+    /// Restart the running daemon into the build now installed at its path (after a package
+    /// or app update), keeping its sessions running. Fails, changing nothing, when that build
+    /// cannot take them over.
+    Restart,
     /// The paired owner devices (guests are managed in the app). In a terminal: pair a new
     /// one, rename or remove them.
     Devices {
@@ -186,6 +190,7 @@ fn main() -> Result<()> {
             local,
         ),
         Command::Status => status(&state_dir),
+        Command::Restart => restart(&state_dir),
         Command::Devices { json } => devices::run(&state_dir, json),
         Command::Rename { device, name } => devices::rename(&state_dir, &device, &name.join(" ")),
         Command::Unpair { device } => {
@@ -233,6 +238,9 @@ fn run(
     no_relay: bool,
     shell: Option<PathBuf>,
 ) -> Result<()> {
+    // First, while this process has one thread and before it starts any program: what the
+    // build this process ran before its `exec` handed over.
+    let inherited = daemon::Inherited::claim();
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_env(brand::env_var("LOG"))
@@ -260,13 +268,20 @@ fn run(
     config.cli_exe = std::env::current_exe()
         .and_then(|exe| exe.canonicalize())
         .ok();
+    config.exe.clone_from(&config.cli_exe);
+    if let Some(inherited) = &inherited {
+        tracing::info!(
+            panes = inherited.panes(),
+            "continuing the panes of the previous build"
+        );
+    }
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("hostd")
         .build()?;
     runtime.block_on(async move {
-        let daemon = Daemon::start(config).await?;
+        let daemon = Daemon::start_inheriting(config, inherited).await?;
         eprintln!(
             "{} {} serving as {}",
             brand::DAEMON_BIN,
@@ -305,11 +320,17 @@ fn run(
                 "shutting down"
             }
         );
-        daemon.shutdown().await;
-        if let Some(exe) = restart {
-            restart_into(&exe);
-        }
-        anyhow::Ok(())
+        let Some(exe) = restart else {
+            daemon.shutdown().await;
+            return anyhow::Ok(());
+        };
+        let hand_off = if daemon.successor_adopts() {
+            daemon.hand_off().await
+        } else {
+            daemon.shutdown().await;
+            None
+        };
+        restart_into(&exe, hand_off)
     })
 }
 
@@ -369,48 +390,97 @@ fn in_app_bundle(exe: &Path) -> bool {
 }
 
 /// Replaces this process with `exe` and the same arguments (same PID, so systemd or launchd
-/// keep supervising it). Falls back to the previous build if the new one cannot be executed,
-/// and exits with an error (the service manager restarts it) if neither can.
-fn restart_into(exe: &Path) -> ! {
+/// keep supervising it, and the panes' programs stay its children). With a hand-off the new
+/// build continues the running panes. Falls back to the previous build if the new one cannot
+/// be executed, and exits with an error (the service manager restarts it) if neither can,
+/// after ending the panes it would have handed over.
+fn restart_into(exe: &Path, hand_off: Option<daemon::HandOff>) -> ! {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    let error = exec(exe, &args);
+    let hand_off = hand_off.and_then(|hand_off| match hand_off.prepare_exec() {
+        Ok(()) => Some(hand_off),
+        Err(error) => {
+            eprintln!("could not pass the running panes on: {error}");
+            hand_off.abandon();
+            None
+        }
+    });
+    let handed_env = hand_off.as_ref().map(daemon::HandOff::env);
+    let error = exec(exe, &args, handed_env.as_ref());
     eprintln!("could not start the new build {}: {error}", exe.display());
     let previous = daemon::upgrade_prev_path(exe);
     if std::fs::rename(&previous, exe).is_ok() {
-        let error = exec(exe, &args);
+        let error = exec(exe, &args, handed_env.as_ref());
         eprintln!("could not start the previous build either: {error}");
+    }
+    if let Some(hand_off) = hand_off {
+        hand_off.abandon();
     }
     std::process::exit(1)
 }
 
-/// `execv` with `exe` as argv[0]; returns only on failure.
+/// `execve` with `exe` as argv[0], this process's environment and `extra` added to it;
+/// returns only on failure.
 ///
 /// Not `Command::exec`: it sets SIGPIPE back to the default before `execve` while the
 /// runtime's other threads still run, so one writing to a closed socket or pipe in that window
 /// kills the daemon instead of restarting it. Kept ignored, the new build inherits it ignored,
-/// as Rust programs run anyway.
-fn exec(exe: &Path, args: &[std::ffi::OsString]) -> std::io::Error {
-    use std::ffi::CString;
+/// as Rust programs run anyway. `extra` is never set in this process's own environment, so
+/// only the new build sees it.
+fn exec(
+    exe: &Path,
+    args: &[std::ffi::OsString],
+    extra: Option<&(std::ffi::OsString, std::ffi::OsString)>,
+) -> std::io::Error {
+    use std::ffi::{CString, OsStr, OsString};
     use std::os::unix::ffi::OsStrExt;
+    let c_string = |text: &OsStr| CString::new(text.as_bytes());
     let Ok(argv) = std::iter::once(exe.as_os_str())
         .chain(args.iter().map(|arg| arg.as_os_str()))
-        .map(|arg| CString::new(arg.as_bytes()))
+        .map(c_string)
         .collect::<Result<Vec<_>, _>>()
     else {
         return std::io::ErrorKind::InvalidInput.into();
     };
-    let mut pointers: Vec<*const libc::c_char> = argv.iter().map(|arg| arg.as_ptr()).collect();
-    pointers.push(std::ptr::null());
+    let assignment = |name: &OsStr, value: &OsStr| {
+        let mut pair = OsString::from(name);
+        pair.push("=");
+        pair.push(value);
+        pair
+    };
+    let Ok(envp) = std::env::vars_os()
+        .filter(|(name, _)| extra.is_none_or(|(extra_name, _)| name != extra_name))
+        .map(|(name, value)| assignment(&name, &value))
+        .chain(extra.map(|(name, value)| assignment(name, value)))
+        .map(|pair| c_string(&pair))
+        .collect::<Result<Vec<_>, _>>()
+    else {
+        return std::io::ErrorKind::InvalidInput.into();
+    };
+    let mut arg_pointers: Vec<*const libc::c_char> = argv.iter().map(|arg| arg.as_ptr()).collect();
+    arg_pointers.push(std::ptr::null());
+    let mut env_pointers: Vec<*const libc::c_char> =
+        envp.iter().map(|pair| pair.as_ptr()).collect();
+    env_pointers.push(std::ptr::null());
     // SAFETY: `argv[0]` and every pointer are NUL-terminated strings that outlive the call,
-    // and the array ends with a null pointer.
-    unsafe { libc::execv(argv[0].as_ptr(), pointers.as_ptr()) };
+    // and both arrays end with a null pointer.
+    unsafe {
+        libc::execve(
+            argv[0].as_ptr(),
+            arg_pointers.as_ptr(),
+            env_pointers.as_ptr(),
+        )
+    };
     std::io::Error::last_os_error()
 }
 
 fn build_info(json: bool) -> Result<()> {
     let info = daemon::info::build_info(proto::DaemonFeatures::EMPTY);
     if json {
-        println!("{}", serde_json::to_string(&info)?);
+        // The hand-off formats it reads: a running daemon hands its panes only to a build
+        // that reads its own.
+        let mut object = serde_json::to_value(&info)?;
+        object["handoff"] = serde_json::json!(daemon::HANDOFF_READS);
+        println!("{object}");
     } else {
         println!("{} {} ({})", brand::DAEMON_BIN, info.version, info.build);
         println!(
@@ -709,6 +779,70 @@ fn status(state_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Asks the running daemon over its hook socket to restart into the installed build and
+/// waits until it has (same process, started again).
+fn restart(state_dir: &Path) -> Result<()> {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::ffi::OsStrExt;
+    const ANSWER_TIMEOUT: Duration = Duration::from_secs(30);
+    const RESTART_TIMEOUT: Duration = Duration::from_secs(60);
+    let before = daemon::endpoint_info(state_dir)?
+        .filter(|info| pid_alive(info.pid))
+        .with_context(|| {
+            format!(
+                "no daemon is running with state dir {}",
+                state_dir.display()
+            )
+        })?;
+    let socket = std::fs::read(state_dir.join("hook.endpoint"))
+        .map(|bytes| PathBuf::from(std::ffi::OsStr::from_bytes(&bytes)))
+        .context("reading the daemon's socket")?;
+    let token = std::fs::read_to_string(state_dir.join("hook.token"))
+        .context("reading the daemon's token")?;
+    let mut stream = std::os::unix::net::UnixStream::connect(&socket)
+        .with_context(|| format!("connecting to {}", socket.display()))?;
+    stream.set_read_timeout(Some(ANSWER_TIMEOUT))?;
+    let call = daemon::RestartCall {
+        restart: daemon::RestartAsk {
+            token: token.trim().to_owned(),
+        },
+    };
+    let mut line = serde_json::to_vec(&call)?;
+    line.push(b'\n');
+    stream.write_all(&line)?;
+    let mut answer = String::new();
+    BufReader::new(&stream).read_line(&mut answer)?;
+    let reply: daemon::RestartReply = serde_json::from_str(&answer).map_err(|_| {
+        anyhow::anyhow!("the running daemon cannot restart in place; restart it to update")
+    })?;
+    match reply {
+        daemon::RestartReply::Current => {
+            println!("already running the installed build");
+            Ok(())
+        }
+        daemon::RestartReply::Refused(reason) => bail!("{reason}"),
+        daemon::RestartReply::Restarting => {
+            let start = std::time::Instant::now();
+            while start.elapsed() < RESTART_TIMEOUT {
+                std::thread::sleep(Duration::from_millis(100));
+                let now = daemon::endpoint_info(state_dir).ok().flatten();
+                match now {
+                    Some(info) if info.pid == before.pid && info.started_at > before.started_at => {
+                        println!("restarted into the installed build (pid {})", info.pid);
+                        return Ok(());
+                    }
+                    _ if !pid_alive(before.pid) => bail!("the daemon stopped while restarting"),
+                    _ => {}
+                }
+            }
+            bail!(
+                "the daemon did not come back within {} s",
+                RESTART_TIMEOUT.as_secs()
+            )
+        }
+    }
+}
+
 fn relays_label(relays: &proto::TicketRelays) -> String {
     match relays {
         proto::TicketRelays::Default => "default".into(),
@@ -749,6 +883,7 @@ mod tests {
             let error = exec(
                 Path::new("/bin/sh"),
                 &["-c".into(), "kill -PIPE $$; exit 7".into()],
+                None,
             );
             panic!("exec failed: {error}");
         }
@@ -767,6 +902,39 @@ mod tests {
             Some(7),
             "SIGPIPE stays ignored through exec: {status}"
         );
+    }
+
+    /// The hand-off variable reaches the new program (replacing a stale value), along with
+    /// the rest of the environment.
+    #[test]
+    fn exec_adds_the_variable_to_the_environment() {
+        const CHILD: &str = "HOSTD_TEST_EXEC_ENV_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let extra = ("HOSTD_TEST_EXTRA".into(), "new".into());
+            let error = exec(
+                Path::new("/bin/sh"),
+                &[
+                    "-c".into(),
+                    "[ \"$HOSTD_TEST_EXTRA\" = new ] && [ \"$HOSTD_TEST_KEPT\" = kept ] && exit 7"
+                        .into(),
+                ],
+                Some(&extra),
+            );
+            panic!("exec failed: {error}");
+        }
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "tests::exec_adds_the_variable_to_the_environment",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("HOSTD_TEST_EXTRA", "stale")
+            .env("HOSTD_TEST_KEPT", "kept")
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert_eq!(status.code(), Some(7), "{status}");
     }
 
     #[test]
