@@ -59,8 +59,9 @@ import GudoCore
         #expect(sidebar.repos.map(\.id) == ["/r", "/s"]) // "/q" has no tab
         #expect(sidebar.repos[0].worktrees.map(\.id) == ["/r", "/w/feat", "/w/idle"])
         #expect(sidebar.repos[0].worktrees.map(\.tabs) == [[TabId(1)], [TabId(2)], []])
-        #expect(sidebar.orderedTabs == [TabId(3), TabId(1), TabId(2), TabId(4)])
         #expect(sidebar.worktree(of: TabId(2))?.branch == "feat")
+        #expect(snapshot.worktree(of: tabs[1])?.branch == "feat")
+        #expect(snapshot.worktree(of: tabs[2]) == nil)
         let busy = RepoSidebar.build(tabs: tabs, snapshot: snapshot, includeIdle: false)
         #expect(busy.repos[0].worktrees.map(\.id) == ["/r", "/w/feat"])
     }

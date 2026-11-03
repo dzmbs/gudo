@@ -192,13 +192,11 @@ nonisolated public struct RepoSidebar: Equatable, Sendable {
         guard let snapshot, !snapshot.worktrees.isEmpty else {
             return RepoSidebar(looseTabs: tabs.map(\.id), repos: [])
         }
-        let paneWorktree = Dictionary(snapshot.panes.map { ($0.paneId, $0.worktree) }, uniquingKeysWith: { a, _ in a })
+        let paneWorktree = snapshot.worktreePathsByPane
         var tabsByWorktree: [String: [TabId]] = [:]
         var loose: [TabId] = []
         for tab in tabs {
-            let focused = paneWorktree[tab.focused.rawValue]
-            let any = tab.root.panes.lazy.compactMap { paneWorktree[$0.rawValue] }.first
-            if let path = focused ?? any {
+            if let path = Self.worktreePath(of: tab, paneWorktree: paneWorktree) {
                 tabsByWorktree[path, default: []].append(tab.id)
             } else {
                 loose.append(tab.id)
@@ -230,8 +228,20 @@ nonisolated public struct RepoSidebar: Equatable, Sendable {
         return nil
     }
 
-    /// Tabs in display order (loose first, then by repository and worktree), for ⌘1–9.
-    public var orderedTabs: [TabId] {
-        looseTabs + repos.flatMap { $0.worktrees.flatMap(\.tabs) }
+    /// The focused pane's worktree, else any pane's.
+    static func worktreePath(of tab: Tab, paneWorktree: [UInt64: String]) -> String? {
+        paneWorktree[tab.focused.rawValue] ?? tab.root.panes.lazy.compactMap { paneWorktree[$0.rawValue] }.first
+    }
+}
+
+extension RepoSnapshot {
+    nonisolated var worktreePathsByPane: [UInt64: String] {
+        Dictionary(panes.map { ($0.paneId, $0.worktree) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// The worktree a tab is in, as `RepoSidebar` places it.
+    nonisolated public func worktree(of tab: Tab) -> WorktreeState? {
+        guard let path = RepoSidebar.worktreePath(of: tab, paneWorktree: worktreePathsByPane) else { return nil }
+        return worktrees.first { $0.path == path }
     }
 }

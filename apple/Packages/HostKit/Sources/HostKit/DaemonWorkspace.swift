@@ -650,6 +650,8 @@ extension DaemonConnection {
         guard let entry = DaemonWorkspaceRegistry.hubs[ObjectIdentifier(self)], entry.connection === self else { return nil }
         return entry.hub
     }
+
+    public var repoSnapshot: RepoSnapshot? { existingWorkspace?.repos }
 }
 
 @MainActor

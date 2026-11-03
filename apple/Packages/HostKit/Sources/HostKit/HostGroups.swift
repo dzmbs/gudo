@@ -146,8 +146,8 @@ public final class HostGroups {
     }
 
     /// Every tab in sidebar order: the unified list ⌘1…⌘9 and ⇧⌘[ ] walk. Projects first (in
-    /// their order, tabs by rank), then the window's loose tabs, then each host's loose tabs;
-    /// a daemon's follow its repository grouping, as the sidebar draws them.
+    /// their order, tabs by rank), then the window's loose tabs, then each host's loose tabs
+    /// in host order, as the sidebar draws them.
     public var tabs: [TabRef] {
         let groups = groups
         let projects = projects(in: groups)
@@ -160,11 +160,7 @@ public final class HostGroups {
     /// A group's tabs that are in no project, in sidebar order.
     public func looseTabs(of group: HostGroup, grouped: Set<TabRef>? = nil) -> [TabRef] {
         let grouped = grouped ?? Set(projects.flatMap(\.tabs))
-        let loose = group.tabs.filter { !grouped.contains(group.ref($0.id)) }
-        if let sidebar = repoSidebar(for: group, tabs: loose) {
-            return sidebar.orderedTabs.map { group.ref($0) }
-        }
-        return loose.map { group.ref($0.id) }
+        return group.tabs.filter { !grouped.contains(group.ref($0.id)) }.map { group.ref($0.id) }
     }
 
     /// The window's own tabs: VS Code tabs, then mixed tabs, each in the order they were made.
@@ -173,7 +169,7 @@ public final class HostGroups {
     }
 
     /// A daemon group's tabs grouped by repository and worktree, once the daemon has sent its
-    /// repository snapshot (nil otherwise: draw the tabs flat). `tabs` defaults to all of them.
+    /// repository snapshot (nil otherwise). `tabs` defaults to all of them.
     public func repoSidebar(for group: HostGroup, tabs: [Tab]? = nil) -> RepoSidebar? {
         guard let snapshot = repoSnapshot(for: group) else { return nil }
         return RepoSidebar.build(tabs: tabs ?? group.tabs, snapshot: snapshot)
@@ -182,11 +178,19 @@ public final class HostGroups {
     /// A daemon group's repositories and worktrees, nil until the daemon has sent any.
     public func repoSnapshot(for group: HostGroup) -> RepoSnapshot? {
         guard group.kind == .daemon,
-              let connection = hosts.connection(group.id) as? DaemonConnection,
-              let snapshot = connection.existingWorkspace?.repos,
+              let snapshot = hosts.connection(group.id)?.repoSnapshot,
               !snapshot.worktrees.isEmpty
         else { return nil }
         return snapshot
+    }
+
+    /// The worktree a tab is in, for the git context on its row.
+    public func worktree(of ref: TabRef) -> WorktreeState? {
+        guard let group = group(ref.hostId),
+              let tab = group.tabs.first(where: { $0.id == ref.tab }),
+              let snapshot = repoSnapshot(for: group)
+        else { return nil }
+        return snapshot.worktree(of: tab)
     }
 
     // MARK: Projects

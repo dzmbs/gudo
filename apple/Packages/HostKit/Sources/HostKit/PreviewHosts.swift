@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import PaneLayout
+import GudoCore
 
 /// A host over an in-memory layout, for design fixtures and snapshots: no network, no panes.
 @MainActor
@@ -9,6 +10,7 @@ public final class PreviewConnection: HostConnection {
     public var status: ConnectionStatus
     public let layout: LocalLayoutStore
     public var isReady = true
+    public var repoSnapshot: RepoSnapshot?
     public var layoutStore: any LayoutStore { layout }
 
     /// A host with one tab per name.

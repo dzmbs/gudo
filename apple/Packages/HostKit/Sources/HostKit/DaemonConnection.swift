@@ -26,10 +26,13 @@ public protocol HostConnection: AnyObject, Observable {
     /// Redial or probe now.
     func networkChanged()
     func close()
+    /// The host's repositories and worktrees, and which panes are in them.
+    var repoSnapshot: RepoSnapshot? { get }
 }
 
 public extension HostConnection {
     var showsCachedLayout: Bool { false }
+    var repoSnapshot: RepoSnapshot? { nil }
 }
 
 /// A paired daemon: one `DaemonClient` (iroh), its layout and its panes.

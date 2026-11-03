@@ -1,4 +1,5 @@
 import Foundation
+import GudoCore
 @testable import HostKit
 import Observation
 import PaneLayout
@@ -12,6 +13,7 @@ final class FakeConnection: HostConnection {
     var status: ConnectionStatus = .connected(rtt: nil)
     let layout: LocalLayoutStore
     var isReady = true
+    var repoSnapshot: RepoSnapshot?
     var layoutStore: any LayoutStore { layout }
     @ObservationIgnored var dials = 1
     @ObservationIgnored var lifecycle: [String] = []
@@ -64,6 +66,24 @@ final class FakeConnection: HostConnection {
         // Opening an open host again neither reorders nor duplicates it.
         try groups.open("cloud")
         #expect(groups.openHosts == ["cloud", "box", "studio"])
+    }
+
+    /// A tab in a repository is a tab like any other: its host's rows and ⌘-numbers keep host
+    /// order, and its worktree is context for its row.
+    @Test func tabsInRepositoriesKeepTheirPlaceAmongTheHostsTabs() throws {
+        let (groups, fakes, _) = try fixture()
+        let cloud = try #require(fakes["cloud"])
+        let tabs = cloud.layout.session.tabs
+        let before = groups.tabs
+        let pane = try #require(tabs.first?.root.panes.first)
+        cloud.repoSnapshot = RepoSnapshot(
+            rev: 1, panes: [PaneRepo(paneId: pane.rawValue, worktree: "/src/lab")],
+            worktrees: [RepoSidebarTests.worktree("/src/lab", repo: "/src/lab", main: true, branch: "main")], gh: .unknown)
+        #expect(groups.repoSidebar(for: try #require(groups.group("cloud")))?.repos.count == 1)
+        #expect(groups.tabs == before)
+        #expect(groups.sections.first { $0.container == .host("cloud") }?.rows == tabs.map { TabRef(hostId: "cloud", tab: $0.id) })
+        #expect(groups.worktree(of: TabRef(hostId: "cloud", tab: tabs[0].id))?.branch == "main")
+        #expect(groups.worktree(of: TabRef(hostId: "cloud", tab: tabs[1].id)) == nil)
     }
 
     @Test func shortcutsIndexTheUnifiedListAcrossHosts() throws {
