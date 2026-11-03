@@ -67,7 +67,10 @@ Teardown, before archive or delete) and lists every command. Declining opens the
 archives the worktree, without them. A new task asks about the file committed at its base,
 which is the file the new worktree gets. Only an owner device can trust: a guest, even one
 holding the owner role, is refused, and the commands do not run for it. Daemon-run teardowns
-(auto-delete of merged worktrees) follow the same rule.
+(auto-delete of merged worktrees) follow the same rule. The repository's script-menu commands
+are asked about in the app the same way before their first run and after any change, kept per
+device, host, repository and command hash (docs/security/apple-client.md); the daemon runs
+what an owner or driver sends, as it would run what they type.
 
 **Terminal tools.** The pane ids in calls are typed integers, and no shell is built from tool
 arguments: `cmd_run` types into a pane the agent owns, which is its purpose. One agent,

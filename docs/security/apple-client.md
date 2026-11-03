@@ -103,6 +103,11 @@ and terminal SSH-integration bugs).
   opens only clicked web links).
 - A repository's own setup and teardown commands run only once the owner trusts them in the
   app ("Run Setup Commands for repo?", listing them).
+- A script from a repository's own configuration (the script menu) runs the first time, and
+  after its command changed, only once the user confirms it ("Run “Test” from repo?", showing
+  the exact command with control and bidi characters made visible). The answer is kept on the
+  device per host, repository and SHA-256 of the command. The user's own scripts from Settings
+  never ask.
 - The Excalidraw canvas:
   - never navigates its page away from its bundled scheme, not even to a `data:` or `blob:`
     page (a shared drawing's link could otherwise replace it with a form);
@@ -230,7 +235,8 @@ by removing it).
     itself, for web pages, its schemes clicked and not clicked, in the main frame and in a
     frame, the tunnel's own desktop address against crafted ones, and files, other apps' and
     this app's links.
-  - `testAHostsCopyIsPlainTextNamedByItsPane` (macOS), `testTheRepositoryTrustAlertListsEveryCommand`.
+  - `testAHostsCopyIsPlainTextNamedByItsPane` (macOS), `testTheRepositoryTrustAlertListsEveryCommand`,
+    `testRepositoryScriptsAskOncePerCommand`.
   - `testToolingHooksAreNeverReadFromSavedDefaults`: scans the app's sources; every tooling
     hook and `test…` key is read through `LaunchArguments`.
   - `testKeychainItemsStayOnThisDevice`: the stored item is `AfterFirstUnlockThisDeviceOnly`

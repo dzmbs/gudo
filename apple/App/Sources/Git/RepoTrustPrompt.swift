@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import HostKit
 import GudoCore
@@ -47,6 +48,24 @@ enum RepoTrustPrompt {
         return (title, message)
     }
 
+    /// Asks before a script from the repository's own configuration runs for the first time on
+    /// this device or after its command changed. Returns whether it may run.
+    static func confirm(script name: String, command: String, repo: String, host: String) async -> Bool {
+        if RepoScriptTrust.isTrusted(command, repo: repo, host: host) { return true }
+        let text = text(forScript: name, command: command, repo: repo)
+        guard await present(title: text.title, message: text.message) else { return false }
+        RepoScriptTrust.trust(command, repo: repo, host: host)
+        return true
+    }
+
+    static func text(forScript name: String, command: String, repo: String) -> (title: String, message: String) {
+        let repoName = (repo as NSString).lastPathComponent
+        let message = "\(repoName) defines this command for “\(RepoScriptTrust.visible(name))”:\n\n"
+            + RepoScriptTrust.visible(command)
+            + "\n\nRun it only if you trust this repository. You'll be asked again if it changes."
+        return ("Run “\(RepoScriptTrust.visible(name))” from \(repoName)?", message)
+    }
+
     private static func present(title: String, message: String) async -> Bool {
         #if os(macOS)
         let alert = NSAlert()
@@ -70,5 +89,46 @@ enum RepoTrustPrompt {
             presenter.present(alert, animated: true)
         }
         #endif
+    }
+}
+
+/// Scripts from a repository's own configuration the user allowed on this device: per host and
+/// repository, the SHA-256 of each command, so a changed command is asked about again.
+enum RepoScriptTrust {
+    static let key = "git.trustedRepoScripts"
+    static let maxPerRepo = 32
+
+    static func isTrusted(_ command: String, repo: String, host: String, defaults: UserDefaults = .standard) -> Bool {
+        trusted(in: defaults)[scope(repo: repo, host: host)]?.contains(digest(command)) == true
+    }
+
+    static func trust(_ command: String, repo: String, host: String, defaults: UserDefaults = .standard) {
+        var all = trusted(in: defaults)
+        let scope = scope(repo: repo, host: host)
+        let hash = digest(command)
+        var hashes = (all[scope] ?? []).filter { $0 != hash }
+        hashes.append(hash)
+        all[scope] = Array(hashes.suffix(maxPerRepo))
+        defaults.set(all, forKey: key)
+    }
+
+    /// Every control and format character shown as its code, so a command cannot hide what
+    /// follows a carriage return or reorder itself with bidi controls.
+    static func visible(_ text: String) -> String {
+        text.unicodeScalars.map { scalar in
+            let category = scalar.properties.generalCategory
+            guard scalar != "\n", scalar != "\t", category == .control || category == .format else { return String(scalar) }
+            return String(format: "\\u{%04X}", scalar.value)
+        }.joined()
+    }
+
+    private static func trusted(in defaults: UserDefaults) -> [String: [String]] {
+        defaults.dictionary(forKey: key) as? [String: [String]] ?? [:]
+    }
+
+    private static func scope(repo: String, host: String) -> String { host + "\n" + repo }
+
+    private static func digest(_ command: String) -> String {
+        SHA256.hash(data: Data(command.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 }

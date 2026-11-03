@@ -350,6 +350,12 @@ final class GitUI {
         }
         guard let daemon = connection(host), let api = api(host), let session = daemon.layout.sessionId else { return }
         Task {
+            // A clone's own scripts are its author's commands, not the user's.
+            if script.fromRepo {
+                let allowed = await RepoTrustPrompt.confirm(
+                    script: script.name, command: script.command, repo: worktree.repo, host: daemon.hostId)
+                guard allowed else { return }
+            }
             do {
                 let pane = try await api.scriptRun(cwd: worktree.path, sessionId: session, name: script.name, command: script.command)
                 window?.reveal(host: daemon.hostId, pane: pane)
