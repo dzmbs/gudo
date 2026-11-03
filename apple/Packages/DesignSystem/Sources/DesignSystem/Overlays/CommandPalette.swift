@@ -105,12 +105,23 @@ public struct CommandPalette: View {
         .frame(maxWidth: DS.Size.paletteWidth)
         .floatingPanel(cornerRadius: DS.Radius.panel, elevated: true)
         .padding(.horizontal, DS.Space.l)
-        .onAppear { Task { isFocused = true } }
+        .task { await takeFocus() }
         .onChange(of: query) {
             selection = nil
             if let onScope, onScope(query) { query = "" }
         }
         .accessibilityIdentifier("command-palette")
+    }
+
+    /// Focuses the field as the palette appears. The text input that had the keyboard (a terminal,
+    /// a field in its key bar) can still be giving it up while the overlay fades in, so the
+    /// request repeats until the field holds focus.
+    private func takeFocus() async {
+        for _ in 0..<20 {
+            isFocused = true
+            try? await Task.sleep(for: .milliseconds(25))
+            if isFocused || Task.isCancelled { return }
+        }
     }
 
     private func field(_ results: [PaletteCommand]) -> some View {

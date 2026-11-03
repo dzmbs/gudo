@@ -43,6 +43,43 @@ final class PaletteUITests: XCTestCase {
         waitForExpectations(timeout: 10)
     }
 
+    /// The ⌘ button while the terminal holds the keyboard: the search field takes it at once, so
+    /// typing narrows the list with no tap on the field.
+    func testPaletteFieldHasTheKeyboardAsItOpens() throws {
+        try openPaletteAndType(terminalHasKeyboard: true)
+    }
+
+    /// The same with the keyboard down: the field raises it.
+    func testPaletteFieldRaisesTheKeyboard() throws {
+        try openPaletteAndType(terminalHasKeyboard: false)
+    }
+
+    /// In a daemon pane (`TEST_RUNNER_PAIR_TICKET=$(apple/scripts/local-daemon.sh start)`).
+    func testPaletteFieldHasTheKeyboardInADaemonPane() throws {
+        let ticket = ProcessInfo.processInfo.environment["PAIR_TICKET"] ?? ""
+        try XCTSkipIf(ticket.isEmpty, "no daemon ticket (TEST_RUNNER_PAIR_TICKET)")
+        try openPaletteAndType(terminalHasKeyboard: true, arguments: ["-testTicket", ticket, "-testRelay", "disabled"])
+    }
+
+    private func openPaletteAndType(terminalHasKeyboard: Bool, arguments: [String] = ["-localEcho", "YES"]) throws {
+        let app = XCUIApplication()
+        app.launchArguments += ["-restoreLastTarget", "NO", "-noAutoFocus", "YES"] + arguments
+        app.launch()
+        let pane = app.descendants(matching: .any).matching(NSPredicate(format: "identifier MATCHES 'pane-[0-9]+'")).firstMatch
+        XCTAssertTrue(pane.waitForExistence(timeout: 30))
+        if terminalHasKeyboard { pane.tap() }
+        sleep(1)
+        app.buttons["open-palette"].firstMatch.tap()
+        let field = app.textFields.matching(identifier: "command-palette").firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "the palette opens")
+        let focused = NSPredicate(format: "hasKeyboardFocus == true")
+        expectation(for: focused, evaluatedWith: field)
+        waitForExpectations(timeout: 3)
+        app.typeText("split")
+        XCTAssertEqual(field.value as? String, "split", "typing goes to the palette")
+        shot(app, "palette-typing")
+    }
+
     /// Control: an app shortcut the terminal answers (⌘D splits).
     func testCommandDSplits() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .phone, "a phone shows one pane of a split")
