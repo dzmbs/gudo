@@ -638,6 +638,12 @@ impl HookServer {
         own || fsutil::constant_eq(token.as_bytes(), self.token.as_bytes())
     }
 
+    /// Whether `token` is the daemon's own token, which only the state directory holds (not a
+    /// pane's).
+    pub fn is_daemon_token(&self, token: &str) -> bool {
+        fsutil::constant_eq(token.as_bytes(), self.token.as_bytes())
+    }
+
     pub fn launch_context(
         &self,
         pane: PaneId,
@@ -835,6 +841,16 @@ async fn serve_hook(core: &Arc<Core>, stream: UnixStream) -> io::Result<()> {
         encoded.push(b'\n');
         write.write_all(&encoded).await?;
         return write.shutdown().await;
+    }
+    // And the local restart into an installed build (`gudo-hostd restart`).
+    if let Ok(call) = serde_json::from_str::<crate::upgrade::RestartCall>(&line) {
+        let reply = crate::upgrade::serve_restart(core, &call).await;
+        let mut encoded = serde_json::to_vec(&reply).map_err(io::Error::other)?;
+        encoded.push(b'\n');
+        let written = write.write_all(&encoded).await;
+        let _ = write.shutdown().await;
+        crate::upgrade::after_restart_reply(core, &reply);
+        return written;
     }
     let request: HookRequest = serde_json::from_str(&line).map_err(io::Error::other)?;
     let response = handle_hook(core, request).await;

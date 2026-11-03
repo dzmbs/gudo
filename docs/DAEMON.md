@@ -220,8 +220,11 @@ app (`ClientEvent::PaneHistory`) for its own decoder.
   immediately, before reading anything else: from the ring if `seq` is still retained and
   `snap_gen` matches, else a snapshot. Resize records at or after `seq` are replayed (re-applying
   a size is harmless).
-- `snap_gen` is the daemon run's epoch, so after a daemon restart every resume point is invalid
-  and clients get snapshots.
+- `snap_gen` is the generation of the run that started the pane, so after a daemon restart every
+  resume point is invalid and clients get snapshots. A hot upgrade (below) carries panes with
+  their `snap_gen`, ring and offsets, and the session epoch and applied input numbers too, so
+  clients resume from the ring without a gap or a snapshot, and input they send again is
+  applied once. Panes the new build starts get a generation of its own.
 
 ### Echo prediction (`EchoHintAt`)
 
@@ -368,19 +371,58 @@ and only once), `mp::policy` unit test.
   executable (streamed, flow controlled, ≤ 256 MiB), checks the SHA-256 of the decoded
   executable, runs `<new> build-info --json` (15 s; must start and report this OS and CPU), keeps
   the old file as `<exe>.prev` (hard link), renames the new one over the executable, fsyncs the
-  directory, answers `Installed(DaemonInfo of the new build)`, then `run` saves the layout, stops
-  the panes and `exec`s the new build with the same arguments: same PID, so systemd `--user`,
-  launchd or a detached start keep supervising it (if the exec fails it renames `.prev` back
-  and execs that). One upgrade at a time (`Busy`); any failure (`Forbidden`, `Unsupported`,
-  `Corrupt`, `Rejected`, `Io`) leaves the running daemon and its file untouched. There is no
-  release signing key yet: the bytes are vouched for by the owner device authenticated in the
-  QUIC handshake and checked by hash and by running them.
-- **What survives an update**: everything a restart keeps. The layout (sessions, tabs, splits,
-  ids), pane directories, paired devices, grants, history, drawings and Claude/Codex sessions
-  (`--resume`) come back; clients redial by themselves (backoff ≤ 5 s) and get snapshots.
-  **Lost**: the shell processes and whatever ran in them (they restart in their last directory),
-  unsaved terminal state, scrollback beyond what the next snapshot holds, in-memory workspace state
-  (attention items, turn snapshots, editor servers; §9), and Codex sessions started by hand.
+  directory, answers `Installed(DaemonInfo of the new build)`, then `run` hands the running
+  panes over (hot upgrade, below) and `exec`s the new build with the same arguments: same PID,
+  so systemd `--user`, launchd or a detached start keep supervising it (if the exec fails it
+  renames `.prev` back and execs that). A new build that does not read this build's hand-off
+  (`build-info --json` lists the versions it reads as `"handoff"`; builds from before list
+  none) gets a cold restart instead: the layout is saved and the panes stopped. One upgrade at
+  a time (`Busy`); any failure (`Forbidden`, `Unsupported`, `Corrupt`, `Rejected`, `Io`) leaves
+  the running daemon and its file untouched. There is no release signing key yet: the bytes
+  are vouched for by the owner device authenticated in the QUIC handshake and checked by hash
+  and by running them.
+- **Hot upgrade** (`daemon::handoff`, `pty::PtyActor::hand_off`/`adopt`). The old build stops
+  serving (tasks, pane tasks, endpoint, editors, tunnel), saves the layout, then stops each PTY
+  without closing it: its I/O thread exits (input it had not written yet is kept, output waits
+  in the kernel), and its wait thread no longer reaps, so the child's pid stays reserved. Each
+  terminal is encoded with the snapshot format at exactly the ring head. Everything goes into an
+  anonymous file: a `memfd` on Linux, on macOS a `0600` file created `O_EXCL|O_NOFOLLOW` in the
+  state directory and unlinked at once. Format: a fixed header that never changes (magic,
+  payload version, then each pane's master fd and child pid), then a versioned payload (JSON
+  metadata: pane id, `snap_gen`, ring capacity and head, sizes and resize records, title,
+  directory, prompt state, last command id, launch time, agent kind; the session epoch and the
+  applied input numbers) and zstd blobs (ring contents, unsent input, snapshots). Right before
+  `execve`, `FD_CLOEXEC` is cleared on that file and the masters only, and the file's fd is
+  named in `GUDO_HANDOFF_FD`, passed in the new build's environment alone (never set in the
+  old process, so panes never see it). `exec` keeps the pid, so the children stay the new
+  build's children and it can `waitpid` them. The new build (`Inherited::claim`, first thing in
+  `run`, single-threaded) removes the variable, marks every inherited descriptor close-on-exec
+  before anything can start a program, and reads the header; `Daemon::start_inheriting` reads
+  the payload and, for each pane in the saved layout, checks the master is a PTY master and the
+  pid an unreaped child of this process, restores the ring at the same offsets and the
+  terminal from its snapshot (blank under a fresh `snap_gen` if it cannot be decoded), writes
+  the unsent input, and resumes. Agents resume as after a restart (`restored`). A pane that
+  cannot be continued, or is not in the layout, ends as a closed pane does (`pty::abandon`:
+  SIGHUP, the master closed, the process group killed after 3 s, reaped) and a fresh one takes
+  its place; a payload version the build does not read ends them all and it starts as after a
+  cold restart. The lock file is close-on-exec, so `exec` releases its `flock` and the new build
+  takes it again. If writing the hand-off fails the old build stops the panes and restarts
+  cold; if `exec` fails (and `.prev` too) it ends the panes before exiting.
+- **Local restart** (`gudo-hostd restart`): after a package manager or the Mac app replaced the
+  executable on disk, asks the running daemon over the hook socket (`RestartCall`, with the
+  daemon's own `hook.token`, not a pane's) to hand off into the build now at its path. It
+  answers `current` when the file is the one it started from, `refused` (nothing changes) when
+  the new build fails `build-info` or does not read its hand-off, else `restarting`; the
+  command then waits for the same pid to record a new start in `endpoint.json`. There is no
+  rollback check here: the file was put there by someone who can already run it.
+- **What survives an update**: with a hot upgrade, everything: the programs in the panes, their
+  terminals (screens, scrollback, modes, cursor), output offsets, sizes, titles, directories,
+  shell state, and the layout. Clients redial by themselves (backoff ≤ 5 s) and resume their
+  streams. **Lost**: open hook connections (a held agent permission prompt falls back to the
+  agent's own), command marks from before the upgrade (numbering continues), drawing anchors
+  and since-join views (opened again on demand), in-memory workspace state (attention items,
+  turn snapshots, editor servers; §9). After a cold restart, as before: the layout,
+  directories and Claude/Codex sessions (`--resume`) come back, the processes do not.
 - `gudo daemon info` / `gudo daemon upgrade <file> [--build ID]` drive it from a terminal.
 - **Installs from before the rename** (`brand::legacy`: `unnamed-hostd`, state in `unnamed`,
   ALPN `unnamed/1`). The daemon accepts both ALPNs and the client offers both, so either side

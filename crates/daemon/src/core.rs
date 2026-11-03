@@ -195,6 +195,13 @@ pub(crate) struct PaneEntry {
 }
 
 impl PaneEntry {
+    /// Stops the pane's task, which reacts to its output and exit.
+    pub fn stop_task(&self) {
+        if let Some(task) = lock(&self.task).take() {
+            task.abort();
+        }
+    }
+
     /// Whether the pane existed at `at` (its process started no later).
     pub fn existed_at(&self, at: proto::UnixMillis) -> bool {
         let started = self
@@ -238,7 +245,11 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 pub(crate) struct Core {
     pub cfg: Config,
+    /// The session's run: the same across hot upgrades, which keep panes and streams.
     pub epoch: SessionEpoch,
+    /// The snapshot generation of panes this process starts, unlike any a previous build
+    /// handed over.
+    pane_gen: SnapGen,
     pub identity: Arc<Identity>,
     pub layout: Mutex<Layout>,
     panes: Mutex<HashMap<PaneId, Arc<PaneEntry>>>,
@@ -293,12 +304,15 @@ impl Core {
         hooks: HookServer,
         shell: Option<ShellIntegration>,
         mp: crate::mp::Mp,
+        carried_epoch: Option<SessionEpoch>,
     ) -> Arc<Self> {
         let (events, _) = broadcast::channel(1024);
         let ws = crate::ws::Ws::new(&config, events.clone());
+        let started = crate::identity::now_millis();
         Arc::new_cyclic(|weak_self| Self {
             weak_self: weak_self.clone(),
-            epoch: SessionEpoch(crate::identity::now_millis()),
+            epoch: carried_epoch.unwrap_or(SessionEpoch(started)),
+            pane_gen: SnapGen(started),
             identity,
             layout: Mutex::new(layout),
             panes: Mutex::new(HashMap::new()),
@@ -317,7 +331,7 @@ impl Core {
             art: crate::art::Art::open(&config.state_dir, config.artifacts),
             assist: crate::assist::Assist::new(&config),
             term: crate::term::Term::default(),
-            upgrade: crate::upgrade::Upgrade::default(),
+            upgrade: crate::upgrade::Upgrade::new(config.exe.as_deref()),
             inputs: crate::resume::InputStreams::default(),
             askpass: crate::askpass::Askpass::install(
                 &config.askpass,
@@ -1525,7 +1539,7 @@ impl Core {
         };
         let (pane, vt_events) = Pane::spawn(
             id,
-            SnapGen(self.epoch.0),
+            self.pane_gen,
             command,
             size,
             self.cfg.ring_capacity,
@@ -1566,6 +1580,88 @@ impl Core {
             ticks: AtomicU64::new(0),
             task: Mutex::new(None),
             launched_at: SystemTime::now(),
+        });
+        let task = tokio::spawn(pane_task(Arc::clone(self), Arc::clone(&entry), vt_events));
+        *lock(&entry.task) = Some(task.abort_handle());
+        lock(&self.panes).insert(id, entry);
+        if accounts_changed {
+            self.emit(Event::Accounts);
+        }
+        Ok(())
+    }
+
+    /// Stops every pane for the daemon build that replaces this process with `exec`
+    /// (`handoff`), leaving its program running, and returns what that build needs to
+    /// continue them. Pane tasks must be stopped already.
+    pub fn hand_off_panes(&self) -> Vec<crate::handoff::CarriedPane> {
+        let mut carried = Vec::new();
+        for (id, entry) in self.pane_entries() {
+            let state = match entry.pane.hand_off() {
+                Ok(state) => state,
+                Err(error) => {
+                    tracing::warn!(pane = %id, "cannot hand off the pane: {error}; it ends");
+                    entry.pane.pty().end_handed_off(HANGUP_GRACE);
+                    continue;
+                }
+            };
+            let meta = lock(&entry.meta);
+            carried.push(crate::handoff::CarriedPane {
+                id,
+                state,
+                title: meta.title.clone(),
+                cwd: meta.cwd.clone(),
+                at_prompt: meta.at_prompt,
+                launched_at: entry.launched_at,
+                agent: lock(&entry.agent).as_ref().map(AgentRuntime::kind),
+            });
+        }
+        carried
+    }
+
+    /// Continues a pane the previous daemon build handed off (`handoff`): same process,
+    /// PTY, screens, history and stream offsets. Its record is the one saved with the layout.
+    pub fn adopt_pane(
+        self: &Arc<Self>,
+        carried: crate::handoff::CarriedPane,
+        master: std::os::fd::OwnedFd,
+        record: PaneRecord,
+    ) -> Result<(), pty::AdoptError> {
+        let id = carried.id;
+        let (pane, vt_events) = Pane::adopt(
+            id,
+            master,
+            &carried.state,
+            self.pane_gen,
+            crate::pane::VtLimits {
+                scrollback_bytes: self.cfg.scrollback_bytes,
+                image_storage_bytes: self.cfg.image_storage_bytes,
+            },
+        )?;
+        let agent = carried
+            .agent
+            .or_else(|| record.agent.as_ref().map(|agent| agent.kind))
+            .map(|kind| AgentRuntime::new(kind, id, crate::agent::adapter(kind), true));
+        if let Some(agent) = &record.agent
+            && let Some(session) = &agent.session_id
+            && let Some(account) = &agent.account
+        {
+            self.ws.accounts.pin(agent.kind, session, account);
+        }
+        let accounts_changed = agent.is_some();
+        let entry = Arc::new(PaneEntry {
+            pane,
+            meta: Mutex::new(MetaState {
+                title: carried.title,
+                cwd: carried.cwd.or_else(|| record.cwd.clone()),
+                at_prompt: carried.at_prompt,
+                ..MetaState::default()
+            }),
+            record: Mutex::new(record),
+            agent: Mutex::new(agent),
+            agent_attached: Notify::new(),
+            ticks: AtomicU64::new(0),
+            task: Mutex::new(None),
+            launched_at: carried.launched_at,
         });
         let task = tokio::spawn(pane_task(Arc::clone(self), Arc::clone(&entry), vt_events));
         *lock(&entry.task) = Some(task.abort_handle());
@@ -2262,11 +2358,14 @@ pub(crate) fn shell_quote(word: &str) -> String {
     format!("'{}'", word.replace('\'', r"'\''"))
 }
 
-/// Restores the saved layout, respawning every pane (agents resume their sessions).
+/// Restores the saved layout: continues the panes a previous build handed over (`adopted`),
+/// respawns the others (agents resume their sessions), and ends carried panes the layout no
+/// longer has.
 pub(crate) fn restore(
     core: &Arc<Core>,
     panes: HashMap<PaneId, PaneRecord>,
     closed: Vec<ClosedPane>,
+    adopted: &mut crate::handoff::Adopted,
 ) {
     core.restore_closed(closed);
     let ids = lock(&core.layout).all_panes();
@@ -2277,9 +2376,22 @@ pub(crate) fn restore(
             continue;
         }
         let Some(record) = panes.get(&id).cloned() else {
+            if let Some((carried, master)) = adopted.take(id) {
+                pty::abandon(master, carried.state.pty.pid, HANGUP_GRACE);
+            }
             failed.push(id);
             continue;
         };
+        if let Some((carried, master)) = adopted.take(id) {
+            match core.adopt_pane(carried, master, record.clone()) {
+                Ok(()) => {
+                    tracing::info!(pane = %id, "continued the pane from the previous build");
+                    continue;
+                }
+                // The master was closed (the session hung up); a fresh pane takes its place.
+                Err(error) => tracing::warn!(pane = %id, "cannot continue the pane: {error}"),
+            }
+        }
         let mut launch = record.launch.clone();
         let restored_agent = match (&mut launch, &record.agent) {
             (PaneLaunch::Agent { resume, cwd, .. }, Some(agent)) => {

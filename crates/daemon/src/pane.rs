@@ -171,7 +171,56 @@ struct View {
     snapshots: VecDeque<Arc<Snapshot>>,
 }
 
+/// A pane's terminal side, its latest title and directory, and its task's inbox.
+type StartedVt = (Arc<Mutex<Vt>>, Arc<LatestMeta>, mpsc::Receiver<VtEvent>);
+
 impl Vt {
+    /// The terminal side of a pane whose output is at `seq`, with the pane task's inbox.
+    fn start(
+        pane: PaneId,
+        mut term: Terminal,
+        size: PaneSize,
+        limits: VtLimits,
+        seq: Seq,
+        resize_count: u64,
+        resizes: Vec<ResizeRecord>,
+    ) -> io::Result<StartedVt> {
+        let (tx, events_rx) = mpsc::channel(MAX_VT_EVENTS);
+        let latest = Arc::new(LatestMeta::default());
+        let events = VtEvents {
+            tx,
+            latest: Arc::clone(&latest),
+        };
+        let replies = events.clone();
+        term.set_reply_sink(Box::new(move |bytes| {
+            replies.send(VtEvent::Reply(bytes.to_vec()));
+        }))
+        .map_err(io::Error::other)?;
+        term.record_semantic_prompts().map_err(io::Error::other)?;
+        let alt = term.active_screen() == Screen::Alternate;
+        let vt = Self {
+            pane,
+            term,
+            seq: seq.0,
+            resizes: resizes.into_iter().rev().take(MAX_RESIZES).rev().collect(),
+            resize_count,
+            size,
+            scanner: OscScanner::default(),
+            alt,
+            last_activity: None,
+            commands: CommandLog::default(),
+            keys: KeyEncoder::new().map_err(io::Error::other)?,
+            mouse: MouseEncoder::new().map_err(io::Error::other)?,
+            events,
+            scroll: ScrollLog::default(),
+            anchors: Anchors::default(),
+            scrollback_bytes: limits.scrollback_bytes,
+            image_storage_bytes: limits.image_storage_bytes,
+            views: Vec::new(),
+        };
+        Ok((Arc::new(Mutex::new(vt)), latest, events_rx))
+    }
+
     fn view(&self, principal: PrincipalId) -> Option<&View> {
         self.views.iter().find(|view| view.principal == principal)
     }
@@ -295,46 +344,26 @@ impl Pane {
         ring_capacity: usize,
         limits: VtLimits,
     ) -> io::Result<(Arc<Self>, mpsc::Receiver<VtEvent>)> {
-        let (tx, events_rx) = mpsc::channel(MAX_VT_EVENTS);
-        let latest = Arc::new(LatestMeta::default());
-        let events = VtEvents {
-            tx,
-            latest: Arc::clone(&latest),
-        };
         let size = with_pixels(size);
-        let mut term = new_terminal(size, limits).map_err(io::Error::other)?;
-        let replies = events.clone();
-        term.set_reply_sink(Box::new(move |bytes| {
-            replies.send(VtEvent::Reply(bytes.to_vec()));
-        }))
-        .map_err(io::Error::other)?;
-        term.record_semantic_prompts().map_err(io::Error::other)?;
-        let vt = Arc::new(Mutex::new(Vt {
-            pane: id,
-            term,
-            seq: 0,
-            resizes: VecDeque::new(),
-            resize_count: 0,
-            size,
-            scanner: OscScanner::default(),
-            alt: false,
-            last_activity: None,
-            commands: CommandLog::default(),
-            keys: KeyEncoder::new().map_err(io::Error::other)?,
-            mouse: MouseEncoder::new().map_err(io::Error::other)?,
-            events,
-            scroll: ScrollLog::default(),
-            anchors: Anchors::default(),
-            scrollback_bytes: limits.scrollback_bytes,
-            image_storage_bytes: limits.image_storage_bytes,
-            views: Vec::new(),
-        }));
+        let term = new_terminal(size, limits).map_err(io::Error::other)?;
+        let (vt, latest, events_rx) = Vt::start(id, term, size, limits, Seq(0), 0, Vec::new())?;
         let hook_vt = Arc::clone(&vt);
         let options = SpawnOptions::new(win_size(size))
             .ring_capacity(ring_capacity)
             .output_hook(move |seq, data| lock(&hook_vt).feed(seq, data));
         let pty = PtyActor::spawn(command, options)?;
-        let pane = Arc::new(Self {
+        Ok((Self::new(id, snap_gen, pty, vt, latest), events_rx))
+    }
+
+    fn new(
+        id: PaneId,
+        snap_gen: SnapGen,
+        pty: PtyActor,
+        vt: Arc<Mutex<Vt>>,
+        latest: Arc<LatestMeta>,
+    ) -> Arc<Self> {
+        let resize_count = lock(&vt).resize_count;
+        Arc::new(Self {
             id,
             snap_gen,
             pty,
@@ -342,10 +371,89 @@ impl Pane {
             cache: Mutex::new(None),
             history: Mutex::new(VecDeque::new()),
             text_cache: Mutex::new(None),
-            resized: watch::Sender::new(0),
+            resized: watch::Sender::new(resize_count),
             latest,
+        })
+    }
+
+    /// Stops the pane for the daemon build that replaces this process with `exec`
+    /// ([`pty::PtyActor::hand_off`]) and captures its terminal at the stream position where
+    /// output stopped, so the successor shows the same screens and scrollback and clients
+    /// resume their streams without a gap. The pane neither reads nor writes afterwards.
+    pub fn hand_off(&self) -> io::Result<PaneHandOff> {
+        let pty = self.pty.hand_off()?;
+        let vt = lock(&self.vt);
+        let snapshot = if vt.seq == pty.head.get() {
+            vt.term
+                .encode_snapshot()
+                .inspect_err(|error| {
+                    tracing::warn!(pane = %self.id, "the screen cannot be carried over: {error}");
+                })
+                .ok()
+        } else {
+            tracing::warn!(pane = %self.id, "the screen lags its output; not carried over");
+            None
+        };
+        Ok(PaneHandOff {
+            snapshot,
+            size: vt.size,
+            resize_count: vt.resize_count,
+            resizes: vt.resizes.iter().copied().collect(),
+            last_command_id: vt.commands.last_id(),
+            snap_gen: self.snap_gen,
+            pty,
+        })
+    }
+
+    /// Continues a pane the previous daemon build handed off: its PTY (`master`, inherited
+    /// across `exec`) and child, its output history and its terminal. If the terminal could
+    /// not be carried, it starts blank under `fresh_gen`, so clients take a new snapshot
+    /// instead of resuming.
+    pub fn adopt(
+        id: PaneId,
+        master: std::os::fd::OwnedFd,
+        state: &PaneHandOff,
+        fresh_gen: SnapGen,
+        limits: VtLimits,
+    ) -> Result<(Arc<Self>, mpsc::Receiver<VtEvent>), pty::AdoptError> {
+        let size = with_pixels(state.size);
+        let restored = state.snapshot.as_deref().and_then(|snapshot| {
+            restore_terminal(snapshot, size, limits)
+                .inspect_err(|error| {
+                    tracing::warn!(pane = %id, "the carried screen does not decode: {error}");
+                })
+                .ok()
         });
-        Ok((pane, events_rx))
+        let (term, snap_gen) = match restored {
+            Some(term) => (Ok(term), state.snap_gen),
+            None => (
+                new_terminal(size, limits).map_err(io::Error::other),
+                fresh_gen,
+            ),
+        };
+        let started = term.and_then(|term| {
+            Vt::start(
+                id,
+                term,
+                size,
+                limits,
+                Seq(state.pty.head.get()),
+                state.resize_count,
+                state.resizes.clone(),
+            )
+        });
+        let (vt, latest, events_rx) = match started {
+            Ok(started) => started,
+            Err(error) => {
+                pty::abandon(master, state.pty.pid, ABANDON_GRACE);
+                return Err(error.into());
+            }
+        };
+        lock(&vt).commands.continue_numbering(state.last_command_id);
+        let hook_vt = Arc::clone(&vt);
+        let hook: pty::OutputHook = Box::new(move |seq, data| lock(&hook_vt).feed(seq, data));
+        let pty = PtyActor::adopt(master, &state.pty, Some(hook))?;
+        Ok((Self::new(id, snap_gen, pty, vt, latest), events_rx))
     }
 
     pub fn pty(&self) -> &PtyActor {
@@ -1034,6 +1142,36 @@ fn open_view(vt: &mut Vt, principal: PrincipalId) -> Result<(), ghostty_vt::Erro
 pub(crate) struct VtLimits {
     pub scrollback_bytes: usize,
     pub image_storage_bytes: u64,
+}
+
+/// How long a carried pane that cannot be continued may outlive its hangup.
+const ABANDON_GRACE: Duration = Duration::from_secs(3);
+
+/// A pane stopped for the next daemon build ([`Pane::hand_off`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PaneHandOff {
+    pub pty: pty::HandedOff,
+    /// The terminal at `pty.head` (`Terminal::encode_snapshot`), unless it could not be
+    /// encoded.
+    pub snapshot: Option<Vec<u8>>,
+    pub snap_gen: SnapGen,
+    pub size: PaneSize,
+    pub resize_count: u64,
+    pub resizes: Vec<ResizeRecord>,
+    pub last_command_id: u64,
+}
+
+/// The terminal a snapshot describes, sized and limited like a pane's own.
+fn restore_terminal(
+    snapshot: &[u8],
+    size: PaneSize,
+    limits: VtLimits,
+) -> Result<Terminal, ghostty_vt::Error> {
+    let mut term = ghostty_vt::SnapshotDecoder::new(snapshot)?.decode()?;
+    term.resize(size.cols, size.rows, size.cell_px())?;
+    term.set_scrollback_max_bytes(Some(limits.scrollback_bytes))?;
+    term.set_kitty_image_storage_limit(limits.image_storage_bytes)?;
+    Ok(term)
 }
 
 /// A terminal of `size` (pixels included) within `limits`. Kitty graphics files and shared

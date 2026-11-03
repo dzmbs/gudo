@@ -38,18 +38,32 @@ const CHECK_TIMEOUT: Duration = Duration::from_secs(15);
 pub(crate) struct Upgrade {
     busy: AtomicBool,
     restart: watch::Sender<Option<PathBuf>>,
-}
-
-impl Default for Upgrade {
-    fn default() -> Self {
-        Self {
-            busy: AtomicBool::new(false),
-            restart: watch::channel(None).0,
-        }
-    }
+    /// The build to restart into continues running panes (`handoff`).
+    successor_adopts: AtomicBool,
+    /// The file the daemon started from ([`file_identity`] of `Config::exe`), so a local
+    /// restart request for the same file changes nothing.
+    started_from: Option<(u64, u64, u64, i64)>,
 }
 
 impl Upgrade {
+    pub fn new(exe: Option<&Path>) -> Self {
+        Self {
+            busy: AtomicBool::new(false),
+            restart: watch::channel(None).0,
+            successor_adopts: AtomicBool::new(false),
+            started_from: exe.and_then(file_identity),
+        }
+    }
+
+    pub fn successor_adopts(&self) -> bool {
+        self.successor_adopts.load(Ordering::Acquire)
+    }
+
+    fn request_restart(&self, exe: PathBuf, adopts: bool) {
+        self.successor_adopts.store(adopts, Ordering::Release);
+        self.restart.send_replace(Some(exe));
+    }
+
     /// Resolves with the executable to restart into once an upgrade was installed.
     pub fn restart_requested(&self) -> impl Future<Output = PathBuf> + Send + 'static {
         let mut rx = self.restart.subscribe();
@@ -110,9 +124,9 @@ pub(crate) async fn serve(
         ))
     };
     let (reply, restart) = match result {
-        Ok((info, exe)) => {
+        Ok((info, exe, adopts)) => {
             tracing::info!(build = %info.build, protocol = info.protocol, "upgrade installed; restarting");
-            (UpgradeReply::Installed(info), Some(exe))
+            (UpgradeReply::Installed(info), Some((exe, adopts)))
         }
         Err((code, message)) => {
             tracing::warn!(?code, "upgrade failed: {message}");
@@ -124,8 +138,8 @@ pub(crate) async fn serve(
     let _ = send.finish();
     // Let the answer reach the client before the restart closes the connection.
     let _ = tokio::time::timeout(Duration::from_secs(2), send.stopped()).await;
-    if let Some(exe) = restart {
-        core.upgrade.restart.send_replace(Some(exe));
+    if let Some((exe, adopts)) = restart {
+        core.upgrade.request_restart(exe, adopts);
     }
 }
 
@@ -155,7 +169,7 @@ async fn install(
     downgrade: bool,
     send: &mut SendStream,
     recv: &mut RecvStream,
-) -> Result<(DaemonInfo, PathBuf), Failure> {
+) -> Result<(DaemonInfo, PathBuf, bool), Failure> {
     let exe = core.cfg.self_exe.clone().ok_or_else(|| {
         fail(
             UpgradeFailure::Unsupported,
@@ -186,7 +200,7 @@ async fn install(
         .await
         .map_err(|error| fail(UpgradeFailure::Io, error.to_string()))?;
     let staged = receive(staged, header, recv).await?;
-    let info = check(&staged.path).await?;
+    let (info, adopts) = check(&staged.path).await?;
     let running = crate::info::build_info(DaemonFeatures::EMPTY);
     if info.is_older_than(&running) {
         if !downgrade {
@@ -213,7 +227,7 @@ async fn install(
         })?;
     staged.keep();
     busy.keep();
-    Ok((info, exe))
+    Ok((info, exe, adopts))
 }
 
 /// The new build's file next to the executable; removed unless kept.
@@ -369,7 +383,7 @@ async fn receive(
 
 /// Runs `<new> build-info --json`: the build must start on this host and report this OS and
 /// CPU.
-async fn check(path: &Path) -> Result<DaemonInfo, Failure> {
+async fn check(path: &Path) -> Result<(DaemonInfo, bool), Failure> {
     let run = tokio::process::Command::new(path)
         .args(["build-info", "--json"])
         .stdin(std::process::Stdio::null())
@@ -418,7 +432,97 @@ async fn check(path: &Path) -> Result<DaemonInfo, Failure> {
             ),
         ));
     }
-    Ok(info)
+    Ok((info, reads_handoff(line)))
+}
+
+/// Whether a `build-info --json` line says the build continues panes handed off in this
+/// build's format (`"handoff": [versions]`; builds before hot upgrades report none).
+fn reads_handoff(line: &str) -> bool {
+    #[derive(serde::Deserialize)]
+    struct Reads {
+        #[serde(default)]
+        handoff: Vec<u32>,
+    }
+    serde_json::from_str::<Reads>(line)
+        .is_ok_and(|reads| reads.handoff.contains(&crate::handoff::HANDOFF_VERSION))
+}
+
+/// A local request to restart into the build installed at the daemon's own path, as the Mac
+/// app sends after it updated itself (and `gudo-hostd restart`), over the hook socket.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RestartCall {
+    pub restart: RestartAsk,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RestartAsk {
+    /// The daemon's own hook token (`<state>/hook.token`), not a pane's.
+    pub token: String,
+}
+
+/// The answer to a [`RestartCall`].
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RestartReply {
+    /// The daemon hands its panes to the installed build and becomes it.
+    Restarting,
+    /// The daemon already runs the installed build.
+    Current,
+    /// Nothing changes, for this reason. A build that cannot continue running panes is
+    /// refused too: restarting into it would end them.
+    Refused(String),
+}
+
+/// Answers a local restart request; on [`RestartReply::Restarting`] the caller asks the host
+/// process to restart once the answer is sent ([`after_restart_reply`]).
+pub(crate) async fn serve_restart(core: &Arc<Core>, call: &RestartCall) -> RestartReply {
+    if !core.hooks.is_daemon_token(&call.restart.token) {
+        tracing::warn!("refused a restart request with a bad token");
+        return RestartReply::Refused("not allowed".into());
+    }
+    let Some(exe) = core.cfg.exe.clone() else {
+        return RestartReply::Refused("this daemon does not know its executable".into());
+    };
+    if core.upgrade.started_from.is_some() && core.upgrade.started_from == file_identity(&exe) {
+        return RestartReply::Current;
+    }
+    let Some(busy) = Busy::acquire(&core.upgrade.busy) else {
+        return RestartReply::Refused("an update is already running".into());
+    };
+    match check(&exe).await {
+        Ok((info, true)) => {
+            tracing::info!(build = %info.build, "restarting into the installed build");
+            busy.keep();
+            RestartReply::Restarting
+        }
+        Ok((info, false)) => RestartReply::Refused(format!(
+            "the installed build {} cannot take over running sessions",
+            info.build
+        )),
+        Err((_, message)) => RestartReply::Refused(message),
+    }
+}
+
+/// After the [`RestartReply::Restarting`] answer went out: asks the host process to restart
+/// into the installed build.
+pub(crate) fn after_restart_reply(core: &Core, reply: &RestartReply) {
+    if *reply == RestartReply::Restarting
+        && let Some(exe) = core.cfg.exe.clone()
+    {
+        core.upgrade.request_restart(exe, true);
+    }
+}
+
+/// Which file a path names now: device, inode, size and modification time.
+pub(crate) fn file_identity(path: &Path) -> Option<(u64, u64, u64, i64)> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = fs::metadata(path).ok()?;
+    Some((
+        metadata.dev(),
+        metadata.ino(),
+        metadata.size(),
+        metadata.mtime(),
+    ))
 }
 
 /// Keeps the running executable as `<exe>.prev` and renames the new build over it.

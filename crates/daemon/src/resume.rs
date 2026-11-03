@@ -44,6 +44,23 @@ impl InputStreams {
         ResumeToken(bytes)
     }
 
+    /// The highest number applied per device and stream, for the next daemon build.
+    pub fn applied(&self) -> Vec<(DeviceId, u64, u64)> {
+        lock(&self.applied)
+            .iter()
+            .map(|(&(device, stream), &(last, _))| (device, stream, last))
+            .collect()
+    }
+
+    /// Continues what the previous daemon build applied ([`applied`](Self::applied)).
+    pub fn carry_on(&self, applied: Vec<(DeviceId, u64, u64)>) {
+        let now = Instant::now();
+        let mut streams = lock(&self.applied);
+        for (device, stream, last) in applied.into_iter().take(MAX_STREAMS) {
+            streams.insert((device, stream), (last, now));
+        }
+    }
+
     /// Whether input `seq` of `device`'s `stream` is new; if so it counts as applied.
     pub fn admit(&self, device: DeviceId, stream: u64, seq: u64) -> bool {
         let mut applied = lock(&self.applied);

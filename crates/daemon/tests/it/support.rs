@@ -55,6 +55,36 @@ pub fn ticket(daemon: &Daemon) -> String {
         .to_string()
 }
 
+/// One pane's output stream as a client received it.
+#[derive(Debug, Default)]
+pub struct PaneStream {
+    /// The offset `bytes` start at (the last snapshot's).
+    pub start: u64,
+    pub bytes: Vec<u8>,
+    pub snapshots: u32,
+    /// Chunks that did not continue where the stream stood: (expected, received).
+    pub gaps: Vec<(u64, u64)>,
+}
+
+impl PaneStream {
+    fn snapshot(&mut self, seq: u64) {
+        self.start = seq;
+        self.bytes.clear();
+        self.snapshots += 1;
+    }
+
+    fn bytes(&mut self, seq: u64, data: &[u8]) {
+        let end = self.start + self.bytes.len() as u64;
+        if seq != end {
+            self.gaps.push((end, seq));
+        }
+        if seq >= self.start {
+            self.bytes.truncate((seq - self.start) as usize);
+            self.bytes.extend_from_slice(data);
+        }
+    }
+}
+
 /// A client plus everything it has been told.
 pub struct TestClient {
     pub client: Client,
@@ -64,6 +94,9 @@ pub struct TestClient {
     pub connected: u32,
     pub snapshot_events: u32,
     pub byte_events: u32,
+    /// Each pane's stream as received: the bytes since its last snapshot, the offset they
+    /// start at, and any jump between consecutive chunks (expected offset, actual).
+    pub streams: HashMap<PaneId, PaneStream>,
     pub agent_events: Vec<String>,
     pub marks: Vec<client_core::proto::CommandMark>,
     pub unseen: Vec<client_core::proto::CommandMark>,
@@ -204,6 +237,7 @@ impl TestClient {
             connected: 0,
             snapshot_events: 0,
             byte_events: 0,
+            streams: HashMap::new(),
             agent_events: Vec::new(),
             marks: Vec::new(),
             unseen: Vec::new(),
@@ -251,8 +285,14 @@ impl TestClient {
             ClientEvent::OpResult { op_id, outcome } => {
                 self.results.insert(op_id, outcome);
             }
-            ClientEvent::PaneSnapshot { .. } => self.snapshot_events += 1,
-            ClientEvent::PaneBytes { .. } => self.byte_events += 1,
+            ClientEvent::PaneSnapshot { pane_id, seq, .. } => {
+                self.snapshot_events += 1;
+                self.streams.entry(pane_id).or_default().snapshot(seq);
+            }
+            ClientEvent::PaneBytes { pane_id, seq, data } => {
+                self.byte_events += 1;
+                self.streams.entry(pane_id).or_default().bytes(seq, &data);
+            }
             ClientEvent::AgentEvent { json, .. } => self.agent_events.push(json),
             ClientEvent::CommandMark { mark } => self.marks.push(mark),
             ClientEvent::CommandFinishedUnseen { mark } => self.unseen.push(mark),

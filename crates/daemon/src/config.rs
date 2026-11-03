@@ -188,6 +188,11 @@ pub struct Config {
     /// connection (`proto::info`): the new build is written next to it and renamed over it.
     /// `None` (the default; library users and tests opt in) refuses upgrades.
     pub self_exe: Option<PathBuf>,
+    /// The executable this daemon runs from, wherever it is (an app bundle too): a local
+    /// restart request (`gudo-hostd restart`, sent by the Mac app after it updated itself)
+    /// restarts into the build installed there, handing over the running panes. `None` (the
+    /// default) refuses such requests.
+    pub exe: Option<PathBuf>,
     /// The program [`brand::CLI_BIN`] runs in panes (`gudo pair`, `gudo devices`): linked as
     /// `<state_dir>/bin/gudo`, a directory appended to every pane's `PATH`. `None` (the
     /// default) links nothing.
@@ -330,6 +335,7 @@ impl Config {
             askpass: AskpassConfig::default(),
             history: crate::assist::HistoryConfig::default(),
             self_exe: None,
+            exe: None,
             cli_exe: None,
             test_snapshot_format: None,
             usage: crate::usage::UsageConfig::default(),

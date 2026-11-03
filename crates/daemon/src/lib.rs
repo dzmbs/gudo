@@ -40,6 +40,7 @@ mod conn;
 mod core;
 mod forward;
 mod fsutil;
+mod handoff;
 mod hook_launcher;
 mod identity;
 mod input;
@@ -90,6 +91,7 @@ pub use clock::boot_nanos as hook_seq;
 pub use config::{ArtifactLimits, AskpassConfig, Config, RelayMode, default_state_dir};
 pub use config::{CustomRelays, PresenceTimes, PushConfig, RepoConfig};
 pub use fsutil::create_private_temp_file;
+pub use handoff::{HANDOFF_ENV, HANDOFF_READS, HANDOFF_VERSION, HandOff, Inherited};
 pub use identity::{
     DEVICE_NAME_MAX, EndpointInfo, MAX_REUSABLE_TICKET_TTL, MAX_TICKET_USES, PAIRING_TTL,
     PairedDevice, PendingTicket, clean_device_name, endpoint_info, list_paired,
@@ -101,6 +103,7 @@ pub use procinfo::inherited_env_var;
 pub use term::SOURCE_SHARED as TERM_SOURCE_SHARED;
 pub use term::{ErrorCode as TermErrorCode, TERM_VERSION, TermAsk, TermCall, TermReply, ToolError};
 pub use upgrade::prev_path as upgrade_prev_path;
+pub use upgrade::{RestartAsk, RestartCall, RestartReply};
 pub use usage::UsageConfig;
 
 use crate::agent::HookServer;
@@ -131,7 +134,32 @@ impl Daemon {
     /// # Errors
     ///
     /// Returns [`StartError`] if the state directory is unusable or the endpoint cannot bind.
-    pub async fn start(mut config: Config) -> Result<Self, StartError> {
+    pub async fn start(config: Config) -> Result<Self, StartError> {
+        Self::start_inheriting(config, None).await
+    }
+
+    /// Like [`start`](Self::start), continuing the panes the previous build of this process
+    /// handed over before its `exec` ([`Inherited::claim`]): same programs, screens, history
+    /// and stream offsets, so clients resume as after a network change. Panes it cannot
+    /// continue end as closed panes do and start afresh, as after a plain restart.
+    ///
+    /// # Errors
+    ///
+    /// As for [`start`](Self::start); the inherited panes have been ended then.
+    pub async fn start_inheriting(
+        config: Config,
+        inherited: Option<Inherited>,
+    ) -> Result<Self, StartError> {
+        let mut adopted = inherited.map(Inherited::read).unwrap_or_default();
+        let started = Self::start_with(config, &mut adopted).await;
+        adopted.abandon_rest();
+        started
+    }
+
+    async fn start_with(
+        mut config: Config,
+        adopted: &mut handoff::Adopted,
+    ) -> Result<Self, StartError> {
         limits::raise_fd_limit();
         config.apply_user_file()?;
         match hook_launcher::install(&config.state_dir, &config.hook_bin()) {
@@ -164,10 +192,20 @@ impl Daemon {
             config.lease_idle,
             config.presence,
         )?;
-        let core = Core::new(config, identity, layout, hooks, shell, mp);
+        let core = Core::new(
+            config,
+            identity,
+            layout,
+            hooks,
+            shell,
+            mp,
+            adopted.carried.epoch,
+        );
+        core.inputs
+            .carry_on(std::mem::take(&mut adopted.carried.inputs));
         repair_hook_paths(&core);
         let mut tasks = vec![HookServer::listen(&core)?];
-        core::restore(&core, records, closed);
+        core::restore(&core, records, closed, adopted);
         core.term
             .restore(creators, |pane| core.pane(pane).is_some());
 
@@ -266,6 +304,79 @@ impl Daemon {
     /// This daemon's build and machine, as clients see it.
     pub fn info(&self) -> proto::DaemonInfo {
         conn::daemon_info(&self.core)
+    }
+
+    /// Whether the build [`restart_requested`](Self::restart_requested) names continues
+    /// running panes ([`HANDOFF_READS`]); [`hand_off`](Self::hand_off) is only for one that
+    /// does.
+    pub fn successor_adopts(&self) -> bool {
+        self.core.upgrade.successor_adopts()
+    }
+
+    /// Stops serving for the next build of this program, which this process becomes with
+    /// `exec`, and leaves every pane's program running for it to continue
+    /// ([`start_inheriting`](Self::start_inheriting)): saves the layout, closes connections,
+    /// stops each PTY where its output stands and captures its terminal.
+    ///
+    /// Returns `None` after stopping the usual way ([`shutdown`](Self::shutdown): the panes
+    /// end) if the hand-off could not be written. Dropping the [`HandOff`] without `exec`
+    /// ends the panes too.
+    pub async fn hand_off(self) -> Option<HandOff> {
+        let mut file = match handoff::create_file(&self.core.cfg.state_dir) {
+            Ok(file) => file,
+            Err(error) => {
+                tracing::warn!("cannot hand off the panes: {error}; they end");
+                self.shutdown().await;
+                return None;
+            }
+        };
+        self.core.shutting_down.store(true, Ordering::Release);
+        for task in &self.tasks {
+            task.abort();
+        }
+        for (_, entry) in self.core.pane_entries() {
+            entry.stop_task();
+        }
+        self.core.art.flush();
+        if let Err(error) = persist::save(&self.core).await {
+            tracing::warn!("saving layout on hand-off: {error}");
+        }
+        self.endpoint.close().await;
+        self.core.ws.editors.stop_all().await;
+        self.core.ws.tunnel.shutdown();
+        let core = Arc::clone(&self.core);
+        let carried = tokio::task::spawn_blocking(move || handoff::Carried {
+            epoch: Some(core.epoch),
+            inputs: core.inputs.applied(),
+            panes: core.hand_off_panes(),
+        })
+        .await
+        .unwrap_or_default();
+        self.core.hooks.remove_socket();
+        let masters: Vec<_> = carried
+            .panes
+            .iter()
+            .map(|pane| (pane.state.pty.master, pane.state.pty.pid))
+            .collect();
+        let written =
+            handoff::encode(&carried).and_then(|bytes| handoff::write_file(&mut file, &bytes));
+        let hand_off = HandOff::new(file, masters, Arc::clone(&self.core));
+        match written {
+            Ok(()) => {
+                tracing::info!(
+                    panes = hand_off.panes(),
+                    "handing the panes to the new build"
+                );
+                Some(hand_off)
+            }
+            Err(error) => {
+                tracing::warn!("writing the hand-off: {error}; the panes end");
+                tokio::task::spawn_blocking(move || hand_off.abandon())
+                    .await
+                    .ok();
+                None
+            }
+        }
     }
 
     /// Stops serving: saves the layout, closes connections and hangs up every pane.

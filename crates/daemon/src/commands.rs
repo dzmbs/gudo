@@ -60,6 +60,17 @@ pub(crate) struct CommandLog {
 }
 
 impl CommandLog {
+    /// The id the last command got (0 before any).
+    pub fn last_id(&self) -> u64 {
+        self.next_id
+    }
+
+    /// Numbers commands on from `last_id`, the last one a previous daemon build gave out in
+    /// this pane, so ids clients hold never name a different command.
+    pub fn continue_numbering(&mut self, last_id: u64) {
+        self.next_id = self.next_id.max(last_id);
+    }
+
     /// Applies the terminal's recorded shell-integration events. `seq` is the output offset
     /// after the bytes that produced them.
     pub fn apply(

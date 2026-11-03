@@ -126,7 +126,33 @@ into a launchd log or the journal.
 control characters refused). Paths in the plist are XML-escaped.
 
 **Upgrade.** Only the owner can upgrade the daemon. The build must have the announced size and
-SHA-256, must run here and report this OS and CPU, and is then swapped in atomically.
+SHA-256, must run here and report this OS and CPU, must not be older than the running build
+unless the owner asked for a downgrade, and is then swapped in atomically (the old file kept as
+`.prev`).
+
+**Hot upgrade (running panes carried across `exec`).**
+
+- The hand-off holds terminal contents, so it is never a file others can read: a `memfd` on
+  Linux; on macOS a new `0600` file (`O_CREAT|O_EXCL|O_NOFOLLOW`) in the 0700 state directory,
+  unlinked before anything is written to it. It exists only as a descriptor of the daemon's
+  process.
+- Only the hand-off file and the pane masters lose `FD_CLOEXEC`, right before `execve`. The new
+  build marks every inherited descriptor close-on-exec again before it can start any program,
+  and adopted masters stay close-on-exec, so no pane program ever holds a master or the
+  hand-off (tested on both systems by listing a pane program's descriptors).
+- The descriptor number travels in `GUDO_HANDOFF_FD` in the new build's environment only; it is
+  removed from the environment at once and never reaches a pane.
+- A pane is adopted only if its descriptor is a PTY master and its pid an unreaped child of the
+  daemon (`waitid(WNOWAIT)`), so a stale or forged entry can never make the daemon signal
+  someone else's process. Everything read is bounds-checked (sizes, blob ranges, ring
+  consistency); what does not check out is ended, not trusted.
+- The old build hands off only to a build whose `build-info --json` says it reads this format.
+  A build that cannot read it (another version, damage) still reads the fixed header and ends
+  the panes cleanly: hang-up, then the process group killed after 3 s, then reaped. No program
+  is left running unseen.
+- The local restart (`gudo-hostd restart`) takes the daemon's own `hook.token`, not a pane's,
+  over the 0600 hook socket that checks the peer's uid. It only re-runs the file at the
+  daemon's own path, after the same `build-info` check.
 
 ## Residual risk (by design or not yet built)
 
@@ -162,6 +188,13 @@ SHA-256, must run here and report this OS and CPU, and is then swapped in atomic
   editor server's own Origin check is relied on for websockets.
 - **No signature on upgrades.** An upgrade is trusted because the owner's device sent it. There
   is no release signature to check yet.
+- **A short window at `exec`.** Between clearing `FD_CLOEXEC` on the masters and `execve`, a
+  program another daemon thread starts at that instant could inherit them. By then the daemon
+  has stopped serving and its tasks, so little can start a program; the window is a few
+  system calls.
+- **The local restart has no rollback check.** It runs whatever build is at the daemon's own
+  path, put there by someone who could run it anyway (the same user, a package manager, the Mac
+  app's update).
 
 ## Decisions
 
