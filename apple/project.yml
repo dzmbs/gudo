@@ -105,6 +105,7 @@ targets:
         # Universal links (`https://<domain>/join#…`) and the bundled helper (Brand.xcconfig).
         BrandWebDomain: $(BRAND_WEB_DOMAIN)
         BrandDaemonBinary: $(BRAND_DAEMON_BIN)
+        BrandCommandLineTool: $(BRAND_CLI_BIN)
         # `.excalidraw` scenes: drawings dragged, copied and exported out of the app (with a
         # PNG alongside), and dropped or pasted in. Excalidraw declares no UTI; imported, not
         # owned.

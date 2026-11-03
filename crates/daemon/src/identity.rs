@@ -49,7 +49,34 @@ struct DeviceEntry {
     /// What the device calls itself (its first `SetName`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     name: String,
+    /// What the owner named it; shown instead of `name`, which the device may say again.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    label: String,
+    /// When it last connected or disconnected, Unix ms.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    last_seen: u64,
 }
+
+impl DeviceEntry {
+    fn display_name(&self) -> &str {
+        if self.label.is_empty() {
+            &self.name
+        } else {
+            &self.label
+        }
+    }
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
+/// How long a connection's arrival may go unrecorded in `last_seen`, so reconnects do not
+/// rewrite `devices.json` each time.
+const SEEN_GRANULARITY_MS: u64 = 5 * 60 * 1000;
+
+/// The longest device name kept, in characters.
+pub const DEVICE_NAME_MAX: usize = 64;
 
 /// When each device was last removed from the allowlist, Unix ms, by device hex.
 type Removed = BTreeMap<String, u64>;
@@ -253,6 +280,8 @@ impl Identity {
                     principal: hex(&principal.0),
                     paired_at: now_millis(),
                     name: String::new(),
+                    label: String::new(),
+                    last_seen: 0,
                 };
                 // A fresh ticket brings a removed device back, but not its old invites: they
                 // stay void by its removal time (`removed_at`).
@@ -317,7 +346,7 @@ impl Identity {
                 Some(Owner {
                     device: DeviceId(unhex(&paired.device)?),
                     principal: PrincipalId(unhex(&paired.principal)?),
-                    name: paired.name.clone(),
+                    name: paired.display_name().to_owned(),
                     paired_at: UnixMillis(paired.paired_at),
                 })
             })
@@ -349,6 +378,49 @@ impl Identity {
             list.iter_mut()
                 .find(|paired| paired.device == hex_id && paired.name != name)
                 .map(|paired| paired.name = name.to_owned())
+                .is_some()
+        });
+        if let Err(error) = saved {
+            tracing::warn!("saving paired devices: {error}");
+        }
+    }
+
+    /// Names a paired device as the owner wants it listed; empty goes back to the name the
+    /// device gave. Returns whether it is paired.
+    pub fn rename(&self, device: DeviceId, label: &str) -> io::Result<bool> {
+        let hex_id = hex(&device.0);
+        let label = clean_device_name(label);
+        let mut found = false;
+        self.update_devices(|list, _| {
+            let Some(paired) = list.iter_mut().find(|paired| paired.device == hex_id) else {
+                return false;
+            };
+            found = true;
+            if paired.label == label {
+                return false;
+            }
+            paired.label = label;
+            true
+        })?;
+        Ok(found)
+    }
+
+    /// Records that `device` connected (at most once per [`SEEN_GRANULARITY_MS`]) or, with
+    /// `leaving`, disconnected.
+    pub fn seen(&self, device: DeviceId, leaving: bool) {
+        let hex_id = hex(&device.0);
+        let now = now_millis();
+        let due = |paired: &DeviceEntry| {
+            paired.device == hex_id
+                && (leaving || now.saturating_sub(paired.last_seen) >= SEEN_GRANULARITY_MS)
+        };
+        if !self.lock_devices().list.iter().any(due) {
+            return;
+        }
+        let saved = self.update_devices(|list, _| {
+            list.iter_mut()
+                .find(|paired| due(paired))
+                .map(|paired| paired.last_seen = now)
                 .is_some()
         });
         if let Err(error) = saved {
@@ -516,18 +588,36 @@ pub struct PairedDevice {
     pub device: String,
     /// When it paired, Unix ms.
     pub paired_at: u64,
-    /// What it calls itself; empty until it said.
+    /// What the owner named it, else what it calls itself; empty until either said.
     pub name: String,
+    /// What it calls itself (an iPhone says "iPhone" unless its owner set otherwise).
+    pub own_name: String,
+    /// When it last connected or disconnected, Unix ms; 0 if never recorded.
+    pub last_seen: u64,
 }
 
 impl From<DeviceEntry> for PairedDevice {
     fn from(entry: DeviceEntry) -> Self {
         Self {
+            name: entry.display_name().to_owned(),
+            own_name: entry.name,
             device: entry.device,
             paired_at: entry.paired_at,
-            name: entry.name,
+            last_seen: entry.last_seen,
         }
     }
+}
+
+/// A device name as stored: trimmed, without control characters, at most
+/// [`DEVICE_NAME_MAX`] characters.
+pub fn clean_device_name(name: &str) -> String {
+    name.trim()
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(DEVICE_NAME_MAX)
+        .collect::<String>()
+        .trim_end()
+        .to_owned()
 }
 
 /// The devices on the owner allowlist.
@@ -564,6 +654,43 @@ pub fn paired_devices(state_dir: &Path) -> io::Result<usize> {
 /// [`io::ErrorKind::InvalidInput`] if the prefix is too short or matches several devices,
 /// [`io::ErrorKind::NotFound`] if it matches none, or any error reading or writing the file.
 pub fn unpair_device(state_dir: &Path, prefix: &str) -> io::Result<PairedDevice> {
+    let prefix = device_prefix(prefix)?;
+    let path = state_dir.join(DEVICES_FILE);
+    let removed_path = state_dir.join(REMOVED_FILE);
+    fsutil::with_lock(&path, || {
+        let mut list: Vec<DeviceEntry> = read_json(&path)?.unwrap_or_default();
+        let mut removed: Removed = read_json(&removed_path)?.unwrap_or_default();
+        let entry = list[find_device(&list, &prefix)?].clone();
+        remove_device(&mut list, &mut removed, &entry.device);
+        write_json(&removed_path, &removed)?;
+        write_json(&path, &list)?;
+        Ok(entry.into())
+    })
+}
+
+/// Names the paired device whose key starts with `prefix` (at least 8 hex digits) as the owner
+/// wants it listed, here and in the apps; an empty name goes back to what the device calls
+/// itself. A running daemon picks it up on its next check.
+///
+/// # Errors
+///
+/// As [`unpair_device`].
+pub fn rename_device(state_dir: &Path, prefix: &str, name: &str) -> io::Result<PairedDevice> {
+    let prefix = device_prefix(prefix)?;
+    let path = state_dir.join(DEVICES_FILE);
+    fsutil::with_lock(&path, || {
+        let mut list: Vec<DeviceEntry> = read_json(&path)?.unwrap_or_default();
+        let index = find_device(&list, &prefix)?;
+        let label = clean_device_name(name);
+        if list[index].label != label {
+            list[index].label = label;
+            write_json(&path, &list)?;
+        }
+        Ok(list[index].clone().into())
+    })
+}
+
+fn device_prefix(prefix: &str) -> io::Result<String> {
     let prefix = prefix.trim().to_ascii_lowercase();
     if prefix.len() < 8 || !prefix.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(io::Error::new(
@@ -571,35 +698,24 @@ pub fn unpair_device(state_dir: &Path, prefix: &str) -> io::Result<PairedDevice>
             "give at least 8 hex digits of the device key",
         ));
     }
-    let path = state_dir.join(DEVICES_FILE);
-    let removed_path = state_dir.join(REMOVED_FILE);
-    fsutil::with_lock(&path, || {
-        let mut list: Vec<DeviceEntry> = read_json(&path)?.unwrap_or_default();
-        let mut removed: Removed = read_json(&removed_path)?.unwrap_or_default();
-        let matches: Vec<usize> = (0..list.len())
-            .filter(|&i| list[i].device.starts_with(&prefix))
-            .collect();
-        let i = match matches[..] {
-            [i] => i,
-            [] => {
-                return Err(io::Error::new(
-                    io::ErrorKind::NotFound,
-                    format!("no paired device starts with {prefix}"),
-                ));
-            }
-            _ => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("several paired devices start with {prefix}; give more digits"),
-                ));
-            }
-        };
-        let entry = list[i].clone();
-        remove_device(&mut list, &mut removed, &entry.device);
-        write_json(&removed_path, &removed)?;
-        write_json(&path, &list)?;
-        Ok(entry.into())
-    })
+    Ok(prefix)
+}
+
+fn find_device(list: &[DeviceEntry], prefix: &str) -> io::Result<usize> {
+    let matches: Vec<usize> = (0..list.len())
+        .filter(|&i| list[i].device.starts_with(prefix))
+        .collect();
+    match matches[..] {
+        [index] => Ok(index),
+        [] => Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("no paired device starts with {prefix}"),
+        )),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("several paired devices start with {prefix}; give more digits"),
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -812,6 +928,50 @@ mod tests {
             consume_pairing_secret(dir.path(), secret).expect("consume"),
             None
         );
+    }
+
+    /// The owner's name for a device stands over what the device says about itself, from the
+    /// daemon or from `hostd rename`; arrivals are recorded at most every few minutes.
+    #[test]
+    fn owner_names_stand_and_arrivals_are_recorded() {
+        let dir = started_daemon();
+        let identity = Identity::load_or_create(dir.path()).expect("identity");
+        let secret = mint_ticket(dir.path(), PAIRING_TTL).expect("mint").secret;
+        let device = DeviceId([9; 32]);
+        let owner = load_or_create_owner(dir.path()).expect("owner");
+        identity
+            .authorize(device, owner, &pairing_grant(secret))
+            .expect("paired");
+        identity.set_name(device, "iPhone");
+        assert!(identity.rename(device, " Work\nphone ").expect("rename"));
+        identity.set_name(device, "iPhone 16");
+        let listed = &list_paired(dir.path()).expect("list")[0];
+        assert_eq!(
+            (listed.name.as_str(), listed.own_name.as_str()),
+            ("Workphone", "iPhone 16")
+        );
+        assert_eq!(identity.paired()[0].name, "Workphone");
+
+        let renamed = rename_device(dir.path(), &hex(&device.0)[..8], "").expect("rename");
+        assert_eq!(renamed.name, "iPhone 16", "empty goes back to its own name");
+        assert!(matches!(
+            rename_device(dir.path(), "abc", "x").map_err(|error| error.kind()),
+            Err(io::ErrorKind::InvalidInput)
+        ));
+        assert!(!identity.rename(DeviceId([8; 32]), "x").expect("rename"));
+
+        identity.seen(device, false);
+        let first = list_paired(dir.path()).expect("list")[0].last_seen;
+        assert!(first > 0);
+        let before = stamp(&dir.path().join(DEVICES_FILE)).expect("stat");
+        identity.seen(device, false);
+        assert_eq!(
+            stamp(&dir.path().join(DEVICES_FILE)).expect("stat"),
+            before,
+            "a quick reconnect writes nothing"
+        );
+        identity.seen(device, true);
+        assert_ne!(stamp(&dir.path().join(DEVICES_FILE)).expect("stat"), before);
     }
 
     /// Key and allowlist are private to the user.

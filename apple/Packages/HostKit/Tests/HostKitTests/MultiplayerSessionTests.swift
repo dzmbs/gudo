@@ -25,6 +25,9 @@ nonisolated final class FakeMultiplayerClient: MultiplayerClientAPI {
         var grants: [GrantInfo] = []
         var linkRequests: [String] = []
         var devices: [DeviceInfo] = []
+        var managesDevices = false
+        var pairingCodes = 0
+        var renamed: [(String, String)] = []
     }
     let state = Mutex(State())
 
@@ -51,6 +54,21 @@ nonisolated final class FakeMultiplayerClient: MultiplayerClientAPI {
         return "gudo://join/again-\(grantId)"
     }
     func listDevices() async throws -> [DeviceInfo] { state.withLock { $0.devices } }
+    func canManageDevices() -> Bool { state.withLock { $0.managesDevices } }
+    func pairingCode() async throws -> PairingCode {
+        let made = state.withLock { state in
+            state.pairingCodes += 1
+            return state.pairingCodes
+        }
+        let link = "gudo://pair/code\(made)"
+        return PairingCode(link: link, qrPayload: link.uppercased(), expiresMs: UInt64((Date.now.timeIntervalSince1970 + 600) * 1000))
+    }
+    func renameDevice(device: String, name: String) async throws {
+        state.withLock { state in
+            state.renamed.append((device, name))
+            if let index = state.devices.firstIndex(where: { $0.device == device }) { state.devices[index].name = name }
+        }
+    }
     func revoke(target: RevokeTarget) async throws -> RevokeResult {
         state.withLock { $0.revoked.append(target) }
         return RevokeResult(grants: [], devices: [], disconnected: 1)

@@ -260,6 +260,12 @@ nonisolated final class MockMultiplayerClient: MultiplayerClientAPI {
     }
     func listGrants() async throws -> [GrantInfo] { MockMultiplayer.grants }
     func listDevices() async throws -> [DeviceInfo] { MockMultiplayer.devices }
+    func canManageDevices() -> Bool { true }
+    func pairingCode() async throws -> PairingCode {
+        let link = "gudo://pair/" + "ahyuuihplhmobkzj6ntbzl7tjjpizmjbt4iuzfij4i7nbikwr743aaiap4aaaaoz54bqa7ngnmxxqbhpjewwquhnd24yruwkwmrux63wwshwtbmtrb73nksj5dskb6ezgttqcaq"
+        return PairingCode(link: link, qrPayload: link.uppercased(), expiresMs: UInt64((Date.now.timeIntervalSince1970 + 600) * 1000))
+    }
+    func renameDevice(device: String, name: String) async throws {}
     func revoke(target: RevokeTarget) async throws -> RevokeResult { RevokeResult(grants: [], devices: [], disconnected: 1) }
     func takeControl(paneId: UInt64, force: Bool) async throws -> LeaseOutcome { .pending(holder: MockMultiplayer.mira.principal) }
     func releaseControl(paneId: UInt64) async throws {}

@@ -9,6 +9,7 @@ mod askpass;
 mod assist;
 mod browser;
 mod codex;
+mod devices;
 mod drive;
 mod e2e;
 mod floats;

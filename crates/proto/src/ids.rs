@@ -395,5 +395,8 @@ bitset! {
         ACCOUNTS = 18;
         /// Applies each input of a client once across its reconnects (`Caps::INPUT_RESUME`).
         INPUT_RESUME = 19;
+        /// Answers `MpRequest::PairingTicket` and `MpRequest::RenameDevice` from paired owner
+        /// devices.
+        DEVICE_MANAGEMENT = 20;
     }
 }

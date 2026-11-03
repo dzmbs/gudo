@@ -25,6 +25,9 @@ nonisolated public protocol MultiplayerClientAPI: AnyObject, Sendable {
     func inviterDevice() -> String?
     func listDevices() async throws -> [DeviceInfo]
     func revoke(target: RevokeTarget) async throws -> RevokeResult
+    func canManageDevices() -> Bool
+    func pairingCode() async throws -> PairingCode
+    func renameDevice(device: String, name: String) async throws
     func takeControl(paneId: UInt64, force: Bool) async throws -> LeaseOutcome
     func releaseControl(paneId: UInt64) async throws
     func answerControl(paneId: UInt64, give: Bool) async throws -> LeaseOutcome
@@ -56,6 +59,13 @@ nonisolated public extension MultiplayerClientAPI {
         throw MultiplayerError.Failed(message: "This host can't share a link again.")
     }
     func inviterDevice() -> String? { nil }
+    func canManageDevices() -> Bool { false }
+    func pairingCode() async throws -> PairingCode {
+        throw MultiplayerError.Failed(message: "This host can't make pairing codes.")
+    }
+    func renameDevice(device: String, name: String) async throws {
+        throw MultiplayerError.Failed(message: "This host can't rename devices.")
+    }
     func hasLivePresence() -> Bool { false }
     func setDraft(paneId: UInt64, source: DraftSource, text: String, caret: UInt32) {}
     func clearDraft() {}
@@ -242,6 +252,9 @@ public final class MultiplayerSession {
     @ObservationIgnored public var onDevicePaired: ((DeviceInfo) -> Void)?
     /// Owner devices that paired while this session ran, by key, with when.
     public private(set) var freshPairings: [String: Date] = [:]
+    /// When the last pairing code made here stops working: a device pairing before then was
+    /// expected.
+    public private(set) var pairingCodeExpiry: Date?
     /// What the host says the owner must know while it stands (re-sent on every connection).
     public private(set) var hostAlerts: [HostAlert] = []
     /// Called for every host alert push, repeats included (the app notifies once per alert).
@@ -434,7 +447,13 @@ public final class MultiplayerSession {
             } else {
                 devices.append(device)
             }
-            post(.devicePaired(device.device), "\(displayName(of: device)) paired with this host. Not you? Remove it in Devices.", failure: false)
+            let expected = pairingCodeExpiry.map { $0 > .now } ?? false
+            post(
+                .devicePaired(device.device),
+                expected
+                    ? "\(displayName(of: device)) paired with this host."
+                    : "\(displayName(of: device)) paired with this host. Not you? Remove it in Devices.",
+                failure: false)
             onDevicePaired?(device)
         case .hostAlert(let alert):
             hostAlerts.removeAll { $0.key == alert.key }
@@ -874,6 +893,47 @@ public final class MultiplayerSession {
             let (lhsRank, rhsRank) = (rank(lhs), rank(rhs))
             return lhsRank != rhsRank ? lhsRank < rhsRank : lhs.firstSeenMs > rhs.firstSeenMs
         }
+    }
+
+    /// Whether this device may pair another one and rename devices from here: a paired owner
+    /// device (never a guest, whatever its roles) on a host that offers it.
+    public var canManageDevices: Bool {
+        guard let me, me.grantId == nil, isOwner else { return false }
+        return client?.canManageDevices() ?? false
+    }
+
+    /// A one-time pairing code for another device; nil (with a notice) when the host refuses.
+    public func makePairingCode() async -> PairingCode? {
+        guard let client else { return nil }
+        do {
+            let code = try await client.pairingCode()
+            pairingCodeExpiry = Date(timeIntervalSince1970: Double(code.expiresMs) / 1000)
+            Self.log.info("pairing code made")
+            return code
+        } catch {
+            fail(error)
+            return nil
+        }
+    }
+
+    /// Names a paired owner device for every device that lists it; empty goes back to the
+    /// name it gave. Returns whether the host saved it.
+    @discardableResult
+    public func renameDevice(_ device: DeviceInfo, to name: String) async -> Bool {
+        guard let client, device.kind == .owner else { return false }
+        do {
+            try await client.renameDevice(device: device.device, name: name.trimmingCharacters(in: .whitespacesAndNewlines))
+            await refreshGrants()
+            return true
+        } catch {
+            fail(error)
+            return false
+        }
+    }
+
+    /// Whether the user can rename `device` from here: owner devices, by an owner device.
+    public func canRename(_ device: DeviceInfo) -> Bool {
+        canManageDevices && device.kind == .owner && !device.revoked
     }
 
     /// Unpairs a device (an owner device is signed out and its invites stop working; a guest

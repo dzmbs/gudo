@@ -80,6 +80,7 @@ enum DesignFixtures {
         case "tab-selection": tabSelection(model)
         case "inbox": model.destination = .inbox
         case "palette": model.isPaletteShown = true
+        case "pair-device": model.pairDevice()
         case "host-switcher":
             // Once the toolbar's button exists to anchor it.
             try? await Task.sleep(for: .seconds(1))

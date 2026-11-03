@@ -639,6 +639,7 @@ private struct PersonRow: View {
 /// A QR code drawn with Core Image, crisp at any size, dark modules on white with a quiet zone.
 struct QRCodeView: View {
     let text: String
+    var label = "QR code of the invite link"
 
     var body: some View {
         if let image = Self.image(text) {
@@ -651,7 +652,7 @@ struct QRCodeView: View {
                 .overlay {
                     RoundedRectangle(cornerRadius: DS.Radius.control).strokeBorder(DS.Palette.hairline, lineWidth: 0.5)
                 }
-                .accessibilityLabel("QR code of the invite link")
+                .accessibilityLabel(label)
         }
     }
 

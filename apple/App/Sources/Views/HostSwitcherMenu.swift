@@ -53,6 +53,11 @@ struct HostToolbarButton: View {
     @Environment(\.chrome) private var chrome
 
     private var commands: [HostSwitcherCommand] {
+        let pairing: [HostSwitcherCommand] = PairDeviceTarget.host(preferring: nil, window: model) == nil ? [] : [
+            HostSwitcherCommand(id: "pair-device", group: 1, title: "Pair a Device…", systemImage: "qrcode") {
+                model.pairDevice()
+            },
+        ]
         let rawCommands: [HostSwitcherCommand] = [
             HostSwitcherCommand(id: "new-tab", title: "New Tab", systemImage: "plus", shortcut: ["⌘", "T"]) {
                 model.newTab()
@@ -69,6 +74,7 @@ struct HostToolbarButton: View {
             HostSwitcherCommand(id: "join", group: 1, title: "Join a Session…", systemImage: "person.2") {
                 model.sheet = .join
             },
+        ] + pairing + [
             HostSwitcherCommand(id: "all-hosts", group: 2, title: "All Hosts", systemImage: "server.rack", shortcut: ["⇧", "⌘", "H"]) {
                 withAnimation(DS.Motion.snappy) { model.destination = .hosts }
             },

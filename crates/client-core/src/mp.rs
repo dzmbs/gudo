@@ -601,6 +601,48 @@ impl Client {
         Ok(invite.to_string_with_terms(terms))
     }
 
+    /// Whether the daemon makes pairing tickets and renames devices for its owner devices
+    /// ([`Self::pairing_ticket`], [`Self::rename_device`]).
+    pub fn can_manage_devices(&self) -> bool {
+        self.daemon_has(proto::DaemonFeatures::DEVICE_MANAGEMENT)
+    }
+
+    /// A one-time pairing ticket (`<scheme>://pair/…`) for another device, and when it
+    /// expires (paired owner devices only).
+    ///
+    /// # Errors
+    ///
+    /// [`MpError::Failed`] when the daemon is too old; [`MpError::Forbidden`] for guests.
+    pub async fn pairing_ticket(&self) -> Result<(String, proto::UnixMillis), MpError> {
+        if !self.can_manage_devices() {
+            return Err(MpError::Failed(
+                "the host's helper is too old to pair from here; update it".into(),
+            ));
+        }
+        expect!(self.multiplayer(MpRequest::PairingTicket).await?,
+            MpResponse::PairingTicket { ticket, expires } => (ticket, expires))
+    }
+
+    /// Names a paired owner device for everyone; an empty name goes back to the device's own
+    /// (paired owner devices only).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::pairing_ticket`], and [`MpError::NotFound`] for a device that is not paired.
+    pub async fn rename_device(
+        &self,
+        device: proto::DeviceId,
+        name: String,
+    ) -> Result<(), MpError> {
+        if !self.can_manage_devices() {
+            return Err(MpError::Failed(
+                "the host's helper is too old to rename devices; update it".into(),
+            ));
+        }
+        expect!(self.multiplayer(MpRequest::RenameDevice { device, name }).await?,
+            MpResponse::Done => ())
+    }
+
     /// Owner and guest devices (owner only).
     pub async fn list_devices(&self) -> Result<Vec<DeviceInfo>, MpError> {
         expect!(self.multiplayer(MpRequest::ListDevices).await?, MpResponse::Devices(devices) => devices)

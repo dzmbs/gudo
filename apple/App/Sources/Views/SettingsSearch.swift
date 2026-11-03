@@ -114,6 +114,7 @@ enum SettingsIndex {
             .init(id: "relay-mode", title: "Relays", section: .network, synonyms: ["relay", "iroh", "self-hosted", "local only", "network"]),
             .init(id: "relay-ca", title: "Import Certificate", section: .network, synonyms: ["certificate", "ca", "private", "relay", "tls"]),
             .init(id: "devices", title: "Paired Devices", section: .devices, synonyms: ["devices", "unpair", "remove", "sign out", "owner", "guests", "pairing", "security"]),
+            .init(id: "devices-pair", title: "Pair a Device", section: .devices, synonyms: ["pair", "qr", "code", "phone", "ipad", "iphone", "add device", "rename"]),
             .init(id: "version", title: "Version", section: .about, synonyms: ["build", "about"]),
             .init(id: "acknowledgements", title: "Acknowledgements", section: .about, synonyms: ["licenses", "licences", "credits", "open source"]),
         ]
@@ -130,6 +131,7 @@ enum SettingsIndex {
         entries += [
             .init(id: "this-mac-keep-running", title: "Keep Sessions Running in the Background", section: .thisMac, synonyms: ["helper", "daemon", "login item", "background", "quit"]),
             .init(id: "this-mac-helper", title: "Stop Helper", section: .thisMac, synonyms: ["helper", "daemon", "start", "local"]),
+            .init(id: "this-mac-command-line-tool", title: "Command Line Tool", section: .thisMac, synonyms: ["cli", "terminal", "shell", "path", "pair", "devices"]),
         ]
         #endif
         return entries

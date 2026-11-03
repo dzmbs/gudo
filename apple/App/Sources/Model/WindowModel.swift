@@ -47,7 +47,7 @@ enum PaletteMode: Equatable {
 
 /// Modal surfaces. One at a time, like the system's own sheets.
 enum SheetRoute: String, Identifiable {
-    case pairing, launchAgent, invite, sharing, join, links, diff, files, browser, editor, settings, shortcuts, replays
+    case pairing, pairDevice, launchAgent, invite, sharing, join, links, diff, files, browser, editor, settings, shortcuts, replays
     var id: String { rawValue }
 }
 
@@ -173,6 +173,8 @@ final class WindowModel {
     var pairingDestination = ""
     /// The ticket the Add Host sheet starts with (a pairing link opened from elsewhere).
     var pairingTicket = ""
+    /// The host Pair a Device shows a code for.
+    var pairDeviceHostId: String?
     /// The invite link the Join sheet starts with (a `<scheme>://join/…` deep link).
     var joinInvite = ""
     /// Every host this window shows at once (sidebar groups, the unified tab order).
@@ -479,6 +481,17 @@ final class WindowModel {
         pairingDestination = destination
         pairingTicket = ticket
         sheet = .pairing
+    }
+
+    /// Pair a Device: a code another device of the owner scans, for `hostId` or the host the
+    /// command means (`PairDeviceTarget`).
+    func pairDevice(hostId: String? = nil) {
+        guard let target = PairDeviceTarget.host(preferring: hostId, window: self) else {
+            toasts.show(Toast("Pair this device with a computer first", systemImage: "qrcode", style: .neutral))
+            return
+        }
+        pairDeviceHostId = target
+        sheet = .pairDevice
     }
 
     /// A link or file the system opened the app with. Any app or web page can open one, so a

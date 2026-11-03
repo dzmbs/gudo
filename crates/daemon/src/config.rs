@@ -188,6 +188,10 @@ pub struct Config {
     /// connection (`proto::info`): the new build is written next to it and renamed over it.
     /// `None` (the default; library users and tests opt in) refuses upgrades.
     pub self_exe: Option<PathBuf>,
+    /// The program [`brand::CLI_BIN`] runs in panes (`gudo pair`, `gudo devices`): linked as
+    /// `<state_dir>/bin/gudo`, a directory appended to every pane's `PATH`. `None` (the
+    /// default) links nothing.
+    pub cli_exe: Option<PathBuf>,
     /// Tests only: announce this snapshot format instead of libghostty-vt's, to exercise a
     /// client that cannot decode it.
     #[doc(hidden)]
@@ -326,6 +330,7 @@ impl Config {
             askpass: AskpassConfig::default(),
             history: crate::assist::HistoryConfig::default(),
             self_exe: None,
+            cli_exe: None,
             test_snapshot_format: None,
             usage: crate::usage::UsageConfig::default(),
             repos: RepoConfig::default(),

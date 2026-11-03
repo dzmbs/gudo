@@ -754,6 +754,19 @@ private struct WelcomeView: View {
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 340)
             }
+            #if os(iOS)
+            if !workspace.canOpenTabs {
+                Button { model.addHost(mode: .scan) } label: {
+                    Label("Scan Pairing Code", systemImage: "qrcode.viewfinder")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.primaryGlass)
+                .controlSize(.large)
+                .frame(width: 300)
+                .padding(.top, DS.Space.s)
+                .accessibilityIdentifier("welcome-scan")
+            }
+            #endif
             VStack(spacing: 2) {
                 if workspace.canOpenTabs {
                     welcomeRow("New Terminal", systemImage: "plus", keys: ["⌘", "T"]) { model.newTab(onGroup: model.currentGroupId) }
@@ -769,10 +782,6 @@ private struct WelcomeView: View {
                         .accessibilityIdentifier("welcome-ssh")
                     welcomeRow("Paste a Pairing Ticket…", systemImage: "doc.on.clipboard", keys: nil) { model.addHost(mode: .ticket) }
                         .accessibilityIdentifier("welcome-ticket")
-                    #if os(iOS)
-                    welcomeRow("Scan a QR Code…", systemImage: "qrcode.viewfinder", keys: nil) { model.addHost(mode: .scan) }
-                        .accessibilityIdentifier("welcome-scan")
-                    #endif
                 }
                 welcomeRow("Command Palette", systemImage: "command", keys: ["⌘", "K"]) { model.isPaletteShown = true }
             }
@@ -795,7 +804,7 @@ private struct WelcomeView: View {
         if workspace.isRemote { return "Open a new tab to start a terminal." }
         return workspace.canOpenTabs
             ? "Open a shell here, or connect to a host to pick up its sessions."
-            : "Pair a machine running the helper, or connect to any SSH host. Sessions keep running there while this device sleeps."
+            : PairingHint.message
     }
 
     /// Shortcut hints only where a hardware keyboard is likely (not on iPhone).
@@ -844,6 +853,8 @@ private struct SheetContent: View {
         switch route {
         case .pairing:
             PairingSheet(directory: model.hosts, live: LaunchOptions.mock ? nil : model.app.hosts, initialMode: model.pairingMode, destination: model.pairingDestination, ticket: model.pairingTicket)
+        case .pairDevice:
+            if let hostId = model.pairDeviceHostId { PairDeviceSheet(hostId: hostId) }
         case .launchAgent, .links, .diff, .files, .browser, .editor:
             ToolSheet(route: route)
         case .invite:
