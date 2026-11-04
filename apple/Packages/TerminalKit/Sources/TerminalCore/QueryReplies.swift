@@ -11,10 +11,18 @@ extension Terminal {
 
     /// The XTVERSION reply: Ghostty's, since the terminal is libghostty-vt and programs pick
     /// features by that name, with the app's name after it.
-    public static let xtversion: String = {
-        let product = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String
-        return "ghostty \(ghosttyVersion)" + (product.map { " (\($0))" } ?? "")
-    }()
+    public static let xtversion = "ghostty \(ghosttyVersion)" + (productName.map { " (\($0))" } ?? "")
+
+    /// The app's name, which `LC_TERMINAL` and XTVERSION carry.
+    public static let productName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String
+
+    /// The terminal environment of programs this device starts, locally or over SSH, as a
+    /// host's daemon gives its panes: Ghostty's features under Ghostty's name, and the app's
+    /// own name in `LC_TERMINAL`, which SSH servers accept by default.
+    public static var programEnvironment: [(name: String, value: String)] {
+        [("COLORTERM", "truecolor"), ("TERM_PROGRAM", "ghostty"), ("TERM_PROGRAM_VERSION", ghosttyVersion)]
+            + (productName.map { [("LC_TERMINAL", $0)] } ?? [])
+    }
 
     /// The Ghostty release libghostty-vt is built from ("1.4.0").
     public static let ghosttyVersion: String = {

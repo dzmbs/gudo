@@ -151,9 +151,9 @@ nonisolated public final class SshPaneBackend: PaneBackend, PredictionFeed {
         }
         events(.connection(.stale(reason: "Connecting…")))
         let options = SshPaneOptions(
-            paneId: pane.rawValue, size: size.withLock { $0 }, term: "xterm-256color", env: [
-                EnvVar(name: "COLORTERM", value: "truecolor"),
-            ], command: nil, tmuxSession: tmuxSession)
+            paneId: pane.rawValue, size: size.withLock { $0 }, term: Terminal.terminfoName,
+            env: Terminal.programEnvironment.map { EnvVar(name: $0.name, value: $0.value) },
+            command: nil, tmuxSession: tmuxSession)
         let opened = session.openPane(options: options, listener: listener)
         channel.withLock { $0 = opened }
     }

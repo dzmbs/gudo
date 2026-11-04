@@ -11,12 +11,8 @@ nonisolated final class LocalPTYBackend: PaneBackend {
 
     init() throws {
         var environment = ProcessInfo.processInfo.environment
-        // As a host's daemon names its panes' terminal (`crates/daemon/src/theme.rs`).
         environment["TERM"] = Terminal.terminfoName
-        environment["COLORTERM"] = "truecolor"
-        environment["TERM_PROGRAM"] = "ghostty"
-        environment["TERM_PROGRAM_VERSION"] = Terminal.ghosttyVersion
-        environment["LC_TERMINAL"] = Brand.name
+        for variable in Terminal.programEnvironment { environment[variable.name] = variable.value }
         let shell = environment["SHELL"] ?? "/bin/zsh"
         pty = try PTY(
             argv: [shell, "-l"], environment: environment, workingDirectory: NSHomeDirectory(), cols: 80, rows: 24)
