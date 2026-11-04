@@ -210,38 +210,64 @@ final class LocalHelper {
         guard let binary else { throw HelperError.notBundled }
         if !isIsolated { await retireLegacyHelper() }
         var launched = true
-        if let running = Self.runningEndpoint(in: stateDirectory), !Self.isAppHelper(pid: running.pid) {
+        let running = Self.runningEndpoint(in: stateDirectory)
+        let loginItemEnabled = !isIsolated && agent.status == .enabled
+        let plan = Self.plan(
+            running: running, isAppHelper: running.map { Self.isAppHelper(pid: $0.pid) } ?? false,
+            keepsRunning: keepsRunning, loginItemEnabled: loginItemEnabled, registeredIsCurrent: isRegistered(binary))
+        switch plan {
+        case .useForeign:
             launched = false
             // A daemon the user runs on this folder (`service install`, `run`) serves This Mac.
             // The app's login item could only fail to take the folder, again and again.
-            if !isIsolated, agent.status == .enabled {
+            if loginItemEnabled {
                 try? await agent.unregister()
                 defaults.removeObject(forKey: Self.registeredKey)
             }
-            Self.log.info("helper: using the daemon already running on the folder (pid \(running.pid))")
-        } else if Self.runningEndpoint(in: stateDirectory) == nil {
+            Self.log.info("helper: using the daemon already running on the folder (pid \(running?.pid ?? 0))")
+        case .launch:
             try await launch(binary)
-        } else if keepsRunning, agent.status == .enabled, !isRegistered(binary) {
+        case .restartInPlace(let replaceIfRefused):
             if await Self.restartInPlace(binary: binary, stateDirectory: stateDirectory) {
-                // The running helper became this build (same process, so launchd keeps it)
-                // and its sessions kept running. The login item is registered again the next
-                // time the helper is not running (`startLoginItem`).
+                // The running helper now runs the build in the app (same process, so launchd
+                // keeps it), its sessions still running; or it already did. The login item is
+                // registered again the next time the helper is not running (`startLoginItem`).
                 launched = false
-                Self.log.info("helper: restarted into this build, sessions kept")
-            } else {
+            } else if replaceIfRefused {
                 // A helper that cannot restart in place is replaced, never restarted, because
-                // launchd only spawns the exact build that was registered.
+                // launchd only spawns the exact build that was registered. Its agents resume
+                // their sessions in the new helper.
                 try await stopLoginItem()
                 try await launch(binary)
+            } else {
+                launched = false
             }
-        } else {
-            launched = false
         }
         let endpoint = try await waitForEndpoint()
         if launched { startedAt = .now }
         if let id = hosts.thisDeviceId, hosts.record(id)?.daemonId == endpoint.daemonId { return id }
         let ticket = try await Self.mintTicket(binary: binary, stateDirectory: stateDirectory)
         return try await hosts.pairThisDevice(try PairingTicket(ticket), name: WindowModel.deviceName)
+    }
+
+    /// How starting goes, given what runs on the state folder.
+    nonisolated enum StartPlan: Equatable {
+        /// Nothing runs there: start the helper.
+        case launch
+        /// A daemon the user runs on the folder serves This Mac.
+        case useForeign
+        /// The app's helper runs: it restarts into the build in the app, keeping its sessions,
+        /// when that build changed (an update replaced the app). One that cannot is replaced
+        /// when `replaceIfRefused`, else left running.
+        case restartInPlace(replaceIfRefused: Bool)
+    }
+
+    nonisolated static func plan(
+        running: Endpoint?, isAppHelper: Bool, keepsRunning: Bool, loginItemEnabled: Bool, registeredIsCurrent: Bool
+    ) -> StartPlan {
+        guard running != nil else { return .launch }
+        guard isAppHelper else { return .useForeign }
+        return .restartInPlace(replaceIfRefused: keepsRunning && loginItemEnabled && !registeredIsCurrent)
     }
 
     /// Stops the helper of a build from before the product's rename and keeps its login items
@@ -386,9 +412,11 @@ final class LocalHelper {
     /// Asks the running helper to hand its sessions to the build now in the app and become it
     /// (`restart`): false when it cannot (a build from before this, or the new build cannot
     /// take the sessions over), which leaves it running as it was.
-    private static func restartInPlace(binary: URL, stateDirectory: URL) async -> Bool {
+    static func restartInPlace(binary: URL, stateDirectory: URL) async -> Bool {
         do {
-            _ = try await Self.output(binary, ["--state-dir", stateDirectory.path, "restart"])
+            let output = try await Self.output(binary, ["--state-dir", stateDirectory.path, "restart"])
+            let said = String(decoding: output, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            Self.log.info("helper: \(said, privacy: .public)")
             return true
         } catch {
             Self.log.info("helper: no restart in place (\(String(describing: error), privacy: .public))")
