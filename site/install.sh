@@ -4,8 +4,9 @@
 #   curl -fsSL https://gudo.dev/install.sh | sh
 #
 # It downloads the static binary for this CPU from the GitHub release, checks it against the
-# release's SHA256SUMS, and puts it in ~/.local/bin with a short `gudo` link to it. No sudo,
-# nothing else is changed.
+# release's SHA256SUMS published on gudo.dev (a second place, so a changed GitHub release alone
+# cannot pass), and puts it in ~/.local/bin with a short `gudo` link to it. No sudo, nothing else
+# is changed.
 #
 #   GUDO_VERSION=0.1.0       install that release instead of the latest
 #   GUDO_INSTALL_DIR=DIR     install somewhere else (default ~/.local/bin)
@@ -15,6 +16,7 @@
 set -eu
 
 REPO="https://github.com/dzmbs/gudo"
+SITE="https://gudo.dev/releases"
 
 say() { printf '%s\n' "$*"; }
 fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -57,20 +59,25 @@ main() {
     *) fail "no build for $arch yet (x86_64 and arm64 are available)" ;;
   esac
 
-  if [ -n "${GUDO_VERSION:-}" ]; then
-    base="$REPO/releases/download/v${GUDO_VERSION#v}"
-  else
-    base="$REPO/releases/latest/download"
-  fi
   dir="${GUDO_INSTALL_DIR:-$HOME/.local/bin}"
   file="gudo-hostd-$target"
 
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT INT TERM
 
-  say "Downloading $file"
-  fetch "$base/$file" "$tmp/$file"
-  fetch "$base/SHA256SUMS" "$tmp/SHA256SUMS"
+  if [ -n "${GUDO_VERSION:-}" ]; then
+    version="${GUDO_VERSION#v}"
+  else
+    fetch "$SITE/latest/VERSION" "$tmp/VERSION" || fail "could not read the latest version from $SITE"
+    version=$(head -n 1 "$tmp/VERSION" | tr -d ' \r\n')
+  fi
+  case "$version" in
+    "" | *[!0-9A-Za-z.+-]*) fail "not a version: '$version'" ;;
+  esac
+
+  say "Downloading $file $version"
+  fetch "$REPO/releases/download/v$version/$file" "$tmp/$file"
+  fetch "$SITE/v$version/SHA256SUMS" "$tmp/SHA256SUMS" || fail "no checksums for $version on $SITE"
 
   want=$(awk -v f="$file" '$2 == f || $2 == "*" f { print $1 }' "$tmp/SHA256SUMS")
   [ -n "$want" ] || fail "$file is not listed in SHA256SUMS"

@@ -1,9 +1,10 @@
-# Hosted services: push relay, push crypto, iroh relays
+# Hosted services: push relay, push crypto, iroh relays, the Linux installer
 
 Scope: the Cloudflare Worker `services/push-relay`, the push formats in `crates/push` and
 `apple/Packages/PushCrypto`, the Notification Service Extension and lock-screen actions
-(`NotifyKit`), and the self-hosted `iroh-relay` (`services/iroh-relay`, docs/RELAYS.md).
-Details of the push design: docs/PUSH.md.
+(`NotifyKit`), the self-hosted `iroh-relay` (`services/iroh-relay`, docs/RELAYS.md), and the
+Linux installer `site/install.sh` with the checksums the site serves. Details of the push
+design: docs/PUSH.md.
 
 ## Assets
 
@@ -22,6 +23,8 @@ Details of the push design: docs/PUSH.md.
    Worker sees and can send arbitrary APNs payloads.
 4. A network observer between daemon, relay and APNs (TLS only).
 5. A stolen or replayed notification, and a stale one tapped after the host restarted.
+6. Someone who can change the GitHub release (a stolen GitHub token or session, a compromised
+   account), or the site, but not both.
 
 ## What we defend, and how
 
@@ -42,6 +45,7 @@ Details of the push design: docs/PUSH.md.
 | Information leaks (1) | Generic 500s; no CORS; `nosniff`, `no-store`, CSP `default-src 'none'`, HSTS; no invocation logs, no logging of tokens, IPs or payloads | `sends security headers and no CORS` |
 | Open relay used as a free proxy (1) | `access.shared_token` required: compose refuses to start without `IROH_RELAY_ACCESS_TOKEN`, and the shipped `[""]` makes iroh-relay itself refuse to start when nobody set a token; per-connection accept limits and per-client byte limits | config parsed and started with iroh-relay 1.3.0 |
 | Relay container escape impact (1) | Non-root user, no capabilities, read-only root fs, `no-new-privileges`, memory/CPU/pids/log limits; metrics on loopback only | - |
+| A swapped Linux binary on the GitHub release (6) | `install.sh` downloads the binary from GitHub but checks it against `SHA256SUMS` from gudo.dev (Cloudflare, deployed from this repository): `https://gudo.dev/releases/v<version>/SHA256SUMS`, the version from `GUDO_VERSION` or `releases/latest/VERSION`. `scripts/release-mac.sh` writes both. HTTPS only (`--proto =https`, `--https-only`); a missing checksum file, a missing entry or a mismatch stops the install; the version must be `[0-9A-Za-z.+-]` | install.sh run with GitHub and the site stubbed: latest, pinned, a changed binary, missing checksums, a malformed version; `shellcheck` |
 
 ## Residual risk
 
@@ -77,6 +81,11 @@ Details of the push design: docs/PUSH.md.
   authenticates the device.
 - **Request ids across restarts** start at a random point per process; tests run daemons in
   one process, so only the subject binding and "request gone" are exercised.
+- **The installer's checksums are not signed.** Changing both the GitHub release and the site
+  (the repository or the Cloudflare account) still passes, and `curl | sh` trusts the site for
+  `install.sh` itself. Later step: sign `SHA256SUMS` with an Ed25519 key kept off GitHub and
+  Cloudflare, and verify it in `install.sh` with a pinned public key (minisign, or `openssl
+  pkeyutl -verify -rawin`, which needs OpenSSL 3, so not every distribution has it).
 
 ## Validation
 
@@ -101,3 +110,8 @@ Each defence was checked by removing it and confirming a test fails. The exploit
   `aPushThatSkipsTheExtensionCannotForgeAPayload`, `aPushCannotPoseAsALocalApproval`.
 - iroh relay: the shipped `iroh-relay.toml` run with iroh-relay 1.3.0 refuses to start
   without a token and starts (health, metrics on loopback) with `IROH_RELAY_ACCESS_TOKEN`.
+- Installer: `site/install.sh` run on macOS posing as Linux (`uname` stubbed) with downloads
+  served from local copies of the GitHub release and the site: the latest and a pinned version
+  install; a binary changed on the GitHub side fails with a checksum mismatch; a version with no
+  checksums on the site fails; `GUDO_VERSION='1;rm'` is refused. `shellcheck` passes on
+  `site/install.sh` and `scripts/release-mac.sh`.

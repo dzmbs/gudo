@@ -6,6 +6,8 @@
 #
 # Output in apple/build/release-mac/: the DMG, the static Linux helpers and SHA256SUMS, the
 # files a GitHub release `v<version>` carries (site/download and site/install.sh link to them).
+# SHA256SUMS also goes to site/releases/v<version>/ and site/releases/latest/ (with the version
+# in VERSION): install.sh checks the GitHub download against the copy on the site.
 # It also adds the release to site/appcast.xml, the Mac app's update feed (Sparkle), with the
 # DMG's EdDSA signature; publishing the release and deploying the site stay manual.
 #
@@ -193,6 +195,12 @@ for arch in x86_64 aarch64; do
   chmod 755 "$asset"
 done
 (cd "$output_dir" && shasum -a 256 "$(basename "$dmg")" "$daemon_bin"-*-unknown-linux-musl > SHA256SUMS)
+for published in "v$version" latest; do
+  mkdir -p "$repo_root/site/releases/$published"
+  cp "$output_dir/SHA256SUMS" "$repo_root/site/releases/$published/SHA256SUMS"
+done
+echo "$version" > "$repo_root/site/releases/latest/VERSION"
+echo "    site/releases: v$version and latest; deploy the site with the release"
 ls -l "$output_dir"
 cat "$output_dir/SHA256SUMS"
 echo "$brand_name $version ($build_number), notarization $submission_id"

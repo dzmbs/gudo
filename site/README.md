@@ -35,6 +35,7 @@ This serves `_headers`, clean URLs and `404.html` the way Pages does. Use https:
 | `.well-known/apple-app-site-association` | Universal links for `8SP2H5J666.dev.gudo.app`: `/join*`, `/pair*` |
 | `appcast.xml` | Sparkle feed for the Mac app (empty until the first release) |
 | `install.sh` | The Linux host installer behind `curl -fsSL https://gudo.dev/install.sh \| sh` |
+| `releases/` | Each release's `SHA256SUMS` (`v<version>/`, and `latest/` with `VERSION`), written by `scripts/release-mac.sh`; `install.sh` checks the GitHub download against them |
 | `_headers` | CSP, HSTS, nosniff, no referrer, no framing; content types for AASA, appcast and the script |
 | `assets/` | `site.css`, small scripts, JetBrains Mono (subset, SIL OFL 1.1, `assets/fonts/OFL.txt`) |
 | `assets/hero.js` | Home page only: the iPad and iPhone demo (a canned shell, Claude Code, the approval card, palette, splits, floating windows and the tray, projects by drag, the Agents and Hosts screens, share, diff review, a web pane, the ⌘-hold shortcuts; on iPhone the key bar, switcher and banner), the scroll tilt fallback and the card spotlight. All local; nothing typed leaves the page |
@@ -52,7 +53,8 @@ The header and footer are repeated in each page. Change them everywhere at once.
   `download/index.html`.
 - **Release assets**: the pages and `install.sh` expect these names on each GitHub release:
   `Gudo.dmg`, `gudo-hostd-x86_64-unknown-linux-musl`, `gudo-hostd-aarch64-unknown-linux-musl`
-  and `SHA256SUMS` (`sha256sum` format). Tags look like `v0.1.0`.
+  and `SHA256SUMS` (`sha256sum` format). Tags look like `v0.1.0`. Deploy the site with each
+  release: until `releases/v<version>/` is live, `install.sh` refuses that version.
 - **Homebrew**: the download page shows `brew install --cask dzmbs/tap/gudo`, which needs a
   `dzmbs/homebrew-tap` repository with `Casks/gudo.rb`:
 
