@@ -92,7 +92,7 @@ final class PopupDelegate: NSObject, WKNavigationDelegate, WKUIDelegate {
 
     #if os(macOS)
     func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters, initiatedByFrame frame: WKFrameInfo) async -> [URL]? {
-        if let pane, pane.agentActing { return await pane.chooseFiles(multiple: parameters.allowsMultipleSelection) }
+        if let pane, pane.agentActing { return await pane.chooseFiles(multiple: parameters.allowsMultipleSelection, origin: frame.securityOrigin) }
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = parameters.allowsMultipleSelection
         panel.canChooseDirectories = parameters.allowsDirectories

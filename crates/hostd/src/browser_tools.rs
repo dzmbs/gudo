@@ -13,14 +13,11 @@ use std::path::PathBuf;
 use daemon::{BrowserAsk, BrowserReply};
 use serde_json::{Value, json};
 
+use crate::browser_upload::{REVIEW_TOOL, Upload, UploadScope};
 use crate::mcp::Backend;
 
 /// Snapshots longer than this many characters are saved to a file when asked to.
 const INLINE_LIMIT: usize = 20_000;
-
-/// Most bytes one `browser_upload` sends: as base64 they must fit one frame to the app
-/// (`proto::MAX_FRAME_LEN`).
-const MAX_UPLOAD: usize = 3_000_000;
 
 struct Tool {
     name: &'static str,
@@ -220,11 +217,11 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "browser_upload",
-        description: "Choose files for a file input: target its ref (or the button or label that opens it), or leave target out to answer the file picker an action opened. Files are paths on this host, or given as name, mime_type and base64 data; at most 3 MB in all. cancel closes an open picker without files.",
+        description: "Choose files for a file input: target its ref (or the button or label that opens it), or leave target out to answer the file picker an action opened. Files are paths in this project on this host, or given as name, mime_type and base64 data; at most 3 MB in all. The user approves each upload on the device first; keys, credentials and files outside the project are never uploaded. cancel closes an open picker without files.",
         properties: || {
             json!({
                 "target": target(),
-                "paths": { "type": "array", "items": { "type": "string" }, "description": "Files on this host." },
+                "paths": { "type": "array", "items": { "type": "string" }, "description": "Files in this project on this host." },
                 "files": {
                     "type": "array",
                     "description": "Files given inline.",
@@ -310,7 +307,7 @@ pub fn own(args: &Value) -> Value {
 
 /// As [`call`]; with `approve`, steps that need approval are put to the agent's client
 /// (elicitation) instead of the device: the app answers at once with what to ask, and the
-/// step runs again approved when allowed.
+/// step runs again approved when allowed. Uploads are always approved on the device.
 pub fn call_with(
     name: &str,
     args: &Value,
@@ -329,128 +326,100 @@ pub fn call_with(
     {
         return error(&format!("`{missing}` is required"));
     }
-    if name == "browser_upload"
-        && let Err(why) = load_files(&mut args)
-    {
-        return error(&why);
+    if name == "browser_upload" {
+        return upload(&own(&args), backend, &UploadScope::current());
     }
     if approve.is_some() {
         args["approval_by"] = json!("client");
     }
-    let reply = backend.browser(BrowserAsk::Tool {
+    let json = match ask(name, &args, backend) {
+        Ok(json) => json,
+        Err(error) => return error,
+    };
+    let asked = serde_json::from_str::<Value>(&json)
+        .ok()
+        .and_then(|answer| answer["approval"]["message"].as_str().map(str::to_owned));
+    if let (Some(message), Some(approve)) = (asked, approve.as_mut()) {
+        return match approve(&message, &args) {
+            Approval::Allow => {
+                args["approved"] = json!(true);
+                call_with(name, &args, backend, None)
+            }
+            Approval::Deny => error(&format!("The user declined: {message}")),
+            Approval::Pending(result) => result,
+        };
+    }
+    result(&json, args.get("save_to_file") == Some(&Value::Bool(true)))
+}
+
+/// Runs tool `name` in the app: its JSON answer, or the tool's error result.
+fn ask(name: &str, args: &Value, backend: &mut dyn Backend) -> Result<String, Value> {
+    match backend.browser(BrowserAsk::Tool {
         name: name.to_owned(),
         args: args.clone(),
-    });
-    match reply {
-        Ok(BrowserReply::Result(json)) => {
-            let asked = serde_json::from_str::<Value>(&json)
-                .ok()
-                .and_then(|answer| answer["approval"]["message"].as_str().map(str::to_owned));
-            if let (Some(message), Some(approve)) = (asked, approve.as_mut()) {
-                return match approve(&message, &args) {
-                    Approval::Allow => {
-                        args["approved"] = json!(true);
-                        call_with(name, &args, backend, None)
-                    }
-                    Approval::Deny => error(&format!("The user declined: {message}")),
-                    Approval::Pending(result) => result,
-                };
-            }
-            result(&json, args.get("save_to_file") == Some(&Value::Bool(true)))
-        }
-        Ok(BrowserReply::Error(why)) => error(&why),
-        Ok(BrowserReply::NoApp) => error(&format!(
+    }) {
+        Ok(BrowserReply::Result(json)) => Ok(json),
+        Ok(BrowserReply::Error(why)) => Err(error(&why)),
+        Ok(BrowserReply::NoApp) => Err(error(&format!(
             "No {} app shows this terminal right now, so there is no browser to use. Ask the user to open this terminal in the app.",
             brand::PRODUCT_NAME
-        )),
-        Ok(BrowserReply::Opened) => error("unexpected answer"),
-        Err(io_error) => error(&format!(
+        ))),
+        Ok(BrowserReply::Opened) => Err(error("unexpected answer")),
+        Err(io_error) => Err(error(&format!(
             "the {} daemon is not reachable: {io_error}",
             brand::PRODUCT_NAME
-        )),
+        ))),
     }
 }
 
-/// Reads `browser_upload`'s `paths` on this host into its `files` (`{name, mime_type, data}`),
-/// within [`MAX_UPLOAD`] bytes in all.
-fn load_files(args: &mut Value) -> Result<(), String> {
-    use base64::Engine;
-    use base64::engine::general_purpose::STANDARD;
-    let too_big = |what: &str| {
-        format!(
-            "{what} takes the upload past {} MB, the most one call carries",
-            MAX_UPLOAD / 1_000_000
-        )
-    };
-    let mut files = match args.get("files") {
-        None | Some(Value::Null) => Vec::new(),
-        Some(Value::Array(files)) => files.clone(),
-        Some(_) => return Err("`files` is a list".into()),
-    };
-    let mut total = 0;
-    for file in &mut files {
-        let data = file["data"]
-            .as_str()
-            .ok_or("each of `files` needs name and data (base64)")?;
-        total += STANDARD
-            .decode(data)
-            .map_err(|decode_error| format!("bad base64: {decode_error}"))?
-            .len();
-        let name = file["name"]
-            .as_str()
-            .ok_or("each of `files` needs a name")?;
-        if total > MAX_UPLOAD {
-            return Err(too_big(name));
-        }
-        if file["mime_type"].as_str().is_none_or(str::is_empty) {
-            file["mime_type"] = json!(mime_for(name));
-        }
+/// `browser_upload`: the owner approves the files and the origin on the device before any file
+/// on this host is read; then they go to that origin only.
+fn upload(args: &Value, backend: &mut dyn Backend, scope: &UploadScope) -> Value {
+    if args.get("cancel") == Some(&Value::Bool(true)) {
+        return match ask("browser_upload", &json!({ "cancel": true }), backend) {
+            Ok(json) => result(&json, false),
+            Err(error) => error,
+        };
     }
-    let paths = match args.get("paths") {
-        None | Some(Value::Null) => Vec::new(),
-        Some(Value::String(one)) => vec![one.clone()],
-        Some(Value::Array(paths)) => paths
-            .iter()
-            .map(|path| {
-                path.as_str()
-                    .map(str::to_owned)
-                    .ok_or("`paths` are strings")
-            })
-            .collect::<Result<_, _>>()?,
-        Some(_) => return Err("`paths` is a list of paths".into()),
+    let plan = match Upload::plan(args, scope) {
+        Ok(plan) if plan.is_empty() => {
+            return error("Name the files: paths, or files given inline.");
+        }
+        Ok(plan) => plan,
+        Err(why) => return error(&why),
     };
-    for path in paths {
-        let path = PathBuf::from(path);
-        let shown = path.display().to_string();
-        let meta = std::fs::metadata(&path).map_err(|io_error| format!("{shown}: {io_error}"))?;
-        if !meta.is_file() {
-            return Err(format!("{shown} is not a file"));
+    let review = match ask(REVIEW_TOOL, &plan.review(args.get("target")), backend) {
+        Ok(json) => json,
+        Err(failure) if failure.to_string().contains(REVIEW_TOOL) => {
+            return error(&format!(
+                "Update the {} app to upload files: this version cannot ask the user to approve them.",
+                brand::PRODUCT_NAME
+            ));
         }
-        total += usize::try_from(meta.len()).unwrap_or(usize::MAX);
-        if total > MAX_UPLOAD {
-            return Err(too_big(&format!(
-                "{shown} ({:.1} MB)",
-                meta.len() as f64 / 1e6
-            )));
-        }
-        let bytes = std::fs::read(&path).map_err(|io_error| format!("{shown}: {io_error}"))?;
-        let name = path.file_name().map_or_else(
-            || shown.clone(),
-            |file_name| file_name.to_string_lossy().into_owned(),
-        );
-        files.push(
-            json!({ "name": name, "mime_type": mime_for(&name), "data": STANDARD.encode(&bytes) }),
-        );
+        Err(failure) => return failure,
+    };
+    let Some(origin) = serde_json::from_str::<Value>(&review)
+        .ok()
+        .and_then(|answer| answer["approved"]["origin"].as_str().map(str::to_owned))
+    else {
+        return error("The user did not approve the upload.");
+    };
+    let files = match plan.read() {
+        Ok(files) => files,
+        Err(why) => return error(&why),
+    };
+    let mut approved = json!({ "files": files, "approved": true, "approved_origin": origin });
+    if let Some(target) = args.get("target") {
+        approved["target"] = target.clone();
     }
-    if let Some(map) = args.as_object_mut() {
-        map.remove("paths");
-        map.insert("files".into(), Value::Array(files));
+    match ask("browser_upload", &approved, backend) {
+        Ok(json) => result(&json, false),
+        Err(error) => error,
     }
-    Ok(())
 }
 
 /// A MIME type from a file name's extension.
-fn mime_for(name: &str) -> &'static str {
+pub(crate) fn mime_for(name: &str) -> &'static str {
     let ext = name
         .rsplit_once('.')
         .map(|(_, ext)| ext.to_ascii_lowercase());
@@ -679,79 +648,38 @@ mod tests {
         let _ = std::fs::remove_file(second);
     }
 
-    #[test]
-    fn uploads_read_host_files_within_the_cap() {
-        let dir = std::env::temp_dir().join(format!("browser-upload-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let small = dir.join("notes.txt");
-        std::fs::write(&small, "hi").unwrap();
-        let mut args = json!({
-            "paths": [small.to_str().unwrap()],
-            "files": [
-                { "name": "pic.PNG", "data": "AAEC" },
-                { "name": "x.bin", "mime_type": "application/x-thing", "data": "" },
-            ],
-        });
-        load_files(&mut args).unwrap();
-        assert_eq!(
-            args,
-            json!({ "files": [
-                { "name": "pic.PNG", "mime_type": "image/png", "data": "AAEC" },
-                { "name": "x.bin", "mime_type": "application/x-thing", "data": "" },
-                { "name": "notes.txt", "mime_type": "text/plain", "data": "aGk=" },
-            ] })
-        );
-        // One path as a string; a cancel has no files.
-        let mut args = json!({ "paths": small.to_str().unwrap() });
-        load_files(&mut args).unwrap();
-        assert_eq!(args["files"][0]["name"], "notes.txt");
-        let mut args = json!({ "cancel": true });
-        load_files(&mut args).unwrap();
-        assert_eq!(args, json!({ "cancel": true, "files": [] }));
+    /// Answers browser calls from a script (then "Done.") and records what was asked.
+    #[derive(Default)]
+    struct Recorder {
+        asked: Vec<(String, Value)>,
+        replies: Vec<BrowserReply>,
+    }
 
-        let big = dir.join("big.bin");
-        std::fs::write(&big, vec![0u8; MAX_UPLOAD + 1]).unwrap();
-        let mut args = json!({ "paths": [big.to_str().unwrap()] });
-        let why = load_files(&mut args).unwrap_err();
-        assert!(why.contains("past 3 MB"), "{why}");
-        // Under the cap each, over it together.
-        let half = dir.join("half.bin");
-        std::fs::write(&half, vec![0u8; MAX_UPLOAD / 2 + 1]).unwrap();
-        let path = half.to_str().unwrap();
-        let mut args = json!({ "paths": [path, path] });
-        assert!(load_files(&mut args).is_err());
+    impl Backend for Recorder {
+        fn pull(&mut self, _: daemon::PullOp) -> io::Result<daemon::PullReply> {
+            Err(io::ErrorKind::NotFound.into())
+        }
+        fn browser(&mut self, ask: BrowserAsk) -> io::Result<BrowserReply> {
+            if let BrowserAsk::Tool { name, args } = ask {
+                self.asked.push((name, args));
+            }
+            if self.replies.is_empty() {
+                return Ok(BrowserReply::Result(json!({ "text": "Done." }).to_string()));
+            }
+            Ok(self.replies.remove(0))
+        }
+        fn term(&mut self, _: daemon::TermAsk) -> io::Result<daemon::TermReply> {
+            Err(io::ErrorKind::NotFound.into())
+        }
+    }
 
-        let missing = dir.join("missing");
-        let mut args = json!({ "paths": [missing.to_str().unwrap()] });
-        assert!(load_files(&mut args).unwrap_err().contains("missing"));
-        let mut args = json!({ "files": [{ "data": "AA==" }] });
-        assert!(load_files(&mut args).unwrap_err().contains("name"));
-        let mut args = json!({ "files": [{ "name": "a", "data": "!!" }] });
-        assert!(load_files(&mut args).unwrap_err().contains("base64"));
-        let _ = std::fs::remove_dir_all(&dir);
+    fn approved(origin: &str) -> BrowserReply {
+        BrowserReply::Result(json!({ "text": "", "approved": { "origin": origin } }).to_string())
     }
 
     #[test]
-    fn upload_and_dialog_calls_reach_the_app() {
-        use daemon::{PullOp, PullReply};
-        struct Fake {
-            asked: Vec<(String, Value)>,
-        }
-        impl Backend for Fake {
-            fn pull(&mut self, _: PullOp) -> io::Result<PullReply> {
-                Err(io::ErrorKind::NotFound.into())
-            }
-            fn browser(&mut self, ask: BrowserAsk) -> io::Result<BrowserReply> {
-                if let BrowserAsk::Tool { name, args } = ask {
-                    self.asked.push((name, args));
-                }
-                Ok(BrowserReply::Result(json!({ "text": "Done." }).to_string()))
-            }
-            fn term(&mut self, _: daemon::TermAsk) -> io::Result<daemon::TermReply> {
-                Err(io::ErrorKind::NotFound.into())
-            }
-        }
-        let mut fake = Fake { asked: vec![] };
+    fn dialog_calls_reach_the_app() {
+        let mut fake = Recorder::default();
         let result = call(
             "browser_dialog",
             &json!({ "accept": true, "text": "Ada" }),
@@ -768,26 +696,136 @@ mod tests {
         // Required arguments are checked here.
         let result = call("browser_dialog", &json!({}), &mut fake);
         assert_eq!(result["isError"], true);
-        // A file that cannot be read never reaches the app.
-        let result = call(
-            "browser_upload",
-            &json!({ "paths": ["/nonexistent/f"] }),
-            &mut fake,
-        );
-        assert_eq!(result["isError"], true);
-        assert_eq!(fake.asked.len(), 1);
-        call(
-            "browser_upload",
-            &json!({ "files": [{ "name": "a.txt", "data": "aGk=" }] }),
-            &mut fake,
-        );
-        assert_eq!(fake.asked[1].1["files"][0]["mime_type"], "text/plain");
 
         let tools = tools();
         for name in ["browser_dialog", "browser_upload"] {
             let tool = tools.iter().find(|tool| tool["name"] == name).unwrap();
             assert_eq!(tool["annotations"]["readOnlyHint"], false);
         }
+    }
+
+    #[test]
+    fn host_files_never_reach_the_app_without_an_owner_approval() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = dir.path().join("id_ed25519");
+        std::fs::write(&key, "PRIVATE KEY").unwrap();
+        let mut fake = Recorder::default();
+        call(
+            "browser_upload",
+            &json!({ "paths": [key.to_str().unwrap()] }),
+            &mut fake,
+        );
+        let leaked = fake
+            .asked
+            .iter()
+            .any(|(_, args)| args.to_string().contains("UFJJVkFURSBLRVk="));
+        assert!(!leaked, "{:?}", fake.asked);
+    }
+
+    fn project() -> (tempfile::TempDir, UploadScope) {
+        let home = tempfile::tempdir().unwrap();
+        let tree = home.path().join("app");
+        std::fs::create_dir_all(tree.join(".git")).unwrap();
+        std::fs::write(tree.join("notes.txt"), "hi").unwrap();
+        let scope = UploadScope::new(home.path(), &tree, &[]);
+        (home, scope)
+    }
+
+    #[test]
+    fn uploads_are_approved_with_their_origin_before_any_file_is_read() {
+        let (_home, scope) = project();
+        let mut fake = Recorder {
+            replies: vec![approved("https://forms.example")],
+            ..Recorder::default()
+        };
+        let target = json!({ "type": "ref", "ref": "ref_4" });
+        let result = upload(
+            &json!({ "paths": ["notes.txt"], "files": [{ "name": "a.txt", "data": "aGk=" }], "target": target }),
+            &mut fake,
+            &scope,
+        );
+        assert_eq!(result["content"][0]["text"], "Done.");
+        let (review, asked) = &fake.asked[0];
+        assert_eq!(review, REVIEW_TOOL);
+        assert_eq!(
+            asked,
+            &json!({
+                "files": [
+                    { "name": "a.txt", "size": 2 },
+                    { "name": "notes.txt", "path": "~/app/notes.txt", "size": 2 },
+                ],
+                "target": target,
+            })
+        );
+        let (name, sent) = &fake.asked[1];
+        assert_eq!(name, "browser_upload");
+        assert_eq!(sent["approved"], true);
+        assert_eq!(sent["approved_origin"], "https://forms.example");
+        assert_eq!(sent["target"], target);
+        assert_eq!(sent["files"][0]["mime_type"], "text/plain");
+        assert_eq!(sent["files"][1]["data"], "aGk=");
+        assert!(sent.get("paths").is_none());
+    }
+
+    #[test]
+    fn a_declined_or_unanswered_review_sends_nothing() {
+        let (_home, scope) = project();
+        for reply in [
+            BrowserReply::Error("The user declined the upload.".into()),
+            BrowserReply::Result(json!({ "text": "Done." }).to_string()),
+            BrowserReply::Error("Unknown tool browser_upload_review.".into()),
+            BrowserReply::NoApp,
+        ] {
+            let mut fake = Recorder {
+                replies: vec![reply],
+                ..Recorder::default()
+            };
+            let result = upload(&json!({ "paths": ["notes.txt"] }), &mut fake, &scope);
+            assert_eq!(result["isError"], true);
+            assert_eq!(fake.asked.len(), 1, "{:?}", fake.asked);
+        }
+        let mut fake = Recorder {
+            replies: vec![BrowserReply::Error(
+                "Unknown tool browser_upload_review.".into(),
+            )],
+            ..Recorder::default()
+        };
+        let result = upload(&json!({ "paths": ["notes.txt"] }), &mut fake, &scope);
+        assert!(
+            result["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .starts_with("Update the")
+        );
+    }
+
+    #[test]
+    fn approvals_cannot_be_passed_in_and_cancel_needs_none() {
+        let (_home, scope) = project();
+        let mut fake = Recorder::default();
+        let args = own(
+            &json!({ "paths": ["notes.txt"], "approved": true, "approved_origin": "https://x" }),
+        );
+        upload(&args, &mut fake, &scope);
+        assert_eq!(fake.asked.len(), 1);
+        assert_eq!(fake.asked[0].0, REVIEW_TOOL);
+
+        let mut fake = Recorder::default();
+        let result = upload(
+            &json!({ "cancel": true, "paths": ["notes.txt"] }),
+            &mut fake,
+            &scope,
+        );
+        assert_eq!(result["content"][0]["text"], "Done.");
+        assert_eq!(
+            fake.asked,
+            vec![("browser_upload".into(), json!({ "cancel": true }))]
+        );
+
+        let mut fake = Recorder::default();
+        let result = upload(&json!({ "paths": ["/nonexistent/f"] }), &mut fake, &scope);
+        assert_eq!(result["isError"], true);
+        assert!(fake.asked.is_empty());
     }
 
     #[test]

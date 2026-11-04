@@ -112,8 +112,18 @@ final class BrowserPageEventsTests: XCTestCase {
         let text = try await pane.snapshot(["full": true, "filter": "all"])
         let field = try XCTUnwrap(text.split(separator: "\n").first { $0.contains("ref_f") && $0.contains("button") && !$0.contains("Cross") && !$0.contains("Same") })
         let files = BrowserAgent.payloads(["files": [["name": "a.txt", "mime_type": "text/plain", "data": "aGk="]]])
-        _ = try await act(pane, ["kind": "upload", "files": files, "target": ["type": "ref", "ref": try ref("", in: String(field))]])
-        let frame = try await pane.locate(["type": "ref", "ref": try ref("", in: String(field))]).frame
+        let target = ["type": "ref", "ref": try ref("", in: String(field))]
+        let frame = try await pane.locate(target).frame
+
+        // Approved for the page's origin, the files do not go to the frame's other origin.
+        let top = "http://127.0.0.1:\(server.port)"
+        let refused = try await act(pane, ["kind": "upload", "files": files, "target": target, "approved": true, "approved_origin": top])
+        let need = try XCTUnwrap(refused["needsUser"] as? [String: Any])
+        XCTAssertEqual(need["origin"] as? String, "http://localhost:\(server.port)")
+        let untouched = try await pane.js("return document.title", [:], frame: frame)
+        XCTAssertEqual(untouched, "")
+
+        _ = try await act(pane, ["kind": "upload", "files": files, "target": target, "approved": true, "approved_origin": "http://localhost:\(server.port)"])
         let title = try await pane.js("return document.title", [:], frame: frame)
         XCTAssertEqual(title, "a.txt:text/plain:2")
     }
@@ -225,11 +235,24 @@ final class BrowserPageEventsTests: XCTestCase {
             ["name": "b.png", "mime_type": "image/png", "data": "AAEC"],
         ]])
         let field = try XCTUnwrap(text.split(separator: "\n").first { $0.contains("button") && !$0.contains("Avatar") })
-        _ = try await act(pane, ["kind": "upload", "files": files, "target": ["type": "ref", "ref": try ref("", in: String(field))]])
+        let target = ["type": "ref", "ref": try ref("", in: String(field))]
+        let origin = "http://127.0.0.1:\(server.port)"
+
+        // Without the user's approval for this origin, no file is set.
+        for approval: [String: Any] in [[:], ["approved": true], ["approved": true, "approved_origin": "https://elsewhere.example"]] {
+            let refused = try await act(pane, (["kind": "upload", "files": files, "target": target] as [String: Any]).merging(approval) { $1 })
+            let need = try XCTUnwrap(refused["needsUser"] as? [String: Any], "\(approval)")
+            XCTAssertEqual(need["upload"] as? Bool, true)
+            XCTAssertEqual(need["origin"] as? String, origin)
+            let empty = try await out(pane)
+            XCTAssertEqual(empty, "")
+        }
+
+        _ = try await act(pane, ["kind": "upload", "files": files, "target": target, "approved": true, "approved_origin": origin])
         let out = try await out(pane)
         XCTAssertEqual(out, "a.txt:text/plain:2,b.png:image/png:3")
         // The label stands for its input.
-        _ = try await act(pane, ["kind": "upload", "files": Array(files.prefix(1)), "target": ["type": "ref", "ref": try ref("Avatar", in: text)]])
+        _ = try await act(pane, ["kind": "upload", "files": Array(files.prefix(1)), "target": ["type": "ref", "ref": try ref("Avatar", in: text)], "approved": true, "approved_origin": origin])
         let one = try await self.out(pane)
         XCTAssertEqual(one, "one a.txt")
 
@@ -241,10 +264,23 @@ final class BrowserPageEventsTests: XCTestCase {
         try await until("the picker opens") { pane.fileChooser != nil }
         let chooser = try XCTUnwrap(pane.fileChooser)
         XCTAssertFalse(chooser.multiple)
+        XCTAssertEqual(chooser.origin, origin, "the picker names the origin that receives the files")
         let file = FileManager.default.temporaryDirectory.appending(path: "picked.txt")
         try Data("x".utf8).write(to: file)
         chooser.answer([file])
         try await until("the picked file arrives") { try await self.out(pane) == "picked picked.txt" }
+    }
+
+    func testTheUploadApprovalNamesEveryFileItsSizeAndTheOrigin() {
+        let one = BrowserAgent.uploadRequest(
+            [.init(name: "notes.txt", size: 2048, path: "~/app/notes.txt")], origin: "https://forms.example")
+        XCTAssertTrue(one.hasPrefix("Upload this file to https://forms.example?\n"), one)
+        XCTAssertTrue(one.contains("~/app/notes.txt, 2 KB"), one)
+        let inline = BrowserAgent.listing([["name": "a.txt", "data": "aGk="], ["name": "b.png", "data": "AAEC"]])
+        XCTAssertEqual(inline, [.init(name: "a.txt", size: 2), .init(name: "b.png", size: 3)])
+        let two = BrowserAgent.uploadRequest(inline, origin: "http://localhost:3000")
+        XCTAssertTrue(two.hasPrefix("Upload these 2 files to http://localhost:3000?\n"), two)
+        XCTAssertTrue(two.contains("a.txt, 2 bytes") && two.contains("b.png, 3 bytes"), two)
     }
 
     // MARK: Plumbing

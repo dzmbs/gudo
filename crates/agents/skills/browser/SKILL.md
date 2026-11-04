@@ -35,8 +35,8 @@ verbs work from the shell: `gudo-hook browser <verb> [json | key=value …]`.
 6. Dialogs (alert, confirm, prompt, and "Leave site?" when navigating away from unsaved changes)
    hold the page until `browser_dialog` answers them. Pages
    opened in a new window become tabs: `browser_tabs` lists, opens, switches and closes them
-   (ids `t1`, `t2`, …). `browser_upload` chooses files on this host for a file field, or for
-   the file picker an action opened.
+   (ids `t1`, `t2`, …). `browser_upload` chooses files in this project for a file field, or for
+   the file picker an action opened; the user approves each upload on the device.
 7. Debug with `browser_console` and `browser_network` (since the last read) and
    `browser_wait` (`text`, `selector`, `until: load | network_idle`, `seconds`).
 

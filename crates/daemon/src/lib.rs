@@ -107,6 +107,7 @@ pub use term::{ErrorCode as TermErrorCode, TERM_VERSION, TermAsk, TermCall, Term
 pub use upgrade::prev_path as upgrade_prev_path;
 pub use upgrade::{RestartAsk, RestartCall, RestartReply};
 pub use usage::UsageConfig;
+pub use ws::Policy as PathPolicy;
 
 use crate::agent::HookServer;
 use crate::core::Core;

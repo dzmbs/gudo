@@ -551,6 +551,9 @@
   async function act(args) {
     const kind = args.kind, target = args.target, el = resolve(target);
     const label = target && target.ref ? target.ref : target ? "(" + target.x + ", " + target.y + ")" : "the focused element";
+    // Files go only to the origin the user approved for them, checked where they land.
+    if (kind === "upload" && !(args.approved && args.approved_origin === location.origin))
+      return { needsUser: { kind: "approve", upload: true, origin: location.origin } };
     if (!args.approved) { const need = sensitive(el, kind, args); if (need) return { needsUser: need }; }
     if (args.phase === "show") {
       if (target && target.type !== "coordinate") bringIntoView(el);

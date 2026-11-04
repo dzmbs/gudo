@@ -62,6 +62,8 @@ final class BrowserPane: Identifiable {
 
     struct FileChooser {
         let multiple: Bool
+        /// The origin of the frame that opened the picker, which receives the files.
+        let origin: String
         let answer: ([URL]?) -> Void
     }
 
@@ -189,9 +191,9 @@ final class BrowserPane: Identifiable {
         return .allow
     }
 
-    func chooseFiles(multiple: Bool) async -> [URL]? {
+    func chooseFiles(multiple: Bool, origin: WKSecurityOrigin) async -> [URL]? {
         await withCheckedContinuation { continuation in
-            fileChooser = FileChooser(multiple: multiple) { [weak self] urls in
+            fileChooser = FileChooser(multiple: multiple, origin: BrowserRecorder.origin(origin)) { [weak self] urls in
                 self?.fileChooser = nil
                 continuation.resume(returning: urls)
             }
@@ -347,7 +349,7 @@ private struct Dialogs: WebPage.DialogPresenting {
     /// Only an acting agent's upload answers the picker.
     func handleFileInputPrompt(parameters: WKOpenPanelParameters, initiatedBy frame: WebPage.FrameInfo) async -> WebPage.FileInputPromptResult {
         guard let pane = box.pane, pane.agentActing else { return .cancel }
-        return await pane.chooseFiles(multiple: parameters.allowsMultipleSelection).map { .selected($0) } ?? .cancel
+        return await pane.chooseFiles(multiple: parameters.allowsMultipleSelection, origin: frame.securityOrigin).map { .selected($0) } ?? .cancel
     }
 }
 

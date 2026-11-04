@@ -2314,9 +2314,13 @@ shells (Codex, scripts). Semantics follow Anthropic's browser toolset: `role "na
 snapshots, targets `{"type":"ref","ref":…}` or `{"type":"coordinate","x","y"}` in screenshot
 pixels, a stale ref is an error asking for a new snapshot, actions answer with what changed.
 The app answers JSON `{"text", "image"?: {"data", "mimeType"}}`; `save_to_file` writes a long
-snapshot to a file on the host. `browser_upload` reads its `paths` on the host and sends
-`files: [{name, mime_type, data}]` (base64), at most 3 MB in all so the call fits one frame
-(hook lines may be `MAX_FRAME_LEN` long). The app runs them on the browser leaf beside the agent's pane
+snapshot to a file on the host. `browser_upload` first asks the app to approve the files
+(`browser_upload_review` with `files: [{name, path?, size}]` and the `target`; the app answers
+`{"approved": {"origin"}}` once the user allows), then reads its `paths` on the host and sends
+`files: [{name, mime_type, data}]` (base64) with `approved` and `approved_origin`, at most 3 MB
+in all so the call fits one frame (hook lines may be `MAX_FRAME_LEN` long). Paths must be in the
+agent's working tree; keys, credentials, keychains, browser profiles and the state directory are
+refused (docs/security/host-local.md). The app runs them on the browser leaf beside the agent's pane
 (opened by the first navigate): the user sees each step (cursor and highlight), can take over,
 and approves purchases and form submits on sign-in or payment pages, or types passwords
 themselves; the call waits meanwhile. `crates/agents/skills/browser/SKILL.md` teaches agents

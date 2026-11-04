@@ -10,7 +10,7 @@ use std::path::{Component, Path, PathBuf};
 use proto::WsError;
 
 #[derive(Debug, Clone)]
-pub(crate) struct Policy {
+pub struct Policy {
     home: PathBuf,
     roots: Vec<PathBuf>,
     /// Inside a root but never served: the daemon's state (keys, tokens, grants, audit log).
@@ -28,6 +28,21 @@ impl Policy {
             roots,
             denied: Vec::new(),
         }
+    }
+
+    /// A policy whose only roots are `roots`; `~/` still means `home`.
+    pub fn confined(home: &Path, roots: &[PathBuf]) -> Self {
+        Self {
+            home: home.to_owned(),
+            roots: roots.iter().map(|root| canonical(root)).collect(),
+            denied: Vec::new(),
+        }
+    }
+
+    /// Refuses `path` and everything under it, even when it holds a whole root.
+    pub fn refuse(mut self, path: &Path) -> Self {
+        self.denied.push(real_of(path));
+        self
     }
 
     /// Also refuses `dir` and everything under it, unless it holds a whole root (that would

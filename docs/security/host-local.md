@@ -51,6 +51,25 @@ launch apps and run `file://…/x.command` (compare mcp-remote CVE-2025-6514).
 Browser tool calls are refused while a guest holds the pane's lease. Anything the guest types
 can use the pane's token, and the tools drive the owner's signed-in browser.
 
+**Uploads.** `browser_upload` is the one tool that reads files on the host, and agents call the
+MCP server without their own file-read prompts. So it reads nothing until the owner approves:
+the shim sends the app only each file's name, path and size (`browser_upload_review`), the app
+shows them with the origin of the frame or file picker that would receive them, and only after
+Allow does the shim read the files, each checked to be the same inode and size as approved, and
+send them with that origin. The page script sets files only when the approved origin is where
+they land, so a page that navigated, or a cross-origin frame, gets nothing. Uploads are
+approved on the device, never through the agent's client. Paths go through the daemon's path
+policy, rooted at the agent's working tree (its git checkout, else its directory, never above
+home), and these are refused even with approval: `~/.ssh`, `~/.gnupg`, keychains, browser
+profiles and cookies, cloud and registry credentials (`~/.aws`, `~/.azure`, `~/.config/gcloud`,
+`~/.kube`, `~/.docker/config.json`, `.netrc`, `.git-credentials`, `~/.config/gh`, `.npmrc`,
+`.pypirc`, Cargo credentials), the agents' own credential files and this product's state and
+config. A new shim with an old app fails closed ("update the app"); an old shim with a new app
+gets the same approval in the page before files are set.
+
+The other tools read no host files: snapshots and screenshots are written, never read back, and
+`browser_navigate` opens `http(s)` only.
+
 **Password prompts (askpass).** Prompts go to the owner's devices only, never a guest's: a
 host that is not the guest's own must not ask for the guest's passwords. The daemon checks
 this when it pushes a prompt, when it counts who could answer, and when an answer or cancel
@@ -253,6 +272,16 @@ Each test runs the attack against the real code (real git, real sockets, a real 
   pane's token, and driving a pane the caller did not open.
 - `browser::a_driving_guest_never_gets_the_hosts_browser_calls` (it): browser calls never
   reach a guest's device, and once the guest types in the pane, a tool call is refused.
+- `browser_tools::tests::host_files_never_reach_the_app_without_an_owner_approval`,
+  `uploads_are_approved_with_their_origin_before_any_file_is_read`,
+  `a_declined_or_unanswered_review_sends_nothing`,
+  `approvals_cannot_be_passed_in_and_cancel_needs_none`, `browser_upload::tests` (keys, cloud
+  credentials, the state dir, files outside the tree, a link in the tree to a key, any working
+  directory, a file swapped after approval) and `mcp::browser_tools_reach_the_app_showing_the_pane`
+  (it): an agent uploading `~/.ssh` keys or any file without the owner's approval. App side:
+  `AppTests/BrowserPageEventsTests` `testUploadsSetFilesAndAnswerTheFilePicker` (no approval,
+  approval without origin, another origin) and `testUploadsReachAFileInputInACrossOriginFrame`
+  (approved for the page, refused in its cross-origin frame).
 - `askpass::guests_never_see_prompts_and_the_owner_is_told_who_drives` (it): a viewer and a
   driver guest whose clients offer to answer anyway get no prompt, and their answers and
   cancels are refused. Once the driver types, the owner's prompt names them. The client side:

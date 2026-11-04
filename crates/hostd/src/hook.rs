@@ -23,6 +23,7 @@
 mod askpass;
 mod browser;
 mod browser_tools;
+mod browser_upload;
 mod mcp;
 mod term_tools;
 

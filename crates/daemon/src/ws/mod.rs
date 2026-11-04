@@ -38,7 +38,7 @@ use tokio::sync::mpsc;
 
 pub(crate) use attention::{Attention, NewItem, Viewer};
 pub(crate) use files::{serve_download, serve_upload};
-pub(crate) use paths::Policy;
+pub use paths::Policy;
 pub(crate) use watch::Watch;
 
 use crate::config::Config;

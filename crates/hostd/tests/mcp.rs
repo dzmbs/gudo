@@ -30,9 +30,14 @@ struct Server {
 
 impl Server {
     fn spawn(args: &[&str]) -> Self {
+        Self::spawn_in(args, &std::env::current_dir().unwrap())
+    }
+
+    fn spawn_in(args: &[&str], cwd: &std::path::Path) -> Self {
         let mut command = Command::new(HOOK);
         command
             .args(args)
+            .current_dir(cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
@@ -205,13 +210,16 @@ async fn browser_tools_reach_the_app_showing_the_pane() {
     assert_eq!(missing["isError"], true);
     assert_eq!(app.browser.len(), 1);
 
-    // A file near the upload cap is read on the host and reaches the app in one call.
-    let file = dir.path().join("photo.jpg");
+    // A file of the agent's project near the upload cap: the user approves it on the device
+    // before it is read, then it reaches the app in one call.
+    let project = dir.path().join("project");
+    std::fs::create_dir_all(project.join(".git")).unwrap();
+    let file = project.join("photo.jpg");
     std::fs::write(&file, vec![7u8; 2_900_000]).unwrap();
     let (state, pane) = (upload_state, upload_pane);
     let path = file.to_str().unwrap().to_owned();
     let call = tokio::task::spawn_blocking(move || {
-        let mut server = Server::spawn(&["mcp", "--state", &state, "--pane", &pane]);
+        let mut server = Server::spawn_in(&["mcp", "--state", &state, "--pane", &pane], &project);
         server.request(
             "initialize",
             json!({ "protocolVersion": "2025-11-25", "capabilities": {} }),
@@ -221,13 +229,31 @@ async fn browser_tools_reach_the_app_showing_the_pane() {
             json!({ "target": { "type": "ref", "ref": "ref_2" }, "paths": [path] }),
         )
     });
-    app.until("the upload", |client| client.browser.len() == 2)
+    app.until("the review", |client| client.browser.len() == 2)
         .await;
     let BrowserPush::Call { id, tool, args, .. } = app.browser[1].clone() else {
         panic!("not a call: {:?}", app.browser[1]);
     };
+    assert_eq!(tool, "browser_upload_review");
+    let review: Value = serde_json::from_str(&args).unwrap();
+    assert_eq!(review["files"][0]["name"], "photo.jpg");
+    assert_eq!(review["files"][0]["size"], 2_900_000);
+    assert!(review["files"][0].get("data").is_none());
+    app.client.answer_browser_call(
+        id,
+        Ok(
+            json!({ "text": "Approved.", "approved": { "origin": "https://photos.example" } })
+                .to_string(),
+        ),
+    );
+    app.until("the upload", |client| client.browser.len() == 3)
+        .await;
+    let BrowserPush::Call { id, tool, args, .. } = app.browser[2].clone() else {
+        panic!("not a call: {:?}", app.browser[2]);
+    };
     assert_eq!(tool, "browser_upload");
     let args: Value = serde_json::from_str(&args).unwrap();
+    assert_eq!(args["approved_origin"], "https://photos.example");
     assert_eq!(args["files"][0]["name"], "photo.jpg");
     assert_eq!(args["files"][0]["mime_type"], "image/jpeg");
     assert_eq!(
