@@ -109,6 +109,18 @@ final class ThemeConsistencyTests: XCTestCase {
             try picture.expect(palette.sidebar, at: CGPoint(x: 200, y: 740), "\(name): the sidebar")
         }
     }
+    #else
+    func testSettingsSheetIsThemedUpToTheNavigationBar() async throws {
+        for name in Self.themes {
+            let palette = use(name)
+            let picture = try await render("settings", theme: name, size: CGSize(width: 390, height: 720)) {
+                SettingsView().chromeSheetBackground()
+            } settle: { await self.pump(1.5) }
+            try picture.expect(palette.groupedPage, at: CGPoint(x: 120, y: 6), "\(name): the navigation bar")
+            try picture.expect(palette.groupedPage, at: CGPoint(x: 6, y: 300), "\(name): the form's page")
+            try picture.expect(palette.groupedPage, at: CGPoint(x: 6, y: 712), "\(name): the form's page")
+        }
+    }
     #endif
 
     // MARK: Rendering
