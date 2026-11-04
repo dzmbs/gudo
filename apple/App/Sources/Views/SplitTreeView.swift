@@ -617,7 +617,7 @@ struct PaneSlot: View {
                     }
                 }
                 .clipped()
-                .saturation(pane.showsSavedScreen ? 0.5 : 1)
+                .fadedTowardTerminalBackground(pane.showsSavedScreen ? 0.25 : 0)
                 .overlay { SavedScreenOverlay(pane: pane) }
                 .overlay {
                     StalePaneOverlay(

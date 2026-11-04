@@ -204,7 +204,7 @@ struct StalePaneOverlay: View {
             ZStack(alignment: .bottomTrailing) {
                 // A host that is down shows its card over the pane instead.
                 if hostIsLive ?? model.connection.isLive {
-                    Color.black.opacity(0.35)
+                    Color.clear.fadedTowardTerminalBackground(0.35)
                     Label(reason, systemImage: "arrow.triangle.2.circlepath")
                         .font(.caption)
                         .padding(.horizontal, DS.Space.gap10)

@@ -4,6 +4,28 @@ import SwiftUI
 // (MIT; see apple/THIRD_PARTY_NOTICES.md) and adapted to plain values instead of a Ghostty
 // surface.
 
+public extension View {
+    /// Fades the terminal toward its own background by `amount` (0…1): a pane waiting on its link
+    /// or showing a saved screen. A filter (saturation, opacity over the window) would turn a
+    /// tinted background grey.
+    func fadedTowardTerminalBackground(_ amount: Double) -> some View {
+        modifier(TerminalBackgroundFade(amount: amount))
+    }
+}
+
+private struct TerminalBackgroundFade: ViewModifier {
+    let amount: Double
+    @Environment(\.terminalTheme) private var theme
+
+    func body(content: Content) -> some View {
+        content.overlay {
+            if amount > 0 {
+                Rectangle().fill(theme.background.opacity(amount)).allowsHitTesting(false)
+            }
+        }
+    }
+}
+
 nonisolated public struct GridSize: Equatable, Hashable, Sendable {
     public var cols: Int
     public var rows: Int
@@ -181,6 +203,7 @@ public struct SecureInputBadge: View {
                     .frame(idealWidth: 280)
                     .padding()
                     .presentationCompactAdaptation(.popover)
+                    .chromePopover()
             }
             .padding(.top, 10)
             .padding(.trailing, 10)

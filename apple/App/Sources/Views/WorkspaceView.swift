@@ -89,6 +89,7 @@ struct WorkspaceView: View {
                     .environment(model.app)
             }
             // The whole window follows the terminal theme, light or dark by `window-theme`.
+            .chromeWindow()
             .chromeTheme(theme, windowTheme: windowTheme)
             .modifier(ThemePairFollower())
             .focusedSceneValue(workspace)
@@ -196,7 +197,6 @@ struct WorkspaceView: View {
         .chromeBackground(DS.Palette.base)
         #if os(macOS)
         .background(RepresentedDirectory(path: workspace.isRemote ? nil : workspace.session.activeTab.flatMap(workspace.absoluteDirectory(of:))))
-        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         #endif
     }
 }
@@ -629,7 +629,7 @@ struct ActiveTabView: View {
                     .id(tab.id)
                     .padding(paneStyle == .comfortable && isSplit ? DS.Space.row : 0)
                     .background(paneStyle == .comfortable && isSplit ? theme.splitDivider : theme.background, ignoresSafeAreaEdges: [])
-                    // Lost link: the last frame stays, dimmed and desaturated, under the card.
+                    // Lost link: the last frame stays, faded toward the background, under the card.
                     .connectionOverlay(
                         model.connection, hostName: model.hostName, showsSavedState: workspace.showsSavedWorkspace,
                         onRetry: { model.retryConnection() },

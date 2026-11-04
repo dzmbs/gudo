@@ -110,6 +110,7 @@ struct SettingsView: View {
             }
             // A pinned ideal size: the window opens at one size whichever pane's form is longer.
             .frame(minWidth: 720, idealWidth: 720, minHeight: 480, idealHeight: 560)
+            .chromeWindow()
         }
         #else
         NavigationStack(path: $path) {
@@ -658,6 +659,7 @@ private struct AboutSection: View {
                     HStack(spacing: DS.Space.s) {
                         Text(version).foregroundStyle(DS.Palette.textSecondary)
                         Button(AppUpdater.checkTitle) { updater.checkForUpdates() }
+                            .buttonStyle(.formAction)
                             .disabled(!updater.canCheckForUpdates)
                             .accessibilityIdentifier("settings-check-for-updates")
                     }

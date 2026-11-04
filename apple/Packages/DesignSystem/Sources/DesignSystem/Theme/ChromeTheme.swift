@@ -94,6 +94,13 @@ public extension View {
         modifier(ResolvedChromeBackground(token: .groupedPage, place: .sheet))
     }
 
+    /// A popover's own background on the chrome's raised surface instead of the system's
+    /// material, with the theme's ink.
+    func chromePopover() -> some View {
+        modifier(ResolvedChromeBackground(token: .raised, place: .popover))
+            .chromeContent()
+    }
+
     #if os(iOS)
     /// An opaque navigation bar on a chrome surface.
     func chromeBarBackground(_ token: ChromeStyle.Token) -> some View {
@@ -106,7 +113,7 @@ public extension View {
 /// Bar and sheet backgrounds are handed to UIKit only when their value changes, and a token is
 /// equal under every theme: these get the resolved colour so a theme change reaches them.
 private struct ResolvedChromeBackground: ViewModifier {
-    enum Place { case sheet, navigationBar }
+    enum Place { case sheet, popover, navigationBar }
     let token: ChromeStyle.Token
     let place: Place
     @Environment(\.chrome) private var chrome
@@ -119,6 +126,8 @@ private struct ResolvedChromeBackground: ViewModifier {
             content
                 .background(chrome.color(token), ignoresSafeAreaEdges: .all)
                 .presentationBackground(chrome.color(token))
+        case .popover:
+            content.presentationBackground(chrome.color(token))
         #if os(iOS)
         case .navigationBar: content.toolbarBackground(chrome.color(token), for: .navigationBar)
         #else
@@ -182,3 +191,51 @@ public struct ThemedRoot<Content: View>: View {
         content.chromeTheme(ThemeCatalog.theme(named: themeName), windowTheme: windowTheme)
     }
 }
+
+public extension View {
+    /// A window's own surfaces on the chrome: on the Mac, its title bar and toolbar band show the
+    /// content under them instead of the system's grey material, and the window itself (what
+    /// shows while it resizes or before its content draws) is the chrome's base. Apply once at a
+    /// window scene's root, under `chromeTheme`.
+    func chromeWindow() -> some View {
+        #if os(macOS)
+        background(ChromeWindowBridge())
+            .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+        #else
+        self
+        #endif
+    }
+}
+
+#if os(macOS)
+private struct ChromeWindowBridge: NSViewRepresentable {
+    @Environment(\.chrome) private var chrome
+
+    final class Probe: NSView {
+        var base: NSColor = .windowBackgroundColor {
+            didSet { apply() }
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            apply()
+        }
+
+        private func apply() {
+            guard let window else { return }
+            window.titlebarAppearsTransparent = true
+            if window.backgroundColor != base { window.backgroundColor = base }
+        }
+    }
+
+    func makeNSView(context: Context) -> Probe {
+        let probe = Probe()
+        probe.base = NSColor(chrome.baseColor)
+        return probe
+    }
+
+    func updateNSView(_ probe: Probe, context: Context) {
+        probe.base = NSColor(chrome.baseColor)
+    }
+}
+#endif

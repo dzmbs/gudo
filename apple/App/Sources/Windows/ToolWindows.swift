@@ -47,6 +47,7 @@ struct ToolWindowRoot: View {
                     .environment(model)
                     .environment(model.app)
                     .environment(\.isToolWindow, true)
+                    .chromeWindow()
             }
         } else {
             Color.clear.onAppear { dismiss() }
@@ -63,7 +64,6 @@ struct ToolWindowContent: View {
             .navigationTitle(route.toolTitle)
             .frame(minWidth: minSize.width, minHeight: minSize.height)
             .background(theme.background.ignoresSafeArea())
-            .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
     }
 
     @ViewBuilder private var content: some View {

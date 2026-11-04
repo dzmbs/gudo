@@ -179,8 +179,7 @@ private struct ConnectionOverlayModifier: ViewModifier {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             let presentation = presentation(now: context.date)
             content
-                .saturation(presentation.dimmed ? 0.25 : 1)
-                .opacity(presentation.dimmed ? 0.55 : 1)
+                .fadedTowardTerminalBackground(presentation.dimmed ? 0.45 : 0)
                 .allowsHitTesting(state.isLive || state == .paused || state == .disconnected || savedAndConnecting)
                 .overlay(alignment: .topTrailing) {
                     if let notice = presentation.notice {
