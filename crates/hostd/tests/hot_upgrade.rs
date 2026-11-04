@@ -546,7 +546,8 @@ exec -a codex /bin/sh -c 'echo codex-pid=$$; i=0; while :; do i=$((i+1)); echo n
 
 /// An app update replaces the whole bundle the helper runs from, the app runs `restart`, and
 /// a Codex started by hand keeps running: the same process, its output going on. Its session
-/// stays recorded, so a cold restart later still resumes it.
+/// stays recorded, so a cold restart later still resumes it. `GUDO_TEST_UPGRADE_FROM` and
+/// `GUDO_TEST_UPGRADE_TO` name two builds to update between (default: this one twice).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_app_update_keeps_codex_running_and_resumable() {
     use std::os::unix::fs::PermissionsExt;
@@ -554,7 +555,13 @@ async fn an_app_update_keeps_codex_running_and_resumable() {
     let macos = dir.path().join("Gudo.app/Contents/MacOS");
     std::fs::create_dir_all(&macos).unwrap();
     let exe = macos.join("gudo-hostd");
-    std::fs::copy(HOSTD, &exe).unwrap();
+    let build =
+        |var: &str| std::env::var_os(var).map_or_else(|| PathBuf::from(HOSTD), PathBuf::from);
+    let (from, to) = (
+        build("GUDO_TEST_UPGRADE_FROM"),
+        build("GUDO_TEST_UPGRADE_TO"),
+    );
+    std::fs::copy(&from, &exe).unwrap();
     let tools = dir.path().join("bin");
     std::fs::create_dir_all(&tools).unwrap();
     let codex = tools.join("codex");
@@ -613,7 +620,7 @@ async fn an_app_update_keeps_codex_running_and_resumable() {
     // The update moves the old bundle away and puts the new one in its place.
     let staged = dir.path().join("staged/Gudo.app/Contents/MacOS");
     std::fs::create_dir_all(&staged).unwrap();
-    std::fs::copy(HOSTD, staged.join("gudo-hostd")).unwrap();
+    std::fs::copy(&to, staged.join("gudo-hostd")).unwrap();
     std::fs::create_dir_all(dir.path().join("trash")).unwrap();
     std::fs::rename(
         dir.path().join("Gudo.app"),
@@ -626,10 +633,18 @@ async fn an_app_update_keeps_codex_running_and_resumable() {
     )
     .unwrap();
     let connections = client.connected;
+    let build_before = client.client.daemon_info().unwrap().build;
     let output = restart_command(&exe, &state);
     assert!(output.status.success(), "{output:?}\n{}", hostd.log());
     assert_eq!(hostd.child.id(), daemon_pid);
     reconnected(&mut client, connections).await;
+    if from != to {
+        client
+            .until("the new build answers", |client| {
+                client.client.daemon_info().unwrap().build != build_before
+            })
+            .await;
+    }
     let before = client.streams[&pane].bytes.len();
     client
         .until("codex goes on", |client| {
