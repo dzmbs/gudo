@@ -928,9 +928,16 @@ async fn handle_hook(core: &Arc<Core>, request: HookRequest) -> HookResponse {
     let (event, blocked) = {
         let mut agent = lock(&entry.agent);
         // A late SessionEnd must not bring back an agent that already exited.
-        if agent.is_none()
-            && request.event != "SessionEnd"
+        if request.event == "SessionEnd"
+            && agent
+                .as_ref()
+                .is_some_and(|runtime| Some(runtime.kind()) != agent_kind(&request.agent))
+        {
+            return HookResponse::default();
+        }
+        if request.event != "SessionEnd"
             && let Some(kind) = agent_kind(&request.agent)
+            && agent.as_ref().is_none_or(|runtime| runtime.kind() != kind)
         {
             *agent = Some(AgentRuntime::new(kind, pane_id, adapter(kind), false));
             entry.agent_attached.notify_one();

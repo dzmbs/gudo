@@ -33,6 +33,25 @@ async fn a_shipped_daemon_provides_hooks_askpass_and_mcp_without_a_separate_shim
     let state_directory = directory.path().join("state");
     let home = directory.path().join("home");
     std::fs::create_dir(&home).unwrap();
+    std::fs::create_dir(home.join(".codex")).unwrap();
+    let notification_path = directory.path().join("user-notification.json");
+    let user_notification = vec![
+        "/bin/sh".to_owned(),
+        "-c".to_owned(),
+        format!(
+            "printf '%s' \"$1\" > {}",
+            agents::shell_quote(&notification_path.to_string_lossy())
+        ),
+        "notify".to_owned(),
+    ];
+    std::fs::write(
+        home.join(".codex/config.toml"),
+        format!(
+            "notify = {}\n",
+            serde_json::to_string(&user_notification).unwrap()
+        ),
+    )
+    .unwrap();
     let _daemon = Command::new(&executable)
         .arg("--state-dir")
         .arg(&state_directory)
@@ -169,6 +188,49 @@ async fn a_shipped_daemon_provides_hooks_askpass_and_mcp_without_a_separate_shim
         assert!(server.wait().await.unwrap().success());
     }
 
+    let tools_directory = directory.path().join("tools");
+    std::fs::create_dir(&tools_directory).unwrap();
+    for agent_name in ["claude", "codex"] {
+        use std::os::unix::fs::PermissionsExt;
+        let agent_path = tools_directory.join(agent_name);
+        std::fs::write(&agent_path, format!(
+            "#!/bin/sh\nexport GUDO_TEST_MANUAL_AGENT={}\nexec {} --exact hooks::manual_agent_process --nocapture\n",
+            agent_name,
+            agents::shell_quote(&std::env::current_exe().unwrap().to_string_lossy()),
+        )).unwrap();
+        std::fs::set_permissions(&agent_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    client.type_line(
+        pane,
+        &format!(
+            "export HOME={} CLAUDE_CONFIG_DIR={} CODEX_HOME={} PATH={}:$PATH; claude; codex",
+            agents::shell_quote(&home.to_string_lossy()),
+            agents::shell_quote(&home.join(".claude").to_string_lossy()),
+            agents::shell_quote(&home.join(".codex").to_string_lossy()),
+            agents::shell_quote(&tools_directory.to_string_lossy()),
+        ),
+    );
+    client.wait_text(pane, "manual-claude-tools-ok").await;
+    client.wait_text(pane, "manual-codex-tools-ok").await;
+    assert!(
+        client
+            .agent_events
+            .iter()
+            .any(|event| event.contains("manual-claude"))
+    );
+    assert!(
+        client
+            .agent_events
+            .iter()
+            .any(|event| event.contains("manual-codex"))
+    );
+    let notification: Value =
+        serde_json::from_slice(&std::fs::read(notification_path).unwrap()).unwrap();
+    assert_eq!(
+        notification["last-assistant-message"],
+        "Manual agent completed"
+    );
+
     let alias = directory.path().join("alias");
     std::fs::create_dir(&alias).unwrap();
     let alias = alias.join(brand::HOOK_BIN);
@@ -181,4 +243,100 @@ async fn a_shipped_daemon_provides_hooks_askpass_and_mcp_without_a_separate_shim
             .unwrap()
             .success()
     );
+}
+
+#[test]
+fn manual_agent_process() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::Command;
+
+    let Ok(agent_name) = std::env::var("GUDO_TEST_MANUAL_AGENT") else {
+        return;
+    };
+    let server = if agent_name == "claude" {
+        let config_directory =
+            std::path::PathBuf::from(std::env::var_os("CLAUDE_CONFIG_DIR").unwrap());
+        let settings: Value =
+            serde_json::from_slice(&std::fs::read(config_directory.join("settings.json")).unwrap())
+                .unwrap();
+        for group in settings["hooks"]["UserPromptSubmit"].as_array().unwrap() {
+            for handler in group["hooks"].as_array().unwrap() {
+                let mut hook_process = Command::new("/bin/sh")
+                    .args(["-c", handler["command"].as_str().unwrap()])
+                    .stdin(Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                hook_process
+                    .stdin
+                    .take()
+                    .unwrap()
+                    .write_all(
+                        br#"{"hook_event_name":"UserPromptSubmit", "session_id":"manual-claude"}"#,
+                    )
+                    .unwrap();
+                assert!(hook_process.wait().unwrap().success());
+            }
+        }
+        let settings: Value =
+            serde_json::from_slice(&std::fs::read(config_directory.join(".claude.json")).unwrap())
+                .unwrap();
+        settings["mcpServers"][agents::mcp_server_name()].clone()
+    } else {
+        let config_directory = std::path::PathBuf::from(std::env::var_os("CODEX_HOME").unwrap());
+        let settings: toml::Table = std::fs::read_to_string(config_directory.join("config.toml"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        let notification = settings["notify"].as_array().unwrap();
+        assert!(Command::new(notification[0].as_str().unwrap())
+            .args(notification[1..].iter().map(|argument| argument.as_str().unwrap()))
+            .arg(json!({"type":"agent-turn-complete", "thread-id":"manual-codex", "last-assistant-message":"Manual agent completed"}).to_string())
+            .status().unwrap().success());
+        serde_json::to_value(&settings["mcp_servers"][agents::mcp_server_name()]).unwrap()
+    };
+    let mut process = Command::new(server["command"].as_str().unwrap())
+        .args(
+            server["args"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|argument| argument.as_str().unwrap()),
+        )
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut server_input = process.stdin.take().unwrap();
+    let mut server_output = BufReader::new(process.stdout.take().unwrap());
+    for (request_id, method, parameters) in [
+        (
+            1,
+            "initialize",
+            json!({"protocolVersion":"2025-06-18", "capabilities":{}, "clientInfo":{"name":"manual-agent", "version":"1"}}),
+        ),
+        (2, "tools/call", json!({"name":"pane_list", "arguments":{}})),
+    ] {
+        writeln!(
+            server_input,
+            "{}",
+            json!({"jsonrpc":"2.0", "id":request_id, "method":method, "params":parameters})
+        )
+        .unwrap();
+        let mut line = String::new();
+        server_output.read_line(&mut line).unwrap();
+        let response: Value = serde_json::from_str(&line).unwrap();
+        assert!(response.get("error").is_none(), "{response}");
+        if request_id == 2 {
+            assert!(
+                !response["result"]["structuredContent"]["panes"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty(),
+                "{response}"
+            );
+        }
+    }
+    drop(server_input);
+    assert!(process.wait().unwrap().success());
+    println!("manual-{agent_name}-tools-ok");
 }

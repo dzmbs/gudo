@@ -25,6 +25,8 @@ fn hostd(exe: &Path, root: &Path) -> Command {
     let mut command = Command::new(exe);
     command
         .env("HOME", root.join("home"))
+        .env("CLAUDE_CONFIG_DIR", root.join("home/.claude"))
+        .env("CODEX_HOME", root.join("home/.codex"))
         .env("XDG_STATE_HOME", root.join("state"))
         .env("XDG_CONFIG_HOME", root.join("config"))
         .env_remove("GUDO_STATE_DIR")

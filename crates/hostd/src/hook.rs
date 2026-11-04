@@ -38,6 +38,10 @@ use serde_json::Value;
 
 pub fn run_hook(arguments: &[String]) {
     match arguments.first().map(String::as_str) {
+        Some("codex-notify") => {
+            relay_codex_notify(&arguments[1..]);
+            return;
+        }
         Some("askpass") => std::process::exit(askpass::main(&arguments[1..])),
         Some("mcp") => std::process::exit(mcp::main(&arguments[1..])),
         Some("open-url") => std::process::exit(browser::open_url(&arguments[1..])),
@@ -66,6 +70,26 @@ pub fn run_hook(arguments: &[String]) {
     }
     if codex_notify && let Some(json) = arguments.get(2) {
         user_codex_notify(json);
+    }
+}
+
+fn relay_codex_notify(arguments: &[String]) {
+    let (Some(original_command), Some(payload)) = (arguments.first(), arguments.get(1)) else {
+        return;
+    };
+    let forwarded = ["codex".into(), CODEX_NOTIFY_EVENT.into()];
+    let _ = relay(&forwarded, payload.as_bytes(), false);
+    let Ok(command) = serde_json::from_str::<Vec<String>>(original_command) else {
+        return;
+    };
+    if let Some(program) = command.first() {
+        let _ = Command::new(program)
+            .args(&command[1..])
+            .arg(payload)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
     }
 }
 
@@ -164,17 +188,25 @@ fn user_codex_notify(json: &str) {
 fn user_notify_command(config: &std::path::Path) -> Option<Vec<String>> {
     let text = std::fs::read_to_string(config).ok()?;
     let table: toml::Table = text.parse().ok()?;
-    let argv: Vec<String> = table
+    let arguments: Vec<String> = table
         .get("notify")?
         .as_array()?
         .iter()
-        .map(|arg| arg.as_str().map(str::to_owned))
+        .map(|argument| argument.as_str().map(str::to_owned))
         .collect::<Option<_>>()?;
-    let ours = argv.first().is_some_and(|program| {
+    let is_owned_command = arguments.first().is_some_and(|program| {
         let name = std::path::Path::new(program).file_name();
         name.is_some_and(|name| name == brand::HOOK_BIN || name == brand::legacy::HOOK_BIN)
     });
-    (!argv.is_empty() && !ours).then_some(argv)
+    if is_owned_command {
+        return arguments
+            .get(1)
+            .filter(|argument| *argument == "codex-notify")
+            .and_then(|_| arguments.get(2))
+            .and_then(|original| serde_json::from_str::<Vec<String>>(original).ok())
+            .filter(|original| !original.is_empty());
+    }
+    (!arguments.is_empty()).then_some(arguments)
 }
 
 /// The pane's Claude configuration directory: its account's (`GUDO_ACCOUNT_DIR`, which Claude's

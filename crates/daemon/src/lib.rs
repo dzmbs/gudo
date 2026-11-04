@@ -26,6 +26,7 @@
 
 mod accounts;
 mod agent;
+mod agent_integration;
 mod anchor;
 mod approve;
 mod art;
@@ -80,6 +81,7 @@ use proto::{DaemonId, DeviceId, Ticket};
 use tokio::task::JoinHandle;
 
 pub use agent::{HookRequest, HookResponse, PERMISSION_WAIT, STATUS_LINE_EVENT};
+pub use agent_integration::install_agent_integration;
 pub use agents::CODEX_NOTIFY_EVENT;
 pub use art::pull::{
     PULL_FORMATS, PULL_MAX, PULL_VERSION, PullCall, PullExport, PullFormat, PullOp, PullReply,

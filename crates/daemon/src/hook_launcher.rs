@@ -154,7 +154,7 @@ fn is_shim(path: &Path) -> bool {
 }
 
 /// The first word of a shell line, unquoted, and the rest of the line from the space after it.
-fn first_shell_word(line: &str) -> Option<(String, &str)> {
+pub(crate) fn first_shell_word(line: &str) -> Option<(String, &str)> {
     let mut word = String::new();
     let mut chars = line.char_indices();
     while let Some((index, c)) = chars.next() {

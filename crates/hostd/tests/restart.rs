@@ -50,6 +50,9 @@ async fn upgrades_restart_the_daemon_while_clients_reconnect() {
     let state = dir.path().join("state");
     let mut daemon = Daemon(
         Command::new(&exe)
+            .env("HOME", dir.path())
+            .env("CLAUDE_CONFIG_DIR", dir.path().join(".claude"))
+            .env("CODEX_HOME", dir.path().join(".codex"))
             .arg("--state-dir")
             .arg(&state)
             .args([

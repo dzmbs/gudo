@@ -284,6 +284,9 @@ fn run(
         .ok();
     config.exe.clone_from(&config.cli_exe);
     config.hook_bin.clone_from(&config.cli_exe);
+    if let Err(error) = daemon::install_agent_integration(&config) {
+        tracing::warn!("installing agent hooks and tools: {error}");
+    }
     if let Some(inherited) = &inherited {
         tracing::info!(
             panes = inherited.panes(),

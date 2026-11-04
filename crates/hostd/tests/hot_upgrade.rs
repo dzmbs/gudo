@@ -55,7 +55,12 @@ fn run(exe: &Path, state: &Path, log: &Path) -> Hostd {
 }
 
 fn run_with_env(exe: &Path, state: &Path, log: &Path, env: &[(&str, String)]) -> Hostd {
+    let home_directory = state.join("test-home");
+    std::fs::create_dir_all(&home_directory).unwrap();
     let child = Command::new(exe)
+        .env("HOME", &home_directory)
+        .env("CLAUDE_CONFIG_DIR", home_directory.join(".claude"))
+        .env("CODEX_HOME", home_directory.join(".codex"))
         .arg("--state-dir")
         .arg(state)
         .args([

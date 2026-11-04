@@ -583,10 +583,10 @@ impl SocketBackend {
         if let Some(dir) = state {
             return Ok(from_state(dir.into()));
         }
-        let endpoint = env("ENDPOINT_FILE")
+        let endpoint = pane_env("ENDPOINT_FILE")
             .map(|file| Endpoint::File(file.into()))
-            .or_else(|| env("SOCK").map(|socket| Endpoint::Socket(socket.into())));
-        Ok(match (endpoint, env("TOKEN")) {
+            .or_else(|| pane_env("SOCK").map(|socket| Endpoint::Socket(socket.into())));
+        Ok(match (endpoint, pane_env("TOKEN")) {
             (Some(endpoint), Some(token)) => Self {
                 endpoint,
                 token: Token::Value(token),
