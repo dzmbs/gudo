@@ -152,6 +152,7 @@ final class CanvasEditor: NSObject {
         host.sizingOptions = [.intrinsicContentSize]
         host.overrideUserInterfaceStyle = context.dark ? .dark : .light
         view.addSubview(host.view)
+        pinChrome(host.view)
         chromeHost = host
         #else
         let host = NSHostingView(rootView: ThemedRoot { CanvasChrome(model: chrome) })
@@ -243,18 +244,27 @@ final class CanvasEditor: NSObject {
     /// The page leaves this band at the top for the chrome (index.html).
     private static let band: CGFloat = 56
 
+    #if os(iOS)
+    /// Constraints rather than frames: the chrome's size follows its content (the name, Done, the
+    /// compact labels) once SwiftUI applies it, which is after the layout pass that changed it.
+    private func pinChrome(_ chromeView: UIView) {
+        chromeView.translatesAutoresizingMaskIntoConstraints = false
+        chromeView.setContentHuggingPriority(.required, for: .horizontal)
+        chromeView.setContentCompressionResistancePriority(.required, for: .horizontal)
+        NSLayoutConstraint.activate([
+            chromeView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
+            chromeView.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 8),
+            chromeView.centerYAnchor.constraint(equalTo: view.topAnchor, constant: Self.band / 2),
+        ])
+    }
+    #endif
+
     private func layout() {
         let bounds = view.bounds
         let compact = bounds.width < 560
         if chrome.compact != compact { chrome.compact = compact }
         #if os(iOS)
         ink?.canvas.frame = bounds
-        guard let chromeView = chromeHost?.view else { return }
-        chromeView.invalidateIntrinsicContentSize()
-        let size = chromeView.intrinsicContentSize
-        chromeView.frame = CGRect(
-            x: bounds.width - size.width - 8, y: max(4, (Self.band - size.height) / 2),
-            width: size.width, height: size.height)
         #else
         guard let chromeHost else { return }
         let size = chromeHost.fittingSize
@@ -578,6 +588,8 @@ struct CanvasChrome: View {
                     Button("Copy Image", systemImage: "doc.on.doc") { model.onCopy() }
                 } label: {
                     Label(model.compact ? "Send" : "Send to Agent", systemImage: "paperplane.fill")
+                        .lineLimit(1)
+                        .fixedSize()
                 }
                 .menuStyle(.button)
                 .buttonStyle(.primaryGlass)
@@ -585,7 +597,7 @@ struct CanvasChrome: View {
                 .help("Attach the selection, or the whole drawing, to an agent's prompt as an image")
                 .accessibilityIdentifier("canvas.send")
                 if model.showsDone {
-                    Button("Done") { model.onDone() }
+                    Button { model.onDone() } label: { Text("Done").lineLimit(1).fixedSize() }
                         .buttonStyle(.glass)
                         .keyboardShortcut(.cancelAction)
                         .accessibilityIdentifier("canvas.done")
