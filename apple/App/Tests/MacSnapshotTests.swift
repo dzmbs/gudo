@@ -1140,7 +1140,7 @@ final class MacSnapshotTests: XCTestCase {
                                 if state.showsCard { UpdateCard(prompt: state) }
                                 HStack(spacing: DS.Space.s) {
                                     Label("New Project", systemImage: "plus")
-                                        .font(DS.Font.sidebarSubtitle)
+                                        .font(SidebarFont.subtitle)
                                         .foregroundStyle(DS.Palette.textSecondary)
                                     Spacer()
                                     if state.showsIndicator { UpdateIndicator(prompt: state) }
