@@ -551,7 +551,8 @@ struct PaneSlot: View {
         let focused = isFocused
         let notice = workspace.notices[id] ?? PaneNotice()
         VStack(spacing: 0) {
-            if isSplit {
+            // A drawing always has its header: its close and pane controls, docked alone or not.
+            if isSplit || workspace.canvasTitles[id] != nil {
                 PaneHeader(id: id, workspace: workspace, isFocused: focused, namesHost: namesHost, focus: focus)
             }
             ZStack {

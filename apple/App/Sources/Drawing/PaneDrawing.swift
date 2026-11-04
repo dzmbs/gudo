@@ -857,6 +857,17 @@ final class PaneDrawing: NSObject {
         return drawing.canvas
     }
 
+    /// The pane's terminal took a new theme.
+    func appearanceChanged() {
+        guard let canvas, let background = pane?.view.surface.appearance.background else { return }
+        canvas.follow(dark: isDarkTheme, background: background)
+    }
+
+    static func focusedCanvasHasKeyboard(in workspace: Workspace) -> Bool {
+        guard let focused = workspace.focusedPane, let pane = workspace.panes[focused] else { return false }
+        return canvas(in: pane)?.ownsKeyboard ?? false
+    }
+
     // MARK: Handoff
 
     /// Tells the window which drawing this pane has open, for its Handoff activity.

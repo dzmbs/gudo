@@ -33,6 +33,13 @@ enum WorkspaceShortcuts {
             action.perform(on: workspace, window: model)
             return true
         }
+        // A drawing has the keyboard: the keys that lead out of a page (⌘W, ⌘1–⌘9) are the app's
+        // before the page sees them, as with VS Code.
+        if let workspace = ActiveWindow.workspace(in: window), PaneDrawing.focusedCanvasHasKeyboard(in: workspace) {
+            guard let action = action(for: event), action.passesEditor else { return false }
+            action.perform(on: workspace, window: ActiveWindow.model(for: workspace))
+            return true
+        }
         guard window.firstResponder is TerminalView || window.firstResponder === window,
               let workspace = ActiveWindow.workspace(in: window), let action = action(for: event)
         else { return false }

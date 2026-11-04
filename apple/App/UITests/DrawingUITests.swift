@@ -337,6 +337,37 @@ final class DrawingUITests: XCTestCase {
         sleep(2)
     }
 
+    /// A drawing docked into its tab, alone there, keeps the header every pane has: its close
+    /// (×) closes it, and so does ⌘W.
+    func testADockedDrawingKeepsItsCloseControl() throws {
+        let app = launch(try ticket())
+        let pane = element(app, preparePane(app).identifier)
+        app.typeKey("d", modifierFlags: [.command, .control, .shift])
+        XCTAssertTrue(element(app, "canvas.toolbar").waitForExistence(timeout: 30), "the canvas opens")
+        try XCTSkipIf(element(app, "drawing.sheet").exists, "a phone shows a drawing full screen")
+        sleep(2)
+        let window = element(app, "drawing.canvas").frame
+        let dock = app.buttons.matching(identifier: "pane-float-button").allElementsBoundByIndex
+            .first { $0.frame.minY >= window.minY - 40 && $0.frame.minY < window.minY && $0.frame.midX > window.minX }
+        tap(try XCTUnwrap(dock, "the floating drawing's Dock button"))
+        sleep(3)
+        shot(app, "drawing-docked-beside-terminal")
+        pane.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 40, dy: pane.frame.height / 2)).tap()
+        sleep(1)
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(pane.waitForNonExistence(timeout: 10), "the terminal beside it closes")
+        let canvas = element(app, "drawing.canvas")
+        XCTAssertTrue(canvas.exists, "the drawing is alone in its tab")
+        let close = app.buttons["Close Pane"]
+        XCTAssertTrue(close.waitForExistence(timeout: 5), "with the close control every pane has")
+        shot(app, "docked-drawing")
+
+        tap(canvas)
+        sleep(1)
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(canvas.waitForNonExistence(timeout: 10), "⌘W closes the drawing")
+    }
+
     /// iPhone: Done puts the full-screen drawing away and the terminal behind is still in the
     /// window, drawn, with its output, and typing reaches its shell.
     func testDoneOnAPhoneDrawingShowsTheTerminalAgain() throws {
