@@ -48,8 +48,8 @@ The header and footer are repeated in each page. Change them everywhere at once.
 
 ## Before launch
 
-- **TestFlight**: replace `https://testflight.apple.com/join/GUDO-BETA` in `index.html` and
-  `download/index.html` with the public link.
+- **TestFlight**: the public beta link (`https://testflight.apple.com/join/MTTS89sw`) is on
+  `download/index.html`.
 - **Release assets**: the pages and `install.sh` expect these names on each GitHub release:
   `Gudo.dmg`, `gudo-hostd-x86_64-unknown-linux-musl`, `gudo-hostd-aarch64-unknown-linux-musl`
   and `SHA256SUMS` (`sha256sum` format). Tags look like `v0.1.0`.
