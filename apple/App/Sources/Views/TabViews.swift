@@ -1014,12 +1014,12 @@ struct CompactTerminalView: View {
                 paneSwitcher(tab)
             }
             Button("Command Palette", systemImage: "command") { model.isPaletteShown = true }
+                .labelStyle(.iconOnly)
                 .help("Command Palette (⌘K)")
                 .accessibilityIdentifier("open-palette")
             NewTabButton(workspace: workspace)
         }
         .buttonStyle(.bar)
-        .labelStyle(.iconOnly)
         .padding(.horizontal, DS.Space.s)
         // A 36 pt bar with a two-line title: grows with Dynamic Type only as far as it fits.
         .dynamicTypeSize(...DynamicTypeSize.xLarge)
@@ -1189,6 +1189,7 @@ struct CompactTerminalView: View {
             }
         } label: {
             Label("Panes", systemImage: "rectangle.split.2x1")
+                .labelStyle(.iconOnly)
         }
         .menuIndicator(.hidden)
     }
@@ -1202,6 +1203,7 @@ struct CompactTerminalView: View {
             }
         } label: {
             Label("Panes", systemImage: "rectangle.split.2x1")
+                .labelStyle(.iconOnly)
         }
         .menuIndicator(.hidden)
     }
@@ -1268,16 +1270,19 @@ struct TabMenu: View {
     @Environment(WindowModel.self) private var model
 
     var body: some View {
-        Button("Rename…", systemImage: "pencil") { workspace.renamingTab = tab.id }
-        if WindowRequest.isSupported {
-            Button("Open in New Window", systemImage: "macwindow.badge.plus") {
-                model.openInNewWindow(TabRef(hostId: workspace.hostId ?? HostGroups.localId, tab: tab.id))
+        Group {
+            Button("Rename…", systemImage: "pencil") { workspace.renamingTab = tab.id }
+            if WindowRequest.isSupported {
+                Button("Open in New Window", systemImage: "macwindow.badge.plus") {
+                    model.openInNewWindow(TabRef(hostId: workspace.hostId ?? HostGroups.localId, tab: tab.id))
+                }
+            }
+            MergeIntoTabMenu(workspace: workspace, tab: tab.id)
+            ProjectMenuItems(model: model, ref: TabRef(hostId: workspace.groupId, tab: tab.id))
+            Button(RowAction.closeTab.title, systemImage: RowAction.closeTab.systemImage, role: .destructive) {
+                model.closeTab(TabRef(hostId: workspace.groupId, tab: tab.id), undoable: true)
             }
         }
-        MergeIntoTabMenu(workspace: workspace, tab: tab.id)
-        ProjectMenuItems(model: model, ref: TabRef(hostId: workspace.groupId, tab: tab.id))
-        Button(RowAction.closeTab.title, systemImage: RowAction.closeTab.systemImage, role: .destructive) {
-            model.closeTab(TabRef(hostId: workspace.groupId, tab: tab.id), undoable: true)
-        }
+        .labelStyle(.titleAndIcon)
     }
 }

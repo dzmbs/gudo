@@ -560,6 +560,7 @@ struct MixedTabChip: View {
             .padding(.horizontal, 40)
             HStack(spacing: 0) {
                 Button("Close Tab", systemImage: "xmark") { model.closeMixedTab(tab.id) }
+                    .labelStyle(.iconOnly)
                     .help("Close Tab (⌘W)")
                     .font(.caption2.weight(.bold))
                     .frame(width: 22, height: 22)

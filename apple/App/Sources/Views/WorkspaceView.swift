@@ -281,12 +281,14 @@ struct NewTabButton: View {
                 Button("Add Host…", systemImage: "plus.circle") { model.addHost() }
             } label: {
                 Label("New", systemImage: "plus")
+                    .labelStyle(.iconOnly)
             }
             .menuIndicator(.hidden)
             .help("New Terminal (⌘T) or New Agent (⇧⌘N)")
             .accessibilityIdentifier("new-tab")
         } else {
             Button("Add Host", systemImage: "plus") { model.newTab() }
+                .labelStyle(.iconOnly)
                 .help("Add Host")
                 .accessibilityIdentifier("new-tab")
         }

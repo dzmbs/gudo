@@ -26,7 +26,6 @@ struct TabBar: View {
                 .padding(.leading, DS.Space.xs)
         }
         .buttonStyle(.bar)
-        .labelStyle(.iconOnly)
         .padding(.horizontal, DS.Space.row)
         .frame(height: DS.Size.tabStrip)
         .background(DS.Palette.base)
@@ -132,6 +131,7 @@ private struct TabChip: View {
 
             HStack(spacing: 0) {
                 Button("Close Tab", systemImage: "xmark") { model.closeTab(ref, undoable: false) }
+                    .labelStyle(.iconOnly)
                     .font(.caption2.weight(.bold))
                     .frame(width: 22, height: 22)
                     .opacity(isHovered ? 1 : 0)
