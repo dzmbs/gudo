@@ -46,12 +46,13 @@ final class MacSnapshotTests: XCTestCase {
         try? await Task.sleep(for: .seconds(seconds))
     }
 
-    private func makeWindow(_ root: some View, size: CGSize) -> NSWindow {
+    private func makeWindow(_ root: @autoclosure () -> some View, size: CGSize) -> NSWindow {
         let theme = themeName
         // The argument domain: it wins over the app's saved settings and is never written to
         // disk, so a snapshot run leaves the real app's theme alone.
         var arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
         arguments[TerminalPreferences.Key.theme] = theme
+        arguments[TerminalPreferences.Key.windowTheme] = TerminalPreferences.WindowTheme.auto.rawValue
         UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
         let window = OffscreenWindow(
             contentRect: NSRect(x: -30000, y: -30000, width: size.width, height: size.height),
@@ -61,7 +62,7 @@ final class MacSnapshotTests: XCTestCase {
         // What `toolbarBackgroundVisibility(.hidden)` asks of a scene window.
         window.titlebarAppearsTransparent = true
         window.isReleasedWhenClosed = false
-        let controller = NSHostingController(rootView: AnyView(root))
+        let controller = NSHostingController(rootView: AnyView(root()))
         controller.sceneBridgingOptions = [.toolbars, .title]
         window.contentViewController = controller
         window.setFrame(NSRect(x: -30000, y: -30000, width: size.width, height: size.height), display: false)
@@ -467,8 +468,32 @@ final class MacSnapshotTests: XCTestCase {
         try await window("program-status", screen: "program-status")
     }
 
-    /// A kitty graphics image a program printed, drawn in the pane by the Metal renderer from
-    /// the render state's placements: a gradient over 24 × 6 cells between lines of text.
+    func testInstalledAgentScreen() async throws {
+        try XCTSkipIf(environment["AGENT_TUI_RAW"] == nil, "requires an agent start-screen capture")
+        let path = try XCTUnwrap(environment["AGENT_TUI_RAW"])
+        let outputBytes = try Data(contentsOf: URL(filePath: path))
+        var appearance = TerminalAppearance()
+        if mode == "light" {
+            appearance.background = RGB(r: 255, g: 255, b: 255)
+            appearance.foreground = RGB(r: 38, g: 38, b: 38)
+        }
+        let terminal = Terminal(cols: 100, rows: 30, configuration: appearance.terminalConfiguration, writePty: { _ in })
+        let surface = try TerminalSurface(terminal: terminal, appearance: appearance)
+        surface.layout(size: CGSize(width: 1000, height: 650), scale: 2)
+        terminal.resize(cols: 100, rows: 30, cellWidth: 8, cellHeight: 16)
+        terminal.write(Array(outputBytes))
+        surface.outputArrived()
+        _ = surface.renderIfDirty(offscreen: true)
+        await pump(1.2)
+        _ = surface.renderIfDirty(offscreen: true)
+        let image = try XCTUnwrap(surface.snapshot())
+        let bitmap = NSBitmapImageRep(cgImage: image)
+        let directory = URL(filePath: try XCTUnwrap(environment["SNAPSHOT_DIR"]))
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let imageBytes = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        try imageBytes.write(to: directory.appendingPathComponent("mac-agent-start-screen-\(mode).png"))
+    }
+
     func testKittyImageInAPane() async throws {
         try await window("kitty-image", screen: "single") { model in
             guard let workspace = model.workspace, let id = workspace.focusedPane, let pane = workspace.panes[id] else {

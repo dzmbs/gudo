@@ -46,9 +46,18 @@ async fn launch(name: &str, command: &str, workdir: &Path) -> Drawn {
     let daemon = start(state.path()).await;
     let mut client = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
     // Ghostty's default theme, as the app announces it.
+    let is_light = std::env::var_os("AGENT_TUI_LIGHT").is_some();
     client.client.set_terminal_colors(TerminalColors {
-        foreground: [0xff, 0xff, 0xff],
-        background: [0x28, 0x2c, 0x34],
+        foreground: if is_light {
+            [0x26, 0x26, 0x26]
+        } else {
+            [0xff, 0xff, 0xff]
+        },
+        background: if is_light {
+            [0xff, 0xff, 0xff]
+        } else {
+            [0x28, 0x2c, 0x34]
+        },
         cursor: None,
         palette: Vec::new(),
     });
@@ -65,6 +74,11 @@ async fn launch(name: &str, command: &str, workdir: &Path) -> Drawn {
     );
     tokio::time::sleep(SETTLE).await;
     let screen = client.text(pane);
+    std::fs::write(
+        out_dir().join(format!("{name}.frame.raw")),
+        std::fs::read(&raw).unwrap_or_default(),
+    )
+    .unwrap();
     std::fs::write(out_dir().join(format!("{name}.screen.txt")), &screen).unwrap();
     let placed = client.client.pane_images(pane).unwrap_or_default();
     for (index, (_, image)) in placed.iter().enumerate() {
