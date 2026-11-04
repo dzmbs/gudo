@@ -189,6 +189,7 @@ struct InboxUsageStrip: View {
                             set: { if !$0 { detailRow = nil } })
                         ) {
                             UsageDetailView(hostName: row.host.name, report: model.usage.usage(forHost: row.host.id))
+                                .chromePopover()
                         }
                         .accessibilityIdentifier("inbox-usage-\(row.host.name)-\(row.meter.id.lowercased())")
                     }

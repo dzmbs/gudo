@@ -56,6 +56,14 @@ final class TunnelBrowser: NSObject, WKUIDelegate, WKNavigationDelegate {
         webView.uiDelegate = self
         webView.navigationDelegate = self
         webView.allowsBackForwardNavigationGestures = false
+        // The editor paints its own theme; until it does, the pane's background shows, not white.
+        #if canImport(UIKit)
+        webView.isOpaque = false
+        webView.backgroundColor = .clear
+        webView.scrollView.backgroundColor = .clear
+        #else
+        webView.setValue(false, forKey: "drawsBackground")
+        #endif
         #if DEBUG
         webView.isInspectable = true
         #endif

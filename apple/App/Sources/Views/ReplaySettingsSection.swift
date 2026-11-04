@@ -16,6 +16,7 @@ struct ReplaySettingsSection: View {
                 Text(store.sessions.isEmpty ? "None" : "\(store.sessions.count) · \(ByteCountFormatter.string(fromByteCount: Int64(store.totalSize), countStyle: .file))")
             }
             Button("Delete All Replays", role: .destructive) { confirmDelete = true }
+                .buttonStyle(.formAction)
                 .disabled(store.sessions.isEmpty)
                 .settingAnchor("delete-replays")
                 .confirmationDialog("Delete all session replays?", isPresented: $confirmDelete) {

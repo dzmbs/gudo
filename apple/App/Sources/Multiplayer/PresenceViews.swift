@@ -41,6 +41,7 @@ struct PresenceToolbarButton: View {
                 onFollow: { session.follow($0) },
                 onDismiss: { showsPeople = false })
                 .presentationCompactAdaptation(.popover)
+                .chromePopover()
         }
         .onChange(of: showsPeople) { _, shown in
             guard !shown, let next = afterClose else { return }

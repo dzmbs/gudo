@@ -37,6 +37,7 @@ struct HostToolbarButton: View {
                 focusesFilter: InboxView.hasKeyboard,
                 onDismiss: { model.isHostSwitcherShown = false })
                 .presentationCompactAdaptation(.popover)
+                .chromePopover()
                 .environment(\.chrome, chrome)
         }
         .onChange(of: model.isHostSwitcherShown) { _, shown in

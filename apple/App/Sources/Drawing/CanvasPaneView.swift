@@ -5,6 +5,7 @@ import HostKit
 import PaneLayout
 import SwiftUI
 import TerminalCore
+import TerminalRenderer
 import GudoCore
 #if os(iOS)
 import PencilKit
@@ -27,7 +28,7 @@ final class CanvasPaneView {
         let paneId = drawing.paneId
         editor = CanvasEditor(artifactId: artifactId, context: CanvasEditor.Context(
             hub: drawing.hub, sessionId: drawing.sessionId, readOnly: drawing.isReadOnly, dark: drawing.isDarkTheme,
-            background: drawing.pane?.view.surface.appearance.background ?? RGB(r: 0x28, g: 0x2C, b: 0x34),
+            background: drawing.pane?.view.surface.appearance.background ?? TerminalAppearance.fromPreferences().background,
             files: { [weak drawing] in (drawing?.workspace?.host as? DaemonConnection)?.workspace.api },
             destinations: { [weak drawing] in
                 guard let drawing, let window = drawing.window else { return [] }

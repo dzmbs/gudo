@@ -95,6 +95,7 @@ public struct SheetScaffold<Content: View, Accessory: View>: View {
             }
         }
         .chromeContent()
+        .chromeSheetBackground()
         #else
         NavigationStack {
             content
@@ -120,6 +121,7 @@ public struct SheetScaffold<Content: View, Accessory: View>: View {
                     }
                 }
         }
+        .chromeSheetBackground()
         #endif
     }
 

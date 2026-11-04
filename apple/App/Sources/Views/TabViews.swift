@@ -326,6 +326,7 @@ private struct HostGroupHeader: View {
             set: { if !$0, model.usageDetailHost == group.id { model.usageDetailHost = nil } })
         ) {
             UsageDetailView(hostName: group.name, report: model.usage.usage(forHost: group.id))
+                .chromePopover()
         }
         .padding(.leading, DS.Space.l)
         .padding(.trailing, DS.Space.gap10)

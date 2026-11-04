@@ -18,6 +18,7 @@ struct PasswordsSection: View {
             .accessibilityIdentifier("saved-passwords-count")
             .settingAnchor("saved-passwords")
             Button("Forget Saved Passwords", role: .destructive) { confirming = true }
+                .buttonStyle(.formAction)
                 .disabled(saved == 0)
                 .accessibilityIdentifier("forget-saved-passwords")
                 .confirmationDialog("Forget \(saved == 1 ? "the saved password" : "all \(saved) saved passwords")?",

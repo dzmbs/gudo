@@ -262,10 +262,51 @@ public struct QuietButtonStyle: ButtonStyle {
     }
 
     private func foreground(_ pressed: Bool) -> AnyShapeStyle {
-        guard isEnabled else { return AnyShapeStyle(DS.Palette.textQuaternary) }
+        guard isEnabled else { return AnyShapeStyle(DS.Palette.textTertiary) }
         if prominent { return AnyShapeStyle(DS.Palette.accent) }
         return AnyShapeStyle(isHovered || pressed ? DS.Palette.text : DS.Palette.textSecondary)
     }
+}
+
+/// An action in a settings form (Forget Saved Passwords, Delete All Replays): on the Mac a push
+/// button filled from the theme's ink, on touch a row's tinted label. A destructive one reads in
+/// the theme's red; disabled, the label drops to the tertiary ink (≥ 3:1), never a faded tint.
+public struct FormActionButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    public init() {}
+
+    public func makeBody(configuration: Configuration) -> some View {
+        #if os(macOS)
+        configuration.label
+            .foregroundStyle(foreground(configuration.role))
+            .padding(.horizontal, DS.Space.gap10)
+            .padding(.vertical, 3)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(DS.Palette.ink.opacity(!isEnabled ? 0.06 : configuration.isPressed ? 0.20 : 0.12)))
+            .contentShape(.rect(cornerRadius: 6))
+        #else
+        configuration.label
+            .foregroundStyle(foreground(configuration.role))
+            .opacity(configuration.isPressed ? 0.6 : 1)
+            .contentShape(.rect)
+        #endif
+    }
+
+    private func foreground(_ role: ButtonRole?) -> AnyShapeStyle {
+        guard isEnabled else { return AnyShapeStyle(DS.Palette.textTertiary) }
+        if role == .destructive { return AnyShapeStyle(DS.Palette.error) }
+        #if os(macOS)
+        return AnyShapeStyle(DS.Palette.text)
+        #else
+        return AnyShapeStyle(DS.Palette.accent)
+        #endif
+    }
+}
+
+public extension ButtonStyle where Self == FormActionButtonStyle {
+    static var formAction: FormActionButtonStyle { FormActionButtonStyle() }
 }
 
 public extension ButtonStyle where Self == QuietButtonStyle {
