@@ -157,6 +157,8 @@ struct WindowContent: View {
     @SceneStorage("openHosts") private var storedHosts: String?
     @SceneStorage("collapsedHosts") private var storedCollapsed: String?
     @SceneStorage("focusedTab") private var storedFocus: String?
+    /// The focused pane of that tab.
+    @SceneStorage("focusedPane") private var storedPane: String?
     /// The window's mixed tabs (`CompositeTab`s, JSON).
     @SceneStorage("mixedTabs") private var storedMixed: String?
     /// Projects of tabs without a daemon to keep them, collapsed projects (JSON).
@@ -179,6 +181,7 @@ struct WindowContent: View {
                 // "Untouched" for the idle-tab suggestion: when this device last showed a tab.
                 if let ref, !LaunchOptions.mock, ref.hostId != HostGroups.mixedId { TabTouches.shared.touch(ref) }
             }
+            .onChange(of: model.currentPane) { _, _ in persist() }
             .onChange(of: model.composites.tabs) { _, _ in persist() }
             .onChange(of: model.groups.projectsState) { _, _ in persist() }
             .onChange(of: model.twoColumnsChoice) { _, _ in persist() }
@@ -399,10 +402,16 @@ struct WindowContent: View {
             text.flatMap { $0.data(using: .utf8) }.flatMap { try? decoder.decode(type, from: $0) }
         }
         var hosts = decode([String].self, storedHosts) ?? decode([String].self, defaults.string(forKey: Self.lastHostsKey))
-        var focus = decode(TabRef.self, storedFocus) ?? decode(TabRef.self, defaults.string(forKey: Self.lastFocusKey))
+        var focus = decode(TabRef.self, storedFocus)
+        var pane = storedPane
+        if focus == nil {
+            focus = decode(TabRef.self, defaults.string(forKey: Self.lastFocusKey))
+            pane = defaults.string(forKey: Self.lastPaneKey)
+        }
         if hosts == nil, case .host(let id)? = decode(WorkspaceTarget.self, storedTarget) {
             hosts = [id]
             focus = nil
+            pane = nil
             model.show(.host(id))
         }
         let collapsed = decode([String].self, storedCollapsed) ?? decode([String].self, defaults.string(forKey: Self.lastCollapsedKey)) ?? []
@@ -417,7 +426,9 @@ struct WindowContent: View {
         // keep running, out of sight, and one new terminal opens. A window opened later
         // (New Window) restores its tabs.
         let startsFresh = LaunchTabs.current == .newTerminal && AppModel.isLaunching
-        model.restore(openHosts: hosts ?? [], collapsed: Set(collapsed), focus: startsFresh ? nil : focus, mixedTabs: mixed)
+        model.restore(
+            openHosts: hosts ?? [], collapsed: Set(collapsed), focus: startsFresh ? nil : focus,
+            pane: pane.flatMap(UInt64.init).map(PaneId.init), mixedTabs: mixed)
         if startsFresh { model.startFresh(lastHost: focus?.hostId) }
     }
 
@@ -426,6 +437,7 @@ struct WindowContent: View {
     private static let lastHostsKey = "window.openHosts"
     private static let lastCollapsedKey = "window.collapsedHosts"
     private static let lastFocusKey = "window.focusedTab"
+    private static let lastPaneKey = "window.focusedPane"
     private static let lastMixedKey = "window.mixedTabs"
     private static let lastTwoColumnsKey = "window.twoColumns"
 
@@ -439,6 +451,7 @@ struct WindowContent: View {
         storedHosts = encode(model.groups.openHosts)
         storedCollapsed = encode(model.groups.collapsed.sorted())
         storedFocus = model.currentTab.flatMap(encode)
+        storedPane = model.currentPane.map { String($0.rawValue) }
         storedMixed = encode(model.composites.tabs)
         storedTwoColumns = model.twoColumnsChoice.map { $0 ? "on" : "off" } ?? "auto"
         storedTarget = nil
@@ -446,6 +459,7 @@ struct WindowContent: View {
         defaults.set(storedHosts, forKey: Self.lastHostsKey)
         defaults.set(storedCollapsed, forKey: Self.lastCollapsedKey)
         defaults.set(storedFocus, forKey: Self.lastFocusKey)
+        defaults.set(storedPane, forKey: Self.lastPaneKey)
         defaults.set(storedMixed, forKey: Self.lastMixedKey)
         defaults.set(storedTwoColumns, forKey: Self.lastTwoColumnsKey)
         storedProjects = encode(model.groups.projectsState)

@@ -574,6 +574,11 @@ final class WindowModel {
         return workspace?.session.activeTabId.map { TabRef(hostId: currentGroupId, tab: $0) }
     }
 
+    /// The focused pane of the current tab (none in a mixed tab).
+    var currentPane: PaneId? {
+        activeMixedTab == nil ? workspace?.session.activeTab?.focused : nil
+    }
+
     func workspace(ofGroup id: String) -> Workspace? {
         workspaces[id]
     }
@@ -735,8 +740,10 @@ final class WindowModel {
     }
 
     /// Launch restore: reopens the hosts this window had open and selects the last-focused tab
-    /// once its host has a layout (a daemon's arrives after connecting).
-    func restore(openHosts ids: [String], collapsed: Set<String>, focus ref: TabRef?, mixedTabs: [CompositeTab] = []) {
+    /// and its pane once its host has a layout (a daemon's arrives after connecting).
+    func restore(
+        openHosts ids: [String], collapsed: Set<String>, focus ref: TabRef?, pane: PaneId? = nil, mixedTabs: [CompositeTab] = []
+    ) {
         groups.restore(ids)
         groups.collapsed = collapsed.intersection(Set(ids))
         restoreMixedTabs(mixedTabs, openHosts: ids)
@@ -750,7 +757,7 @@ final class WindowModel {
             return
         }
         guard groups.group(ref.hostId) != nil else { return }
-        select(ref, pane: nil)
+        select(ref, pane: pane)
     }
 
     /// Shows a tab (and a pane in it) as soon as its host's layout has it: at once for this
@@ -765,9 +772,13 @@ final class WindowModel {
         pendingFocus = ref
         // A saved workspace has the tab already: selected before the first frame.
         if let workspace = workspaces[ref.hostId], workspace.session.tabs.contains(where: { $0.id == ref.tab }),
-           currentGroupId == ref.hostId, pane == nil
+           currentGroupId == ref.hostId
         {
-            workspace.selectTab(ref.tab)
+            if let pane, workspace.session.tab(containing: pane)?.id == ref.tab {
+                workspace.apply(.focus(pane))
+            } else if pane == nil {
+                workspace.selectTab(ref.tab)
+            }
         }
         Task { [weak self] in
             for _ in 0..<300 {

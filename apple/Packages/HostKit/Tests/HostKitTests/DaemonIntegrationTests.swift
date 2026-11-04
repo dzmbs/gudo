@@ -322,6 +322,44 @@ nonisolated final class LocalDaemon {
         print("instant start (local daemon, \(bytes) B cache): saved workspace \(median(samples.map(\.cached))), connected \(median(samples.map(\.connected))), layout \(median(samples.map(\.layout))), live screen \(median(samples.map(\.screen)))")
     }
 
+    /// The app quits (an update relaunches it) and the helper restarts cold: the tab and the
+    /// pane that had focus are focused again, also over the saved workspace shown first.
+    @Test func theFocusedTabAndPaneComeBackAfterARestartAndRelaunch() async throws {
+        let daemon = try LocalDaemon()
+        let model = makeModel()
+        let store = WorkspaceCacheStore(directory: temporaryDirectory())
+        model.workspaceCache = store
+        let hostId = try await model.pair(try PairingTicket(try await daemon.ticket()), name: "local")
+        let first = try #require(model.connection(hostId) as? DaemonConnection)
+        let wanted = try #require(first.layout.session.activeTab?.focused)
+        let wantedTab = try #require(first.layout.session.activeTabId)
+        first.layout.apply(.split(wanted, .horizontal))
+        try await eventually("split", timeout: .seconds(10)) { first.layout.session.panes.count == 2 }
+        first.layout.apply(.newTab)
+        try await eventually("second tab", timeout: .seconds(10)) { first.layout.session.tabs.count == 2 }
+        #expect(first.layout.session.activeTabId != wantedTab)
+        first.layout.apply(.focus(wanted))
+        try await eventually("focused", timeout: .seconds(10)) {
+            first.layout.session.activeTabId == wantedTab && first.layout.session.activeTab?.focused == wanted
+        }
+        try await Task.sleep(for: .milliseconds(800))
+        try store.save(try #require(first.workspaceToSave(daemonId: model.record(hostId)?.daemonId)))
+        model.disconnect(hostId)
+
+        daemon.kill()
+        try daemon.start()
+        let connection = try #require(try model.open(hostId) as? DaemonConnection)
+        #expect(connection.showsCachedLayout)
+        #expect(connection.layout.session.activeTabId == wantedTab)
+        #expect(connection.layout.session.activeTab?.focused == wanted)
+        try await eventually("live", timeout: .seconds(30)) {
+            connection.status.isLive && !connection.showsCachedLayout && connection.layout.session.panes.count == 3
+        }
+        #expect(connection.layout.session.activeTabId == wantedTab)
+        #expect(connection.layout.session.activeTab?.focused == wanted)
+        model.disconnect(hostId)
+    }
+
     /// Projects live on the daemon: what one connection groups, a fresh connection is told, and
     /// a reorder never shows the old order in between.
     @Test func projectsComeBackFromTheDaemon() async throws {

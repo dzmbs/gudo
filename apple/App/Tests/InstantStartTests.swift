@@ -330,6 +330,51 @@ final class InstantStartTests: XCTestCase {
         XCTAssertTrue(shown.contains { $0.surface.terminal.visibleText().contains("audit_logs_login") }, "drawn in that frame")
     }
 
+    /// A relaunch (an update) comes back on the tab and the pane that had focus, over the saved
+    /// workspace and after the host's layout arrives, whatever the host had focused.
+    func testARelaunchFocusesTheTabAndPaneAgain() async throws {
+        let (connection, client) = try InstantStartFixture.attach(.shared)
+        let defaults = UserDefaults.standard
+        let keys = ["restoreLastTarget", "window.openHosts", "window.focusedTab", "window.focusedPane"]
+        let saved = keys.map { defaults.object(forKey: $0) }
+        defaults.set(true, forKey: "restoreLastTarget")
+        defaults.set("[\"\(InstantStartFixture.hostId)\"]", forKey: "window.openHosts")
+        let focus = try JSONEncoder().encode(TabRef(hostId: InstantStartFixture.hostId, tab: TabId(10)))
+        defaults.set(String(decoding: focus, as: UTF8.self), forKey: "window.focusedTab")
+        defaults.set("2", forKey: "window.focusedPane")
+        defer {
+            for (key, value) in zip(keys, saved) {
+                if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
+            }
+        }
+        let before = Set(AppModel.shared.openWindows.map(ObjectIdentifier.init))
+        let window = OffscreenWindow(
+            contentRect: NSRect(x: -30000, y: -30000, width: 900, height: 600),
+            styleMask: [.titled, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentViewController = NSHostingController(rootView: WindowRoot(request: nil).environment(AppModel.shared))
+        window.contentView?.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        let made = AppModel.shared.openWindows.filter { !before.contains(ObjectIdentifier($0)) }
+        defer {
+            window.close()
+            made.forEach { $0.close() }
+        }
+        let model = try XCTUnwrap(made.first)
+        let workspace = try XCTUnwrap(model.workspace)
+        XCTAssertEqual(workspace.session.activeTabId, TabId(10))
+        XCTAssertEqual(workspace.session.activeTab?.focused, PaneId(2), "the saved workspace focuses it at once")
+
+        InstantStartFixture.goLive(client)
+        let deadline = ContinuousClock.now + .seconds(5)
+        while workspace.showsSavedWorkspace || !connection.status.isLive, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(connection.status.isLive)
+        XCTAssertEqual(workspace.session.activeTabId, TabId(10))
+        XCTAssertEqual(workspace.session.activeTab?.focused, PaneId(2), "the host's own focus (pane 1) does not take over")
+    }
+
     /// A sheet asked for as the window's content first appears (a link that opened the app)
     /// still comes up, with the model made in the scene's first update.
     func testASheetAskedForAtOnceShows() async throws {
