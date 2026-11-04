@@ -337,6 +337,50 @@ final class DrawingUITests: XCTestCase {
         sleep(2)
     }
 
+    /// iPhone: Done puts the full-screen drawing away and the terminal behind is still in the
+    /// window, drawn, with its output, and typing reaches its shell.
+    func testDoneOnAPhoneDrawingShowsTheTerminalAgain() throws {
+        let app = launch(try ticket())
+        let pane = preparePane(app)
+        let paneId = pane.identifier
+        XCTAssertTrue(isDrawn(app, in: pane.frame), "the terminal is drawn before the drawing")
+        app.typeKey("d", modifierFlags: [.command, .control, .shift])
+        XCTAssertTrue(element(app, "canvas.toolbar").waitForExistence(timeout: 30), "the canvas opens")
+        try XCTSkipUnless(element(app, "drawing.sheet").exists, "a full-screen drawing is an iPhone's")
+        sleep(2)
+        shot(app, "phone-drawing")
+
+        tap(element(app, "canvas.done"))
+        XCTAssertTrue(element(app, "drawing.sheet").waitForNonExistence(timeout: 5))
+        sleep(2)
+        shot(app, "phone-drawing-done")
+        let terminal = element(app, paneId)
+        XCTAssertTrue(terminal.waitForExistence(timeout: 5), "the pane is back in the window")
+        XCTAssertTrue(app.frame.contains(terminal.frame) && terminal.frame.height > 100, "the pane is on screen: \(terminal.frame)")
+        let screen = element(app, paneId + "-screen")
+        XCTAssertTrue((screen.value as? String ?? "").contains("12"), "the output is still there")
+        XCTAssertTrue(isDrawn(app, in: terminal.frame), "the terminal is drawn, not blank")
+
+        terminal.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1)).tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 10), "the terminal has the keyboard again")
+        app.typeText("echo typed-after-done\n")
+        sleep(2)
+        XCTAssertTrue((screen.value as? String ?? "").contains("typed-after-done"), "typing reaches the shell")
+        XCTAssertTrue(isDrawn(app, in: terminal.frame), "the terminal is still drawn")
+        shot(app, "phone-drawing-typing")
+    }
+
+    /// Text on the terminal background: the region is not one flat colour.
+    private func isDrawn(_ app: XCUIApplication, in frame: CGRect) -> Bool {
+        let screenshot = app.screenshot()
+        let rows = 12
+        let height = frame.height / CGFloat(rows)
+        let values = (0..<rows).map { row in
+            luminance(screenshot, in: CGRect(x: frame.minX, y: frame.minY + CGFloat(row) * height, width: frame.width, height: height), of: app)
+        }
+        return (values.max() ?? 0) - (values.min() ?? 0) > 2
+    }
+
     /// Mean luminance (0…255) of `frame` (points) in a screenshot.
     private func luminance(_ screenshot: XCUIScreenshot, in frame: CGRect, of app: XCUIApplication) -> Double {
         guard let image = screenshot.image.cgImage else { return 0 }

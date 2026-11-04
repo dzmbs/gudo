@@ -176,7 +176,9 @@ final class DrawingSheet: UIViewController {
     init(editor: CanvasEditor) {
         self.editor = editor
         super.init(nibName: nil, bundle: nil)
-        modalPresentationStyle = .fullScreen
+        // Over, not in place of, the window's content: `.fullScreen` takes it out of the window,
+        // and a window whose content disappears closes.
+        modalPresentationStyle = .overFullScreen
     }
 
     @available(*, unavailable)
