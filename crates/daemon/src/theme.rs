@@ -28,6 +28,10 @@ pub(crate) const TERM: &str = "xterm-256color";
 /// Variables a pane's program must not inherit from the terminal the daemon was started in:
 /// they would name another terminal or a multiplexer the pane is not inside.
 const INHERITED_TERMINAL_VARS: &[&str] = &[
+    "NO_COLOR",
+    "FORCE_COLOR",
+    "CLICOLOR",
+    "CLICOLOR_FORCE",
     "TMUX",
     "TMUX_PANE",
     "STY",
@@ -194,5 +198,21 @@ mod tests {
         assert_eq!(env["TERM_PROGRAM_VERSION"], ghostty_vt::GHOSTTY_VERSION);
         assert_eq!(env["LC_TERMINAL"], brand::PRODUCT_NAME);
         assert!(identity().xtversion.starts_with("ghostty "));
+    }
+    #[test]
+    fn pane_colors_do_not_inherit_the_launchers_overrides() {
+        let mut command = Command::new("shell");
+        for variable in ["NO_COLOR", "FORCE_COLOR", "CLICOLOR", "CLICOLOR_FORCE"] {
+            command.env(variable, "1");
+        }
+        apply_pane_env(&mut command);
+        let environment: HashMap<_, _> = command.get_envs().collect();
+        for variable in ["NO_COLOR", "FORCE_COLOR", "CLICOLOR", "CLICOLOR_FORCE"] {
+            assert_eq!(
+                environment.get(std::ffi::OsStr::new(variable)),
+                Some(&None),
+                "{variable}"
+            );
+        }
     }
 }
