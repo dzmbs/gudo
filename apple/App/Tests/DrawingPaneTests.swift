@@ -109,6 +109,7 @@ final class DrawingPaneTests: XCTestCase {
         func terminalHasKeyboard() -> Bool { terminalView.isFirstResponder }
         #else
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 800, height: 600), styleMask: [.titled], backing: .buffered, defer: true)
+        window.isReleasedWhenClosed = false
         let root = try XCTUnwrap(window.contentView)
         terminalView.frame = CGRect(x: 300, y: 0, width: 300, height: 300)
         root.addSubview(terminalView)
