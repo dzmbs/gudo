@@ -1,5 +1,6 @@
 import Foundation
 import os
+import TerminalCore
 import WebKit
 
 /// The bundled, offline Excalidraw (built by scripts/build-excalidraw.sh) in a transparent
@@ -32,9 +33,12 @@ final class CanvasWebView: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         #endif
         let controller = WKUserContentController()
         configuration.userContentController = controller
-        webView = WKWebView(frame: .zero, configuration: configuration)
+        let page = CanvasPageView(frame: .zero, configuration: configuration)
+        webView = page
         super.init()
         controller.add(WeakMessageHandler(self), name: "canvas")
+        controller.addScriptMessageHandler(ClipboardReader(), contentWorld: .page, name: "canvasClipboard")
+        page.onPaste = { [weak self] in self?.pasteFromClipboard() }
         webView.navigationDelegate = self
         #if DEBUG
         webView.isInspectable = true
@@ -95,15 +99,29 @@ final class CanvasWebView: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         await withCheckedContinuation { readyWaiters.append($0) }
     }
 
+    /// Pastes what the system clipboard holds into the drawing.
+    func pasteFromClipboard() {
+        let contents = CanvasClipboard.contents()
+        guard !contents.isEmpty else { return }
+        call("paste", contents)
+    }
+
     /// `bounds` in scene px fixes the exported area; `scale` is image pixels per scene px.
-    /// `selectionOnly` exports the selected elements when there are any.
-    func export(format: String = "png", scale: CGFloat, bounds: CGRect?, background: Bool = false, selectionOnly: Bool = false) async -> (data: Data, count: Int)? {
+    /// `selectionOnly` exports the selected elements when there are any. `backgroundColor` goes
+    /// under the drawing, as the pane it stands on shows it.
+    func export(
+        format: String = "png", scale: CGFloat, bounds: CGRect?, background: Bool = false, backgroundColor: RGB? = nil,
+        selectionOnly: Bool = false
+    ) async -> (data: Data, count: Int)? {
         await waitUntilReady()
         let id = UUID().uuidString
         var argument: [String: Any] = [
             "requestId": id, "format": format, "scale": Double(scale), "exportPadding": 0, "background": background,
             "selectionOnly": selectionOnly,
         ]
+        if let backgroundColor {
+            argument["backgroundColor"] = String(format: "#%02x%02x%02x", backgroundColor.r, backgroundColor.g, backgroundColor.b)
+        }
         if let bounds {
             argument["bounds"] = ["x": bounds.minX, "y": bounds.minY, "width": bounds.width, "height": bounds.height]
         }
@@ -167,6 +185,8 @@ final class CanvasWebView: NSObject, WKScriptMessageHandler, WKNavigationDelegat
 
     func tearDown() {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "canvas")
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "canvasClipboard", contentWorld: .page)
+        (webView as? CanvasPageView)?.onPaste = nil
         for continuation in exports.values { continuation.resume(returning: ExportReply(data: nil, count: 0, error: "closed")) }
         exports = [:]
         readyWaiters.forEach { $0.resume() }
@@ -178,6 +198,42 @@ struct ExportReply: Sendable {
     var data: String?
     var count: Int
     var error: String?
+}
+
+/// The page's view: Paste (⌘V, the Edit menu, the iPad's edit menu) hands the system clipboard
+/// to the drawing, which the page cannot read itself.
+final class CanvasPageView: WKWebView {
+    var onPaste: (() -> Void)?
+
+    #if os(macOS)
+    @objc func paste(_ sender: Any?) {
+        onPaste?()
+    }
+
+    override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(paste(_:)) { return onPaste != nil && CanvasClipboard.hasContents() }
+        return super.validateUserInterfaceItem(item)
+    }
+    #else
+    override func paste(_ sender: Any?) {
+        onPaste?()
+    }
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(paste(_:)) { return onPaste != nil && CanvasClipboard.hasContents() }
+        return super.canPerformAction(action, withSender: sender)
+    }
+    #endif
+}
+
+/// Excalidraw's own Paste reads `navigator.clipboard`, which the page answers from here. Only
+/// the bundled page reads it, never a frame inside it.
+private final class ClipboardReader: NSObject, WKScriptMessageHandlerWithReply {
+    @MainActor
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) async -> (Any?, String?) {
+        guard CanvasWebView.isOwnPage(message.frameInfo) else { return (nil, "not allowed") }
+        return (CanvasClipboard.contents(), nil)
+    }
 }
 
 /// `WKUserContentController` retains its handlers; this breaks the cycle.

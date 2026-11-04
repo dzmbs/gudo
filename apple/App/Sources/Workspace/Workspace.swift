@@ -96,7 +96,10 @@ final class Workspace {
     /// Terminal appearance for every pane (the design layer may replace it).
     @ObservationIgnored var appearance = TerminalAppearance.fromPreferences() {
         didSet {
-            for pane in made.values { pane.view.surface.appearance = appearance }
+            for pane in made.values {
+                pane.view.surface.appearance = appearance
+                PaneDrawing.of(pane.id)?.appearanceChanged()
+            }
             announceTerminalColors()
         }
     }

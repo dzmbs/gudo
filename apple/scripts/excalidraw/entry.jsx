@@ -240,27 +240,100 @@ function blobToBase64(blob) {
   });
 }
 
-// Excalidraw's dark theme is a CSS filter on the canvas (invert(93%) hue-rotate(180deg)); its
-// PNG export applies it with the canvas 2D \`filter\`, which WebKit does not implement. Apply the
-// same color matrix to the pixels so the placed image looks like the editor did.
-async function darken(blob) {
+// Excalidraw's dark theme is a CSS filter on the canvas (invert(93%) hue-rotate(180deg)), and
+// images are pre-inverted with the canvas 2D \`filter\` so they come out as themselves. WebKit
+// does not implement that \`filter\`: these apply the same color matrices to the pixels.
+const HUE_ROTATE_HALF_TURN = [-0.574, 1.43, 0.144, 0.426, 0.43, 0.144, 0.426, 1.43, -0.856];
+const SATURATE_125 = [1.19675, -0.17875, -0.018, 0.14675, 1.07125, -0.018, 0.14675, -0.17875, 1.232];
+const IMAGE_INVERT_FILTER = "invert(100%) hue-rotate(180deg) saturate(1.25)";
+
+function clamp(value) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function multiply(matrix, r, g, b) {
+  return [
+    clamp(matrix[0] * r + matrix[1] * g + matrix[2] * b),
+    clamp(matrix[3] * r + matrix[4] * g + matrix[5] * b),
+    clamp(matrix[6] * r + matrix[7] * g + matrix[8] * b),
+  ];
+}
+
+function filterPixels(pixels, invertAmount, saturate) {
+  const invert = (channel) => invertAmount - (2 * invertAmount - 1) * (channel / 255);
+  for (let i = 0; i < pixels.length; i += 4) {
+    if (pixels[i + 3] === 0) continue;
+    let rgb = multiply(HUE_ROTATE_HALF_TURN, invert(pixels[i]), invert(pixels[i + 1]), invert(pixels[i + 2]));
+    if (saturate) rgb = multiply(SATURATE_125, ...rgb);
+    pixels[i] = rgb[0] * 255;
+    pixels[i + 1] = rgb[1] * 255;
+    pixels[i + 2] = rgb[2] * 255;
+  }
+}
+
+function canvasFiltersWork() {
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = 1;
+  const ctx = canvas.getContext("2d");
+  ctx.filter = "invert(100%)";
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, 1, 1);
+  return ctx.getImageData(0, 0, 1, 1).data[0] > 127;
+}
+
+const nativeCanvasFilters = canvasFiltersWork();
+// A dark export draws its images unfiltered under a filter on the whole canvas, which
+// `finishExport` applies afterwards here: they are pre-inverted as the editor draws them.
+let exportingDark = false;
+
+// A pasted screenshot on a dark canvas shows as itself, not as its negative.
+if (!nativeCanvasFilters) {
+  const inverted = new WeakMap();
+  const drawImage = CanvasRenderingContext2D.prototype.drawImage;
+  const invertedCopy = (source) => {
+    const width = source.naturalWidth;
+    const height = source.naturalHeight;
+    if (!width || !height) return source;
+    const cached = inverted.get(source);
+    if (cached?.width === width && cached?.height === height) return cached;
+    const copy = document.createElement("canvas");
+    copy.width = width;
+    copy.height = height;
+    const ctx = copy.getContext("2d");
+    drawImage.call(ctx, source, 0, 0, width, height);
+    const image = ctx.getImageData(0, 0, width, height);
+    filterPixels(image.data, 1, true);
+    ctx.putImageData(image, 0, 0);
+    inverted.set(source, copy);
+    return copy;
+  };
+  CanvasRenderingContext2D.prototype.drawImage = function (source, ...rest) {
+    const invert = this.filter === IMAGE_INVERT_FILTER || exportingDark;
+    if (!invert || !(source instanceof HTMLImageElement)) return drawImage.call(this, source, ...rest);
+    return drawImage.call(this, invertedCopy(source), ...rest);
+  };
+}
+
+// The exported PNG as the editor shows it: the dark theme's filter, then the pane's background
+// under the drawing, which is what the canvas stands on.
+async function finishExport(blob, { dark, backgroundColor }) {
+  if (!dark && !backgroundColor) return blob;
   const bitmap = await createImageBitmap(blob);
   const canvas = document.createElement("canvas");
   canvas.width = bitmap.width;
   canvas.height = bitmap.height;
   const ctx = canvas.getContext("2d");
   ctx.drawImage(bitmap, 0, 0);
-  const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const pixels = image.data;
-  const matrix = [-0.574, 1.43, 0.144, 0.426, 0.43, 0.144, 0.426, 1.43, -0.856];
-  for (let i = 0; i < pixels.length; i += 4) {
-    if (pixels[i + 3] === 0) continue;
-    const r = 0.93 - 0.86 * (pixels[i] / 255), g = 0.93 - 0.86 * (pixels[i + 1] / 255), b = 0.93 - 0.86 * (pixels[i + 2] / 255);
-    pixels[i] = Math.max(0, Math.min(255, (matrix[0] * r + matrix[1] * g + matrix[2] * b) * 255));
-    pixels[i + 1] = Math.max(0, Math.min(255, (matrix[3] * r + matrix[4] * g + matrix[5] * b) * 255));
-    pixels[i + 2] = Math.max(0, Math.min(255, (matrix[6] * r + matrix[7] * g + matrix[8] * b) * 255));
+  if (dark) {
+    const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    filterPixels(image.data, 0.93, false);
+    ctx.putImageData(image, 0, 0);
   }
-  ctx.putImageData(image, 0, 0);
+  if (backgroundColor) {
+    ctx.globalCompositeOperation = "destination-over";
+    ctx.fillStyle = backgroundColor;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
   return await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
 }
 
@@ -282,7 +355,7 @@ function boundsElement({ x, y, width, height }) {
   ])[0];
 }
 
-async function exportImage({ requestId, format = "png", scale = 2, exportPadding = 0, bounds = null, background = false, selectionOnly = false }) {
+async function exportImage({ requestId, format = "png", scale = 2, exportPadding = 0, bounds = null, background = false, backgroundColor = null, selectionOnly = false }) {
   const api = state.api;
   if (!api) return post({ type: "export", requestId, error: "not loaded" });
   try {
@@ -303,15 +376,22 @@ async function exportImage({ requestId, format = "png", scale = 2, exportPadding
       const svg = await exportToSvg({ elements, appState, files, exportPadding });
       data = btoa(unescape(encodeURIComponent(svg.outerHTML)));
     } else {
-      const blob = await exportToBlob({
-        elements,
-        appState,
-        files,
-        exportPadding,
-        mimeType: "image/png",
-        getDimensions: (width, height) => ({ width: width * scale, height: height * scale, scale }),
-      });
-      data = await blobToBase64(appState.exportWithDarkMode ? await darken(blob) : blob);
+      const dark = appState.exportWithDarkMode && !nativeCanvasFilters;
+      exportingDark = dark;
+      let blob;
+      try {
+        blob = await exportToBlob({
+          elements,
+          appState,
+          files,
+          exportPadding,
+          mimeType: "image/png",
+          getDimensions: (width, height) => ({ width: width * scale, height: height * scale, scale }),
+        });
+      } finally {
+        exportingDark = false;
+      }
+      data = await blobToBase64(await finishExport(blob, { dark, backgroundColor }));
     }
     post({ type: "export", requestId, data, count: drawn.length });
   } catch (error) {
@@ -363,13 +443,95 @@ async function debugSkeleton({ elements = [] }) {
   redrawTextWhenFontsLoad(made);
 }
 
+function bytes(base64) {
+  const binary = atob(base64);
+  const array = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) array[i] = binary.charCodeAt(i);
+  return array;
+}
+
+function isWritable(element) {
+  return element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement || !!element?.isContentEditable;
+}
+
+const pointer = { x: null, y: null };
+document.addEventListener(
+  "pointermove",
+  (event) => {
+    pointer.x = event.clientX;
+    pointer.y = event.clientY;
+  },
+  { capture: true, passive: true },
+);
+
+// Excalidraw pastes where the pointer last was, and only over its canvas: with the pointer
+// elsewhere, or never seen (a keyboard paste on touch), it goes to the middle of the view.
+function pointAtCanvas() {
+  if (pointer.x !== null && document.elementFromPoint(pointer.x, pointer.y) instanceof HTMLCanvasElement) return;
+  const canvas = document.querySelector(".excalidraw canvas.interactive") || document.querySelector(".excalidraw canvas");
+  if (!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  document.dispatchEvent(new PointerEvent("pointermove", { clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 }));
+}
+
+// ⌘V and Paste: the host reads the system clipboard (the page cannot) and hands it over, and
+// Excalidraw takes it as its own paste (images, text, copied shapes).
+function paste(contents = {}) {
+  if (!state.api || state.config?.readOnly) return;
+  if (isWritable(document.activeElement)) {
+    if (contents.text) document.execCommand("insertText", false, contents.text);
+    return;
+  }
+  const data = new DataTransfer();
+  if (contents.image) data.items.add(new File([bytes(contents.image)], "Pasted Image", { type: contents.mimeType || "image/png" }));
+  if (contents.text) data.setData("text/plain", contents.text);
+  if (!data.items.length) return;
+  const container = document.querySelector(".excalidraw-container");
+  if (container && !container.contains(document.activeElement)) container.focus();
+  pointAtCanvas();
+  document.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+}
+
+// Excalidraw's own Paste (its context menu) reads the clipboard through the host too.
+function hostClipboard() {
+  const handler = window.webkit?.messageHandlers?.canvasClipboard;
+  return handler ? handler.postMessage({}).then((contents) => contents || {}) : Promise.resolve({});
+}
+
+{
+  const existing = navigator.clipboard;
+  const clipboard = {
+    async read() {
+      const contents = await hostClipboard();
+      const blobs = {};
+      if (contents.image) {
+        const type = contents.mimeType || "image/png";
+        blobs[type] = new Blob([bytes(contents.image)], { type });
+      }
+      if (contents.text) blobs["text/plain"] = new Blob([contents.text], { type: "text/plain" });
+      const types = Object.keys(blobs);
+      return types.length ? [{ types, getType: async (type) => blobs[type] }] : [];
+    },
+    async readText() {
+      return (await hostClipboard()).text || "";
+    },
+  };
+  if (existing?.writeText) clipboard.writeText = existing.writeText.bind(existing);
+  if (existing?.write) clipboard.write = existing.write.bind(existing);
+  Object.defineProperty(navigator, "clipboard", { value: clipboard, configurable: true });
+}
+
 // Debug and tests: the scene as the editor holds it.
 function snapshot() {
   const api = state.api;
-  return JSON.stringify({ elements: api ? api.getSceneElements() : [], tool: api?.getAppState().activeTool.type });
+  return JSON.stringify({
+    elements: api ? api.getSceneElements() : [],
+    tool: api?.getAppState().activeTool.type,
+    files: api ? Object.keys(api.getFiles()) : [],
+  });
 }
 
-window.canvas = { load, applyRemote, addElements, setViewport, setTool, setTheme, setPenMode, exportImage, bounds, flushNow, revert, debugRect, debugArrow, debugSkeleton, snapshot };
+window.canvas = { load, applyRemote, addElements, setViewport, setTool, setTheme, setPenMode, exportImage, paste, bounds, flushNow, revert, debugRect, debugArrow, debugSkeleton, snapshot };
 
 // MARK: JS → Swift
 

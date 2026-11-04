@@ -54,6 +54,8 @@ final class CanvasPaneView {
 
     func start() { editor.start() }
 
+    func follow(dark: Bool, background: RGB) { editor.follow(dark: dark, background: background) }
+
     var ownsKeyboard: Bool { editor.ownsKeyboard }
 
     func takeKeyboard() { editor.takeKeyboard() }
@@ -92,6 +94,8 @@ final class CanvasEditor: NSObject {
     }
 
     private let context: Context
+    private var dark: Bool
+    private var background: RGB
     private let web = CanvasWebView()
     private var sync: SceneSync?
     private let chrome = CanvasChromeModel()
@@ -112,18 +116,16 @@ final class CanvasEditor: NSObject {
     init(artifactId: UInt64, context: Context) {
         self.artifactId = artifactId
         self.context = context
+        dark = context.dark
+        background = context.background
         super.init()
-        let background = context.background
         #if os(iOS)
-        view.backgroundColor = UIColor(
-            red: CGFloat(background.r) / 255, green: CGFloat(background.g) / 255, blue: CGFloat(background.b) / 255, alpha: 1)
         web.webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         #else
         view.wantsLayer = true
-        view.layer?.backgroundColor = CGColor(
-            srgbRed: CGFloat(background.r) / 255, green: CGFloat(background.g) / 255, blue: CGFloat(background.b) / 255, alpha: 1)
         web.webView.autoresizingMask = [.width, .height]
         #endif
+        paintBackground()
         web.webView.frame = view.bounds
         view.addSubview(web.webView)
         let focus = FocusOnTouch()
@@ -151,17 +153,44 @@ final class CanvasEditor: NSObject {
         let host = UIHostingController(rootView: ThemedRoot { CanvasChrome(model: chrome) })
         host.view.backgroundColor = .clear
         host.sizingOptions = [.intrinsicContentSize]
-        host.overrideUserInterfaceStyle = context.dark ? .dark : .light
         view.addSubview(host.view)
         pinChrome(host.view)
         chromeHost = host
         #else
         let host = NSHostingView(rootView: ThemedRoot { CanvasChrome(model: chrome) })
-        host.appearance = NSAppearance(named: context.dark ? .darkAqua : .aqua)
         view.addSubview(host)
         chromeHost = host
         #endif
+        applyChromeAppearance()
         view.onLayout = { [weak self] in self?.layout() }
+    }
+
+    /// The terminal theme changed: the editor, its chrome and what Send and Copy export follow.
+    func follow(dark: Bool, background: RGB) {
+        guard dark != self.dark || background != self.background else { return }
+        let themeChanged = dark != self.dark
+        self.dark = dark
+        self.background = background
+        paintBackground()
+        applyChromeAppearance()
+        if themeChanged { web.call("setTheme", ["theme": dark ? "dark" : "light"]) }
+    }
+
+    private func paintBackground() {
+        let red = CGFloat(background.r) / 255, green = CGFloat(background.g) / 255, blue = CGFloat(background.b) / 255
+        #if os(iOS)
+        view.backgroundColor = UIColor(red: red, green: green, blue: blue, alpha: 1)
+        #else
+        view.layer?.backgroundColor = CGColor(srgbRed: red, green: green, blue: blue, alpha: 1)
+        #endif
+    }
+
+    private func applyChromeAppearance() {
+        #if os(iOS)
+        chromeHost?.overrideUserInterfaceStyle = dark ? .dark : .light
+        #else
+        chromeHost?.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        #endif
     }
 
     func start() {
@@ -187,7 +216,7 @@ final class CanvasEditor: NSObject {
             guard let self, let sync else { return }
             followFile(sync.appState[DrawingFile.pathKey] as? String)
         }
-        let theme = context.dark ? "dark" : "light"
+        let theme = dark ? "dark" : "light"
         Task {
             await sync.load(mode: "canvas", theme: theme, viewport: nil)
             guard !closed else { return }
@@ -316,12 +345,13 @@ final class CanvasEditor: NSObject {
 
     // MARK: Send, copy, rename
 
-    /// The selection, or the whole drawing when nothing is selected.
+    /// The selection, or the whole drawing when nothing is selected, as the canvas shows it: in
+    /// the theme, on the pane's background.
     private func image() async -> Data? {
         web.call("flushNow")
         await sync?.settle()
         guard await web.value("canvas.bounds()") is [String: Any] else { return nil }
-        return await web.export(scale: 2, bounds: nil, selectionOnly: true)?.data
+        return await web.export(scale: 2, bounds: nil, background: true, backgroundColor: background, selectionOnly: true)?.data
     }
 
     private func send(to destination: AgentDestination) {
