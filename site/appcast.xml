@@ -10,6 +10,23 @@
     <description>Updates for Gudo for Mac.</description>
     <language>en</language>
     <item>
+      <title>Version 0.1.4</title>
+      <pubDate>Wed, 04 Nov 2026 11:38:36 +0100</pubDate>
+      <sparkle:version>876</sparkle:version>
+      <sparkle:shortVersionString>0.1.4</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <sparkle:releaseNotesLink>https://github.com/dzmbs/gudo/releases/tag/v0.1.4</sparkle:releaseNotesLink>
+      <description>Updates show up in the sidebar
+Programs keep running through updates
+Claude Code and Codex look as they do in Ghostty
+Notifications when an agent finishes or needs you
+Easier SSH hosts and a new SSH Keys page
+Drawing, browser and tab improvements
+Security fixes for shared sessions</description>
+      <enclosure url="https://github.com/dzmbs/gudo/releases/download/v0.1.4/Gudo.dmg" length="67884660" type="application/octet-stream"
+                 sparkle:edSignature="ZyxpOQ4QhQtsfnnRoRQc9z5jS/7krdZMrtJK3BZdONVKO2AwN+XKQtfMEA0hZzz++AJvBcPMLq+xLqwzdXiWDQ==" />
+    </item>
+    <item>
       <title>Version 0.1.3</title>
       <pubDate>Tue, 03 Nov 2026 17:02:50 +0100</pubDate>
       <sparkle:version>807</sparkle:version>
