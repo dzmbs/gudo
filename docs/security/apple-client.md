@@ -93,6 +93,22 @@ and terminal SSH-integration bugs).
   use that host's own persistent `WKWebsiteDataStore(forIdentifier:)`, never the store of the
   user's own browsing. Host A's pages cannot see host B's cookies or storage, or the user's
   sessions. Removing a host deletes its store.
+- A host's dev servers reach the in-app browser through listeners on this device's loopback
+  (`HostKit/DevServerProxy.swift`), which any program or other user on the device can reach:
+  - The host's SOCKS5 proxy accepts only username and password authentication (RFC 1929) with a
+    random credential per proxy, applied to that host's data store only
+    (`ProxyConfiguration.applyCredential`), compared in constant time; "no authentication" is
+    refused.
+  - The `localhost` router forwards an HTTP request only when it carries a host's HttpOnly route
+    cookie and a loopback `Host` (`localhost`, `127.x`, `[::1]`). No cookie, TLS or another name
+    is refused; it never falls back to the host that opened the port last. The one exception
+    is a sign-in's callback port while the sign-in lasts, since the callback comes from the
+    sign-in's own browser without the cookie. An `https` dev server on a loopback literal
+    therefore opens through a forward on another port.
+  - Either way only the host's ports opened for the browser are forwarded: a dev server opened
+    from the app, a page the browser navigated to, a sign-in's callback, the host's existing
+    forwards and ports its panes listen on. A page cannot reach the host's other loopback
+    services (databases, admin ports) through them.
 - The VS Code web view hands only `vscode:`, `vscode-insiders:`, `mailto:` and `tel:` links to
   the system, only from the main frame and only from a link the user clicked: a page cannot
   start another app by itself. Only the exact desktop address of the open tunnel, as the daemon
@@ -204,6 +220,10 @@ collected data. Required-reason APIs are declared: UserDefaults `CA92.1`/`1C8F.1
   Keychain, where another app's access triggers a prompt.
 - **`*.localhost` is allowed over plain HTTP by ATS.** It is needed for dev servers through the
   host's proxy. A resolver that sends `*.localhost` off the machine would expose those loads.
+- **Pages in a host's data store reach its opened dev ports.** Any page shown for that host
+  (a site an agent opened, say) can make requests to the dev servers opened for the browser and
+  to ports the host's panes listen on, as a page in a desktop browser on the host could reach
+  its `localhost`. While a sign-in waits, its callback port takes requests without the cookie.
 - **Secrets cross into Swift as `Data`/`String`**, which Swift cannot zeroize. The Rust side
   zeroizes askpass secrets; device and SSH keys live as long as the connection does.
 - **Links a user clicks in a host's terminal** open as the user's own browsing (as a
@@ -246,6 +266,14 @@ by removing it).
 - `AppTests/LinkSecurityTests`: a pairing link shows Add Host; invites open Join.
 - `HostKitTests`: `fileSecretsAreOwnerOnlyUnderAnOpenUmask` (umask 0, a folder made before),
   `fileSecretsMoveIntoTheKeychainAndLeaveNoFiles`.
+- `HostKitTests/DevServerProxyTests`: `testSocksRefusesClientsWithoutItsCredential` (method
+  "no authentication", a wrong password, a wrong username; each proxy's own credential),
+  `testSocksPassesOnARefusedPort`, `testRouterRefusesRequestsWithoutARouteCookie` (no cookie,
+  another host's token, a non-loopback `Host`, TLS), `testRoutedNames` (`127.evil.example`),
+  and `testWebKitKeepsTheOriginPerHost` and `testSignInPortIsObservedAndReleased` for what must
+  keep working (WebKit sending the credential, cookies, websockets, OAuth callbacks).
+  `AppTests/WorkspaceScreenModelTests`: `testPortsOpenAtThePrintedURLThroughTheHost` (another
+  program's request gets no forward), `testOnlyPortsOpenedForTheBrowserReachTheHost`.
 - `client-core` `browser::tests`: a daemon pushing browser requests to a connection that did
   not announce the capability (or to a guest) reaches nothing.
 - `apple-ffi` `debug_output_leaves_secrets_out`: every FFI type that carries a secret.

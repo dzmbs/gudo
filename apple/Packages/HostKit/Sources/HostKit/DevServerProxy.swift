@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import Security
 
 // A dev server on a host keeps its origin in the in-app browser.
 //
@@ -11,13 +12,19 @@ import Network
 // `localhost` but not `127.0.0.1` or `[::1]`); `*.localhost` is always proxied:
 //
 // - `DevServerSocksProxy`: one per host, set as its `WKWebsiteDataStore.proxyConfigurations`
-//   (SOCKS5). `*.localhost:<port>` (and loopback literals, should WebKit ever send them) go to
-//   that host's forward of `<port>`; anything else connects directly.
+//   (SOCKS5 with a username and password only that data store is given, so other programs and
+//   users on this device cannot use it). `*.localhost:<port>` (and loopback literals, should
+//   WebKit ever send them) go to that host's forward of `<port>`; anything else connects
+//   directly.
 // - `LoopbackRouter`: the app's listeners on this device's `127.0.0.1:<port>` and
 //   `[::1]:<port>` for `localhost` URLs. Several hosts may serve the same port: each host's data
 //   store carries a route cookie (`routeCookie`, HttpOnly) for the loopback names, and a
-//   connection goes to the host whose cookie its first request carries, else to the host that
-//   opened the port last (TLS, or a request without cookies).
+//   connection goes to the host whose cookie its first request carries, for a loopback `Host`.
+//   Anything else (no cookie, TLS, another name) is refused, except on a sign-in's callback
+//   port while the sign-in lasts: its callback comes from a browser without the cookie.
+//
+// Which ports of a host the forward opens is the caller's: `DevServerProxyError.portNotOpened`
+// refuses one.
 
 /// Gives the local port of a forward to the host's `localhost:<port>`, creating it if needed.
 public typealias DevServerForward = @Sendable (_ hostPort: UInt16) async throws -> UInt16
@@ -26,7 +33,8 @@ public nonisolated enum DevServerNames {
     /// `localhost`, `127.x.x.x`, `::1`: names WebKit never proxies.
     public static func isLoopbackLiteral(_ host: String) -> Bool {
         let host = host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-        return host == "localhost" || host == "::1" || host.hasPrefix("127.")
+        if host == "localhost" || host == "::1" { return true }
+        return IPv4Address(host).map { $0.rawValue.first == 127 } ?? false
     }
 
     /// Names the host's forwards serve: loopback literals and `*.localhost`.
@@ -40,6 +48,21 @@ public nonisolated enum DevServerProxyError: Error, Equatable {
     /// Something other than this app listens on that loopback port here.
     case portInUse(UInt16)
     case listenerFailed(String)
+    /// The host's port was not opened for the browser.
+    case portNotOpened(UInt16)
+}
+
+/// Equal whatever the contents, in time that depends only on the lengths.
+nonisolated func constantTimeEqual(_ first: some Collection<UInt8>, _ second: some Collection<UInt8>) -> Bool {
+    guard first.count == second.count else { return false }
+    return zip(first, second).reduce(UInt8(0)) { $0 | ($1.0 ^ $1.1) } == 0
+}
+
+nonisolated func randomSecret() -> String {
+    var bytes = [UInt8](repeating: 0, count: 24)
+    let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+    precondition(status == errSecSuccess, "no system randomness")
+    return bytes.map { String(format: "%02x", $0) }.joined()
 }
 
 // MARK: - Splicing
@@ -164,8 +187,18 @@ public nonisolated final class DevServerSocksProxy: @unchecked Sendable {
     /// The port it listens on (after `start`).
     public private(set) var port: UInt16 = 0
 
+    /// The only username and password it takes (RFC 1929), random per proxy.
+    public let credential = (username: randomSecret(), password: randomSecret())
+
     public init(forward: @escaping DevServerForward) {
         self.forward = forward
+    }
+
+    /// The proxy configuration for the host's data store, its credential applied.
+    public var configuration: ProxyConfiguration {
+        var configuration = ProxyConfiguration(socksv5Proxy: .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!))
+        configuration.applyCredential(username: credential.username, password: credential.password)
+        return configuration
     }
 
     /// Connections sent to the host (`*.localhost`, loopback) and directly (anything else).
@@ -212,12 +245,38 @@ public nonisolated final class DevServerSocksProxy: @unchecked Sendable {
 
     private func accept(_ client: NWConnection) {
         client.start(queue: queue)
-        // Greeting: VER, NMETHODS, METHODS…
+        // Greeting: VER, NMETHODS, METHODS…; only username and password (2).
         readPrefix(client, limit: 257, enough: { $0.count >= 2 && $0.count >= 2 + Int($0[$0.startIndex + 1]) }) { [self] greeting, _ in
             let bytes = [UInt8](greeting)
-            guard bytes.count >= 2, bytes[0] == 5, bytes[2...].contains(0) else { return client.cancel() }
-            client.send(content: Data([5, 0]), completion: .contentProcessed { [self] _ in request(client) })
+            guard bytes.count >= 2, bytes[0] == 5 else { return client.cancel() }
+            guard bytes[2...].contains(2) else { return refuse(client, Data([5, 0xFF])) }
+            client.send(content: Data([5, 2]), completion: .contentProcessed { [self] _ in authenticate(client) })
         }
+    }
+
+    /// `VER=1 ULEN UNAME PLEN PASSWD`, checked against `credential`.
+    private func authenticate(_ client: NWConnection) {
+        readPrefix(client, limit: 513, enough: { Self.parseLogin([UInt8]($0)) != nil }) { [self] data, _ in
+            guard let (username, password) = Self.parseLogin([UInt8](data)) else { return client.cancel() }
+            let userMatches = constantTimeEqual(username, Array(credential.username.utf8))
+            let passwordMatches = constantTimeEqual(password, Array(credential.password.utf8))
+            guard userMatches && passwordMatches else { return refuse(client, Data([1, 1])) }
+            client.send(content: Data([1, 0]), completion: .contentProcessed { [self] _ in request(client) })
+        }
+    }
+
+    private func refuse(_ client: NWConnection, _ reply: Data) {
+        client.send(content: reply, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { _ in client.cancel() })
+    }
+
+    /// `VER ULEN UNAME PLEN PASSWD` → (username, password), or nil while incomplete.
+    static func parseLogin(_ bytes: [UInt8]) -> ([UInt8], [UInt8])? {
+        guard bytes.count >= 2, bytes[0] == 1 else { return nil }
+        let userEnd = 2 + Int(bytes[1])
+        guard bytes.count > userEnd else { return nil }
+        let passwordEnd = userEnd + 1 + Int(bytes[userEnd])
+        guard bytes.count >= passwordEnd else { return nil }
+        return (Array(bytes[2..<userEnd]), Array(bytes[(userEnd + 1)..<passwordEnd]))
     }
 
     private func request(_ client: NWConnection) {
@@ -230,6 +289,8 @@ public nonisolated final class DevServerSocksProxy: @unchecked Sendable {
                     do {
                         let local = try await forward(port)
                         connectLocal(local, queue: queue) { [self] upstream in established(client, upstream) }
+                    } catch DevServerProxyError.portNotOpened {
+                        reply(client, 2)
                     } catch {
                         reply(client, 5)
                     }
@@ -297,9 +358,10 @@ public nonisolated final class LoopbackRouter: @unchecked Sendable {
 
     private let queue = DispatchQueue(label: "loopback-router")
     private var listeners: [UInt16: [NWListener]] = [:]
-    /// Per port: route token → that host's forward, and the host that opened it last.
+    /// Per port: route token → that host's forward.
     private var routes: [UInt16: [String: DevServerForward]] = [:]
-    private var latest: [UInt16: String] = [:]
+    /// Per port: the sign-in that takes requests without a route cookie.
+    private var callbacks: [UInt16: String] = [:]
     private var routedBy: [String: Int] = [:]
     /// Per port: told each HTTP request's target (a sign-in waiting for its callback).
     private var observers: [UInt16: @Sendable (String) -> Void] = [:]
@@ -316,8 +378,10 @@ public nonisolated final class LoopbackRouter: @unchecked Sendable {
     /// `portInUse` when something else listens on it here (the caller falls back to a forward
     /// on another port).
     /// `onRequest` hears the target (`/callback?code=…`) of every HTTP request on the port.
+    /// With `acceptsAnyRequest` (a sign-in's callback port, until released), requests without a
+    /// route cookie go to this host too.
     public func claim(
-        port: UInt16, token: String, forward: @escaping DevServerForward,
+        port: UInt16, token: String, forward: @escaping DevServerForward, acceptsAnyRequest: Bool = false,
         onRequest: (@Sendable (String) -> Void)? = nil
     ) async throws {
         let listening = queue.sync { listeners[port] != nil }
@@ -327,7 +391,7 @@ public nonisolated final class LoopbackRouter: @unchecked Sendable {
         }
         queue.sync {
             routes[port, default: [:]][token] = forward
-            latest[port] = token
+            if acceptsAnyRequest { callbacks[port] = token }
             if let onRequest { observers[port] = onRequest }
         }
     }
@@ -335,30 +399,25 @@ public nonisolated final class LoopbackRouter: @unchecked Sendable {
     /// Stops serving `port` for `token`'s host (a sign-in is over); closed once no host uses it.
     public func release(port: UInt16, token: String) {
         queue.sync {
-            routes[port]?[token] = nil
-            if latest[port] == token { latest[port] = routes[port]?.keys.sorted().first }
-            if routes[port]?.isEmpty == true {
-                routes[port] = nil
-                latest[port] = nil
-                observers[port] = nil
-                listeners.removeValue(forKey: port)?.forEach { $0.cancel() }
-            }
+            forget(token, on: port)
+        }
+    }
+
+    /// On `queue`.
+    private func forget(_ token: String, on port: UInt16) {
+        routes[port]?[token] = nil
+        if callbacks[port] == token { callbacks[port] = nil }
+        if routes[port]?.isEmpty == true {
+            routes[port] = nil
+            observers[port] = nil
+            listeners.removeValue(forKey: port)?.forEach { $0.cancel() }
         }
     }
 
     /// Forgets a host (disconnected, removed); ports no host uses any more are closed.
     public func release(token: String) {
         queue.sync {
-            for port in routes.keys {
-                routes[port]?[token] = nil
-                if latest[port] == token { latest[port] = routes[port]?.keys.sorted().first }
-                if routes[port]?.isEmpty == true {
-                    routes[port] = nil
-                    latest[port] = nil
-                    observers[port] = nil
-                    listeners.removeValue(forKey: port)?.forEach { $0.cancel() }
-                }
-            }
+            for port in routes.keys { forget(token, on: port) }
         }
     }
 
@@ -367,7 +426,7 @@ public nonisolated final class LoopbackRouter: @unchecked Sendable {
             listeners.values.joined().forEach { $0.cancel() }
             listeners = [:]
             routes = [:]
-            latest = [:]
+            callbacks = [:]
         }
     }
 
@@ -390,23 +449,13 @@ public nonisolated final class LoopbackRouter: @unchecked Sendable {
 
     private func accept(_ client: NWConnection, port: UInt16) {
         client.start(queue: queue)
-        // The request head names the host by its route cookie; anything that is not HTTP
-        // (TLS) goes to the latest host at once. Browsers speak first, so no timeout.
+        // The request head names the host by its route cookie. Browsers speak first, so no
+        // timeout.
         readPrefix(client, limit: 64 * 1024, enough: Self.headIsComplete) { [self] head, ended in
-            let token = Self.routeToken(in: head)
             // On `queue` already (the connection's queue).
+            guard let token = route(head, port: port), let forward = routes[port]?[token] else { return client.cancel() }
+            routedBy[token, default: 0] += 1
             if let observe = observers[port], let target = Self.requestTarget(in: head) { observe(target) }
-            let forward: DevServerForward? = {
-                let routes = routes[port] ?? [:]
-                if let token, let forward = routes[token] {
-                    routedBy[token, default: 0] += 1
-                    return forward
-                }
-                guard let latest = latest[port] else { return nil }
-                routedBy[latest, default: 0] += 1
-                return routes[latest]
-            }()
-            guard let forward else { return client.cancel() }
             Task { [self] in
                 guard let local = try? await forward(port) else { return client.cancel() }
                 connectLocal(local, queue: queue) { [self] upstream in
@@ -420,6 +469,36 @@ public nonisolated final class LoopbackRouter: @unchecked Sendable {
                 }
             }
         }
+    }
+
+    /// The route token of an HTTP request for a loopback name: its route cookie's host, else a
+    /// sign-in waiting on the port. On `queue`.
+    private func route(_ head: Data, port: UInt16) -> String? {
+        guard Self.requestTarget(in: head) != nil, let host = Self.hostHeader(in: head),
+              DevServerNames.isLoopbackLiteral(Self.hostName(host))
+        else { return nil }
+        if let cookie = Self.routeToken(in: head),
+           let token = routes[port]?.keys.first(where: { constantTimeEqual(Array($0.utf8), Array(cookie.utf8)) }) {
+            return token
+        }
+        return callbacks[port]
+    }
+
+    /// The `Host` header of an HTTP request head.
+    static func hostHeader(in head: Data) -> String? {
+        guard let end = head.range(of: Data("\r\n\r\n".utf8)) else { return nil }
+        let text = String(decoding: head[..<end.lowerBound], as: UTF8.self)
+        for line in text.split(separator: "\r\n").dropFirst() {
+            guard let colon = line.firstIndex(of: ":"), line[..<colon].lowercased() == "host" else { continue }
+            return line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+        }
+        return nil
+    }
+
+    /// `localhost:3000` → `localhost`, `[::1]:3000` → `[::1]`.
+    static func hostName(_ host: String) -> String {
+        if host.hasPrefix("["), let close = host.firstIndex(of: "]") { return String(host[...close]) }
+        return String(host.split(separator: ":", maxSplits: 1).first ?? "")
     }
 
     /// An HTTP request head is complete at its blank line; non-HTTP bytes are "complete" at once.

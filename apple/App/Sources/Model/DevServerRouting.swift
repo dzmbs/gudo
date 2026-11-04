@@ -14,6 +14,9 @@ import WebKit
 /// - WebKit does not proxy loopback literals (`127.0.0.1` and `[::1]` anywhere, `localhost` on
 ///   macOS), so for those the app also listens on this device's loopback port itself
 ///   (`LoopbackRouter`) and sends each connection to the host whose route cookie it carries.
+/// - Only ports opened for the browser reach the host: dev servers opened from the app, pages
+///   the browser navigated to, sign-in callbacks, the host's forwards and ports its panes
+///   listen on. A page cannot reach the host's other loopback services.
 ///
 /// When the port is in use here or the proxy cannot start, `page` returns nil and the caller
 /// forwards to another port instead. `-browserProxy NO` forces that.
@@ -33,6 +36,7 @@ final class DevServerRouting {
         let token: String
         var proxy: DevServerSocksProxy?
         var cookiesSet = false
+        var openedPorts: Set<UInt16> = []
         var client: () throws -> any DaemonWorkspaceAPI
 
         init(store: WKWebsiteDataStore, token: String, client: @escaping () throws -> any DaemonWorkspaceAPI) {
@@ -72,6 +76,9 @@ final class DevServerRouting {
         }
     }
 
+    /// The value of the host's route cookie.
+    func routeCookie(forHost id: String) -> String? { hosts[id]?.token }
+
     func routedConnections(forHost id: String) -> Int {
         guard let route = hosts[id] else { return 0 }
         return (route.proxy?.counts.routed ?? 0) + router.count(for: route.token)
@@ -81,7 +88,10 @@ final class DevServerRouting {
     func page(for port: DetectedPort, hostId: String, client: @escaping () throws -> any DaemonWorkspaceAPI) async -> URL? {
         guard isEnabled, let route = await route(hostId, client: client) else { return nil }
         let url = Self.pageURL(for: port)
+        route.openedPorts.insert(port.port)
         if let host = url.host(), DevServerNames.isLoopbackLiteral(host) {
+            // TLS carries no route cookie the router could read.
+            if url.scheme == "https", !Self.webKitProxies(host) { return nil }
             do {
                 try await router.claim(port: port.port, token: route.token) { [weak self] hostPort in
                     guard let self else { throw HostError.notConnected }
@@ -102,11 +112,12 @@ final class DevServerRouting {
         return await route(id, client: client)?.store
     }
 
-    /// Makes this device's loopback port serve the host's before such a page loads.
+    /// Opens the host's port for a page the browser navigates to, and makes this device's
+    /// loopback port serve it before a `localhost` page loads.
     func prepareLoopback(_ url: URL, hostId: String, client: @escaping () throws -> any DaemonWorkspaceAPI) async {
-        guard let host = url.host(), DevServerNames.isLoopbackLiteral(host), let port = url.port.flatMap(UInt16.init(exactly:)),
-              !router.ports.contains(port)
-        else { return }
+        guard let host = url.host(), DevServerNames.isRouted(host), let port = url.port.flatMap(UInt16.init(exactly:)) else { return }
+        hosts[hostId]?.openedPorts.insert(port)
+        guard DevServerNames.isLoopbackLiteral(host), !router.ports.contains(port) else { return }
         _ = await page(
             for: DetectedPort(port: port, process: "", url: url.absoluteString, isHTTP: true, loopbackOnly: true, pane: nil),
             hostId: hostId, client: client)
@@ -118,12 +129,13 @@ final class DevServerRouting {
         port: UInt16, hostId: String, client: @escaping () throws -> any DaemonWorkspaceAPI,
         onRequest: @escaping @Sendable (String) -> Void
     ) async throws -> String {
-        guard await route(hostId, client: client) != nil else { throw HostError.notConnected }
+        guard let route = await route(hostId, client: client) else { throw HostError.notConnected }
+        route.openedPorts.insert(port)
         let token = "signin-" + UUID().uuidString.lowercased()
         try await router.claim(port: port, token: token, forward: { [weak self] hostPort in
             guard let self else { throw HostError.notConnected }
             return try await self.forward(hostId, hostPort)
-        }, onRequest: onRequest)
+        }, acceptsAnyRequest: true, onRequest: onRequest)
         return token
     }
 
@@ -182,8 +194,7 @@ final class DevServerRouting {
                 return nil
             }
             route.proxy = proxy
-            route.store.proxyConfigurations = [ProxyConfiguration(
-                socksv5Proxy: .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: proxy.port)!))]
+            route.store.proxyConfigurations = [proxy.configuration]
         }
         if !route.cookiesSet {
             for domain in ["localhost", "127.0.0.1"] {
@@ -205,7 +216,16 @@ final class DevServerRouting {
         if let existing = api.forwards().first(where: { if case .tcp(let port) = $0.target { port == hostPort } else { false } }) {
             return existing.localPort
         }
+        guard Self.isOpened(hostPort, opened: route.openedPorts, panePorts: api.ports().map(\.port)) else {
+            throw DevServerProxyError.portNotOpened(hostPort)
+        }
         return try api.forward(localPort: 0, target: .tcp(port: hostPort))
+    }
+
+    /// A host port the browser may reach: opened for it, or one the host's panes listen on (an
+    /// API server beside the page's dev server).
+    nonisolated static func isOpened(_ port: UInt16, opened: Set<UInt16>, panePorts: [UInt16]) -> Bool {
+        opened.contains(port) || panePorts.contains(port)
     }
 
     nonisolated static func storeIdentifier(_ hostId: String) -> UUID {

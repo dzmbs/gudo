@@ -597,16 +597,30 @@ final class WorkspaceScreenModelTests: XCTestCase {
         let plain = DetectedPort(port: 48_326, process: "python3", url: nil, isHTTP: true, loopbackOnly: true, pane: nil)
         let localURL = try await ports.open(plain)
         XCTAssertEqual(localURL.absoluteString, "http://localhost:48326/", "the same port here, served by the app")
-        // A connection to it asks the host for a forward of 48326.
+        // Another program on this device, without the host's route cookie, gets nothing.
+        let stranger = NWConnection(host: "127.0.0.1", port: 48_326, using: .tcp)
+        stranger.start(queue: .global())
+        stranger.send(content: Data("GET / HTTP/1.1\r\nHost: localhost:48326\r\n\r\n".utf8), completion: .idempotent)
+        defer { stranger.cancel() }
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertFalse(client.forwards().contains { $0.target == .tcp(port: 48_326) }, "\(client.forwards())")
+        // The host's pages carry the cookie: a connection asks the host for a forward of 48326.
+        let cookie = try XCTUnwrap(DevServerRouting.shared.routeCookie(forHost: "h1"))
         let connection = NWConnection(host: "127.0.0.1", port: 48_326, using: .tcp)
         connection.start(queue: .global())
-        connection.send(content: Data("GET / HTTP/1.1\r\nHost: localhost:48326\r\n\r\n".utf8), completion: .idempotent)
+        connection.send(content: Data("GET / HTTP/1.1\r\nHost: localhost:48326\r\nCookie: \(LoopbackRouter.routeCookie)=\(cookie)\r\n\r\n".utf8), completion: .idempotent)
         defer { connection.cancel() }
         let deadline = Date().addingTimeInterval(5)
         while Date() < deadline, !client.forwards().contains(where: { if case .tcp(48_326) = $0.target { true } else { false } }) {
             try await Task.sleep(for: .milliseconds(50))
         }
         XCTAssertTrue(client.forwards().contains { $0.localPort >= 50_000 && $0.target == .tcp(port: 48_326) }, "\(client.forwards())")
+    }
+
+    func testOnlyPortsOpenedForTheBrowserReachTheHost() {
+        XCTAssertTrue(DevServerRouting.isOpened(5173, opened: [5173], panePorts: []))
+        XCTAssertTrue(DevServerRouting.isOpened(8000, opened: [5173], panePorts: [8000]), "an API server in a pane")
+        XCTAssertFalse(DevServerRouting.isOpened(6379, opened: [5173], panePorts: [8000]), "the host's other services")
     }
 
     func testDevServerPageURLs() {

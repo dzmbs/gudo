@@ -21,12 +21,47 @@ nonisolated final class DevServerProxyTests: XCTestCase {
         try await proxy.start()
         defer { proxy.stop() }
 
-        let reply = try await RawClient.socksGet(proxy: proxy.port, host: "app.localhost", port: 48_321, path: "/whoami")
+        let reply = try await RawClient.socksGet(proxy: proxy.port, credential: proxy.credential, host: "app.localhost", port: 48_321, path: "/whoami")
         XCTAssertTrue(reply.contains("server=A"), reply)
         XCTAssertTrue(reply.contains("host=app.localhost:48321"), "the Host header is the page's own: \(reply)")
         XCTAssertEqual(asked.value, [48_321], "the host's port, not the forward's")
         XCTAssertEqual(proxy.counts.routed, 1)
         XCTAssertEqual(proxy.counts.direct, 0)
+    }
+
+    /// Other programs and users on this device cannot use a host's proxy: it takes only the
+    /// username and password its own data store was given, never "no authentication".
+    func testSocksRefusesClientsWithoutItsCredential() async throws {
+        let server = try await TestDevServer.start(name: "A")
+        defer { server.stop() }
+        let asked = Locked<[UInt16]>([])
+        let proxy = DevServerSocksProxy { port in
+            asked.mutate { $0.append(port) }
+            return server.port
+        }
+        try await proxy.start()
+        defer { proxy.stop() }
+
+        let noAuth = try await RawClient.socksGreeting(proxy: proxy.port, methods: [0])
+        XCTAssertEqual(noAuth, [5, 0xFF], "no acceptable method")
+        let wrong = try await RawClient.socksLogin(proxy: proxy.port, username: proxy.credential.username, password: "guess")
+        XCTAssertEqual(wrong, [1, 1])
+        let otherUser = try await RawClient.socksLogin(proxy: proxy.port, username: "x", password: proxy.credential.password)
+        XCTAssertEqual(otherUser, [1, 1])
+        XCTAssertEqual(asked.value, [], "nothing was forwarded")
+
+        let other = DevServerSocksProxy { _ in server.port }
+        XCTAssertNotEqual(other.credential.password, proxy.credential.password, "each proxy has its own")
+        XCTAssertGreaterThanOrEqual(proxy.credential.password.count, 32)
+    }
+
+    /// A port the host's forward refuses (not opened for that host) fails the CONNECT.
+    func testSocksPassesOnARefusedPort() async throws {
+        let proxy = DevServerSocksProxy { port in throw DevServerProxyError.portNotOpened(port) }
+        try await proxy.start()
+        defer { proxy.stop() }
+        let code = try await RawClient.socksConnect(proxy: proxy.port, credential: proxy.credential, host: "db.localhost", port: 5432)
+        XCTAssertEqual(code, 2, "not allowed by ruleset")
     }
 
     func testSocksRequestParsing() {
@@ -45,7 +80,7 @@ nonisolated final class DevServerProxyTests: XCTestCase {
         for name in ["localhost", "LOCALHOST", "127.0.0.1", "127.1.2.3", "[::1]", "app.localhost", "a.b.localhost", "app.localhost."] {
             XCTAssertTrue(DevServerNames.isRouted(name), name)
         }
-        for name in ["example.com", "localhost.example.com", "10.0.0.1", "mylocalhost"] {
+        for name in ["example.com", "localhost.example.com", "10.0.0.1", "mylocalhost", "127.evil.example"] {
             XCTAssertFalse(DevServerNames.isRouted(name), name)
         }
         XCTAssertTrue(DevServerNames.isLoopbackLiteral("localhost"))
@@ -69,16 +104,40 @@ nonisolated final class DevServerProxyTests: XCTestCase {
         XCTAssertTrue(viaA.contains("server=A"), viaA)
         let viaB = try await RawClient.get(port: port, path: "/whoami", cookie: "\(LoopbackRouter.routeCookie)=tb")
         XCTAssertTrue(viaB.contains("server=B"), viaB)
-        let none = try await RawClient.get(port: port, path: "/whoami", cookie: nil)
-        XCTAssertTrue(none.contains("server=B"), "no cookie: the host that opened the port last")
         XCTAssertEqual(router.count(for: "ta"), 1)
-        XCTAssertEqual(router.count(for: "tb"), 2)
+        XCTAssertEqual(router.count(for: "tb"), 1)
 
         router.release(token: "tb")
-        let afterRelease = try await RawClient.get(port: port, path: "/whoami", cookie: nil)
+        let afterRelease = try await RawClient.get(port: port, path: "/whoami", cookie: "\(LoopbackRouter.routeCookie)=ta")
         XCTAssertTrue(afterRelease.contains("server=A"), afterRelease)
         router.release(token: "ta")
         XCTAssertEqual(router.ports, [], "a port no host uses is closed")
+    }
+
+    /// Any program on this device, another user or a web page can reach the app's loopback
+    /// ports: without a host's route cookie, or naming another host, nothing is forwarded.
+    func testRouterRefusesRequestsWithoutARouteCookie() async throws {
+        let server = try await TestDevServer.start(name: "A")
+        defer { server.stop() }
+        let router = LoopbackRouter()
+        defer { router.stop() }
+        let port: UInt16 = 48_325
+        try await router.claim(port: port, token: "ta") { _ in server.port }
+
+        let none = try await RawClient.get(port: port, path: "/whoami", cookie: nil)
+        XCTAssertFalse(none.contains("server=A"), "no cookie: refused, not the latest host: \(none)")
+        let forged = try await RawClient.get(port: port, path: "/whoami", cookie: "\(LoopbackRouter.routeCookie)=tb")
+        XCTAssertFalse(forged.contains("server=A"), forged)
+        let rebound = try await RawClient.get(port: port, path: "/whoami", cookie: "\(LoopbackRouter.routeCookie)=ta", host: "evil.example:\(port)")
+        XCTAssertFalse(rebound.contains("server=A"), "a name that is not loopback: \(rebound)")
+        let tls = try await RawClient.send(port: port, Data([0x16, 3, 1, 0, 5, 1, 0, 0, 1, 0]))
+        XCTAssertTrue(tls.isEmpty, "not HTTP: no cookie to route by")
+        XCTAssertEqual(router.count(for: "ta"), 0)
+
+        for host in ["localhost:\(port)", "127.0.0.1:\(port)", "[::1]:\(port)", "LOCALHOST"] {
+            let routed = try await RawClient.get(port: port, path: "/whoami", cookie: "\(LoopbackRouter.routeCookie)=ta", host: host)
+            XCTAssertTrue(routed.contains("server=A"), "\(host): \(routed)")
+        }
     }
 
     func testRouterRefusesAPortTakenHere() async throws {
@@ -105,9 +164,10 @@ nonisolated final class DevServerProxyTests: XCTestCase {
         defer { router.stop() }
         let port: UInt16 = 48_324
         let heard = Locked<[String]>([])
-        try await router.claim(port: port, token: "signin", forward: { _ in host.port }) { target in
+        try await router.claim(port: port, token: "signin", forward: { _ in host.port }, acceptsAnyRequest: true) { target in
             heard.mutate { $0.append(target) }
         }
+        // The callback comes from the sign-in's own browser, which holds no route cookie.
         let reply = try await RawClient.get(port: port, path: "/whoami?code=abc&state=s", cookie: nil)
         XCTAssertTrue(reply.hasPrefix("HTTP/1.1 200"), "the host answered: \(reply)")
         XCTAssertEqual(heard.value, ["/whoami?code=abc&state=s"])
@@ -145,8 +205,7 @@ nonisolated final class DevServerProxyTests: XCTestCase {
             let proxy = DevServerSocksProxy { _ in server.port }
             try await proxy.start()
             let store = WKWebsiteDataStore(forIdentifier: UUID())
-            store.proxyConfigurations = [ProxyConfiguration(
-                socksv5Proxy: .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: proxy.port)!))]
+            store.proxyConfigurations = [proxy.configuration]
             for domain in ["localhost", "127.0.0.1"] {
                 let cookie = HTTPCookie(properties: [
                     .domain: domain, .path: "/", .name: LoopbackRouter.routeCookie, .value: token,
@@ -295,28 +354,70 @@ nonisolated final class TestDevServer: @unchecked Sendable {
 
 /// Plain TCP clients for the proxy and the router.
 nonisolated enum RawClient {
-    static func get(port: UInt16, path: String, cookie: String?) async throws -> String {
+    static func get(port: UInt16, path: String, cookie: String?, host: String? = nil) async throws -> String {
+        var request = "GET \(path) HTTP/1.1\r\nHost: \(host ?? "localhost:\(port)")\r\n"
+        if let cookie { request += "Cookie: \(cookie)\r\n" }
+        return String(decoding: try await send(port: port, Data((request + "\r\n").utf8)), as: UTF8.self)
+    }
+
+    /// Sends `data` and reads until the server closes; empty when it closes without a word.
+    static func send(port: UInt16, _ data: Data) async throws -> Data {
         let connection = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
         defer { connection.cancel() }
         try await ready(connection)
-        var request = "GET \(path) HTTP/1.1\r\nHost: localhost:\(port)\r\n"
-        if let cookie { request += "Cookie: \(cookie)\r\n" }
-        try await send(connection, Data((request + "\r\n").utf8))
-        return try await readAll(connection)
+        try await send(connection, data)
+        return Data((try? await readAll(connection))?.utf8 ?? "".utf8)
     }
 
-    static func socksGet(proxy: UInt16, host: String, port: UInt16, path: String) async throws -> String {
-        let connection = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: proxy)!, using: .tcp)
+    static func socksGreeting(proxy: UInt16, methods: [UInt8]) async throws -> [UInt8] {
+        let connection = try await connect(proxy)
         defer { connection.cancel() }
-        try await ready(connection)
-        try await send(connection, Data([5, 1, 0]))
-        let method = [UInt8](try await read(connection, 2))
-        XCTAssertEqual(method, [5, 0])
+        try await send(connection, Data([5, UInt8(methods.count)] + methods))
+        return [UInt8](try await read(connection, 2))
+    }
+
+    /// The proxy's answer to a username and password (RFC 1929): `[1, 0]` on success.
+    static func socksLogin(proxy: UInt16, username: String, password: String) async throws -> [UInt8] {
+        let connection = try await connect(proxy)
+        defer { connection.cancel() }
+        return try await login(connection, username: username, password: password)
+    }
+
+    static func socksConnect(proxy: UInt16, credential: (username: String, password: String), host: String, port: UInt16) async throws -> UInt8 {
+        let connection = try await connect(proxy)
+        defer { connection.cancel() }
+        let accepted = try await login(connection, username: credential.username, password: credential.password)
+        XCTAssertEqual(accepted, [1, 0])
+        try await send(connection, Data([5, 1, 0, 3, UInt8(host.utf8.count)] + Array(host.utf8) + [UInt8(port >> 8), UInt8(port & 0xFF)]))
+        return [UInt8](try await read(connection, 10)).dropFirst().first ?? 0xFF
+    }
+
+    static func socksGet(
+        proxy: UInt16, credential: (username: String, password: String), host: String, port: UInt16, path: String
+    ) async throws -> String {
+        let connection = try await connect(proxy)
+        defer { connection.cancel() }
+        let accepted = try await login(connection, username: credential.username, password: credential.password)
+        XCTAssertEqual(accepted, [1, 0])
         try await send(connection, Data([5, 1, 0, 3, UInt8(host.utf8.count)] + Array(host.utf8) + [UInt8(port >> 8), UInt8(port & 0xFF)]))
         let reply = [UInt8](try await read(connection, 10))
         XCTAssertEqual(reply.prefix(2), [5, 0], "CONNECT succeeds")
         try await send(connection, Data("GET \(path) HTTP/1.1\r\nHost: \(host):\(port)\r\n\r\n".utf8))
         return try await readAll(connection)
+    }
+
+    private static func connect(_ port: UInt16) async throws -> NWConnection {
+        let connection = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+        try await ready(connection)
+        return connection
+    }
+
+    private static func login(_ connection: NWConnection, username: String, password: String) async throws -> [UInt8] {
+        try await send(connection, Data([5, 2, 0, 2]))
+        let method = [UInt8](try await read(connection, 2))
+        guard method == [5, 2] else { return method }
+        try await send(connection, Data([1, UInt8(username.utf8.count)] + Array(username.utf8) + [UInt8(password.utf8.count)] + Array(password.utf8)))
+        return [UInt8](try await read(connection, 2))
     }
 
     private static func ready(_ connection: NWConnection) async throws {
