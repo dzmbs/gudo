@@ -7,6 +7,9 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[lib]
+path = "src/hook.rs"
+
 # Binary names come from crates/brand (DAEMON_BIN, HOOK_BIN); Cargo needs them literally.
 [[bin]]
 name = "gudo-hostd"
@@ -14,7 +17,7 @@ path = "src/main.rs"
 
 [[bin]]
 name = "gudo-hook"
-path = "src/hook.rs"
+path = "src/hook_main.rs"
 
 [dependencies]
 anyhow.workspace = true

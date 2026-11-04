@@ -36,28 +36,27 @@ use std::time::Duration;
 use daemon::{CODEX_NOTIFY_EVENT, HookRequest, HookResponse, STATUS_LINE_EVENT};
 use serde_json::Value;
 
-fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    match args.first().map(String::as_str) {
-        Some("askpass") => std::process::exit(askpass::main(&args[1..])),
-        Some("mcp") => std::process::exit(mcp::main(&args[1..])),
-        Some("open-url") => std::process::exit(browser::open_url(&args[1..])),
-        Some("browser") => std::process::exit(browser::cli(&args[1..])),
+pub fn run_hook(arguments: &[String]) {
+    match arguments.first().map(String::as_str) {
+        Some("askpass") => std::process::exit(askpass::main(&arguments[1..])),
+        Some("mcp") => std::process::exit(mcp::main(&arguments[1..])),
+        Some("open-url") => std::process::exit(browser::open_url(&arguments[1..])),
+        Some("browser") => std::process::exit(browser::cli(&arguments[1..])),
         _ => {}
     }
-    let codex_notify = args.first().map(String::as_str) == Some("codex")
-        && args.get(1).map(String::as_str) == Some(CODEX_NOTIFY_EVENT);
+    let codex_notify = arguments.first().map(String::as_str) == Some("codex")
+        && arguments.get(1).map(String::as_str) == Some(CODEX_NOTIFY_EVENT);
     let mut payload = Vec::new();
     if codex_notify {
-        payload = args
+        payload = arguments
             .get(2)
             .map(|json| json.as_bytes().to_vec())
             .unwrap_or_default();
     } else {
         let _ = std::io::stdin().take(4 << 20).read_to_end(&mut payload);
     }
-    let status_line = args.get(1).map(String::as_str) == Some(STATUS_LINE_EVENT);
-    if let Err(error) = relay(&args, &payload, status_line)
+    let status_line = arguments.get(1).map(String::as_str) == Some(STATUS_LINE_EVENT);
+    if let Err(error) = relay(arguments, &payload, status_line)
         && brand::var_os("HOOK_DEBUG").is_some()
     {
         eprintln!("{}: {error}", brand::HOOK_BIN);
@@ -65,7 +64,7 @@ fn main() {
     if status_line {
         user_status_line(&payload);
     }
-    if codex_notify && let Some(json) = args.get(2) {
+    if codex_notify && let Some(json) = arguments.get(2) {
         user_codex_notify(json);
     }
 }

@@ -12,6 +12,13 @@ blocked-agent options), and native password prompts (§9: askpass helper, detect
 hidden-input prompts).
 Crates: `daemon` (library),
 `hostd` (binaries `gudo-hostd` and the `gudo-hook` shim), `client-core` (library), `gudo` (dev CLI).
+
+`gudo-hostd` includes the agent hook shim. `gudo-hostd hook <arguments>` and a link named
+`gudo-hook` run the same shim as the standalone `gudo-hook` binary. Shipped installs need only
+`gudo-hostd`: the daemon writes `<state>/bin/gudo-hook` to call its own executable with `hook`.
+Agent hooks, askpass, browser helpers and MCP all use that stable launcher, which is refreshed
+on daemon startup. No extra executable or code signature is needed in the Mac app bundle,
+Linux release assets, SSH bootstrap or service install.
 Wire types live in `proto`; see its crate docs for the frame format and compatibility rules.
 
 ## 1. Model

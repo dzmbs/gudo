@@ -152,9 +152,23 @@ enum ServiceAction {
 
 fn main() -> Result<()> {
     // Not a clap subcommand: the prompt is free text that may start with `-`.
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.first().is_some_and(|arg| arg == "askpass") {
-        std::process::exit(askpass::main(&args[1..]));
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    let is_invoked_as_hook = std::env::args_os().next().is_some_and(|name| {
+        Path::new(&name).file_name() == Some(std::ffi::OsStr::new(brand::HOOK_BIN))
+    });
+    if is_invoked_as_hook {
+        hostd::run_hook(&arguments);
+        return Ok(());
+    }
+    if arguments.first().is_some_and(|argument| argument == "hook") {
+        hostd::run_hook(&arguments[1..]);
+        return Ok(());
+    }
+    if arguments
+        .first()
+        .is_some_and(|argument| argument == "askpass")
+    {
+        std::process::exit(askpass::main(&arguments[1..]));
     }
     let cli = parse_cli();
     let state_dir = daemon::migrate::current_state_dir(
@@ -269,6 +283,7 @@ fn run(
         .and_then(|exe| exe.canonicalize())
         .ok();
     config.exe.clone_from(&config.cli_exe);
+    config.hook_bin.clone_from(&config.cli_exe);
     if let Some(inherited) = &inherited {
         tracing::info!(
             panes = inherited.panes(),

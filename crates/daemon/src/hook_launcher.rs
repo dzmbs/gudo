@@ -1,9 +1,3 @@
-//! The hook shim path agents and panes are given: `<state_dir>/bin/gudo-hook`, a script that
-//! runs the daemon's own shim. The shim itself lives next to the daemon (an app bundle, a build
-//! folder), which moves with updates and rebuilds; this path does not, and each start points it
-//! at the current shim. With the shim gone the script exits quietly, so an agent never reports
-//! a failing hook.
-//!
 //! Each start also repairs what earlier daemons wrote with a direct shim path: the generated
 //! agent settings under the state directory, and this daemon's MCP server registration in the
 //! agents' user configuration when its shim no longer exists.
@@ -40,10 +34,18 @@ fn script(shim: &Path) -> String {
     format!(
         "#!/bin/sh\n\
          shim={}\n\
-         if [ -x \"$shim\" ]; then exec \"$shim\" \"$@\"; fi\n\
+         if [ -x \"$shim\" ]; then exec \"$shim\" {}\"$@\"; fi\n\
          case \"$1\" in askpass) exit 1 ;; esac\n\
          exit 0\n",
         shell_quote(&shim.to_string_lossy()),
+        if shim
+            .file_name()
+            .is_some_and(|name| name == brand::DAEMON_BIN)
+        {
+            "hook "
+        } else {
+            ""
+        },
     )
 }
 
@@ -301,6 +303,20 @@ mod tests {
 
     fn run(launcher: &Path, args: &[&str]) -> std::process::Output {
         Command::new(launcher).args(args).output().unwrap()
+    }
+
+    #[test]
+    fn the_launcher_dispatches_to_the_daemons_hook_command() {
+        let directory = tempfile::tempdir().unwrap();
+        let daemon = directory
+            .path()
+            .join("app's bundle")
+            .join(brand::DAEMON_BIN);
+        crate::askpass::write_executable(&daemon, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n").unwrap();
+        let launcher = install(&directory.path().join("state"), &daemon).unwrap();
+        let output = run(&launcher, &["askpass", "Password with spaces:"]);
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"hook\naskpass\nPassword with spaces:\n");
     }
 
     #[test]
