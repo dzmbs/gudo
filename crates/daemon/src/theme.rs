@@ -136,7 +136,12 @@ impl Themes {
     }
 
     /// Records `conn`'s theme, which becomes the latest when `latest`. Returns it.
-    pub fn announce(&self, conn: ConnId, colors: DefaultColors, latest: bool) -> Arc<DefaultColors> {
+    pub fn announce(
+        &self,
+        conn: ConnId,
+        colors: DefaultColors,
+        latest: bool,
+    ) -> Arc<DefaultColors> {
         let colors = Arc::new(colors);
         let mut state = lock(&self.state);
         state.by_conn.insert(conn, Arc::clone(&colors));
