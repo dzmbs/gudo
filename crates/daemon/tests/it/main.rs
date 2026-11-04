@@ -11,6 +11,7 @@ mod askpass;
 mod assist;
 mod browser;
 mod codex;
+mod cold_restart;
 mod devices;
 mod drive;
 mod e2e;

@@ -51,6 +51,10 @@ fn install(dir: &Path) -> PathBuf {
 }
 
 fn run(exe: &Path, state: &Path, log: &Path) -> Hostd {
+    run_with_env(exe, state, log, &[])
+}
+
+fn run_with_env(exe: &Path, state: &Path, log: &Path, env: &[(&str, String)]) -> Hostd {
     let child = Command::new(exe)
         .arg("--state-dir")
         .arg(state)
@@ -63,6 +67,7 @@ fn run(exe: &Path, state: &Path, log: &Path) -> Hostd {
             "/bin/sh",
         ])
         .env("GUDO_LOG", "info")
+        .envs(env.iter().map(|(key, value)| (key, value)))
         .stdout(Stdio::null())
         .stderr(std::fs::File::create(log).unwrap())
         .spawn()
@@ -524,4 +529,131 @@ async fn the_restart_command_continues_the_panes_in_the_installed_build() {
     client.type_line(shell, "echo again-$KEEP");
     client.wait_text(shell, "again-still-here").await;
     assert!(client.streams[&shell].gaps.is_empty());
+}
+
+const CODEX_ID: &str = "0199a213-81c0-7800-8aa1-bbab2a035a53";
+
+/// Writes a rollout the way Codex does, keeps it open and counts while running as `codex`.
+const FAKE_CODEX: &str = r#"#!/bin/bash
+case " $* " in *" resume "*) echo "resumed-session=${@: -1}"; exec -a codex /bin/sleep 600 ;; esac
+dir="$CODEX_HOME/sessions/2026/10/18"
+mkdir -p "$dir"
+f="$dir/rollout-2026-10-18T12-00-00-__ID__.jsonl"
+printf '{"type":"session_meta","payload":{"id":"x","cwd":"%s"}}\n' "$PWD" > "$f"
+exec 3>>"$f"
+exec -a codex /bin/sh -c 'echo codex-pid=$$; i=0; while :; do i=$((i+1)); echo n=$i; sleep 0.05; done'
+"#;
+
+/// An app update replaces the whole bundle the helper runs from, the app runs `restart`, and
+/// a Codex started by hand keeps running: the same process, its output going on. Its session
+/// stays recorded, so a cold restart later still resumes it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_app_update_keeps_codex_running_and_resumable() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let macos = dir.path().join("Gudo.app/Contents/MacOS");
+    std::fs::create_dir_all(&macos).unwrap();
+    let exe = macos.join("gudo-hostd");
+    std::fs::copy(HOSTD, &exe).unwrap();
+    let tools = dir.path().join("bin");
+    std::fs::create_dir_all(&tools).unwrap();
+    let codex = tools.join("codex");
+    std::fs::write(&codex, FAKE_CODEX.replace("__ID__", CODEX_ID)).unwrap();
+    std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let work = dir.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let env = [
+        (
+            "PATH",
+            format!(
+                "{}:{}",
+                tools.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        ),
+        (
+            "CODEX_HOME",
+            dir.path().join("codex-home").display().to_string(),
+        ),
+    ];
+    let state = dir.path().join("state");
+    let log = dir.path().join("hostd.log");
+    let mut hostd = run_with_env(&exe, &state, &log, &env);
+    let daemon_pid = hostd.child.id();
+    let key = ClientConfig::generate_key();
+    let mut client = TestClient::connect(&ticket(&exe, &state), key.clone());
+    client.attach_and_follow().await;
+    let session_id = client.layout.as_ref().unwrap().session_id;
+    let OpOutcome::TabCreated { pane_id: pane, .. } = client
+        .op(LayoutOp::NewTab {
+            session_id,
+            name: String::new(),
+            launch: PaneLaunch::Shell {
+                cwd: Some(work.display().to_string()),
+            },
+        })
+        .await
+    else {
+        panic!("new tab");
+    };
+    client.follow(pane).await;
+    client.type_line(pane, "codex");
+    client.wait_text(pane, "n=5").await;
+    let codex_pid: u32 = printed(&client.text(pane), "codex-pid")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let layout = state.join("layout.json");
+    let deadline = Instant::now() + support::TIMEOUT;
+    while !std::fs::read_to_string(&layout).is_ok_and(|text| text.contains(CODEX_ID)) {
+        assert!(Instant::now() < deadline, "session id never saved");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    // The update moves the old bundle away and puts the new one in its place.
+    let staged = dir.path().join("staged/Gudo.app/Contents/MacOS");
+    std::fs::create_dir_all(&staged).unwrap();
+    std::fs::copy(HOSTD, staged.join("gudo-hostd")).unwrap();
+    std::fs::create_dir_all(dir.path().join("trash")).unwrap();
+    std::fs::rename(
+        dir.path().join("Gudo.app"),
+        dir.path().join("trash/Gudo.app"),
+    )
+    .unwrap();
+    std::fs::rename(
+        dir.path().join("staged/Gudo.app"),
+        dir.path().join("Gudo.app"),
+    )
+    .unwrap();
+    let connections = client.connected;
+    let output = restart_command(&exe, &state);
+    assert!(output.status.success(), "{output:?}\n{}", hostd.log());
+    assert_eq!(hostd.child.id(), daemon_pid);
+    reconnected(&mut client, connections).await;
+    let before = client.streams[&pane].bytes.len();
+    client
+        .until("codex goes on", |client| {
+            client.streams[&pane].bytes.len() > before + 100
+        })
+        .await;
+    assert!(alive(codex_pid));
+    assert!(client.streams[&pane].gaps.is_empty());
+    assert!(std::fs::read_to_string(&layout).unwrap().contains(CODEX_ID));
+
+    // A cold restart later (a reboot, a crash) resumes the session.
+    drop(client);
+    // SAFETY: sends SIGTERM to the daemon this test started.
+    unsafe { libc::kill(daemon_pid as libc::pid_t, libc::SIGTERM) };
+    let _ = hostd.child.wait();
+    let _hostd = run_with_env(&exe, &state, &dir.path().join("second.log"), &env);
+    let mut client = TestClient::connect(&ticket(&exe, &state), key);
+    client.client.attach(None);
+    client
+        .until("layout", |client| client.layout.is_some())
+        .await;
+    client.follow(pane).await;
+    client
+        .wait_text(pane, &format!("resumed-session={CODEX_ID}"))
+        .await;
+    client.wait_text(pane, "Resumed after restart").await;
 }

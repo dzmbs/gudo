@@ -118,6 +118,22 @@ pub(crate) fn program(kind: AgentKind) -> &'static str {
     }
 }
 
+/// The agent `process` runs, also when a script runtime runs it (`node …/codex`).
+pub(crate) fn running_agent(process: &pty::ForegroundProcess) -> Option<AgentKind> {
+    let kind = |name: &str| match name {
+        "claude" => Some(AgentKind::Claude),
+        "codex" => Some(AgentKind::Codex),
+        _ => None,
+    };
+    kind(process.program()).or_else(|| {
+        if !matches!(process.program(), "node" | "bun" | "deno") {
+            return None;
+        }
+        let script = process.argv.get(1)?.rsplit('/').next()?;
+        kind(script.strip_suffix(".js").unwrap_or(script))
+    })
+}
+
 fn agent_kind(name: &str) -> Option<AgentKind> {
     match name {
         "claude" | "claude-code" => Some(AgentKind::Claude),
@@ -184,6 +200,7 @@ pub(crate) struct AgentRuntime {
     notices: Vec<(agents::Notify, Option<AgentEvent>)>,
     /// The agent's process, once seen as the pane's foreground job.
     pid: Option<u32>,
+    started_at: std::time::SystemTime,
 }
 
 impl AgentRuntime {
@@ -209,6 +226,7 @@ impl AgentRuntime {
             last_decided: None,
             notices: Vec::new(),
             pid: None,
+            started_at: std::time::SystemTime::now(),
         }
     }
 
@@ -226,6 +244,11 @@ impl AgentRuntime {
 
     pub fn kind(&self) -> AgentKind {
         self.kind
+    }
+
+    /// When the daemon launched the agent or first saw it running.
+    pub fn started_at(&self) -> std::time::SystemTime {
+        self.started_at
     }
 
     pub fn state(&self) -> agents::AgentState {
@@ -345,7 +368,7 @@ impl AgentRuntime {
         alive: impl FnOnce(u32) -> bool,
     ) -> bool {
         if let Some(process) = foreground
-            && process.program() == program(self.kind)
+            && running_agent(process) == Some(self.kind)
         {
             self.note_process(process.pid);
             return false;
@@ -901,6 +924,7 @@ async fn handle_hook(core: &Arc<Core>, request: HookRequest) -> HookResponse {
         return HookResponse::default();
     };
     let payload = serde_json::to_vec(&request.payload).unwrap_or_default();
+    let mut attached = None;
     let (event, blocked) = {
         let mut agent = lock(&entry.agent);
         // A late SessionEnd must not bring back an agent that already exited.
@@ -910,6 +934,7 @@ async fn handle_hook(core: &Arc<Core>, request: HookRequest) -> HookResponse {
         {
             *agent = Some(AgentRuntime::new(kind, pane_id, adapter(kind), false));
             entry.agent_attached.notify_one();
+            attached = Some(kind);
         }
         let Some(runtime) = agent.as_mut() else {
             return HookResponse::default();
@@ -919,6 +944,9 @@ async fn handle_hook(core: &Arc<Core>, request: HookRequest) -> HookResponse {
         let _ = runtime.wire_status();
         (event, runtime.blocked_request())
     };
+    if let Some(kind) = attached {
+        crate::core::record_agent_started_by_hand(core, &entry, kind, None);
+    }
     core.agent_event(pane_id, event);
     if request.event != "PermissionRequest" {
         return HookResponse::default();

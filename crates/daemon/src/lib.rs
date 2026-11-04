@@ -32,6 +32,7 @@ mod art;
 mod askpass;
 mod assist;
 mod browser;
+mod claude_session;
 mod clock;
 mod codex_session;
 mod commands;

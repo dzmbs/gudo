@@ -323,7 +323,16 @@ policy is always `LastInput` for now.
      environment, else `~/.codex`) modified since the pane started whose `session_meta.cwd`
      is the pane's directory and that no other pane claimed.
   The id is persisted like Claude's and the pane resumes with `codex resume <id>` after a
-  restart. Agents started by hand in a shell pane are detected but not persisted.
+  restart.
+- Agents started by hand in a shell pane (the foreground process is `claude` or `codex`, also
+  under `node`/`bun`) are recorded under the system account, and their session id is learnt
+  the same way: Codex's as above; Claude's from `--resume`/`-r`/`--session-id`, else the
+  newest transcript `<config>/projects/<directory>/<uuid>.jsonl` written since the agent
+  started that no other pane claimed (Claude Code's config directory: `CLAUDE_CONFIG_DIR`,
+  else `~/.claude`). After a restart such a pane comes back as the agent resuming that
+  session in the same directory, then a shell when it exits, as a launched one does.
+- A pane that resumes its agent after a cold restart shows `Resumed after restart` (dim)
+  above it.
 
 ### Persistence
 
@@ -2575,8 +2584,6 @@ An agent on host A driving a pane on host B. Not built; the safe shape:
   offset (libghostty-vt reports the event, not the byte).
 - fish 3 sends no `133;B`, so its command lines are unknown (fish 4 marks prompts itself);
   macOS's `/bin/bash` 3.2 gets no automatic integration (as in Ghostty).
-- A Codex started by hand in a shell pane is detected for status but its session id is not
-  captured (only launched agents are restored).
 - Links: git SHAs, IPs and ports are not detected yet.
 - Multiplayer (§6), not built yet: short PAKE codes, guest push registration, per-pane redaction, the
   structured lane for prompters (today prompts are sanitized keystrokes into the TUI), the

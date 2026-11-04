@@ -1398,6 +1398,7 @@ impl Core {
         cwd_hint: Option<String>,
         restored: bool,
     ) -> Result<(), (OpError, String)> {
+        let after_restart = restored;
         let (launch, restored) = match launch {
             PaneLaunch::Reopen { pane_id, cwd } => {
                 let launch = self.reopen_launch(pane_id, cwd);
@@ -1618,11 +1619,16 @@ impl Core {
                 // that shell. Interactive, so rc files set `PATH` as in any pane and the install
                 // check holds.
                 let pre_command = pre_command.as_deref().unwrap_or_default();
+                let marker = if after_restart && resume.is_some() {
+                    RESUMED_MARKER
+                } else {
+                    ""
+                };
                 command.args([
                     "-i",
                     "-l",
                     "-c",
-                    &format!("{pre_command}{line}; {}", then_shell()),
+                    &format!("{pre_command}{marker}{line}; {}", then_shell()),
                 ]);
                 for (key, value) in &spec.env {
                     command.env(key, value);
@@ -2177,7 +2183,7 @@ async fn pane_task(core: Arc<Core>, entry: Arc<PaneEntry>, mut vt_events: mpsc::
     let mut active_until = Instant::now() + PANE_ACTIVE;
     let mut screen_dirty = false;
     let mut detect_tick = 0u32;
-    let codex_lookup = Arc::new(AtomicBool::new(false));
+    let session_lookup = Arc::new(AtomicBool::new(false));
     let mut meta_sent: Option<Instant> = None;
     let mut meta_due: Option<tokio::time::Instant> = None;
     refresh_hint(&core, &entry);
@@ -2264,13 +2270,13 @@ async fn pane_task(core: Arc<Core>, entry: Arc<PaneEntry>, mut vt_events: mpsc::
                 detect_tick += 1;
                 if detect_tick.is_multiple_of(2) {
                     if lock(&entry.agent).is_none() {
-                        detect_agent(&entry);
+                        detect_agent(&core, &entry);
                     } else {
                         end_exited_agent(&core, &entry);
                     }
                 }
                 if detect_tick.is_multiple_of(2) {
-                    capture_codex_session(&core, &entry, &codex_lookup);
+                    capture_agent_session(&core, &entry, &session_lookup);
                 }
                 let screen = screen_dirty.then(|| pane.screen_text());
                 screen_dirty = false;
@@ -2393,14 +2399,24 @@ fn handle_command(core: &Core, entry: &PaneEntry, update: CommandUpdate) {
     }
 }
 
-/// While a launched Codex pane's session id is unknown, looks for it off the async runtime
-/// (process table and file system) and records it when found.
-fn capture_codex_session(core: &Arc<Core>, entry: &Arc<PaneEntry>, busy: &Arc<AtomicBool>) {
-    let wanted = lock(&entry.record)
+/// While an agent pane's session id is unknown, looks for it off the async runtime (process
+/// table and file system) and records it when found.
+fn capture_agent_session(core: &Arc<Core>, entry: &Arc<PaneEntry>, busy: &Arc<AtomicBool>) {
+    let Some((kind, account)) = lock(&entry.record)
         .agent
         .as_ref()
-        .is_some_and(|agent| agent.kind == AgentKind::Codex && agent.session_id.is_none());
-    if !wanted || busy.swap(true, Ordering::AcqRel) {
+        .filter(|agent| agent.session_id.is_none())
+        .map(|agent| {
+            let account = agent
+                .account
+                .clone()
+                .unwrap_or_else(|| proto::SYSTEM_ACCOUNT.into());
+            (agent.kind, account)
+        })
+    else {
+        return;
+    };
+    if busy.swap(true, Ordering::AcqRel) {
         return;
     }
     let claimed: Vec<String> = core
@@ -2408,41 +2424,47 @@ fn capture_codex_session(core: &Arc<Core>, entry: &Arc<PaneEntry>, busy: &Arc<At
         .iter()
         .filter_map(|(_, other)| lock(&other.record).agent.as_ref()?.session_id.clone())
         .collect();
-    let cwd = lock(&entry.record).cwd.clone().unwrap_or_default();
-    let account = lock(&entry.record)
-        .agent
-        .as_ref()
-        .and_then(|agent| agent.account.clone())
-        .unwrap_or_else(|| proto::SYSTEM_ACCOUNT.into());
-    // Rollouts are under the pane's account's home.
-    let codex_home = core
+    let cwd = PathBuf::from(lock(&entry.record).cwd.clone().unwrap_or_default());
+    let (directory_var, default_directory) = match kind {
+        AgentKind::Codex => (agents::CODEX_DIR_VAR, ".codex"),
+        AgentKind::Claude => (agents::CLAUDE_DIR_VAR, ".claude"),
+    };
+    // Sessions are under the pane's account's directory.
+    let agent_dir = core
         .ws
         .accounts
-        .context(AgentKind::Codex, &account)
+        .context(kind, &account)
         .and_then(|context| context.dir)
-        .or_else(|| core.cfg.pane_var("CODEX_HOME").map(PathBuf::from))
+        .or_else(|| core.cfg.pane_var(directory_var).map(PathBuf::from))
         .or_else(|| {
             core.cfg
                 .pane_var("HOME")
-                .map(|home| PathBuf::from(home).join(".codex"))
+                .map(|home| PathBuf::from(home).join(default_directory))
         });
     let root = entry.pane.pty().pid();
-    let since = entry.launched_at;
+    // Slack for an agent that was running a moment before the pane noticed it.
+    let since = lock(&entry.agent)
+        .as_ref()
+        .map(|runtime| runtime.started_at() - Duration::from_secs(5))
+        .map_or(entry.launched_at, |started| started.max(entry.launched_at));
     let (core, entry, busy) = (Arc::clone(core), Arc::clone(entry), Arc::clone(busy));
     tokio::task::spawn_blocking(move || {
-        let found = crate::codex_session::from_open_files(root).or_else(|| {
-            let home = codex_home?;
-            crate::codex_session::from_rollouts(&home, std::path::Path::new(&cwd), since, &claimed)
-        });
+        let found = match kind {
+            AgentKind::Codex => crate::codex_session::from_open_files(root).or_else(|| {
+                crate::codex_session::from_rollouts(&agent_dir?, &cwd, since, &claimed)
+            }),
+            AgentKind::Claude => agent_dir.and_then(|dir| {
+                crate::claude_session::from_transcripts(&dir, &cwd, since, &claimed)
+            }),
+        };
         if let Some(session_id) = found {
             let mut record = lock(&entry.record);
             if let Some(agent) = record.agent.as_mut()
+                && agent.kind == kind
                 && agent.session_id.is_none()
             {
-                tracing::info!(pane = %entry.pane.id, %session_id, "codex session found");
-                core.ws
-                    .accounts
-                    .pin(AgentKind::Codex, &session_id, &account);
+                tracing::info!(pane = %entry.pane.id, %session_id, ?kind, "agent session found");
+                core.ws.accounts.pin(kind, &session_id, &account);
                 agent.session_id = Some(session_id);
                 core.mark_dirty();
             }
@@ -2452,19 +2474,52 @@ fn capture_codex_session(core: &Arc<Core>, entry: &Arc<PaneEntry>, busy: &Arc<At
 }
 
 /// Starts tracking an agent the user launched by hand (no hooks, screen and OSC only).
-fn detect_agent(entry: &PaneEntry) {
+fn detect_agent(core: &Core, entry: &PaneEntry) {
     let Some(foreground) = entry.pane.pty().foreground_process() else {
         return;
     };
-    let kind = match foreground.program() {
-        "claude" => AgentKind::Claude,
-        "codex" => AgentKind::Codex,
-        _ => return,
+    let Some(kind) = crate::agent::running_agent(&foreground) else {
+        return;
     };
     let adapter = crate::agent::adapter(kind);
     let mut runtime = AgentRuntime::new(kind, entry.pane.id, adapter, false);
     runtime.note_process(foreground.pid);
     *lock(&entry.agent) = Some(runtime);
+    let session_id = match kind {
+        AgentKind::Claude => crate::claude_session::from_argv(&foreground.argv),
+        AgentKind::Codex => None,
+    };
+    record_agent_started_by_hand(core, entry, kind, session_id);
+}
+
+/// Records an agent the user started by hand in a shell pane, under the user's own setup
+/// (the system account), so the pane resumes its session after a daemon restart.
+pub(crate) fn record_agent_started_by_hand(
+    core: &Core,
+    entry: &PaneEntry,
+    kind: AgentKind,
+    session_id: Option<String>,
+) {
+    {
+        let mut record = lock(&entry.record);
+        if record
+            .agent
+            .as_ref()
+            .is_some_and(|agent| agent.kind == kind)
+        {
+            return;
+        }
+        if let Some(session) = &session_id {
+            core.ws.accounts.pin(kind, session, proto::SYSTEM_ACCOUNT);
+        }
+        record.agent = Some(AgentRecord {
+            kind,
+            session_id,
+            account: Some(proto::SYSTEM_ACCOUNT.into()),
+        });
+    }
+    core.mark_dirty();
+    core.emit(Event::Accounts);
 }
 
 /// Ends the pane's agent once its process exited and the pane is back at its shell: the
@@ -2506,6 +2561,9 @@ fn end_exited_agent(core: &Core, entry: &PaneEntry) {
     core.mark_dirty();
     core.emit(Event::PaneMeta(id));
 }
+
+/// Printed in dim text above an agent that resumes its session after a daemon restart.
+const RESUMED_MARKER: &str = "printf '\\033[2m%s\\033[0m\\n' 'Resumed after restart'; ";
 
 /// Quotes `word` for a POSIX shell as one word.
 pub(crate) fn shell_quote(word: &str) -> String {
@@ -2554,6 +2612,17 @@ pub(crate) fn restore(
             }
         }
         let mut launch = record.launch.clone();
+        // An agent the user started by hand in a shell pane comes back as one launched there.
+        if let (PaneLaunch::Shell { .. } | PaneLaunch::Command { .. }, Some(agent)) =
+            (&launch, &record.agent)
+            && agent.session_id.is_some()
+        {
+            launch = PaneLaunch::Agent {
+                agent: agent.kind,
+                resume: None,
+                cwd: None,
+            };
+        }
         let restored_agent = match (&mut launch, &record.agent) {
             (PaneLaunch::Agent { resume, cwd, .. }, Some(agent)) => {
                 *resume = agent.session_id.clone();
