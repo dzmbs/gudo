@@ -31,21 +31,15 @@ nonisolated struct DiffRenderRow: Identifiable, Sendable {
 }
 
 nonisolated struct DiffRenderDocument: Sendable {
-    struct Anchor: Equatable, Sendable {
-        var id: String
-        var fileID: String?
-        var offset: CGFloat
-    }
+    typealias Anchor = NativeListLayout.Anchor
 
-    let revision = UUID()
     var input: DiffRenderInput
     private(set) var rows: [DiffRenderRow] = []
-    private(set) var positions: [CGFloat] = [0]
-    private(set) var indices: [String: Int] = [:]
-    private(set) var headers: [Int] = []
-    private(set) var contentWidth: CGFloat = 0
-
-    var height: CGFloat { positions.last ?? 0 }
+    private(set) var layout = NativeListLayout()
+    var positions: [CGFloat] { layout.positions }
+    var indices: [String: Int] { layout.indices }
+    var contentWidth: CGFloat { layout.contentWidth }
+    var height: CGFloat { layout.height }
 
     init(input: DiffRenderInput) {
         self.input = input
@@ -54,7 +48,6 @@ nonisolated struct DiffRenderDocument: Sendable {
         append("summary", content: .summary, height: 88)
         for (fileIndex, file) in input.files.enumerated() {
             let prefix = "file:\(file.path)"
-            headers.append(rows.count)
             append(prefix, fileIndex: fileIndex, content: .file, height: 36)
             guard !input.collapsed.contains(file.path) else { continue }
             if file.isBinary || file.hunks.isEmpty {
@@ -87,61 +80,33 @@ nonisolated struct DiffRenderDocument: Sendable {
             }
         }
         let codeWidth = CGFloat(longestLine) * input.characterWidth
-        contentWidth = max(input.width, input.split ? (codeWidth + 72) * 2 : codeWidth + 112)
-    }
-
-    func row(at position: CGFloat) -> Int? {
-        guard !rows.isEmpty else { return nil }
-        var lower = 0
-        var upper = rows.count
-        while lower < upper {
-            let middle = (lower + upper) / 2
-            if positions[middle + 1] <= position { lower = middle + 1 } else { upper = middle }
+        let width = input.split
+            ? input.width + max(0, codeWidth - max(0, input.width / 2 - 72))
+            : max(input.width, codeWidth + 112)
+        let nativeRows = rows.map { row in
+            let isHeader: Bool
+            let scrollsHorizontally: Bool
+            switch row.content {
+            case .file: isHeader = true; scrollsHorizontally = false
+            case .line, .hunk: isHeader = false; scrollsHorizontally = !input.split
+            default: isHeader = false; scrollsHorizontally = false
+            }
+            return NativeListRow(id: row.id, height: row.height, isHeader: isHeader,
+                scrollsHorizontally: scrollsHorizontally, sectionID: row.fileIndex.map { "file:\(input.files[$0].path)" })
         }
-        return min(lower, rows.count - 1)
+        layout = NativeListLayout(rows: nativeRows, contentWidth: width)
     }
 
-    func visibleRows(in rect: CGRect) -> Range<Int> {
-        guard let first = row(at: rect.minY), let last = row(at: rect.maxY) else { return 0..<0 }
-        return first..<min(rows.count, last + 1)
-    }
+    func row(at position: CGFloat) -> Int? { layout.row(at: position) }
 
-    func header(at position: CGFloat) -> Int? {
-        guard let rowIndex = row(at: position) else { return nil }
-        let insertion = headerInsertion(after: rowIndex)
-        return insertion > 0 ? headers[insertion - 1] : nil
-    }
+    func visibleRows(in rect: CGRect) -> Range<Int> { layout.visibleRows(in: rect) }
 
-    func nextHeaderPosition(after rowIndex: Int) -> CGFloat {
-        let insertion = headerInsertion(after: rowIndex)
-        return insertion < headers.count ? positions[headers[insertion]] : height
-    }
+    func anchor(at position: CGFloat) -> Anchor? { layout.anchor(at: position) }
 
-    private func headerInsertion(after rowIndex: Int) -> Int {
-        var lower = 0
-        var upper = headers.count
-        while lower < upper {
-            let middle = (lower + upper) / 2
-            if headers[middle] <= rowIndex { lower = middle + 1 } else { upper = middle }
-        }
-        return lower
-    }
-
-    func anchor(at position: CGFloat) -> Anchor? {
-        guard let index = row(at: position) else { return nil }
-        let row = rows[index]
-        return Anchor(id: row.id, fileID: row.fileIndex.map { "file:\(input.files[$0].path)" }, offset: position - positions[index])
-    }
-
-    func position(of anchor: Anchor) -> CGFloat? {
-        guard let index = indices[anchor.id] ?? anchor.fileID.flatMap({ indices[$0] }) else { return nil }
-        return positions[index] + min(max(0, anchor.offset), max(0, rows[index].height - 1))
-    }
+    func position(of anchor: Anchor) -> CGFloat? { layout.position(of: anchor) }
 
     private mutating func append(_ id: String, fileIndex: Int? = nil, content: DiffRenderRow.Content, height: CGFloat) {
-        indices[id] = rows.count
         rows.append(DiffRenderRow(id: id, fileIndex: fileIndex, content: content, height: height))
-        positions.append((positions.last ?? 0) + height)
     }
 
     private func noteHeight(_ text: String, width: CGFloat, textSize: CGFloat) -> CGFloat {

@@ -126,7 +126,7 @@ struct TabGitBadges: View {
 }
 
 /// A repository whose worktrees have no tab here: one quiet line that shows them under it.
-private struct RepoFoldRow: View {
+struct RepoFoldRow: View {
     let repo: RepoSidebar.Repo
     let fold: WorktreeFold
     let host: String
@@ -303,35 +303,6 @@ private struct WorktreeMenu: View {
     }
 }
 
-/// After a host's tabs: each repository with tabs here, folded to one line, opening to its
-/// worktrees that have no tab. Tabs are never drawn here; they keep their own rows.
-struct RepoWorktreesView: View {
-    let group: HostGroup
-    let sidebar: RepoSidebar
-    private var folds: WorktreeFoldStore { .shared }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(sidebar.repos) { repo in
-                let fold = WorktreeFold(repo)
-                if !fold.folded.isEmpty {
-                    let expanded = folds.isExpanded(repo: repo.id, host: group.id)
-                    RepoFoldRow(repo: repo, fold: fold, host: group.id, expanded: expanded) {
-                        withAnimation(DS.Motion.snappy) { folds.toggle(repo: repo.id, host: group.id) }
-                    }
-                    if expanded {
-                        ForEach(fold.folded) { worktree in
-                            WorktreeRow(worktree: worktree.state, host: group.id)
-                        }
-                    }
-                }
-            }
-        }
-        .padding(.top, DS.Space.xs)
-        .opacity(group.showsAsLive ? 1 : 0.6)
-    }
-}
-
 /// Every tab, on every host, whose agent waits for an answer or failed, hoisted above the hosts.
 struct NeedsYouSection: View {
     @Environment(WindowModel.self) private var model
@@ -348,7 +319,7 @@ struct NeedsYouSection: View {
     var body: some View {
         let items = self.items
         if !items.isEmpty {
-            LazyVStack(alignment: .leading, spacing: 0) {
+            Group {
                 HStack(spacing: 6) {
                     SectionDot(DS.Palette.attention)
                     Text("Needs you").font(SidebarFont.section).foregroundStyle(DS.Palette.textSecondary)

@@ -57,6 +57,16 @@ final class TouchSnapshotTests: XCTestCase {
             window.isHidden = false
             await pump(1)
             try capture(window, "diff-\(layout.rawValue)")
+            if layout == .split {
+                func collection(in view: UIView) -> UICollectionView? {
+                    if let value = view as? UICollectionView { return value }
+                    return view.subviews.lazy.compactMap { collection(in: $0) }.first
+                }
+                let list = try XCTUnwrap(window.rootViewController.flatMap { collection(in: $0.view) })
+                list.setContentOffset(CGPoint(x: min(120, max(0, list.contentSize.width - list.bounds.width)), y: 0), animated: false)
+                await pump(0.1)
+                try capture(window, "diff-split-horizontal")
+            }
             window.isHidden = true
         }
     }

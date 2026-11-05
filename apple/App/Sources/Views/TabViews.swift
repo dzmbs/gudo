@@ -8,17 +8,17 @@ import SwiftUI
 /// The sidebar: Inbox and Hosts on top, then one group per host the window shows. Every host is
 /// live at once, and tab numbers (⌘1…⌘9) run across hosts.
 ///
-/// Drawn by hand, not a system `List`: the system sidebar list paints its own material, which
-/// clashes with a dark terminal next to it.
+/// Native list reuse with the system's row fills hidden, so the terminal palette owns the chrome.
 struct WorkspaceSidebar: View {
     @Environment(WindowModel.self) private var model
     /// Inbox and Hosts on top; the tab overview leaves them to the iPhone's tab bar.
     var showsDestinations = true
     @State private var swipe = RowSwipeState()
+    @State private var geometry = SidebarGeometry()
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
+        List {
+            Group {
                 if showsDestinations {
                     VStack(spacing: 0) {
                         destinationRow(.inbox) {
@@ -34,15 +34,28 @@ struct WorkspaceSidebar: View {
                 // Tabs whose agent waits or failed, on any host, hoisted.
                 NeedsYouSection()
 
-                SidebarTabList()
+                SidebarTabList(geometry: geometry)
 
                 if model.groups.groups.isEmpty {
                     NoHostsRow()
                 }
             }
-            .padding(.bottom, DS.Space.l)
+            .listRowInsets(EdgeInsets())
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
             .animation(DS.Motion.snappy, value: model.groups.collapsed)
         }
+        .listStyle(.plain)
+        .contentMargins(.all, 0, for: .scrollContent)
+        .coordinateSpace(name: "sidebar-list")
+        .onDrop(of: [.text], delegate: SidebarDropDelegate(model: model, drag: model.sidebarDrag, geometry: geometry))
+        .environment(model.sidebarDrag)
+        #if os(iOS)
+        .listRowSpacing(0)
+        .listSectionSpacing(0)
+        #endif
+        .environment(\.defaultMinListRowHeight, 0)
+        .scrollContentBackground(.hidden)
         #if os(macOS)
         // Rows keep their own menus.
         .contextMenu {
@@ -780,8 +793,7 @@ struct GroupAgents: View {
             }
         }
         if !rows.isEmpty {
-            // One row per agent, and a host can run hundreds: only the rows in view are built.
-            LazyVStack(spacing: 0) {
+            Group {
                 header
                 ForEach(rows) { row in
                     Button {

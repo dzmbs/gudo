@@ -78,8 +78,11 @@ final class DiffLayoutTests: XCTestCase {
         for split in [false, true] {
             let document = DiffRenderDocument(input: input([sample], split: split))
             XCTAssertGreaterThan(document.contentWidth, 900)
-            for row in document.rows {
-                if case .line = row.content { XCTAssertEqual(row.height, 18) }
+            for (index, row) in document.rows.enumerated() {
+                if case .line = row.content {
+                    XCTAssertEqual(row.height, 18)
+                    XCTAssertEqual(document.layout.rows[index].scrollsHorizontally, !split, "Split columns stay in the viewport while their code scrolls")
+                }
             }
         }
     }

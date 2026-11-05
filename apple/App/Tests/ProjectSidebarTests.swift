@@ -1,6 +1,10 @@
 import HostKit
 import PaneLayout
+import SwiftUI
 import XCTest
+#if os(macOS)
+import AppKit
+#endif
 @testable import App
 
 /// The sidebar's list while a tab is dragged is the list the drop leaves: rows keep their ids
@@ -20,6 +24,51 @@ final class ProjectSidebarTests: XCTestCase {
         model.close()
         for id in ["fixture-studio", "fixture-hetzner", "fixture-box"] { AppModel.shared.hosts.disconnect(id) }
     }
+
+    #if os(macOS)
+    func testSidebarExposesIndividualRowsToTheNativeList() throws {
+        let host = NSHostingView(rootView: WorkspaceSidebar().environment(model).environment(model.app))
+        host.frame = CGRect(x: 0, y: 0, width: 300, height: 700)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        host.layoutSubtreeIfNeeded()
+        func rowCount(in view: NSView) -> Int {
+            let count: Int
+            if let table = view as? NSTableView { count = table.numberOfRows }
+            else if let collection = view as? NSCollectionView { count = collection.numberOfItems(inSection: 0) }
+            else { count = 0 }
+            return max(count, view.subviews.map { rowCount(in: $0) }.max() ?? 0)
+        }
+        XCTAssertGreaterThan(rowCount(in: host), model.groups.tabs.count, "Tabs and section headers must be separate reused rows, not one large hosting cell")
+    }
+    #endif
+
+    #if os(macOS)
+    func testNativeRowsReportTheirPositionsInTheDropTargetsCoordinateSpace() async throws {
+        let geometry = SidebarGeometry()
+        let host = NSHostingView(rootView: List { SidebarTabList(geometry: geometry) }
+            .listStyle(.plain)
+            .coordinateSpace(name: "sidebar-list")
+            .environment(model).environment(model.app).environment(model.sidebarDrag).environment(RowSwipeState()))
+        host.frame = CGRect(x: 0, y: 0, width: 300, height: 900)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(30))
+        let project = try XCTUnwrap(model.projects.first)
+        let frames = try project.tabs.map { try XCTUnwrap(geometry.frames["tab/\($0)"]) }
+        for pair in zip(frames, frames.dropFirst()) {
+            XCTAssertGreaterThan(pair.1.minY, pair.0.minY)
+            XCTAssertLessThanOrEqual(pair.0.maxY, pair.1.minY + 1)
+        }
+        let point = CGPoint(x: frames[0].midX, y: frames[0].midY)
+        XCTAssertEqual(geometry.item(at: point)?.0.id, "tab/\(project.tabs[0])")
+    }
+    #endif
 
     private func ids(_ drop: SidebarDrop? = nil) -> [String] {
         model.sidebarItems(drop: drop, projectMove: nil).items.map(\.id)
@@ -199,7 +248,10 @@ final class RepositoryTabsTests: XCTestCase {
         XCTAssertEqual(Set(rows), Set(allTabs))
         XCTAssertEqual(rows.count, allTabs.count, "each tab once")
         // The worktrees without tabs come after the host's tabs, never in their place.
-        let reposIndex = try XCTUnwrap(items.firstIndex(of: .hostRepos("fixture-studio")))
+        let reposIndex = try XCTUnwrap(items.firstIndex { item in
+            if case .repoFold(let host, _) = item { return host == "fixture-studio" }
+            return false
+        })
         XCTAssertLessThan(try XCTUnwrap(items.firstIndex(of: .row(logs, .host("fixture-studio")))), reposIndex)
     }
 

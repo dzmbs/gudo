@@ -186,7 +186,7 @@ struct DiffReviewView: View {
             if let index = row.fileIndex {
                 let file = document.input.files[index]
                 DiffLineContent(file: file, left: left, right: right, split: document.input.split,
-                    lineHeight: document.input.lineHeight,
+                    lineHeight: document.input.lineHeight, columnWidth: (document.input.width - 1) / 2,
                     onTapLine: { line, oldSide in beginNote(file, line, oldSide: oldSide) })
             }
         case let .note(note):
@@ -554,9 +554,11 @@ struct DiffLineContent: View {
     let right: DiffLine?
     let split: Bool
     var lineHeight: CGFloat = 18
+    var columnWidth: CGFloat?
     let onTapLine: (DiffLine, Bool) -> Void
 
     @Environment(\.terminalTheme) private var theme
+    @Environment(\.nativeListHorizontalOffset) private var horizontalOffset
 
     static let numberWidth: CGFloat = 40
 
@@ -611,11 +613,14 @@ struct DiffLineContent: View {
                 Text(verbatim: line.text.isEmpty ? " " : line.text)
                     .font(DS.Font.literal)
                     .foregroundStyle(kind == .context ? DS.Palette.textSecondary : DS.Palette.text)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.trailing, DS.Space.s)
                     .lineLimit(1)
+                    .fixedSize()
+                    .offset(x: -horizontalOffset)
+                    .frame(width: columnWidth.map { max(0, $0 - Self.numberWidth - DS.Space.xs - 2 - DS.Space.s * 2) }, alignment: .leading)
+                    .clipped()
+                    .padding(.trailing, DS.Space.s)
             }
-            .frame(height: lineHeight)
+            .frame(width: columnWidth, height: lineHeight, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .background(fill(kind))
             .contentShape(.rect)
@@ -627,7 +632,7 @@ struct DiffLineContent: View {
             .accessibilityIdentifier("diff-line-\(file.path)-\(line.id)\(oldSide ? "-old" : "")")
         } else {
             Rectangle().fill(DS.Palette.hoverFill.opacity(0.5))
-                .frame(height: lineHeight)
+                .frame(width: columnWidth, height: lineHeight)
                 .frame(maxWidth: .infinity)
         }
     }

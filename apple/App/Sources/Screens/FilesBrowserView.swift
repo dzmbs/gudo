@@ -910,49 +910,9 @@ struct FilePreviewScreen: View {
 private struct TextPreview: View {
     let text: String
     let truncated: Bool
-    @Environment(\.terminalTheme) private var theme
-
-    private var lines: [Substring] { text.split(separator: "\n", omittingEmptySubsequences: false) }
-
     var body: some View {
-        ScrollView([.vertical, .horizontal]) {
-            HStack(alignment: .top, spacing: 0) {
-                LazyVStack(alignment: .trailing, spacing: 0) {
-                    ForEach(lines.indices, id: \.self) { index in
-                        Text(verbatim: "\(index + 1)")
-                            .font(DS.Font.literal.monospacedDigit())
-                            .foregroundStyle(DS.Palette.textQuaternary)
-                            .frame(height: 18)
-                    }
-                }
-                .padding(.horizontal, DS.Space.s)
-                .frame(minWidth: CGFloat(max(3, String(lines.count).count)) * 9 + DS.Space.l, alignment: .trailing)
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(lines.indices, id: \.self) { index in
-                        Text(verbatim: lines[index].isEmpty ? " " : String(lines[index]))
-                            .font(DS.Font.literal)
-                            .foregroundStyle(theme.foreground)
-                            .lineLimit(1)
-                            .fixedSize()
-                            .frame(height: 18, alignment: .leading)
-                    }
-                    if truncated {
-                        Text("Showing the first MiB. Download the file or open it in VS Code for the rest.")
-                            .font(DS.Font.rowSubtitle)
-                            .foregroundStyle(.secondary)
-                            .padding(.vertical, DS.Space.m)
-                    }
-                }
-                .padding(.trailing, DS.Space.l)
-                .textSelection(.enabled)
-            }
-            .padding(.vertical, DS.Space.s)
-        }
-        // A short file starts at the top left, not centred in the view.
-        .defaultScrollAnchor(.topLeading)
-        .defaultScrollAnchor(.topLeading, for: .alignment)
-        .background(theme.background)
-        .accessibilityIdentifier("file-text-preview")
+        NativeTextPreview(text: text, truncated: truncated)
+            .accessibilityIdentifier("file-text-preview")
     }
 }
 

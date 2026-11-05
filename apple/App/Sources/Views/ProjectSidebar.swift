@@ -24,8 +24,8 @@ enum SidebarItem: Identifiable, Hashable {
     /// "Close 6 Idle Tabs".
     case idleTabs(Int)
     case hostHeader(String)
-    /// A daemon's worktrees that have no tab, by repository, after its tabs (drawn as one block).
-    case hostRepos(String)
+    case repoFold(host: String, repo: String)
+    case worktree(host: String, repo: String, path: String)
     case hostPlaceholder(String)
     case hostAgents(String)
 
@@ -40,7 +40,8 @@ enum SidebarItem: Identifiable, Hashable {
         case .restoreTabs: "restore-tabs"
         case .idleTabs: "idle-tabs"
         case .hostHeader(let id): "host/\(id)"
-        case .hostRepos(let id): "repos/\(id)"
+        case .repoFold(let host, let repo): "repos/\(host)/\(repo)"
+        case .worktree(let host, let repo, let path): "worktree/\(host)/\(repo)/\(path)"
         case .hostPlaceholder(let id): "placeholder/\(id)"
         case .hostAgents(let id): "agents/\(id)"
         }
@@ -166,8 +167,15 @@ extension WindowModel {
             items.append(.hostHeader(group.id))
             guard !self.groups.collapsed.contains(group.id) else { continue }
             items += rows(.host(group.id)).map { .row($0, .host(group.id)) }
-            if let sidebar = self.groups.repoSidebar(for: group), sidebar.repos.contains(where: { !WorktreeFold($0).folded.isEmpty }) {
-                items.append(.hostRepos(group.id))
+            if let sidebar = self.groups.repoSidebar(for: group) {
+                for repo in sidebar.repos {
+                    let fold = WorktreeFold(repo)
+                    guard !fold.folded.isEmpty else { continue }
+                    items.append(.repoFold(host: group.id, repo: repo.id))
+                    if WorktreeFoldStore.shared.isExpanded(repo: repo.id, host: group.id) {
+                        items += fold.folded.map { .worktree(host: group.id, repo: repo.id, path: $0.id) }
+                    }
+                }
             }
             if group.tabs.isEmpty { items.append(.hostPlaceholder(group.id)) }
             items.append(.hostAgents(group.id))
@@ -214,7 +222,7 @@ extension WindowModel {
 /// The list itself, with one drop target over all of it.
 struct SidebarTabList: View {
     @Environment(WindowModel.self) private var model
-    @State private var geometry = SidebarGeometry()
+    let geometry: SidebarGeometry
     @AppStorage(ProjectsIntroRow.dismissedKey) private var introDismissed = false
     private static let space = "sidebar-list"
 
@@ -223,18 +231,13 @@ struct SidebarTabList: View {
         let (items, sections) = model.sidebarItems(drop: drag.plan, projectMove: drag.projectMove, showsIntro: !introDismissed)
         let numbers = Dictionary(model.groups.tabs.enumerated().map { ($1, $0 + 1) }, uniquingKeysWith: { first, _ in first })
         let _ = geometry.record(items, sections)
-        // Lazy: a host with hundreds of tabs lays out the rows in view, not every row on every
-        // status change.
-        LazyVStack(alignment: .leading, spacing: 0) {
+        Group {
             ForEach(items) { item in
                 SidebarItemView(item: item, numbers: numbers)
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.space)) } action: { geometry.frames[item.id] = $0 }
             }
         }
-        .coordinateSpace(.named(Self.space))
         .animation(DS.Motion.reorder, value: items)
-        .onDrop(of: [.text], delegate: SidebarDropDelegate(model: model, drag: drag, geometry: geometry))
-        .environment(drag)
         // Taught once: the first project, however made, retires the hint for good.
         .onChange(of: model.projects.isEmpty, initial: true) { _, empty in
             if !empty, !introDismissed { introDismissed = true }
@@ -275,8 +278,22 @@ private struct SidebarItemView: View {
             IdleTabsRow(count: count)
         case .hostHeader(let id):
             if let group = model.groups.group(id) { HostGroupHeaderItem(group: group) }
-        case .hostRepos(let id):
-            if let group = model.groups.group(id) { HostReposItem(group: group) }
+        case .repoFold(let host, let repoID):
+            if let group = model.groups.group(host), let repo = model.groups.repoSidebar(for: group)?.repos.first(where: { $0.id == repoID }) {
+                let folds = WorktreeFoldStore.shared
+                RepoFoldRow(repo: repo, fold: WorktreeFold(repo), host: host, expanded: folds.isExpanded(repo: repoID, host: host)) {
+                    withAnimation(DS.Motion.snappy) { folds.toggle(repo: repoID, host: host) }
+                }
+                .padding(.top, DS.Space.xs)
+                .opacity(group.showsAsLive ? 1 : 0.6)
+            }
+        case .worktree(let host, let repoID, let path):
+            if let group = model.groups.group(host),
+               let repo = model.groups.repoSidebar(for: group)?.repos.first(where: { $0.id == repoID }),
+               let worktree = repo.worktrees.first(where: { $0.id == path }) {
+                WorktreeRow(worktree: worktree.state, host: host)
+                    .opacity(group.showsAsLive ? 1 : 0.6)
+            }
         case .hostPlaceholder(let id):
             if let group = model.groups.group(id) { GroupPlaceholder(group: group) }
         case .hostAgents(let id):
@@ -402,7 +419,7 @@ private struct DragLiftPreview: View {
 }
 
 /// One drop target over the whole list: the pointer's place picks the row or header under it.
-private struct SidebarDropDelegate: DropDelegate {
+struct SidebarDropDelegate: DropDelegate {
     let model: WindowModel
     let drag: SidebarDragState
     let geometry: SidebarGeometry
@@ -463,7 +480,7 @@ private struct SidebarDropDelegate: DropDelegate {
             if ref.hostId == id, !geometry.section(.host(id)).rows.contains(ref) {
                 next = .insert(ref, into: .host(id), at: 0)
             }
-        case .hostRepos(let id):
+        case .repoFold(let id, _), .worktree(let id, _, _):
             let rows = geometry.section(.host(id)).rows
             if ref.hostId == id, !rows.contains(ref) {
                 next = .insert(ref, into: .host(id), at: rows.count)
@@ -845,16 +862,5 @@ private struct WindowTabsHeader: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isHeader)
         .accessibilityIdentifier("host-group-\(kind.rawValue)")
-    }
-}
-
-private struct HostReposItem: View {
-    let group: HostGroup
-    @Environment(WindowModel.self) private var model
-
-    var body: some View {
-        if let sidebar = model.groups.repoSidebar(for: group) {
-            RepoWorktreesView(group: group, sidebar: sidebar)
-        }
     }
 }

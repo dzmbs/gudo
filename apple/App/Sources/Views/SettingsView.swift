@@ -960,28 +960,15 @@ private struct AcknowledgementsView: View {
 
 /// The generated third-party notices (`cargo xtask notices`), as bundled.
 private struct LicenseNoticesView: View {
-    @State private var paragraphs: [String] = []
+    @State private var text = ""
 
     var body: some View {
-        ScrollView {
-            // About 1 MB of text: lazily, a paragraph at a time.
-            LazyVStack(alignment: .leading, spacing: 10) {
-                ForEach(paragraphs.indices, id: \.self) { i in
-                    Text(paragraphs[i])
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                }
+        NativeTextPreview(text: text, numbered: false)
+            .navigationTitle("Open-Source Licenses")
+            .task {
+                guard text.isEmpty,
+                      let url = Bundle.main.url(forResource: "THIRD_PARTY_NOTICES", withExtension: "txt") else { return }
+                text = await Task.detached { (try? String(contentsOf: url, encoding: .utf8)) ?? "" }.value
             }
-            .padding()
-        }
-        .navigationTitle("Open-Source Licenses")
-        .task {
-            guard paragraphs.isEmpty,
-                  let url = Bundle.main.url(forResource: "THIRD_PARTY_NOTICES", withExtension: "txt") else { return }
-            paragraphs = await Task.detached {
-                let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-                return text.components(separatedBy: "\n\n")
-            }.value
-        }
     }
 }

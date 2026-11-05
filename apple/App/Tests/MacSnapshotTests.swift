@@ -655,6 +655,17 @@ final class MacSnapshotTests: XCTestCase {
         }
     }
 
+    func testNativeTextLists() async throws {
+        let code = (1...80).map { "let value\($0) = \($0)" }.joined(separator: "\n")
+        try await tool("file-text-native", size: CGSize(width: 720, height: 480)) {
+            NativeTextPreview(text: code, truncated: true)
+        }
+        let notices = String(repeating: "Permission is hereby granted, free of charge, to any person obtaining a copy of this software. ", count: 12)
+        try await tool("notices-native", size: CGSize(width: 600, height: 480)) {
+            NativeTextPreview(text: ["Example library", "MIT License", notices, "Copyright holders retain their rights."].joined(separator: "\n\n"), numbered: false)
+        }
+    }
+
     func testNativeDiffLayouts() async throws {
         let defaults = UserDefaults.standard
         let saved = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
