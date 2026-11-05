@@ -36,7 +36,7 @@ struct UpdateCard: View {
         .background { surface }
         .glassEdge(Self.shape)
         .shadow(color: .black.opacity(chrome.scheme == .dark ? 0.28 : 0.08), radius: 6, y: 2)
-        .padding(.horizontal, DS.Space.s)
+        .padding(.horizontal, DS.Space.l)
         .animation(DS.Motion.snappy, value: prompt.phase)
         .animation(DS.Motion.snappy, value: prompt.showsNotes)
         .accessibilityElement(children: .contain)

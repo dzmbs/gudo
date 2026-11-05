@@ -187,7 +187,7 @@ struct PortOfferBanner: ViewModifier {
     }
 
     func body(content: Content) -> some View {
-        content.overlay(alignment: .bottom) {
+        content.overlay(alignment: .bottomLeading) {
             if let port = model.ports.offer, !model.editorHasKeys {
                 HStack(spacing: DS.Space.m) {
                     Circle()
@@ -215,7 +215,7 @@ struct PortOfferBanner: ViewModifier {
                 .frame(minHeight: Self.height)
                 .chromeContent()
                 .floatingCapsule()
-                .frame(maxWidth: 520)
+                .frame(maxWidth: 520, alignment: .leading)
                 .padding(.horizontal, DS.Space.l)
                 .padding(.bottom, Self.bottomInset(model))
                 .movingTransition(.bottom)

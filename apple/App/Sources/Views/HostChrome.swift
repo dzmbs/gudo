@@ -67,7 +67,7 @@ struct HostNotices: View {
         .font(.callout)
         .frame(maxWidth: 420, alignment: .trailing)
         .frame(maxWidth: .infinity, alignment: .trailing)
-        .padding(DS.Space.m)
+        .padding(DS.Space.l)
         .animation(DS.Motion.panel, value: app.hosts.installs[workspace.hostId ?? ""]?.summary)
     }
 

@@ -38,6 +38,26 @@ final class TouchSnapshotTests: XCTestCase {
         print("snapshot: \(url.path)")
     }
 
+    func testAgentNotifications() async throws {
+        var arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        arguments[TerminalPreferences.Key.theme] = environment["SNAPSHOT_THEME"] ?? (mode == "light" ? "Apple System Colors Light" : "Dracula")
+        arguments[TerminalPreferences.Key.windowTheme] = TerminalPreferences.WindowTheme.auto.rawValue
+        UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let model = WindowModel(app: .shared)
+        AgentToastTestFixtures.seed(model.agentToasts)
+        let window = UIWindow(windowScene: scene)
+        window.frame = scene.screen.bounds
+        window.rootViewController = UIHostingController(rootView: ThemedRoot {
+            Rectangle().fill(DS.Palette.base)
+                .overlay(alignment: .bottomLeading) { AgentToastStack().environment(model) }
+        })
+        window.isHidden = false
+        defer { window.isHidden = true; model.close() }
+        await pump(0.5)
+        try capture(window, "agent-toasts")
+    }
+
     func testProjects() async throws {
         let theme = mode == "light" ? "Apple System Colors Light" : "Ghostty Default"
         var arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)

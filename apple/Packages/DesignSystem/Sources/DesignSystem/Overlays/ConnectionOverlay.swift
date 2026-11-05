@@ -184,7 +184,7 @@ private struct ConnectionOverlayModifier: ViewModifier {
                 .overlay(alignment: .topTrailing) {
                     if let notice = presentation.notice {
                         ConnectionNotice(state: state, copy: notice)
-                            .padding(DS.Space.s)
+                            .padding(DS.Space.l)
                             .transition(.opacity)
                     }
                 }

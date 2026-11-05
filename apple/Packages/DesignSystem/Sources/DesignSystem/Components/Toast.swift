@@ -70,14 +70,12 @@ public final class ToastCenter {
         obstacles[id] = frame
     }
 
-    /// The banner's distance from the bottom of `host` (global coordinates): `base`, or just
-    /// above the obstacles a banner of `size`, centred at the bottom, would otherwise cover.
     public static func bottomInset(
         base: CGFloat, banner size: CGSize, in host: CGRect, avoiding obstacles: [CGRect], spacing: CGFloat = DS.Space.s
     ) -> CGFloat {
         var inset = base
         for obstacle in obstacles.sorted(by: { $0.maxY > $1.maxY }) {
-            let banner = CGRect(x: host.midX - size.width / 2, y: host.maxY - inset - size.height, width: size.width, height: size.height)
+            let banner = CGRect(x: host.minX + DS.Space.l, y: host.maxY - inset - size.height, width: size.width, height: size.height)
             if banner.intersects(obstacle) { inset = host.maxY - obstacle.minY + spacing }
         }
         return inset
@@ -162,7 +160,7 @@ public struct Banner: View {
         .chromeContent()
         .floatingCapsule(interactive: true)
         // As wide as its words, up to a line a glance takes in.
-        .frame(maxWidth: 560)
+        .frame(maxWidth: 560, alignment: .leading)
         .offset(y: max(0, dragOffset))
         // A tap dismisses; with a button only the button takes taps.
         .gesture(TapGesture().onEnded { dismiss() }, including: toast.action == nil ? .all : .subviews)
@@ -201,7 +199,7 @@ private struct ToastHost: ViewModifier {
         content
             .environment(\.toastCenter, center)
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { host = $0 }
-            .overlay(alignment: .bottom) {
+            .overlay(alignment: .bottomLeading) {
                 if let toast = center.current {
                     Banner(toast) { center.dismiss() }
                         .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
@@ -229,7 +227,7 @@ private struct BannerTransition: ViewModifier {
     func body(content: Content) -> some View {
         content
             .opacity(active ? 0 : 1)
-            .scaleEffect(active && !reduceMotion ? 0.9 : 1, anchor: .bottom)
+            .scaleEffect(active && !reduceMotion ? 0.9 : 1, anchor: .bottomLeading)
             .offset(y: active && !reduceMotion ? 24 : 0)
             .blur(radius: active && !reduceMotion ? 4 : 0)
     }

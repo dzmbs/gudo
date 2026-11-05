@@ -22,8 +22,14 @@ final class WorkspaceScreenModelTests: XCTestCase {
         AttentionItem(id: id, atMs: 1_700_000_000_000 + id * 1000, paneId: pane, sessionId: 1, kind: kind, title: title, body: body, seen: seen, whileViewed: false)
     }
 
-    /// An agent asking to drive one of the user's panes reads as what it wants and exactly what
-    /// it would do, and its card offers "for this pane"; Approve is never the wider answer.
+    func testFinishedAgentsWithoutAMessageHaveNoSummary() throws {
+        let metadata = [PaneId(1): meta(1, title: "[ ! ] Action Required | task | project", agent: AgentStatus(kind: "codex", state: .idle))]
+        let notices = [attention(1, pane: 1, kind: .agentDone(agent: "codex"), title: "codex finished")]
+        let agent = try XCTUnwrap(LiveAgentFeed.items(hostId: "host", hostName: "Host", meta: metadata, attention: notices).first)
+        XCTAssertNil(agent.summary)
+        XCTAssertNil(AgentToasts.summary(for: agent))
+    }
+
     func testADriveRequestShowsItsActionAndOffersThePane() {
         let options = [DecisionOption(id: 0, label: "Allow once"),
                        DecisionOption(id: 1, label: "Allow for this pane until it closes"),

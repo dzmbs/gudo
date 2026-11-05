@@ -77,10 +77,9 @@ struct WorkspaceView: View {
             .onChange(of: (workspace.host as? DaemonConnection)?.workspace.workflowsRev) {
                 if model.isPaletteShown { model.loadWorkflows() }
             }
-            // Above the port offer when it shows, and above the iPhone's tab bar.
+            .overlay(alignment: .bottomLeading) { AgentToastStack() }
             .toastHost(model.toasts, bottomInset: PortOfferBanner.bottomInset(model)
                 + (model.ports.offer != nil && !model.editorHasKeys ? PortOfferBanner.height + DS.Space.s : 0))
-            .overlay(alignment: model.widthBucket == .compact ? .top : .topTrailing) { AgentToastStack() }
             .dictationIndicator()
             .portOffers(model)
             .sheet(item: $model.sheet) { route in

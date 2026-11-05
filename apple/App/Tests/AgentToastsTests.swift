@@ -17,14 +17,14 @@ final class AgentToastsTests: XCTestCase {
         XCTAssertTrue(toasts.cards.isEmpty)
     }
 
-    func testNeedsYouFinishedAndFailedBecomeCardsNewestFirst() {
+    func testNeedsYouFinishedAndFailedBecomeCardsNewestAtTheBottom() {
         let toasts = AgentToasts()
         toasts.update([item("a", .working), item("b", .working), item("c", .working)], isShown: { _ in false })
         toasts.update([item("a", .blocked, request: .permission(tool: "Bash", detail: "rm -rf build")), item("b", .working), item("c", .working)], isShown: { _ in false })
         toasts.update([item("a", .blocked, request: .permission(tool: "Bash", detail: "rm -rf build")), item("b", .done), item("c", .error)], isShown: { _ in false })
-        XCTAssertEqual(toasts.cards.map(\.item.id), ["c", "b", "a"])
+        XCTAssertEqual(toasts.cards.map(\.item.id), ["a", "b", "c"])
         XCTAssertEqual(Set(toasts.cards.map(\.kind)), [.needsYou, .finished, .failed])
-        XCTAssertEqual(toasts.cards.last?.item.id, "a", "the oldest card is at the bottom")
+        XCTAssertEqual(toasts.cards.last?.item.id, "c", "the newest card is at the bottom")
     }
 
     func testAShownAgentACommandAndHistoryNeverToast() {
@@ -81,6 +81,34 @@ final class AgentToastsTests: XCTestCase {
         XCTAssertTrue(toasts.cards.isEmpty)
     }
 
+    func testAMessageArrivingAfterCompletionUpdatesTheCardWithoutExtendingItsLifetime() {
+        let toasts = AgentToasts()
+        var agent = item("late", .working)
+        toasts.update([agent], isShown: { _ in false })
+        agent.state = .done
+        toasts.update([agent], isShown: { _ in false })
+        let expiry = toasts.cards.first?.expires
+        agent.summary = "Added retry handling"
+        toasts.update([agent], isShown: { _ in false })
+        XCTAssertEqual(toasts.cards.first?.item.summary, "Added retry handling")
+        XCTAssertEqual(toasts.cards.first?.expires, expiry)
+    }
+
+    func testToastBodiesUseTheFirstMessageLineAndNeverTheTerminalTitle() {
+        var agent = item("message", .done)
+        agent.prompt = "[ ! ] Action Required | Fix download flow | project"
+        XCTAssertNil(AgentToasts.summary(for: agent))
+        agent.summary = "claude finished"
+        XCTAssertNil(AgentToasts.summary(for: agent))
+        agent.summary = "[✓] Added retry handling | Tests pass\nDetailed output"
+        XCTAssertEqual(AgentToasts.summary(for: agent), "Added retry handling Tests pass")
+        agent.summary = "Action Required: Which branch should I use?"
+        XCTAssertEqual(AgentToasts.summary(for: agent), "Which branch should I use?")
+        agent.summary = nil
+        agent.request = .question("[ ! ] Which branch should I use?\nMore context")
+        XCTAssertEqual(AgentToasts.summary(for: agent), "Which branch should I use?")
+    }
+
     func testInboxFilters() {
         let items = [
             item("blocked", .blocked, request: .question("?")), item("working", .working),
@@ -107,5 +135,22 @@ final class AgentToastsTests: XCTestCase {
     func testEverySettingsEntryHasAUniqueAnchor() {
         let ids = SettingsIndex.all.map(\.id)
         XCTAssertEqual(ids.count, Set(ids).count)
+    }
+}
+
+@MainActor
+enum AgentToastTestFixtures {
+    static func seed(_ toasts: AgentToasts) {
+        var waiting = AgentItem(id: "waiting", agent: .claude, hostName: "Host", sessionTitle: "project", state: .working,
+                                since: .now, prompt: "[ ! ] Action Required | task | project", hostId: "host", paneId: 1)
+        var finished = AgentItem(id: "finished", agent: .codex, hostName: "Host", sessionTitle: "project", state: .working,
+                                 since: .now, prompt: "terminal title", hostId: "host", paneId: 2)
+        toasts.update([waiting, finished], isShown: { _ in false })
+        waiting.state = .blocked
+        waiting.request = .permission(tool: "Bash", detail: "cargo test")
+        finished.state = .done
+        finished.summary = "[✓] Added retry handling | Tests pass\nDetailed output"
+        toasts.update([waiting, finished], isShown: { _ in false })
+        toasts.hold(true)
     }
 }

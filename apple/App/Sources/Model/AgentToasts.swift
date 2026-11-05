@@ -24,7 +24,6 @@ final class AgentToasts {
     static let lifetime: TimeInterval = 8
     static let maxShown = 3
 
-    /// Newest first.
     private(set) var cards: [Card] = []
     private(set) var isHeld = false
     @ObservationIgnored private var heldSince: Date?
@@ -58,6 +57,33 @@ final class AgentToasts {
         }
     }
 
+    static func summary(for item: AgentItem) -> String? {
+        let message: String?
+        if case .question(let question) = item.request {
+            message = question
+        } else {
+            message = item.summary
+        }
+        guard let message,
+              let firstLine = message.split(whereSeparator: \.isNewline).first else { return nil }
+        var line = String(firstLine).trimmingCharacters(in: .whitespaces)
+        line = line.replacingOccurrences(of: #"^\s*(?:\[[\s!✓✔✗×*+.-]*\]|[!✓✔✗×●]+)\s*"#, with: "", options: .regularExpression)
+        line = line.replacingOccurrences(of: #"^#{1,6}\s+"#, with: "", options: .regularExpression)
+        line = line.replacingOccurrences(of: #"(?i)^(?:action required|finished|failed|needs you|working|done)\s*:\s*"#, with: "", options: .regularExpression)
+        let statusWords = ["finished", "failed", "needs you", "working", "done", "action required"]
+        let genericLines = statusWords + statusWords.flatMap { status in
+            ["\(item.agent.rawValue) \(status)", "\(item.title) \(status)"]
+        }
+        let parts = line.components(separatedBy: " | ").flatMap { $0.components(separatedBy: " · ") }
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { part in
+                !part.isEmpty && !genericLines.contains { $0.caseInsensitiveCompare(part) == .orderedSame }
+                    && part != item.sessionTitle && part != item.hostName
+            }
+        line = parts.joined(separator: " ")
+        return line.isEmpty ? nil : String(line.prefix(200))
+    }
+
     func update(_ items: [AgentItem], isShown: (AgentItem) -> Bool, now: Date = .now) {
         let snapshots = Dictionary(items.map { ($0.id, Snapshot(state: $0.state, request: $0.request)) }, uniquingKeysWith: { first, _ in first })
         defer { known = snapshots }
@@ -72,12 +98,15 @@ final class AgentToasts {
             case .finished, .failed: return item.state == .working || item.state == .blocked
             }
         }
+        for index in cards.indices {
+            if let item = current[cards[index].item.id] { cards[index].item = item }
+        }
         for (kind, item) in Self.arrivals(items, known: known, isShown: isShown) {
             let id = "\(item.id)/\(kind)/\(item.request.map { "\($0.hashValue)" } ?? "")"
             cards.removeAll { $0.item.id == item.id }
-            cards.insert(Card(id: id, kind: kind, item: item, expires: now + Self.lifetime), at: 0)
+            cards.append(Card(id: id, kind: kind, item: item, expires: now + Self.lifetime))
         }
-        if cards.count > Self.maxShown { cards.removeLast(cards.count - Self.maxShown) }
+        if cards.count > Self.maxShown { cards.removeFirst(cards.count - Self.maxShown) }
         guard cards != self.cards else { return }
         self.cards = cards
         scheduleExpiry()

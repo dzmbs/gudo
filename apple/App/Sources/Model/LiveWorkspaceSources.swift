@@ -327,12 +327,12 @@ final class LiveAgentFeed: AgentFeed {
             }
             var summary: String?
             if state == .done || state == .idle, let latest, latest.kind.isFinish {
-                summary = latest.body.nonEmpty ?? latest.title.nonEmpty
+                summary = latest.body.nonEmpty
                 if case .agentFailed = latest.kind { state = .error }
             }
             result.append(AgentItem(
                 id: id, agent: AgentKind(agent.kind), hostName: hostName,
-                sessionTitle: paneMeta.cwd.map(Self.folder) ?? paneMeta.title,
+                sessionTitle: paneMeta.cwd.map(Self.folder) ?? "",
                 state: state == .idle ? .done : state,
                 since: latest.map { Date(timeIntervalSince1970: Double($0.atMs) / 1000) } ?? .now,
                 prompt: prompt.nonEmpty ?? AgentKind(agent.kind).title,

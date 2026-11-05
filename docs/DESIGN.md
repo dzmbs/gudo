@@ -167,7 +167,7 @@ tab strip at XXL, pane headers and the iPhone bar at XL.
 | lift beat | keyframes: 1.03 (snappy 0.16 s) → 1 (smooth 0.36 s) floating; 0.985 → 1 docking | the pane coming towards you as it lifts, pressed in as it docks; off under Reduce Motion | macOS window drag-out |
 | `settle` | spring 0.34 / 0.86 | a floating window let go, carried by its flick onto the line it snaps to; a keyboard move or resize; picture in picture settling in a corner | iOS PiP |
 | toast | 2.4 s; failures 4 s; with an action 5 s | | - |
-| agent toast | 8 s, held while the pointer or a finger is on the stack, +0.5 s after | needs you / finished / failed, max 3, newest on top | - |
+| agent toast | 8 s, held while the pointer or a finger is on the stack, +0.5 s after | needs you / finished / failed, max 3, newest at the bottom | - |
 | shimmer | 3 s sweep, 6-glyph cosine band, secondary → full ink | a working agent's title (sidebar, Agents); plain text under Reduce Motion | - |
 | feedback delay | 200 ms before any progress UI | | - |
 
@@ -211,7 +211,7 @@ Two shadows (`.shadow(DS.Shadow.float)`: r 16, y 6, 12 % light / 35 % dark; `.pa
 | `HostSwitcher`, `HostSwitcherLabel`, `HostSwitcherHost`, `HostSwitcherCommand` | `Components/HostSwitcher.swift` | a session popup for hosts: "Filter or connect…", hosts with ⌃⌘N and ✓, a highlight that follows ↑/↓ and the pointer, then commands with their shortcuts; typing an unknown address offers Connect to it |
 | `floatingPanel`, `floatingCapsule`, `phoneDetents` | `Components/Glass.swift`, `Sheets.swift` | glass rules above; bottom sheets only on iPhone |
 | `ShortcutLabel`, `KeyCap` | `Components/KeyCaps.swift` | Ghostty `ShortcutSymbolsView`, `KeyCap` |
-| `Toast`, `ToastCenter`, `toastHost`, `Banner` | `Components/Toast.swift` | one at a time; a `person` (joined, left) leads with their avatar instead of the symbol; a glass capsule at the bottom (never over a pane's top bar: address bar, editor bar, pane headers; above the dev-server offer, the iPhone tab bar and cards at the bottom of a pane such as someone's draft, `toastObstacle()`), edge and float shadow; the symbol in a 24 pt disc tinted at 16 %; one line (failures two); the action in accent semibold after a hairline; tap or flick down dismisses; taps beside it pass through |
+| `Toast`, `ToastCenter`, `toastHost`, `Banner` | `Components/Toast.swift` | one at a time; a `person` (joined, left) leads with their avatar instead of the symbol; a glass capsule at the bottom leading edge, 16 pt from the content edges (never over a pane's top bar: address bar, editor bar, pane headers; above the dev-server offer, the iPhone tab bar and cards at the bottom of a pane such as someone's draft, `toastObstacle()`), edge and float shadow; the symbol in a 24 pt disc tinted at 16 %; one line (failures two); the action in accent semibold after a hairline; tap or flick down dismisses; taps beside it pass through |
 | `ShimmerMath`, `.shimmering(_:text:)` | `Components/Shimmer.swift` | "working" on a title instead of a spinner |
 | `PresenceAvatar`, `PresenceStack`, `Participant` | `Components/Presence.swift` | initials on ANSI hues, typing ring, +N; stacks at any size, each avatar cutting a thin gap out of the one under it so they read on any background |
 | `PeopleSwitcher`, `PeopleSwitcherPerson` | `Components/PeopleSwitcher.swift` | the presence button's popover in the host switcher's form: "4 people here", one row per person (avatar, what they are doing, ✓ on the one followed; a tap follows or stops), then Share Session… |

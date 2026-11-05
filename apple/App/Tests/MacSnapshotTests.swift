@@ -468,6 +468,46 @@ final class MacSnapshotTests: XCTestCase {
         try await window("program-status", screen: "program-status")
     }
 
+    func testNotificationBanner() async throws {
+        guard wanted("notification-banner") else { return }
+        let center = ToastCenter()
+        center.show(Toast("Changes saved", systemImage: "checkmark"))
+        let window = makeWindow(ThemedRoot {
+            Rectangle().fill(DS.Palette.base).toastHost(center)
+        }, size: CGSize(width: 1000, height: 650))
+        defer { window.close(); center.dismiss() }
+        await pump(0.5)
+        try capture(window, "notification-banner")
+    }
+
+    func testAgentNotificationsWithBanner() async throws {
+        guard wanted("agent-toasts-banner") else { return }
+        let model = WindowModel(app: .shared)
+        AgentToastTestFixtures.seed(model.agentToasts)
+        model.toasts.show(Toast("Changes saved", systemImage: "checkmark"))
+        let window = makeWindow(ThemedRoot {
+            Rectangle().fill(DS.Palette.base)
+                .overlay(alignment: .bottomLeading) { AgentToastStack().environment(model) }
+                .toastHost(model.toasts)
+        }, size: CGSize(width: 1000, height: 650))
+        defer { window.close(); model.toasts.dismiss(); model.close() }
+        await pump(0.5)
+        try capture(window, "agent-toasts-banner")
+    }
+
+    func testAgentNotifications() async throws {
+        guard wanted("agent-toasts") else { return }
+        let model = WindowModel(app: .shared)
+        AgentToastTestFixtures.seed(model.agentToasts)
+        let window = makeWindow(ThemedRoot {
+            Rectangle().fill(DS.Palette.base)
+                .overlay(alignment: .bottomLeading) { AgentToastStack().environment(model) }
+        }, size: CGSize(width: 1000, height: 650))
+        defer { window.close(); model.close() }
+        await pump(0.5)
+        try capture(window, "agent-toasts")
+    }
+
     func testInstalledAgentScreen() async throws {
         try XCTSkipIf(environment["AGENT_TUI_RAW"] == nil, "requires an agent start-screen capture")
         let path = try XCTUnwrap(environment["AGENT_TUI_RAW"])

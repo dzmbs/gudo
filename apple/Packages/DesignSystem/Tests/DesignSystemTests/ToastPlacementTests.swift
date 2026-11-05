@@ -4,24 +4,18 @@ import SwiftUI
 import Testing
 @testable import DesignSystem
 
-/// A banner rises above cards at the bottom of a pane (someone's draft) instead of covering them.
 @MainActor
 @Suite struct ToastPlacementTests {
     @Test func theInsetClearsOnlyTheCardsTheBannerWouldCover() {
         let host = CGRect(x: 0, y: 0, width: 1000, height: 700)
         let banner = CGSize(width: 300, height: 40)
         #expect(ToastCenter.bottomInset(base: 16, banner: banner, in: host, avoiding: []) == 16)
-        // A card in the left pane, away from the centred banner: no change.
-        #expect(ToastCenter.bottomInset(base: 16, banner: banner, in: host, avoiding: [CGRect(x: 10, y: 600, width: 300, height: 90)]) == 16)
-        // Under the banner: it sits 8 above the card's top.
-        #expect(ToastCenter.bottomInset(base: 16, banner: banner, in: host, avoiding: [CGRect(x: 300, y: 600, width: 500, height: 90)]) == 108)
-        // Two stacked cards: above both.
-        let stacked = [CGRect(x: 300, y: 600, width: 500, height: 90), CGRect(x: 400, y: 540, width: 300, height: 50)]
+        #expect(ToastCenter.bottomInset(base: 16, banner: banner, in: host, avoiding: [CGRect(x: 10, y: 600, width: 300, height: 90)]) == 108)
+        #expect(ToastCenter.bottomInset(base: 16, banner: banner, in: host, avoiding: [CGRect(x: 600, y: 600, width: 300, height: 90)]) == 16)
+        let stacked = [CGRect(x: 10, y: 600, width: 300, height: 90), CGRect(x: 20, y: 540, width: 300, height: 50)]
         #expect(ToastCenter.bottomInset(base: 16, banner: banner, in: host, avoiding: stacked) == 168)
     }
 
-    /// Laid out for real: a card marked as an obstacle reports its frame to the window's
-    /// banners, so the banner's inset clears it.
     @Test func aDraftCardReportsItselfToTheBanners() async throws {
         let center = ToastCenter()
         var card = CGRect.zero

@@ -14,7 +14,7 @@ private struct DictationIndicator: ViewModifier {
     private let voice = VoiceDictation.shared.voice
 
     func body(content: Content) -> some View {
-        content.overlay(alignment: .bottom) {
+        content.overlay(alignment: .bottomLeading) {
             Group {
                 switch voice.phase {
                 case .starting, .listening, .finishing:
@@ -57,7 +57,7 @@ private struct DictationIndicator: ViewModifier {
                     EmptyView()
                 }
             }
-            .padding(.bottom, DS.Space.xxl)
+            .padding(.bottom, DS.Space.l)
             .padding(.horizontal, DS.Space.l)
             .movingTransition(.bottom)
         }

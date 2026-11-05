@@ -1,9 +1,6 @@
 import DesignSystem
 import SwiftUI
 
-/// The agent toasts (`AgentToasts`): cards under the toolbar at the trailing edge (top on iPhone),
-/// newest on top. Holding the pointer or a finger on them keeps them; while the pointer is over a
-/// card, ↩ approves and Esc (⌘.) denies it, as in the Inbox.
 struct AgentToastStack: View {
     @Environment(WindowModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -11,18 +8,19 @@ struct AgentToastStack: View {
     var body: some View {
         let toasts = model.agentToasts
         let compact = model.widthBucket == .compact
-        VStack(alignment: .trailing, spacing: DS.Space.s) {
+        VStack(alignment: .leading, spacing: DS.Space.s) {
             ForEach(Array(toasts.cards.enumerated()), id: \.element.id) { index, card in
-                AgentToastCard(card: card, isNewest: index == 0)
+                AgentToastCard(card: card, isNewest: index == toasts.cards.count - 1)
                     .transition(reduceMotion ? .opacity : .asymmetric(
-                        insertion: .move(edge: compact ? .top : .trailing).combined(with: .opacity),
+                        insertion: .move(edge: .leading).combined(with: .opacity),
                         removal: .opacity.combined(with: .scale(scale: 0.96))))
             }
         }
         .frame(maxWidth: compact ? .infinity : 380)
-        .padding(.horizontal, compact ? DS.Space.s : DS.Space.m)
-        // Under the toolbar's band (its trailing controls stay reachable).
-        .padding(.top, compact ? DS.Space.s : 58)
+        .toastObstacle()
+        .padding(.horizontal, DS.Space.l)
+        .padding(.bottom, PortOfferBanner.bottomInset(model)
+            + (model.ports.offer != nil && !model.editorHasKeys ? PortOfferBanner.height + DS.Space.s : 0))
         .onHover { toasts.hold($0) }
         .simultaneousGesture(
             DragGesture(minimumDistance: 0)
@@ -79,7 +77,6 @@ private struct AgentToastCard: View {
         .accessibilityIdentifier("agent-toast-\(item.id)")
     }
 
-    /// The agent's mark with its state glyph cut into the corner.
     private var mark: some View {
         ProgramMark(item.identity, size: 22)
             .foregroundStyle(.primary)
@@ -116,7 +113,7 @@ private struct AgentToastCard: View {
             Text(headline)
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
-            Text("\(item.hostName) · \(item.sessionTitle)")
+            Text([item.hostName, item.sessionTitle].filter { !$0.isEmpty && !$0.contains("|") }.joined(separator: " · "))
                 .font(.footnote)
                 .foregroundStyle(DS.Palette.textSecondary)
                 .lineLimit(1)
@@ -136,14 +133,16 @@ private struct AgentToastCard: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.field))
                     .overlay(RoundedRectangle(cornerRadius: DS.Radius.field).strokeBorder(DS.Palette.hairline, lineWidth: 0.5)))
-        case .question(let question)?:
-            AnyView(Text(verbatim: question).font(DS.Font.rowSubtitle).lineLimit(2))
+        case .question?:
+            AgentToasts.summary(for: item).map { line in
+                AnyView(Text(verbatim: line).font(DS.Font.rowSubtitle).lineLimit(1))
+            }
         case nil:
-            (item.summary ?? (item.prompt == "Working…" ? nil : item.prompt)).map { line in
+            AgentToasts.summary(for: item).map { line in
                 AnyView(Text(verbatim: line)
                     .font(DS.Font.rowSubtitle)
                     .foregroundStyle(card.kind == .failed ? AnyShapeStyle(DS.Palette.error) : AnyShapeStyle(DS.Palette.textSecondary))
-                    .lineLimit(2))
+                    .lineLimit(1))
             }
         }
     }
