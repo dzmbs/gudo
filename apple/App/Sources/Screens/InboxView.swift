@@ -101,9 +101,12 @@ struct InboxView: View {
         }
         .safeAreaInset(edge: .top, spacing: 0) {
             if !items.isEmpty {
-                HStack {
-                    InboxFilterBar(selection: $filter, counts: counts(items))
-                    Spacer(minLength: 0)
+                VStack(alignment: .leading, spacing: DS.Space.xs) {
+                    HStack {
+                        InboxFilterBar(selection: $filter, counts: counts(items))
+                        Spacer(minLength: 0)
+                    }
+                    AgentPowerStatus()
                 }
                 .padding(.horizontal, DS.Space.l)
                 .padding(.top, DS.Space.xs)

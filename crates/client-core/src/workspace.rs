@@ -815,6 +815,19 @@ impl Client {
             WorkspaceResponse::Worktree(worktree) => worktree)
     }
 
+    pub async fn power_settings(
+        &self,
+        policy: Option<proto::PowerPolicy>,
+    ) -> Result<proto::PowerStatus, WsError> {
+        if !self.daemon_has(proto::DaemonFeatures::POWER_SETTINGS) {
+            return Err(WsError::Unavailable(
+                "update the helper to manage its power policy".into(),
+            ));
+        }
+        expect!(self.workspace(WorkspaceRequest::PowerSettings(policy)).await?,
+            WorkspaceResponse::PowerStatus(status) => status)
+    }
+
     /// Reads (`None`) or changes the worktree housekeeping.
     pub async fn worktree_settings(
         &self,

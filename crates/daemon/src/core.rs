@@ -265,6 +265,7 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 pub(crate) struct Core {
     pub cfg: Config,
+    pub power: crate::power::Power,
     /// The session's run: the same across hot upgrades, which keep panes and streams.
     pub epoch: SessionEpoch,
     /// The snapshot generation of panes this process starts, unlike any a previous build
@@ -363,6 +364,7 @@ impl Core {
             approvals: crate::approve::Approvals::default(),
             browser: crate::browser::Browser::install(&config.state_dir, &config.hook_bin()),
             themes: crate::theme::Themes::default(),
+            power: crate::power::Power::load(&config.state_dir),
             cfg: config,
             connected: AtomicUsize::new(0),
             device_conns: Mutex::default(),
@@ -456,6 +458,9 @@ impl Core {
     }
 
     pub fn emit(&self, event: Event) {
+        if matches!(event, Event::PaneMeta(_) | Event::PaneClosed(_)) {
+            self.power.changed.notify_one();
+        }
         let _ = self.events.send(event);
     }
 

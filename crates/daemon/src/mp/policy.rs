@@ -245,7 +245,7 @@ pub(crate) fn workspace(req: &WorkspaceRequest) -> (Need, Target) {
         | R::ScriptRun(_)
         | R::RepoHooks(_) => (Need::Drive, Target::Host),
         // Lets a repository's own commands run as the user from then on.
-        R::RepoTrust { .. } => (Need::Own, Target::Daemon),
+        R::PowerSettings(_) | R::RepoTrust { .. } => (Need::Own, Target::Daemon),
         // Housekeeping that deletes worktrees is the owner's call.
         R::WorktreeSettings(Some(_)) => (Need::Own, Target::Daemon),
         R::EditorLaunch(_)

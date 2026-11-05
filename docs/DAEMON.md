@@ -319,6 +319,26 @@ policy is always `LastInput` for now.
   of small order (whose signatures anyone can forge) are refused. A refused peer's
   `DaemonInfo` carries no host name, OS name or build.
 
+### Keeping the host awake
+
+While at least one pane's agent is working, the daemon can prevent idle system sleep. The
+policy is per host: Always, When Plugged In (default), or Never, available in Settings > Agents.
+Only owner devices can read or change it; it is saved in `power-policy.json` in the state
+directory. The Agents list names hosts currently being kept awake.
+
+On macOS this holds an IOKit `PreventUserIdleSystemSleep` assertion. The display can sleep and
+lock. The assertion is released when every agent is idle, blocked, or gone, and on daemon
+shutdown. This does not override lid-closed sleep, explicit Sleep, low-battery shutdown, or
+thermal protection. Use external power with the lid open for unattended work.
+
+On Linux the daemon uses `systemd-inhibit --what=idle --mode=block` when available. Without a
+working logind session or permission to inhibit, nothing is held. The plugged-in policy checks
+power supplies in sysfs; machines with no battery count as plugged in.
+
+The append-only `PowerSettings` workspace request is gated by `DaemonFeatures::POWER_SETTINGS`.
+It returns the saved policy and whether an inhibitor is held. Older helpers remain usable;
+changing their policy requires a helper update.
+
 ### Agents
 
 - `PaneLaunch::Agent{Claude|Codex}` runs the adapter's launch recipe (`claude --settings

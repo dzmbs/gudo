@@ -29,6 +29,8 @@ mod mp;
 mod mp2;
 mod notify;
 mod peer;
+mod power;
+pub use power::{PowerPolicy, PowerStatus};
 mod repo;
 mod ssh_api;
 mod types;

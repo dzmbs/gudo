@@ -173,6 +173,17 @@ pub(crate) async fn handle(
         | Request::AccountRemove { .. }
         | Request::AccountCheck { .. }
         | Request::AccountSetDefault { .. }) => accounts(core, request).await,
+        Request::PowerSettings(policy) => {
+            if !conn.owner {
+                return Err(WsError::Denied(
+                    "only the host's owner can manage its power policy".into(),
+                ));
+            }
+            core.power
+                .settings(policy)
+                .map(Response::PowerStatus)
+                .map_err(|error| WsError::Failed(error.to_string()))
+        }
         Request::ListPorts => Ok(Response::Ports(ports::scan(core).await)),
         Request::EditorStatus => {
             let mut editors = ws.editors.status(&core.cfg).await;

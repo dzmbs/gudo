@@ -796,6 +796,25 @@ final class MacSnapshotTests: XCTestCase {
         window.close()
     }
 
+    func testAgentPowerSettings() async throws {
+        guard wanted("agent-power") else { return }
+        let window = makeWindow(ThemedRoot {
+            Form {
+                Section("Keep Mac awake while agents work") {
+                    PowerPolicyControl(name: "This Mac", policy: .constant(.whenPluggedIn), keepingAwake: true)
+                }
+                Text("The display can sleep and lock. Closing a laptop's lid can still put it to sleep.")
+                    .font(DS.Font.rowSubtitle)
+                    .foregroundStyle(DS.Palette.textSecondary)
+            }
+            .formStyle(.grouped)
+            .chromeGrouped()
+        }, size: CGSize(width: 700, height: 420))
+        defer { window.close() }
+        await pump(0.5)
+        try capture(window, "agent-power")
+    }
+
     func testSettings() async throws {
         try await settings("settings")
         try await settings("settings-theme", SettingsNavigation(path: [.theme]))

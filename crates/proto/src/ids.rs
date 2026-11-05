@@ -406,5 +406,6 @@ bitset! {
         /// Answers programs' color queries with the theme clients send in
         /// `ClientCtl::TerminalColors`.
         TERMINAL_COLORS = 22;
+        POWER_SETTINGS = 23;
     }
 }

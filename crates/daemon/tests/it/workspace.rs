@@ -53,6 +53,50 @@ async fn connected(daemon: &Daemon) -> TestClient {
     client
 }
 
+#[tokio::test]
+async fn only_owners_can_change_the_persisted_power_policy() {
+    use client_core::proto::PowerPolicy;
+    let state = tempfile::tempdir().unwrap();
+    let daemon = start_with(state.path(), |_| {}).await;
+    let owner = connected(&daemon).await;
+    assert_eq!(
+        owner.client.power_settings(None).await.unwrap().policy,
+        PowerPolicy::WhenPluggedIn
+    );
+    assert_eq!(
+        owner
+            .client
+            .power_settings(Some(PowerPolicy::Never))
+            .await
+            .unwrap()
+            .policy,
+        PowerPolicy::Never
+    );
+    let mut spec = GrantSpec::new(Roles::DRIVER, Scope::Daemon);
+    spec.expires = Some(UnixMillis(now_millis().0 + 3_600_000));
+    let invite = owner
+        .client
+        .create_invite(spec, "owner".into())
+        .await
+        .unwrap();
+    let mut guest = TestClient::join(&invite.to_string(), ClientConfig::generate_key());
+    guest.until("joined", |client| client.connected > 0).await;
+    assert!(matches!(
+        guest.client.power_settings(Some(PowerPolicy::Always)).await,
+        Err(WsError::Denied(_))
+    ));
+    drop(guest);
+    drop(owner);
+    daemon.shutdown().await;
+    let restarted = start_with(state.path(), |_| {}).await;
+    let owner = connected(&restarted).await;
+    let status = owner.client.power_settings(None).await.unwrap();
+    assert_eq!(status.policy, PowerPolicy::Never);
+    assert!(!status.keeping_awake);
+    drop(owner);
+    restarted.shutdown().await;
+}
+
 async fn next_event(
     events: &mut UnboundedReceiver<WorkspaceEvent>,
     what: &str,

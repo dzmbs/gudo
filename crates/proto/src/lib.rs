@@ -136,6 +136,8 @@ pub use mp::*;
 pub use msg::*;
 pub use peer::*;
 pub use program::*;
+pub mod power;
+pub use power::*;
 pub use project::*;
 pub use repo::*;
 pub use script::*;

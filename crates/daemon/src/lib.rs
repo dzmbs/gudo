@@ -55,6 +55,7 @@ mod notifier;
 mod osc;
 mod pane;
 mod persist;
+mod power;
 mod preauth;
 mod procinfo;
 mod resume;
@@ -232,6 +233,7 @@ impl Daemon {
             Arc::clone(&core),
             endpoint.clone(),
         )));
+        tasks.push(tokio::spawn(power::run(Arc::clone(&core))));
         tasks.push(tokio::spawn(persist::run(Arc::clone(&core))));
         tasks.push(tokio::spawn(ws::ports::run(Arc::clone(&core))));
         tasks.push(tokio::spawn(ws::turns::run(Arc::clone(&core))));

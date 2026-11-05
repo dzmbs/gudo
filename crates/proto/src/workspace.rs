@@ -44,7 +44,9 @@ pub enum WorkspaceRequest {
     /// Starts (or reuses) an editor server for a folder → [`WorkspaceResponse::Editor`].
     EditorLaunch(EditorLaunch),
     /// Stops the editor serving `folder` → [`WorkspaceResponse::Done`].
-    EditorStop { folder: String },
+    EditorStop {
+        folder: String,
+    },
     /// Opens a file at a line in the running editor → [`WorkspaceResponse::EditorOpened`].
     EditorOpen {
         /// Folder whose editor to use; `None` picks the running editor whose folder contains
@@ -119,7 +121,9 @@ pub enum WorkspaceRequest {
         show_hidden: bool,
     },
     /// Stats a path without following a final symlink → [`WorkspaceResponse::Stat`].
-    FsStat { path: String },
+    FsStat {
+        path: String,
+    },
     /// Reads part of a file (at most 1 MiB; use a download stream for more) →
     /// [`WorkspaceResponse::FileData`].
     FsRead {
@@ -152,7 +156,9 @@ pub enum WorkspaceRequest {
     },
     /// Watches a directory (not recursively) → [`WorkspaceResponse::Watching`]; changes
     /// arrive as [`ServerCtl::FsChanged`](crate::ServerCtl::FsChanged) on this connection.
-    FsWatch { path: String },
+    FsWatch {
+        path: String,
+    },
     /// Stops a watch → [`WorkspaceResponse::Done`].
     FsUnwatch {
         /// From [`WorkspaceResponse::Watching`].
@@ -210,7 +216,9 @@ pub enum WorkspaceRequest {
     PrMerge(crate::repo::PrMerge),
     /// Re-runs the failed jobs of the pull request's failed workflow runs (`gh run rerun
     /// --failed`) → [`WorkspaceResponse::Pr`].
-    PrRerunFailed { path: String },
+    PrRerunFailed {
+        path: String,
+    },
     /// Pushes the branch and opens a pull request → [`WorkspaceResponse::Pr`].
     PrCreate(crate::repo::PrCreate),
     /// Checks a pull request out into a new worktree → [`WorkspaceResponse::Worktree`].
@@ -297,10 +305,16 @@ pub enum WorkspaceRequest {
     /// Signs an account out with the agent's own logout and deletes its directory →
     /// [`WorkspaceResponse::Accounts`]. Refused for the system account and while an agent
     /// pane runs under it.
-    AccountRemove { agent: AgentKind, account: String },
+    AccountRemove {
+        agent: AgentKind,
+        account: String,
+    },
     /// Asks the agent whether an account is signed in, and as whom →
     /// [`WorkspaceResponse::Account`].
-    AccountCheck { agent: AgentKind, account: String },
+    AccountCheck {
+        agent: AgentKind,
+        account: String,
+    },
     /// Sets or clears the account an agent uses by default, on the host or in a project →
     /// [`WorkspaceResponse::Accounts`].
     AccountSetDefault {
@@ -315,6 +329,7 @@ pub enum WorkspaceRequest {
     /// re-registration. Only daemons offering
     /// [`DaemonFeatures::PUSH_AGENTS`](crate::DaemonFeatures::PUSH_AGENTS) understand it.
     PushAgents(Vec<PushAgentRule>),
+    PowerSettings(Option<crate::PowerPolicy>),
 }
 
 /// The answer to a [`WorkspaceRequest`].
@@ -387,6 +402,7 @@ pub enum WorkspaceResponse {
     /// The host's agent accounts.
     Accounts(crate::account::AccountsReport),
     Account(crate::account::AgentAccount),
+    PowerStatus(crate::PowerStatus),
 }
 
 /// A command that registers or removes the daemon's MCP server with an agent.
