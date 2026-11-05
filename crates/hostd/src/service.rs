@@ -81,6 +81,9 @@ pub fn legacy_installed() -> bool {
 /// first: stopping it ends this process too when it runs as that service.
 #[cfg(target_os = "linux")]
 fn retire_legacy() -> Result<()> {
+    if brand::IS_DEV {
+        return Ok(());
+    }
     let path = unit_dir()?.join(legacy_unit());
     if !path.exists() {
         return Ok(());
@@ -184,6 +187,9 @@ pub fn legacy_installed() -> bool {
 /// goes first: stopping it ends this process too when it runs as that agent.
 #[cfg(target_os = "macos")]
 fn retire_legacy() -> Result<()> {
+    if brand::IS_DEV {
+        return Ok(());
+    }
     let path = plist_path_for(brand::legacy::SERVICE_LABEL)?;
     if !path.exists() {
         return Ok(());

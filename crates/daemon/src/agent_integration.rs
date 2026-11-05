@@ -6,6 +6,13 @@ use serde_json::{Value, json};
 use crate::{Config, fsutil, hook_launcher};
 
 pub fn install_agent_integration(config: &Config) -> io::Result<()> {
+    if brand::IS_DEV {
+        return Ok(());
+    }
+    install_shared_agent_integration(config)
+}
+
+fn install_shared_agent_integration(config: &Config) -> io::Result<()> {
     let home_directory = config.home();
     let launcher_path = hook_launcher::path(&config.state_dir);
     let claude_directory = config
@@ -227,6 +234,27 @@ fn install_codex_config(path: &Path, launcher_path: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn install_agent_integration(config: &Config) -> io::Result<()> {
+        super::install_shared_agent_integration(config)
+    }
+
+    #[test]
+    fn development_startup_never_writes_shared_agent_configuration() {
+        if !brand::IS_DEV {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = Config::new(directory.path().join("state"));
+        config.pane_env.push((
+            "HOME".into(),
+            directory.path().to_string_lossy().into_owned(),
+        ));
+        super::install_agent_integration(&config).unwrap();
+        assert!(!directory.path().join(".claude").exists());
+        assert!(!directory.path().join(".claude.json").exists());
+        assert!(!directory.path().join(".codex").exists());
+    }
 
     #[test]
     fn manual_agents_get_tools_and_hooks_without_losing_their_settings() {

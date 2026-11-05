@@ -1464,6 +1464,16 @@ impl Core {
             .unwrap_or(home);
         let shell = self.cfg.shell();
         let mut command = Command::new(&shell);
+        if brand::IS_DEV {
+            for (key, _) in std::env::vars_os() {
+                if key.to_str().is_some_and(|key| {
+                    key.starts_with(brand::RELEASE_ENV_PREFIX)
+                        || key.starts_with(brand::legacy::ENV_PREFIX)
+                }) {
+                    command.env_remove(key);
+                }
+            }
+        }
         let mut agent = None;
         let injection = self
             .shell

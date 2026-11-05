@@ -357,6 +357,9 @@ fn run(
 /// service (it was just upgraded in place) installs itself under today's name and hands over
 /// to the new service, which ends this process.
 fn adopt_legacy_install(state_dir: &Path) -> Result<()> {
+    if brand::IS_DEV {
+        return Ok(());
+    }
     // Before the move: the executable may live inside the old state directory.
     let exe = upgradable_exe();
     if daemon::migrate::adopt_legacy_state(state_dir, Duration::from_secs(10))? {

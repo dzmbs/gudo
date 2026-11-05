@@ -208,7 +208,7 @@ final class LocalHelper {
 
     private func run() async throws -> String {
         guard let binary else { throw HelperError.notBundled }
-        if !isIsolated { await retireLegacyHelper() }
+        if !isIsolated && !Brand.isDev { await retireLegacyHelper() }
         var launched = true
         let running = Self.runningEndpoint(in: stateDirectory)
         let loginItemEnabled = !isIsolated && agent.status == .enabled

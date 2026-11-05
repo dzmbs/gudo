@@ -131,7 +131,8 @@ impl FromStr for Ticket {
 /// `None` when `link` is not such a link. Case is ignored.
 pub(crate) fn link_payload<'a>(link: &'a str, verb: &str) -> Option<&'a str> {
     [
-        format!("{}://{verb}", brand::URL_SCHEME),
+        format!("{}://{verb}", brand::RELEASE_URL_SCHEME),
+        format!("{}://{verb}", brand::DEV_URL_SCHEME),
         format!("{}://{verb}", brand::legacy::URL_SCHEME),
         format!("https://{}/{verb}", brand::WEB_DOMAIN),
     ]

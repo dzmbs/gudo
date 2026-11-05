@@ -3,15 +3,26 @@
 // Swift code reads the name back from the bundle (CFBundleName).
 
 BRAND_NAME = Gudo
+BRAND_NAME[config=Debug] = Gudo Dev
+BRAND_IS_DEV = NO
+BRAND_IS_DEV[config=Debug] = YES
+BRAND_APP_ICON = AppIcon
+BRAND_APP_ICON[config=Debug] = AppIconDev
+BRAND_HELPER_DIRECTORY = macos
+BRAND_HELPER_DIRECTORY[config=Debug] = macos/dev
 BRAND_BUNDLE_ID_PREFIX = dev.gudo
+BRAND_BUNDLE_ID_PREFIX[config=Debug] = dev.gudo.dev
 // Deep links (`<scheme>://pair/<ticket>`); must match crates/brand URL_SCHEME.
 BRAND_URL_SCHEME = gudo
+BRAND_URL_SCHEME[config=Debug] = gudo-dev
 // Universal links (`https://<domain>/pair#…`, `/join#…`); must match crates/brand WEB_DOMAIN.
 BRAND_WEB_DOMAIN = gudo.dev
 // The bundled helper (`Contents/MacOS/<this>`); must match crates/brand DAEMON_BIN.
 BRAND_DAEMON_BIN = gudo-hostd
+BRAND_DAEMON_BIN[config=Debug] = gudo-dev-hostd
 // The short command for the helper (a link to it); must match crates/brand CLI_BIN.
 BRAND_CLI_BIN = gudo
+BRAND_CLI_BIN[config=Debug] = gudo-dev
 
 // The Apple developer team. Release builds sign with it; Debug builds keep signing to run
 // locally (ad-hoc), so they build and run without the team's certificates.

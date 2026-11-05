@@ -107,12 +107,16 @@ fn root() -> PathBuf {
 }
 
 fn target_dir() -> PathBuf {
-    std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| root().join("target"), PathBuf::from)
+    std::env::var_os("CARGO_TARGET_DIR").map_or_else(
+        || root().join("target").join(brand::BUILD_DIRECTORY),
+        PathBuf::from,
+    )
 }
 
 fn cargo() -> Command {
     let mut command = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
     command.current_dir(root());
+    command.env("CARGO_TARGET_DIR", target_dir());
     command
 }
 
@@ -494,7 +498,9 @@ fn build_stamp() -> Result<(String, u64)> {
 }
 
 fn build_hostd_linux() -> Result<()> {
-    let out_dir = root().join("apple/build/hostd");
+    let out_dir = root()
+        .join("apple/build/hostd")
+        .join(brand::BUILD_DIRECTORY);
     fs::create_dir_all(&out_dir)?;
     let (build_id, built_unix) = build_stamp()?;
     eprintln!("==> build {build_id} ({built_unix})");
@@ -513,7 +519,7 @@ fn build_hostd_linux() -> Result<()> {
         let binary = target_dir()
             .join(&triple)
             .join("release")
-            .join(brand::DAEMON_BIN);
+            .join(brand::CARGO_DAEMON_BIN);
         let data = fs::read(&binary).with_context(|| format!("reading {}", binary.display()))?;
         ensure!(
             data.starts_with(b"\x7fELF"),
@@ -546,7 +552,9 @@ fn build_hostd_linux() -> Result<()> {
 }
 
 fn build_hostd_macos() -> Result<()> {
-    let out_dir = root().join("apple/build/hostd/macos");
+    let out_dir = root()
+        .join("apple/build/hostd/macos")
+        .join(brand::BUILD_DIRECTORY);
     fs::create_dir_all(&out_dir)?;
     let (build_id, built_unix) = build_stamp()?;
     eprintln!("==> cargo build {} ({build_id})", MACOS.target);
@@ -567,7 +575,7 @@ fn build_hostd_macos() -> Result<()> {
     let binary = target_dir()
         .join(MACOS.target)
         .join("release")
-        .join(brand::DAEMON_BIN);
+        .join(brand::CARGO_DAEMON_BIN);
     let dest = out_dir.join(brand::DAEMON_BIN);
     fs::copy(&binary, &dest).with_context(|| format!("copying {}", binary.display()))?;
     eprintln!("    {} ({:.1} MB)", dest.display(), size_mb(&dest));

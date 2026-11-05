@@ -6,6 +6,8 @@
 	<string>$(BRAND_CLI_BIN)</string>
 	<key>BrandDaemonBinary</key>
 	<string>$(BRAND_DAEMON_BIN)</string>
+	<key>BrandIsDev</key>
+	<string>$(BRAND_IS_DEV)</string>
 	<key>BrandWebDomain</key>
 	<string>$(BRAND_WEB_DOMAIN)</string>
 	<key>CFBundleDevelopmentRegion</key>

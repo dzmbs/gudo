@@ -17,7 +17,7 @@ const LOCK_FILE: &str = "hostd.lock";
 /// `requested`, except that the earlier default state directory (which service definitions
 /// written before the rename name explicitly) means today's default.
 pub fn current_state_dir(requested: PathBuf) -> PathBuf {
-    if requested == legacy_state_dir() {
+    if !brand::IS_DEV && requested == legacy_state_dir() {
         default_state_dir()
     } else {
         requested
@@ -33,7 +33,7 @@ pub fn current_state_dir(requested: PathBuf) -> PathBuf {
 ///
 /// The old daemon still runs after `wait`, or a move fails.
 pub fn adopt_legacy_state(state_dir: &Path, wait: Duration) -> io::Result<bool> {
-    if state_dir != default_state_dir() {
+    if brand::IS_DEV || state_dir != default_state_dir() {
         return Ok(false);
     }
     if let Err(error) = adopt_legacy_config() {

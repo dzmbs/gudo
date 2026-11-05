@@ -2,6 +2,7 @@ import Foundation
 
 /// Product naming comes from apple/Brand.xcconfig through the bundle, never from string literals.
 nonisolated enum Brand {
+    static let isDev = (Bundle.main.object(forInfoDictionaryKey: "BrandIsDev") as? String) == "YES"
     static let name = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? ""
     /// The host daemon's executable name (`gudo-hostd`), bundled and installed on hosts.
     static let daemonBinary = Bundle.main.object(forInfoDictionaryKey: "BrandDaemonBinary") as? String ?? ""
