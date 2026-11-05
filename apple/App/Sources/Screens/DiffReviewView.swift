@@ -28,7 +28,17 @@ struct DiffReviewView: View {
     @State private var collapsed: Set<String> = []
     @State private var notes: [ReviewNote] = []
     @State private var composing: NoteAnchor?
+    @State private var composingText = ""
     @State private var isSending = false
+    @State private var renderDocument: DiffRenderDocument?
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.chrome) private var chrome
+    #if os(macOS)
+    @ScaledMetric(relativeTo: .callout) private var diffLineHeight: CGFloat = 18
+    #else
+    @ScaledMetric(relativeTo: .callout) private var diffLineHeight: CGFloat = 22
+    #endif
     @State private var width = CGFloat.infinity
     @Environment(\.toolLeaf) private var leaf
 
@@ -124,35 +134,72 @@ struct DiffReviewView: View {
     }
 
     private func review(_ files: [DiffFile]) -> some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                summary(files)
-                    .padding(.horizontal, DS.Space.l)
-                    .padding(.vertical, DS.Space.m)
-                ForEach(files) { file in
-                    Section {
-                        if !collapsed.contains(file.id) {
-                            FileDiffBody(
-                                file: file, split: isSplit, notes: notes.filter { $0.path == file.path },
-                                composing: composing?.path == file.path ? composing : nil,
-                                onTapLine: { line, oldSide in beginNote(file, line, oldSide: oldSide) },
-                                onSaveNote: saveNote, onCancelNote: { withAnimation(DS.Motion.snappy) { composing = nil } },
-                                onDeleteNote: { note in withAnimation(DS.Motion.snappy) { notes.removeAll { $0.id == note.id } } })
-                        }
-                    } header: {
-                        FileHeader(file: file, isCollapsed: collapsed.contains(file.id), noteCount: notes.filter { $0.path == file.path }.count) {
-                            withAnimation(DS.Motion.snappy) {
-                                if collapsed.contains(file.id) { collapsed.remove(file.id) } else { collapsed.insert(file.id) }
-                            }
-                        }
-                    }
+        let input = DiffRenderInput(files: files, collapsed: collapsed, split: isSplit, notes: notes,
+            composing: composing, width: width.isFinite ? width : 800,
+            lineHeight: ceil(diffLineHeight), characterWidth: diffLineHeight * 0.45, textSize: diffLineHeight * 0.7)
+        return Group {
+            if let document = renderDocument {
+                NativeDiffList(document: document) { row in
+                    render(row, document: document)
+                        .id(row.id)
+                        .environment(\.terminalTheme, theme)
+                        .environment(\.chrome, chrome)
+                        .environment(\.dynamicTypeSize, dynamicTypeSize)
+                        .environment(\.colorScheme, colorScheme)
                 }
+            } else {
+                Color.clear
             }
-            .padding(.bottom, DS.Space.xxl)
         }
-        .scrollContentBackground(.hidden)
+        .task(id: input) {
+            let document = await Task.detached(priority: .userInitiated) { DiffRenderDocument(input: input) }.value
+            guard !Task.isCancelled else { return }
+            renderDocument = document
+        }
         .background(theme.background)
         .accessibilityIdentifier("diff-review")
+    }
+
+    @ViewBuilder private func render(_ row: DiffRenderRow, document: DiffRenderDocument) -> some View {
+        switch row.content {
+        case .summary:
+            summary(document.input.files)
+                .padding(.horizontal, DS.Space.l)
+                .padding(.vertical, DS.Space.m)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        case .file:
+            if let index = row.fileIndex {
+                let file = document.input.files[index]
+                FileHeader(file: file, isCollapsed: document.input.collapsed.contains(file.id), noteCount: notes.filter { $0.path == file.path }.count) {
+                    if collapsed.contains(file.id) { collapsed.remove(file.id) } else { collapsed.insert(file.id) }
+                }
+            }
+        case let .hunk(header):
+            Text(verbatim: header)
+                .font(DS.Font.literalSmall)
+                .foregroundStyle(DS.Palette.textTertiary)
+                .lineLimit(1)
+                .padding(.leading, (document.input.split ? DiffLineContent.numberWidth : DiffLineContent.numberWidth * 2) + DS.Space.l)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                .background(DS.Palette.hoverFill)
+        case let .line(left, right):
+            if let index = row.fileIndex {
+                let file = document.input.files[index]
+                DiffLineContent(file: file, left: left, right: right, split: document.input.split,
+                    lineHeight: document.input.lineHeight,
+                    onTapLine: { line, oldSide in beginNote(file, line, oldSide: oldSide) })
+            }
+        case let .note(note):
+            NoteCard(note: note) { notes.removeAll { $0.id == note.id } }
+        case let .composer(anchor):
+            NoteComposer(anchor: anchor, text: $composingText, onSave: saveNote, onCancel: { composing = nil })
+        case let .notice(message):
+            Text(message)
+                .font(DS.Font.rowSubtitle)
+                .foregroundStyle(DS.Palette.textSecondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                .padding(.horizontal, DS.Space.l)
+        }
     }
 
     private func summary(_ files: [DiffFile]) -> some View {
@@ -249,6 +296,7 @@ struct DiffReviewView: View {
     // MARK: Notes
 
     private func beginNote(_ file: DiffFile, _ line: DiffLine, oldSide: Bool) {
+        composingText = ""
         withAnimation(DS.Motion.snappy) {
             composing = NoteAnchor(path: file.path, lineId: line.id, number: (oldSide ? line.oldNumber : line.newNumber) ?? line.newNumber ?? line.oldNumber ?? 0, oldSide: oldSide, quote: line.text)
         }
@@ -358,7 +406,7 @@ enum DiffLayout: String {
 }
 
 /// Where a note is being written.
-struct NoteAnchor: Hashable {
+nonisolated struct NoteAnchor: Hashable, Sendable {
     var path: String
     var lineId: Int
     var number: Int
@@ -462,7 +510,7 @@ private struct StatusLetter: View {
 // MARK: - Lines
 
 /// One row of a side-by-side diff: the old line on the left, the new one on the right.
-struct SplitDiffRow: Identifiable, Hashable {
+nonisolated struct SplitDiffRow: Identifiable, Hashable, Sendable {
     var id: Int
     var left: DiffLine?
     var right: DiffLine?
@@ -470,7 +518,7 @@ struct SplitDiffRow: Identifiable, Hashable {
 
 extension DiffHunk {
     /// Pairs each run of removed lines with the run of added lines that follows it.
-    var splitRows: [SplitDiffRow] {
+    nonisolated var splitRows: [SplitDiffRow] {
         var rows: [SplitDiffRow] = []
         var removed: [DiffLine] = []
         var added: [DiffLine] = []
@@ -500,88 +548,33 @@ extension DiffHunk {
     }
 }
 
-struct FileDiffBody: View {
+struct DiffLineContent: View {
     let file: DiffFile
+    let left: DiffLine?
+    let right: DiffLine?
     let split: Bool
-    let notes: [ReviewNote]
-    let composing: NoteAnchor?
+    var lineHeight: CGFloat = 18
     let onTapLine: (DiffLine, Bool) -> Void
-    let onSaveNote: (String) -> Void
-    let onCancelNote: () -> Void
-    let onDeleteNote: (ReviewNote) -> Void
 
     @Environment(\.terminalTheme) private var theme
 
     static let numberWidth: CGFloat = 40
-    static let lineHeight: CGFloat = 18
 
     var body: some View {
-        if file.isBinary {
-            placeholder("Binary file not shown")
-        } else if file.hunks.isEmpty {
-            placeholder(file.hunksOmitted ? "This diff is too large to show here." : "No content changes")
-        } else if split {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                // One block per hunk: row ids repeat across hunks and must not meet the
-                // hunks' own ids in one lazy stack (a row would vanish).
-                ForEach(file.hunks) { hunk in
-                    VStack(alignment: .leading, spacing: 0) {
-                        hunkHeader(hunk)
-                        ForEach(hunk.splitRows) { row in
-                            HStack(spacing: 0) {
-                                side(row.left, oldSide: true)
-                                theme.splitDivider.frame(width: 1)
-                                side(row.right, oldSide: false)
-                            }
-                            .frame(height: Self.lineHeight)
-                            .clipped()
-                            annotations(for: row.left, oldSide: true)
-                            if row.right?.id != row.left?.id { annotations(for: row.right, oldSide: false) }
-                        }
-                    }
+        Group {
+            if split {
+                HStack(spacing: 0) {
+                    side(left, oldSide: true)
+                    theme.splitDivider.frame(width: 1)
+                    side(right, oldSide: false)
                 }
+            } else if let left {
+                unifiedRow(left)
             }
-            .background(theme.background)
-        } else {
-            // One horizontal scroll per file: long lines never wrap, numbers stay aligned.
-            ScrollView(.horizontal) {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(file.hunks) { hunk in
-                        VStack(alignment: .leading, spacing: 0) {
-                            hunkHeader(hunk)
-                            ForEach(hunk.lines) { line in
-                                unifiedRow(line)
-                                annotations(for: line, oldSide: line.kind == .removed)
-                            }
-                        }
-                    }
-                }
-            }
-            .scrollIndicators(.automatic)
-            .background(theme.background)
         }
-    }
-
-    private func placeholder(_ text: String) -> some View {
-        Text(text)
-            .font(DS.Font.rowSubtitle)
-            .foregroundStyle(DS.Palette.textSecondary)
-            .padding(.horizontal, DS.Space.l)
-            .padding(.vertical, DS.Space.m)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(theme.background)
-    }
-
-    private func hunkHeader(_ hunk: DiffHunk) -> some View {
-        Text(verbatim: hunk.header)
-            .font(DS.Font.literalSmall)
-            .foregroundStyle(DS.Palette.textTertiary)
-            .lineLimit(1)
-            .padding(.leading, (split ? Self.numberWidth : Self.numberWidth * 2) + DS.Space.l)
-            .padding(.trailing, DS.Space.l)
-            .frame(height: 24)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(DS.Palette.hoverFill)
+        .frame(height: lineHeight)
+        .clipped()
+        .background(theme.background)
     }
 
     private func unifiedRow(_ line: DiffLine) -> some View {
@@ -596,7 +589,7 @@ struct FileDiffBody: View {
                 .fixedSize()
                 .padding(.trailing, DS.Space.l)
         }
-        .frame(height: Self.lineHeight)
+        .frame(height: lineHeight)
         .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         .background(fill(line.kind))
         .contentShape(.rect)
@@ -622,7 +615,7 @@ struct FileDiffBody: View {
                     .padding(.trailing, DS.Space.s)
                     .lineLimit(1)
             }
-            .frame(height: Self.lineHeight)
+            .frame(height: lineHeight)
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .background(fill(kind))
             .contentShape(.rect)
@@ -634,7 +627,7 @@ struct FileDiffBody: View {
             .accessibilityIdentifier("diff-line-\(file.path)-\(line.id)\(oldSide ? "-old" : "")")
         } else {
             Rectangle().fill(DS.Palette.hoverFill.opacity(0.5))
-                .frame(height: Self.lineHeight)
+                .frame(height: lineHeight)
                 .frame(maxWidth: .infinity)
         }
     }
@@ -647,25 +640,13 @@ struct FileDiffBody: View {
         }
     }
 
-    @ViewBuilder private func annotations(for line: DiffLine?, oldSide: Bool) -> some View {
-        if let line {
-            let number = (oldSide ? line.oldNumber : line.newNumber) ?? -1
-            ForEach(notes.filter { $0.startLine == number && $0.oldSide == oldSide }) { note in
-                NoteCard(note: note) { onDeleteNote(note) }
-            }
-            if let composing, composing.lineId == line.id, composing.oldSide == oldSide || line.kind == .context {
-                NoteComposer(anchor: composing, onSave: onSaveNote, onCancel: onCancelNote)
-            }
-        }
-    }
-
     private func number(_ value: Int?) -> some View {
         Text(value.map(String.init) ?? "")
             .font(DS.Font.literalSmall.monospacedDigit())
             .foregroundStyle(DS.Palette.textTertiary)
             .frame(width: Self.numberWidth, alignment: .trailing)
             .padding(.trailing, DS.Space.xs)
-            .frame(height: Self.lineHeight)
+            .frame(height: lineHeight)
     }
 
     private func mark(_ kind: DiffLine.Kind) -> some View {
@@ -723,7 +704,7 @@ private struct NoteCard: View {
         .padding(DS.Space.gap10)
         .background(DS.Palette.accent.opacity(0.1), in: .rect(cornerRadius: DS.Radius.control))
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.control).strokeBorder(DS.Palette.accent.opacity(0.35), lineWidth: 0.5))
-        .padding(.leading, FileDiffBody.numberWidth + DS.Space.l)
+        .padding(.leading, DiffLineContent.numberWidth + DS.Space.l)
         .padding(.trailing, DS.Space.l)
         .padding(.vertical, DS.Space.xs)
         .accessibilityIdentifier("diff-note")
@@ -732,9 +713,9 @@ private struct NoteCard: View {
 
 private struct NoteComposer: View {
     let anchor: NoteAnchor
+    @Binding var text: String
     let onSave: (String) -> Void
     let onCancel: () -> Void
-    @State private var text = ""
     @FocusState private var focused: Bool
     @Environment(\.terminalTheme) private var theme
 
@@ -768,7 +749,7 @@ private struct NoteComposer: View {
         }
         .padding(DS.Space.m)
         .background(DS.Palette.hoverFill, in: .rect(cornerRadius: DS.Radius.control))
-        .padding(.leading, FileDiffBody.numberWidth + DS.Space.l)
+        .padding(.leading, DiffLineContent.numberWidth + DS.Space.l)
         .padding(.trailing, DS.Space.l)
         .padding(.vertical, DS.Space.xs)
         .onAppear { focused = true }

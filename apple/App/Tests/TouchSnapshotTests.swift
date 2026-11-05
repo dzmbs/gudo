@@ -38,6 +38,29 @@ final class TouchSnapshotTests: XCTestCase {
         print("snapshot: \(url.path)")
     }
 
+    func testNativeDiffLayouts() async throws {
+        let saved = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        defer { UserDefaults.standard.setVolatileDomain(saved, forName: UserDefaults.argumentDomain) }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let model = WindowModel(app: .shared)
+        defer { model.close() }
+        for layout in [DiffLayout.unified, .split] {
+            var arguments = saved
+            arguments["diffLayout"] = layout.rawValue
+            arguments[TerminalPreferences.Key.theme] = mode == "light" ? "Apple System Colors Light" : "Ghostty Default"
+            UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
+            let window = UIWindow(windowScene: scene)
+            window.frame = scene.screen.bounds
+            window.rootViewController = UIHostingController(rootView: ThemedRoot {
+                NavigationStack { DiffReviewView(source: MockDiffSource()) }.environment(model).environment(model.app)
+            })
+            window.isHidden = false
+            await pump(1)
+            try capture(window, "diff-\(layout.rawValue)")
+            window.isHidden = true
+        }
+    }
+
     func testAgentNotifications() async throws {
         var arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
         arguments[TerminalPreferences.Key.theme] = environment["SNAPSHOT_THEME"] ?? (mode == "light" ? "Apple System Colors Light" : "Dracula")

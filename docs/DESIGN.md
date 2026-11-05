@@ -699,8 +699,14 @@ unified, side by side), Reload ⌘R. "Uncommitted changes", "3 files · +425 −
 sits on the terminal background in SF Mono, syntax-neutral, Ghostty-quiet: per-file pinned
 headers on the raised background (status letter, directory secondary + file name, note count,
 counts, collapse), hunk headers dim, old/new numbers at 32 %, 2 pt gutter bars and 13 % fills in
-the palette's green/red. Side by side on iPad/Mac (lines wrap; empty cells a faint fill), unified
-on iPhone (horizontal scroll per file, 18 pt rows). Tap a line → an inline note composer; notes
+the palette's green/red. Side by side on iPad/Mac (empty cells a faint fill), unified on iPhone.
+Code never wraps: one native horizontal/vertical scroll surface, 18 pt rows on Mac and scaled
+rows on touch. `NativeDiffList` uses reusable `NSCollectionView` / `UICollectionView` items;
+`DiffRenderDocument` prepares split pairs, note heights, stable identities and a prefix position
+index away from the main actor. Position and pinned-header lookup are binary searches, never
+scans from the beginning. Row geometry never feeds application state. Reload, note insertion,
+collapse and width changes preserve the visible line and its intra-row offset, falling back to
+the file header if that line disappears. Tap a line → an inline note composer; notes
 are accent-tinted cards under their line; a floating glass bar "2 notes · Goes to Claude Code as
 one prompt" with Copy and Send to Claude Code (⌘↩).
 

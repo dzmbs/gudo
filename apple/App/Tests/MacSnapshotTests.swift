@@ -655,6 +655,20 @@ final class MacSnapshotTests: XCTestCase {
         }
     }
 
+    func testNativeDiffLayouts() async throws {
+        let defaults = UserDefaults.standard
+        let saved = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
+        defer { defaults.setVolatileDomain(saved, forName: UserDefaults.argumentDomain) }
+        for (layout, size) in [(DiffLayout.unified, CGSize(width: 960, height: 680)), (.split, CGSize(width: 1180, height: 760))] {
+            var arguments = saved
+            arguments["diffLayout"] = layout.rawValue
+            defaults.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
+            try await tool("diff-\(layout.rawValue)", size: size) {
+                NavigationStack { DiffReviewView(source: MockDiffSource()) }
+            }
+        }
+    }
+
     /// Changes on a folder outside any repository: a calm state, not git's words.
     func testToolProblems() async throws {
         final class NotARepository: DiffSource {
