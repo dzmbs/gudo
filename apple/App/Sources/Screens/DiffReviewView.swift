@@ -500,7 +500,7 @@ extension DiffHunk {
     }
 }
 
-private struct FileDiffBody: View {
+struct FileDiffBody: View {
     let file: DiffFile
     let split: Bool
     let notes: [ReviewNote]
@@ -511,7 +511,6 @@ private struct FileDiffBody: View {
     let onDeleteNote: (ReviewNote) -> Void
 
     @Environment(\.terminalTheme) private var theme
-    @State private var viewport: CGFloat = 0
 
     static let numberWidth: CGFloat = 40
     static let lineHeight: CGFloat = 18
@@ -534,6 +533,8 @@ private struct FileDiffBody: View {
                                 theme.splitDivider.frame(width: 1)
                                 side(row.right, oldSide: false)
                             }
+                            .frame(height: Self.lineHeight)
+                            .clipped()
                             annotations(for: row.left, oldSide: true)
                             if row.right?.id != row.left?.id { annotations(for: row.right, oldSide: false) }
                         }
@@ -555,10 +556,8 @@ private struct FileDiffBody: View {
                         }
                     }
                 }
-                .frame(minWidth: viewport, alignment: .leading)
             }
             .scrollIndicators(.automatic)
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { viewport = $0 }
             .background(theme.background)
         }
     }
@@ -621,10 +620,10 @@ private struct FileDiffBody: View {
                     .foregroundStyle(kind == .context ? DS.Palette.textSecondary : DS.Palette.text)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.trailing, DS.Space.s)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(1)
             }
-            .frame(minHeight: Self.lineHeight)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .frame(height: Self.lineHeight)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
             .background(fill(kind))
             .contentShape(.rect)
             .onTapGesture { onTapLine(line, oldSide) }
@@ -635,7 +634,8 @@ private struct FileDiffBody: View {
             .accessibilityIdentifier("diff-line-\(file.path)-\(line.id)\(oldSide ? "-old" : "")")
         } else {
             Rectangle().fill(DS.Palette.hoverFill.opacity(0.5))
-                .frame(maxWidth: .infinity, minHeight: Self.lineHeight, maxHeight: .infinity)
+                .frame(height: Self.lineHeight)
+                .frame(maxWidth: .infinity)
         }
     }
 
