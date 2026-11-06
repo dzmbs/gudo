@@ -25,6 +25,53 @@ fn hook_command(executable: &Path, state_directory: &Path, pane_id: PaneId) -> C
     command
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn custom_state_startup_does_not_register_shared_agent_configuration() {
+    let directory = tempfile::tempdir().unwrap();
+    let home = directory.path().join("home");
+    let state = directory.path().join("state");
+    std::fs::create_dir_all(home.join(".claude")).unwrap();
+    std::fs::create_dir_all(home.join(".codex")).unwrap();
+    let files = [
+        (home.join(".claude/settings.json"), "{\"hooks\":{}}"),
+        (home.join(".claude/.claude.json"), "{\"mcpServers\":{}}"),
+        (home.join(".claude.json"), "{\"mcpServers\":{}}"),
+        (home.join(".codex/config.toml"), "notify = ['my-notify']\n"),
+    ];
+    for (path, contents) in &files {
+        std::fs::write(path, contents).unwrap();
+    }
+    let mut daemon = Command::new(env!("CARGO_BIN_EXE_gudo-hostd"))
+        .arg("--state-dir")
+        .arg(&state)
+        .args(["run", "--no-relay", "--bind", "127.0.0.1:0"])
+        .env("HOME", &home)
+        .env("CLAUDE_CONFIG_DIR", home.join(".claude"))
+        .env("CODEX_HOME", home.join(".codex"))
+        .env_remove(brand::env_var("INSTALL_AGENT_INTEGRATION"))
+        .env_remove(brand::legacy::env_var("INSTALL_AGENT_INTEGRATION"))
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while !state.join("hook.endpoint").exists() {
+            assert!(
+                daemon.try_wait().unwrap().is_none(),
+                "daemon exited before registering its endpoint"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    for (path, contents) in files {
+        assert_eq!(std::fs::read_to_string(path).unwrap(), contents);
+    }
+    daemon.kill().await.unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_shipped_daemon_provides_hooks_askpass_and_mcp_without_a_separate_shim() {
     let directory = tempfile::tempdir().unwrap();

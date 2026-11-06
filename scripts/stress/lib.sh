@@ -5,7 +5,8 @@ set -u
 BIN=${BIN:?set BIN to the directory with release gudo-hostd and gudo}
 OUT=${STRESS_OUT:-${TMPDIR:-/tmp}/gudo-stress}
 ROOT=$OUT/run-$S
-rm -rf "$ROOT"; mkdir -p "$ROOT/state" "$ROOT/cfg"
+rm -rf "$ROOT"; mkdir -p "$ROOT/state" "$ROOT/cfg" "$ROOT/home/.claude" "$ROOT/home/.codex"
+export HOME=$ROOT/home CLAUDE_CONFIG_DIR=$ROOT/home/.claude CODEX_HOME=$ROOT/home/.codex
 export XDG_CONFIG_HOME=$ROOT/cfg GUDO_LOG=${GUDO_LOG:-warn}
 
 start_daemon() {

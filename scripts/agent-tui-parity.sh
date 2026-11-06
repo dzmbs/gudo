@@ -1,6 +1,6 @@
 #!/bin/bash
 # Launches the installed Codex and Claude Code in a daemon pane, to their start screen only
-# (nothing is typed into them, nothing is sent to a model; Codex runs with a throwaway home),
+# (nothing is typed into them, nothing is sent to a model; both use private homes and dummy keys),
 # and fails unless they turn on what they turn on in Ghostty:
 #
 # - Codex: the composer drawn on the theme's background (OSC 11 answered), the dotted logo in

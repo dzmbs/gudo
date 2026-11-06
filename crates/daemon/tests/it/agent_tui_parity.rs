@@ -10,7 +10,7 @@ use std::time::Duration;
 use client_core::ClientConfig;
 use client_core::proto::{PaneId, TerminalColors};
 
-use crate::support::{TestClient, start, ticket};
+use crate::support::{TestClient, start_with, ticket};
 
 /// How long a program gets to draw its start screen and finish its terminal probes.
 const SETTLE: Duration = Duration::from_secs(12);
@@ -32,6 +32,46 @@ fn quote(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', r"'\''"))
 }
 
+fn isolated_command(command: &str, home: &Path) -> String {
+    format!(
+        "env -i PATH=\"$PATH\" LANG=en_US.UTF-8 TERM=\"${{TERM:-xterm-256color}}\" COLORTERM=truecolor TERM_PROGRAM=\"${{TERM_PROGRAM:-ghostty}}\" TERM_PROGRAM_VERSION=\"${{TERM_PROGRAM_VERSION:-0}}\" SHELL=/bin/sh HOME={} CLAUDE_CONFIG_DIR={} CODEX_HOME={} TMPDIR={} ANTHROPIC_API_KEY=fixture-placeholder-key OPENAI_API_KEY=fixture-placeholder-key ANTHROPIC_BASE_URL=http://127.0.0.1:9 OPENAI_BASE_URL=http://127.0.0.1:9/v1 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 DISABLE_AUTOUPDATER=1 {command}",
+        quote(home),
+        quote(&home.join(".claude")),
+        quote(&home.join(".codex")),
+        quote(&home.join("tmp")),
+    )
+}
+
+#[test]
+fn parity_commands_do_not_inherit_home_credentials_or_pane_tokens() {
+    let directory = tempfile::tempdir().unwrap();
+    let command = isolated_command(
+        "/bin/sh -c 'printf \"%s\\n\" \"$HOME\" \"$CLAUDE_CONFIG_DIR\" \"$CODEX_HOME\" \"$ANTHROPIC_API_KEY\" \"${ANTHROPIC_AUTH_TOKEN-unset}\" \"${GUDO_TOKEN-unset}\"'",
+        directory.path(),
+    );
+    let output = std::process::Command::new("/bin/sh")
+        .args(["-c", &command])
+        .env("HOME", "/home/not-the-fixture")
+        .env("ANTHROPIC_API_KEY", "must-not-inherit")
+        .env("ANTHROPIC_AUTH_TOKEN", "must-not-inherit")
+        .env("GUDO_TOKEN", "must-not-inherit")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        text.lines().collect::<Vec<_>>(),
+        vec![
+            directory.path().to_str().unwrap(),
+            directory.path().join(".claude").to_str().unwrap(),
+            directory.path().join(".codex").to_str().unwrap(),
+            "fixture-placeholder-key",
+            "unset",
+            "unset",
+        ]
+    );
+}
+
 /// What a program drew: the client's screen, the images placed on it, and its raw output.
 struct Drawn {
     screen: String,
@@ -43,7 +83,38 @@ struct Drawn {
 /// it settles. The screen, each image a client shows and the output are saved as evidence.
 async fn launch(name: &str, command: &str, workdir: &Path) -> Drawn {
     let state = tempfile::tempdir().unwrap();
-    let daemon = start(state.path()).await;
+    let home = state.path().join("home");
+    for name in [".claude", ".codex", "tmp"] {
+        std::fs::create_dir_all(home.join(name)).unwrap();
+    }
+    let project = workdir
+        .canonicalize()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let configuration = serde_json::json!({
+        "hasCompletedOnboarding":true, "theme":"dark", "hasSeenTasksHint":true,
+        "customApiKeyResponses":{"approved":["ture-placeholder-key"],"rejected":[]},
+        "projects":{project:{"hasTrustDialogAccepted":true}},
+    });
+    for path in [home.join(".claude.json"), home.join(".claude/.claude.json")] {
+        std::fs::write(path, configuration.to_string()).unwrap();
+    }
+    let daemon = start_with(state.path(), |config| {
+        config.pane_env.extend([
+            ("HOME".into(), home.to_string_lossy().into_owned()),
+            (
+                agents::CLAUDE_DIR_VAR.into(),
+                home.join(".claude").to_string_lossy().into_owned(),
+            ),
+            (
+                agents::CODEX_DIR_VAR.into(),
+                home.join(".codex").to_string_lossy().into_owned(),
+            ),
+        ]);
+    })
+    .await;
+    let command = isolated_command(command, &home);
     let mut client = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
     // Ghostty's default theme, as the app announces it.
     let is_light = std::env::var_os("AGENT_TUI_LIGHT").is_some();
@@ -64,14 +135,18 @@ async fn launch(name: &str, command: &str, workdir: &Path) -> Drawn {
     let pane: PaneId = client.attach_and_follow().await;
     let raw = out_dir().join(format!("{name}.raw"));
     let _ = std::fs::remove_file(&raw);
-    client.type_line(
-        pane,
-        &format!(
-            "cd {} && exec script -q -t 0 {} {command}",
+    // A canonical-mode shell can truncate long launch commands before executing them.
+    let launcher = state.path().join("launch.sh");
+    std::fs::write(
+        &launcher,
+        format!(
+            "cd {} && exec script -q -t 0 {} {command}\n",
             quote(workdir),
             quote(&raw)
         ),
-    );
+    )
+    .unwrap();
+    client.type_line(pane, &format!("exec /bin/sh {}", quote(&launcher)));
     tokio::time::sleep(SETTLE).await;
     let screen = client.text(pane);
     std::fs::write(
@@ -203,7 +278,11 @@ async fn claude_start_screen_matches_ghostty() {
         return;
     };
     let workdir = tempfile::tempdir().unwrap();
-    let drawn = launch("claude", &quote(&claude), workdir.path()).await;
+    let command = format!(
+        "{} --settings '{{\"disableAllHooks\":true}}' --strict-mcp-config --mcp-config '{{\"mcpServers\":{{}}}}'",
+        quote(&claude)
+    );
+    let drawn = launch("claude", &command, workdir.path()).await;
     let (screen, output) = (&drawn.screen, &drawn.output);
 
     let mut findings = Findings::default();
