@@ -28,6 +28,25 @@ that operation's contents.
 Wire enums are append-only and covered by golden-byte tests. The Apple FFI carries timeline
 values as JSON strings; decoding and row preparation belong off the main actor.
 
+## Apple values and subscriptions
+
+HostKit decodes the FFI's JSON into sendable timeline values. Explicit coding keys preserve
+Rust's external enum tags and snake-case fields, including round trips through a device
+cache. Integer cursors never pass through floating-point JSON objects.
+
+A `TimelineChannel` shares one pane watch between screens on a connection. A new viewer
+refreshes the snapshot for every viewer, so replacing the helper's watch cannot leave another
+screen behind. Pushes arriving during that request wait behind its snapshot. The pending queue
+is bounded to 64 updates and 2 MiB; overflow requests a fresh snapshot. The final viewer waits
+for an in-flight watch's reply before unwatching. A viewer arriving during unwatch waits for
+that request to finish. Connection generations reject late replies, and pane closure releases
+the channel.
+
+`RowBuilder` parses Markdown on its actor into independent block rows with stable IDs and
+cached attributed inline text. Its cache is bounded by 500 blocks, 500 item entries and
+4 MiB of estimated retained content. Only HTTP, HTTPS and mail links are interactive; HTML
+stays literal text. The upstream Markdown and cmark-gfm licences ship with the app.
+
 ## Claude adapter
 
 `crates/daemon/src/timeline/` owns discovery, parsing, paging and watches. Session IDs come
