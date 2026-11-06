@@ -15,7 +15,7 @@ nonisolated struct NativeListLayout: Sendable {
         var offset: CGFloat
     }
 
-    let revision: Int
+    private(set) var revision: Int
     private(set) var rows: [NativeListRow]
     private(set) var contentWidth: CGFloat
     private(set) var positions: [CGFloat] = [0]
@@ -34,6 +34,22 @@ nonisolated struct NativeListLayout: Sendable {
             positions.append((positions.last ?? 0) + row.height)
             if row.isHeader { headers.append(index) }
         }
+        revision = hasher.finalize()
+    }
+
+    mutating func setHeights(_ heights: [Int: CGFloat]) {
+        var firstChanged: Int?
+        var hasher = Hasher()
+        hasher.combine(revision)
+        for (index, height) in heights where rows.indices.contains(index) && height.isFinite && height > 0 {
+            guard rows[index].height != height else { continue }
+            rows[index].height = height
+            firstChanged = min(firstChanged ?? index, index)
+            hasher.combine(index)
+            hasher.combine(height)
+        }
+        guard let firstChanged else { return }
+        for index in firstChanged..<rows.count { positions[index + 1] = positions[index] + rows[index].height }
         revision = hasher.finalize()
     }
 

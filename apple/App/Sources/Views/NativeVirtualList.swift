@@ -211,7 +211,7 @@ struct NativeVirtualList<Content: View>: UIViewRepresentable {
                 guard let self, let index = parent.document.indices[identifier] else { return nil }
                 let cell = collection.dequeueReusableCell(withReuseIdentifier: "virtual-list-row", for: indexPath)
                 let content = parent.rowContent(index, horizontalOffset: collection.contentOffset.x)
-                cell.contentConfiguration = UIHostingConfiguration { content }
+                cell.contentConfiguration = UIHostingConfiguration { content.ignoresSafeArea() }
                     .margins(.all, 0)
                     .minSize(width: 0, height: 0)
                 cell.backgroundConfiguration = .clear()
@@ -229,7 +229,7 @@ struct NativeVirtualList<Content: View>: UIViewRepresentable {
             for path in collection.indexPathsForVisibleItems {
                 guard parent.document.rows.indices.contains(path.item), let cell = collection.cellForItem(at: path) else { continue }
                 let content = parent.rowContent(path.item, horizontalOffset: collection.contentOffset.x)
-                cell.contentConfiguration = UIHostingConfiguration { content }
+                cell.contentConfiguration = UIHostingConfiguration { content.ignoresSafeArea() }
                     .margins(.all, 0)
                     .minSize(width: 0, height: 0)
             }

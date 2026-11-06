@@ -15,6 +15,24 @@ final class NativeListLayoutTests: XCTestCase {
         XCTAssertNotEqual(first.revision, NativeListLayout(rows: Array(rows.dropLast()), contentWidth: 800).revision)
     }
 
+    func testHeightUpdatesPreserveIndicesAndRecomputeOnlyGeometry() {
+        let rows = [NativeListRow(id: "header", height: 36, isHeader: true),
+                    NativeListRow(id: "first", height: 18, sectionID: "header"),
+                    NativeListRow(id: "second", height: 18, sectionID: "header")]
+        var layout = NativeListLayout(rows: rows, contentWidth: 400)
+        let revision = layout.revision
+        layout.setHeights([1: 52, 2: 30, 10: 80, -1: 80])
+        XCTAssertEqual(layout.positions, [0, 36, 88, 118])
+        XCTAssertEqual(layout.indices, ["header": 0, "first": 1, "second": 2])
+        XCTAssertEqual(layout.headers, [0])
+        XCTAssertEqual(layout.contentWidth, 400)
+        XCTAssertNotEqual(layout.revision, revision)
+        let unchanged = layout.revision
+        layout.setHeights([1: 52, 2: -.infinity, 0: 0])
+        XCTAssertEqual(layout.revision, unchanged)
+        XCTAssertEqual(layout.positions, [0, 36, 88, 118])
+    }
+
     func testEmptyLayoutAndPinnedHeaderBoundaries() {
         let empty = NativeListLayout()
         XCTAssertNil(empty.row(at: 0))

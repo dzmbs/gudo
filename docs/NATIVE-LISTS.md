@@ -4,13 +4,26 @@ Code and transcript-sized surfaces must not use SwiftUI lazy stacks. Their cells
 native containers; SwiftUI draws only the current window of rows. `NativeVirtualList` uses
 `NSCollectionView` on Mac and `UICollectionView` with a diffable data source on touch.
 `NativeListLayout` owns fixed/cached heights, prefix positions, binary-search viewport and
-header lookup, stable identities and scroll anchors. Cells never supply heights back to the
-layout. Geometry revisions change only when identifiers, dimensions or header behavior change;
+header lookup, stable identities and scroll anchors. Diff and file rows have fixed or
+precomputed heights. Chat measures visible cells once per row revision and metrics, then updates
+prefix positions in a bounded native pass, outside SwiftUI state. Geometry revisions change only when identifiers, dimensions or header behavior change;
 a status/text update with identical geometry refreshes visible content without reloading rows.
 The hosting boundary forwards the environment, including theme, accessibility and window model.
 
 ## Surface audit
 
+- **Touch Chat presentation:** one normal-orientation `UICollectionView`, diffable row identities
+  and `UIHostingConfiguration` content. Native measurements are cached by identity, revision,
+  exact width, Dynamic Type, legibility, expansion and terminal font size. One detached sizing
+  host avoids caching a reused cell's previous intrinsic size; a measurement pass yields after 3 ms.
+  UIKit cell content ignores safe areas: collection-level insets own the chrome and keyboard
+  boundaries, so a partially clipped row never reflows itself around the screen's safe area.
+  Stable order revisions and changed-row values avoid walking the whole window on token updates.
+  A skipped frame falls back to full reconciliation. Height changes update prefix geometry
+  without rebuilding identifiers. Prepends restore the reading anchor; bottom following checks
+  the user's scroll generation before deferred adjustments. Large Markdown lists split into
+  20-line native rows, prose into 2,048-character rows, and code previews cap both lines and bytes.
+  Long user/thinking text, tables and plans retain their full values for explicit detail actions.
 - **Diff review:** `DiffRenderDocument` builds unified/split rows and note heights off the main
   actor. No nested scrolls or lazy stacks. Code never wraps; width is estimated before rendering.
   Split columns stay equally wide in the viewport; horizontal scrolling moves their code,
@@ -47,5 +60,10 @@ OS layout stall. Removing the nested lazy renderer removes that stack from the s
 positions and anchors, and real native jumps through 20,000 lines on Mac and touch, recording
 main-thread jump times and bounding the number of created row contents. `NativeListLayoutTests`
 covers revision stability, empty/pinned-header boundaries, 20,000 preview lines and cached
-paragraph reflow. `ProjectSidebarTests` checks native row granularity and drag coordinates.
+paragraph reflow and incremental height updates. `ProjectSidebarTests` checks native row
+granularity and drag coordinates. `ChatCollectionTests` covers anchored prepends, following versus
+reading, changed-row reconfiguration, coalesced frames, connection generations and clock teardown.
+Its synthetic 2,000-row Simulator replay gates cached first content at 100 ms, streaming apply
+p99 at 4 ms, memory above baseline at 80 MiB and second-pass growth at 8 MiB. These are Debug
+Simulator checks, not physical-device Release measurements.
 Snapshots are opt-in and run in process; Mac test windows remain offscreen.

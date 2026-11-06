@@ -11,6 +11,10 @@ nonisolated struct TimelineFrame: Sendable {
     var hasNewerGap = false
     var note: String?
     var revision = 0
+    var generation = UUID()
+    var parentRevision: Int?
+    var orderRevision: Int?
+    var changedRows: [ChatRow]?
 }
 
 nonisolated enum TimelineJob: Sendable {
@@ -38,6 +42,9 @@ actor TimelineRenderWorker {
     private let builder = RowBuilder()
     private var rowsByItem: [String: [ChatRow]] = [:]
     private var revision = 0
+    private var generation = UUID()
+    private var orderRevision = 0
+    private var identifiers: [ChatRowID] = []
     private let pane: UInt64
 
     init(pane: UInt64) { self.pane = pane }
@@ -74,6 +81,7 @@ actor TimelineRenderWorker {
         }
         window = next
         if didReset {
+            generation = UUID()
             rowsByItem.removeAll(keepingCapacity: false)
             await builder.clear()
             changed.formUnion(window.order)
@@ -83,13 +91,24 @@ actor TimelineRenderWorker {
         await builder.remove(removed)
         let values = changed.compactMap { window.items[$0] }
         let rendered = await builder.rows(for: values)
-        for (identifier, rows) in rendered { rowsByItem[identifier] = rows }
+        var changedRows: [ChatRow] = []
+        for (identifier, rows) in rendered {
+            let previous = rowsByItem[identifier] ?? []
+            for (index, row) in rows.enumerated() {
+                if !previous.indices.contains(index) || previous[index] != row { changedRows.append(row) }
+            }
+            rowsByItem[identifier] = rows
+        }
+        let parentRevision = revision
         revision += 1
         let rows = window.order.flatMap { rowsByItem[$0] ?? [] }
+        let identifiers = rows.map(\.id)
+        if self.identifiers != identifiers { orderRevision += 1; self.identifiers = identifiers }
         let frame = TimelineFrame(
-            rows: rows, rowIDs: Set(rows.map(\.id)), session: window.session,
+            rows: rows, rowIDs: Set(identifiers), session: window.session,
             cursor: window.cursor, before: window.before, hasNewerGap: window.hasNewerGap,
-            note: window.note, revision: revision)
+            note: window.note, revision: revision, generation: generation,
+            parentRevision: parentRevision, orderRevision: orderRevision, changedRows: changedRows)
         return TimelineRenderResult(frame: frame, needsHistoryCursor: window.needsHistoryCursor, consumedSnapshot: consumedSnapshot, consumedHistory: consumedHistory, hasLiveChanges: hasLiveChanges)
     }
 

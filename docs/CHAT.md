@@ -45,7 +45,9 @@ the channel.
 `RowBuilder` parses Markdown on its actor into independent block rows with stable IDs and
 cached attributed inline text. Its cache is bounded by 500 blocks, 500 item entries and
 4 MiB of estimated retained content. Only HTTP, HTTPS and mail links are interactive; HTML
-stays literal text. The upstream Markdown and cmark-gfm licences ship with the app.
+stays literal text. Original block source comes from cmark's UTF-8 ranges, not a padded table
+formatter. Nested tables rendered inline keep their literal source instead of expanding columns.
+The upstream Markdown and cmark-gfm licences ship with the app.
 
 `TimelineModel` serializes bounded JSON batches through an off-main render worker. Its value
 window checks epoch and sequence continuity, ignores stale revisions, applies batches
@@ -56,6 +58,32 @@ jump-to-latest gap instead of moving the reading position. A missing history bou
 a fresh snapshot. Connection resets clear rendered values before another connection can
 publish, including screens that were stopped during a reconnect. Expansion and drafts stay
 local to the screen; drafts do not cross hosts.
+
+## Touch presentation
+
+`ChatViewController` owns one normal-orientation reusable collection and a composer host pinned
+to the keyboard layout guide. A display-link coalesces pending frames; stopped views release
+that clock. Inactive presentation parks it and retains only the latest pending frame. Changed-row values and order revisions keep content-only updates independent of
+window length. Parent revisions detect a skipped render frame and force full reconciliation.
+A render generation also invalidates cached values when two connections reuse IDs and cursors.
+
+Visible rows use cached native fitting heights from one detached sizing host, independent of
+reused cells' stale intrinsic sizes. Exact width, Dynamic Type and legibility changes invalidate
+those measurements. The measurement pass yields after 3 ms and
+updates prefix positions without re-hashing every row. Prepends restore the same reading row;
+following updates pin to the bottom unless a newer user drag invalidates that adjustment.
+The New capsule remains separate from the reusable cells.
+
+Markdown rows use prepared attributed values. Long lists and paragraphs split into bounded
+native rows. Code uses the terminal's font, foreground and background, with a 30-line/8-KiB
+prepared preview and an explicit full-code action. Large user, thinking and notice text have
+4-KiB UTF-8-safe previews; full values remain available for detail and copy actions. Plans and tables
+also bound the number of views constructed in one cell. The Mac has no Chat presentation.
+
+`ChatCollectionTests` exercises native reading anchors, bottom following, frozen visible rows,
+coalescing, reused connection IDs, cached opening, streaming apply, two-pass memory and teardown.
+The replay here uses synthetic cached rows on the Simulator; real transcript replay and device
+performance verification are separate gates.
 
 ## Claude adapter
 

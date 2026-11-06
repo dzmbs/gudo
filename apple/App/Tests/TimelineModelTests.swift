@@ -10,12 +10,24 @@ final class TimelineModelTests: XCTestCase {
         model.receive(.snapshot(try TimelineFixtureJSON.snapshot(0..<60)))
         try await wait { model.frame.rows.count == 60 }
         let original = model.frame.rows.last?.id
+        let first = model.frame
         model.receive(.update(try TimelineFixtureJSON.append("m59", text: " tail", sequence: 1)))
         try await wait { model.frame.cursor?.sequence == 1 }
         XCTAssertEqual(model.frame.rows.last?.id, original)
         guard case .markdown(let block) = model.frame.rows.last?.content else { return XCTFail("Missing paragraph") }
         XCTAssertEqual(String(block.text.characters), "Message 59 tail")
         XCTAssertNil(model.error)
+        XCTAssertEqual(model.frame.parentRevision, first.revision)
+        XCTAssertEqual(model.frame.orderRevision, first.orderRevision)
+        XCTAssertEqual(model.frame.changedRows?.map(\.id), [original].compactMap { $0 })
+        XCTAssertEqual(model.frame.generation, first.generation)
+        let second = model.frame
+        model.receive(.update(try TimelineFixtureJSON.append("m59", text: "\n\nNew paragraph.", sequence: 2)))
+        try await wait { model.frame.cursor?.sequence == 2 }
+        XCTAssertEqual(model.frame.parentRevision, second.revision)
+        XCTAssertGreaterThan(model.frame.orderRevision ?? 0, second.orderRevision ?? 0)
+        XCTAssertEqual(model.frame.rows.count, 61)
+        XCTAssertEqual(model.frame.rows[59], second.rows[59])
         model.stop()
     }
 
