@@ -188,6 +188,16 @@ DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
 OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
+## Swift Markdown and cmark-gfm
+
+Source: https://github.com/swiftlang/swift-markdown 0.7.3 and
+https://github.com/swiftlang/swift-cmark 0.9.0, linked unmodified for native Chat block parsing.
+Swift Markdown is Apache-2.0 with the Swift Runtime Library Exception, Copyright (c) 2021 Apple
+Inc. and the Swift project authors. cmark-gfm is BSD-2-Clause with MIT-licensed components.
+The complete upstream notice, Apache licence and cmark-gfm `COPYING` are in
+`scripts/notices/markdown.txt` and ship in `App/Resources/THIRD_PARTY_NOTICES.txt`.
+The CommonMark test specification and test software are not included in the app.
+
 ## Sparkle
 
 Source: https://github.com/sparkle-project/Sparkle 2.10.1, linked unmodified into the Mac app as

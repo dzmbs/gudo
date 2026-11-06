@@ -26,6 +26,7 @@ pub fn notices(check: bool) -> Result<()> {
     let root = root();
     let native = fs::read_to_string(root.join("scripts/notices/native.txt"))?;
     let mac_app = fs::read_to_string(root.join("scripts/notices/mac-app.txt"))?;
+    let markdown = fs::read_to_string(root.join("scripts/notices/markdown.txt"))?;
     let hostd = rust_crates("crates/hostd/Cargo.toml")?;
     let core = rust_crates("crates/apple-ffi/Cargo.toml")?;
     let excalidraw = npm_packages("excalidraw", false)?;
@@ -39,6 +40,7 @@ pub fn notices(check: bool) -> Result<()> {
     let app = [
         section("Native code linked into the app and its helpers", &native),
         section("Frameworks in the Mac app", &mac_app),
+        section("Swift Markdown and cmark-gfm in the app", &markdown),
         section("Rust crates in the app (GudoCore)", &core),
         section("Rust crates in the bundled helpers (gudo-hostd)", &hostd),
         section("npm packages in the Excalidraw canvas bundle", &excalidraw),

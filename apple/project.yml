@@ -41,6 +41,9 @@ packages:
     path: Packages/VoiceKit
   FilesProviderKit:
     path: Packages/FilesProviderKit
+  Markdown:
+    url: https://github.com/swiftlang/swift-markdown
+    exactVersion: 0.7.3
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     exactVersion: 2.10.1
@@ -275,6 +278,8 @@ targets:
       - package: FilesProviderKit
         product: FilesProviderKit
         destinationFilters: [iOS]
+      - package: Markdown
+        product: Markdown
       - package: Sparkle
         product: Sparkle
         destinationFilters: [macOS]
