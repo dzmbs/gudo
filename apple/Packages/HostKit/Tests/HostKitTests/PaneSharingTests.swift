@@ -93,7 +93,7 @@ import GudoCore
         #expect(client().calls == [.resize(3, small), .input(3, Data("x".utf8))])
         client().clear()
         tapA.claimSize()
-        #expect(client().calls == [.resize(3, big)])
+        #expect(client().calls == [.resize(3, big), .claimSize(3)])
         // The driving window closes: the other one's size takes over.
         client().clear()
         tapA.terminate()
@@ -214,6 +214,64 @@ import GudoCore
         client().send(.paneBytes(paneId: 3, seq: 0, data: Data("abc".utf8)))
         #expect(seenA.withLock { $0 } == [3])
         #expect(seenB.withLock { $0 } == [3])
+    }
+
+    @Test func inactiveWindowReportsBeforeVisibilityAndDoesNotChangeIt() throws {
+        let (connection, client) = try makeConnection()
+        let window = NSObject()
+        client().clear()
+        connection.setWindowView(window, focused: PaneId(1), visible: [PaneId(1)], activity: .inactive)
+        #expect(client().calls == [.activity(1, .inactive), .setView(1, [1])])
+        client().clear()
+        connection.setWindowView(window, focused: PaneId(1), visible: [PaneId(1)], activity: .active)
+        #expect(client().calls == [.activity(1, .active)])
+    }
+
+    @Test func anInactiveWindowsReportDoesNotTakeTheActiveWindowsFocus() throws {
+        let (connection, client) = try makeConnection()
+        let windowA = NSObject(), windowB = NSObject()
+        connection.setWindowView(windowA, focused: PaneId(1), visible: [PaneId(1)])
+        connection.setWindowView(windowB, focused: PaneId(3), visible: [PaneId(3)], activity: .inactive)
+        #expect(client().calls.last == .setView(1, [1, 3]))
+    }
+
+    @Test func activityIsSeededBeforeTheClientConnects() throws {
+        let recorded = Mutex<FakeClient?>(nil)
+        let connection = DaemonConnection(hostId: "h", ticket: "t") { _, listener in
+            let client = FakeClient(listener: listener)
+            recorded.withLock { $0 = client }
+            return client
+        }
+        let window = NSObject()
+        connection.setWindowView(window, focused: PaneId(1), visible: [PaneId(1)], activity: .inactive)
+        try connection.connect()
+        let client = try #require(recorded.withLock { $0 })
+        #expect(client.calls.prefix(2) == [.activity(1, .inactive), .setView(1, [1])])
+    }
+
+    @Test func overlappingWindowsKeepActivityUntilTheLastActiveOneLeaves() throws {
+        let (connection, client) = try makeConnection()
+        let windowA = NSObject(), windowB = NSObject()
+        connection.setWindowView(windowA, focused: PaneId(1), visible: [PaneId(1)])
+        connection.setWindowView(windowB, focused: PaneId(1), visible: [PaneId(1)])
+        client().clear()
+        connection.setWindowView(windowA, focused: PaneId(1), visible: [PaneId(1)], activity: .inactive)
+        #expect(client().calls.isEmpty)
+        connection.setWindowView(windowB, focused: nil, visible: [])
+        #expect(client().calls == [.activity(1, .inactive)])
+        client().clear()
+        connection.setWindowView(windowA, focused: nil, visible: [])
+        #expect(client().calls == [.setView(nil, [])])
+    }
+
+    @Test func explicitClaimsReachTheDaemonEvenWhenTheLocalTapAlreadyDrives() throws {
+        let (connection, client) = try makeConnection()
+        let backend = try connection.makeBackend(for: PaneId(3))
+        backend.resize(cols: 80, rows: 24, cellWidth: 8, cellHeight: 16)
+        client().clear()
+        (backend as? any SharedPaneTap)?.claimSize()
+        (backend as? any SharedPaneTap)?.claimSize()
+        #expect(client().calls == [.claimSize(3), .claimSize(3)])
     }
 
     @Test func theDaemonHearsEveryWindowsPanes() async throws {

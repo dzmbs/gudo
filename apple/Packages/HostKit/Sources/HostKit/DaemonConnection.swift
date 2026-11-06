@@ -137,6 +137,7 @@ public final class DaemonConnection: HostConnection {
     public private(set) var connectionCount = 0
     @ObservationIgnored private var attachSession: UInt64?
     @ObservationIgnored private var lastView: (UInt64?, [UInt64])?
+    @ObservationIgnored private var lastActivities: [UInt64: PaneActivity] = [:]
     @ObservationIgnored private var attempt: UInt32 = 0
     @ObservationIgnored private var sawOutput = false
     /// Between `Attach` and the session's first layout (status `.connecting(.openingSession)`).
@@ -212,6 +213,9 @@ public final class DaemonConnection: HostConnection {
         Self.log.info("dialing host=\(self.hostId, privacy: .public)")
         let client = try dialer(ticket, listener)
         self.client = client
+        lastView = nil
+        lastActivities.removeAll()
+        if windowsReported { pushView() }
         pushTerminalColors()
         if let multiplayerClient = client as? any MultiplayerClientAPI { multiplayer.attach(multiplayerClient) }
         if let askpassClient = client as? any AskpassClientAPI { askpass.attach(askpassClient) }
@@ -508,6 +512,7 @@ public final class DaemonConnection: HostConnection {
                 client?.attach(sessionId: attachSession)
             }
             lastView = nil
+            lastActivities.removeAll()
             pushView()
         case .disconnected(let reason):
             if case .suspended = status { return }
@@ -611,20 +616,20 @@ public final class DaemonConnection: HostConnection {
 
     /// What each window shows of this host (`setWindowView`), most recent last. Until a window
     /// reports, the layout's own active tab stands in.
-    @ObservationIgnored private var windowViews: [(owner: ObjectIdentifier, focused: UInt64?, visible: [UInt64])] = []
+    @ObservationIgnored private var windowViews: [(owner: ObjectIdentifier, focused: UInt64?, visible: [UInt64], activity: PaneActivity)] = []
     /// A window has reported: from then on no entry means nothing of this host is on screen
     /// (the app in the background, another host in front), so the daemon notifies.
     @ObservationIgnored private var windowsReported = false
 
     /// A window shows `visible` of this host with `focused` taking keys (nil focused and empty
     /// visible: the window does not show the host now). The daemon hears the union of every
-    /// window's panes and the focus of the window that reported last.
-    public func setWindowView(_ window: AnyObject, focused: PaneId?, visible: [PaneId]) {
+    /// window's panes and the focus of the last active window, falling back to the last report.
+    public func setWindowView(_ window: AnyObject, focused: PaneId?, visible: [PaneId], activity: PaneActivity = .active) {
         let owner = ObjectIdentifier(window)
         windowsReported = true
         windowViews.removeAll { $0.owner == owner }
         if focused != nil || !visible.isEmpty {
-            windowViews.append((owner, focused?.rawValue, visible.map(\.rawValue)))
+            windowViews.append((owner, focused?.rawValue, visible.map(\.rawValue), activity))
         }
         pushView()
     }
@@ -636,12 +641,30 @@ public final class DaemonConnection: HostConnection {
         guard windowsReported else { return layout.view }
         var visible: [UInt64] = []
         for view in windowViews { for pane in view.visible where !visible.contains(pane) { visible.append(pane) } }
-        let focused = windowViews.last { $0.focused != nil }?.focused
+        let focused = windowViews.last { $0.activity == .active && $0.focused != nil }?.focused
+            ?? windowViews.last { $0.focused != nil }?.focused
         return (focused, visible)
+    }
+
+    private func pushActivities() {
+        guard windowsReported, let client = client as? any PaneSizingClient else { return }
+        var activities: [UInt64: PaneActivity] = [:]
+        for view in windowViews {
+            for pane in view.visible + (view.focused.map { [$0] } ?? []) {
+                if activities[pane] != .active { activities[pane] = view.activity }
+            }
+        }
+        for pane in Set(lastActivities.keys).union(activities.keys).sorted() {
+            let activity = activities[pane] ?? .inactive
+            if lastActivities[pane] != activity { client.setPaneActivity(paneId: pane, activity: activity) }
+        }
+        lastActivities = activities
     }
 
     private func pushView() {
         guard let client else { return }
+        // Inactivity must precede visibility, including when the visible union is unchanged.
+        pushActivities()
         let view = combinedView
         if let lastView, lastView.0 == view.focused, lastView.1 == view.visible { return }
         lastView = (view.focused, view.visible)

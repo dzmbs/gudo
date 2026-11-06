@@ -475,6 +475,11 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap 
     }
 
     public func claimSize() {
+        claimLocalSize()
+        (client as? any PaneSizingClient)?.claimPaneSize(paneId: pane.rawValue)
+    }
+
+    private func claimLocalSize() {
         if let size = router.claim(pane.rawValue, tap: tap) { client.resize(paneId: pane.rawValue, size: size) }
     }
 
@@ -490,7 +495,7 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap 
 
     public func write(_ bytes: UnsafeRawBufferPointer) {
         guard !bytes.isEmpty, !hold(.bytes(Data(bytes))), router.admitsInput(pane.rawValue) else { return }
-        if !Self.isFocusReport(bytes) { claimSize() }
+        if !Self.isFocusReport(bytes) { claimLocalSize() }
         router.noteInput(pane.rawValue, tap: tap)
         client.sendInput(paneId: pane.rawValue, data: Data(bytes))
     }
@@ -514,14 +519,14 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap 
 
     public func writeInput(_ bytes: UnsafeRawBufferPointer, inputSeq: UInt64) {
         guard !bytes.isEmpty, !hold(.bytes(Data(bytes))), router.admitsInput(pane.rawValue) else { return }
-        if !Self.isFocusReport(bytes) { claimSize() }
+        if !Self.isFocusReport(bytes) { claimLocalSize() }
         router.noteInput(pane.rawValue, tap: tap, predicted: inputSeq)
         client.sendInput(paneId: pane.rawValue, data: Data(bytes))
     }
 
     public func paste(_ text: String) {
         guard !hold(.paste(text)), router.admitsInput(pane.rawValue) else { return }
-        claimSize()
+        claimLocalSize()
         router.noteInput(pane.rawValue, tap: tap)
         client.sendPaste(paneId: pane.rawValue, text: text)
     }
@@ -625,7 +630,7 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap 
                 case .generated: false
                 }
             }
-            if claimsSize { claimSize() }
+            if claimsSize { claimLocalSize() }
             for input in current.inputs {
                 router.noteInput(pane.rawValue, tap: tap)
                 switch input {

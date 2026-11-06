@@ -27,6 +27,14 @@ nonisolated public protocol GeneratedInputClient: AnyObject, Sendable {
 
 extension DaemonClient: GeneratedInputClient {}
 
+nonisolated public protocol PaneSizingClient: AnyObject, Sendable {
+    func setPaneActivity(paneId: UInt64, activity: PaneActivity)
+    func claimPaneSize(paneId: UInt64)
+    func setSizePolicy(paneId: UInt64, policy: SizePolicy)
+}
+
+extension DaemonClient: PaneSizingClient {}
+
 /// Updating the daemon over its connection (`DaemonClient.upgradeDaemon`), separate from
 /// `DaemonClientAPI` so test fakes need not implement it.
 nonisolated public protocol DaemonUpgradeAPI: AnyObject, Sendable {
