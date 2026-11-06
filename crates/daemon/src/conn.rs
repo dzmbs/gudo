@@ -885,9 +885,9 @@ async fn read_input(client: &Arc<Client>, mut stream: RecvStream) -> Result<(), 
             InputPayload::Bytes(bytes) => bytes,
             payload => entry.pane.encode_input(payload),
         };
-        // The PTY follows the client that typed last.
+        let is_focus_report = crate::input::is_focus_report(&bytes);
         let size = lock(&client.state).sizes.get(&input.pane_id).copied();
-        if let Some(size) = size {
+        if !is_focus_report && let Some(size) = size {
             client
                 .core
                 .apply_client_size(&entry, client.id, client.actor.principal, size, true);
@@ -904,9 +904,11 @@ async fn read_input(client: &Arc<Client>, mut stream: RecvStream) -> Result<(), 
                 continue;
             }
         };
-        lock(&entry.meta).typed_by = Some(client.id);
-        client.core.theme_used(client.id, &entry);
-        client.core.mp.typed(&client.core, client.id, input.pane_id);
+        if !is_focus_report {
+            lock(&entry.meta).typed_by = Some(client.id);
+            client.core.theme_used(client.id, &entry);
+            client.core.mp.typed(&client.core, client.id, input.pane_id);
+        }
         if let Some(subscription) = lock(&client.state).subscriptions.get(&input.pane_id) {
             let _ = subscription.cmds.send(StreamCmd::InputAck {
                 input_seq: input.input_seq,

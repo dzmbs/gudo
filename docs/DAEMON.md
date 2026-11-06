@@ -278,7 +278,9 @@ shell prompt (after 133;A/B, before 133;C; shell integration is injected, see be
 
 Each client sends its size per pane (`Resize`); the PTY follows the client that **last typed**,
 or the first client to report a size. `PaneMeta.sized_by` names its principal; the
-policy is always `LastInput` for now.
+policy is always `LastInput` for now. Lone focus-in/out reports (`CSI I` / `CSI O`, including
+8-bit CSI) are delivered to the PTY but do not claim its size or update typing presence. Apple pane
+backends also leave the sizing window unchanged when forwarding those reports.
 
 ### Identity and pairing
 

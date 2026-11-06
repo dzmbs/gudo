@@ -100,6 +100,29 @@ import GudoCore
         #expect(client().calls == [.resize(3, small)])
     }
 
+    @Test(arguments: [false, true])
+    func focusReportsDoNotTakeTheOtherWindowsSize(usesPrediction: Bool) async throws {
+        let (connection, client) = try makeConnection()
+        let desktop = try #require(try connection.makeBackend(for: PaneId(3)) as? DaemonPaneBackend)
+        let phone = try #require(try connection.makeBackend(for: PaneId(3)) as? DaemonPaneBackend)
+        desktop.start(events: { _ in }, seed: nil)
+        phone.start(events: { _ in }, seed: nil)
+        desktop.resize(cols: 120, rows: 40, cellWidth: 10, cellHeight: 20)
+        phone.resize(cols: 45, rows: 20, cellWidth: 10, cellHeight: 20)
+        let reports: [[UInt8]] = [[0x1b, 0x5b, 0x49], [0x1b, 0x5b, 0x4f], [0x9b, 0x49], [0x9b, 0x4f]]
+        for bytes in reports {
+            client().clear()
+            bytes.withUnsafeBytes {
+                if usesPrediction { phone.writeInput($0, inputSeq: 7) }
+                else { phone.write($0) }
+            }
+            #expect(client().calls == [.input(3, Data(bytes))])
+        }
+        client().clear()
+        desktop.resize(cols: 121, rows: 40, cellWidth: 10, cellHeight: 20)
+        #expect(client().calls == [.resize(3, PaneSize(cols: 121, rows: 40, widthPx: 1210, heightPx: 800))])
+    }
+
     @Test func acksGoToTheWindowThatTyped() async throws {
         let (connection, client) = try makeConnection()
         client().send(.connected(epoch: 1, resumed: false))

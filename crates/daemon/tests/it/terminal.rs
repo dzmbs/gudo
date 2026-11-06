@@ -3,7 +3,7 @@
 
 use client_core::proto::{
     CaseMode, FullKeyEvent, KeyAction, LayoutOp, LinkKind, MouseAction, MouseButton, MouseEvent,
-    OpOutcome, PaneLaunch, SearchMode, SearchQuery,
+    OpOutcome, PaneLaunch, PaneSize, SearchMode, SearchQuery,
 };
 use client_core::{ClientConfig, ClientEvent};
 use ghostty_vt::Key;
@@ -43,6 +43,54 @@ fn click(col: u16, row: u16) -> MouseEvent {
         col,
         row,
         mods: 0,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn focus_reports_do_not_replace_the_other_clients_terminal_size() {
+    for report in [b"\x1b[I".as_slice(), b"\x1b[O", b"\x9bI", b"\x9bO"] {
+        let directory = tempfile::tempdir().unwrap();
+        let daemon = start(directory.path()).await;
+        let mut desktop = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+        let pane = desktop.attach_and_follow().await;
+        desktop.client.resize(
+            pane,
+            PaneSize {
+                cols: 160,
+                rows: 40,
+                width_px: 0,
+                height_px: 0,
+            },
+        );
+        desktop
+            .until("desktop size", |client| {
+                client
+                    .metas
+                    .get(&pane)
+                    .is_some_and(|meta| meta.size.cols == 160)
+            })
+            .await;
+        desktop.type_line(pane, &format!("stty raw -echo; printf '%s%s\\r\\n' REA DY; dd bs=1 count={} >/dev/null 2>&1; printf '\\r\\n%s%s ' FO CUS; stty size; exec /bin/sh", report.len()));
+        desktop.wait_text(pane, "READY").await;
+        let mut phone = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+        phone.attach_and_follow().await;
+        phone.client.resize(
+            pane,
+            PaneSize {
+                cols: 45,
+                rows: 20,
+                width_px: 0,
+                height_px: 0,
+            },
+        );
+        phone.op(LayoutOp::Focus { pane_id: pane }).await;
+        phone.client.send_input(pane, report.to_vec());
+        desktop.wait_text(pane, "FOCUS ").await;
+        assert!(
+            desktop.text(pane).contains("FOCUS 40 160"),
+            "focus report {report:?} changed the size: {}",
+            desktop.text(pane)
+        );
     }
 }
 

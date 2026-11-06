@@ -482,16 +482,22 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap 
         router.startPrediction(pane.rawValue, tap: tap, onUpdate)
     }
 
+    private static func isFocusReport(_ bytes: UnsafeRawBufferPointer) -> Bool {
+        let hasFocusSuffix = bytes.last == 0x49 || bytes.last == 0x4f
+        return hasFocusSuffix && ((bytes.count == 3 && bytes[0] == 0x1b && bytes[1] == 0x5b)
+            || (bytes.count == 2 && bytes[0] == 0x9b))
+    }
+
     public func write(_ bytes: UnsafeRawBufferPointer) {
         guard !bytes.isEmpty, !hold(.bytes(Data(bytes))), router.admitsInput(pane.rawValue) else { return }
-        claimSize()
+        if !Self.isFocusReport(bytes) { claimSize() }
         router.noteInput(pane.rawValue, tap: tap)
         client.sendInput(paneId: pane.rawValue, data: Data(bytes))
     }
 
     public func writeInput(_ bytes: UnsafeRawBufferPointer, inputSeq: UInt64) {
         guard !bytes.isEmpty, !hold(.bytes(Data(bytes))), router.admitsInput(pane.rawValue) else { return }
-        claimSize()
+        if !Self.isFocusReport(bytes) { claimSize() }
         router.noteInput(pane.rawValue, tap: tap, predicted: inputSeq)
         client.sendInput(paneId: pane.rawValue, data: Data(bytes))
     }

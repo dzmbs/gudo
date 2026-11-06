@@ -2,6 +2,10 @@
 
 use ghostty_vt::{Key, KeyAction, KeyEvent, Mods, MouseAction, MouseButton, MouseEvent};
 
+pub(crate) fn is_focus_report(bytes: &[u8]) -> bool {
+    matches!(bytes, b"\x1b[I" | b"\x1b[O" | b"\x9bI" | b"\x9bO")
+}
+
 fn action(key_action: proto::KeyAction) -> KeyAction {
     match key_action {
         proto::KeyAction::Press => KeyAction::Press,
@@ -64,5 +68,27 @@ pub(crate) fn mouse(event: proto::MouseEvent) -> MouseEvent {
         col: event.col,
         row: event.row,
         mods: Mods(event.mods),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_focus_report;
+
+    #[test]
+    fn only_a_complete_lone_focus_report_is_protocol_only() {
+        for report in [b"\x1b[I".as_slice(), b"\x1b[O", b"\x9bI", b"\x9bO"] {
+            assert!(is_focus_report(report));
+        }
+        for input in [
+            b"".as_slice(),
+            b"I",
+            b"\x1b[",
+            b"\x1b[Itext",
+            b"text\x1b[O",
+            b"\x1b[I\x1b[O",
+        ] {
+            assert!(!is_focus_report(input));
+        }
     }
 }
