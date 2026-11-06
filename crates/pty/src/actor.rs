@@ -25,7 +25,7 @@ use std::{fmt, thread};
 
 use bytes::Bytes;
 use rustix::process::{Pid, WaitId, WaitIdOptions};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch};
 
 use crate::foreground::{self, ForegroundProcess};
 use crate::ring::{Chunk, DEFAULT_RING_CAPACITY, OutputRing, ReadError, Seq};
@@ -313,6 +313,23 @@ struct Input {
     data: Bytes,
     _permit: OwnedSemaphorePermit,
     _slot: OwnedSemaphorePermit,
+    written: Option<oneshot::Sender<()>>,
+}
+
+impl Input {
+    fn complete(self) {
+        let Self {
+            data,
+            _permit: byte_permit,
+            _slot: write_slot,
+            written,
+        } = self;
+        drop(data);
+        drop((byte_permit, write_slot));
+        if let Some(written) = written {
+            let _ = written.send(());
+        }
+    }
 }
 
 /// Permits a write of `len` bytes takes: all of them, or the whole budget for a bigger one.
@@ -610,7 +627,14 @@ impl PtyActor {
     ///
     /// Returns [`Closed`] if the I/O thread has stopped.
     pub async fn write(&self, data: impl Into<Bytes>) -> Result<(), Closed> {
-        let data = data.into();
+        self.enqueue_input(data.into(), None).await
+    }
+
+    async fn enqueue_input(
+        &self,
+        data: Bytes,
+        written: Option<oneshot::Sender<()>>,
+    ) -> Result<(), Closed> {
         let permits = permits_for(data.len());
         let permit = Arc::clone(&self.shared.input_budget)
             .acquire_many_owned(permits)
@@ -624,10 +648,22 @@ impl PtyActor {
             data,
             _permit: permit,
             _slot: slot,
+            written,
         };
         self.input.send(input).await.map_err(|_| Closed)?;
         self.waker.wake();
         Ok(())
+    }
+
+    /// Waits until earlier queued input reaches the PTY master, not until the child reads it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Closed`] if the I/O thread stops before the writes finish.
+    pub async fn flush_writes(&self) -> Result<(), Closed> {
+        let (written, completion) = oneshot::channel();
+        self.enqueue_input(Bytes::new(), Some(written)).await?;
+        completion.await.map_err(|_| Closed)
     }
 
     /// Queues `data` without waiting.
@@ -654,6 +690,7 @@ impl PtyActor {
                 data,
                 _permit: permit,
                 _slot: slot,
+                written: None,
             })
             .map_err(|err| {
                 let (input, full) = match err {

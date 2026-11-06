@@ -127,6 +127,13 @@ Tab  = { tab_id, name, root, focused: PaneId, zoomed: Option<PaneId> }
   Codex session lookup run on `spawn_blocking`.
 - No `std::sync::Mutex` guard is held across an `.await`.
 
+PTY input has an 8-MiB byte budget and a 256-write limit, including empty writes. A single larger
+write reserves the whole byte budget. Owned permits cover queueing, cancellation and pending
+kernel writes. `PtyActor::write` acknowledges enqueueing;
+`flush_writes` waits until every earlier queued byte reaches the PTY master. It does not prove
+that the program consumed those bytes or make a shell handoff safe by itself. A write failure,
+closed child or handoff with unsent bytes refuses the pending flush instead of claiming delivery.
+
 ### Streams (ALPN `gudo/1`)
 
 | Stream | Opened by | Priority | Content |

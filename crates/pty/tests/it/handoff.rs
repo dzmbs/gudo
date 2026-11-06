@@ -33,6 +33,30 @@ fn cloexec(fd: &OwnedFd) -> bool {
 }
 
 #[tokio::test]
+async fn a_pending_flush_does_not_claim_unsent_handoff_bytes_were_written() {
+    let old = spawn(&[
+        "/bin/sh",
+        "-c",
+        "stty raw -echo; echo ready; exec sleep 100",
+    ]);
+    let mut output = old.subscribe();
+    read_until(&mut output, "ready").await;
+    old.write(vec![b'x'; pty::MAX_QUEUED_INPUT]).await.unwrap();
+    let flush = old.flush_writes();
+    tokio::pin!(flush);
+    tokio::select! {
+        result = &mut flush => panic!("flush finished without a reader: {result:?}"),
+        () = tokio::time::sleep(Duration::from_millis(20)) => {}
+    }
+    let handed = old.hand_off().unwrap();
+    assert!(!handed.unsent_input.is_empty());
+    assert!(within("handoff flush refused", flush).await.is_err());
+    let new = PtyActor::adopt(inherited(handed.master), &handed, None).unwrap();
+    new.signal(pty::Signal::Kill).unwrap();
+    within("successor child reaped", new.wait()).await.unwrap();
+}
+
+#[tokio::test]
 async fn the_successor_continues_output_input_and_history() {
     let old = spawn(&[
         "/bin/sh",

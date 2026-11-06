@@ -69,6 +69,7 @@ pub(super) struct IoLoop {
     shared: Arc<Shared>,
     hook: Option<OutputHook>,
     pending: VecDeque<Input>,
+    has_input_failed: bool,
 }
 
 impl IoLoop {
@@ -86,6 +87,7 @@ impl IoLoop {
             shared,
             hook,
             pending: VecDeque::new(),
+            has_input_failed: false,
         }
     }
 
@@ -169,6 +171,9 @@ impl IoLoop {
 
     /// Moves queued input into `pending`. Returns `false` once the actor handle is gone.
     fn take_input(&mut self) -> bool {
+        if self.has_input_failed {
+            return true;
+        }
         loop {
             match self.input.try_recv() {
                 Ok(input) => self.pending.push_back(input),
@@ -180,19 +185,25 @@ impl IoLoop {
 
     fn flush_input(&mut self) {
         while let Some(front) = self.pending.front_mut() {
-            match rustix::io::write(&*self.master, &front.data) {
-                Ok(written) => {
-                    front.data.advance(written);
-                    if front.data.is_empty() {
-                        self.pending.pop_front();
-                    }
+            if front.data.is_empty() {
+                if let Some(input) = self.pending.pop_front() {
+                    input.complete();
                 }
+                continue;
+            }
+            match rustix::io::write(&*self.master, &front.data) {
+                Ok(written) => front.data.advance(written),
                 Err(Errno::INTR) => {}
                 Err(Errno::AGAIN) => return,
                 Err(err) => {
                     // Typically EIO once the child side is gone; output EOF follows.
-                    tracing::debug!(%err, "pty write failed; dropping queued input");
+                    tracing::debug!(%err, "pty write failed; refusing input");
+                    self.has_input_failed = true;
+                    self.input.close();
+                    self.shared.input_budget.close();
+                    self.shared.input_slots.close();
                     self.pending.clear();
+                    while self.input.try_recv().is_ok() {}
                     return;
                 }
             }
