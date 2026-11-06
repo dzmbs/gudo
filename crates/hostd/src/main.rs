@@ -62,6 +62,9 @@ enum Command {
         /// Shell for new panes (default: $SHELL, then the passwd entry).
         #[arg(long)]
         shell: Option<PathBuf>,
+        /// Register shared agent hooks and MCP tools, including with a custom state directory.
+        #[arg(long)]
+        install_agent_integration: bool,
     },
     /// Print a one-time pairing ticket as text and QR code.
     Pair {
@@ -181,7 +184,8 @@ fn main() -> Result<()> {
             bind,
             no_relay,
             shell,
-        } => run(state_dir, bind, no_relay, shell),
+            install_agent_integration,
+        } => run(state_dir, bind, no_relay, shell, install_agent_integration),
         Command::Pair {
             list: true, json, ..
         } => pending_tickets(&state_dir, json),
@@ -251,6 +255,7 @@ fn run(
     bind: Option<SocketAddr>,
     no_relay: bool,
     shell: Option<PathBuf>,
+    install_agent_integration: bool,
 ) -> Result<()> {
     // First, while this process has one thread and before it starts any program: what the
     // build this process ran before its `exec` handed over.
@@ -268,6 +273,10 @@ fn run(
     let _lock = lock_instance(&state_dir)?;
 
     let mut config = Config::new(&state_dir);
+    if install_agent_integration || brand::var("INSTALL_AGENT_INTEGRATION").as_deref() == Some("1")
+    {
+        config.agent_integration = daemon::AgentIntegration::Install;
+    }
     config.bind = bind;
     config.relay = if no_relay {
         RelayMode::Disabled
@@ -884,6 +893,27 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_agent_installation_requires_an_explicit_run_flag() {
+        let default = Cli::try_parse_from(["hostd", "run"]).unwrap();
+        assert!(matches!(
+            default.command,
+            Command::Run {
+                install_agent_integration: false,
+                ..
+            }
+        ));
+        let opted_in =
+            Cli::try_parse_from(["hostd", "run", "--install-agent-integration"]).unwrap();
+        assert!(matches!(
+            opted_in.command,
+            Command::Run {
+                install_agent_integration: true,
+                ..
+            }
+        ));
+    }
 
     #[test]
     fn app_bundles_are_not_upgraded_in_place() {

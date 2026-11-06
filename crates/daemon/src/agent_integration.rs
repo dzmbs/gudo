@@ -6,10 +6,14 @@ use serde_json::{Value, json};
 use crate::{Config, fsutil, hook_launcher};
 
 pub fn install_agent_integration(config: &Config) -> io::Result<()> {
-    if brand::IS_DEV {
-        return Ok(());
+    match config.agent_integration {
+        crate::AgentIntegration::Automatic
+            if brand::IS_DEV || config.state_dir != crate::default_state_dir() =>
+        {
+            Ok(())
+        }
+        _ => install_shared_agent_integration(config),
     }
-    install_shared_agent_integration(config)
 }
 
 fn install_shared_agent_integration(config: &Config) -> io::Result<()> {
@@ -89,9 +93,9 @@ fn read_json_config(path: &Path) -> io::Result<(String, Value)> {
 }
 
 fn is_hook_program(program: &str) -> bool {
-    Path::new(program)
-        .file_name()
-        .is_some_and(|name| name == brand::HOOK_BIN || name == brand::legacy::HOOK_BIN)
+    Path::new(program).file_name().is_some_and(|name| {
+        name == brand::HOOK_BIN || (!brand::IS_DEV && name == brand::legacy::HOOK_BIN)
+    })
 }
 
 fn is_owned_hook(command: &str) -> bool {
@@ -240,6 +244,55 @@ mod tests {
     }
 
     #[test]
+    fn temporary_state_startup_leaves_shared_agent_configuration_untouched() {
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().join("home");
+        let claude = home.join(".claude");
+        let codex = home.join(".codex");
+        std::fs::create_dir_all(&claude).unwrap();
+        std::fs::create_dir_all(&codex).unwrap();
+        let files = [
+            (
+                claude.join("settings.json"),
+                r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"my-stop"}]}]}}"#,
+            ),
+            (
+                home.join(".claude.json"),
+                r#"{"mcpServers":{"mine":{"command":"my-server"}}}"#,
+            ),
+            (
+                claude.join(".claude.json"),
+                r#"{"mcpServers":{"mine":{"command":"my-server"}}}"#,
+            ),
+            (codex.join("config.toml"), "notify = ['my-notify']\n"),
+        ];
+        for (path, contents) in &files {
+            std::fs::write(path, contents).unwrap();
+        }
+        let mut config = Config::new(directory.path().join("temporary-state"));
+        config.pane_env = vec![
+            ("HOME".into(), home.to_string_lossy().into_owned()),
+            (
+                agents::CLAUDE_DIR_VAR.into(),
+                claude.to_string_lossy().into_owned(),
+            ),
+            (
+                agents::CODEX_DIR_VAR.into(),
+                codex.to_string_lossy().into_owned(),
+            ),
+        ];
+        super::install_agent_integration(&config).unwrap();
+        for (path, contents) in &files {
+            assert_eq!(
+                std::fs::read_to_string(path).unwrap(),
+                *contents,
+                "{} was changed",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
     fn development_startup_never_writes_shared_agent_configuration() {
         if !brand::IS_DEV {
             return;
@@ -294,7 +347,8 @@ mod tests {
                 home_directory.join(".codex").to_string_lossy().into_owned(),
             ),
         ];
-        install_agent_integration(&config).unwrap();
+        config.agent_integration = crate::AgentIntegration::Install;
+        super::install_agent_integration(&config).unwrap();
         let settings: Value =
             serde_json::from_slice(&std::fs::read(&claude_settings).unwrap()).unwrap();
         assert_eq!(settings["statusLine"], original_settings["statusLine"]);
@@ -325,7 +379,7 @@ mod tests {
         let original_notify: Vec<String> =
             serde_json::from_str(notification[2].as_str().unwrap()).unwrap();
         assert_eq!(original_notify, ["my-notify", "argument with spaces"]);
-        install_agent_integration(&config).unwrap();
+        super::install_agent_integration(&config).unwrap();
         assert_eq!(std::fs::read_to_string(&codex_config).unwrap(), codex_text);
         assert_eq!(
             serde_json::from_slice::<Value>(&std::fs::read(&claude_settings).unwrap()).unwrap(),

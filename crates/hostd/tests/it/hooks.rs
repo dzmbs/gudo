@@ -57,6 +57,7 @@ async fn a_shipped_daemon_provides_hooks_askpass_and_mcp_without_a_separate_shim
         .arg(&state_directory)
         .args([
             "run",
+            "--install-agent-integration",
             "--no-relay",
             "--bind",
             "127.0.0.1:0",

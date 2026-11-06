@@ -20,8 +20,13 @@ Agent hooks, askpass, browser helpers and MCP all use that stable launcher, whic
 on daemon startup. No extra executable or code signature is needed in the Mac app bundle,
 Linux release assets, SSH bootstrap or service install.
 
-On startup, the helper registers its MCP server and hooks in the user's Claude Code and
-Codex configuration, including `CLAUDE_CONFIG_DIR` and `CODEX_HOME` when supplied. Agents
+On startup with the default production state directory, the helper registers its MCP server
+and hooks in the user's Claude Code and Codex configuration, including `CLAUDE_CONFIG_DIR`
+and `CODEX_HOME` when supplied. Custom state directories and Gudo Dev leave shared agent
+configuration untouched unless explicitly enabled with `run --install-agent-integration` or
+the flavour's `INSTALL_AGENT_INTEGRATION=1` environment variable (`GUDO_` or `GUDO_DEV_` prefix).
+An isolated state directory alone is not an isolated home; tests and capture tools supply a
+private `HOME`, `CLAUDE_CONFIG_DIR` and `CODEX_HOME` as well. Agents
 started by typing their command into a pane get the same hooks and tools. The MCP server
 resolves the pane, endpoint and token from the calling environment, including an ancestor's
 environment when the agent filters its subprocess environment. Only that pane's token is used

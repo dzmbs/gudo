@@ -96,6 +96,13 @@ arguments: `cmd_run` types into a pane the agent owns, which is its purpose. One
 together with every worker it starts, may have at most 32 panes open. A wait holds at most
 1 MiB of output, and results are capped at 256 KiB.
 
+**Shared agent configuration.** Automatic hook and MCP registration is restricted to the
+production flavour's default state directory. Custom-state and development daemons need an
+explicit `--install-agent-integration` opt-in before changing shared agent configuration.
+Otherwise startup does not create, edit or clean agent configuration files, even if `HOME`
+still names the user's actual home. Dedicated launches retain their per-launch integration.
+Tests and capture tools must also supply private home and agent configuration directories.
+
 **Agent timelines.** Reading a timeline requires View on its pane. Since-join guests receive no
 older items or output. The captured session selects the file inside that agent account's
 transcript directory; requests carry scoped cursors and output handles, never file paths.

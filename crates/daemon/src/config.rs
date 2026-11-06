@@ -96,6 +96,14 @@ impl Default for PushConfig {
     }
 }
 
+/// Whether startup may change the user's shared agent configuration.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AgentIntegration {
+    #[default]
+    Automatic,
+    Install,
+}
+
 /// Daemon settings.
 ///
 /// # Examples
@@ -108,6 +116,7 @@ impl Default for PushConfig {
 pub struct Config {
     /// Keys, paired devices, layout and the hook socket live here.
     pub state_dir: PathBuf,
+    pub agent_integration: AgentIntegration,
     /// UDP address the iroh endpoint binds (port 0 picks one). `None` binds every interface,
     /// IPv4 and IPv6, on random ports.
     pub bind: Option<SocketAddr>,
@@ -306,6 +315,7 @@ impl Config {
     pub fn new(state_dir: impl Into<PathBuf>) -> Self {
         Self {
             state_dir: state_dir.into(),
+            agent_integration: AgentIntegration::default(),
             bind: None,
             relay: RelayMode::Default,
             shell: None,
