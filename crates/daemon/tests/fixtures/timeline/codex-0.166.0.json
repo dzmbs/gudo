@@ -1,0 +1,973 @@
+{
+  "clients": [
+    [
+      {
+        "id": 1,
+        "result": {
+          "userAgent": "gudo_fixture/0.166.0 (Mac OS 26.6.0; arm64) xterm-256color (gudo_fixture; 0.0.0)",
+          "codexHome": "/fixture/codex",
+          "platformFamily": "unix",
+          "platformOs": "macos"
+        }
+      },
+      {
+        "method": "remoteControl/status/changed",
+        "params": {
+          "status": "disabled",
+          "serverName": "fixture-host",
+          "installationId": "fe4094fe-ff44-4a5e-b114-93ec9498a913",
+          "environmentId": null
+        },
+        "emittedAtMs": 1793972448767
+      },
+      {
+        "id": 2,
+        "result": {
+          "thread": {
+            "id": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+            "environments": [
+              {
+                "environmentId": "local",
+                "cwd": "/fixture/project",
+                "runtimeWorkspaceRoots": [
+                  "/fixture/project"
+                ]
+              }
+            ],
+            "extra": null,
+            "sessionId": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+            "forkedFromId": null,
+            "parentThreadId": null,
+            "preview": "",
+            "ephemeral": false,
+            "section": null,
+            "sectionEnteredAt": null,
+            "projectId": null,
+            "historyMode": "paginated",
+            "modelProvider": "fixture",
+            "model": "fixture-model",
+            "reasoningEffort": null,
+            "createdAt": 1793972448,
+            "updatedAt": 1793972448,
+            "recencyAt": 1793972448,
+            "status": {
+              "type": "idle"
+            },
+            "path": "/fixture/codex/sessions/2026/11/06/rollout-2026-11-06T14-40-48-01a1b117-2e02-7d80-a85d-97bee9f44115.jsonl",
+            "cwd": "/fixture/project",
+            "cliVersion": "0.166.0",
+            "originator": "gudo_fixture",
+            "source": "vscode",
+            "canAcceptDirectInput": true,
+            "threadSource": null,
+            "agentNickname": null,
+            "agentRole": null,
+            "gitInfo": null,
+            "name": null,
+            "daybreakEnabled": null,
+            "turns": []
+          },
+          "model": "fixture-model",
+          "modelProvider": "fixture",
+          "serviceTier": null,
+          "disabledPluginIds": [],
+          "cwd": "/fixture/project",
+          "runtimeWorkspaceRoots": [
+            "/fixture/project"
+          ],
+          "instructionSources": [],
+          "approvalPolicy": "never",
+          "approvalsReviewer": "user",
+          "sandbox": {
+            "type": "readOnly",
+            "networkAccess": false
+          },
+          "activePermissionProfile": null,
+          "reasoningEffort": null,
+          "multiAgentMode": "explicitRequestOnly"
+        }
+      },
+      {
+        "method": "thread/started",
+        "params": {
+          "thread": {
+            "id": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+            "environments": [
+              {
+                "environmentId": "local",
+                "cwd": "/fixture/project",
+                "runtimeWorkspaceRoots": [
+                  "/fixture/project"
+                ]
+              }
+            ],
+            "extra": null,
+            "sessionId": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+            "forkedFromId": null,
+            "parentThreadId": null,
+            "preview": "",
+            "ephemeral": false,
+            "section": null,
+            "sectionEnteredAt": null,
+            "projectId": null,
+            "historyMode": "paginated",
+            "modelProvider": "fixture",
+            "model": "fixture-model",
+            "reasoningEffort": null,
+            "createdAt": 1793972448,
+            "updatedAt": 1793972448,
+            "recencyAt": 1793972448,
+            "status": {
+              "type": "idle"
+            },
+            "path": "/fixture/codex/sessions/2026/11/06/rollout-2026-11-06T14-40-48-01a1b117-2e02-7d80-a85d-97bee9f44115.jsonl",
+            "cwd": "/fixture/project",
+            "cliVersion": "0.166.0",
+            "originator": "gudo_fixture",
+            "source": "vscode",
+            "canAcceptDirectInput": true,
+            "threadSource": null,
+            "agentNickname": null,
+            "agentRole": null,
+            "gitInfo": null,
+            "name": null,
+            "daybreakEnabled": null,
+            "turns": []
+          }
+        },
+        "emittedAtMs": 1793972448778
+      },
+      {
+        "method": "warning",
+        "params": {
+          "threadId": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+          "message": "Model metadata for `fixture-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."
+        },
+        "emittedAtMs": 1793972448782
+      },
+      {
+        "id": 3,
+        "result": {
+          "turn": {
+            "id": "01a1b117-2e0c-7c83-8bc4-97ecf04b9ea7",
+            "rootTurnId": "01a1b117-2e0c-7c83-8bc4-97ecf04b9ea7",
+            "items": [],
+            "itemsView": "notLoaded",
+            "status": "inProgress",
+            "error": null,
+            "startedAt": null,
+            "completedAt": null,
+            "durationMs": null
+          }
+        }
+      },
+      {
+        "method": "thread/status/changed",
+        "params": {
+          "threadId": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+          "status": {
+            "type": "active",
+            "activeFlags": []
+          }
+        },
+        "emittedAtMs": 1793972448791
+      },
+      {
+        "method": "turn/started",
+        "params": {
+          "threadId": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+          "turn": {
+            "id": "01a1b117-2e0c-7c83-8bc4-97ecf04b9ea7",
+            "rootTurnId": "01a1b117-2e0c-7c83-8bc4-97ecf04b9ea7",
+            "items": [],
+            "itemsView": "notLoaded",
+            "status": "inProgress",
+            "error": null,
+            "startedAt": 1793972448,
+            "completedAt": null,
+            "durationMs": null
+          }
+        },
+        "emittedAtMs": 1793972448791
+      },
+      {
+        "method": "item/started",
+        "params": {
+          "item": {
+            "type": "userMessage",
+            "id": "01a1b117-2e1c-7812-93c4-dc8d97b80e4f",
+            "clientId": null,
+            "content": [
+              {
+                "type": "text",
+                "text": "Reply with a short fixture sentence.",
+                "text_elements": []
+              }
+            ],
+            "startedAtMs": 1793972448797,
+            "completedAtMs": null
+          },
+          "threadId": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+          "turnId": "01a1b117-2e0c-7c83-8bc4-97ecf04b9ea7",
+          "startedAtMs": 1793972448797
+        },
+        "emittedAtMs": 1793972448797
+      },
+      {
+        "method": "item/completed",
+        "params": {
+          "item": {
+            "type": "userMessage",
+            "id": "01a1b117-2e1c-7812-93c4-dc8d97b80e4f",
+            "clientId": null,
+            "content": [
+              {
+                "type": "text",
+                "text": "Reply with a short fixture sentence.",
+                "text_elements": []
+              }
+            ],
+            "startedAtMs": 1793972448797,
+            "completedAtMs": 1793972448797
+          },
+          "threadId": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+          "turnId": "01a1b117-2e0c-7c83-8bc4-97ecf04b9ea7",
+          "completedAtMs": 1793972448797
+        },
+        "emittedAtMs": 1793972448798
+      },
+      {
+        "method": "thread/goal/cleared",
+        "params": {
+          "threadId": "01a1b117-2e02-7d80-a85d-97bee9f44115"
+        },
+        "emittedAtMs": 1793972448804
+      },
+      {
+        "method": "item/started",
+        "params": {
+          "item": {
+            "type": "agentMessage",
+            "id": "msg_fixture",
+            "text": "",
+            "phase": null,
+            "memoryCitation": null,
+            "delivery": null,
+            "questions": null,
+            "startedAtMs": 1793972449855,
+            "completedAtMs": null
+          },
+          "threadId": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+          "turnId": "01a1b117-2e0c-7c83-8bc4-97ecf04b9ea7",
+          "startedAtMs": 1793972449855
+        },
+        "emittedAtMs": 1793972449855
+      },
+      {
+        "method": "item/agentMessage/delta",
+        "params": {
+          "threadId": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+          "turnId": "01a1b117-2e0c-7c83-8bc4-97ecf04b9ea7",
+          "itemId": "msg_fixture",
+          "delta": "A same-process "
+        },
+        "emittedAtMs": 1793972449903
+      },
+      {
+        "method": "item/agentMessage/delta",
+        "params": {
+          "threadId": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+          "turnId": "01a1b117-2e0c-7c83-8bc4-97ecf04b9ea7",
+          "itemId": "msg_fixture",
+          "delta": "live mirror.\n"
+        },
+        "emittedAtMs": 1793972449952
+      },
+      {
+        "method": "item/completed",
+        "params": {
+          "item": {
+            "type": "agentMessage",
+            "id": "msg_fixture",
+            "text": "A same-process live mirror.\n",
+            "phase": null,
+            "memoryCitation": null,
+            "delivery": null,
+            "questions": null,
+            "startedAtMs": 1793972449855,
+            "completedAtMs": 1793972450002
+          },
+          "threadId": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+          "turnId": "01a1b117-2e0c-7c83-8bc4-97ecf04b9ea7",
+          "completedAtMs": 1793972450002
+        },
+        "emittedAtMs": 1793972450004
+      },
+      {
+        "method": "thread/tokenUsage/updated",
+        "params": {
+          "threadId": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+          "turnId": "01a1b117-2e0c-7c83-8bc4-97ecf04b9ea7",
+          "tokenUsage": {
+            "total": {
+              "totalTokens": 20,
+              "inputTokens": 12,
+              "cachedInputTokens": 0,
+              "cacheWriteInputTokens": 0,
+              "outputTokens": 8,
+              "reasoningOutputTokens": 0
+            },
+            "last": {
+              "totalTokens": 20,
+              "inputTokens": 12,
+              "cachedInputTokens": 0,
+              "cacheWriteInputTokens": 0,
+              "outputTokens": 8,
+              "reasoningOutputTokens": 0
+            },
+            "modelContextWindow": 258400
+          }
+        },
+        "emittedAtMs": 1793972450055
+      },
+      {
+        "method": "account/rateLimits/updated",
+        "params": {
+          "rateLimits": {
+            "limitId": "codex",
+            "limitName": null,
+            "normalModelSlug": null,
+            "primary": null,
+            "secondary": null,
+            "credits": null,
+            "individualLimit": null,
+            "spendControlReached": null,
+            "planType": null,
+            "rateLimitReachedType": null
+          }
+        },
+        "emittedAtMs": 1793972450055
+      },
+      {
+        "method": "thread/readState/changed",
+        "params": {
+          "threadId": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+          "readState": {
+            "firstUnread": {
+              "type": "turn",
+              "turnId": "01a1b117-2e0c-7c83-8bc4-97ecf04b9ea7"
+            },
+            "revision": "0e431339-6d3c-481d-9684-70a9e79b2808"
+          }
+        },
+        "emittedAtMs": 1793972450061
+      },
+      {
+        "method": "thread/status/changed",
+        "params": {
+          "threadId": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+          "status": {
+            "type": "idle"
+          }
+        },
+        "emittedAtMs": 1793972450061
+      },
+      {
+        "method": "turn/completed",
+        "params": {
+          "threadId": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+          "turn": {
+            "id": "01a1b117-2e0c-7c83-8bc4-97ecf04b9ea7",
+            "rootTurnId": "01a1b117-2e0c-7c83-8bc4-97ecf04b9ea7",
+            "items": [
+              {
+                "type": "agentMessage",
+                "id": "msg_fixture",
+                "text": "A same-process live mirror.\n",
+                "phase": null,
+                "memoryCitation": null,
+                "delivery": null,
+                "questions": null,
+                "startedAtMs": 1793972449855,
+                "completedAtMs": 1793972450002
+              }
+            ],
+            "itemsView": "summary",
+            "status": "completed",
+            "error": null,
+            "startedAt": 1793972448,
+            "completedAt": 1793972450,
+            "durationMs": 1275
+          }
+        },
+        "emittedAtMs": 1793972450061
+      },
+      {
+        "method": "deprecationNotice",
+        "params": {
+          "summary": "Full-history hydration is deprecated for paginated threads; omit `includeTurns` or set it to `false`, then page with `thread/turns/list` and `thread/items/list`.",
+          "details": null
+        },
+        "emittedAtMs": 1793972450167
+      },
+      {
+        "id": 4,
+        "result": {
+          "thread": {
+            "id": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+            "environments": [
+              {
+                "environmentId": "local",
+                "cwd": "/fixture/project",
+                "runtimeWorkspaceRoots": [
+                  "/fixture/project"
+                ]
+              }
+            ],
+            "extra": null,
+            "sessionId": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+            "forkedFromId": null,
+            "parentThreadId": null,
+            "preview": "Reply with a short fixture sentence.",
+            "ephemeral": false,
+            "section": null,
+            "sectionEnteredAt": null,
+            "projectId": null,
+            "historyMode": "paginated",
+            "modelProvider": "fixture",
+            "model": "fixture-model",
+            "reasoningEffort": null,
+            "createdAt": 1793972448,
+            "updatedAt": 1793972450,
+            "recencyAt": 1793972448,
+            "status": {
+              "type": "idle"
+            },
+            "path": "/fixture/codex/sessions/2026/11/06/rollout-2026-11-06T14-40-48-01a1b117-2e02-7d80-a85d-97bee9f44115.jsonl",
+            "cwd": "/fixture/project",
+            "cliVersion": "0.166.0",
+            "originator": "gudo_fixture",
+            "source": "vscode",
+            "canAcceptDirectInput": true,
+            "threadSource": null,
+            "agentNickname": null,
+            "agentRole": null,
+            "gitInfo": null,
+            "name": null,
+            "daybreakEnabled": null,
+            "turns": [
+              {
+                "id": "01a1b117-2e0c-7c83-8bc4-97ecf04b9ea7",
+                "rootTurnId": "01a1b117-2e0c-7c83-8bc4-97ecf04b9ea7",
+                "items": [
+                  {
+                    "type": "userMessage",
+                    "id": "01a1b117-2e1c-7812-93c4-dc8d97b80e4f",
+                    "clientId": null,
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "Reply with a short fixture sentence.",
+                        "text_elements": []
+                      }
+                    ],
+                    "startedAtMs": 1793972448797,
+                    "completedAtMs": 1793972448797
+                  },
+                  {
+                    "type": "agentMessage",
+                    "id": "msg_fixture",
+                    "text": "A same-process live mirror.\n",
+                    "phase": null,
+                    "memoryCitation": null,
+                    "delivery": null,
+                    "questions": null,
+                    "startedAtMs": 1793972449855,
+                    "completedAtMs": 1793972450002
+                  }
+                ],
+                "itemsView": "full",
+                "status": "completed",
+                "error": null,
+                "startedAt": 1793972448,
+                "completedAt": 1793972450,
+                "durationMs": 1275
+              }
+            ]
+          },
+          "readState": {
+            "firstUnread": {
+              "type": "turn",
+              "turnId": "01a1b117-2e0c-7c83-8bc4-97ecf04b9ea7"
+            },
+            "revision": "0e431339-6d3c-481d-9684-70a9e79b2808"
+          }
+        }
+      }
+    ],
+    [
+      {
+        "id": 1,
+        "result": {
+          "userAgent": "gudo_fixture/0.166.0 (Mac OS 26.6.0; arm64) xterm-256color (gudo_fixture; 0.0.0)",
+          "codexHome": "/fixture/codex",
+          "platformFamily": "unix",
+          "platformOs": "macos"
+        }
+      },
+      {
+        "method": "remoteControl/status/changed",
+        "params": {
+          "status": "disabled",
+          "serverName": "fixture-host",
+          "installationId": "fe4094fe-ff44-4a5e-b114-93ec9498a913",
+          "environmentId": null
+        },
+        "emittedAtMs": 1793972448768
+      },
+      {
+        "method": "thread/started",
+        "params": {
+          "thread": {
+            "id": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+            "environments": [
+              {
+                "environmentId": "local",
+                "cwd": "/fixture/project",
+                "runtimeWorkspaceRoots": [
+                  "/fixture/project"
+                ]
+              }
+            ],
+            "extra": null,
+            "sessionId": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+            "forkedFromId": null,
+            "parentThreadId": null,
+            "preview": "",
+            "ephemeral": false,
+            "section": null,
+            "sectionEnteredAt": null,
+            "projectId": null,
+            "historyMode": "paginated",
+            "modelProvider": "fixture",
+            "model": "fixture-model",
+            "reasoningEffort": null,
+            "createdAt": 1793972448,
+            "updatedAt": 1793972448,
+            "recencyAt": 1793972448,
+            "status": {
+              "type": "idle"
+            },
+            "path": "/fixture/codex/sessions/2026/11/06/rollout-2026-11-06T14-40-48-01a1b117-2e02-7d80-a85d-97bee9f44115.jsonl",
+            "cwd": "/fixture/project",
+            "cliVersion": "0.166.0",
+            "originator": "gudo_fixture",
+            "source": "vscode",
+            "canAcceptDirectInput": true,
+            "threadSource": null,
+            "agentNickname": null,
+            "agentRole": null,
+            "gitInfo": null,
+            "name": null,
+            "daybreakEnabled": null,
+            "turns": []
+          }
+        },
+        "emittedAtMs": 1793972448778
+      },
+      {
+        "method": "thread/status/changed",
+        "params": {
+          "threadId": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+          "status": {
+            "type": "active",
+            "activeFlags": []
+          }
+        },
+        "emittedAtMs": 1793972448791
+      },
+      {
+        "method": "deprecationNotice",
+        "params": {
+          "summary": "Full-history hydration is deprecated for paginated threads; use `excludeTurns: true`, then page with `thread/turns/list` and `thread/items/list`.",
+          "details": null
+        },
+        "emittedAtMs": 1793972448802
+      },
+      {
+        "id": 2,
+        "result": {
+          "thread": {
+            "id": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+            "environments": [
+              {
+                "environmentId": "local",
+                "cwd": "/fixture/project",
+                "runtimeWorkspaceRoots": [
+                  "/fixture/project"
+                ]
+              }
+            ],
+            "extra": null,
+            "sessionId": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+            "forkedFromId": null,
+            "parentThreadId": null,
+            "preview": "Reply with a short fixture sentence.",
+            "ephemeral": false,
+            "section": null,
+            "sectionEnteredAt": null,
+            "projectId": null,
+            "historyMode": "paginated",
+            "modelProvider": "fixture",
+            "model": "fixture-model",
+            "reasoningEffort": null,
+            "createdAt": 1793972448,
+            "updatedAt": 1793972448,
+            "recencyAt": 1793972448,
+            "status": {
+              "type": "active",
+              "activeFlags": []
+            },
+            "path": "/fixture/codex/sessions/2026/11/06/rollout-2026-11-06T14-40-48-01a1b117-2e02-7d80-a85d-97bee9f44115.jsonl",
+            "cwd": "/fixture/project",
+            "cliVersion": "0.166.0",
+            "originator": "gudo_fixture",
+            "source": "vscode",
+            "canAcceptDirectInput": true,
+            "threadSource": null,
+            "agentNickname": null,
+            "agentRole": null,
+            "gitInfo": null,
+            "name": null,
+            "daybreakEnabled": null,
+            "turns": [
+              {
+                "id": "01a1b117-2e0c-7c83-8bc4-97ecf04b9ea7",
+                "rootTurnId": "01a1b117-2e0c-7c83-8bc4-97ecf04b9ea7",
+                "items": [
+                  {
+                    "type": "userMessage",
+                    "id": "01a1b117-2e1c-7812-93c4-dc8d97b80e4f",
+                    "clientId": null,
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "Reply with a short fixture sentence.",
+                        "text_elements": []
+                      }
+                    ],
+                    "startedAtMs": 1793972448797,
+                    "completedAtMs": 1793972448797
+                  }
+                ],
+                "itemsView": "full",
+                "status": "inProgress",
+                "error": null,
+                "startedAt": 1793972448,
+                "completedAt": null,
+                "durationMs": null
+              }
+            ]
+          },
+          "model": "fixture-model",
+          "modelProvider": "fixture",
+          "serviceTier": null,
+          "disabledPluginIds": [],
+          "cwd": "/fixture/project",
+          "runtimeWorkspaceRoots": [
+            "/fixture/project"
+          ],
+          "instructionSources": [],
+          "approvalPolicy": "never",
+          "approvalsReviewer": "user",
+          "sandbox": {
+            "type": "readOnly",
+            "networkAccess": false
+          },
+          "activePermissionProfile": null,
+          "reasoningEffort": null,
+          "collaborationMode": {
+            "mode": "default",
+            "settings": {
+              "model": "fixture-model",
+              "reasoning_effort": null,
+              "developer_instructions": null
+            }
+          },
+          "multiAgentMode": "explicitRequestOnly",
+          "initialTurnsPage": null,
+          "turnsBackwardsCursor": "{\"requestedThreadId\":\"01a1b117-2e02-7d80-a85d-97bee9f44115\",\"rolloutOrdinal\":1,\"includeAnchor\":true,\"scope\":{\"kind\":\"turns\"}}",
+          "itemsBackwardsCursor": "{\"requestedThreadId\":\"01a1b117-2e02-7d80-a85d-97bee9f44115\",\"rolloutOrdinal\":8,\"includeAnchor\":true,\"scope\":{\"kind\":\"itemsByCreatedAtOrdinal\"}}"
+        }
+      },
+      {
+        "method": "thread/goal/cleared",
+        "params": {
+          "threadId": "01a1b117-2e02-7d80-a85d-97bee9f44115"
+        },
+        "emittedAtMs": 1793972448804
+      },
+      {
+        "method": "item/started",
+        "params": {
+          "item": {
+            "type": "agentMessage",
+            "id": "msg_fixture",
+            "text": "",
+            "phase": null,
+            "memoryCitation": null,
+            "delivery": null,
+            "questions": null,
+            "startedAtMs": 1793972449855,
+            "completedAtMs": null
+          },
+          "threadId": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+          "turnId": "01a1b117-2e0c-7c83-8bc4-97ecf04b9ea7",
+          "startedAtMs": 1793972449855
+        },
+        "emittedAtMs": 1793972449855
+      },
+      {
+        "method": "item/agentMessage/delta",
+        "params": {
+          "threadId": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+          "turnId": "01a1b117-2e0c-7c83-8bc4-97ecf04b9ea7",
+          "itemId": "msg_fixture",
+          "delta": "A same-process "
+        },
+        "emittedAtMs": 1793972449903
+      },
+      {
+        "method": "item/agentMessage/delta",
+        "params": {
+          "threadId": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+          "turnId": "01a1b117-2e0c-7c83-8bc4-97ecf04b9ea7",
+          "itemId": "msg_fixture",
+          "delta": "live mirror.\n"
+        },
+        "emittedAtMs": 1793972449952
+      },
+      {
+        "method": "item/completed",
+        "params": {
+          "item": {
+            "type": "agentMessage",
+            "id": "msg_fixture",
+            "text": "A same-process live mirror.\n",
+            "phase": null,
+            "memoryCitation": null,
+            "delivery": null,
+            "questions": null,
+            "startedAtMs": 1793972449855,
+            "completedAtMs": 1793972450002
+          },
+          "threadId": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+          "turnId": "01a1b117-2e0c-7c83-8bc4-97ecf04b9ea7",
+          "completedAtMs": 1793972450002
+        },
+        "emittedAtMs": 1793972450004
+      },
+      {
+        "method": "thread/tokenUsage/updated",
+        "params": {
+          "threadId": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+          "turnId": "01a1b117-2e0c-7c83-8bc4-97ecf04b9ea7",
+          "tokenUsage": {
+            "total": {
+              "totalTokens": 20,
+              "inputTokens": 12,
+              "cachedInputTokens": 0,
+              "cacheWriteInputTokens": 0,
+              "outputTokens": 8,
+              "reasoningOutputTokens": 0
+            },
+            "last": {
+              "totalTokens": 20,
+              "inputTokens": 12,
+              "cachedInputTokens": 0,
+              "cacheWriteInputTokens": 0,
+              "outputTokens": 8,
+              "reasoningOutputTokens": 0
+            },
+            "modelContextWindow": 258400
+          }
+        },
+        "emittedAtMs": 1793972450055
+      },
+      {
+        "method": "account/rateLimits/updated",
+        "params": {
+          "rateLimits": {
+            "limitId": "codex",
+            "limitName": null,
+            "normalModelSlug": null,
+            "primary": null,
+            "secondary": null,
+            "credits": null,
+            "individualLimit": null,
+            "spendControlReached": null,
+            "planType": null,
+            "rateLimitReachedType": null
+          }
+        },
+        "emittedAtMs": 1793972450055
+      },
+      {
+        "method": "thread/readState/changed",
+        "params": {
+          "threadId": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+          "readState": {
+            "firstUnread": {
+              "type": "turn",
+              "turnId": "01a1b117-2e0c-7c83-8bc4-97ecf04b9ea7"
+            },
+            "revision": "0e431339-6d3c-481d-9684-70a9e79b2808"
+          }
+        },
+        "emittedAtMs": 1793972450061
+      },
+      {
+        "method": "thread/status/changed",
+        "params": {
+          "threadId": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+          "status": {
+            "type": "idle"
+          }
+        },
+        "emittedAtMs": 1793972450061
+      },
+      {
+        "method": "turn/completed",
+        "params": {
+          "threadId": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+          "turn": {
+            "id": "01a1b117-2e0c-7c83-8bc4-97ecf04b9ea7",
+            "rootTurnId": "01a1b117-2e0c-7c83-8bc4-97ecf04b9ea7",
+            "items": [
+              {
+                "type": "agentMessage",
+                "id": "msg_fixture",
+                "text": "A same-process live mirror.\n",
+                "phase": null,
+                "memoryCitation": null,
+                "delivery": null,
+                "questions": null,
+                "startedAtMs": 1793972449855,
+                "completedAtMs": 1793972450002
+              }
+            ],
+            "itemsView": "summary",
+            "status": "completed",
+            "error": null,
+            "startedAt": 1793972448,
+            "completedAt": 1793972450,
+            "durationMs": 1275
+          }
+        },
+        "emittedAtMs": 1793972450061
+      },
+      {
+        "method": "deprecationNotice",
+        "params": {
+          "summary": "Full-history hydration is deprecated for paginated threads; omit `includeTurns` or set it to `false`, then page with `thread/turns/list` and `thread/items/list`.",
+          "details": null
+        },
+        "emittedAtMs": 1793972450171
+      },
+      {
+        "id": 3,
+        "result": {
+          "thread": {
+            "id": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+            "environments": [
+              {
+                "environmentId": "local",
+                "cwd": "/fixture/project",
+                "runtimeWorkspaceRoots": [
+                  "/fixture/project"
+                ]
+              }
+            ],
+            "extra": null,
+            "sessionId": "01a1b117-2e02-7d80-a85d-97bee9f44115",
+            "forkedFromId": null,
+            "parentThreadId": null,
+            "preview": "Reply with a short fixture sentence.",
+            "ephemeral": false,
+            "section": null,
+            "sectionEnteredAt": null,
+            "projectId": null,
+            "historyMode": "paginated",
+            "modelProvider": "fixture",
+            "model": "fixture-model",
+            "reasoningEffort": null,
+            "createdAt": 1793972448,
+            "updatedAt": 1793972450,
+            "recencyAt": 1793972448,
+            "status": {
+              "type": "idle"
+            },
+            "path": "/fixture/codex/sessions/2026/11/06/rollout-2026-11-06T14-40-48-01a1b117-2e02-7d80-a85d-97bee9f44115.jsonl",
+            "cwd": "/fixture/project",
+            "cliVersion": "0.166.0",
+            "originator": "gudo_fixture",
+            "source": "vscode",
+            "canAcceptDirectInput": true,
+            "threadSource": null,
+            "agentNickname": null,
+            "agentRole": null,
+            "gitInfo": null,
+            "name": null,
+            "daybreakEnabled": null,
+            "turns": [
+              {
+                "id": "01a1b117-2e0c-7c83-8bc4-97ecf04b9ea7",
+                "rootTurnId": "01a1b117-2e0c-7c83-8bc4-97ecf04b9ea7",
+                "items": [
+                  {
+                    "type": "userMessage",
+                    "id": "01a1b117-2e1c-7812-93c4-dc8d97b80e4f",
+                    "clientId": null,
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "Reply with a short fixture sentence.",
+                        "text_elements": []
+                      }
+                    ],
+                    "startedAtMs": 1793972448797,
+                    "completedAtMs": 1793972448797
+                  },
+                  {
+                    "type": "agentMessage",
+                    "id": "msg_fixture",
+                    "text": "A same-process live mirror.\n",
+                    "phase": null,
+                    "memoryCitation": null,
+                    "delivery": null,
+                    "questions": null,
+                    "startedAtMs": 1793972449855,
+                    "completedAtMs": 1793972450002
+                  }
+                ],
+                "itemsView": "full",
+                "status": "completed",
+                "error": null,
+                "startedAt": 1793972448,
+                "completedAt": 1793972450,
+                "durationMs": 1275
+              }
+            ]
+          },
+          "readState": {
+            "firstUnread": {
+              "type": "turn",
+              "turnId": "01a1b117-2e0c-7c83-8bc4-97ecf04b9ea7"
+            },
+            "revision": "0e431339-6d3c-481d-9684-70a9e79b2808"
+          }
+        }
+      }
+    ]
+  ]
+}
