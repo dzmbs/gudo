@@ -282,7 +282,10 @@ policy is always `LastInput` for now. Lone focus-in/out reports (`CSI I` / `CSI 
 8-bit CSI) are delivered to the PTY but do not claim its size or update typing presence. Apple pane
 backends also leave the sizing window unchanged when forwarding those reports. Pixel-only
 changes leave the PTY, VT and resize history unchanged, so changing display scale does not send
-SIGWINCH. Pixel metrics are refreshed with the next columns-or-rows change.
+SIGWINCH. Pixel metrics are refreshed with the next columns-or-rows change. Window resize
+bursts settle for 120 ms in the existing per-pane task; there is only one pending request per
+pane. Actual input applies its client's size immediately before writing and cancels any older
+pending resize. Deferred work rechecks its sizing connection and lease before applying.
 
 ### Identity and pairing
 

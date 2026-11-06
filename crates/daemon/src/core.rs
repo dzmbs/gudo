@@ -200,6 +200,14 @@ pub(crate) struct LastTurn {
     pub transcript: Option<PathBuf>,
 }
 
+struct PendingResize {
+    conn: ConnId,
+    principal: PrincipalId,
+    size: PaneSize,
+    due: tokio::time::Instant,
+    ownership_changed: bool,
+}
+
 pub(crate) struct PaneEntry {
     pub pane: Arc<Pane>,
     pub meta: Mutex<MetaState>,
@@ -207,6 +215,9 @@ pub(crate) struct PaneEntry {
     pub agent: Mutex<Option<AgentRuntime>>,
     /// Wakes the pane task when an agent attaches from outside it (a hook), so its timers run.
     pub agent_attached: Notify,
+    /// Serializes request replacement and actual resizes, including input-driven changes.
+    pending_resize: Mutex<Option<PendingResize>>,
+    resize_changed: Notify,
     /// Periodic ticks the pane task has run.
     ticks: AtomicU64,
     task: Mutex<Option<AbortHandle>>,
@@ -953,8 +964,8 @@ impl Core {
         })
     }
 
-    /// Applies `conn`'s size for a pane if the PTY follows that client (it typed last, or no
-    /// one has sized the pane yet). `force` makes `conn` the sizing client (it just typed).
+    /// Queues `conn`'s size if the PTY follows that client. Input-driven changes (`force`)
+    /// take ownership and apply immediately, before the input reaches the PTY.
     pub fn apply_client_size(
         &self,
         entry: &PaneEntry,
@@ -963,20 +974,50 @@ impl Core {
         size: PaneSize,
         force: bool,
     ) {
-        let apply = {
-            let mut meta = lock(&entry.meta);
-            let follows = meta.sized_by.is_none_or(|(sizer, _)| sizer == conn);
-            if follows || force {
-                meta.sized_by = Some((conn, principal));
-            }
-            follows || force
-        };
-        if !apply {
+        let mut pending = lock(&entry.pending_resize);
+        let mut meta = lock(&entry.meta);
+        let follows = meta.sized_by.is_none_or(|(sizer, _)| sizer == conn);
+        if !follows && !force {
             return;
         }
+        let ownership_changed = meta.sized_by != Some((conn, principal))
+            || pending
+                .as_ref()
+                .is_some_and(|request| request.ownership_changed);
+        meta.sized_by = Some((conn, principal));
+        if force {
+            *pending = None;
+            self.resize_pane(entry, size, ownership_changed);
+        } else {
+            *pending = Some(PendingResize {
+                conn,
+                principal,
+                size,
+                ownership_changed,
+                due: tokio::time::Instant::now() + RESIZE_DEBOUNCE,
+            });
+            entry.resize_changed.notify_one();
+        }
+    }
+
+    fn flush_client_size(&self, entry: &PaneEntry) {
+        let mut pending = lock(&entry.pending_resize);
+        let Some(request) = pending.take_if(|request| request.due <= tokio::time::Instant::now())
+        else {
+            return;
+        };
+        let meta = lock(&entry.meta);
+        if meta.sized_by == Some((request.conn, request.principal))
+            && self.mp.may_size(entry.pane.id, request.principal)
+        {
+            self.resize_pane(entry, request.size, request.ownership_changed);
+        }
+    }
+
+    fn resize_pane(&self, entry: &PaneEntry, size: PaneSize, ownership_changed: bool) {
         match entry.pane.resize(size) {
             Ok(changed) => {
-                if changed {
+                if changed || ownership_changed {
                     self.emit(Event::PaneMeta(entry.pane.id));
                 }
             }
@@ -1761,6 +1802,8 @@ impl Core {
             record: Mutex::new(record),
             agent: Mutex::new(agent.map(|(_, _, _, runtime)| runtime)),
             agent_attached: Notify::new(),
+            pending_resize: Mutex::new(None),
+            resize_changed: Notify::new(),
             ticks: AtomicU64::new(0),
             task: Mutex::new(None),
             launched_at: SystemTime::now(),
@@ -1844,6 +1887,8 @@ impl Core {
             record: Mutex::new(record),
             agent: Mutex::new(agent),
             agent_attached: Notify::new(),
+            pending_resize: Mutex::new(None),
+            resize_changed: Notify::new(),
             ticks: AtomicU64::new(0),
             task: Mutex::new(None),
             launched_at: carried.launched_at,
@@ -2192,6 +2237,7 @@ const PANE_ACTIVE: Duration = Duration::from_secs(5);
 /// Title and directory changes reach clients at most this often per pane (the last one always
 /// arrives): a program that sets its title in a loop must not flood every client.
 const META_INTERVAL: Duration = Duration::from_millis(50);
+const RESIZE_DEBOUNCE: Duration = Duration::from_millis(120);
 
 /// Per-pane task: turns VT events, termios changes, agent timers and process exit into
 /// metadata, echo hints and agent events.
@@ -2214,7 +2260,12 @@ async fn pane_task(core: Arc<Core>, entry: Arc<PaneEntry>, mut vt_events: mpsc::
     refresh_hint(&core, &entry);
     loop {
         let ticking = Instant::now() < active_until || lock(&entry.agent).is_some();
+        let resize_due = lock(&entry.pending_resize)
+            .as_ref()
+            .map(|request| request.due);
         tokio::select! {
+            () = entry.resize_changed.notified() => {}
+            () = sleep_until_some(resize_due) => core.flush_client_size(&entry),
             event = vt_events.recv() => {
                 let Some(event) = event else { break };
                 active_until = Instant::now() + PANE_ACTIVE;

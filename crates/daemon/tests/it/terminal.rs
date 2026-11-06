@@ -1,6 +1,8 @@
 //! Terminal completeness end to end: key, mouse and paste encoding per the program's modes,
 //! scrollback history paging, and daemon-side search and links.
 
+use std::time::Duration;
+
 use client_core::proto::{
     CaseMode, FullKeyEvent, KeyAction, LayoutOp, LinkKind, MouseAction, MouseButton, MouseEvent,
     OpOutcome, PaneLaunch, PaneSize, SearchMode, SearchQuery,
@@ -92,6 +94,96 @@ async fn focus_reports_do_not_replace_the_other_clients_terminal_size() {
             desktop.text(pane)
         );
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_burst_of_window_sizes_emits_one_final_grid_resize() {
+    let directory = tempfile::tempdir().unwrap();
+    let daemon = start(directory.path()).await;
+    let mut client = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = client.attach_and_follow().await;
+    client
+        .until("initial size", |client| {
+            client
+                .metas
+                .get(&pane)
+                .is_some_and(|meta| meta.size.cols == 100)
+        })
+        .await;
+    for cols in 120..140 {
+        client.client.resize(
+            pane,
+            PaneSize {
+                cols,
+                rows: 30,
+                width_px: 0,
+                height_px: 0,
+            },
+        );
+    }
+    client
+        .until("final resize in stream", |client| {
+            client
+                .log
+                .iter()
+                .any(|event| event.starts_with("PaneResized") && event.contains("cols: 139,"))
+        })
+        .await;
+    let resize_events = client
+        .log
+        .iter()
+        .filter(|event| event.starts_with("PaneResized") && !event.contains("cols: 100,"))
+        .count();
+    assert_eq!(resize_events, 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn input_takeover_cancels_the_previous_windows_deferred_resize() {
+    let directory = tempfile::tempdir().unwrap();
+    let daemon = start(directory.path()).await;
+    let mut desktop = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = desktop.attach_and_follow().await;
+    desktop.type_line(pane, "stty raw -echo; printf '%s%s\\r\\n' REA DY; dd bs=1 count=5 >/dev/null 2>&1; printf '\\r\\n%s%s ' FI NAL; stty size; exec /bin/sh");
+    desktop.wait_text(pane, "READY").await;
+    let mut phone = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    phone.attach_and_follow().await;
+    phone.client.resize(
+        pane,
+        PaneSize {
+            cols: 45,
+            rows: 20,
+            width_px: 0,
+            height_px: 0,
+        },
+    );
+    phone.op(LayoutOp::Focus { pane_id: pane }).await;
+    desktop.client.resize(
+        pane,
+        PaneSize {
+            cols: 140,
+            rows: 40,
+            width_px: 0,
+            height_px: 0,
+        },
+    );
+    desktop.op(LayoutOp::Focus { pane_id: pane }).await;
+    phone.client.send_input(pane, b"ab".to_vec());
+    phone
+        .until("input changed the sizing client", |client| {
+            client
+                .metas
+                .get(&pane)
+                .is_some_and(|meta| meta.size.cols == 45)
+        })
+        .await;
+    tokio::time::sleep(Duration::from_millis(180)).await;
+    phone.client.send_input(pane, b"\x1b[I".to_vec());
+    desktop.wait_text(pane, "FINAL ").await;
+    assert!(
+        desktop.text(pane).contains("FINAL 20 45"),
+        "a deferred resize replaced the input client's grid: {}",
+        desktop.text(pane)
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
