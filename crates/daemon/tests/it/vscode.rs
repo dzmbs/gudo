@@ -503,13 +503,30 @@ async fn forward_io_splices_a_stream_onto_a_host_port() {
     let (_state, state) = canonical_tempdir();
     let echo = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = echo.local_addr().unwrap().port();
-    tokio::spawn(async move {
-        let (mut socket, _) = echo.accept().await.unwrap();
-        socket.write_all(b"SSH-2.0-fake\r\n").await.unwrap();
-        let mut received = vec![0; 64];
-        let read = socket.read(&mut received).await.unwrap();
-        socket.write_all(&received[..read]).await.unwrap();
+    let server = tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = echo.accept().await.unwrap();
+            if socket.write_all(b"SSH-2.0-fake\r\n").await.is_err() {
+                continue;
+            }
+            let mut received = [0; 5];
+            if socket.read_exact(&mut received[..1]).await.is_err() || received[0] != b'h' {
+                continue;
+            }
+            socket.read_exact(&mut received[1..]).await.unwrap();
+            assert_eq!(&received, b"hello");
+            socket.write_all(&received).await.unwrap();
+            break;
+        }
     });
+    // Pane discovery can probe any listening port before the forward connects.
+    let mut probe = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    probe.write_all(b"HEAD / HTTP/1.0\r\n\r\n").await.unwrap();
+    let mut banner = [0u8; 14];
+    probe.read_exact(&mut banner).await.unwrap();
+    drop(probe);
     let daemon = start_with(&state, |_| {}).await;
     let client = connected(&daemon).await;
     let (ours, theirs) = tokio::io::duplex(1024);
@@ -536,6 +553,7 @@ async fn forward_io_splices_a_stream_onto_a_host_port() {
     .await
     .unwrap();
     spliced.unwrap();
+    server.await.unwrap();
     drop(client);
     daemon.shutdown().await;
 }
