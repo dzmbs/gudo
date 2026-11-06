@@ -33,7 +33,11 @@ environment when the agent filters its subprocess environment. Only that pane's 
 when available. Existing hooks, status lines, permissions and unrelated MCP servers remain;
 Codex's notification shim forwards the payload to the user's notification command. A foreign
 server with the same name is left alone. Malformed or symbolic-link configurations are left
-alone and reported in the helper's log.
+alone and reported in the helper's log. Registration removes recognized Gudo hook and MCP
+entries whose absolute hook command no longer exists, including stale entries from the other
+flavour. Relative commands, custom shell suffixes and unrelated registrations remain. Live
+registrations from the other flavour remain; Codex notification chains retain one wrapper per
+flavour and forward the user's original notification command once.
 
 Wire types live in `proto`; see its crate docs for the frame format and compatibility rules.
 

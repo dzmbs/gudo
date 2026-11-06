@@ -100,8 +100,54 @@ fn is_hook_program(program: &str) -> bool {
 
 fn is_owned_hook(command: &str) -> bool {
     hook_launcher::first_shell_word(command).is_some_and(|(program, arguments)| {
-        is_hook_program(&program) && arguments.trim_start().starts_with("claude ")
+        is_hook_program(&program) && is_claude_hook_arguments(arguments)
     })
+}
+
+fn is_any_hook_program(program: &str) -> bool {
+    Path::new(program).file_name().is_some_and(|name| {
+        name == brand::RELEASE_HOOK_BIN
+            || name == brand::DEV_HOOK_BIN
+            || name == brand::legacy::HOOK_BIN
+    })
+}
+
+fn is_missing_hook_program(program: &str) -> bool {
+    Path::new(program).is_absolute()
+        && is_any_hook_program(program)
+        && std::fs::metadata(program).is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
+}
+
+fn is_owned_server_name(name: &str) -> bool {
+    brand::MCP_SERVER_NAMES.contains(&name) || agents::legacy_mcp_server_names().contains(&name)
+}
+
+fn is_claude_hook_arguments(arguments: &str) -> bool {
+    let mut words = arguments.split_whitespace();
+    words.next() == Some("claude")
+        && words.next().is_some_and(|event| {
+            event
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        })
+        && words.next().is_none()
+}
+
+fn is_stale_claude_hook(command: &str) -> bool {
+    hook_launcher::first_shell_word(command).is_some_and(|(program, arguments)| {
+        is_claude_hook_arguments(arguments) && is_missing_hook_program(&program)
+    })
+}
+
+fn remove_hook_handlers(groups: &mut Vec<Value>, removes: fn(&str) -> bool) {
+    groups.retain_mut(|group| {
+        let Some(handlers) = group.get_mut("hooks").and_then(Value::as_array_mut) else {
+            return true;
+        };
+        let original_count = handlers.len();
+        handlers.retain(|handler| !handler["command"].as_str().is_some_and(removes));
+        handlers.len() == original_count || !handlers.is_empty()
+    });
 }
 
 fn install_claude_settings(path: &Path, context: &agents::LaunchContext) -> io::Result<()> {
@@ -113,19 +159,15 @@ fn install_claude_settings(path: &Path, context: &agents::LaunchContext) -> io::
     let hooks = settings["hooks"]
         .as_object_mut()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "hooks must be an object"))?;
+    for groups in hooks.values_mut().filter_map(Value::as_array_mut) {
+        remove_hook_handlers(groups, is_stale_claude_hook);
+    }
     for (event, generated_groups) in generated["hooks"].as_object().into_iter().flatten() {
         let groups = hooks.entry(event.clone()).or_insert_with(|| json!([]));
         let groups = groups.as_array_mut().ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidData, "hook groups must be an array")
         })?;
-        groups.retain_mut(|group| {
-            let Some(handlers) = group.get_mut("hooks").and_then(Value::as_array_mut) else {
-                return true;
-            };
-            let original_count = handlers.len();
-            handlers.retain(|handler| !handler["command"].as_str().is_some_and(is_owned_hook));
-            handlers.len() == original_count || !handlers.is_empty()
-        });
+        remove_hook_handlers(groups, is_owned_hook);
         groups.extend(generated_groups.as_array().into_iter().flatten().cloned());
     }
     let contents = serde_json::to_string_pretty(&settings).map_err(io::Error::other)?;
@@ -135,12 +177,32 @@ fn install_claude_settings(path: &Path, context: &agents::LaunchContext) -> io::
 fn install_claude_server(path: &Path, launcher_path: &Path) -> io::Result<()> {
     let (original, mut settings) = read_json_config(path)?;
     let name = agents::mcp_server_name();
+    let mut removed_stale_server = false;
+    if let Some(servers) = settings
+        .get_mut("mcpServers")
+        .and_then(Value::as_object_mut)
+    {
+        servers.retain(|name, server| {
+            let removes = is_owned_server_name(name)
+                && server["args"].get(0).and_then(Value::as_str) == Some("mcp")
+                && server["command"]
+                    .as_str()
+                    .is_some_and(is_missing_hook_program);
+            removed_stale_server |= removes;
+            !removes
+        });
+    }
     if let Some(server) = settings
         .get("mcpServers")
         .and_then(|servers| servers.get(&name))
         && !server["command"].as_str().is_some_and(is_hook_program)
     {
-        return Ok(());
+        return if removed_stale_server {
+            let contents = serde_json::to_string_pretty(&settings).map_err(io::Error::other)?;
+            write_config(path, &original, &contents)
+        } else {
+            Ok(())
+        };
     }
     if settings.get("mcpServers").is_none() {
         settings["mcpServers"] = json!({});
@@ -180,6 +242,31 @@ fn install_codex_config(path: &Path, launcher_path: &Path) -> io::Result<()> {
         ));
     }
     let name = agents::mcp_server_name();
+    if let Some(servers) = document
+        .get_mut("mcp_servers")
+        .and_then(toml_edit::Item::as_table_like_mut)
+    {
+        let stale: Vec<String> = servers
+            .iter()
+            .filter(|(name, server)| {
+                is_owned_server_name(name)
+                    && server
+                        .get("args")
+                        .and_then(toml_edit::Item::as_array)
+                        .and_then(|args| args.get(0))
+                        .and_then(toml_edit::Value::as_str)
+                        == Some("mcp")
+                    && server
+                        .get("command")
+                        .and_then(toml_edit::Item::as_str)
+                        .is_some_and(is_missing_hook_program)
+            })
+            .map(|(name, _)| name.to_owned())
+            .collect();
+        for name in stale {
+            servers.remove(&name);
+        }
+    }
     let has_foreign_server = document
         .get("mcp_servers")
         .and_then(|servers| servers.get(&name))
@@ -206,24 +293,8 @@ fn install_codex_config(path: &Path, launcher_path: &Path) -> io::Result<()> {
         })
         .unwrap_or_else(|| Some(Vec::new()))
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "notify must contain strings"))?;
-    let original_notify = if existing_notify
-        .first()
-        .is_some_and(|program| is_hook_program(program))
-    {
-        if existing_notify
-            .get(1)
-            .is_some_and(|argument| argument == "codex-notify")
-        {
-            existing_notify
-                .get(2)
-                .cloned()
-                .unwrap_or_else(|| "[]".into())
-        } else {
-            "[]".into()
-        }
-    } else {
-        serde_json::to_string(&existing_notify).map_err(io::Error::other)?
-    };
+    let original_notify = serde_json::to_string(&normalize_notification(existing_notify)?)
+        .map_err(io::Error::other)?;
     let notification: toml_edit::Array = [
         launcher_path.to_string_lossy().into_owned(),
         "codex-notify".into(),
@@ -235,12 +306,212 @@ fn install_codex_config(path: &Path, launcher_path: &Path) -> io::Result<()> {
     write_config(path, &original, &document.to_string())
 }
 
+fn normalize_notification(mut arguments: Vec<String>) -> io::Result<Vec<String>> {
+    let mut preserved_wrappers = Vec::new();
+    let mut depth = 0;
+    while let Some(program) = arguments
+        .first()
+        .filter(|program| is_any_hook_program(program))
+    {
+        if depth == 64 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "notification chain is too deep",
+            ));
+        }
+        depth += 1;
+        let removes = is_hook_program(program) || is_missing_hook_program(program);
+        if arguments.len() == 3 && arguments[1] == "codex-notify" {
+            let original = serde_json::from_str(&arguments[2]).map_err(io::Error::other)?;
+            if !removes {
+                preserved_wrappers.push(arguments.remove(0));
+            }
+            arguments = original;
+        } else {
+            if removes
+                && arguments.get(1).is_some_and(|argument| argument == "codex")
+                && arguments
+                    .get(2)
+                    .is_some_and(|argument| argument == "notify")
+            {
+                arguments.clear();
+            }
+            break;
+        }
+    }
+    for program in preserved_wrappers.into_iter().rev() {
+        let original = serde_json::to_string(&arguments).map_err(io::Error::other)?;
+        arguments = vec![program, "codex-notify".into(), original];
+    }
+    Ok(arguments)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn install_agent_integration(config: &Config) -> io::Result<()> {
         super::install_shared_agent_integration(config)
+    }
+
+    fn private_config(directory: &Path) -> Config {
+        let home = directory.join("home");
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        std::fs::create_dir_all(home.join(".codex")).unwrap();
+        let mut config = Config::new(directory.join("state"));
+        config.pane_env = vec![
+            ("HOME".into(), home.to_string_lossy().into_owned()),
+            (
+                agents::CLAUDE_DIR_VAR.into(),
+                home.join(".claude").to_string_lossy().into_owned(),
+            ),
+            (
+                agents::CODEX_DIR_VAR.into(),
+                home.join(".codex").to_string_lossy().into_owned(),
+            ),
+        ];
+        config.agent_integration = crate::AgentIntegration::Install;
+        config
+    }
+
+    fn other_flavour() -> (&'static str, &'static str) {
+        if brand::IS_DEV {
+            (brand::RELEASE_HOOK_BIN, brand::MCP_SERVER_NAMES[0])
+        } else {
+            (brand::DEV_HOOK_BIN, brand::MCP_SERVER_NAMES[1])
+        }
+    }
+
+    fn notify_wrapper(program: &Path, original: &[String]) -> Vec<String> {
+        vec![
+            program.to_string_lossy().into_owned(),
+            "codex-notify".into(),
+            serde_json::to_string(original).unwrap(),
+        ]
+    }
+
+    #[test]
+    fn stale_cleanup_preserves_relative_commands_and_custom_shell_suffixes() {
+        let directory = tempfile::tempdir().unwrap();
+        let program = directory.path().join(brand::HOOK_BIN);
+        let program = agents::shell_quote(&program.to_string_lossy());
+        assert!(is_stale_claude_hook(&format!("{program} claude Stop")));
+        assert!(!is_stale_claude_hook(&format!(
+            "{} claude Stop",
+            brand::HOOK_BIN
+        )));
+        assert!(!is_stale_claude_hook(&format!(
+            "{program} claude Stop; custom-notify"
+        )));
+        assert!(!is_owned_hook(&format!(
+            "{program} claude Stop && custom-notify"
+        )));
+    }
+
+    #[test]
+    fn startup_removes_missing_owned_entries_without_touching_live_or_foreign_entries() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = private_config(directory.path());
+        let (other_hook, other_server) = other_flavour();
+        let missing = directory.path().join("gone/bin").join(other_hook);
+        let live = directory.path().join("live").join(other_hook);
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        std::fs::write(&live, "live hook fixture").unwrap();
+        let settings_path = config.home().join(".claude/settings.json");
+        let handlers = json!({"hooks":{"RetiredEvent":[{"hooks":[
+            {"type":"command","command":format!("{} claude Stop", agents::shell_quote(&missing.to_string_lossy()))},
+            {"type":"command","command":format!("{} claude Stop", agents::shell_quote(&live.to_string_lossy()))},
+            {"type":"command","command":"my-missing-hook claude Stop"}
+        ]}]}});
+        std::fs::write(&settings_path, handlers.to_string()).unwrap();
+        let server_path = config.home().join(".claude/.claude.json");
+        std::fs::write(
+            &server_path,
+            json!({"mcpServers":{
+                other_server:{"command":missing,"args":["mcp"]},
+                "mine":{"command":missing,"args":["mcp"]}
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let notify = notify_wrapper(&missing, &["my-notify".into()]);
+        let codex_path = config.home().join(".codex/config.toml");
+        std::fs::write(&codex_path, format!("# preserve\nnotify = {}\n\n[mcp_servers.{other_server}]\ncommand = {}\nargs = ['mcp']\n\n[mcp_servers.mine]\ncommand = 'my-server'\n", serde_json::to_string(&notify).unwrap(), serde_json::to_string(&missing).unwrap())).unwrap();
+        super::install_agent_integration(&config).unwrap();
+        let settings: Value =
+            serde_json::from_str(&std::fs::read_to_string(settings_path).unwrap()).unwrap();
+        let retained = settings["hooks"]["RetiredEvent"][0]["hooks"]
+            .as_array()
+            .unwrap();
+        assert_eq!(retained.len(), 2);
+        assert_eq!(
+            retained[0],
+            handlers["hooks"]["RetiredEvent"][0]["hooks"][1]
+        );
+        assert_eq!(
+            retained[1],
+            handlers["hooks"]["RetiredEvent"][0]["hooks"][2]
+        );
+        let servers: Value =
+            serde_json::from_str(&std::fs::read_to_string(server_path).unwrap()).unwrap();
+        assert!(servers["mcpServers"].get(other_server).is_none());
+        assert_eq!(servers["mcpServers"]["mine"]["command"], json!(missing));
+        let codex_text = std::fs::read_to_string(codex_path).unwrap();
+        assert!(codex_text.starts_with("# preserve\n"));
+        let codex: toml::Table = codex_text.parse().unwrap();
+        assert!(codex["mcp_servers"].get(other_server).is_none());
+        assert_eq!(
+            codex["mcp_servers"]["mine"]["command"].as_str(),
+            Some("my-server")
+        );
+        let original: Vec<String> =
+            serde_json::from_str(codex["notify"][2].as_str().unwrap()).unwrap();
+        assert_eq!(original, ["my-notify"]);
+    }
+
+    #[test]
+    fn alternating_flavours_keep_one_notification_wrapper_each_and_preserve_live_servers() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = private_config(directory.path());
+        let (other_hook, other_server) = other_flavour();
+        let live = directory.path().join("live").join(other_hook);
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        std::fs::write(&live, "live hook fixture").unwrap();
+        let current = hook_launcher::path(&config.state_dir);
+        let user_notify = vec!["my-notify".into(), "argument with spaces".into()];
+        let previous = notify_wrapper(&live, &notify_wrapper(&current, &user_notify));
+        let codex_path = config.home().join(".codex/config.toml");
+        std::fs::write(
+            &codex_path,
+            format!(
+                "notify = {}\n\n[mcp_servers.{other_server}]\ncommand = {}\nargs = ['mcp']\n",
+                serde_json::to_string(&previous).unwrap(),
+                serde_json::to_string(&live).unwrap()
+            ),
+        )
+        .unwrap();
+        let claude_path = config.home().join(".claude/.claude.json");
+        let other_registration = json!({"command":live,"args":["mcp"],"env":{"CUSTOM":"keep"}});
+        std::fs::write(
+            &claude_path,
+            json!({"mcpServers":{other_server:other_registration}}).to_string(),
+        )
+        .unwrap();
+        super::install_agent_integration(&config).unwrap();
+        let first = std::fs::read_to_string(&codex_path).unwrap();
+        let codex: toml::Table = first.parse().unwrap();
+        let original: Vec<String> =
+            serde_json::from_str(codex["notify"][2].as_str().unwrap()).unwrap();
+        assert_eq!(original, notify_wrapper(&live, &user_notify));
+        assert_eq!(
+            codex["mcp_servers"][other_server]["command"].as_str(),
+            live.to_str()
+        );
+        let claude: Value =
+            serde_json::from_str(&std::fs::read_to_string(&claude_path).unwrap()).unwrap();
+        assert_eq!(claude["mcpServers"][other_server], other_registration);
+        super::install_agent_integration(&config).unwrap();
+        assert_eq!(std::fs::read_to_string(codex_path).unwrap(), first);
     }
 
     #[test]

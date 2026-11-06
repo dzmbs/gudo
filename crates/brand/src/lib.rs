@@ -28,7 +28,16 @@ pub const DAEMON_BIN: &str = if IS_DEV {
 };
 
 /// Name of the agent hook shim binary.
-pub const HOOK_BIN: &str = if IS_DEV { "gudo-dev-hook" } else { "gudo-hook" };
+pub const RELEASE_HOOK_BIN: &str = "gudo-hook";
+pub const DEV_HOOK_BIN: &str = "gudo-dev-hook";
+pub const HOOK_BIN: &str = if IS_DEV {
+    DEV_HOOK_BIN
+} else {
+    RELEASE_HOOK_BIN
+};
+
+/// Shared agent registrations owned by either flavour.
+pub const MCP_SERVER_NAMES: [&str; 2] = ["gudo", "gudo_dev"];
 
 /// Directory name under the platform config/state roots (e.g. `~/.config/<this>`), and the
 /// prefix of names the daemon gives things on the host (branches, refs, repo config files).

@@ -198,25 +198,31 @@ fn user_codex_notify(json: &str) {
 fn user_notify_command(config: &std::path::Path) -> Option<Vec<String>> {
     let text = std::fs::read_to_string(config).ok()?;
     let table: toml::Table = text.parse().ok()?;
-    let arguments: Vec<String> = table
+    let mut arguments: Vec<String> = table
         .get("notify")?
         .as_array()?
         .iter()
         .map(|argument| argument.as_str().map(str::to_owned))
         .collect::<Option<_>>()?;
-    let is_owned_command = arguments.first().is_some_and(|program| {
-        let name = std::path::Path::new(program).file_name();
-        name.is_some_and(|name| name == brand::HOOK_BIN || name == brand::legacy::HOOK_BIN)
-    });
-    if is_owned_command {
-        return arguments
-            .get(1)
-            .filter(|argument| *argument == "codex-notify")
-            .and_then(|_| arguments.get(2))
-            .and_then(|original| serde_json::from_str::<Vec<String>>(original).ok())
-            .filter(|original| !original.is_empty());
+    for _ in 0..64 {
+        let is_owned_command = arguments.first().is_some_and(|program| {
+            std::path::Path::new(program)
+                .file_name()
+                .is_some_and(|name| {
+                    name == brand::RELEASE_HOOK_BIN
+                        || name == brand::DEV_HOOK_BIN
+                        || name == brand::legacy::HOOK_BIN
+                })
+        });
+        if !is_owned_command {
+            return (!arguments.is_empty()).then_some(arguments);
+        }
+        if arguments.len() != 3 || arguments[1] != "codex-notify" {
+            return None;
+        }
+        arguments = serde_json::from_str(&arguments[2]).ok()?;
     }
-    (!arguments.is_empty()).then_some(arguments)
+    None
 }
 
 /// The pane's Claude configuration directory: its account's (`GUDO_ACCOUNT_DIR`, which Claude's
@@ -284,6 +290,30 @@ mod tests {
             Some(PathBuf::from("/h/.claude"))
         );
         assert_eq!(config_dir_from(dir(""), None), None);
+    }
+
+    #[test]
+    fn dedicated_notifications_unwrap_both_flavours_without_relaying_twice() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join("config.toml");
+        let user = vec!["my-notify".to_owned(), "argument with spaces".into()];
+        let mut notification = user.clone();
+        for program in [brand::RELEASE_HOOK_BIN, brand::DEV_HOOK_BIN] {
+            notification = vec![
+                format!("/state/bin/{program}"),
+                "codex-notify".into(),
+                serde_json::to_string(&notification).unwrap(),
+            ];
+        }
+        std::fs::write(
+            &config,
+            format!(
+                "notify = {}\n",
+                serde_json::to_string(&notification).unwrap()
+            ),
+        )
+        .unwrap();
+        assert_eq!(user_notify_command(&config), Some(user));
     }
 
     #[test]
