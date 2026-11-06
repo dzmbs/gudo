@@ -108,6 +108,24 @@ The fixture in `crates/daemon/tests/fixtures/timeline/` is emitted by the instal
 Code CLI against a loopback-only mock API with an isolated home and placeholder key. Its
 README records which data is preserved. No real account is used.
 
+## Native composer safety prerequisites
+
+The native collection is not yet an integrated Chat composer. The exit fence protects existing
+composer/reviewer PTY writes from crossing into the fallback shell; it does not prove the TUI
+has an empty draft or make those legacy paste/Enter pairs transactional.
+
+Real Claude 2.1.318/2.1.319 captures in `crates/daemon/tests/fixtures/agent-input/` establish two
+important limits: Ctrl-U after a multiline paste leaves an earlier line intact, and a spaces-only
+draft with the cursor at Home has exactly the same input-region cells and cursor as an empty
+draft. Layout, styles, blank-cell distinctions and cursor position cannot establish emptiness
+by themselves. Constrained submission also needs input-revision provenance and a trusted empty
+checkpoint. Manual/raw input must invalidate that proof immediately; unknown versions/layouts,
+unproven resumed drafts and changed revisions retain the draft and fall back to Terminal.
+
+A small bracketed-paste-plus-Return packet reached the isolated loopback API exactly once on
+both probed versions. That observation does not prove all bindings, payload sizes or modal
+states safe. Signed approval routes and owner-only permission-mode changes remain separate.
+
 ## Scope and bounds
 
 Every request requires View on its pane. A guest's since-join policy filters items and full
