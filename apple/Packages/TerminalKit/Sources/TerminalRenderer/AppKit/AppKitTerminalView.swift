@@ -16,6 +16,7 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
     public let surface: TerminalSurface
     /// Bytes to write to the PTY (encoded keys, mouse and focus reports).
     public var onInput: (([UInt8]) -> Void)?
+    public var onGeneratedInput: (([UInt8]) -> Void)?
     /// Sees each key event before it is encoded; returning true consumes it (the app's
     /// hold-to-talk chord).
     public var keyInterceptor: ((KeyEvent) -> Bool)?
@@ -83,7 +84,7 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
     override public func becomeFirstResponder() -> Bool {
         hasKeyboard = true
         updateFocus()
-        emit(surface.terminal.encodeFocus(true))
+        emitGenerated(surface.terminal.encodeFocus(true))
         onFocus?()
         return true
     }
@@ -91,7 +92,7 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
     override public func resignFirstResponder() -> Bool {
         hasKeyboard = false
         updateFocus()
-        emit(surface.terminal.encodeFocus(false))
+        emitGenerated(surface.terminal.encodeFocus(false))
         unmarkText()
         return true
     }
@@ -168,9 +169,16 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         if !bytes.isEmpty { onInput?(bytes) }
     }
 
+    private func emitGenerated(_ bytes: [UInt8]) {
+        guard !bytes.isEmpty else { return }
+        (onGeneratedInput ?? onInput)?(bytes)
+    }
+
     /// Sends a key as if typed here.
     public func send(_ key: KeyEvent) {
-        emit(surface.encode(key))
+        let bytes = surface.encode(key)
+        if case .release = key.action { emitGenerated(bytes) }
+        else { emit(bytes) }
     }
 
     /// BEL: the system alert sound, Ghostty's macOS default (`bell-features = system`). Never a
@@ -199,7 +207,7 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         let flags = event.modifierFlags
         mouseReporting = surface.reportsMouse(shift: flags.contains(.shift))
         if mouseReporting {
-            emit(surface.mouse(.press, button: .left, at: location, mods: KeyModifiers(flags)))
+            emitGenerated(surface.mouse(.press, button: .left, at: location, mods: KeyModifiers(flags)))
             return
         }
         if flags.contains(.command), let link = surface.link(at: location) {
@@ -235,7 +243,7 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
     override public func mouseDragged(with event: NSEvent) {
         let location = point(event)
         if mouseReporting {
-            emit(surface.mouse(.motion, button: .left, at: location, mods: KeyModifiers(event.modifierFlags)))
+            emitGenerated(surface.mouse(.motion, button: .left, at: location, mods: KeyModifiers(event.modifierFlags)))
             return
         }
         if let start = dragOutStart, let image = dragOutImage {
@@ -271,7 +279,7 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
     override public func mouseUp(with event: NSEvent) {
         let location = point(event)
         if mouseReporting {
-            emit(surface.mouse(.release, button: .left, at: location, mods: KeyModifiers(event.modifierFlags)))
+            emitGenerated(surface.mouse(.release, button: .left, at: location, mods: KeyModifiers(event.modifierFlags)))
             mouseReporting = false
             return
         }
@@ -295,12 +303,12 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
 
     override public func rightMouseDown(with event: NSEvent) {
         guard surface.reportsMouse(shift: event.modifierFlags.contains(.shift)) else { return super.rightMouseDown(with: event) }
-        emit(surface.mouse(.press, button: .right, at: point(event), mods: KeyModifiers(event.modifierFlags)))
+        emitGenerated(surface.mouse(.press, button: .right, at: point(event), mods: KeyModifiers(event.modifierFlags)))
     }
 
     override public func rightMouseUp(with event: NSEvent) {
         guard surface.reportsMouse(shift: event.modifierFlags.contains(.shift)) else { return super.rightMouseUp(with: event) }
-        emit(surface.mouse(.release, button: .right, at: point(event), mods: KeyModifiers(event.modifierFlags)))
+        emitGenerated(surface.mouse(.release, button: .right, at: point(event), mods: KeyModifiers(event.modifierFlags)))
     }
 
     /// Menu items about the rows under a point (view coordinates), for the right-click menu: a
@@ -330,12 +338,12 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
 
     override public func otherMouseDown(with event: NSEvent) {
         guard surface.reportsMouse(shift: false) else { return }
-        emit(surface.mouse(.press, button: .middle, at: point(event), mods: KeyModifiers(event.modifierFlags)))
+        emitGenerated(surface.mouse(.press, button: .middle, at: point(event), mods: KeyModifiers(event.modifierFlags)))
     }
 
     override public func otherMouseUp(with event: NSEvent) {
         guard surface.reportsMouse(shift: false) else { return }
-        emit(surface.mouse(.release, button: .middle, at: point(event), mods: KeyModifiers(event.modifierFlags)))
+        emitGenerated(surface.mouse(.release, button: .middle, at: point(event), mods: KeyModifiers(event.modifierFlags)))
     }
 
     override public func mouseMoved(with event: NSEvent) {
@@ -350,7 +358,7 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         onPointerMoved?(location)
         updateHoverLink(at: location, flags: event.modifierFlags)
         if surface.reportsMouse(shift: event.modifierFlags.contains(.shift)) {
-            emit(surface.mouse(.motion, button: nil, at: location, mods: KeyModifiers(event.modifierFlags)))
+            emitGenerated(surface.mouse(.motion, button: nil, at: location, mods: KeyModifiers(event.modifierFlags)))
         }
     }
 
@@ -432,7 +440,7 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         scrollRemainder += rows
         let whole = Int(scrollRemainder.rounded(.towardZero))
         scrollRemainder -= CGFloat(whole)
-        emit(surface.wheel(rows: -whole, at: point(event), mods: KeyModifiers(event.modifierFlags)))
+        emitGenerated(surface.wheel(rows: -whole, at: point(event), mods: KeyModifiers(event.modifierFlags)))
     }
 
     // MARK: Copy / paste

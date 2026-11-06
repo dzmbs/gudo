@@ -246,6 +246,10 @@ nonisolated public final class SharedPaneBackend: Sendable {
             shared.backend.write(bytes)
         }
 
+        func writeGenerated(_ bytes: UnsafeRawBufferPointer) {
+            shared.backend.writeGenerated(bytes)
+        }
+
         func paste(_ text: String) {
             shared.claim(id)
             shared.backend.paste(text)

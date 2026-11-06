@@ -123,6 +123,63 @@ import GudoCore
         #expect(client().calls == [.resize(3, PaneSize(cols: 121, rows: 40, widthPx: 1210, heightPx: 800))])
     }
 
+    @Test func generatedInputDoesNotClaimOrChangeTheDrivingWindow() async throws {
+        let (connection, client) = try makeConnection()
+        let desktop = try #require(try connection.makeBackend(for: PaneId(3)) as? DaemonPaneBackend)
+        let phone = try #require(try connection.makeBackend(for: PaneId(3)) as? DaemonPaneBackend)
+        desktop.start(events: { _ in }, seed: nil)
+        phone.start(events: { _ in }, seed: nil)
+        desktop.resize(cols: 120, rows: 40, cellWidth: 10, cellHeight: 20)
+        phone.resize(cols: 45, rows: 20, cellWidth: 10, cellHeight: 20)
+        client().clear()
+        let report = Array("\u{1b}[<0;1;1M".utf8)
+        report.withUnsafeBytes { phone.writeGenerated($0) }
+        #expect(client().calls == [.generatedInput(3, Data(report))])
+        client().clear()
+        desktop.resize(cols: 121, rows: 40, cellWidth: 10, cellHeight: 20)
+        #expect(client().calls == [.resize(3, PaneSize(cols: 121, rows: 40, widthPx: 1210, heightPx: 800))])
+    }
+
+    @Test(arguments: [false, true])
+    func heldReportsDoNotTakeSizeWhenTheSavedScreenBecomesLive(tagged: Bool) async throws {
+        let (connection, client) = try makeConnection()
+        let desktop = try #require(try connection.makeBackend(for: PaneId(3)) as? DaemonPaneBackend)
+        let phone = try #require(try connection.makeBackend(for: PaneId(3)) as? DaemonPaneBackend)
+        desktop.start(events: { _ in }, seed: nil)
+        phone.start(events: { _ in }, seed: nil)
+        desktop.resize(cols: 120, rows: 40, cellWidth: 10, cellHeight: 20)
+        phone.resize(cols: 45, rows: 20, cellWidth: 10, cellHeight: 20)
+        phone.holdInputUntilLive(screen: { "saved" }, onChange: { _ in })
+        client().clear()
+        let report = Array("\u{1b}[I".utf8)
+        report.withUnsafeBytes { if tagged { phone.writeGenerated($0) } else { phone.write($0) } }
+        #expect(client().calls.isEmpty)
+        client().send(.paneSnapshot(paneId: 3, seq: 0, data: Data()))
+        let expected: FakeClient.Call = tagged ? .generatedInput(3, Data(report)) : .input(3, Data(report))
+        try await eventually("held report delivered") { client().calls.contains(expected) }
+        #expect(client().calls == [expected])
+        client().clear()
+        desktop.resize(cols: 121, rows: 40, cellWidth: 10, cellHeight: 20)
+        #expect(client().calls == [.resize(3, PaneSize(cols: 121, rows: 40, widthPx: 1210, heightPx: 800))])
+    }
+
+    @Test func generatedReportsKeepFollowingKeyAcknowledgementsAligned() async throws {
+        let (connection, client) = try makeConnection()
+        client().send(.connected(epoch: 1, resumed: false))
+        let backend = try #require(try connection.makeBackend(for: PaneId(3)) as? DaemonPaneBackend)
+        backend.start(events: { _ in }, seed: nil)
+        let predictions = PredictionSink()
+        backend.startPredictionFeed(predictions.handler)
+        Array("\u{1b}[I".utf8).withUnsafeBytes { backend.writeGenerated($0) }
+        Array("x".utf8).withUnsafeBytes { backend.writeInput($0, inputSeq: 7) }
+        client().send(.inputAck(paneId: 3, inputSeq: 1, atSeq: 0))
+        client().send(.paneBytes(paneId: 3, seq: 0, data: Data("g".utf8)))
+        #expect(!predictions.all.contains(.acknowledged(upTo: 7, hint: nil)))
+        client().send(.inputAck(paneId: 3, inputSeq: 2, atSeq: 1))
+        client().send(.paneBytes(paneId: 3, seq: 1, data: Data("x".utf8)))
+        #expect(predictions.all.contains(.acknowledged(upTo: 7, hint: nil)))
+    }
+
     @Test func acksGoToTheWindowThatTyped() async throws {
         let (connection, client) = try makeConnection()
         client().send(.connected(epoch: 1, resumed: false))
@@ -245,6 +302,9 @@ import GudoCore
         tapA.resize(cols: 100, rows: 30, cellWidth: 8, cellHeight: 16)
         tapB.resize(cols: 50, rows: 30, cellWidth: 8, cellHeight: 16)
         #expect(recorder.lock.withLock { $0.sizes } == [100])
+        Array("\u{1b}[I".utf8).withUnsafeBytes { tapB.writeGenerated($0) }
+        #expect(recorder.lock.withLock { $0.sizes } == [100])
+        #expect(recorder.lock.withLock { $0.writes } == ["\u{1b}[I"])
         Array("x".utf8).withUnsafeBytes { tapB.write($0) }
         #expect(recorder.lock.withLock { $0.sizes } == [100, 50])
         tapA.claimSize()

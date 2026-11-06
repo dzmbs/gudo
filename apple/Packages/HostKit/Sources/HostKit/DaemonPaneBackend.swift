@@ -495,6 +495,23 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap 
         client.sendInput(paneId: pane.rawValue, data: Data(bytes))
     }
 
+    public func writeGenerated(_ bytes: UnsafeRawBufferPointer) {
+        guard !bytes.isEmpty else { return }
+        let data = Data(bytes)
+        if hold(.generated(data)) { return }
+        guard router.admitsInput(pane.rawValue) else { return }
+        router.noteInput(pane.rawValue, tap: tap)
+        sendGenerated(data)
+    }
+
+    private func sendGenerated(_ data: Data) {
+        if let client = client as? any GeneratedInputClient {
+            client.sendGeneratedInput(paneId: pane.rawValue, data: data)
+        } else {
+            client.sendInput(paneId: pane.rawValue, data: data)
+        }
+    }
+
     public func writeInput(_ bytes: UnsafeRawBufferPointer, inputSeq: UInt64) {
         guard !bytes.isEmpty, !hold(.bytes(Data(bytes))), router.admitsInput(pane.rawValue) else { return }
         if !Self.isFocusReport(bytes) { claimSize() }
@@ -539,6 +556,7 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap 
     private enum Held: Sendable {
         case bytes(Data)
         case paste(String)
+        case generated(Data)
     }
 
     private struct HeldInput {
@@ -569,7 +587,7 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap 
         let update = held.withLock { held -> (@Sendable (HeldInputState) -> Void, Int)? in
             guard var current = held else { return nil }
             let size = switch input {
-            case .bytes(let data): data.count
+            case .bytes(let data), .generated(let data): data.count
             case .paste(let text): text.utf8.count
             }
             if current.bytes + size > Self.holdBytes {
@@ -600,12 +618,20 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap 
                 current.onChange(.dropped)
                 return
             }
-            claimSize()
+            let claimsSize = current.inputs.contains { input in
+                switch input {
+                case .bytes(let data): data.withUnsafeBytes { !Self.isFocusReport($0) }
+                case .paste(let text): !text.isEmpty
+                case .generated: false
+                }
+            }
+            if claimsSize { claimSize() }
             for input in current.inputs {
                 router.noteInput(pane.rawValue, tap: tap)
                 switch input {
                 case .bytes(let data): client.sendInput(paneId: pane.rawValue, data: data)
                 case .paste(let text): client.sendPaste(paneId: pane.rawValue, text: text)
+                case .generated(let data): sendGenerated(data)
                 }
             }
             current.onChange(.sent)

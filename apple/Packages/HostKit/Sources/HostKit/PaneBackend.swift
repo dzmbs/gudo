@@ -20,6 +20,8 @@ nonisolated public protocol PaneBackend: Sendable {
     func start(events: @escaping @Sendable (PaneEvent) -> Void)
     /// Input for the pane's process: encoded keys and terminal query replies. Callable from any thread.
     func write(_ bytes: UnsafeRawBufferPointer)
+    /// Generated terminal reports, which do not claim a shared terminal's size.
+    func writeGenerated(_ bytes: UnsafeRawBufferPointer)
     /// Pasted text. Remote backends let the host apply bracketed-paste rules for the program's
     /// modes (docs/DAEMON.md "Input encoding"); the default sends the bytes as typed.
     func paste(_ text: String)
@@ -63,6 +65,8 @@ nonisolated extension PaneBackend {
     public func start(events: @escaping @Sendable (PaneEvent) -> Void) {
         start(onOutput: { events(.output(Data($0))) }, onExit: { events(.exited) })
     }
+
+    public func writeGenerated(_ bytes: UnsafeRawBufferPointer) { write(bytes) }
 
     public func paste(_ text: String) {
         Array(text.utf8).withUnsafeBytes { write($0) }

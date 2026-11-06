@@ -19,6 +19,7 @@ public final class TerminalView: UIView {
     public let surface: TerminalSurface
     /// Bytes to write to the PTY (encoded keys, mouse reports, focus reports).
     public var onInput: (([UInt8]) -> Void)?
+    public var onGeneratedInput: (([UInt8]) -> Void)?
     /// Called when the view becomes first responder (a tap, or a programmatic focus change).
     public var onFocus: (() -> Void)?
     /// Modifiers latched on an on-screen key bar (sticky Ctrl), applied to the next key from the
@@ -232,7 +233,8 @@ public final class TerminalView: UIView {
     /// Sends a key as if typed here (key bar, menu actions).
     public func send(_ key: KeyEvent) {
         let bytes = surface.encode(key)
-        if !bytes.isEmpty { emit(bytes) }
+        if case .release = key.action { emitGenerated(bytes) }
+        else { emit(bytes) }
     }
 
     /// Sends text written in a composer: as a paste (bracketed when the program
@@ -245,6 +247,11 @@ public final class TerminalView: UIView {
     private func emit(_ bytes: [UInt8]) {
         guard !bytes.isEmpty else { return }
         onInput?(bytes)
+    }
+
+    private func emitGenerated(_ bytes: [UInt8]) {
+        guard !bytes.isEmpty else { return }
+        (onGeneratedInput ?? onInput)?(bytes)
     }
 
     // MARK: Accessibility
@@ -352,7 +359,7 @@ public final class TerminalView: UIView {
         Self.holdForKeyboard()
         guard super.becomeFirstResponder() else { return false }
         updateFocus()
-        emit(surface.terminal.encodeFocus(true))
+        emitGenerated(surface.terminal.encodeFocus(true))
         onFocus?()
         return true
     }
@@ -362,7 +369,7 @@ public final class TerminalView: UIView {
         Self.holdForKeyboard()
         guard super.resignFirstResponder() else { return false }
         updateFocus()
-        emit(surface.terminal.encodeFocus(false))
+        emitGenerated(surface.terminal.encodeFocus(false))
         repeater.stop()
         repeatingKey = nil
         heldOptionKeys.removeAll()
@@ -427,8 +434,8 @@ public final class TerminalView: UIView {
 
         if surface.reportsMouse(shift: shift) {
             let mods = KeyModifiers(tap.modifierFlags)
-            emit(surface.mouse(.press, button: .left, at: point, mods: mods))
-            emit(surface.mouse(.release, button: .left, at: point, mods: mods))
+            emitGenerated(surface.mouse(.press, button: .left, at: point, mods: mods))
+            emitGenerated(surface.mouse(.release, button: .left, at: point, mods: mods))
             return
         }
         if shift, let selection = surface.terminal.selection, let head = surface.terminal.screenPoint(fromViewport: surface.cell(at: point)) {
@@ -487,8 +494,8 @@ public final class TerminalView: UIView {
         let point = click.location(in: self)
         if surface.reportsMouse(shift: click.modifierFlags.contains(.shift)) {
             let mods = KeyModifiers(click.modifierFlags)
-            emit(surface.mouse(.press, button: .right, at: point, mods: mods))
-            emit(surface.mouse(.release, button: .right, at: point, mods: mods))
+            emitGenerated(surface.mouse(.press, button: .right, at: point, mods: mods))
+            emitGenerated(surface.mouse(.release, button: .right, at: point, mods: mods))
             return
         }
         if !isFirstResponder { becomeFirstResponder() }
@@ -533,7 +540,7 @@ public final class TerminalView: UIView {
         let whole = Int(scrollRemainder.rounded(.towardZero))
         guard whole != 0 else { return }
         scrollRemainder -= CGFloat(whole)
-        emit(surface.wheel(rows: -whole, at: point, mods: mods))
+        emitGenerated(surface.wheel(rows: -whole, at: point, mods: mods))
     }
 
     /// Zooms the drawn grid with the fingers and settles on a whole point size when they lift,
@@ -614,10 +621,10 @@ public final class TerminalView: UIView {
         if surface.reportsMouse(shift: flags.contains(.shift)) {
             switch pan.state {
             case .began:
-                emit(surface.mouse(.press, button: .left, at: start, mods: mods))
-                emit(surface.mouse(.motion, button: .left, at: point, mods: mods))
-            case .changed: emit(surface.mouse(.motion, button: .left, at: point, mods: mods))
-            case .ended, .cancelled: emit(surface.mouse(.release, button: .left, at: point, mods: mods))
+                emitGenerated(surface.mouse(.press, button: .left, at: start, mods: mods))
+                emitGenerated(surface.mouse(.motion, button: .left, at: point, mods: mods))
+            case .changed: emitGenerated(surface.mouse(.motion, button: .left, at: point, mods: mods))
+            case .ended, .cancelled: emitGenerated(surface.mouse(.release, button: .left, at: point, mods: mods))
             default: break
             }
             return
@@ -657,7 +664,7 @@ public final class TerminalView: UIView {
             setHoverLink(surface.reportsMouse(shift: hover.modifierFlags.contains(.shift)) ? nil : surface.link(at: point))
             // Any-event tracking (1003) reports motion with no button held.
             if surface.reportsMouse(shift: hover.modifierFlags.contains(.shift)) {
-                emit(surface.mouse(.motion, button: nil, at: point, mods: KeyModifiers(hover.modifierFlags)))
+                emitGenerated(surface.mouse(.motion, button: nil, at: point, mods: KeyModifiers(hover.modifierFlags)))
             }
         default:
             setHoverLink(nil)

@@ -260,6 +260,32 @@ struct WorkspaceCacheTests {
         #expect(inputs(client()).last == "x")
     }
 
+    @Test func heldGeneratedReportsKeepTheirOrderAndSourceAmongTypedKeys() async throws {
+        let (connection, client) = try connection(seeded: cached())
+        let (backend, _, states) = try heldPane(connection, saved: ["$ "])
+        Array("x".utf8).withUnsafeBytes { backend.write($0) }
+        Array("\u{1b}[I".utf8).withUnsafeBytes { backend.writeGenerated($0) }
+        Array("y".utf8).withUnsafeBytes { backend.write($0) }
+        client().send(.paneSnapshot(paneId: 1, seq: 0, data: try liveSnapshot(["$ "])))
+        try await eventually("held inputs sent") { states.all.last == .sent }
+        let delivered = client().calls.filter {
+            switch $0 {
+            case .input, .generatedInput, .paste: true
+            default: false
+            }
+        }
+        #expect(delivered == [.input(1, Data("x".utf8)), .generatedInput(1, Data("\u{1b}[I".utf8)), .input(1, Data("y".utf8))])
+    }
+
+    @Test func tooMuchHeldGeneratedInputIsDropped() async throws {
+        let (connection, client) = try connection(seeded: cached())
+        let (backend, _, states) = try heldPane(connection, saved: ["$ "])
+        [UInt8](repeating: 0, count: DaemonPaneBackend.holdBytes + 1).withUnsafeBytes { backend.writeGenerated($0) }
+        client().send(.paneSnapshot(paneId: 1, seq: 0, data: try liveSnapshot(["$ "])))
+        try await eventually("generated input dropped") { states.all.last == .dropped }
+        #expect(!client().calls.contains { if case .generatedInput = $0 { true } else { false } })
+    }
+
     @Test func inputOverASavedScreenIsDroppedWhenTheHostsScreenChanged() async throws {
         let (connection, client) = try connection(seeded: cached())
         let (backend, _, states) = try heldPane(connection, saved: ["Allow rm -rf build? (y/n)"])

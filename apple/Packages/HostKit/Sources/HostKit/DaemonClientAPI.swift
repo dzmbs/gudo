@@ -21,6 +21,12 @@ nonisolated public protocol DaemonClientAPI: AnyObject, Sendable {
 
 extension DaemonClient: DaemonClientAPI {}
 
+nonisolated public protocol GeneratedInputClient: AnyObject, Sendable {
+    func sendGeneratedInput(paneId: UInt64, data: Data)
+}
+
+extension DaemonClient: GeneratedInputClient {}
+
 /// Updating the daemon over its connection (`DaemonClient.upgradeDaemon`), separate from
 /// `DaemonClientAPI` so test fakes need not implement it.
 nonisolated public protocol DaemonUpgradeAPI: AnyObject, Sendable {

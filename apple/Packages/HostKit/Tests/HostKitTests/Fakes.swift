@@ -10,10 +10,11 @@ struct TestError: Error, CustomStringConvertible {
 }
 
 /// A `DaemonClientAPI` that records calls; tests push events through `listener`.
-nonisolated final class FakeClient: DaemonClientAPI {
+nonisolated final class FakeClient: DaemonClientAPI, GeneratedInputClient {
     enum Call: Equatable {
         case attach(UInt64?), op(GudoCore.LayoutOp), subscribe(UInt64), unsubscribe(UInt64)
         case setView(UInt64?, [UInt64]), resize(UInt64, PaneSize), input(UInt64, Data), paste(UInt64, String)
+        case generatedInput(UInt64, Data)
         case fetchHistory(UInt64), decide(UInt64, UInt32), reconnect, suspend, probe
     }
 
@@ -41,6 +42,7 @@ nonisolated final class FakeClient: DaemonClientAPI {
     func setView(focused: UInt64?, visible: [UInt64]) { record(.setView(focused, visible)) }
     func resize(paneId: UInt64, size: PaneSize) { record(.resize(paneId, size)) }
     func sendInput(paneId: UInt64, data: Data) { record(.input(paneId, data)) }
+    func sendGeneratedInput(paneId: UInt64, data: Data) { record(.generatedInput(paneId, data)) }
     func sendPaste(paneId: UInt64, text: String) { record(.paste(paneId, text)) }
     func fetchHistory(paneId: UInt64, maxBytes: UInt32) -> Bool {
         record(.fetchHistory(paneId))

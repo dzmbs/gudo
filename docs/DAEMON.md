@@ -293,6 +293,9 @@ claim size; ordinary keys, paste and committed text do. The client retains repor
 when reconnecting and converts to legacy bytes only on the wire for older daemons. Reports
 still require Drive and the input lease, and nonempty reports still invalidate native-input
 provenance through `Pane::write`; this is not an empty-draft checkpoint or a safety exemption.
+Apple views route focus, mouse, wheel, key releases and terminal replies through an explicit
+report callback. Shared taps and the 4-KiB saved-screen input buffer preserve that source;
+a held batch claims size only when it also contains actual typed or pasted input.
 
 ### Identity and pairing
 
