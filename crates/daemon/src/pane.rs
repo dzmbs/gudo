@@ -327,6 +327,7 @@ pub(crate) struct Pane {
     pub id: PaneId,
     pub snap_gen: SnapGen,
     pty: PtyActor,
+    pub(crate) agent_input_gate: Mutex<crate::agent_input::AgentInputGate>,
     vt: Arc<Mutex<Vt>>,
     cache: Mutex<Option<Arc<Snapshot>>>,
     history: Mutex<VecDeque<Arc<Snapshot>>>,
@@ -377,6 +378,7 @@ impl Pane {
             id,
             snap_gen,
             pty,
+            agent_input_gate: Mutex::new(crate::agent_input::AgentInputGate::default()),
             vt,
             cache: Mutex::new(None),
             history: Mutex::new(VecDeque::new()),
@@ -1013,6 +1015,8 @@ impl Pane {
     /// Queues input for the child. Returns the output offset at the time of writing, which
     /// the input's echo (if any) follows.
     pub async fn write(&self, data: Vec<u8>) -> Result<Seq, InputError> {
+        let _input = (!data.is_empty())
+            .then(|| crate::agent_input::begin_unproven_write(&self.agent_input_gate));
         let head = self.head();
         if !data.is_empty() {
             tokio::time::timeout(INPUT_STALL, self.pty.write(data))

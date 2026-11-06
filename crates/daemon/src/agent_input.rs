@@ -1,6 +1,6 @@
 //! The local exit fence for daemon-launched agent PTYs.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -34,7 +34,14 @@ pub enum AgentInputReply {
 /// Native enqueue must hold the same mutex that protects these transitions.
 /// A delayed agent hook or arm request cannot reopen a closed launch.
 #[derive(Default)]
-pub(crate) enum AgentInputGate {
+pub(crate) struct AgentInputGate {
+    phase: AgentInputPhase,
+    revision: u64,
+    pending_unproven_writes: u64,
+}
+
+#[derive(Default)]
+enum AgentInputPhase {
     #[default]
     Disabled,
     Pending(String),
@@ -42,9 +49,23 @@ pub(crate) enum AgentInputGate {
 }
 
 impl AgentInputGate {
+    pub(crate) fn pending(launch: String) -> Self {
+        Self {
+            phase: AgentInputPhase::Pending(launch),
+            ..Self::default()
+        }
+    }
+
+    fn advance_revision(&mut self) {
+        self.revision = self.revision.saturating_add(1);
+        if self.revision == u64::MAX {
+            self.phase = AgentInputPhase::Disabled;
+        }
+    }
+
     fn arm(&mut self, launch: &str) -> bool {
-        if matches!(self, Self::Pending(active) if active == launch) {
-            *self = Self::Open(launch.to_owned());
+        if matches!(&self.phase, AgentInputPhase::Pending(active) if active == launch) {
+            self.phase = AgentInputPhase::Open(launch.to_owned());
             true
         } else {
             false
@@ -52,12 +73,35 @@ impl AgentInputGate {
     }
 
     fn close(&mut self, launch: &str) -> bool {
-        if matches!(self, Self::Pending(active) | Self::Open(active) if active == launch) {
-            *self = Self::Disabled;
+        if matches!(&self.phase, AgentInputPhase::Pending(active) | AgentInputPhase::Open(active) if active == launch)
+        {
+            self.phase = AgentInputPhase::Disabled;
+            self.advance_revision();
             true
         } else {
             false
         }
+    }
+}
+
+/// Covers enqueue/backpressure/cancellation, not kernel delivery or the child's reads.
+/// Even a later Stop hook cannot prove that all buffered raw input has been consumed.
+pub(crate) struct UnprovenWrite<'a> {
+    gate: &'a Mutex<AgentInputGate>,
+}
+
+pub(crate) fn begin_unproven_write(gate: &Mutex<AgentInputGate>) -> UnprovenWrite<'_> {
+    let mut state = lock(gate);
+    state.advance_revision();
+    state.pending_unproven_writes = state.pending_unproven_writes.saturating_add(1);
+    UnprovenWrite { gate }
+}
+
+impl Drop for UnprovenWrite<'_> {
+    fn drop(&mut self) {
+        let mut state = lock(self.gate);
+        state.pending_unproven_writes = state.pending_unproven_writes.saturating_sub(1);
+        state.advance_revision();
     }
 }
 
@@ -72,8 +116,15 @@ pub(crate) fn enqueue(
     bytes: Vec<u8>,
 ) -> Result<(), EnqueueError> {
     let entry = core.pane(pane).ok_or(EnqueueError::Unavailable)?;
-    let gate = lock(&entry.native_input_launch);
-    if !matches!(&*gate, AgentInputGate::Open(_)) || !core.agent_has_terminal(pane) {
+    let mut gate = lock(&entry.pane.agent_input_gate);
+    if !matches!(&gate.phase, AgentInputPhase::Open(_)) || !core.agent_has_terminal(pane) {
+        return Err(EnqueueError::Unavailable);
+    }
+    if gate.pending_unproven_writes != 0 {
+        return Err(EnqueueError::Busy);
+    }
+    gate.advance_revision();
+    if !matches!(&gate.phase, AgentInputPhase::Open(_)) {
         return Err(EnqueueError::Unavailable);
     }
     entry
@@ -117,13 +168,13 @@ pub(crate) async fn serve(core: &Arc<Core>, call: AgentInputCall) -> AgentInputR
         return AgentInputReply::Refused;
     };
     if matches!(call, AgentInputCall::Arm { .. }) {
-        return if lock(&entry.native_input_launch).arm(launch) {
+        return if lock(&entry.pane.agent_input_gate).arm(launch) {
             AgentInputReply::Ready
         } else {
             AgentInputReply::Refused
         };
     }
-    if !lock(&entry.native_input_launch).close(launch) {
+    if !lock(&entry.pane.agent_input_gate).close(launch) {
         return AgentInputReply::Refused;
     }
     match tokio::time::timeout(Duration::from_secs(5), entry.pane.pty().flush_writes()).await {
@@ -169,9 +220,53 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn cancelling_an_unproven_write_advances_revision_and_releases_its_pending_count() {
+        let gate = Mutex::new(AgentInputGate::pending("current".into()));
+        assert!(lock(&gate).arm("current"));
+        let result = tokio::time::timeout(Duration::from_millis(10), async {
+            let _input = begin_unproven_write(&gate);
+            assert_eq!(lock(&gate).revision, 1);
+            assert_eq!(lock(&gate).pending_unproven_writes, 1);
+            std::future::pending::<()>().await;
+        })
+        .await;
+        assert!(result.is_err());
+        let state = lock(&gate);
+        assert_eq!(state.revision, 2);
+        assert_eq!(state.pending_unproven_writes, 0);
+    }
+
+    #[test]
+    fn closing_with_an_unproven_write_pending_cannot_be_undone_by_its_completion() {
+        let gate = Mutex::new(AgentInputGate::pending("current".into()));
+        assert!(lock(&gate).arm("current"));
+        let input = begin_unproven_write(&gate);
+        assert!(lock(&gate).close("current"));
+        drop(input);
+        let mut state = lock(&gate);
+        assert_eq!(state.pending_unproven_writes, 0);
+        assert_eq!(state.revision, 3);
+        assert!(!state.arm("current"));
+    }
+
+    #[test]
+    fn exhausted_revisions_never_wrap_or_reopen_native_input() {
+        let gate = Mutex::new(AgentInputGate::pending("current".into()));
+        assert!(lock(&gate).arm("current"));
+        lock(&gate).revision = u64::MAX - 1;
+        let input = begin_unproven_write(&gate);
+        drop(input);
+        let mut state = lock(&gate);
+        assert_eq!(state.revision, u64::MAX);
+        assert_eq!(state.pending_unproven_writes, 0);
+        assert!(matches!(state.phase, AgentInputPhase::Disabled));
+        assert!(!state.arm("current"));
+    }
+
     #[test]
     fn only_this_pending_launch_can_arm_and_close() {
-        let mut gate = AgentInputGate::Pending("current".into());
+        let mut gate = AgentInputGate::pending("current".into());
         assert!(!gate.arm("other"));
         assert!(!gate.close("other"));
         assert!(gate.arm("current"));
@@ -183,7 +278,7 @@ mod tests {
 
     #[test]
     fn closing_before_a_delayed_arm_never_reopens_the_gate() {
-        let mut gate = AgentInputGate::Pending("current".into());
+        let mut gate = AgentInputGate::pending("current".into());
         assert!(gate.close("current"));
         assert!(!gate.arm("current"));
     }

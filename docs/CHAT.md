@@ -122,6 +122,14 @@ by themselves. Constrained submission also needs input-revision provenance and a
 checkpoint. Manual/raw input must invalidate that proof immediately; unknown versions/layouts,
 unproven resumed drafts and changed revisions retain the draft and fall back to Terminal.
 
+The gate now belongs to `Pane`, so every non-protocol `Pane.write` advances its input revision
+before enqueue and again when enqueue finishes or is cancelled. An owned guard counts writes
+waiting under backpressure; native legacy writes advance the same revision under that gate.
+Revision exhaustion disables native input instead of wrapping. These are input bookkeeping,
+not a child-read acknowledgement: even a later Stop hook cannot prove an older raw write has
+finished traversing the kernel and the TUI's own input queues. No trusted empty checkpoint or
+new atomic submission API is enabled by this bookkeeping alone.
+
 A small bracketed-paste-plus-Return packet reached the isolated loopback API exactly once on
 both probed versions. That observation does not prove all bindings, payload sizes or modal
 states safe. Signed approval routes and owner-only permission-mode changes remain separate.
