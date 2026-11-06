@@ -58,6 +58,7 @@ impl FakeRelay {
                         if reader.read_line(&mut line).await.unwrap_or(0) == 0 {
                             return;
                         }
+                        let method = line.split_whitespace().next().unwrap_or("");
                         let path = line.split_whitespace().nth(1).unwrap_or("").to_owned();
                         let (mut len, mut signature) = (0, String::new());
                         loop {
@@ -73,6 +74,10 @@ impl FakeRelay {
                                 "x-push-signature" => signature = value.trim().to_owned(),
                                 _ => {}
                             }
+                        }
+                        if method == "HEAD" && path == "/" {
+                            let _ = reader.get_mut().write_all(b"HTTP/1.1 204 No Content\r\ncontent-length: 0\r\nconnection: close\r\n\r\n").await;
+                            return;
                         }
                         let mut body = vec![0; len];
                         reader.read_exact(&mut body).await.unwrap();
@@ -118,6 +123,30 @@ impl FakeRelay {
             );
         }
     }
+}
+
+#[tokio::test]
+async fn relay_port_probes_do_not_consume_scripted_push_responses() {
+    let mut relay = FakeRelay::start().await;
+    relay.script.lock().unwrap().push(503);
+    let mut stream = tokio::net::TcpStream::connect(relay.url.strip_prefix("http://").unwrap())
+        .await
+        .unwrap();
+    stream
+        .write_all(b"HEAD / HTTP/1.0\r\nHost: localhost\r\nUser-Agent: port-probe\r\n\r\n")
+        .await
+        .unwrap();
+    let mut response = String::new();
+    BufReader::new(stream)
+        .read_line(&mut response)
+        .await
+        .unwrap();
+    assert!(response.starts_with("HTTP/1.1 204"), "{response}");
+    assert!(matches!(
+        relay.rx.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+    assert_eq!(*relay.script.lock().unwrap(), vec![503]);
 }
 
 async fn start(state: &Path, relay: &FakeRelay, delay_ms: u64) -> Daemon {

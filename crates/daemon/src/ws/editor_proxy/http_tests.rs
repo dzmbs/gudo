@@ -2,7 +2,6 @@
 
 use std::collections::VecDeque;
 use std::io::Read as _;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -74,9 +73,23 @@ fn reply(status: StatusCode, headers: &[(&str, &str)], body: Chunks) -> Response
     response
 }
 
+#[derive(Default)]
+struct Requests(Mutex<Vec<(Method, String)>>);
+
+impl Requests {
+    fn count(&self, method: Method, path: &str) -> usize {
+        lock(&self.0)
+            .iter()
+            .filter(|(received_method, received_path)| {
+                *received_method == method && received_path == path
+            })
+            .count()
+    }
+}
+
 /// The fake server: what VS Code's would send, by path.
-fn serve(mut request: Request<Incoming>, hits: &AtomicUsize) -> Response<Chunks> {
-    hits.fetch_add(1, Ordering::SeqCst);
+fn serve(mut request: Request<Incoming>, hits: &Requests) -> Response<Chunks> {
+    lock(&hits.0).push((request.method().clone(), request.uri().path().to_owned()));
     let js = script();
     let path = request.uri().path().to_owned();
     let immutable = [
@@ -171,7 +184,7 @@ fn serve(mut request: Request<Incoming>, hits: &AtomicUsize) -> Response<Chunks>
     }
 }
 
-async fn upstream(hits: Arc<AtomicUsize>) -> u16 {
+async fn upstream(hits: Arc<Requests>) -> u16 {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
@@ -195,12 +208,12 @@ async fn upstream(hits: Arc<AtomicUsize>) -> u16 {
 
 struct Fixture {
     proxy: EditorProxy,
-    hits: Arc<AtomicUsize>,
+    hits: Arc<Requests>,
     cache_dir: tempfile::TempDir,
 }
 
 async fn fixture() -> Fixture {
-    let hits = Arc::new(AtomicUsize::new(0));
+    let hits = Arc::new(Requests::default());
     let port = upstream(Arc::clone(&hits)).await;
     let cache_dir = tempfile::tempdir().unwrap();
     let cache = AssetCache::new(cache_dir.path().to_owned());
@@ -311,8 +324,11 @@ async fn refuses_hosts_that_are_not_loopback() {
         "{}",
         String::from_utf8_lossy(&raw)
     );
-    let hits = fixture.hits.load(std::sync::atomic::Ordering::SeqCst);
-    assert_eq!(hits, 0, "the editor server was never asked");
+    let hits = fixture.hits.count(Method::GET, "/tiny.css");
+    assert_eq!(
+        hits, 0,
+        "the rejected request never reached the editor server"
+    );
     let reply = request(port, "GET", "/tiny.css", &[]).await;
     assert!(reply.head.starts_with("HTTP/1.1 200"), "{}", reply.head);
 }
@@ -381,6 +397,7 @@ async fn streams_instead_of_buffering() {
 async fn caches_versioned_static_assets_but_still_asks_the_server() {
     let fixture = fixture().await;
     let port = fixture.proxy.port();
+    request(port, "HEAD", "/", &["User-Agent: port-probe"]).await;
     let first = request(port, "GET", &app_js(), &["Accept-Encoding: br"]).await;
     assert_eq!(first.header("content-encoding"), Some("br"));
     assert!(first.header("content-length").is_none(), "streamed");
@@ -415,7 +432,7 @@ async fn caches_versioned_static_assets_but_still_asks_the_server() {
     assert_eq!(second.body.len() as u64, len);
     assert_eq!(second.decoded(), script());
     assert_eq!(
-        fixture.hits.load(Ordering::SeqCst),
+        fixture.hits.count(Method::GET, &app_js()),
         2,
         "the server is asked every time"
     );
