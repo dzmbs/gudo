@@ -150,6 +150,7 @@ public final class DaemonWorkspace {
     /// read before it are stale. See `Workflows.swift`.
     public internal(set) var workflowsRev: UInt64 = 0
     @ObservationIgnored var workflowObservers: [UUID: (UInt64) -> Void] = [:]
+    @ObservationIgnored var timelineObservers: [UUID: (pane: UInt64, handler: (String) -> Void)] = [:]
 
     @ObservationIgnored private let resolve: () -> (any DaemonWorkspaceAPI)?
     @ObservationIgnored private var installedOn: ObjectIdentifier?
@@ -245,6 +246,7 @@ public final class DaemonWorkspace {
         attentionObservers[id] = nil
         markObservers[id] = nil
         workflowObservers[id] = nil
+        timelineObservers[id] = nil
     }
 
     // MARK: Commands (shell integration)
@@ -292,6 +294,8 @@ public final class DaemonWorkspace {
         case .repos(let snapshot):
             repos = snapshot
             loadWorktreePortsIfNeeded()
+        case .timeline(let pane, let json):
+            for observer in timelineObservers.values where observer.pane == pane { observer.handler(json) }
         case .workflowsChanged(let rev):
             workflowsRev = rev
             for observer in workflowObservers.values { observer(rev) }
