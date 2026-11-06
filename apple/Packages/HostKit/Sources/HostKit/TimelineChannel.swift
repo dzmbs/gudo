@@ -3,6 +3,7 @@ import Foundation
 @MainActor
 public final class TimelineChannel {
     nonisolated public enum Packet: Equatable, Sendable {
+        case reset
         case snapshot(String)
         case update(String)
         case unavailable(String)
@@ -98,6 +99,7 @@ public final class TimelineChannel {
     func reconnect() {
         isPaused = false
         resetConnection()
+        publish(.reset)
         requestSnapshot()
     }
 

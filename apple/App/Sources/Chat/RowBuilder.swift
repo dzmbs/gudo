@@ -87,6 +87,12 @@ actor RowBuilder {
         return rows
     }
 
+    func rows(for items: [TimelineItem]) -> [String: [ChatRow]] {
+        var result: [String: [ChatRow]] = [:]
+        for item in items { result[item.id] = rows(for: item) }
+        return result
+    }
+
     func remove(_ identifiers: Set<String>) {
         for identifier in identifiers {
             if let entry = cache.removeValue(forKey: identifier) {

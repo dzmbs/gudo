@@ -47,6 +47,16 @@ cached attributed inline text. Its cache is bounded by 500 blocks, 500 item entr
 4 MiB of estimated retained content. Only HTTP, HTTPS and mail links are interactive; HTML
 stays literal text. The upstream Markdown and cmark-gfm licences ship with the app.
 
+`TimelineModel` serializes bounded JSON batches through an off-main render worker. Its value
+window checks epoch and sequence continuity, ignores stale revisions, applies batches
+transactionally and reconciles authoritative snapshots without discarding older loaded pages.
+Historical replies never advance the live cursor. At 3,000 values, live following evicts older
+pages at known byte boundaries; paging further back evicts the newest values and exposes a
+jump-to-latest gap instead of moving the reading position. A missing history boundary requests
+a fresh snapshot. Connection resets clear rendered values before another connection can
+publish, including screens that were stopped during a reconnect. Expansion and drafts stay
+local to the screen; drafts do not cross hosts.
+
 ## Claude adapter
 
 `crates/daemon/src/timeline/` owns discovery, parsing, paging and watches. Session IDs come

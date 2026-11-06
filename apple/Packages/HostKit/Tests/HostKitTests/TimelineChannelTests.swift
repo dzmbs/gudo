@@ -107,8 +107,8 @@ struct TimelineChannelTests {
         await client.finishWatch("stale snapshot")
         channel.receive("current update")
         await client.finishWatch("current snapshot")
-        try await wait { packets.count == 2 }
-        #expect(packets == [.snapshot("current snapshot"), .update("current update")])
+        try await wait { packets.count == 3 }
+        #expect(packets == [.reset, .snapshot("current snapshot"), .update("current update")])
         channel.removeObserver(token)
         try await wait { await client.stopCalls == 1 }
     }
