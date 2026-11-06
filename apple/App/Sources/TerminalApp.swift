@@ -147,6 +147,9 @@ final class WindowModelBox {
 
 /// A window's content around its model (see `WindowRoot`).
 struct WindowContent: View {
+    #if os(macOS)
+    @Environment(\.controlActiveState) private var controlActiveState
+    #endif
     var request: WindowRequest?
     let model: WindowModel
     @Environment(AppModel.self) private var app
@@ -185,7 +188,21 @@ struct WindowContent: View {
             .onChange(of: model.composites.tabs) { _, _ in persist() }
             .onChange(of: model.groups.projectsState) { _, _ in persist() }
             .onChange(of: model.twoColumnsChoice) { _, _ in persist() }
-            .onChange(of: scenePhase, initial: true) { _, phase in model.isOnScreen = phase != .background }
+            .onChange(of: scenePhase, initial: true) { _, phase in
+                model.isOnScreen = phase != .background
+                reportSizingActivity()
+            }
+            #if os(macOS)
+            .onChange(of: controlActiveState, initial: true) { _, _ in reportSizingActivity() }
+            #endif
+    }
+
+    private func reportSizingActivity() {
+        #if os(macOS)
+        model.sizingActivity = scenePhase == .active && controlActiveState == .key ? .active : .inactive
+        #else
+        model.sizingActivity = scenePhase == .active ? .active : .inactive
+        #endif
     }
 
     private func showError(_ error: String?) {

@@ -204,6 +204,20 @@ final class WindowModel {
     var isOnScreen = true {
         didSet { if isOnScreen != oldValue { reportViews() } }
     }
+    var sizingActivity: PaneActivity = .inactive {
+        didSet {
+            guard sizingActivity != oldValue else { return }
+            reportViews()
+            guard reportedSizingActivity == .active else { return }
+            for (id, view) in screenViews() {
+                for pane in view.visible { workspaces[id]?.panes[pane]?.claimSize() }
+            }
+        }
+    }
+    var reportedSizingActivity: PaneActivity {
+        isOnScreen && !isClosed && destination == .terminal ? sizingActivity : .inactive
+    }
+
     /// The workspace on screen (the target's).
     private(set) var workspace: Workspace? {
         didSet {
@@ -1001,7 +1015,7 @@ final class WindowModel {
         for (id, open) in workspaces {
             guard let daemon = open.host as? DaemonConnection else { continue }
             let view = views[id] ?? (nil, [])
-            daemon.setWindowView(self, focused: view.focused, visible: view.visible)
+            daemon.setWindowView(self, focused: view.focused, visible: view.visible, activity: reportedSizingActivity)
         }
     }
 

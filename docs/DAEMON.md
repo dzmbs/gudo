@@ -281,7 +281,9 @@ activation, explicit claims and actual input select the latest active eligible c
 Backgrounding or disconnecting hands sizing to another eligible active client; inactive size
 requests are saved without resizing the PTY. Legacy clients use visible-pane transitions as
 activity. New clients report `PaneActivity` separately and use `ClaimSize` for an explicit claim;
-repeated identical activity reports do not take sizing back. These controls require
+repeated identical activity reports do not take sizing back. Apple windows aggregate activity
+separately from notification visibility, preferring the active window's focus. Scene activation
+and Mac key-window activation claim visible panes' local taps and their daemon grids. These controls require
 `DaemonFeatures::ACTIVE_SIZING`; `Caps::ACTIVE_SIZING` permits `LastActive` in metadata. Older
 clients receive `LastInput` in its place, including on initial subscription.
 
@@ -2709,7 +2711,7 @@ An agent on host A driving a pane on host B. Not built; the safe shape:
   ignored (they are free text); no per-shell quoting (fish reads the POSIX quoting the same way
   except inside `"…"`, where it does not treat `` ` `` specially); a watched directory that is
   deleted and recreated is re-armed only on the next event or list.
-- Sizing policy choices are not persisted across daemon restarts. Native explicit activity,
-  non-driver fitting and sizing controls are not yet wired to the new daemon APIs.
+- Sizing policy choices are not persisted across daemon restarts. Non-driver fitting and
+  sizing controls are not yet wired to the new daemon APIs.
 - The ticket's relay URL is the one known at mint time; `endpoint.json` is refreshed as iroh's
   addresses change.
