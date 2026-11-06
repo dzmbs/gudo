@@ -280,7 +280,9 @@ Each client sends its size per pane (`Resize`); the PTY follows the client that 
 or the first client to report a size. `PaneMeta.sized_by` names its principal; the
 policy is always `LastInput` for now. Lone focus-in/out reports (`CSI I` / `CSI O`, including
 8-bit CSI) are delivered to the PTY but do not claim its size or update typing presence. Apple pane
-backends also leave the sizing window unchanged when forwarding those reports.
+backends also leave the sizing window unchanged when forwarding those reports. Pixel-only
+changes leave the PTY, VT and resize history unchanged, so changing display scale does not send
+SIGWINCH. Pixel metrics are refreshed with the next columns-or-rows change.
 
 ### Identity and pairing
 

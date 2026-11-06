@@ -540,9 +540,9 @@ impl Pane {
         self.pty.subscribe_from(pty::Seq::new(seq.0))
     }
 
-    /// Resizes the terminal and the PTY. Returns `false` if the size is unchanged.
+    /// Resizes the terminal and PTY when columns or rows change; ignores pixel-only changes.
     ///
-    /// A size without pixels gets [`DEFAULT_CELL_PX`] cells, recorded and reported to the
+    /// A grid change without pixels gets [`DEFAULT_CELL_PX`] cells, recorded and reported to the
     /// program and clients as if the client had sent it.
     pub fn resize(&self, size: PaneSize) -> io::Result<bool> {
         if size.cols == 0 || size.rows == 0 {
@@ -550,7 +550,7 @@ impl Pane {
         }
         let size = with_pixels(size);
         let mut vt = lock(&self.vt);
-        if vt.size == size {
+        if vt.size.cols == size.cols && vt.size.rows == size.rows {
             return Ok(false);
         }
         vt.term
@@ -1253,6 +1253,61 @@ mod tests {
             full: vec![0; len],
             made: Instant::now(),
         })
+    }
+
+    #[tokio::test]
+    async fn pixel_only_changes_do_not_resize_the_pty_or_emit_resize_records() {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "exec sleep 30"]);
+        let original = PaneSize {
+            cols: 80,
+            rows: 24,
+            width_px: 800,
+            height_px: 480,
+        };
+        let (pane, _events) = Pane::spawn(
+            PaneId(1),
+            SnapGen(1),
+            command,
+            original,
+            1 << 20,
+            VtLimits {
+                scrollback_bytes: 1 << 20,
+                image_storage_bytes: 0,
+            },
+            &DefaultColors::default(),
+        )
+        .unwrap();
+        let updates = pane.resize_updates();
+        let pixels_only = PaneSize {
+            width_px: 1600,
+            height_px: 960,
+            ..original
+        };
+        assert!(!pane.resize(pixels_only).unwrap());
+        assert_eq!(pane.size(), original);
+        assert!(!updates.has_changed().unwrap());
+        assert!(pane.resizes_from(0).unwrap().is_empty());
+        let changed_grid = PaneSize {
+            rows: 25,
+            height_px: 1000,
+            ..pixels_only
+        };
+        assert!(pane.resize(changed_grid).unwrap());
+        assert_eq!(pane.size(), changed_grid);
+        assert!(updates.has_changed().unwrap());
+        assert_eq!(pane.resizes_from(0).unwrap().len(), 1);
+        assert!(
+            !pane
+                .resize(PaneSize {
+                    width_px: 0,
+                    height_px: 0,
+                    ..changed_grid
+                })
+                .unwrap()
+        );
+        assert_eq!(pane.size(), changed_grid);
+        let _ = pane.pty().signal(pty::Signal::Kill);
     }
 
     /// Many streams asking for snapshots of a flooding pane share recent ones. Checking that
