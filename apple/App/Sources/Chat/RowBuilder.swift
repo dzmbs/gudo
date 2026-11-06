@@ -14,6 +14,8 @@ nonisolated struct ChatRow: Equatable, Sendable, Identifiable {
     let revision: UInt32
     let turn: String?
     let content: Content
+    var preview: String?
+    var planPreview: TimelinePlan?
 
     enum Content: Equatable, Sendable {
         case markdown(ChatMarkdownBlock)
@@ -28,15 +30,51 @@ nonisolated struct ChatMarkdownBlock: Equatable, Sendable {
 
     let kind: Kind
     let source: String
-    let text: AttributedString
+    var text: AttributedString
     var list: [ChatListLine] = []
     var table: [[AttributedString]] = []
+    var code: ChatCodeSnippet?
+    var hasOmittedContent = false
+}
+
+nonisolated struct ChatCodeSnippet: Equatable, Sendable {
+    let text: String
+    let preview: String
+    let lineCount: Int
+    let visibleLineCount: Int
+    let isTruncated: Bool
 }
 
 nonisolated struct ChatListLine: Equatable, Sendable {
     let depth: Int
     let marker: String
     let text: AttributedString
+}
+
+nonisolated private struct MarkdownSource {
+    let whole: String
+    let bytes: [UInt8]
+    let lineStarts: [Int]
+
+    init(_ text: String) {
+        whole = text
+        bytes = Array(text.utf8)
+        var starts = [0]
+        for (index, byte) in bytes.enumerated() where byte == 10 { starts.append(index + 1) }
+        lineStarts = starts
+    }
+
+    func text(in range: SourceRange?) -> String? {
+        guard let range, let lower = offset(range.lowerBound), let upper = offset(range.upperBound), lower <= upper else { return nil }
+        return String(bytes: bytes[lower..<upper], encoding: .utf8)
+    }
+
+    private func offset(_ location: SourceLocation) -> Int? {
+        guard lineStarts.indices.contains(location.line - 1), location.column > 0 else { return nil }
+        let offset = lineStarts[location.line - 1] + location.column - 1
+        let end = location.line < lineStarts.count ? lineStarts[location.line] - 1 : bytes.count
+        return offset <= end ? offset : nil
+    }
 }
 
 actor RowBuilder {
@@ -61,12 +99,33 @@ actor RowBuilder {
         var bytes = ((try? TimelineJSON.encode(item).count) ?? 0) * 2 + 256
         if case .assistant(let assistant) = item.body {
             let blocks = markdown(assistant.text)
+            let previous = cache[item.id]?.rows ?? []
             rows = blocks.enumerated().map { index, block in
-                ChatRow(id: ChatRowID(item: item.id, part: index), revision: item.revision, turn: item.turn, content: .markdown(block))
+                let content = ChatRow.Content.markdown(block)
+                if previous.indices.contains(index), previous[index].turn == item.turn, previous[index].content == content { return previous[index] }
+                return ChatRow(id: ChatRowID(item: item.id, part: index), revision: item.revision, turn: item.turn, content: content)
             }
             bytes = assistant.text.utf8.count * 4 + rows.count * 512 + 256
         } else {
-            rows = [ChatRow(id: ChatRowID(item: item.id, part: 0), revision: item.revision, turn: item.turn, content: .item(item))]
+            let text: String?
+            switch item.body {
+            case .user(let user): text = user.text
+            case .thinking(let thinking): text = thinking.text
+            case .notice(let notice): text = notice.text
+            default: text = nil
+            }
+            let preview = text.flatMap { $0.utf8.count > 4_096 ? prefix($0, bytes: 4_096) : nil }
+            var planPreview: TimelinePlan?
+            if case .plan(let plan) = item.body, plan.entries.count > 20 || plan.entries.contains(where: { $0.text.utf8.count > 512 }) {
+                var limited = plan
+                limited.entries = plan.entries.prefix(20).map { entry in
+                    var limited = entry
+                    limited.text = prefix(entry.text, bytes: 512)
+                    return limited
+                }
+                planPreview = limited
+            }
+            rows = [ChatRow(id: ChatRowID(item: item.id, part: 0), revision: item.revision, turn: item.turn, content: .item(item), preview: preview, planPreview: planPreview)]
         }
         if let previous = cache.removeValue(forKey: item.id) {
             cachedBytes -= previous.bytes
@@ -114,6 +173,12 @@ actor RowBuilder {
     var cacheRowCount: Int { cachedRows }
     var cacheBytes: Int { cachedBytes }
 
+    private func prefix(_ text: String, bytes: Int) -> String {
+        var prefix = Array(text.utf8.prefix(bytes))
+        while String(bytes: prefix, encoding: .utf8) == nil { prefix.removeLast() }
+        return String(decoding: prefix, as: UTF8.self)
+    }
+
     private func touch(_ identifier: String) {
         recency.removeAll { $0 == identifier }
         recency.append(identifier)
@@ -122,31 +187,57 @@ actor RowBuilder {
     private func markdown(_ source: String) -> [ChatMarkdownBlock] {
         parseCount += 1
         let document = Document(parsing: source)
-        return document.children.map { block($0) }
+        let original = MarkdownSource(source)
+        return document.children.flatMap { markup -> [ChatMarkdownBlock] in
+            let rendered = block(markup, source: original.text(in: markup.range) ?? source, original: original)
+            if rendered.kind == .list, rendered.list.count > 20 {
+                return stride(from: 0, to: rendered.list.count, by: 20).map { start in
+                    var chunk = rendered
+                    chunk.list = Array(rendered.list[start..<min(start + 20, rendered.list.count)])
+                    return chunk
+                }
+            }
+            switch rendered.kind {
+            case .paragraph, .heading, .quote, .plain:
+                return textChunks(rendered.text).map { text in
+                    var chunk = rendered
+                    chunk.text = text
+                    return chunk
+                }
+            default: return [rendered]
+            }
+        }
     }
 
-    private func block(_ markup: any Markup) -> ChatMarkdownBlock {
-        let source = markup.format().trimmingCharacters(in: .newlines)
+    private func block(_ markup: any Markup, source: String, original: MarkdownSource) -> ChatMarkdownBlock {
         if let code = markup as? CodeBlock {
-            return ChatMarkdownBlock(kind: .code(code.language), source: source, text: AttributedString(code.code))
+            let text = code.code
+            let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+            let preview = prefix(lines.prefix(30).joined(separator: "\n"), bytes: 8_192)
+            let snippet = ChatCodeSnippet(text: text, preview: preview, lineCount: lines.count,
+                                          visibleLineCount: preview.split(separator: "\n", omittingEmptySubsequences: false).count,
+                                          isTruncated: lines.count > 30 || text.utf8.count > preview.utf8.count)
+            return ChatMarkdownBlock(kind: .code(code.language), source: source, text: AttributedString(text), code: snippet)
         }
         if markup is ThematicBreak {
             return ChatMarkdownBlock(kind: .separator, source: source, text: AttributedString())
         }
         if let table = markup as? Table {
-            var rows = [Array(table.head.cells.map { self.inlineChildren($0) })]
-            rows += table.body.rows.map { row in Array(row.cells.map { self.inlineChildren($0) }) }
-            return ChatMarkdownBlock(kind: .table, source: source, text: AttributedString(), table: rows)
+            var rows = [Array(table.head.cells.prefix(8).map { self.tableCell($0) })]
+            rows += table.body.rows.prefix(8).map { row in Array(row.cells.prefix(8).map { self.tableCell($0) }) }
+            let omitted = table.body.childCount > 8 || table.head.childCount > 8 || rows.joined().contains { $0.isTruncated }
+            return ChatMarkdownBlock(kind: .table, source: source, text: AttributedString(), table: rows.map { $0.map { $0.text } },
+                                     hasOmittedContent: omitted)
         }
         if markup is UnorderedList || markup is OrderedList {
-            return ChatMarkdownBlock(kind: .list, source: source, text: AttributedString(), list: listLines(markup, depth: 0))
+            return ChatMarkdownBlock(kind: .list, source: source, text: AttributedString(), list: listLines(markup, depth: 0, original: original))
         }
         if let heading = markup as? Heading {
             let content = heading.children.map { $0.format() }.joined()
             return ChatMarkdownBlock(kind: .heading(heading.level), source: source, text: inline(content))
         }
         if let quote = markup as? BlockQuote {
-            let content = quote.children.map { $0.format() }.joined(separator: "\n")
+            let content = quote.children.map { inlineSource($0, original: original) }.joined(separator: "\n")
             return ChatMarkdownBlock(kind: .quote, source: source, text: inline(content))
         }
         if markup is HTMLBlock {
@@ -155,7 +246,7 @@ actor RowBuilder {
         return ChatMarkdownBlock(kind: .paragraph, source: source, text: inline(source))
     }
 
-    private func listLines(_ markup: any Markup, depth: Int) -> [ChatListLine] {
+    private func listLines(_ markup: any Markup, depth: Int, original: MarkdownSource) -> [ChatListLine] {
         let start = (markup as? OrderedList)?.startIndex
         var lines: [ChatListLine] = []
         for (index, child) in markup.children.enumerated() {
@@ -171,18 +262,42 @@ actor RowBuilder {
             var isFirst = true
             for content in item.children {
                 if content is UnorderedList || content is OrderedList {
-                    lines += listLines(content, depth: depth + 1)
+                    lines += listLines(content, depth: depth + 1, original: original)
                 } else {
-                    lines.append(ChatListLine(depth: depth, marker: isFirst ? marker : "", text: inline(content.format().trimmingCharacters(in: .newlines))))
-                    isFirst = false
+                    let text = inline(inlineSource(content, original: original).trimmingCharacters(in: .newlines))
+                    for chunk in textChunks(text) {
+                        lines.append(ChatListLine(depth: depth, marker: isFirst ? marker : "", text: chunk))
+                        isFirst = false
+                    }
                 }
             }
         }
         return lines
     }
 
-    private func inlineChildren(_ markup: any Markup) -> AttributedString {
-        inline(markup.children.map { $0.format() }.joined())
+    private func inlineSource(_ markup: any Markup, original: MarkdownSource) -> String {
+        if containsTable(markup) { return original.text(in: markup.range) ?? original.whole }
+        return markup.detachedFromParent.format()
+    }
+
+    private func containsTable(_ markup: any Markup) -> Bool {
+        markup is Markdown.Table || markup.children.contains { containsTable($0) }
+    }
+
+    private func textChunks(_ text: AttributedString) -> [AttributedString] {
+        var chunks: [AttributedString] = []
+        var start = text.startIndex
+        while start < text.endIndex {
+            let end = text.characters.index(start, offsetBy: 2_048, limitedBy: text.endIndex) ?? text.endIndex
+            chunks.append(AttributedString(text[start..<end]))
+            start = end
+        }
+        return chunks.isEmpty ? [text] : chunks
+    }
+
+    private func tableCell(_ markup: any Markup) -> (text: AttributedString, isTruncated: Bool) {
+        let source = markup.children.map { $0.format() }.joined()
+        return (inline(prefix(source, bytes: 512)), source.utf8.count > 512)
     }
 
     private func inline(_ markdown: String) -> AttributedString {

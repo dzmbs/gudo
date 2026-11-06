@@ -41,6 +41,7 @@ final class RowBuilderTests: XCTestCase {
         XCTAssertEqual(blocks.map(\.kind), [.heading(1), .paragraph, .list, .quote, .code("rust"), .table, .separator, .plain])
         XCTAssertEqual(blocks[2].list.map(\.depth), [0, 1, 0])
         XCTAssertEqual(blocks[2].list.last?.marker, "☑")
+        XCTAssertEqual(String(blocks[3].text.characters).trimmingCharacters(in: .whitespacesAndNewlines), "A quote")
         XCTAssertEqual(String(blocks[4].text.characters), "fn main() {}\n")
         XCTAssertEqual(blocks[5].table.count, 2)
         XCTAssertEqual(String(blocks[5].table[1][1].characters).trimmingCharacters(in: .whitespacesAndNewlines), "Passed")
@@ -57,10 +58,125 @@ final class RowBuilderTests: XCTestCase {
         let original = await builder.rows(for: first)
         let changed = await builder.rows(for: try assistant("First paragraph.\n\nChanged paragraph.", revision: 2))
         XCTAssertEqual(original.map(\.id), changed.map(\.id))
-        XCTAssertEqual(original.first?.content, changed.first?.content)
+        XCTAssertEqual(original.first, changed.first)
         XCTAssertNotEqual(original.last?.content, changed.last?.content)
         let parseCount = await builder.parseCount
         XCTAssertEqual(parseCount, 2)
+    }
+
+    func testLongListsAndParagraphsBecomeBoundedNativeRows() async throws {
+        let builder = RowBuilder()
+        let list = (0..<1_001).map { "- Entry \($0)" }.joined(separator: "\n")
+        let rows = await builder.rows(for: try assistant(list))
+        let blocks = rows.compactMap { row -> ChatMarkdownBlock? in
+            if case .markdown(let block) = row.content { return block }
+            return nil
+        }
+        XCTAssertEqual(blocks.count, 51)
+        XCTAssertTrue(blocks.allSatisfy { $0.list.count <= 20 })
+        XCTAssertEqual(blocks.flatMap(\.list).count, 1_001)
+        let paragraph = String(repeating: "bounded ", count: 2_000)
+        let paragraphs = await builder.rows(for: try assistant(paragraph, id: "long-paragraph"))
+        let texts = paragraphs.compactMap { row -> AttributedString? in
+            if case .markdown(let block) = row.content { return block.text }
+            return nil
+        }
+        XCTAssertTrue(texts.allSatisfy { $0.characters.count <= 2_048 })
+        XCTAssertEqual(texts.map { String($0.characters) }.joined().trimmingCharacters(in: .whitespacesAndNewlines), paragraph.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    func testCodePreviewsArePreparedOffMainAndKeepTheFullSource() async throws {
+        let builder = RowBuilder()
+        let code = (0..<100).map { "print(\($0))" }.joined(separator: "\n")
+        let rows = await builder.rows(for: try assistant("```swift\n\(code)\n```"))
+        guard case .markdown(let block) = rows.first?.content else { return XCTFail("Missing code") }
+        XCTAssertEqual(block.code?.text, code + "\n")
+        XCTAssertEqual(block.code?.lineCount, 101)
+        XCTAssertEqual(block.code?.preview.split(separator: "\n").count, 30)
+    }
+
+    func testLongSingleLineCodeHasAByteBoundedUTF8Preview() async throws {
+        let builder = RowBuilder()
+        let code = "x" + String(repeating: "🙂", count: 3_000)
+        let rows = await builder.rows(for: try assistant("```text\n\(code)\n```"))
+        guard case .markdown(let block) = rows.first?.content else { return XCTFail("Missing code") }
+        XCTAssertEqual(block.code?.preview.utf8.count, 8_189)
+        XCTAssertEqual(block.code?.visibleLineCount, 1)
+        XCTAssertEqual(block.code?.isTruncated, true)
+        XCTAssertFalse(block.code?.preview.contains("�") ?? true)
+        XCTAssertEqual(block.code?.text, code + "\n")
+    }
+
+    func testLargeTextValuesKeepFullTextOutsideTheInlinePreview() async throws {
+        let builder = RowBuilder()
+        let text = "x" + String(repeating: "🙂", count: 3_000)
+        let bodies: [[String: Any]] = [
+            ["User": ["text": text, "attachments": [], "queued": false]],
+            ["Thinking": ["text": text]],
+            ["Notice": ["kind": "Error", "text": text]]
+        ]
+        for (index, body) in bodies.enumerated() {
+            var item = try assistant("", id: "large-\(index)")
+            let data = try JSONSerialization.data(withJSONObject: body)
+            item.body = try TimelineJSON.decode(TimelineBody.self, from: String(decoding: data, as: UTF8.self))
+            let rows = await builder.rows(for: item)
+            XCTAssertEqual(rows.first?.preview?.utf8.count, 4_093)
+            XCTAssertFalse(rows.first?.preview?.contains("�") ?? true)
+            XCTAssertEqual(rows.first?.content, .item(item))
+        }
+    }
+
+    func testLargePlansKeepBoundedEntriesWithoutLosingTheirFullValue() async throws {
+        let builder = RowBuilder()
+        let text = "x" + String(repeating: "🙂", count: 300)
+        let entries = (0..<100).map { _ in ["text": text, "status": "Pending"] }
+        let data = try JSONSerialization.data(withJSONObject: ["Plan": ["entries": entries]])
+        var item = try assistant("")
+        item.body = try TimelineJSON.decode(TimelineBody.self, from: String(decoding: data, as: UTF8.self))
+        let rows = await builder.rows(for: item)
+        XCTAssertEqual(rows.first?.content, .item(item))
+        let preview = try XCTUnwrap(rows.first?.planPreview)
+        XCTAssertEqual(preview.entries.count, 20)
+        XCTAssertTrue(preview.entries.allSatisfy { $0.text.utf8.count <= 512 && !$0.text.contains("�") })
+    }
+
+    func testSparseTablesKeepTheirOriginalSourceWithoutColumnPadding() async throws {
+        let builder = RowBuilder()
+        let longCell = String(repeating: "x", count: 2_000)
+        let source = "| Value |\n| --- |\n| \(longCell) |\n" + (0..<80).map { "| Value \($0) |" }.joined(separator: "\n")
+        let rows = await builder.rows(for: try assistant(source))
+        guard case .markdown(let block) = rows.first?.content else { return XCTFail("Missing table") }
+        XCTAssertEqual(block.source, source)
+        XCTAssertEqual(block.table.count, 9)
+        XCTAssertTrue(block.hasOmittedContent)
+        XCTAssertTrue(block.table.flatMap { $0 }.allSatisfy { String($0.characters).utf8.count <= 512 })
+    }
+
+    func testNestedSparseTablesCannotExpandIntoPaddedInlineText() async throws {
+        let builder = RowBuilder()
+        let table = "| Value |\n| --- |\n| \(String(repeating: "x", count: 2_000)) |\n" + (0..<80).map { "| Value \($0) |" }.joined(separator: "\n")
+        let lines = table.split(separator: "\n")
+        let sources = [lines.map { "> \($0)" }.joined(separator: "\n"),
+                       "- Item\n\n" + lines.map { "  \($0)" }.joined(separator: "\n")]
+        for (index, source) in sources.enumerated() {
+            let rows = await builder.rows(for: try assistant(source, id: "nested-\(index)"))
+            let characters = rows.reduce(0) { count, row in
+                guard case .markdown(let block) = row.content else { return count }
+                return count + block.text.characters.count + block.list.reduce(0) { $0 + $1.text.characters.count }
+            }
+            XCTAssertLessThanOrEqual(characters, source.utf8.count * 2)
+        }
+    }
+
+    func testSourceRangesPreserveUnicodeAndCRLF() async throws {
+        let builder = RowBuilder()
+        let sources = ["🙂 αβ", "first\r\n第二段", "\u{feff}abcdef", "\u{feff}🙂 abcdef"]
+        for (index, source) in sources.enumerated() {
+            let rows = await builder.rows(for: try assistant(source, id: "source-\(index)"))
+            guard case .markdown(let block) = rows.first?.content else { return XCTFail("Missing paragraph") }
+            let markers = CharacterSet(charactersIn: "\u{feff}")
+            XCTAssertEqual(block.source.trimmingCharacters(in: markers), source.trimmingCharacters(in: markers))
+        }
     }
 
     func testUntrustedLinkSchemesAreNeverInteractive() async throws {
