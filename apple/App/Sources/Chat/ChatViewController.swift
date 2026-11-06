@@ -20,7 +20,7 @@ struct NativeChatView<Composer: View>: UIViewControllerRepresentable {
 
     func updateUIViewController(_ controller: ChatViewController, context: Context) {
         controller.update(frame: frame, expanded: expanded, environment: environment, actions: actions,
-                          composer: AnyView(composer().environment(\.self, environment)), codeFontSize: fontSize, isActive: isActive)
+                          composer: AnyView(composer().environment(\.self, environment).tint(environment.chrome.accentColor)), codeFontSize: fontSize, isActive: isActive)
     }
 }
 
@@ -267,6 +267,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         ChatRowView(row: row, isExpanded: expanded.contains(row.id), toggle: { [weak self] in self?.model.toggle(row.id) }, actions: actions)
             .environment(\.self, environment)
             .dynamicTypeSize(environment.dynamicTypeSize)
+            .tint(environment.chrome.accentColor)
             .ignoresSafeArea()
     }
 
