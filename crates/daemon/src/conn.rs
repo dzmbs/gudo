@@ -190,6 +190,10 @@ async fn run(
     let ws = crate::ws::ConnCtx {
         ctl: ctl.clone(),
         watches: Arc::default(),
+        timeline_watches: Arc::default(),
+        timeline_mailbox: Arc::default(),
+        timeline_since: (!owner && authz.history == proto::History::SinceJoin)
+            .then_some(authz.joined_at),
         actor: authz.actor,
         caps: hello.caps,
         owner,
@@ -256,6 +260,7 @@ async fn run(
         ctl_tx,
         ctl_out,
         client.peers.clone(),
+        Some(Arc::clone(&client.ws.timeline_mailbox)),
     ));
     tasks.spawn(forward_events(Arc::clone(&client), core.events.subscribe()));
     tasks.spawn(accept_uni(Arc::clone(&client)));
@@ -295,6 +300,8 @@ async fn run(
         core.ws.repos.watch(false);
     }
     lock(&client.ws.watches).clear();
+    lock(&client.ws.timeline_watches).clear();
+    client.ws.timeline_mailbox.clear();
     result
 }
 
@@ -327,7 +334,8 @@ pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {
         | DaemonFeatures::DEVICE_MANAGEMENT
         | DaemonFeatures::PUSH_AGENTS
         | DaemonFeatures::TERMINAL_COLORS
-        | DaemonFeatures::POWER_SETTINGS;
+        | DaemonFeatures::POWER_SETTINGS
+        | DaemonFeatures::AGENT_TIMELINE;
     if core.cfg.push.enabled && core.cfg.push.live_activity {
         features |= DaemonFeatures::LIVE_ACTIVITY;
     }
@@ -426,7 +434,7 @@ async fn serve_knock(
     mut knocker: Knocker,
 ) -> Result<(), NetError> {
     let (ctl, ctl_out) = mpsc::unbounded_channel();
-    let writer = tokio::spawn(write_ctl(conn.clone(), ctl_tx, ctl_out, None));
+    let writer = tokio::spawn(write_ctl(conn.clone(), ctl_tx, ctl_out, None, None));
     // The knocker says who it is right after `Hello`; wait a moment for it, so the owner (and
     // the audit log) see the name rather than a placeholder.
     let first = tokio::time::timeout(
@@ -574,8 +582,10 @@ async fn write_ctl(
     mut send: SendStream,
     mut out: mpsc::UnboundedReceiver<ServerCtl>,
     peers: Option<Arc<Mailbox>>,
+    timelines: Option<Arc<crate::timeline::Mailbox>>,
 ) {
     let mut batch = Vec::new();
+    let mut bulk_replies = Vec::new();
     loop {
         let first = tokio::select! {
             message = out.recv() => match message {
@@ -588,14 +598,34 @@ async fn write_ctl(
                     None => std::future::pending().await,
                 }
             } => None,
+            () = async {
+                match &timelines {
+                    Some(mailbox) => mailbox.ready.notified().await,
+                    None => std::future::pending().await,
+                }
+            } => None,
         };
         batch.clear();
+        bulk_replies.clear();
         let mut next = first;
         // Coalesce what is queued into one write, up to a bound: a producer that never pauses
         // must not keep this loop (and its buffer) growing.
         while let Some(message) = next {
+            let bulk_reply = match &message {
+                ServerCtl::WorkspaceResult { req_id, result }
+                    if crate::timeline::bulk_reply(result) =>
+                {
+                    Some(*req_id)
+                }
+                _ => None,
+            };
             if let Err(error) = proto::frame::encode(&message, &mut batch) {
                 tracing::warn!("encoding ctl message: {error}");
+                if let (Some(mailbox), Some(request)) = (&timelines, bulk_reply) {
+                    mailbox.reply_sent(request);
+                }
+            } else if let Some(request) = bulk_reply {
+                bulk_replies.push(request);
             }
             next = if batch.len() < MAX_CTL_BATCH {
                 out.try_recv().ok()
@@ -603,7 +633,11 @@ async fn write_ctl(
                 None
             };
         }
-        for message in peers.iter().flat_map(|mailbox| mailbox.take()) {
+        for message in peers
+            .iter()
+            .flat_map(|mailbox| mailbox.take())
+            .chain(timelines.iter().flat_map(|mailbox| mailbox.take()))
+        {
             if let Err(error) = proto::frame::encode(&message, &mut batch) {
                 tracing::warn!("encoding ctl message: {error}");
             }
@@ -636,6 +670,11 @@ async fn write_ctl(
                         return;
                     }
                 }
+            }
+        }
+        if let Some(mailbox) = &timelines {
+            for request in bulk_replies.drain(..) {
+                mailbox.reply_sent(request);
             }
         }
     }
@@ -2338,7 +2377,26 @@ impl Client {
             ClientCtl::Workspace { req_id, req } => {
                 let client = Arc::clone(self);
                 tokio::spawn(async move {
+                    let permit = if crate::timeline::bulk_request(&req) {
+                        match client.ws.timeline_mailbox.reserve_reply() {
+                            Ok(permit) => Some(permit),
+                            Err(error) => {
+                                client.send(ServerCtl::WorkspaceResult {
+                                    req_id,
+                                    result: Err(error),
+                                });
+                                return;
+                            }
+                        }
+                    } else {
+                        None
+                    };
                     let result = client.workspace(req).await;
+                    if let Some(permit) = permit
+                        && crate::timeline::bulk_reply(&result)
+                    {
+                        client.ws.timeline_mailbox.hold_reply(req_id, permit);
+                    }
                     client.send(ServerCtl::WorkspaceResult { req_id, result });
                 });
             }

@@ -64,6 +64,7 @@ mod shell;
 mod stream;
 mod term;
 mod theme;
+mod timeline;
 mod upgrade;
 mod usage;
 mod ws;

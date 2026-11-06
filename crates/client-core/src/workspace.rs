@@ -43,25 +43,46 @@ const COPY_CHUNK: usize = 64 << 10;
 #[derive(Debug, Clone)]
 pub enum WorkspaceEvent {
     /// The listening ports in panes (the whole list).
-    PortsChanged { ports: Vec<PortInfo> },
+    PortsChanged {
+        ports: Vec<PortInfo>,
+    },
     /// A watched directory changed ([`Client::fs_watch`]).
-    FsChanged { change: FsChange },
+    FsChanged {
+        change: FsChange,
+    },
     /// The attention feed changed.
-    Attention { update: AttentionUpdate },
+    Attention {
+        update: AttentionUpdate,
+    },
     /// The host's VS Code tunnel changed state: show a device code
     /// ([`TunnelState::NeedsLogin`](proto::TunnelState::NeedsLogin)), connected, failed.
-    VsCodeTunnel { status: VsCodeTunnelStatus },
+    VsCodeTunnel {
+        status: VsCodeTunnelStatus,
+    },
     /// Agent plan usage changed (while watching, [`Client::usage_watch`]).
-    AgentUsage { report: AgentUsageReport },
+    AgentUsage {
+        report: AgentUsageReport,
+    },
     /// The host's agent accounts or the panes' accounts changed (owner devices).
-    Accounts { report: proto::AccountsReport },
+    Accounts {
+        report: proto::AccountsReport,
+    },
     /// Plan usage per account changed (owner devices, while watching usage).
-    AccountUsage { report: proto::AccountUsageReport },
+    AccountUsage {
+        report: proto::AccountUsageReport,
+    },
     /// The repositories, worktrees, branches and pull requests of the panes (the whole
     /// snapshot; only with [`ClientConfig::repo_status`](crate::ClientConfig::repo_status)).
-    Repos { snapshot: RepoSnapshot },
+    Repos {
+        snapshot: RepoSnapshot,
+    },
     /// A workflow file the daemon listed changed: list again ([`Client::workflow_list`]).
-    WorkflowsChanged { rev: u64 },
+    WorkflowsChanged {
+        rev: u64,
+    },
+    Timeline {
+        update: proto::TimelineUpdate,
+    },
 }
 
 /// Receives [`WorkspaceEvent`]s. Must return quickly; it runs on the network threads.
@@ -133,6 +154,7 @@ impl WsState {
                 WorkspaceEvent::Repos { snapshot }
             }
             ServerCtl::WorkflowsChanged { rev } => WorkspaceEvent::WorkflowsChanged { rev },
+            ServerCtl::Timeline(update) => WorkspaceEvent::Timeline { update },
             other => return Some(other),
         };
         let listener = lock(&self.listener).clone();
@@ -813,6 +835,53 @@ impl Client {
     pub async fn worktree_restore(&self, id: u64) -> Result<WorktreeInfo, WsError> {
         expect!(self.workspace(WorkspaceRequest::WorktreeRestore { id }).await?,
             WorkspaceResponse::Worktree(worktree) => worktree)
+    }
+
+    pub async fn timeline_watch(
+        &self,
+        pane_id: PaneId,
+    ) -> Result<proto::TimelineSnapshot, WsError> {
+        self.require_timeline()?;
+        expect!(self.workspace(WorkspaceRequest::TimelineWatch { pane_id }).await?,
+            WorkspaceResponse::Timeline(snapshot) => snapshot)
+    }
+
+    pub async fn timeline_unwatch(&self, pane_id: PaneId) -> Result<(), WsError> {
+        if !self.daemon_has(proto::DaemonFeatures::AGENT_TIMELINE) {
+            return Ok(());
+        }
+        expect!(self.workspace(WorkspaceRequest::TimelineUnwatch { pane_id }).await?,
+            WorkspaceResponse::Done => ())
+    }
+
+    pub async fn timeline_items_before(
+        &self,
+        pane_id: PaneId,
+        before: u64,
+        limit: u16,
+    ) -> Result<proto::TimelineSnapshot, WsError> {
+        self.require_timeline()?;
+        expect!(self.workspace(WorkspaceRequest::TimelineItemsBefore { pane_id, before, limit }).await?,
+            WorkspaceResponse::Timeline(snapshot) => snapshot)
+    }
+
+    pub async fn timeline_tool_output(
+        &self,
+        pane_id: PaneId,
+        handle: String,
+        offset: u64,
+        len: u32,
+    ) -> Result<proto::TimelineToolOutput, WsError> {
+        self.require_timeline()?;
+        expect!(self.workspace(WorkspaceRequest::TimelineToolOutput { pane_id, handle, offset, len }).await?,
+            WorkspaceResponse::TimelineOutput(output) => output)
+    }
+
+    fn require_timeline(&self) -> Result<(), WsError> {
+        if self.daemon_has(proto::DaemonFeatures::AGENT_TIMELINE) {
+            return Ok(());
+        }
+        Err(WsError::Unavailable("update the helper to use Chat".into()))
     }
 
     pub async fn power_settings(

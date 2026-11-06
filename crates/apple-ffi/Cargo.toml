@@ -18,6 +18,7 @@ brand.workspace = true
 client-core.workspace = true
 flate2.workspace = true
 push.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 ssh.workspace = true
 thiserror.workspace = true

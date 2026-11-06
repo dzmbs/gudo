@@ -37,6 +37,7 @@ mod stress;
 mod support;
 mod term;
 mod terminal;
+mod timeline;
 mod upgrade;
 mod usage;
 mod vscode;

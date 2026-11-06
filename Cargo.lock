@@ -203,6 +203,7 @@ dependencies = [
  "daemon",
  "flate2",
  "push",
+ "serde",
  "serde_json",
  "ssh",
  "tempfile",

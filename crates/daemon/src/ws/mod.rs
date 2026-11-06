@@ -64,6 +64,7 @@ pub(crate) struct Ws {
     pub workflows: Arc<workflows::Workflows>,
     /// `PATH` as the user's terminal panes see it.
     pub terminal_path: installs::TerminalPath,
+    pub timelines: crate::timeline::Timelines,
 }
 
 impl Ws {
@@ -89,6 +90,7 @@ impl Ws {
             accounts,
             tools: crate::accounts::Tools::new(config),
             terminal_path: installs::TerminalPath::default(),
+            timelines: crate::timeline::Timelines::default(),
         }
     }
 
@@ -103,6 +105,9 @@ impl Ws {
 pub(crate) struct ConnCtx {
     pub ctl: mpsc::UnboundedSender<ServerCtl>,
     pub watches: Arc<Mutex<HashMap<u64, Watch>>>,
+    pub timeline_watches: Arc<Mutex<HashMap<PaneId, crate::timeline::Watch>>>,
+    pub timeline_mailbox: Arc<crate::timeline::Mailbox>,
+    pub timeline_since: Option<proto::UnixMillis>,
     /// Who is asking (push registration and notification actions are per device).
     pub actor: proto::Actor,
     /// The client's optional features (`Caps::AGENT_USAGE` takes usage pushes).
@@ -184,6 +189,10 @@ pub(crate) async fn handle(
                 .map(Response::PowerStatus)
                 .map_err(|error| WsError::Failed(error.to_string()))
         }
+        request @ (Request::TimelineWatch { .. }
+        | Request::TimelineUnwatch { .. }
+        | Request::TimelineItemsBefore { .. }
+        | Request::TimelineToolOutput { .. }) => crate::timeline::handle(core, conn, request).await,
         Request::ListPorts => Ok(Response::Ports(ports::scan(core).await)),
         Request::EditorStatus => {
             let mut editors = ws.editors.status(&core.cfg).await;

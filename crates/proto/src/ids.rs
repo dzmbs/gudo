@@ -338,6 +338,7 @@ bitset! {
         /// On an owner device, wants `ServerCtl::GuestAnswered` whenever someone else answers
         /// an agent's request.
         ANSWER_ALERTS = 26;
+        AGENT_TIMELINE = 27;
     }
 }
 
@@ -407,5 +408,6 @@ bitset! {
         /// `ClientCtl::TerminalColors`.
         TERMINAL_COLORS = 22;
         POWER_SETTINGS = 23;
+        AGENT_TIMELINE = 24;
     }
 }

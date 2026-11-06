@@ -423,6 +423,7 @@ async fn handshake(
             }
             | Caps::APPROVALS
             | Caps::WORKFLOWS
+            | Caps::AGENT_TIMELINE
             | Caps::PRESENCE
             | Caps::PROJECTS
             | Caps::FLOATS

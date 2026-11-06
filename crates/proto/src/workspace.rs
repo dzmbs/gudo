@@ -330,6 +330,23 @@ pub enum WorkspaceRequest {
     /// [`DaemonFeatures::PUSH_AGENTS`](crate::DaemonFeatures::PUSH_AGENTS) understand it.
     PushAgents(Vec<PushAgentRule>),
     PowerSettings(Option<crate::PowerPolicy>),
+    TimelineWatch {
+        pane_id: PaneId,
+    },
+    TimelineUnwatch {
+        pane_id: PaneId,
+    },
+    TimelineItemsBefore {
+        pane_id: PaneId,
+        before: u64,
+        limit: u16,
+    },
+    TimelineToolOutput {
+        pane_id: PaneId,
+        handle: String,
+        offset: u64,
+        len: u32,
+    },
 }
 
 /// The answer to a [`WorkspaceRequest`].
@@ -403,6 +420,8 @@ pub enum WorkspaceResponse {
     Accounts(crate::account::AccountsReport),
     Account(crate::account::AgentAccount),
     PowerStatus(crate::PowerStatus),
+    Timeline(crate::TimelineSnapshot),
+    TimelineOutput(crate::TimelineToolOutput),
 }
 
 /// A command that registers or removes the daemon's MCP server with an agent.

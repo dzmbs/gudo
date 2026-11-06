@@ -1310,6 +1310,10 @@ pub enum WorkspaceEvent {
     AccountUsage {
         report: crate::accounts::AccountUsageReport,
     },
+    Timeline {
+        pane_id: u64,
+        update_json: String,
+    },
 }
 
 impl From<client_core::WorkspaceEvent> for WorkspaceEvent {
@@ -1345,6 +1349,10 @@ impl From<client_core::WorkspaceEvent> for WorkspaceEvent {
                 snapshot: snapshot.into(),
             },
             E::WorkflowsChanged { rev } => Self::WorkflowsChanged { rev },
+            E::Timeline { update } => Self::Timeline {
+                pane_id: update.pane_id.0,
+                update_json: crate::timeline::encode_update(&update),
+            },
         }
     }
 }

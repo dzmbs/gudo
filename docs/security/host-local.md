@@ -96,6 +96,13 @@ arguments: `cmd_run` types into a pane the agent owns, which is its purpose. One
 together with every worker it starts, may have at most 32 panes open. A wait holds at most
 1 MiB of output, and results are capped at 256 KiB.
 
+**Agent timelines.** Reading a timeline requires View on its pane. Since-join guests receive no
+older items or output. The captured session selects the file inside that agent account's
+transcript directory; requests carry scoped cursors and output handles, never file paths.
+Canonical roots, matching session filenames, no-follow opens and file identity checks constrain
+reads. Native watches and workers stop with their last subscription. Push mailboxes and bulk
+reply permits bound memory while a client stops reading. See [Agent timelines](../CHAT.md).
+
 **Files and git.** Path policy (DAEMON.md §5.0): paths must be absolute, with no `..`, and their
 real path must lie inside `$HOME` or `files.allow`. Symlinks are checked through their real
 targets.

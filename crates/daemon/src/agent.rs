@@ -246,6 +246,10 @@ impl AgentRuntime {
         self.kind
     }
 
+    pub fn session(&self) -> &SessionInfo {
+        self.arbiter.session()
+    }
+
     /// When the daemon launched the agent or first saw it running.
     pub fn started_at(&self) -> std::time::SystemTime {
         self.started_at

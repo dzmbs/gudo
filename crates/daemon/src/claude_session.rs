@@ -10,7 +10,7 @@ use std::path::Path;
 use std::time::SystemTime;
 
 /// Whether `text` is a session id (a UUID).
-fn is_session_id(text: &str) -> bool {
+pub(crate) fn is_session_id(text: &str) -> bool {
     text.len() == 36
         && text.char_indices().all(|(i, character)| match i {
             8 | 13 | 18 | 23 => character == '-',
@@ -37,7 +37,7 @@ pub(crate) fn from_argv(argv: &[String]) -> Option<String> {
 }
 
 /// Claude Code's folder for the transcripts of sessions started in `cwd`.
-fn project_dir(config_dir: &Path, cwd: &Path) -> std::path::PathBuf {
+pub(crate) fn project_dir(config_dir: &Path, cwd: &Path) -> std::path::PathBuf {
     let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_owned());
     let name: String = cwd
         .to_string_lossy()

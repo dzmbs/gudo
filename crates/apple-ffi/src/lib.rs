@@ -33,6 +33,7 @@ mod power;
 pub use power::{PowerPolicy, PowerStatus};
 mod repo;
 mod ssh_api;
+mod timeline;
 mod types;
 mod upgrade;
 mod usage;
