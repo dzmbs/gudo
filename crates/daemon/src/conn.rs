@@ -2898,27 +2898,23 @@ impl Client {
             .pane(pane_id)
             .ok_or_else(|| MpError::NotFound(format!("pane {pane_id}")))?;
         crate::mp::prompt::check(&text).map_err(|error| MpError::Invalid(error.to_string()))?;
-        // Checked right before each write: the agent may have exited a moment ago, leaving its
-        // shell in front.
-        let agent_holds = || self.core.agent_has_terminal(pane_id);
-        if !agent_holds() {
-            return Err(MpError::Forbidden(
-                "prompts go to agent panes only; this pane runs a shell".into(),
-            ));
-        }
+        let write = |bytes| {
+            crate::agent_input::enqueue(&self.core, pane_id, bytes).map_err(|error| match error {
+                crate::agent_input::EnqueueError::Unavailable => MpError::Forbidden(
+                    "prompts go to agent panes only, with a live input fence; use Terminal or relaunch it".into(),
+                ),
+                crate::agent_input::EnqueueError::Busy => MpError::Invalid(
+                    "agent input is busy or closed; retry from Terminal".into(),
+                ),
+            })
+        };
         self.core.mp.admit_prompt(&self.authz, self.ws.owner)?;
         let bytes = entry.pane.encode_input(InputPayload::Paste(text.clone()));
-        entry
-            .pane
-            .write(bytes)
-            .await
-            .map_err(|_| MpError::NotFound(format!("pane {pane_id} exited")))?;
+        write(bytes)?;
         if submit {
             // Let the agent's input box take the paste before Enter arrives.
             tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-            if agent_holds() {
-                let _ = entry.pane.write(b"\r".to_vec()).await;
-            }
+            write(b"\r".to_vec())?;
         }
         let digest = grants::sha256(&[text.as_bytes()]);
         self.core.mp.audit.append(

@@ -71,22 +71,27 @@ pub(crate) async fn send(
     let prompt = format_prompt(preamble, notes);
     crate::mp::prompt::check_review(&prompt)
         .map_err(|error| WsError::Invalid(error.to_string()))?;
-    let agent_holds = || !agent_only || core.agent_has_terminal(pane_id);
-    if !agent_holds() {
-        return Err(WsError::Denied(
-            "review notes from a prompter go to agent panes only".into(),
-        ));
-    }
+    let write_agent = |bytes| {
+        crate::agent_input::enqueue(core, pane_id, bytes).map_err(|_| {
+            WsError::Denied("review notes from a prompter require a live agent input fence".into())
+        })
+    };
     let bytes = entry.pane.encode_input(InputPayload::Paste(prompt.clone()));
-    entry
-        .pane
-        .write(bytes)
-        .await
-        .map_err(|_| WsError::NotFound(format!("pane {pane_id} exited")))?;
+    if agent_only {
+        write_agent(bytes)?;
+    } else {
+        entry
+            .pane
+            .write(bytes)
+            .await
+            .map_err(|_| WsError::NotFound(format!("pane {pane_id} exited")))?;
+    }
     if submit {
         // Let the agent's input box take the paste before Enter arrives.
         tokio::time::sleep(Duration::from_millis(80)).await;
-        if agent_holds() {
+        if agent_only {
+            write_agent(b"\r".to_vec())?;
+        } else {
             let _ = entry.pane.write(b"\r".to_vec()).await;
         }
     }

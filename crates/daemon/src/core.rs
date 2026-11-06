@@ -205,6 +205,8 @@ pub(crate) struct PaneEntry {
     pub meta: Mutex<MetaState>,
     pub record: Mutex<PaneRecord>,
     pub agent: Mutex<Option<AgentRuntime>>,
+    /// Native enqueue must hold this gate; only construction opens it, never agent hooks.
+    pub native_input_launch: Mutex<crate::agent_input::AgentInputGate>,
     /// Wakes the pane task when an agent attaches from outside it (a hook), so its timers run.
     pub agent_attached: Notify,
     /// Periodic ticks the pane task has run.
@@ -1475,6 +1477,7 @@ impl Core {
             }
         }
         let mut agent = None;
+        let mut native_input_launch = crate::agent_input::AgentInputGate::Disabled;
         let injection = self
             .shell
             .as_ref()
@@ -1639,11 +1642,19 @@ impl Core {
                 } else {
                     ""
                 };
+                let launch_id = crate::agent::new_uuid();
+                native_input_launch =
+                    crate::agent_input::AgentInputGate::Pending(launch_id.clone());
+                let shim = shell_quote(&context.hook_bin.to_string_lossy());
+                let launch_id = shell_quote(&launch_id);
                 command.args([
                     "-i",
                     "-l",
                     "-c",
-                    &format!("{pre_command}{marker}{line}; {}", then_shell()),
+                    &format!(
+                        "{pre_command}{marker}{shim} agent-input-arm {launch_id} </dev/null; {line}; {shim} agent-exit-fence {launch_id} && {}",
+                        then_shell()
+                    ),
                 ]);
                 for (key, value) in &spec.env {
                     command.env(key, value);
@@ -1750,6 +1761,7 @@ impl Core {
             }),
             record: Mutex::new(record),
             agent: Mutex::new(agent.map(|(_, _, _, runtime)| runtime)),
+            native_input_launch: Mutex::new(native_input_launch),
             agent_attached: Notify::new(),
             ticks: AtomicU64::new(0),
             task: Mutex::new(None),
@@ -1833,6 +1845,7 @@ impl Core {
             }),
             record: Mutex::new(record),
             agent: Mutex::new(agent),
+            native_input_launch: Mutex::new(crate::agent_input::AgentInputGate::Disabled),
             agent_attached: Notify::new(),
             ticks: AtomicU64::new(0),
             task: Mutex::new(None),

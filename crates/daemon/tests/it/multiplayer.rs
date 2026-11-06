@@ -278,7 +278,7 @@ async fn viewer_cannot_type_and_one_driver_holds_the_lease() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn prompter_only_composes_to_agent_panes() {
+async fn an_unfenced_agent_refuses_native_composers() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = daemon(dir.path()).await;
     let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
@@ -320,14 +320,11 @@ async fn prompter_only_composes_to_agent_panes() {
     })
     .await;
 
-    // The composer path writes a prompt (here `sh` runs it, which shows it arrived).
-    let chars = pat
-        .client
-        .prompt(agent_pane, "echo prompted-ok".into(), true)
-        .await
-        .unwrap();
-    assert_eq!(chars, 16);
-    owner.wait_text(agent_pane, "prompted-ok").await;
+    // A SessionStart alone cannot authorize native input into an unfenced process.
+    assert!(matches!(
+        pat.client.prompt(agent_pane, "echo prompted-ok".into(), true).await,
+        Err(MpError::Forbidden(message)) if message.contains("live input fence")
+    ));
     assert!(!owner.text(agent_pane).contains("raw-keys"));
 
     // Not into a shell pane, and no shell escapes, agent commands or control bytes.
@@ -359,15 +356,13 @@ async fn prompter_only_composes_to_agent_panes() {
         Err(MpError::Forbidden(_))
     ));
 
-    // The audit log records the prompt by length and hash, never the text.
+    // Positive prompt delivery, hashing and rate limits use the real shim in hostd tests.
     let page = owner.client.audit(None, 100).await.unwrap();
-    let prompt = page
-        .records
-        .iter()
-        .find(|record| record.kind == AuditKind::Prompt)
-        .expect("prompt audited");
-    assert!(prompt.detail.contains("16 chars"), "{}", prompt.detail);
-    assert!(!prompt.detail.contains("prompted-ok"));
+    assert!(
+        page.records
+            .iter()
+            .all(|record| record.kind != AuditKind::Prompt)
+    );
     drop((pat, vic, owner));
     daemon.shutdown().await;
 }
@@ -394,7 +389,11 @@ async fn text_for_an_agent_that_just_exited_reaches_nobody() {
     start_fake_agent(&mut owner, pane, "read line; echo \"agent-read:$line\"").await;
     let pat = guest(&invite(&owner, spec(Roles::PROMPTER, "pat")).await, pane).await;
 
-    pat.client.prompt(pane, "first".into(), true).await.unwrap();
+    assert!(matches!(
+        pat.client.prompt(pane, "first".into(), true).await,
+        Err(MpError::Forbidden(_))
+    ));
+    owner.type_line(pane, "first");
     owner.wait_text(pane, "agent-read:first").await;
     tokio::time::sleep(Duration::from_millis(200)).await;
 
@@ -462,19 +461,12 @@ async fn review_notes_obey_the_prompt_rules() {
         (Roles::PROMPTER, "pat"),
         (Roles::APPROVER | Roles::VIEWER, "ann"),
     ] {
-        let mut guest = guest(&invite(&owner, spec(roles, name)).await, agent_pane).await;
+        let guest = guest(&invite(&owner, spec(roles, name)).await, agent_pane).await;
         let note = format!("note from {name}");
-        let prompt = guest
-            .client
-            .send_review(review(agent_pane, Some(&shell_escape), &note))
-            .await
-            .unwrap();
-        assert!(!prompt.contains("touch"), "{prompt}");
-        assert!(
-            !prompt.contains('\x1b') && !prompt.contains('\r'),
-            "{prompt:?}"
-        );
-        guest.wait_text(agent_pane, &note).await;
+        assert!(matches!(
+            guest.client.send_review(review(agent_pane, Some(&shell_escape), &note)).await,
+            Err(WsError::Denied(message)) if message.contains("live agent input fence")
+        ));
         for bad in ["fine\x1b[201~\r!sh", "x\x03"] {
             let result = guest
                 .client
@@ -1020,7 +1012,7 @@ async fn removing_a_person_keeps_the_link_for_everyone_else() {
 /// A prompter pasting at line rate would burn the owner's agent quota and grow the audit log:
 /// past a short burst it is refused, and the refusals are audited once, with a count.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_prompt_flood_is_cut_and_audited_once() {
+async fn an_unfenced_prompt_flood_is_cut_without_writing() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = daemon(dir.path()).await;
     let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
@@ -1042,7 +1034,7 @@ async fn a_prompt_flood_is_cut_and_audited_once() {
     )
     .await;
 
-    let mut sent = 0;
+    let mut unfenced = 0;
     let mut refused = 0;
     for round in 0..30 {
         match pat
@@ -1050,21 +1042,21 @@ async fn a_prompt_flood_is_cut_and_audited_once() {
             .prompt(agent_pane, format!("echo flood-{round}"), false)
             .await
         {
-            Ok(_) => sent += 1,
+            Err(MpError::Forbidden(_)) => unfenced += 1,
             Err(MpError::Failed(message)) => {
                 assert!(message.contains("Wait a few seconds"), "{message}");
                 refused += 1;
             }
-            Err(other) => panic!("{other:?}"),
+            other => panic!("unexpected unfenced prompt result: {other:?}"),
         }
     }
-    assert_eq!((sent, refused), (5, 25));
+    assert_eq!((unfenced, refused), (5, 25));
     for round in 0..10 {
         owner
             .client
             .prompt(agent_pane, format!("echo owner-{round}"), false)
             .await
-            .expect("the owner is not limited");
+            .expect_err("even the owner needs a live input fence");
     }
 
     let page = owner.client.audit(None, 200).await.unwrap();
@@ -1079,7 +1071,7 @@ async fn a_prompt_flood_is_cut_and_audited_once() {
         .iter()
         .filter(|record| record.kind == AuditKind::Prompt)
         .count();
-    assert_eq!(prompts, 15);
+    assert_eq!(prompts, 0);
     drop((pat, owner));
     daemon.shutdown().await;
 }

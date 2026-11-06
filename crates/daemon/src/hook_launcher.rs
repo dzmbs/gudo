@@ -35,7 +35,7 @@ fn script(shim: &Path) -> String {
         "#!/bin/sh\n\
          shim={}\n\
          if [ -x \"$shim\" ]; then exec \"$shim\" {}\"$@\"; fi\n\
-         case \"$1\" in askpass) exit 1 ;; esac\n\
+         case \"$1\" in askpass|agent-input-arm|agent-exit-fence) exit 1 ;; esac\n\
          exit 0\n",
         shell_quote(&shim.to_string_lossy()),
         if shim
@@ -338,10 +338,13 @@ mod tests {
         let output = run(&launcher, &["claude", "SessionStart"]);
         assert!(output.status.success());
         assert!(output.stdout.is_empty() && output.stderr.is_empty());
-        assert_eq!(
-            run(&launcher, &["askpass", "Password:"]).status.code(),
-            Some(1)
-        );
+        for arguments in [
+            ["askpass", "Password:"],
+            ["agent-input-arm", "launch"],
+            ["agent-exit-fence", "launch"],
+        ] {
+            assert_eq!(run(&launcher, &arguments).status.code(), Some(1));
+        }
     }
 
     #[test]

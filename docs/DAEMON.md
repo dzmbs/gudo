@@ -134,6 +134,13 @@ kernel writes. `PtyActor::write` acknowledges enqueueing;
 that the program consumed those bytes or make a shell handoff safe by itself. A write failure,
 closed child or handoff with unsent bytes refuses the pending flush instead of claiming delivery.
 
+Dedicated agent launches arm a per-launch native-input gate through the trusted shim. The exit
+shim closes that gate and drains/discards raw terminal input until the actual-writer barrier
+acknowledges, then flushes/restores termios before allowing the fallback shell. Failure skips
+the shell. A SessionStart alone, manual agent attachment or hot adoption cannot arm native input.
+Legacy composer paste and Enter each check and enqueue under this gate; they are not yet one
+transaction and do not classify TUI draft readiness. See [the exit fence](security/host-local.md).
+
 ### Streams (ALPN `gudo/1`)
 
 | Stream | Opened by | Priority | Content |

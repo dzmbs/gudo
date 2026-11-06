@@ -888,6 +888,13 @@ async fn serve_hook(core: &Arc<Core>, stream: UnixStream) -> io::Result<()> {
         crate::upgrade::after_restart_reply(core, &reply);
         return written;
     }
+    if let Ok(call) = serde_json::from_str::<crate::agent_input::AgentInputCall>(&line) {
+        let reply = crate::agent_input::serve(core, call).await;
+        let mut encoded = serde_json::to_vec(&reply).map_err(io::Error::other)?;
+        encoded.push(b'\n');
+        write.write_all(&encoded).await?;
+        return write.shutdown().await;
+    }
     let request: HookRequest = serde_json::from_str(&line).map_err(io::Error::other)?;
     let response = handle_hook(core, request).await;
     let mut encoded = serde_json::to_vec(&response).map_err(io::Error::other)?;

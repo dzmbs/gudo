@@ -103,6 +103,25 @@ Canonical roots, matching session filenames, no-follow opens and file identity c
 reads. Native watches and workers stop with their last subscription. Push mailboxes and bulk
 reply permits bound memory while a client stops reading. See [Agent timelines](../CHAT.md).
 
+**Agent input exit fence.** A dedicated agent launch has a fresh nonce and starts with native
+input disabled. Only the bundled shim's authenticated arm call enables it; ordinary agent hooks
+cannot reopen it. Composer writes and non-driver reviews enqueue under the same per-pane gate
+that the exit call closes. Foreground identity alone is not a fence: an agent can exit after the
+check while bytes are still queued, and dedicated agent panes also return to a shell.
+
+Before that shell starts, the trusted shim disables terminal echo/canonical processing and
+continually discards input while the daemon closes the gate and waits for the ordered PTY writer
+barrier. The shim then flushes unread input, restores modes and flushes again. Missing, refused,
+malformed, oversized, timed-out or disconnected acknowledgements skip the shell. The launcher
+also refuses these control commands if the shim disappeared. Adopted or manually started agent
+panes have no native gate until relaunched; an inherited fence cannot acknowledge a different
+launch. Driver input remains a code-execution capability, not a constrained composer.
+
+This fence prevents queued native input from crossing an agent-to-shell transition. It does not
+prove an agent consumed a prompt, recognize a safe/empty TUI draft or make the legacy paste/Enter
+pair transactional. Version-tested draft classification and revision-checked atomic submission
+are separate prerequisites for the new Chat composer.
+
 **Files and git.** Path policy (DAEMON.md §5.0): paths must be absolute, with no `..`, and their
 real path must lie inside `$HOME` or `files.allow`. Symlinks are checked through their real
 targets.

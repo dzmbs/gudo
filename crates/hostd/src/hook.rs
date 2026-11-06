@@ -11,8 +11,9 @@
 //! the payload is the last argument (Codex gives no stdin), goes to the daemon, then the shim
 //! runs the user's own `notify` from their Codex `config.toml` with the same argument.
 //!
-//! It never fails the agent: any error prints nothing and exits 0, so a missing daemon only
-//! means the agent falls back to its own prompts.
+//! Ordinary hooks never fail the agent: an error prints nothing and exits 0, so a missing
+//! daemon means the agent falls back to its own prompts. The agent input arm/exit fence is
+//! different: failure exits nonzero and the launch script must not start its fallback shell.
 //!
 //! `gudo-hook askpass <prompt>` is the askpass helper instead (see `askpass.rs`), and
 //! `gudo-hook mcp [--state <dir>] [--pane <id>]` the MCP server through which agents read the
@@ -20,6 +21,7 @@
 //! the panes' `BROWSER` (see `browser.rs`), and `gudo-hook browser <verb> …` the browser tools
 //! from a shell (see `browser_tools.rs`).
 
+mod agent_exit_fence;
 mod askpass;
 mod browser;
 mod browser_tools;
@@ -38,6 +40,14 @@ use serde_json::Value;
 
 pub fn run_hook(arguments: &[String]) {
     match arguments.first().map(String::as_str) {
+        Some("agent-input-arm") => std::process::exit(agent_exit_fence::main(
+            &arguments[1..],
+            agent_exit_fence::FenceAction::Arm,
+        )),
+        Some("agent-exit-fence") => std::process::exit(agent_exit_fence::main(
+            &arguments[1..],
+            agent_exit_fence::FenceAction::Close,
+        )),
         Some("codex-notify") => {
             relay_codex_notify(&arguments[1..]);
             return;

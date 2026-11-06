@@ -26,6 +26,7 @@
 
 mod accounts;
 mod agent;
+pub mod agent_input;
 mod agent_integration;
 mod anchor;
 mod approve;
