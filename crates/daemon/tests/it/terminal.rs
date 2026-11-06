@@ -4,8 +4,8 @@
 use std::time::Duration;
 
 use client_core::proto::{
-    CaseMode, FullKeyEvent, KeyAction, LayoutOp, LinkKind, MouseAction, MouseButton, MouseEvent,
-    OpOutcome, PaneLaunch, PaneSize, SearchMode, SearchQuery,
+    CaseMode, FullKeyEvent, InputPayload, KeyAction, LayoutOp, LinkKind, MouseAction, MouseButton,
+    MouseEvent, OpOutcome, PaneLaunch, PaneSize, SearchMode, SearchQuery,
 };
 use client_core::{ClientConfig, ClientEvent};
 use ghostty_vt::Key;
@@ -91,6 +91,66 @@ async fn focus_reports_do_not_replace_the_other_clients_terminal_size() {
         assert!(
             desktop.text(pane).contains("FOCUS 40 160"),
             "focus report {report:?} changed the size: {}",
+            desktop.text(pane)
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn generated_bytes_and_mouse_reports_do_not_claim_the_grid() {
+    for payload in [
+        InputPayload::GeneratedBytes(b"abc".to_vec()),
+        InputPayload::Mouse(click(0, 0)),
+    ] {
+        let count = match &payload {
+            InputPayload::GeneratedBytes(bytes) => bytes.len(),
+            InputPayload::Mouse(_) => 6,
+            _ => unreachable!(),
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let daemon = start(directory.path()).await;
+        let mut desktop = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+        let pane = desktop.attach_and_follow().await;
+        desktop.client.resize(
+            pane,
+            PaneSize {
+                cols: 160,
+                rows: 40,
+                width_px: 0,
+                height_px: 0,
+            },
+        );
+        desktop
+            .until("desktop size", |client| {
+                client
+                    .metas
+                    .get(&pane)
+                    .is_some_and(|meta| meta.size.cols == 160)
+            })
+            .await;
+        desktop.type_line(pane, &format!("printf '\\033[?1000h'; stty raw -echo; printf '%s%s\\r\\n' REA DY; dd bs=1 count={count} >/dev/null 2>&1; printf '\\r\\n%s%s ' RE PORT; stty size; exec /bin/sh"));
+        desktop.wait_text(pane, "READY").await;
+        let mut phone = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+        phone.attach_and_follow().await;
+        phone.client.resize(
+            pane,
+            PaneSize {
+                cols: 45,
+                rows: 20,
+                width_px: 0,
+                height_px: 0,
+            },
+        );
+        phone.op(LayoutOp::Focus { pane_id: pane }).await;
+        match payload {
+            InputPayload::GeneratedBytes(bytes) => phone.client.send_generated_input(pane, bytes),
+            InputPayload::Mouse(event) => phone.client.send_mouse(pane, event),
+            _ => unreachable!(),
+        }
+        desktop.wait_text(pane, "REPORT ").await;
+        assert!(
+            desktop.text(pane).contains("REPORT 40 160"),
+            "a terminal report claimed the grid: {}",
             desktop.text(pane)
         );
     }

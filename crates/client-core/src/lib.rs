@@ -796,6 +796,19 @@ impl Client {
         }
     }
 
+    /// Sends encoded terminal reports without claiming the pane's size. Older daemons receive
+    /// ordinary bytes; the input sequence stays unchanged across reconnects.
+    pub fn send_generated_input(&self, pane_id: PaneId, data: Vec<u8>) {
+        const PIECE: usize = 1 << 20;
+        if data.len() <= PIECE {
+            self.send_payload(pane_id, InputPayload::GeneratedBytes(data));
+            return;
+        }
+        for piece in data.chunks(PIECE) {
+            self.send_payload(pane_id, InputPayload::GeneratedBytes(piece.to_vec()));
+        }
+    }
+
     /// Sends a key event; the daemon encodes it for the program's current keyboard modes
     /// (legacy, application cursor keys, modifyOtherKeys or kitty flags).
     pub fn send_key(&self, pane_id: PaneId, key: FullKeyEvent) {

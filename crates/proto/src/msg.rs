@@ -1023,7 +1023,7 @@ pub struct Input {
     /// The acting principal. The daemon rejects input whose principal differs from the
     /// connection's, so the field can be trusted downstream (audit, presence, prompt authors).
     pub principal: PrincipalId,
-    /// What was typed.
+    /// What was typed or reported.
     pub payload: InputPayload,
 }
 
@@ -1041,6 +1041,8 @@ pub enum InputPayload {
     /// A key event with everything the kitty keyboard protocol needs; supersedes
     /// [`InputPayload::Key`].
     KeyFull(FullKeyEvent),
+    /// Encoded terminal reports, not typing; requires `DaemonFeatures::GENERATED_INPUT`.
+    GeneratedBytes(#[serde(with = "crate::serde_bytes")] Vec<u8>),
 }
 
 /// A key event as libghostty-vt's key encoder takes it (`include/ghostty/vt/key/event.h`).

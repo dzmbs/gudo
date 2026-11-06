@@ -409,5 +409,7 @@ bitset! {
         TERMINAL_COLORS = 22;
         POWER_SETTINGS = 23;
         AGENT_TIMELINE = 24;
+        /// Accepts `InputPayload::GeneratedBytes` without treating reports as typing.
+        GENERATED_INPUT = 25;
     }
 }

@@ -762,13 +762,13 @@ impl Pane {
     /// libghostty-vt's encoders, paste bracketed and sanitized. Empty when the event sends
     /// nothing (for example a mouse click while the program does not track the mouse).
     pub fn encode_input(&self, payload: InputPayload) -> Vec<u8> {
-        if let InputPayload::Bytes(bytes) = payload {
+        if let InputPayload::Bytes(bytes) | InputPayload::GeneratedBytes(bytes) = payload {
             return bytes;
         }
         let mut guard = lock(&self.vt);
         let vt = &mut *guard;
         let encoded = match payload {
-            InputPayload::Bytes(bytes) => Ok(bytes),
+            InputPayload::Bytes(bytes) | InputPayload::GeneratedBytes(bytes) => Ok(bytes),
             InputPayload::Paste(text) => Ok(vt.term.encode_paste(&text)),
             InputPayload::Key(key) => vt.keys.encode(&vt.term, &crate::input::key(key)),
             InputPayload::KeyFull(key) => vt.keys.encode(&vt.term, &crate::input::full_key(key)),

@@ -335,7 +335,8 @@ pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {
         | DaemonFeatures::PUSH_AGENTS
         | DaemonFeatures::TERMINAL_COLORS
         | DaemonFeatures::POWER_SETTINGS
-        | DaemonFeatures::AGENT_TIMELINE;
+        | DaemonFeatures::AGENT_TIMELINE
+        | DaemonFeatures::GENERATED_INPUT;
     if core.cfg.push.enabled && core.cfg.push.live_activity {
         features |= DaemonFeatures::LIVE_ACTIVITY;
     }
@@ -881,13 +882,16 @@ async fn read_input(client: &Arc<Client>, mut stream: RecvStream) -> Result<(), 
         }
         // Keys, mouse and paste are encoded for the program's current modes, which only the
         // daemon's VT knows for sure (the client's may lag behind by the bytes in flight).
+        let is_sizing_input = crate::input::is_sizing_input(&input.payload);
+        let records_typing = !matches!(&input.payload, InputPayload::GeneratedBytes(_));
         let bytes = match input.payload {
-            InputPayload::Bytes(bytes) => bytes,
+            InputPayload::Bytes(bytes) | InputPayload::GeneratedBytes(bytes) => bytes,
             payload => entry.pane.encode_input(payload),
         };
         let is_focus_report = crate::input::is_focus_report(&bytes);
+        let is_sizing_input = is_sizing_input && !bytes.is_empty() && !is_focus_report;
         let size = lock(&client.state).sizes.get(&input.pane_id).copied();
-        if !is_focus_report && let Some(size) = size {
+        if is_sizing_input && let Some(size) = size {
             client
                 .core
                 .apply_client_size(&entry, client.id, client.actor.principal, size, true);
@@ -904,7 +908,7 @@ async fn read_input(client: &Arc<Client>, mut stream: RecvStream) -> Result<(), 
                 continue;
             }
         };
-        if !is_focus_report {
+        if records_typing && !is_focus_report {
             lock(&entry.meta).typed_by = Some(client.id);
             client.core.theme_used(client.id, &entry);
             client.core.mp.typed(&client.core, client.id, input.pane_id);

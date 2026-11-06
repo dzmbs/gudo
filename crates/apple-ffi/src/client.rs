@@ -770,6 +770,12 @@ impl DaemonClient {
         self.inner.send_input(PaneId(pane_id), data.to_vec());
     }
 
+    /// Sends encoded terminal reports without treating them as typing.
+    pub fn send_generated_input(&self, pane_id: u64, data: &[u8]) {
+        self.inner
+            .send_generated_input(PaneId(pane_id), data.to_vec());
+    }
+
     /// Sends a key event, encoded by the daemon for the program's keyboard modes.
     pub fn send_key(&self, pane_id: u64, key: KeyEvent) {
         self.inner.send_key(PaneId(pane_id), key.into());

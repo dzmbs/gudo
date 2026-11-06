@@ -287,6 +287,13 @@ bursts settle for 120 ms in the existing per-pane task; there is only one pendin
 pane. Actual input applies its client's size immediately before writing and cancels any older
 pending resize. Deferred work rechecks its sizing connection and lease before applying.
 
+Clients can mark encoded reports as `InputPayload::GeneratedBytes` when the daemon advertises
+`DaemonFeatures::GENERATED_INPUT`. Reports, mouse events, key releases and composing keys do not
+claim size; ordinary keys, paste and committed text do. The client retains report provenance
+when reconnecting and converts to legacy bytes only on the wire for older daemons. Reports
+still require Drive and the input lease, and nonempty reports still invalidate native-input
+provenance through `Pane::write`; this is not an empty-draft checkpoint or a safety exemption.
+
 ### Identity and pairing
 
 - `daemon.key` (Ed25519, iroh endpoint id), `owner.json` (the single owner principal),

@@ -6,6 +6,18 @@ pub(crate) fn is_focus_report(bytes: &[u8]) -> bool {
     matches!(bytes, b"\x1b[I" | b"\x1b[O" | b"\x9bI" | b"\x9bO")
 }
 
+pub(crate) fn is_sizing_input(payload: &proto::InputPayload) -> bool {
+    match payload {
+        proto::InputPayload::Bytes(bytes) => !bytes.is_empty() && !is_focus_report(bytes),
+        proto::InputPayload::Paste(text) => !text.is_empty(),
+        proto::InputPayload::Key(key) => key.action != proto::KeyAction::Release,
+        proto::InputPayload::KeyFull(key) => {
+            !key.composing && key.action != proto::KeyAction::Release
+        }
+        proto::InputPayload::Mouse(_) | proto::InputPayload::GeneratedBytes(_) => false,
+    }
+}
+
 fn action(key_action: proto::KeyAction) -> KeyAction {
     match key_action {
         proto::KeyAction::Press => KeyAction::Press,
@@ -73,7 +85,57 @@ pub(crate) fn mouse(event: proto::MouseEvent) -> MouseEvent {
 
 #[cfg(test)]
 mod tests {
-    use super::is_focus_report;
+    use super::{is_focus_report, is_sizing_input};
+
+    #[test]
+    fn reports_and_key_releases_are_not_sizing_input() {
+        use proto::{
+            FullKeyEvent, InputPayload, KeyAction, KeyEvent, MouseAction, MouseButton, MouseEvent,
+        };
+        for bytes in [b"".as_slice(), b"\x1b[I", b"\x9bO"] {
+            assert!(!is_sizing_input(&InputPayload::Bytes(bytes.to_vec())));
+        }
+        assert!(!is_sizing_input(&InputPayload::GeneratedBytes(
+            b"text".to_vec()
+        )));
+        assert!(!is_sizing_input(&InputPayload::Mouse(MouseEvent {
+            action: MouseAction::Press,
+            button: MouseButton::Left,
+            col: 0,
+            row: 0,
+            mods: 0
+        })));
+        assert!(is_sizing_input(&InputPayload::Bytes(b"text".to_vec())));
+        assert!(is_sizing_input(&InputPayload::Paste("\x1b[I".into())));
+        let mut key = FullKeyEvent {
+            key: 0,
+            mods: 0,
+            consumed_mods: 0,
+            action: KeyAction::Press,
+            text: None,
+            unshifted_codepoint: None,
+            composing: false,
+        };
+        for action in [KeyAction::Press, KeyAction::Repeat, KeyAction::Release] {
+            key.action = action;
+            assert_eq!(
+                is_sizing_input(&InputPayload::KeyFull(key.clone())),
+                action != KeyAction::Release
+            );
+            assert_eq!(
+                is_sizing_input(&InputPayload::Key(KeyEvent {
+                    key: 0,
+                    mods: 0,
+                    action,
+                    text: None
+                })),
+                action != KeyAction::Release
+            );
+        }
+        key.action = KeyAction::Press;
+        key.composing = true;
+        assert!(!is_sizing_input(&InputPayload::KeyFull(key)));
+    }
 
     #[test]
     fn only_a_complete_lone_focus_report_is_protocol_only() {

@@ -14,7 +14,7 @@ use proto::{InputPayload, PaneId};
 const MAX_BYTES: usize = 4 << 20;
 const MAX_ENTRIES: usize = 8192;
 
-/// One input as sent.
+/// An input kept with its original provenance for reconnects.
 #[derive(Debug, Clone)]
 pub(crate) struct Sent {
     pub seq: u64,
@@ -33,7 +33,7 @@ pub(crate) struct InputLog {
 
 fn payload_len(payload: &InputPayload) -> usize {
     match payload {
-        InputPayload::Bytes(bytes) => bytes.len(),
+        InputPayload::Bytes(bytes) | InputPayload::GeneratedBytes(bytes) => bytes.len(),
         InputPayload::Paste(text) => text.len(),
         _ => 64,
     }
@@ -106,13 +106,30 @@ mod tests {
     }
 
     #[test]
-    fn the_log_is_bounded() {
+    fn reconnects_preserve_generated_input_provenance_and_sequence() {
         let mut log = InputLog::default();
-        let piece = InputPayload::Bytes(vec![0; 1 << 20]);
-        for _ in 0..10 {
-            log.send(PaneId(1), &piece, true);
+        let payload = InputPayload::GeneratedBytes(b"report".to_vec());
+        let sequence = log.send(PaneId(1), &payload, true);
+        let replay = log.resend(true);
+        assert_eq!(replay.len(), 1);
+        assert_eq!(replay[0].seq, sequence);
+        assert_eq!(replay[0].payload, payload);
+        log.confirm(sequence);
+        assert!(log.resend(true).is_empty());
+    }
+
+    #[test]
+    fn the_log_is_bounded_for_raw_and_generated_bytes() {
+        for piece in [
+            InputPayload::Bytes(vec![0; 1 << 20]),
+            InputPayload::GeneratedBytes(vec![0; 1 << 20]),
+        ] {
+            let mut log = InputLog::default();
+            for _ in 0..10 {
+                log.send(PaneId(1), &piece, true);
+            }
+            assert!(log.bytes <= MAX_BYTES);
+            assert_eq!(log.resend(true).first().map(|sent| sent.seq), Some(7));
         }
-        assert!(log.bytes <= MAX_BYTES);
-        assert_eq!(log.resend(true).first().map(|sent| sent.seq), Some(7));
     }
 }
