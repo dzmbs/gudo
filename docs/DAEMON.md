@@ -276,16 +276,32 @@ shell prompt (after 133;A/B, before 133;C; shell integration is injected, see be
 
 ### Sizing
 
-Each client sends its size per pane (`Resize`); the PTY follows the client that **last typed**,
-or the first client to report a size. `PaneMeta.sized_by` names its principal; the
-policy is always `LastInput` for now. Lone focus-in/out reports (`CSI I` / `CSI O`, including
+Each client sends its size per pane (`Resize`). The default live-pane policy is `LastActive`:
+activation, explicit claims and actual input select the latest active eligible client.
+Backgrounding or disconnecting hands sizing to another eligible active client; inactive size
+requests are saved without resizing the PTY. Legacy clients use visible-pane transitions as
+activity. New clients report `PaneActivity` separately and use `ClaimSize` for an explicit claim;
+repeated identical activity reports do not take sizing back. These controls require
+`DaemonFeatures::ACTIVE_SIZING`; `Caps::ACTIVE_SIZING` permits `LastActive` in metadata. Older
+clients receive `LastInput` in its place, including on initial subscription.
+
+`SetSizePolicy` requires Drive, pane scope and the input lease when one exists. `LastInput`
+ranks active clients by input or explicit claim; `FollowLease` uses that ranking within the
+holder's principal. All client-selected policies enforce the current lease and recheck
+revocation, expiry and scope. `Smallest` takes the independent column and row minima across
+eligible active clients. `Fixed` holds a nonzero grid until the policy changes. Policy choices
+belong to the live pane. `PaneMeta.sized_by` names the selected principal, or is absent for a
+fixed or composite grid.
+
+Lone focus-in/out reports (`CSI I` / `CSI O`, including
 8-bit CSI) are delivered to the PTY but do not claim its size or update typing presence. Apple pane
 backends also leave the sizing window unchanged when forwarding those reports. Pixel-only
 changes leave the PTY, VT and resize history unchanged, so changing display scale does not send
 SIGWINCH. Pixel metrics are refreshed with the next columns-or-rows change. Window resize
 bursts settle for 120 ms in the existing per-pane task; there is only one pending request per
-pane. Actual input applies its client's size immediately before writing and cancels any older
-pending resize. Deferred work rechecks its sizing connection and lease before applying.
+pane. Actual input from an active eligible client applies the selected size immediately before
+writing and cancels any older pending resize. Deferred work rechecks current eligibility and
+policy selection before applying. Lease changes recompute selection as well.
 
 Clients can mark encoded reports as `InputPayload::GeneratedBytes` when the daemon advertises
 `DaemonFeatures::GENERATED_INPUT`. Reports, mouse events, key releases and composing keys do not
@@ -2693,6 +2709,7 @@ An agent on host A driving a pane on host B. Not built; the safe shape:
   ignored (they are free text); no per-shell quoting (fish reads the POSIX quoting the same way
   except inside `"…"`, where it does not treat `` ` `` specially); a watched directory that is
   deleted and recreated is re-armed only on the next event or list.
-- `SetSizePolicy` is ignored (`LastInput`, restricted to the lease holder when a pane is
-  leased). The ticket's relay URL is the one known at
-  mint time; `endpoint.json` is refreshed as iroh's addresses change.
+- Sizing policy choices are not persisted across daemon restarts. Native explicit activity,
+  non-driver fitting and sizing controls are not yet wired to the new daemon APIs.
+- The ticket's relay URL is the one known at mint time; `endpoint.json` is refreshed as iroh's
+  addresses change.

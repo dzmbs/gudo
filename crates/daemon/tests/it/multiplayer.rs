@@ -10,7 +10,7 @@ use client_core::grants::{self, DeviceKey, GrantSpec};
 use client_core::proto::{
     AgentState, AuditKind, InputRejectReason, Invite, LayoutOp, LeaseMode, LeaseOutcome, MpError,
     MpResponse, OpError, OpOutcome, OptionId, PaneId, PaneLaunch, ReviewNote, ReviewRequest,
-    RevokeTarget, Roles, Scope, UnixMillis, WorkspaceRequest, WsError,
+    RevokeTarget, Roles, Scope, SizePolicy, UnixMillis, WorkspaceRequest, WsError,
 };
 use client_core::{ClientConfig, MultiplayerEvent, now_millis};
 use daemon::{Daemon, HookRequest, HookResponse};
@@ -132,6 +132,11 @@ async fn viewer_cannot_type_and_one_driver_holds_the_lease() {
         |event| matches!(event, MultiplayerEvent::Forbidden { reason, .. } if reason.contains("driver"))
     ));
 
+    carol
+        .client
+        .set_size_policy(pane, SizePolicy::Fixed { cols: 1, rows: 1 });
+    carol.until("viewer cannot change sizing policy", |client| client.mp.iter().any(|event| matches!(event, MultiplayerEvent::Forbidden { what, reason } if what == "SetSizePolicy" && reason.contains("driver")))).await;
+
     // The owner types first and takes the free lease; everyone is told.
     owner.type_line(pane, "echo owner-one");
     carol.wait_text(pane, "owner-one").await;
@@ -148,6 +153,10 @@ async fn viewer_cannot_type_and_one_driver_holds_the_lease() {
         rejected(c, pane, InputRejectReason::NoLease)
     })
     .await;
+
+    bob.client
+        .set_size_policy(pane, SizePolicy::Fixed { cols: 1, rows: 1 });
+    bob.until("a different lease holder prevents policy changes", |client| client.mp.iter().any(|event| matches!(event, MultiplayerEvent::Forbidden { what, reason } if what == "SetSizePolicy" && reason.contains("lease")))).await;
 
     // Bob asks; the owner is active, so the owner is asked and gives it.
     let asked = bob.client.take_control(pane, false).await.unwrap();

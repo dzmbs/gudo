@@ -410,6 +410,7 @@ pub(crate) struct Wanted {
     pub focus: Option<PaneId>,
     pub visible: Vec<PaneId>,
     pub sizes: HashMap<PaneId, PaneSize>,
+    pub activities: HashMap<PaneId, proto::PaneActivity>,
     pub colors: Option<proto::TerminalColors>,
 }
 
@@ -745,11 +746,46 @@ impl Client {
 
     /// Stops following a pane and forgets its mirror.
     pub fn unsubscribe(&self, pane_id: PaneId) {
-        lock(&self.inner.wanted)
-            .subscribed
-            .retain(|&subscribed| subscribed != pane_id);
+        let had_activity = {
+            let mut wanted = lock(&self.inner.wanted);
+            wanted
+                .subscribed
+                .retain(|&subscribed| subscribed != pane_id);
+            wanted.activities.remove(&pane_id).is_some()
+        };
+        if had_activity {
+            self.inner.send(ClientCtl::PaneActivity {
+                pane_id,
+                activity: proto::PaneActivity::Inactive,
+            });
+        }
         lock(&self.inner.mirrors).remove(&pane_id);
         self.inner.send(ClientCtl::Unsubscribe { pane_id });
+    }
+
+    /// Reports whether this device actively shows a pane. Kept across reconnects, separate
+    /// from visibility; older daemons receive only the existing visibility reports.
+    pub fn set_pane_activity(&self, pane_id: PaneId, activity: proto::PaneActivity) {
+        if lock(&self.inner.wanted)
+            .activities
+            .insert(pane_id, activity)
+            == Some(activity)
+        {
+            return;
+        }
+        self.inner
+            .send(ClientCtl::PaneActivity { pane_id, activity });
+    }
+
+    /// Claims this active client's grid without sending terminal bytes.
+    pub fn claim_pane_size(&self, pane_id: PaneId) {
+        self.inner.send(ClientCtl::ClaimSize { pane_id });
+    }
+
+    /// Sets a shared pane's policy. The daemon owns it; reconnects do not replay an old choice.
+    pub fn set_size_policy(&self, pane_id: PaneId, policy: proto::SizePolicy) {
+        self.inner
+            .send(ClientCtl::SetSizePolicy { pane_id, policy });
     }
 
     /// Tells the daemon what is on screen, which sets stream priorities and budgets.

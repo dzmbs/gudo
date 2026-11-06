@@ -10,8 +10,9 @@ use tokio::sync::oneshot;
 use crate::bytes::Bytes;
 use crate::types::{
     AgentKind, AttachVia, Axis, CommandList, CommandMark, CommandOutput, EchoHint, KeyEvent,
-    LayoutOp, Links, MouseEvent, OpErrorCode, OpOutcome, PaneMeta, PaneSize, ProgramReport,
-    RpcError, SearchPage, SearchQuery, SessionLayout, SessionSummary, TerminalColors,
+    LayoutOp, Links, MouseEvent, OpErrorCode, OpOutcome, PaneActivity, PaneMeta, PaneSize,
+    ProgramReport, RpcError, SearchPage, SearchQuery, SessionLayout, SessionSummary, SizePolicy,
+    TerminalColors,
 };
 use crate::ws_types::{ForwardInfo, ForwardTarget, WorkspaceError};
 use crate::{on_runtime, runtime};
@@ -762,6 +763,19 @@ impl DaemonClient {
     /// This client's size for a pane; the PTY takes it when this client types.
     pub fn resize(&self, pane_id: u64, size: PaneSize) {
         self.inner.resize(PaneId(pane_id), size.into());
+    }
+
+    pub fn set_pane_activity(&self, pane_id: u64, activity: PaneActivity) {
+        self.inner
+            .set_pane_activity(PaneId(pane_id), activity.into());
+    }
+
+    pub fn claim_pane_size(&self, pane_id: u64) {
+        self.inner.claim_pane_size(PaneId(pane_id));
+    }
+
+    pub fn set_size_policy(&self, pane_id: u64, policy: SizePolicy) {
+        self.inner.set_size_policy(PaneId(pane_id), policy.into());
     }
 
     /// Sends raw input bytes (borrowed from Swift without a copy across the boundary).

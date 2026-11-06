@@ -336,7 +336,8 @@ pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {
         | DaemonFeatures::TERMINAL_COLORS
         | DaemonFeatures::POWER_SETTINGS
         | DaemonFeatures::AGENT_TIMELINE
-        | DaemonFeatures::GENERATED_INPUT;
+        | DaemonFeatures::GENERATED_INPUT
+        | DaemonFeatures::ACTIVE_SIZING;
     if core.cfg.push.enabled && core.cfg.push.live_activity {
         features |= DaemonFeatures::LIVE_ACTIVITY;
     }
@@ -894,7 +895,7 @@ async fn read_input(client: &Arc<Client>, mut stream: RecvStream) -> Result<(), 
         if is_sizing_input && let Some(size) = size {
             client
                 .core
-                .apply_client_size(&entry, client.id, client.actor.principal, size, true);
+                .apply_client_size(&entry, client.id, &client.authz, size, true);
         }
         let at_seq = match entry.pane.write(bytes).await {
             Ok(at_seq) => at_seq,
@@ -1009,7 +1010,7 @@ impl Client {
             Event::Sessions => self.send(self.core.sessions_message(self.authz.scope)),
             Event::PaneMeta(pane) => {
                 if self.in_session(pane)
-                    && let Some(meta) = self.core.pane_meta(pane)
+                    && let Some(meta) = self.pane_metadata(pane)
                 {
                     let mut state = lock(&self.state);
                     if state.sent_meta.get(&pane) != Some(&meta) {
@@ -2089,6 +2090,12 @@ impl Client {
         ports
     }
 
+    fn pane_metadata(&self, pane_id: PaneId) -> Option<proto::PaneMeta> {
+        let mut meta = self.core.pane_meta(pane_id)?;
+        meta.size_policy = meta.size_policy.for_client(self.caps);
+        Some(meta)
+    }
+
     fn view_changed(&self) {
         let panes = {
             let state = lock(&self.state);
@@ -2103,6 +2110,7 @@ impl Client {
                 viewer: self.ws.viewer,
                 panes,
             },
+            &self.authz,
         );
     }
 
@@ -2338,13 +2346,10 @@ impl Client {
                     return;
                 }
                 lock(&self.state).sizes.insert(pane_id, size);
-                // Viewers keep their size for later but never size the PTY; with a lease,
-                // only the holder does (`FollowLease`).
-                let sizes_pty = self.allow(Need::Drive, Target::Pane(pane_id)).is_ok()
-                    && self.core.mp.may_size(pane_id, self.actor.principal);
+                let sizes_pty = self.allow(Need::Drive, Target::Pane(pane_id)).is_ok();
                 if sizes_pty && let Some(entry) = self.core.pane(pane_id) {
                     self.core
-                        .apply_client_size(&entry, self.id, self.actor.principal, size, false);
+                        .apply_client_size(&entry, self.id, &self.authz, size, false);
                 }
             }
             ClientCtl::Ack { pane_id, seq } => {
@@ -2367,8 +2372,46 @@ impl Client {
                     }),
                 }
             }
-            // Only `LastInput` / `FollowLease` sizing exist.
-            ClientCtl::SetSizePolicy { .. } => {}
+            ClientCtl::SetSizePolicy { pane_id, policy } => {
+                let allowed = self.allow(Need::Drive, Target::Pane(pane_id));
+                if let Err(error) = allowed {
+                    self.send(ServerCtl::Forbidden {
+                        what: "SetSizePolicy".into(),
+                        reason: error.to_string(),
+                    });
+                    return;
+                }
+                if !self.core.mp.may_size(pane_id, self.actor.principal) {
+                    self.send(ServerCtl::Forbidden {
+                        what: "SetSizePolicy".into(),
+                        reason: "another principal holds the input lease".into(),
+                    });
+                    return;
+                }
+                if let Some(entry) = self.core.pane(pane_id)
+                    && let Err(error) = self.core.set_size_policy(&entry, policy)
+                {
+                    self.send(ServerCtl::Forbidden {
+                        what: "SetSizePolicy".into(),
+                        reason: error.to_string(),
+                    });
+                }
+            }
+            ClientCtl::PaneActivity { pane_id, activity } => {
+                if self.allow(Need::Drive, Target::Pane(pane_id)).is_ok()
+                    && let Some(entry) = self.core.pane(pane_id)
+                {
+                    self.core
+                        .pane_activity(&entry, self.id, &self.authz, activity);
+                }
+            }
+            ClientCtl::ClaimSize { pane_id } => {
+                if self.allow(Need::Drive, Target::Pane(pane_id)).is_ok()
+                    && let Some(entry) = self.core.pane(pane_id)
+                {
+                    self.core.claim_client_size(&entry, self.id);
+                }
+            }
             ClientCtl::Presence(presence) => {
                 if presence.actor == self.actor {
                     self.core.mp.presence(&self.core, self.id, presence);
@@ -3015,7 +3058,7 @@ impl Client {
             .collect();
         self.send_layout(layout);
         for pane in panes {
-            if let Some(meta) = self.core.pane_meta(pane) {
+            if let Some(meta) = self.pane_metadata(pane) {
                 self.send(ServerCtl::PaneMeta(meta));
             }
             if let Some(hint) = self.core.echo_hint(pane) {

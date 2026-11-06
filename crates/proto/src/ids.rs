@@ -339,6 +339,8 @@ bitset! {
         /// an agent's request.
         ANSWER_ALERTS = 26;
         AGENT_TIMELINE = 27;
+        /// Understands `SizePolicy::LastActive` and reports `ClientCtl::PaneActivity`.
+        ACTIVE_SIZING = 28;
     }
 }
 
@@ -411,5 +413,7 @@ bitset! {
         AGENT_TIMELINE = 24;
         /// Accepts `InputPayload::GeneratedBytes` without treating reports as typing.
         GENERATED_INPUT = 25;
+        /// Accepts pane activity and applies shared-terminal size policies.
+        ACTIVE_SIZING = 26;
     }
 }

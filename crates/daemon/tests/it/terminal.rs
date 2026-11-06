@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use client_core::proto::{
     CaseMode, FullKeyEvent, InputPayload, KeyAction, LayoutOp, LinkKind, MouseAction, MouseButton,
-    MouseEvent, OpOutcome, PaneLaunch, PaneSize, SearchMode, SearchQuery,
+    MouseEvent, OpOutcome, PaneActivity, PaneLaunch, PaneSize, SearchMode, SearchQuery, SizePolicy,
 };
 use client_core::{ClientConfig, ClientEvent};
 use ghostty_vt::Key;
@@ -75,6 +75,7 @@ async fn focus_reports_do_not_replace_the_other_clients_terminal_size() {
         desktop.type_line(pane, &format!("stty raw -echo; printf '%s%s\\r\\n' REA DY; dd bs=1 count={} >/dev/null 2>&1; printf '\\r\\n%s%s ' FO CUS; stty size; exec /bin/sh", report.len()));
         desktop.wait_text(pane, "READY").await;
         let mut phone = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+        phone.client.set_pane_activity(pane, PaneActivity::Inactive);
         phone.attach_and_follow().await;
         phone.client.resize(
             pane,
@@ -131,6 +132,7 @@ async fn generated_bytes_and_mouse_reports_do_not_claim_the_grid() {
         desktop.type_line(pane, &format!("printf '\\033[?1000h'; stty raw -echo; printf '%s%s\\r\\n' REA DY; dd bs=1 count={count} >/dev/null 2>&1; printf '\\r\\n%s%s ' RE PORT; stty size; exec /bin/sh"));
         desktop.wait_text(pane, "READY").await;
         let mut phone = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+        phone.client.set_pane_activity(pane, PaneActivity::Inactive);
         phone.attach_and_follow().await;
         phone.client.resize(
             pane,
@@ -154,6 +156,175 @@ async fn generated_bytes_and_mouse_reports_do_not_claim_the_grid() {
             desktop.text(pane)
         );
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn backgrounding_the_sizing_client_hands_the_grid_to_the_remaining_view() {
+    let directory = tempfile::tempdir().unwrap();
+    let daemon = start(directory.path()).await;
+    let mut desktop = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = desktop.attach_and_follow().await;
+    desktop.client.resize(
+        pane,
+        PaneSize {
+            cols: 160,
+            rows: 40,
+            width_px: 0,
+            height_px: 0,
+        },
+    );
+    desktop
+        .until("desktop size", |client| {
+            client
+                .metas
+                .get(&pane)
+                .is_some_and(|meta| meta.size.cols == 160)
+        })
+        .await;
+    let mut phone = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    phone.attach_and_follow().await;
+    phone.client.resize(
+        pane,
+        PaneSize {
+            cols: 45,
+            rows: 20,
+            width_px: 0,
+            height_px: 0,
+        },
+    );
+    phone.op(LayoutOp::Focus { pane_id: pane }).await;
+    phone.type_line(pane, "printf 'phone\\n'");
+    desktop
+        .until("phone size", |client| {
+            client
+                .metas
+                .get(&pane)
+                .is_some_and(|meta| meta.size.cols == 45)
+        })
+        .await;
+    phone.client.set_view(None, Vec::new());
+    desktop
+        .until("background handed sizing back", |client| {
+            client
+                .metas
+                .get(&pane)
+                .is_some_and(|meta| meta.size.cols == 160)
+        })
+        .await;
+    phone.client.resize(
+        pane,
+        PaneSize {
+            cols: 60,
+            rows: 25,
+            width_px: 0,
+            height_px: 0,
+        },
+    );
+    phone.op(LayoutOp::Focus { pane_id: pane }).await;
+    phone.client.set_view(Some(pane), vec![pane]);
+    desktop
+        .until(
+            "active phone uses its stored size without typing",
+            |client| {
+                client
+                    .metas
+                    .get(&pane)
+                    .is_some_and(|meta| meta.size.cols == 60 && meta.size.rows == 25)
+            },
+        )
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn fixed_size_survives_resizes_and_input_until_the_policy_changes() {
+    let directory = tempfile::tempdir().unwrap();
+    let daemon = start(directory.path()).await;
+    let mut client = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = client.attach_and_follow().await;
+    client
+        .client
+        .set_size_policy(pane, SizePolicy::Fixed { cols: 80, rows: 24 });
+    client
+        .until("fixed policy applied", |client| {
+            client.metas.get(&pane).is_some_and(|meta| {
+                meta.size_policy == SizePolicy::Fixed { cols: 80, rows: 24 }
+                    && meta.size.cols == 80
+                    && meta.size.rows == 24
+            })
+        })
+        .await;
+    client.client.resize(
+        pane,
+        PaneSize {
+            cols: 160,
+            rows: 40,
+            width_px: 0,
+            height_px: 0,
+        },
+    );
+    client.op(LayoutOp::Focus { pane_id: pane }).await;
+    client.type_line(pane, "printf '%s%s ' FI XED; stty size");
+    client.wait_text(pane, "FIXED 24 80").await;
+    client.client.set_size_policy(pane, SizePolicy::LastActive);
+    client
+        .until("active policy uses stored size", |client| {
+            client.metas.get(&pane).is_some_and(|meta| {
+                meta.size_policy == SizePolicy::LastActive
+                    && meta.size.cols == 160
+                    && meta.size.rows == 40
+            })
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn smallest_size_combines_active_drivers_and_ignores_background_requests() {
+    let directory = tempfile::tempdir().unwrap();
+    let daemon = start(directory.path()).await;
+    let mut desktop = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = desktop.attach_and_follow().await;
+    desktop.client.resize(
+        pane,
+        PaneSize {
+            cols: 160,
+            rows: 40,
+            width_px: 0,
+            height_px: 0,
+        },
+    );
+    desktop.op(LayoutOp::Focus { pane_id: pane }).await;
+    let mut phone = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    phone.attach_and_follow().await;
+    phone.client.resize(
+        pane,
+        PaneSize {
+            cols: 100,
+            rows: 50,
+            width_px: 0,
+            height_px: 0,
+        },
+    );
+    phone.op(LayoutOp::Focus { pane_id: pane }).await;
+    desktop.client.set_size_policy(pane, SizePolicy::Smallest);
+    desktop
+        .until("smallest active grid", |client| {
+            client.metas.get(&pane).is_some_and(|meta| {
+                meta.size_policy == SizePolicy::Smallest
+                    && meta.size.cols == 100
+                    && meta.size.rows == 40
+                    && meta.sized_by.is_none()
+            })
+        })
+        .await;
+    phone.client.set_pane_activity(pane, PaneActivity::Inactive);
+    desktop
+        .until("background no longer constrains smallest grid", |client| {
+            client
+                .metas
+                .get(&pane)
+                .is_some_and(|meta| meta.size.cols == 160 && meta.size.rows == 40)
+        })
+        .await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -217,6 +388,7 @@ async fn input_takeover_cancels_the_previous_windows_deferred_resize() {
         },
     );
     phone.op(LayoutOp::Focus { pane_id: pane }).await;
+    desktop.client.claim_pane_size(pane);
     desktop.client.resize(
         pane,
         PaneSize {

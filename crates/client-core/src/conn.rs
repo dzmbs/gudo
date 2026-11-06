@@ -424,6 +424,7 @@ async fn handshake(
             | Caps::APPROVALS
             | Caps::WORKFLOWS
             | Caps::AGENT_TIMELINE
+            | Caps::ACTIVE_SIZING
             | Caps::PRESENCE
             | Caps::PROJECTS
             | Caps::FLOATS
@@ -594,6 +595,11 @@ async fn run(inner: &Arc<Inner>, live: Live) -> String {
                 session_id: wanted.session,
             });
         }
+        if input_features.contains(proto::DaemonFeatures::ACTIVE_SIZING) {
+            for (&pane_id, &activity) in &wanted.activities {
+                messages.push(ClientCtl::PaneActivity { pane_id, activity });
+            }
+        }
         if let Some(colors) = &wanted.colors
             && inner.daemon_has(proto::DaemonFeatures::TERMINAL_COLORS)
         {
@@ -650,7 +656,7 @@ async fn run(inner: &Arc<Inner>, live: Live) -> String {
                 let Some(msg) = msg else { break "client dropped".to_owned() };
                 match msg {
                     Outgoing::Ctl(ctl) => {
-                        let _ = ctl_out.send(ctl);
+                        if control_supported(&ctl, input_features) { let _ = ctl_out.send(ctl); }
                     }
                     Outgoing::Input { pane_id, payload } => {
                         let input_seq = lock(&inner.input).send(pane_id, &payload, resends);
@@ -681,6 +687,17 @@ async fn run(inner: &Arc<Inner>, live: Live) -> String {
     tasks.abort_all();
     conn.close(0u32.into(), b"");
     reason
+}
+
+fn control_supported(control: &ClientCtl, features: proto::DaemonFeatures) -> bool {
+    match control {
+        ClientCtl::PaneActivity { .. }
+        | ClientCtl::ClaimSize { .. }
+        | ClientCtl::SetSizePolicy { .. } => {
+            features.contains(proto::DaemonFeatures::ACTIVE_SIZING)
+        }
+        _ => true,
+    }
 }
 
 fn compatible_input_payload(
@@ -1247,6 +1264,34 @@ mod tests {
 
     use super::*;
     use crate::ConnectOptions;
+
+    #[test]
+    fn old_daemons_are_not_sent_activity_claims_or_unknown_policies() {
+        for control in [
+            ClientCtl::PaneActivity {
+                pane_id: PaneId(1),
+                activity: proto::PaneActivity::Active,
+            },
+            ClientCtl::ClaimSize { pane_id: PaneId(1) },
+            ClientCtl::SetSizePolicy {
+                pane_id: PaneId(1),
+                policy: proto::SizePolicy::LastActive,
+            },
+        ] {
+            assert!(!control_supported(
+                &control,
+                proto::DaemonFeatures::default()
+            ));
+            assert!(control_supported(
+                &control,
+                proto::DaemonFeatures::ACTIVE_SIZING
+            ));
+        }
+        assert!(control_supported(
+            &ClientCtl::Ping { nonce: 1 },
+            proto::DaemonFeatures::default()
+        ));
+    }
 
     #[test]
     fn generated_reports_use_legacy_bytes_only_when_the_daemon_needs_them() {

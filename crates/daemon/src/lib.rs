@@ -62,6 +62,7 @@ mod procinfo;
 mod resume;
 mod scan;
 mod shell;
+mod sizing;
 mod stream;
 mod term;
 mod theme;

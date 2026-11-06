@@ -990,6 +990,21 @@ impl From<proto::ProgramReport> for ProgramReport {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum PaneActivity {
+    Active,
+    Inactive,
+}
+
+impl From<PaneActivity> for proto::PaneActivity {
+    fn from(activity: PaneActivity) -> Self {
+        match activity {
+            PaneActivity::Active => Self::Active,
+            PaneActivity::Inactive => Self::Inactive,
+        }
+    }
+}
+
 /// Whose size a pane's PTY follows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum SizePolicy {
@@ -1001,8 +1016,21 @@ pub enum SizePolicy {
         cols: u16,
         rows: u16,
     },
-    /// The smallest attached client's.
+    /// The smallest active driving client's.
     Smallest,
+    LastActive,
+}
+
+impl From<SizePolicy> for proto::SizePolicy {
+    fn from(policy: SizePolicy) -> Self {
+        match policy {
+            SizePolicy::FollowLease => Self::FollowLease,
+            SizePolicy::LastInput => Self::LastInput,
+            SizePolicy::Fixed { cols, rows } => Self::Fixed { cols, rows },
+            SizePolicy::Smallest => Self::Smallest,
+            SizePolicy::LastActive => Self::LastActive,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -1035,6 +1063,7 @@ impl From<proto::PaneMeta> for PaneMeta {
                 proto::SizePolicy::LastInput => SizePolicy::LastInput,
                 proto::SizePolicy::Fixed { cols, rows } => SizePolicy::Fixed { cols, rows },
                 proto::SizePolicy::Smallest => SizePolicy::Smallest,
+                proto::SizePolicy::LastActive => SizePolicy::LastActive,
             },
             sized_by: pane_meta.sized_by.map(|principal| principal.0.to_vec()),
         }

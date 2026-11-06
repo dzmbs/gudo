@@ -252,6 +252,19 @@ pub enum ClientCtl {
     /// (OSC 4, 10, 11, 12) or color scheme get the theme of the device that last focused or
     /// typed into it. Not answered.
     TerminalColors(TerminalColors),
+    /// Whether this connection actively shows the pane; requires `ACTIVE_SIZING`.
+    PaneActivity {
+        pane_id: PaneId,
+        activity: PaneActivity,
+    },
+    /// Explicitly claims this active client's grid; requires `ACTIVE_SIZING`.
+    ClaimSize { pane_id: PaneId },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PaneActivity {
+    Active,
+    Inactive,
 }
 
 /// A terminal theme's colors, each `[red, green, blue]`.
@@ -785,14 +798,26 @@ impl PaneSize {
 /// How a pane's PTY size is chosen when several clients view it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SizePolicy {
-    /// The lease holder's size. Default once a pane is shared.
+    /// The lease holder's size.
     FollowLease,
-    /// The size of the client that last sent input. Default for one principal.
+    /// The size of the active client that last sent input.
     LastInput,
     /// A fixed size.
     Fixed { cols: u16, rows: u16 },
-    /// The smallest size of all viewers (tmux).
+    /// The smallest grid among active clients allowed to size the pane.
     Smallest,
+    /// The most recently active client. The default.
+    LastActive,
+}
+
+impl SizePolicy {
+    pub fn for_client(self, caps: Caps) -> Self {
+        if self == Self::LastActive && !caps.contains(Caps::ACTIVE_SIZING) {
+            Self::LastInput
+        } else {
+            self
+        }
+    }
 }
 
 /// The agent in a pane.

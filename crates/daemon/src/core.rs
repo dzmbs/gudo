@@ -23,10 +23,13 @@ use crate::commands::CommandUpdate;
 use crate::config::Config;
 use crate::identity::Identity;
 use crate::layout::{Layout, Removed};
+use crate::mp::Authz;
+use crate::mp::policy::{Need, Target};
 use crate::osc::Osc;
 use crate::pane::{Pane, VtEvent};
 use crate::persist;
 use crate::shell::ShellIntegration;
+use crate::sizing::{EmptyGrid, SizeChoice, Sizing};
 use crate::ws::Viewer;
 
 /// How long a float that closes when its work is done stays to show the outcome.
@@ -173,6 +176,7 @@ pub(crate) struct MetaState {
     pub exit: Option<i32>,
     /// The connection whose size the PTY has, and its principal.
     pub sized_by: Option<(ConnId, PrincipalId)>,
+    pub size_policy: Option<SizePolicy>,
     /// The connection that typed into the pane last; `None` once an agent typed, or it left.
     pub typed_by: Option<ConnId>,
     /// The connection whose theme the pane's color replies use; `None`: the latest theme.
@@ -200,10 +204,15 @@ pub(crate) struct LastTurn {
     pub transcript: Option<PathBuf>,
 }
 
+#[derive(Clone, Copy)]
+enum ResizeTiming {
+    Immediate,
+    Deferred,
+    BeforeInput,
+}
+
 struct PendingResize {
-    conn: ConnId,
-    principal: PrincipalId,
-    size: PaneSize,
+    choice: SizeChoice,
     due: tokio::time::Instant,
     ownership_changed: bool,
 }
@@ -215,7 +224,8 @@ pub(crate) struct PaneEntry {
     pub agent: Mutex<Option<AgentRuntime>>,
     /// Wakes the pane task when an agent attaches from outside it (a hook), so its timers run.
     pub agent_attached: Notify,
-    /// Serializes request replacement and actual resizes, including input-driven changes.
+    /// Serializes policy decisions, request replacement and actual PTY resizes.
+    sizing: Mutex<Sizing>,
     pending_resize: Mutex<Option<PendingResize>>,
     resize_changed: Notify,
     /// Periodic ticks the pane task has run.
@@ -432,8 +442,25 @@ impl Core {
     }
 
     /// Records the panes `conn` shows.
-    pub fn set_view(&self, conn: ConnId, view: View) {
-        lock(&self.views).insert(conn, view);
+    pub fn set_view(&self, conn: ConnId, view: View, authz: &Authz) {
+        let visible: HashSet<_> = view.panes.iter().copied().collect();
+        let previous = lock(&self.views).insert(conn, view);
+        for (pane_id, entry) in self.pane_entries() {
+            let was_visible = previous
+                .as_ref()
+                .is_some_and(|view| view.panes.contains(&pane_id));
+            let is_visible = visible.contains(&pane_id);
+            if was_visible != is_visible {
+                let activity = if is_visible {
+                    proto::PaneActivity::Active
+                } else {
+                    proto::PaneActivity::Inactive
+                };
+                let mut sizing = lock(&entry.sizing);
+                sizing.view_activity(conn, authz, activity);
+                self.select_client_size(&entry, &mut sizing, ResizeTiming::Immediate);
+            }
+        }
     }
 
     /// Who shows `pane` now.
@@ -469,6 +496,12 @@ impl Core {
     }
 
     pub fn emit(&self, event: Event) {
+        if let Event::Lease(lease) = &event
+            && let Some(entry) = self.pane(lease.pane_id)
+        {
+            let mut sizing = lock(&entry.sizing);
+            self.select_client_size(&entry, &mut sizing, ResizeTiming::Immediate);
+        }
         if matches!(event, Event::PaneMeta(_) | Event::PaneClosed(_)) {
             self.power.changed.notify_one();
         }
@@ -567,12 +600,11 @@ impl Core {
         if lock(&self.attached).remove(&conn).is_some() {
             self.emit(Event::Sessions);
         }
-        // A departed client no longer sizes anything; the next typist takes over.
         for (_, entry) in self.pane_entries() {
+            let mut sizing = lock(&entry.sizing);
+            sizing.remove(conn);
+            self.select_client_size(&entry, &mut sizing, ResizeTiming::Immediate);
             let mut meta = lock(&entry.meta);
-            if meta.sized_by.is_some_and(|(sizer, _)| sizer == conn) {
-                meta.sized_by = None;
-            }
             if meta.typed_by == Some(conn) {
                 meta.typed_by = None;
             }
@@ -859,7 +891,7 @@ impl Core {
             exit: meta.exit,
             agent,
             size: entry.pane.size(),
-            size_policy: SizePolicy::LastInput,
+            size_policy: meta.size_policy.unwrap_or(SizePolicy::LastActive),
             sized_by: meta.sized_by.map(|(_, principal)| principal),
         })
     }
@@ -964,53 +996,126 @@ impl Core {
         })
     }
 
-    /// Queues `conn`'s size if the PTY follows that client. Input-driven changes (`force`)
-    /// take ownership and apply immediately, before the input reaches the PTY.
     pub fn apply_client_size(
         &self,
         entry: &PaneEntry,
         conn: ConnId,
-        principal: PrincipalId,
+        authz: &Authz,
         size: PaneSize,
         force: bool,
     ) {
-        let mut pending = lock(&entry.pending_resize);
-        let mut meta = lock(&entry.meta);
-        let follows = meta.sized_by.is_none_or(|(sizer, _)| sizer == conn);
-        if !follows && !force {
+        let visible = lock(&self.views)
+            .get(&conn)
+            .is_none_or(|view| view.panes.contains(&entry.pane.id));
+        let activity = if visible {
+            proto::PaneActivity::Active
+        } else {
+            proto::PaneActivity::Inactive
+        };
+        let mut sizing = lock(&entry.sizing);
+        if sizing.set_size(conn, authz, size, activity).is_err() {
             return;
         }
-        let ownership_changed = meta.sized_by != Some((conn, principal))
+        if force {
+            sizing.input(conn);
+        }
+        let timing = if force && sizing.is_active(conn) {
+            ResizeTiming::BeforeInput
+        } else {
+            ResizeTiming::Deferred
+        };
+        self.select_client_size(entry, &mut sizing, timing);
+    }
+
+    pub fn pane_activity(
+        &self,
+        entry: &PaneEntry,
+        conn: ConnId,
+        authz: &Authz,
+        activity: proto::PaneActivity,
+    ) {
+        let mut sizing = lock(&entry.sizing);
+        sizing.explicit_activity(conn, authz, activity);
+        self.select_client_size(entry, &mut sizing, ResizeTiming::Immediate);
+    }
+
+    pub fn claim_client_size(&self, entry: &PaneEntry, conn: ConnId) {
+        let mut sizing = lock(&entry.sizing);
+        sizing.input(conn);
+        self.select_client_size(entry, &mut sizing, ResizeTiming::Immediate);
+    }
+
+    pub fn set_size_policy(&self, entry: &PaneEntry, policy: SizePolicy) -> Result<(), EmptyGrid> {
+        let mut sizing = lock(&entry.sizing);
+        sizing.set_policy(policy)?;
+        lock(&entry.meta).size_policy = Some(policy);
+        self.select_client_size(entry, &mut sizing, ResizeTiming::Immediate);
+        self.emit(Event::PaneMeta(entry.pane.id));
+        Ok(())
+    }
+
+    fn sizing_eligible(&self, entry: &PaneEntry, authz: &Authz) -> bool {
+        self.mp.still_valid(authz)
+            && crate::mp::policy::check(self, authz, Need::Drive, Target::Pane(entry.pane.id))
+                .is_ok()
+            && self.mp.may_size(entry.pane.id, authz.actor.principal)
+    }
+
+    fn select_client_size(&self, entry: &PaneEntry, sizing: &mut Sizing, timing: ResizeTiming) {
+        let choice = sizing.choose(|authz| self.sizing_eligible(entry, authz));
+        if sizing.update_choice(choice) || matches!(timing, ResizeTiming::BeforeInput) {
+            self.queue_size_choice(entry, choice, timing);
+        }
+    }
+
+    fn queue_size_choice(
+        &self,
+        entry: &PaneEntry,
+        choice: Option<SizeChoice>,
+        timing: ResizeTiming,
+    ) {
+        let mut pending = lock(&entry.pending_resize);
+        let mut meta = lock(&entry.meta);
+        let Some(choice) = choice else {
+            *pending = None;
+            if meta.sized_by.take().is_some() {
+                self.emit(Event::PaneMeta(entry.pane.id));
+            }
+            return;
+        };
+        let ownership_changed = meta.sized_by != choice.owner
             || pending
                 .as_ref()
                 .is_some_and(|request| request.ownership_changed);
-        meta.sized_by = Some((conn, principal));
-        if force {
-            *pending = None;
-            self.resize_pane(entry, size, ownership_changed);
-        } else {
-            *pending = Some(PendingResize {
-                conn,
-                principal,
-                size,
-                ownership_changed,
-                due: tokio::time::Instant::now() + RESIZE_DEBOUNCE,
-            });
-            entry.resize_changed.notify_one();
+        meta.sized_by = choice.owner;
+        match timing {
+            ResizeTiming::Immediate | ResizeTiming::BeforeInput => {
+                *pending = None;
+                self.resize_pane(entry, choice.size, ownership_changed);
+            }
+            ResizeTiming::Deferred => {
+                *pending = Some(PendingResize {
+                    choice,
+                    ownership_changed,
+                    due: tokio::time::Instant::now() + RESIZE_DEBOUNCE,
+                });
+                entry.resize_changed.notify_one();
+            }
         }
     }
 
     fn flush_client_size(&self, entry: &PaneEntry) {
-        let mut pending = lock(&entry.pending_resize);
-        let Some(request) = pending.take_if(|request| request.due <= tokio::time::Instant::now())
-        else {
-            return;
-        };
-        let meta = lock(&entry.meta);
-        if meta.sized_by == Some((request.conn, request.principal))
-            && self.mp.may_size(entry.pane.id, request.principal)
-        {
-            self.resize_pane(entry, request.size, request.ownership_changed);
+        let mut sizing = lock(&entry.sizing);
+        let request = lock(&entry.pending_resize)
+            .take_if(|request| request.due <= tokio::time::Instant::now());
+        let Some(request) = request else { return };
+        let choice = sizing.choose(|authz| self.sizing_eligible(entry, authz));
+        sizing.update_choice(choice);
+        if choice == Some(request.choice) {
+            let _meta = lock(&entry.meta);
+            self.resize_pane(entry, request.choice.size, request.ownership_changed);
+        } else {
+            self.queue_size_choice(entry, choice, ResizeTiming::Immediate);
         }
     }
 
@@ -1802,6 +1907,7 @@ impl Core {
             record: Mutex::new(record),
             agent: Mutex::new(agent.map(|(_, _, _, runtime)| runtime)),
             agent_attached: Notify::new(),
+            sizing: Mutex::new(Sizing::default()),
             pending_resize: Mutex::new(None),
             resize_changed: Notify::new(),
             ticks: AtomicU64::new(0),
@@ -1887,6 +1993,7 @@ impl Core {
             record: Mutex::new(record),
             agent: Mutex::new(agent),
             agent_attached: Notify::new(),
+            sizing: Mutex::new(Sizing::default()),
             pending_resize: Mutex::new(None),
             resize_changed: Notify::new(),
             ticks: AtomicU64::new(0),
