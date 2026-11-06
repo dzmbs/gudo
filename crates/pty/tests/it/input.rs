@@ -3,7 +3,32 @@ use std::time::Duration;
 use pty::{SpawnOptions, TryWriteError, WinSize};
 use tokio::sync::oneshot;
 
-use crate::support::{spawn_with, within};
+use crate::support::{read_until, spawn, spawn_with, within};
+
+#[tokio::test]
+async fn empty_writes_cannot_bypass_a_stalled_input_queue_bound() {
+    let pty = spawn(&[
+        "/bin/sh",
+        "-c",
+        "stty raw -echo; echo ready; exec sleep 100",
+    ]);
+    let mut output = pty.subscribe();
+    read_until(&mut output, "ready").await;
+    pty.write(vec![b'x'; pty::MAX_QUEUED_INPUT]).await.unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_millis(500);
+    let mut accepted = 1;
+    while std::time::Instant::now() < deadline {
+        match pty.try_write(Vec::new()) {
+            Ok(()) => accepted += 1,
+            Err(TryWriteError::Full(_)) => tokio::time::sleep(Duration::from_millis(1)).await,
+            Err(TryWriteError::Closed(_)) => panic!("child closed before input was queued"),
+        }
+        assert!(
+            accepted <= pty::MAX_QUEUED_WRITES,
+            "retained {accepted} writes"
+        );
+    }
+}
 
 #[tokio::test]
 async fn cancelling_a_queued_write_returns_its_input_budget() {

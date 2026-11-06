@@ -34,8 +34,8 @@ use crate::termios::{self, EchoState, WinSize};
 
 /// Most bytes a [`Subscriber`] receives per [`recv`](Subscriber::recv).
 const MAX_SUBSCRIBER_CHUNK: usize = 64 * 1024;
-/// Queued input writes before [`PtyActor::write`] waits.
-const INPUT_QUEUE: usize = 256;
+/// Most input writes retained before [`PtyActor::write`] waits.
+pub const MAX_QUEUED_WRITES: usize = 256;
 /// Input bytes accepted but not yet taken by the child before [`PtyActor::write`] waits: a
 /// program that stops reading its input (or is stopped) holds at most this much.
 pub const MAX_QUEUED_INPUT: usize = 8 << 20;
@@ -201,6 +201,7 @@ struct Shared {
     /// One permit per input byte that may still be queued ([`MAX_QUEUED_INPUT`]); the I/O
     /// thread gives them back as the child takes the bytes.
     input_budget: Arc<Semaphore>,
+    input_slots: Arc<Semaphore>,
 }
 
 impl Shared {
@@ -311,6 +312,7 @@ pub enum AdoptError {
 struct Input {
     data: Bytes,
     _permit: OwnedSemaphorePermit,
+    _slot: OwnedSemaphorePermit,
 }
 
 /// Permits a write of `len` bytes takes: all of them, or the whole budget for a bigger one.
@@ -430,6 +432,7 @@ impl PtyActor {
             shutdown: AtomicBool::new(false),
             handing_off: AtomicBool::new(false),
             input_budget: Arc::new(Semaphore::new(MAX_QUEUED_INPUT)),
+            input_slots: Arc::new(Semaphore::new(MAX_QUEUED_WRITES)),
         });
 
         match exited {
@@ -447,7 +450,7 @@ impl PtyActor {
             }
         }
 
-        let (input, input_rx) = mpsc::channel(INPUT_QUEUE);
+        let (input, input_rx) = mpsc::channel(MAX_QUEUED_WRITES);
         let (waker, wake_rx) = io_loop::wake_pipe()?;
         let io_loop = io_loop::IoLoop::new(
             Arc::clone(&master),
@@ -597,8 +600,8 @@ impl PtyActor {
         Ok(subscriber)
     }
 
-    /// Queues `data` to be written to the child's input, waiting while the queue is full
-    /// ([`MAX_QUEUED_INPUT`] bytes the child has not taken yet).
+    /// Queues `data`, waiting while [`MAX_QUEUED_INPUT`] bytes or [`MAX_QUEUED_WRITES`] writes
+    /// are retained.
     ///
     /// Writes are applied in order. The bytes are written without blocking the I/O thread even if
     /// the child is not reading.
@@ -613,9 +616,14 @@ impl PtyActor {
             .acquire_many_owned(permits)
             .await
             .map_err(|_| Closed)?;
+        let slot = Arc::clone(&self.shared.input_slots)
+            .acquire_owned()
+            .await
+            .map_err(|_| Closed)?;
         let input = Input {
             data,
             _permit: permit,
+            _slot: slot,
         };
         self.input.send(input).await.map_err(|_| Closed)?;
         self.waker.wake();
@@ -636,10 +644,16 @@ impl PtyActor {
             Err(tokio::sync::TryAcquireError::NoPermits) => return Err(TryWriteError::Full(data)),
             Err(tokio::sync::TryAcquireError::Closed) => return Err(TryWriteError::Closed(data)),
         };
+        let slot = match Arc::clone(&self.shared.input_slots).try_acquire_owned() {
+            Ok(slot) => slot,
+            Err(tokio::sync::TryAcquireError::NoPermits) => return Err(TryWriteError::Full(data)),
+            Err(tokio::sync::TryAcquireError::Closed) => return Err(TryWriteError::Closed(data)),
+        };
         self.input
             .try_send(Input {
                 data,
                 _permit: permit,
+                _slot: slot,
             })
             .map_err(|err| {
                 let (input, full) = match err {

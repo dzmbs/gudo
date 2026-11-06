@@ -21,8 +21,8 @@ mod spawn;
 mod termios;
 
 pub use actor::{
-    AdoptError, Closed, HandedOff, MAX_QUEUED_INPUT, OutputHook, PtyActor, RecvError, Signal,
-    SignalError, SpawnOptions, Subscriber, TryWriteError, abandon,
+    AdoptError, Closed, HandedOff, MAX_QUEUED_INPUT, MAX_QUEUED_WRITES, OutputHook, PtyActor,
+    RecvError, Signal, SignalError, SpawnOptions, Subscriber, TryWriteError, abandon,
 };
 pub use foreground::ForegroundProcess;
 pub use ring::{Chunk, DEFAULT_RING_CAPACITY, OutputRing, ReadError, Seq};

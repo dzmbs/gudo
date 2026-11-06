@@ -148,6 +148,7 @@ impl IoLoop {
         // also sees writes fail.
         self.input.close();
         self.shared.input_budget.close();
+        self.shared.input_slots.close();
         self.shared.output.send_modify(|state| state.closed = true);
         Vec::new()
     }
@@ -157,6 +158,7 @@ impl IoLoop {
     fn stop_for_hand_off(mut self) -> Vec<u8> {
         self.input.close();
         self.shared.input_budget.close();
+        self.shared.input_slots.close();
         self.take_input();
         self.flush_input();
         self.pending
