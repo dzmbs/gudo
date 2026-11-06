@@ -25,7 +25,7 @@ use std::{fmt, thread};
 
 use bytes::Bytes;
 use rustix::process::{Pid, WaitId, WaitIdOptions};
-use tokio::sync::{Semaphore, mpsc, watch};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
 
 use crate::foreground::{self, ForegroundProcess};
 use crate::ring::{Chunk, DEFAULT_RING_CAPACITY, OutputRing, ReadError, Seq};
@@ -200,7 +200,7 @@ struct Shared {
     handing_off: AtomicBool,
     /// One permit per input byte that may still be queued ([`MAX_QUEUED_INPUT`]); the I/O
     /// thread gives them back as the child takes the bytes.
-    input_budget: Semaphore,
+    input_budget: Arc<Semaphore>,
 }
 
 impl Shared {
@@ -310,7 +310,7 @@ pub enum AdoptError {
 /// Queued input and the budget permits it holds.
 struct Input {
     data: Bytes,
-    permits: u32,
+    _permit: OwnedSemaphorePermit,
 }
 
 /// Permits a write of `len` bytes takes: all of them, or the whole budget for a bigger one.
@@ -429,7 +429,7 @@ impl PtyActor {
             echo: watch::Sender::new(initial_echo),
             shutdown: AtomicBool::new(false),
             handing_off: AtomicBool::new(false),
-            input_budget: Semaphore::new(MAX_QUEUED_INPUT),
+            input_budget: Arc::new(Semaphore::new(MAX_QUEUED_INPUT)),
         });
 
         match exited {
@@ -609,17 +609,15 @@ impl PtyActor {
     pub async fn write(&self, data: impl Into<Bytes>) -> Result<(), Closed> {
         let data = data.into();
         let permits = permits_for(data.len());
-        self.shared
-            .input_budget
-            .acquire_many(permits)
+        let permit = Arc::clone(&self.shared.input_budget)
+            .acquire_many_owned(permits)
             .await
-            .map_err(|_| Closed)?
-            .forget();
-        let input = Input { data, permits };
-        if let Err(err) = self.input.send(input).await {
-            self.shared.input_budget.add_permits(err.0.permits as usize);
-            return Err(Closed);
-        }
+            .map_err(|_| Closed)?;
+        let input = Input {
+            data,
+            _permit: permit,
+        };
+        self.input.send(input).await.map_err(|_| Closed)?;
         self.waker.wake();
         Ok(())
     }
@@ -633,19 +631,21 @@ impl PtyActor {
     pub fn try_write(&self, data: impl Into<Bytes>) -> Result<(), TryWriteError> {
         let data = data.into();
         let permits = permits_for(data.len());
-        match self.shared.input_budget.try_acquire_many(permits) {
-            Ok(permit) => permit.forget(),
+        let permit = match Arc::clone(&self.shared.input_budget).try_acquire_many_owned(permits) {
+            Ok(permit) => permit,
             Err(tokio::sync::TryAcquireError::NoPermits) => return Err(TryWriteError::Full(data)),
             Err(tokio::sync::TryAcquireError::Closed) => return Err(TryWriteError::Closed(data)),
-        }
+        };
         self.input
-            .try_send(Input { data, permits })
+            .try_send(Input {
+                data,
+                _permit: permit,
+            })
             .map_err(|err| {
                 let (input, full) = match err {
                     mpsc::error::TrySendError::Full(input) => (input, true),
                     mpsc::error::TrySendError::Closed(input) => (input, false),
                 };
-                self.shared.input_budget.add_permits(input.permits as usize);
                 if full {
                     TryWriteError::Full(input.data)
                 } else {

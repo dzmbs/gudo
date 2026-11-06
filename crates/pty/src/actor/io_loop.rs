@@ -182,8 +182,7 @@ impl IoLoop {
                 Ok(written) => {
                     front.data.advance(written);
                     if front.data.is_empty() {
-                        let done = self.pending.pop_front().expect("front exists");
-                        self.shared.input_budget.add_permits(done.permits as usize);
+                        self.pending.pop_front();
                     }
                 }
                 Err(Errno::INTR) => {}
@@ -191,12 +190,7 @@ impl IoLoop {
                 Err(err) => {
                     // Typically EIO once the child side is gone; output EOF follows.
                     tracing::debug!(%err, "pty write failed; dropping queued input");
-                    let permits: usize = self
-                        .pending
-                        .drain(..)
-                        .map(|input| input.permits as usize)
-                        .sum();
-                    self.shared.input_budget.add_permits(permits);
+                    self.pending.clear();
                     return;
                 }
             }
