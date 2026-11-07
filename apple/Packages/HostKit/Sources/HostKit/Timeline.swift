@@ -6,6 +6,13 @@ nonisolated public protocol DaemonTimelineAPI: AnyObject, Sendable {
     func timelineUnwatch(paneId: UInt64) async throws
     func timelineItemsBefore(paneId: UInt64, before: UInt64, limit: UInt16) async throws -> String
     func timelineToolOutput(paneId: UInt64, handle: String, offset: UInt64, len: UInt32) async throws -> String
+    func timelineToolDiff(paneId: UInt64, handle: String) async throws -> String
+}
+
+extension DaemonTimelineAPI {
+    public func timelineToolDiff(paneId: UInt64, handle: String) async throws -> String {
+        throw WorkspaceError.Unavailable(message: "Update the helper to read complete recorded changes.")
+    }
 }
 
 extension DaemonClient: DaemonTimelineAPI {}

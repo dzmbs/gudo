@@ -8,6 +8,13 @@ nonisolated enum ChatDiffTarget: Hashable, Sendable {
 nonisolated struct ChatToolDiff: Sendable {
     let item: String
     let files: [TimelineFileDiff]
+    let resultHandle: String?
+
+    init(item: String, files: [TimelineFileDiff], resultHandle: String? = nil) {
+        self.item = item
+        self.files = files
+        self.resultHandle = resultHandle
+    }
 }
 
 nonisolated enum ChatDiffPreview {
@@ -27,7 +34,7 @@ nonisolated enum ChatDiffPreview {
                 guard item.id == identifier else { return nil }
                 files = tool.diff.filter { path == nil || $0.path == path }
             }
-            return ChatToolDiff(item: item.id, files: files)
+            return ChatToolDiff(item: item.id, files: files, resultHandle: tool.output?.handle)
         }
     }
 }

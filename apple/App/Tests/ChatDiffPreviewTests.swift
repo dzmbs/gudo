@@ -42,11 +42,22 @@ final class ChatDiffPreviewTests: XCTestCase {
         XCTAssertTrue(ChatDiffPreview.files(for: .turn(""), rows: rows).isEmpty)
     }
 
-    private func toolRow(_ identifier: String, turn: String, path: String) throws -> ChatRow {
+    func testSelectedGroupsKeepTheirOwnOpaqueResultHandleRatherThanInventingOne() throws {
+        let rows = try [toolRow("first", turn: "turn", path: "a.swift", handle: "7:19:tool:part"),
+                        toolRow("second", turn: "turn", path: "a.swift", handle: "7:99:other")]
+        let groups = ChatDiffPreview.groups(for: .tool(item: "first", path: "a.swift"), rows: rows)
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertEqual(groups[0].resultHandle, "7:19:tool:part")
+        let missing = try toolRow("missing", turn: "turn", path: "a.swift")
+        XCTAssertNil(ChatDiffPreview.groups(for: .tool(item: "missing", path: nil), rows: [missing])[0].resultHandle)
+    }
+
+    private func toolRow(_ identifier: String, turn: String, path: String, handle: String? = nil) throws -> ChatRow {
         let file: [String: Any] = ["path": path, "change": "Modified", "binary": false,
                                     "additions": 1, "deletions": 0, "hunks": [], "hunks_omitted": false]
-        let tool: [String: Any] = ["kind": "Edit", "name": "Edit", "title": "Edit file", "input": "",
+        var tool: [String: Any] = ["kind": "Edit", "name": "Edit", "title": "Edit file", "input": "",
                                     "status": "Done", "diff": [file]]
+        if let handle { tool["output"] = ["handle": handle, "bytes": 0, "preview": ""] }
         let json = try TimelineFixtureJSON.json(["id": identifier, "revision": 1, "turn": turn,
                                                   "at": 0, "origin": "Agent", "body": ["Tool": tool]])
         let item = try TimelineJSON.decode(TimelineItem.self, from: json)

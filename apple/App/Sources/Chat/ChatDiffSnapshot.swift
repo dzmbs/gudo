@@ -7,6 +7,7 @@ nonisolated enum ChatDiffLimits {
     static let rows = 20_000
     static let bytes = 2 * 1_024 * 1_024
     static let lineBytes = 8 * 1_024
+    static let jsonBytes = bytes * 6 + 1_024
 }
 
 nonisolated struct ChatDiffSnapshot: Sendable {
