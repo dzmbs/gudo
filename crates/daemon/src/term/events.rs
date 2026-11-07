@@ -30,6 +30,10 @@ struct Ring {
 
 impl Ring {
     fn push(&mut self, session: Option<SessionId>, pane: Option<PaneId>, kind: ScriptEventKind) {
+        // A vanished pane has no session, not permission to broadcast its data.
+        if session.is_none() && (pane.is_some() || !matches!(kind, ScriptEventKind::Lost { .. })) {
+            return;
+        }
         let event = ScriptEvent {
             v: proto::SCRIPT_EVENTS_VERSION,
             seq: self.next,
@@ -269,6 +273,48 @@ mod tests {
             }
         });
         feed
+    }
+
+    #[tokio::test]
+    async fn missing_pane_scope_never_makes_private_events_daemon_wide() {
+        let feed = Feed::default();
+        feed.record(|ring| {
+            for kind in [
+                ScriptEventKind::CommandStarted {
+                    id: 1,
+                    command: Some("private command".into()),
+                    cwd: Some("/private/fixture".into()),
+                },
+                ScriptEventKind::CommandFinished {
+                    id: 1,
+                    command: Some("private command".into()),
+                    exit_code: Some(7),
+                    duration_ms: 1,
+                },
+                ScriptEventKind::AgentState {
+                    state: "working".into(),
+                    kind: None,
+                    app: Some("claude".into()),
+                },
+                ScriptEventKind::Lost { missed: 1 },
+            ] {
+                ring.push(None, Some(PaneId(42)), kind);
+            }
+            ring.push(Some(SessionId(1)), None, ScriptEventKind::LayoutChanged);
+            ring.push(None, None, ScriptEventKind::Lost { missed: 1 });
+        });
+        let mine = feed
+            .read(Some(SessionId(1)), Some(0), |_| true, 10, Duration::ZERO)
+            .await;
+        assert_eq!(mine.events.len(), 2, "{:?}", mine.events);
+        let other = feed
+            .read(Some(SessionId(2)), Some(0), |_| true, 10, Duration::ZERO)
+            .await;
+        assert_eq!(other.events.len(), 1, "{:?}", other.events);
+        assert!(matches!(
+            other.events[0].kind,
+            ScriptEventKind::Lost { missed: 1 }
+        ));
     }
 
     #[tokio::test]

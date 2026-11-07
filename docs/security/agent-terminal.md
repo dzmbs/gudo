@@ -58,6 +58,7 @@ directory (it holds `hook.token` and can do anything the user can anyway).
   the hash-chained audit log.
 - **Event stream.** Agents see only their own session's events; `gudo events` sees what its
   connection's grant shows. Neither leaks another session's panes, commands or exit codes.
+  A missing pane session never becomes daemon-wide scope; only pane-free loss notices may be global.
 
 ## Residual risk
 
