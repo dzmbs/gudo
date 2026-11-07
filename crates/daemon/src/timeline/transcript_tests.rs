@@ -38,6 +38,32 @@ fn assigning_an_output_epoch_replaces_the_previous_epoch() {
 }
 
 #[test]
+fn output_handles_cannot_read_records_excluded_from_the_main_timeline() {
+    let mut unexpected = Vec::new();
+    for (kind, sidechain, visible) in [
+        ("user", false, true),
+        ("user", true, false),
+        ("assistant", false, false),
+        ("future-record", false, false),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("test.jsonl");
+        let record = json!({"type": kind, "sessionId": "test", "isSidechain": sidechain,
+            "message": {"content": [{"type": "tool_result", "tool_use_id": "tool", "content": "result"}]}});
+        std::fs::write(&path, format!("{record}\n")).unwrap();
+        let mut transcript = open(&path);
+        assert_eq!(transcript.snapshot(60, None).items.is_empty(), !visible);
+        let output = transcript.output("7:0:tool", 0, 16, None);
+        if visible {
+            assert_eq!(output.unwrap().text, "result");
+        } else if !matches!(output, Err(WsError::Denied(_))) {
+            unexpected.push(format!("{kind}, sidechain={sidechain}: {output:?}"));
+        }
+    }
+    assert!(unexpected.is_empty(), "{unexpected:?}");
+}
+
+#[test]
 fn malformed_records_do_not_prevent_open_or_history() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("test.jsonl");

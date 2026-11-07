@@ -189,6 +189,56 @@ fn contains(update: &TimelineUpdate, text: &str) -> bool {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn guessed_output_handles_cannot_read_records_hidden_from_the_main_conversation() {
+    let harness = Harness::start().await;
+    let mut writer = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&harness.transcript)
+        .unwrap();
+    let mut handles = Vec::new();
+    for (index, (kind, sidechain, visible)) in [
+        ("user", false, true),
+        ("user", true, false),
+        ("assistant", false, false),
+        ("future-record", false, false),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = format!("record-scope-{index}");
+        let offset = writer.metadata().unwrap().len();
+        let record = json!({"type": kind, "sessionId": SESSION, "isSidechain": sidechain,
+            "timestamp": "2099-01-01T00:00:00Z", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": id, "content": "recorded result"}]}});
+        writeln!(writer, "{record}").unwrap();
+        handles.push((offset, id, visible));
+    }
+    drop(writer);
+    let snapshot = harness
+        .owner
+        .client
+        .timeline_watch(harness.pane)
+        .await
+        .unwrap();
+    let mut unexpected = Vec::new();
+    for (offset, id, visible) in handles {
+        let handle = format!("{}:{offset}:{id}", snapshot.cursor.epoch);
+        let output = harness
+            .owner
+            .client
+            .timeline_tool_output(harness.pane, handle, 0, 64)
+            .await;
+        match output {
+            Ok(output) if visible && output.text == "recorded result" => {}
+            Err(WsError::Denied(_)) if !visible => {}
+            output => unexpected.push(format!("{id}: {output:?}")),
+        }
+    }
+    harness.shutdown().await;
+    assert!(unexpected.is_empty(), "{unexpected:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn unsupported_items_become_legacy_notices_in_snapshots_history_and_live_updates() {
     let harness = Harness::start().await;
     harness.append_unknown_block("old-unsupported");

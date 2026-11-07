@@ -375,6 +375,11 @@ impl Transcript {
         record: &Record,
         since: Option<UnixMillis>,
     ) -> Result<(), WsError> {
+        if record.kind != RecordKind::User || record.is_sidechain {
+            return Err(WsError::Denied(
+                "this output is not part of the main conversation".into(),
+            ));
+        }
         let at = UnixMillis(
             record
                 .timestamp

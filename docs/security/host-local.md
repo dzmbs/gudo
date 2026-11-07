@@ -114,7 +114,8 @@ Tests and capture tools must also supply private home and agent configuration di
 older items or output. The captured session selects the file inside that agent account's
 transcript directory; requests carry scoped cursors and output handles, never file paths.
 Canonical roots, matching session filenames, no-follow opens and file identity checks constrain
-reads. Native watches and workers stop with their last subscription. Push mailboxes and bulk
+reads. Output handles admit only main-conversation user tool-result records; sidechains and unknown
+record kinds stay unreadable even when a client guesses a handle. Native watches and workers stop with their last subscription. Push mailboxes and bulk
 reply permits bound memory while a client stops reading. See [Agent timelines](../CHAT.md).
 
 **Agent input exit fence.** A dedicated agent launch has a fresh nonce and starts with native

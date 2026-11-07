@@ -289,7 +289,8 @@ states safe. Signed approval routes and owner-only permission-mode changes remai
 ## Scope and bounds
 
 Every request requires View on its pane. A guest's since-join policy filters items and full
-output, including reads made with a guessed handle. A transcript must resolve inside the
+output, including reads made with a guessed handle. Output handles cannot bypass the record-kind
+and sidechain exclusions of the main timeline. A transcript must resolve inside the
 pane's agent account's `projects` directory and its filename must match the captured session.
 Files are opened without following a final symlink. Output reads reject stale file identity
 or tail anchors, even before the file watcher runs.
