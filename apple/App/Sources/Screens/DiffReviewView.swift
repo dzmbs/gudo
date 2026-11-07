@@ -449,7 +449,7 @@ struct DiffFileHeader: View {
             }
             .padding(.horizontal, DS.Space.l)
             .padding(.vertical, DS.Space.s)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -461,7 +461,7 @@ struct DiffFileHeader: View {
         }
         .accessibilityLabel("\(file.path), \(file.additions) additions, \(file.deletions) deletions")
         .accessibilityHint(isCollapsed ? "Expands the file" : "Collapses the file")
-        .accessibilityIdentifier("diff-file-\(file.path)")
+        .accessibilityIdentifier("diff-file-\(file.id)")
     }
 
     private var pathText: Text {
@@ -601,7 +601,7 @@ struct DiffLineContent: View {
         .accessibilityLabel(accessibility(line))
         .accessibilityAddTraits(onTapLine == nil ? .isStaticText : .isButton)
         .accessibilityHint(onTapLine == nil ? "" : "Adds a review note")
-        .accessibilityIdentifier("diff-line-\(file.path)-\(line.id)")
+        .accessibilityIdentifier("diff-line-\(file.id)-\(line.id)")
     }
 
     @ViewBuilder private func side(_ line: DiffLine?, oldSide: Bool) -> some View {
@@ -629,7 +629,7 @@ struct DiffLineContent: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(accessibility(line))
             .accessibilityAddTraits(onTapLine == nil ? .isStaticText : .isButton)
-            .accessibilityIdentifier("diff-line-\(file.path)-\(line.id)\(oldSide ? "-old" : "")")
+            .accessibilityIdentifier("diff-line-\(file.id)-\(line.id)\(oldSide ? "-old" : "")")
         } else {
             Rectangle().fill(DS.Palette.hoverFill.opacity(0.5))
                 .frame(width: columnWidth, height: lineHeight)

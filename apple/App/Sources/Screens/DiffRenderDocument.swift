@@ -11,6 +11,9 @@ nonisolated struct DiffRenderInput: Hashable, Sendable {
     var lineHeight: CGFloat = 18
     var characterWidth: CGFloat = 8
     var textSize: CGFloat = 13
+    var summaryHeight: CGFloat = 88
+    var fileHeaderHeight: CGFloat = 36
+    var hunkHeaderHeight: CGFloat = 24
 }
 
 nonisolated struct DiffRenderRow: Identifiable, Sendable {
@@ -45,10 +48,10 @@ nonisolated struct DiffRenderDocument: Sendable {
         self.input = input
         let notesByLocation = Dictionary(grouping: input.notes) { NoteLocation(path: $0.path, number: $0.startLine, oldSide: $0.oldSide) }
         var longestLine = 0
-        append("summary", content: .summary, height: 88)
+        append("summary", content: .summary, height: input.summaryHeight)
         for (fileIndex, file) in input.files.enumerated() {
             let prefix = "file:\(file.id)"
-            append(prefix, fileIndex: fileIndex, content: .file, height: 36)
+            append(prefix, fileIndex: fileIndex, content: .file, height: input.fileHeaderHeight)
             guard !input.collapsed.contains(file.id) else { continue }
             if file.isBinary || file.hunks.isEmpty {
                 let message = file.isBinary ? "Binary file not shown" : file.hunksOmitted ? "This diff is too large to show here." : "No content changes"
@@ -57,7 +60,7 @@ nonisolated struct DiffRenderDocument: Sendable {
             }
             for hunk in file.hunks {
                 let hunkPrefix = "\(prefix)/hunk:\(hunk.id)"
-                append(hunkPrefix, fileIndex: fileIndex, content: .hunk(hunk.header), height: 24)
+                append(hunkPrefix, fileIndex: fileIndex, content: .hunk(hunk.header), height: input.hunkHeaderHeight)
                 let lines = input.split ? hunk.splitRows : hunk.lines.map { SplitDiffRow(id: $0.id, left: $0, right: nil) }
                 for row in lines {
                     let linePrefix = "\(hunkPrefix)/line:\(row.id)"

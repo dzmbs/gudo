@@ -65,6 +65,16 @@ final class DiffLayoutTests: XCTestCase {
         XCTAssertEqual(document.rows.filter { if case .line = $0.content { return true }; return false }.count, 2)
     }
 
+    func testSnapshotHeaderMetricsParticipateInNativeGeometry() {
+        var configuration = input([file()])
+        configuration.summaryHeight = 132
+        configuration.fileHeaderHeight = 66
+        configuration.hunkHeaderHeight = 44
+        let document = DiffRenderDocument(input: configuration)
+        XCTAssertEqual(Array(document.rows.prefix(3).map(\.height)), [132, 66, 44])
+        XCTAssertEqual(document.height, 278)
+    }
+
     func testMissingSystemFontUsesASizedMeasurableFallback() throws {
         for size in [CGFloat(13), 22] {
             let font = try XCTUnwrap(DiffRenderDocument.noteFont(nil, size: size))

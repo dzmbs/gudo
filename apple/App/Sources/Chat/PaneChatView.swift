@@ -48,6 +48,8 @@ struct PaneChatView<Terminal: View>: View {
                     return try await hub.timelineClient().timelineToolOutput(
                         paneId: pane.id.rawValue, handle: output.handle, offset: offset, len: length)
                 }, openTerminal: openTerminalFromDetail)
+            case .diff(let groups):
+                ChatDiffSheet(groups: groups, openTerminal: openTerminalFromDetail)
             }
         }
     }
@@ -88,27 +90,8 @@ struct PaneChatView<Terminal: View>: View {
     }
 
     private func selectDiffPreview(_ target: ChatDiffTarget) {
-        let diffs = ChatDiffPreview.files(for: target, rows: state.model?.frame.rows ?? [])
-        let text = diffs.map { file in
-            let hunks = file.hunks.map { hunk in
-                hunk.header + "\n" + hunk.lines.map { line in
-                    let prefix: String
-                    switch line.kind {
-                    case .known(.added): prefix = "+"
-                    case .known(.removed): prefix = "-"
-                    case .known(.noNewline): prefix = "\\"
-                    default: prefix = " "
-                    }
-                    return prefix + line.text
-                }.joined(separator: "\n")
-            }.joined(separator: "\n")
-            return file.path + "\n" + hunks
-        }.joined(separator: "\n\n")
-        let note = "\n\nThis is a Chat preview. Open Terminal for the complete diff."
-        let preview = diffs.isEmpty
-            ? "No changes for this selection are available in Chat. Open Terminal to inspect them."
-            : text + note
-        selectedDetail = ChatDetail(content: .text(ChatSelectedText(title: "Diff Preview", text: preview)))
+        let groups = ChatDiffPreview.groups(for: target, rows: state.model?.frame.rows ?? [])
+        selectedDetail = ChatDetail(content: .diff(groups))
     }
 
     private func openTerminalFromDetail() {
@@ -117,7 +100,7 @@ struct PaneChatView<Terminal: View>: View {
 }
 
 private struct ChatDetail: Identifiable {
-    enum Content { case text(ChatSelectedText), tool(TimelineTool) }
+    enum Content { case text(ChatSelectedText), tool(TimelineTool), diff([ChatToolDiff]) }
     let id = UUID()
     let content: Content
 }

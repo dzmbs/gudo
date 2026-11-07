@@ -152,8 +152,9 @@ Native fixture tests cover retained views, reading position, live updates while 
 VT geometry and zero resize/claim/input calls. Real paired no-SIGWINCH acceptance remains separate.
 Tool details read output through the existing authenticated same-pane output API, one bounded
 native page at a time, with Input/Output tabs and Beginning/Previous/Next navigation. Closing the
-sheet invalidates pending replies. Diff details still expose bounded previews with Terminal
-fallbacks; full native diff routing, device snapshot persistence and the rest of the composer remain pending.
+sheet invalidates pending replies. Diff details use read-only native unified/side-by-side rows,
+with independent file collapse and explicit preview/omission notices. Complete-diff fetching,
+command-mark navigation, device snapshot persistence and the rest of the composer remain pending.
 Turn-summary Changes uses the opaque turn identity, not a file path. Tool-file selections also
 carry the owning item identity. Missing or empty turn correlation offers Terminal rather than
 showing changes from other visible turns.
@@ -233,8 +234,11 @@ repository diffs retain their path identities and review callbacks.
 as repository capture IDs. It admits at most 128 files, 512 hunks, 20,000 lines and 2 MiB of
 conservative derived-value charges, with an 8 KiB UTF8 limit per line. Over-budget or unknown
 semantics reject the whole selection with a Terminal fallback. Hunk coordinates, newline
-markers and omission flags survive conversion. This foundation is not yet a native sheet or a
-complete-diff fetch path; the inline timeline still contains bounded previews.
+markers and omission flags survive conversion. The native Chat diff sheet uses this snapshot
+without a `DiffSource`, repository identity, note callback or review submission path. Snapshot
+conversion and native geometry run off-main. Scaled header metrics preserve touch targets and
+summary room without changing repository-review defaults. The inline timeline still contains
+bounded previews, not a complete-diff fetch path.
 
 ## Output reader foundation
 

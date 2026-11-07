@@ -255,6 +255,11 @@ struct ChatRowView: View {
                 }
                 HStack {
                     Button("Details", systemImage: "arrow.up.left.and.arrow.down.right") { actions.showTool(item) }
+                    if !tool.diff.isEmpty {
+                        Button("Changes", systemImage: "plus.forwardslash.minus") {
+                            actions.showDiff(.tool(item: item.id, path: nil))
+                        }.accessibilityIdentifier("chat-tool-changes-\(item.id)")
+                    }
                     Spacer()
                     Button("Show in Terminal", systemImage: "terminal") { actions.showTerminal(tool.commandMark) }
                 }.font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
