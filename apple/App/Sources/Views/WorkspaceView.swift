@@ -483,6 +483,12 @@ private struct TerminalToolbar: ToolbarContent {
             SidebarToggle()
         }
         #endif
+        #if os(iOS)
+        if model.destination == .terminal, workspace.session.activeTab?.root.panes.count == 1,
+           let id = workspace.focusedPane, let pane = workspace.panes[id], let chat = pane.chat, chat.agent != nil {
+            ToolbarItem(placement: .principal) { PaneChatToggle(pane: pane, state: chat) }
+        }
+        #endif
         if let session = workspace.multiplayer {
             ToolbarItem(placement: .primaryAction) {
                 PresenceToolbarButton(session: session, place: { pane in

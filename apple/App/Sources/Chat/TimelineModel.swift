@@ -130,7 +130,6 @@ final class TimelineModel {
     private(set) var error: String?
     var followsBottom = true
     var expanded: Set<ChatRowID> = []
-    var draft = ""
 
     @ObservationIgnored var readingItem: String?
     @ObservationIgnored private var channel: TimelineChannel?
@@ -159,7 +158,6 @@ final class TimelineModel {
             if self.hub === hub { return }
             stop()
         }
-        if let lastHubIdentity, lastHubIdentity != ObjectIdentifier(hub) { draft = "" }
         if lastHubIdentity != ObjectIdentifier(hub) || lastHubGeneration != hub.generation { receive(.reset) }
         lastHubIdentity = ObjectIdentifier(hub)
         lastHubGeneration = hub.generation

@@ -8,7 +8,7 @@ import os
 
 @MainActor
 final class PanePresentationTests: XCTestCase {
-    private final class Backend: DeferredPaneSizing, SharedPaneTap, @unchecked Sendable {
+    final class Backend: DeferredPaneSizing, SharedPaneTap, @unchecked Sendable {
         struct State {
             var isDeferred = false
             var resizes = 0
@@ -17,6 +17,7 @@ final class PanePresentationTests: XCTestCase {
             var input = Data()
         }
         let state = OSAllocatedUnfairLock(initialState: State())
+        var sizeFollowsStream: Bool { true }
         var isSizeDeferred: Bool { state.withLock { $0.isDeferred } }
         func deferSize() { state.withLock { $0.isDeferred = true } }
         func cancelSizeDeferral() { state.withLock { $0.isDeferred = false } }

@@ -17,7 +17,11 @@ struct PaneHeader: View {
     #else
     static let restingOpacity = DS.Opacity.mutedGlyph
     #endif
+    #if os(iOS)
+    static let height = DS.Size.touchTarget
+    #else
     static let height: CGFloat = 24
+    #endif
 
     let id: PaneId
     let workspace: Workspace
@@ -82,13 +86,18 @@ struct PaneHeader: View {
                     model.startAgent(onGroup: workspace.groupId, agent: hint.alternative.agent, account: hint.alternative.id, from: id)
                 }
             }
+            #if os(iOS)
+            if let pane = workspace.panes[id], let chat = pane.chat, chat.agent != nil {
+                PaneChatToggle(pane: pane, state: chat)
+            }
+            #endif
             PanePresence(workspace: workspace, pane: id)
             PaneHeaderButtons(id: id, workspace: workspace, window: window, focus: focus)
                 .opacity(isFocused || isHovered ? 1 : Self.restingOpacity)
         }
         .padding(.leading, DS.Space.s)
         .padding(.trailing, DS.Space.xxs)
-        // A fixed 24 pt band over the grid: its caption text grows only so far.
+        // The fixed band does not change when switching presentation or when an agent starts.
         .dynamicTypeSize(...DynamicTypeSize.xLarge)
         .frame(height: Self.height)
         .background(theme.background, ignoresSafeAreaEdges: [])

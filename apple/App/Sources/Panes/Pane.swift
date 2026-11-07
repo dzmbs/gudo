@@ -25,6 +25,9 @@ final class Pane {
     private(set) var foregroundProgram: String?
     /// Live, or showing stale content (dimmed, never blank) while its host reconnects.
     private(set) var connection = PaneConnection.live
+    #if os(iOS)
+    var chat: PaneChatState?
+    #endif
     /// Showing the screen this device saved last, until the host sends its own.
     private(set) var showsSavedScreen = false
     /// Input typed over the saved screen: held, then sent or dropped.

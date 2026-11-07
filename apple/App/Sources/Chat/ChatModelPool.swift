@@ -63,6 +63,11 @@ final class ChatModelPool {
         return ChatModelLease(model: entry.model, owner: owner, pool: self)
     }
 
+    func forget(_ owner: UUID) {
+        guard let entry = entries[owner], entry.users == 0 else { return }
+        entries[owner] = nil
+    }
+
     fileprivate func release(_ owner: UUID) {
         guard let entry = entries[owner], entry.users > 0 else { return }
         entry.users -= 1

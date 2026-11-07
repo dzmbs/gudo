@@ -1,0 +1,158 @@
+#if os(iOS)
+import DesignSystem
+import HostKit
+import SwiftUI
+
+struct PaneChatView<Terminal: View>: View {
+    let pane: Pane
+    @Bindable var state: PaneChatState
+    let hub: DaemonWorkspace
+    @ViewBuilder var terminal: (Bool) -> Terminal
+    @State private var selectedText: ChatSelectedText?
+
+    var body: some View {
+        ZStack {
+            terminal(state.presentation == .terminal)
+                .opacity(state.presentation == .terminal ? 1 : 0)
+                .allowsHitTesting(state.presentation == .terminal)
+                .accessibilityHidden(state.presentation != .terminal)
+            if let model = state.model {
+                NativeChatView(model: model, frame: model.frame, expanded: model.expanded, actions: actions,
+                               isActive: state.presentation == .chat, onControllerReady: { state.controller = $0 }) {
+                    composer
+                }
+                .opacity(state.presentation == .chat ? 1 : 0)
+                .allowsHitTesting(state.presentation == .chat)
+                .accessibilityHidden(state.presentation != .chat)
+            }
+            if state.presentation == .chat, state.model?.frame.rows.isEmpty != false {
+                Text(state.model?.isLoading == true ? "Opening Chat…" : "No messages yet")
+                    .font(DS.Font.proseSecondary).foregroundStyle(DS.Palette.textSecondary)
+                    .allowsHitTesting(false)
+            }
+        }
+        .overlay(alignment: .top) { fallbackNote }
+        .onAppear { state.activate(in: hub) }
+        .onDisappear { state.deactivate() }
+        .onChange(of: state.agent) { _, agent in if agent != nil { state.activate(in: hub) } }
+        .onChange(of: state.model?.error) { _, error in
+            if error != nil { state.show(.terminal, terminal: pane, persistence: .transient) }
+        }
+        .sheet(item: $selectedText) { selection in
+            ChatSelectedTextSheet(selection: selection) {
+                selectedText = nil
+                state.show(.terminal, terminal: pane)
+            }
+        }
+    }
+
+    @ViewBuilder private var fallbackNote: some View {
+        if let message = state.error ?? state.model?.error {
+            Text(verbatim: message).font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
+                .padding(DS.Space.s).frame(maxWidth: .infinity).background(DS.Palette.raised)
+                .accessibilityIdentifier("chat-unavailable-note")
+        }
+    }
+
+    private var composer: some View {
+        VStack(alignment: .leading, spacing: DS.Space.s) {
+            TextField("Draft (not sent)", text: $state.draft, axis: .vertical)
+                .font(DS.Font.prose).lineLimit(1...6)
+                .accessibilityIdentifier("chat-draft")
+            HStack(spacing: DS.Space.s) {
+                Text("Chat sending is unavailable.").font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
+                Spacer(minLength: 0)
+                Button("Open Terminal", systemImage: "terminal") { state.show(.terminal, terminal: pane) }
+                    .font(DS.Font.caption).frame(minHeight: DS.Size.touchTarget)
+                Button("Send", systemImage: "arrow.up") {}
+                    .labelStyle(.iconOnly).frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
+                    .disabled(true).accessibilityIdentifier("chat-send-disabled")
+            }
+        }
+        .padding(DS.Space.l).foregroundStyle(DS.Palette.text).background(DS.Palette.sidebar)
+    }
+
+    private var actions: ChatRowActions {
+        ChatRowActions(showTerminal: { _ in state.show(.terminal, terminal: pane) }, selectText: { text in
+            selectedText = ChatSelectedText(title: "Select Text", text: text)
+        }, showTool: { item in
+            guard case .tool(let tool) = item.body else { return }
+            let preview = [tool.input, tool.output?.preview].compactMap { $0 }.joined(separator: "\n\n")
+            selectedText = ChatSelectedText(title: tool.title, text: preview)
+        }, showDiff: { selectDiffPreview($0) })
+    }
+
+    private func selectDiffPreview(_ path: String?) {
+        let diffs = state.model?.frame.rows.flatMap { row -> [TimelineFileDiff] in
+            guard case .item(let item) = row.content, case .tool(let tool) = item.body else { return [] }
+            return tool.diff.filter { path == nil || $0.path == path }
+        } ?? []
+        let text = diffs.map { file in
+            let hunks = file.hunks.map { hunk in
+                hunk.header + "\n" + hunk.lines.map { line in
+                    let prefix: String
+                    switch line.kind {
+                    case .known(.added): prefix = "+"
+                    case .known(.removed): prefix = "-"
+                    case .known(.noNewline): prefix = "\\"
+                    default: prefix = " "
+                    }
+                    return prefix + line.text
+                }.joined(separator: "\n")
+            }.joined(separator: "\n")
+            return file.path + "\n" + hunks
+        }.joined(separator: "\n\n")
+        let note = "\n\nThis is a Chat preview. Open Terminal for the complete diff."
+        selectedText = ChatSelectedText(title: "Diff Preview", text: text + note)
+    }
+}
+
+private struct ChatSelectedText: Identifiable {
+    let id = UUID()
+    let title: String
+    let text: String
+}
+
+private struct ChatSelectedTextSheet: View {
+    let selection: ChatSelectedText
+    let openTerminal: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                Text(verbatim: selection.text).font(DS.Font.literal).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(DS.Space.l)
+            }
+            .background(DS.Palette.base).foregroundStyle(DS.Palette.text)
+            .navigationTitle(selection.title).navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Terminal", systemImage: "terminal", action: openTerminal)
+                        .frame(minHeight: DS.Size.touchTarget)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }.frame(minHeight: DS.Size.touchTarget)
+                }
+            }
+        }
+    }
+}
+
+struct PaneChatToggle: View {
+    let pane: Pane
+    @Bindable var state: PaneChatState
+
+    var body: some View {
+        Picker("Presentation", selection: Binding(
+            get: { state.presentation }, set: { state.show($0, terminal: pane) }
+        )) {
+            Text("Chat").tag(PanePresentation.chat)
+            Text("Terminal").tag(PanePresentation.terminal)
+        }
+        .pickerStyle(.segmented).labelsHidden().fixedSize(horizontal: true, vertical: false)
+        .frame(minHeight: DS.Size.touchTarget)
+        .accessibilityIdentifier("pane-presentation")
+    }
+}
+#endif

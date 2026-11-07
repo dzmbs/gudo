@@ -29,7 +29,7 @@ final class TimelineModelTests: XCTestCase {
             return nil
         })
         var model: TimelineModel? = TimelineModel(pane: 7)
-        weak var released = model
+        weak let released = model
         model?.start(in: hub)
         let initial = resolutions.withLock { $0 }
         XCTAssertGreaterThan(initial, 0)

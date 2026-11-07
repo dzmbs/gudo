@@ -426,6 +426,9 @@ final class Workspace {
     private func refreshForegrounds() {
         let daemon = host as? DaemonConnection
         for (id, pane) in made {
+            #if os(iOS)
+            updateChatState(of: pane)
+            #endif
             // Local panes ask the kernel; daemon panes take what the daemon reports (the agent
             // running there, the shell's cwd) until it reports the foreground program itself.
             let current = pane.foreground() ?? daemon?.meta[id].flatMap { meta in
@@ -715,6 +718,9 @@ final class Workspace {
             self?.apply(.focus(id))
             self?.onPaneFocus?(id)
         }
+        #endif
+        #if os(iOS)
+        updateChatState(of: pane)
         #endif
         return pane
     }

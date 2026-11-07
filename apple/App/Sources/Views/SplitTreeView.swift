@@ -600,32 +600,7 @@ struct PaneSlot: View {
 
     @ViewBuilder private var content: some View {
         if let pane = workspace.pane(id) {
-            // One host per pane: without the id, switching between two single-pane tabs reuses
-            // the representable (same structural identity), so its container keeps showing,
-            // and its first responder keeps typing into, the previous tab's pane.
-            TerminalHost(pane: pane, isFocused: isFocused, workspace: workspace)
-                // Per host and pane: pane ids repeat across hosts.
-                .id(HostPane(hostId: workspace.groupId, pane: id))
-                // In motion between layers: its still moves instead (a platform view neither
-                // scales nor fades with its SwiftUI parents).
-                .opacity(still == nil ? 1 : 0)
-                .overlay(alignment: .topLeading) {
-                    if let still {
-                        Image(decorative: still, scale: displayScale)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                            .background(theme.background)
-                            .allowsHitTesting(false)
-                    }
-                }
-                .clipped()
-                .fadedTowardTerminalBackground(pane.showsSavedScreen ? 0.25 : 0)
-                .overlay { SavedScreenOverlay(pane: pane) }
-                .overlay(alignment: .bottomTrailing) { PaneSizingOverlay(pane: pane, workspace: workspace) }
-                .overlay {
-                    StalePaneOverlay(
-                        connection: pane.connection, paneId: id,
-                        hostIsLive: namesHost ? model.connectionState(ofGroup: workspace.groupId).isLive : nil)
-                }
+            paneContent(pane)
         } else if let failure = workspace.failures[id] {
             EmptyState("Pane Failed to Start", systemImage: "exclamationmark.triangle", message: failure) {
                 Button("Close Pane") { workspace.apply(.close(id)) }
@@ -634,6 +609,41 @@ struct PaneSlot: View {
         } else {
             theme.background
         }
+    }
+
+    @ViewBuilder private func paneContent(_ pane: Pane) -> some View {
+        #if os(iOS)
+        if let state = pane.chat, state.agent != nil, let daemon = workspace.host as? DaemonConnection {
+            PaneChatView(pane: pane, state: state, hub: daemon.workspace) { active in
+                terminalContent(pane, isActive: active)
+            }
+        } else { terminalContent(pane) }
+        #else
+        terminalContent(pane)
+        #endif
+    }
+
+    private func terminalContent(_ pane: Pane, isActive: Bool = true) -> some View {
+        // Identity must include the host: otherwise a reused container can keep typing into the previous pane.
+        TerminalHost(pane: pane, isFocused: isFocused, workspace: workspace, isActive: isActive)
+            .id(HostPane(hostId: workspace.groupId, pane: id))
+            // Moving panes use a still because platform views do not follow SwiftUI transforms.
+            .opacity(still == nil ? 1 : 0)
+            .overlay(alignment: .topLeading) {
+                if let still {
+                    Image(decorative: still, scale: displayScale)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                        .background(theme.background).allowsHitTesting(false)
+                }
+            }
+            .clipped()
+            .fadedTowardTerminalBackground(pane.showsSavedScreen ? 0.25 : 0)
+            .overlay { SavedScreenOverlay(pane: pane) }
+            .overlay(alignment: .bottomTrailing) { PaneSizingOverlay(pane: pane, workspace: workspace) }
+            .overlay {
+                StalePaneOverlay(connection: pane.connection, paneId: id,
+                    hostIsLive: namesHost ? model.connectionState(ofGroup: workspace.groupId).isLive : nil)
+            }
     }
 }
 

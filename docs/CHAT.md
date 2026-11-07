@@ -104,18 +104,31 @@ local to the screen; drafts do not cross hosts.
 
 ## Touch presentation
 
-`TerminalHost` can park its long-lived terminal view outside the window hierarchy while the
-backend and VT feed remain alive. Inactive containers neither take the view from an active
-host nor give it their changing layout; removal stops the terminal's display link and releases
-GPU resources through its existing lifecycle. Reactivation reuses the same view and backend.
-The pane switch must also preserve keyboard geometry and gate pending IME composition before
-parking; this container support alone is not the integrated Terminal/Chat switch.
+On iOS, tracked Claude/Codex panes have a title-bar Chat/Terminal control. New iPhone panes
+prefer Chat; iPad panes prefer Terminal. Explicit choices persist by host and pane, not native
+session, and temporary availability fallbacks do not overwrite them. Other agents and the Mac
+remain Terminal-only. Codex currently falls back until its same-process adapter is connected.
 
-`DaemonPaneBackend.cacheSize` stages a hidden viewport without sending a resize or claiming
-ownership. Actual input or an explicit sizing claim admits it before input bytes; generated
-replies and focus reports do not. Deferred candidates are excluded from automatic local-tap
-handover. This API is not yet wired into the pane switch: warm-layout admission and keyboard
-geometry still require integrated no-SIGWINCH acceptance.
+`PaneChatState` owns the draft independently of the evictable render model. Visible panes lease
+a bounded model and route the same workspace/pane's `TimelineChannel` into it. Both presentation
+containers stay mounted while visible; the timeline continues advancing in Terminal mode.
+Leaving the view releases its lease, and destroying the pane forgets the unreachable model.
+
+`TerminalHost` parks its long-lived terminal view outside the window hierarchy while the
+backend and VT feed remain alive. Inactive containers neither take the view from an active
+host nor give it changing layout; removal stops the display link and releases GPU resources.
+Reactivation reuses the same view and backend. Both directions veto marked text before resigning.
+A shared typed presentation gate blocks stale terminal keys and pastes while Chat is selected,
+including the prediction path; generated VT replies remain independent. This gate is not a
+prompt-consumption acknowledgement. The composer is draft-only, with Send disabled.
+
+Before the first Chat layout, `DeferredPaneSizing` stages the hidden viewport without sending
+a resize or claiming ownership. Actual input or an explicit sizing claim admits it; generated
+replies and focus do not. Deferred candidates are excluded from automatic local-tap handover.
+Native fixture tests cover retained views, reading position, live updates while parked, original
+VT geometry and zero resize/claim/input calls. Real paired no-SIGWINCH acceptance remains separate.
+Tool and diff detail sheets currently expose bounded previews with Terminal fallbacks; full output,
+full native diff routing, device snapshot persistence and the rest of the composer remain pending.
 
 `ChatViewController` owns one normal-orientation reusable collection and a composer host pinned
 to the keyboard layout guide. A display-link coalesces pending frames; stopped views release
