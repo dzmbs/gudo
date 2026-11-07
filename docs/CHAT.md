@@ -154,13 +154,16 @@ Tool details read output through the existing authenticated same-pane output API
 native page at a time, with Input/Output tabs and Beginning/Previous/Next navigation. Closing the
 sheet invalidates pending replies. Diff details use read-only native unified/side-by-side rows,
 with independent file collapse and explicit preview/omission notices. Complete-diff fetching,
-command-mark navigation, device snapshot persistence and the rest of the composer remain pending.
+device snapshot persistence and the rest of the composer remain pending.
 Turn-summary Changes uses the opaque turn identity, not a file path. Tool-file selections also
 carry the owning item identity. Missing or empty turn correlation offers Terminal rather than
 showing changes from other visible turns. Command-mark lookup is associated with the exact
 Pane/view, not a process-global pane number: different hosts and linked views can reuse it.
 Exact command jumps use that VT's retained row pin; missing, future, erased, foreign-pane or
-alternate-screen marks are not approximated with a similar-looking prompt.
+alternate-screen marks are not approximated with a similar-looking prompt. Chat row and tool-detail
+Terminal actions admit the presentation before navigating, with both Terminal and composer marked-text
+vetoes. An unavailable pin opens Terminal without scrolling and shows an explicit notice. An admitted
+presentation selection or agent change clears that notice. Navigation does not launch an agent or write input.
 
 `ChatViewController` owns one normal-orientation reusable collection and a composer host pinned
 to the keyboard layout guide. A display-link coalesces pending frames; stopped views release

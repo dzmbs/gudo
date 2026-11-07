@@ -8,6 +8,15 @@ import PaneLayout
 @Observable
 final class PaneChatState {
     enum Persistence { case remembered, transient }
+    enum TerminalNotice: Equatable {
+        case unavailableCommand(UInt64)
+
+        var message: String {
+            switch self {
+            case .unavailableCommand: "This command is not available in this Terminal window."
+            }
+        }
+    }
 
     private(set) var presentation: PanePresentation {
         get { access(keyPath: \.presentation); return inputPresentation.value }
@@ -15,6 +24,7 @@ final class PaneChatState {
     }
     private(set) var agent: AgentKind?
     private(set) var error: String?
+    private(set) var terminalNotice: TerminalNotice?
     var draft = ""
     var model: TimelineModel? { lease?.model }
     @ObservationIgnored weak var controller: ChatViewController?
@@ -64,6 +74,7 @@ final class PaneChatState {
         let supported = agent == .other ? nil : agent
         guard self.agent != supported else { return }
         self.agent = supported
+        terminalNotice = nil
         model?.stop()
         model?.receive(.reset)
         if supported == nil {
@@ -110,12 +121,22 @@ final class PaneChatState {
     }
 
     @discardableResult
+    func showTerminal(commandMark: UInt64?, terminal: Pane) -> Bool {
+        guard terminal.view.markedTextRange == nil, show(.terminal, terminal: terminal) else { return false }
+        if let commandMark, PaneCommandMarks.of(terminal)?.reveal(command: commandMark) != true {
+            terminalNotice = .unavailableCommand(commandMark)
+        }
+        return true
+    }
+
+    @discardableResult
     func select(
         _ presentation: PanePresentation,
         persistence: Persistence = .remembered,
         preparing prepare: () -> Bool
     ) -> Bool {
         guard self.presentation == presentation || prepare() else { return false }
+        terminalNotice = nil
         self.presentation = presentation
         if persistence == .remembered { preferences.set(presentation.rawValue, forKey: preferenceKey) }
         return true

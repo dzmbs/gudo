@@ -57,6 +57,11 @@ final class PaneChatViewTests: XCTestCase {
         controller.view.addSubview(editor)
         XCTAssertTrue(editor.becomeFirstResponder())
         editor.setMarkedText("かな", selectedRange: NSRange(location: 2, length: 0))
+        XCTAssertFalse(fixture.state.showTerminal(commandMark: 42, terminal: fixture.pane))
+        XCTAssertNil(fixture.state.terminalNotice)
+        XCTAssertEqual(fixture.state.presentation, .chat)
+        XCTAssertTrue(editor.isFirstResponder)
+        XCTAssertNotNil(editor.markedTextRange)
         let picker = try XCTUnwrap(presentationControl(in: fixture.window))
         picker.selectedSegmentIndex = 1
         picker.sendActions(for: .valueChanged)
@@ -146,6 +151,16 @@ final class PaneChatViewTests: XCTestCase {
         XCTAssertFalse(fixture.client.calls.contains("unwatch 7"))
         XCTAssertTrue(fixture.client.state.withLock { $0.launches.isEmpty })
         try capture(fixture.window, name: "returned-chat-" + name)
+        XCTAssertTrue(state.showTerminal(commandMark: 99, terminal: fixture.pane))
+        try await wait { state.presentation == .terminal && original.superview != nil }
+        try await Task.sleep(for: .milliseconds(180))
+        XCTAssertEqual(state.terminalNotice, .unavailableCommand(99))
+        XCTAssertEqual(fixture.backend.state.withLock { $0.resizes }, 0)
+        XCTAssertEqual(fixture.backend.state.withLock { $0.claims }, 0)
+        XCTAssertTrue(fixture.backend.state.withLock { $0.input.isEmpty })
+        try capture(fixture.window, name: "missing-command-" + name)
+        XCTAssertTrue(state.show(.chat, terminal: fixture.pane))
+        XCTAssertNil(state.terminalNotice)
     }
 
     private func readingAnchor(in collection: UICollectionView) throws -> (row: ChatRowID, position: CGFloat) {

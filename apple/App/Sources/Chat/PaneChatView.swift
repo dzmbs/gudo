@@ -47,7 +47,7 @@ struct PaneChatView<Terminal: View>: View {
                     guard let output = tool.output else { throw ChatOutputError.invalidPage }
                     return try await hub.timelineClient().timelineToolOutput(
                         paneId: pane.id.rawValue, handle: output.handle, offset: offset, len: length)
-                }, openTerminal: openTerminalFromDetail)
+                }, openTerminal: { openTerminalFromDetail(commandMark: tool.commandMark) })
             case .diff(let groups):
                 ChatDiffSheet(groups: groups, openTerminal: openTerminalFromDetail)
             }
@@ -55,7 +55,7 @@ struct PaneChatView<Terminal: View>: View {
     }
 
     @ViewBuilder private var fallbackNote: some View {
-        if let message = state.error ?? state.model?.error {
+        if let message = state.error ?? state.terminalNotice?.message ?? state.model?.error {
             Text(verbatim: message).font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
                 .padding(DS.Space.s).frame(maxWidth: .infinity).background(DS.Palette.raised)
                 .accessibilityIdentifier("chat-unavailable-note")
@@ -81,7 +81,7 @@ struct PaneChatView<Terminal: View>: View {
     }
 
     private var actions: ChatRowActions {
-        ChatRowActions(showTerminal: { _ in state.show(.terminal, terminal: pane) }, selectText: { text in
+        ChatRowActions(showTerminal: { state.showTerminal(commandMark: $0, terminal: pane) }, selectText: { text in
             selectedDetail = ChatDetail(content: .text(ChatSelectedText(title: "Select Text", text: text)))
         }, showTool: { item in
             guard case .tool(let tool) = item.body else { return }
@@ -94,8 +94,10 @@ struct PaneChatView<Terminal: View>: View {
         selectedDetail = ChatDetail(content: .diff(groups))
     }
 
-    private func openTerminalFromDetail() {
-        if state.show(.terminal, terminal: pane) { selectedDetail = nil }
+    private func openTerminalFromDetail() { openTerminalFromDetail(commandMark: nil) }
+
+    private func openTerminalFromDetail(commandMark: UInt64?) {
+        if state.showTerminal(commandMark: commandMark, terminal: pane) { selectedDetail = nil }
     }
 }
 

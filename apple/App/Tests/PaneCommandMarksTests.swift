@@ -92,6 +92,29 @@ final class PaneCommandMarksTests: XCTestCase {
         XCTAssertEqual(terminal.viewportTopRow, top)
     }
 
+    #if os(iOS)
+    func testChatAdmissionNavigatesOnlyAfterBothCompositionsAreClear() throws {
+        let fixture = try fixture(host: "chat-navigation")
+        defer { fixture.close() }
+        _ = seed(fixture)
+        let suite = "chat-command-admission-" + UUID().uuidString
+        let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { preferences.removePersistentDomain(forName: suite) }
+        let state = PaneChatState(member: HostPane(hostId: "chat-navigation", pane: fixture.pane.id),
+            defaultPresentation: .chat, agent: .claude, inputPresentation: fixture.pane.inputPresentation,
+            preferences: preferences, pool: ChatModelPool(capacity: 1))
+        XCTAssertTrue(state.showTerminal(commandMark: 42, terminal: fixture.pane))
+        XCTAssertEqual(state.presentation, .terminal)
+        XCTAssertNil(state.terminalNotice)
+        XCTAssertEqual(fixture.pane.view.surface.terminal.viewportTopRow, 10)
+        fixture.pane.view.setMarkedText("かな", selectedRange: NSRange(location: 2, length: 0))
+        XCTAssertFalse(state.showTerminal(commandMark: 99, terminal: fixture.pane))
+        XCTAssertNotNil(fixture.pane.view.markedTextRange)
+        XCTAssertNil(state.terminalNotice)
+        XCTAssertEqual(fixture.pane.view.surface.terminal.viewportTopRow, 10)
+    }
+    #endif
+
     private func seed(_ fixture: Fixture) -> CommandList {
         let terminal = fixture.pane.view.surface.terminal
         terminal.write(Array((0..<120).map { "row \($0)\r\n" }.joined().utf8))

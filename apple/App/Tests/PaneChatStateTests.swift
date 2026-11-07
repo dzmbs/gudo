@@ -119,6 +119,26 @@ final class PaneChatStateTests: XCTestCase {
         XCTAssertEqual(try state(pane: 8).presentation, .chat)
     }
 
+    func testMissingCommandNoticeClearsOnlyAfterAnAdmittedSelectionOrAgentChange() throws {
+        let first = try state()
+        let backend = PanePresentationTests.Backend()
+        let pane = try Pane(id: PaneId(7), backend: backend, onExit: {})
+        defer { pane.detach() }
+        XCTAssertTrue(first.showTerminal(commandMark: 99, terminal: pane))
+        XCTAssertEqual(first.presentation, .terminal)
+        XCTAssertEqual(first.terminalNotice, .unavailableCommand(99))
+        XCTAssertFalse(first.select(.chat, preparing: { false }))
+        XCTAssertEqual(first.terminalNotice, .unavailableCommand(99))
+        XCTAssertTrue(first.select(.chat, preparing: { true }))
+        XCTAssertNil(first.terminalNotice)
+        XCTAssertTrue(first.showTerminal(commandMark: 99, terminal: pane))
+        first.updateAgent(.codex)
+        XCTAssertNil(first.terminalNotice)
+        XCTAssertEqual(backend.state.withLock { $0.resizes }, 0)
+        XCTAssertEqual(backend.state.withLock { $0.claims }, 0)
+        XCTAssertTrue(backend.state.withLock { $0.input.isEmpty })
+    }
+
     func testACompositionVetoDoesNotChangeOrPersistTheChoice() throws {
         let first = try state(initial: .terminal)
         XCTAssertFalse(first.select(.chat, preparing: { false }))
