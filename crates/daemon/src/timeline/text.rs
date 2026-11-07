@@ -1,16 +1,5 @@
-use serde_json::Value;
-
-pub(super) fn plain_text(value: &Value) -> String {
-    let text = match value {
-        Value::String(text) => text.to_owned(),
-        Value::Array(parts) => parts
-            .iter()
-            .filter_map(|part| part["text"].as_str().or(part["content"].as_str()))
-            .collect::<Vec<_>>()
-            .join("\n"),
-        _ => String::new(),
-    };
-    strip_terminal_controls(&text)
+pub(super) fn plain_text(text: &str) -> String {
+    strip_terminal_controls(text)
 }
 
 pub(super) fn output_preview(text: &str) -> String {
@@ -85,17 +74,15 @@ mod tests {
     #[test]
     fn output_does_not_expose_terminal_control_payloads() {
         assert_eq!(
-            plain_text(&json!(
+            plain_text(
                 "\u{1b}[31mred\u{1b}[0m \u{1b}]8;;https://example.invalid\u{7}link\u{1b}]8;;\u{1b}\\\u{1b}Psecret\u{1b}\\\n"
-            )),
+            ),
             "red link\n"
         );
-        assert_eq!(
-            plain_text(
-                &json!([{ "type":"text", "text":"first" }, { "type":"image", "data":"hidden" }, { "text":"last" }])
-            ),
-            "first\nlast"
-        );
+        let content: super::super::claude_record::Content = serde_json::from_value(
+            json!([{ "type":"text", "text":"first" }, { "type":"image", "data":"hidden" }, { "text":"last" }]),
+        ).unwrap();
+        assert_eq!(plain_text(&content.joined_text()), "first\nlast");
     }
 
     #[test]

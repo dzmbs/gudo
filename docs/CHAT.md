@@ -178,7 +178,16 @@ or tail anchors, even before the file watcher runs.
 
 The daemon retains at most 512 items per watched pane and 128 tool-call merge entries.
 Initial and historical reads seek within the last 8 MiB before the requested position;
-only the selected records are parsed. Snapshot item data is capped at 1 MiB. A connection
+only the selected records are parsed. Native record, block, result and plan tags decode into
+typed values at the reader boundary; arbitrary tool input retains bounded JSON for its sheet.
+Malformed complete records are skipped without ending the timeline. Text over 256 KiB becomes
+a per-item Terminal notice, not a session-wide error. Live scanning is limited to 8 MiB per
+refresh, including record newlines. An oversized line is discarded through its next newline;
+the scan position and last complete record boundary are distinct, so an unfinished line never
+publishes a false offset or repeatedly resets the epoch. Partial-tail rewrite checks cover
+the scanned position as well as the completed boundary.
+
+Snapshot item data is capped at 1 MiB. A connection
 may watch four panes. Pushes occupy one mailbox slot per pane and coalesce to a snapshot
 under backpressure. Watch tokens prevent a cancelled forwarder from reviving an unwatched
 pane or replacing a later watch.

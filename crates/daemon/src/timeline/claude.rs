@@ -1,25 +1,27 @@
 use std::collections::{HashMap, VecDeque};
 
 use proto::{
-    AgentKind, DiffLine, FileChange, FileDiff, Hunk, LineKind, TimelineAttachment, TimelineBody,
-    TimelineItem, TimelineNoticeKind, TimelineOrigin, TimelineOutputRef, TimelinePlanEntry,
-    TimelinePlanStatus, TimelineSession, TimelineTool, TimelineToolKind, TimelineToolStatus,
-    UnixMillis,
+    AgentKind, TimelineAttachment, TimelineBody, TimelineItem, TimelineNoticeKind, TimelineOrigin,
+    TimelineOutputRef, TimelinePlanEntry, TimelinePlanStatus, TimelineSession, TimelineTool,
+    TimelineToolKind, TimelineToolStatus, UnixMillis,
 };
-use serde_json::Value;
 
+use super::claude_diff::result_diff;
+use super::claude_record::{
+    Block, BlockKind, Content, Decision, Record, RecordKind, SystemKind, TodoStatus,
+};
 use super::text::{output_preview, plain_text};
 
 const TOOL_CACHE_LIMIT: usize = 128;
-const INPUT_LIMIT: usize = 16 * 1024;
 const TEXT_LIMIT: usize = 256 * 1024;
+const METADATA_CHARS_LIMIT: usize = 2048;
+const PLAN_ENTRIES_LIMIT: usize = 200;
+const OVERSIZED_MESSAGE: &str = "This message is too large for Chat. Open Terminal to read it.";
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum ParseError {
     #[error("the transcript contains an invalid record")]
     Json(#[from] serde_json::Error),
-    #[error("a transcript message is too large for Chat; open Terminal to read it")]
-    MessageTooLarge,
 }
 
 pub(super) struct ClaudeTimeline {
@@ -57,260 +59,206 @@ impl ClaudeTimeline {
         bytes: &[u8],
         offset: u64,
     ) -> Result<Vec<TimelineItem>, ParseError> {
-        let record: Value = serde_json::from_slice(bytes)?;
-        self.parse_record(&record, offset)
+        let record: Record = serde_json::from_slice(bytes)?;
+        Ok(self.parse_record(&record, offset))
     }
 
-    pub(super) fn parse_record(
-        &mut self,
-        record: &Value,
-        offset: u64,
-    ) -> Result<Vec<TimelineItem>, ParseError> {
-        if record["sessionId"]
-            .as_str()
-            .is_some_and(|session| session != self.session.native_session)
-            || record["isSidechain"].as_bool() == Some(true)
+    pub(super) fn parse_record(&mut self, record: &Record, offset: u64) -> Vec<TimelineItem> {
+        if record
+            .session_id
+            .as_ref()
+            .is_some_and(|session| session != &self.session.native_session)
+            || record.is_sidechain
         {
-            return Ok(Vec::new());
+            return Vec::new();
         }
-        if let Some(mode) = record["permissionMode"].as_str() {
-            self.session.permission_mode = Some(mode.to_owned());
-        }
-        let kind = record["type"].as_str().unwrap_or_default();
-        match kind {
-            "ai-title" | "custom-title" => {
-                let title = record["customTitle"]
-                    .as_str()
-                    .or(record["aiTitle"].as_str());
-                if let Some(title) = title {
-                    self.session.title = Some(checked_text(title)?);
-                }
-                Ok(Vec::new())
-            }
-            "permission-mode" => {
-                if let Some(mode) = record["mode"]
-                    .as_str()
-                    .or(record["permissionMode"].as_str())
-                {
-                    self.session.permission_mode = Some(mode.to_owned());
-                }
-                Ok(Vec::new())
-            }
-            "user" if record["isCompactSummary"].as_bool() == Some(true) => Ok(vec![self.item(
+        self.session_metadata(record);
+        match record.kind {
+            RecordKind::User if record.is_compact_summary => vec![self.item(
                 record,
                 record_id(record, offset),
                 TimelineBody::Notice {
                     kind: TimelineNoticeKind::Compacted,
                     text: "Context compacted".into(),
                 },
-            )]),
-            "user" if record["isMeta"].as_bool() == Some(true) => Ok(Vec::new()),
-            "user" => self.user(record, offset),
-            "assistant" => self.assistant(record, offset),
-            "system" => Ok(self.system(record, offset)),
-            _ => Ok(Vec::new()),
+            )],
+            RecordKind::User if record.is_meta => Vec::new(),
+            RecordKind::User => self.user(record, offset),
+            RecordKind::Assistant => self.assistant(record, offset),
+            RecordKind::System => self.system(record, offset),
+            _ => Vec::new(),
         }
     }
 
-    fn user(&mut self, record: &Value, offset: u64) -> Result<Vec<TimelineItem>, ParseError> {
-        let content = &record["message"]["content"];
+    fn session_metadata(&mut self, record: &Record) {
+        if let Some(mode) = &record.permission_mode {
+            self.session.permission_mode = Some(metadata_text(mode));
+        }
+        match record.kind {
+            RecordKind::AiTitle | RecordKind::CustomTitle => {
+                if let Some(title) = record.custom_title.as_ref().or(record.ai_title.as_ref()) {
+                    self.session.title = Some(metadata_text(title));
+                }
+            }
+            RecordKind::PermissionMode => {
+                if let Some(mode) = record.mode.as_ref().or(record.permission_mode.as_ref()) {
+                    self.session.permission_mode = Some(metadata_text(mode));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn user(&mut self, record: &Record, offset: u64) -> Vec<TimelineItem> {
+        let content = &record.message.content;
         let mut items = Vec::new();
-        let blocks = content.as_array();
-        if let Some(blocks) = blocks {
-            for block in blocks {
-                if block["type"].as_str() == Some("tool_result")
-                    && let Some(id) = block["tool_use_id"].as_str()
-                {
-                    items.push(self.tool_result(record, block, id, offset));
-                }
+        for block in content.blocks() {
+            if block.kind == BlockKind::ToolResult
+                && let Some(id) = &block.tool_use_id
+            {
+                items.push(self.tool_result(record, block, id, offset));
             }
         }
-        let text = match content {
-            Value::String(text) => checked_text(text)?,
-            Value::Array(blocks) => {
-                let mut text = String::new();
-                for block in blocks {
-                    if block["type"].as_str() == Some("text")
-                        && let Some(part) = block["text"].as_str()
-                    {
-                        if !text.is_empty() {
-                            text.push('\n');
-                        }
-                        text.push_str(part);
-                        if text.len() > TEXT_LIMIT {
-                            return Err(ParseError::MessageTooLarge);
-                        }
-                    }
-                }
-                text
-            }
-            _ => String::new(),
+        let text = user_text(content);
+        let attachments = attachments(content);
+        if text.as_ref().is_some_and(String::is_empty) && attachments.is_empty() {
+            return items;
+        }
+        let id = record_id(record, offset);
+        self.turn = Some(id.clone());
+        self.input_tokens = 0;
+        self.output_tokens = 0;
+        let body = match text {
+            Some(text) => TimelineBody::User {
+                text,
+                attachments,
+                queued: false,
+            },
+            None => oversized_message(),
         };
-        let attachments: Vec<_> = blocks
-            .into_iter()
-            .flatten()
-            .filter(|block| matches!(block["type"].as_str(), Some("image" | "document")))
-            .filter_map(|block| {
-                let path = block["source"]["path"]
-                    .as_str()
-                    .or(block["path"].as_str())?;
-                Some(TimelineAttachment {
-                    path: path.to_owned(),
-                    media_type: block["source"]["media_type"].as_str().map(str::to_owned),
-                })
-            })
-            .collect();
-        if !text.is_empty() || !attachments.is_empty() {
-            let id = record_id(record, offset);
-            self.turn = Some(id.clone());
-            self.input_tokens = 0;
-            self.output_tokens = 0;
-            let mut item = self.item(
-                record,
-                id,
-                TimelineBody::User {
-                    text,
-                    attachments,
-                    queued: false,
-                },
-            );
-            item.origin = TimelineOrigin::Terminal;
-            items.push(item);
-        }
-        Ok(items)
+        let mut item = self.item(record, id, body);
+        item.origin = TimelineOrigin::Terminal;
+        items.push(item);
+        items
     }
 
-    fn assistant(&mut self, record: &Value, offset: u64) -> Result<Vec<TimelineItem>, ParseError> {
-        let message = &record["message"];
-        if let Some(model) = message["model"]
-            .as_str()
+    fn assistant(&mut self, record: &Record, offset: u64) -> Vec<TimelineItem> {
+        self.note_message(record);
+        let record_id = record_id(record, offset);
+        let mut items = Vec::new();
+        for (index, block) in record.message.content.blocks().iter().enumerate() {
+            items.extend(self.assistant_block(record, block, &record_id, index));
+        }
+        items
+    }
+
+    fn note_message(&mut self, record: &Record) {
+        let message = &record.message;
+        if let Some(model) = message
+            .model
+            .as_deref()
             .filter(|model| *model != "<synthetic>")
         {
-            self.session.model = Some(model.to_owned());
+            self.session.model = Some(metadata_text(model));
         }
-        if let Some(message_id) = message["id"].as_str()
-            && !self.seen_usage.iter().any(|seen| seen == message_id)
-        {
-            self.seen_usage.push_back(message_id.to_owned());
-            if self.seen_usage.len() > TOOL_CACHE_LIMIT {
-                self.seen_usage.pop_front();
-            }
-            let usage = &message["usage"];
-            self.input_tokens = self.input_tokens.saturating_add(
-                [
-                    "input_tokens",
-                    "cache_read_input_tokens",
-                    "cache_creation_input_tokens",
-                ]
-                .iter()
-                .filter_map(|key| usage[key].as_u64())
-                .fold(0u64, u64::saturating_add),
-            );
-            self.output_tokens = self
-                .output_tokens
-                .saturating_add(usage["output_tokens"].as_u64().unwrap_or(0));
+        let Some(id) = &message.id else { return };
+        if self.seen_usage.iter().any(|seen| seen == id) {
+            return;
         }
-        let mut items = Vec::new();
-        let Some(blocks) = message["content"].as_array() else {
-            return Ok(items);
-        };
-        let record_id = record_id(record, offset);
-        for (index, block) in blocks.iter().enumerate() {
-            let id = format!("{record_id}:{index}");
-            let body = match block["type"].as_str() {
-                Some("text") => TimelineBody::Assistant {
-                    text: checked_text(block["text"].as_str().unwrap_or_default())?,
+        self.seen_usage.push_back(id.clone());
+        if self.seen_usage.len() > TOOL_CACHE_LIMIT {
+            self.seen_usage.pop_front();
+        }
+        let usage = &message.usage;
+        self.input_tokens = [
+            usage.input_tokens,
+            usage.cache_read_input_tokens,
+            usage.cache_creation_input_tokens,
+        ]
+        .into_iter()
+        .fold(self.input_tokens, u64::saturating_add);
+        self.output_tokens = self.output_tokens.saturating_add(usage.output_tokens);
+    }
+
+    fn assistant_block(
+        &mut self,
+        record: &Record,
+        block: &Block,
+        record_id: &str,
+        index: usize,
+    ) -> Vec<TimelineItem> {
+        let body = match block.kind {
+            BlockKind::Text => bounded_body(block.text.as_deref().unwrap_or_default(), |text| {
+                TimelineBody::Assistant {
+                    text,
                     streaming: false,
-                },
-                Some("thinking") => TimelineBody::Thinking {
-                    text: block["thinking"].as_str().map(checked_text).transpose()?,
-                    duration_ms: block["durationMs"].as_u64(),
-                },
-                Some("redacted_thinking") => TimelineBody::Thinking {
-                    text: None,
-                    duration_ms: None,
-                },
-                Some("tool_use") => {
-                    let Some(tool_id) = block["id"].as_str() else {
-                        continue;
-                    };
-                    let name = block["name"].as_str().unwrap_or("Tool");
-                    let input = &block["input"];
-                    if name == "TodoWrite" {
-                        let entries = plan_entries(&input["todos"]);
-                        let plan_id =
-                            format!("plan:{}", self.turn.as_deref().unwrap_or(&record_id));
-                        items.push(self.item(record, plan_id, TimelineBody::Plan { entries }));
-                    }
-                    let serialized = input.to_string();
-                    let tool = TimelineTool {
-                        kind: tool_kind(name),
-                        name: name.to_owned(),
-                        title: tool_title(name, input),
-                        input: if serialized.len() <= INPUT_LIMIT {
-                            serialized
-                        } else {
-                            "{\"message\":\"Input is too large. Open Terminal to read it.\"}".into()
-                        },
-                        status: TimelineToolStatus::Running,
-                        output: None,
-                        diff: Vec::new(),
-                        exit: None,
-                        duration_ms: None,
-                        command_mark: None,
-                    };
-                    let item = self.item(record, tool_id.to_owned(), TimelineBody::Tool(tool));
-                    self.remember_tool(item.clone());
-                    items.push(item);
-                    continue;
                 }
-                _ => continue,
-            };
-            items.push(self.item(record, id, body));
+            }),
+            BlockKind::Thinking => match block.thinking.as_deref() {
+                Some(text) => bounded_body(text, |text| TimelineBody::Thinking {
+                    text: Some(text),
+                    duration_ms: block.duration_ms,
+                }),
+                None => TimelineBody::Thinking {
+                    text: None,
+                    duration_ms: block.duration_ms,
+                },
+            },
+            BlockKind::RedactedThinking => TimelineBody::Thinking {
+                text: None,
+                duration_ms: None,
+            },
+            BlockKind::ToolUse => return self.tool_call(record, block, record_id),
+            _ => return Vec::new(),
+        };
+        vec![self.item(record, format!("{record_id}:{index}"), body)]
+    }
+
+    fn tool_call(&mut self, record: &Record, block: &Block, record_id: &str) -> Vec<TimelineItem> {
+        let Some(id) = &block.id else {
+            return Vec::new();
+        };
+        let name = block.name.as_deref().unwrap_or("Tool");
+        let mut items = Vec::new();
+        if name == "TodoWrite" {
+            let plan_id = format!("plan:{}", self.turn.as_deref().unwrap_or(record_id));
+            let entries = plan_entries(block);
+            items.push(self.item(record, plan_id, TimelineBody::Plan { entries }));
         }
-        Ok(items)
+        let tool = TimelineTool {
+            kind: tool_kind(name),
+            name: name.to_owned(),
+            title: block.input.title.clone().unwrap_or_else(|| name.to_owned()),
+            input: block.input.json.clone(),
+            status: TimelineToolStatus::Running,
+            output: None,
+            diff: Vec::new(),
+            exit: None,
+            duration_ms: None,
+            command_mark: None,
+        };
+        let item = self.item(record, id.clone(), TimelineBody::Tool(tool));
+        self.remember_tool(item.clone());
+        items.push(item);
+        items
     }
 
     fn tool_result(
         &mut self,
-        record: &Value,
-        block: &Value,
+        record: &Record,
+        block: &Block,
         id: &str,
         offset: u64,
     ) -> TimelineItem {
-        let rich = &record["toolUseResult"];
+        let rich = record.tool_use_result.rich();
         let mut item = self.tools.get(id).cloned().unwrap_or_else(|| {
-            self.item(
-                record,
-                id.to_owned(),
-                TimelineBody::Tool(TimelineTool {
-                    kind: TimelineToolKind::Other,
-                    name: "Tool".into(),
-                    title: "Tool output".into(),
-                    input: "{}".into(),
-                    status: TimelineToolStatus::Running,
-                    output: None,
-                    diff: Vec::new(),
-                    exit: None,
-                    duration_ms: None,
-                    command_mark: None,
-                }),
-            )
+            self.item(record, id.to_owned(), TimelineBody::Tool(unknown_tool()))
         });
         item.revision = item.revision.saturating_add(1);
         let TimelineBody::Tool(tool) = &mut item.body else {
             return item;
         };
-        let is_error = block["is_error"].as_bool().unwrap_or(false);
-        tool.status = if rich["interrupted"].as_bool() == Some(true) {
-            TimelineToolStatus::Interrupted
-        } else if record["permissionDecision"]["decision"].as_str() == Some("deny") {
-            TimelineToolStatus::Denied
-        } else if is_error {
-            TimelineToolStatus::Failed
-        } else {
-            TimelineToolStatus::Done
-        };
+        tool.status = tool_status(record, block);
         let output = result_text(record, block);
         tool.output =
             proto::OutputHandle::new(0, offset, id)
@@ -320,35 +268,34 @@ impl ClaudeTimeline {
                     bytes: output.len() as u64,
                     preview: output_preview(&output),
                 });
-        tool.exit = rich["exitCode"]
-            .as_i64()
+        tool.exit = rich
+            .and_then(|rich| rich.exit_code)
             .and_then(|exit| i32::try_from(exit).ok());
-        tool.duration_ms = rich["durationMs"]
-            .as_u64()
-            .or(rich["totalDurationMs"].as_u64());
-        tool.diff = result_diff(rich);
+        tool.duration_ms = rich.and_then(|rich| rich.duration_ms.or(rich.total_duration_ms));
+        tool.diff = rich.map(result_diff).unwrap_or_default();
         self.remember_tool(item.clone());
         item
     }
 
-    fn system(&self, record: &Value, offset: u64) -> Vec<TimelineItem> {
-        let body = match record["subtype"].as_str() {
-            Some("turn_duration") => TimelineBody::TurnEnd {
-                duration_ms: record["durationMs"].as_u64().unwrap_or(0),
+    fn system(&self, record: &Record, offset: u64) -> Vec<TimelineItem> {
+        let body = match record.subtype {
+            SystemKind::TurnDuration => TimelineBody::TurnEnd {
+                duration_ms: record.duration_ms.unwrap_or(0),
                 input_tokens: Some(self.input_tokens),
                 output_tokens: Some(self.output_tokens),
             },
-            Some("compact_boundary") => TimelineBody::Notice {
+            SystemKind::CompactBoundary => TimelineBody::Notice {
                 kind: TimelineNoticeKind::Compacted,
                 text: "Context compacted".into(),
             },
-            Some("api_error") => TimelineBody::Notice {
+            SystemKind::ApiError => TimelineBody::Notice {
                 kind: TimelineNoticeKind::Error,
                 text: "The agent could not reach its service. Open Terminal for details.".into(),
             },
-            Some("local_command")
-                if record["content"]
-                    .as_str()
+            SystemKind::LocalCommand
+                if record
+                    .content
+                    .as_ref()
                     .is_some_and(|text| text.contains("/clear")) =>
             {
                 TimelineBody::Notice {
@@ -361,15 +308,16 @@ impl ClaudeTimeline {
         vec![self.item(record, record_id(record, offset), body)]
     }
 
-    fn item(&self, record: &Value, id: String, body: TimelineBody) -> TimelineItem {
+    fn item(&self, record: &Record, id: String, body: TimelineBody) -> TimelineItem {
         TimelineItem {
             id,
             revision: 1,
             turn: self.turn.clone(),
-            parent: record["parentToolUseId"].as_str().map(str::to_owned),
+            parent: record.parent_tool_use_id.clone(),
             at: UnixMillis(
-                record["timestamp"]
-                    .as_str()
+                record
+                    .timestamp
+                    .as_deref()
                     .and_then(crate::usage::rfc3339_millis)
                     .unwrap_or(0),
             ),
@@ -391,18 +339,135 @@ impl ClaudeTimeline {
     }
 }
 
-fn record_id(record: &Value, offset: u64) -> String {
-    record["uuid"]
-        .as_str()
-        .map(str::to_owned)
+fn unknown_tool() -> TimelineTool {
+    TimelineTool {
+        kind: TimelineToolKind::Other,
+        name: "Tool".into(),
+        title: "Tool output".into(),
+        input: "{}".into(),
+        status: TimelineToolStatus::Running,
+        output: None,
+        diff: Vec::new(),
+        exit: None,
+        duration_ms: None,
+        command_mark: None,
+    }
+}
+
+fn tool_status(record: &Record, block: &Block) -> TimelineToolStatus {
+    if record
+        .tool_use_result
+        .rich()
+        .is_some_and(|rich| rich.interrupted)
+    {
+        TimelineToolStatus::Interrupted
+    } else if matches!(record.permission_decision.decision, Decision::Deny) {
+        TimelineToolStatus::Denied
+    } else if block.is_error {
+        TimelineToolStatus::Failed
+    } else {
+        TimelineToolStatus::Done
+    }
+}
+
+fn plan_entries(block: &Block) -> Vec<TimelinePlanEntry> {
+    block
+        .input
+        .todos
+        .iter()
+        .take(PLAN_ENTRIES_LIMIT)
+        .filter_map(|todo| {
+            Some(TimelinePlanEntry {
+                text: todo
+                    .content
+                    .as_ref()?
+                    .chars()
+                    .take(METADATA_CHARS_LIMIT)
+                    .collect(),
+                status: match todo.status {
+                    TodoStatus::Completed => TimelinePlanStatus::Completed,
+                    TodoStatus::InProgress => TimelinePlanStatus::InProgress,
+                    TodoStatus::Pending => TimelinePlanStatus::Pending,
+                },
+            })
+        })
+        .collect()
+}
+
+fn record_id(record: &Record, offset: u64) -> String {
+    record
+        .uuid
+        .clone()
         .unwrap_or_else(|| format!("record:{offset}"))
 }
 
-fn checked_text(text: &str) -> Result<String, ParseError> {
-    if text.len() > TEXT_LIMIT {
-        return Err(ParseError::MessageTooLarge);
+fn metadata_text(text: &str) -> String {
+    text.chars().take(METADATA_CHARS_LIMIT).collect()
+}
+
+fn oversized_message() -> TimelineBody {
+    TimelineBody::Notice {
+        kind: TimelineNoticeKind::Error,
+        text: OVERSIZED_MESSAGE.into(),
     }
-    Ok(text.to_owned())
+}
+
+fn bounded_body(text: &str, body: impl FnOnce(String) -> TimelineBody) -> TimelineBody {
+    if text.len() > TEXT_LIMIT {
+        oversized_message()
+    } else {
+        body(text.to_owned())
+    }
+}
+
+fn user_text(content: &Content) -> Option<String> {
+    if let Some(text) = content.text() {
+        return (text.len() <= TEXT_LIMIT).then(|| text.to_owned());
+    }
+    let mut text = String::new();
+    for block in content
+        .blocks()
+        .iter()
+        .filter(|block| block.kind == BlockKind::Text)
+    {
+        if let Some(part) = &block.text {
+            if part
+                .len()
+                .saturating_add(text.len())
+                .saturating_add(usize::from(!text.is_empty()))
+                > TEXT_LIMIT
+            {
+                return None;
+            }
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(part);
+        }
+    }
+    Some(text)
+}
+
+fn attachments(content: &Content) -> Vec<TimelineAttachment> {
+    content
+        .blocks()
+        .iter()
+        .filter(|block| matches!(block.kind, BlockKind::Image | BlockKind::Document))
+        .filter_map(|block| {
+            Some(TimelineAttachment {
+                path: block
+                    .source
+                    .as_ref()
+                    .and_then(|source| source.path.as_ref())
+                    .or(block.path.as_ref())?
+                    .clone(),
+                media_type: block
+                    .source
+                    .as_ref()
+                    .and_then(|source| source.media_type.clone()),
+            })
+        })
+        .collect()
 }
 
 fn tool_kind(name: &str) -> TimelineToolKind {
@@ -420,157 +485,22 @@ fn tool_kind(name: &str) -> TimelineToolKind {
     }
 }
 
-fn tool_title(name: &str, input: &Value) -> String {
-    for key in [
-        "description",
-        "file_path",
-        "path",
-        "pattern",
-        "query",
-        "url",
-        "command",
-    ] {
-        if let Some(title) = input[key].as_str().filter(|text| !text.is_empty()) {
-            return title.chars().take(512).collect();
-        }
-    }
-    name.to_owned()
-}
-
-fn plan_entries(todos: &Value) -> Vec<TimelinePlanEntry> {
-    todos
-        .as_array()
-        .into_iter()
-        .flatten()
-        .take(200)
-        .filter_map(|todo| {
-            let text = todo["content"].as_str()?;
-            Some(TimelinePlanEntry {
-                text: text.chars().take(2048).collect(),
-                status: match todo["status"].as_str() {
-                    Some("completed") => TimelinePlanStatus::Completed,
-                    Some("in_progress") => TimelinePlanStatus::InProgress,
-                    _ => TimelinePlanStatus::Pending,
-                },
-            })
-        })
-        .collect()
-}
-
-pub(super) fn result_text(record: &Value, block: &Value) -> String {
-    let rich = &record["toolUseResult"];
-    if rich["stdout"].is_string() || rich["stderr"].is_string() {
-        let stdout = rich["stdout"].as_str().unwrap_or_default();
-        let stderr = rich["stderr"].as_str().unwrap_or_default();
-        return plain_text(&Value::String(if stdout.is_empty() || stderr.is_empty() {
-            format!("{stdout}{stderr}")
-        } else {
-            format!("{stdout}\n{stderr}")
-        }));
-    }
-    if let Some(content) = rich["file"]["content"].as_str() {
-        return plain_text(&Value::String(content.to_owned()));
-    }
-    plain_text(&block["content"])
-}
-
-fn result_diff(result: &Value) -> Vec<FileDiff> {
-    let Some(path) = result["filePath"].as_str() else {
-        return Vec::new();
-    };
-    let patches = result["structuredPatch"].as_array();
-    let is_created = result["type"].as_str() == Some("create");
-    if patches.is_none() && !is_created {
-        return Vec::new();
-    }
-    let mut additions = 0u32;
-    let mut deletions = 0u32;
-    let mut hunks = Vec::new();
-    let mut retained_lines = 0usize;
-    let mut omitted = false;
-    for patch in patches.into_iter().flatten() {
-        let mut lines = Vec::new();
-        for line in patch["lines"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-        {
-            let (kind, text) = match line.as_bytes().first() {
-                Some(b'+') => {
-                    additions = additions.saturating_add(1);
-                    (LineKind::Added, &line[1..])
-                }
-                Some(b'-') => {
-                    deletions = deletions.saturating_add(1);
-                    (LineKind::Removed, &line[1..])
-                }
-                Some(b' ') => (LineKind::Context, &line[1..]),
-                _ => (LineKind::Context, line),
-            };
-            if retained_lines < 6 {
-                lines.push(DiffLine {
-                    kind,
-                    text: text.chars().take(512).collect(),
-                });
-                retained_lines += 1;
+pub(super) fn result_text(record: &Record, block: &Block) -> String {
+    if let Some(rich) = record.tool_use_result.rich() {
+        if rich.stdout.is_some() || rich.stderr.is_some() {
+            let stdout = rich.stdout.as_deref().unwrap_or_default();
+            let stderr = rich.stderr.as_deref().unwrap_or_default();
+            return plain_text(&if stdout.is_empty() || stderr.is_empty() {
+                format!("{stdout}{stderr}")
             } else {
-                omitted = true;
-            }
-        }
-        if !lines.is_empty() {
-            hunks.push(Hunk {
-                old_start: number(patch, "oldStart"),
-                old_lines: number(patch, "oldLines"),
-                new_start: number(patch, "newStart"),
-                new_lines: number(patch, "newLines"),
-                header: String::new(),
-                lines,
+                format!("{stdout}\n{stderr}")
             });
         }
+        if let Some(content) = rich.file.as_ref().and_then(|file| file.content.as_ref()) {
+            return plain_text(content);
+        }
     }
-    if is_created && hunks.is_empty() {
-        let content = result["content"].as_str().unwrap_or_default();
-        additions = u32::try_from(content.lines().count()).unwrap_or(u32::MAX);
-        let lines = content
-            .lines()
-            .take(6)
-            .map(|line| DiffLine {
-                kind: LineKind::Added,
-                text: line.chars().take(512).collect(),
-            })
-            .collect();
-        omitted = additions > 6;
-        hunks.push(Hunk {
-            old_start: 0,
-            old_lines: 0,
-            new_start: 1,
-            new_lines: additions,
-            header: String::new(),
-            lines,
-        });
-    }
-    vec![FileDiff {
-        path: path.to_owned(),
-        old_path: None,
-        change: if is_created {
-            FileChange::Added
-        } else {
-            FileChange::Modified
-        },
-        binary: false,
-        additions,
-        deletions,
-        hunks,
-        hunks_omitted: omitted,
-    }]
-}
-
-fn number(record: &Value, key: &str) -> u32 {
-    record[key]
-        .as_u64()
-        .and_then(|number| u32::try_from(number).ok())
-        .unwrap_or(0)
+    plain_text(&block.content.joined_text())
 }
 
 #[cfg(test)]

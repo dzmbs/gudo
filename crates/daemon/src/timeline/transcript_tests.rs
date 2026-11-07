@@ -30,6 +30,172 @@ fn assigning_an_output_epoch_replaces_the_previous_epoch() {
 }
 
 #[test]
+fn malformed_records_do_not_prevent_open_or_history() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("test.jsonl");
+    let mut contents = String::new();
+    for index in 0..20 {
+        contents.push_str(&message(index));
+        if index == 10 {
+            contents.push_str("{torn-json\n");
+        }
+    }
+    std::fs::write(&path, contents).unwrap();
+    let mut transcript = open(&path);
+    assert_eq!(transcript.snapshot(60, None).items.len(), 20);
+    let before = transcript.snapshot(2, None).before.unwrap();
+    let page = transcript.page(before, 100, None).unwrap();
+    assert_eq!(page.items.len(), 18);
+    assert_eq!(page.items[0].id, "message-0:0");
+    assert_eq!(transcript.cursor.epoch, 7);
+}
+
+#[test]
+fn malformed_live_records_do_not_end_refresh() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("test.jsonl");
+    std::fs::write(&path, message(0)).unwrap();
+    let mut transcript = open(&path);
+    let mut writer = OpenOptions::new().append(true).open(&path).unwrap();
+    writer
+        .write_all(format!("{{torn-json\n{}", message(1)).as_bytes())
+        .unwrap();
+    let operations = transcript.refresh().unwrap();
+    assert!(
+        matches!(&operations[..], [TimelineOp::Upsert { item, .. }] if item.id == "message-1:0")
+    );
+    assert!(transcript.refresh().unwrap().is_empty());
+    assert_eq!(transcript.snapshot(60, None).items.len(), 2);
+    assert_eq!(transcript.cursor.epoch, 7);
+}
+
+#[test]
+fn oversized_text_is_a_bounded_item_not_a_dead_transcript() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("test.jsonl");
+    let large =
+        json!({"type":"user", "uuid":"large-user", "message":{"content":"x".repeat(300 * 1024)}});
+    std::fs::write(&path, format!("{large}\n{}", message(0))).unwrap();
+    let mut transcript = open(&path);
+    let snapshot = transcript.snapshot(60, None);
+    assert_eq!(snapshot.items.len(), 2);
+    assert_eq!(snapshot.items[0].id, "large-user");
+    assert!(
+        matches!(&snapshot.items[0].body, proto::TimelineBody::Notice { text, .. } if text.contains("Terminal") && text.len() < 512)
+    );
+    let large = json!({"type":"assistant", "uuid":"large-assistant", "message":{"content":[{"type":"text", "text":"x".repeat(300 * 1024)}]}});
+    let mut writer = OpenOptions::new().append(true).open(&path).unwrap();
+    writer
+        .write_all(format!("{large}\n{}", message(1)).as_bytes())
+        .unwrap();
+    let operations = transcript.refresh().unwrap();
+    assert_eq!(operations.len(), 2);
+    assert!(
+        matches!(&operations[0], TimelineOp::Upsert { item, .. } if matches!(item.body, proto::TimelineBody::Notice { .. }))
+    );
+    assert_eq!(transcript.snapshot(60, None).items.len(), 4);
+    assert_eq!(transcript.cursor.epoch, 7);
+}
+
+const GIANT_RECORD_PREFIX: &[u8] =
+    br#"{"type":"assistant","uuid":"giant","message":{"content":[{"type":"text","text":""#;
+const GIANT_RECORD_SUFFIX: &[u8] = b"\"}]}}\n";
+
+#[test]
+fn oversized_unfinished_records_keep_the_last_complete_offset_and_epoch() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("test.jsonl");
+    std::fs::write(&path, message(0)).unwrap();
+    let mut transcript = open(&path);
+    let complete = transcript.stream.complete_end();
+    let mut writer = OpenOptions::new().append(true).open(&path).unwrap();
+    writer.write_all(GIANT_RECORD_PREFIX).unwrap();
+    let chunk = vec![b'x'; 1024 * 1024];
+    for _ in 0..9 {
+        writer.write_all(&chunk).unwrap();
+        assert!(transcript.refresh().unwrap().is_empty());
+        assert_eq!(transcript.stream.complete_end(), complete);
+        assert_eq!(transcript.cursor.epoch, 7);
+    }
+    writer.write_all(GIANT_RECORD_SUFFIX).unwrap();
+    writer.write_all(message(1).as_bytes()).unwrap();
+    let operations = transcript.refresh().unwrap();
+    assert!(
+        matches!(&operations[..], [TimelineOp::Upsert { item, .. }] if item.id == "message-1:0")
+    );
+    assert_eq!(transcript.snapshot(60, None).items.len(), 2);
+    assert_eq!(
+        transcript.stream.complete_end(),
+        writer.metadata().unwrap().len()
+    );
+    assert_eq!(transcript.cursor.epoch, 7);
+    assert!(transcript.refresh().unwrap().is_empty());
+}
+
+#[test]
+fn a_large_append_drains_in_bounded_reads_without_resetting_the_epoch() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("test.jsonl");
+    std::fs::write(&path, message(0)).unwrap();
+    let mut transcript = open(&path);
+    let complete = transcript.stream.complete_end();
+    let mut writer = OpenOptions::new().append(true).open(&path).unwrap();
+    writer.write_all(GIANT_RECORD_PREFIX).unwrap();
+    writer.write_all(&vec![b'x'; READ_LIMIT + 1024]).unwrap();
+    writer.write_all(GIANT_RECORD_SUFFIX).unwrap();
+    writer.write_all(message(1).as_bytes()).unwrap();
+    assert!(transcript.refresh().unwrap().is_empty());
+    assert_eq!(transcript.stream.complete_end(), complete);
+    assert_eq!(
+        transcript.stream.scan_offset(),
+        complete + READ_LIMIT as u64
+    );
+    let operations = transcript.refresh().unwrap();
+    assert!(
+        matches!(&operations[..], [TimelineOp::Upsert { item, .. }] if item.id == "message-1:0")
+    );
+    assert_eq!(transcript.snapshot(60, None).items.len(), 2);
+    assert_eq!(transcript.cursor.epoch, 7);
+    assert!(transcript.refresh().unwrap().is_empty());
+}
+
+#[test]
+fn rewrites_of_scanned_partial_records_reset_the_epoch() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("test.jsonl");
+    std::fs::write(&path, message(0)).unwrap();
+    let mut transcript = open(&path);
+    let mut writer = OpenOptions::new().append(true).open(&path).unwrap();
+    writer.write_all(b"{old-partial").unwrap();
+    assert!(transcript.refresh().unwrap().is_empty());
+    std::fs::write(&path, format!("{}{}", message(0), message(1))).unwrap();
+    let operations = transcript.refresh().unwrap();
+    assert!(matches!(&operations[..], [TimelineOp::Snapshot(snapshot)]
+        if snapshot.cursor.epoch == 8 && snapshot.items.len() == 2));
+}
+
+#[test]
+fn opening_inside_an_oversized_unfinished_record_does_not_create_a_false_boundary() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("test.jsonl");
+    let mut writer = File::create(&path).unwrap();
+    writer.write_all(GIANT_RECORD_PREFIX).unwrap();
+    writer.write_all(&vec![b'x'; READ_LIMIT + 1024]).unwrap();
+    let mut transcript = open(&path);
+    assert!(record_boundary(&mut transcript.file, transcript.stream.complete_end()).unwrap());
+    assert!(transcript.refresh().unwrap().is_empty());
+    writer.write_all(GIANT_RECORD_SUFFIX).unwrap();
+    writer.write_all(message(1).as_bytes()).unwrap();
+    let operations = transcript.refresh().unwrap();
+    assert!(
+        matches!(&operations[..], [TimelineOp::Upsert { item, .. }, TimelineOp::Session { session, .. }]
+            if item.id == "message-1:0" && session.model.as_deref() == Some("test-model")),
+        "{operations:?}",
+    );
+    assert_eq!(transcript.cursor.epoch, 7);
+}
+
+#[test]
 fn opens_only_the_tail_and_pages_without_gaps_or_duplicates() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("test.jsonl");

@@ -1,5 +1,8 @@
 mod claude;
+mod claude_diff;
+mod claude_record;
 mod commands;
+mod record_stream;
 mod text;
 mod transcript;
 

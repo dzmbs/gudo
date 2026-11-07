@@ -1,5 +1,7 @@
+use super::super::claude_record::INPUT_BYTES_LIMIT as INPUT_LIMIT;
 use super::*;
-use serde_json::json;
+use proto::{FileChange, LineKind};
+use serde_json::{Value, json};
 
 const FIXTURE: &str = include_str!("../../tests/fixtures/timeline/claude-2.1.318.jsonl");
 
@@ -303,10 +305,12 @@ fn outputs_inputs_and_diff_previews_are_bounded() {
     assert_eq!(tool.diff[0].additions, 100);
     assert!(tool.diff[0].hunks_omitted);
     let oversized = json!({"type":"user","message":{"content":"a".repeat(TEXT_LIMIT+1)}});
-    assert!(matches!(
-        parser.parse_line(&serde_json::to_vec(&oversized).unwrap(), 0),
-        Err(ParseError::MessageTooLarge)
-    ));
+    let items = parser
+        .parse_line(&serde_json::to_vec(&oversized).unwrap(), 0)
+        .unwrap();
+    assert!(
+        matches!(&items[0].body, TimelineBody::Notice { text, .. } if text == OVERSIZED_MESSAGE)
+    );
 }
 
 #[test]
