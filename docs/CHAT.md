@@ -17,8 +17,10 @@ no timeline traffic.
   version 0 is rejected before replacing a watch. Current peers support schema 1. A newer app
   uses the frozen legacy request with helpers that do not advertise versioned watches.
 - `TimelineUnwatch` releases the subscription.
-- `TimelineItemsBefore` returns up to 100 older items. Its byte cursor is scoped to the
-  watched pane's transcript, not a client-supplied file path.
+- `TimelineItemsBefore` requests up to 100 older items. A page always includes whole native
+  records, so its soft requested count can expand to at most 512 sibling items within the
+  byte allowance. Its byte cursor is scoped to the watched pane's transcript, not a
+  client-supplied file path.
 - `TimelineToolOutput` reads output on demand, up to 256 KiB per page. Handles bind the
   transcript epoch, record offset and tool ID. Offsets must be UTF-8 boundaries and pages
   must hold at least four bytes. Rust retains a validated `OutputHandle` value and parses
@@ -212,6 +214,9 @@ Files are opened without following a final symlink. Output reads reject stale fi
 or tail anchors, even before the file watcher runs.
 
 The daemon retains at most 512 items per watched pane and 128 tool-call merge entries.
+Item-count eviction removes complete native records, never just their first siblings.
+Records exceeding the 512-item or page-byte allowance become one explicit Terminal notice
+on open, live refresh and history reads. Tool results retain their original record position.
 Initial and historical reads seek within the last 8 MiB before the requested position;
 only the selected records are parsed. Native record, block, result and plan tags decode into
 typed values at the reader boundary; arbitrary tool input retains bounded JSON for its sheet.
@@ -225,7 +230,12 @@ the scan position and last complete record boundary are distinct, so an unfinish
 publishes a false offset or repeatedly resets the epoch. Partial-tail rewrite checks cover
 the scanned position as well as the completed boundary.
 
-Snapshot item data is capped at 1 MiB. A connection
+Snapshot item data is capped at 1 MiB using a conservative cached postcard bound. The bound
+walks typed string/vector fields only when an item changes; snapshot/history selection does
+not serialize items to measure them. The requested item count and remaining byte allowance
+are tested between complete records; a record that cannot fit after newer records is deferred
+to the next page, not silently truncated. This wire allowance does not establish a resident
+memory or RSS bound. A connection
 may watch four panes. Pushes occupy one mailbox slot per pane and coalesce to a snapshot
 under backpressure. Watch tokens prevent a cancelled forwarder from reviving an unwatched
 pane or replacing a later watch. A stopped worker is never reused, even while an old

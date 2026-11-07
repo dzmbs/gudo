@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use super::claude::{ClaudeTimeline, result_text};
 use super::claude_record::{BlockKind, Record, RecordKind};
 use proto::{
-    TimelineCursor, TimelineItem, TimelineOp, TimelineSession, TimelineSnapshot,
-    TimelineToolOutput, UnixMillis, WsError,
+    TimelineBody, TimelineCursor, TimelineItem, TimelineNoticeKind, TimelineOp, TimelineOrigin,
+    TimelineSession, TimelineSnapshot, TimelineToolOutput, UnixMillis, WsError,
 };
 
 use super::record_stream::{RECORD_BYTES_LIMIT as READ_LIMIT, RecordStream};
@@ -35,6 +35,22 @@ pub(super) struct Transcript {
 struct StoredItem {
     item: TimelineItem,
     offset: u64,
+    encoded_bound: usize,
+}
+
+impl StoredItem {
+    fn new(item: TimelineItem, offset: u64) -> Self {
+        Self {
+            encoded_bound: super::value_weight::item(&item),
+            item,
+            offset,
+        }
+    }
+
+    fn replace(&mut self, item: TimelineItem) {
+        self.encoded_bound = super::value_weight::item(&item);
+        self.item = item;
+    }
 }
 
 struct Window {
@@ -74,7 +90,7 @@ impl Transcript {
         transcript.stream = window.stream;
         for (offset, record) in window.records {
             let items = transcript.parser.parse_record(&record, offset);
-            for item in items {
+            for item in bounded_record(items, offset) {
                 transcript.store(item, offset);
             }
         }
@@ -99,32 +115,57 @@ impl Transcript {
     }
 
     pub fn snapshot(&self, limit: usize, since: Option<UnixMillis>) -> TimelineSnapshot {
-        let mut items = Vec::new();
-        let mut encoded_bytes = 0;
-        let mut before = None;
-        for id in self.order.iter().rev() {
-            let Some(stored) = self.items.get(id) else {
-                continue;
+        self.select_records(
+            self.order.iter().filter_map(|id| self.items.get(id)),
+            limit,
+            since,
+        )
+    }
+
+    fn select_records<'a>(
+        &self,
+        values: impl DoubleEndedIterator<Item = &'a StoredItem>,
+        limit: usize,
+        since: Option<UnixMillis>,
+    ) -> TimelineSnapshot {
+        // A byte cursor names a whole JSONL record, never an individual visible child.
+        // Original offsets stay ordered even when a later result revises an earlier tool.
+        let mut values = values
+            .rev()
+            .filter(|value| since.is_none_or(|since| value.item.at >= since))
+            .peekable();
+        let mut page = Self::empty_page(self.parser.session.clone(), self.cursor);
+        let mut bytes = 0;
+        while page.items.len() < limit {
+            let Some(first) = values.next() else {
+                break;
             };
-            if since.is_some_and(|since| stored.item.at < since) {
-                continue;
+            let offset = first.offset;
+            let mut record = vec![first];
+            while let Some(value) = values.next_if(|value| value.offset == offset) {
+                record.push(value);
             }
-            let item_bytes =
-                postcard::to_allocvec(&stored.item).map_or(SNAPSHOT_BYTES, |bytes| bytes.len());
-            if items.len() >= limit || encoded_bytes + item_bytes > SNAPSHOT_BYTES {
+            let weight = record
+                .iter()
+                .map(|value| value.encoded_bound)
+                .sum::<usize>();
+            if bytes + weight > SNAPSHOT_BYTES {
+                if page.items.is_empty() {
+                    page.items.push(record_notice(offset, first.item.at));
+                    page.before = (offset > 0).then_some(offset);
+                }
                 break;
             }
-            encoded_bytes += item_bytes;
-            before = (stored.offset > 0).then_some(stored.offset);
-            items.push(with_output_epoch(stored.item.clone(), self.cursor.epoch));
+            bytes += weight;
+            page.before = (offset > 0).then_some(offset);
+            page.items.extend(
+                record
+                    .into_iter()
+                    .map(|value| with_output_epoch(value.item.clone(), self.cursor.epoch)),
+            );
         }
-        items.reverse();
-        TimelineSnapshot {
-            cursor: self.cursor,
-            session: self.parser.session.clone(),
-            items,
-            before,
-        }
+        page.items.reverse();
+        page
     }
 
     pub fn refresh(&mut self) -> Result<Vec<TimelineOp>, WsError> {
@@ -192,7 +233,8 @@ impl Transcript {
     fn publish_records(&mut self, records: Vec<(u64, Vec<u8>)>) -> Vec<TimelineOp> {
         let mut operations = Vec::new();
         for (offset, bytes) in records {
-            for item in self.parser.parse_line(&bytes, offset).unwrap_or_default() {
+            let items = self.parser.parse_line(&bytes, offset).unwrap_or_default();
+            for item in bounded_record(items, offset) {
                 if let Some(item) = self.store(item, offset) {
                     self.cursor.sequence = self.cursor.sequence.wrapping_add(1);
                     operations.push(TimelineOp::Upsert {
@@ -234,39 +276,29 @@ impl Transcript {
             ));
         }
         let window = read_window(&mut self.file, before, limit.clamp(1, 100))?;
-        let mut page = Self::empty_page(self.parser.session.clone(), self.cursor);
         let mut order = Vec::new();
-        let mut items = HashMap::new();
+        let mut items: HashMap<String, StoredItem> = HashMap::new();
         let mut parser = ClaudeTimeline::new(self.native_session.clone());
         for (offset, record) in window.records {
-            for item in parser.parse_record(&record, offset) {
+            let parsed = parser.parse_record(&record, offset);
+            for item in bounded_record(parsed, offset) {
                 if since.is_some_and(|since| item.at < since) {
                     continue;
                 }
-                if !items.contains_key(&item.id) {
+                if let Some(stored) = items.get_mut(&item.id) {
+                    // Results revise the original tool's record; moving its cursor skips siblings.
+                    stored.replace(item);
+                } else {
                     order.push(item.id.clone());
+                    items.insert(item.id.clone(), StoredItem::new(item, offset));
                 }
-                items.insert(item.id.clone(), StoredItem { item, offset });
             }
         }
-        let mut retained = Vec::new();
-        let mut encoded_bytes = 0;
-        for id in order.into_iter().rev() {
-            let Some(stored) = items.remove(&id) else {
-                continue;
-            };
-            let item_bytes = postcard::to_allocvec(&stored.item).map_err(failed)?.len();
-            if retained.len() >= limit.clamp(1, 100) || encoded_bytes + item_bytes > SNAPSHOT_BYTES
-            {
-                break;
-            }
-            encoded_bytes += item_bytes;
-            page.before = (stored.offset > 0).then_some(stored.offset);
-            retained.push(with_output_epoch(stored.item, self.cursor.epoch));
-        }
-        retained.reverse();
-        page.items = retained;
-        Ok(page)
+        Ok(self.select_records(
+            order.iter().filter_map(|id| items.get(id)),
+            limit.clamp(1, 100),
+            since,
+        ))
     }
 
     pub fn output(
@@ -361,23 +393,37 @@ impl Transcript {
                 return None;
             }
             item.revision = stored.item.revision.saturating_add(1);
-            stored.item = item.clone();
+            stored.replace(item.clone());
         } else {
             self.order.push_back(item.id.clone());
-            self.items.insert(
-                item.id.clone(),
-                StoredItem {
-                    item: item.clone(),
-                    offset,
-                },
-            );
+            self.items
+                .insert(item.id.clone(), StoredItem::new(item.clone(), offset));
         }
         while self.order.len() > CACHE_ITEMS {
+            self.evict_oldest_record();
+        }
+        Some(item)
+    }
+
+    fn evict_oldest_record(&mut self) {
+        // Partial retention would make the next snapshot's record cursor silently lossy.
+        let offset = self
+            .order
+            .front()
+            .and_then(|id| self.items.get(id))
+            .map(|value| value.offset);
+        while let Some(id) = self.order.front() {
+            if self
+                .items
+                .get(id)
+                .is_some_and(|value| Some(value.offset) != offset)
+            {
+                break;
+            }
             if let Some(id) = self.order.pop_front() {
                 self.items.remove(&id);
             }
         }
-        Some(item)
     }
 
     fn empty_page(session: TimelineSession, cursor: TimelineCursor) -> TimelineSnapshot {
@@ -387,6 +433,33 @@ impl Transcript {
             items: Vec::new(),
             before: None,
         }
+    }
+}
+
+fn bounded_record(items: Vec<TimelineItem>, offset: u64) -> Vec<TimelineItem> {
+    if items.len() <= CACHE_ITEMS
+        && items.iter().map(super::value_weight::item).sum::<usize>() <= SNAPSHOT_BYTES
+    {
+        return items;
+    }
+    vec![record_notice(
+        offset,
+        items.first().map_or(UnixMillis(0), |item| item.at),
+    )]
+}
+
+fn record_notice(offset: u64, at: UnixMillis) -> TimelineItem {
+    TimelineItem {
+        id: format!("record:{offset}:unavailable"),
+        revision: 1,
+        turn: None,
+        parent: None,
+        at,
+        origin: TimelineOrigin::Agent,
+        body: TimelineBody::Notice {
+            kind: TimelineNoticeKind::Error,
+            text: "This record is too large for Chat. Open Terminal to read it.".into(),
+        },
     }
 }
 

@@ -4,9 +4,17 @@ use std::io::Write;
 use serde_json::json;
 
 fn message(index: usize) -> String {
+    message_blocks(index, &[format!("Entry {index}")])
+}
+
+fn message_blocks(index: usize, text: &[String]) -> String {
+    let content: Vec<_> = text
+        .iter()
+        .map(|text| json!({"type":"text","text":text}))
+        .collect();
     format!(
         "{}\n",
-        json!({"type":"assistant","uuid":format!("message-{index}"),"timestamp":"2026-01-01T00:00:00Z","message":{"id":format!("api-{index}"),"model":"test-model","content":[{"type":"text","text":format!("Entry {index}")}]}})
+        json!({"type":"assistant","uuid":format!("message-{index}"),"timestamp":"2026-01-01T00:00:00Z","message":{"id":format!("api-{index}"),"model":"test-model","content":content}})
     )
 }
 
@@ -193,6 +201,192 @@ fn opening_inside_an_oversized_unfinished_record_does_not_create_a_false_boundar
         "{operations:?}",
     );
     assert_eq!(transcript.cursor.epoch, 7);
+}
+
+#[test]
+fn a_snapshot_never_splits_siblings_from_one_record() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("test.jsonl");
+    std::fs::write(&path, message_blocks(0, &["first".into(), "second".into()])).unwrap();
+    let transcript = open(&path);
+    let snapshot = transcript.snapshot(1, None);
+    assert_eq!(snapshot.items.len(), 2);
+    assert_eq!(snapshot.items[0].id, "message-0:0");
+    assert_eq!(snapshot.items[1].id, "message-0:1");
+    assert!(snapshot.before.is_none());
+}
+
+#[test]
+fn history_pages_never_skip_siblings_at_the_requested_item_limit() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("test.jsonl");
+    let contents: String = (0..3)
+        .map(|index| message_blocks(index, &["first".into(), "second".into()]))
+        .collect();
+    std::fs::write(&path, contents).unwrap();
+    let mut transcript = open(&path);
+    let snapshot = transcript.snapshot(2, None);
+    let mut before = snapshot.before;
+    let mut seen: std::collections::HashSet<_> =
+        snapshot.items.into_iter().map(|item| item.id).collect();
+    while let Some(cursor) = before {
+        let page = transcript.page(cursor, 1, None).unwrap();
+        for item in page.items {
+            assert!(seen.insert(item.id));
+        }
+        assert!(page.before.is_none_or(|older| older < cursor));
+        before = page.before;
+    }
+    assert_eq!(seen.len(), 6);
+}
+
+#[test]
+fn snapshot_byte_limits_defer_the_entire_older_record() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("test.jsonl");
+    let blocks = vec!["x".repeat(200_000); 3];
+    std::fs::write(
+        &path,
+        message_blocks(0, &blocks) + &message_blocks(1, &blocks),
+    )
+    .unwrap();
+    let mut transcript = open(&path);
+    let snapshot = transcript.snapshot(60, None);
+    assert_eq!(snapshot.items.len(), 3);
+    let page = transcript
+        .page(snapshot.before.unwrap(), 100, None)
+        .unwrap();
+    assert_eq!(page.items.len(), 3);
+    assert!(page.before.is_none());
+    let ids: std::collections::HashSet<_> = snapshot
+        .items
+        .into_iter()
+        .chain(page.items)
+        .map(|item| item.id)
+        .collect();
+    assert_eq!(ids.len(), 6);
+}
+
+#[test]
+fn a_record_over_the_page_byte_budget_has_an_explicit_terminal_fallback() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("test.jsonl");
+    std::fs::write(&path, message_blocks(0, &vec!["x".repeat(200_000); 6])).unwrap();
+    let transcript = open(&path);
+    let snapshot = transcript.snapshot(60, None);
+    assert_eq!(snapshot.items.len(), 1);
+    let proto::TimelineBody::Notice { kind, text } = &snapshot.items[0].body else {
+        panic!("oversized record must not silently drop siblings")
+    };
+    assert_eq!(*kind, proto::TimelineNoticeKind::Error);
+    assert!(text.contains("Terminal"));
+    assert!(snapshot.before.is_none());
+}
+
+#[test]
+fn too_many_siblings_produce_one_bounded_record_notice() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("test.jsonl");
+    std::fs::write(&path, message_blocks(0, &vec!["x".into(); CACHE_ITEMS + 1])).unwrap();
+    let transcript = open(&path);
+    let snapshot = transcript.snapshot(60, None);
+    assert_eq!(transcript.items.len(), 1);
+    assert_eq!(snapshot.items.len(), 1);
+    assert!(matches!(
+        snapshot.items[0].body,
+        proto::TimelineBody::Notice { .. }
+    ));
+}
+
+#[test]
+fn live_record_overflow_uses_the_same_notice_as_reopening() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("test.jsonl");
+    std::fs::write(&path, message(0)).unwrap();
+    let mut transcript = open(&path);
+    let mut writer = OpenOptions::new().append(true).open(&path).unwrap();
+    writer
+        .write_all(message_blocks(1, &vec!["x".into(); CACHE_ITEMS + 1]).as_bytes())
+        .unwrap();
+    let operations = transcript.refresh().unwrap();
+    assert_eq!(operations.len(), 1);
+    let TimelineOp::Upsert { item, .. } = &operations[0] else {
+        panic!("one bounded upsert")
+    };
+    assert!(matches!(item.body, proto::TimelineBody::Notice { .. }));
+    assert_eq!(
+        transcript.snapshot(60, None).items,
+        open(&path).snapshot(60, None).items
+    );
+}
+
+#[test]
+fn cache_pressure_evicts_whole_records_instead_of_siblings() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("test.jsonl");
+    let contents: String = (0..3)
+        .map(|index| message_blocks(index, &vec!["x".into(); 200]))
+        .collect();
+    std::fs::write(&path, contents).unwrap();
+    let mut transcript = open(&path);
+    assert_eq!(transcript.items.len(), 400);
+    assert!(
+        !transcript
+            .items
+            .keys()
+            .any(|id| id.starts_with("message-0:"))
+    );
+    let snapshot = transcript.snapshot(1, None);
+    assert_eq!(snapshot.items.len(), 200);
+    let middle = transcript.page(snapshot.before.unwrap(), 1, None).unwrap();
+    assert_eq!(middle.items.len(), 200);
+    let oldest = transcript.page(middle.before.unwrap(), 1, None).unwrap();
+    assert_eq!(oldest.items.len(), 200);
+    assert!(oldest.before.is_none());
+}
+
+#[test]
+fn tool_results_keep_the_original_record_cursor_and_its_siblings() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("test.jsonl");
+    let assistant = json!({"type":"assistant","uuid":"mixed","timestamp":"2026-01-01T00:00:00Z","message":{"content":[
+        {"type":"tool_use","id":"use","name":"Bash","input":{"command":"echo done"}},
+        {"type":"text","text":"first"},{"type":"text","text":"second"}
+    ]}});
+    let result = json!({"type":"user","uuid":"result","timestamp":"2026-01-01T00:00:01Z","message":{"content":[
+        {"type":"tool_result","tool_use_id":"use","content":"done"}
+    ]}});
+    let contents = format!("{assistant}\n{result}\n");
+    let before = contents.len() as u64;
+    std::fs::write(&path, contents + &message(2)).unwrap();
+    let mut transcript = open(&path);
+    let page = transcript.page(before, 1, None).unwrap();
+    assert_eq!(page.items.len(), 3);
+    let proto::TimelineBody::Tool(tool) = &page.items[0].body else {
+        panic!("original tool position")
+    };
+    assert_eq!(tool.status, proto::TimelineToolStatus::Done);
+    assert_eq!(tool.output.as_ref().unwrap().preview, "done");
+    assert!(page.before.is_none());
+}
+
+#[test]
+fn revising_a_cached_value_refreshes_its_wire_bound_without_moving_its_record() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("test.jsonl");
+    std::fs::write(&path, message(0)).unwrap();
+    let mut transcript = open(&path);
+    let previous = transcript.items["message-0:0"].encoded_bound;
+    let mut writer = OpenOptions::new().append(true).open(&path).unwrap();
+    writer
+        .write_all(message_blocks(0, &["λ".repeat(50_000)]).as_bytes())
+        .unwrap();
+    assert_eq!(transcript.refresh().unwrap().len(), 1);
+    let stored = &transcript.items["message-0:0"];
+    assert!(stored.encoded_bound > previous);
+    assert!(postcard::to_allocvec(&stored.item).unwrap().len() <= stored.encoded_bound);
+    assert_eq!(stored.offset, 0);
+    assert_eq!(stored.item.revision, 2);
 }
 
 #[test]

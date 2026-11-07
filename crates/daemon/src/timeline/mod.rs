@@ -5,6 +5,7 @@ mod commands;
 mod record_stream;
 mod text;
 mod transcript;
+mod value_weight;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
