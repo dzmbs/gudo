@@ -170,7 +170,7 @@ struct DiffReviewView: View {
         case .file:
             if let index = row.fileIndex {
                 let file = document.input.files[index]
-                FileHeader(file: file, isCollapsed: document.input.collapsed.contains(file.id), noteCount: notes.filter { $0.path == file.path }.count) {
+                DiffFileHeader(file: file, isCollapsed: document.input.collapsed.contains(file.id), noteCount: notes.filter { $0.path == file.path }.count) {
                     if collapsed.contains(file.id) { collapsed.remove(file.id) } else { collapsed.insert(file.id) }
                 }
             }
@@ -416,7 +416,7 @@ nonisolated struct NoteAnchor: Hashable, Sendable {
 
 // MARK: - File header
 
-private struct FileHeader: View {
+struct DiffFileHeader: View {
     let file: DiffFile
     let isCollapsed: Bool
     let noteCount: Int
@@ -555,7 +555,7 @@ struct DiffLineContent: View {
     let split: Bool
     var lineHeight: CGFloat = 18
     var columnWidth: CGFloat?
-    let onTapLine: (DiffLine, Bool) -> Void
+    var onTapLine: ((DiffLine, Bool) -> Void)? = nil
 
     @Environment(\.terminalTheme) private var theme
     @Environment(\.nativeListHorizontalOffset) private var horizontalOffset
@@ -595,12 +595,12 @@ struct DiffLineContent: View {
         .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         .background(fill(line.kind))
         .contentShape(.rect)
-        .onTapGesture { onTapLine(line, line.kind == .removed) }
+        .onTapGesture { onTapLine?(line, line.kind == .removed) }
         .contextMenu { lineMenu(line, oldSide: line.kind == .removed) }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibility(line))
-        .accessibilityAddTraits(.isButton)
-        .accessibilityHint("Adds a review note")
+        .accessibilityAddTraits(onTapLine == nil ? .isStaticText : .isButton)
+        .accessibilityHint(onTapLine == nil ? "" : "Adds a review note")
         .accessibilityIdentifier("diff-line-\(file.path)-\(line.id)")
     }
 
@@ -624,11 +624,11 @@ struct DiffLineContent: View {
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .background(fill(kind))
             .contentShape(.rect)
-            .onTapGesture { onTapLine(line, oldSide) }
+            .onTapGesture { onTapLine?(line, oldSide) }
             .contextMenu { lineMenu(line, oldSide: oldSide) }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(accessibility(line))
-            .accessibilityAddTraits(.isButton)
+            .accessibilityAddTraits(onTapLine == nil ? .isStaticText : .isButton)
             .accessibilityIdentifier("diff-line-\(file.path)-\(line.id)\(oldSide ? "-old" : "")")
         } else {
             Rectangle().fill(DS.Palette.hoverFill.opacity(0.5))
@@ -638,7 +638,9 @@ struct DiffLineContent: View {
     }
 
     @ViewBuilder private func lineMenu(_ line: DiffLine, oldSide: Bool) -> some View {
-        Button("Add Note", systemImage: "text.bubble") { onTapLine(line, oldSide) }
+        if let onTapLine {
+            Button("Add Note", systemImage: "text.bubble") { onTapLine(line, oldSide) }
+        }
         Button("Copy Line", systemImage: "doc.on.doc") { DiffPasteboard.copy(line.text) }
         if let number = oldSide ? line.oldNumber : line.newNumber {
             Button("Copy Location", systemImage: "number") { DiffPasteboard.copy("\(file.path):\(number)") }

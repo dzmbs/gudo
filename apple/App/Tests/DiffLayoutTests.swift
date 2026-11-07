@@ -22,6 +22,20 @@ final class DiffLayoutTests: XCTestCase {
         DiffRenderInput(files: files, collapsed: [], split: split, notes: [], width: 900)
     }
 
+    func testSharedDiffLinesAreReadOnlyWithoutAnExplicitNoteCapability() throws {
+        let sample = file()
+        let line = try XCTUnwrap(sample.hunks.first?.lines.first)
+        let preview = DiffLineContent(file: sample, left: line, right: nil, split: false)
+        XCTAssertNil(preview.onTapLine)
+        var captured: [(Int, Bool)] = []
+        let review = DiffLineContent(file: sample, left: line, right: nil, split: false,
+                                     onTapLine: { captured.append(($0.id, $1)) })
+        review.onTapLine?(line, false)
+        XCTAssertEqual(captured.count, 1)
+        XCTAssertEqual(captured.first?.0, line.id)
+        XCTAssertEqual(captured.first?.1, false)
+    }
+
     func testMissingSystemFontUsesASizedMeasurableFallback() throws {
         for size in [CGFloat(13), 22] {
             let font = try XCTUnwrap(DiffRenderDocument.noteFont(nil, size: size))
