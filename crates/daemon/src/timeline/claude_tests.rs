@@ -271,17 +271,40 @@ fn compaction_and_service_errors_are_not_user_prompts() {
 }
 
 #[test]
-fn unknown_records_and_blocks_are_skipped_but_malformed_json_is_reported() {
+fn unknown_tool_names_use_the_frozen_other_kind() {
+    let items = parse(
+        &mut parser(),
+        json!({"type":"assistant","message":{"content":[
+            {"type":"tool_use","id":"future-tool","name":"FutureTool","input":{}}
+        ]}}),
+    );
+    let TimelineBody::Tool(tool) = &items[0].body else {
+        panic!("Missing tool")
+    };
+    assert_eq!(tool.kind, proto::TimelineToolKind::Other);
+    assert_eq!(postcard::to_allocvec(&tool.kind).unwrap(), [9]);
+}
+
+#[test]
+fn unknown_records_are_skipped_and_unsupported_blocks_become_notices() {
     let mut parser = parser();
     for record in [
         json!({"type":"future-entry"}),
-        json!({"type":"assistant","message":{"content":[{"type":"future-block"}]}}),
         json!({"type":"user","isMeta":true,"message":{"content":"System reminder"}}),
         json!({"type":"assistant","isSidechain":true}),
         json!({"type":"user","sessionId":"another-session","message":{"content":"Not this session"}}),
     ] {
         assert!(parse(&mut parser, record).is_empty());
     }
+    let items = parse(
+        &mut parser,
+        json!({"type":"assistant","message":{"content":[{"type":"future-block"}]}}),
+    );
+    assert_eq!(items.len(), 1);
+    assert!(
+        matches!(&items[0].body, TimelineBody::Notice { kind: TimelineNoticeKind::Error, text }
+        if text == "This Chat item is not supported. Open Terminal.")
+    );
     assert!(parser.parse_line(b"{broken", 0).is_err());
 }
 

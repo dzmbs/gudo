@@ -31,8 +31,16 @@ changed epoch. A slow consumer receives a current snapshot rather than an expand
 `Checkpoint` advances a scoped reader past an operation it may not see, without exposing
 that operation's contents.
 
-Wire enums are append-only and covered by golden-byte tests. The Apple FFI carries timeline
-values as JSON strings; decoding and row preparation belong off the main actor.
+Wire enums are append-only and covered by golden-byte tests. Schema 1 has closed whitelists:
+unsupported item bodies/origins become a local Terminal notice, future tool kinds become Other,
+and unsupported patches offer Terminal rather than closing the control stream. Initial, live,
+recovery and history snapshots pass through the schema adapter. Native unknown content blocks
+become bounded notices before retention; their opaque payload is never used as text or actions.
+Current watches all select schema 1. Adding a supported second schema requires carrying that
+selection through its watch and writers, not widening schema 1's whitelist.
+
+The Apple FFI carries timeline values as JSON strings; decoding and row preparation belong off
+the main actor.
 
 ## Apple values and subscriptions
 

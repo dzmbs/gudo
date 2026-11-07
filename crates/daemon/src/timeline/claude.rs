@@ -209,6 +209,7 @@ impl ClaudeTimeline {
                 duration_ms: None,
             },
             BlockKind::ToolUse => return self.tool_call(record, block, record_id),
+            BlockKind::Other => TimelineBody::Unsupported,
             _ => return Vec::new(),
         };
         vec![self.item(record, format!("{record_id}:{index}"), body)]
@@ -309,7 +310,7 @@ impl ClaudeTimeline {
     }
 
     fn item(&self, record: &Record, id: String, body: TimelineBody) -> TimelineItem {
-        TimelineItem {
+        let mut item = TimelineItem {
             id,
             revision: 1,
             turn: self.turn.clone(),
@@ -323,7 +324,9 @@ impl ClaudeTimeline {
             ),
             origin: TimelineOrigin::Agent,
             body,
-        }
+        };
+        proto::TimelineVersion::CURRENT.item(&mut item);
+        item
     }
 
     fn remember_tool(&mut self, item: TimelineItem) {

@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Actor, AgentKind, FileDiff, PaneId, UnixMillis};
 
+mod compatibility;
 mod metadata;
 mod output_handle;
 mod version;
@@ -61,6 +62,8 @@ pub enum TimelineBody {
         input_tokens: Option<u64>,
         output_tokens: Option<u64>,
     },
+    /// A producer placeholder; schema adapters must replace it before sending to schema 1.
+    Unsupported,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

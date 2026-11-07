@@ -102,6 +102,17 @@ impl Harness {
         writeln!(file, "{record}").unwrap();
     }
 
+    fn append_unknown_block(&self, id: &str) {
+        let record = json!({"type":"assistant","uuid":id,"sessionId":SESSION,
+            "timestamp":"2099-01-01T00:00:00Z","message":{"id":id,
+            "content":[{"type":"future-block","future_payload":"must not become actions or text"}]}});
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&self.transcript)
+            .unwrap();
+        writeln!(file, "{record}").unwrap();
+    }
+
     async fn rewrite(
         &self,
         events: &mut UnboundedReceiver<WorkspaceEvent>,
@@ -175,6 +186,65 @@ fn contains(update: &TimelineUpdate, text: &str) -> bool {
         TimelineOp::Snapshot(snapshot) => snapshot.items.iter().any(|item| matches!(&item.body, TimelineBody::Assistant { text: actual, .. } if actual == text)),
         _ => false,
     })
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unsupported_items_become_legacy_notices_in_snapshots_history_and_live_updates() {
+    let harness = Harness::start().await;
+    harness.append_unknown_block("old-unsupported");
+    for index in 0..70 {
+        harness.append(&format!("supported-{index}"), "Supported text");
+    }
+    harness.append_unknown_block("latest-unsupported");
+    let (listener, mut events) = WorkspaceEventQueue::channel();
+    harness.owner.client.set_workspace_listener(listener);
+    let response = harness
+        .owner
+        .client
+        .workspace(WorkspaceRequest::TimelineWatch {
+            pane_id: harness.pane,
+        })
+        .await
+        .unwrap();
+    let WorkspaceResponse::Timeline(snapshot) = response else {
+        panic!("Missing snapshot")
+    };
+    assert_unsupported_notice(&snapshot.items, "latest-unsupported:0");
+    let history = harness
+        .owner
+        .client
+        .timeline_items_before(harness.pane, snapshot.before.unwrap(), 100)
+        .await
+        .unwrap();
+    assert_unsupported_notice(&history.items, "old-unsupported:0");
+    harness.append_unknown_block("live-unsupported");
+    next_update(&mut events, |update| {
+        update.operations.iter().any(|operation| {
+            matches!(operation, TimelineOp::Upsert { item, .. }
+            if item.id == "live-unsupported:0" && matches!(&item.body, TimelineBody::Notice { .. }))
+        })
+    })
+    .await;
+    harness.append(
+        "still-supported",
+        "Unsupported items did not close the stream",
+    );
+    next_update(&mut events, |update| {
+        contains(update, "Unsupported items did not close the stream")
+    })
+    .await;
+    harness.shutdown().await;
+}
+
+fn assert_unsupported_notice(items: &[client_core::proto::TimelineItem], id: &str) {
+    let item = items
+        .iter()
+        .find(|item| item.id == id)
+        .expect("Missing unsupported item");
+    assert!(
+        matches!(&item.body, TimelineBody::Notice { kind: client_core::proto::TimelineNoticeKind::Error, text }
+        if text == "This Chat item is not supported. Open Terminal.")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -573,7 +573,8 @@ pub(crate) async fn handle(
                     "Chat stopped; reopen it to retry".into(),
                 ));
             }
-            let snapshot = lock(&timeline.state).snapshot(connection.timeline_since);
+            let snapshot = proto::TimelineVersion::V1
+                .snapshot(lock(&timeline.state).snapshot(connection.timeline_since));
             let mut watches = lock(&connection.timeline_watches);
             if watches.len() >= MAX_WATCHES && !watches.contains_key(&pane_id) {
                 return Err(WsError::Invalid("too many Chat panes are open".into()));
@@ -588,9 +589,14 @@ pub(crate) async fn handle(
             let task = tokio::spawn(async move {
                 loop {
                     let operations = match updates.recv().await {
-                        Ok(operations) => filter(operations, since, &mut visible),
+                        Ok(operations) => proto::TimelineVersion::V1.operations(filter(
+                            operations,
+                            since,
+                            &mut visible,
+                        )),
                         Err(broadcast::error::RecvError::Lagged(_)) => {
-                            let snapshot = lock(&watched.state).snapshot(since);
+                            let snapshot = proto::TimelineVersion::V1
+                                .snapshot(lock(&watched.state).snapshot(since));
                             visible = snapshot.items.iter().map(|item| item.id.clone()).collect();
                             vec![TimelineOp::Snapshot(snapshot)]
                         }
@@ -608,7 +614,10 @@ pub(crate) async fn handle(
                             pane_id,
                             operations,
                         },
-                        || lock(&watched.state).snapshot(since),
+                        || {
+                            proto::TimelineVersion::V1
+                                .snapshot(lock(&watched.state).snapshot(since))
+                        },
                     );
                     if unavailable {
                         return;
@@ -676,7 +685,12 @@ async fn read_timeline(
             .transcript
             .as_mut()
             .ok_or_else(|| WsError::Unavailable("the conversation has not started yet".into()))?;
-        work(transcript, since)
+        work(transcript, since).map(|response| match response {
+            WorkspaceResponse::Timeline(snapshot) => {
+                WorkspaceResponse::Timeline(proto::TimelineVersion::V1.snapshot(snapshot))
+            }
+            response => response,
+        })
     })
     .await
 }
