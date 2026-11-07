@@ -6,6 +6,22 @@ import os
 
 @MainActor
 final class TimelineModelTests: XCTestCase {
+    func testAConfiguredValueBudgetSurvivesConnectionResets() async throws {
+        var snapshot = try TimelineJSON.decode(TimelineSnapshot.self, from: TimelineFixtureJSON.snapshot(0..<1))
+        guard case .assistant(var assistant) = snapshot.items[0].body else { return XCTFail("Missing assistant") }
+        assistant.text = String(repeating: "large text", count: 200)
+        snapshot.items[0].body = .assistant(assistant)
+        let json = String(decoding: try TimelineJSON.encode(snapshot), as: UTF8.self)
+        let model = TimelineModel(pane: 7, valueByteLimit: 1_024)
+        for attempt in 0..<2 {
+            if attempt > 0 { model.receive(.reset) }
+            model.receive(.snapshot(json))
+            try await wait { model.frame.revision == 1 }
+            XCTAssertTrue(model.frame.rows.isEmpty)
+            XCTAssertEqual(model.error, "This Chat page exceeds the memory budget. Open Terminal.")
+        }
+    }
+
     func testDeinitializingTheScreenReleasesItsSharedWatchObserver() {
         let resolutions = OSAllocatedUnfairLock(initialState: 0)
         let hub = DaemonWorkspace(hostId: "fixture", events: WorkspaceEventHub(), resolve: {

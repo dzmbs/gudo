@@ -18,6 +18,9 @@ nonisolated struct TimelineChanges: Sendable {
 }
 
 nonisolated struct TimelineWindow: Sendable {
+    static let defaultByteLimit = 16 * 1_024 * 1_024
+    static let minimumByteLimit = 1_024
+
     private(set) var cursor: TimelineCursor?
     private(set) var session: TimelineSession?
     private(set) var order: [String] = []
@@ -32,9 +35,9 @@ nonisolated struct TimelineWindow: Sendable {
     let limit: Int
     let byteLimit: Int
 
-    init(limit: Int = 3_000, byteLimit: Int = 16 * 1_024 * 1_024) {
+    init(limit: Int = 3_000, byteLimit: Int = TimelineWindow.defaultByteLimit) {
         self.limit = max(60, limit)
-        self.byteLimit = max(1_024, byteLimit)
+        self.byteLimit = max(Self.minimumByteLimit, byteLimit)
     }
 
     mutating func apply(_ update: TimelineUpdate, resetSnapshot: Bool = false, protectsHistory: Bool = false) throws -> TimelineChanges {

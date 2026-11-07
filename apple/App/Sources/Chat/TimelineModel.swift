@@ -38,7 +38,7 @@ nonisolated struct TimelineRenderResult: Sendable {
 }
 
 actor TimelineRenderWorker {
-    private var window = TimelineWindow()
+    private var window: TimelineWindow
     private let builder = RowBuilder()
     private var rowsByItem: [String: [ChatRow]] = [:]
     private var revision = 0
@@ -47,7 +47,10 @@ actor TimelineRenderWorker {
     private var identifiers: [ChatRowID] = []
     private let pane: UInt64
 
-    init(pane: UInt64) { self.pane = pane }
+    init(pane: UInt64, valueByteLimit: Int = TimelineWindow.defaultByteLimit) {
+        self.pane = pane
+        window = TimelineWindow(byteLimit: valueByteLimit)
+    }
 
     func apply(_ jobs: [TimelineJob], resetsSnapshot: Bool, protectsHistory: Bool, historyAnchor: String? = nil) async throws -> TimelineRenderResult {
         var next = window
@@ -119,6 +122,7 @@ actor TimelineRenderWorker {
 @Observable
 final class TimelineModel {
     let pane: UInt64
+    let valueByteLimit: Int
     private(set) var frame = TimelineFrame()
     private(set) var isLoading = false
     private(set) var isLoadingHistory = false
@@ -142,9 +146,10 @@ final class TimelineModel {
     @ObservationIgnored private var lastHubIdentity: ObjectIdentifier?
     @ObservationIgnored private var lastHubGeneration: Int?
 
-    init(pane: UInt64) {
+    init(pane: UInt64, valueByteLimit: Int = TimelineWindow.defaultByteLimit) {
         self.pane = pane
-        worker = TimelineRenderWorker(pane: pane)
+        self.valueByteLimit = max(TimelineWindow.minimumByteLimit, valueByteLimit)
+        worker = TimelineRenderWorker(pane: pane, valueByteLimit: self.valueByteLimit)
     }
 
     isolated deinit { stop() }
@@ -237,7 +242,7 @@ final class TimelineModel {
             processing = nil
             history?.cancel()
             history = nil
-            worker = TimelineRenderWorker(pane: pane)
+            worker = TimelineRenderWorker(pane: pane, valueByteLimit: valueByteLimit)
             pending.removeAll(keepingCapacity: false)
             pendingBytes = 0
             frame = TimelineFrame()

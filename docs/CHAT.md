@@ -84,6 +84,12 @@ allowances, not a resident-memory measurement). Incremental accounting includes 
 output tails, nested diffs, attachments, plans and actor bytes. Live following evicts older
 pages at known byte boundaries; a missing history boundary requests a fresh snapshot.
 
+`ChatModelPool` offers four retained models sharing a 16 MiB value allowance, split into
+immutable 4 MiB worker grants that survive resets. Leases protect visible models from eviction;
+only inactive models are replaced, with the least recently used one first. The final lease
+stops its model's subscription. This bounds pooled value retention, not rendered-memory or RSS;
+controllers and derived caches need their own limits.
+
 Paging further back evicts newest values but never the controller's current reading item. A
 page that cannot fit without losing that anchor is rejected transactionally with a Terminal
 fallback, not retried automatically. Protected history declines over-budget growth and exposes
