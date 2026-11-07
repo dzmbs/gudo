@@ -70,6 +70,26 @@ final class ChatDiffSnapshotTests: XCTestCase {
         XCTAssertThrowsError(try ChatDiffSnapshot(groups: [ChatToolDiff(item: "tool", files: [value])]))
     }
 
+    func testIncrementalConversionMatchesTheOneShotSelection() throws {
+        let groups = try ["first", "second"].map { ChatToolDiff(item: $0, files: [try file()]) }
+        var builder = ChatDiffSnapshot.Builder()
+        for group in groups { try builder.append(group) }
+        let expected = try ChatDiffSnapshot(groups: groups)
+        XCTAssertEqual(builder.snapshot.files.map(\.id), expected.files.map(\.id))
+        XCTAssertEqual(builder.snapshot.files.map(\.hunks), expected.files.map(\.hunks))
+    }
+
+    func testStagedIncrementalConversionKeepsTheAggregateBudgetAndItsAdmittedPrefix() throws {
+        let lines = Array(repeating: ["kind": "Added", "text": String(repeating: "x", count: 8_192)], count: 100)
+        let value = try file(lines: lines)
+        var builder = ChatDiffSnapshot.Builder()
+        try builder.append(ChatToolDiff(item: "first", files: [value]))
+        var staged = builder
+        XCTAssertThrowsError(try staged.append(ChatToolDiff(item: "second", files: [value])))
+        XCTAssertEqual(builder.snapshot.files.count, 1)
+        XCTAssertEqual(builder.snapshot.files[0].hunks[0].lines.count, 100)
+    }
+
     private func file(change: String = "Modified",
                       lines: [[String: String]] = [["kind": "Added", "text": "new"]]) throws -> TimelineFileDiff {
         let hunk: [String: Any] = ["old_start": 10, "old_lines": 3, "new_start": 20, "new_lines": 3,

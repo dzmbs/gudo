@@ -14,23 +14,29 @@ nonisolated struct ChatDiffSnapshot: Sendable {
 
     init(groups: [ChatToolDiff]) throws {
         var builder = Builder()
-        var files: [DiffFile] = []
-        for group in groups {
-            for (index, file) in group.files.enumerated() {
-                let identity = "tool:\(group.item.utf8.count):\(group.item):\(index)"
-                files.append(try builder.file(file, identity: identity))
-            }
-        }
-        self.files = files
+        for group in groups { try builder.append(group) }
+        self = builder.snapshot
     }
 
-    private struct Builder {
+    private init(files: [DiffFile]) { self.files = files }
+
+    struct Builder: Sendable {
         private var files = 0
         private var hunks = 0
         private var bytes = 0
         private var rows = 0
+        private var converted: [DiffFile] = []
 
-        mutating func file(_ source: TimelineFileDiff, identity: String) throws -> DiffFile {
+        var snapshot: ChatDiffSnapshot { ChatDiffSnapshot(files: converted) }
+
+        mutating func append(_ group: ChatToolDiff) throws {
+            for (index, file) in group.files.enumerated() {
+                let identity = "tool:\(group.item.utf8.count):\(group.item):\(index)"
+                converted.append(try self.file(file, identity: identity))
+            }
+        }
+
+        private mutating func file(_ source: TimelineFileDiff, identity: String) throws -> DiffFile {
             guard files < ChatDiffLimits.files else { throw ChatDiffError.tooLarge }
             files += 1
             try charge(2 * (source.path.utf8.count + (source.oldPath?.utf8.count ?? 0) + identity.utf8.count) + 256)
