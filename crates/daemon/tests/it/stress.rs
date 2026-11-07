@@ -94,6 +94,37 @@ async fn dial_with(
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn welcome_downgrades_existing_panes_for_old_sizing_clients() {
+    let directory = tempfile::tempdir().unwrap();
+    let daemon = support::start(directory.path()).await;
+    let mut owner = TestClient::connect(&support::ticket(&daemon), ClientConfig::generate_key());
+    let pane = owner.attach_and_follow().await;
+    for (caps, expected) in [
+        (Caps::default(), proto::SizePolicy::LastInput),
+        (Caps::ACTIVE_SIZING, proto::SizePolicy::LastActive),
+    ] {
+        let ((endpoint, connection, _, _), welcome) = dial_with(
+            &support::ticket(&daemon),
+            &ClientConfig::generate_key(),
+            true,
+            caps,
+            None,
+        )
+        .await;
+        let meta = welcome
+            .panes
+            .iter()
+            .find(|meta| meta.pane_id == pane)
+            .expect("existing pane in Welcome");
+        assert_eq!(meta.size_policy, expected);
+        connection.close(0u32.into(), b"done");
+        endpoint.close().await;
+    }
+    drop(owner);
+    daemon.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn sizing_identity_requires_its_own_capability_and_old_policies_stay_decodable() {
     let directory = tempfile::tempdir().unwrap();
     let daemon = support::start(directory.path()).await;

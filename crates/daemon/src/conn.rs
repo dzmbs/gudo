@@ -24,6 +24,12 @@ use crate::net::{self, NetError};
 use crate::stream::{Class, PaneStream, Start, StreamCmd, priority};
 use crate::ws::Viewer;
 
+fn pane_metadata_for_client(core: &Core, pane: PaneId, caps: Caps) -> Option<proto::PaneMeta> {
+    let mut meta = core.pane_meta(pane)?;
+    meta.size_policy = meta.size_policy.for_client(caps);
+    Some(meta)
+}
+
 struct Subscription {
     acks: watch::Sender<Seq>,
     cmds: mpsc::UnboundedSender<StreamCmd>,
@@ -176,7 +182,7 @@ async fn run(
             core.pane_entries()
                 .into_iter()
                 .filter(|(id, _)| core.scope_within(Scope::Pane(*id), authz.scope))
-                .filter_map(|(id, _)| core.pane_meta(id))
+                .filter_map(|(id, _)| pane_metadata_for_client(&core, id, hello.caps))
                 .collect()
         },
         resume_token: crate::resume::InputStreams::token(core.epoch, input_stream),
@@ -2112,9 +2118,7 @@ impl Client {
     }
 
     fn pane_metadata(&self, pane_id: PaneId) -> Option<proto::PaneMeta> {
-        let mut meta = self.core.pane_meta(pane_id)?;
-        meta.size_policy = meta.size_policy.for_client(self.caps);
-        Some(meta)
+        pane_metadata_for_client(&self.core, pane_id, self.caps)
     }
 
     fn view_changed(&self) {

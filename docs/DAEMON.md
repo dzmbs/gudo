@@ -292,7 +292,8 @@ repeated identical activity reports do not take sizing back. Apple windows aggre
 separately from notification visibility, preferring the active window's focus. Scene activation
 and Mac key-window activation claim visible panes' local taps and their daemon grids. These controls require
 `DaemonFeatures::ACTIVE_SIZING`; `Caps::ACTIVE_SIZING` permits `LastActive` in metadata. Older
-clients receive `LastInput` in its place, including on initial subscription. A separate
+clients receive `LastInput` in its place, including in `Welcome` before attachment and on
+initial subscription. A separate
 `Caps::PANE_SIZING` opts into `PaneSizing` updates carrying the exact sizing connection's peer
 id, rather than its shared principal. These are sent on attachment and ownership changes,
 even when the grid and principal stay unchanged. Clients without that capability never receive
