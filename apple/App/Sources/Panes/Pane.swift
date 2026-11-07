@@ -256,6 +256,7 @@ final class Pane {
 
     /// This window's view of the pane drives its size (it took focus): the PTY follows it.
     func claimSize() {
+        guard (backend as? any DeferredPaneSizing)?.isSizeDeferred != true else { return }
         (backend as? any SharedPaneTap)?.claimSize()
     }
 
@@ -286,10 +287,20 @@ final class Pane {
         cellPixels.withLock { $0 = (grid.cellWidth, grid.cellHeight) }
         onGridChange?(grid)
         if let size = view.surface.cellSize { onCellSize?(size) }
-        // Resize with the grid, as Ghostty does: the surface already coalesced layout into grid
-        // changes, and a program redrawing after SIGWINCH must find the grid it was told of.
-        resizesSent += 1
-        backend.resize(cols: grid.cols, rows: grid.rows, cellWidth: grid.cellWidth, cellHeight: grid.cellHeight)
+        // A program redrawing after SIGWINCH must find the grid it was told of.
+        if let sizing = backend as? any DeferredPaneSizing {
+            if sizing.layoutViewport(
+                cols: grid.cols,
+                rows: grid.rows,
+                cellWidth: grid.cellWidth,
+                cellHeight: grid.cellHeight
+            ) {
+                resizesSent += 1
+            }
+        } else {
+            resizesSent += 1
+            backend.resize(cols: grid.cols, rows: grid.rows, cellWidth: grid.cellWidth, cellHeight: grid.cellHeight)
+        }
         isSizingTap = (backend as? DaemonPaneBackend)?.drivesLocalSize ?? true
     }
 }

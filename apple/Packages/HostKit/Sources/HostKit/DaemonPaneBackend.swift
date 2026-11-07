@@ -195,6 +195,18 @@ nonisolated final class PaneRouter: Sendable {
 
     // MARK: Size
 
+    func isSizeDeferred(_ pane: UInt64, tap id: UInt64) -> Bool {
+        routes.withLock { $0[pane]?.taps[id]?.hasDeferredSize ?? false }
+    }
+
+    func deferSize(_ pane: UInt64, tap id: UInt64) {
+        routes.withLock { $0[pane]?.taps[id]?.hasDeferredSize = true }
+    }
+
+    func cancelSizeDeferral(_ pane: UInt64, tap id: UInt64) {
+        routes.withLock { $0[pane]?.taps[id]?.hasDeferredSize = false }
+    }
+
     /// A hidden viewport is only a candidate; caching neither claims nor resizes the pane.
     func cacheSize(_ pane: UInt64, tap id: UInt64, size: PaneSize) {
         routes.withLock { routes in
@@ -204,13 +216,21 @@ nonisolated final class PaneRouter: Sendable {
     }
 
     /// Returns the proposed size if this tap drives (or nothing drives yet).
-    func resize(_ pane: UInt64, tap id: UInt64, to size: PaneSize) -> PaneSize? {
+    enum ViewportAdmission { case layout, explicit }
+
+    func resize(
+        _ pane: UInt64,
+        tap id: UInt64,
+        to size: PaneSize,
+        admission: ViewportAdmission = .explicit
+    ) -> (size: PaneSize?, deferred: Bool) {
         routes.withLock { routes in
             routes[pane]?.taps[id]?.size = size
+            if admission == .layout, routes[pane]?.taps[id]?.hasDeferredSize == true { return (nil, true) }
             routes[pane]?.taps[id]?.hasDeferredSize = false
-            guard let route = routes[pane] else { return nil }
+            guard let route = routes[pane] else { return (nil, false) }
             if route.driver == nil { routes[pane]?.driver = id }
-            return route.driver == nil || route.driver == id ? size : nil
+            return (route.driver == nil || route.driver == id ? size : nil, false)
         }
     }
 
@@ -450,7 +470,7 @@ nonisolated final class PaneRouter: Sendable {
 ///
 /// Each window showing the pane has its own instance (a tap of the router): the connection
 /// subscribes once, when the first starts, and unsubscribes when the last ends.
-nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap {
+nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap, DeferredPaneSizing {
     public let pane: PaneId
     /// The daemon reports every PTY resize in the stream (`PaneResized`).
     public var sizeFollowsStream: Bool { true }
@@ -560,6 +580,28 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap 
         client.sendPaste(paneId: pane.rawValue, text: text)
     }
 
+    public var isSizeDeferred: Bool { router.isSizeDeferred(pane.rawValue, tap: tap) }
+
+    public func deferSize() { router.deferSize(pane.rawValue, tap: tap) }
+
+    public func cancelSizeDeferral() { router.cancelSizeDeferral(pane.rawValue, tap: tap) }
+
+    public func layoutViewport(
+        cols: UInt16,
+        rows: UInt16,
+        cellWidth: UInt32,
+        cellHeight: UInt32
+    ) -> Bool {
+        guard cols > 0, rows > 0 else { return false }
+        let size = PaneSize(
+            cols: cols, rows: rows,
+            widthPx: UInt16(clamping: UInt64(cols) * UInt64(cellWidth)),
+            heightPx: UInt16(clamping: UInt64(rows) * UInt64(cellHeight)))
+        let result = router.resize(pane.rawValue, tap: tap, to: size, admission: .layout)
+        if let size = result.size { client.resize(paneId: pane.rawValue, size: size) }
+        return !result.deferred
+    }
+
     /// Retains a hidden viewport without proposing a PTY resize. Actual input or an explicit
     /// sizing claim admits it; generated replies and automatic handovers do not.
     public func cacheSize(cols: UInt16, rows: UInt16, cellWidth: UInt32, cellHeight: UInt32) {
@@ -575,7 +617,7 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap 
             cols: cols, rows: rows,
             widthPx: UInt16(clamping: UInt64(cols) * UInt64(cellWidth)),
             heightPx: UInt16(clamping: UInt64(rows) * UInt64(cellHeight)))
-        if let sizeToSend = router.resize(pane.rawValue, tap: tap, to: size) {
+        if let sizeToSend = router.resize(pane.rawValue, tap: tap, to: size).size {
             client.resize(paneId: pane.rawValue, size: sizeToSend)
         }
     }

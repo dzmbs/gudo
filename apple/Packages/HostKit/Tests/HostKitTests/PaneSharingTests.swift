@@ -125,6 +125,51 @@ import GudoCore
         #expect(client().calls == [.resize(3, PaneSize(cols: 60, rows: 20, widthPx: 600, heightPx: 400)), .claimSize(3)])
     }
 
+    @Test func viewportLayoutPreservesDeferralUntilInput() throws {
+        let (connection, client) = try makeConnection()
+        let tap = try #require(try connection.makeBackend(for: PaneId(3)) as? DaemonPaneBackend)
+        tap.start(events: { _ in }, seed: nil)
+        client().clear()
+        tap.deferSize()
+        #expect(!tap.layoutViewport(cols: 60, rows: 20, cellWidth: 10, cellHeight: 20))
+        #expect(tap.isSizeDeferred)
+        #expect(client().calls.isEmpty)
+        Array("typed".utf8).withUnsafeBytes { tap.write($0) }
+        #expect(!tap.isSizeDeferred)
+        #expect(client().calls == [.resize(3, PaneSize(cols: 60, rows: 20, widthPx: 600, heightPx: 400)), .input(3, Data("typed".utf8))])
+        client().clear()
+        #expect(tap.layoutViewport(cols: 70, rows: 20, cellWidth: 10, cellHeight: 20))
+        #expect(client().calls == [.resize(3, PaneSize(cols: 70, rows: 20, widthPx: 700, heightPx: 400))])
+    }
+
+    @Test func deferringBeforeAHiddenLayoutDoesNotClaimOrResize() throws {
+        let (connection, client) = try makeConnection()
+        let tap = try #require(try connection.makeBackend(for: PaneId(3)) as? DaemonPaneBackend)
+        tap.start(events: { _ in }, seed: nil)
+        tap.resize(cols: 120, rows: 40, cellWidth: 10, cellHeight: 20)
+        client().clear()
+        tap.deferSize()
+        #expect(tap.isSizeDeferred)
+        #expect(client().calls.isEmpty)
+        tap.claimSize()
+        #expect(!tap.isSizeDeferred)
+        #expect(client().calls == [.resize(3, PaneSize(cols: 120, rows: 40, widthPx: 1200, heightPx: 800)), .claimSize(3)])
+    }
+
+    @Test func cancellingSizeDeferralDoesNotClaimOrProposeGeometry() throws {
+        let (connection, client) = try makeConnection()
+        let tap = try #require(try connection.makeBackend(for: PaneId(3)) as? DaemonPaneBackend)
+        tap.start(events: { _ in }, seed: nil)
+        client().clear()
+        tap.deferSize()
+        #expect(!tap.layoutViewport(cols: 60, rows: 20, cellWidth: 10, cellHeight: 20))
+        tap.cancelSizeDeferral()
+        #expect(!tap.isSizeDeferred)
+        #expect(client().calls.isEmpty)
+        #expect(tap.layoutViewport(cols: 70, rows: 20, cellWidth: 10, cellHeight: 20))
+        #expect(client().calls == [.resize(3, PaneSize(cols: 70, rows: 20, widthPx: 700, heightPx: 400))])
+    }
+
     @Test(arguments: [false, true])
     func viewportPixelMetricsClampWithoutOverflow(deferred: Bool) throws {
         let (connection, client) = try makeConnection()
