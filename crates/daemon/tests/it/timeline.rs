@@ -191,7 +191,7 @@ async fn two_clients_mirror_one_transcript_and_fetch_output_over_the_real_protoc
         .client
         .timeline_tool_output(
             harness.pane,
-            tool.output.as_ref().unwrap().handle.clone(),
+            tool.output.as_ref().unwrap().handle.to_string(),
             0,
             4096,
         )
@@ -242,7 +242,7 @@ async fn a_scoped_viewer_can_read_only_its_pane_and_since_join_history() {
     let TimelineBody::Tool(tool) = &shell.body else {
         panic!()
     };
-    let old_output = tool.output.as_ref().unwrap().handle.clone();
+    let old_output = tool.output.as_ref().unwrap().handle.to_string();
     let guest = harness.guest(History::SinceJoin).await;
     let (listener, mut events) = WorkspaceEventQueue::channel();
     guest.client.set_workspace_listener(listener);

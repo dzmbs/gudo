@@ -14,6 +14,23 @@ fn parse(parser: &mut ClaudeTimeline, record: Value) -> Vec<TimelineItem> {
 }
 
 #[test]
+fn invalid_tool_identifiers_do_not_advertise_unreadable_output() {
+    let mut parser = parser();
+    for id in [String::new(), "x".repeat(257)] {
+        let items = parse(
+            &mut parser,
+            json!({"type":"user", "message":{"content":[{
+                "type":"tool_result", "tool_use_id": id, "content":"done"
+            }]}}),
+        );
+        let TimelineBody::Tool(tool) = &items[0].body else {
+            panic!("tool result")
+        };
+        assert!(tool.output.is_none());
+    }
+}
+
+#[test]
 fn current_cli_fixture_merges_tool_results_without_duplicate_calls() {
     let first: Value = serde_json::from_str(FIXTURE.lines().next().unwrap()).unwrap();
     let mut parser = ClaudeTimeline::new(first["sessionId"].as_str().unwrap().into());

@@ -268,22 +268,20 @@ impl Transcript {
                 "the transcript changed; reopen the tool".into(),
             ));
         }
-        let mut parts = handle.splitn(3, ':');
-        let epoch = parts.next().and_then(|text| text.parse::<u64>().ok());
-        let position = parts.next().and_then(|text| text.parse::<u64>().ok());
-        let id = parts.next().filter(|id| !id.is_empty() && id.len() <= 256);
-        let (Some(epoch), Some(position), Some(id)) = (epoch, position, id) else {
-            return Err(WsError::Invalid("the output handle is invalid".into()));
-        };
-        if epoch != self.cursor.epoch {
+        let handle = handle
+            .parse::<proto::OutputHandle>()
+            .map_err(|error| WsError::Invalid(error.to_string()))?;
+        if handle.epoch() != self.cursor.epoch {
             return Err(WsError::Conflict(
                 "the transcript changed; reopen the tool".into(),
             ));
         }
-        if !record_boundary(&mut self.file, position)? {
+        if !record_boundary(&mut self.file, handle.offset())? {
             return Err(WsError::Invalid("the output handle is invalid".into()));
         }
-        self.file.seek(SeekFrom::Start(position)).map_err(failed)?;
+        self.file
+            .seek(SeekFrom::Start(handle.offset()))
+            .map_err(failed)?;
         let mut bytes = Vec::new();
         let mut reader = std::io::BufReader::new((&mut self.file).take(READ_LIMIT as u64));
         std::io::BufRead::read_until(&mut reader, b'\n', &mut bytes).map_err(failed)?;
@@ -317,7 +315,7 @@ impl Transcript {
             .flatten()
             .find(|block| {
                 block["type"].as_str() == Some("tool_result")
-                    && block["tool_use_id"].as_str() == Some(id)
+                    && block["tool_use_id"].as_str() == Some(handle.id())
             })
             .ok_or_else(|| WsError::NotFound("tool output".into()))?;
         let text = result_text(&record, block);
@@ -380,7 +378,7 @@ fn with_output_epoch(mut item: TimelineItem, epoch: u64) -> TimelineItem {
     if let proto::TimelineBody::Tool(tool) = &mut item.body
         && let Some(output) = &mut tool.output
     {
-        output.handle = format!("{epoch}:{}", output.handle);
+        output.handle.set_epoch(epoch);
     }
     item
 }

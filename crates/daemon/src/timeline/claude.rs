@@ -312,11 +312,14 @@ impl ClaudeTimeline {
             TimelineToolStatus::Done
         };
         let output = result_text(record, block);
-        tool.output = Some(TimelineOutputRef {
-            handle: format!("{offset}:{id}"),
-            bytes: output.len() as u64,
-            preview: output_preview(&output),
-        });
+        tool.output =
+            proto::OutputHandle::new(0, offset, id)
+                .ok()
+                .map(|handle| TimelineOutputRef {
+                    handle,
+                    bytes: output.len() as u64,
+                    preview: output_preview(&output),
+                });
         tool.exit = rich["exitCode"]
             .as_i64()
             .and_then(|exit| i32::try_from(exit).ok());

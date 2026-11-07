@@ -15,6 +15,21 @@ fn open(path: &Path) -> Transcript {
 }
 
 #[test]
+fn assigning_an_output_epoch_replaces_the_previous_epoch() {
+    let mut parser = ClaudeTimeline::new("test".into());
+    let mut items = parser.parse_line(
+        br#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tool:part","content":"done"}]}}"#,
+        19,
+    ).unwrap();
+    let item = with_output_epoch(items.remove(0), 7);
+    let item = with_output_epoch(item, 8);
+    let proto::TimelineBody::Tool(tool) = item.body else {
+        panic!("tool result")
+    };
+    assert_eq!(tool.output.unwrap().handle.to_string(), "8:19:tool:part");
+}
+
+#[test]
 fn opens_only_the_tail_and_pages_without_gaps_or_duplicates() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("test.jsonl");
@@ -155,7 +170,7 @@ fn full_output_is_paged_on_utf8_boundaries_and_history_since_join_is_enforced() 
     let proto::TimelineBody::Tool(tool) = &snapshot.items[0].body else {
         panic!()
     };
-    let handle = tool.output.as_ref().unwrap().handle.clone();
+    let handle = tool.output.as_ref().unwrap().handle.to_string();
     assert_eq!(handle, "7:0:tool");
     let mut output = String::new();
     let mut offset = 0;

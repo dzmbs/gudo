@@ -17,7 +17,9 @@ no timeline traffic.
   watched pane's transcript, not a client-supplied file path.
 - `TimelineToolOutput` reads output on demand, up to 256 KiB per page. Handles bind the
   transcript epoch, record offset and tool ID. Offsets must be UTF-8 boundaries and pages
-  must hold at least four bytes.
+  must hold at least four bytes. Rust retains a validated `OutputHandle` value and parses
+  incoming opaque request strings once. Its JSON/postcard encoding remains the existing
+  `epoch:record-offset:tool-id` string; assigning an epoch replaces it, never nests prefixes.
 
 Items have stable agent IDs and revisions. Operations carry an epoch and sequence. File
 replacement, truncation, a changed session or a rewritten tail produces a snapshot with a

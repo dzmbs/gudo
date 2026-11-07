@@ -2,6 +2,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Actor, AgentKind, FileDiff, PaneId, UnixMillis};
 
+mod output_handle;
+pub use output_handle::{InvalidOutputHandle, OutputHandle};
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimelineCursor {
     pub epoch: u64,
@@ -114,7 +117,7 @@ pub struct TimelineTool {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimelineOutputRef {
-    pub handle: String,
+    pub handle: OutputHandle,
     pub preview: String,
     pub bytes: u64,
 }
