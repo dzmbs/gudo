@@ -122,12 +122,48 @@ final class ChatCollectionTests: XCTestCase {
         let text = String(repeating: "The updated tail grows while finished rows keep their cached geometry. ", count: 6)
         frame.rows[4] = ChatRow(id: previous.id, revision: previous.revision + 1, turn: previous.turn,
                                 content: .markdown(ChatMarkdownBlock(kind: .paragraph, source: text, text: AttributedString(text))))
+        frame.parentRevision = frame.revision
+        frame.changedRows = frame.rows
         frame.revision += 1
         update(controller, frame)
         try await settle()
         XCTAssertEqual(controller.configuredCells - configured, 1)
         XCTAssertEqual(controller.measuredCells - measured, 1)
         XCTAssertGreaterThan(try XCTUnwrap(controller.collection.layoutAttributesForItem(at: path)).frame.height, height)
+    }
+
+    func testOffscreenChangedRowsAreReconfiguredInTheSnapshot() async throws {
+        var frame = preparedFrame(200)
+        let (window, controller) = try open(frame, following: false)
+        defer { close(window) }
+        try await settle()
+        var reconfigured: Set<ChatRowID> = []
+        controller.onSnapshot = { reconfigured.formUnion($0.reconfiguredItemIdentifiers) }
+        let index = 150
+        XCTAssertFalse(controller.collection.indexPathsForVisibleItems.contains(IndexPath(item: index, section: 0)))
+        let previous = frame.rows[index]
+        frame.rows[index] = ChatRow(id: previous.id, revision: 2, turn: previous.turn,
+            content: .markdown(ChatMarkdownBlock(kind: .paragraph, source: "Finished offscreen", text: AttributedString("Finished offscreen"))))
+        frame.parentRevision = frame.revision
+        frame.revision += 1
+        frame.changedRows = [frame.rows[index]]
+        update(controller, frame)
+        try await settle()
+        XCTAssertTrue(reconfigured.contains(previous.id))
+    }
+
+    func testRestylingReconfiguresOffscreenRowsToo() async throws {
+        let frame = preparedFrame(200)
+        let (window, controller) = try open(frame, following: false)
+        defer { close(window) }
+        try await settle()
+        var reconfigured: Set<ChatRowID> = []
+        controller.onSnapshot = { reconfigured.formUnion($0.reconfiguredItemIdentifiers) }
+        var environment = EnvironmentValues()
+        environment.dynamicTypeSize = .accessibility3
+        update(controller, frame, environment: environment)
+        try await settle()
+        XCTAssertEqual(reconfigured, frame.rowIDs)
     }
 
     func testGenerationChangesRefreshEvenWhenCursorsAndRevisionsMatch() async throws {

@@ -53,6 +53,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
     private let signposter = OSSignposter(subsystem: Bundle.main.bundleIdentifier ?? "app", category: "chat")
     private var openedAt = CACurrentMediaTime()
     private(set) var firstContentLatency: Double?
+    var onSnapshot: ((NSDiffableDataSourceSnapshot<Int, ChatRowID>) -> Void)?
     private var heights: [HeightKey: CGFloat] = [:]
     private var heightRecency: [HeightKey] = []
     private var measured: Set<ChatRowID> = []
@@ -313,19 +314,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
             document = NativeListLayout()
         }
         let identifierSet = frame.rowIDs
-        let visible = collection.indexPathsForVisibleItems.compactMap { source.itemIdentifier(for: $0) }
-        let previousVisible = Dictionary(uniqueKeysWithValues: visible.compactMap { identifier in rows[identifier].map { (identifier, $0) } })
-        let usesDelta = !resets && frame.parentRevision == current.revision && frame.changedRows != nil
-        let changedRows = usesDelta ? frame.changedRows ?? [] : frame.rows
-        measured.subtract(previousExpanded.symmetricDifference(expanded))
-        for row in changedRows {
-            if usesDelta || rows[row.id] != row { measured.remove(row.id) }
-            rows[row.id] = row
-        }
-        var changed: [ChatRowID] = []
-        for identifier in visible where identifierSet.contains(identifier) {
-            if needsRestyle || previousVisible[identifier] != rows[identifier] || previousExpanded.contains(identifier) != expanded.contains(identifier) { changed.append(identifier) }
-        }
+        let changed = updateRows(in: frame, resetting: resets)
         current = frame
         if changesOrder || needsRestyle { rebuildDocument() }
         needsRestyle = false
@@ -338,6 +327,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
             snapshot.appendItems(frame.rows.map(\.id))
         } else { snapshot = source.snapshot() }
         snapshot.reconfigureItems(changed)
+        onSnapshot?(snapshot)
         source.apply(snapshot, animatingDifferences: false) { [weak self] in
             guard let self else { return }
             if isActive { collection.layoutIfNeeded() }
@@ -351,6 +341,22 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
             needsMeasurement = true
             clock?.isPaused = !isActive
         }
+    }
+
+    private func updateRows(in frame: TimelineFrame, resetting: Bool) -> [ChatRowID] {
+        let usesDelta = !resetting && frame.parentRevision == current.revision && frame.changedRows != nil
+        let candidates = usesDelta ? frame.changedRows ?? [] : frame.rows
+        var changed = previousExpanded.symmetricDifference(expanded)
+        measured.subtract(changed)
+        for row in candidates {
+            if resetting || rows[row.id]?.revision != row.revision {
+                measured.remove(row.id)
+                changed.insert(row.id)
+            }
+            rows[row.id] = row
+        }
+        if needsRestyle { changed.formUnion(frame.rowIDs) }
+        return Array(changed.intersection(frame.rowIDs))
     }
 
     private func rebuildDocument() {
