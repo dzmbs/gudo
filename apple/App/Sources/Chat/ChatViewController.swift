@@ -10,12 +10,15 @@ struct NativeChatView<Composer: View>: UIViewControllerRepresentable {
     let expanded: Set<ChatRowID>
     var actions = ChatRowActions()
     var isActive = true
+    var onControllerReady: ((ChatViewController) -> Void)?
     @ViewBuilder var composer: () -> Composer
     @Environment(\.self) private var environment
     @AppStorage(TerminalPreferences.Key.fontSize) private var fontSize = TerminalPreferences.Default.fontSize
 
     func makeUIViewController(context: Context) -> ChatViewController {
-        ChatViewController(model: model)
+        let controller = ChatViewController(model: model)
+        onControllerReady?(controller)
+        return controller
     }
 
     func updateUIViewController(_ controller: ChatViewController, context: Context) {
@@ -72,6 +75,12 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
     private(set) var configuredCells = 0
     private(set) var measuredCells = 0
     private(set) var applyDurations: [Double] = []
+
+    func prepareToPark() -> Bool {
+        guard isViewLoaded, let responder = view.firstResponderWithin() else { return true }
+        if let input = responder as? any UITextInput, input.markedTextRange != nil { return false }
+        return responder.resignFirstResponder()
+    }
 
     init(model: TimelineModel) {
         self.model = model

@@ -46,15 +46,3 @@ extension WKWebView {
         #endif
     }
 }
-
-#if canImport(UIKit)
-private extension UIView {
-    func firstResponderWithin() -> UIView? {
-        if isFirstResponder { return self }
-        for subview in subviews {
-            if let found = subview.firstResponderWithin() { return found }
-        }
-        return nil
-    }
-}
-#endif

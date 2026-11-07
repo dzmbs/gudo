@@ -45,6 +45,23 @@ final class ChatCollectionTests: XCTestCase {
         window.rootViewController = nil
     }
 
+    func testParkingChatVetoesMarkedComposerTextBeforeResigning() throws {
+        let (window, controller) = try open(preparedFrame(1))
+        defer { close(window) }
+        let editor = UITextView(frame: CGRect(x: 0, y: 0, width: 200, height: 60))
+        controller.view.addSubview(editor)
+        XCTAssertTrue(editor.becomeFirstResponder())
+        editor.setMarkedText("かな", selectedRange: NSRange(location: 2, length: 0))
+        XCTAssertNotNil(editor.markedTextRange)
+        XCTAssertFalse(controller.prepareToPark())
+        XCTAssertTrue(editor.isFirstResponder)
+        XCTAssertNotNil(editor.markedTextRange)
+        editor.unmarkText()
+        XCTAssertTrue(controller.prepareToPark())
+        XCTAssertFalse(editor.isFirstResponder)
+        XCTAssertEqual(editor.text, "かな")
+    }
+
     func testPrependingKeepsTheReadingRowAtTheSamePosition() async throws {
         var frame = preparedFrame(200)
         let (window, controller) = try open(frame, following: false)
