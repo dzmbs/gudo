@@ -159,6 +159,8 @@ Turn-summary Changes uses the opaque turn identity, not a file path. Tool-file s
 carry the owning item identity. Missing or empty turn correlation offers Terminal rather than
 showing changes from other visible turns. Command-mark lookup is associated with the exact
 Pane/view, not a process-global pane number: different hosts and linked views can reuse it.
+Exact command jumps use that VT's retained row pin; missing, future, erased, foreign-pane or
+alternate-screen marks are not approximated with a similar-looking prompt.
 
 `ChatViewController` owns one normal-orientation reusable collection and a composer host pinned
 to the keyboard layout guide. A display-link coalesces pending frames; stopped views release

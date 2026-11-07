@@ -273,6 +273,17 @@ final class PaneCommandMarks: NSObject {
 
     // MARK: Prompt jumps (⌘↑ / ⌘↓)
 
+    @discardableResult
+    func reveal(command: UInt64) -> Bool {
+        guard let surface, let terminal = pane?.view.surface.terminal, !terminal.isAlternateScreen,
+              let entry = entries.first(where: { $0.block.id == command && $0.block.mark.paneId == paneId }),
+              let pin = entry.first, let row = terminal.screenRow(of: pin) else { return false }
+        terminal.scrollViewport(toScreenRow: row)
+        if terminal.viewportTopRow == 0 { surface.onScroll?(-1) }
+        surface.setNeedsRender()
+        return true
+    }
+
     /// Scrolls so the previous (`direction` < 0) or next prompt is the top row; past the last
     /// prompt, back to the bottom.
     func jumpToPrompt(_ direction: Int) {
