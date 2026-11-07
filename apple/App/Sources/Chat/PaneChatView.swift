@@ -88,10 +88,7 @@ struct PaneChatView<Terminal: View>: View {
     }
 
     private func selectDiffPreview(_ path: String?) {
-        let diffs = state.model?.frame.rows.flatMap { row -> [TimelineFileDiff] in
-            guard case .item(let item) = row.content, case .tool(let tool) = item.body else { return [] }
-            return tool.diff.filter { path == nil || $0.path == path }
-        } ?? []
+        let diffs = ChatDiffPreview.files(matching: path, rows: state.model?.frame.rows ?? [])
         let text = diffs.map { file in
             let hunks = file.hunks.map { hunk in
                 hunk.header + "\n" + hunk.lines.map { line in
