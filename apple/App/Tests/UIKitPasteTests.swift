@@ -5,6 +5,7 @@ import TerminalCore
 import UIKit
 import UniformTypeIdentifiers
 import XCTest
+@testable import App
 
 nonisolated private final class PasteSink: Sendable {
     let bytes = Mutex<[UInt8]>([])
@@ -15,6 +16,24 @@ final class UIKitPasteTests: XCTestCase {
     private func makeView(_ sink: PasteSink) throws -> TerminalView {
         let terminal = Terminal(cols: 40, rows: 5) { bytes in sink.bytes.withLock { $0 += Array(bytes) } }
         return TerminalView(surface: try TerminalSurface(terminal: terminal))
+    }
+
+    func testImageOnlyDropDoesNotOfferPlacement() {
+        let provider = NSItemProvider(object: UIImage())
+        XCTAssertEqual(PaneDrawing.terminalDropKind([provider]), .ignore)
+    }
+
+    func testFileDropTakesPrecedenceOverImageRepresentations() {
+        let provider = NSItemProvider(object: URL(fileURLWithPath: "/tmp/a b/it's.png") as NSURL)
+        provider.registerDataRepresentation(forTypeIdentifier: UTType.png.identifier, visibility: .all) { completion in
+            completion(Data(), nil)
+            return nil
+        }
+        XCTAssertEqual(PaneDrawing.terminalDropKind([provider]), .files)
+    }
+
+    func testTextDropRemainsText() {
+        XCTAssertEqual(PaneDrawing.terminalDropKind([NSItemProvider(object: "git status" as NSString)]), .text)
     }
 
     func testImageOnlyPasteDoesNotPlaceOrWriteAnything() throws {
@@ -39,6 +58,9 @@ final class UIKitPasteTests: XCTestCase {
         board.urls = [URL(fileURLWithPath: "/tmp/a b/it's.png")]
         board.addItems([[UTType.utf8PlainText.identifier: "it's.png"]])
         view.paste(from: board)
+        XCTAssertEqual(String(decoding: sink.bytes.withLock { $0 }, as: UTF8.self), "'/tmp/a b/it'\\''s.png'")
+        sink.bytes.withLock { $0 = [] }
+        view.pasteURLs([URL(fileURLWithPath: "/tmp/a b/it's.png")])
         XCTAssertEqual(String(decoding: sink.bytes.withLock { $0 }, as: UTF8.self), "'/tmp/a b/it'\\''s.png'")
     }
 }

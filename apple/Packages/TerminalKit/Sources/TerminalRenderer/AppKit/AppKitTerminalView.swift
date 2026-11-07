@@ -329,8 +329,11 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
             menu.addItem(.separator())
         }
         menu.addItem(withTitle: "Paste", action: #selector(paste(_:)), keyEquivalent: "")
+        if onPasteAttachment != nil, Self.hasAttachment(.general) {
+            menu.addItem(withTitle: "Place Image from Clipboard", action: #selector(placeClipboardAttachment(_:)), keyEquivalent: "")
+        }
         menu.addItem(withTitle: "Select All", action: #selector(selectAll(_:)), keyEquivalent: "")
-        for item in menu.items where item.action == #selector(copy(_:)) || item.action == #selector(paste(_:)) || item.action == #selector(selectAll(_:)) {
+        for item in menu.items where item.action == #selector(copy(_:)) || item.action == #selector(paste(_:)) || item.action == #selector(placeClipboardAttachment(_:)) || item.action == #selector(selectAll(_:)) {
             item.target = self
         }
         return menu
@@ -450,6 +453,7 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         case #selector(copy(_:)): surface.terminal.selection != nil
         case #selector(paste(_:)):
             Self.hasDroppableText(NSPasteboard.general)
+        case #selector(placeClipboardAttachment(_:)): onPasteAttachment != nil && Self.hasAttachment(.general)
         case #selector(selectAll(_:)): true
         default: true
         }
@@ -468,14 +472,21 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         pasteText(text)
     }
 
+    @objc public func placeClipboardAttachment(_ sender: Any?) { _ = onPasteAttachment?(.general) }
+
     // MARK: Attachments (images, .excalidraw files)
 
     /// Explicit clipboard attachment placement; ordinary terminal paste never invokes it.
     public var onPasteAttachment: ((NSPasteboard) -> Bool)?
 
-    /// Handles images and files dropped on the view at a point; returns whether it took them.
-    /// What it leaves pastes: text as is, files as their shell-quoted paths.
+    /// Explicit Option-drops and internal canvas drags only; ordinary drops paste paths/text.
     public var onDropAttachment: ((NSPasteboard, CGPoint) -> Bool)?
+    public var attachmentDragTypes: [String] = []
+
+    private func acceptsAttachmentDrop(_ board: NSPasteboard, modifiers: NSEvent.ModifierFlags) -> Bool {
+        let internalTypes = attachmentDragTypes.map { NSPasteboard.PasteboardType($0) }
+        return board.availableType(from: internalTypes) != nil || (modifiers.contains(.option) && Self.hasAttachment(board))
+    }
 
     static func hasAttachment(_ pasteboard: NSPasteboard) -> Bool {
         // Files (the host decides which it takes), or an image with no text alongside.
@@ -503,7 +514,7 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         // Its own selection dropped back on it is a slip, not a paste.
         if sender.draggingSource as? TerminalView === self { return [] }
         let board = sender.draggingPasteboard
-        if onDropAttachment != nil, Self.hasAttachment(board) { return .copy }
+        if onDropAttachment != nil, acceptsAttachmentDrop(board, modifiers: NSEvent.modifierFlags) { return .copy }
         // Asked on every move of the drag: look at the types, never read the text itself.
         return Self.hasDroppableText(board) ? .copy : []
     }
@@ -519,8 +530,11 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
 
     override public func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
         if isUnpasted(sender) { return dropTargetAround?.performDragOperation(sender) ?? false }
-        let board = sender.draggingPasteboard
-        if let onDropAttachment, Self.hasAttachment(board), onDropAttachment(board, convert(sender.draggingLocation, from: nil)) {
+        return drop(from: sender.draggingPasteboard, at: convert(sender.draggingLocation, from: nil), modifiers: NSEvent.modifierFlags)
+    }
+
+    func drop(from board: NSPasteboard, at point: CGPoint, modifiers: NSEvent.ModifierFlags) -> Bool {
+        if let onDropAttachment, acceptsAttachmentDrop(board, modifiers: modifiers), onDropAttachment(board, point) {
             return true
         }
         guard let text = Self.droppedText(board) else { return false }

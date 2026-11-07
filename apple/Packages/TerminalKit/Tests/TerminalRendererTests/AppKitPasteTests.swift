@@ -107,6 +107,30 @@ import Testing
         #expect(view.surface.terminal.selectionText() == "https://example.com/a/b")
     }
 
+    @Test func ordinaryDropsPastePathsAndOnlyExplicitOptionDropsImportImages() throws {
+        let (view, window, written) = try makeView()
+        let board = NSPasteboard(name: .init("terminal-explicit-drop-\(UUID())"))
+        defer { board.releaseGlobally() }
+        var placements = 0
+        view.onDropAttachment = { _, _ in placements += 1; return true }
+        board.writeObjects([URL(fileURLWithPath: "/tmp/a b/it's.png") as NSURL])
+        #expect(view.drop(from: board, at: .zero, modifiers: []))
+        #expect(placements == 0)
+        #expect(String(decoding: written.bytes.withLock { $0 }, as: UTF8.self) == "'/tmp/a b/it'\\''s.png'")
+        board.clearContents()
+        board.setData(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jAj0AAAAASUVORK5CYII=")!, forType: .png)
+        #expect(!view.drop(from: board, at: .zero, modifiers: []))
+        #expect(placements == 0)
+        #expect(view.drop(from: board, at: .zero, modifiers: .option))
+        #expect(placements == 1)
+        board.clearContents()
+        view.attachmentDragTypes = ["test.internal-drawing"]
+        board.setData(Data(), forType: .init("test.internal-drawing"))
+        #expect(view.drop(from: board, at: .zero, modifiers: []))
+        #expect(placements == 2)
+        withExtendedLifetime(window) {}
+    }
+
     @Test func droppedTextAndFilesPaste() throws {
         let board = NSPasteboard(name: NSPasteboard.Name("terminal-drop-test"))
         board.clearContents()

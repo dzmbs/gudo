@@ -13,8 +13,16 @@ import AppKit
 
 #if os(iOS)
 extension PaneDrawing: UIGestureRecognizerDelegate, UIDropInteractionDelegate {
+    enum TerminalDropKind { case files, text, ignore }
+
+    static func terminalDropKind(_ providers: [NSItemProvider]) -> TerminalDropKind {
+        if providers.contains(where: { $0.canLoadObject(ofClass: NSURL.self) }) { return .files }
+        if providers.contains(where: { $0.canLoadObject(ofClass: NSString.self) }) { return .text }
+        return .ignore
+    }
+
     /// Pencil on the terminal opens draw mode at that row (held still: Write); a two-finger long
-    /// press opens draw mode; dropped and pasted images and `.excalidraw` files are imported.
+    /// press opens draw mode. Terminal drops paste text/paths; canvas drags move drawings.
     func installInput(on view: TerminalView) {
         // Fingers keep scrolling and selecting: the terminal's own recognizers take direct
         // touches only.
@@ -189,7 +197,8 @@ extension PaneDrawing: UIGestureRecognizerDelegate, UIDropInteractionDelegate {
         if let view = interaction.view, session.localDragSession?.items.contains(where: { $0.localObject as? UIView === view }) == true {
             return false
         }
-        return !isReadOnly && session.hasItemsConforming(toTypeIdentifiers: [UTType.image.identifier, UTType.fileURL.identifier, UTType.excalidraw.identifier, UTType.json.identifier])
+        let canvasDrag = session.localDragSession?.items.contains { $0.localObject is DrawingDragRef } == true
+        return !isReadOnly && (canvasDrag || Self.terminalDropKind(session.items.map(\.itemProvider)) != .ignore)
     }
 
     func dropInteraction(_ interaction: UIDropInteraction, sessionDidUpdate session: any UIDropSession) -> UIDropProposal {
@@ -203,27 +212,19 @@ extension PaneDrawing: UIGestureRecognizerDelegate, UIDropInteractionDelegate {
             refs.forEach(dropped)
             return
         }
-        for item in session.items {
-            let provider = item.itemProvider
-            let name = provider.suggestedName ?? "Dropped Image"
-            if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
-                provider.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { data, _ in
-                    guard let data else { return }
-                    let png = UIImage(data: data).flatMap { $0.pngData() } ?? data
-                    Task { @MainActor [weak self] in self?.importAttachment(name: name + ".png", data: png) }
-                }
-            } else if provider.hasItemConformingToTypeIdentifier(UTType.excalidraw.identifier) {
-                provider.loadDataRepresentation(forTypeIdentifier: UTType.excalidraw.identifier) { data, _ in
-                    guard let data else { return }
-                    Task { @MainActor [weak self] in self?.importAttachment(name: name + ".excalidraw", data: data) }
-                }
-            } else {
-                provider.loadFileRepresentation(forTypeIdentifier: UTType.data.identifier) { url, _ in
-                    guard let url, PaneDrawing.acceptsFile(named: url.lastPathComponent), let data = try? Data(contentsOf: url) else { return }
-                    let file = url.lastPathComponent
-                    Task { @MainActor [weak self] in self?.importAttachment(name: file, data: data) }
-                }
+        guard !isReadOnly, let view = pane?.view else { return }
+        switch Self.terminalDropKind(session.items.map(\.itemProvider)) {
+        case .files:
+            session.loadObjects(ofClass: NSURL.self) { [weak view] objects in
+                let urls = objects.compactMap { $0 as? URL }
+                Task { @MainActor [weak view] in view?.pasteURLs(urls) }
             }
+        case .text:
+            session.loadObjects(ofClass: NSString.self) { [weak view] objects in
+                let text = objects.compactMap { $0 as? String }.joined(separator: "\n")
+                Task { @MainActor [weak view] in view?.pasteText(text) }
+            }
+        case .ignore: break
         }
     }
 }
@@ -428,9 +429,9 @@ final class PlacementMarker: UIView, UIDragInteractionDelegate {
 }
 #else
 extension PaneDrawing {
-    /// Dropped and pasted images and `.excalidraw` files are imported; ⌥-drop onto an agent pane
-    /// sends the image to the agent.
+    /// Explicit clipboard placement and Option-drop import; Option-drop onto an agent sends it.
     func installInput(on view: TerminalView) {
+        view.attachmentDragTypes = [DrawingDragRef.typeIdentifier]
         view.onPasteAttachment = { [weak self] pasteboard in
             self?.importFromPasteboard(pasteboard, send: false) ?? false
         }
