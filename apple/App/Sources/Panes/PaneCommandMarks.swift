@@ -51,6 +51,12 @@ final class PaneCommandMarks: NSObject {
     static func attach(to pane: Pane, workspace: Workspace) -> PaneCommandMarks? {
         guard let backend = pane.backend as? DaemonPaneBackend, backend.daemonClient != nil,
               let daemon = workspace.host as? DaemonConnection else { return nil }
+        return attach(to: pane, backend: backend, daemon: daemon, workspace: workspace)
+    }
+
+    @discardableResult
+    static func attach(to pane: Pane, backend: DaemonPaneBackend, daemon: DaemonConnection,
+                       workspace: Workspace) -> PaneCommandMarks {
         let marks = PaneCommandMarks(pane: pane, backend: backend, daemon: daemon, workspace: workspace)
         objc_setAssociatedObject(pane.view, &associationKey, marks, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
         registry.setObject(marks, forKey: NSNumber(value: pane.id.rawValue))
