@@ -104,6 +104,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         collection.translatesAutoresizingMaskIntoConstraints = false
         install(footer)
         install(latest)
+        latest.view.accessibilityIdentifier = "chat-jump-latest"
         view.keyboardLayoutGuide.followsUndockedKeyboard = true
         NSLayoutConstraint.activate([
             collection.topAnchor.constraint(equalTo: view.topAnchor),
@@ -434,9 +435,10 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
     }
 
     private func updateFollowing() {
+        model.readingItem = collection.indexPathsForVisibleItems.min().flatMap { source?.itemIdentifier(for: $0)?.item }
         let distance = document.height - collection.bounds.height + collection.adjustedContentInset.bottom - collection.contentOffset.y
         model.followsBottom = distance < 40
-        if model.followsBottom { model.reachedBottom(); latest.view.isHidden = true }
+        if model.followsBottom { model.reachedBottom(); latest.view.isHidden = !current.hasNewerGap }
     }
 
     private func requestHistoryIfNeeded() {

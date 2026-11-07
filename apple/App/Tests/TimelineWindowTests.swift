@@ -198,6 +198,134 @@ final class TimelineWindowTests: XCTestCase {
         XCTAssertEqual(Set(window.order).count, window.order.count)
     }
 
+    func testByteBudgetKeepsTheLatestValuesAndRequestsAMissingHistoryBoundary() throws {
+        var window = TimelineWindow(byteLimit: 16_384)
+        _ = window.replace(try largeSnapshot(0..<2, textBytes: 1_024))
+        for number in 2..<60 {
+            let item = try largeSnapshot(number..<(number + 1), textBytes: 1_024).items[0]
+            let value = try JSONSerialization.jsonObject(with: TimelineJSON.encode(item))
+            _ = try window.apply(update([["Upsert": ["cursor": ["epoch": 1, "sequence": number - 1], "item": value]]]))
+        }
+        XCTAssertLessThanOrEqual(window.retainedBytes, window.byteLimit)
+        XCTAssertLessThan(window.order.count, 60)
+        XCTAssertEqual(window.order.last, "m59")
+        XCTAssertTrue(window.needsHistoryCursor)
+    }
+
+    func testByteEvictionUsesKnownHistoryBoundaries() throws {
+        var window = TimelineWindow(byteLimit: 128 * 1_024)
+        _ = window.replace(try largeSnapshot(100..<160, textBytes: 128))
+        _ = try window.prepend(largeSnapshot(0..<100, textBytes: 128))
+        var large = try largeSnapshot(159..<160, textBytes: 30_000).items[0]
+        large.revision = 2
+        let value = try JSONSerialization.jsonObject(with: TimelineJSON.encode(large))
+        _ = try window.apply(update([["Upsert": ["cursor": ["epoch": 1, "sequence": 1], "item": value]]]))
+        XCTAssertEqual(window.order.first, "m100")
+        XCTAssertEqual(window.before, 100)
+        XCTAssertLessThanOrEqual(window.retainedBytes, window.byteLimit)
+    }
+
+    func testProtectedHistoryRejectsGrowthWithoutApplyingLaterDeltasToAnOldValue() throws {
+        var window = TimelineWindow(byteLimit: 4_096)
+        _ = window.replace(try largeSnapshot(0..<2, textBytes: 500))
+        let original = window.items["m0"]
+        _ = try window.apply(update([append("m0", text: String(repeating: "x", count: 1_000), sequence: 1)]), protectsHistory: true)
+        XCTAssertEqual(window.items["m0"], original)
+        XCTAssertTrue(window.hasNewerGap)
+        _ = try window.apply(update([append("m0", text: "must not append to stale prefix", sequence: 2)]), protectsHistory: true)
+        XCTAssertEqual(window.items["m0"], original)
+        XCTAssertEqual(window.cursor?.sequence, 2)
+        XCTAssertLessThanOrEqual(window.retainedBytes, window.byteLimit)
+    }
+
+    func testAnOversizedHistoryPageDoesNotEvictTheReadingAnchor() throws {
+        var window = TimelineWindow(byteLimit: 8_192)
+        _ = window.replace(try largeSnapshot(100..<104, textBytes: 256))
+        let order = window.order
+        XCTAssertThrowsError(try window.prepend(largeSnapshot(0..<100, textBytes: 256)))
+        XCTAssertEqual(window.order, order)
+        XCTAssertLessThanOrEqual(window.retainedBytes, window.byteLimit)
+    }
+
+    func testAnOversizedSnapshotFallsBackWithoutRequestingItForever() throws {
+        var window = TimelineWindow(byteLimit: 4_096)
+        _ = window.replace(try largeSnapshot(0..<1, textBytes: 10_000))
+        XCTAssertTrue(window.items.isEmpty)
+        XCTAssertNotNil(window.note)
+        XCTAssertFalse(window.needsHistoryCursor)
+        XCTAssertLessThanOrEqual(window.retainedBytes, window.byteLimit)
+    }
+
+    func testAnOversizedRefreshRetainsProtectedHistoryInsteadOfClearingTheReader() throws {
+        var window = TimelineWindow(byteLimit: 4_096)
+        _ = window.replace(try largeSnapshot(0..<2, textBytes: 500))
+        let original = window.items
+        var refreshed = try largeSnapshot(0..<2, textBytes: 1_500)
+        refreshed.cursor.sequence = 10
+        for index in refreshed.items.indices { refreshed.items[index].revision = 2 }
+        _ = window.reconcile(refreshed, protectsHistory: true)
+        XCTAssertEqual(window.items, original)
+        XCTAssertTrue(window.hasNewerGap)
+        XCTAssertFalse(window.needsHistoryCursor)
+        XCTAssertNotNil(window.note)
+    }
+
+    func testHistoryTrimmingNeverRemovesTheExplicitReadingItem() throws {
+        var window = TimelineWindow(limit: 160)
+        _ = window.replace(try snapshot(200..<360))
+        let original = window.order
+        XCTAssertThrowsError(try window.prepend(snapshot(100..<200), protecting: "m330"))
+        XCTAssertEqual(window.order, original)
+    }
+
+    func testRefreshingAMissingBoundaryDoesNotEvictAReaderWhoStoppedFollowing() throws {
+        var window = TimelineWindow(limit: 60)
+        _ = window.replace(try snapshot(0..<60))
+        _ = try window.apply(update([upsert(60, revision: 1, sequence: 1)]))
+        XCTAssertTrue(window.needsHistoryCursor)
+        XCTAssertEqual(window.order.first, "m1")
+        _ = window.reconcile(try snapshot(20..<80, sequence: 2), protectsHistory: true)
+        XCTAssertEqual(window.order.first, "m1")
+        XCTAssertTrue(window.hasNewerGap)
+        XCTAssertFalse(window.needsHistoryCursor)
+        XCTAssertNotNil(window.note)
+    }
+
+    func testByteAccountingTracksChangesHistoryAndResets() throws {
+        var window = TimelineWindow()
+        _ = window.replace(try largeSnapshot(100..<160, textBytes: 128))
+        _ = try window.prepend(largeSnapshot(0..<100, textBytes: 256))
+        XCTAssertEqual(window.retainedBytes, window.items.values.reduce(0) { $0 + TimelineValueWeight.of($1) })
+        _ = try window.apply(update([append("m159", text: " unicode 🦀", sequence: 1), ["Remove": ["cursor": ["epoch": 1, "sequence": 2], "id": "m0"]]]))
+        XCTAssertEqual(window.retainedBytes, window.items.values.reduce(0) { $0 + TimelineValueWeight.of($1) })
+        _ = window.replace(try snapshot(100..<160, epoch: 2))
+        XCTAssertEqual(window.retainedBytes, window.items.values.reduce(0) { $0 + TimelineValueWeight.of($1) })
+        _ = window.replace(try snapshot(0..<0, epoch: 3))
+        XCTAssertEqual(window.retainedBytes, 0)
+    }
+
+    func testASingleOversizedLiveValueRollsBackItsWholeBatch() throws {
+        var window = TimelineWindow(byteLimit: 4_096)
+        _ = window.replace(try largeSnapshot(0..<2, textBytes: 500))
+        let original = window.items, bytes = window.retainedBytes
+        let item = try largeSnapshot(2..<3, textBytes: 10_000).items[0]
+        let value = try JSONSerialization.jsonObject(with: TimelineJSON.encode(item))
+        XCTAssertThrowsError(try window.apply(update([append("m0", text: "uncommitted", sequence: 1), ["Upsert": ["cursor": ["epoch": 1, "sequence": 2], "item": value]]])))
+        XCTAssertEqual(window.items, original)
+        XCTAssertEqual(window.retainedBytes, bytes)
+        XCTAssertEqual(window.cursor?.sequence, 0)
+    }
+
+    private func largeSnapshot(_ range: Range<Int>, textBytes: Int) throws -> TimelineSnapshot {
+        var result = try snapshot(range)
+        result.items = try range.map { number in
+            var object = item(number)
+            object["body"] = ["Assistant": ["text": String(repeating: "x", count: textBytes), "streaming": true]]
+            return try decode(TimelineItem.self, object)
+        }
+        return result
+    }
+
     private func snapshot(_ range: Range<Int>, sequence: UInt64 = 0, epoch: UInt64 = 1, before: UInt64? = 100) throws -> TimelineSnapshot {
         try decode(TimelineSnapshot.self, ["cursor": ["epoch": epoch, "sequence": sequence], "session": ["agent": "Claude", "native_session": "fixture", "title": NSNull(), "model": NSNull(), "permission_mode": NSNull(), "commands": []], "items": range.map { item($0) }, "before": before.map { $0 as Any } ?? NSNull()])
     }

@@ -49,7 +49,7 @@ actor TimelineRenderWorker {
 
     init(pane: UInt64) { self.pane = pane }
 
-    func apply(_ jobs: [TimelineJob], resetsSnapshot: Bool, protectsHistory: Bool) async throws -> TimelineRenderResult {
+    func apply(_ jobs: [TimelineJob], resetsSnapshot: Bool, protectsHistory: Bool, historyAnchor: String? = nil) async throws -> TimelineRenderResult {
         var next = window
         var changed: Set<String> = []
         var removed: Set<String> = []
@@ -62,7 +62,7 @@ actor TimelineRenderWorker {
             switch job {
             case .snapshot(let json):
                 let snapshot = try TimelineJSON.decode(TimelineSnapshot.self, from: json)
-                changes = next.reconcile(snapshot, reset: resetsSnapshot && !consumedSnapshot)
+                changes = next.reconcile(snapshot, reset: resetsSnapshot && !consumedSnapshot, protectsHistory: protectsHistory)
                 consumedSnapshot = true
                 hasLiveChanges = hasLiveChanges || !changes.changed.isEmpty || !changes.removed.isEmpty
             case .update(let json):
@@ -72,7 +72,7 @@ actor TimelineRenderWorker {
                 hasLiveChanges = hasLiveChanges || !changes.changed.isEmpty || !changes.removed.isEmpty
             case .older(let json):
                 let snapshot = try TimelineJSON.decode(TimelineSnapshot.self, from: json)
-                changes = try next.prepend(snapshot)
+                changes = try next.prepend(snapshot, protecting: historyAnchor)
                 consumedHistory = true
             }
             changed.formUnion(changes.changed)
@@ -128,6 +128,7 @@ final class TimelineModel {
     var expanded: Set<ChatRowID> = []
     var draft = ""
 
+    @ObservationIgnored var readingItem: String?
     @ObservationIgnored private var channel: TimelineChannel?
     @ObservationIgnored private weak var hub: DaemonWorkspace?
     @ObservationIgnored private var observer: UUID?
@@ -239,6 +240,7 @@ final class TimelineModel {
             pendingBytes = 0
             frame = TimelineFrame()
             expanded.removeAll()
+            readingItem = nil
             isLoading = true
             isLoadingHistory = false
             hasNewItems = false
@@ -274,7 +276,7 @@ final class TimelineModel {
                 pending.removeAll(keepingCapacity: true)
                 pendingBytes = 0
                 do {
-                    let result = try await worker.apply(jobs, resetsSnapshot: resetsSnapshot, protectsHistory: !followsBottom)
+                    let result = try await worker.apply(jobs, resetsSnapshot: resetsSnapshot, protectsHistory: !followsBottom, historyAnchor: readingItem)
                     guard self.lifetime == lifetime, !Task.isCancelled else { return }
                     if !followsBottom, result.hasLiveChanges { hasNewItems = true }
                     frame = result.frame
@@ -284,6 +286,11 @@ final class TimelineModel {
                     if result.consumedHistory { isLoadingHistory = false }
                     expanded.formIntersection(frame.rowIDs)
                     if result.needsHistoryCursor { channel?.requestSnapshot() }
+                } catch TimelineWindowError.valueTooLarge, TimelineWindowError.historyBudget {
+                    guard self.lifetime == lifetime, !Task.isCancelled else { return }
+                    self.error = "This Chat page exceeds the memory budget. Open Terminal."
+                    isLoading = false
+                    isLoadingHistory = false
                 } catch is TimelineWindowError {
                     guard self.lifetime == lifetime, !Task.isCancelled else { return }
                     isLoadingHistory = false

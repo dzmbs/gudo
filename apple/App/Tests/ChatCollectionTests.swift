@@ -94,6 +94,21 @@ final class ChatCollectionTests: XCTestCase {
         XCTAssertFalse(controller.model.followsBottom)
     }
 
+    func testTheLatestGapKeepsItsJumpControlAtTheLoadedBottom() async throws {
+        var frame = preparedFrame(200)
+        frame.hasNewerGap = true
+        let (window, controller) = try open(frame, following: false)
+        defer { close(window) }
+        try await settle()
+        controller.collection.scrollToItem(at: IndexPath(item: 199, section: 0), at: .bottom, animated: false)
+        try await settle()
+        controller.scrollViewDidEndDragging(controller.collection, willDecelerate: false)
+        XCTAssertTrue(controller.model.followsBottom)
+        let control = try XCTUnwrap(controller.view.subviews.first { $0.accessibilityIdentifier == "chat-jump-latest" })
+        XCTAssertFalse(control.isHidden, "The loaded bottom is not the live bottom when newer values were evicted")
+        XCTAssertNotNil(controller.model.readingItem)
+    }
+
     func testAChangedTailDoesNotReconfigureFinishedVisibleRows() async throws {
         var frame = preparedFrame(5)
         let (window, controller) = try open(frame)

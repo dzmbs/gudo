@@ -52,10 +52,21 @@ The upstream Markdown and cmark-gfm licences ship with the app.
 `TimelineModel` serializes bounded JSON batches through an off-main render worker. Its value
 window checks epoch and sequence continuity, ignores stale revisions, applies batches
 transactionally and reconciles authoritative snapshots without discarding older loaded pages.
-Historical replies never advance the live cursor. At 3,000 values, live following evicts older
-pages at known byte boundaries; paging further back evicts the newest values and exposes a
-jump-to-latest gap instead of moving the reading position. A missing history boundary requests
-a fresh snapshot. Connection resets clear rendered values before another connection can
+Historical replies never advance the live cursor. Values are bounded by both 3,000 items and
+16 MiB of conservative retained-value weight (twice UTF-8 string storage plus record/collection
+allowances, not a resident-memory measurement). Incremental accounting includes tool inputs,
+output tails, nested diffs, attachments, plans and actor bytes. Live following evicts older
+pages at known byte boundaries; a missing history boundary requests a fresh snapshot.
+
+Paging further back evicts newest values but never the controller's current reading item. A
+page that cannot fit without losing that anchor is rejected transactionally with a Terminal
+fallback, not retried automatically. Protected history declines over-budget growth and exposes
+a jump-to-latest gap. Appends are frozen across that gap so later deltas cannot attach to an
+outdated prefix; authoritative full values can still reconcile. A snapshot page that cannot
+fit produces a bounded fallback instead of an endless refresh loop. If following stops while
+a history-boundary refresh is in flight, an unrepairable boundary offers Terminal rather than
+discarding the reading rows. The New control remains visible at the loaded bottom while that
+bottom is not the live bottom. Connection resets clear rendered values before another connection can
 publish, including screens that were stopped during a reconnect. Expansion and drafts stay
 local to the screen; drafts do not cross hosts.
 
