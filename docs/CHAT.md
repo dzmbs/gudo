@@ -64,7 +64,11 @@ the channel.
 
 `RowBuilder` parses Markdown on its actor into independent block rows with stable IDs and
 cached attributed inline text. Its cache is bounded by 500 blocks, 500 item entries and
-4 MiB of estimated retained content. Only HTTP, HTTPS and mail links are interactive; HTML
+4 MiB of estimated retained content, including assistant IDs, turn/parent and actor metadata.
+Row and height caches share a single-owner constant-time LRU with cached byte/unit costs;
+an entry that cannot fit does not discard unrelated completed prefixes. Empty documents still
+consume entry slots. A single document beyond the block budget remains uncached; incremental
+freezing for that larger prefix is not finished. Only HTTP, HTTPS and mail links are interactive; HTML
 stays literal text. Original block source comes from cmark's UTF-8 ranges, not a padded table
 formatter. Nested tables rendered inline keep their literal source instead of expanding columns.
 The upstream Markdown and cmark-gfm licences ship with the app.

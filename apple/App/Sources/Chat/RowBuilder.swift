@@ -4,6 +4,11 @@ import Foundation
 import HostKit
 import Markdown
 
+nonisolated enum ChatCacheLimits {
+    static let entries = 500
+    static let bytes = 4 * 1_024 * 1_024
+}
+
 nonisolated struct ChatRowID: Hashable, Sendable {
     let item: String
     let part: Int
@@ -95,73 +100,38 @@ actor RowBuilder {
     private struct Entry {
         let revision: UInt32
         let rows: [ChatRow]
-        let bytes: Int
         let partition: MarkdownPartition?
     }
 
-    private var cache: [String: Entry] = [:]
-    private var recency: [String] = []
-    private var cachedBytes = 0
-    private var cachedRows = 0
+    private let cache = BoundedLRU<String, Entry>(
+        capacity: ChatCacheLimits.entries, byteLimit: ChatCacheLimits.bytes, unitLimit: ChatCacheLimits.entries
+    )
     private(set) var parseCount = 0
     private(set) var parsedBytes = 0
 
     func rows(for item: TimelineItem) -> [ChatRow] {
-        if let entry = cache[item.id], entry.revision == item.revision {
-            touch(item.id)
-            return entry.rows
-        }
+        let previous = cache.value(for: item.id)
+        if let previous, previous.revision == item.revision { return previous.rows }
         let rows: [ChatRow]
         var bytes = TimelineValueWeight.of(item)
         var partition: MarkdownPartition?
         if case .assistant(let assistant) = item.body {
-            let rendered = markdown(assistant.text, after: cache[item.id]?.partition)
+            let rendered = markdown(assistant.text, after: previous?.partition)
             partition = rendered
             let blocks = rendered.blocks
-            let previous = cache[item.id]?.rows ?? []
+            let previousRows = previous?.rows ?? []
             rows = blocks.enumerated().map { index, block in
                 let content = ChatRow.Content.markdown(block)
-                if previous.indices.contains(index), previous[index].turn == item.turn, previous[index].content == content { return previous[index] }
-                return ChatRow(id: ChatRowID(item: item.id, part: index), revision: item.revision, turn: item.turn, content: content)
+                if previousRows.indices.contains(index), previousRows[index].turn == item.turn,
+                   previousRows[index].content == content { return previousRows[index] }
+                return ChatRow(id: ChatRowID(item: item.id, part: index), revision: item.revision,
+                               turn: item.turn, content: content)
             }
-            bytes = assistant.text.utf8.count * 4 + rows.count * 512 + 256
-        } else {
-            let text: String?
-            switch item.body {
-            case .user(let user): text = user.text
-            case .thinking(let thinking): text = thinking.text
-            case .notice(let notice): text = notice.text
-            default: text = nil
-            }
-            let preview = text.flatMap { $0.utf8.count > 4_096 ? prefix($0, bytes: 4_096) : nil }
-            var planPreview: TimelinePlan?
-            if case .plan(let plan) = item.body, plan.entries.count > 20 || plan.entries.contains(where: { $0.text.utf8.count > 512 }) {
-                var limited = plan
-                limited.entries = plan.entries.prefix(20).map { entry in
-                    var limited = entry
-                    limited.text = prefix(entry.text, bytes: 512)
-                    return limited
-                }
-                planPreview = limited
-            }
-            rows = [ChatRow(id: ChatRowID(item: item.id, part: 0), revision: item.revision, turn: item.turn, content: .item(item), preview: preview, planPreview: planPreview)]
-        }
-        if let previous = cache.removeValue(forKey: item.id) {
-            cachedBytes -= previous.bytes
-            cachedRows -= previous.rows.count
-        }
-        cache[item.id] = Entry(revision: item.revision, rows: rows, bytes: bytes, partition: partition)
-        cachedBytes += bytes
-        cachedRows += rows.count
-        touch(item.id)
-        while cache.count > 500 || cachedRows > 500 || cachedBytes > 4 * 1_024 * 1_024 {
-            guard let oldest = recency.first else { break }
-            recency.removeFirst()
-            if let removed = cache.removeValue(forKey: oldest) {
-                cachedBytes -= removed.bytes
-                cachedRows -= removed.rows.count
-            }
-        }
+            // Preserve ID/turn/actor charges as well as copied Markdown buffers and row metadata.
+            bytes += assistant.text.utf8.count * 2 + rows.count * 512 + 256
+        } else { rows = [plainRow(item)] }
+        cache.insert(Entry(revision: item.revision, rows: rows, partition: partition), for: item.id,
+                     cost: LRUCost(bytes: bytes, units: rows.count))
         return rows
     }
 
@@ -172,35 +142,43 @@ actor RowBuilder {
     }
 
     func remove(_ identifiers: Set<String>) {
-        for identifier in identifiers {
-            if let entry = cache.removeValue(forKey: identifier) {
-                cachedBytes -= entry.bytes
-                cachedRows -= entry.rows.count
-            }
-        }
-        recency.removeAll { identifiers.contains($0) }
+        for identifier in identifiers { cache.remove(identifier) }
     }
 
-    func clear() {
-        cache.removeAll(keepingCapacity: false)
-        recency.removeAll(keepingCapacity: false)
-        cachedBytes = 0
-        cachedRows = 0
-    }
+    func clear() { cache.removeAll() }
 
     var cacheSize: Int { cache.count }
-    var cacheRowCount: Int { cachedRows }
-    var cacheBytes: Int { cachedBytes }
+    var cacheRowCount: Int { cache.cost.units }
+    var cacheBytes: Int { cache.cost.bytes }
+
+    private func plainRow(_ item: TimelineItem) -> ChatRow {
+        let text: String?
+        switch item.body {
+        case .user(let user): text = user.text
+        case .thinking(let thinking): text = thinking.text
+        case .notice(let notice): text = notice.text
+        default: text = nil
+        }
+        let preview = text.flatMap { $0.utf8.count > 4_096 ? prefix($0, bytes: 4_096) : nil }
+        var planPreview: TimelinePlan?
+        if case .plan(let plan) = item.body,
+           plan.entries.count > 20 || plan.entries.contains(where: { $0.text.utf8.count > 512 }) {
+            var limited = plan
+            limited.entries = plan.entries.prefix(20).map { entry in
+                var limited = entry
+                limited.text = prefix(entry.text, bytes: 512)
+                return limited
+            }
+            planPreview = limited
+        }
+        return ChatRow(id: ChatRowID(item: item.id, part: 0), revision: item.revision, turn: item.turn,
+                       content: .item(item), preview: preview, planPreview: planPreview)
+    }
 
     private func prefix(_ text: String, bytes: Int) -> String {
         var prefix = Array(text.utf8.prefix(bytes))
         while String(bytes: prefix, encoding: .utf8) == nil { prefix.removeLast() }
         return String(decoding: prefix, as: UTF8.self)
-    }
-
-    private func touch(_ identifier: String) {
-        recency.removeAll { $0 == identifier }
-        recency.append(identifier)
     }
 
     private func markdown(_ source: String, after previous: MarkdownPartition?) -> MarkdownPartition {

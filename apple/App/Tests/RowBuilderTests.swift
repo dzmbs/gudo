@@ -282,6 +282,27 @@ final class RowBuilderTests: XCTestCase {
         XCTAssertEqual(count, 500)
     }
 
+    func testAssistantCacheChargesIdentifiersAndTurnMetadata() async throws {
+        let builder = RowBuilder()
+        let item = try assistant("", id: String(repeating: "id", count: 50_000))
+        _ = await builder.rows(for: item)
+        let bytes = await builder.cacheBytes
+        XCTAssertGreaterThanOrEqual(bytes, TimelineValueWeight.of(item))
+    }
+
+    func testAnUncacheableDocumentDoesNotDiscardOtherRetainedPrefixes() async throws {
+        let builder = RowBuilder()
+        let retained = try assistant("Retained paragraph.", id: "retained")
+        _ = await builder.rows(for: retained)
+        let text = (0..<501).map { "Paragraph \($0)." }.joined(separator: "\n\n")
+        let rows = await builder.rows(for: try assistant(text, id: "too-many-blocks"))
+        XCTAssertEqual(rows.count, 501)
+        let before = await builder.parseCount
+        _ = await builder.rows(for: retained)
+        let after = await builder.parseCount
+        XCTAssertEqual(after, before, "An uncacheable value must not flush unrelated completed prefixes")
+    }
+
     func testEmptyMessagesStillConsumeTheEntryBudget() async throws {
         let builder = RowBuilder()
         for index in 0..<600 {

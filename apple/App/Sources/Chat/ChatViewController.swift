@@ -57,8 +57,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
     private var openedAt = CACurrentMediaTime()
     private(set) var firstContentLatency: Double?
     var onSnapshot: ((NSDiffableDataSourceSnapshot<Int, ChatRowID>) -> Void)?
-    private var heights: [HeightKey: CGFloat] = [:]
-    private var heightRecency: [HeightKey] = []
+    private let heights = BoundedLRU<HeightKey, CGFloat>(capacity: ChatCacheLimits.entries)
     private var measured: Set<ChatRowID> = []
     private var clock: CADisplayLink?
     private var isActive = true
@@ -317,8 +316,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         else if let nextOrder = frame.orderRevision, let previousOrder = current.orderRevision { changesOrder = nextOrder != previousOrder }
         else { changesOrder = frame.rows.map(\.id) != current.rows.map(\.id) }
         if resets {
-            heights.removeAll(keepingCapacity: false)
-            heightRecency.removeAll(keepingCapacity: false)
+            heights.removeAll()
             measured.removeAll(keepingCapacity: false)
             document = NativeListLayout()
         }
@@ -373,7 +371,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         let width = collection.bounds.width
         let geometry = current.rows.map { row -> NativeListRow in
             let height: CGFloat
-            if let cached = heights[key(row)] { height = cached }
+            if let cached = heights.peek(key(row)) { height = cached }
             else if old.contentWidth == width, let index = old.indices[row.id.storageKey] { height = old.rows[index].height }
             else { height = estimate(row) }
             return NativeListRow(id: row.id.storageKey, height: max(1, height))
@@ -402,10 +400,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
             guard fitting.height.isFinite, fitting.height > 0 else { continue }
             let height = ceil(fitting.height)
             let key = key(row)
-            heights[key] = height
-            heightRecency.removeAll { $0 == key }
-            heightRecency.append(key)
-            while heightRecency.count > 500 { heights[heightRecency.removeFirst()] = nil }
+            heights.insert(height, for: key)
             measured.insert(identifier)
             measuredCells += 1
             if let index = document.indices[identifier.storageKey], document.rows[index].height != height { changed[index] = height }
@@ -469,8 +464,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
     }
 
     @objc private func memoryWarning() {
-        heights.removeAll(keepingCapacity: false)
-        heightRecency.removeAll(keepingCapacity: false)
+        heights.removeAll()
         model.releaseRenderCaches()
     }
 }
