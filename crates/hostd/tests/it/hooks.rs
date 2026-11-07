@@ -3,7 +3,7 @@ use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
-use client_core::proto::{AgentState, PaneId, Secret};
+use client_core::proto::{AgentState, Axis, LayoutOp, OpOutcome, PaneId, PaneLaunch, Secret};
 use client_core::{AskpassEvent, ClientConfig};
 use serde_json::{Value, json};
 
@@ -272,30 +272,10 @@ async fn a_shipped_daemon_provides_hooks_askpass_and_mcp_without_a_separate_shim
         )).unwrap();
         std::fs::set_permissions(&agent_path, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
-    client.type_line(
-        pane,
-        &format!(
-            "export HOME={} CLAUDE_CONFIG_DIR={} CODEX_HOME={} PATH={}:$PATH; claude; codex",
-            agents::shell_quote(&home.to_string_lossy()),
-            agents::shell_quote(&home.join(".claude").to_string_lossy()),
-            agents::shell_quote(&home.join(".codex").to_string_lossy()),
-            agents::shell_quote(&tools_directory.to_string_lossy()),
-        ),
-    );
-    client.wait_text(pane, "manual-claude-tools-ok").await;
-    client.wait_text(pane, "manual-codex-tools-ok").await;
-    assert!(
-        client
-            .agent_events
-            .iter()
-            .any(|event| event.contains("manual-claude"))
-    );
-    assert!(
-        client
-            .agent_events
-            .iter()
-            .any(|event| event.contains("manual-codex"))
-    );
+    // Independent parents must not impersonate the initial fixture's still-live session.
+    for agent in ["claude", "codex"] {
+        run_manual_agent(&mut client, pane, &home, &tools_directory, agent).await;
+    }
     let notification: Value =
         serde_json::from_slice(&std::fs::read(notification_path).unwrap()).unwrap();
     assert_eq!(
@@ -315,6 +295,53 @@ async fn a_shipped_daemon_provides_hooks_askpass_and_mcp_without_a_separate_shim
             .unwrap()
             .success()
     );
+}
+
+async fn run_manual_agent(
+    client: &mut TestClient,
+    source: PaneId,
+    home: &Path,
+    tools_directory: &Path,
+    agent: &str,
+) {
+    let OpOutcome::PaneCreated { pane_id } = client
+        .op(LayoutOp::Split {
+            pane_id: source,
+            axis: Axis::Vertical,
+            launch: PaneLaunch::Shell { cwd: None },
+        })
+        .await
+    else {
+        panic!("manual agent pane was not created")
+    };
+    client.follow(pane_id).await;
+    client.type_line(
+        pane_id,
+        &format!(
+            "export HOME={} CLAUDE_CONFIG_DIR={} CODEX_HOME={} PATH={}:$PATH; {agent}",
+            agents::shell_quote(&home.to_string_lossy()),
+            agents::shell_quote(&home.join(".claude").to_string_lossy()),
+            agents::shell_quote(&home.join(".codex").to_string_lossy()),
+            agents::shell_quote(&tools_directory.to_string_lossy()),
+        ),
+    );
+    client
+        .wait_text(pane_id, &format!("manual-{agent}-tools-ok"))
+        .await;
+    let expected_pane = agents::PaneId::new(pane_id.0.to_string());
+    let native = agents::NativeSessionId::new(format!("manual-{agent}"));
+    client
+        .until("manual hook belongs to its own pane", |client| {
+            client
+                .agent_events
+                .iter()
+                .filter_map(|json| serde_json::from_str::<agents::AgentEvent>(json).ok())
+                .any(|event| {
+                    event.pane_id.as_ref() == Some(&expected_pane)
+                        && event.session.native_id.as_ref() == Some(&native)
+                })
+        })
+        .await;
 }
 
 #[test]
@@ -367,6 +394,7 @@ fn manual_agent_process() {
         serde_json::to_value(&settings["mcp_servers"][agents::mcp_server_name()]).unwrap()
     };
     let mut process = Command::new(server["command"].as_str().unwrap())
+        .env_clear()
         .args(
             server["args"]
                 .as_array()
