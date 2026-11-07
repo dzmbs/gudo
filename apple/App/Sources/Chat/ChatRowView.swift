@@ -16,15 +16,16 @@ struct ChatRowView: View {
     let isExpanded: Bool
     let toggle: () -> Void
     let actions: ChatRowActions
-    @ScaledMetric(relativeTo: .callout) private var tableLineHeight = 24
-    @ScaledMetric(relativeTo: .caption) private var outputLineHeight = 16
+    private static let maximumIndentationDepth = 12
+    @ScaledMetric(relativeTo: .callout) private var tableLineHeight = DS.Size.proseTableLineHeight
+    @ScaledMetric(relativeTo: .caption) private var outputLineHeight = DS.Size.proseOutputLineHeight
     @Environment(\.terminalTheme) private var terminalTheme
 
     var body: some View {
         content
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 20)
-            .padding(.vertical, 7)
+            .padding(.horizontal, DS.Space.xl)
+            .padding(.vertical, DS.Space.s)
             .foregroundStyle(DS.Palette.text)
             .buttonStyle(ChatRowButtonStyle())
             .contextMenu {
@@ -52,53 +53,56 @@ struct ChatRowView: View {
     @ViewBuilder private func markdown(_ block: ChatMarkdownBlock) -> some View {
         switch block.kind {
         case .paragraph:
-            Text(block.text).font(.body).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
+            Text(block.text).font(DS.Font.prose).lineSpacing(DS.Space.badgeV)
+                .fixedSize(horizontal: false, vertical: true)
         case .heading(let level):
             Text(block.text)
-                .font(level == 1 ? .title2.weight(.semibold) : level == 2 ? .title3.weight(.semibold) : .headline)
-                .padding(.top, 8)
+                .font(level == 1 ? DS.Font.proseTitle : level == 2 ? DS.Font.title : DS.Font.proseHeading)
+                .padding(.top, DS.Space.s)
                 .fixedSize(horizontal: false, vertical: true)
         case .quote:
-            HStack(alignment: .top, spacing: 12) {
-                RoundedRectangle(cornerRadius: 2).fill(DS.Palette.border).frame(width: 3)
-                Text(block.text).font(.body).foregroundStyle(DS.Palette.textSecondary)
+            HStack(alignment: .top, spacing: DS.Space.m) {
+                RoundedRectangle(cornerRadius: DS.Radius.chip).fill(DS.Palette.border)
+                    .frame(width: DS.Size.proseQuoteRule)
+                Text(block.text).font(DS.Font.prose).foregroundStyle(DS.Palette.textSecondary)
             }.fixedSize(horizontal: false, vertical: true)
         case .list:
-            VStack(alignment: .leading, spacing: 7) {
+            VStack(alignment: .leading, spacing: DS.Space.s) {
                 ForEach(Array(block.list.enumerated()), id: \.offset) { _, line in
-                    HStack(alignment: .firstTextBaseline, spacing: 9) {
-                        Text(line.marker).foregroundStyle(DS.Palette.textSecondary).frame(minWidth: 16, alignment: .trailing)
+                    HStack(alignment: .firstTextBaseline, spacing: DS.Space.s) {
+                        Text(line.marker).foregroundStyle(DS.Palette.textSecondary)
+                            .frame(minWidth: DS.Space.l, alignment: .trailing)
                         Text(line.text).frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .padding(.leading, CGFloat(min(line.depth, 12)) * 16)
+                    .padding(.leading, CGFloat(min(line.depth, Self.maximumIndentationDepth)) * DS.Space.l)
                 }
-            }.font(.body).fixedSize(horizontal: false, vertical: true)
+            }.font(DS.Font.prose).fixedSize(horizontal: false, vertical: true)
         case .code(let language):
             if let code = block.code {
                 ChatCodeBlock(code: code, language: language) { actions.selectText(code.text) }
             }
         case .table:
             ScrollView(.horizontal) {
-                Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 10) {
+                Grid(alignment: .leading, horizontalSpacing: DS.Space.xl, verticalSpacing: DS.Space.gap10) {
                     ForEach(Array(block.table.enumerated()), id: \.offset) { index, cells in
                         GridRow {
                             ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
                                 Text(cell).fontWeight(index == 0 ? .semibold : .regular)
                                     .fixedSize(horizontal: true, vertical: true)
-                                    .frame(minWidth: 80, alignment: .leading)
+                                    .frame(minWidth: DS.Size.proseTableColumn, alignment: .leading)
                             }
                         }
                         if index == 0 { Divider().gridCellColumns(cells.count) }
                     }
-                }.font(.callout).padding(14)
+                }.font(DS.Font.proseSecondary).padding(DS.Space.l)
             }
-            .frame(height: CGFloat(block.table.count) * (tableLineHeight + 10) + 30)
-            .background(DS.Palette.raised, in: .rect(cornerRadius: 12))
+            .frame(height: CGFloat(block.table.count) * (tableLineHeight + DS.Space.gap10) + 2 * DS.Space.l)
+            .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.secureBadge))
             if block.hasOmittedContent {
-                Button("Open full table") { actions.selectText(block.source) }.font(.caption)
+                Button("Open full table") { actions.selectText(block.source) }.font(DS.Font.caption)
             }
         case .separator:
-            Rectangle().fill(DS.Palette.separator).frame(height: 1).padding(.vertical, 8)
+            Rectangle().fill(DS.Palette.separator).frame(height: DS.Size.dividerVisible).padding(.vertical, DS.Space.s)
         case .plain:
             Text(block.text).font(DS.Font.literal).fixedSize(horizontal: false, vertical: true)
         }
@@ -106,95 +110,127 @@ struct ChatRowView: View {
 
     @ViewBuilder private func itemContent(_ item: TimelineItem) -> some View {
         switch item.body {
-        case .user(let user):
-            VStack(alignment: .trailing, spacing: 7) {
-                if user.queued { Label("Queued", systemImage: "clock").font(.caption).foregroundStyle(DS.Palette.textSecondary) }
-                Text(verbatim: row.preview ?? user.text).font(.body).padding(.horizontal, 15).padding(.vertical, 11)
-                    .background(DS.Palette.raised, in: .rect(cornerRadius: 18))
-                if row.preview != nil {
-                    Button("Read full prompt") { actions.selectText(user.text) }.font(.caption)
-                }
-                ForEach(Array(user.attachments.prefix(12).enumerated()), id: \.offset) { _, attachment in
-                    Label((attachment.path as NSString).lastPathComponent, systemImage: "paperclip")
-                        .font(.caption).foregroundStyle(DS.Palette.textSecondary).lineLimit(1).truncationMode(.middle)
-                }
-                if user.attachments.count > 12 {
-                    Button("View all \(user.attachments.count) attachments") {
-                        actions.selectText(user.attachments.map(\.path).joined(separator: "\n"))
-                    }.font(.caption)
-                }
-                if item.origin == .terminal { Text("From Terminal").font(.caption2).foregroundStyle(DS.Palette.textTertiary) }
-            }.frame(maxWidth: .infinity, alignment: .trailing).padding(.leading, 28).padding(.vertical, 5)
-        case .assistant(let assistant): Text(verbatim: assistant.text).font(.body)
+        case .user(let user): userContent(item, user: user)
+        case .assistant(let assistant): Text(verbatim: assistant.text).font(DS.Font.prose)
         case .tool(let tool): toolContent(item, tool: tool)
-        case .thinking(let thinking):
-            VStack(alignment: .leading, spacing: 10) {
-                Button(action: toggle) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "sparkle")
-                        Text(thinking.durationMs.map { "Thought for \(duration($0))" } ?? "Thinking")
-                        Spacer(minLength: 8)
-                        if thinking.text != nil { Image(systemName: isExpanded ? "chevron.down" : "chevron.right").font(.caption2) }
-                    }.font(.callout).foregroundStyle(DS.Palette.textSecondary).frame(minHeight: 30)
-                }.buttonStyle(ChatRowButtonStyle()).disabled(thinking.text == nil)
-                if isExpanded, let text = thinking.text {
-                    Text(verbatim: row.preview ?? text).font(.callout).foregroundStyle(DS.Palette.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if row.preview != nil { Button("Read all") { actions.selectText(text) }.font(.caption) }
-                }
-            }
-        case .plan(let plan):
-            let entries = row.planPreview?.entries ?? plan.entries
-            VStack(alignment: .leading, spacing: 11) {
-                Label("Plan", systemImage: "checklist").font(.callout.weight(.semibold))
-                ForEach(Array(entries.prefix(20).enumerated()), id: \.offset) { _, entry in
-                    HStack(alignment: .firstTextBaseline, spacing: 10) {
-                        Image(systemName: entry.status == "Completed" ? "checkmark.circle.fill" : entry.status == "InProgress" ? "circle.dotted" : "circle")
-                            .foregroundStyle(entry.status == "Completed" ? DS.Palette.done : DS.Palette.textSecondary)
-                        Text(verbatim: entry.text).strikethrough(entry.status == "Completed")
-                    }.font(.callout)
-                }
-                if row.planPreview != nil || plan.entries.count > 20 {
-                    Button("Read full plan") { actions.selectText(plan.entries.map(\.text).joined(separator: "\n")) }.font(.caption)
-                }
-            }.padding(15).background(DS.Palette.raised, in: .rect(cornerRadius: 14))
-        case .notice(let notice):
-            VStack(alignment: .leading, spacing: 0) {
-                Label {
-                    Text(verbatim: row.preview ?? notice.text).foregroundStyle(DS.Palette.textSecondary)
-                } icon: {
-                    Image(systemName: notice.kind == "Error" ? "exclamationmark.circle" : "info.circle")
-                        .foregroundStyle(notice.kind == "Error" ? DS.Palette.error : DS.Palette.info)
-                }.font(.callout)
-                if row.preview != nil { Button("Read all") { actions.selectText(notice.text) }.font(.caption) }
-            }
-        case .turnEnd(let end):
-            HStack(spacing: 9) {
-                Text("Worked for \(duration(end.durationMs))")
-                if let tokens = end.outputTokens { Text("· \(tokens.formatted(.number.notation(.compactName))) tokens") }
-                Spacer(minLength: 0)
-                Button("Changes", systemImage: "plus.forwardslash.minus") { actions.showDiff(item.turn) }
-            }.font(.caption).foregroundStyle(DS.Palette.textSecondary).padding(.vertical, 7)
+        case .thinking(let thinking): thinkingContent(thinking)
+        case .plan(let plan): planContent(plan)
+        case .notice(let notice): noticeContent(notice)
+        case .turnEnd(let end): turnEndContent(item, end: end)
         }
     }
 
-    private func toolContent(_ item: TimelineItem, tool: TimelineTool) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+    private func userContent(_ item: TimelineItem, user: TimelineUser) -> some View {
+        VStack(alignment: .trailing, spacing: DS.Space.s) {
+            if user.queued {
+                Label("Queued", systemImage: "clock").font(DS.Font.caption)
+                    .foregroundStyle(DS.Palette.textSecondary)
+            }
+            Text(verbatim: row.preview ?? user.text).font(DS.Font.prose)
+                .padding(.horizontal, DS.Space.l).padding(.vertical, DS.Space.m)
+                .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.panel))
+            if row.preview != nil {
+                Button("Read full prompt") { actions.selectText(user.text) }.font(DS.Font.caption)
+            }
+            ForEach(Array(user.attachments.prefix(12).enumerated()), id: \.offset) { _, attachment in
+                Label((attachment.path as NSString).lastPathComponent, systemImage: "paperclip")
+                    .font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
+                    .lineLimit(1).truncationMode(.middle)
+            }
+            if user.attachments.count > 12 {
+                Button("View all \(user.attachments.count) attachments") {
+                    actions.selectText(user.attachments.map(\.path).joined(separator: "\n"))
+                }.font(DS.Font.caption)
+            }
+            if item.origin == .terminal {
+                Text("From Terminal").font(DS.Font.captionDetail).foregroundStyle(DS.Palette.textTertiary)
+            }
+        }.frame(maxWidth: .infinity, alignment: .trailing)
+            .padding(.leading, DS.Space.xxxl).padding(.vertical, DS.Space.row)
+    }
+
+    private func thinkingContent(_ thinking: TimelineThinking) -> some View {
+        VStack(alignment: .leading, spacing: DS.Space.gap10) {
             Button(action: toggle) {
-                HStack(spacing: 9) {
+                HStack(spacing: DS.Space.s) {
+                    Image(systemName: "sparkle")
+                    Text(thinking.durationMs.map { "Thought for \(duration($0))" } ?? "Thinking")
+                    Spacer(minLength: DS.Space.s)
+                    if thinking.text != nil {
+                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right").font(DS.Font.captionDetail)
+                    }
+                }.font(DS.Font.proseSecondary).foregroundStyle(DS.Palette.textSecondary)
+                    .frame(minHeight: DS.Size.touchTarget)
+            }.buttonStyle(ChatRowButtonStyle()).disabled(thinking.text == nil)
+            if isExpanded, let text = thinking.text {
+                Text(verbatim: row.preview ?? text).font(DS.Font.proseSecondary)
+                    .foregroundStyle(DS.Palette.textSecondary).fixedSize(horizontal: false, vertical: true)
+                if row.preview != nil { Button("Read all") { actions.selectText(text) }.font(DS.Font.caption) }
+            }
+        }
+    }
+
+    private func planContent(_ plan: TimelinePlan) -> some View {
+        let entries = row.planPreview?.entries ?? plan.entries
+        return VStack(alignment: .leading, spacing: DS.Space.m) {
+            Label("Plan", systemImage: "checklist").font(DS.Font.proseSecondaryEmphasis)
+            ForEach(Array(entries.prefix(20).enumerated()), id: \.offset) { _, entry in
+                HStack(alignment: .firstTextBaseline, spacing: DS.Space.gap10) {
+                    Image(systemName: entry.status == "Completed" ? "checkmark.circle.fill"
+                        : entry.status == "InProgress" ? "circle.dotted" : "circle")
+                        .foregroundStyle(entry.status == "Completed" ? DS.Palette.done : DS.Palette.textSecondary)
+                    Text(verbatim: entry.text).strikethrough(entry.status == "Completed")
+                }.font(DS.Font.proseSecondary)
+            }
+            if row.planPreview != nil || plan.entries.count > 20 {
+                Button("Read full plan") {
+                    actions.selectText(plan.entries.map(\.text).joined(separator: "\n"))
+                }.font(DS.Font.caption)
+            }
+        }.padding(DS.Space.l).background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.searchPanel))
+    }
+
+    private func noticeContent(_ notice: TimelineNotice) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Label {
+                Text(verbatim: row.preview ?? notice.text).foregroundStyle(DS.Palette.textSecondary)
+            } icon: {
+                Image(systemName: notice.kind == "Error" ? "exclamationmark.circle" : "info.circle")
+                    .foregroundStyle(notice.kind == "Error" ? DS.Palette.error : DS.Palette.info)
+            }.font(DS.Font.proseSecondary)
+            if row.preview != nil { Button("Read all") { actions.selectText(notice.text) }.font(DS.Font.caption) }
+        }
+    }
+
+    private func turnEndContent(_ item: TimelineItem, end: TimelineTurnEnd) -> some View {
+        HStack(spacing: DS.Space.s) {
+            Text("Worked for \(duration(end.durationMs))")
+            if let tokens = end.outputTokens { Text("· \(tokens.formatted(.number.notation(.compactName))) tokens") }
+            Spacer(minLength: 0)
+            Button("Changes", systemImage: "plus.forwardslash.minus") { actions.showDiff(item.turn) }
+        }.font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary).padding(.vertical, DS.Space.s)
+    }
+
+    private func toolContent(_ item: TimelineItem, tool: TimelineTool) -> some View {
+        VStack(alignment: .leading, spacing: DS.Space.gap10) {
+            Button(action: toggle) {
+                HStack(spacing: DS.Space.s) {
                     Image(systemName: toolGlyph(tool.kind))
-                        .frame(width: 16).foregroundStyle(tool.status == "Failed" ? DS.Palette.error : DS.Palette.textSecondary)
-                    Text(verbatim: tool.title).font(.callout).lineLimit(2).multilineTextAlignment(.leading)
+                        .frame(width: DS.Space.l)
+                        .foregroundStyle(tool.status == "Failed" ? DS.Palette.error : DS.Palette.textSecondary)
+                    Text(verbatim: tool.title).font(DS.Font.proseSecondary)
+                        .lineLimit(2).multilineTextAlignment(.leading)
                         .shimmering(tool.status == "Running", text: tool.title)
-                    Spacer(minLength: 4)
+                    Spacer(minLength: DS.Space.xs)
                     if !tool.diff.isEmpty {
                         Text("+\(tool.diff.reduce(UInt64(0)) { $0 + UInt64($1.additions) })")
                             .foregroundStyle(DS.Palette.done)
                         Text("−\(tool.diff.reduce(UInt64(0)) { $0 + UInt64($1.deletions) })")
                             .foregroundStyle(DS.Palette.error)
                     } else if let time = tool.durationMs { Text(duration(time)).foregroundStyle(DS.Palette.textTertiary) }
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right").font(.caption2).foregroundStyle(DS.Palette.textTertiary)
-                }.font(.caption.monospacedDigit()).frame(minHeight: 30)
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(DS.Font.captionDetail).foregroundStyle(DS.Palette.textTertiary)
+                }.font(DS.Font.meta).frame(minHeight: DS.Size.touchTarget)
             }.buttonStyle(ChatRowButtonStyle())
             if isExpanded {
                 if !tool.input.isEmpty {
@@ -205,16 +241,16 @@ struct ChatRowView: View {
                     ScrollView(.horizontal) {
                         Text(verbatim: output.preview.split(separator: "\n", omittingEmptySubsequences: false).suffix(12).joined(separator: "\n"))
                             .font(DS.Font.literalSmall).foregroundStyle(terminalTheme.foreground)
-                            .fixedSize(horizontal: true, vertical: true).padding(12)
+                            .fixedSize(horizontal: true, vertical: true).padding(DS.Space.m)
                     }
-                    .frame(height: CGFloat(min(output.preview.split(separator: "\n", omittingEmptySubsequences: false).count, 12)) * outputLineHeight + 24)
-                    .background(DS.Palette.terminal, in: .rect(cornerRadius: 10))
+                    .frame(height: CGFloat(min(output.preview.split(separator: "\n", omittingEmptySubsequences: false).count, 12)) * outputLineHeight + 2 * DS.Space.m)
+                    .background(DS.Palette.terminal, in: .rect(cornerRadius: DS.Radius.pane))
                 }
                 HStack {
                     Button("Details", systemImage: "arrow.up.left.and.arrow.down.right") { actions.showTool(item) }
                     Spacer()
                     Button("Show in Terminal", systemImage: "terminal") { actions.showTerminal(tool.commandMark) }
-                }.font(.caption).foregroundStyle(DS.Palette.textSecondary)
+                }.font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
             }
         }
         .accessibilityElement(children: .combine)
@@ -260,8 +296,9 @@ private struct ChatRowButtonStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label.frame(minHeight: 44).contentShape(.rect)
-            .background(RoundedRectangle(cornerRadius: DS.Radius.control).fill(DS.Palette.selection.opacity(configuration.isPressed ? 1 : 0)))
+        configuration.label.frame(minHeight: DS.Size.touchTarget).contentShape(.rect)
+            .background(RoundedRectangle(cornerRadius: DS.Radius.control)
+                .fill(DS.Palette.selection.opacity(configuration.isPressed ? 1 : 0)))
             .animation(reduceMotion ? nil : DS.Motion.press, value: configuration.isPressed)
             .hoverEffect(.highlight)
     }
@@ -276,8 +313,9 @@ private struct ChatCodeBlock: View {
     @ScaledMetric(relativeTo: .callout) private var scale: CGFloat = 1
 
     private var lineHeight: CGFloat {
-        let font = TerminalFont.regular.flatMap { UIFont(name: $0, size: fontSize) } ?? .monospacedSystemFont(ofSize: fontSize, weight: .regular)
-        return ceil((font.lineHeight + 2) * scale)
+        let font = TerminalFont.regular.flatMap { UIFont(name: $0, size: fontSize) }
+            ?? .monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        return ceil((font.lineHeight + DS.Space.xxs) * scale)
     }
 
     var body: some View {
@@ -286,24 +324,26 @@ private struct ChatCodeBlock: View {
                 Text(language?.isEmpty == false ? language ?? "Code" : "Code")
                 Spacer()
                 Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = code.text }
-            }.font(.caption).foregroundStyle(DS.Palette.textSecondary).padding(.horizontal, 13).frame(height: 44)
+            }.font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
+                .padding(.horizontal, DS.Space.m).frame(height: DS.Size.touchTarget)
                 .background(DS.Palette.raised)
             ScrollView(.horizontal) {
                 Text(verbatim: code.preview)
-                    .font(TerminalFont.font(size: fontSize, relativeTo: .callout)).lineSpacing(2 * scale)
+                    .font(TerminalFont.font(size: fontSize, relativeTo: .callout)).lineSpacing(DS.Space.xxs * scale)
                     .foregroundStyle(terminalTheme.foreground)
-                    .fixedSize(horizontal: true, vertical: true).padding(13)
+                    .fixedSize(horizontal: true, vertical: true).padding(DS.Space.m)
             }
-            .frame(height: CGFloat(code.visibleLineCount) * lineHeight + 26)
+            .frame(height: CGFloat(code.visibleLineCount) * lineHeight + 2 * DS.Space.m)
             if code.isTruncated {
                 Button(code.lineCount == 1 ? "Show full code" : "Show all \(code.lineCount) lines", action: showAll)
-                    .font(.caption).padding(.horizontal, 13).frame(maxWidth: .infinity, alignment: .leading)
+                    .font(DS.Font.caption).padding(.horizontal, DS.Space.m)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .foregroundStyle(DS.Palette.textSecondary).background(DS.Palette.raised)
             }
         }
-        .background(DS.Palette.terminal, in: .rect(cornerRadius: 12))
-        .clipShape(.rect(cornerRadius: 12))
-        .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(DS.Palette.hairline) }
+        .background(DS.Palette.terminal, in: .rect(cornerRadius: DS.Radius.secureBadge))
+        .clipShape(.rect(cornerRadius: DS.Radius.secureBadge))
+        .overlay { RoundedRectangle(cornerRadius: DS.Radius.secureBadge).strokeBorder(DS.Palette.hairline) }
     }
 }
 #endif

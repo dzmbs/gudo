@@ -72,6 +72,11 @@ public extension DS {
         /// ...and with a finger (44 pt is the HIG minimum; 20 keeps neighbouring cells tappable).
         public static let dividerHitTouch: CGFloat = 20
         public static let statusGlyph: CGFloat = 12
+        public static let touchTarget: CGFloat = 44
+        public static let proseQuoteRule: CGFloat = 3
+        public static let proseTableColumn: CGFloat = 80
+        public static let proseTableLineHeight: CGFloat = 24
+        public static let proseOutputLineHeight: CGFloat = 16
         /// macOS 26 titlebar tabs are 28 inside a 36 bar.
         public static let tabBar: CGFloat = 36
         public static let tab: CGFloat = 28

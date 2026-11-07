@@ -10,6 +10,13 @@ public extension DS {
         public static let rowTitle = SwiftUI.Font.body
         public static let rowTitleEmphasis = SwiftUI.Font.body.weight(.medium)
         public static let rowSubtitle = SwiftUI.Font.subheadline
+        public static let prose = rowTitle
+        public static let proseTitle = SwiftUI.Font.title2.weight(.semibold)
+        public static let proseHeading = SwiftUI.Font.headline
+        public static let proseSecondary = SwiftUI.Font.callout
+        public static let proseSecondaryEmphasis = proseSecondary.weight(.semibold)
+        public static let caption = SwiftUI.Font.caption
+        public static let captionDetail = SwiftUI.Font.caption2
         #if os(macOS)
         public static let tabTitle = SwiftUI.Font.callout
         #else
