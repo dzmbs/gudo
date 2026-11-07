@@ -109,8 +109,13 @@ nonisolated struct DiffRenderDocument: Sendable {
         rows.append(DiffRenderRow(id: id, fileIndex: fileIndex, content: content, height: height))
     }
 
+    static func noteFont(_ preferred: CTFont?, size: CGFloat) -> CTFont {
+        // The named factory has an internal fallback and cannot return nil.
+        preferred ?? CTFontCreateWithName("Helvetica" as CFString, size, nil)
+    }
+
     private func noteHeight(_ text: String, width: CGFloat, textSize: CGFloat) -> CGFloat {
-        let font = CTFontCreateUIFontForLanguage(.system, textSize, nil)!
+        let font = Self.noteFont(CTFontCreateUIFontForLanguage(.system, textSize, nil), size: textSize)
         let string = NSAttributedString(string: text, attributes: [NSAttributedString.Key(kCTFontAttributeName as String): font])
         let framesetter = CTFramesetterCreateWithAttributedString(string)
         let size = CTFramesetterSuggestFrameSizeWithConstraints(framesetter, CFRange(location: 0, length: 0), nil,

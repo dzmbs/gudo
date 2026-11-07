@@ -1,3 +1,4 @@
+import CoreText
 import DesignSystem
 import SwiftUI
 import XCTest
@@ -19,6 +20,24 @@ final class DiffLayoutTests: XCTestCase {
 
     private func input(_ files: [DiffFile], split: Bool = false) -> DiffRenderInput {
         DiffRenderInput(files: files, collapsed: [], split: split, notes: [], width: 900)
+    }
+
+    func testMissingSystemFontUsesASizedMeasurableFallback() throws {
+        for size in [CGFloat(13), 22] {
+            let font = try XCTUnwrap(DiffRenderDocument.noteFont(nil, size: size))
+            XCTAssertEqual(CTFontGetSize(font), size)
+            let text = NSAttributedString(string: "A review note", attributes: [
+                NSAttributedString.Key(kCTFontAttributeName as String): font
+            ])
+            let line = CTLineCreateWithAttributedString(text)
+            XCTAssertGreaterThan(CTLineGetTypographicBounds(line, nil, nil, nil), 0)
+        }
+    }
+
+    func testAvailableSystemFontIsPreserved() throws {
+        let preferred = CTFontCreateWithName("Helvetica" as CFString, 19, nil)
+        let actual = try XCTUnwrap(DiffRenderDocument.noteFont(preferred, size: 19))
+        XCTAssertTrue(CFEqual(actual, preferred))
     }
 
     func testPositionIndexFindsEveryBoundaryAndLargeJump() {
