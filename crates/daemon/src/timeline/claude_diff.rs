@@ -68,8 +68,15 @@ impl Preview {
         self.retained += 1;
         Some(DiffLine {
             kind,
-            text: text.chars().take(LINE_CHARS_LIMIT).collect(),
+            text: self.line_text(text),
         })
+    }
+
+    fn line_text(&mut self, text: &str) -> String {
+        let mut characters = text.chars();
+        let preview = characters.by_ref().take(LINE_CHARS_LIMIT).collect();
+        self.omitted |= characters.next().is_some();
+        preview
     }
 
     fn hunk(&mut self, patch: &Patch) -> Option<Hunk> {
@@ -98,10 +105,10 @@ impl Preview {
             .take(PREVIEW_LINES_LIMIT)
             .map(|line| DiffLine {
                 kind: LineKind::Added,
-                text: line.chars().take(LINE_CHARS_LIMIT).collect(),
+                text: self.line_text(line),
             })
             .collect();
-        self.omitted = self.additions as usize > PREVIEW_LINES_LIMIT;
+        self.omitted |= self.additions as usize > PREVIEW_LINES_LIMIT;
         Hunk {
             old_start: 0,
             old_lines: 0,
@@ -109,6 +116,43 @@ impl Preview {
             new_lines: self.additions,
             header: String::new(),
             lines,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncated_patch_lines_mark_the_diff_as_incomplete() {
+        for (length, omitted) in [(512, false), (513, true)] {
+            let result = RichResult {
+                file_path: Some("/fixture/file".into()),
+                structured_patch: Some(vec![Patch {
+                    lines: vec![format!("+{}", "🦀".repeat(length))],
+                    ..Patch::default()
+                }]),
+                ..RichResult::default()
+            };
+            let files = result_diff(&result);
+            assert_eq!(files[0].hunks[0].lines[0].text.chars().count(), 512);
+            assert_eq!(files[0].hunks_omitted, omitted);
+        }
+    }
+
+    #[test]
+    fn truncated_created_lines_mark_the_diff_as_incomplete() {
+        for (length, omitted) in [(512, false), (513, true)] {
+            let result = RichResult {
+                file_path: Some("/fixture/file".into()),
+                kind: ResultKind::Create,
+                content: Some("🦀".repeat(length)),
+                ..RichResult::default()
+            };
+            let files = result_diff(&result);
+            assert_eq!(files[0].hunks[0].lines[0].text.chars().count(), 512);
+            assert_eq!(files[0].hunks_omitted, omitted);
         }
     }
 }

@@ -217,7 +217,9 @@ including when no further file event occurs. The 35 ms minimum refresh interval 
 already-pending work; idle workers have neither an active timer nor a strong pane lease.
 Blocking I/O and parsing run on the blocking executor. Reusable tool IDs merge calls and results; complete output remains
 on disk until requested. Inline output is a terminal-control-free tail of at most 4 KiB,
-and inline diff previews retain at most six lines.
+and inline diff previews retain at most six lines. Each preview line retains at most 512
+Unicode scalar values; either line-count or line-text truncation marks the hunks incomplete,
+including created-file previews.
 
 The fixture in `crates/daemon/tests/fixtures/timeline/` is emitted by the installed Claude
 Code CLI against a loopback-only mock API with an isolated home and placeholder key. Its
