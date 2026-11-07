@@ -10,12 +10,13 @@ typealias PlatformView = UIView
 #endif
 
 /// Hosts a pane's long-lived `TerminalView`. Each representable gets its own container and the
-/// view lives in whichever one is in a window (`Pane.placeView`), because SwiftUI creates and
+/// view lives in an active container in a window (`Pane.placeView`), because SwiftUI creates and
 /// removes containers in no particular order when the split tree changes.
 struct TerminalHost {
     let pane: Pane
     let isFocused: Bool
     let workspace: Workspace
+    var isActive = true
 
     final class Coordinator {
         var wasFocused = false
@@ -24,6 +25,14 @@ struct TerminalHost {
     /// Holds the pane's terminal view while on screen and keeps it at its own size.
     final class Container: PlatformView {
         weak var pane: Pane?
+        var isFocusedPane = false
+        var isActive = true {
+            didSet {
+                guard isActive != oldValue, let pane else { return }
+                if isActive, window != nil { pane.placeView(joining: self) }
+                else if !isActive, pane.view.superview === self { pane.view.removeFromSuperview() }
+            }
+        }
 
         #if os(macOS)
         override func viewDidMoveToWindow() {
@@ -62,18 +71,23 @@ struct TerminalHost {
 
     private func makeContainer() -> Container {
         let container = Container()
+        container.isFocusedPane = isFocused
+        container.isActive = isActive
         container.pane = pane
         pane.hosts.add(container)
         return container
     }
 
-    private func update(_ coordinator: Coordinator) {
+    private func update(_ container: Container, coordinator: Coordinator) {
+        container.isFocusedPane = isFocused
+        container.isActive = isActive
+        if isActive { pane.placeView(joining: container) }
         #if os(iOS)
-        // The cursor follows the focused pane even while the software keyboard is down.
-        pane.view.isSelected = isFocused
+        // A retiring container must not change the selection of the view in its new host.
+        if pane.view.superview === container { pane.view.isSelected = isFocused && isActive }
         #endif
-        let gainedFocus = isFocused && !coordinator.wasFocused
-        coordinator.wasFocused = isFocused
+        let gainedFocus = isActive && isFocused && !coordinator.wasFocused
+        coordinator.wasFocused = isActive && isFocused
         guard gainedFocus, workspace.claimsKeyboardFocus || PaneDrawing.canvas(in: pane) != nil else { return }
         let view = pane.view
         // The container joins its window after this update, so focus on a later turn: when the
@@ -82,7 +96,7 @@ struct TerminalHost {
         Task { @MainActor [workspace] in
             for attempt in 0..<20 {
                 if attempt > 0 { try? await Task.sleep(for: .milliseconds(16)) }
-                guard workspace.focusedPane == pane.id else { return }
+                guard container.isActive, workspace.focusedPane == pane.id else { return }
                 if let canvas = PaneDrawing.canvas(in: pane) {
                     canvas.takeKeyboard()
                     return
@@ -104,19 +118,20 @@ struct TerminalHost {
 }
 
 extension Pane {
-    /// Keeps `view` in a host container that is in a window, preferring a newcomer joining the
+    /// Keeps `view` in an active host container in a window, preferring a newcomer joining the
     /// same window.
     ///
     /// The newcomer wins because SwiftUI rebuilds a pane's place by inserting the new
     /// representable on top and keeping the old one in the window while its removal animates.
     /// Staying in the old container would leave the topmost one empty, swallowing wheel and clicks.
     func placeView(joining newcomer: TerminalHost.Container? = nil) {
+        if let newcomer, !newcomer.isActive { return }
         let target: TerminalHost.Container
-        if let current = view.superview as? TerminalHost.Container, current.window != nil, hosts.contains(current) {
+        if let current = view.superview as? TerminalHost.Container, current.isActive, current.window != nil, hosts.contains(current) {
             guard let newcomer, newcomer !== current, newcomer.window === current.window else { return }
             target = newcomer
         } else {
-            guard let onScreen = hosts.allObjects.first(where: { $0.window != nil }) else { return }
+            guard let onScreen = hosts.allObjects.first(where: { $0.isActive && $0.window != nil }) else { return }
             target = onScreen
         }
         // Moving the view resigns first responder; a terminal being typed into keeps the keyboard.
@@ -129,6 +144,9 @@ extension Pane {
         view.removeFromSuperview()
         view.frame = target.bounds
         target.addSubview(view)
+        #if os(iOS)
+        view.isSelected = target.isFocusedPane
+        #endif
         #if os(macOS)
         // AppKit hands first responder to the window as soon as the old container leaves it, so
         // the focused pane takes it back whenever nothing else in the window has it. Only the
@@ -161,7 +179,7 @@ extension Pane {
 #if os(macOS)
 extension TerminalHost: NSViewRepresentable {
     func makeNSView(context: Context) -> Container { makeContainer() }
-    func updateNSView(_ container: Container, context: Context) { update(context.coordinator) }
+    func updateNSView(_ container: Container, context: Context) { update(container, coordinator: context.coordinator) }
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: Container, context: Context) -> CGSize? {
         proposal.replacingUnspecifiedDimensions()
     }
@@ -169,7 +187,7 @@ extension TerminalHost: NSViewRepresentable {
 #else
 extension TerminalHost: UIViewRepresentable {
     func makeUIView(context: Context) -> Container { makeContainer() }
-    func updateUIView(_ container: Container, context: Context) { update(context.coordinator) }
+    func updateUIView(_ container: Container, context: Context) { update(container, coordinator: context.coordinator) }
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: Container, context: Context) -> CGSize? {
         proposal.replacingUnspecifiedDimensions()
     }

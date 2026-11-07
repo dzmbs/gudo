@@ -72,6 +72,13 @@ local to the screen; drafts do not cross hosts.
 
 ## Touch presentation
 
+`TerminalHost` can park its long-lived terminal view outside the window hierarchy while the
+backend and VT feed remain alive. Inactive containers neither take the view from an active
+host nor give it their changing layout; removal stops the terminal's display link and releases
+GPU resources through its existing lifecycle. Reactivation reuses the same view and backend.
+The pane switch must also preserve keyboard geometry and gate pending IME composition before
+parking; this container support alone is not the integrated Terminal/Chat switch.
+
 `ChatViewController` owns one normal-orientation reusable collection and a composer host pinned
 to the keyboard layout guide. A display-link coalesces pending frames; stopped views release
 that clock. Inactive presentation parks it and retains only the latest pending frame. Changed-row values and order revisions keep content-only updates independent of
