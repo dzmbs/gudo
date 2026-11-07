@@ -299,6 +299,8 @@ pub(super) struct RichResult {
 pub(super) enum ResultKind {
     Create,
     #[default]
+    #[serde(skip)]
+    Missing,
     #[serde(other)]
     Other,
 }

@@ -26,6 +26,15 @@ no timeline traffic.
   must hold at least four bytes. Rust retains a validated `OutputHandle` value and parses
   incoming opaque request strings once. Its JSON/postcard encoding remains the existing
   `epoch:record-offset:tool-id` string; assigning an epoch replaces it, never nests prefixes.
+- `TimelineToolDiff` reads complete recorded changes from that same result handle, not the
+  working tree or a numeric repository capture. It requires `DaemonFeatures::TIMELINE_TOOL_DIFF`;
+  clients construct no request without both this feature and the timeline feature. Request67,
+  response37 and feature28 append to the protocol; legacy golden bytes and schema 1 stay unchanged.
+  View on the watched pane, session identity, since-join, file rewrite and epoch checks apply.
+  Rich metadata must belong to exactly one matching tool result. The whole selection is rejected
+  when unavailable, ambiguous, malformed or over its 1 MiB value allowance, 512 hunks, 20,000 lines
+  or 8 KiB per UTF8 line. It never returns another truncated preview as a complete result.
+  These charges are not an allocator/RSS bound. The four actual-write reply permits also cover it.
 
 Items have stable agent IDs and revisions. Operations carry an epoch and sequence. File
 replacement, truncation, a changed session or a rewritten tail produces a snapshot with a
@@ -153,8 +162,10 @@ VT geometry and zero resize/claim/input calls. Real paired no-SIGWINCH acceptanc
 Tool details read output through the existing authenticated same-pane output API, one bounded
 native page at a time, with Input/Output tabs and Beginning/Previous/Next navigation. Closing the
 sheet invalidates pending replies. Diff details use read-only native unified/side-by-side rows,
-with independent file collapse and explicit preview/omission notices. Complete-diff fetching,
-device snapshot persistence and the rest of the composer remain pending.
+with independent file collapse and explicit preview/omission notices. Native complete-diff fetching,
+device snapshot persistence and the rest of the composer remain pending. The daemon exposes complete
+recorded per-tool changes; that does not establish a complete turn or map opaque timeline turns to
+numeric repository captures.
 Turn-summary Changes uses the opaque turn identity, not a file path. Tool-file selections also
 carry the owning item identity. Missing or empty turn correlation offers Terminal rather than
 showing changes from other visible turns. Command-mark lookup is associated with the exact

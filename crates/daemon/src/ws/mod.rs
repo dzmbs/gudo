@@ -193,7 +193,8 @@ pub(crate) async fn handle(
         | Request::TimelineWatchVersioned { .. }
         | Request::TimelineUnwatch { .. }
         | Request::TimelineItemsBefore { .. }
-        | Request::TimelineToolOutput { .. }) => crate::timeline::handle(core, conn, request).await,
+        | Request::TimelineToolOutput { .. }
+        | Request::TimelineToolDiff { .. }) => crate::timeline::handle(core, conn, request).await,
         Request::ListPorts => Ok(Response::Ports(ports::scan(core).await)),
         Request::EditorStatus => {
             let mut editors = ws.editors.status(&core.cfg).await;

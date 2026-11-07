@@ -111,10 +111,10 @@ still names the user's actual home. Dedicated launches retain their per-launch i
 Tests and capture tools must also supply private home and agent configuration directories.
 
 **Agent timelines.** Reading a timeline requires View on its pane. Since-join guests receive no
-older items or output. The captured session selects the file inside that agent account's
+older items, output or recorded changes. The captured session selects the file inside that agent account's
 transcript directory; requests carry scoped cursors and output handles, never file paths.
 Canonical roots, matching session filenames, no-follow opens and file identity checks constrain
-reads. Output handles admit only main-conversation user tool-result records; sidechains and unknown
+reads. Result handles admit only main-conversation user tool-result records; sidechains and unknown
 record kinds stay unreadable even when a client guesses a handle. Native watches and workers stop with their last subscription. Push mailboxes and bulk
 reply permits bound memory while a client stops reading. See [Agent timelines](../CHAT.md).
 

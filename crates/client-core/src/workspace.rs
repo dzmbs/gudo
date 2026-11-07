@@ -879,6 +879,17 @@ impl Client {
             WorkspaceResponse::TimelineOutput(output) => output)
     }
 
+    /// Reads complete bounded changes from one recorded tool result, not the working tree.
+    pub async fn timeline_tool_diff(
+        &self,
+        pane_id: PaneId,
+        handle: String,
+    ) -> Result<Vec<proto::FileDiff>, WsError> {
+        let request = crate::timeline_diff::request(self.inner.daemon_features(), pane_id, handle)?;
+        expect!(self.workspace(request).await?,
+            WorkspaceResponse::TimelineDiff(files) => files)
+    }
+
     fn require_timeline(&self) -> Result<(), WsError> {
         if self.daemon_has(proto::DaemonFeatures::AGENT_TIMELINE) {
             return Ok(());

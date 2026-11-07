@@ -353,6 +353,10 @@ pub enum WorkspaceRequest {
         pane_id: PaneId,
         version: u16,
     },
+    TimelineToolDiff {
+        pane_id: PaneId,
+        handle: String,
+    },
 }
 
 /// The answer to a [`WorkspaceRequest`].
@@ -428,6 +432,7 @@ pub enum WorkspaceResponse {
     PowerStatus(crate::PowerStatus),
     Timeline(crate::TimelineSnapshot),
     TimelineOutput(crate::TimelineToolOutput),
+    TimelineDiff(Vec<FileDiff>),
 }
 
 /// A command that registers or removes the daemon's MCP server with an agent.

@@ -346,6 +346,37 @@ impl Transcript {
         output_page(&result_text(&record, block), offset, length)
     }
 
+    pub fn tool_diff(
+        &mut self,
+        handle: &str,
+        since: Option<UnixMillis>,
+    ) -> Result<Vec<proto::FileDiff>, WsError> {
+        let handle = handle
+            .parse::<proto::OutputHandle>()
+            .map_err(|error| WsError::Invalid(error.to_string()))?;
+        let record = self.output_record(&handle)?;
+        self.validate_output_scope(&record, since)?;
+        let mut results = record
+            .message
+            .content
+            .blocks()
+            .iter()
+            .filter(|block| block.kind == BlockKind::ToolResult);
+        let matches = results
+            .next()
+            .is_some_and(|block| block.tool_use_id.as_deref() == Some(handle.id()));
+        if !matches || results.next().is_some() {
+            return Err(WsError::Unavailable(
+                "The recorded change is not correlated with this tool. Open Terminal.".into(),
+            ));
+        }
+        let result = record
+            .tool_use_result
+            .rich()
+            .ok_or_else(|| WsError::NotFound("recorded changes".into()))?;
+        super::complete_diff::recorded_diff(result)
+    }
+
     fn output_record(&mut self, handle: &proto::OutputHandle) -> Result<Record, WsError> {
         let metadata = std::fs::metadata(&self.path).map_err(failed)?;
         if self.was_rewritten(&metadata)? || handle.epoch() != self.cursor.epoch {
@@ -608,3 +639,7 @@ fn failed(error: impl std::fmt::Display) -> WsError {
 #[cfg(test)]
 #[path = "transcript_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "complete_diff_read_tests.rs"]
+mod complete_diff_read_tests;

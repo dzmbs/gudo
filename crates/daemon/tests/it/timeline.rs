@@ -394,6 +394,58 @@ async fn a_failed_worker_is_not_reused_when_its_connection_watches_again() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn complete_recorded_changes_are_read_from_the_owning_tool_result() {
+    let harness = Harness::start().await;
+    let record = json!({"type": "user", "sessionId": SESSION, "timestamp": "2000-01-01T00:00:00Z",
+        "message": {"content": [{"type": "tool_result", "tool_use_id": "full-edit", "content": "changed"}]},
+        "toolUseResult": {"filePath": "/fixture/recorded-only", "structuredPatch": [
+            {"oldStart": 0, "oldLines": 0, "newStart": 1, "newLines": 20, "lines": vec!["+line"; 20]}]}});
+    let mut writer = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&harness.transcript)
+        .unwrap();
+    writeln!(writer, "{record}").unwrap();
+    drop(writer);
+    let snapshot = harness
+        .owner
+        .client
+        .timeline_watch(harness.pane)
+        .await
+        .unwrap();
+    let item = snapshot
+        .items
+        .iter()
+        .find(|item| item.id == "full-edit")
+        .unwrap();
+    let TimelineBody::Tool(tool) = &item.body else {
+        panic!("tool result")
+    };
+    assert_eq!(tool.diff[0].hunks[0].lines.len(), 6);
+    let handle = tool.output.as_ref().unwrap().handle.to_string();
+    let files = harness
+        .owner
+        .client
+        .timeline_tool_diff(harness.pane, handle.clone())
+        .await
+        .unwrap();
+    assert_eq!(files[0].path, "/fixture/recorded-only");
+    assert_eq!(files[0].hunks[0].lines.len(), 20);
+    assert!(!files[0].hunks_omitted);
+    let guest = harness.guest(History::Full).await;
+    guest.client.timeline_watch(harness.pane).await.unwrap();
+    assert_eq!(
+        guest
+            .client
+            .timeline_tool_diff(harness.pane, handle)
+            .await
+            .unwrap(),
+        files
+    );
+    drop(guest);
+    harness.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn two_clients_mirror_one_transcript_and_fetch_output_over_the_real_protocol() {
     let harness = Harness::start().await;
     let (listener, mut first_events) = WorkspaceEventQueue::channel();
@@ -479,11 +531,34 @@ async fn a_scoped_viewer_can_read_only_its_pane_and_since_join_history() {
         panic!()
     };
     let old_output = tool.output.as_ref().unwrap().handle.to_string();
+    let edit = owner_snapshot
+        .items
+        .iter()
+        .find(|item| item.id == "toolu_fixture_edit")
+        .unwrap();
+    let TimelineBody::Tool(edit) = &edit.body else {
+        panic!("edit result")
+    };
+    let old_diff = edit.output.as_ref().unwrap().handle.to_string();
     let guest = harness.guest(History::SinceJoin).await;
     let (listener, mut events) = WorkspaceEventQueue::channel();
     guest.client.set_workspace_listener(listener);
     let snapshot = guest.client.timeline_watch(harness.pane).await.unwrap();
     assert!(snapshot.items.is_empty());
+    assert!(matches!(
+        guest
+            .client
+            .timeline_tool_diff(harness.pane, old_diff.clone())
+            .await,
+        Err(WsError::Denied(_))
+    ));
+    assert!(matches!(
+        guest
+            .client
+            .timeline_tool_diff(PaneId(harness.pane.0 + 1000), old_diff)
+            .await,
+        Err(WsError::Denied(_))
+    ));
     assert!(matches!(
         guest
             .client

@@ -418,5 +418,7 @@ bitset! {
         ACTIVE_SIZING = 26;
         /// Accepts TimelineWatchVersioned with the peer's highest readable schema.
         VERSIONED_TIMELINE = 27;
+        /// Reads bounded complete recorded tool changes through a scoped result handle.
+        TIMELINE_TOOL_DIFF = 28;
     }
 }

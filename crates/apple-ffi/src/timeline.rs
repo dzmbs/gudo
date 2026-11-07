@@ -37,6 +37,21 @@ impl DaemonClient {
         .await
     }
 
+    pub async fn timeline_tool_diff(
+        &self,
+        pane_id: u64,
+        handle: String,
+    ) -> Result<String, WorkspaceError> {
+        self.ws_call(|client| async move {
+            encoded(
+                &client
+                    .timeline_tool_diff(proto::PaneId(pane_id), handle)
+                    .await?,
+            )
+        })
+        .await
+    }
+
     pub async fn timeline_tool_output(
         &self,
         pane_id: u64,

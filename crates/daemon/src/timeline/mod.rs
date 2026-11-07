@@ -2,6 +2,7 @@ mod claude;
 mod claude_diff;
 mod claude_record;
 mod commands;
+mod complete_diff;
 mod native_watch;
 mod record_stream;
 mod text;
@@ -227,13 +228,16 @@ pub(crate) fn bulk_request(request: &WorkspaceRequest) -> bool {
             | WorkspaceRequest::TimelineWatchVersioned { .. }
             | WorkspaceRequest::TimelineItemsBefore { .. }
             | WorkspaceRequest::TimelineToolOutput { .. }
+            | WorkspaceRequest::TimelineToolDiff { .. }
     )
 }
 
 pub(crate) fn bulk_reply(result: &Result<WorkspaceResponse, WsError>) -> bool {
     matches!(
         result,
-        Ok(WorkspaceResponse::Timeline(_) | WorkspaceResponse::TimelineOutput(_))
+        Ok(WorkspaceResponse::Timeline(_)
+            | WorkspaceResponse::TimelineOutput(_)
+            | WorkspaceResponse::TimelineDiff(_))
     )
 }
 
@@ -684,6 +688,14 @@ pub(crate) async fn handle(
                 transcript
                     .output(&handle, offset, len, since)
                     .map(WorkspaceResponse::TimelineOutput)
+            })
+            .await
+        }
+        WorkspaceRequest::TimelineToolDiff { pane_id, handle } => {
+            read_timeline(core, connection, pane_id, move |transcript, since| {
+                transcript
+                    .tool_diff(&handle, since)
+                    .map(WorkspaceResponse::TimelineDiff)
             })
             .await
         }

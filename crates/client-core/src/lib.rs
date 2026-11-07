@@ -44,6 +44,7 @@ pub mod push;
 mod resend;
 pub mod script;
 mod ssh_pane;
+mod timeline_diff;
 mod upgrade;
 pub mod vscode;
 mod workspace;
