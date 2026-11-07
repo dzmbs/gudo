@@ -1,5 +1,135 @@
 use super::*;
+use notify::Watcher;
 use proto::{TimelineBody, TimelineField, TimelineItem, TimelineOrigin};
+use std::io::Write;
+
+fn test_source(root: &std::path::Path) -> Source {
+    Source {
+        native_session: "test".into(),
+        path: None,
+        config_directory: root.into(),
+        working_directory: root.into(),
+        watch_directory: root.into(),
+    }
+}
+
+#[test]
+fn a_runtime_watch_failure_is_terminal_instead_of_a_stale_live_session() {
+    let root = tempfile::tempdir().unwrap();
+    let source = test_source(root.path());
+    let (wake, _wakes) = mpsc::channel(1);
+    let mut state = LiveState::new(source.clone(), 7, wake).unwrap();
+    state.watcher.failed.store(true, Ordering::Release);
+    assert!(matches!(
+        state.refresh(source),
+        Err(WsError::Unavailable(_))
+    ));
+}
+
+#[test]
+fn known_backlog_reschedules_itself_without_another_native_file_event() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("test.jsonl");
+    std::fs::write(
+        &path,
+        "{\"type\":\"user\",\"uuid\":\"first\",\"message\":{\"content\":\"Hello\"}}\n",
+    )
+    .unwrap();
+    let mut source = test_source(root.path());
+    source.path = Some(path.clone());
+    let (wake, mut wakes) = mpsc::channel(1);
+    let mut state = LiveState::new(source.clone(), 7, wake).unwrap();
+    // Deliberately detach the real backend to isolate the bounded reader's continuation.
+    state.watcher._watcher.unwatch(root.path()).unwrap();
+    while wakes.try_recv().is_ok() {}
+    let mut writer = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    writer
+        .write_all(&vec![b'x'; record_stream::RECORD_BYTES_LIMIT + 1024])
+        .unwrap();
+    writer
+        .write_all(b"\n{\"type\":\"user\",\"uuid\":\"last\",\"message\":{\"content\":\"Done\"}}\n")
+        .unwrap();
+    assert!(state.refresh(source.clone()).unwrap().is_empty());
+    assert!(state.transcript.as_ref().unwrap().has_backlog());
+    assert!(
+        wakes.try_recv().is_ok(),
+        "known bytes require a continuation, not a future file event"
+    );
+    let operations = state.refresh(source).unwrap();
+    assert!(
+        matches!(operations.as_slice(), [TimelineOp::Upsert { item, .. }] if item.id == "last")
+    );
+    assert!(!state.transcript.as_ref().unwrap().has_backlog());
+    assert!(matches!(
+        wakes.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+}
+
+#[tokio::test]
+async fn only_matching_agent_events_or_native_wakes_refresh_a_pane() {
+    let (wake, mut wakes) = mpsc::channel(1);
+    let (events, mut receiver) = broadcast::channel(4);
+    events.send(Event::PaneMeta(PaneId(2))).unwrap();
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(20),
+            wait_for_wake(PaneId(1), &mut wakes, &mut receiver)
+        )
+        .await
+        .is_err()
+    );
+    events.send(Event::PaneMeta(PaneId(1))).unwrap();
+    assert!(wait_for_wake(PaneId(1), &mut wakes, &mut receiver).await);
+    wake.try_send(()).unwrap();
+    assert!(wait_for_wake(PaneId(1), &mut wakes, &mut receiver).await);
+}
+
+#[test]
+fn coalescing_drains_are_bounded_and_leave_later_events_pending() {
+    let (wake, mut wakes) = mpsc::channel(1);
+    let (events, mut receiver) = broadcast::channel(128);
+    wake.try_send(()).unwrap();
+    for _ in 0..MAX_COALESCED_EVENTS + 2 {
+        events.send(Event::PaneMeta(PaneId(1))).unwrap();
+    }
+    drain_pending(&mut wakes, &mut receiver);
+    assert!(matches!(
+        wakes.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+    assert_eq!(receiver.len(), 2);
+}
+
+#[tokio::test]
+async fn an_idle_timeline_does_not_refresh_on_a_periodic_clock() {
+    let (_wake, mut wakes) = mpsc::channel(1);
+    let (_events, mut events) = broadcast::channel(4);
+    let result = tokio::time::timeout(
+        Duration::from_millis(850),
+        wait_for_wake(PaneId(1), &mut wakes, &mut events),
+    )
+    .await;
+    assert!(
+        result.is_err(),
+        "an idle timeline must wait for native or agent events, not a clock tick"
+    );
+}
+
+#[test]
+fn a_missing_native_watch_is_unavailable_instead_of_silently_polling() {
+    let root = tempfile::tempdir().unwrap();
+    let mut source = test_source(root.path());
+    source.watch_directory = root.path().join("missing");
+    let (wake, _wakes) = mpsc::channel(1);
+    assert!(matches!(
+        LiveState::new(source, 7, wake),
+        Err(WsError::Unavailable(_))
+    ));
+}
 
 fn session() -> TimelineSession {
     TimelineSession {
@@ -229,13 +359,7 @@ fn since_join_filtering_advances_the_cursor_without_exposing_hidden_items() {
 #[test]
 fn a_new_agent_pane_can_open_chat_before_its_first_transcript_exists() {
     let root = tempfile::tempdir().unwrap();
-    let source = Source {
-        native_session: "test".into(),
-        path: None,
-        config_directory: root.path().into(),
-        working_directory: root.path().into(),
-        watch_directory: root.path().into(),
-    };
+    let source = test_source(root.path());
     let (wake, _) = mpsc::channel(1);
     let mut state = LiveState::new(source.clone(), 7, wake).unwrap();
     assert!(state.snapshot(None).items.is_empty());
@@ -280,13 +404,7 @@ fn bulk_replies_keep_their_budget_until_written_even_with_reused_request_ids() {
 }
 
 fn test_timeline(root: &std::path::Path) -> Arc<Timeline> {
-    let source = Source {
-        native_session: "test".into(),
-        path: None,
-        config_directory: root.into(),
-        working_directory: root.into(),
-        watch_directory: root.into(),
-    };
+    let source = test_source(root);
     let (wake, _) = mpsc::channel(1);
     Arc::new(Timeline {
         state: Mutex::new(LiveState::new(source, 7, wake).unwrap()),

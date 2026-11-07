@@ -2,6 +2,7 @@ mod claude;
 mod claude_diff;
 mod claude_record;
 mod commands;
+mod native_watch;
 mod record_stream;
 mod text;
 mod transcript;
@@ -13,7 +14,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
-use notify::Watcher;
 use proto::{
     AgentKind, Caps, PaneId, ServerCtl, TimelineCursor, TimelineOp, TimelineSession,
     TimelineSnapshot, TimelineUpdate, UnixMillis, WorkspaceRequest, WorkspaceResponse, WsError,
@@ -23,6 +23,7 @@ use tokio::task::AbortHandle;
 
 use crate::core::{Core, Event, lock};
 use crate::ws::ConnCtx;
+use native_watch::NativeWatch;
 use transcript::Transcript;
 
 static NEXT_EPOCH: AtomicU64 = AtomicU64::new(1);
@@ -32,6 +33,8 @@ const MAX_PUSH_BYTES: usize = 1024 * 1024;
 const MAX_BULK_REQUESTS: usize = 4;
 const MAX_IO_RETRIES: usize = 3;
 const IO_RETRY_DELAY: Duration = Duration::from_millis(250);
+const MIN_REFRESH_INTERVAL: Duration = Duration::from_millis(35);
+const MAX_COALESCED_EVENTS: usize = 64;
 
 #[derive(Default)]
 pub(crate) struct Timelines {
@@ -249,11 +252,12 @@ struct LiveState {
     cursor: TimelineCursor,
     waiting_session: TimelineSession,
     wake: mpsc::Sender<()>,
-    watcher: Option<notify::RecommendedWatcher>,
+    watcher: NativeWatch,
 }
 
 impl LiveState {
     fn new(source: Source, epoch: u64, wake: mpsc::Sender<()>) -> Result<Self, WsError> {
+        let watcher = NativeWatch::new(&source.watch_directory, wake.clone())?;
         let cursor = TimelineCursor { epoch, sequence: 0 };
         let commands = commands::discover(&source.config_directory, &source.working_directory);
         let mut transcript = source
@@ -272,7 +276,6 @@ impl LiveState {
             permission_mode: None,
             commands,
         };
-        let watcher = native_watch(&source.watch_directory, wake.clone());
         Ok(Self {
             source,
             transcript,
@@ -302,8 +305,9 @@ impl LiveState {
     }
 
     fn refresh(&mut self, source: Source) -> Result<Vec<TimelineOp>, WsError> {
+        self.watcher.check()?;
         if source.native_session != self.source.native_session || source.path != self.source.path {
-            let epoch = self.snapshot(None).cursor.epoch.wrapping_add(1);
+            let epoch = self.cursor().epoch.wrapping_add(1);
             *self = Self::new(source, epoch, self.wake.clone())?;
             return Ok(vec![TimelineOp::Snapshot(self.snapshot(None))]);
         }
@@ -311,6 +315,13 @@ impl LiveState {
             .transcript
             .as_mut()
             .map_or(Ok(Vec::new()), Transcript::refresh)?;
+        if self
+            .transcript
+            .as_ref()
+            .is_some_and(Transcript::has_backlog)
+        {
+            let _ = self.wake.try_send(());
+        }
         if source.config_directory != self.source.config_directory
             || source.working_directory != self.source.working_directory
         {
@@ -329,7 +340,7 @@ impl LiveState {
             }
         }
         if source.watch_directory != self.source.watch_directory {
-            self.watcher = native_watch(&source.watch_directory, self.wake.clone());
+            self.watcher = NativeWatch::new(&source.watch_directory, self.wake.clone())?;
         }
         self.source = source;
         Ok(operations)
@@ -387,10 +398,12 @@ async fn run(
     };
     let mut events = initial_core.events.subscribe();
     drop(initial_core);
-    let mut fallback = tokio::time::interval(Duration::from_millis(750));
-    fallback.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut next_refresh = tokio::time::Instant::now();
     let mut failures = 0;
-    while wait_for_wake(pane, &mut fallback, &mut wakes, &mut events).await {
+    while wait_for_wake(pane, &mut wakes, &mut events).await {
+        // Throttle only already-pending work; idle timelines have no active timer or strong lease.
+        tokio::time::sleep_until(next_refresh).await;
+        drain_pending(&mut wakes, &mut events);
         let (Some(core), Some(timeline)) = (core.upgrade(), timeline.upgrade()) else {
             return;
         };
@@ -408,19 +421,17 @@ async fn run(
             Err(_) => return,
         }
         drop(timeline);
-        tokio::time::sleep(Duration::from_millis(35)).await;
+        next_refresh = tokio::time::Instant::now() + MIN_REFRESH_INTERVAL;
     }
 }
 
 async fn wait_for_wake(
     pane: PaneId,
-    fallback: &mut tokio::time::Interval,
     wakes: &mut mpsc::Receiver<()>,
     events: &mut broadcast::Receiver<Event>,
 ) -> bool {
     loop {
         tokio::select! {
-            _ = fallback.tick() => return true,
             wake = wakes.recv() => return wake.is_some(),
             event = events.recv() => match event {
                 Ok(Event::PaneMeta(changed)
@@ -430,6 +441,17 @@ async fn wait_for_wake(
                 Err(broadcast::error::RecvError::Closed) => return false,
                 _ => {},
             },
+        }
+    }
+}
+
+fn drain_pending(wakes: &mut mpsc::Receiver<()>, events: &mut broadcast::Receiver<Event>) {
+    // Drain before reading current state, never after it: a concurrent append must stay queued.
+    let _ = wakes.try_recv();
+    for _ in 0..MAX_COALESCED_EVENTS {
+        match events.try_recv() {
+            Ok(_) | Err(broadcast::error::TryRecvError::Lagged(_)) => {}
+            Err(_) => break,
         }
     }
 }
@@ -540,22 +562,6 @@ fn source(core: &Core, pane: PaneId) -> Result<Source, WsError> {
         working_directory,
         watch_directory,
     })
-}
-
-fn native_watch(
-    path: &std::path::Path,
-    wake: mpsc::Sender<()>,
-) -> Option<notify::RecommendedWatcher> {
-    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-        if event.is_ok() {
-            let _ = wake.try_send(());
-        }
-    })
-    .ok()?;
-    watcher
-        .watch(path, notify::RecursiveMode::NonRecursive)
-        .ok()?;
-    Some(watcher)
 }
 
 fn negotiate_request(request: WorkspaceRequest) -> Result<WorkspaceRequest, WsError> {

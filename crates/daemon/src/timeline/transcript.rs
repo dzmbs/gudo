@@ -124,6 +124,11 @@ impl Transcript {
         self.cursor
     }
 
+    /// Returns whether the last bounded read left known bytes to consume without another file event.
+    pub fn has_backlog(&self) -> bool {
+        self.stream.scan_offset() < self.observed_length
+    }
+
     pub fn snapshot(&self, limit: usize, since: Option<UnixMillis>) -> TimelineSnapshot {
         self.select_records(
             self.order.iter().filter_map(|id| self.items.get(id)),

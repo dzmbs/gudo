@@ -165,13 +165,18 @@ transcript.
 
 The parser recognizes user messages, assistant text and thinking, tool calls and results,
 structured edit patches, plans, title and permission metadata, turn duration and compaction.
-Unknown record and content-block kinds are skipped. Invalid JSON or unsupported message
-sizes yield a short Terminal fallback note, not an agent restart. Thinking signatures and
-redacted data are never exposed.
+Unknown or malformed records are skipped without ending the watch. Unsupported visible
+content and oversized messages produce bounded Terminal notices, not an agent restart.
+Thinking signatures and redacted data are never exposed.
 
-Native file notifications wake an incremental byte-offset reader. Agent events and a timed
-check cover session changes and missed file notifications. Blocking I/O and parsing run on
-the blocking executor. Reusable tool IDs merge calls and results; complete output remains
+Native file notifications and scoped agent events wake an incremental byte-offset reader;
+there is no periodic filesystem/session poll. Native subscriptions attach before the initial
+read and queue one reconciliation to cover changes during attachment. Installation or reported
+backend failures make Chat unavailable instead of silently losing coverage. Read/open events
+cannot wake the reader back into itself. Known bounded-read backlogs queue their own continuation,
+including when no further file event occurs. The 35 ms minimum refresh interval coalesces only
+already-pending work; idle workers have neither an active timer nor a strong pane lease.
+Blocking I/O and parsing run on the blocking executor. Reusable tool IDs merge calls and results; complete output remains
 on disk until requested. Inline output is a terminal-control-free tail of at most 4 KiB,
 and inline diff previews retain at most six lines.
 
