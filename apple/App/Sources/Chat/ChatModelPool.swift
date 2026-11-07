@@ -58,8 +58,7 @@ final class ChatModelPool {
             entries[owner] = Entry(model: TimelineModel(pane: pane, valueByteLimit: modelValueByteLimit))
         }
         guard let entry = entries[owner] else { return nil }
-        recency += 1
-        entry.recency = recency
+        touch(entry)
         entry.users += 1
         return ChatModelLease(model: entry.model, owner: owner, pool: self)
     }
@@ -67,6 +66,14 @@ final class ChatModelPool {
     fileprivate func release(_ owner: UUID) {
         guard let entry = entries[owner], entry.users > 0 else { return }
         entry.users -= 1
-        if entry.users == 0 { entry.model.stop() }
+        if entry.users == 0 {
+            touch(entry)
+            entry.model.stop()
+        }
+    }
+
+    private func touch(_ entry: Entry) {
+        recency += 1
+        entry.recency = recency
     }
 }

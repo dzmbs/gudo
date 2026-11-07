@@ -26,6 +26,19 @@ final class ChatModelPoolTests: XCTestCase {
         XCTAssertEqual(resolutions.withLock { $0 }, stillObserved)
     }
 
+    func testFinishingALongVisibleLeaseCountsAsTheMostRecentUse() throws {
+        let pool = ChatModelPool(capacity: 2)
+        let firstID = UUID()
+        let first = try XCTUnwrap(pool.acquire(firstID, pane: 7))
+        let firstModel = first.model
+        let second = try XCTUnwrap(pool.acquire(UUID(), pane: 8))
+        second.close()
+        first.close()
+        let third = try XCTUnwrap(pool.acquire(UUID(), pane: 9))
+        third.close()
+        XCTAssertTrue(try XCTUnwrap(pool.acquire(firstID, pane: 7)).model === firstModel)
+    }
+
     func testOnlyInactiveModelsCanBeEvicted() throws {
         let pool = ChatModelPool(capacity: 2, valueByteLimit: 4_096)
         let first = try XCTUnwrap(pool.acquire(UUID(), pane: 7))
