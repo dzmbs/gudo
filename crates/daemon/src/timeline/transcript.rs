@@ -94,6 +94,10 @@ impl Transcript {
         })
     }
 
+    pub fn cursor(&self) -> TimelineCursor {
+        self.cursor
+    }
+
     pub fn snapshot(&self, limit: usize, since: Option<UnixMillis>) -> TimelineSnapshot {
         let mut items = Vec::new();
         let mut encoded_bytes = 0;

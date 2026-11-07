@@ -190,7 +190,13 @@ the scanned position as well as the completed boundary.
 Snapshot item data is capped at 1 MiB. A connection
 may watch four panes. Pushes occupy one mailbox slot per pane and coalesce to a snapshot
 under backpressure. Watch tokens prevent a cancelled forwarder from reviving an unwatched
-pane or replacing a later watch.
+pane or replacing a later watch. A stopped worker is never reused, even while an old
+connection still retains its Watch. Worker exit (including cancellation) marks the worker
+closed before publishing Unavailable; subscribers check liveness after subscribing so they
+cannot miss that exit. A re-watch opens a fresh reader with an epoch above previously observed
+rewrite epochs. Transient read failures receive at most three retries, 250 ms apart, without
+keeping an abandoned pane alive during backoff. Authorization and invalid-source errors are
+not retried.
 
 Bulk timeline requests have four per-connection permits. Successful snapshot and output
 replies retain their permits until the control writer sends them, so a slow reader cannot

@@ -102,6 +102,26 @@ impl Harness {
         writeln!(file, "{record}").unwrap();
     }
 
+    async fn rewrite(
+        &self,
+        events: &mut UnboundedReceiver<WorkspaceEvent>,
+    ) -> client_core::proto::TimelineCursor {
+        let replacement = self.transcript.with_extension("next");
+        std::fs::write(&replacement, "{\"type\":\"user\",\"uuid\":\"rewrite-seed\",\"message\":{\"content\":\"Rewritten\"}}\n").unwrap();
+        std::fs::rename(replacement, &self.transcript).unwrap();
+        let update = next_update(events, |update| update.operations.iter().any(|operation|
+            matches!(operation, TimelineOp::Snapshot(snapshot) if snapshot.items.iter().any(|item| item.id == "rewrite-seed"))
+        )).await;
+        update
+            .operations
+            .into_iter()
+            .find_map(|operation| match operation {
+                TimelineOp::Snapshot(snapshot) => Some(snapshot.cursor),
+                _ => None,
+            })
+            .unwrap()
+    }
+
     async fn guest(&self, history: History) -> TestClient {
         let terms = InviteTerms {
             knock: false,
@@ -155,6 +175,50 @@ fn contains(update: &TimelineUpdate, text: &str) -> bool {
         TimelineOp::Snapshot(snapshot) => snapshot.items.iter().any(|item| matches!(&item.body, TimelineBody::Assistant { text: actual, .. } if actual == text)),
         _ => false,
     })
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_worker_is_not_reused_when_its_connection_watches_again() {
+    let harness = Harness::start().await;
+    let (listener, mut events) = WorkspaceEventQueue::channel();
+    harness.owner.client.set_workspace_listener(listener);
+    let first = harness
+        .owner
+        .client
+        .timeline_watch(harness.pane)
+        .await
+        .unwrap();
+    let rewritten = harness.rewrite(&mut events).await;
+    assert_ne!(rewritten.epoch, first.cursor.epoch);
+    let saved = harness.transcript.with_extension("saved");
+    std::fs::rename(&harness.transcript, &saved).unwrap();
+    std::fs::create_dir(&harness.transcript).unwrap();
+    next_update(&mut events, |update| {
+        update
+            .operations
+            .iter()
+            .any(|operation| matches!(operation, TimelineOp::Unavailable { .. }))
+    })
+    .await;
+    std::fs::remove_dir(&harness.transcript).unwrap();
+    std::fs::rename(saved, &harness.transcript).unwrap();
+    harness.append("recovered", "Written after the worker failed");
+    let recovered = harness
+        .owner
+        .client
+        .timeline_watch(harness.pane)
+        .await
+        .unwrap();
+    assert_ne!(recovered.cursor.epoch, rewritten.epoch);
+    assert!(recovered.items.iter().any(|item| matches!(&item.body,
+        TimelineBody::Assistant { text, .. } if text == "Written after the worker failed"
+    )));
+    harness.append("live-again", "The replacement worker is live");
+    next_update(&mut events, |update| {
+        contains(update, "The replacement worker is live")
+    })
+    .await;
+    harness.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

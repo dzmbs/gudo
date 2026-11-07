@@ -235,6 +235,72 @@ fn bulk_replies_keep_their_budget_until_written_even_with_reused_request_ids() {
     assert!(mailbox.reserve_reply().is_ok());
 }
 
+fn test_timeline(root: &std::path::Path) -> Arc<Timeline> {
+    let source = Source {
+        native_session: "test".into(),
+        path: None,
+        config_directory: root.into(),
+        working_directory: root.into(),
+        watch_directory: root.into(),
+    };
+    let (wake, _) = mpsc::channel(1);
+    Arc::new(Timeline {
+        state: Mutex::new(LiveState::new(source, 7, wake).unwrap()),
+        updates: broadcast::channel(8).0,
+        worker: Mutex::default(),
+    })
+}
+
+#[tokio::test]
+async fn cancellation_marks_a_worker_dead_before_notifying_its_subscribers() {
+    let root = tempfile::tempdir().unwrap();
+    let timeline = test_timeline(root.path());
+    let mut updates = timeline.updates.subscribe();
+    let lifetime = WorkerLifetime(Arc::downgrade(&timeline));
+    let task = {
+        let mut worker = lock(&timeline.worker);
+        let task = tokio::spawn(async move {
+            let _lifetime = lifetime;
+            std::future::pending::<()>().await;
+        });
+        *worker = Some(task.abort_handle());
+        task
+    };
+    assert!(timeline.is_running());
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    assert!(matches!(
+        &updates.recv().await.unwrap()[0],
+        TimelineOp::Unavailable { .. }
+    ));
+    assert!(!timeline.is_running());
+    assert!(lock(&timeline.worker).is_none());
+}
+
+#[test]
+fn only_transient_failures_consume_the_bounded_io_retry_budget() {
+    let mut failures = 0;
+    for error in [
+        WsError::Denied("scope".into()),
+        WsError::Invalid("input".into()),
+        WsError::NotFound("pane".into()),
+    ] {
+        assert!(!retry_io(&mut failures, &error));
+        assert_eq!(failures, 0);
+    }
+    for attempt in 1..=MAX_IO_RETRIES {
+        assert!(retry_io(
+            &mut failures,
+            &WsError::Failed("temporary I/O".into())
+        ));
+        assert_eq!(failures, attempt);
+    }
+    assert!(!retry_io(
+        &mut failures,
+        &WsError::Failed("persistent I/O".into())
+    ));
+}
+
 #[test]
 fn unrelated_workspace_results_do_not_release_a_timeline_reply_budget() {
     assert!(bulk_request(&WorkspaceRequest::TimelineWatch {

@@ -29,6 +29,8 @@ static NEXT_WATCH: AtomicU64 = AtomicU64::new(1);
 const MAX_WATCHES: usize = 4;
 const MAX_PUSH_BYTES: usize = 1024 * 1024;
 const MAX_BULK_REQUESTS: usize = 4;
+const MAX_IO_RETRIES: usize = 3;
+const IO_RETRY_DELAY: Duration = Duration::from_millis(250);
 
 #[derive(Default)]
 pub(crate) struct Timelines {
@@ -45,6 +47,28 @@ impl Drop for Timeline {
     fn drop(&mut self) {
         if let Some(worker) = lock(&self.worker).take() {
             worker.abort();
+        }
+    }
+}
+
+impl Timeline {
+    fn is_running(&self) -> bool {
+        lock(&self.worker)
+            .as_ref()
+            .is_some_and(|worker| !worker.is_finished())
+    }
+}
+
+struct WorkerLifetime(Weak<Timeline>);
+
+impl Drop for WorkerLifetime {
+    fn drop(&mut self) {
+        if let Some(timeline) = self.0.upgrade() {
+            // Publish death before the terminal event, including cancellation and unwinding.
+            lock(&timeline.worker).take();
+            let _ = timeline.updates.send(vec![TimelineOp::Unavailable {
+                message: "Chat could not read this session. Open Terminal to continue.".into(),
+            }]);
         }
     }
 }
@@ -233,6 +257,12 @@ impl LiveState {
         })
     }
 
+    fn cursor(&self) -> TimelineCursor {
+        self.transcript
+            .as_ref()
+            .map_or(self.cursor, Transcript::cursor)
+    }
+
     fn snapshot(&self, since: Option<UnixMillis>) -> TimelineSnapshot {
         self.transcript.as_ref().map_or_else(
             || TimelineSnapshot {
@@ -284,14 +314,16 @@ impl Timelines {
     async fn open(&self, core: &Arc<Core>, pane: PaneId) -> Result<Arc<Timeline>, WsError> {
         let mut entries = self.entries.lock().await;
         entries.retain(|_, timeline| timeline.strong_count() > 0);
-        if let Some(timeline) = entries.get(&pane).and_then(Weak::upgrade) {
+        if let Some(timeline) = entries
+            .get(&pane)
+            .and_then(Weak::upgrade)
+            .filter(|timeline| timeline.is_running())
+        {
             return Ok(timeline);
         }
         let (wake, wakes) = mpsc::channel(1);
-        let epoch = core
-            .epoch
-            .0
-            .wrapping_add(NEXT_EPOCH.fetch_add(1, Ordering::Relaxed));
+        NEXT_EPOCH.fetch_max(core.epoch.0, Ordering::Relaxed);
+        let epoch = NEXT_EPOCH.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
         let source_core = Arc::clone(core);
         let state =
             blocking(move || LiveState::new(source(&source_core, pane)?, epoch, wake)).await?;
@@ -301,13 +333,18 @@ impl Timelines {
             updates,
             worker: Mutex::default(),
         });
-        let task = tokio::spawn(run(
-            Arc::downgrade(core),
-            pane,
-            Arc::downgrade(&timeline),
-            wakes,
-        ));
-        *lock(&timeline.worker) = Some(task.abort_handle());
+        let worker_core = Arc::downgrade(core);
+        let worker_timeline = Arc::downgrade(&timeline);
+        let lifetime = WorkerLifetime(worker_timeline.clone());
+        {
+            // Register before an early exit can clear the handle and publish death.
+            let mut worker = lock(&timeline.worker);
+            let task = tokio::spawn(async move {
+                let _lifetime = lifetime;
+                run(worker_core, pane, worker_timeline, wakes).await;
+            });
+            *worker = Some(task.abort_handle());
+        }
         entries.insert(pane, Arc::downgrade(&timeline));
         Ok(timeline)
     }
@@ -326,47 +363,85 @@ async fn run(
     drop(initial_core);
     let mut fallback = tokio::time::interval(Duration::from_millis(750));
     fallback.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    loop {
-        tokio::select! {
-            _ = fallback.tick() => {},
-            wake = wakes.recv() => if wake.is_none() { return; },
-            event = events.recv() => match event {
-                Ok(Event::PaneMeta(changed) | Event::PaneClosed(changed) | Event::Agent { pane_id: changed, .. }) if changed == pane => {},
-                Err(broadcast::error::RecvError::Lagged(_)) => {},
-                Err(broadcast::error::RecvError::Closed) => return,
-                _ => continue,
-            },
-        }
+    let mut failures = 0;
+    while wait_for_wake(pane, &mut fallback, &mut wakes, &mut events).await {
         let (Some(core), Some(timeline)) = (core.upgrade(), timeline.upgrade()) else {
             return;
         };
-        let state = Arc::clone(&timeline);
-        let result = blocking(move || {
-            let mut state = lock(&state.state);
-            let operations = state.refresh(source(&core, pane)?)?;
-            if postcard::to_allocvec(&operations).map_or(true, |bytes| bytes.len() > MAX_PUSH_BYTES)
-            {
-                Ok(vec![TimelineOp::Snapshot(state.snapshot(None))])
-            } else {
-                Ok(operations)
+        match refresh_live(core, pane, Arc::clone(&timeline)).await {
+            Ok(operations) => {
+                failures = 0;
+                if !operations.is_empty() {
+                    let _ = timeline.updates.send(operations);
+                }
             }
-        })
-        .await;
-        match result {
-            Ok(operations) if !operations.is_empty() => {
-                let _ = timeline.updates.send(operations);
+            Err(error) if retry_io(&mut failures, &error) => {
+                retry_after(timeline).await;
+                continue;
             }
-            Ok(_) => {}
-            Err(_) => {
-                let _ = timeline.updates.send(vec![TimelineOp::Unavailable {
-                    message: "Chat could not read this session. Open Terminal to continue.".into(),
-                }]);
-                return;
-            }
+            Err(_) => return,
         }
         drop(timeline);
         tokio::time::sleep(Duration::from_millis(35)).await;
     }
+}
+
+async fn wait_for_wake(
+    pane: PaneId,
+    fallback: &mut tokio::time::Interval,
+    wakes: &mut mpsc::Receiver<()>,
+    events: &mut broadcast::Receiver<Event>,
+) -> bool {
+    loop {
+        tokio::select! {
+            _ = fallback.tick() => return true,
+            wake = wakes.recv() => return wake.is_some(),
+            event = events.recv() => match event {
+                Ok(Event::PaneMeta(changed)
+                    | Event::PaneClosed(changed)
+                    | Event::Agent { pane_id: changed, .. }) if changed == pane => return true,
+                Err(broadcast::error::RecvError::Lagged(_)) => return true,
+                Err(broadcast::error::RecvError::Closed) => return false,
+                _ => {},
+            },
+        }
+    }
+}
+
+async fn refresh_live(
+    core: Arc<Core>,
+    pane: PaneId,
+    timeline: Arc<Timeline>,
+) -> Result<Vec<TimelineOp>, WsError> {
+    blocking(move || {
+        let mut state = lock(&timeline.state);
+        let operations = state.refresh(source(&core, pane)?);
+        // Reopens must not reuse an epoch consumed by a local transcript rewrite.
+        NEXT_EPOCH.fetch_max(state.cursor().epoch, Ordering::Relaxed);
+        let operations = operations?;
+        if postcard::to_allocvec(&operations).map_or(true, |bytes| bytes.len() > MAX_PUSH_BYTES) {
+            Ok(vec![TimelineOp::Snapshot(state.snapshot(None))])
+        } else {
+            Ok(operations)
+        }
+    })
+    .await
+}
+
+fn retry_io(failures: &mut usize, error: &WsError) -> bool {
+    if !matches!(error, WsError::Failed(_)) || *failures >= MAX_IO_RETRIES {
+        return false;
+    }
+    *failures += 1;
+    true
+}
+
+async fn retry_after(timeline: Arc<Timeline>) {
+    let wake = lock(&timeline.state).wake.clone();
+    // Do not keep an abandoned pane's worker alive while backing off.
+    drop(timeline);
+    tokio::time::sleep(IO_RETRY_DELAY).await;
+    let _ = wake.try_send(());
 }
 
 fn source(core: &Core, pane: PaneId) -> Result<Source, WsError> {
@@ -480,6 +555,12 @@ pub(crate) async fn handle(
             }
             let timeline = core.ws.timelines.open(core, pane_id).await?;
             let mut updates = timeline.updates.subscribe();
+            // Subscribe before checking liveness so a concurrent exit cannot be missed.
+            if !timeline.is_running() {
+                return Err(WsError::Unavailable(
+                    "Chat stopped; reopen it to retry".into(),
+                ));
+            }
             let snapshot = lock(&timeline.state).snapshot(connection.timeline_since);
             let mut watches = lock(&connection.timeline_watches);
             if watches.len() >= MAX_WATCHES && !watches.contains_key(&pane_id) {
@@ -591,6 +672,7 @@ async fn read_timeline(
 fn watched(connection: &ConnCtx, pane: PaneId) -> Result<Arc<Timeline>, WsError> {
     lock(&connection.timeline_watches)
         .get(&pane)
+        .filter(|watch| watch.timeline.is_running())
         .map(|watch| Arc::clone(&watch.timeline))
         .ok_or_else(|| WsError::Unavailable("open Chat before reading its history".into()))
 }
