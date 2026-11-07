@@ -50,6 +50,7 @@ struct Uniforms {
   bool use_display_p3;
   bool use_linear_blending;
   bool use_linear_correction;
+  float view_scale;
 };
 
 //-------------------------------------------------------------------
@@ -479,7 +480,7 @@ fragment float4 cell_bg_fragment(
   constant Uniforms& uniforms [[buffer(1)]],
   constant uchar4 *cells [[buffer(2)]]
 ) {
-  int2 grid_pos = int2(floor((in.position.xy - uniforms.grid_padding.wx) / uniforms.cell_size));
+  int2 grid_pos = int2(floor((in.position.xy / uniforms.view_scale - uniforms.grid_padding.wx) / uniforms.cell_size));
 
   float4 bg = float4(0.0);
 

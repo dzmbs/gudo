@@ -26,6 +26,7 @@ import TerminalCore
             ("min_contrast", \.minContrast), ("cursor_pos", \.cursorPos), ("cursor_color", \.cursorColor),
             ("bg_color", \.bgColor), ("cursor_wide", \.cursorWide), ("use_display_p3", \.useDisplayP3),
             ("use_linear_blending", \.useLinearBlending), ("use_linear_correction", \.useLinearCorrection),
+            ("view_scale", \.viewScale),
         ]
         for (name, keyPath) in swift {
             #expect(offsets[name] == MemoryLayout<Uniforms>.offset(of: keyPath), "\(name)")

@@ -315,6 +315,12 @@ Apple views route focus, mouse, wheel, key releases and terminal replies through
 report callback. Shared taps and the 4-KiB saved-screen input buffer preserve that source;
 a held batch claims size only when it also contains actual typed or pasted input.
 
+Stream-sized terminals whose actual grid differs from the viewport's requested grid scale
+down to fit and center on the terminal background, without reflowing the mirror or changing
+its requested dimensions. The Metal projection, cell backgrounds, mouse/selection geometry,
+IME cursor, search highlights and image/gutter bounds use the same presentation transform.
+A matching grid retains the user's normal padding settings.
+
 ### Identity and pairing
 
 - `daemon.key` (Ed25519, iroh endpoint id), `owner.json` (the single owner principal),
@@ -2711,7 +2717,7 @@ An agent on host A driving a pane on host B. Not built; the safe shape:
   ignored (they are free text); no per-shell quoting (fish reads the POSIX quoting the same way
   except inside `"…"`, where it does not treat `` ` `` specially); a watched directory that is
   deleted and recreated is re-armed only on the next event or list.
-- Sizing policy choices are not persisted across daemon restarts. Non-driver fitting and
-  sizing controls are not yet wired to the new daemon APIs.
+- Sizing policy choices are not persisted across daemon restarts. The native sizing label and
+  takeover control are not yet wired to the new daemon APIs.
 - The ticket's relay URL is the one known at mint time; `endpoint.json` is refreshed as iroh's
   addresses change.

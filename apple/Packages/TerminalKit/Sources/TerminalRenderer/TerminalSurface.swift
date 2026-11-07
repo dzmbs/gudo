@@ -134,7 +134,6 @@ public final class TerminalSurface {
     private var displayLinkTarget: DisplayLinkTarget?
     private var pixelSize = CGSize.zero
     private var lastLayout: (size: CGSize, scale: CGFloat)?
-    private var paddingPx = SIMD4<Float>.zero
     private var needsFullRender = true
     private var lastOverlay = FrameOverlay()
     private var overlayDirty = false
@@ -264,8 +263,9 @@ public final class TerminalSurface {
     /// pass, as keyboard avoidance produces, never reaches the program), and at most every
     /// `gridInterval` while the size keeps changing (a divider drag, a live window resize),
     /// always ending at the final size. Meanwhile the
-    /// current grid stays drawn where it was, anchored top-left: clipped by a shrinking view,
-    /// on background in a growing one, never reflowed. A view in a layout motion
+    /// local grid stays anchored top-left, without reflow. A stream-sized grid that differs
+    /// from the requested size scales down to fit and is centered on the terminal background.
+    /// A view in a layout motion
     /// (`prepareResize`, `holdFrames`) does not even redraw: it shows its last frame.
     public func layout(size: CGSize, scale requestedScale: CGFloat) {
         lastLayout = (size, requestedScale)
@@ -318,7 +318,6 @@ public final class TerminalSurface {
             // The first real size, or new cells (font, scale): at once.
             commitGrid(target)
         }
-        placeGrid()
         invalidate()
         // On screen: draw at the new size now, presented with the transaction that resizes the
         // layer, rather than on the next display-link tick a frame later (a split's new pane,
@@ -399,7 +398,6 @@ public final class TerminalSurface {
             self.gridCommitTask = nil
             guard let pending = self.pendingGrid, !Task.isCancelled else { return }
             self.commitGrid(pending)
-            self.placeGrid()
             self.invalidate()
         }
     }
@@ -585,16 +583,32 @@ public final class TerminalSurface {
     /// The view shows a held frame in place of new ones (tests).
     public var isHoldingFrame: Bool { showsHeldFrame }
 
-    /// Padding around the applied grid in the current drawable: the kept inset on the top and
-    /// left, whatever remains (none when clipped) on the right and bottom.
-    private func placeGrid() {
-        guard let grid else { return }
-        let width = Int(grid.cols) * Int(grid.cellWidth), height = Int(grid.rows) * Int(grid.cellHeight)
-        paddingPx = SIMD4(
-            Float(gridInset.y),
-            Float(max(0, Int(pixelSize.width) - gridInset.x - width)),
-            Float(max(0, Int(pixelSize.height) - gridInset.y - height)),
-            Float(gridInset.x))
+    private var drawingGrid: Grid? {
+        guard let grid, sizeFollowsStream else { return grid }
+        let size = terminal.size
+        return Grid(cols: UInt16(clamping: size.cols), rows: UInt16(clamping: size.rows),
+                    cellWidth: grid.cellWidth, cellHeight: grid.cellHeight)
+    }
+
+    private var gridFit: GridFit {
+        guard sizeFollowsStream, let grid, let drawingGrid,
+              grid.cols != drawingGrid.cols || grid.rows != drawingGrid.rows else {
+            return GridFit(scale: 1, origin: CGPoint(x: gridInset.x, y: gridInset.y))
+        }
+        return GridFit.fit(
+            CGSize(width: Int(drawingGrid.cols) * Int(drawingGrid.cellWidth),
+                   height: Int(drawingGrid.rows) * Int(drawingGrid.cellHeight)),
+            in: pixelSize, padding: appearance.padding * layer.contentsScale)
+    }
+
+    private var drawingScale: CGFloat { layer.contentsScale / gridFit.scale }
+
+    private var paddingPx: SIMD4<Float> {
+        guard let grid = drawingGrid else { return .zero }
+        let fit = gridFit
+        let x = fit.origin.x / fit.scale, y = fit.origin.y / fit.scale
+        return SIMD4(Float(y), Float(max(0, pixelSize.width / fit.scale - x - CGFloat(grid.cols) * CGFloat(grid.cellWidth))),
+                     Float(max(0, pixelSize.height / fit.scale - y - CGFloat(grid.rows) * CGFloat(grid.cellHeight))), Float(x))
     }
 
     /// The grid the view's size calls for while the applied one waits (nil: none waits).
@@ -605,20 +619,20 @@ public final class TerminalSurface {
     /// One cell in points (nil before the first layout).
     public var cellSize: CGSize? {
         guard let grid else { return nil }
-        let scale = layer.contentsScale
+        let scale = drawingScale
         return CGSize(width: CGFloat(grid.cellWidth) / scale, height: CGFloat(grid.cellHeight) / scale)
     }
 
     /// Fixed (top/left) padding in points.
-    public var paddingPoints: CGFloat { CGFloat(paddingPx.x) / layer.contentsScale }
+    public var paddingPoints: CGFloat { CGFloat(paddingPx.x) / drawingScale }
     /// The grid's origin in points (differs from `paddingPoints` with padding balance).
     private var gridOrigin: CGPoint {
-        CGPoint(x: CGFloat(paddingPx.w) / layer.contentsScale, y: CGFloat(paddingPx.x) / layer.contentsScale)
+        CGPoint(x: CGFloat(paddingPx.w) / drawingScale, y: CGFloat(paddingPx.x) / drawingScale)
     }
 
     /// The viewport cell under a point in view coordinates, clamped into the grid.
     public func cell(at point: CGPoint) -> GridPoint {
-        guard let grid, let size = cellSize else { return GridPoint(x: 0, y: 0) }
+        guard let grid = drawingGrid, let size = cellSize else { return GridPoint(x: 0, y: 0) }
         let origin = gridOrigin
         let x = Int(((point.x - origin.x) / size.width).rounded(.down))
         let y = Int(((point.y - origin.y) / size.height).rounded(.down))
@@ -635,23 +649,24 @@ public final class TerminalSurface {
 
     /// A view point in surface pixels, as the mouse encoder and selection gestures expect.
     public func pixels(_ point: CGPoint) -> (x: Double, y: Double) {
-        (Double(point.x * layer.contentsScale), Double(point.y * layer.contentsScale))
+        (Double(point.x * drawingScale), Double(point.y * drawingScale))
     }
 
     public var mouseGeometry: MouseGeometry {
-        let grid = grid ?? Grid(cols: 1, rows: 1, cellWidth: 1, cellHeight: 1)
+        let grid = drawingGrid ?? Grid(cols: 1, rows: 1, cellWidth: 1, cellHeight: 1)
         return MouseGeometry(
-            screenWidth: UInt32(pixelSize.width), screenHeight: UInt32(pixelSize.height),
+            screenWidth: UInt32(clamping: Int(pixelSize.width / gridFit.scale)),
+            screenHeight: UInt32(clamping: Int(pixelSize.height / gridFit.scale)),
             cellWidth: grid.cellWidth, cellHeight: grid.cellHeight,
             paddingTop: UInt32(paddingPx.x), paddingRight: UInt32(paddingPx.y),
             paddingBottom: UInt32(paddingPx.z), paddingLeft: UInt32(paddingPx.w))
     }
 
     public var selectionGeometry: SelectionGesture.Geometry {
-        let grid = grid ?? Grid(cols: 1, rows: 1, cellWidth: 1, cellHeight: 1)
+        let grid = drawingGrid ?? Grid(cols: 1, rows: 1, cellWidth: 1, cellHeight: 1)
         return SelectionGesture.Geometry(
             columns: UInt32(grid.cols), cellWidth: grid.cellWidth, paddingLeft: UInt32(paddingPx.w),
-            screenHeight: UInt32(pixelSize.height))
+            screenHeight: UInt32(clamping: Int(pixelSize.height / gridFit.scale)))
     }
 
     // MARK: Input
@@ -838,7 +853,7 @@ public final class TerminalSurface {
 
     /// Advances the search on a frame and returns the highlights for the viewport.
     private func searchHighlights() -> [SearchHighlight] {
-        guard let search, let grid else { return [] }
+        guard let search, let grid = drawingGrid else { return [] }
         // The viewport's match list is refreshed by feeding, so feed on every frame it is shown.
         let output = searchOutputPending.exchange(false, ordering: .acquiringAndReleasing)
         reportSearchStatus(search.update(outputChanged: output))
@@ -875,8 +890,8 @@ public final class TerminalSurface {
     private func imageDraws(_ placements: [InlineImagePlacement], metrics: CellMetrics) -> [ImageDraw] {
         var draws: [ImageDraw] = []
         var frames: [(placement: InlineImagePlacement, rect: CGRect)] = []
-        let gridRows = Int(grid?.rows ?? 0)
-        let scale = layer.contentsScale
+        let gridRows = Int(drawingGrid?.rows ?? 0)
+        let scale = drawingScale
         for placement in placements {
             guard let texture = imageTextures[placement.key], placement.cols > 0, placement.rows > 0, placement.row + placement.rows > 0, placement.row < gridRows else { continue }
             let size = SIMD2(Float(placement.cols * metrics.cellWidth), Float(placement.rows * metrics.cellHeight))
@@ -894,10 +909,11 @@ public final class TerminalSurface {
 
     /// The grid area in drawable pixels: images never draw into the padding.
     private var imageClip: MTLScissorRect? {
-        guard let grid, pixelSize.width > 0 else { return nil }
-        let x = max(0, Int(paddingPx.w)), y = max(0, Int(paddingPx.x))
-        let width = min(Int(grid.cols) * Int(grid.cellWidth), Int(pixelSize.width) - x)
-        let height = min(Int(grid.rows) * Int(grid.cellHeight), Int(pixelSize.height) - y)
+        guard let grid = drawingGrid, pixelSize.width > 0 else { return nil }
+        let scale = gridFit.scale
+        let x = max(0, Int(CGFloat(paddingPx.w) * scale)), y = max(0, Int(CGFloat(paddingPx.x) * scale))
+        let width = min(Int((CGFloat(grid.cols) * CGFloat(grid.cellWidth) * scale).rounded(.up)), Int(pixelSize.width) - x)
+        let height = min(Int((CGFloat(grid.rows) * CGFloat(grid.cellHeight) * scale).rounded(.up)), Int(pixelSize.height) - y)
         guard width > 0, height > 0 else { return nil }
         return MTLScissorRect(x: x, y: y, width: width, height: height)
     }
@@ -934,12 +950,12 @@ public final class TerminalSurface {
     private func kittyImageDraws(metrics: CellMetrics) -> KittyDraws {
         var draws = KittyDraws()
         kittyImageFrames = []
-        guard !kittyPlacements.isEmpty, let grid else { return draws }
+        guard !kittyPlacements.isEmpty, let grid = drawingGrid else { return draws }
         let vtCell = terminal.cellPixelSize
         guard vtCell.width > 0, vtCell.height > 0 else { return draws }
         let sx = Float(metrics.cellWidth) / Float(vtCell.width), sy = Float(metrics.cellHeight) / Float(vtCell.height)
         let sorted = kittyPlacements.sorted { ($0.layer, $0.z) < ($1.layer, $1.z) }
-        let scale = layer.contentsScale
+        let scale = drawingScale
         let gridRect = CGRect(
             x: CGFloat(paddingPx.w), y: CGFloat(paddingPx.x),
             width: CGFloat(Int(grid.cols) * metrics.cellWidth), height: CGFloat(Int(grid.rows) * metrics.cellHeight))
@@ -1008,7 +1024,7 @@ public final class TerminalSurface {
     private func gutterDraws(_ marks: [GutterMark], colors: RenderState.Colors, metrics: CellMetrics) -> [ImageDraw] {
         var draws: [ImageDraw] = []
         var frames: [(mark: GutterMark, rect: CGRect)] = []
-        let gridRows = Int(grid?.rows ?? 0)
+        let gridRows = Int(drawingGrid?.rows ?? 0)
         let scale = layer.contentsScale
         let left = Int(paddingPx.w)
         let width = Self.gutterWidth(paddingLeft: left, scale: scale)
@@ -1020,8 +1036,8 @@ public final class TerminalSurface {
             let top = max(mark.row, 0), bottom = min(mark.row + mark.rows, gridRows)
             guard mark.rows > 0, bottom > top else { continue }
             frames.append((mark, CGRect(
-                x: 0, y: (CGFloat(paddingPx.x) + CGFloat(top * metrics.cellHeight)) / scale,
-                width: pixelSize.width / scale, height: CGFloat((bottom - top) * metrics.cellHeight) / scale)))
+                x: 0, y: (CGFloat(paddingPx.x) + CGFloat(top * metrics.cellHeight)) / drawingScale,
+                width: pixelSize.width / scale, height: CGFloat((bottom - top) * metrics.cellHeight) / drawingScale)))
             guard let texture = gutterTextures.texture(mark.color(colors), opacity: mark.opacity, device: renderer.device) else { continue }
             // The whole stripe (its ends may be off screen; the clip trims them).
             let height = mark.rows * metrics.cellHeight - 2 * inset
@@ -1037,7 +1053,7 @@ public final class TerminalSurface {
     /// Tints across the grid over marks that ask for one (a failed command's rows), drawn in
     /// the image pass under any inline image and clipped to the grid.
     private func rowTintDraws(_ marks: [GutterMark], colors: RenderState.Colors, metrics: CellMetrics) -> [ImageDraw] {
-        guard let grid, marks.contains(where: { $0.rowTint > 0 }) else { return [] }
+        guard let grid = drawingGrid, marks.contains(where: { $0.rowTint > 0 }) else { return [] }
         let width = Int(grid.cols) * metrics.cellWidth
         return marks.compactMap { mark in
             guard mark.rowTint > 0, mark.rows > 0,
@@ -1052,10 +1068,11 @@ public final class TerminalSurface {
     /// The left padding beside the grid's rows in drawable pixels: stripes never draw over
     /// the cells or the top and bottom padding.
     private var gutterClip: MTLScissorRect? {
-        guard let grid, pixelSize.width > 0 else { return nil }
-        let y = max(0, Int(paddingPx.x))
-        let width = min(Int(paddingPx.w), Int(pixelSize.width))
-        let height = min(Int(grid.rows) * Int(grid.cellHeight), Int(pixelSize.height) - y)
+        guard let grid = drawingGrid, pixelSize.width > 0 else { return nil }
+        let scale = gridFit.scale
+        let y = max(0, Int(CGFloat(paddingPx.x) * scale))
+        let width = min(Int(CGFloat(paddingPx.w) * scale), Int(pixelSize.width))
+        let height = min(Int((CGFloat(grid.rows) * CGFloat(grid.cellHeight) * scale).rounded(.up)), Int(pixelSize.height) - y)
         guard width > 0, height > 0 else { return nil }
         return MTLScissorRect(x: 0, y: y, width: width, height: height)
     }
@@ -1324,7 +1341,7 @@ public final class TerminalSurface {
 
     private func cursorRect(_ cursor: RenderState.Cursor, metrics: CellMetrics) -> CGRect? {
         guard cursor.visible, let position = cursor.position else { return nil }
-        let scale = layer.contentsScale
+        let scale = drawingScale
         let x = Int(position.x) - (cursor.onWideTail ? 1 : 0)
         // paddingPx is (top, right, bottom, left), as in Ghostty's uniforms.
         return CGRect(
@@ -1347,7 +1364,8 @@ public final class TerminalSurface {
     }
 
     private func uniforms(_ metrics: CellMetrics) -> Uniforms {
-        let screen = SIMD2(Float(pixelSize.width), Float(pixelSize.height))
+        let scale = Float(gridFit.scale)
+        let screen = SIMD2(Float(pixelSize.width), Float(pixelSize.height)) / scale
         let cursor = frame.blockCursor
         return Uniforms(
             projectionMatrix: Uniforms.projection(screen: screen, padding: paddingPx),
@@ -1363,7 +1381,7 @@ public final class TerminalSurface {
             cursorWide: cursor?.wide ?? false,
             useDisplayP3: false,
             useLinearBlending: false,
-            useLinearCorrection: false)
+            useLinearCorrection: false, viewScale: scale)
     }
 }
 

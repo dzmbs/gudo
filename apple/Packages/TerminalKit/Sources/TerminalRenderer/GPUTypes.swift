@@ -21,6 +21,7 @@ struct Uniforms {
     var useDisplayP3: Bool
     var useLinearBlending: Bool
     var useLinearCorrection: Bool
+    var viewScale: Float = 1
 }
 
 /// One instanced quad of the `cell_text` pipeline (`CellTextVertexIn`). 32 bytes, like Ghostty's.
