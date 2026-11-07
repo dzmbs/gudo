@@ -1,10 +1,28 @@
 import Foundation
 import HostKit
 import XCTest
+import os
 @testable import App
 
 @MainActor
 final class TimelineModelTests: XCTestCase {
+    func testDeinitializingTheScreenReleasesItsSharedWatchObserver() {
+        let resolutions = OSAllocatedUnfairLock(initialState: 0)
+        let hub = DaemonWorkspace(hostId: "fixture", events: WorkspaceEventHub(), resolve: {
+            resolutions.withLock { $0 += 1 }
+            return nil
+        })
+        var model: TimelineModel? = TimelineModel(pane: 7)
+        weak var released = model
+        model?.start(in: hub)
+        let initial = resolutions.withLock { $0 }
+        XCTAssertGreaterThan(initial, 0)
+        model = nil
+        XCTAssertNil(released)
+        hub.timelineChannel(pane: 7).requestSnapshot()
+        XCTAssertEqual(resolutions.withLock { $0 }, initial)
+    }
+
     func testSnapshotAndStreamingUpdatesRenderThroughTheWorker() async throws {
         let model = TimelineModel(pane: 7)
         model.receive(.snapshot(try TimelineFixtureJSON.snapshot(0..<60)))

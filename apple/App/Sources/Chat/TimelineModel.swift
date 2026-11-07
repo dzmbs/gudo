@@ -147,6 +147,8 @@ final class TimelineModel {
         worker = TimelineRenderWorker(pane: pane)
     }
 
+    isolated deinit { stop() }
+
     func start(in hub: DaemonWorkspace) {
         if observer != nil {
             if self.hub === hub { return }
