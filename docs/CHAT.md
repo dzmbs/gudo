@@ -222,6 +222,20 @@ The fixture in `crates/daemon/tests/fixtures/timeline/` is emitted by the instal
 Code CLI against a loopback-only mock API with an isolated home and placeholder key. Its
 README records which data is preserved. No real account is used.
 
+## Read-only diff foundation
+
+Native diff rows accept an explicit note callback; without one, they expose copy actions but
+no note action or review-button accessibility trait. Snapshot identities can differ from display
+paths, so separate edits of the same file do not share native rows or collapse state. Existing
+repository diffs retain their path identities and review callbacks.
+
+`ChatDiffSnapshot` converts scoped timeline diff groups without treating opaque turn identities
+as repository capture IDs. It admits at most 128 files, 512 hunks, 20,000 lines and 2 MiB of
+conservative derived-value charges, with an 8 KiB UTF8 limit per line. Over-budget or unknown
+semantics reject the whole selection with a Terminal fallback. Hunk coordinates, newline
+markers and omission flags survive conversion. This foundation is not yet a native sheet or a
+complete-diff fetch path; the inline timeline still contains bounded previews.
+
 ## Output reader foundation
 
 `ChatOutputReader` reads one 64 KiB output range at a time and retains only that page, with
