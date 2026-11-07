@@ -115,7 +115,7 @@ final class PaneChatViewTests: XCTestCase {
         controller.scrollViewDidEndDragging(controller.collection, willDecelerate: false)
         XCTAssertFalse(try XCTUnwrap(state.model).followsBottom)
         try await Task.sleep(for: .milliseconds(180))
-        let offset = controller.collection.contentOffset.y
+        let reading = try readingAnchor(in: controller.collection)
         try capture(fixture.window, name: "chat-" + name)
         let picker = try XCTUnwrap(presentationControl(in: fixture.window))
         picker.selectedSegmentIndex = 1
@@ -134,7 +134,8 @@ final class PaneChatViewTests: XCTestCase {
         try await wait { state.presentation == .chat && original.superview == nil }
         try await Task.sleep(for: .milliseconds(180))
         XCTAssertTrue(state.controller === controller)
-        XCTAssertEqual(controller.collection.contentOffset.y, offset, accuracy: 1)
+        XCTAssertEqual(try position(of: reading.row, in: controller.collection), reading.position,
+                       accuracy: 1, name + " reading anchor")
         XCTAssertEqual(state.draft, "Unsent Chat draft")
         XCTAssertEqual(original.surface.terminal.size.cols, originalGrid.cols)
         XCTAssertEqual(original.surface.terminal.size.rows, originalGrid.rows)
@@ -145,6 +146,20 @@ final class PaneChatViewTests: XCTestCase {
         XCTAssertFalse(fixture.client.calls.contains("unwatch 7"))
         XCTAssertTrue(fixture.client.state.withLock { $0.launches.isEmpty })
         try capture(fixture.window, name: "returned-chat-" + name)
+    }
+
+    private func readingAnchor(in collection: UICollectionView) throws -> (row: ChatRowID, position: CGFloat) {
+        let source = try XCTUnwrap(collection.dataSource as? UICollectionViewDiffableDataSource<Int, ChatRowID>)
+        let point = CGPoint(x: 1, y: collection.contentOffset.y + collection.adjustedContentInset.top)
+        let path = try XCTUnwrap(collection.indexPathForItem(at: point))
+        let identifier = try XCTUnwrap(source.itemIdentifier(for: path))
+        return (identifier, try position(of: identifier, in: collection))
+    }
+
+    private func position(of identifier: ChatRowID, in collection: UICollectionView) throws -> CGFloat {
+        let source = try XCTUnwrap(collection.dataSource as? UICollectionViewDiffableDataSource<Int, ChatRowID>)
+        let path = try XCTUnwrap(source.indexPath(for: identifier))
+        return try XCTUnwrap(collection.layoutAttributesForItem(at: path)).frame.minY - collection.contentOffset.y
     }
 
     private func presentationControl(in view: UIView) -> UISegmentedControl? {
