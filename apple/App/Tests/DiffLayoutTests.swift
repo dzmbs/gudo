@@ -53,6 +53,18 @@ final class DiffLayoutTests: XCTestCase {
         XCTAssertEqual(file().id, file().path)
     }
 
+    func testOmittedHunksRemainExplicitEvenWhenSomeLinesAreVisible() {
+        var sample = file()
+        sample.hunksOmitted = true
+        let document = DiffRenderDocument(input: input([sample]))
+        let notices = document.rows.compactMap { row -> String? in
+            if case .notice(let message) = row.content { return message }
+            return nil
+        }
+        XCTAssertEqual(notices, ["Some changes are not shown."])
+        XCTAssertEqual(document.rows.filter { if case .line = $0.content { return true }; return false }.count, 2)
+    }
+
     func testMissingSystemFontUsesASizedMeasurableFallback() throws {
         for size in [CGFloat(13), 22] {
             let font = try XCTUnwrap(DiffRenderDocument.noteFont(nil, size: size))

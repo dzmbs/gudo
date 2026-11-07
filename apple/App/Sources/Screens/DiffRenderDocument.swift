@@ -78,6 +78,10 @@ nonisolated struct DiffRenderDocument: Sendable {
                     }
                 }
             }
+            if file.hunksOmitted {
+                append("\(prefix)/omitted", fileIndex: fileIndex,
+                       content: .notice("Some changes are not shown."), height: 44)
+            }
         }
         let codeWidth = CGFloat(longestLine) * input.characterWidth
         let width = input.split
