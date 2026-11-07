@@ -217,6 +217,16 @@ The fixture in `crates/daemon/tests/fixtures/timeline/` is emitted by the instal
 Code CLI against a loopback-only mock API with an isolated home and placeholder key. Its
 README records which data is preserved. No real account is used.
 
+## Output reader foundation
+
+`ChatOutputReader` reads one 64 KiB output range at a time and retains only that page, with
+64 prior byte offsets and a route back to the beginning. Responses must agree with UTF8
+byte cursors, make progress and fit a bounded JSON envelope. Native presentation admits at
+most 4,096 lines; remaining text continues at the exact unconsumed byte, without being lost.
+Cancelled or superseded reads cannot publish a page or overwrite a later loading state.
+A changed output size requires restarting rather than mixing versions. The reader is not yet
+wired to the tool sheet; that integration still displays the preview.
+
 ## Native composer safety prerequisites
 
 The native collection is not yet an integrated Chat composer. The exit fence protects existing
