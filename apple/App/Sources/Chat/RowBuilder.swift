@@ -6,6 +6,7 @@ import Markdown
 
 nonisolated enum ChatCacheLimits {
     static let entries = 500
+    static let paragraphProfiles = 8
     static let bytes = 4 * 1_024 * 1_024
 }
 

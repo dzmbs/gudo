@@ -64,6 +64,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
     private let heights = BoundedLRU<HeightKey, CGFloat>(
         capacity: ChatCacheLimits.entries, byteLimit: ChatCacheLimits.bytes
     )
+    private let paragraphMetrics = ChatParagraphMetrics()
     private var measured: Set<ChatRowID> = []
     private var clock: CADisplayLink?
     private var isActive = true
@@ -328,13 +329,14 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
             measured.removeAll(keepingCapacity: false)
             document = NativeListLayout()
         }
-        let identifierSet = frame.rowIDs
         let changed = updateRows(in: frame, resetting: resets)
         current = frame
         if changesOrder || needsRestyle { rebuildDocument() }
         needsRestyle = false
         previousExpanded = expanded
         guard changesOrder || !changed.isEmpty else { isApplying = false; return }
+        let initial = source.snapshot().numberOfItems == 0
+        measureBeforeSnapshot(anchor: anchor, following: wasFollowing, includingCurrent: !initial)
         var snapshot: NSDiffableDataSourceSnapshot<Int, ChatRowID>
         if changesOrder {
             snapshot = NSDiffableDataSourceSnapshot<Int, ChatRowID>()
@@ -343,22 +345,34 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         } else { snapshot = source.snapshot() }
         snapshot.reconfigureItems(changed)
         onSnapshot?(snapshot)
-        source.apply(snapshot, animatingDifferences: false) { [weak self] in
-            guard let self else { return }
-            if isActive { collection.layoutIfNeeded() }
-            if isActive, firstContentLatency == nil, !collection.visibleCells.isEmpty { firstContentLatency = (CACurrentMediaTime() - openedAt) * 1_000 }
-            if isActive, generation == userScrollGeneration {
-                if wasFollowing && model.followsBottom { scrollToBottom() }
-                else if let anchor, let y = document.position(of: anchor) { restore(y - collection.adjustedContentInset.top) }
-            }
-            if changesOrder {
-                rows = rows.filter { identifierSet.contains($0.key) }
-                measured.formIntersection(identifierSet)
-            }
-            isApplying = false
-            needsMeasurement = true
-            clock?.isPaused = !isActive
+        let completion: () -> Void = { [weak self] in
+            self?.finishSnapshot(anchor: anchor, following: wasFollowing, generation: generation, changesOrder: changesOrder)
         }
+        if initial {
+            // No cells need retaining yet: fit and place the destination in one initial layout transaction.
+            restore(targetOffset(anchor: anchor, following: wasFollowing).y)
+            source.applySnapshotUsingReloadData(snapshot)
+            completion()
+        } else { source.apply(snapshot, animatingDifferences: false, completion: completion) }
+    }
+
+    private func finishSnapshot(anchor: NativeListLayout.Anchor?, following: Bool, generation: Int, changesOrder: Bool) {
+        if isActive { collection.layoutIfNeeded() }
+        if isActive, firstContentLatency == nil, !collection.visibleCells.isEmpty {
+            firstContentLatency = (CACurrentMediaTime() - openedAt) * 1_000
+        }
+        if isActive, generation == userScrollGeneration {
+            if following && model.followsBottom { scrollToBottom() }
+            else if let anchor, let y = document.position(of: anchor) { restore(y - collection.adjustedContentInset.top) }
+        }
+        if changesOrder {
+            let identifiers = current.rowIDs
+            rows = rows.filter { identifiers.contains($0.key) }
+            measured.formIntersection(identifiers)
+        }
+        isApplying = false
+        needsMeasurement = true
+        clock?.isPaused = !isActive
     }
 
     private func updateRows(in frame: TimelineFrame, resetting: Bool) -> [ChatRowID] {
@@ -392,6 +406,55 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         layout.invalidateLayout()
     }
 
+    private func fittedHeight(_ row: ChatRow) -> CGFloat? {
+        let key = key(row)
+        if let cached = heights.value(for: key) {
+            measured.insert(row.id)
+            return cached
+        }
+        let fitting = paragraphMetrics.height(for: row, width: collection.bounds.width,
+                                              environment: environment, measure: nativeFittingHeight)
+            ?? nativeFittingHeight(row)
+        guard let fitting, fitting.isFinite, fitting > 0 else { return nil }
+        let height = ceil(fitting)
+        heights.insert(height, for: key, cost: key.cost)
+        measured.insert(row.id)
+        measuredCells += 1
+        return height
+    }
+
+    private func nativeFittingHeight(_ row: ChatRow) -> CGFloat? {
+        // Reused cells can report the previous hosting configuration's fitting size.
+        sizingHost.rootView = AnyView(rowContent(row))
+        return sizingHost.sizeThatFits(in: CGSize(width: collection.bounds.width, height: .greatestFiniteMagnitude)).height
+    }
+
+    private func targetOffset(anchor: NativeListLayout.Anchor?, following: Bool) -> CGPoint {
+        let top = -collection.adjustedContentInset.top
+        let bottom = max(top, document.height - collection.bounds.height + collection.adjustedContentInset.bottom)
+        let reading = anchor.flatMap { document.position(of: $0) }.map { $0 + top } ?? collection.contentOffset.y
+        return CGPoint(x: 0, y: following ? bottom : min(bottom, max(top, reading)))
+    }
+
+    private func measureBeforeSnapshot(anchor: NativeListLayout.Anchor?, following: Bool, includingCurrent: Bool) {
+        guard collection.bounds.height > 0 else { return }
+        while true {
+            let viewport = CGRect(origin: targetOffset(anchor: anchor, following: following), size: collection.bounds.size)
+            var candidates = Set(document.visibleRows(in: viewport))
+            if includingCurrent { candidates.formUnion(document.visibleRows(in: collection.bounds)) }
+            var changed: [Int: CGFloat] = [:]
+            for index in candidates {
+                guard current.rows.indices.contains(index), !measured.contains(current.rows[index].id),
+                      let height = fittedHeight(current.rows[index]) else { continue }
+                changed[index] = height
+            }
+            guard !changed.isEmpty else { break }
+            document.setHeights(changed)
+        }
+        layout.document = document
+        layout.invalidateLayout()
+    }
+
     private func measureVisible() {
         guard !isMeasuring, !isApplying else { return }
         isMeasuring = true
@@ -405,15 +468,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
             if CACurrentMediaTime() - start > 0.003 { needsMeasurement = true; break }
             guard let identifier = source?.itemIdentifier(for: path), !measured.contains(identifier),
                   let row = rows[identifier], collection.cellForItem(at: path) != nil else { continue }
-            // Reused cells can report the previous hosting configuration's fitting size.
-            sizingHost.rootView = AnyView(rowContent(row))
-            let fitting = sizingHost.sizeThatFits(in: CGSize(width: collection.bounds.width, height: .greatestFiniteMagnitude))
-            guard fitting.height.isFinite, fitting.height > 0 else { continue }
-            let height = ceil(fitting.height)
-            let key = key(row)
-            heights.insert(height, for: key, cost: key.cost)
-            measured.insert(identifier)
-            measuredCells += 1
+            guard let height = fittedHeight(row) else { continue }
             if let index = document.indices[identifier.storageKey], document.rows[index].height != height { changed[index] = height }
         }
         if !changed.isEmpty {
@@ -476,6 +531,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
 
     @objc private func memoryWarning() {
         heights.removeAll()
+        paragraphMetrics.clear()
+        sizingHost.rootView = AnyView(EmptyView())
         model.releaseRenderCaches()
     }
 }

@@ -18,12 +18,16 @@ final class ChatCollectionTests: XCTestCase {
         return TimelineFrame(rows: rows, rowIDs: Set(rows.map(\.id)), revision: 1)
     }
 
-    private func open(_ frame: TimelineFrame, following: Bool = true) throws -> (UIWindow, ChatViewController) {
+    private func open(_ frame: TimelineFrame, following: Bool = true,
+                      onSnapshot: ((ChatViewController) -> Void)? = nil) throws -> (UIWindow, ChatViewController) {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let model = TimelineModel(pane: 42)
         model.followsBottom = following
         let controller = ChatViewController(model: model)
         controller.loadViewIfNeeded()
+        controller.onSnapshot = { [weak controller] _ in
+            if let controller { onSnapshot?(controller) }
+        }
         update(controller, frame)
         let window = UIWindow(windowScene: scene)
         window.frame = scene.screen.bounds
@@ -60,6 +64,35 @@ final class ChatCollectionTests: XCTestCase {
         XCTAssertTrue(controller.prepareToPark())
         XCTAssertFalse(editor.isFirstResponder)
         XCTAssertEqual(editor.text, "かな")
+    }
+
+    func testVisibleRowsHaveFittingHeightsBeforeTheirFirstSnapshot() async throws {
+        var measuredAtSubmission: [Int] = []
+        let (window, _) = try open(preparedFrame(3), onSnapshot: { measuredAtSubmission.append($0.measuredCells) })
+        defer { close(window) }
+        try await settle()
+        XCTAssertFalse(measuredAtSubmission.isEmpty)
+        XCTAssertTrue(measuredAtSubmission.allSatisfy { $0 >= 3 }, "Visible rows must fit before UIKit receives their snapshot")
+    }
+
+    func testVisibleRevisionsFitBeforeTheirSnapshotReconfiguration() async throws {
+        var frame = preparedFrame(3)
+        let (window, controller) = try open(frame, following: false)
+        defer { close(window) }
+        try await settle()
+        let before = controller.measuredCells
+        var measuredAtSubmission: Int?
+        controller.onSnapshot = { [weak controller] _ in measuredAtSubmission = controller?.measuredCells }
+        let previous = frame.rows[0]
+        let text = String(repeating: "The changed row must fit before its new content is displayed. ", count: 20)
+        frame.rows[0] = ChatRow(id: previous.id, revision: 2, turn: previous.turn,
+            content: .markdown(ChatMarkdownBlock(kind: .paragraph, source: text, text: AttributedString(text))))
+        frame.parentRevision = frame.revision
+        frame.changedRows = [frame.rows[0]]
+        frame.revision += 1
+        update(controller, frame)
+        try await settle()
+        XCTAssertGreaterThan(try XCTUnwrap(measuredAtSubmission), before)
     }
 
     func testMeasurementMarkersDoNotOutliveTheRetainedRows() async throws {
@@ -233,7 +266,8 @@ final class ChatCollectionTests: XCTestCase {
         XCTAssertLessThan(controller.configuredCells, 60)
         XCTAssertLessThan(controller.collection.visibleCells.count, 40)
         let latency = try XCTUnwrap(controller.firstContentLatency)
-        print("Chat cached open: \(latency) ms")
+        print("Chat cached open: \(latency) ms, first apply: \(controller.applyDurations.first ?? 0) ms,",
+              "configured: \(controller.configuredCells), fitted: \(controller.measuredCells)")
         XCTAssertLessThan(latency, 100)
     }
 

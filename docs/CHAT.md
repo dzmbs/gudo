@@ -146,7 +146,17 @@ Visible rows use cached native fitting heights from one detached sizing host, in
 reused cells' stale intrinsic sizes. Exact width, Dynamic Type and legibility changes invalidate
 those measurements. Measurement markers are pruned to retained row IDs after order changes;
 the 500-entry height LRU also charges identifier/metric metadata against a 4 MiB allowance.
-The measurement pass yields after 3 ms and
+Before a timeline snapshot is submitted, its current and destination viewports receive native
+fitting heights; viewport selection repeats if fitting exposes additional rows. An empty
+collection uses a synchronous initial reload and destination placement in the same layout
+transaction; populated collections retain their diffable updates and reading anchors.
+Unstyled ASCII paragraphs fitting one or two lines use Core Text for line breaks and an
+eight-profile LRU of heights calibrated through the same native row/environment for that exact
+line count. Three-plus lines, styled, Unicode, control-character and custom text-case/line-height
+values keep the sizing-host fallback; there is no guessed UIFont equivalent or line-height formula.
+This preflight is synchronous, so its cold cost is still a performance acceptance gate.
+Newly revealed scroll rows still use the deferred measurement pass; finishing their
+pre-display/prefetch path remains follow-up work. That pass yields after 3 ms and
 updates prefix positions without re-hashing every row. Prepends restore the same reading row;
 following updates pin to the bottom unless a newer user drag invalidates that adjustment.
 The New capsule remains separate from the reusable cells.
