@@ -157,7 +157,8 @@ with independent file collapse and explicit preview/omission notices. Complete-d
 command-mark navigation, device snapshot persistence and the rest of the composer remain pending.
 Turn-summary Changes uses the opaque turn identity, not a file path. Tool-file selections also
 carry the owning item identity. Missing or empty turn correlation offers Terminal rather than
-showing changes from other visible turns.
+showing changes from other visible turns. Command-mark lookup is associated with the exact
+Pane/view, not a process-global pane number: different hosts and linked views can reuse it.
 
 `ChatViewController` owns one normal-orientation reusable collection and a composer host pinned
 to the keyboard layout guide. A display-link coalesces pending frames; stopped views release

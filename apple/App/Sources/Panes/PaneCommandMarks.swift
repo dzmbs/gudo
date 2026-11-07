@@ -40,11 +40,12 @@ final class PaneCommandMarks: NSObject {
     private var pendingPins: Flag
     private var markers: [UInt64: CommandMarker] = [:]
 
-    private static let registry = NSMapTable<NSNumber, PaneCommandMarks>.strongToWeakObjects()
     private static nonisolated(unsafe) var associationKey: UInt8 = 0
 
     /// The marks of a pane, if it is on a daemon.
-    static func of(_ pane: PaneId) -> PaneCommandMarks? { registry.object(forKey: NSNumber(value: pane.rawValue)) }
+    static func of(_ pane: Pane) -> PaneCommandMarks? {
+        objc_getAssociatedObject(pane.view, &associationKey) as? PaneCommandMarks
+    }
 
     /// Attaches command marks to a pane whose backend is a daemon pane; no-op otherwise.
     @discardableResult
@@ -59,7 +60,6 @@ final class PaneCommandMarks: NSObject {
                        workspace: Workspace) -> PaneCommandMarks {
         let marks = PaneCommandMarks(pane: pane, backend: backend, daemon: daemon, workspace: workspace)
         objc_setAssociatedObject(pane.view, &associationKey, marks, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-        registry.setObject(marks, forKey: NSNumber(value: pane.id.rawValue))
         return marks
     }
 
@@ -293,7 +293,7 @@ final class PaneCommandMarks: NSObject {
     /// ⌘↑/⌘↓ on a workspace's focused pane: its marks, else libghostty-vt's own prompts.
     static func jumpToPrompt(_ direction: Int, in workspace: Workspace) {
         guard let id = workspace.focusedPane, let pane = workspace.pane(id) else { return }
-        if let marks = of(id) {
+        if let marks = of(pane) {
             marks.jumpToPrompt(direction)
         } else {
             pane.view.surface.terminal.scrollViewport(byPrompts: direction)
