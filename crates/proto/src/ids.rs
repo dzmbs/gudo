@@ -416,5 +416,7 @@ bitset! {
         GENERATED_INPUT = 25;
         /// Accepts pane activity and applies shared-terminal size policies.
         ACTIVE_SIZING = 26;
+        /// Accepts TimelineWatchVersioned with the peer's highest readable schema.
+        VERSIONED_TIMELINE = 27;
     }
 }

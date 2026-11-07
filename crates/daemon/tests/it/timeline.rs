@@ -178,6 +178,58 @@ fn contains(update: &TimelineUpdate, text: &str) -> bool {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn legacy_and_versioned_watches_negotiate_without_losing_an_existing_watch() {
+    let harness = Harness::start().await;
+    let (listener, mut events) = WorkspaceEventQueue::channel();
+    harness.owner.client.set_workspace_listener(listener);
+    let legacy = harness
+        .owner
+        .client
+        .workspace(WorkspaceRequest::TimelineWatch {
+            pane_id: harness.pane,
+        })
+        .await
+        .unwrap();
+    assert!(matches!(legacy, WorkspaceResponse::Timeline(_)));
+    let invalid = harness
+        .owner
+        .client
+        .workspace(WorkspaceRequest::TimelineWatchVersioned {
+            pane_id: harness.pane,
+            version: 0,
+        })
+        .await;
+    assert!(matches!(invalid, Err(WsError::Invalid(_))));
+    harness.append("legacy-live", "The rejected watch did not replace this one");
+    next_update(&mut events, |update| {
+        contains(update, "The rejected watch did not replace this one")
+    })
+    .await;
+    let future = harness
+        .owner
+        .client
+        .workspace(WorkspaceRequest::TimelineWatchVersioned {
+            pane_id: harness.pane,
+            version: u16::MAX,
+        })
+        .await
+        .unwrap();
+    let WorkspaceResponse::Timeline(snapshot) = future else {
+        panic!("Missing snapshot")
+    };
+    assert!(snapshot.items.iter().any(|item| item.id == "legacy-live:0"));
+    harness.append(
+        "negotiated-live",
+        "The mutually supported stream stays live",
+    );
+    next_update(&mut events, |update| {
+        contains(update, "The mutually supported stream stays live")
+    })
+    .await;
+    harness.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_failed_worker_is_not_reused_when_its_connection_watches_again() {
     let harness = Harness::start().await;
     let (listener, mut events) = WorkspaceEventQueue::channel();

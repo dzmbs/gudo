@@ -4,8 +4,10 @@ use crate::{Actor, AgentKind, FileDiff, PaneId, UnixMillis};
 
 mod metadata;
 mod output_handle;
+mod version;
 pub use metadata::{TimelineCommandSource, TimelinePermissionMode};
 pub use output_handle::{InvalidOutputHandle, OutputHandle};
+pub use version::{TimelineVersion, UnsupportedTimelineVersion};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimelineCursor {

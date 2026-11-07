@@ -533,9 +533,14 @@ impl Inner {
 
     /// Whether the daemon of the current (or last) connection announced `feature`.
     pub(crate) fn daemon_has(&self, feature: proto::DaemonFeatures) -> bool {
+        self.daemon_features().contains(feature)
+    }
+
+    pub(crate) fn daemon_features(&self) -> proto::DaemonFeatures {
         lock(&self.daemon_info)
             .as_ref()
-            .is_some_and(|info| info.features.contains(feature))
+            .map(|info| info.features)
+            .unwrap_or_default()
     }
 }
 

@@ -11,7 +11,11 @@ interrupts and approvals use the existing input and signed-decision paths.
 no timeline traffic.
 
 - `TimelineWatch` returns the last approximately 60 items and a cursor, then
-  `ServerCtl::Timeline` pushes operations.
+  `ServerCtl::Timeline` pushes operations. Its frozen encoding always selects schema 1.
+- `TimelineWatchVersioned`, gated by `DaemonFeatures::VERSIONED_TIMELINE`, supplies the
+  peer's highest readable schema. The helper selects the highest version supported by both;
+  version 0 is rejected before replacing a watch. Current peers support schema 1. A newer app
+  uses the frozen legacy request with helpers that do not advertise versioned watches.
 - `TimelineUnwatch` releases the subscription.
 - `TimelineItemsBefore` returns up to 100 older items. Its byte cursor is scoped to the
   watched pane's transcript, not a client-supplied file path.

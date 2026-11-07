@@ -196,6 +196,7 @@ pub(crate) fn bulk_request(request: &WorkspaceRequest) -> bool {
     matches!(
         request,
         WorkspaceRequest::TimelineWatch { .. }
+            | WorkspaceRequest::TimelineWatchVersioned { .. }
             | WorkspaceRequest::TimelineItemsBefore { .. }
             | WorkspaceRequest::TimelineToolOutput { .. }
     )
@@ -532,6 +533,17 @@ fn native_watch(
     Some(watcher)
 }
 
+fn negotiate_request(request: WorkspaceRequest) -> Result<WorkspaceRequest, WsError> {
+    let WorkspaceRequest::TimelineWatchVersioned { pane_id, version } = request else {
+        return Ok(request);
+    };
+    let version = proto::TimelineVersion::negotiate(version)
+        .map_err(|error| WsError::Invalid(error.to_string()))?;
+    match version {
+        proto::TimelineVersion::V1 => Ok(WorkspaceRequest::TimelineWatch { pane_id }),
+    }
+}
+
 pub(crate) async fn handle(
     core: &Arc<Core>,
     connection: &ConnCtx,
@@ -540,7 +552,7 @@ pub(crate) async fn handle(
     if !connection.caps.contains(Caps::AGENT_TIMELINE) {
         return Err(WsError::Unavailable("update the app to use Chat".into()));
     }
-    match request {
+    match negotiate_request(request)? {
         WorkspaceRequest::TimelineUnwatch { pane_id } => {
             lock(&connection.timeline_watches).remove(&pane_id);
             connection.timeline_mailbox.remove(pane_id);

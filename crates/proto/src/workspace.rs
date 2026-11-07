@@ -347,6 +347,12 @@ pub enum WorkspaceRequest {
         offset: u64,
         len: u32,
     },
+    /// The highest timeline schema this peer can read. Requires VERSIONED_TIMELINE;
+    /// a legacy TimelineWatch selects version 1.
+    TimelineWatchVersioned {
+        pane_id: PaneId,
+        version: u16,
+    },
 }
 
 /// The answer to a [`WorkspaceRequest`].

@@ -208,6 +208,7 @@ pub(crate) fn workspace(req: &WorkspaceRequest) -> (Need, Target) {
     match req {
         R::ListPorts | R::AttentionList | R::AttentionSeen(_) => (Need::View, Target::Any),
         R::TimelineWatch { pane_id }
+        | R::TimelineWatchVersioned { pane_id, .. }
         | R::TimelineUnwatch { pane_id }
         | R::TimelineItemsBefore { pane_id, .. }
         | R::TimelineToolOutput { pane_id, .. } => (Need::View, Target::Pane(*pane_id)),

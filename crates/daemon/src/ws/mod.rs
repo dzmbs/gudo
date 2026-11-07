@@ -190,6 +190,7 @@ pub(crate) async fn handle(
                 .map_err(|error| WsError::Failed(error.to_string()))
         }
         request @ (Request::TimelineWatch { .. }
+        | Request::TimelineWatchVersioned { .. }
         | Request::TimelineUnwatch { .. }
         | Request::TimelineItemsBefore { .. }
         | Request::TimelineToolOutput { .. }) => crate::timeline::handle(core, conn, request).await,

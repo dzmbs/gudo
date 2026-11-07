@@ -842,7 +842,9 @@ impl Client {
         pane_id: PaneId,
     ) -> Result<proto::TimelineSnapshot, WsError> {
         self.require_timeline()?;
-        expect!(self.workspace(WorkspaceRequest::TimelineWatch { pane_id }).await?,
+        let request =
+            proto::TimelineVersion::CURRENT.watch_request(pane_id, self.inner.daemon_features());
+        expect!(self.workspace(request).await?,
             WorkspaceResponse::Timeline(snapshot) => snapshot)
     }
 

@@ -306,6 +306,10 @@ fn unrelated_workspace_results_do_not_release_a_timeline_reply_budget() {
     assert!(bulk_request(&WorkspaceRequest::TimelineWatch {
         pane_id: PaneId(1)
     }));
+    assert!(bulk_request(&WorkspaceRequest::TimelineWatchVersioned {
+        pane_id: PaneId(1),
+        version: proto::TimelineVersion::CURRENT.as_u16(),
+    }));
     assert!(!bulk_request(&WorkspaceRequest::ListPorts));
     assert!(bulk_reply(&Ok(WorkspaceResponse::Timeline(snapshot(0)))));
     assert!(!bulk_reply(&Ok(WorkspaceResponse::Done)));

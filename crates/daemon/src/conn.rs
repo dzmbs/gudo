@@ -343,6 +343,7 @@ pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {
         | DaemonFeatures::TERMINAL_COLORS
         | DaemonFeatures::POWER_SETTINGS
         | DaemonFeatures::AGENT_TIMELINE
+        | DaemonFeatures::VERSIONED_TIMELINE
         | DaemonFeatures::GENERATED_INPUT
         | DaemonFeatures::ACTIVE_SIZING;
     if core.cfg.push.enabled && core.cfg.push.live_activity {
