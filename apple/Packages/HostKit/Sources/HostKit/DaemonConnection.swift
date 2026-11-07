@@ -44,6 +44,7 @@ public final class DaemonConnection: HostConnection {
     public let layout: DaemonLayoutStore
     /// Pane metadata (title, cwd, agent) by pane, observed per pane.
     public let meta = PaneTable<PaneMeta>()
+    public let sizing = PaneTable<PaneSizing>()
     /// What any program in a pane last reported about itself (OSC 7501, `status_set`), by pane.
     /// A blocked report is a status only: approvals stay in `meta[pane].agent`.
     public let programs = PaneTable<ProgramReport>()
@@ -391,6 +392,7 @@ public final class DaemonConnection: HostConnection {
     }
 
     public func close() {
+        clearSizing()
         multiplayer.detach()
         askpass.detach()
         approvals.detach()
@@ -494,6 +496,7 @@ public final class DaemonConnection: HostConnection {
             status = .needsAttention(reason: Self.incompatibleWords)
             Self.log.error("incompatible host=\(self.hostId, privacy: .public): \(reason, privacy: .public)")
         case .connected(let epoch, let resumed):
+            clearSizing()
             incompatibility = nil
             refusal = nil
             if let previous = self.epoch, previous != epoch { layout.resetRevision() }
@@ -515,6 +518,7 @@ public final class DaemonConnection: HostConnection {
             lastActivities.removeAll()
             pushView()
         case .disconnected(let reason):
+            clearSizing()
             if case .suspended = status { return }
             attempt += 1
             status = .reconnecting(attempt: attempt, reason: reason)
@@ -529,6 +533,7 @@ public final class DaemonConnection: HostConnection {
                 status = .needsAttention(reason: Self.incompatibleWords)
             }
         case .attached(let session, let via, let missing):
+            clearSizing()
             attachSession = session
             onAttached?(session)
             if let missing {
@@ -551,7 +556,10 @@ public final class DaemonConnection: HostConnection {
             pushView()
         case .paneMeta, .programStatus:
             break
+        case .paneSizing(let state):
+            sizing.set(state, for: PaneId(state.paneId))
         case .paneClosed(let pane):
+            sizing.set(nil, for: PaneId(pane))
             meta.set(nil, for: PaneId(pane))
             programs.set(nil, for: PaneId(pane))
         case .sessions(let sessions):
@@ -644,6 +652,10 @@ public final class DaemonConnection: HostConnection {
         let focused = windowViews.last { $0.activity == .active && $0.focused != nil }?.focused
             ?? windowViews.last { $0.focused != nil }?.focused
         return (focused, visible)
+    }
+
+    private func clearSizing() {
+        for pane in Array(sizing.all.keys) { sizing.set(nil, for: pane) }
     }
 
     private func pushActivities() {

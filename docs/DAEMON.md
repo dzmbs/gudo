@@ -291,6 +291,14 @@ id, rather than its shared principal. These are sent on attachment and ownership
 even when the grid and principal stay unchanged. Clients without that capability never receive
 this variant, including clients that already support `ACTIVE_SIZING`.
 
+Apple clients cache sizing identity per pane, clearing it on closure, disconnect and attachment
+changes. A quiet terminal overlay names the other device or local window after 200 ms; it does
+not take space from the grid. Local tap handoffs notify both windows even when their grids match,
+so live-resize dimension differences are not mistaken for another window. The action requires
+an active window, Drive and an open input gate. “Use this size” claims the local tap and daemon
+connection before selecting `LastActive`, including when leaving a fixed or composite policy.
+Older daemons without sizing identity do not show the overlay.
+
 `SetSizePolicy` requires Drive, pane scope and the input lease when one exists. `LastInput`
 ranks active clients by input or explicit claim; `FollowLease` uses that ranking within the
 holder's principal. All client-selected policies enforce the current lease and recheck
@@ -2721,7 +2729,6 @@ An agent on host A driving a pane on host B. Not built; the safe shape:
   ignored (they are free text); no per-shell quoting (fish reads the POSIX quoting the same way
   except inside `"…"`, where it does not treat `` ` `` specially); a watched directory that is
   deleted and recreated is re-armed only on the next event or list.
-- Sizing policy choices are not persisted across daemon restarts. The native sizing label and
-  takeover control are not yet wired to the new daemon APIs.
+- Sizing policy choices are not persisted across daemon restarts.
 - The ticket's relay URL is the one known at mint time; `endpoint.json` is refreshed as iroh's
   addresses change.

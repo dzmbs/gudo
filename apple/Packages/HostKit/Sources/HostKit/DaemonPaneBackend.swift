@@ -159,7 +159,8 @@ nonisolated final class PaneRouter: Sendable {
     /// `handover`: the size of the tap that drives now (the caller sends it).
     @discardableResult
     func remove(_ pane: UInt64, tap id: UInt64) -> (last: Bool, handover: PaneSize?) {
-        routes.withLock { routes in
+        var changed: [Sink] = []
+        let result: (last: Bool, handover: PaneSize?) = routes.withLock { routes in
             guard var route = routes[pane] else { return (false, nil) }
             route.taps[id] = nil
             var handover: PaneSize?
@@ -168,6 +169,7 @@ nonisolated final class PaneRouter: Sendable {
                 let next = route.taps.filter { $0.value.size != nil }.min { $0.key < $1.key }
                 route.driver = next?.key
                 handover = next?.value.size
+                changed = route.started.map(\.sink)
             }
             route.unacked.removeAll { $0.tap == id }
             if route.pendingAck?.tap == id { route.pendingAck = nil }
@@ -178,6 +180,8 @@ nonisolated final class PaneRouter: Sendable {
             routes[pane] = route
             return (false, handover)
         }
+        changed.forEach { $0(.sizingChanged) }
+        return result
     }
 
     var panes: [UInt64] { routes.withLock { Array($0.keys) } }
@@ -201,15 +205,23 @@ nonisolated final class PaneRouter: Sendable {
         }
     }
 
+    func isDriver(_ pane: UInt64, tap id: UInt64) -> Bool {
+        routes.withLock { $0[pane]?.driver == id }
+    }
+
     /// A tap types or takes focus: it drives the pane's size from now on. Returns its size when
     /// that changes the pane's (to send before the input).
     func claim(_ pane: UInt64, tap id: UInt64) -> PaneSize? {
-        routes.withLock { routes in
-            guard let route = routes[pane], route.driver != id else { return nil }
+        var changed: [Sink] = []
+        let size: PaneSize? = routes.withLock { routes in
+            guard let route = routes[pane], route.taps[id] != nil, route.driver != id else { return nil }
             routes[pane]?.driver = id
+            changed = route.started.map(\.sink)
             // The first tap ever claiming has already sent its size.
             return route.driver == nil ? nil : route.taps[id]?.size
         }
+        changed.forEach { $0(.sizingChanged) }
+        return size
     }
 
     // MARK: Input
@@ -474,9 +486,18 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap 
         }
     }
 
+    public var drivesLocalSize: Bool { router.isDriver(pane.rawValue, tap: tap) }
+
     public func claimSize() {
         claimLocalSize()
         (client as? any PaneSizingClient)?.claimPaneSize(paneId: pane.rawValue)
+    }
+
+    public func useSize() {
+        guard router.admitsInput(pane.rawValue), let client = client as? any PaneSizingClient else { return }
+        // Stamp this tap before leaving a fixed/composite policy, avoiding an intermediate owner.
+        claimSize()
+        client.setSizePolicy(paneId: pane.rawValue, policy: .lastActive)
     }
 
     private func claimLocalSize() {

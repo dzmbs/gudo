@@ -155,7 +155,7 @@ nonisolated final class MirrorPane: Sendable {
                 terminal.resize(cols: cols, rows: rows, cellWidth: max(cellWidth, 8), cellHeight: max(cellHeight, 16))
             case .connection(let connection):
                 self.state.withLock { $0.connection = connection }
-            case .exited:
+            case .exited, .sizingChanged:
                 break
             }
         }

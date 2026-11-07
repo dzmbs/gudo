@@ -264,6 +264,39 @@ import GudoCore
         #expect(client().calls == [.setView(nil, [])])
     }
 
+    @Test func sameGridLocalHandoffsNotifyBothWindowsAndClosingTheDriverRestoresTheOther() throws {
+        let (connection, _) = try makeConnection()
+        let a = try #require(try connection.makeBackend(for: PaneId(3)) as? DaemonPaneBackend)
+        let b = try #require(try connection.makeBackend(for: PaneId(3)) as? DaemonPaneBackend)
+        let eventsA = EventSink(), eventsB = EventSink()
+        a.start(events: eventsA.handler)
+        b.start(events: eventsB.handler)
+        a.resize(cols: 80, rows: 24, cellWidth: 8, cellHeight: 16)
+        b.resize(cols: 80, rows: 24, cellWidth: 8, cellHeight: 16)
+        b.claimSize()
+        #expect(!a.drivesLocalSize && b.drivesLocalSize)
+        #expect(eventsA.all.filter { $0 == .sizingChanged }.count == 1)
+        #expect(eventsB.all.filter { $0 == .sizingChanged }.count == 1)
+        b.claimSize()
+        #expect(eventsA.all.filter { $0 == .sizingChanged }.count == 1)
+        b.detach()
+        #expect(a.drivesLocalSize)
+        #expect(eventsA.all.filter { $0 == .sizingChanged }.count == 2)
+    }
+
+    @Test func takingSizeClaimsBeforeChangingPolicyAndRespectsTheInputGate() throws {
+        let (connection, client) = try makeConnection()
+        let backend = try #require(try connection.makeBackend(for: PaneId(3)) as? DaemonPaneBackend)
+        backend.resize(cols: 80, rows: 24, cellWidth: 8, cellHeight: 16)
+        client().clear()
+        (backend as any SharedPaneTap).useSize()
+        #expect(client().calls == [.claimSize(3), .sizePolicy(3, .lastActive)])
+        backend.router.setGate(MultiplayerSession.InputGate(all: true, panes: []))
+        client().clear()
+        (backend as any SharedPaneTap).useSize()
+        #expect(client().calls.isEmpty)
+    }
+
     @Test func explicitClaimsReachTheDaemonEvenWhenTheLocalTapAlreadyDrives() throws {
         let (connection, client) = try makeConnection()
         let backend = try connection.makeBackend(for: PaneId(3))

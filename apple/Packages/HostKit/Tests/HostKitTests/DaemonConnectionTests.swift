@@ -21,6 +21,19 @@ import GudoCore
         return (connection, { client.withLock { $0! } })
     }
 
+    @Test func sizingIdentityIsPerPaneAndClearedWhenThePaneOrConnectionEnds() async throws {
+        let (connection, client) = try makeConnection()
+        let state = PaneSizing(paneId: 3, peer: 42)
+        client().send(.paneSizing(state: state))
+        try await eventually("sizing identity") { connection.sizing[PaneId(3)] == state }
+        client().send(.paneClosed(paneId: 3))
+        try await eventually("closed pane has no sizing identity") { connection.sizing.isEmpty }
+        client().send(.paneSizing(state: state))
+        try await eventually("sizing identity returns") { !connection.sizing.isEmpty }
+        client().send(.disconnected(reason: "test"))
+        try await eventually("disconnected ownership is not live") { connection.sizing.isEmpty }
+    }
+
     @Test func connectAttachAndShowTheLayout() async throws {
         let (connection, client) = try makeConnection()
         #expect(connection.status == .connecting(.dialing))

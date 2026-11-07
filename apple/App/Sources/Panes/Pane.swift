@@ -45,6 +45,7 @@ final class Pane {
     @ObservationIgnored var onGridChange: ((TerminalSurface.Grid) -> Void)?
     /// Resizes sent to the backend; UI tests expect one per layout change.
     private(set) var resizesSent = 0
+    private(set) var isSizingTap = true
     /// Scrolls and input so far, whoever made them, so following can tell its own moves from the user's.
     @ObservationIgnored private(set) var moves = 0
 
@@ -107,6 +108,9 @@ final class Pane {
             }
         }
         let daemon = backend as? DaemonPaneBackend
+        let sizing = MainActorCoalescer { [weak self, weak daemon] in
+            self?.isSizingTap = daemon?.drivesLocalSize ?? true
+        }
         if let saved, let screen = saved.screen, let daemon, !daemon.isLive {
             showSaved(screen, saved: saved, on: terminal, holdingInputOf: daemon)
         }
@@ -178,6 +182,8 @@ final class Pane {
                 surface.outputArrived()
             case .connection(let state):
                 Task { @MainActor in self?.connection = state }
+            case .sizingChanged:
+                sizing.signal()
             case .exited:
                 onExit()
             }
@@ -281,5 +287,6 @@ final class Pane {
         // changes, and a program redrawing after SIGWINCH must find the grid it was told of.
         resizesSent += 1
         backend.resize(cols: grid.cols, rows: grid.rows, cellWidth: grid.cellWidth, cellHeight: grid.cellHeight)
+        isSizingTap = (backend as? DaemonPaneBackend)?.drivesLocalSize ?? true
     }
 }

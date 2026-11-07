@@ -114,7 +114,7 @@ nonisolated public struct PaneForeground: Equatable, Sendable {
     }
 }
 
-/// Everything a backend tells its pane, in stream order.
+/// Remote screen events follow stream order; local sizing notifications carry no VT state.
 nonisolated public enum PaneEvent: Sendable, Equatable {
     /// Raw output for the VT.
     case output(Data)
@@ -131,6 +131,8 @@ nonisolated public enum PaneEvent: Sendable, Equatable {
     case connection(PaneConnection)
     /// The pane's process ended (local backends; remote panes leave the layout instead).
     case exited
+    /// A different local window drives sizing, even if the shared grid did not change.
+    case sizingChanged
 }
 
 /// A pane's connection as its view shows it.
@@ -169,6 +171,7 @@ nonisolated public protocol SharedPaneTap: PaneBackend {
     func start(events: @escaping @Sendable (PaneEvent) -> Void, seed: (@Sendable () -> [PaneEvent])?)
     /// This tap's window drives the pane's size now (it took focus); typing claims it too.
     func claimSize()
+    func useSize()
     /// The window closed but the pane stays in the layout: stop following it without ending
     /// its process (the default ends it, like `terminate`).
     func detach()
@@ -176,6 +179,7 @@ nonisolated public protocol SharedPaneTap: PaneBackend {
 
 nonisolated extension SharedPaneTap {
     public func detach() { terminate() }
+    public func useSize() { claimSize() }
 }
 
 nonisolated extension Terminal {

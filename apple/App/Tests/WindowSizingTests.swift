@@ -11,6 +11,17 @@ import UIKit
 
 @MainActor
 final class WindowSizingTests: XCTestCase {
+    func testSizingSourceUsesTheConnectionNotItsSharedPrincipal() {
+        let mine = PaneSizing(paneId: 1, peer: 7)
+        let other = PaneSizing(paneId: 1, peer: 8)
+        XCTAssertNil(PaneSizingSource.resolve(mine, myPeer: 7, policy: .lastActive, isLocalDriver: true))
+        XCTAssertEqual(PaneSizingSource.resolve(other, myPeer: 7, policy: .lastActive, isLocalDriver: true), .peer(8))
+        XCTAssertEqual(PaneSizingSource.resolve(mine, myPeer: 7, policy: .lastActive, isLocalDriver: false), .anotherWindow)
+        let composite = PaneSizing(paneId: 1, peer: nil)
+        XCTAssertEqual(PaneSizingSource.resolve(composite, myPeer: 7, policy: .fixed(cols: 80, rows: 24), isLocalDriver: true), .fixed)
+        XCTAssertEqual(PaneSizingSource.resolve(composite, myPeer: 7, policy: .smallest, isLocalDriver: true), .shared)
+    }
+
     func testNativeViewFitsAndCentersSharedGridsWithoutReflow() throws {
         for (columns, rows, width, height) in [(20, 5, 600, 400), (160, 50, 220, 300)] {
             let terminal = Terminal(cols: UInt16(columns), rows: UInt16(rows)) { _ in }

@@ -216,7 +216,7 @@ nonisolated public final class SharedPaneBackend: Sendable {
         case .history(let data, _): _ = try? terminal.appendHistory(data)
         case .resized(let cols, let rows, let cellWidth, let cellHeight):
             terminal.resize(cols: cols, rows: rows, cellWidth: max(cellWidth, 1), cellHeight: max(cellHeight, 1))
-        case .connection, .exited: break
+        case .connection, .exited, .sizingChanged: break
         }
     }
 

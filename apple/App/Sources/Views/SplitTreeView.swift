@@ -620,6 +620,7 @@ struct PaneSlot: View {
                 .clipped()
                 .fadedTowardTerminalBackground(pane.showsSavedScreen ? 0.25 : 0)
                 .overlay { SavedScreenOverlay(pane: pane) }
+                .overlay(alignment: .bottomTrailing) { PaneSizingOverlay(pane: pane, workspace: workspace) }
                 .overlay {
                     StalePaneOverlay(
                         connection: pane.connection, paneId: id,
