@@ -59,6 +59,7 @@ impl Preview {
                 (LineKind::Removed, &line[1..])
             }
             Some(b' ') => (LineKind::Context, &line[1..]),
+            Some(b'\\') if line == r"\ No newline at end of file" => (LineKind::NoNewline, ""),
             _ => (LineKind::Context, line),
         };
         if self.retained >= PREVIEW_LINES_LIMIT {
@@ -123,6 +124,44 @@ impl Preview {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn literal_missing_newline_markers_are_not_context_lines() {
+        let result = RichResult {
+            file_path: Some("/fixture/file".into()),
+            structured_patch: Some(vec![Patch {
+                old_start: 1,
+                old_lines: 1,
+                new_start: 1,
+                new_lines: 1,
+                lines: vec![
+                    "-old".into(),
+                    r"\ No newline at end of file".into(),
+                    "+new".into(),
+                    r"\ No newline at end of file".into(),
+                ],
+            }]),
+            ..RichResult::default()
+        };
+        let files = result_diff(&result);
+        let lines = &files[0].hunks[0].lines;
+        assert_eq!(
+            lines.iter().map(|line| line.kind).collect::<Vec<_>>(),
+            [
+                LineKind::Removed,
+                LineKind::NoNewline,
+                LineKind::Added,
+                LineKind::NoNewline,
+            ]
+        );
+        assert!(lines[1].text.is_empty() && lines[3].text.is_empty());
+        assert_eq!((files[0].additions, files[0].deletions), (1, 1));
+        assert!(!files[0].hunks_omitted);
+        let mut preview = Preview::default();
+        let unknown = preview.line(r"\ not a newline marker").unwrap();
+        assert_eq!(unknown.kind, LineKind::Context);
+        assert_eq!(unknown.text, r"\ not a newline marker");
+    }
 
     #[test]
     fn truncated_patch_lines_mark_the_diff_as_incomplete() {
