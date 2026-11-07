@@ -104,17 +104,9 @@ fn is_owned_hook(command: &str) -> bool {
     })
 }
 
-fn is_any_hook_program(program: &str) -> bool {
-    Path::new(program).file_name().is_some_and(|name| {
-        name == brand::RELEASE_HOOK_BIN
-            || name == brand::DEV_HOOK_BIN
-            || name == brand::legacy::HOOK_BIN
-    })
-}
-
 fn is_missing_hook_program(program: &str) -> bool {
     Path::new(program).is_absolute()
-        && is_any_hook_program(program)
+        && agents::is_hook_program(program)
         && std::fs::metadata(program).is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
 }
 
@@ -297,7 +289,7 @@ fn install_codex_config(path: &Path, launcher_path: &Path) -> io::Result<()> {
         .map_err(io::Error::other)?;
     let notification: toml_edit::Array = [
         launcher_path.to_string_lossy().into_owned(),
-        "codex-notify".into(),
+        agents::CODEX_NOTIFY_SUBCOMMAND.into(),
         original_notify,
     ]
     .into_iter()
@@ -306,44 +298,14 @@ fn install_codex_config(path: &Path, launcher_path: &Path) -> io::Result<()> {
     write_config(path, &original, &document.to_string())
 }
 
-fn normalize_notification(mut arguments: Vec<String>) -> io::Result<Vec<String>> {
-    let mut preserved_wrappers = Vec::new();
-    let mut depth = 0;
-    while let Some(program) = arguments
-        .first()
-        .filter(|program| is_any_hook_program(program))
-    {
-        if depth == 64 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "notification chain is too deep",
-            ));
-        }
-        depth += 1;
-        let removes = is_hook_program(program) || is_missing_hook_program(program);
-        if arguments.len() == 3 && arguments[1] == "codex-notify" {
-            let original = serde_json::from_str(&arguments[2]).map_err(io::Error::other)?;
-            if !removes {
-                preserved_wrappers.push(arguments.remove(0));
-            }
-            arguments = original;
-        } else {
-            if removes
-                && arguments.get(1).is_some_and(|argument| argument == "codex")
-                && arguments
-                    .get(2)
-                    .is_some_and(|argument| argument == "notify")
-            {
-                arguments.clear();
-            }
-            break;
-        }
-    }
-    for program in preserved_wrappers.into_iter().rev() {
-        let original = serde_json::to_string(&arguments).map_err(io::Error::other)?;
-        arguments = vec![program, "codex-notify".into(), original];
-    }
-    Ok(arguments)
+fn normalize_notification(arguments: Vec<String>) -> io::Result<Vec<String>> {
+    agents::NotifyChain::parse(arguments)
+        .and_then(|chain| {
+            chain.remove_hooks(|program| {
+                is_hook_program(program) || is_missing_hook_program(program)
+            })
+        })
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
 #[cfg(test)]

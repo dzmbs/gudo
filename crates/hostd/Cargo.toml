@@ -20,6 +20,7 @@ name = "gudo-hook"
 path = "src/hook_main.rs"
 
 [dependencies]
+agents.workspace = true
 anyhow.workspace = true
 base64.workspace = true
 brand.workspace = true
@@ -38,7 +39,6 @@ tracing-subscriber.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
-agents.workspace = true
 client-core.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["net", "io-util", "fs", "rt-multi-thread", "macros"] }

@@ -48,7 +48,7 @@ pub fn run_hook(arguments: &[String]) {
             &arguments[1..],
             agent_exit_fence::FenceAction::Close,
         )),
-        Some("codex-notify") => {
+        Some(agents::CODEX_NOTIFY_SUBCOMMAND) => {
             relay_codex_notify(&arguments[1..]);
             return;
         }
@@ -197,32 +197,14 @@ fn user_codex_notify(json: &str) {
 
 fn user_notify_command(config: &std::path::Path) -> Option<Vec<String>> {
     let text = std::fs::read_to_string(config).ok()?;
-    let table: toml::Table = text.parse().ok()?;
-    let mut arguments: Vec<String> = table
-        .get("notify")?
-        .as_array()?
-        .iter()
-        .map(|argument| argument.as_str().map(str::to_owned))
-        .collect::<Option<_>>()?;
-    for _ in 0..64 {
-        let is_owned_command = arguments.first().is_some_and(|program| {
-            std::path::Path::new(program)
-                .file_name()
-                .is_some_and(|name| {
-                    name == brand::RELEASE_HOOK_BIN
-                        || name == brand::DEV_HOOK_BIN
-                        || name == brand::legacy::HOOK_BIN
-                })
-        });
-        if !is_owned_command {
-            return (!arguments.is_empty()).then_some(arguments);
-        }
-        if arguments.len() != 3 || arguments[1] != "codex-notify" {
-            return None;
-        }
-        arguments = serde_json::from_str(&arguments[2]).ok()?;
+    #[derive(serde::Deserialize)]
+    struct NotifyConfig {
+        notify: Option<Vec<String>>,
     }
-    None
+    let config: NotifyConfig = toml::from_str(&text).ok()?;
+    agents::NotifyChain::parse(config.notify?)
+        .ok()?
+        .into_user_command()
 }
 
 /// The pane's Claude configuration directory: its account's (`GUDO_ACCOUNT_DIR`, which Claude's

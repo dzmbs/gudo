@@ -24,6 +24,7 @@ mod event;
 mod hook;
 mod launch;
 mod manifest;
+mod notify_chain;
 mod program_status;
 mod signal;
 
@@ -45,5 +46,6 @@ pub use launch::{
 pub use manifest::{
     ENGINE_VERSION, Manifest, ManifestError, Region, ScreenInput, ScreenMatch, ScreenVerdict,
 };
+pub use notify_chain::{CODEX_NOTIFY_SUBCOMMAND, NotifyChain, NotifyChainError, is_hook_program};
 pub use program_status::{ProgramKind, ProgramState, ProgramStatus};
 pub use signal::{Claim, SessionUpdate, Signal};
