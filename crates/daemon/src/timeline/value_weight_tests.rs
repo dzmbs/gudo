@@ -2,6 +2,74 @@ use super::*;
 use proto::*;
 
 #[test]
+fn cached_update_bounds_cover_all_operations_and_session_metadata() {
+    let text = "λ\0\"\\".repeat(128);
+    let cursor = TimelineCursor {
+        epoch: u64::MAX,
+        sequence: u64::MAX,
+    };
+    let session = TimelineSession {
+        agent: AgentKind::Claude,
+        native_session: text.clone(),
+        title: Some(text.clone()),
+        model: Some(text.clone()),
+        permission_mode: Some(TimelinePermissionMode::BypassPermissions),
+        commands: vec![
+            TimelineCommand {
+                name: text.clone(),
+                description: text.clone(),
+                source: TimelineCommandSource::Project
+            };
+            200
+        ],
+    };
+    let value = TimelineItem {
+        id: text.clone(),
+        revision: u32::MAX,
+        turn: Some(text.clone()),
+        parent: Some(text.clone()),
+        at: UnixMillis(u64::MAX),
+        origin: TimelineOrigin::Agent,
+        body: TimelineBody::TurnEnd {
+            duration_ms: u64::MAX,
+            input_tokens: Some(u64::MAX),
+            output_tokens: Some(u64::MAX),
+        },
+    };
+    let operations = vec![
+        TimelineOp::Snapshot(TimelineSnapshot {
+            cursor,
+            session: session.clone(),
+            items: vec![value.clone(); 8],
+            before: Some(u64::MAX),
+        }),
+        TimelineOp::Upsert {
+            cursor,
+            item: Box::new(value),
+        },
+        TimelineOp::Append {
+            cursor,
+            id: text.clone(),
+            field: TimelineField::Thinking,
+            text: text.clone(),
+        },
+        TimelineOp::Remove {
+            cursor,
+            id: text.clone(),
+        },
+        TimelineOp::Session { cursor, session },
+        TimelineOp::Unavailable { message: text },
+        TimelineOp::Checkpoint { cursor },
+    ];
+    assert!(postcard::to_allocvec(&operations).unwrap().len() <= super::operations(&operations));
+    let update = TimelineUpdate {
+        pane_id: PaneId(u64::MAX),
+        operations,
+    };
+    assert!(postcard::to_allocvec(&update).unwrap().len() <= super::update(&update));
+}
+
+#[test]
 fn cached_bounds_cover_every_body_and_nested_wire_value() {
     let text = "λ\0\"\\".repeat(512);
     let tool = TimelineTool {

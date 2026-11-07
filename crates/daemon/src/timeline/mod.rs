@@ -105,7 +105,33 @@ impl Default for Mailbox {
 
 struct MailboxSlot {
     watch: u64,
-    pending: Option<TimelineUpdate>,
+    pending: Option<CachedUpdate>,
+}
+
+struct CachedUpdate {
+    value: TimelineUpdate,
+    wire_bound: usize,
+}
+
+impl CachedUpdate {
+    fn new(value: TimelineUpdate) -> Self {
+        Self {
+            wire_bound: value_weight::update(&value),
+            value,
+        }
+    }
+
+    fn bounded(self) -> Self {
+        if self.wire_bound <= MAX_PUSH_BYTES {
+            return self;
+        }
+        Self::new(TimelineUpdate {
+            pane_id: self.value.pane_id,
+            operations: vec![TimelineOp::Unavailable {
+                message: "This Chat update is too large. Open Terminal to continue.".into(),
+            }],
+        })
+    }
 }
 
 impl Mailbox {
@@ -133,22 +159,20 @@ impl Mailbox {
             return;
         };
         // Cancellation can leave a forwarder finishing its batch after the watch was replaced.
-        let oversized =
-            postcard::to_allocvec(&update).map_or(true, |bytes| bytes.len() > MAX_PUSH_BYTES);
-        let update = if (slot.pending.is_some() || oversized)
+        let mut update = CachedUpdate::new(update);
+        if (slot.pending.is_some() || update.wire_bound > MAX_PUSH_BYTES)
             && !update
+                .value
                 .operations
                 .iter()
                 .any(|operation| matches!(operation, TimelineOp::Unavailable { .. }))
         {
-            TimelineUpdate {
-                pane_id: update.pane_id,
+            update = CachedUpdate::new(TimelineUpdate {
+                pane_id: update.value.pane_id,
                 operations: vec![TimelineOp::Snapshot(snapshot())],
-            }
-        } else {
-            update
-        };
-        slot.pending = Some(update);
+            });
+        }
+        slot.pending = Some(update.bounded());
         self.ready.notify_one();
     }
 
@@ -156,7 +180,7 @@ impl Mailbox {
         lock(&self.slots)
             .values_mut()
             .filter_map(|slot| slot.pending.take())
-            .map(ServerCtl::Timeline)
+            .map(|pending| ServerCtl::Timeline(pending.value))
             .collect()
     }
 
@@ -421,7 +445,7 @@ async fn refresh_live(
         // Reopens must not reuse an epoch consumed by a local transcript rewrite.
         NEXT_EPOCH.fetch_max(state.cursor().epoch, Ordering::Relaxed);
         let operations = operations?;
-        if postcard::to_allocvec(&operations).map_or(true, |bytes| bytes.len() > MAX_PUSH_BYTES) {
+        if value_weight::operations(&operations) > MAX_PUSH_BYTES {
             Ok(vec![TimelineOp::Snapshot(state.snapshot(None))])
         } else {
             Ok(operations)

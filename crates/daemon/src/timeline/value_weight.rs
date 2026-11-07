@@ -1,4 +1,7 @@
-use proto::{FileDiff, TimelineBody, TimelineItem, TimelineTool};
+use proto::{
+    FileDiff, TimelineBody, TimelineItem, TimelineOp, TimelineSession, TimelineSnapshot,
+    TimelineTool, TimelineUpdate,
+};
 
 #[cfg(test)]
 #[path = "value_weight_tests.rs"]
@@ -31,6 +34,51 @@ pub(super) fn item(item: &TimelineItem) -> usize {
         TimelineBody::TurnEnd { .. } | TimelineBody::Unsupported => 0,
     };
     2 * std::mem::size_of_val(item) + fields + body
+}
+
+/// Bounds one queued update without creating a temporary encoded payload.
+pub(super) fn update(value: &TimelineUpdate) -> usize {
+    2 * std::mem::size_of_val(value) + operations(&value.operations)
+}
+
+/// Bounds a freshly produced operation batch before it enters the shared broadcast queue.
+pub(super) fn operations(values: &[TimelineOp]) -> usize {
+    2 * std::mem::size_of::<Vec<TimelineOp>>() + values.iter().map(operation).sum::<usize>()
+}
+
+fn operation(value: &TimelineOp) -> usize {
+    let fields = match value {
+        TimelineOp::Snapshot(value) => snapshot(value),
+        TimelineOp::Upsert { item: value, .. } => item(value),
+        TimelineOp::Append { id, text, .. } => id.len() + text.len(),
+        TimelineOp::Remove { id, .. } => id.len(),
+        TimelineOp::Session { session: value, .. } => session(value),
+        TimelineOp::Unavailable { message } => message.len(),
+        TimelineOp::Checkpoint { .. } => 0,
+    };
+    2 * std::mem::size_of_val(value) + fields
+}
+
+fn snapshot(value: &TimelineSnapshot) -> usize {
+    2 * std::mem::size_of_val(value)
+        + session_fields(&value.session)
+        + value.items.iter().map(item).sum::<usize>()
+}
+
+fn session(value: &TimelineSession) -> usize {
+    2 * std::mem::size_of_val(value) + session_fields(value)
+}
+
+fn session_fields(value: &TimelineSession) -> usize {
+    value.native_session.len()
+        + optional(&value.title)
+        + optional(&value.model)
+        + array(&value.commands)
+        + value
+            .commands
+            .iter()
+            .map(|command| command.name.len() + command.description.len())
+            .sum::<usize>()
 }
 
 fn optional(text: &Option<String>) -> usize {

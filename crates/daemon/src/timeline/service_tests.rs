@@ -121,6 +121,50 @@ fn a_large_push_is_replaced_by_a_bounded_snapshot_before_encoding_on_ctl() {
 }
 
 #[test]
+fn an_oversized_coalescing_snapshot_becomes_a_bounded_terminal_failure() {
+    let mailbox = Mailbox::default();
+    mailbox.register(PaneId(1), 42);
+    mailbox.push(42, update(1), || snapshot(1));
+    mailbox.push(42, update(2), || {
+        let mut value = snapshot(2);
+        value.session.title = Some("x".repeat(MAX_PUSH_BYTES + 1));
+        value
+    });
+    let messages = mailbox.take();
+    let ServerCtl::Timeline(received) = &messages[0] else {
+        panic!("timeline update")
+    };
+    assert!(
+        matches!(received.operations.as_slice(), [TimelineOp::Unavailable { message }] if message.contains("Terminal"))
+    );
+    assert!(postcard::to_allocvec(received).unwrap().len() < MAX_PUSH_BYTES);
+}
+
+#[test]
+fn oversized_failure_text_cannot_bypass_the_mailbox_byte_allowance() {
+    let mailbox = Mailbox::default();
+    mailbox.register(PaneId(1), 42);
+    mailbox.push(
+        42,
+        TimelineUpdate {
+            pane_id: PaneId(1),
+            operations: vec![TimelineOp::Unavailable {
+                message: "x".repeat(MAX_PUSH_BYTES + 1),
+            }],
+        },
+        || panic!("failure must not become a successful snapshot"),
+    );
+    let messages = mailbox.take();
+    let ServerCtl::Timeline(received) = &messages[0] else {
+        panic!("timeline update")
+    };
+    assert!(postcard::to_allocvec(received).unwrap().len() < MAX_PUSH_BYTES);
+    assert!(
+        matches!(received.operations.as_slice(), [TimelineOp::Unavailable { message }] if message.contains("Terminal"))
+    );
+}
+
+#[test]
 fn failure_notes_are_not_hidden_by_backpressure_coalescing() {
     let mailbox = Mailbox::default();
     mailbox.register(PaneId(1), 42);

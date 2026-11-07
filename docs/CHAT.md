@@ -243,7 +243,10 @@ are tested between complete records; a record that cannot fit after newer record
 to the next page, not silently truncated. This wire allowance does not establish a resident
 memory or RSS bound. A connection
 may watch four panes. Pushes occupy one mailbox slot per pane and coalesce to a snapshot
-under backpressure. Watch tokens prevent a cancelled forwarder from reviving an unwatched
+under backpressure. Each queued update caches a typed conservative wire bound, without an
+encode-to-measure allocation. Coalescing snapshots and failure messages are checked against
+the same allowance; an oversized fallback becomes a bounded Terminal failure, not another
+oversized queued payload. Watch tokens prevent a cancelled forwarder from reviving an unwatched
 pane or replacing a later watch. A stopped worker is never reused, even while an old
 connection still retains its Watch. Worker exit (including cancellation) marks the worker
 closed before publishing Unavailable; subscribers check liveness after subscribing so they
