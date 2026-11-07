@@ -39,6 +39,13 @@ dropped before a byte is read. Every call carries a token checked in constant ti
 MCP server uses the pane's own token whenever its environment, or the agent's, belongs to the
 pane it serves. It reads `hook.token` only as a fallback, and never takes it from argv.
 
+Environment-cleared helpers may inspect ancestors only below their own daemon. Each new pane
+carries a flavour-neutral `GUDO_DAEMON_PID` boundary, including renamed or embedded hosts;
+known daemon executable names also stop discovery for older launches. The daemon's own
+inherited environment is never a pane source. A foreign-flavour pane stops discovery too,
+and development helpers never fall back to legacy environment names. These are routing
+isolation checks, not a security boundary against arbitrary same-user code.
+
 What a pane token unlocks: hook events for that pane, askpass prompts for that pane, the
 browser calls described next, the session's drawings, and the terminal tools. The terminal
 tools read the session's panes and type into or close only panes the caller opened.
@@ -298,6 +305,10 @@ Each test runs the attack against the real code (real git, real sockets, a real 
 - `ws::editor_proxy::http_tests::refuses_hosts_that_are_not_loopback` and
   `ws::editor_proxy::tests::only_loopback_names_pass_the_host_check`: `localhost.evil.com`,
   `127.0.0.1.nip.io`, trailing dots, IPv4-mapped IPv6, decimal and hex IPs, userinfo tricks.
+- `procinfo::ancestry::tests::cleared_helpers_stop_at_real_process_boundaries`: private
+  subprocess hosts under release, development and renamed executable names, each carrying a
+  dummy parent pane; an environment-cleared helper must not recover that pane. The renamed
+  host supplies the PID boundary rather than depending on its basename.
 - `term::a_panes_environment_reaches_only_that_pane` (it): a pane's environment holds no
   `hook.token`; its own token cannot speak for the pane that opened it on the pull or browser
   channels; the agent tree stops at 32 panes, workers included.

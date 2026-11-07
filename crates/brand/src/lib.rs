@@ -3,10 +3,10 @@
 //! Renaming the product means editing this file and `apple/Brand.xcconfig`. The names the
 //! product had before live in [`legacy`], only to migrate installs made under them.
 
-/// Human-readable product name.
 pub const IS_DEV: bool = cfg!(gudo_dev);
+/// Human-readable product name.
 pub const PRODUCT_NAME: &str = if IS_DEV { "Gudo Dev" } else { "Gudo" };
-pub const CARGO_DAEMON_BIN: &str = "gudo-hostd";
+pub const CARGO_DAEMON_BIN: &str = RELEASE_DAEMON_BIN;
 pub const BUILD_DIRECTORY: &str = if IS_DEV { "dev" } else { "" };
 
 /// QUIC ALPN identifier for the client <-> daemon protocol, version 1.
@@ -14,17 +14,22 @@ pub const ALPN: &[u8] = b"gudo/1";
 
 /// Prefix for every environment variable we set in panes or read from the environment.
 pub const RELEASE_ENV_PREFIX: &str = "GUDO_";
+pub const DEV_ENV_PREFIX: &str = "GUDO_DEV_";
+/// Flavour-neutral boundary for helpers whose launcher clears their environment.
+pub const DAEMON_PID_ENV: &str = "GUDO_DAEMON_PID";
 pub const ENV_PREFIX: &str = if IS_DEV {
-    "GUDO_DEV_"
+    DEV_ENV_PREFIX
 } else {
     RELEASE_ENV_PREFIX
 };
 
 /// Name of the host daemon binary.
+pub const RELEASE_DAEMON_BIN: &str = "gudo-hostd";
+pub const DEV_DAEMON_BIN: &str = "gudo-dev-hostd";
 pub const DAEMON_BIN: &str = if IS_DEV {
-    "gudo-dev-hostd"
+    DEV_DAEMON_BIN
 } else {
-    "gudo-hostd"
+    RELEASE_DAEMON_BIN
 };
 
 /// Name of the agent hook shim binary.

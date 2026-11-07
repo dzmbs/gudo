@@ -526,6 +526,14 @@ fn own_token(
         .filter(|token| !token.is_empty())
 }
 
+fn inherited_pane_variable(name: &str, lookup: impl Fn(&str) -> Option<String>) -> Option<String> {
+    lookup(&brand::env_var(name)).or_else(|| {
+        (!brand::IS_DEV)
+            .then(|| lookup(&brand::legacy::env_var(name)))
+            .flatten()
+    })
+}
+
 /// The daemon's hook socket.
 #[derive(Debug)]
 pub struct SocketBackend {
@@ -564,9 +572,7 @@ impl SocketBackend {
         // Under Codex, which starts servers with a short environment allowlist, the pane's
         // variables are the agent's (an ancestor's).
         let pane_env = |name: &str| {
-            env(name)
-                .or_else(|| daemon::inherited_env_var(&brand::env_var(name)))
-                .or_else(|| daemon::inherited_env_var(&brand::legacy::env_var(name)))
+            env(name).or_else(|| inherited_pane_variable(name, daemon::inherited_env_var))
         };
         let env_pane = pane_env("PANE_ID");
         let pane = pane
@@ -672,6 +678,15 @@ impl Backend for SocketBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dev_helpers_never_fall_back_to_legacy_pane_context() {
+        let resolved = inherited_pane_variable("PANE_ID", |name| {
+            (name == brand::legacy::env_var("PANE_ID")).then(|| "private-legacy-pane".to_owned())
+        });
+        let expected = (!brand::IS_DEV).then(|| "private-legacy-pane".to_owned());
+        assert_eq!(resolved, expected);
+    }
 
     /// Answers from a script and records what was asked.
     #[derive(Default)]
@@ -827,7 +842,10 @@ mod tests {
         assert_eq!(reply["id"], 7);
         assert_eq!(reply["result"]["protocolVersion"], "2025-03-26");
         assert_eq!(reply["result"]["capabilities"], json!({ "tools": {} }));
-        assert_eq!(reply["result"]["serverInfo"]["name"], "Gudo-drawings");
+        assert_eq!(
+            reply["result"]["serverInfo"]["name"],
+            format!("{}-drawings", brand::PRODUCT_NAME)
+        );
         let reply = rpc(
             &mut fake,
             "initialize",

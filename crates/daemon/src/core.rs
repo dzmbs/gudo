@@ -1866,6 +1866,8 @@ impl Core {
         for (key, value) in &inject_env {
             command.env(key, value);
         }
+        // Helpers must not inherit the pane that launched this daemon.
+        command.env(brand::DAEMON_PID_ENV, std::process::id().to_string());
         let (cols, rows) = self.cfg.default_size;
         let size = PaneSize {
             cols,

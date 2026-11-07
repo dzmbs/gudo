@@ -8,7 +8,7 @@ use daemon::{HookRequest, HookResponse};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
-use crate::support::{TestClient, start, ticket};
+use crate::support::{TestClient, start, start_with, ticket};
 
 const PERMISSION: &str =
     include_str!("../../../agents/tests/fixtures/claude/permission_request.json");
@@ -74,6 +74,31 @@ async fn permission_request_is_answered_from_a_client() {
         stdout["hookSpecificOutput"]["decision"]["behavior"], "allow",
         "{stdout}"
     );
+    drop(owner);
+    daemon.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pane_helpers_receive_their_own_host_boundary() {
+    let directory = tempfile::tempdir().unwrap();
+    let daemon = start_with(directory.path(), |config| {
+        config
+            .pane_env
+            .push((brand::DAEMON_PID_ENV.into(), "private-stale-host".into()));
+    })
+    .await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = owner.attach_and_follow().await;
+    owner.type_line(
+        pane,
+        &format!(
+            "printf 'HOST_BOUNDARY=%s\\n' \"${}\"",
+            brand::DAEMON_PID_ENV
+        ),
+    );
+    owner
+        .wait_text(pane, &format!("HOST_BOUNDARY={}", std::process::id()))
+        .await;
     drop(owner);
     daemon.shutdown().await;
 }

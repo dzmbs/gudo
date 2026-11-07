@@ -8,6 +8,10 @@
 
 use std::path::PathBuf;
 
+mod ancestry;
+
+const MAX_ANCESTOR_DEPTH: usize = 64;
+
 /// `root` and all of its descendants.
 pub(crate) fn process_tree(root: u32) -> Vec<u32> {
     process_trees(&[root]).pop().unwrap_or_default()
@@ -70,17 +74,37 @@ pub(crate) fn process_env_var(pid: u32, name: &str) -> Option<String> {
 /// The value of `name` in the environment of this process's nearest ancestor that has it.
 ///
 /// For a helper whose launcher cleared its environment (Codex starts MCP servers with a short
-/// allowlist) but whose ancestors still carry the pane's variables.
+/// allowlist) but whose ancestors still carry the pane's variables. Stops before the host
+/// daemon or a foreign-flavour pane, never borrowing the pane that launched that daemon.
 pub fn inherited_env_var(name: &str) -> Option<String> {
     let parents: std::collections::HashMap<u32, u32> = imp::parent_table().into_iter().collect();
-    let mut pid = std::os::unix::process::parent_id();
-    while pid > 1 {
-        if let Some(value) = process_env_var(pid, name) {
-            return Some(value);
-        }
-        pid = *parents.get(&pid)?;
-    }
-    None
+    let ancestors = std::iter::successors(Some(std::os::unix::process::parent_id()), |pid| {
+        parents.get(pid).copied()
+    })
+    .take_while(|pid| *pid > 1)
+    .take(MAX_ANCESTOR_DEPTH)
+    .map(|pid| ancestry::Ancestor {
+        pid,
+        is_daemon: is_daemon_process(pid),
+        environment: imp::process_env(pid),
+    });
+    ancestry::inherited_variable(name, ancestors)
+}
+
+fn is_daemon_process(pid: u32) -> bool {
+    let daemon_name = |name: &str| {
+        [
+            brand::RELEASE_DAEMON_BIN,
+            brand::DEV_DAEMON_BIN,
+            brand::legacy::DAEMON_BIN,
+        ]
+        .contains(&name)
+    };
+    process_name(pid).is_some_and(|name| daemon_name(&name))
+        || exe_path(pid).is_some_and(|path| {
+            path.file_name()
+                .is_some_and(|name| daemon_name(&name.to_string_lossy()))
+        })
 }
 
 pub(crate) fn exe_path(pid: u32) -> Option<PathBuf> {
