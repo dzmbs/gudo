@@ -214,7 +214,13 @@ Files are opened without following a final symlink. Output reads reject stale fi
 or tail anchors, even before the file watcher runs.
 
 The daemon retains at most 512 items per watched pane and 128 tool-call merge entries.
-Item-count eviction removes complete native records, never just their first siblings.
+A separate 16 MiB indexed-value allowance is maintained incrementally on insertion,
+revision and whole-record eviction. Each value reserves four cached wire allowances for
+owned strings/vectors, duplicate index keys and metadata. This conservative accounting is
+not an allocator/RSS measurement and does not include parser state, temporary reads,
+in-flight updates or rendered caches. Both count and value pressure remove complete native
+records, never just their first siblings. If revisions expand the currently updated record
+past the entire allowance, it becomes an explicit Terminal notice rather than an empty page.
 Records exceeding the 512-item or page-byte allowance become one explicit Terminal notice
 on open, live refresh and history reads. Tool results retain their original record position.
 Initial and historical reads seek within the last 8 MiB before the requested position;

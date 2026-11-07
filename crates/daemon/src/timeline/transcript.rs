@@ -14,6 +14,8 @@ use proto::{
 use super::record_stream::{RECORD_BYTES_LIMIT as READ_LIMIT, RecordStream};
 const SNAPSHOT_BYTES: usize = 1024 * 1024;
 const CACHE_ITEMS: usize = 512;
+const CACHE_VALUE_BYTES: usize = 16 * 1024 * 1024;
+const INDEXED_VALUE_FACTOR: usize = 4;
 const OUTPUT_PAGE_BYTES: usize = 256 * 1024;
 
 pub(super) struct Transcript {
@@ -30,6 +32,7 @@ pub(super) struct Transcript {
     cursor: TimelineCursor,
     order: VecDeque<String>,
     items: HashMap<String, StoredItem>,
+    retained_bytes: usize,
 }
 
 struct StoredItem {
@@ -45,6 +48,12 @@ impl StoredItem {
             item,
             offset,
         }
+    }
+
+    fn retained_weight(&self) -> usize {
+        // Reserve for owned fields plus duplicated index keys and container metadata.
+        // The wire bound is cached; this value allowance is not an allocator/RSS reading.
+        self.encoded_bound * INDEXED_VALUE_FACTOR
     }
 
     fn replace(&mut self, item: TimelineItem) {
@@ -85,6 +94,7 @@ impl Transcript {
             cursor: TimelineCursor { epoch, sequence: 0 },
             order: VecDeque::new(),
             items: HashMap::new(),
+            retained_bytes: 0,
         };
         let window = read_window(&mut transcript.file, metadata.len(), 60)?;
         transcript.stream = window.stream;
@@ -385,6 +395,10 @@ impl Transcript {
     }
 
     fn store(&mut self, mut item: TimelineItem, offset: u64) -> Option<TimelineItem> {
+        let original_offset = self
+            .items
+            .get(&item.id)
+            .map_or(offset, |stored| stored.offset);
         if let Some(stored) = self.items.get_mut(&item.id) {
             if item.body == stored.item.body
                 && item.turn == stored.item.turn
@@ -392,20 +406,37 @@ impl Transcript {
             {
                 return None;
             }
+            self.retained_bytes -= stored.retained_weight();
             item.revision = stored.item.revision.saturating_add(1);
             stored.replace(item.clone());
+            self.retained_bytes += stored.retained_weight();
         } else {
+            let stored = StoredItem::new(item.clone(), offset);
+            self.retained_bytes += stored.retained_weight();
             self.order.push_back(item.id.clone());
-            self.items
-                .insert(item.id.clone(), StoredItem::new(item.clone(), offset));
+            self.items.insert(item.id.clone(), stored);
         }
-        while self.order.len() > CACHE_ITEMS {
-            self.evict_oldest_record();
-        }
-        Some(item)
+        Some(self.enforce_cache_limit(item, original_offset))
     }
 
-    fn evict_oldest_record(&mut self) {
+    fn enforce_cache_limit(&mut self, mut item: TimelineItem, offset: u64) -> TimelineItem {
+        let mut replaced = false;
+        while self.order.len() > CACHE_ITEMS || self.retained_bytes > CACHE_VALUE_BYTES {
+            if self.evict_oldest_record() == Some(offset) && !replaced {
+                // Revisions can grow one old record beyond the entire allowance. Do not
+                // silently empty the timeline or emit a value we immediately discarded.
+                item = record_notice(offset, item.at);
+                let stored = StoredItem::new(item.clone(), offset);
+                self.retained_bytes += stored.retained_weight();
+                self.order.push_front(item.id.clone());
+                self.items.insert(item.id.clone(), stored);
+                replaced = true;
+            }
+        }
+        item
+    }
+
+    fn evict_oldest_record(&mut self) -> Option<u64> {
         // Partial retention would make the next snapshot's record cursor silently lossy.
         let offset = self
             .order
@@ -420,10 +451,13 @@ impl Transcript {
             {
                 break;
             }
-            if let Some(id) = self.order.pop_front() {
-                self.items.remove(&id);
+            if let Some(id) = self.order.pop_front()
+                && let Some(stored) = self.items.remove(&id)
+            {
+                self.retained_bytes -= stored.retained_weight();
             }
         }
+        offset
     }
 
     fn empty_page(session: TimelineSession, cursor: TimelineCursor) -> TimelineSnapshot {

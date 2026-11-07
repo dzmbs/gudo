@@ -387,6 +387,149 @@ fn revising_a_cached_value_refreshes_its_wire_bound_without_moving_its_record() 
     assert!(postcard::to_allocvec(&stored.item).unwrap().len() <= stored.encoded_bound);
     assert_eq!(stored.offset, 0);
     assert_eq!(stored.item.revision, 2);
+    assert!(retained_value_weight(&transcript) <= CACHE_VALUE_BYTES);
+}
+
+fn retained_value_weight(transcript: &Transcript) -> usize {
+    let weight = transcript
+        .items
+        .values()
+        .map(StoredItem::retained_weight)
+        .sum();
+    assert_eq!(transcript.retained_bytes, weight);
+    weight
+}
+
+#[test]
+fn opening_a_tail_respects_the_value_allowance_before_the_item_cap() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("test.jsonl");
+    let text = "x".repeat(200_000);
+    let contents: String = (0..60)
+        .map(|index| message_blocks(index, std::slice::from_ref(&text)))
+        .collect();
+    std::fs::write(&path, contents).unwrap();
+    let mut transcript = open(&path);
+    assert!(transcript.items.len() < CACHE_ITEMS);
+    let weight = retained_value_weight(&transcript);
+    assert!(
+        weight <= CACHE_VALUE_BYTES,
+        "retained value allowance exceeded: {weight}"
+    );
+    let snapshot = transcript.snapshot(60, None);
+    let mut before = snapshot.before;
+    let mut seen: std::collections::HashSet<_> =
+        snapshot.items.into_iter().map(|item| item.id).collect();
+    while let Some(cursor) = before {
+        let page = transcript.page(cursor, 100, None).unwrap();
+        for item in page.items {
+            assert!(seen.insert(item.id));
+        }
+        assert!(page.before.is_none_or(|older| older < cursor));
+        before = page.before;
+    }
+    assert_eq!(seen.len(), 60);
+    assert_eq!(retained_value_weight(&transcript), weight);
+}
+
+#[test]
+fn live_growth_respects_the_value_allowance_before_the_item_cap() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("test.jsonl");
+    std::fs::write(&path, message(0)).unwrap();
+    let mut transcript = open(&path);
+    let text = "x".repeat(100_000);
+    let mut writer = OpenOptions::new().append(true).open(&path).unwrap();
+    for index in 1..=80 {
+        writer
+            .write_all(message_blocks(index, std::slice::from_ref(&text)).as_bytes())
+            .unwrap();
+    }
+    assert_eq!(transcript.refresh().unwrap().len(), 80);
+    assert!(transcript.items.len() < CACHE_ITEMS);
+    let weight = retained_value_weight(&transcript);
+    assert!(
+        weight <= CACHE_VALUE_BYTES,
+        "retained value allowance exceeded: {weight}"
+    );
+}
+
+#[test]
+fn value_pressure_preserves_whole_records_and_their_history_boundaries() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("test.jsonl");
+    let blocks = vec!["x".repeat(11_000); 50];
+    let contents: String = (0..8).map(|index| message_blocks(index, &blocks)).collect();
+    std::fs::write(&path, contents).unwrap();
+    let mut transcript = open(&path);
+    assert!(transcript.items.len() < 400);
+    assert_eq!(transcript.items.len() % 50, 0);
+    let weight = retained_value_weight(&transcript);
+    assert!(weight <= CACHE_VALUE_BYTES);
+    let snapshot = transcript.snapshot(1, None);
+    assert_eq!(snapshot.items.len(), 50);
+    let mut before = snapshot.before;
+    let mut seen: std::collections::HashSet<_> =
+        snapshot.items.into_iter().map(|item| item.id).collect();
+    while let Some(cursor) = before {
+        let page = transcript.page(cursor, 1, None).unwrap();
+        assert_eq!(page.items.len(), 50);
+        for item in page.items {
+            assert!(seen.insert(item.id));
+        }
+        assert!(page.before.is_none_or(|older| older < cursor));
+        before = page.before;
+    }
+    assert_eq!(seen.len(), 400);
+    assert_eq!(retained_value_weight(&transcript), weight);
+}
+
+#[test]
+fn revising_one_record_past_the_value_allowance_publishes_a_terminal_notice() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("test.jsonl");
+    std::fs::write(&path, message_blocks(0, &vec!["x".into(); 32])).unwrap();
+    let mut transcript = open(&path);
+    let original = transcript.snapshot(60, None).items;
+    let mut fallback = None;
+    for (index, mut item) in original.into_iter().enumerate() {
+        item.body = proto::TimelineBody::Assistant {
+            text: "x".repeat(200_000),
+            streaming: false,
+        };
+        let update = transcript.store(item, 10_000 + index as u64).unwrap();
+        if matches!(update.body, proto::TimelineBody::Notice { .. }) {
+            fallback = Some(update);
+            break;
+        }
+    }
+    let fallback =
+        fallback.expect("discarding the revised record must be explicit, not an empty snapshot");
+    assert_eq!(transcript.snapshot(60, None).items, vec![fallback]);
+    assert!(retained_value_weight(&transcript) <= CACHE_VALUE_BYTES);
+}
+
+#[test]
+fn cached_value_accounting_handles_shrink_duplicates_and_epoch_resets() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("test.jsonl");
+    std::fs::write(&path, message_blocks(0, &["x".repeat(100_000)])).unwrap();
+    let mut transcript = open(&path);
+    let original = retained_value_weight(&transcript);
+    let mut writer = OpenOptions::new().append(true).open(&path).unwrap();
+    writer.write_all(message(0).as_bytes()).unwrap();
+    assert_eq!(transcript.refresh().unwrap().len(), 1);
+    let smaller = retained_value_weight(&transcript);
+    assert!(smaller < original);
+    writer.write_all(message(0).as_bytes()).unwrap();
+    assert!(transcript.refresh().unwrap().is_empty());
+    assert_eq!(retained_value_weight(&transcript), smaller);
+    std::fs::write(&path, message(9)).unwrap();
+    assert_eq!(transcript.refresh().unwrap().len(), 1);
+    assert_eq!(transcript.items.len(), 1);
+    assert!(transcript.items.contains_key("message-9:0"));
+    assert!(retained_value_weight(&transcript) <= CACHE_VALUE_BYTES);
+    assert!(transcript.cursor.epoch > 7);
 }
 
 #[test]
