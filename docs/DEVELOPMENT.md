@@ -55,6 +55,8 @@ configuration changes; never replace the daily agent configuration with dev laun
 Tests use temporary state and HOME directories. Never install a test helper as a service, never
 pair or restart the daily helper, and never use macOS UI automation or foreground app launches for
 validation. In-process AppTests and offscreen captures do not require switching away from work.
+Always use `-only-testing:AppTests` (or narrower AppTests selectors) with `xcodebuild test`;
+the App scheme also contains UI-test targets.
 
 ## Real-agent sizing acceptance
 
@@ -71,3 +73,20 @@ Run `AppTests/AgentSizingCaptureTests` with
 Mac and iOS Simulator, using `-collect-test-diagnostics never`. It verifies geometry and renders
 each snapshot at desktop and phone viewports into `native/`. These are native offscreen Debug
 captures, not live paired hardware or physical-device Release measurements.
+
+## Shell completion/header acceptance
+
+The parity script also runs real zsh/ZLE with 200 files in a temporary HOME and a private
+prompt-regeneration hook that exercises the p10k-style integration fallback. It lists matches,
+then copies a private fixture and records bounded command metadata. It does not source the
+user's p10k configuration or touch real Downloads. Run it alone with:
+
+```sh
+GUDO_SHELL_CAPTURE_DIR=/tmp/gudo-shell cargo test -p daemon --test it shell::zsh_theme_fallback_completion
+```
+
+`AppTests/CommandBadgeTests` accepts `TEST_RUNNER_GUDO_SHELL_CAPTURE_DIR=/tmp/gudo-shell` for
+native Mac/iOS offscreen playback: real VT snapshots are rendered through Metal, with the native
+badge also fed 200 extra legacy listing lines to verify the one-line presentation backstop.
+Dark/light images land in `native/`. This is isolated Debug playback, not live paired hardware,
+and the theme hook is a reproduction of fallback behavior, not an installed p10k theme.

@@ -211,8 +211,15 @@ app (`ClientEvent::PaneHistory`) for its own decoder.
   and calls back during `write`; the daemon pins the cursor cell at each event (tracked grid
   references follow the cell through scrolling, reflow and pruning). A command is
   `{id, command, cwd, started_at, exit, duration}`; the command line is the shell's
-  `cmdline=` if sent, else the text between the `B` and `C` pins. `ServerCtl::CommandMark` is
-  sent at start and end. OSC 7 accepts both `file://` and `kitty-shell-cwd://`.
+  `cmdline=` if sent, else bounded screen text from the input start toward `C`. Soft wraps
+  join; a hard newline ends input unless the next row has an explicit continuation prompt
+  (`133;P;k=s`), whose `B` excludes its prompt glyphs. A fresh non-continuation `B` re-pins
+  input even without another `A` (zsh theme fallback redraw); primary `P;k=i` also starts
+  fresh. `D` releases abandoned input, including inferred fish input. Extraction is capped at
+  4,096 characters/rows and 128 continuation pins; overflow leaves the command unknown.
+  `ServerCtl::CommandMark` is sent at start and end. OSC 7 accepts both `file://` and
+  `kitty-shell-cwd://`. Native sticky badges show only the leading line, tail-truncated and
+  fixed to one text line, even when an older daemon supplies contaminated multiline text.
 - **Finished while unseen**: a command running at least `Config::long_command` (10 s) that ends
   while no connected client has the pane focused or visible is pushed to every client as
   `CommandFinishedUnseen` (for a local notification now, push later). Its attention item reads
@@ -2708,8 +2715,11 @@ An agent on host A driving a pane on host B. Not built; the safe shape:
   bottom. Extracting a large scrollback holds the pane's VT lock for a few tens of ms.
 - Mark `at_seq` is the end of the output chunk that carried the OSC 133 sequence, not its exact
   offset (libghostty-vt reports the event, not the byte).
-- fish 3 sends no `133;B`, so its command lines are unknown (fish 4 marks prompts itself);
-  macOS's `/bin/bash` 3.2 gets no automatic integration (as in Ghostty).
+- fish 3 sends no `133;B`, so command text uses a best-effort inferred start and may be
+  unknown (fish 4 marks prompts itself). A theme/widget redraw without fresh `A`/`P`/`B`
+  marks can leave only the first known logical input line; completion rows are not treated
+  as command text, but the full edited command cannot be reconstructed reliably from those
+  missing marks. macOS's `/bin/bash` 3.2 gets no automatic integration (as in Ghostty).
 - Links: git SHAs, IPs and ports are not detected yet.
 - Multiplayer (§6), not built yet: short PAKE codes, guest push registration, per-pane redaction, the
   structured lane for prompters (today prompts are sanitized keystrokes into the TUI), the

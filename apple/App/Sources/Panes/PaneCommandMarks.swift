@@ -131,7 +131,7 @@ final class PaneCommandMarks: NSObject {
            let block = entries.first(where: { $0.block.id == top.mark.id })?.block, let command = block.mark.command
         {
             let status = Self.result(block).map { "  \($0)" } ?? ""
-            stickyHeader.show("$ \(command)\(status)", color: palette.textSecondary, palette: palette, in: view)
+            stickyHeader.show("$ \(command.prefix { !$0.isNewline })\(status)", color: palette.textSecondary, palette: palette, in: view)
             stickyHeader.place(leading: max(surface.paddingPoints, 4) + 4, top: 2, maxWidth: view.bounds.width - 16, in: view)
         } else {
             stickyHeader.hide()
@@ -550,12 +550,14 @@ final class CommandBadge {
         label.layer.masksToBounds = true
         label.layer.borderWidth = 0.5
         label.lineBreakMode = .byTruncatingTail
+        label.numberOfLines = 1
         label.accessibilityIdentifier = identifier
     }
 
     func show(_ text: String, color: Color, palette: ChromePalette, in view: UIView) {
         if label.superview !== view { view.addSubview(label) }
-        label.text = text
+        let text = String(text.prefix { !$0.isNewline })
+        if label.text != text { label.text = text }
         label.textColor = UIColor(color)
         label.backgroundColor = UIColor(palette.raisedColor)
         label.layer.borderColor = UIColor(palette.hairline).cgColor
@@ -569,7 +571,7 @@ final class CommandBadge {
 
     func place(leading: CGFloat, top: CGFloat, maxWidth: CGFloat, in view: UIView) {
         let size = label.intrinsicContentSize
-        label.frame = CGRect(x: leading, y: top, width: min(size.width, maxWidth - leading), height: size.height)
+        label.frame = CGRect(x: leading, y: top, width: min(size.width, max(0, maxWidth - leading)), height: size.height)
     }
 
     func hide() { label.isHidden = true }
@@ -595,13 +597,16 @@ final class CommandBadge {
         field.layer?.cornerRadius = DS.Radius.chip
         field.layer?.borderWidth = 0.5
         field.lineBreakMode = .byTruncatingTail
+        field.maximumNumberOfLines = 1
+        field.usesSingleLineMode = true
         field.drawsBackground = true
         field.setAccessibilityIdentifier(identifier)
     }
 
     func show(_ text: String, color: Color, palette: ChromePalette, in view: NSView) {
         if field.superview !== view { view.addSubview(field) }
-        field.stringValue = " \(text) "
+        let text = " \(text.prefix { !$0.isNewline }) "
+        if field.stringValue != text { field.stringValue = text }
         field.textColor = NSColor(color)
         field.backgroundColor = NSColor(palette.raisedColor)
         field.layer?.borderColor = NSColor(palette.hairline).cgColor
@@ -615,7 +620,7 @@ final class CommandBadge {
 
     func place(leading: CGFloat, top: CGFloat, maxWidth: CGFloat, in view: NSView) {
         let size = field.intrinsicContentSize
-        field.frame = CGRect(x: leading, y: top, width: min(size.width, maxWidth - leading), height: size.height + 2)
+        field.frame = CGRect(x: leading, y: top, width: min(size.width, max(0, maxWidth - leading)), height: size.height + 2)
     }
 
     func hide() { field.isHidden = true }

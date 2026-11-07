@@ -18,6 +18,7 @@ use crate::identity::now_millis;
 const MAX_COMMANDS: usize = 1000;
 /// Longest command line read off the screen.
 const MAX_COMMAND_LINE: usize = 4096;
+const MAX_CONTINUATIONS: usize = 128;
 
 /// A change worth telling clients about.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +55,9 @@ pub(crate) struct CommandLog {
     /// Pins of the prompt being drawn or edited, before its command runs.
     prompt: Option<PinId>,
     input: Option<PinId>,
+    continuations: Vec<PinId>,
+    pending_prompt: Option<PromptKind>,
+    continuation_overflow: bool,
     commands: VecDeque<Command>,
     /// The current prompt's input state, for the mobile line editor.
     line: crate::assist::marks::LineMarks,
@@ -71,6 +75,12 @@ impl CommandLog {
         self.next_id = self.next_id.max(last_id);
     }
 
+    fn clear_continuations(&mut self, term: &mut Terminal) {
+        self.continuations.drain(..).for_each(|pin| term.unpin(pin));
+        self.pending_prompt = None;
+        self.continuation_overflow = false;
+    }
+
     /// Applies the terminal's recorded shell-integration events. `seq` is the output offset
     /// after the bytes that produced them.
     pub fn apply(
@@ -86,25 +96,65 @@ impl CommandLog {
                 SemanticPromptKind::PromptStart(PromptKind::Primary) => {
                     replace(term, &mut self.prompt, event.pin);
                     replace(term, &mut self.input, None);
+                    self.clear_continuations(term);
+                    self.pending_prompt = Some(PromptKind::Primary);
                     self.line.prompt_started(term);
                     // Shells that never send 133;B (fish 3) are at their prompt from here.
                     updates.push(CommandUpdate::AtPrompt(true));
                 }
-                SemanticPromptKind::PromptStart(_) => {
-                    // After the input start: a continuation prompt (PS2).
-                    if self.input.is_some() {
+                SemanticPromptKind::PromptStart(kind) => {
+                    self.pending_prompt = Some(kind);
+                    if kind != PromptKind::Right && self.input.is_some() {
                         self.line.continuation = true;
-                    }
-                    release(term, event.pin);
-                }
-                SemanticPromptKind::InputStart => {
-                    self.line.input_started(term);
-                    // Continuation prompts report input starts too; keep the first.
-                    if self.input.is_none() {
-                        self.input = event.pin;
+                        if self.continuations.len() < MAX_CONTINUATIONS {
+                            if let Some(pin) = event.pin {
+                                self.continuations.push(pin);
+                            } else {
+                                self.continuation_overflow = true;
+                            }
+                        } else {
+                            self.continuation_overflow = true;
+                            release(term, event.pin);
+                        }
                     } else {
                         release(term, event.pin);
                     }
+                }
+                SemanticPromptKind::InputStart => {
+                    match self.pending_prompt.take() {
+                        Some(PromptKind::Right) => {
+                            release(term, event.pin);
+                            continue;
+                        }
+                        Some(PromptKind::Continuation | PromptKind::Secondary)
+                            if self.input.is_some() =>
+                        {
+                            // Replace the PS2 start with its input start, excluding prompt glyphs.
+                            if !self.continuation_overflow
+                                && let Some(last) = self.continuations.last_mut()
+                                && let Some(pin) = event.pin
+                            {
+                                term.unpin(std::mem::replace(last, pin));
+                            } else {
+                                self.continuation_overflow = true;
+                                release(term, event.pin);
+                            }
+                        }
+                        _ => {
+                            if self.input.is_some() {
+                                // zle-line-init fallback redraw: a fresh B without another A.
+                                let prompt = event
+                                    .pin
+                                    .and_then(|pin| term.pin_point(pin))
+                                    .and_then(|point| term.pin_at(point).ok());
+                                replace(term, &mut self.prompt, prompt);
+                                self.line.prompt_started(term);
+                            }
+                            self.clear_continuations(term);
+                            replace(term, &mut self.input, event.pin);
+                        }
+                    }
+                    self.line.input_started(term);
                     updates.push(CommandUpdate::AtPrompt(true));
                 }
                 SemanticPromptKind::OutputStart { command } => {
@@ -123,6 +173,7 @@ impl CommandLog {
                         })
                         .filter(|line| !line.is_empty());
                     self.next_id += 1;
+                    self.clear_continuations(term);
                     self.line.output_started(term, self.next_id);
                     let mark = CommandMark {
                         pane_id: pane,
@@ -164,11 +215,14 @@ impl CommandLog {
                                 duration_ms: command.started.elapsed().as_millis() as u64,
                             });
                             updates.push(CommandUpdate::Mark(command.mark.clone()));
-                            self.line.command_ended();
                         }
                         // A prompt without a command (empty Enter, the first prompt).
                         None => release(term, event.pin),
                     }
+                    replace(term, &mut self.prompt, None);
+                    replace(term, &mut self.input, None);
+                    self.clear_continuations(term);
+                    self.line.command_ended(term);
                 }
             }
         }
@@ -202,12 +256,49 @@ impl CommandLog {
         if end < start {
             return None;
         }
-        let text = term
-            .text_wrapped(TextRegion::Range { start, end }, Wrap::Join)
-            .ok()?;
+        if self.continuation_overflow {
+            return None;
+        }
+        let mut text = String::new();
+        let mut remaining = MAX_COMMAND_LINE;
+        let mut x = start.x;
+        // A hard newline ends input unless the next row has an explicit PS2 mark. Reading
+        // row by row bounds work and never allocates an entire completion listing first.
+        for y in (start.y..=end.y).take(MAX_COMMAND_LINE) {
+            let row = term.row(y).ok()?;
+            let end_x = if y == end.y { end.x } else { term.cols() - 1 };
+            let piece = term
+                .text_wrapped(
+                    TextRegion::Range {
+                        start: Point { y, x },
+                        end: Point { y, x: end_x },
+                    },
+                    Wrap::Join,
+                )
+                .ok()?;
+            let piece: String = piece.chars().take(remaining).collect();
+            remaining -= piece.chars().count();
+            text.push_str(&piece);
+            if remaining == 0 || y == end.y {
+                break;
+            }
+            if row.wrapped {
+                x = 0;
+            } else if let Some(next) = self
+                .continuations
+                .iter()
+                .filter_map(|&pin| term.pin_point(pin))
+                .find(|point| point.y == y + 1)
+            {
+                text.push('\n');
+                remaining -= 1;
+                x = next.x;
+            } else {
+                break;
+            }
+        }
         // Leading whitespace is kept for the history privacy rule; the caller trims.
-        let text = self.line.strip_right_prompt(text.trim_end());
-        Some(text.chars().take(MAX_COMMAND_LINE).collect())
+        Some(self.line.strip_right_prompt(text.trim_end()))
     }
 
     /// Every remembered command with its current rows, oldest first.
@@ -343,5 +434,99 @@ mod tests {
         };
         assert_eq!(start.command.as_deref(), Some("makefr- mr test"));
         assert_eq!(start.cwd, None);
+    }
+
+    fn command(bytes: &[u8], cols: u16) -> Option<String> {
+        let mut term = Terminal::new(cols, 10).unwrap();
+        term.record_semantic_prompts().unwrap();
+        let mut log = CommandLog::default();
+        feed(&mut log, &mut term, bytes);
+        log.list(&term)
+            .last()
+            .and_then(|info| info.mark.command.clone())
+    }
+
+    #[test]
+    fn unmarked_hard_newlines_are_not_command_input() {
+        assert_eq!(
+            command(
+                b"\x1b]133;A\x07$ \x1b]133;B\x07echo safe\r\ncompletion noise\r\n\x1b]133;C\x07",
+                40
+            )
+            .as_deref(),
+            Some("echo safe")
+        );
+    }
+
+    #[test]
+    fn marked_continuations_are_kept_without_their_prompt_text() {
+        assert_eq!(command(b"\x1b]133;A\x07$ \x1b]133;B\x07echo first \\\r\n\x1b]133;P;k=s\x07> \x1b]133;B\x07second\r\nnoise\r\n\x1b]133;C\x07", 40).as_deref(), Some("echo first \\\nsecond"));
+    }
+
+    #[test]
+    fn soft_wrapped_commands_keep_spaces_at_wrap_boundaries() {
+        assert_eq!(
+            command(
+                b"\x1b]133;A\x07$ \x1b]133;B\x07printf 'a   b'\r\n\x1b]133;C\x07",
+                10
+            )
+            .as_deref(),
+            Some("printf 'a   b'")
+        );
+    }
+
+    #[test]
+    fn abandoned_input_is_dropped_even_without_an_output_start() {
+        assert_eq!(
+            command(
+                b"\x1b]133;A\x07$ \x1b]133;B\x07abandoned\r\n\x1b]133;D\x07\x1b]133;C\x07",
+                40
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn abandoned_inferred_input_is_also_released() {
+        let mut term = Terminal::new(40, 10).unwrap();
+        term.record_semantic_prompts().unwrap();
+        let mut log = CommandLog::default();
+        feed(&mut log, &mut term, b"\x1b]133;A\x07$ ");
+        feed(&mut log, &mut term, b"abandoned\r\n\x1b]133;D\x07");
+        feed(&mut log, &mut term, b"\x1b]133;C\x07");
+        assert_eq!(log.list(&term).last().unwrap().mark.command, None);
+    }
+
+    #[test]
+    fn multiline_primary_prompt_still_establishes_its_first_input_start() {
+        assert_eq!(command(b"\x1b]133;A\x07directory\r\n\x1b]133;P;k=s\x07$ \x1b]133;B\x07echo safe\r\n\x1b]133;C\x07", 40).as_deref(), Some("echo safe"));
+    }
+
+    #[test]
+    fn continuation_pins_are_bounded_and_overflow_does_not_guess_a_command() {
+        let mut term = Terminal::new(40, 10).unwrap();
+        term.record_semantic_prompts().unwrap();
+        let mut log = CommandLog::default();
+        feed(
+            &mut log,
+            &mut term,
+            b"\x1b]133;A\x07$ \x1b]133;B\x07echo first\r\n",
+        );
+        for _ in 0..=MAX_CONTINUATIONS {
+            feed(
+                &mut log,
+                &mut term,
+                b"\x1b]133;P;k=s\x07> \x1b]133;B\x07next\r\n",
+            );
+        }
+        assert_eq!(log.continuations.len(), MAX_CONTINUATIONS);
+        feed(&mut log, &mut term, b"\x1b]133;C\x07");
+        assert_eq!(log.list(&term).last().unwrap().mark.command, None);
+        assert!(log.continuations.is_empty());
+    }
+
+    #[test]
+    fn primary_prompt_redraw_replaces_the_old_input_start() {
+        assert_eq!(command(b"\x1b]133;A\x07$ \x1b]133;B\x07old\r\nnoise\r\n\x1b]133;P;k=i\x07$ \x1b]133;B\x07new\r\n\x1b]133;C\x07", 40).as_deref(), Some("new"));
     }
 }

@@ -208,3 +208,174 @@ async fn fish_integration_marks_commands() {
     // fish 3 sends no 133;B (fish 4 marks its prompts itself).
     scenario(&fish, false).await;
 }
+
+/// The zle-line-init fallback can mark a fresh input area without another 133;A.
+/// Replay through a real pane PTY, with enough completion rows to scroll the old input away.
+#[tokio::test(flavor = "multi_thread")]
+async fn fallback_completion_redraw_does_not_capture_the_listing() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let mut bytes =
+        String::from("\x1b[2J\x1b[H\x1b]133;P;k=i\x07$ \x1b]133;B\x07cp Downloads/\r\n");
+    for i in 0..200 {
+        bytes.push_str(&format!("download-{i:03}.txt\r\n"));
+    }
+    bytes.push_str(
+        "$ \x1b]133;B\x07cp Downloads/x\r\n\x1b]133;C\x07result\r\n\x1b]133;D;0\x07REPLAY-DONE\r\n",
+    );
+    let fixture = home.path().join("completion.vt");
+    std::fs::write(&fixture, bytes).unwrap();
+    let private_home = home.path().to_string_lossy().into_owned();
+    let daemon = start_with(dir.path(), move |config| {
+        config.shell = Some("/bin/sh".into());
+        config.pane_env = vec![("HOME".into(), private_home)];
+    })
+    .await;
+    let mut client = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = client.attach_and_follow().await;
+    client.type_line(
+        pane,
+        &format!("stty -echo; cat '{}'; sleep 30", fixture.display()),
+    );
+    client
+        .until("replayed command finished", |client| {
+            client.marks.iter().any(|mark| mark.finished.is_some())
+        })
+        .await;
+    let command = client
+        .marks
+        .iter()
+        .find(|mark| mark.finished.is_some())
+        .unwrap()
+        .command
+        .clone();
+    drop(client);
+    daemon.shutdown().await;
+    assert_eq!(command.as_deref(), Some("cp Downloads/x"));
+}
+
+/// Real zsh/ZLE, with a private theme hook that regenerates PS1 after integration, as p10k
+/// can do. No user theme/config is sourced. Optional captures are Debug replay evidence.
+#[tokio::test(flavor = "multi_thread")]
+async fn zsh_theme_fallback_completion_keeps_command_metadata_single_line() {
+    let Some(zsh) = zsh() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let downloads = home.path().join("Downloads");
+    std::fs::create_dir(&downloads).unwrap();
+    for i in 0..200 {
+        std::fs::write(
+            downloads.join(format!("x{i:03}-{}", "a".repeat(64))),
+            "private fixture",
+        )
+        .unwrap();
+    }
+    std::fs::write(
+        home.path().join(".zshrc"),
+        r#"
+autoload -Uz compinit
+compinit -D
+bindkey -e
+unsetopt BEEP AUTO_MENU MENU_COMPLETE
+setopt AUTO_LIST LIST_AMBIGUOUS
+LISTMAX=-1
+_private_theme() {
+  PS1='PRIVATE> '
+  precmd_functions=(${precmd_functions:#_private_theme} _private_theme)
+}
+typeset -ga precmd_functions
+precmd_functions+=(_private_theme)
+PS1='PRIVATE> '
+"#,
+    )
+    .unwrap();
+    let private_home = home.path().to_string_lossy().into_owned();
+    let daemon = start_with(dir.path(), move |config| {
+        config.shell = Some(zsh);
+        config.pane_env = vec![
+            ("HOME".into(), private_home.clone()),
+            ("ZDOTDIR".into(), private_home),
+        ];
+    })
+    .await;
+    let mut client = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = client.attach_and_follow().await;
+    client.wait_text(pane, "PRIVATE>").await;
+    client.type_line(pane, &format!("cd '{}'", home.path().display()));
+    client
+        .until("private directory entered", |client| {
+            client.marks.iter().any(|mark| mark.finished.is_some())
+        })
+        .await;
+    client
+        .client
+        .send_input(pane, b"cp Downloads/\t\t".to_vec());
+    client
+        .until("200 real completion matches", |client| {
+            client
+                .client
+                .pane_text_all(pane)
+                .is_some_and(|text| text.contains("x199-"))
+        })
+        .await;
+    let capture = |stage: &str, client: &TestClient| {
+        if let Ok(path) = std::env::var("GUDO_SHELL_CAPTURE_DIR") {
+            let root = PathBuf::from(path);
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::write(
+                root.join(format!("zsh-{stage}.snapshot")),
+                client.client.pane_snapshot(pane).unwrap(),
+            )
+            .unwrap();
+            std::fs::write(
+                root.join(format!("zsh-{stage}.screen.txt")),
+                client.text(pane),
+            )
+            .unwrap();
+            std::fs::write(
+                root.join("commands.json"),
+                serde_json::to_vec_pretty(&client.marks).unwrap(),
+            )
+            .unwrap();
+        }
+    };
+    capture("listing", &client);
+    // Clear a known shell draft, not an agent draft, then actually copy a private fixture.
+    client.client.send_input(pane, vec![0x15]);
+    client.type_line(
+        pane,
+        &format!(
+            "cp Downloads/x000-{} copied.txt; for i in {{1..40}}; do print private-output-$i; done",
+            "a".repeat(64)
+        ),
+    );
+    client
+        .until("copy command completed", |client| {
+            client
+                .marks
+                .iter()
+                .filter(|mark| mark.finished.is_some())
+                .count()
+                >= 2
+        })
+        .await;
+    capture("output", &client);
+    let command = client
+        .marks
+        .iter()
+        .rev()
+        .find(|mark| mark.finished.is_some())
+        .unwrap()
+        .command
+        .clone();
+    let copied = std::fs::read_to_string(home.path().join("copied.txt"));
+    drop(client);
+    daemon.shutdown().await;
+    assert_eq!(copied.unwrap(), "private fixture");
+    let command = command.expect("a command read from the fallback prompt");
+    assert!(
+        !command.contains('\n'),
+        "completion listing entered metadata: {command}"
+    );
+    assert!(!command.contains("x199-"));
+}

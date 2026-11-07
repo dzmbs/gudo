@@ -99,8 +99,11 @@ impl LineMarks {
     }
 
     /// `133;D` of a running command.
-    pub fn command_ended(&mut self) {
+    pub fn command_ended(&mut self, term: &mut Terminal) {
         self.phase = Phase::Finished;
+        self.watch_right = false;
+        self.continuation = false;
+        self.drop_inferred(term);
     }
 
     /// After a batch of events, once the bytes that carried them are on screen: infer the

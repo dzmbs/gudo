@@ -12,6 +12,8 @@
 #
 # AGENT_TUI_MIRROR=1 also checks two-client sizing/focus/background handoffs and saves VT
 # snapshots for native fitting captures. It types a draft only: never Return or a model request.
+# Also checks real zsh completion with a private p10k-style prompt-regeneration hook; its
+# snapshots/metadata go into shell/ for native single-line command-header playback.
 # Each program's screen and raw output land in the evidence dir (default target/agent-tui).
 # CODEX and CLAUDE name the binaries; otherwise they are looked up on PATH, and one that is not
 # installed is skipped with a message.
@@ -32,12 +34,13 @@ codex="$(find_program "${CODEX:-}" codex)"
 claude="$(find_program "${CLAUDE:-}" claude)"
 [ -n "$codex" ] || echo "agent-tui-parity: Codex is not installed; skipping it"
 [ -n "$claude" ] || echo "agent-tui-parity: Claude Code is not installed; skipping it"
+mkdir -p "$out_dir"
+cd "$repo_root"
+GUDO_SHELL_CAPTURE_DIR="$out_dir/shell" \
+  cargo test -p daemon --test it shell::zsh_theme_fallback_completion -- --nocapture
 if [ -z "$codex" ] && [ -z "$claude" ]; then
   exit 0
 fi
-
-mkdir -p "$out_dir"
-cd "$repo_root"
 AGENT_TUI_CODEX="$codex" AGENT_TUI_CLAUDE="$claude" AGENT_TUI_OUT="$out_dir" \
   cargo test -p daemon --test it agent_tui_parity -- --ignored --nocapture --test-threads=1
 echo "agent-tui-parity: passed; evidence in $out_dir"
