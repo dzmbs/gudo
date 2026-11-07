@@ -55,3 +55,19 @@ configuration changes; never replace the daily agent configuration with dev laun
 Tests use temporary state and HOME directories. Never install a test helper as a service, never
 pair or restart the daily helper, and never use macOS UI automation or foreground app launches for
 validation. In-process AppTests and offscreen captures do not require switching away from work.
+
+## Real-agent sizing acceptance
+
+`AGENT_TUI_MIRROR=1 scripts/agent-tui-parity.sh /tmp/gudo-sizing` runs the normal startup parity
+checks, then a separate direct-PTY fixture for each installed agent. Both clients observe the
+same running process. It checks focus reports, activation/background handoff, non-driver resize
+bursts, trailing debounce, pixel-only changes, explicit takeover and a preserved unsubmitted
+draft. Homes, config, project and placeholder credentials are private; model URLs are loopback.
+
+Sizing must not run through the startup recorder's nested `script` PTY: it can hide the real
+resize/input behavior. The sizing fixture saves ten VT snapshots when both agents are installed.
+Run `AppTests/AgentSizingCaptureTests` with
+`TEST_RUNNER_GUDO_AGENT_SIZING_CAPTURE_DIR=/tmp/gudo-sizing` and `TEST_RUNNER_GUDO_MOCK=1` on
+Mac and iOS Simulator, using `-collect-test-diagnostics never`. It verifies geometry and renders
+each snapshot at desktop and phone viewports into `native/`. These are native offscreen Debug
+captures, not live paired hardware or physical-device Release measurements.

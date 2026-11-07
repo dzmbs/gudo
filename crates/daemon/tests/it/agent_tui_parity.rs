@@ -1,5 +1,5 @@
-//! Real Codex and Claude Code in a daemon pane, launched to their start screen only (nothing is
-//! typed into them), with what they drew checked for the features they turn on in Ghostty.
+//! Real Codex and Claude Code start-screen parity with Ghostty. AGENT_TUI_MIRROR additionally
+//! checks sizing with two clients on a direct PTY, typing a draft but never submitting it.
 //! Run by `scripts/agent-tui-parity.sh`, which finds the programs and names them in
 //! `AGENT_TUI_CODEX` / `AGENT_TUI_CLAUDE`; a program not named is skipped. Evidence (screen
 //! text, the program's raw output) goes to `AGENT_TUI_OUT`.
@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use client_core::ClientConfig;
-use client_core::proto::{PaneId, TerminalColors};
+use client_core::proto::{PaneActivity, PaneId, PaneSize, TerminalColors};
 
 use crate::support::{TestClient, start_with, ticket};
 
@@ -79,9 +79,14 @@ struct Drawn {
     output: Vec<u8>,
 }
 
-/// Runs `command` in a fresh pane under `script`, which records everything it prints, until
-/// it settles. The screen, each image a client shows and the output are saved as evidence.
-async fn launch(name: &str, command: &str, workdir: &Path) -> Drawn {
+#[derive(Clone, Copy)]
+enum Capture {
+    Startup,
+    SharedSizing,
+}
+
+/// Startup records raw escapes through `script`; sizing uses the actual pane PTY directly.
+async fn launch(name: &str, command: &str, workdir: &Path, capture: Capture) -> Drawn {
     let state = tempfile::tempdir().unwrap();
     let home = state.path().join("home");
     for name in [".claude", ".codex", "tmp"] {
@@ -133,28 +138,34 @@ async fn launch(name: &str, command: &str, workdir: &Path) -> Drawn {
         palette: Vec::new(),
     });
     let pane: PaneId = client.attach_and_follow().await;
-    let raw = out_dir().join(format!("{name}.raw"));
+    let prefix = match capture {
+        Capture::Startup => name.to_owned(),
+        Capture::SharedSizing => format!("{name}.sizing"),
+    };
+    let raw = out_dir().join(format!("{prefix}.raw"));
     let _ = std::fs::remove_file(&raw);
     // A canonical-mode shell can truncate long launch commands before executing them.
     let launcher = state.path().join("launch.sh");
+    let invocation = match capture {
+        Capture::Startup => format!("script -q -t 0 {} {command}", quote(&raw)),
+        Capture::SharedSizing => command,
+    };
     std::fs::write(
         &launcher,
-        format!(
-            "cd {} && exec script -q -t 0 {} {command}\n",
-            quote(workdir),
-            quote(&raw)
-        ),
+        format!("cd {} && exec {invocation}\n", quote(workdir)),
     )
     .unwrap();
     client.type_line(pane, &format!("exec /bin/sh {}", quote(&launcher)));
     tokio::time::sleep(SETTLE).await;
     let screen = client.text(pane);
-    std::fs::write(
-        out_dir().join(format!("{name}.frame.raw")),
-        std::fs::read(&raw).unwrap_or_default(),
-    )
-    .unwrap();
-    std::fs::write(out_dir().join(format!("{name}.screen.txt")), &screen).unwrap();
+    if matches!(capture, Capture::Startup) {
+        std::fs::write(
+            out_dir().join(format!("{prefix}.frame.raw")),
+            std::fs::read(&raw).unwrap(),
+        )
+        .unwrap();
+    }
+    std::fs::write(out_dir().join(format!("{prefix}.screen.txt")), &screen).unwrap();
     let placed = client.client.pane_images(pane).unwrap_or_default();
     for (index, (_, image)) in placed.iter().enumerate() {
         if let Some(image) = image
@@ -165,8 +176,11 @@ async fn launch(name: &str, command: &str, workdir: &Path) -> Drawn {
                 height: image.height,
                 data: pixels.clone(),
             });
-            std::fs::write(out_dir().join(format!("{name}.image{index}.png")), png).unwrap();
+            std::fs::write(out_dir().join(format!("{prefix}.image{index}.png")), png).unwrap();
         }
+    }
+    if matches!(capture, Capture::SharedSizing) {
+        verify_shared_sizing(name, pane, &mut client, &ticket(&daemon)).await;
     }
     // Leave without a prompt: interrupt twice, then hang up.
     client.client.send_input(pane, b"\x03".to_vec());
@@ -180,6 +194,159 @@ async fn launch(name: &str, command: &str, workdir: &Path) -> Drawn {
         images: placed.len(),
         output: std::fs::read(&raw).unwrap_or_default(),
     }
+}
+
+async fn wait_grid(client: &mut TestClient, pane: PaneId, cols: u16, rows: u16) {
+    client
+        .until("agent grid in metadata and mirror", |client| {
+            client
+                .metas
+                .get(&pane)
+                .is_some_and(|meta| meta.size.cols == cols && meta.size.rows == rows)
+                && client.client.pane_snapshot(pane).is_some_and(|snapshot| {
+                    let terminal = ghostty_vt::SnapshotDecoder::new(&snapshot)
+                        .unwrap()
+                        .ready()
+                        .unwrap()
+                        .into_terminal();
+                    terminal.cols() == cols && terminal.rows() == rows
+                })
+        })
+        .await;
+}
+
+async fn wait_resize(client: &mut TestClient, pane: PaneId, cols: u16, rows: u16) {
+    client
+        .until("resize event", |client| {
+            client
+                .resizes
+                .iter()
+                .any(|(id, size)| *id == pane && size.cols == cols && size.rows == rows)
+        })
+        .await;
+}
+
+async fn pump_for(client: &mut TestClient, duration: Duration) {
+    let deadline = tokio::time::Instant::now() + duration;
+    client
+        .until("settle", |_| tokio::time::Instant::now() >= deadline)
+        .await;
+}
+
+async fn capture_shared_grid(name: &str, stage: &str, pane: PaneId, client: &mut TestClient) {
+    // Give the real application's SIGWINCH renderer time to finish, not just the host's VT.
+    pump_for(client, Duration::from_millis(750)).await;
+    std::fs::write(
+        out_dir().join(format!("{name}.{stage}.snapshot")),
+        client.client.pane_snapshot(pane).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        out_dir().join(format!("{name}.{stage}.screen.txt")),
+        client.text(pane),
+    )
+    .unwrap();
+}
+
+async fn verify_shared_sizing(name: &str, pane: PaneId, desktop: &mut TestClient, ticket: &str) {
+    const DESKTOP: PaneSize = PaneSize {
+        cols: 160,
+        rows: 40,
+        width_px: 0,
+        height_px: 0,
+    };
+    const PHONE: PaneSize = PaneSize {
+        cols: 45,
+        rows: 20,
+        width_px: 0,
+        height_px: 0,
+    };
+    desktop.client.set_pane_activity(pane, PaneActivity::Active);
+    desktop.client.resize(pane, DESKTOP);
+    desktop.client.claim_pane_size(pane);
+    wait_grid(desktop, pane, DESKTOP.cols, DESKTOP.rows).await;
+    let mut phone = TestClient::connect(ticket, ClientConfig::generate_key());
+    phone.client.set_pane_activity(pane, PaneActivity::Inactive);
+    assert_eq!(phone.attach_and_follow().await, pane);
+    phone.client.resize(pane, PHONE);
+    phone.client.send_input(pane, b"\x1b[I".to_vec());
+    phone.client.send_generated_input(pane, b"\x1b[O".to_vec());
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    wait_grid(&mut phone, pane, DESKTOP.cols, DESKTOP.rows).await;
+    capture_shared_grid(name, "desktop", pane, desktop).await;
+
+    phone.client.set_pane_activity(pane, PaneActivity::Active);
+    phone.client.send_generated_input(pane, b"\x1b[I".to_vec());
+    wait_grid(&mut phone, pane, PHONE.cols, PHONE.rows).await;
+    wait_grid(desktop, pane, PHONE.cols, PHONE.rows).await;
+    capture_shared_grid(name, "phone", pane, &mut phone).await;
+    wait_resize(desktop, pane, PHONE.cols, PHONE.rows).await;
+    desktop.resizes.clear();
+    for cols in 160..180 {
+        desktop.client.resize(pane, PaneSize { cols, ..DESKTOP });
+    }
+    desktop
+        .client
+        .send_generated_input(pane, b"\x1b[I".to_vec());
+    pump_for(desktop, Duration::from_millis(350)).await;
+    wait_grid(desktop, pane, PHONE.cols, PHONE.rows).await;
+    assert!(
+        desktop.resizes.is_empty(),
+        "unexpected resizes: {:?}",
+        desktop.resizes
+    );
+
+    phone.client.set_pane_activity(pane, PaneActivity::Inactive);
+    wait_grid(desktop, pane, 179, DESKTOP.rows).await;
+    wait_resize(desktop, pane, 179, DESKTOP.rows).await;
+    desktop.resizes.clear();
+    for cols in 200..220 {
+        desktop.client.resize(pane, PaneSize { cols, ..DESKTOP });
+    }
+    wait_grid(desktop, pane, 219, DESKTOP.rows).await;
+    wait_resize(desktop, pane, 219, DESKTOP.rows).await;
+    assert_eq!(
+        desktop.resizes.len(),
+        1,
+        "resize events: {:?}",
+        desktop.resizes
+    );
+    desktop.resizes.clear();
+    desktop.client.resize(
+        pane,
+        PaneSize {
+            cols: 219,
+            width_px: 3504,
+            height_px: 1280,
+            ..DESKTOP
+        },
+    );
+    pump_for(desktop, Duration::from_millis(300)).await;
+    wait_grid(desktop, pane, 219, DESKTOP.rows).await;
+    assert!(
+        desktop.resizes.is_empty(),
+        "unexpected resizes: {:?}",
+        desktop.resizes
+    );
+    capture_shared_grid(name, "returned", pane, desktop).await;
+
+    phone.client.set_pane_activity(pane, PaneActivity::Active);
+    phone.client.send_generated_input(pane, b"\x1b[I".to_vec());
+    wait_grid(&mut phone, pane, PHONE.cols, PHONE.rows).await;
+    desktop.client.claim_pane_size(pane);
+    wait_grid(desktop, pane, 219, DESKTOP.rows).await;
+    // Draft only: never submit a model request or replace/resume the running agent.
+    phone.client.send_input(pane, b"gudo-size-probe".to_vec());
+    phone.wait_flat(pane, "gudo-size-probe").await;
+    wait_grid(&mut phone, pane, PHONE.cols, PHONE.rows).await;
+    capture_shared_grid(name, "draft-phone", pane, &mut phone).await;
+    phone.client.set_pane_activity(pane, PaneActivity::Inactive);
+    wait_grid(desktop, pane, 219, DESKTOP.rows).await;
+    desktop.wait_flat(pane, "gudo-size-probe").await;
+    capture_shared_grid(name, "draft-returned", pane, desktop).await;
+    println!(
+        "ok  {name}: two-client focus/activity/input/resize/pixel/claim handoffs, same live agent"
+    );
 }
 
 /// `CSI > <flags> u`: the program turned the kitty keyboard protocol on.
@@ -239,7 +406,7 @@ async fn codex_start_screen_matches_ghostty() {
     )
     .unwrap();
     let command = format!("env CODEX_HOME={} {}", quote(home.path()), quote(&codex));
-    let drawn = launch("codex", &command, workdir.path()).await;
+    let drawn = launch("codex", &command, workdir.path(), Capture::Startup).await;
     let output = &drawn.output;
 
     let mut findings = Findings::default();
@@ -268,6 +435,9 @@ async fn codex_start_screen_matches_ghostty() {
     );
     findings.expect(drawn.images > 0, "pet shown by the client");
     findings.finish("codex");
+    if std::env::var_os("AGENT_TUI_MIRROR").is_some() {
+        launch("codex", &command, workdir.path(), Capture::SharedSizing).await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -282,7 +452,7 @@ async fn claude_start_screen_matches_ghostty() {
         "{} --settings '{{\"disableAllHooks\":true}}' --strict-mcp-config --mcp-config '{{\"mcpServers\":{{}}}}'",
         quote(&claude)
     );
-    let drawn = launch("claude", &command, workdir.path()).await;
+    let drawn = launch("claude", &command, workdir.path(), Capture::Startup).await;
     let (screen, output) = (&drawn.screen, &drawn.output);
 
     let mut findings = Findings::default();
@@ -317,4 +487,7 @@ async fn claude_start_screen_matches_ghostty() {
         "start screen drawn",
     );
     findings.finish("claude");
+    if std::env::var_os("AGENT_TUI_MIRROR").is_some() {
+        launch("claude", &command, workdir.path(), Capture::SharedSizing).await;
+    }
 }

@@ -108,6 +108,7 @@ pub struct TestClient {
     pub sizing: HashMap<PaneId, client_core::proto::PaneSizing>,
     /// `ClientEvent::PaneMeta` pushes received.
     pub meta_events: u32,
+    pub resizes: Vec<(PaneId, PaneSize)>,
     pub log: Vec<String>,
     /// Refusals (`ClientEvent::Refused` reasons).
     pub refused: Vec<String>,
@@ -249,6 +250,7 @@ impl TestClient {
             metas: HashMap::new(),
             sizing: HashMap::new(),
             meta_events: 0,
+            resizes: Vec::new(),
             log: Vec::new(),
             refused: Vec::new(),
             attached: Vec::new(),
@@ -307,6 +309,7 @@ impl TestClient {
             | ClientEvent::CommandOutput { req_id, .. } => {
                 self.answers.insert(req_id, event);
             }
+            ClientEvent::PaneResized { pane_id, size, .. } => self.resizes.push((pane_id, size)),
             ClientEvent::PaneMeta { meta } => {
                 self.meta_events += 1;
                 self.metas.insert(meta.pane_id, meta);

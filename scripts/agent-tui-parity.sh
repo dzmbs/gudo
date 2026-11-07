@@ -10,6 +10,8 @@
 #
 #   scripts/agent-tui-parity.sh [evidence dir]
 #
+# AGENT_TUI_MIRROR=1 also checks two-client sizing/focus/background handoffs and saves VT
+# snapshots for native fitting captures. It types a draft only: never Return or a model request.
 # Each program's screen and raw output land in the evidence dir (default target/agent-tui).
 # CODEX and CLAUDE name the binaries; otherwise they are looked up on PATH, and one that is not
 # installed is skipped with a message.
