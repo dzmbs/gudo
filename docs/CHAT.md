@@ -150,8 +150,10 @@ a resize or claiming ownership. Actual input or an explicit sizing claim admits 
 replies and focus do not. Deferred candidates are excluded from automatic local-tap handover.
 Native fixture tests cover retained views, reading position, live updates while parked, original
 VT geometry and zero resize/claim/input calls. Real paired no-SIGWINCH acceptance remains separate.
-Tool and diff detail sheets currently expose bounded previews with Terminal fallbacks; full output,
-full native diff routing, device snapshot persistence and the rest of the composer remain pending.
+Tool details read output through the existing authenticated same-pane output API, one bounded
+native page at a time, with Input/Output tabs and Beginning/Previous/Next navigation. Closing the
+sheet invalidates pending replies. Diff details still expose bounded previews with Terminal
+fallbacks; full native diff routing, device snapshot persistence and the rest of the composer remain pending.
 
 `ChatViewController` owns one normal-orientation reusable collection and a composer host pinned
 to the keyboard layout guide. A display-link coalesces pending frames; stopped views release
@@ -224,8 +226,10 @@ README records which data is preserved. No real account is used.
 byte cursors, make progress and fit a bounded JSON envelope. Native presentation admits at
 most 4,096 lines; remaining text continues at the exact unconsumed byte, without being lost.
 Cancelled or superseded reads cannot publish a page or overwrite a later loading state.
-A changed output size requires restarting rather than mixing versions. The reader is not yet
-wired to the tool sheet; that integration still displays the preview.
+A changed output size requires restarting rather than mixing versions. The tool sheet uses the
+reader rather than treating its short output reference preview as complete. Input and output use
+native virtual text rows; oversized input gets an explicit Terminal fallback. No detail action
+submits text or launches another process.
 
 ## Native composer safety prerequisites
 

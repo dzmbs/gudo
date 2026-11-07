@@ -8,7 +8,7 @@ struct PaneChatView<Terminal: View>: View {
     @Bindable var state: PaneChatState
     let hub: DaemonWorkspace
     @ViewBuilder var terminal: (Bool) -> Terminal
-    @State private var selectedText: ChatSelectedText?
+    @State private var selectedDetail: ChatDetail?
 
     var body: some View {
         ZStack {
@@ -38,10 +38,16 @@ struct PaneChatView<Terminal: View>: View {
         .onChange(of: state.model?.error) { _, error in
             if error != nil { state.show(.terminal, terminal: pane, persistence: .transient) }
         }
-        .sheet(item: $selectedText) { selection in
-            ChatSelectedTextSheet(selection: selection) {
-                selectedText = nil
-                state.show(.terminal, terminal: pane)
+        .sheet(item: $selectedDetail) { detail in
+            switch detail.content {
+            case .text(let selection):
+                ChatSelectedTextSheet(selection: selection, openTerminal: openTerminalFromDetail)
+            case .tool(let tool):
+                ChatToolDetailSheet(tool: tool, source: { offset, length in
+                    guard let output = tool.output else { throw ChatOutputError.invalidPage }
+                    return try await hub.timelineClient().timelineToolOutput(
+                        paneId: pane.id.rawValue, handle: output.handle, offset: offset, len: length)
+                }, openTerminal: openTerminalFromDetail)
             }
         }
     }
@@ -74,11 +80,10 @@ struct PaneChatView<Terminal: View>: View {
 
     private var actions: ChatRowActions {
         ChatRowActions(showTerminal: { _ in state.show(.terminal, terminal: pane) }, selectText: { text in
-            selectedText = ChatSelectedText(title: "Select Text", text: text)
+            selectedDetail = ChatDetail(content: .text(ChatSelectedText(title: "Select Text", text: text)))
         }, showTool: { item in
             guard case .tool(let tool) = item.body else { return }
-            let preview = [tool.input, tool.output?.preview].compactMap { $0 }.joined(separator: "\n\n")
-            selectedText = ChatSelectedText(title: tool.title, text: preview)
+            selectedDetail = ChatDetail(content: .tool(tool))
         }, showDiff: { selectDiffPreview($0) })
     }
 
@@ -103,8 +108,18 @@ struct PaneChatView<Terminal: View>: View {
             return file.path + "\n" + hunks
         }.joined(separator: "\n\n")
         let note = "\n\nThis is a Chat preview. Open Terminal for the complete diff."
-        selectedText = ChatSelectedText(title: "Diff Preview", text: text + note)
+        selectedDetail = ChatDetail(content: .text(ChatSelectedText(title: "Diff Preview", text: text + note)))
     }
+
+    private func openTerminalFromDetail() {
+        if state.show(.terminal, terminal: pane) { selectedDetail = nil }
+    }
+}
+
+private struct ChatDetail: Identifiable {
+    enum Content { case text(ChatSelectedText), tool(TimelineTool) }
+    let id = UUID()
+    let content: Content
 }
 
 private struct ChatSelectedText: Identifiable {
