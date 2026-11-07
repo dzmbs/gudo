@@ -327,6 +327,8 @@ final class PlacementMarker: UIView, UIDragInteractionDelegate {
     /// Not interactive itself: a menu button would open on touch down and swallow the long press
     /// that lifts the drawing, so a tap gesture presents it instead.
     private let menuButton = UIButton()
+    let closeButton = UIButton(type: .system)
+    private var currentPalette: ChromePalette?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -337,7 +339,14 @@ final class PlacementMarker: UIView, UIDragInteractionDelegate {
         menuButton.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         menuButton.isUserInteractionEnabled = false
         menuButton.isAccessibilityElement = false
+        menuButton.accessibilityLabel = "Drawing actions"
         addSubview(menuButton)
+        closeButton.setImage(UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .semibold)), for: .normal)
+        setPalette(ChromePalette.fromPreferences())
+        closeButton.layer.cornerRadius = 22
+        closeButton.accessibilityLabel = "Remove image from terminal"
+        closeButton.addTarget(self, action: #selector(closePlacement), for: .touchUpInside)
+        addSubview(closeButton)
     }
 
     @available(*, unavailable)
@@ -350,8 +359,16 @@ final class PlacementMarker: UIView, UIDragInteractionDelegate {
         let drag = UIDragInteraction(delegate: self)
         drag.isEnabled = true
         addInteraction(drag)
-        addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(showMenu)))
+        let tap = UITapGestureRecognizer(target: self, action: #selector(showMenu(_:)))
+        tap.cancelsTouchesInView = false
+        addGestureRecognizer(tap)
+        closeButton.isHidden = drawing.isReadOnly
         accessibilityTraits = [.image, .button]
+        accessibilityCustomActions = drawing.isReadOnly ? [] : [UIAccessibilityCustomAction(name: "Remove image from terminal") { [weak self] _ in
+            guard let self, let drawing = self.drawing, !drawing.isReadOnly else { return false }
+            drawing.removePlacement(self.placementId)
+            return true
+        }]
         accessibilityHint = "Send, copy, share or edit the drawing; touch and hold to drag it"
         menuButton.showsMenuAsPrimaryAction = true
         menuButton.menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] completion in
@@ -362,8 +379,24 @@ final class PlacementMarker: UIView, UIDragInteractionDelegate {
         }])
     }
 
-    @objc private func showMenu() {
+    @objc private func showMenu(_ gesture: UITapGestureRecognizer? = nil) {
+        if let gesture, !closeButton.isHidden, closeButton.frame.contains(gesture.location(in: self)) { return }
         menuButton.performPrimaryAction()
+    }
+
+    @objc private func closePlacement() { drawing?.removePlacement(placementId) }
+
+    func setPalette(_ palette: ChromePalette) {
+        guard currentPalette != palette else { return }
+        currentPalette = palette
+        closeButton.tintColor = UIColor(palette.foreground.color)
+        closeButton.backgroundColor = UIColor(palette.background.color)
+    }
+
+    func setImageFrame(_ image: CGRect, viewport: CGRect) {
+        let layout = PlacementControlLayout(image: image, viewport: viewport, target: 44)
+        if frame != layout.frame { frame = layout.frame }
+        if closeButton.frame != layout.close { closeButton.frame = layout.close }
     }
 
     override func accessibilityActivate() -> Bool {
@@ -381,6 +414,7 @@ final class PlacementMarker: UIView, UIDragInteractionDelegate {
     func setIdentifier(_ id: String, label: String) {
         accessibilityIdentifier = id
         accessibilityLabel = label
+        closeButton.accessibilityIdentifier = "close-" + id
     }
 
     func dragInteraction(_ interaction: UIDragInteraction, itemsForBeginning session: any UIDragSession) -> [UIDragItem] {
@@ -566,6 +600,40 @@ final class PlacementMarker: NSView, NSDraggingSource {
     private weak var drawing: PaneDrawing?
     private var placementId: UInt64 = 0
     private var mouseDownPoint: NSPoint?
+    let closeButton = NSButton()
+    private var currentPalette: ChromePalette?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        closeButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: nil)
+        closeButton.imagePosition = .imageOnly
+        closeButton.isBordered = false
+        closeButton.wantsLayer = true
+        setPalette(ChromePalette.fromPreferences())
+        closeButton.layer?.cornerRadius = 14
+        closeButton.target = self
+        closeButton.action = #selector(closePlacement)
+        closeButton.setAccessibilityLabel("Remove image from terminal")
+        addSubview(closeButton)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    @objc private func closePlacement() { drawing?.removePlacement(placementId) }
+
+    func setPalette(_ palette: ChromePalette) {
+        guard currentPalette != palette else { return }
+        currentPalette = palette
+        closeButton.contentTintColor = NSColor(palette.foreground.color)
+        closeButton.layer?.backgroundColor = NSColor(palette.background.color).cgColor
+    }
+
+    func setImageFrame(_ image: CGRect, viewport: CGRect) {
+        let layout = PlacementControlLayout(image: image, viewport: viewport, target: 28)
+        if frame != layout.frame { frame = layout.frame }
+        if closeButton.frame != layout.close { closeButton.frame = layout.close }
+    }
 
     override var isFlipped: Bool { true }
 
@@ -607,6 +675,8 @@ final class PlacementMarker: NSView, NSDraggingSource {
         setAccessibilityRole(.image)
         setAccessibilityIdentifier(id)
         setAccessibilityLabel(label)
+        setAccessibilityChildren([closeButton])
+        closeButton.setAccessibilityIdentifier("close-" + id)
     }
 
     /// Outlines the placement for a moment, so the user sees where it went.
@@ -621,6 +691,7 @@ final class PlacementMarker: NSView, NSDraggingSource {
     func offerMenu(drawing: PaneDrawing, placementId: UInt64) {
         self.drawing = drawing
         self.placementId = placementId
+        closeButton.isHidden = drawing.isReadOnly
         setAccessibilityRole(.button)
         setAccessibilityHelp("Click to send, copy, export or edit the drawing; drag it to move it")
     }

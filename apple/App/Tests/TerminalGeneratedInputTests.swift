@@ -15,6 +15,32 @@ final class TerminalGeneratedInputTests: XCTestCase {
         return TerminalView(surface: try TerminalSurface(terminal: terminal, appearance: .init()))
     }
 
+    func testLocalEscapeDismissalConsumesTheKeyCycleButTheNextEscapeReachesTheAgent() throws {
+        let view = try makeView(modes: "\u{1b}[>31u")
+        var dismissals = 0
+        view.onEscape = {
+            guard dismissals == 0 else { return false }
+            dismissals += 1
+            return true
+        }
+        var typed: [[UInt8]] = [], generated: [[UInt8]] = []
+        view.onInput = { typed.append($0) }
+        view.onGeneratedInput = { generated.append($0) }
+        let press = KeyEvent.press(.escape)
+        view.send(press)
+        var repeated = press
+        repeated.action = .repeat
+        view.send(repeated)
+        var release = press
+        release.action = .release
+        view.send(release)
+        XCTAssertEqual(dismissals, 1)
+        XCTAssertTrue(typed.isEmpty)
+        XCTAssertTrue(generated.isEmpty)
+        view.send(press)
+        XCTAssertEqual(typed.count, 1)
+    }
+
     func testKeyReleaseIsGeneratedAndKeyPressIsUserInput() throws {
         let view = try makeView(modes: "\u{1b}[>31u")
         var typed: [[UInt8]] = [], generated: [[UInt8]] = []

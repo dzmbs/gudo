@@ -1303,6 +1303,20 @@ async fn inline_placements_follow_output_and_survive_reattach() {
         .await
         .unwrap();
     assert_eq!(photo.image.width, 36);
+    let screenshot = drawing::encode_png(&drawing::Rgba {
+        width: 600,
+        height: 600,
+        data: vec![120; 600 * 600 * 4],
+    });
+    let preview = device_a
+        .client
+        .client
+        .import_to_pane(pane, "screenshot.png".into(), screenshot)
+        .await
+        .unwrap();
+    let grid = device_a.client.metas[&pane].size;
+    assert!(preview.cols <= (grid.cols / 3).max(1));
+    assert!(preview.rows <= (grid.rows / 3).max(1));
     let kinds: Vec<ArtifactKind> = device_a
         .client
         .client

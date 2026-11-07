@@ -20,6 +20,9 @@ public final class TerminalView: UIView {
     /// Bytes to write to the PTY (encoded keys, mouse reports, focus reports).
     public var onInput: (([UInt8]) -> Void)?
     public var onGeneratedInput: (([UInt8]) -> Void)?
+    /// Consumes Escape before encoding when dismissing local transient content.
+    public var onEscape: (() -> Bool)?
+    var consumedEscape = false
     /// Called when the view becomes first responder (a tap, or a programmatic focus change).
     public var onFocus: (() -> Void)?
     /// Modifiers latched on an on-screen key bar (sticky Ctrl), applied to the next key from the
@@ -232,6 +235,7 @@ public final class TerminalView: UIView {
 
     /// Sends a key as if typed here (key bar, menu actions).
     public func send(_ key: KeyEvent) {
+        if consumeEscape(key) { return }
         let bytes = surface.encode(key)
         if case .release = key.action { emitGenerated(bytes) }
         else { emit(bytes) }

@@ -1979,9 +1979,21 @@ images and ink). `Detached` placements leave the grid and go to the pane's loose
 **Canvas pane (secondary).** A `Canvas` leaf (`ArtifactEvent::Canvases`) hosts the same
 Excalidraw editor full-size, free scene units.
 
-**Paste / drop onto a pane.** Images and `.excalidraw` files → `import_to_pane(pane, name,
-bytes)`; with the "send" modifier onto an agent pane → `send_to_agent(pane, None, None,
-Some(png))`.
+**Paste / drop onto a terminal.** Ordinary paste/drop writes text or shell-escaped file paths;
+file URLs take precedence over their clipboard display names. Image-only clipboard paste writes
+nothing and creates no placement, including in agent panes. Placement is explicit: the Mac's
+“Place Image from Clipboard” menu item, Option-drop, or paste/import inside the canvas editor
+(on either platform). Option-drop onto an agent retains `send_to_agent(pane, None, None,
+Some(png))`. Internal drawing drags still move/place the existing artifact.
+
+**Explicit image previews.** `import_to_pane(pane, name, bytes)` automatically sizes the preview
+to at most a third of the pane's columns and rows, preserving aspect ratio to cell rounding.
+Small images are not expanded to fill that budget; explicitly requested drawing geometry is
+preserved. Live placements have a visible native close button (44-point touch target, 28-point
+Mac control) and an accessible remove action. Unmodified Escape dismisses this window's most
+recent live import, consuming its whole key cycle before terminal encoding; with no such import,
+Escape reaches the program normally. Removal unplaces the image, not the source artifact, and
+retains the normal read-only/server authorization checks.
 
 **Excalidraw in WKWebView: the JS bridge.** The bundle (`@excalidraw/excalidraw`, MIT,
 fonts included) loads from app resources over a custom scheme (`<brand>-canvas://`), no

@@ -45,6 +45,8 @@ final class PaneDrawing: NSObject {
     private var markers: [UInt64: PlacementMarker] = [:]
     /// A placement just made, outlined once its marker exists.
     private var flashPlacement: UInt64?
+    private var latestImport: UInt64?
+    private var removingPlacements: Set<UInt64> = []
     #if os(iOS)
     private(set) var writer: WriteOverlay?
     private var notice: UIHostingController<ThemedRoot<PlacedNotice>>?
@@ -112,9 +114,10 @@ final class PaneDrawing: NSObject {
         peerInk.frame = pane.view.bounds
         pane.view.addSubview(peerInk)
         installInput(on: pane.view)
+        pane.view.onEscape = { [weak self] in self?.dismissLatestImport() ?? false }
         looseModel.onPlace = { [weak self] in self?.placeLooseAtCursor($0) }
         looseModel.onSend = { [weak self] in self?.sendLoose($0) }
-        looseModel.onRemove = { [weak self] in self?.removeLoose($0) }
+        looseModel.onRemove = { [weak self] in self?.removePlacement($0) }
         hub.register(self)
         canvasChanged()
     }
@@ -130,6 +133,7 @@ final class PaneDrawing: NSObject {
 
     func placementsChanged() {
         let current = hub.placements[paneId] ?? [:]
+        if let latestImport, current[latestImport]?.anchor.state != .live { self.latestImport = nil }
         for id in entries.keys where current[id] == nil {
             entries[id] = nil
         }
@@ -217,7 +221,9 @@ final class PaneDrawing: NSObject {
     private func updateMarkers() {
         guard let surface, let view = pane?.view else { return }
         var seen: Set<UInt64> = []
-        for (drawn, rect) in surface.inlineImageFrames {
+        let frames = surface.inlineImageFrames
+        let palette = frames.isEmpty ? nil : ChromePalette.fromPreferences()
+        for (drawn, rect) in frames {
             guard let entry = entries.values.first(where: { $0.placement.image.hash == drawn.key && Int($0.placement.col) == drawn.col }) else { continue }
             let id = entry.placement.placementId
             seen.insert(id)
@@ -229,7 +235,8 @@ final class PaneDrawing: NSObject {
                 markers[id] = marker
                 return marker
             }()
-            if marker.frame != rect { marker.frame = rect }
+            marker.setImageFrame(rect, viewport: view.bounds)
+            if let palette { marker.setPalette(palette) }
             if flashPlacement == id {
                 flashPlacement = nil
                 marker.flash()
@@ -360,14 +367,6 @@ final class PaneDrawing: NSObject {
             } catch {
                 showToast("\(target.name) did not get it: \(DrawOverlay.describe(error))", failure: true)
             }
-        }
-    }
-
-    private func removeLoose(_ id: UInt64) {
-        let client = hub.client
-        Task {
-            try? await client.unplace(placementId: id)
-            hub.noteRemoved(id, pane: paneId)
         }
     }
 
@@ -741,17 +740,29 @@ final class PaneDrawing: NSObject {
         switch item.placementAction {
         case .edit: reopen(placement)
         case .history: break  // a submenu, filled when it opens
-        case .delete:
-            let client = hub.client
-            Task {
-                do {
-                    try await client.unplace(placementId: placement.placementId)
-                    hub.noteRemoved(placement.placementId, pane: paneId)
-                } catch {
-                    showToast("Could not delete the drawing: \(DrawOverlay.describe(error))", failure: true)
-                }
-            }
+        case .delete: removePlacement(placement.placementId)
         case nil: break
+        }
+    }
+
+    func dismissLatestImport() -> Bool {
+        guard isIdle, !isReadOnly, let id = latestImport, hub.placements[paneId]?[id] != nil else { return false }
+        removePlacement(id)
+        return true
+    }
+
+    func removePlacement(_ id: UInt64) {
+        guard !isReadOnly, removingPlacements.insert(id).inserted else { return }
+        let client = hub.client
+        Task {
+            defer { removingPlacements.remove(id) }
+            do {
+                try await client.unplace(placementId: id)
+                if latestImport == id { latestImport = nil }
+                hub.noteRemoved(id, pane: paneId)
+            } catch {
+                showToast("Could not remove the image: \(DrawOverlay.describe(error))", failure: true)
+            }
         }
     }
 
@@ -959,8 +970,10 @@ final class PaneDrawing: NSObject {
                     _ = try await client.sendToAgent(paneId: paneId, artifactId: nil, version: nil, png: data)
                 } else {
                     let placement = try await client.importToPane(paneId: paneId, name: name, data: data)
+                    latestImport = placement.placementId
                     hub.seed(hash: placement.image.hash, png: data)
                     hub.noteLocal(placement, replacing: nil)
+                    flash(placement.placementId)
                 }
             } catch {
                 CanvasWebView.log.error("import \(name, privacy: .private): \(String(describing: error), privacy: .public)")

@@ -3,7 +3,8 @@
 //!
 //! Placements travel as `ArtifactEvent::Placed` and are sent again on `Attach`; their rows
 //! are tracked pins like ink anchors. Two ways in: a person places an artifact (the overlay's
-//! "done", or "place" from a list), or a file is pasted or dropped onto the pane (`Import`).
+//! "done", or "place" from a list), or an explicit image import (`Import`). Ordinary terminal
+//! paste/drop is text/path input; it does not call this API.
 //! Images programs print with the kitty graphics protocol are not placements: the VTs keep
 //! them and snapshots carry them (docs/DAEMON.md §7.10).
 
@@ -24,6 +25,9 @@ use crate::identity::now_millis;
 pub(crate) const PLACEMENT_KEY: u64 = 1 << 63;
 /// Default cell size in image pixels for sizing a placement (2× renders of 9×18 pt cells).
 const CELL_PX: (f32, f32) = (18.0, 36.0);
+
+#[cfg(test)]
+mod tests;
 
 impl Art {
     fn alloc_placement(&self) -> u64 {
@@ -127,8 +131,14 @@ fn size_for(image: &ImageRef, pane: PaneSize, col: u16, cols: u16, rows: u16) ->
     } else {
         CELL_PX
     };
+    let automatic = cols == 0 && rows == 0;
     let room = pane.cols.saturating_sub(col).max(1);
-    let cols = if cols > 0 {
+    let room = if automatic {
+        room.min((pane.cols / 3).max(1))
+    } else {
+        room
+    };
+    let mut cols = if cols > 0 {
         cols.min(room)
     } else {
         ((image.width as f32 / cell_width).round() as u16).clamp(1, room)
@@ -139,7 +149,15 @@ fn size_for(image: &ImageRef, pane: PaneSize, col: u16, cols: u16, rows: u16) ->
         let aspect = image.height as f32 / image.width.max(1) as f32;
         ((f32::from(cols) * cell_width * aspect / cell_height).round() as u16).max(1)
     };
-    (cols, rows.min(500))
+    let max_rows = if automatic {
+        (pane.rows / 3).clamp(1, 500)
+    } else {
+        500
+    };
+    if automatic && rows > max_rows {
+        cols = ((f32::from(cols) * f32::from(max_rows) / f32::from(rows)).round() as u16).max(1);
+    }
+    (cols, rows.min(max_rows))
 }
 
 /// The PNG shown for `artifact` at `version`: a given blob, else the image, preview, or the
@@ -283,7 +301,7 @@ pub(crate) fn unplace(core: &Core, id: u64) -> Option<Placement> {
     Some(placement)
 }
 
-/// A file pasted or dropped onto a pane: an image or an `.excalidraw` scene becomes an
+/// An explicit import: an image or an `.excalidraw` scene becomes an
 /// artifact placed at the cursor row. Returns the placement and the new artifact's info.
 pub(crate) fn import(
     core: &Arc<Core>,

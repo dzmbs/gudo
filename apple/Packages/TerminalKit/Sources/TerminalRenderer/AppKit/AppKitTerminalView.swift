@@ -17,6 +17,9 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
     /// Bytes to write to the PTY (encoded keys, mouse and focus reports).
     public var onInput: (([UInt8]) -> Void)?
     public var onGeneratedInput: (([UInt8]) -> Void)?
+    /// Consumes Escape before encoding when dismissing local transient content.
+    public var onEscape: (() -> Bool)?
+    var consumedEscape = false
     /// Sees each key event before it is encoded; returning true consumes it (the app's
     /// hold-to-talk chord).
     public var keyInterceptor: ((KeyEvent) -> Bool)?
@@ -176,6 +179,7 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
 
     /// Sends a key as if typed here.
     public func send(_ key: KeyEvent) {
+        if consumeEscape(key) { return }
         let bytes = surface.encode(key)
         if case .release = key.action { emitGenerated(bytes) }
         else { emit(bytes) }
