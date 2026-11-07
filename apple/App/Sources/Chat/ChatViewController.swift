@@ -38,6 +38,10 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         let rightToLeft: Bool
         let expanded: Bool
         let fontSize: Double
+
+        var cost: LRUCost {
+            LRUCost(bytes: 2 * (MemoryLayout<Self>.stride + id.item.utf8.count + category.utf8.count))
+        }
     }
 
     let model: TimelineModel
@@ -57,7 +61,9 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
     private var openedAt = CACurrentMediaTime()
     private(set) var firstContentLatency: Double?
     var onSnapshot: ((NSDiffableDataSourceSnapshot<Int, ChatRowID>) -> Void)?
-    private let heights = BoundedLRU<HeightKey, CGFloat>(capacity: ChatCacheLimits.entries)
+    private let heights = BoundedLRU<HeightKey, CGFloat>(
+        capacity: ChatCacheLimits.entries, byteLimit: ChatCacheLimits.bytes
+    )
     private var measured: Set<ChatRowID> = []
     private var clock: CADisplayLink?
     private var isActive = true
@@ -73,6 +79,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
     private var latest = UIHostingController(rootView: AnyView(EmptyView()))
     private(set) var configuredCells = 0
     private(set) var measuredCells = 0
+    var retainedMeasurementCount: Int { measured.count }
+    var retainedHeightBytes: Int { heights.cost.bytes }
     private(set) var applyDurations: [Double] = []
 
     func prepareToPark() -> Bool {
@@ -343,7 +351,10 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
                 if wasFollowing && model.followsBottom { scrollToBottom() }
                 else if let anchor, let y = document.position(of: anchor) { restore(y - collection.adjustedContentInset.top) }
             }
-            if changesOrder { rows = rows.filter { identifierSet.contains($0.key) } }
+            if changesOrder {
+                rows = rows.filter { identifierSet.contains($0.key) }
+                measured.formIntersection(identifierSet)
+            }
             isApplying = false
             needsMeasurement = true
             clock?.isPaused = !isActive
@@ -400,7 +411,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
             guard fitting.height.isFinite, fitting.height > 0 else { continue }
             let height = ceil(fitting.height)
             let key = key(row)
-            heights.insert(height, for: key)
+            heights.insert(height, for: key, cost: key.cost)
             measured.insert(identifier)
             measuredCells += 1
             if let index = document.indices[identifier.storageKey], document.rows[index].height != height { changed[index] = height }

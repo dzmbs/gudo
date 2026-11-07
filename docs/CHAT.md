@@ -144,7 +144,9 @@ A render generation also invalidates cached values when two connections reuse ID
 
 Visible rows use cached native fitting heights from one detached sizing host, independent of
 reused cells' stale intrinsic sizes. Exact width, Dynamic Type and legibility changes invalidate
-those measurements. The measurement pass yields after 3 ms and
+those measurements. Measurement markers are pruned to retained row IDs after order changes;
+the 500-entry height LRU also charges identifier/metric metadata against a 4 MiB allowance.
+The measurement pass yields after 3 ms and
 updates prefix positions without re-hashing every row. Prepends restore the same reading row;
 following updates pin to the bottom unless a newer user drag invalidates that adjustment.
 The New capsule remains separate from the reusable cells.

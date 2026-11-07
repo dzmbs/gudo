@@ -62,6 +62,32 @@ final class ChatCollectionTests: XCTestCase {
         XCTAssertEqual(editor.text, "かな")
     }
 
+    func testMeasurementMarkersDoNotOutliveTheRetainedRows() async throws {
+        var frame = preparedFrame(1)
+        let (window, controller) = try open(frame)
+        defer { close(window) }
+        try await settle()
+        for index in 0..<4 {
+            frame.rows = preparedFrame(1, prefix: "replacement-\(index)").rows
+            frame.rowIDs = Set(frame.rows.map(\.id))
+            frame.revision += 1
+            update(controller, frame)
+            try await settle()
+        }
+        XCTAssertEqual(controller.retainedMeasurementCount, 1)
+    }
+
+    func testHeightCacheChargesRetainedIdentifierBytes() async throws {
+        let original = preparedFrame(1).rows[0]
+        let row = ChatRow(id: ChatRowID(item: String(repeating: "id", count: 50_000), part: 0),
+                          revision: 1, turn: original.turn, content: original.content)
+        let frame = TimelineFrame(rows: [row], rowIDs: [row.id], revision: 1)
+        let (window, controller) = try open(frame)
+        defer { close(window) }
+        try await settle()
+        XCTAssertGreaterThanOrEqual(controller.retainedHeightBytes, row.id.item.utf8.count)
+    }
+
     func testPrependingKeepsTheReadingRowAtTheSamePosition() async throws {
         var frame = preparedFrame(200)
         let (window, controller) = try open(frame, following: false)
