@@ -78,6 +78,59 @@ async fn permission_request_is_answered_from_a_client() {
     daemon.shutdown().await;
 }
 
+async fn tracked_agent_kind(owner: &mut TestClient, pane: client_core::proto::PaneId) -> String {
+    owner
+        .until("tracked agent", |owner| {
+            owner
+                .metas
+                .get(&pane)
+                .is_some_and(|meta| meta.agent.is_some())
+        })
+        .await;
+    owner.metas[&pane].agent.as_ref().unwrap().kind.clone()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn nested_agent_hooks_do_not_replace_the_foreground_agent() {
+    let directory = tempfile::tempdir().unwrap();
+    let executable = directory.path().join("codex");
+    std::os::unix::fs::symlink("/bin/sleep", &executable).unwrap();
+    let daemon = start(directory.path()).await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = owner.attach_and_follow().await;
+    owner.type_line(
+        pane,
+        &format!("{} 60", agents::shell_quote(&executable.to_string_lossy())),
+    );
+    assert_eq!(tracked_agent_kind(&mut owner, pane).await, "codex");
+    let mut request = HookRequest {
+        v: 1,
+        token: std::fs::read_to_string(directory.path().join("hook.token")).unwrap(),
+        pane: pane.0.to_string(),
+        agent: "codex".into(),
+        event: daemon::CODEX_NOTIFY_EVENT.into(),
+        seq: 1,
+        payload: serde_json::json!({ "type": "agent-turn-complete", "thread-id": "parent" }),
+    };
+    hook(daemon.hook_socket(), &request).await;
+    request.agent = "claude".into();
+    for (index, event) in ["SessionStart", "SessionEnd"].into_iter().enumerate() {
+        request.event = event.into();
+        request.seq = index as u64 + 2;
+        request.payload = serde_json::json!({ "hook_event_name": event, "session_id": "nested", "source": "startup" });
+        hook(daemon.hook_socket(), &request).await;
+        let mut probe = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+        assert_eq!(probe.attach_and_follow().await, pane);
+        assert_eq!(
+            tracked_agent_kind(&mut probe, pane).await,
+            "codex",
+            "{event}"
+        );
+    }
+    drop(owner);
+    daemon.shutdown().await;
+}
+
 /// An agent run by hand is tracked while it runs and forgotten once it exits back to the shell,
 /// with no SessionEnd hook.
 #[tokio::test(flavor = "multi_thread")]

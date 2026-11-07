@@ -187,7 +187,11 @@ pub(crate) struct ApprovalButtons {
     pub deny: Option<(OptionId, String)>,
 }
 
-/// The agent side of one pane.
+/// Ignored hooks must not replace the pane's pending approval.
+pub(crate) struct AppliedHook {
+    event: Option<AgentEvent>,
+}
+
 pub(crate) struct AgentRuntime {
     kind: AgentKind,
     adapter: Box<dyn AgentAdapter + Send + Sync>,
@@ -320,18 +324,24 @@ impl AgentRuntime {
         self.take(update)
     }
 
-    pub fn hook(&mut self, payload: &[u8], seq: u64) -> Option<AgentEvent> {
-        match self.adapter.parse_hook(payload, agents::Seq(seq)) {
-            Ok(Some(signal)) => {
-                let update = self.arbiter.apply(signal, now());
-                self.take(update)
-            }
-            Ok(None) => None,
+    pub fn hook(&mut self, payload: &[u8], seq: u64) -> Option<AppliedHook> {
+        let signal = match self.adapter.parse_hook(payload, agents::Seq(seq)) {
+            Ok(Some(signal)) => signal,
+            Ok(None) => return None,
             Err(error) => {
                 tracing::debug!("ignoring hook payload: {error}");
-                None
+                return None;
             }
+        };
+        if self.session().native_id.is_some()
+            && self.session().native_id != signal.session.native_id
+        {
+            return None;
         }
+        let update = self.arbiter.apply(signal, now());
+        Some(AppliedHook {
+            event: self.take(update),
+        })
     }
 
     /// Timers, plus a screen check when output arrived since the last tick.
@@ -938,18 +948,13 @@ async fn handle_hook(core: &Arc<Core>, request: HookRequest) -> HookResponse {
     let mut attached = None;
     let (event, blocked) = {
         let mut agent = lock(&entry.agent);
-        // A late SessionEnd must not bring back an agent that already exited.
-        if request.event == "SessionEnd"
-            && agent
-                .as_ref()
-                .is_some_and(|runtime| Some(runtime.kind()) != agent_kind(&request.agent))
-        {
+        let Some(kind) = agent_kind(&request.agent) else {
+            return HookResponse::default();
+        };
+        if agent.as_ref().is_some_and(|runtime| runtime.kind() != kind) {
             return HookResponse::default();
         }
-        if request.event != "SessionEnd"
-            && let Some(kind) = agent_kind(&request.agent)
-            && agent.as_ref().is_none_or(|runtime| runtime.kind() != kind)
-        {
+        if request.event != "SessionEnd" && agent.is_none() {
             *agent = Some(AgentRuntime::new(kind, pane_id, adapter(kind), false));
             entry.agent_attached.notify_one();
             attached = Some(kind);
@@ -957,7 +962,9 @@ async fn handle_hook(core: &Arc<Core>, request: HookRequest) -> HookResponse {
         let Some(runtime) = agent.as_mut() else {
             return HookResponse::default();
         };
-        let event = runtime.hook(&payload, request.seq);
+        let Some(AppliedHook { event }) = runtime.hook(&payload, request.seq) else {
+            return HookResponse::default();
+        };
         // Register wire ids now so a client can answer as soon as it sees the event.
         let _ = runtime.wire_status();
         (event, runtime.blocked_request())
@@ -1048,6 +1055,41 @@ mod tests {
             name: program.into(),
             argv: vec![program.into()],
         }
+    }
+
+    #[test]
+    fn nested_session_hooks_leave_the_parent_identity_and_approval_untouched() {
+        let mut runtime = runtime();
+        let parent = br#"{
+            "session_id":"parent", "hook_event_name":"PermissionRequest",
+            "tool_name":"Bash", "tool_input":{"command":"echo parent"}
+        }"#;
+        let _ = runtime.hook(parent, 1);
+        let identity = runtime.session().native_id.clone();
+        let status = runtime.wire_status();
+        assert!(runtime.blocked_request().is_some());
+        for (index, event) in ["SessionStart", "PermissionRequest", "SessionEnd"]
+            .into_iter()
+            .enumerate()
+        {
+            let payload = serde_json::json!({
+                "session_id": "nested",
+                "hook_event_name": event,
+                "source": "startup",
+                "tool_name": "Bash",
+                "tool_input": { "command": "echo nested" },
+            });
+            assert!(
+                runtime
+                    .hook(&serde_json::to_vec(&payload).unwrap(), index as u64 + 2)
+                    .is_none()
+            );
+            assert_eq!(runtime.session().native_id, identity, "{event}");
+            assert_eq!(runtime.wire_status(), status, "{event}");
+        }
+        let stopped = br#"{"session_id":"parent","hook_event_name":"Stop"}"#;
+        assert!(runtime.hook(stopped, 2).is_some());
+        assert!(matches!(runtime.wire_status().state, AgentState::Idle));
     }
 
     #[test]

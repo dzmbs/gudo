@@ -30,6 +30,10 @@ directory (it holds `hook.token` and can do anything the user can anyway).
 - **Identity.** Each pane's helpers get a token that speaks for that pane only (an HMAC of its
   id); the socket refuses other uids before reading. An agent acts as its own pane, never as
   another.
+- **Hook identity.** A nested agent cannot replace a tracked agent of another kind. Once the
+  runtime has a native session id, hooks with a different or missing id are ignored before
+  advancing hook order, changing status or replacing a pending approval. A different native
+  session needs a fresh tracked runtime.
 - **Own panes only, without asking.** An agent types into, runs in and closes the panes it (or
   its workers) opened; never its own pane (it would type into its own prompt), never another
   session's. Ownership survives a restart (`layout.json`) and is dropped with the pane, so an id

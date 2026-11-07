@@ -725,6 +725,7 @@ async fn live_activity_starts_updates_and_ends() {
 
     // 3. The agent asks for approval: an urgent update right away.
     let mut payload: serde_json::Value = serde_json::from_str(PERMISSION).unwrap();
+    payload["session_id"] = "s".into();
     payload["cwd"] = "/".into();
     let waiting = hook(&daemon, state.path(), hidden, "PermissionRequest", payload).await;
     let (blocked, activity_state) = activity(&relay.next("needs you").await, &daemon, &seal_secret);
