@@ -162,10 +162,14 @@ VT geometry and zero resize/claim/input calls. Real paired no-SIGWINCH acceptanc
 Tool details read output through the existing authenticated same-pane output API, one bounded
 native page at a time, with Input/Output tabs and Beginning/Previous/Next navigation. Closing the
 sheet invalidates pending replies. Diff details use read-only native unified/side-by-side rows,
-with independent file collapse and explicit preview/omission notices. Native complete-diff fetching,
-device snapshot persistence and the rest of the composer remain pending. The daemon exposes complete
-recorded per-tool changes; that does not establish a complete turn or map opaque timeline turns to
-numeric repository captures.
+with independent file collapse and explicit preview/omission notices. Load recorded changes uses
+only the selected tool results' existing opaque handles on this pane's authenticated client. Replies
+are decoded off-main within a 12MiB + 1KiB JSON envelope and staged incrementally against one aggregate
+native diff budget; a rejected, cancelled or stale request retains the original preview. Loaded paths
+cannot broaden the selection and incomplete replies cannot acquire the recorded-result label.
+The sheet labels recorded tool changes, not a complete turn or the current working tree. It never
+maps opaque timeline turns to numeric repository captures. Complete-turn aggregation beyond the
+retained results, device snapshot persistence and the rest of the composer remain pending.
 Turn-summary Changes uses the opaque turn identity, not a file path. Tool-file selections also
 carry the owning item identity. Missing or empty turn correlation offers Terminal rather than
 showing changes from other visible turns. Command-mark lookup is associated with the exact

@@ -3,10 +3,8 @@ import DesignSystem
 import SwiftUI
 
 struct ChatDiffSheet: View {
-    let groups: [ChatToolDiff]
     let openTerminal: () -> Void
-    @State private var snapshot: ChatDiffSnapshot?
-    @State private var error: String?
+    @State private var reader: ChatDiffReader
     @State private var document: DiffRenderDocument?
     @State private var collapsed: Set<String> = []
     @State private var layout = DiffLayout.automatic
@@ -21,17 +19,27 @@ struct ChatDiffSheet: View {
     @ScaledMetric(relativeTo: .body) private var summaryHeight: CGFloat = 88
     @ScaledMetric(relativeTo: .body) private var fileHeaderHeight: CGFloat = 44
 
+    init(groups: [ChatToolDiff], source: ChatDiffReader.Source? = nil, openTerminal: @escaping () -> Void) {
+        self.init(reader: ChatDiffReader(groups: groups, source: source), openTerminal: openTerminal)
+    }
+
+    init(reader: ChatDiffReader, openTerminal: @escaping () -> Void) {
+        self.openTerminal = openTerminal
+        _reader = State(initialValue: reader)
+    }
+
     var body: some View {
         NavigationStack {
             Group {
-                if let snapshot, !snapshot.files.isEmpty { review(snapshot) }
-                else if let error { note(error) }
-                else if snapshot != nil {
+                if let snapshot = reader.snapshot, !snapshot.files.isEmpty { review(snapshot) }
+                else if let error = reader.error { note(error) }
+                else if reader.snapshot != nil {
                     note("No changes for this selection are available in Chat. Open Terminal to inspect them.")
                 } else { note("Loading diff…") }
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
             .background(theme.background)
+            .safeAreaInset(edge: .bottom, spacing: 0) { recordedControls }
             .navigationTitle("Chat Changes").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -52,18 +60,33 @@ struct ChatDiffSheet: View {
                 }
             }
         }
-        .task {
-            do {
-                let snapshot = try await Task.detached(priority: .userInitiated) { [groups] in
-                    try ChatDiffSnapshot(groups: groups)
-                }.value
-                guard !Task.isCancelled else { return }
-                self.snapshot = snapshot
-            } catch {
-                guard !Task.isCancelled else { return }
-                self.error = (error as? ChatDiffError)?.errorDescription
-                    ?? "This diff could not load. Open Terminal to read it."
-            }
+        .task(id: reader.requested) {
+            if reader.requested == nil { await reader.preview() } else { await reader.loadRecorded() }
+        }
+        .onDisappear { reader.cancel() }
+    }
+
+    @ViewBuilder private var recordedControls: some View {
+        if reader.snapshot?.files.isEmpty == false, reader.canLoadRecorded || reader.error != nil {
+            VStack(alignment: .leading, spacing: DS.Space.s) {
+                if let error = reader.error {
+                    Text(verbatim: error).font(DS.Font.proseSecondary).foregroundStyle(DS.Palette.textSecondary)
+                        .accessibilityIdentifier("chat-diff-recorded-error")
+                }
+                if reader.canLoadRecorded {
+                    Button {
+                        reader.requestRecorded()
+                    } label: {
+                        HStack(spacing: DS.Space.s) {
+                            if reader.isLoading { ProgressView().accessibilityLabel("Loading recorded changes") }
+                            Text(reader.isLoading ? "Loading recorded changes…" : "Load recorded changes")
+                                .font(DS.Font.prose)
+                        }.frame(maxWidth: .infinity, minHeight: DS.Size.touchTarget)
+                    }
+                    .buttonStyle(.bordered).disabled(reader.isLoading)
+                    .accessibilityIdentifier("chat-diff-load-recorded")
+                }
+            }.padding(DS.Space.l).background(DS.Palette.raised)
         }
     }
 
@@ -81,7 +104,7 @@ struct ChatDiffSheet: View {
             summaryHeight: ceil(summaryHeight), fileHeaderHeight: ceil(fileHeaderHeight),
             hunkHeaderHeight: max(24, ceil(lineHeight)))
         return Group {
-            if let document {
+            if let document, document.input == input {
                 NativeDiffList(document: document) { row in
                     render(row, document: document)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
@@ -95,15 +118,17 @@ struct ChatDiffSheet: View {
             guard !Task.isCancelled else { return }
             self.document = document
         }
-        .accessibilityIdentifier("chat-diff-preview")
+        .accessibilityIdentifier(reader.isRecorded ? "chat-diff-recorded" : "chat-diff-preview")
     }
 
     @ViewBuilder private func render(_ row: DiffRenderRow, document: DiffRenderDocument) -> some View {
         switch row.content {
         case .summary:
             VStack(alignment: .leading, spacing: DS.Space.s) {
-                Text("Chat diff preview").font(DS.Font.title).foregroundStyle(DS.Palette.text)
-                Text("Open Terminal for the complete diff.").font(DS.Font.proseSecondary)
+                Text(reader.isRecorded ? "Recorded tool changes" : "Chat diff preview")
+                    .font(DS.Font.title).foregroundStyle(DS.Palette.text)
+                Text(reader.isRecorded ? "Selected tool results, not the working tree."
+                     : "Open Terminal for the complete diff.").font(DS.Font.proseSecondary)
                     .foregroundStyle(DS.Palette.textSecondary)
             }.padding(DS.Space.l)
         case .file:

@@ -24,6 +24,24 @@ final class ChatDiffReaderTests: XCTestCase {
         XCTAssertNil(reader.error)
     }
 
+    func testTheViewActionCannotReenterLoadingOrReloadAnAlreadyRecordedSelection() async throws {
+        let probe = DiffProbe()
+        let reader = ChatDiffReader(groups: [try group("tool")], source: probe.read)
+        reader.requestRecorded()
+        let requested = try XCTUnwrap(reader.requested)
+        let task = Task { await reader.loadRecorded() }
+        try await wait { probe.pending[0] != nil }
+        reader.requestRecorded()
+        XCTAssertEqual(reader.requested, requested)
+        probe.finish(0, with: try reply())
+        await task.value
+        reader.requestRecorded()
+        XCTAssertEqual(reader.requested, requested)
+        let unavailable = ChatDiffReader(groups: [try group("tool")])
+        unavailable.requestRecorded()
+        XCTAssertNil(unavailable.requested)
+    }
+
     func testAMissingResultHandleCannotBeReplacedWithAnItemOrTurnID() async throws {
         let value = try group("tool")
         let uncorrelated = ChatToolDiff(item: value.item, files: value.files)

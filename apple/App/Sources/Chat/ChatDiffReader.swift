@@ -10,6 +10,7 @@ final class ChatDiffReader {
     private(set) var error: String?
     private(set) var isLoading = false
     private(set) var isRecorded = false
+    private(set) var requested: UUID?
     @ObservationIgnored private let groups: [ChatToolDiff]
     @ObservationIgnored private let source: Source?
     @ObservationIgnored private var request = UUID()
@@ -21,6 +22,11 @@ final class ChatDiffReader {
     init(groups: [ChatToolDiff], source: Source? = nil) {
         self.groups = groups.filter { !$0.files.isEmpty }
         self.source = source
+    }
+
+    func requestRecorded() {
+        guard canLoadRecorded, !isLoading else { return }
+        requested = UUID()
     }
 
     func cancel() {

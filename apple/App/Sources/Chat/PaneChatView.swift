@@ -49,7 +49,9 @@ struct PaneChatView<Terminal: View>: View {
                         paneId: pane.id.rawValue, handle: output.handle, offset: offset, len: length)
                 }, openTerminal: { openTerminalFromDetail(commandMark: tool.commandMark) })
             case .diff(let groups):
-                ChatDiffSheet(groups: groups, openTerminal: openTerminalFromDetail)
+                ChatDiffSheet(groups: groups, source: { handle in
+                    try await hub.timelineClient().timelineToolDiff(paneId: pane.id.rawValue, handle: handle)
+                }, openTerminal: openTerminalFromDetail)
             }
         }
     }
