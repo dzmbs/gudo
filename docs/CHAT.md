@@ -154,6 +154,9 @@ Tool details read output through the existing authenticated same-pane output API
 native page at a time, with Input/Output tabs and Beginning/Previous/Next navigation. Closing the
 sheet invalidates pending replies. Diff details still expose bounded previews with Terminal
 fallbacks; full native diff routing, device snapshot persistence and the rest of the composer remain pending.
+Turn-summary Changes uses the opaque turn identity, not a file path. Tool-file selections also
+carry the owning item identity. Missing or empty turn correlation offers Terminal rather than
+showing changes from other visible turns.
 
 `ChatViewController` owns one normal-orientation reusable collection and a composer host pinned
 to the keyboard layout guide. A display-link coalesces pending frames; stopped views release

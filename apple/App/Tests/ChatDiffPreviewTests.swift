@@ -7,13 +7,39 @@ final class ChatDiffPreviewTests: XCTestCase {
     func testPathPreviewRetainsOnlyTheMatchingFiles() throws {
         let rows = try [toolRow("first", turn: "turn-a", path: "a.swift"),
                         toolRow("second", turn: "turn-b", path: "b.swift")]
-        XCTAssertEqual(ChatDiffPreview.files(matching: "a.swift", rows: rows).map(\.path), ["a.swift"])
+        let target = ChatDiffTarget.tool(item: "first", path: "a.swift")
+        XCTAssertEqual(ChatDiffPreview.files(for: target, rows: rows).map(\.path), ["a.swift"])
     }
 
-    func testLegacyUnfilteredPreviewRetainsAllVisibleToolFiles() throws {
+    func testAnUnfilteredToolSelectionStillExcludesOtherTools() throws {
         let rows = try [toolRow("first", turn: "turn-a", path: "a.swift"),
                         toolRow("second", turn: "turn-b", path: "b.swift")]
-        XCTAssertEqual(ChatDiffPreview.files(matching: nil, rows: rows).map(\.path), ["a.swift", "b.swift"])
+        let target = ChatDiffTarget.tool(item: "first", path: nil)
+        XCTAssertEqual(ChatDiffPreview.files(for: target, rows: rows).map(\.path), ["a.swift"])
+    }
+
+    func testATurnSummarySelectsOnlyItsCorrelatedTurnInsteadOfMatchingAFilePath() throws {
+        let rows = try [toolRow("first", turn: "turn-a", path: "a.swift"),
+                        toolRow("second", turn: "turn-b", path: "b.swift")]
+        XCTAssertEqual(ChatDiffPreview.files(for: .turn("turn-a"), rows: rows).map(\.path), ["a.swift"])
+    }
+
+    func testAMissingTurnCorrelationDoesNotSelectEveryVisibleTurn() throws {
+        let rows = try [toolRow("first", turn: "turn-a", path: "a.swift"),
+                        toolRow("second", turn: "turn-b", path: "b.swift")]
+        XCTAssertTrue(ChatDiffPreview.files(for: .turn(nil), rows: rows).isEmpty)
+    }
+
+    func testMatchingPathsDoNotCrossTheRequestedToolBoundary() throws {
+        let rows = try [toolRow("first", turn: "turn-a", path: "a.swift"),
+                        toolRow("second", turn: "turn-b", path: "a.swift")]
+        XCTAssertEqual(ChatDiffPreview.files(for: .tool(item: "first", path: "a.swift"), rows: rows).count, 1)
+        XCTAssertTrue(ChatDiffPreview.files(for: .tool(item: "missing", path: nil), rows: rows).isEmpty)
+    }
+
+    func testAnEmptyTurnIdentifierDoesNotInventCorrelation() throws {
+        let rows = try [toolRow("first", turn: "", path: "a.swift")]
+        XCTAssertTrue(ChatDiffPreview.files(for: .turn(""), rows: rows).isEmpty)
     }
 
     private func toolRow(_ identifier: String, turn: String, path: String) throws -> ChatRow {

@@ -8,7 +8,7 @@ struct ChatRowActions {
     var showTerminal: (UInt64?) -> Void = { _ in }
     var selectText: (String) -> Void = { _ in }
     var showTool: (TimelineItem) -> Void = { _ in }
-    var showDiff: (String?) -> Void = { _ in }
+    var showDiff: (ChatDiffTarget) -> Void = { _ in }
 }
 
 struct ChatRowView: View {
@@ -214,7 +214,7 @@ struct ChatRowView: View {
             Text("Worked for \(duration(end.durationMs))")
             if let tokens = end.outputTokens { Text("· \(tokens.formatted(.number.notation(.compactName))) tokens") }
             Spacer(minLength: 0)
-            Button("Changes", systemImage: "plus.forwardslash.minus") { actions.showDiff(item.turn) }
+            Button("Changes", systemImage: "plus.forwardslash.minus") { actions.showDiff(.turn(item.turn)) }
         }.font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary).padding(.vertical, DS.Space.s)
     }
 

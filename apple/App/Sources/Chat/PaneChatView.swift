@@ -87,8 +87,8 @@ struct PaneChatView<Terminal: View>: View {
         }, showDiff: { selectDiffPreview($0) })
     }
 
-    private func selectDiffPreview(_ path: String?) {
-        let diffs = ChatDiffPreview.files(matching: path, rows: state.model?.frame.rows ?? [])
+    private func selectDiffPreview(_ target: ChatDiffTarget) {
+        let diffs = ChatDiffPreview.files(for: target, rows: state.model?.frame.rows ?? [])
         let text = diffs.map { file in
             let hunks = file.hunks.map { hunk in
                 hunk.header + "\n" + hunk.lines.map { line in
@@ -105,7 +105,10 @@ struct PaneChatView<Terminal: View>: View {
             return file.path + "\n" + hunks
         }.joined(separator: "\n\n")
         let note = "\n\nThis is a Chat preview. Open Terminal for the complete diff."
-        selectedDetail = ChatDetail(content: .text(ChatSelectedText(title: "Diff Preview", text: text + note)))
+        let preview = diffs.isEmpty
+            ? "No changes for this selection are available in Chat. Open Terminal to inspect them."
+            : text + note
+        selectedDetail = ChatDetail(content: .text(ChatSelectedText(title: "Diff Preview", text: preview)))
     }
 
     private func openTerminalFromDetail() {
