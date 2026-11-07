@@ -187,6 +187,10 @@ final class PaneCommandMarks: NSObject {
 
     private func reload() async {
         guard let list = try? await daemon.workspace.commands(pane: paneId), !Task.isCancelled else { return }
+        reconcile(list)
+    }
+
+    func reconcile(_ list: CommandList) {
         let blocks = CommandBlocks.blocks(list)
         entries = blocks.map { Entry(block: $0, first: nil, last: nil) }
         repin()
