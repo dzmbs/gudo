@@ -180,6 +180,9 @@ The daemon retains at most 512 items per watched pane and 128 tool-call merge en
 Initial and historical reads seek within the last 8 MiB before the requested position;
 only the selected records are parsed. Native record, block, result and plan tags decode into
 typed values at the reader boundary; arbitrary tool input retains bounded JSON for its sheet.
+Command sources and permission modes are shared proto enums with an Unknown case. They retain
+the original string encoding for known values on both postcard and JSON; unrecognized metadata
+becomes Unknown rather than an actionable permission mode.
 Malformed complete records are skipped without ending the timeline. Text over 256 KiB becomes
 a per-item Terminal notice, not a session-wide error. Live scanning is limited to 8 MiB per
 refresh, including record newlines. An oversized line is discarded through its next newline;

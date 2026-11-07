@@ -47,8 +47,8 @@ fn current_cli_fixture_merges_tool_results_without_duplicate_calls() {
     assert_eq!(items.len(), 8);
     assert_eq!(parser.session.model.as_deref(), Some("claude-sonnet-4-6"));
     assert_eq!(
-        parser.session.permission_mode.as_deref(),
-        Some("bypassPermissions")
+        parser.session.permission_mode,
+        Some(proto::TimelinePermissionMode::BypassPermissions)
     );
     let TimelineBody::Tool(shell) = &items["toolu_fixture_bash"].body else {
         panic!()
@@ -138,7 +138,10 @@ fn titles_and_permission_modes_update_session_metadata() {
     );
     assert_eq!(parser.session.title.as_deref(), Some("Build"));
     assert!(parse(&mut parser, json!({"type":"permission-mode","mode":"plan"})).is_empty());
-    assert_eq!(parser.session.permission_mode.as_deref(), Some("plan"));
+    assert_eq!(
+        parser.session.permission_mode,
+        Some(proto::TimelinePermissionMode::Plan)
+    );
 }
 
 #[test]

@@ -2,7 +2,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Actor, AgentKind, FileDiff, PaneId, UnixMillis};
 
+mod metadata;
 mod output_handle;
+pub use metadata::{TimelineCommandSource, TimelinePermissionMode};
 pub use output_handle::{InvalidOutputHandle, OutputHandle};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -137,7 +139,7 @@ pub enum TimelineNoticeKind {
 pub struct TimelineCommand {
     pub name: String,
     pub description: String,
-    pub source: String,
+    pub source: TimelineCommandSource,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -146,7 +148,7 @@ pub struct TimelineSession {
     pub native_session: String,
     pub title: Option<String>,
     pub model: Option<String>,
-    pub permission_mode: Option<String>,
+    pub permission_mode: Option<TimelinePermissionMode>,
     pub commands: Vec<TimelineCommand>,
 }
 
@@ -170,7 +172,7 @@ pub enum TimelineOp {
     Snapshot(TimelineSnapshot),
     Upsert {
         cursor: TimelineCursor,
-        item: TimelineItem,
+        item: Box<TimelineItem>,
     },
     Append {
         cursor: TimelineCursor,

@@ -100,7 +100,7 @@ fn a_large_push_is_replaced_by_a_bounded_snapshot_before_encoding_on_ctl() {
         };
         operations.push(TimelineOp::Upsert {
             cursor: cursor(sequence),
-            item,
+            item: Box::new(item),
         });
     }
     mailbox.push(
@@ -140,11 +140,11 @@ fn since_join_filtering_advances_the_cursor_without_exposing_hidden_items() {
     let operations = vec![
         TimelineOp::Upsert {
             cursor: cursor(1),
-            item: item("old", 1),
+            item: Box::new(item("old", 1)),
         },
         TimelineOp::Upsert {
             cursor: cursor(2),
-            item: item("new", 11),
+            item: Box::new(item("new", 11)),
         },
         TimelineOp::Append {
             cursor: cursor(3),

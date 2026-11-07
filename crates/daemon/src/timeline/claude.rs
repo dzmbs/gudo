@@ -91,8 +91,8 @@ impl ClaudeTimeline {
     }
 
     fn session_metadata(&mut self, record: &Record) {
-        if let Some(mode) = &record.permission_mode {
-            self.session.permission_mode = Some(metadata_text(mode));
+        if let Some(mode) = record.permission_mode {
+            self.session.permission_mode = Some(mode);
         }
         match record.kind {
             RecordKind::AiTitle | RecordKind::CustomTitle => {
@@ -101,8 +101,8 @@ impl ClaudeTimeline {
                 }
             }
             RecordKind::PermissionMode => {
-                if let Some(mode) = record.mode.as_ref().or(record.permission_mode.as_ref()) {
-                    self.session.permission_mode = Some(metadata_text(mode));
+                if let Some(mode) = record.mode.or(record.permission_mode) {
+                    self.session.permission_mode = Some(mode);
                 }
             }
             _ => {}

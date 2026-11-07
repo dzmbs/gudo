@@ -197,7 +197,7 @@ impl Transcript {
                     self.cursor.sequence = self.cursor.sequence.wrapping_add(1);
                     operations.push(TimelineOp::Upsert {
                         cursor: self.cursor,
-                        item: with_output_epoch(item, self.cursor.epoch),
+                        item: Box::new(with_output_epoch(item, self.cursor.epoch)),
                     });
                 }
             }

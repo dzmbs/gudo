@@ -34,6 +34,24 @@ fn snapshot() -> TimelineSnapshot {
 }
 
 #[test]
+fn timeline_metadata_keeps_its_original_string_wire_bytes() {
+    let mut value = session();
+    value.permission_mode = Some("acceptEdits".into());
+    value.commands.push(TimelineCommand {
+        name: "review".into(),
+        description: String::new(),
+        source: "Project".into(),
+    });
+    frozen(
+        value,
+        &[
+            0, 1, 115, 0, 0, 1, 11, 97, 99, 99, 101, 112, 116, 69, 100, 105, 116, 115, 1, 6, 114,
+            101, 118, 105, 101, 119, 0, 7, 80, 114, 111, 106, 101, 99, 116,
+        ],
+    );
+}
+
+#[test]
 fn timeline_requests_and_capabilities_keep_their_wire_bytes() {
     frozen(Caps::AGENT_TIMELINE, &[128, 128, 128, 64]);
     frozen(DaemonFeatures::AGENT_TIMELINE, &[128, 128, 128, 8]);
@@ -102,7 +120,7 @@ fn timeline_operations_keep_their_wire_bytes() {
     frozen(
         TimelineOp::Upsert {
             cursor,
-            item: TimelineItem {
+            item: Box::new(TimelineItem {
                 id: "id".into(),
                 revision: 1,
                 turn: None,
@@ -113,7 +131,7 @@ fn timeline_operations_keep_their_wire_bytes() {
                     text: "x".into(),
                     streaming: false,
                 },
-            },
+            }),
         },
         &[1, 1, 2, 2, 105, 100, 1, 0, 0, 0, 2, 1, 1, 120, 0],
     );

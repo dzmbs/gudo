@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::Path;
 
-use proto::TimelineCommand;
+use proto::{TimelineCommand, TimelineCommandSource};
 
 const BUILT_INS: &[(&str, &str)] = &[
     ("clear", "Start a fresh conversation"),
@@ -29,14 +29,17 @@ pub(super) fn discover(config: &Path, directory: &Path) -> Vec<TimelineCommand> 
                 TimelineCommand {
                     name: name.to_string(),
                     description: description.to_string(),
-                    source: "Built-in".into(),
+                    source: TimelineCommandSource::BuiltIn,
                 },
             )
         })
         .collect();
     for (path, source) in [
-        (config.join("commands"), "User"),
-        (directory.join(".claude/commands"), "Project"),
+        (config.join("commands"), TimelineCommandSource::User),
+        (
+            directory.join(".claude/commands"),
+            TimelineCommandSource::Project,
+        ),
     ] {
         if let Ok(root) = path.canonicalize() {
             collect(&root, &root, source, 0, &mut commands);
@@ -48,7 +51,7 @@ pub(super) fn discover(config: &Path, directory: &Path) -> Vec<TimelineCommand> 
 fn collect(
     root: &Path,
     directory: &Path,
-    source: &str,
+    source: TimelineCommandSource,
     depth: usize,
     commands: &mut BTreeMap<String, TimelineCommand>,
 ) {
@@ -112,7 +115,7 @@ fn collect(
             TimelineCommand {
                 name,
                 description,
-                source: source.into(),
+                source,
             },
         );
     }
