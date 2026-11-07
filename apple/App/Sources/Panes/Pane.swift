@@ -54,6 +54,7 @@ final class Pane {
     nonisolated private let savedScreenShown = OSAllocatedUnfairLock(initialState: false)
     /// Bumped by every output and snapshot, so the workspace cache knows the screen may have changed.
     nonisolated let outputGeneration = OSAllocatedUnfairLock(initialState: 0)
+    nonisolated let inputPresentation = PaneInputPresentation()
     /// The grid's cell size in pixels, for resizes that follow the stream (off the main actor).
     nonisolated let cellPixels = OSAllocatedUnfairLock<(width: UInt32, height: UInt32)>(initialState: (0, 0))
     /// Rows from the bottom the saved screen was scrolled back, to restore once the host's
@@ -67,15 +68,20 @@ final class Pane {
     ) throws {
         self.id = id
         self.backend = backend
+        let inputPresentation = inputPresentation
         let terminal = Terminal(
             cols: 80, rows: 24, configuration: appearance.terminalConfiguration,
-            writeInput: { backend.write($0) }
+            writeInput: { bytes in
+                guard inputPresentation.allowsTerminalInput else { return }
+                backend.write(bytes)
+            }
         ) { backend.writeGenerated($0) }
         let surface = try TerminalSurface(terminal: terminal, appearance: appearance)
         view = TerminalView(surface: surface)
         view.onInput = { [weak self] bytes in
-            self?.moves += 1
-            self?.keptScroll.withLock { $0 = nil }
+            guard let self, inputPresentation.allowsTerminalInput else { return }
+            self.moves += 1
+            self.keptScroll.withLock { $0 = nil }
             bytes.withUnsafeBytes { backend.write($0) }
         }
         view.onGeneratedInput = { bytes in bytes.withUnsafeBytes { backend.writeGenerated($0) } }
@@ -101,8 +107,9 @@ final class Pane {
             // Keystrokes carry the predictor's input sequence number, which the backend acks.
             surface.enablePrediction()
             view.onInput = { [weak self, weak surface] bytes in
-                self?.moves += 1
-                self?.keptScroll.withLock { $0 = nil }
+                guard let self, inputPresentation.allowsTerminalInput else { return }
+                self.moves += 1
+                self.keptScroll.withLock { $0 = nil }
                 let inputSeq = surface?.predictor?.lastInputSeq ?? 0
                 bytes.withUnsafeBytes { feed.writeInput($0, inputSeq: inputSeq) }
             }

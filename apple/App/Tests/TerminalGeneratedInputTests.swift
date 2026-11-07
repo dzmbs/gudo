@@ -1,3 +1,4 @@
+import HostKit
 import PaneLayout
 import TerminalCore
 import TerminalRenderer
@@ -12,7 +13,7 @@ import UIKit
 
 @MainActor
 final class TerminalGeneratedInputTests: XCTestCase {
-    private final class RecordingBackend: PaneBackend, @unchecked Sendable {
+    private class RecordingBackend: PaneBackend, @unchecked Sendable {
         let input = OSAllocatedUnfairLock(initialState: [[UInt8]]())
         let generated = OSAllocatedUnfairLock(initialState: [[UInt8]]())
         var hostAnswersQueries: Bool { false }
@@ -27,6 +28,28 @@ final class TerminalGeneratedInputTests: XCTestCase {
         }
         func resize(cols: UInt16, rows: UInt16, cellWidth: UInt32, cellHeight: UInt32) {}
         func terminate() {}
+    }
+
+    private final class RecordingPredictionBackend: RecordingBackend, PredictionFeed, @unchecked Sendable {
+        func startPredictionFeed(_ onUpdate: @escaping @Sendable (PredictionUpdate) -> Void) {}
+        func writeInput(_ bytes: UnsafeRawBufferPointer, inputSeq: UInt64) { write(bytes) }
+    }
+
+    func testChatBlocksHiddenTerminalKeysAndPastesButNotGeneratedReplies() throws {
+        let backends: [RecordingBackend] = [RecordingBackend(), RecordingPredictionBackend()]
+        for backend in backends {
+            let pane = try Pane(id: PaneId(1), backend: backend, onExit: {})
+            pane.inputPresentation.value = .chat
+            pane.view.send(.press(.enter))
+            _ = pane.view.surface.paste("stale terminal draft")
+            pane.view.surface.terminal.write(Array("\u{1b}[5n".utf8))
+            XCTAssertTrue(backend.input.withLock { $0.isEmpty })
+            XCTAssertEqual(backend.generated.withLock { $0 }, [Array("\u{1b}[0n".utf8)])
+            pane.inputPresentation.value = .terminal
+            pane.view.send(.press(.enter))
+            _ = pane.view.surface.paste("returned to Terminal")
+            XCTAssertEqual(backend.input.withLock { $0 }, [Array("\r".utf8), Array("returned to Terminal".utf8)])
+        }
     }
 
     func testUserPasteDoesNotTravelAsAGeneratedTerminalReply() throws {
