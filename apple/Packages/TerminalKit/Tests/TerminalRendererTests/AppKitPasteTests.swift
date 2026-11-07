@@ -35,6 +35,35 @@ import Testing
         withExtendedLifetime(window) {}
     }
 
+    @Test func imageOnlyClipboardDoesNotPlaceOrWriteAnything() throws {
+        let (view, window, written) = try makeView()
+        let board = NSPasteboard(name: .init("terminal-image-paste-\(UUID())"))
+        defer { board.releaseGlobally() }
+        let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jAj0AAAAASUVORK5CYII=")!
+        board.setData(png, forType: .png)
+        #expect(TerminalView.hasAttachment(board))
+        var placements = 0
+        view.onPasteAttachment = { _ in placements += 1; return true }
+        view.paste(from: board)
+        #expect(placements == 0)
+        #expect(written.bytes.withLock { $0 }.isEmpty)
+        withExtendedLifetime(window) {}
+    }
+
+    @Test func fileClipboardPastesTheEscapedPathNotTheFinderNameOrAnImage() throws {
+        let (view, window, written) = try makeView()
+        let board = NSPasteboard(name: .init("terminal-file-paste-\(UUID())"))
+        defer { board.releaseGlobally() }
+        board.writeObjects([URL(fileURLWithPath: "/tmp/a b/it's.png") as NSURL])
+        board.setString("it's.png", forType: .string)
+        var placements = 0
+        view.onPasteAttachment = { _ in placements += 1; return true }
+        view.paste(from: board)
+        #expect(placements == 0)
+        #expect(String(decoding: written.bytes.withLock { $0 }, as: UTF8.self) == "'/tmp/a b/it'\\''s.png'")
+        withExtendedLifetime(window) {}
+    }
+
     @Test func singleLinePasteWithoutBracketsIsWrittenAsIs() throws {
         let (view, window, written) = try makeView()
         NSPasteboard.general.clearContents()

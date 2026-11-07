@@ -800,7 +800,7 @@ public final class TerminalView: UIView {
     override public func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
         switch action {
         case #selector(copy(_:)): surface.terminal.selection != nil
-        case #selector(paste(_:)): UIPasteboard.general.hasStrings || (onPasteAttachment != nil && UIPasteboard.general.hasImages)
+        case #selector(paste(_:)): UIPasteboard.general.hasStrings || UIPasteboard.general.hasURLs
         case #selector(selectAll(_:)): true
         case #selector(find(_:)): onFind != nil
         default: super.canPerformAction(action, withSender: sender)
@@ -829,10 +829,10 @@ public final class TerminalView: UIView {
     /// is the user's own paste and reads without asking.
     public func pasteFromKeyBar() {
         let board = UIPasteboard.general
-        if board.changeCount == PasteboardOrigin.ownChangeCount, let text = board.string, !text.isEmpty {
+        if board.changeCount == PasteboardOrigin.ownChangeCount, let text = Self.pastedText(board), !text.isEmpty {
             return pasteText(text)
         }
-        guard board.hasStrings || (onPasteAttachment != nil && board.hasImages) else { return }
+        guard board.hasStrings || board.hasURLs else { return }
         if !isFirstResponder { becomeFirstResponder() }
         menuOffersPaste = true
         let cursor = surface.cursorRect ?? CGRect(x: bounds.midX, y: bounds.midY, width: 1, height: 1)
@@ -847,18 +847,20 @@ public final class TerminalView: UIView {
         return selection.contains(cell)
     }
 
-    override public func paste(_ sender: Any?) {
-        // An image (and no text) goes to the host: a drawing artifact placed in the pane.
-        if let onPasteAttachment, !UIPasteboard.general.hasStrings, UIPasteboard.general.hasImages,
-           onPasteAttachment(UIPasteboard.general)
-        {
-            return
-        }
-        guard let text = UIPasteboard.general.string else { return }
+    override public func paste(_ sender: Any?) { paste(from: .general) }
+
+    func paste(from board: UIPasteboard) {
+        guard let text = Self.pastedText(board) else { return }
         pasteText(text)
     }
 
-    /// Handles a paste of an image with no text; returns whether it took it.
+    static func pastedText(_ board: UIPasteboard) -> String? {
+        let files = (board.urls ?? []).filter(\.isFileURL)
+        if !files.isEmpty { return files.map { shellQuoted($0.path) }.joined(separator: " ") }
+        return board.string
+    }
+
+    /// Explicit clipboard-image placement; ordinary terminal paste never invokes it.
     public var onPasteAttachment: ((UIPasteboard) -> Bool)?
 
     /// Type identifiers of the app's own drags that carry text without being text to paste

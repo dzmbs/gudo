@@ -449,7 +449,7 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         switch item.action {
         case #selector(copy(_:)): surface.terminal.selection != nil
         case #selector(paste(_:)):
-            NSPasteboard.general.string(forType: .string) != nil || (onPasteAttachment != nil && Self.hasAttachment(NSPasteboard.general))
+            Self.hasDroppableText(NSPasteboard.general)
         case #selector(selectAll(_:)): true
         default: true
         }
@@ -461,18 +461,16 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         NSPasteboard.general.setString(text, forType: .string)
     }
 
-    @objc public func paste(_ sender: Any?) {
-        // Images and files (no text) go to the host: a drawing artifact placed in the pane.
-        if let onPasteAttachment, Self.hasAttachment(NSPasteboard.general), onPasteAttachment(NSPasteboard.general) { return }
-        guard let text = NSPasteboard.general.string(forType: .string) else { return }
+    @objc public func paste(_ sender: Any?) { paste(from: .general) }
+
+    func paste(from board: NSPasteboard) {
+        guard let text = Self.droppedText(board) else { return }
         pasteText(text)
     }
 
     // MARK: Attachments (images, .excalidraw files)
 
-    /// Handles a paste whose pasteboard holds an image or a file and no text; returns whether it
-    /// took it. Setting it also accepts drops of images and files onto the view
-    /// (`onDropAttachment`).
+    /// Explicit clipboard attachment placement; ordinary terminal paste never invokes it.
     public var onPasteAttachment: ((NSPasteboard) -> Bool)?
 
     /// Handles images and files dropped on the view at a point; returns whether it took them.
@@ -542,11 +540,6 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
             return urls.map { shellQuoted($0.path) }.joined(separator: " ")
         }
         return pasteboard.string(forType: .string).flatMap { $0.isEmpty ? nil : $0 }
-    }
-
-    static func shellQuoted(_ path: String) -> String {
-        let plain = path.allSatisfy { $0.isLetter || $0.isNumber || "/._-+,:@%".contains($0) }
-        return plain ? path : "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     public func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
