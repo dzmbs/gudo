@@ -282,6 +282,56 @@ final class RowBuilderTests: XCTestCase {
         XCTAssertEqual(count, 500)
     }
 
+    func testOversizedAssistantTextDoesNotReachTheMarkdownParser() async throws {
+        let builder = RowBuilder()
+        let item = try assistant(String(repeating: "é", count: 131_073), id: "over-source-budget")
+        let rows = await builder.rows(for: item)
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertFalse(rows.contains { if case .markdown = $0.content { return true }; return false })
+        let parses = await builder.parseCount
+        XCTAssertEqual(parses, 0, "UTF-8 source admission must precede cmark allocation")
+    }
+
+    func testBlockExpansionHasAHardPerMessageLimit() async throws {
+        let builder = RowBuilder()
+        let text = (0..<3_001).map { "Paragraph \($0)." }.joined(separator: "\n\n")
+        let rows = await builder.rows(for: try assistant(text, id: "over-block-budget"))
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertFalse(rows.contains { if case .markdown = $0.content { return true }; return false })
+    }
+
+    func testRenderAdmissionIncludesItsExactByteAndRowBoundaries() async throws {
+        let builder = RowBuilder()
+        let atBytes = try assistant(String(repeating: "é", count: 131_072), id: "at-byte-limit")
+        let byteRows = await builder.rows(for: atBytes)
+        XCTAssertFalse(byteRows.contains { $0.content == .omitted })
+        let text = (0..<3_000).map { "Paragraph \($0)." }.joined(separator: "\n\n")
+        let blockRows = await builder.rows(for: try assistant(text, id: "at-block-limit"))
+        XCTAssertEqual(blockRows.count, 3_000)
+    }
+
+    func testAnOmittedRevisionDiscardsOnlyItsOwnOldRender() async throws {
+        let builder = RowBuilder()
+        _ = await builder.rows(for: try assistant("Other retained prefix.", id: "other"))
+        var item = try assistant("Old content.", id: "changing")
+        _ = await builder.rows(for: item)
+        item.revision = 2
+        if case .assistant(var value) = item.body {
+            value.text = String(repeating: "é", count: 131_073)
+            item.body = .assistant(value)
+        }
+        let omitted = await builder.rows(for: item)
+        XCTAssertEqual(omitted.first?.content, .omitted)
+        XCTAssertEqual(omitted.first?.id.item, item.id)
+        XCTAssertEqual(omitted.first?.turn, item.turn)
+        let entries = await builder.cacheSize
+        XCTAssertEqual(entries, 1)
+        let parses = await builder.parseCount
+        _ = await builder.rows(for: try assistant("Other retained prefix.", id: "other"))
+        let after = await builder.parseCount
+        XCTAssertEqual(after, parses)
+    }
+
     func testAssistantCacheChargesIdentifiersAndTurnMetadata() async throws {
         let builder = RowBuilder()
         let item = try assistant("", id: String(repeating: "id", count: 50_000))

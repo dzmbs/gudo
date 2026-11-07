@@ -73,6 +73,12 @@ stays literal text. Original block source comes from cmark's UTF-8 ranges, not a
 formatter. Nested tables rendered inline keep their literal source instead of expanding columns.
 The upstream Markdown and cmark-gfm licences ship with the app.
 
+Rendering separately admits at most 256 KiB of UTF-8 per Markdown message before invoking
+cmark, and at most 3,000 resulting native rows per message. Over-limit messages become a
+local typed placeholder with an explicit Terminal action, without exposing a partial prefix as
+the complete message. Omission drops only that item's old cache entry. These are per-message
+limits, not an aggregate rendered-page/allocator/RSS budget; that broader budget remains work.
+
 Append-only revisions retain the parsed completed prefix and parse the mutable suffix from a
 source-line boundary, preserving indentation, CRLF and Unicode. A partial final line retains
 one extra block because cmark can temporarily separate a partial table row from its table.

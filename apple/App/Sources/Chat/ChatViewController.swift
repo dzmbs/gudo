@@ -499,6 +499,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
             case .separator: return 31
             default: return 64 * scale
             }
+        case .omitted: return 96 * scale
         case .item(let item):
             if case .plan(let plan) = item.body { return CGFloat(min(plan.entries.count, 20) * 30 + 64) * scale }
             return 64 * scale

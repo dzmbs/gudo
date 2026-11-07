@@ -47,6 +47,13 @@ struct ChatRowView: View {
         switch row.content {
         case .markdown(let block): markdown(block)
         case .item(let item): itemContent(item)
+        case .omitted:
+            VStack(alignment: .leading, spacing: DS.Space.s) {
+                Text(verbatim: ChatRenderLimits.omittedMessage)
+                    .font(DS.Font.proseSecondary).foregroundStyle(DS.Palette.textSecondary)
+                Button("Open Terminal") { actions.showTerminal(nil) }
+                    .font(DS.Font.caption).frame(minHeight: DS.Size.touchTarget)
+            }
         }
     }
 
@@ -259,6 +266,7 @@ struct ChatRowView: View {
     private var plainText: String {
         switch row.content {
         case .markdown(let block): block.source
+        case .omitted: ChatRenderLimits.omittedMessage
         case .item(let item):
             switch item.body {
             case .user(let value): value.text

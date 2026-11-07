@@ -4,6 +4,12 @@ import Foundation
 import HostKit
 import Markdown
 
+nonisolated enum ChatRenderLimits {
+    static let rowsPerMessage = 3_000
+    static let markdownBytes = 256 * 1_024
+    static let omittedMessage = "This message is too large for Chat. Open Terminal to read it."
+}
+
 nonisolated enum ChatCacheLimits {
     static let entries = 500
     static let paragraphProfiles = 8
@@ -28,6 +34,7 @@ nonisolated struct ChatRow: Equatable, Sendable, Identifiable {
     enum Content: Equatable, Sendable {
         case markdown(ChatMarkdownBlock)
         case item(TimelineItem)
+        case omitted
     }
 }
 
@@ -117,7 +124,11 @@ actor RowBuilder {
         var bytes = TimelineValueWeight.of(item)
         var partition: MarkdownPartition?
         if case .assistant(let assistant) = item.body {
-            let rendered = markdown(assistant.text, after: previous?.partition)
+            guard let rendered = markdown(assistant.text, after: previous?.partition) else {
+                cache.remove(item.id)
+                return [ChatRow(id: ChatRowID(item: item.id, part: 0), revision: item.revision,
+                                turn: item.turn, content: .omitted)]
+            }
             partition = rendered
             let blocks = rendered.blocks
             let previousRows = previous?.rows ?? []
@@ -182,7 +193,8 @@ actor RowBuilder {
         return String(decoding: prefix, as: UTF8.self)
     }
 
-    private func markdown(_ source: String, after previous: MarkdownPartition?) -> MarkdownPartition {
+    private func markdown(_ source: String, after previous: MarkdownPartition?) -> MarkdownPartition? {
+        guard source.utf8.count <= ChatRenderLimits.markdownBytes else { return nil }
         if let previous, previous.source == source { return previous }
         var retained: [ChatMarkdownBlock] = []
         var offset = 0
@@ -203,17 +215,18 @@ actor RowBuilder {
         var blocks = retained
         var stableBytes = offset
         var stableBlocks = retained.count
-        let children = Array(document.children)
         // cmark can temporarily split a partial table row into a following paragraph.
         // Retain one extra block until the final source line is complete.
         let mutableCount = pending.hasSuffix("\n") || pending.hasSuffix("\r") ? 1 : 2
-        let boundary = max(0, children.count - mutableCount)
-        for (index, markup) in children.enumerated() {
+        let boundary = max(0, document.childCount - mutableCount)
+        for (index, markup) in document.children.enumerated() {
             if index == boundary, let start = original.blockStart(markup.range) {
                 stableBytes = offset + start
                 stableBlocks = blocks.count
             }
-            blocks.append(contentsOf: blockRows(markup, original: original))
+            let rows = blockRows(markup, original: original)
+            guard rows.count <= ChatRenderLimits.rowsPerMessage - blocks.count else { return nil }
+            blocks.append(contentsOf: rows)
         }
         return MarkdownPartition(source: source, blocks: blocks, stableBytes: stableBytes, stableBlocks: stableBlocks)
     }

@@ -66,6 +66,27 @@ final class ChatCollectionTests: XCTestCase {
         XCTAssertEqual(editor.text, "かな")
     }
 
+    func testOversizedMessageHasABoundedNativeTerminalFallback() async throws {
+        let row = ChatRow(id: ChatRowID(item: "omitted", part: 0), revision: 1, turn: "turn", content: .omitted)
+        let frame = TimelineFrame(rows: [row], rowIDs: [row.id], revision: 1)
+        let (window, controller) = try open(frame, following: false)
+        defer { close(window) }
+        try await settle()
+        XCTAssertEqual(controller.collection.numberOfItems(inSection: 0), 1)
+        let height = try XCTUnwrap(controller.collection.layoutAttributesForItem(at: IndexPath(item: 0, section: 0))).frame.height
+        XCTAssertGreaterThan(height, DS.Size.touchTarget)
+        XCTAssertLessThan(height, 300)
+        if let directory = ProcessInfo.processInfo.environment["SNAPSHOT_DIR"] {
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            let device = UIDevice.current.userInterfaceIdiom == .pad ? "ipad" : "iphone"
+            let destination = URL(fileURLWithPath: directory).appendingPathComponent("\(device)-chat-omitted.png")
+            try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try XCTUnwrap(image.pngData()).write(to: destination)
+        }
+    }
+
     func testVisibleRowsHaveFittingHeightsBeforeTheirFirstSnapshot() async throws {
         var measuredAtSubmission: [Int] = []
         let (window, _) = try open(preparedFrame(3), onSnapshot: { measuredAtSubmission.append($0.measuredCells) })
