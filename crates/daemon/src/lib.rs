@@ -174,7 +174,7 @@ impl Daemon {
     ) -> Result<Self, StartError> {
         limits::raise_fd_limit();
         config.apply_user_file()?;
-        match hook_launcher::install(&config.state_dir, &config.hook_bin()) {
+        match hook_launcher::install(&config) {
             Ok(launcher) => config.hook_bin = Some(launcher),
             Err(error) => tracing::warn!("writing the hook launcher: {error}"),
         }

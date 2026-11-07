@@ -169,6 +169,13 @@ fn main() -> Result<()> {
     }
     if arguments
         .first()
+        .is_some_and(|argument| matches!(argument.as_str(), "claude" | "codex"))
+    {
+        hostd::run_hook(&arguments);
+        return Ok(());
+    }
+    if arguments
+        .first()
         .is_some_and(|argument| argument == "askpass")
     {
         std::process::exit(askpass::main(&arguments[1..]));

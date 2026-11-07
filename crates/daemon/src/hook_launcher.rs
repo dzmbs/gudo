@@ -16,21 +16,22 @@ pub(crate) fn path(state_dir: &Path) -> PathBuf {
     state_dir.join("bin").join(brand::HOOK_BIN)
 }
 
-/// Writes the launcher for `shim` and returns its path.
+/// Writes the launcher for the configured hook executable and returns its path.
 ///
 /// # Errors
 ///
 /// The script cannot be written.
-pub(crate) fn install(state_dir: &Path, shim: &Path) -> io::Result<PathBuf> {
-    let launcher = path(state_dir);
+pub(crate) fn install(config: &crate::Config) -> io::Result<PathBuf> {
+    let shim = config.hook_bin();
+    let launcher = path(&config.state_dir);
     if shim == launcher {
         return Ok(launcher);
     }
-    crate::askpass::write_executable(&launcher, &script(shim))?;
+    crate::askpass::write_executable(&launcher, &script(&shim, config.cli_exe.as_deref()))?;
     Ok(launcher)
 }
 
-fn script(shim: &Path) -> String {
+fn script(shim: &Path, daemon: Option<&Path>) -> String {
     format!(
         "#!/bin/sh\n\
          shim={}\n\
@@ -38,14 +39,7 @@ fn script(shim: &Path) -> String {
          case \"$1\" in askpass|agent-input-arm|agent-exit-fence) exit 1 ;; esac\n\
          exit 0\n",
         shell_quote(&shim.to_string_lossy()),
-        if shim
-            .file_name()
-            .is_some_and(|name| name == brand::DAEMON_BIN)
-        {
-            "hook "
-        } else {
-            ""
-        },
+        if daemon == Some(shim) { "hook " } else { "" },
     )
 }
 
@@ -301,6 +295,12 @@ mod tests {
     use super::*;
     use std::process::Command;
 
+    fn install(state_dir: &Path, shim: &Path) -> io::Result<PathBuf> {
+        let mut config = crate::Config::new(state_dir);
+        config.hook_bin = Some(shim.to_owned());
+        super::install(&config)
+    }
+
     fn run(launcher: &Path, args: &[&str]) -> std::process::Output {
         Command::new(launcher).args(args).output().unwrap()
     }
@@ -308,12 +308,12 @@ mod tests {
     #[test]
     fn the_launcher_dispatches_to_the_daemons_hook_command() {
         let directory = tempfile::tempdir().unwrap();
-        let daemon = directory
-            .path()
-            .join("app's bundle")
-            .join(brand::DAEMON_BIN);
+        let daemon = directory.path().join("app's bundle").join("renamed-helper");
         crate::askpass::write_executable(&daemon, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n").unwrap();
-        let launcher = install(&directory.path().join("state"), &daemon).unwrap();
+        let mut config = crate::Config::new(directory.path().join("state"));
+        config.hook_bin = Some(daemon.clone());
+        config.cli_exe = Some(daemon);
+        let launcher = super::install(&config).unwrap();
         let output = run(&launcher, &["askpass", "Password with spaces:"]);
         assert!(output.status.success());
         assert_eq!(output.stdout, b"hook\naskpass\nPassword with spaces:\n");
@@ -379,7 +379,7 @@ mod tests {
         let mcp_file = state.join("claude").join("mcp").join("7.json");
         fsutil::write_atomic(
             &settings_file,
-            settings("/gone/Debug/Gudo.app/Contents/MacOS/gudo-hook")
+            settings(&format!("/gone/Debug/app/{}", brand::HOOK_BIN))
                 .to_string()
                 .as_bytes(),
         )
@@ -407,7 +407,8 @@ mod tests {
 
     #[test]
     fn foreign_commands_are_left_alone() {
-        let launcher = Path::new("/s/bin/gudo-hook");
+        let launcher_path = format!("/s/bin/{}", brand::HOOK_BIN);
+        let launcher = Path::new(&launcher_path);
         for command in [
             "/usr/local/bin/my-status-line",
             "gudo-hook claude Stop",
@@ -417,9 +418,11 @@ mod tests {
         ] {
             assert_eq!(repointed_command(command, launcher), None, "{command}");
         }
+        let command = format!("'/a b/{}' claude Stop", brand::HOOK_BIN);
+        let expected = format!("{} claude Stop", launcher.display());
         assert_eq!(
-            repointed_command("'/a b/gudo-hook' claude Stop", launcher).as_deref(),
-            Some("/s/bin/gudo-hook claude Stop")
+            repointed_command(&command, launcher).as_deref(),
+            Some(expected.as_str())
         );
     }
 
@@ -430,10 +433,12 @@ mod tests {
         let launcher = install(&state, Path::new("/gone/gudo-hook")).unwrap();
         let state_arg = state.to_string_lossy();
         let other_state = dir.path().join("other");
+        let server = agents::mcp_server_name();
+        let stale_hook = format!("/gone/app/{}", brand::HOOK_BIN);
         let original = serde_json::json!({
             "numStartups": 4,
             "mcpServers": {
-                "gudo": { "type": "stdio", "command": "/gone/Gudo.app/gudo-hook", "args": ["mcp", "--state", state_arg] },
+                (server.clone()): { "type": "stdio", "command": stale_hook, "args": ["mcp", "--state", state_arg] },
                 "mine": { "type": "stdio", "command": "/gone/tools/gudo-hook", "args": ["serve"] },
                 "unnamed": { "type": "stdio", "command": "/gone/x/un-hook", "args": ["mcp", "--state", other_state.to_string_lossy()] },
             },
@@ -445,12 +450,12 @@ mod tests {
 
         repair(&state, &launcher, std::slice::from_ref(&config), &[]);
         let mut expected = original.clone();
-        expected["mcpServers"]["gudo"]["command"] = launcher.to_string_lossy().as_ref().into();
+        expected["mcpServers"][&server]["command"] = launcher.to_string_lossy().as_ref().into();
         let repaired = fs::read_to_string(&config).unwrap();
         assert_eq!(serde_json::from_str::<Value>(&repaired).unwrap(), expected);
         assert_eq!(
             repaired,
-            text.replace("/gone/Gudo.app/gudo-hook", &launcher.to_string_lossy())
+            text.replace(&stale_hook, &launcher.to_string_lossy())
         );
 
         repair(&state, &launcher, std::slice::from_ref(&config), &[]);
@@ -480,8 +485,10 @@ mod tests {
         let state = dir.path().join("state");
         let launcher = install(&state, Path::new("/gone/gudo-hook")).unwrap();
         let state_arg = toml_basic_string(&state.to_string_lossy());
+        let server = agents::mcp_server_name();
+        let stale_hook = format!("/gone/app/{}", brand::HOOK_BIN);
         let text = format!(
-            "# mine\nmodel = \"o3\"\n\n[mcp_servers.gudo]\ncommand = \"/gone/Gudo.app/gudo-hook\"\nargs = [\"mcp\", \"--state\", {state_arg}]\n\n[mcp_servers.other]\ncommand = \"/gone/other/gudo-hook\"\nargs = []\n"
+            "# mine\nmodel = \"o3\"\n\n[mcp_servers.{server}]\ncommand = \"{stale_hook}\"\nargs = [\"mcp\", \"--state\", {state_arg}]\n\n[mcp_servers.other]\ncommand = \"/gone/other/gudo-hook\"\nargs = []\n"
         );
         let config = dir.path().join("config.toml");
         fs::write(&config, &text).unwrap();
@@ -491,7 +498,7 @@ mod tests {
         assert_eq!(
             repaired,
             text.replace(
-                "\"/gone/Gudo.app/gudo-hook\"",
+                &toml_basic_string(&stale_hook),
                 &toml_basic_string(&launcher.to_string_lossy())
             )
         );

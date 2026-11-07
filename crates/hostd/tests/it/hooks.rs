@@ -12,12 +12,15 @@ use crate::support::TestClient;
 fn hook_command(executable: &Path, state_directory: &Path, pane_id: PaneId) -> Command {
     let mut command = Command::new(executable);
     command
-        .env("GUDO_ENDPOINT_FILE", state_directory.join("hook.endpoint"))
         .env(
-            "GUDO_TOKEN",
+            brand::env_var("ENDPOINT_FILE"),
+            state_directory.join("hook.endpoint"),
+        )
+        .env(
+            brand::env_var("TOKEN"),
             std::fs::read_to_string(state_directory.join("hook.token")).unwrap(),
         )
-        .env("GUDO_PANE_ID", pane_id.0.to_string())
+        .env(brand::env_var("PANE_ID"), pane_id.0.to_string())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
@@ -72,10 +75,31 @@ async fn custom_state_startup_does_not_register_shared_agent_configuration() {
     daemon.kill().await.unwrap();
 }
 
+#[test]
+fn agent_hook_arguments_never_reach_clap() {
+    let directory = tempfile::tempdir().unwrap();
+    for agent in ["claude", "codex"] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_gudo-hostd"))
+            .args([agent, "UnknownEvent"])
+            .env_clear()
+            .env("HOME", directory.path())
+            .env(
+                brand::env_var("ENDPOINT_FILE"),
+                directory.path().join("missing.endpoint"),
+            )
+            .env(brand::env_var("PANE_ID"), "1")
+            .env(brand::env_var("TOKEN"), "private-test-token")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{agent}: {output:?}");
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_shipped_daemon_provides_hooks_askpass_and_mcp_without_a_separate_shim() {
     let directory = tempfile::tempdir().unwrap();
-    let executable = directory.path().join(brand::DAEMON_BIN);
+    let executable = directory.path().join("gudo-hostd");
     std::fs::copy(env!("CARGO_BIN_EXE_gudo-hostd"), &executable).unwrap();
     let state_directory = directory.path().join("state");
     let home = directory.path().join("home");
