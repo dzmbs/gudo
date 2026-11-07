@@ -332,7 +332,10 @@ still require Drive and the input lease, and nonempty reports still invalidate n
 provenance through `Pane::write`; this is not an empty-draft checkpoint or a safety exemption.
 Apple views route focus, mouse, wheel, key releases and terminal replies through an explicit
 report callback. Shared taps and the 4-KiB saved-screen input buffer preserve that source;
-a held batch claims size only when it also contains actual typed or pasted input.
+a held batch claims size only when it also contains actual typed or pasted input. VT-generated
+paste framing uses a separate user-input callback; sharing libghostty-vt's output callback with
+query replies must not turn a clipboard paste, drop or composed-text paste into a report.
+The paste source is scoped under the terminal lock so concurrent queries retain reply provenance.
 
 Stream-sized terminals whose actual grid differs from the viewport's requested grid scale
 down to fit and center on the terminal background, without reflowing the mirror or changing

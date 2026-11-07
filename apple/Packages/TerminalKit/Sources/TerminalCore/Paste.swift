@@ -1,7 +1,7 @@
 import GhosttyVt
 
 public enum PasteResult: Sendable, Equatable {
-    /// The text went to the PTY (through `writePty`), framed for the terminal's modes.
+    /// The text went to the PTY (through `writeInput`, or `writePty` as a fallback).
     case written
     /// Nothing to paste (empty text).
     case empty
@@ -22,7 +22,7 @@ extension Terminal {
 
     /// Pastes `text` the way Ghostty does (`ghostty_terminal_paste`): bracketed when DECSET 2004 is
     /// on (otherwise newlines become CR), unsafe control bytes replaced, and a kitty paste event
-    /// instead when the program asked for one. The bytes go to the PTY through `writePty`.
+    /// instead when the program asked for one. The bytes go through `writeInput` when supplied.
     ///
     /// - Parameter source: `.clipboard` for a user paste; `.text` for IME commits, dictation,
     ///   composer submissions and drops.
@@ -49,7 +49,12 @@ extension Terminal {
                 paste.allow_unsafe = allowUnsafe
                 var written = false
                 let result = withExtendedLifetime(box) {
-                    withHandle { ghostty_terminal_paste($0, &paste, &written) }
+                    withHandle { terminal in
+                        // The terminal lock prevents output/query callbacks from borrowing paste provenance.
+                        effects.isPasting.store(true, ordering: .relaxed)
+                        defer { effects.isPasting.store(false, ordering: .relaxed) }
+                        return ghostty_terminal_paste(terminal, &paste, &written)
+                    }
                 }
                 switch result {
                 case GHOSTTY_SUCCESS: return written ? .written : .empty

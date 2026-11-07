@@ -85,6 +85,8 @@ public final class Terminal: @unchecked Sendable {
     /// pastes) and the terminal's notifications.
     final class Effects: Sendable {
         let writePty: @Sendable (UnsafeRawBufferPointer) -> Void
+        let writeInput: @Sendable (UnsafeRawBufferPointer) -> Void
+        let isPasting = Atomic<Bool>(false)
         let events = Mutex(Events())
         /// Whether query replies produced while writing output go to `writePty`.
         let answersQueries = Atomic<Bool>(true)
@@ -99,8 +101,9 @@ public final class Terminal: @unchecked Sendable {
         /// The theme's background is dark: the color scheme programs are told.
         let darkScheme = Atomic<Bool>(true)
 
-        init(writePty: @escaping @Sendable (UnsafeRawBufferPointer) -> Void) {
+        init(writeInput: (@Sendable (UnsafeRawBufferPointer) -> Void)?, writePty: @escaping @Sendable (UnsafeRawBufferPointer) -> Void) {
             self.writePty = writePty
+            self.writeInput = writeInput ?? writePty
         }
 
         static func from(_ userdata: UnsafeMutableRawPointer?) -> Effects? {
@@ -126,12 +129,14 @@ public final class Terminal: @unchecked Sendable {
     /// Output of a synchronized update not parsed yet (guarded by `lock`).
     var synchronizedOutput = SynchronizedOutput()
 
-    /// - Parameter writePty: called synchronously from `write(_:)` (on the writer's thread) with
-    ///   query replies, and from `paste(_:)`. Must not call back into this terminal.
+    /// - Parameter writePty: called synchronously with generated replies, or paste bytes when
+    ///   `writeInput` is absent. Neither callback may call back into this terminal.
+    /// - Parameter writeInput: user paste bytes, separate from replies so input ownership is retained.
     public init(
         cols: UInt16,
         rows: UInt16,
         configuration: Configuration = .init(),
+        writeInput: (@Sendable (UnsafeRawBufferPointer) -> Void)? = nil,
         writePty: @escaping @Sendable (UnsafeRawBufferPointer) -> Void
     ) {
         var terminal: GhosttyTerminal?
@@ -147,7 +152,7 @@ public final class Terminal: @unchecked Sendable {
               let terminal, let encoder, let event, let mouseEncoder, let mouseEvent
         else { fatalError("libghostty-vt allocation failed") }
 
-        effects = Effects(writePty: writePty)
+        effects = Effects(writeInput: writeInput, writePty: writePty)
         self.configuration = configuration
         Self.configure(terminal, effects: effects, configuration: configuration)
 
@@ -166,7 +171,9 @@ public final class Terminal: @unchecked Sendable {
         let onWritePty: GhosttyTerminalWritePtyFn = { _, userdata, data, len in
             guard let data, let effects = Effects.from(userdata) else { return }
             if effects.parsing.load(ordering: .relaxed), !effects.answersQueries.load(ordering: .relaxed) { return }
-            effects.writePty(UnsafeRawBufferPointer(start: data, count: len))
+            let bytes = UnsafeRawBufferPointer(start: data, count: len)
+            if effects.isPasting.load(ordering: .relaxed) { effects.writeInput(bytes) }
+            else { effects.writePty(bytes) }
         }
         ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_WRITE_PTY, unsafeBitCast(onWritePty, to: UnsafeRawPointer.self))
         Self.installEventCallbacks(terminal)

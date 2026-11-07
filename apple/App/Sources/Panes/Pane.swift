@@ -67,7 +67,10 @@ final class Pane {
     ) throws {
         self.id = id
         self.backend = backend
-        let terminal = Terminal(cols: 80, rows: 24, configuration: appearance.terminalConfiguration) { backend.writeGenerated($0) }
+        let terminal = Terminal(
+            cols: 80, rows: 24, configuration: appearance.terminalConfiguration,
+            writeInput: { backend.write($0) }
+        ) { backend.writeGenerated($0) }
         let surface = try TerminalSurface(terminal: terminal, appearance: appearance)
         view = TerminalView(surface: surface)
         view.onInput = { [weak self] bytes in

@@ -129,6 +129,44 @@ private let geometry = MouseGeometry(screenWidth: 200, screenHeight: 100, cellWi
     #expect(sink.take() == "\u{1b}[200~echo a\necho b\u{1b}[201~")
 }
 
+@Test func userPastesAndGeneratedRepliesHaveSeparateWriters() {
+    let input = PtySink(), generated = PtySink()
+    let terminal = Terminal(cols: 20, rows: 5, writeInput: { bytes in
+        input.bytes.withLock { $0 += Array(bytes) }
+    }) { bytes in generated.bytes.withLock { $0 += Array(bytes) } }
+    terminal.write(Array("\u{1b}[5n".utf8))
+    #expect(generated.take() == "\u{1b}[0n")
+    #expect(input.take().isEmpty)
+    terminal.answersQueries = false
+    #expect(terminal.paste("clipboard") == .written)
+    #expect(terminal.paste("dictated", source: .text) == .written)
+    terminal.write(Array("\u{1b}[5n".utf8))
+    #expect(input.take() == "clipboarddictated")
+    #expect(generated.take().isEmpty)
+    #expect(terminal.paste("line one\nline two") == .needsConfirmation)
+    terminal.answersQueries = true
+    terminal.write(Array("\u{1b}[5n".utf8))
+    #expect(generated.take() == "\u{1b}[0n")
+    #expect(input.take().isEmpty)
+}
+
+@Test func concurrentQueriesCannotBorrowPasteProvenance() async {
+    let input = PtySink(), generated = PtySink()
+    let terminal = Terminal(cols: 20, rows: 5, writeInput: { bytes in
+        input.bytes.withLock { $0 += Array(bytes) }
+    }) { bytes in generated.bytes.withLock { $0 += Array(bytes) } }
+    await withTaskGroup(of: Void.self) { group in
+        for index in 0..<200 {
+            group.addTask {
+                if index.isMultiple(of: 2) { #expect(terminal.paste("paste;") == .written) }
+                else { terminal.write(Array("\u{1b}[5n".utf8)) }
+            }
+        }
+    }
+    #expect(input.take() == String(repeating: "paste;", count: 100))
+    #expect(generated.take() == String(repeating: "\u{1b}[0n", count: 100))
+}
+
 @Test func unbracketedMultilinePasteNeedsConfirmation() {
     let (terminal, sink) = makeTerminal()
     #expect(terminal.paste("rm -rf build\n") == .needsConfirmation)

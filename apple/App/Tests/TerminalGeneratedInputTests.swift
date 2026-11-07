@@ -1,6 +1,9 @@
+import PaneLayout
 import TerminalCore
 import TerminalRenderer
 import XCTest
+import os
+@testable import App
 #if os(macOS)
 import AppKit
 #else
@@ -9,6 +12,48 @@ import UIKit
 
 @MainActor
 final class TerminalGeneratedInputTests: XCTestCase {
+    private final class RecordingBackend: PaneBackend, @unchecked Sendable {
+        let input = OSAllocatedUnfairLock(initialState: [[UInt8]]())
+        let generated = OSAllocatedUnfairLock(initialState: [[UInt8]]())
+        var hostAnswersQueries: Bool { false }
+        func start(events: @escaping @Sendable (PaneEvent) -> Void) {}
+        func write(_ bytes: UnsafeRawBufferPointer) {
+            let bytes = Array(bytes)
+            input.withLock { $0.append(bytes) }
+        }
+        func writeGenerated(_ bytes: UnsafeRawBufferPointer) {
+            let bytes = Array(bytes)
+            generated.withLock { $0.append(bytes) }
+        }
+        func resize(cols: UInt16, rows: UInt16, cellWidth: UInt32, cellHeight: UInt32) {}
+        func terminate() {}
+    }
+
+    func testUserPasteDoesNotTravelAsAGeneratedTerminalReply() throws {
+        let backend = RecordingBackend()
+        let pane = try Pane(id: PaneId(1), backend: backend, onExit: {})
+        pane.view.surface.terminal.write(Array("\u{1b}[?2004h".utf8))
+        XCTAssertEqual(pane.view.surface.paste("native paste"), .written)
+        XCTAssertEqual(backend.input.withLock { $0 }, [Array("\u{1b}[200~native paste\u{1b}[201~".utf8)])
+        XCTAssertTrue(backend.generated.withLock { $0.isEmpty })
+    }
+
+    func testVTQueriesStillUseTheGeneratedReplyPath() throws {
+        let backend = RecordingBackend()
+        let pane = try Pane(id: PaneId(1), backend: backend, onExit: {})
+        pane.view.surface.terminal.write(Array("\u{1b}[5n".utf8))
+        XCTAssertTrue(backend.input.withLock { $0.isEmpty })
+        XCTAssertEqual(backend.generated.withLock { $0 }, [Array("\u{1b}[0n".utf8)])
+    }
+
+    func testAnUnconfirmedPasteDoesNotClaimUserActivity() throws {
+        let backend = RecordingBackend()
+        let pane = try Pane(id: PaneId(1), backend: backend, onExit: {})
+        XCTAssertEqual(pane.view.surface.paste("line one\nline two"), .needsConfirmation)
+        XCTAssertTrue(backend.input.withLock { $0.isEmpty })
+        XCTAssertTrue(backend.generated.withLock { $0.isEmpty })
+    }
+
     private func makeView(modes: String) throws -> TerminalView {
         let terminal = Terminal(cols: 40, rows: 10) { _ in }
         terminal.write(Array(modes.utf8))

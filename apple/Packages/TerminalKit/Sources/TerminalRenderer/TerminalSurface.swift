@@ -699,7 +699,7 @@ public final class TerminalSurface {
     }
 
     /// Pastes through libghostty-vt (bracketed when enabled); the bytes reach the PTY through the
-    /// terminal's `writePty`.
+    /// terminal's user-input writer.
     public func paste(_ text: String, source: PasteSource = .clipboard, allowUnsafe: Bool = false) -> PasteResult {
         let result = terminal.paste(text, source: source, allowUnsafe: allowUnsafe)
         if result == .written {
