@@ -341,6 +341,7 @@ bitset! {
         AGENT_TIMELINE = 27;
         /// Understands `SizePolicy::LastActive` and reports `ClientCtl::PaneActivity`.
         ACTIVE_SIZING = 28;
+        PANE_SIZING = 29;
     }
 }
 

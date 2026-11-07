@@ -1033,6 +1033,21 @@ impl From<SizePolicy> for proto::SizePolicy {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct PaneSizing {
+    pub pane_id: u64,
+    pub peer: Option<u64>,
+}
+
+impl From<proto::PaneSizing> for PaneSizing {
+    fn from(state: proto::PaneSizing) -> Self {
+        Self {
+            pane_id: state.pane_id.0,
+            peer: state.peer.map(|peer| peer.0),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct PaneMeta {
     pub pane_id: u64,

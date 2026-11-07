@@ -213,7 +213,9 @@ pub enum ClientEvent {
     /// owner device in only to upgrade it ([`Client::upgrade_daemon`]); nothing else works on
     /// this connection. Daemons from before [`proto::DaemonInfo`] refuse instead
     /// ([`ClientEvent::Refused`], preceded by this event).
-    Incompatible { reason: String },
+    Incompatible {
+        reason: String,
+    },
     /// Connected (or reconnected) and authenticated.
     Connected {
         /// Daemon run; a change means every pane's resume state was invalid.
@@ -222,12 +224,18 @@ pub enum ClientEvent {
         resumed: bool,
     },
     /// The connection dropped; the client is redialling.
-    Disconnected { reason: String },
+    Disconnected {
+        reason: String,
+    },
     /// The daemon refused the connection (bad grant, version mismatch). The client stops
     /// redialling until [`Client::reconnect`].
-    Refused { reason: String },
+    Refused {
+        reason: String,
+    },
     /// The session list.
-    Sessions { sessions: Vec<SessionSummary> },
+    Sessions {
+        sessions: Vec<SessionSummary>,
+    },
     /// Attached to a session.
     Attached {
         session_id: SessionId,
@@ -244,11 +252,17 @@ pub enum ClientEvent {
         message: String,
     },
     /// The attached session's layout.
-    Layout { layout: SessionLayout },
+    Layout {
+        layout: SessionLayout,
+    },
     /// A pane's metadata.
-    PaneMeta { meta: PaneMeta },
+    PaneMeta {
+        meta: PaneMeta,
+    },
     /// A pane closed.
-    PaneClosed { pane_id: PaneId },
+    PaneClosed {
+        pane_id: PaneId,
+    },
     /// What the program in a pane reports about itself (OSC 7501 or `status_set`), with
     /// [`ConnectOptions::program_status`]. `None` once cleared, and for every known pane when
     /// the connection drops. Also kept: [`Client::program_status`].
@@ -271,7 +285,10 @@ pub enum ClientEvent {
     /// A program in the pane wrote to the clipboard (OSC 52) after this device typed into it,
     /// with [`ConnectOptions::clipboard`]. Put it on this device's clipboard, local only, and
     /// say so.
-    Clipboard { pane_id: PaneId, text: String },
+    Clipboard {
+        pane_id: PaneId,
+        text: String,
+    },
     /// Raw output to feed the pane's VT, in order, continuing from the previous event.
     PaneBytes {
         pane_id: PaneId,
@@ -301,9 +318,14 @@ pub enum ClientEvent {
         at_seq: u64,
     },
     /// Echo prediction facts for a pane.
-    EchoHint { hint: EchoHintAt },
+    EchoHint {
+        hint: EchoHintAt,
+    },
     /// An agent event (JSON).
-    AgentEvent { pane_id: PaneId, json: String },
+    AgentEvent {
+        pane_id: PaneId,
+        json: String,
+    },
     /// The result of [`Client::op`].
     OpResult {
         /// The id `op` returned.
@@ -326,11 +348,17 @@ pub enum ClientEvent {
     },
     /// The daemon no longer has the history of the pane's snapshot; it arrives again after
     /// the next snapshot.
-    PaneHistoryGone { pane_id: PaneId },
+    PaneHistoryGone {
+        pane_id: PaneId,
+    },
     /// A shell-integration command started or finished in the attached session.
-    CommandMark { mark: CommandMark },
+    CommandMark {
+        mark: CommandMark,
+    },
     /// A long command finished while no client was showing its pane (any session).
-    CommandFinishedUnseen { mark: CommandMark },
+    CommandFinishedUnseen {
+        mark: CommandMark,
+    },
     /// The answer to [`Client::search`].
     SearchResult {
         /// The id `search` returned.
@@ -360,6 +388,9 @@ pub enum ClientEvent {
         req_id: u64,
         pane_id: PaneId,
         result: Result<CommandOutput, RpcError>,
+    },
+    PaneSizing {
+        state: proto::PaneSizing,
     },
 }
 

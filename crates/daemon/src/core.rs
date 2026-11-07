@@ -875,6 +875,14 @@ impl Core {
         })
     }
 
+    pub fn pane_sizing(&self, pane_id: PaneId) -> Option<proto::PaneSizing> {
+        let entry = self.pane(pane_id)?;
+        let peer = lock(&entry.meta)
+            .sized_by
+            .map(|(connection, _)| proto::PeerId(connection));
+        Some(proto::PaneSizing { pane_id, peer })
+    }
+
     pub fn pane_meta(&self, id: PaneId) -> Option<PaneMeta> {
         let entry = self.pane(id)?;
         let meta = lock(&entry.meta);

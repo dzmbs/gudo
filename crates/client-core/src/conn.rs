@@ -425,6 +425,7 @@ async fn handshake(
             | Caps::WORKFLOWS
             | Caps::AGENT_TIMELINE
             | Caps::ACTIVE_SIZING
+            | Caps::PANE_SIZING
             | Caps::PRESENCE
             | Caps::PROJECTS
             | Caps::FLOATS
@@ -855,6 +856,7 @@ async fn read_ctl(inner: Arc<Inner>, mut ctl_rx: RecvStream) -> String {
             } => ClientEvent::AttachFailed { code, message },
             ServerCtl::LayoutChanged(layout) => ClientEvent::Layout { layout },
             ServerCtl::PaneMeta(meta) => ClientEvent::PaneMeta { meta },
+            ServerCtl::PaneSizing(state) => ClientEvent::PaneSizing { state },
             ServerCtl::ProgramStatus { pane_id, status } => {
                 let mut programs = lock(&inner.programs);
                 match &status {

@@ -93,6 +93,65 @@ async fn dial_with(
     ((endpoint, connection, tx, rx), welcome)
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn sizing_identity_requires_its_own_capability_and_old_policies_stay_decodable() {
+    let directory = tempfile::tempdir().unwrap();
+    let daemon = support::start(directory.path()).await;
+    for (extra_caps, wants_sizing, policy) in [
+        (Caps::default(), false, proto::SizePolicy::LastInput),
+        (Caps::ACTIVE_SIZING, false, proto::SizePolicy::LastActive),
+        (Caps::PANE_SIZING, true, proto::SizePolicy::LastInput),
+        (
+            Caps::PANE_SIZING | Caps::ACTIVE_SIZING,
+            true,
+            proto::SizePolicy::LastActive,
+        ),
+    ] {
+        let caps = Caps::ATTACH_RESULT | extra_caps;
+        let ((endpoint, connection, mut tx, mut rx), _) = dial_with(
+            &support::ticket(&daemon),
+            &ClientConfig::generate_key(),
+            true,
+            caps,
+            None,
+        )
+        .await;
+        for message in [
+            ClientCtl::Attach { session_id: None },
+            ClientCtl::Ping { nonce: 99 },
+        ] {
+            tx.write_all(&proto::frame::to_vec(&message).unwrap())
+                .await
+                .unwrap();
+        }
+        let (mut saw_meta, mut saw_sizing) = (false, false);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let mut prefix = [0; proto::frame::LEN_PREFIX];
+                rx.read_exact(&mut prefix).await.unwrap();
+                let mut body =
+                    vec![0; proto::frame::body_len(prefix, proto::MAX_FRAME_LEN).unwrap()];
+                rx.read_exact(&mut body).await.unwrap();
+                match proto::frame::decode_body::<ServerCtl>(&body).unwrap() {
+                    ServerCtl::PaneMeta(meta) => {
+                        assert_eq!(meta.size_policy, policy);
+                        saw_meta = true;
+                    }
+                    ServerCtl::PaneSizing(_) => saw_sizing = true,
+                    ServerCtl::Pong { nonce: 99 } => break,
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(saw_meta);
+        assert_eq!(saw_sizing, wants_sizing);
+        connection.close(0u32.into(), b"done");
+        endpoint.close().await;
+    }
+}
+
 /// A peer that keeps asking but never reads must not grow the daemon's queue for it without
 /// bound: it is disconnected, and everyone else carries on.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

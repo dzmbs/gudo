@@ -11,8 +11,8 @@ use crate::bytes::Bytes;
 use crate::types::{
     AgentKind, AttachVia, Axis, CommandList, CommandMark, CommandOutput, EchoHint, KeyEvent,
     LayoutOp, Links, MouseEvent, OpErrorCode, OpOutcome, PaneActivity, PaneMeta, PaneSize,
-    ProgramReport, RpcError, SearchPage, SearchQuery, SessionLayout, SessionSummary, SizePolicy,
-    TerminalColors,
+    PaneSizing, ProgramReport, RpcError, SearchPage, SearchQuery, SessionLayout, SessionSummary,
+    SizePolicy, TerminalColors,
 };
 use crate::ws_types::{ForwardInfo, ForwardTarget, WorkspaceError};
 use crate::{on_runtime, runtime};
@@ -271,6 +271,9 @@ pub enum ClientEvent {
         output: Option<CommandOutput>,
         error: Option<RpcError>,
     },
+    PaneSizing {
+        state: PaneSizing,
+    },
 }
 
 fn split<T, U: From<T>>(r: Result<T, proto::RpcError>) -> (Option<U>, Option<RpcError>) {
@@ -311,6 +314,9 @@ impl From<client_core::ClientEvent> for ClientEvent {
                 layout: layout.into(),
             },
             E::PaneMeta { meta } => Self::PaneMeta { meta: meta.into() },
+            E::PaneSizing { state } => Self::PaneSizing {
+                state: state.into(),
+            },
             E::PaneClosed { pane_id } => Self::PaneClosed { pane_id: pane_id.0 },
             E::Clipboard { pane_id, text } => Self::Clipboard {
                 pane_id: pane_id.0,

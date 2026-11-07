@@ -1,8 +1,20 @@
-use proto::{Caps, ClientCtl, DaemonFeatures, PaneActivity, PaneId, SizePolicy};
+use proto::{
+    Caps, ClientCtl, DaemonFeatures, PaneActivity, PaneId, PaneSizing, PeerId, ServerCtl,
+    SizePolicy,
+};
 
 #[test]
 fn sizing_policy_tags_and_activity_are_append_only() {
     assert_eq!(Caps::ACTIVE_SIZING.0, 1 << 28);
+    assert_eq!(Caps::PANE_SIZING.0, 1 << 29);
+    for (peer, golden) in [(None, vec![64, 1, 0]), (Some(PeerId(7)), vec![64, 1, 1, 7])] {
+        let state = ServerCtl::PaneSizing(PaneSizing {
+            pane_id: PaneId(1),
+            peer,
+        });
+        assert_eq!(postcard::to_allocvec(&state).unwrap(), golden);
+        assert_eq!(postcard::from_bytes::<ServerCtl>(&golden).unwrap(), state);
+    }
     assert_eq!(DaemonFeatures::ACTIVE_SIZING.0, 1 << 26);
     assert_eq!(
         postcard::to_allocvec(&SizePolicy::LastActive.for_client(Caps::default())).unwrap(),

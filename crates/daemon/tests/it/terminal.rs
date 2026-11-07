@@ -236,6 +236,44 @@ async fn backgrounding_the_sizing_client_hands_the_grid_to_the_remaining_view() 
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn sizing_identity_distinguishes_devices_with_the_same_principal_and_grid() {
+    let directory = tempfile::tempdir().unwrap();
+    let daemon = start(directory.path()).await;
+    let mut desktop = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = desktop.attach_and_follow().await;
+    desktop
+        .until("initial sizing identity", |client| {
+            client
+                .sizing
+                .get(&pane)
+                .is_some_and(|state| state.peer.is_some())
+        })
+        .await;
+    let initial = desktop.sizing[&pane].peer;
+    let principal = desktop.metas[&pane].sized_by;
+    let mut phone = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    phone.attach_and_follow().await;
+    desktop
+        .until("other device owns the same grid", |client| {
+            client
+                .sizing
+                .get(&pane)
+                .is_some_and(|state| state.peer.is_some() && state.peer != initial)
+        })
+        .await;
+    assert_eq!(desktop.metas[&pane].sized_by, principal);
+    phone.client.set_pane_activity(pane, PaneActivity::Inactive);
+    desktop
+        .until("initial device regains sizing", |client| {
+            client
+                .sizing
+                .get(&pane)
+                .is_some_and(|state| state.peer == initial)
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn fixed_size_survives_resizes_and_input_until_the_policy_changes() {
     let directory = tempfile::tempdir().unwrap();
     let daemon = start(directory.path()).await;

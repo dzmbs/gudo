@@ -41,6 +41,7 @@ struct ConnState {
     /// The metadata last sent per pane: most changes the core announces (agent events, a
     /// title set again) leave what this client sees as it was.
     sent_meta: HashMap<PaneId, proto::PaneMeta>,
+    sent_sizing: HashMap<PaneId, proto::PaneSizing>,
 }
 
 impl ConnState {
@@ -1012,18 +1013,26 @@ impl Client {
                 if self.in_session(pane)
                     && let Some(meta) = self.pane_metadata(pane)
                 {
-                    let mut state = lock(&self.state);
-                    if state.sent_meta.get(&pane) != Some(&meta) {
-                        state.sent_meta.insert(pane, meta.clone());
-                        drop(state);
+                    let changed = {
+                        let mut state = lock(&self.state);
+                        if state.sent_meta.get(&pane) != Some(&meta) {
+                            state.sent_meta.insert(pane, meta.clone());
+                            true
+                        } else {
+                            false
+                        }
+                    };
+                    if changed {
                         self.send(ServerCtl::PaneMeta(meta));
                     }
+                    self.send_pane_sizing(pane);
                 }
             }
             Event::PaneClosed(pane) => {
                 let had = {
                     let mut state = lock(&self.state);
                     state.sent_meta.remove(&pane);
+                    state.sent_sizing.remove(&pane);
                     state
                         .subscriptions
                         .remove(&pane)
@@ -2090,6 +2099,18 @@ impl Client {
         ports
     }
 
+    fn send_pane_sizing(&self, pane_id: PaneId) {
+        if !self.caps.contains(Caps::PANE_SIZING) {
+            return;
+        }
+        let Some(state) = self.core.pane_sizing(pane_id) else {
+            return;
+        };
+        if lock(&self.state).sent_sizing.insert(pane_id, state) != Some(state) {
+            self.send(ServerCtl::PaneSizing(state));
+        }
+    }
+
     fn pane_metadata(&self, pane_id: PaneId) -> Option<proto::PaneMeta> {
         let mut meta = self.core.pane_meta(pane_id)?;
         meta.size_policy = meta.size_policy.for_client(self.caps);
@@ -3035,6 +3056,7 @@ impl Client {
             state.session = Some(session);
             // A client may drop what it knew about another session's panes.
             state.sent_meta.clear();
+            state.sent_sizing.clear();
         }
         self.core.attach(self.id, session);
         self.send(if self.caps.contains(Caps::ATTACH_RESULT) {
@@ -3061,6 +3083,7 @@ impl Client {
             if let Some(meta) = self.pane_metadata(pane) {
                 self.send(ServerCtl::PaneMeta(meta));
             }
+            self.send_pane_sizing(pane);
             if let Some(hint) = self.core.echo_hint(pane) {
                 self.send(ServerCtl::EchoHintAt(hint));
             }

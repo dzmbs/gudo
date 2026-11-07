@@ -670,6 +670,8 @@ pub enum ServerCtl {
     /// answers for the owner unnoticed.
     GuestAnswered(crate::mp::GuestAnswer),
     Timeline(crate::TimelineUpdate),
+    /// Connection-level sizing identity, only with `Caps::PANE_SIZING`.
+    PaneSizing(PaneSizing),
 }
 
 /// Longest clipboard write a program may make (OSC 52), in bytes of decoded text.
@@ -744,6 +746,12 @@ pub enum RefuseReason {
     Revoked,
     /// `Hello.device_id` does not match the key that completed the handshake.
     DeviceMismatch,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneSizing {
+    pub pane_id: PaneId,
+    pub peer: Option<crate::PeerId>,
 }
 
 /// Everything a client shows about a pane without streaming it.
