@@ -12,6 +12,11 @@ Copyright herdr contributors, licensed under the Apache License, Version 2.0
   - crates/ghostty-vt-sys/build.rs and parts of crates/ghostty-vt/src/lib.rs (adapted)
   - crates/pty/src/foreground.rs (adapted from its foreground-job code)
 
+This product includes incremental Markdown partitioning adapted from OpenAI Codex
+(https://github.com/openai/codex), Copyright 2025 OpenAI, licensed under Apache-2.0.
+apple/App/Sources/Chat/RowBuilder.swift uses native blocks and Swift Markdown source ranges;
+the complete licence is in scripts/notices/codex.txt and ships in the app's notices.
+
 This product includes software derived from Ghostty (https://github.com/ghostty-org/ghostty),
 Copyright (c) 2024 Mitchell Hashimoto, Ghostty contributors, licensed under the MIT License.
 The host daemon and the apps link libghostty-vt, built from vendor/ghostty; the Apple apps

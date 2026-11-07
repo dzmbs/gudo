@@ -1,3 +1,5 @@
+// Incremental partitioning adapted from OpenAI Codex, Copyright 2025 OpenAI, Apache-2.0.
+// Modified for native block rows and Swift Markdown source ranges.
 import Foundation
 import HostKit
 import Markdown
@@ -69,6 +71,11 @@ nonisolated private struct MarkdownSource {
         return String(bytes: bytes[lower..<upper], encoding: .utf8)
     }
 
+    func blockStart(_ range: SourceRange?) -> Int? {
+        guard let line = range?.lowerBound.line, lineStarts.indices.contains(line - 1) else { return nil }
+        return lineStarts[line - 1]
+    }
+
     private func offset(_ location: SourceLocation) -> Int? {
         guard lineStarts.indices.contains(location.line - 1), location.column > 0 else { return nil }
         let offset = lineStarts[location.line - 1] + location.column - 1
@@ -78,10 +85,18 @@ nonisolated private struct MarkdownSource {
 }
 
 actor RowBuilder {
+    private struct MarkdownPartition {
+        let source: String
+        let blocks: [ChatMarkdownBlock]
+        let stableBytes: Int
+        let stableBlocks: Int
+    }
+
     private struct Entry {
         let revision: UInt32
         let rows: [ChatRow]
         let bytes: Int
+        let partition: MarkdownPartition?
     }
 
     private var cache: [String: Entry] = [:]
@@ -89,6 +104,7 @@ actor RowBuilder {
     private var cachedBytes = 0
     private var cachedRows = 0
     private(set) var parseCount = 0
+    private(set) var parsedBytes = 0
 
     func rows(for item: TimelineItem) -> [ChatRow] {
         if let entry = cache[item.id], entry.revision == item.revision {
@@ -96,9 +112,12 @@ actor RowBuilder {
             return entry.rows
         }
         let rows: [ChatRow]
-        var bytes = ((try? TimelineJSON.encode(item).count) ?? 0) * 2 + 256
+        var bytes = TimelineValueWeight.of(item)
+        var partition: MarkdownPartition?
         if case .assistant(let assistant) = item.body {
-            let blocks = markdown(assistant.text)
+            let rendered = markdown(assistant.text, after: cache[item.id]?.partition)
+            partition = rendered
+            let blocks = rendered.blocks
             let previous = cache[item.id]?.rows ?? []
             rows = blocks.enumerated().map { index, block in
                 let content = ChatRow.Content.markdown(block)
@@ -131,7 +150,7 @@ actor RowBuilder {
             cachedBytes -= previous.bytes
             cachedRows -= previous.rows.count
         }
-        cache[item.id] = Entry(revision: item.revision, rows: rows, bytes: bytes)
+        cache[item.id] = Entry(revision: item.revision, rows: rows, bytes: bytes, partition: partition)
         cachedBytes += bytes
         cachedRows += rows.count
         touch(item.id)
@@ -184,28 +203,59 @@ actor RowBuilder {
         recency.append(identifier)
     }
 
-    private func markdown(_ source: String) -> [ChatMarkdownBlock] {
+    private func markdown(_ source: String, after previous: MarkdownPartition?) -> MarkdownPartition {
+        if let previous, previous.source == source { return previous }
+        var retained: [ChatMarkdownBlock] = []
+        var offset = 0
+        var pending = source
+        // Reference definitions can affect earlier blocks. Their conservative fallback also
+        // catches escaped/code-like definitions without duplicating CommonMark's grammar.
+        if let previous, !source.contains("]:"), source.utf8.starts(with: previous.source.utf8),
+           let byteIndex = source.utf8.index(source.utf8.startIndex, offsetBy: previous.stableBytes, limitedBy: source.utf8.endIndex),
+           let index = String.Index(byteIndex, within: source) {
+            retained = Array(previous.blocks.prefix(previous.stableBlocks))
+            offset = previous.stableBytes
+            pending = String(source[index...])
+        }
         parseCount += 1
-        let document = Document(parsing: source)
-        let original = MarkdownSource(source)
-        return document.children.flatMap { markup -> [ChatMarkdownBlock] in
-            let rendered = block(markup, source: original.text(in: markup.range) ?? source, original: original)
-            if rendered.kind == .list, rendered.list.count > 20 {
-                return stride(from: 0, to: rendered.list.count, by: 20).map { start in
-                    var chunk = rendered
-                    chunk.list = Array(rendered.list[start..<min(start + 20, rendered.list.count)])
-                    return chunk
-                }
+        parsedBytes += pending.utf8.count
+        let document = Document(parsing: pending)
+        let original = MarkdownSource(pending)
+        var blocks = retained
+        var stableBytes = offset
+        var stableBlocks = retained.count
+        let children = Array(document.children)
+        // cmark can temporarily split a partial table row into a following paragraph.
+        // Retain one extra block until the final source line is complete.
+        let mutableCount = pending.hasSuffix("\n") || pending.hasSuffix("\r") ? 1 : 2
+        let boundary = max(0, children.count - mutableCount)
+        for (index, markup) in children.enumerated() {
+            if index == boundary, let start = original.blockStart(markup.range) {
+                stableBytes = offset + start
+                stableBlocks = blocks.count
             }
-            switch rendered.kind {
-            case .paragraph, .heading, .quote, .plain:
-                return textChunks(rendered.text).map { text in
-                    var chunk = rendered
-                    chunk.text = text
-                    return chunk
-                }
-            default: return [rendered]
+            blocks.append(contentsOf: blockRows(markup, original: original))
+        }
+        return MarkdownPartition(source: source, blocks: blocks, stableBytes: stableBytes, stableBlocks: stableBlocks)
+    }
+
+    private func blockRows(_ markup: any Markup, original: MarkdownSource) -> [ChatMarkdownBlock] {
+        let rendered = block(markup, source: original.text(in: markup.range) ?? original.whole, original: original)
+        if rendered.kind == .list, rendered.list.count > 20 {
+            return stride(from: 0, to: rendered.list.count, by: 20).map { start in
+                var chunk = rendered
+                chunk.list = Array(rendered.list[start..<min(start + 20, rendered.list.count)])
+                return chunk
             }
+        }
+        switch rendered.kind {
+        case .paragraph, .heading, .quote, .plain:
+            return textChunks(rendered.text).map { text in
+                var chunk = rendered
+                chunk.text = text
+                return chunk
+            }
+        default: return [rendered]
         }
     }
 

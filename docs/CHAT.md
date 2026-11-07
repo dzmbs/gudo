@@ -49,6 +49,14 @@ stays literal text. Original block source comes from cmark's UTF-8 ranges, not a
 formatter. Nested tables rendered inline keep their literal source instead of expanding columns.
 The upstream Markdown and cmark-gfm licences ship with the app.
 
+Append-only revisions retain the parsed completed prefix and parse the mutable suffix from a
+source-line boundary, preserving indentation, CRLF and Unicode. A partial final line retains
+one extra block because cmark can temporarily separate a partial table row from its table.
+Authoritative rewrites discard the partition; possible reference definitions use a source-wide
+fallback. Partition state shares the bounded render-cache lifetime. The native partition adapts
+Codex's incremental renderer; its Apache licence ships in the app. This prefix reuse does not
+substitute for phase-2 newline gating and prose/table/fence holdback.
+
 `TimelineModel` serializes bounded JSON batches through an off-main render worker. Its value
 window checks epoch and sequence continuity, ignores stale revisions, applies batches
 transactionally and reconciles authoritative snapshots without discarding older loaded pages.

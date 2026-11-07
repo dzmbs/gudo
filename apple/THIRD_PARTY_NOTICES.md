@@ -198,6 +198,15 @@ The complete upstream notice, Apache licence and cmark-gfm `COPYING` are in
 `scripts/notices/markdown.txt` and ship in `App/Resources/THIRD_PARTY_NOTICES.txt`.
 The CommonMark test specification and test software are not included in the app.
 
+## Codex incremental Markdown partitioning
+
+Source: https://github.com/openai/codex, `codex-rs/tui/src/streaming/render.rs` and
+`markdown_render/streaming.rs`. Copyright 2025 OpenAI, Apache License 2.0.
+`App/Sources/Chat/RowBuilder.swift` adapts the completed-prefix / mutable-last-block partition
+for native rows and Swift Markdown source ranges. No Ratatui rendering code is included.
+The complete licence is in `scripts/notices/codex.txt` and ships in
+`App/Resources/THIRD_PARTY_NOTICES.txt`.
+
 ## Sparkle
 
 Source: https://github.com/sparkle-project/Sparkle 2.10.1, linked unmodified into the Mac app as

@@ -64,6 +64,73 @@ final class RowBuilderTests: XCTestCase {
         XCTAssertEqual(parseCount, 2)
     }
 
+    func testAppendOnlyUpdatesParseOnlyTheLastTopLevelBlock() async throws {
+        let builder = RowBuilder()
+        let source = (0..<200).map { "Finished paragraph \($0)." }.joined(separator: "\n\n") + "\n\nMutable tail"
+        let original = await builder.rows(for: try assistant(source))
+        let before = await builder.parsedBytes
+        let updated = await builder.rows(for: try assistant(source + " grows", revision: 2))
+        let parsed = await builder.parsedBytes - before
+        XCTAssertLessThan(parsed, 128, "Appending a tail must not parse the completed 200-block prefix")
+        XCTAssertEqual(original.first, updated.first)
+        XCTAssertEqual(original.dropLast(), updated.dropLast())
+    }
+
+    func testTailPartitionPreservesUnicodeCRLFAndIndentedCode() async throws {
+        let builder = RowBuilder()
+        let source = "🙂 first\r\n\r\n    let value = 1\r\n"
+        _ = await builder.rows(for: try assistant(source))
+        let updatedSource = source + "    let next = 2\r\n"
+        let updated = await builder.rows(for: try assistant(updatedSource, revision: 2))
+        let fresh = RowBuilder()
+        let canonical = await fresh.rows(for: try assistant(updatedSource, revision: 2))
+        XCTAssertEqual(updated.map(\.content), canonical.map(\.content))
+        XCTAssertEqual(updated.map(\.id), canonical.map(\.id))
+    }
+
+    func testIncrementalPartitionsMatchCanonicalParsingAcrossChunkBoundaries() async throws {
+        let sources = [
+            "🙂 title\n---\n\nFirst *paragraph*.\n\n- Parent\n  - Nested\n\n  More parent text.\n\n```swift\nlet value = 1\n```\n\n| Name | State |\n| --- | --- |\n| A | Done |\n\nAfter table.\n",
+            "Before.\r\n\r\n<div>\r\nLiteral HTML.\r\n</div>\r\n\r\nAfter.\r\n\r\n    indented code\r\n    more code\r\n",
+            "\u{feff}第一段。\n\n> Quoted\n> continuation\n\nFinal **paragraph**.\n"
+        ]
+        for (sourceIndex, source) in sources.enumerated() {
+            let builder = RowBuilder()
+            let characters = Array(source)
+            let boundaries = Array(stride(from: 1, through: characters.count, by: 3)) + [characters.count]
+            for end in boundaries {
+                let item = try assistant(String(characters.prefix(end)), id: "replay-\(sourceIndex)", revision: UInt32(end))
+                let incremental = await builder.rows(for: item)
+                let canonical = await RowBuilder().rows(for: item)
+                XCTAssertEqual(incremental.map(\.content), canonical.map(\.content), "Source \(sourceIndex), character \(end)")
+                XCTAssertEqual(incremental.map(\.id), canonical.map(\.id))
+            }
+        }
+    }
+
+    func testAnAuthoritativeRewriteDiscardsTheFrozenPrefix() async throws {
+        let builder = RowBuilder()
+        _ = await builder.rows(for: try assistant("Original prefix.\n\nMutable tail."))
+        let rewritten = "Different prefix.\n\nDifferent tail."
+        let before = await builder.parsedBytes
+        let rows = await builder.rows(for: try assistant(rewritten, revision: 2))
+        let parsed = await builder.parsedBytes - before
+        XCTAssertEqual(parsed, rewritten.utf8.count)
+        guard case .markdown(let block) = rows.first?.content else { return XCTFail("Missing rewritten paragraph") }
+        XCTAssertEqual(block.source, "Different prefix.")
+    }
+
+    func testReferenceDefinitionsRetainTheSourceWideParserFallback() async throws {
+        let builder = RowBuilder()
+        let source = "Read [the guide][guide].\n\nAnother paragraph."
+        _ = await builder.rows(for: try assistant(source))
+        let updated = source + "\n\n[guide]: https://example.com\n"
+        let before = await builder.parsedBytes
+        _ = await builder.rows(for: try assistant(updated, revision: 2))
+        let parsed = await builder.parsedBytes - before
+        XCTAssertEqual(parsed, updated.utf8.count)
+    }
+
     func testLongListsAndParagraphsBecomeBoundedNativeRows() async throws {
         let builder = RowBuilder()
         let list = (0..<1_001).map { "- Entry \($0)" }.joined(separator: "\n")
