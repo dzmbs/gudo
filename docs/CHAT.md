@@ -87,6 +87,12 @@ GPU resources through its existing lifecycle. Reactivation reuses the same view 
 The pane switch must also preserve keyboard geometry and gate pending IME composition before
 parking; this container support alone is not the integrated Terminal/Chat switch.
 
+`DaemonPaneBackend.cacheSize` stages a hidden viewport without sending a resize or claiming
+ownership. Actual input or an explicit sizing claim admits it before input bytes; generated
+replies and focus reports do not. Deferred candidates are excluded from automatic local-tap
+handover. This API is not yet wired into the pane switch: warm-layout admission and keyboard
+geometry still require integrated no-SIGWINCH acceptance.
+
 `ChatViewController` owns one normal-orientation reusable collection and a composer host pinned
 to the keyboard layout guide. A display-link coalesces pending frames; stopped views release
 that clock. Inactive presentation parks it and retains only the latest pending frame. Changed-row values and order revisions keep content-only updates independent of

@@ -74,6 +74,86 @@ import GudoCore
         #expect(client().calls.last == .unsubscribe(3))
     }
 
+    @Test(arguments: [false, true])
+    func cachingAHiddenViewportWaitsForActualInputBeforeResizing(predicted: Bool) throws {
+        let (connection, client) = try makeConnection()
+        let tap = try #require(try connection.makeBackend(for: PaneId(3)) as? DaemonPaneBackend)
+        tap.start(events: { _ in }, seed: nil)
+        client().clear()
+        tap.cacheSize(cols: 60, rows: 20, cellWidth: 10, cellHeight: 20)
+        #expect(client().calls.isEmpty)
+        #expect(!tap.drivesLocalSize)
+        Array("typed".utf8).withUnsafeBytes {
+            if predicted { tap.writeInput($0, inputSeq: 1) } else { tap.write($0) }
+        }
+        #expect(client().calls == [.resize(3, PaneSize(cols: 60, rows: 20, widthPx: 600, heightPx: 400)), .input(3, Data("typed".utf8))])
+        #expect(tap.drivesLocalSize)
+        client().clear()
+        Array("next".utf8).withUnsafeBytes { tap.write($0) }
+        #expect(client().calls == [.input(3, Data("next".utf8))])
+    }
+
+    @Test func aDrivingTapsDeferredViewportIgnoresReportsButAppliesBeforeItsNextPaste() throws {
+        let (connection, client) = try makeConnection()
+        let tap = try #require(try connection.makeBackend(for: PaneId(3)) as? DaemonPaneBackend)
+        tap.start(events: { _ in }, seed: nil)
+        tap.resize(cols: 120, rows: 40, cellWidth: 10, cellHeight: 20)
+        client().clear()
+        tap.cacheSize(cols: 60, rows: 20, cellWidth: 10, cellHeight: 20)
+        Array("\u{1b}[I".utf8).withUnsafeBytes { tap.write($0) }
+        #expect(client().calls == [.input(3, Data("\u{1b}[I".utf8))])
+        client().clear()
+        Array("report".utf8).withUnsafeBytes { tap.writeGenerated($0) }
+        #expect(client().calls == [.generatedInput(3, Data("report".utf8))])
+        client().clear()
+        tap.paste("pasted")
+        #expect(client().calls == [.resize(3, PaneSize(cols: 60, rows: 20, widthPx: 600, heightPx: 400)), .paste(3, "pasted")])
+    }
+
+    @Test func aHiddenCachedViewportIsNotAnAutomaticSizingHandoverCandidate() throws {
+        let (connection, client) = try makeConnection()
+        let active = try #require(try connection.makeBackend(for: PaneId(3)) as? DaemonPaneBackend)
+        let hidden = try #require(try connection.makeBackend(for: PaneId(3)) as? DaemonPaneBackend)
+        active.start(events: { _ in }, seed: nil)
+        hidden.start(events: { _ in }, seed: nil)
+        active.resize(cols: 120, rows: 40, cellWidth: 10, cellHeight: 20)
+        hidden.cacheSize(cols: 60, rows: 20, cellWidth: 10, cellHeight: 20)
+        client().clear()
+        active.terminate()
+        #expect(client().calls.isEmpty)
+        hidden.claimSize()
+        #expect(client().calls == [.resize(3, PaneSize(cols: 60, rows: 20, widthPx: 600, heightPx: 400)), .claimSize(3)])
+    }
+
+    @Test(arguments: [false, true])
+    func viewportPixelMetricsClampWithoutOverflow(deferred: Bool) throws {
+        let (connection, client) = try makeConnection()
+        let tap = try #require(try connection.makeBackend(for: PaneId(3)) as? DaemonPaneBackend)
+        tap.start(events: { _ in }, seed: nil)
+        client().clear()
+        if deferred {
+            tap.cacheSize(cols: 2, rows: 2, cellWidth: .max, cellHeight: .max)
+            #expect(client().calls.isEmpty)
+            tap.claimSize()
+        } else {
+            tap.resize(cols: 2, rows: 2, cellWidth: .max, cellHeight: .max)
+        }
+        #expect(client().calls.first == .resize(3, PaneSize(cols: 2, rows: 2, widthPx: .max, heightPx: .max)))
+    }
+
+    @Test func emptyCachedViewportsDoNotReplaceTheLastValidCandidate() throws {
+        let (connection, client) = try makeConnection()
+        let tap = try #require(try connection.makeBackend(for: PaneId(3)) as? DaemonPaneBackend)
+        tap.start(events: { _ in }, seed: nil)
+        client().clear()
+        tap.cacheSize(cols: 60, rows: 20, cellWidth: 10, cellHeight: 20)
+        tap.cacheSize(cols: 0, rows: 20, cellWidth: 10, cellHeight: 20)
+        tap.cacheSize(cols: 60, rows: 0, cellWidth: 10, cellHeight: 20)
+        #expect(client().calls.isEmpty)
+        tap.claimSize()
+        #expect(client().calls == [.resize(3, PaneSize(cols: 60, rows: 20, widthPx: 600, heightPx: 400)), .claimSize(3)])
+    }
+
     @Test func theWindowThatTypesDrivesTheSize() async throws {
         let (connection, client) = try makeConnection()
         let tapA = try #require(try connection.makeBackend(for: PaneId(3)) as? DaemonPaneBackend)
