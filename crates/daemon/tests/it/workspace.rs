@@ -2223,6 +2223,35 @@ async fn a_guest_sees_no_editor_token_or_port() {
     daemon.shutdown().await;
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn a_forwarded_stream_is_distinguished_from_an_earlier_port_probe() {
+    let server = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = server.local_addr().unwrap();
+    let mut probe = TcpStream::connect(address).await.unwrap();
+    probe.write_all(b"HEAD / HTTP/1.0\r\n\r\n").await.unwrap();
+    let mut forward = TcpStream::connect(address).await.unwrap();
+    forward.write_all(b"hello").await.unwrap();
+    let accepted = accept_forwarded_payload(&server, b"hello").await;
+    assert_eq!(accepted.peer_addr().unwrap(), forward.local_addr().unwrap());
+}
+
+async fn accept_forwarded_payload(server: &TcpListener, expected: &[u8]) -> TcpStream {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let mut received = vec![0; expected.len()];
+        loop {
+            let (mut stream, _) = server.accept().await.unwrap();
+            let read =
+                tokio::time::timeout(Duration::from_secs(2), stream.read_exact(&mut received))
+                    .await;
+            if matches!(read, Ok(Ok(_))) && received == expected {
+                return stream;
+            }
+        }
+    })
+    .await
+    .expect("the forwarded payload reached the server")
+}
+
 /// Forwards ride the guest's connection: revoking the grant cuts the ones already open.
 #[tokio::test(flavor = "multi_thread")]
 async fn revoking_a_guest_cuts_its_open_forwards() {
@@ -2246,12 +2275,7 @@ async fn revoking_a_guest_cuts_its_open_forwards() {
         .unwrap();
     let mut client_side = TcpStream::connect(("127.0.0.1", local)).await.unwrap();
     client_side.write_all(b"hello").await.unwrap();
-    let (mut server_side, _) = tokio::time::timeout(Duration::from_secs(10), server.accept())
-        .await
-        .expect("forward reached the server")
-        .unwrap();
-    let mut hello = [0; 5];
-    server_side.read_exact(&mut hello).await.unwrap();
+    let mut server_side = accept_forwarded_payload(&server, b"hello").await;
 
     owner
         .client
