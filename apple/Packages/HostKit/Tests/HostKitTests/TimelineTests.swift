@@ -10,6 +10,8 @@ struct TimelineTests {
         #expect(value.cursor.epoch == UInt64.max)
         #expect(value.cursor.sequence == UInt64.max - 1)
         #expect(value.session.nativeSession == "fixture")
+        #expect(value.session.agent == .known(.claude))
+        #expect(value.session.permissionMode == .known(.default))
         #expect(value.items.first?.origin == .terminal)
         guard case .user(let user) = value.items.first?.body else { Issue.record("Missing user"); return }
         #expect(user.text == "Hello 🦀")
@@ -35,7 +37,7 @@ struct TimelineTests {
         #expect(value.operations.count == 7)
         guard case .append(let cursor, let id, let field, let text) = value.operations[2] else { Issue.record("Missing append"); return }
         #expect(cursor.sequence == 3)
-        #expect(id == "a" && field == "Text" && text == " tail")
+        #expect(id == "a" && field == .known(.text) && text == " tail")
         guard case .session(_, let session) = value.operations[4] else { Issue.record("Missing session"); return }
         #expect(session.nativeSession == "same-thread")
     }

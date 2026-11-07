@@ -176,10 +176,10 @@ struct ChatRowView: View {
             Label("Plan", systemImage: "checklist").font(DS.Font.proseSecondaryEmphasis)
             ForEach(Array(entries.prefix(20).enumerated()), id: \.offset) { _, entry in
                 HStack(alignment: .firstTextBaseline, spacing: DS.Space.gap10) {
-                    Image(systemName: entry.status == "Completed" ? "checkmark.circle.fill"
-                        : entry.status == "InProgress" ? "circle.dotted" : "circle")
-                        .foregroundStyle(entry.status == "Completed" ? DS.Palette.done : DS.Palette.textSecondary)
-                    Text(verbatim: entry.text).strikethrough(entry.status == "Completed")
+                    Image(systemName: entry.status == .known(.completed) ? "checkmark.circle.fill"
+                        : entry.status == .known(.inProgress) ? "circle.dotted" : "circle")
+                        .foregroundStyle(entry.status == .known(.completed) ? DS.Palette.done : DS.Palette.textSecondary)
+                    Text(verbatim: entry.text).strikethrough(entry.status == .known(.completed))
                 }.font(DS.Font.proseSecondary)
             }
             if row.planPreview != nil || plan.entries.count > 20 {
@@ -195,8 +195,8 @@ struct ChatRowView: View {
             Label {
                 Text(verbatim: row.preview ?? notice.text).foregroundStyle(DS.Palette.textSecondary)
             } icon: {
-                Image(systemName: notice.kind == "Error" ? "exclamationmark.circle" : "info.circle")
-                    .foregroundStyle(notice.kind == "Error" ? DS.Palette.error : DS.Palette.info)
+                Image(systemName: notice.kind == .known(.error) ? "exclamationmark.circle" : "info.circle")
+                    .foregroundStyle(notice.kind == .known(.error) ? DS.Palette.error : DS.Palette.info)
             }.font(DS.Font.proseSecondary)
             if row.preview != nil { Button("Read all") { actions.selectText(notice.text) }.font(DS.Font.caption) }
         }
@@ -217,10 +217,10 @@ struct ChatRowView: View {
                 HStack(spacing: DS.Space.s) {
                     Image(systemName: toolGlyph(tool.kind))
                         .frame(width: DS.Space.l)
-                        .foregroundStyle(tool.status == "Failed" ? DS.Palette.error : DS.Palette.textSecondary)
+                        .foregroundStyle(tool.status == .known(.failed) ? DS.Palette.error : DS.Palette.textSecondary)
                     Text(verbatim: tool.title).font(DS.Font.proseSecondary)
                         .lineLimit(2).multilineTextAlignment(.leading)
-                        .shimmering(tool.status == "Running", text: tool.title)
+                        .shimmering(tool.status == .known(.running), text: tool.title)
                     Spacer(minLength: DS.Space.xs)
                     if !tool.diff.isEmpty {
                         Text("+\(tool.diff.reduce(UInt64(0)) { $0 + UInt64($1.additions) })")
@@ -278,16 +278,16 @@ struct ChatRowView: View {
         return seconds >= 60 ? "\(seconds / 60)m \(seconds % 60)s" : "\(seconds)s"
     }
 
-    private func toolGlyph(_ kind: String) -> String {
+    private func toolGlyph(_ kind: TimelineToolKind) -> String {
         switch kind {
-        case "Shell": "terminal"
-        case "Read": "doc.text"
-        case "Search": "magnifyingglass"
-        case "Edit", "Write": "pencil.line"
-        case "Fetch", "WebSearch": "globe"
-        case "Mcp": "puzzlepiece.extension"
-        case "Task": "square.stack.3d.up"
-        default: "wrench.and.screwdriver"
+        case .known(.shell): "terminal"
+        case .known(.read): "doc.text"
+        case .known(.search): "magnifyingglass"
+        case .known(.edit), .known(.write): "pencil.line"
+        case .known(.fetch), .known(.webSearch): "globe"
+        case .known(.mcp): "puzzlepiece.extension"
+        case .known(.task): "square.stack.3d.up"
+        case .known(.other), .unknown: "wrench.and.screwdriver"
         }
     }
 }

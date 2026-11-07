@@ -66,15 +66,15 @@ nonisolated struct TimelineWindow: Sendable {
                 if next.hasNewerGap { continue }
                 guard var item = next.items[id] else { throw TimelineWindowError.missingSnapshot }
                 switch (item.body, field) {
-                case (.assistant(var value), "Text"):
+                case (.assistant(var value), .known(.text)):
                     guard value.text.utf8.count + text.utf8.count <= 256 * 1_024 else { throw TimelineWindowError.unsupportedAppend }
                     value.text += text
                     item.body = .assistant(value)
-                case (.thinking(var value), "Thinking"):
+                case (.thinking(var value), .known(.thinking)):
                     guard (value.text?.utf8.count ?? 0) + text.utf8.count <= 256 * 1_024 else { throw TimelineWindowError.unsupportedAppend }
                     value.text = (value.text ?? "") + text
                     item.body = .thinking(value)
-                case (.tool(var value), "Output"):
+                case (.tool(var value), .known(.output)):
                     guard var output = value.output else { throw TimelineWindowError.unsupportedAppend }
                     let bytes = Array((output.preview + text).utf8.suffix(4_096))
                     let start = bytes.firstIndex { $0 & 0xC0 != 0x80 } ?? bytes.endIndex

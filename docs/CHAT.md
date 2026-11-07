@@ -34,7 +34,11 @@ values as JSON strings; decoding and row preparation belong off the main actor.
 
 HostKit decodes the FFI's JSON into sendable timeline values. Explicit coding keys preserve
 Rust's external enum tags and snake-case fields, including round trips through a device
-cache. Integer cursors never pass through floating-point JSON objects.
+cache. Integer cursors never pass through floating-point JSON objects. Agent, permission,
+command-source, status, kind and append-field tags decode into domain-specific typed values;
+future tags retain their raw string in Unknown without acquiring known behavior. Views do not
+compare wire strings. An unknown append field rejects its whole batch transactionally and
+offers Terminal rather than applying an unsupported patch.
 
 A `TimelineChannel` shares one pane watch between screens on a connection. A new viewer
 refreshes the snapshot for every viewer, so replacing the helper's watch cannot leave another

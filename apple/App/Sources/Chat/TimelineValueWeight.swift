@@ -21,22 +21,22 @@ nonisolated enum TimelineValueWeight {
         switch body {
         case .assistant(let value): 128 + strings(value.text)
         case .thinking(let value): 128 + strings(value.text)
-        case .notice(let value): 128 + strings(value.kind, value.text)
+        case .notice(let value): 128 + strings(value.kind.wireValue, value.text)
         case .turnEnd: 128
         case .user(let value):
             128 + strings(value.text) + value.attachments.reduce(0) { $0 + 64 + strings($1.path, $1.mediaType) }
         case .plan(let value):
-            128 + value.entries.reduce(0) { $0 + 64 + strings($1.text, $1.status) }
+            128 + value.entries.reduce(0) { $0 + 64 + strings($1.text, $1.status.wireValue) }
         case .tool(let value):
-            256 + strings(value.kind, value.name, value.title, value.input, value.status)
+            256 + strings(value.kind.wireValue, value.name, value.title, value.input, value.status.wireValue)
                 + (value.output.map { 96 + strings($0.handle, $0.preview) } ?? 0)
                 + value.diff.reduce(0) { $0 + diff($1) }
         }
     }
 
     private static func diff(_ value: TimelineFileDiff) -> Int {
-        128 + strings(value.path, value.oldPath, value.change) + value.hunks.reduce(0) { total, hunk in
-            total + 96 + strings(hunk.header) + hunk.lines.reduce(0) { $0 + 48 + strings($1.kind, $1.text) }
+        128 + strings(value.path, value.oldPath, value.change.wireValue) + value.hunks.reduce(0) { total, hunk in
+            total + 96 + strings(hunk.header) + hunk.lines.reduce(0) { $0 + 48 + strings($1.kind.wireValue, $1.text) }
         }
     }
 }

@@ -16,11 +16,11 @@ nonisolated public struct TimelineCursor: Codable, Equatable, Sendable {
 }
 
 nonisolated public struct TimelineSession: Codable, Equatable, Sendable {
-    public var agent: String
+    public var agent: TimelineAgent
     public var nativeSession: String
     public var title: String?
     public var model: String?
-    public var permissionMode: String?
+    public var permissionMode: TimelinePermissionMode?
     public var commands: [TimelineCommand]
     private enum CodingKeys: String, CodingKey {
         case agent, title, model, commands
@@ -31,7 +31,7 @@ nonisolated public struct TimelineSession: Codable, Equatable, Sendable {
 nonisolated public struct TimelineCommand: Codable, Equatable, Sendable, Identifiable {
     public var name: String
     public var description: String
-    public var source: String
+    public var source: TimelineCommandSource
     public var id: String { name }
 }
 
@@ -112,11 +112,11 @@ nonisolated public struct TimelinePlan: Codable, Equatable, Sendable {
 
 nonisolated public struct TimelinePlanEntry: Codable, Equatable, Sendable {
     public var text: String
-    public var status: String
+    public var status: TimelinePlanStatus
 }
 
 nonisolated public struct TimelineNotice: Codable, Equatable, Sendable {
-    public var kind: String
+    public var kind: TimelineNoticeKind
     public var text: String
 }
 
@@ -130,11 +130,11 @@ nonisolated public struct TimelineTurnEnd: Codable, Equatable, Sendable {
 }
 
 nonisolated public struct TimelineTool: Codable, Equatable, Sendable {
-    public var kind: String
+    public var kind: TimelineToolKind
     public var name: String
     public var title: String
     public var input: String
-    public var status: String
+    public var status: TimelineToolStatus
     public var output: TimelineOutputReference?
     public var diff: [TimelineFileDiff]
     public var exit: Int32?
@@ -155,7 +155,7 @@ nonisolated public struct TimelineOutputReference: Codable, Equatable, Sendable 
 nonisolated public struct TimelineFileDiff: Codable, Equatable, Sendable {
     public var path: String
     public var oldPath: String?
-    public var change: String
+    public var change: TimelineFileChange
     public var binary: Bool
     public var additions: UInt32
     public var deletions: UInt32
@@ -181,7 +181,7 @@ nonisolated public struct TimelineHunk: Codable, Equatable, Sendable {
 }
 
 nonisolated public struct TimelineDiffLine: Codable, Equatable, Sendable {
-    public var kind: String
+    public var kind: TimelineDiffLineKind
     public var text: String
 }
 
@@ -238,7 +238,7 @@ nonisolated public struct TimelineUpdate: Decodable, Sendable {
 nonisolated public enum TimelineOperation: Decodable, Sendable {
     case snapshot(TimelineSnapshot)
     case upsert(TimelineCursor, TimelineItem)
-    case append(TimelineCursor, id: String, field: String, text: String)
+    case append(TimelineCursor, id: String, field: TimelineField, text: String)
     case remove(TimelineCursor, id: String)
     case session(TimelineCursor, TimelineSession)
     case unavailable(String)
@@ -267,7 +267,7 @@ nonisolated public enum TimelineOperation: Decodable, Sendable {
         let cursor = try fields.decode(TimelineCursor.self, forKey: .cursor)
         switch key {
         case .upsert: self = .upsert(cursor, try fields.decode(TimelineItem.self, forKey: .item))
-        case .append: self = .append(cursor, id: try fields.decode(String.self, forKey: .id), field: try fields.decode(String.self, forKey: .field), text: try fields.decode(String.self, forKey: .text))
+        case .append: self = .append(cursor, id: try fields.decode(String.self, forKey: .id), field: try fields.decode(TimelineField.self, forKey: .field), text: try fields.decode(String.self, forKey: .text))
         case .remove: self = .remove(cursor, id: try fields.decode(String.self, forKey: .id))
         case .session: self = .session(cursor, try fields.decode(TimelineSession.self, forKey: .session))
         case .checkpoint: self = .checkpoint(cursor)

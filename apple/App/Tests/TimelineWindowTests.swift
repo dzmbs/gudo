@@ -117,6 +117,20 @@ final class TimelineWindowTests: XCTestCase {
         XCTAssertEqual(window.cursor?.sequence, 1)
     }
 
+    func testAnUnknownAppendFieldRejectsTheWholeBatchWithoutChangingTheWindow() throws {
+        var window = TimelineWindow()
+        _ = window.replace(try snapshot(0..<60))
+        let original = window.items
+        let bytes = window.retainedBytes
+        XCTAssertThrowsError(try window.apply(update([
+            append("m59", text: "uncommitted", sequence: 1),
+            append("m59", text: "future data", sequence: 2, field: "FutureField")
+        ])))
+        XCTAssertEqual(window.items, original)
+        XCTAssertEqual(window.retainedBytes, bytes)
+        XCTAssertEqual(window.cursor?.sequence, 0)
+    }
+
     func testStreamingTextHasABoundedValueSize() throws {
         var window = TimelineWindow()
         _ = window.replace(try snapshot(0..<60))
