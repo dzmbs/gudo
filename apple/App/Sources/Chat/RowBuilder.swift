@@ -6,6 +6,9 @@ import Markdown
 
 nonisolated enum ChatRenderLimits {
     static let rowsPerMessage = 3_000
+    static let rowsPerPage = 3_000
+    static let bytesPerPage = 8 * 1_024 * 1_024
+    static let pageNotice = "This Chat page exceeds the rendering budget. Open Terminal."
     static let markdownBytes = 256 * 1_024
     static let omittedMessage = "This message is too large for Chat. Open Terminal to read it."
 }
@@ -14,6 +17,11 @@ nonisolated enum ChatCacheLimits {
     static let entries = 500
     static let paragraphProfiles = 8
     static let bytes = 4 * 1_024 * 1_024
+}
+
+nonisolated struct RenderedChatRows: Sendable {
+    let rows: [ChatRow]
+    let cost: LRUCost
 }
 
 nonisolated struct ChatRowID: Hashable, Sendable {
@@ -108,6 +116,7 @@ actor RowBuilder {
     private struct Entry {
         let revision: UInt32
         let rows: [ChatRow]
+        let cost: LRUCost
         let partition: MarkdownPartition?
     }
 
@@ -117,17 +126,23 @@ actor RowBuilder {
     private(set) var parseCount = 0
     private(set) var parsedBytes = 0
 
-    func rows(for item: TimelineItem) -> [ChatRow] {
+    func rows(for item: TimelineItem) -> [ChatRow] { render(item).rows }
+
+    func render(_ item: TimelineItem) -> RenderedChatRows {
         let previous = cache.value(for: item.id)
-        if let previous, previous.revision == item.revision { return previous.rows }
+        if let previous, previous.revision == item.revision {
+            return RenderedChatRows(rows: previous.rows, cost: previous.cost)
+        }
         let rows: [ChatRow]
         var bytes = TimelineValueWeight.of(item)
         var partition: MarkdownPartition?
         if case .assistant(let assistant) = item.body {
             guard let rendered = markdown(assistant.text, after: previous?.partition) else {
                 cache.remove(item.id)
-                return [ChatRow(id: ChatRowID(item: item.id, part: 0), revision: item.revision,
-                                turn: item.turn, content: .omitted)]
+                let row = ChatRow(id: ChatRowID(item: item.id, part: 0), revision: item.revision,
+                                  turn: item.turn, content: .omitted)
+                let bytes = 2 * (item.id.utf8.count + (item.turn?.utf8.count ?? 0)) + rowOverhead + 256
+                return RenderedChatRows(rows: [row], cost: LRUCost(bytes: bytes, units: 1))
             }
             partition = rendered
             let blocks = rendered.blocks
@@ -140,17 +155,13 @@ actor RowBuilder {
                                turn: item.turn, content: content)
             }
             // Preserve ID/turn/actor charges as well as copied Markdown buffers and row metadata.
-            bytes += assistant.text.utf8.count * 2 + rows.count * 512 + 256
+            bytes += assistant.text.utf8.count * 2
         } else { rows = [plainRow(item)] }
-        cache.insert(Entry(revision: item.revision, rows: rows, partition: partition), for: item.id,
-                     cost: LRUCost(bytes: bytes, units: rows.count))
-        return rows
-    }
-
-    func rows(for items: [TimelineItem]) -> [String: [ChatRow]] {
-        var result: [String: [ChatRow]] = [:]
-        for item in items { result[item.id] = rows(for: item) }
-        return result
+        bytes += rows.count * rowOverhead + 256
+        let cost = LRUCost(bytes: bytes, units: rows.count)
+        cache.insert(Entry(revision: item.revision, rows: rows, cost: cost, partition: partition),
+                     for: item.id, cost: cost)
+        return RenderedChatRows(rows: rows, cost: cost)
     }
 
     func remove(_ identifiers: Set<String>) {
@@ -162,6 +173,8 @@ actor RowBuilder {
     var cacheSize: Int { cache.count }
     var cacheRowCount: Int { cache.cost.units }
     var cacheBytes: Int { cache.cost.bytes }
+
+    private var rowOverhead: Int { max(512, 2 * MemoryLayout<ChatRow>.stride) }
 
     private func plainRow(_ item: TimelineItem) -> ChatRow {
         let text: String?

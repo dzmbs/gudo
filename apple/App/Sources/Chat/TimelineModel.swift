@@ -40,7 +40,8 @@ nonisolated struct TimelineRenderResult: Sendable {
 actor TimelineRenderWorker {
     private var window: TimelineWindow
     private let builder = RowBuilder()
-    private var rowsByItem: [String: [ChatRow]] = [:]
+    private var rowsByItem: [String: RenderedChatRows] = [:]
+    private var renderCost = LRUCost()
     private var revision = 0
     private var generation = UUID()
     private var orderRevision = 0
@@ -82,29 +83,30 @@ actor TimelineRenderWorker {
             removed.formUnion(changes.removed)
             didReset = didReset || changes.didReset
         }
-        window = next
-        if didReset {
-            generation = UUID()
-            rowsByItem.removeAll(keepingCapacity: false)
-            await builder.clear()
-            changed.formUnion(window.order)
-        }
-        removed.subtract(window.items.keys)
-        for identifier in removed { rowsByItem[identifier] = nil }
-        await builder.remove(removed)
-        let values = changed.compactMap { window.items[$0] }
-        let rendered = await builder.rows(for: values)
-        var changedRows: [ChatRow] = []
-        for (identifier, rows) in rendered {
-            let previous = rowsByItem[identifier] ?? []
-            for (index, row) in rows.enumerated() {
-                if !previous.indices.contains(index) || previous[index] != row { changedRows.append(row) }
+        removed.subtract(next.items.keys)
+        let prepared = await prepareRows(in: next, changed: changed, removed: removed, resetting: didReset)
+        let changedRows: [ChatRow]
+        if let prepared {
+            window = next
+            rowsByItem = prepared.items
+            renderCost = prepared.cost
+            changedRows = prepared.changedRows
+            if didReset { generation = UUID() }
+        } else {
+            let preserve = !didReset && !window.order.isEmpty && (protectsHistory || window.hasNewerGap)
+            window.rejectRenderedPage(from: next, preservingHistory: preserve,
+                                      markNewerGap: consumedSnapshot || hasLiveChanges || !consumedHistory)
+            if !preserve {
+                rowsByItem.removeAll(keepingCapacity: false)
+                renderCost = LRUCost()
+                generation = UUID()
             }
-            rowsByItem[identifier] = rows
+            await builder.clear()
+            changedRows = []
         }
         let parentRevision = revision
         revision += 1
-        let rows = window.order.flatMap { rowsByItem[$0] ?? [] }
+        let rows = window.order.flatMap { rowsByItem[$0]?.rows ?? [] }
         let identifiers = rows.map(\.id)
         if self.identifiers != identifiers { orderRevision += 1; self.identifiers = identifiers }
         let frame = TimelineFrame(
@@ -113,6 +115,25 @@ actor TimelineRenderWorker {
             note: window.note, revision: revision, generation: generation,
             parentRevision: parentRevision, orderRevision: orderRevision, changedRows: changedRows)
         return TimelineRenderResult(frame: frame, needsHistoryCursor: window.needsHistoryCursor, consumedSnapshot: consumedSnapshot, consumedHistory: consumedHistory, hasLiveChanges: hasLiveChanges)
+    }
+
+    private func prepareRows(in next: TimelineWindow, changed: Set<String>, removed: Set<String>,
+                             resetting: Bool) async -> RenderedPage? {
+        if resetting { await builder.clear() }
+        var prepared = resetting ? RenderedPage() : RenderedPage(items: rowsByItem, cost: renderCost)
+        for identifier in removed { prepared.remove(identifier) }
+        await builder.remove(removed)
+        let identifiers = resetting ? Set(next.order) : changed
+        for identifier in identifiers {
+            guard let item = next.items[identifier] else { continue }
+            let rendered = await builder.render(item)
+            guard prepared.store(rendered, for: identifier) else { return nil }
+            let previous = rowsByItem[identifier]?.rows ?? []
+            for (index, row) in rendered.rows.enumerated() {
+                if !previous.indices.contains(index) || previous[index] != row { prepared.changedRows.append(row) }
+            }
+        }
+        return prepared
     }
 
     func clearRenderCache() async { await builder.clear() }
@@ -185,7 +206,8 @@ final class TimelineModel {
     }
 
     func requestOlder() {
-        guard !isLoadingHistory, let before = frame.before, let hub else { return }
+        guard frame.note != ChatRenderLimits.pageNotice, !isLoadingHistory,
+              let before = frame.before, let hub else { return }
         isLoadingHistory = true
         let lifetime = self.lifetime
         let pane = self.pane

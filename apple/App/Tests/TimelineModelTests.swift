@@ -6,6 +6,128 @@ import os
 
 @MainActor
 final class TimelineModelTests: XCTestCase {
+    func testManyAdmittedMessagesCannotExpandBeyondTheRenderedPageRowBudget() async throws {
+        var snapshot = try TimelineJSON.decode(TimelineSnapshot.self, from: TimelineFixtureJSON.snapshot(0..<100))
+        let text = (0..<31).map { "Paragraph \($0)." }.joined(separator: "\n\n")
+        for index in snapshot.items.indices {
+            guard case .assistant(var value) = snapshot.items[index].body else { return XCTFail("Missing assistant") }
+            value.text = text
+            snapshot.items[index].body = .assistant(value)
+        }
+        let worker = TimelineRenderWorker(pane: 7)
+        let json = String(decoding: try TimelineJSON.encode(snapshot), as: UTF8.self)
+        let result = try await worker.apply([.snapshot(json)], resetsSnapshot: true, protectsHistory: false)
+        XCTAssertLessThanOrEqual(result.frame.rows.count, 3_000)
+        XCTAssertEqual(result.frame.note, "This Chat page exceeds the rendering budget. Open Terminal.")
+    }
+
+    func testRenderedPageBytesAreBoundedSeparatelyFromSourceValuesAndCache() async throws {
+        var snapshot = try TimelineJSON.decode(TimelineSnapshot.self, from: TimelineFixtureJSON.snapshot(0..<24))
+        let text = "```\n" + String(repeating: "x", count: 100_000) + "\n```"
+        for index in snapshot.items.indices {
+            guard case .assistant(var value) = snapshot.items[index].body else { return XCTFail("Missing assistant") }
+            value.text = text
+            snapshot.items[index].body = .assistant(value)
+        }
+        let worker = TimelineRenderWorker(pane: 7)
+        let json = String(decoding: try TimelineJSON.encode(snapshot), as: UTF8.self)
+        let result = try await worker.apply([.snapshot(json)], resetsSnapshot: true, protectsHistory: false)
+        XCTAssertEqual(result.frame.note, "This Chat page exceeds the rendering budget. Open Terminal.")
+        XCTAssertTrue(result.frame.rows.isEmpty)
+    }
+
+    func testRenderOverflowPreservesReadersAndAdvancesTheRejectedLiveCursor() async throws {
+        let worker = TimelineRenderWorker(pane: 7)
+        let initial = try await worker.apply([.snapshot(TimelineFixtureJSON.snapshot(0..<3))],
+                                             resetsSnapshot: true, protectsHistory: false)
+        let expanded = try expandedPage(0..<103, sequence: 100)
+        let rejected = try await worker.apply([.snapshot(expanded)], resetsSnapshot: false, protectsHistory: true)
+        XCTAssertEqual(rejected.frame.rows, initial.frame.rows)
+        XCTAssertEqual(rejected.frame.generation, initial.frame.generation)
+        XCTAssertEqual(rejected.frame.cursor?.sequence, 100)
+        XCTAssertTrue(rejected.frame.hasNewerGap)
+        XCTAssertEqual(rejected.frame.note, ChatRenderLimits.pageNotice)
+        XCTAssertFalse(rejected.needsHistoryCursor)
+        let checkpoint = try await worker.apply([.update(TimelineFixtureJSON.checkpoint(101))],
+                                                resetsSnapshot: false, protectsHistory: true)
+        XCTAssertEqual(checkpoint.frame.cursor?.sequence, 101)
+        XCTAssertEqual(checkpoint.frame.rows, initial.frame.rows)
+        XCTAssertEqual(checkpoint.frame.note, ChatRenderLimits.pageNotice)
+    }
+
+    func testAnOverBudgetPageDoesNotPoisonAnExplicitReset() async throws {
+        let worker = TimelineRenderWorker(pane: 7)
+        let expanded = try expandedPage(0..<100, sequence: 100)
+        let rejected = try await worker.apply([.snapshot(expanded)], resetsSnapshot: true, protectsHistory: false)
+        XCTAssertTrue(rejected.frame.rows.isEmpty)
+        XCTAssertEqual(rejected.frame.note, ChatRenderLimits.pageNotice)
+        let checkpoint = try await worker.apply([.update(TimelineFixtureJSON.checkpoint(101))],
+                                                resetsSnapshot: false, protectsHistory: false)
+        XCTAssertEqual(checkpoint.frame.cursor?.sequence, 101)
+        XCTAssertEqual(checkpoint.frame.note, ChatRenderLimits.pageNotice)
+        let recovered = try await worker.apply([.snapshot(TimelineFixtureJSON.snapshot(200..<203, sequence: 102))],
+                                               resetsSnapshot: true, protectsHistory: false)
+        XCTAssertNil(recovered.frame.note)
+        XCTAssertEqual(recovered.frame.rows.count, 3)
+        XCTAssertEqual(recovered.frame.rows.first?.id.item, "m200")
+        XCTAssertNotEqual(recovered.frame.generation, rejected.frame.generation)
+    }
+
+    func testRejectedRenderedHistoryDoesNotMoveItsBoundaryOrInventNewerContent() async throws {
+        let worker = TimelineRenderWorker(pane: 7)
+        let initial = try await worker.apply([.snapshot(TimelineFixtureJSON.snapshot(100..<103))],
+                                             resetsSnapshot: true, protectsHistory: false)
+        let page = try expandedPage(0..<100)
+        let rejected = try await worker.apply([.older(page)], resetsSnapshot: false,
+                                              protectsHistory: true, historyAnchor: "m100")
+        XCTAssertEqual(rejected.frame.rows, initial.frame.rows)
+        XCTAssertEqual(rejected.frame.before, initial.frame.before)
+        XCTAssertEqual(rejected.frame.note, ChatRenderLimits.pageNotice)
+        XCTAssertTrue(rejected.consumedHistory)
+        XCTAssertFalse(rejected.hasLiveChanges)
+        XCTAssertFalse(rejected.frame.hasNewerGap)
+        XCTAssertFalse(rejected.needsHistoryCursor)
+    }
+
+    func testAutomaticHistoryRequestsStopAtTheRenderedBudgetFallback() async throws {
+        let resolutions = OSAllocatedUnfairLock(initialState: 0)
+        let hub = DaemonWorkspace(hostId: "render-budget", events: WorkspaceEventHub(), resolve: {
+            resolutions.withLock { $0 += 1 }
+            return nil
+        })
+        let model = TimelineModel(pane: 7)
+        model.start(in: hub)
+        defer { model.stop() }
+        model.receive(.snapshot(try TimelineFixtureJSON.snapshot(0..<3)))
+        try await wait { model.frame.rows.count == 3 }
+        model.followsBottom = false
+        model.receive(.snapshot(try expandedPage(0..<103, sequence: 100)))
+        try await wait { model.error == ChatRenderLimits.pageNotice }
+        let count = resolutions.withLock { $0 }
+        model.requestOlder()
+        XCTAssertFalse(model.isLoadingHistory)
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(resolutions.withLock { $0 }, count)
+        XCTAssertEqual(model.error, ChatRenderLimits.pageNotice)
+    }
+
+    func testReplacingRenderedRowsDoesNotAccumulateTheirPreviousCharge() async throws {
+        let worker = TimelineRenderWorker(pane: 7)
+        let text = "```\n" + String(repeating: "x", count: 100_000) + "\n```"
+        for revision in 1...30 {
+            var snapshot = try TimelineJSON.decode(TimelineSnapshot.self,
+                from: TimelineFixtureJSON.snapshot(0..<1, sequence: UInt64(revision)))
+            guard case .assistant(var value) = snapshot.items[0].body else { return XCTFail("Missing assistant") }
+            value.text = text
+            snapshot.items[0].body = .assistant(value)
+            snapshot.items[0].revision = UInt32(revision)
+            let json = String(decoding: try TimelineJSON.encode(snapshot), as: UTF8.self)
+            let result = try await worker.apply([.snapshot(json)], resetsSnapshot: revision == 1, protectsHistory: false)
+            XCTAssertNil(result.frame.note)
+            XCTAssertEqual(result.frame.rows.count, 1)
+        }
+    }
+
     func testAConfiguredValueBudgetSurvivesConnectionResets() async throws {
         var snapshot = try TimelineJSON.decode(TimelineSnapshot.self, from: TimelineFixtureJSON.snapshot(0..<1))
         guard case .assistant(var assistant) = snapshot.items[0].body else { return XCTFail("Missing assistant") }
@@ -172,6 +294,17 @@ final class TimelineModelTests: XCTestCase {
         let result = try await worker.apply([.update(TimelineFixtureJSON.append("m59", text: " accepted", sequence: 1))], resetsSnapshot: false, protectsHistory: false)
         guard case .markdown(let block) = result.frame.rows.last?.content else { return XCTFail("Missing paragraph") }
         XCTAssertEqual(String(block.text.characters), "Message 59 accepted")
+    }
+
+    private func expandedPage(_ range: Range<Int>, sequence: UInt64 = 0) throws -> String {
+        var page = try TimelineJSON.decode(TimelineSnapshot.self, from: TimelineFixtureJSON.snapshot(range, sequence: sequence))
+        let text = (0..<31).map { "Paragraph \($0)." }.joined(separator: "\n\n")
+        for index in page.items.indices {
+            guard case .assistant(var value) = page.items[index].body else { throw CancellationError() }
+            value.text = text
+            page.items[index].body = .assistant(value)
+        }
+        return String(decoding: try TimelineJSON.encode(page), as: UTF8.self)
     }
 
     private func wait(_ condition: () -> Bool) async throws {

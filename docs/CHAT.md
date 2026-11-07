@@ -77,7 +77,18 @@ Rendering separately admits at most 256 KiB of UTF-8 per Markdown message before
 cmark, and at most 3,000 resulting native rows per message. Over-limit messages become a
 local typed placeholder with an explicit Terminal action, without exposing a partial prefix as
 the complete message. Omission drops only that item's old cache entry. These are per-message
-limits, not an aggregate rendered-page/allocator/RSS budget; that broader budget remains work.
+limits, separate from the aggregate rendered-page allowance.
+
+Each worker also keeps an incremental ledger for at most 3,000 active rendered rows and
+8 MiB of conservative rendered-value charges. Original value weights, extra Markdown buffers,
+and row metadata (at least twice `MemoryLayout<ChatRow>.stride`) are charged once and reused
+from cached renders; revisions/removals subtract their old charge. Changed items are admitted
+one at a time into a staged page, before committing its window. An over-budget initial/live
+page becomes an explicit Terminal fallback; protected readers keep their old values and
+history boundary while rejected live cursors advance. Rejected history alone does not invent
+newer content. Neither boundary refreshes nor automatic history retries loop on that fallback;
+an explicit reset can recover. These remain accounting allowances, not allocator, transient
+parser or whole-process RSS guarantees.
 
 Append-only revisions retain the parsed completed prefix and parse the mutable suffix from a
 source-line boundary, preserving indentation, CRLF and Unicode. A partial final line retains

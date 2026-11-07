@@ -158,6 +158,18 @@ nonisolated struct TimelineWindow: Sendable {
         return changes
     }
 
+    mutating func rejectRenderedPage(from candidate: TimelineWindow, preservingHistory: Bool, markNewerGap: Bool) {
+        cursor = candidate.cursor
+        session = candidate.session
+        if !preservingHistory {
+            clearValues()
+            before = nil
+        }
+        hasNewerGap = hasNewerGap || markNewerGap
+        needsHistoryCursor = false
+        note = ChatRenderLimits.pageNotice
+    }
+
     private mutating func store(_ item: TimelineItem, weight: Int, protectsHistory: Bool) -> Bool {
         let total = retainedBytes - (weights[item.id] ?? 0) + weight
         guard !protectsHistory || total <= byteLimit else {
