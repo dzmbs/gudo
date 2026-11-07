@@ -36,6 +36,23 @@ final class DiffLayoutTests: XCTestCase {
         XCTAssertEqual(captured.first?.1, false)
     }
 
+    func testRepeatedPathsKeepTheirDistinctSnapshotIdentitiesAndCollapseState() {
+        var first = file(path: "shared.swift")
+        var second = first
+        first.renderIdentity = "tool:first"
+        second.renderIdentity = "tool:second"
+        var configuration = input([first, second])
+        let expanded = DiffRenderDocument(input: configuration)
+        XCTAssertEqual(Set(expanded.rows.map(\.id)).count, expanded.rows.count)
+        configuration.collapsed = [first.id]
+        let collapsed = DiffRenderDocument(input: configuration)
+        let lines = collapsed.rows.filter { if case .line = $0.content { return true }; return false }
+        XCTAssertEqual(lines.count, 2)
+        XCTAssertTrue(lines.allSatisfy { $0.fileIndex == 1 })
+        XCTAssertEqual(collapsed.input.files.map(\.path), ["shared.swift", "shared.swift"])
+        XCTAssertEqual(file().id, file().path)
+    }
+
     func testMissingSystemFontUsesASizedMeasurableFallback() throws {
         for size in [CGFloat(13), 22] {
             let font = try XCTUnwrap(DiffRenderDocument.noteFont(nil, size: size))

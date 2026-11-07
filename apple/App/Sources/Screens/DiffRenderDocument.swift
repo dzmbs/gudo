@@ -47,9 +47,9 @@ nonisolated struct DiffRenderDocument: Sendable {
         var longestLine = 0
         append("summary", content: .summary, height: 88)
         for (fileIndex, file) in input.files.enumerated() {
-            let prefix = "file:\(file.path)"
+            let prefix = "file:\(file.id)"
             append(prefix, fileIndex: fileIndex, content: .file, height: 36)
-            guard !input.collapsed.contains(file.path) else { continue }
+            guard !input.collapsed.contains(file.id) else { continue }
             if file.isBinary || file.hunks.isEmpty {
                 let message = file.isBinary ? "Binary file not shown" : file.hunksOmitted ? "This diff is too large to show here." : "No content changes"
                 append("\(prefix)/notice", fileIndex: fileIndex, content: .notice(message), height: 44)
@@ -92,7 +92,7 @@ nonisolated struct DiffRenderDocument: Sendable {
             default: isHeader = false; scrollsHorizontally = false
             }
             return NativeListRow(id: row.id, height: row.height, isHeader: isHeader,
-                scrollsHorizontally: scrollsHorizontally, sectionID: row.fileIndex.map { "file:\(input.files[$0].path)" })
+                scrollsHorizontally: scrollsHorizontally, sectionID: row.fileIndex.map { "file:\(input.files[$0].id)" })
         }
         layout = NativeListLayout(rows: nativeRows, contentWidth: width)
     }

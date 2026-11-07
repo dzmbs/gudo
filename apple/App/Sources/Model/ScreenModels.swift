@@ -413,7 +413,8 @@ nonisolated struct DiffHunk: Identifiable, Hashable, Sendable {
 }
 
 nonisolated struct DiffFile: Identifiable, Hashable, Sendable {
-    var id: String { path }
+    var id: String { renderIdentity ?? path }
+    var renderIdentity: String? = nil
     var path: String
     var status: FileEntry.GitStatus
     var additions: Int
