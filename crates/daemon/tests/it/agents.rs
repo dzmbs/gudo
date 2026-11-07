@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use client_core::ClientConfig;
-use client_core::proto::{AgentState, OptionId};
+use client_core::proto::{AgentState, Axis, LayoutOp, OpOutcome, OptionId, PaneLaunch};
 use daemon::{HookRequest, HookResponse};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
@@ -115,6 +115,29 @@ async fn tracked_agent_kind(owner: &mut TestClient, pane: client_core::proto::Pa
     owner.metas[&pane].agent.as_ref().unwrap().kind.clone()
 }
 
+async fn start_parent_agent(
+    owner: &mut TestClient,
+    executable: &std::path::Path,
+) -> client_core::proto::PaneId {
+    let source = owner.attach_and_follow().await;
+    // Launch through an operation: terminal subscription does not prove the shell accepts input.
+    let OpOutcome::PaneCreated { pane_id: pane } = owner
+        .op(LayoutOp::Split {
+            pane_id: source,
+            axis: Axis::Vertical,
+            launch: PaneLaunch::Command {
+                argv: vec![executable.to_string_lossy().into_owned(), "60".into()],
+                cwd: None,
+            },
+        })
+        .await
+    else {
+        panic!("parent agent pane was not created")
+    };
+    owner.follow(pane).await;
+    pane
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn nested_agent_hooks_do_not_replace_the_foreground_agent() {
     let directory = tempfile::tempdir().unwrap();
@@ -122,12 +145,7 @@ async fn nested_agent_hooks_do_not_replace_the_foreground_agent() {
     std::os::unix::fs::symlink("/bin/sleep", &executable).unwrap();
     let daemon = start(directory.path()).await;
     let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    let pane = owner.attach_and_follow().await;
-    owner.type_line(
-        pane,
-        &format!("{} 60", agents::shell_quote(&executable.to_string_lossy())),
-    );
-    assert_eq!(tracked_agent_kind(&mut owner, pane).await, "codex");
+    let pane = start_parent_agent(&mut owner, &executable).await;
     let mut request = HookRequest {
         v: 1,
         token: std::fs::read_to_string(directory.path().join("hook.token")).unwrap(),
@@ -138,6 +156,7 @@ async fn nested_agent_hooks_do_not_replace_the_foreground_agent() {
         payload: serde_json::json!({ "type": "agent-turn-complete", "thread-id": "parent" }),
     };
     hook(daemon.hook_socket(), &request).await;
+    assert_eq!(tracked_agent_kind(&mut owner, pane).await, "codex");
     request.agent = "claude".into();
     for (index, event) in ["SessionStart", "SessionEnd"].into_iter().enumerate() {
         request.event = event.into();
