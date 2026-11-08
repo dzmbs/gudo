@@ -277,6 +277,22 @@ struct PushToTalkTests {
         #expect(await iterator.next() == Transcript())
     }
 
+    @Test func factoryTargetSurvivesUntilTheRecordingEndsThenIsReleased() async {
+        weak var created: FakeTarget?
+        let voice = PushToTalk(recognizer: { recognizer }, settings: { settings }, target: {
+            let target = FakeTarget()
+            created = target
+            return target
+        })
+        #expect(voice.start())
+        #expect(created != nil)
+        await settle { voice.phase == .listening }
+        recognizer.emit(.finalized("Keep this target"))
+        await settle { voice.transcript.text == "Keep this target" }
+        #expect(await voice.stop() == .committed("Keep this target", .paste))
+        #expect(created == nil)
+    }
+
     @Test func scopedControlCannotFinishOrCancelAnotherTarget() async {
         let voice = makeVoice(), other = FakeTarget()
         voice.start()

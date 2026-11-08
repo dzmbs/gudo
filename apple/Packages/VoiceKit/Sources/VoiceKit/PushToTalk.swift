@@ -58,7 +58,9 @@ public final class PushToTalk {
     @ObservationIgnored private let loadSettings: () -> VoiceSettings
     @ObservationIgnored public var targetProvider: () -> (any DictationTarget)?
     @ObservationIgnored private var recognizer: (any SpeechRecognizer)?
-    @ObservationIgnored private weak var target: (any DictationTarget)?
+    // Providers commonly create a fresh pane adapter. Own it for this recording; adapters hold
+    // their UI owners weakly, and end() clears the active target before notifying failure.
+    @ObservationIgnored private var target: (any DictationTarget)?
     @ObservationIgnored private var session = 0
     @ObservationIgnored private var sessionTask: Task<Void, Never>?
     @ObservationIgnored private var stopRequested = false
