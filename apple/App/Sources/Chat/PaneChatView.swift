@@ -252,8 +252,7 @@ struct PaneChatView<Terminal: View>: View {
     func openCommands() {
         guard prepareAction(state.actionContext), ChatCommands.query(state.draft) != nil,
               !state.composer.isBusy, !state.interrupt.isBusy else { return }
-        state.invalidateActions()
-        selectedDetail = ChatDetail(content: .commands(ChatCommandOffer(state: state)))
+        state.presentDetail { .commands(ChatCommandOffer(state: $0)) }
     }
 
     func dictate() {
@@ -362,19 +361,16 @@ struct PaneChatView<Terminal: View>: View {
 
     private var actions: ChatRowActions {
         ChatRowActions(showTerminal: { state.showTerminal(commandMark: $0, terminal: pane) }, selectText: { text in
-            state.dictation.cancel()
-            selectedDetail = ChatDetail(content: .text(ChatSelectedText(title: "Select Text", text: text)))
+            state.presentDetail { _ in .text(ChatSelectedText(title: "Select Text", text: text)) }
         }, showTool: { item in
             guard case .tool(let tool) = item.body else { return }
-            state.dictation.cancel()
-            selectedDetail = ChatDetail(content: .tool(tool))
+            state.presentDetail { _ in .tool(tool) }
         }, showDiff: { selectDiffPreview($0) })
     }
 
     private func selectDiffPreview(_ target: ChatDiffTarget) {
-        state.dictation.cancel()
         let groups = ChatDiffPreview.groups(for: target, rows: state.model?.frame.rows ?? [])
-        selectedDetail = ChatDetail(content: .diff(groups))
+        state.presentDetail { _ in .diff(groups) }
     }
 
     private func openTerminalFromDetail() { openTerminalFromDetail(commandMark: nil) }

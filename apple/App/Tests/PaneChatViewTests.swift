@@ -385,6 +385,31 @@ final class PaneChatViewTests: XCTestCase {
         XCTAssertEqual(fixture.state.draft, "Draft in progress add these words")
     }
 
+    func testReadOnlyDetailRoundTripCancelsAlreadyQueuedNativeControls() async throws {
+        let suite = "chat-detail-action-scope-" + UUID().uuidString
+        let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let fixture = try makeFixture(preferences: preferences, permitsSending: true, working: true, nativeMessageReceipts: true)
+        defer {
+            fixture.state.deactivate()
+            fixture.window.isHidden = true
+            fixture.window.rootViewController = nil
+            preferences.removePersistentDomain(forName: suite)
+        }
+        try await wait { fixture.state.controller != nil && fixture.state.model?.frame.rows.count == 60 }
+        fixture.state.draft = "Queued before reading a tool"
+        let owner = PaneChatView(pane: fixture.pane, state: fixture.state, hub: fixture.hub,
+                                 permitsSending: true, working: true) { _ in Color.clear }
+        owner.send()
+        owner.interrupt()
+        fixture.state.presentDetail { _ in .text(ChatSelectedText(title: "Select Text", text: "Read-only snapshot")) }
+        fixture.state.detail = nil
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertFalse(fixture.client.calls.contains { $0.hasPrefix("send ") || $0.hasPrefix("interrupt") })
+        XCTAssertEqual(fixture.state.draft, "Queued before reading a tool")
+        XCTAssertEqual(fixture.state.composer.phase, .idle)
+        XCTAssertEqual(fixture.state.interrupt.phase, .idle)
+    }
+
     func testPhotoUploadUsesTheExistingStreamAndDefersDraftInsertionWhileNativeTextIsMarked() async throws {
         let suite = "chat-photo-pane-test-" + UUID().uuidString
         let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))

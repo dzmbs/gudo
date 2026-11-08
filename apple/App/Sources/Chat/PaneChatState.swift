@@ -125,6 +125,11 @@ final class PaneChatState {
         interrupt.reset()
     }
 
+    func presentDetail(_ make: (PaneChatState) -> ChatDetail.Content) {
+        invalidateActions()
+        detail = ChatDetail(content: make(self))
+    }
+
     func invalidateActions() {
         actionEpoch = UUID()
         dictation.cancel()

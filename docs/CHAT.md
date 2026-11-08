@@ -181,7 +181,9 @@ park; a retained hidden Chat view cannot send from Terminal. Presentation/lifeti
 and timeline epoch are rechecked when the action task runs and again before either native request,
 so navigation or a scope replacement between a tap and deferred dispatch cannot start a late send.
 Deferred actions keep their tapped text and model generation; a confirmation also keeps its exact
-warning revision, never implicitly approving a newer warning.
+warning revision, never implicitly approving a newer warning. Opening a read-only detail also
+rotates the action scope before building its snapshot/command offer; closing it cannot revive
+controls queued before that navigation.
 
 Claude's working composer also offers Stop/Escape through a separate interrupt capability and
 prepare/admit path. Its ticket is bound to the authenticated `UserPromptSubmit` turn sequence as

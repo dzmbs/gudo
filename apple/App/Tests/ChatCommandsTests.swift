@@ -52,6 +52,22 @@ final class ChatCommandsTests: XCTestCase {
         }
     }
 
+    func testCommandDetailBuildsItsOfferAfterRotatingTheActionScope() async throws {
+        let (state, hub, preferences, _) = try await fixture()
+        defer {
+            state.deactivate()
+            withExtendedLifetime(hub) {}
+            preferences.removePersistentDomain(forName: preferencesSuite)
+        }
+        let previous = state.actionContext
+        state.presentDetail { .commands(ChatCommandOffer(state: $0)) }
+        XCTAssertNotEqual(state.actionContext, previous)
+        guard case .commands(let offer) = state.detail?.content else { return XCTFail("Command detail missing") }
+        XCTAssertEqual(offer.context, state.actionContext)
+        XCTAssertTrue(ChatCommands.apply(offer.commands[0], offer: offer, to: state))
+        XCTAssertNil(state.detail)
+    }
+
     func testCommandSheetRendersBothSchemesWithoutSubmitting() async throws {
         let (state, hub, preferences, client) = try await fixture()
         defer {
