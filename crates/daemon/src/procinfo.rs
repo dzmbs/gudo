@@ -111,6 +111,11 @@ pub(crate) fn exe_path(pid: u32) -> Option<PathBuf> {
     imp::exe_path(pid)
 }
 
+/// A process's working directory, if it is ours to inspect.
+pub(crate) fn process_cwd(pid: u32) -> Option<PathBuf> {
+    imp::process_cwd(pid)
+}
+
 #[cfg(target_os = "linux")]
 mod imp {
     use std::collections::HashMap;
@@ -232,6 +237,10 @@ mod imp {
 
     pub fn exe_path(pid: u32) -> Option<PathBuf> {
         fs::read_link(format!("/proc/{pid}/exe")).ok()
+    }
+
+    pub fn process_cwd(pid: u32) -> Option<PathBuf> {
+        fs::read_link(format!("/proc/{pid}/cwd")).ok()
     }
 }
 
@@ -439,6 +448,30 @@ mod imp {
         })
     }
 
+    pub fn process_cwd(pid: u32) -> Option<PathBuf> {
+        // SAFETY: all-zero is a valid value of this plain C struct, which the call overwrites.
+        let mut info: libc::proc_vnodepathinfo = unsafe { mem::zeroed() };
+        let size = mem::size_of::<libc::proc_vnodepathinfo>() as c_int;
+        // SAFETY: `info` is writable for `size` bytes.
+        let written = unsafe {
+            libc::proc_pidinfo(
+                pid as c_int,
+                libc::PROC_PIDVNODEPATHINFO,
+                0,
+                std::ptr::from_mut(&mut info).cast::<c_void>(),
+                size,
+            )
+        };
+        if written != size {
+            return None;
+        }
+        // SAFETY: `vip_path` is a contiguous `MAXPATHLEN` byte array that the kernel
+        // NUL-terminates.
+        let path = unsafe { CStr::from_ptr(info.pvi_cdir.vip_path.as_ptr().cast()) };
+        let path = path.to_string_lossy();
+        (!path.is_empty()).then(|| PathBuf::from(path.into_owned()))
+    }
+
     /// The environment from `KERN_PROCARGS2`: `argc`, the executable path, padding, `argc`
     /// arguments, then `KEY=value` strings, all NUL-terminated.
     pub fn process_env(pid: u32) -> Option<Vec<String>> {
@@ -492,6 +525,16 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_process_working_directory_is_read() {
+        let directory = std::env::current_dir().unwrap().canonicalize().unwrap();
+        let found = process_cwd(std::process::id())
+            .unwrap()
+            .canonicalize()
+            .unwrap();
+        assert_eq!(found, directory);
+    }
 
     #[test]
     fn reads_a_variable_an_ancestor_carries() {
