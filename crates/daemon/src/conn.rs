@@ -151,6 +151,12 @@ async fn run(
         }
         net::send(&mut ctl_tx, &ServerCtl::DaemonInfo(info)).await?;
     }
+    if hello.caps.contains(Caps::MORE_DAEMON_FEATURES)
+        && matches!(handshake, Ok(Admission::Join(..)))
+    {
+        let more = ServerCtl::MoreDaemonFeatures(more_daemon_features());
+        net::send(&mut ctl_tx, &more).await?;
+    }
     if hello.caps.contains(Caps::TERMINAL_LIMITS) && matches!(handshake, Ok(Admission::Join(..))) {
         let limits = ServerCtl::TerminalLimits {
             image_storage_bytes: core.cfg.image_storage_bytes,
@@ -314,6 +320,10 @@ async fn run(
 
 fn conn_err(error: iroh::endpoint::ConnectionError) -> NetError {
     NetError::Frame(proto::FrameError::Io(std::io::Error::other(error)))
+}
+
+pub(crate) fn more_daemon_features() -> proto::MoreDaemonFeatures {
+    proto::MoreDaemonFeatures::EMPTY
 }
 
 pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {

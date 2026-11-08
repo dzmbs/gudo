@@ -125,8 +125,8 @@ pub use float::*;
 pub use frame::{FrameDecoder, FrameError, MAX_FRAME_LEN, WIRE_VERSION};
 pub use ids::{
     Actor, AgentCapabilities, Caps, DaemonFeatures, DaemonId, DeviceId, GrantId, InputSeq,
-    OptionId, PaneId, PrincipalId, RequestId, ResumeToken, Roles, Seq, SessionEpoch, SessionId,
-    SnapGen, TabId, UnixMillis,
+    MoreDaemonFeatures, OptionId, PaneId, PrincipalId, RequestId, ResumeToken, Roles, Seq,
+    SessionEpoch, SessionId, SnapGen, TabId, UnixMillis,
 };
 pub use info::*;
 pub use layout::{

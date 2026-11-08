@@ -538,6 +538,7 @@ async fn handshake(
                 Caps::EMPTY
             }
             | Caps::INPUT_RESUME
+            | Caps::MORE_DAEMON_FEATURES
             | inner.options.extra_caps,
         link: LinkClass::Normal,
         resume_token: lock(&inner.resume_token).clone(),
@@ -548,27 +549,24 @@ async fn handshake(
     for request in requests_every_daemon_reads(inner) {
         send(&mut ctl_tx, &request).await?;
     }
-    // Daemons that know `Caps::DAEMON_INFO` describe themselves first; older ones answer
-    // with `Welcome` or `Refused` straight away.
-    let mut first = recv::<ServerCtl>(&mut ctl_rx).await?;
-    let info = match first {
-        Some(ServerCtl::DaemonInfo(info)) => {
-            first = recv::<ServerCtl>(&mut ctl_rx).await?;
-            Some(info)
+    // Daemons describe themselves before `Welcome` or `Refused` as far as the Hello's caps ask;
+    // older ones answer straight away.
+    let mut daemon_info = None;
+    let mut more_daemon_features = proto::MoreDaemonFeatures::EMPTY;
+    let mut image_storage_bytes = None;
+    let first = loop {
+        match recv::<ServerCtl>(&mut ctl_rx).await? {
+            Some(ServerCtl::DaemonInfo(info)) => daemon_info = Some(info),
+            Some(ServerCtl::MoreDaemonFeatures(features)) => more_daemon_features = features,
+            Some(ServerCtl::TerminalLimits {
+                image_storage_bytes: bytes,
+            }) => image_storage_bytes = Some(bytes),
+            other => break other,
         }
-        _ => None,
     };
-    *lock(&inner.daemon_info) = info;
-    let limits = match first {
-        Some(ServerCtl::TerminalLimits {
-            image_storage_bytes,
-        }) => {
-            first = recv::<ServerCtl>(&mut ctl_rx).await?;
-            Some(image_storage_bytes)
-        }
-        _ => None,
-    };
-    *lock(&inner.image_storage_bytes) = limits;
+    *lock(&inner.daemon_info) = daemon_info;
+    *lock(&inner.more_daemon_features) = more_daemon_features;
+    *lock(&inner.image_storage_bytes) = image_storage_bytes;
     let our_format = u32::from(ghostty_vt::snapshot_format());
     match first {
         Some(ServerCtl::Welcome(welcome)) => {

@@ -672,6 +672,9 @@ pub enum ServerCtl {
     Timeline(crate::TimelineUpdate),
     /// Connection-level sizing identity, only with `Caps::PANE_SIZING`.
     PaneSizing(PaneSizing),
+    /// To clients with [`Caps::MORE_DAEMON_FEATURES`], after [`ServerCtl::DaemonInfo`] and
+    /// before [`ServerCtl::Welcome`].
+    MoreDaemonFeatures(crate::MoreDaemonFeatures),
 }
 
 /// Longest clipboard write a program may make (OSC 52), in bytes of decoded text.

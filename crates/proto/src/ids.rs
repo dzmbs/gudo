@@ -357,6 +357,8 @@ bitset! {
         /// Understands `SizePolicy::LastActive` and reports `ClientCtl::PaneActivity`.
         ACTIVE_SIZING = 28;
         PANE_SIZING = 29;
+        /// Wants `ServerCtl::MoreDaemonFeatures` before `Welcome`.
+        MORE_DAEMON_FEATURES = 30;
     }
 }
 
@@ -441,4 +443,10 @@ bitset! {
         /// Returns session-bound adapter features with a timeline watch snapshot.
         AGENT_CAPABILITIES = 31;
     }
+}
+
+bitset! {
+    /// What a daemon can do beyond [`DaemonFeatures`], whose bits are all taken: sent in
+    /// `ServerCtl::MoreDaemonFeatures` to clients with [`Caps::MORE_DAEMON_FEATURES`].
+    MoreDaemonFeatures: u64 {}
 }

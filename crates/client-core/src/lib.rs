@@ -512,6 +512,7 @@ pub(crate) struct Inner {
     pub programs: Mutex<HashMap<PaneId, proto::ProgramReport>>,
     /// What the daemon said about itself on the last connection.
     pub daemon_info: Mutex<Option<proto::DaemonInfo>>,
+    pub more_daemon_features: Mutex<proto::MoreDaemonFeatures>,
     /// The daemon's kitty image storage per pane and screen on the last connection, as it
     /// sent it (`ServerCtl::TerminalLimits`); `None` from daemons that do not.
     pub image_storage_bytes: Mutex<Option<u64>>,
@@ -740,6 +741,7 @@ impl Client {
             approvals: approvals::ApprovalState::default(),
             programs: Mutex::new(HashMap::new()),
             daemon_info: Mutex::new(None),
+            more_daemon_features: Mutex::new(proto::MoreDaemonFeatures::EMPTY),
             image_storage_bytes: Mutex::new(None),
             incompatible: Mutex::new(false),
             pong: watch::Sender::new(0),
@@ -1106,6 +1108,11 @@ impl Client {
             connection.close(0u32.into(), b"relay settings");
         }
         self.inner.reconnect.notify_one();
+    }
+
+    /// Whether the daemon of the last connection offers `feature`.
+    pub fn daemon_offers(&self, feature: proto::MoreDaemonFeatures) -> bool {
+        lock(&self.inner.more_daemon_features).contains(feature)
     }
 
     /// Drops the connection and redials immediately.
