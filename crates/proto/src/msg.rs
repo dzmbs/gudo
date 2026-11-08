@@ -259,6 +259,10 @@ pub enum ClientCtl {
     },
     /// Explicitly claims this active client's grid; requires `ACTIVE_SIZING`.
     ClaimSize { pane_id: PaneId },
+    /// Wants [`ServerCtl::RunAgainOffers`] now and whenever they change; sent to daemons with
+    /// [`MoreDaemonFeatures::RUN_AGAIN`](crate::MoreDaemonFeatures::RUN_AGAIN). Owner devices
+    /// only; not answered otherwise.
+    WatchRunAgain,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -675,6 +679,19 @@ pub enum ServerCtl {
     /// To clients with [`Caps::MORE_DAEMON_FEATURES`], after [`ServerCtl::DaemonInfo`] and
     /// before [`ServerCtl::Welcome`].
     MoreDaemonFeatures(crate::MoreDaemonFeatures),
+    /// Every command restored panes offer to run again, to connections that sent
+    /// [`ClientCtl::WatchRunAgain`]: the whole list each time it changes.
+    RunAgainOffers(Vec<RunAgainOffer>),
+}
+
+/// A command that was running in a pane when the daemon stopped (a reboot, a crash). The
+/// pane comes back as a shell and offers it until a command runs there; it is never run
+/// for the user. Running it is typing it, with the usual input rights.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunAgainOffer {
+    pub pane_id: PaneId,
+    /// The command line, as typed or as the process's arguments.
+    pub command: String,
 }
 
 /// Longest clipboard write a program may make (OSC 52), in bytes of decoded text.

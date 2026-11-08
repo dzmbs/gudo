@@ -453,5 +453,8 @@ bitset! {
         REPO_ROOT = 0;
         /// Answers `WorkspaceRequest::ResolvePaths`.
         RESOLVE_PATHS = 1;
+        /// Offers the command a restored pane was running when the daemon stopped
+        /// (`ClientCtl::WatchRunAgain`, `ServerCtl::RunAgainOffers`).
+        RUN_AGAIN = 2;
     }
 }
