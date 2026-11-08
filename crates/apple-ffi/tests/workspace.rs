@@ -420,7 +420,13 @@ fn invite_join_and_a_viewer_cannot_type() {
             since_join: false,
         }))
         .unwrap();
-    assert!(invite.link.starts_with("gudo://join/"), "{}", invite.link);
+    assert!(
+        invite
+            .link
+            .starts_with(&format!("{}://join/", brand::URL_SCHEME)),
+        "{}",
+        invite.link
+    );
     assert_eq!(invite.qr_payload, invite.link.to_ascii_uppercase());
     let info = inspect_invite(invite.qr_payload.clone()).unwrap();
     assert_eq!(info.roles, [Role::Viewer]);
