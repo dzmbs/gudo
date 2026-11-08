@@ -59,8 +59,11 @@ pub(crate) enum Event {
         json: Arc<str>,
     },
     Decided(Decided),
-    /// A shell-integration command started or finished.
-    Command(CommandMark),
+    /// A shell-integration mark, scoped when emitted rather than after its pane may disappear.
+    Command {
+        session: Option<SessionId>,
+        mark: CommandMark,
+    },
     /// A long command finished while no client showed its pane.
     CommandUnseen(CommandMark),
     /// The detected ports changed (read the list from `ws.ports`).
@@ -506,6 +509,14 @@ impl Core {
             self.power.changed.notify_one();
         }
         let _ = self.events.send(event);
+    }
+
+    /// Captures a shell-integration mark's scope before queueing it for command subscribers.
+    pub fn emit_command(&self, mark: CommandMark) {
+        self.emit(Event::Command {
+            session: self.session_of_pane(mark.pane_id),
+            mark,
+        });
     }
 
     /// Broadcasts an artifact event to the session's clients (except `from`).
@@ -2587,7 +2598,7 @@ fn handle_command(core: &Core, entry: &PaneEntry, update: CommandUpdate) {
             if mark.finished.is_some() {
                 core.work_done(mark.pane_id);
             }
-            core.emit(Event::Command(mark));
+            core.emit_command(mark);
         }
     }
 }

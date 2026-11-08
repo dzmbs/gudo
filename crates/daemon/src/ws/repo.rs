@@ -433,7 +433,7 @@ pub(crate) async fn run(core: Arc<Core>) {
             },
             event = events.recv() => match event {
                 // A command finished or an agent did something: its worktree may have changed.
-                Ok(Event::Command(mark)) if mark.finished.is_some() => tracker.pane_touched(mark.pane_id, config.debounce),
+                Ok(Event::Command { mark, .. }) if mark.finished.is_some() => tracker.pane_touched(mark.pane_id, config.debounce),
                 Ok(Event::Agent { pane_id, .. }) => tracker.pane_touched(pane_id, config.debounce),
                 Ok(_) => {}
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}

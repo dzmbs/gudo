@@ -59,6 +59,9 @@ directory (it holds `hook.token` and can do anything the user can anyway).
 - **Event stream.** Agents see only their own session's events; `gudo events` sees what its
   connection's grant shows. Neither leaks another session's panes, commands or exit codes.
   A missing pane session never becomes daemon-wide scope; only pane-free loss notices may be global.
+  Command marks capture their session before entering the broadcast queue: a later pane close cannot
+  discard or rebind that already-scoped script event. Marks emitted without a session remain excluded.
+  This does not guarantee delivery of VT updates still pending when a pane task is aborted.
 
 ## Residual risk
 

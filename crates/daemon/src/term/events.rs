@@ -161,7 +161,7 @@ pub(crate) async fn run(core: Arc<Core>) {
     });
     loop {
         match events.recv().await {
-            Ok(event) => on_event(&core, event),
+            Ok(event) => on_event(&core, feed, event),
             Err(RecvError::Lagged(missed)) => {
                 feed.record(|ring| ring.push(None, None, ScriptEventKind::Lost { missed }));
             }
@@ -170,8 +170,7 @@ pub(crate) async fn run(core: Arc<Core>) {
     }
 }
 
-fn on_event(core: &Core, event: Event) {
-    let feed = &core.term.events;
+fn on_event(core: &Core, feed: &Feed, event: Event) {
     match event {
         Event::Layout(session) => {
             let Some(layout) = lock(&core.layout).snapshot(session) else {
@@ -199,8 +198,7 @@ fn on_event(core: &Core, event: Event) {
                 ring.push(Some(session), Some(pane), ScriptEventKind::PaneClosed);
             }
         }),
-        Event::Command(mark) => {
-            let session = core.session_of_pane(mark.pane_id);
+        Event::Command { session, mark } => {
             let kind = match mark.finished {
                 None => ScriptEventKind::CommandStarted {
                     id: mark.command_id,
@@ -273,6 +271,78 @@ mod tests {
             }
         });
         feed
+    }
+
+    #[tokio::test]
+    async fn queued_command_scope_survives_layout_removal_without_becoming_global() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = crate::Config::new(dir.path());
+        config.relay = crate::RelayMode::Disabled;
+        config.bind = Some("127.0.0.1:0".parse().unwrap());
+        config.shell = Some("/bin/sh".into());
+        config.pane_env = vec![("ENV".into(), String::new())];
+        let daemon = crate::Daemon::start(config).await.unwrap();
+        let core = &daemon.core;
+        let (session, _, pane) = core
+            .create_session("origin".into(), proto::PaneLaunch::Shell { cwd: None })
+            .unwrap();
+        let mut events = core.events.subscribe();
+        core.emit_command(finished(pane));
+        let event = events.try_recv().unwrap();
+        lock(&core.layout).close_pane(pane).unwrap();
+        assert_eq!(core.session_of_pane(pane), None);
+        let feed = Feed::default();
+        on_event(core, &feed, event);
+        core.emit_command(finished(pane));
+        on_event(core, &feed, events.try_recv().unwrap());
+        let mine = feed
+            .read(Some(session), Some(0), |_| true, 10, Duration::ZERO)
+            .await;
+        let other = feed
+            .read(
+                Some(SessionId(session.0 + 100)),
+                Some(0),
+                |_| true,
+                10,
+                Duration::ZERO,
+            )
+            .await;
+        daemon.shutdown().await;
+        assert_eq!(
+            mine.events.len(),
+            1,
+            "the queued finished mark lost its original session"
+        );
+        assert!(matches!(
+            mine.events[0].kind,
+            ScriptEventKind::CommandFinished {
+                exit_code: Some(7),
+                ..
+            }
+        ));
+        assert_eq!(
+            mine.events[0].session.as_deref(),
+            Some(proto::session_ref(session).as_str())
+        );
+        assert!(
+            other.events.is_empty(),
+            "closed-pane metadata escaped its original scope"
+        );
+    }
+
+    fn finished(pane_id: PaneId) -> proto::CommandMark {
+        proto::CommandMark {
+            pane_id,
+            command_id: 1,
+            command: Some("private-origin-command".into()),
+            cwd: Some("/private/fixture".into()),
+            started_at: proto::UnixMillis(1),
+            at_seq: proto::Seq(1),
+            finished: Some(proto::CommandEnd {
+                exit: Some(7),
+                duration_ms: 1,
+            }),
+        }
     }
 
     #[tokio::test]

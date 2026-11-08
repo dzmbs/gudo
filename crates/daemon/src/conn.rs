@@ -1069,7 +1069,7 @@ impl Client {
                     self.send(ServerCtl::Decided(decided));
                 }
             }
-            Event::Command(mark) => {
+            Event::Command { mark, .. } => {
                 if self.in_session(mark.pane_id) {
                     self.send(ServerCtl::CommandMark(mark));
                 }
