@@ -2710,7 +2710,11 @@ fn detect_agent(core: &Core, entry: &PaneEntry) {
     let Some(foreground) = entry.pane.pty().foreground_process() else {
         return;
     };
-    let Some(kind) = crate::agent::running_agent(&foreground) else {
+    track_foreground_agent(core, entry, &foreground);
+}
+
+fn track_foreground_agent(core: &Core, entry: &PaneEntry, foreground: &pty::ForegroundProcess) {
+    let Some(kind) = crate::agent::running_agent(foreground) else {
         return;
     };
     let adapter = crate::agent::adapter(kind);
@@ -2722,6 +2726,7 @@ fn detect_agent(core: &Core, entry: &PaneEntry) {
         AgentKind::Codex => None,
     };
     record_agent_started_by_hand(core, entry, kind, session_id);
+    core.emit(Event::PaneMeta(entry.pane.id));
 }
 
 /// Records an agent the user started by hand in a shell pane, under the user's own setup
@@ -2923,6 +2928,35 @@ fn notice_text(message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn foreground_agent_detection_publishes_metadata_without_incidental_events() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = Config::new(directory.path());
+        config.relay = crate::RelayMode::Disabled;
+        config.bind = Some("127.0.0.1:0".parse().unwrap());
+        config.shell = Some("/bin/sh".into());
+        config.pane_env = vec![("HOME".into(), directory.path().display().to_string())];
+        let daemon = crate::Daemon::start(config).await.unwrap();
+        let core = Arc::clone(&daemon.core);
+        core.create_session("tracking".into(), PaneLaunch::Shell { cwd: None })
+            .unwrap();
+        let (pane_id, entry) = core.pane_entries().pop().unwrap();
+        entry.stop_task();
+        let mut events = core.events.subscribe();
+        let foreground = pty::ForegroundProcess {
+            pid: entry.pane.pty().pid(),
+            name: "claude".into(),
+            argv: vec!["claude".into()],
+        };
+        track_foreground_agent(&core, &entry, &foreground);
+        let agent = core.pane_meta(pane_id).unwrap().agent;
+        let published = std::iter::from_fn(|| events.try_recv().ok())
+            .any(|event| matches!(event, Event::PaneMeta(id) if id == pane_id));
+        daemon.shutdown().await;
+        assert!(agent.is_some(), "agent was registered");
+        assert!(published, "agent registration must publish its metadata");
+    }
 
     /// A quiet shell pane with no agent and no client does no periodic work: dozens of idle
     /// panes must not mean dozens of wakeups a second.
