@@ -607,6 +607,7 @@ final class WindowModel {
             } catch {
                 report(error, "Couldn't open \(app.hosts.record(id)?.name ?? id)")
             }
+            app.hosts.noteShown(hostId: id)
         }
         if selected != target { AppModel.log.info("show \(String(describing: selected), privacy: .public)") }
         target = selected

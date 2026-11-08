@@ -888,9 +888,14 @@ impl DaemonClient {
         self.inner.pane_seq(PaneId(pane_id))
     }
 
-    /// Drops the connection and redials now (network change, app foregrounded).
+    /// Drops the connection and redials now.
     pub fn reconnect(&self) {
         self.inner.reconnect();
+    }
+
+    /// Back in the foreground: probes a live link, otherwise redials at once.
+    pub fn resume_now(&self) {
+        self.inner.resume_now();
     }
 
     /// Changes how the daemon is reached (the app's relay settings changed): `relay` and the
@@ -901,7 +906,7 @@ impl DaemonClient {
     }
 
     /// The device's network changed: a live connection moves to a working path (its streams
-    /// survive); without one the client redials now.
+    /// survive); without one the client redials, unless a dial is in flight.
     pub fn network_changed(&self) {
         self.inner.network_changed();
     }

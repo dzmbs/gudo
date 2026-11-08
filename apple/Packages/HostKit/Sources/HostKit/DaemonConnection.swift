@@ -320,24 +320,28 @@ public final class DaemonConnection: HostConnection {
         }
     }
 
-    /// Back in the foreground: a connection that is not up (suspended, or lost meanwhile) is
-    /// redialled now; one that says it is up is probed (the link may have died while the app was
-    /// away, and would otherwise look connected until the idle timeout); one dialling is left
-    /// alone.
+    /// Back in the foreground: a connection that is down is redialled now, one that says it is up
+    /// is probed (it may have died while the app was away), one dialling carries on.
     public func foreground() {
         guard let client else { return }
-        switch status {
-        case .connected:
-            probeLink(force: true)
-            return
-        case .connecting: return
-        default: break
+        let wasDown = switch status {
+        case .connected, .connecting: false
+        default: true
         }
-        Self.log.info("foreground: resuming host=\(self.hostId, privacy: .public)")
-        status = .connecting(.dialing)
-        dials += 1
-        timings.dialStarted = .now
-        client.reconnect()
+        if wasDown {
+            Self.log.info("foreground: resuming host=\(self.hostId, privacy: .public)")
+            status = .connecting(.dialing)
+            dials += 1
+            timings.dialStarted = .now
+        }
+        if let resuming = client as? any ForegroundResumeClient {
+            lastProbe = .now
+            resuming.resumeNow()
+        } else if case .connected = status {
+            probeLink(force: true)
+        } else if wasDown {
+            client.reconnect()
+        }
     }
 
     /// Pings a link that says it is up (back in the foreground, typing that got no answer): a
@@ -367,8 +371,8 @@ public final class DaemonConnection: HostConnection {
     public func networkChanged() {
         guard let client else { return }
         if case .suspended = status { return }
-        if case .connected = status, let roaming = client as? any NetworkChangeClient {
-            Self.log.info("network changed: keeping the connection host=\(self.hostId, privacy: .public)")
+        if let roaming = client as? any NetworkChangeClient {
+            Self.log.info("network changed: refreshing paths host=\(self.hostId, privacy: .public)")
             roaming.networkChanged()
             return
         }

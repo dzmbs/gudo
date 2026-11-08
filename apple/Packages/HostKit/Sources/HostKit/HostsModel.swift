@@ -84,6 +84,9 @@ public final class HostsModel {
     @ObservationIgnored private let repository: HostRepository
     @ObservationIgnored private let configuration: Configuration
     @ObservationIgnored private var deviceKey: Data?
+    @ObservationIgnored private var recentlyShownHostIds: [String] = []
+    @ObservationIgnored private var lastForeground: ContinuousClock.Instant?
+    @ObservationIgnored private var deferredForeground: Task<Void, Never>?
     @ObservationIgnored private lazy var knownHosts = KnownHosts.load(from: secrets)
     @ObservationIgnored var dialer: DaemonDialer?
     @ObservationIgnored var joinDialer: DaemonDialer?
@@ -871,14 +874,42 @@ public final class HostsModel {
 
     // MARK: Lifecycle
 
+    public func noteShown(hostId: String) {
+        recentlyShownHostIds.removeAll { $0 == hostId }
+        recentlyShownHostIds.insert(hostId, at: 0)
+    }
+
+    /// The host on screen resumes first; the others follow shortly after, so they don't compete
+    /// with it for a waking radio. Repeated foreground signals (scene and window) resume once.
     public func foreground() {
+        let now = ContinuousClock.now
+        if let lastForeground, now - lastForeground < Self.repeatedForegroundWindow { return }
+        lastForeground = now
         network.start()
-        for connection in connections.values { connection.foreground() }
+        let shownHostId = recentlyShownHostIds.first { connections[$0] != nil }
+        guard let shownHostId, let shownConnection = connections[shownHostId] else {
+            for connection in connections.values { connection.foreground() }
+            return
+        }
+        shownConnection.foreground()
+        let otherHostIds = connections.keys.filter { $0 != shownHostId }
+        guard !otherHostIds.isEmpty else { return }
+        deferredForeground = Task { [weak self] in
+            try? await Task.sleep(for: Self.otherHostsDelay)
+            guard !Task.isCancelled, let self else { return }
+            for hostId in otherHostIds { self.connections[hostId]?.foreground() }
+        }
     }
 
     public func background() {
+        lastForeground = nil
+        deferredForeground?.cancel()
+        deferredForeground = nil
         for connection in connections.values { connection.background() }
     }
+
+    static let repeatedForegroundWindow = Duration.seconds(2)
+    static let otherHostsDelay = Duration.milliseconds(300)
 
     public func networkChanged() {
         for connection in connections.values { connection.networkChanged() }

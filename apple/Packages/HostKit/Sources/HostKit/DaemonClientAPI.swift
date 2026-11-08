@@ -68,6 +68,12 @@ nonisolated public protocol NetworkChangeClient: AnyObject, Sendable {
 
 extension DaemonClient: NetworkChangeClient {}
 
+nonisolated public protocol ForegroundResumeClient: AnyObject, Sendable {
+    func resumeNow()
+}
+
+extension DaemonClient: ForegroundResumeClient {}
+
 /// A client that can check its live connection with a ping (`DaemonClient.probe`): one that
 /// gets no answer within seconds is dropped and redialled. Not part of `DaemonClientAPI` so
 /// test fakes need not implement it.

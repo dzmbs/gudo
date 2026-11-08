@@ -169,6 +169,40 @@ final class FakeConnection: HostConnection {
         #expect(fakes.values.allSatisfy { $0.dials == 2 })
     }
 
+    @Test func repeatedForegroundSignalsResumeEachHostOnce() throws {
+        let (groups, fakes, _) = try fixture()
+        groups.hosts.background()
+        groups.hosts.foreground()
+        groups.hosts.foreground()
+        #expect(fakes.values.allSatisfy { $0.lifecycle == ["background", "foreground"] })
+
+        groups.hosts.background()
+        groups.hosts.foreground()
+        #expect(fakes.values.allSatisfy { $0.lifecycle.suffix(2) == ["background", "foreground"] })
+    }
+
+    @Test func theHostOnScreenResumesBeforeTheOthers() async throws {
+        let (groups, fakes, _) = try fixture()
+        groups.hosts.noteShown(hostId: "cloud")
+        groups.hosts.background()
+        groups.hosts.foreground()
+        #expect(fakes["cloud"]?.lifecycle == ["background", "foreground"])
+        #expect(fakes["studio"]?.lifecycle == ["background"])
+        try await eventually("the other hosts resume") {
+            fakes.values.allSatisfy { $0.lifecycle == ["background", "foreground"] }
+        }
+    }
+
+    @Test func goingToTheBackgroundCancelsTheOtherHostsResume() async throws {
+        let (groups, fakes, _) = try fixture()
+        groups.hosts.noteShown(hostId: "cloud")
+        groups.hosts.background()
+        groups.hosts.foreground()
+        groups.hosts.background()
+        try await Task.sleep(for: HostsModel.otherHostsDelay * 3)
+        #expect(fakes["studio"]?.lifecycle == ["background", "background"])
+    }
+
     @Test func closeRestoreAndFailures() throws {
         let (groups, fakes, _) = try fixture()
         groups.close("box")
