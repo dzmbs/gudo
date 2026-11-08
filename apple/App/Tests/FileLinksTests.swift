@@ -106,6 +106,35 @@ final class FileLinksTests: XCTestCase {
         XCTAssertFalse(FileLinks.isThisMachine("build-box", machineName: "studio"))
     }
 
+    func testOnlyPathsThatExistUnderlineOnceThePointerRests() async throws {
+        var looked: [PathUnderlines.Key] = []
+        var learned = 0
+        let underlines = PathUnderlines(
+            lookup: { key in
+                looked.append(key)
+                return key.printed != "gone.txt"
+            },
+            onLearned: { learned += 1 })
+        let notes = PathUnderlines.Key(command: 3, printed: "notes.txt")
+        let gone = PathUnderlines.Key(command: 3, printed: "gone.txt")
+        XCTAssertFalse(underlines.underlines(PathUnderlines.Key(command: 3, printed: "passing.txt")))
+        XCTAssertFalse(underlines.underlines(notes), "nothing until the daemon says")
+        try await waitUntil { learned == 1 }
+        XCTAssertEqual(looked, [notes], "the path the pointer only passed was never asked about")
+        XCTAssertTrue(underlines.underlines(notes))
+        XCTAssertFalse(underlines.underlines(gone))
+        try await waitUntil { learned == 2 }
+        XCTAssertFalse(underlines.underlines(gone))
+        XCTAssertEqual(looked, [notes, gone], "answers are kept")
+    }
+
+    private func waitUntil(_ condition: () -> Bool) async throws {
+        for _ in 0..<200 where !condition() {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(condition())
+    }
+
     // MARK: Viewer
 
     func testTheViewerReadsOnToALineBeyondTheFirstChunk() async throws {

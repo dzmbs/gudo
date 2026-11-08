@@ -42,6 +42,9 @@ public final class TerminalView: UIView {
     public var onOpenLink: ((TerminalLink) -> Void)?
     /// The link under the pointer changed (nil: none), for a status line showing its target.
     public var onHoverLink: ((TerminalLink?) -> Void)?
+    /// Whether a path printed as text is underlined (it exists); nil underlines every one.
+    public var underlinesPath: ((TerminalLink) -> Bool)?
+    private var lastHoverPoint: CGPoint?
     /// The pointer over the terminal (view points), nil when it leaves: hover affordances
     /// drawn by the host (a command's ✓/✗ and run time).
     public var onPointerMoved: ((CGPoint?) -> Void)?
@@ -666,6 +669,7 @@ public final class TerminalView: UIView {
         }
         switch hover.state {
         case .began, .changed:
+            lastHoverPoint = point
             // A tap opens plain-text links too, so the pointer shows them all.
             setHoverLink(surface.reportsMouse(shift: hover.modifierFlags.contains(.shift)) ? nil : surface.link(at: point))
             // Any-event tracking (1003) reports motion with no button held.
@@ -673,11 +677,20 @@ public final class TerminalView: UIView {
                 emitGenerated(surface.mouse(.motion, button: nil, at: point, mods: KeyModifiers(hover.modifierFlags)))
             }
         default:
+            lastHoverPoint = nil
             setHoverLink(nil)
         }
     }
 
+    /// Looks at the link under the pointer again (`underlinesPath` learned more).
+    public func refreshHoverLink() {
+        guard let lastHoverPoint else { return }
+        setHoverLink(surface.link(at: lastHoverPoint))
+    }
+
     private func setHoverLink(_ link: TerminalLink?) {
+        var link = link
+        if let path = link, !path.isHyperlink, path.kind == .path, underlinesPath?(path) == false { link = nil }
         surface.setHoveredLink(link.map { ($0.row, $0.columns) })
         guard link?.target != hoveredLinkTarget?.target else { return }
         hoveredLinkTarget = link

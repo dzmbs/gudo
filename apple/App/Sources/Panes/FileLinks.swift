@@ -225,6 +225,69 @@ extension WindowModel {
     }
 }
 
+/// Which printed paths exist, per pane, so only those underline. Asked after the pointer rests.
+@MainActor
+final class PathUnderlines {
+    struct Key: Hashable {
+        var command: UInt64?
+        var printed: String
+    }
+
+    private var known: [Key: Bool] = [:]
+    private var asking: (key: Key, task: Task<Void, Never>)?
+    private let lookup: (Key) async -> Bool?
+    private let onLearned: () -> Void
+
+    static let limit = 512
+    static let delay = Duration.milliseconds(120)
+
+    init(lookup: @escaping (Key) async -> Bool?, onLearned: @escaping () -> Void) {
+        self.lookup = lookup
+        self.onLearned = onLearned
+    }
+
+    func underlines(_ key: Key) -> Bool {
+        if let exists = known[key] { return exists }
+        guard asking?.key != key else { return false }
+        asking?.task.cancel()
+        asking = (key, Task { [weak self] in
+            try? await Task.sleep(for: Self.delay)
+            guard !Task.isCancelled, let self else { return }
+            let exists = await self.lookup(key)
+            if self.asking?.key == key { self.asking = nil }
+            guard let exists else { return }
+            if self.known.count >= Self.limit { self.known.removeAll() }
+            self.known[key] = exists
+            self.onLearned()
+        })
+        return false
+    }
+
+    static func attach(to pane: Pane, workspace: Workspace) {
+        let paneId = pane.id
+        let underlines = PathUnderlines(
+            lookup: { [weak workspace] key in
+                guard let daemon = workspace.flatMap(pathAPI),
+                      let answer = try? await daemon.resolvePaths(paneId: paneId.rawValue, commandId: key.command, paths: [key.printed]).first
+                else { return nil }
+                return FileLinkKind(answer.found) == .file || FileLinkKind(answer.found) == .directory
+            },
+            onLearned: { [weak pane] in pane?.view.refreshHoverLink() })
+        pane.view.underlinesPath = { [weak workspace, weak pane] link in
+            guard let workspace, let pane, pathAPI(workspace) != nil else { return true }
+            let command = PaneCommandMarks.of(pane.id)?.block(atViewportRow: link.row)?.mark.commandId
+            return underlines.underlines(Key(command: command, printed: link.target))
+        }
+    }
+
+    private static func pathAPI(_ workspace: Workspace) -> (any DaemonPathAPI)? {
+        guard workspace.isRemote, let daemon = (try? (workspace.host as? DaemonConnection)?.workspace.client()) as? DaemonPathAPI,
+              daemon.offersResolvePaths()
+        else { return nil }
+        return daemon
+    }
+}
+
 /// Settings ▸ Terminal ▸ File links.
 struct FileLinksSettingsSection: View {
     @AppStorage(FileLinkOpening.key) private var opening = FileLinkOpening.gudo

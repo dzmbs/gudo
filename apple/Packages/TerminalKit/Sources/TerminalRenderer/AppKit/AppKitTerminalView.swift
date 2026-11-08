@@ -32,6 +32,8 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
     public var onOpenLink: ((TerminalLink) -> Void)?
     /// The link under the pointer changed (nil: none), for a status line showing its target.
     public var onHoverLink: ((TerminalLink?) -> Void)?
+    /// Whether a path printed as text is underlined (it exists); nil underlines every one.
+    public var underlinesPath: ((TerminalLink) -> Bool)?
     /// The pointer over the terminal (view points), nil when it leaves: hover affordances
     /// drawn by the host (a command's ✓/✗ and run time).
     public var onPointerMoved: ((CGPoint?) -> Void)?
@@ -392,8 +394,14 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
     private func updateHoverLink(at location: CGPoint, flags: NSEvent.ModifierFlags) {
         var link = surface.reportsMouse(shift: flags.contains(.shift)) && !flags.contains(.command) ? nil : surface.link(at: location)
         if link?.isHyperlink == false, !flags.contains(.command) { link = nil }
+        if let path = link, !path.isHyperlink, path.kind == .path, underlinesPath?(path) == false { link = nil }
         setHoverLink(link)
         if link != nil { NSCursor.pointingHand.set() } else { NSCursor.iBeam.set() }
+    }
+
+    /// Looks at the link under the pointer again (`underlinesPath` learned more).
+    public func refreshHoverLink() {
+        if let location = lastMousePoint { updateHoverLink(at: location, flags: NSEvent.modifierFlags) }
     }
 
     private func setHoverLink(_ link: TerminalLink?) {

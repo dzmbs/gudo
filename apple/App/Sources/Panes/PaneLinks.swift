@@ -27,6 +27,7 @@ enum PaneLinks {
             guard let workspace, let pane else { return }
             open(link, from: pane, in: workspace)
         }
+        PathUnderlines.attach(to: pane, workspace: workspace)
         #if os(iOS)
         pane.view.linkActions = { [weak workspace, weak pane] link in
             guard link.kind == .path, let workspace, let pane else { return nil }
