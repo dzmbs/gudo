@@ -368,6 +368,16 @@ pub enum WorkspaceRequest {
         text: String,
         confirmed_revision: Option<u64>,
     },
+    /// Prepare a single-use interrupt for the current authenticated Claude turn.
+    ChatInterruptPrepare {
+        pane_id: PaneId,
+    },
+    /// Request one Escape, never a claim that the live turn has actually stopped.
+    ChatInterrupt {
+        pane_id: PaneId,
+        ticket: u64,
+        confirmed_revision: Option<u64>,
+    },
 }
 
 /// The answer to a [`WorkspaceRequest`].
@@ -461,6 +471,7 @@ pub enum ChatSendStatus {
     Confirmed,
     NotConfirmed,
     SentNotConfirmed,
+    InterruptRequested,
 }
 
 /// A command that registers or removes the daemon's MCP server with an agent.

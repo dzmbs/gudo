@@ -4,6 +4,8 @@ import GudoCore
 nonisolated public protocol DaemonTimelineAPI: AnyObject, Sendable {
     func chatPrepare(paneId: UInt64) async throws -> String
     func chatSend(paneId: UInt64, ticket: UInt64, text: String, confirmedRevision: UInt64?) async throws -> String
+    func chatInterruptPrepare(paneId: UInt64) async throws -> String
+    func chatInterrupt(paneId: UInt64, ticket: UInt64, confirmedRevision: UInt64?) async throws -> String
     func timelineWatch(paneId: UInt64) async throws -> String
     func timelineUnwatch(paneId: UInt64) async throws
     func timelineItemsBefore(paneId: UInt64, before: UInt64, limit: UInt16) async throws -> String
@@ -18,6 +20,14 @@ extension DaemonTimelineAPI {
 
     public func chatSend(paneId: UInt64, ticket: UInt64, text: String, confirmedRevision: UInt64?) async throws -> String {
         throw WorkspaceError.Unavailable(message: "Update the helper to send from Chat.")
+    }
+
+    public func chatInterruptPrepare(paneId: UInt64) async throws -> String {
+        throw WorkspaceError.Unavailable(message: "Update the helper to interrupt from Chat.")
+    }
+
+    public func chatInterrupt(paneId: UInt64, ticket: UInt64, confirmedRevision: UInt64?) async throws -> String {
+        throw WorkspaceError.Unavailable(message: "Update the helper to interrupt from Chat.")
     }
 
     public func timelineToolDiff(paneId: UInt64, handle: String) async throws -> String {

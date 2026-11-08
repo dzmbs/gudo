@@ -138,9 +138,18 @@ pair transactional. Chat uses a separate owner-only, revision-checked, single-us
 one bracketed-paste-plus-Return write. Dirty or unknown drafts require explicit confirmation; real
 input invalidates that confirmation. A matching same-session Claude UserPromptSubmit confirms the
 normalized text, not an independently identified submission or a proven-empty PTY queue. Timeout,
-mismatch, concurrent input and exit remain unconfirmed, never automatically retried. Codex can use a
+mismatch, concurrent input and exit remain unconfirmed, never automatically retried. A known blocked
+question refuses both prompt preparation and enqueue: text such as `yes` must not become a dialog
+keystroke in place of the signed approval route. Codex can use a
 same-thread notify only when it carries exactly one matching input message; otherwise it remains
-sent but unconfirmed. Non-fenced adopted panes remain unavailable. See [Native sending](../CHAT.md#native-sending).
+sent but unconfirmed. Non-fenced adopted panes remain unavailable. Claude interrupts use separate
+intent/turn-bound tickets and the same draft-risk revision and exit fence. Authenticated hook turn
+identity, not Working pixels alone, is required; a known new prompt hook invalidates an old interrupt.
+A hook older than the latest input cannot renew that identity. This is not proof of a unique CLI
+submission. One Escape per admitted hook identity is an enqueue receipt only, never a stopped or
+consumption acknowledgement.
+Hook admission and native control use input-gate → runtime lock ordering, so identity changes cannot
+race through native admission. No native action automatically resends. See [Native sending](../CHAT.md#native-sending).
 
 **Files and git.** Path policy (DAEMON.md §5.0): paths must be absolute, with no `..`, and their
 real path must lie inside `$HOME` or `files.allow`. Symlinks are checked through their real

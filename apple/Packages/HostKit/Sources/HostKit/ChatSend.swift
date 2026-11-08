@@ -18,7 +18,7 @@ nonisolated public struct ChatSendOffer: Decodable, Equatable, Sendable {
 }
 
 nonisolated public enum ChatSendStatus: Decodable, Equatable, Sendable {
-    case prepared(ChatSendOffer), confirmationRequired(UInt64), confirmed, notConfirmed, sentNotConfirmed
+    case prepared(ChatSendOffer), confirmationRequired(UInt64), confirmed, notConfirmed, sentNotConfirmed, interruptRequested
 
     private enum Keys: String, CodingKey { case prepared = "Prepared", confirmation = "ConfirmationRequired", revision }
 
@@ -28,6 +28,7 @@ nonisolated public enum ChatSendStatus: Decodable, Equatable, Sendable {
             case "Confirmed": self = .confirmed
             case "NotConfirmed": self = .notConfirmed
             case "SentNotConfirmed": self = .sentNotConfirmed
+            case "InterruptRequested": self = .interruptRequested
             default: throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Unknown send receipt"))
             }
         } else {

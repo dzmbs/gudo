@@ -138,7 +138,11 @@ impl WsState {
         match control {
             proto::ClientCtl::Workspace {
                 req_id,
-                req: WorkspaceRequest::ChatPrepare { .. } | WorkspaceRequest::ChatSend { .. },
+                req:
+                    WorkspaceRequest::ChatPrepare { .. }
+                    | WorkspaceRequest::ChatSend { .. }
+                    | WorkspaceRequest::ChatInterruptPrepare { .. }
+                    | WorkspaceRequest::ChatInterrupt { .. },
             } => lock(&self.pending)
                 .get(req_id)
                 .is_some_and(|reply| !reply.is_closed()),
@@ -931,6 +935,27 @@ impl Client {
     ) -> Result<proto::ChatSendStatus, WsError> {
         crate::chat_send::require(self.inner.daemon_features())?;
         expect!(self.workspace_with_timeout(WorkspaceRequest::ChatSend { pane_id, ticket, text, confirmed_revision }, Duration::from_secs(10)).await?,
+            WorkspaceResponse::ChatSend(status) => status)
+    }
+
+    pub async fn chat_interrupt_prepare(
+        &self,
+        pane_id: PaneId,
+    ) -> Result<proto::ChatSendStatus, WsError> {
+        crate::chat_send::require_interrupt(self.inner.daemon_features())?;
+        expect!(self.workspace_with_timeout(WorkspaceRequest::ChatInterruptPrepare { pane_id }, Duration::from_secs(10)).await?,
+            WorkspaceResponse::ChatSend(status) => status)
+    }
+
+    /// Requests one interrupt; delivery is not confirmation that the agent stopped.
+    pub async fn chat_interrupt(
+        &self,
+        pane_id: PaneId,
+        ticket: u64,
+        confirmed_revision: Option<u64>,
+    ) -> Result<proto::ChatSendStatus, WsError> {
+        crate::chat_send::require_interrupt(self.inner.daemon_features())?;
+        expect!(self.workspace_with_timeout(WorkspaceRequest::ChatInterrupt { pane_id, ticket, confirmed_revision }, Duration::from_secs(10)).await?,
             WorkspaceResponse::ChatSend(status) => status)
     }
 

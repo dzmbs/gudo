@@ -23,21 +23,26 @@ pub(crate) async fn request(
         _ => return Err(unavailable()),
     };
     let entry = core.pane(pane).ok_or_else(unavailable)?;
-    let (kind, session) = {
-        let agent = lock(&entry.agent);
-        let agent = agent.as_ref().ok_or_else(unavailable)?;
-        (
-            agent.kind(),
-            agent
-                .session()
-                .native_id
-                .as_ref()
-                .map(|id| id.as_str().to_owned()),
-        )
-    };
     let bracketed = entry.pane.line_snapshot().bracketed;
-    let (mut receipt, audit) = {
+    let (kind, mut receipt, audit) = {
         let mut gate = lock(&entry.pane.agent_input_gate);
+        // Same input -> runtime order as hook admission. A known question must use its signed
+        // decision route, not a pasted prompt interpreted by the dialog as an approval key.
+        let (kind, session) = {
+            let agent = lock(&entry.agent);
+            let agent = agent.as_ref().ok_or_else(unavailable)?;
+            if agent.is_blocked() {
+                return Err(unavailable());
+            }
+            (
+                agent.kind(),
+                agent
+                    .session()
+                    .native_id
+                    .as_ref()
+                    .map(|id| id.as_str().to_owned()),
+            )
+        };
         if !matches!(&gate.phase, AgentInputPhase::Open(_))
             || !core.agent_has_terminal(pane)
             || !bracketed
@@ -91,7 +96,7 @@ pub(crate) async fn request(
                     gate.draft.finish(Receipt::NotConfirmed);
                 }
                 let audit = queued.then(|| prompt_audit(conn.actor, pane, &text));
-                (receipt, audit)
+                (kind, receipt, audit)
             }
             _ => return Err(unavailable()),
         }

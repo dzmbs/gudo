@@ -947,6 +947,9 @@ async fn handle_hook(core: &Arc<Core>, request: HookRequest) -> HookResponse {
     let payload = serde_json::to_vec(&request.payload).unwrap_or_default();
     let mut attached = None;
     let (event, blocked) = {
+        // Native control takes input -> runtime locks. Keep hook admission/turn identity atomic
+        // in that same order, so a queued interrupt cannot target a newly admitted turn.
+        let mut input = lock(&entry.pane.agent_input_gate);
         let mut agent = lock(&entry.agent);
         let Some(kind) = agent_kind(&request.agent) else {
             return HookResponse::default();
@@ -965,6 +968,7 @@ async fn handle_hook(core: &Arc<Core>, request: HookRequest) -> HookResponse {
         let Some(AppliedHook { event }) = runtime.hook(&payload, request.seq) else {
             return HookResponse::default();
         };
+        crate::agent_input::record_hook(&mut input, &request);
         // Register wire ids now so a client can answer as soon as it sees the event.
         let _ = runtime.wire_status();
         (event, runtime.blocked_request())
@@ -972,7 +976,6 @@ async fn handle_hook(core: &Arc<Core>, request: HookRequest) -> HookResponse {
     if let Some(kind) = attached {
         crate::core::record_agent_started_by_hand(core, &entry, kind, None);
     }
-    crate::agent_input::record_hook(&entry.pane, &request);
     core.agent_event(pane_id, event);
     if request.event != "PermissionRequest" {
         return HookResponse::default();

@@ -697,6 +697,12 @@ fn control_supported(control: &ClientCtl, features: proto::DaemonFeatures) -> bo
                 proto::WorkspaceRequest::ChatPrepare { .. } | proto::WorkspaceRequest::ChatSend { .. },
             ..
         } => features.contains(proto::DaemonFeatures::CHAT_SEND),
+        ClientCtl::Workspace {
+            req:
+                proto::WorkspaceRequest::ChatInterruptPrepare { .. }
+                | proto::WorkspaceRequest::ChatInterrupt { .. },
+            ..
+        } => features.contains(proto::DaemonFeatures::CHAT_INTERRUPT),
         ClientCtl::PaneActivity { .. }
         | ClientCtl::ClaimSize { .. }
         | ClientCtl::SetSizePolicy { .. } => {
@@ -1322,6 +1328,32 @@ mod tests {
             assert!(control_supported(
                 &control,
                 proto::DaemonFeatures::CHAT_SEND
+            ));
+        }
+    }
+
+    #[test]
+    fn queued_interrupts_require_the_current_peers_interrupt_capability_not_just_send() {
+        for req in [
+            proto::WorkspaceRequest::ChatInterruptPrepare { pane_id: PaneId(7) },
+            proto::WorkspaceRequest::ChatInterrupt {
+                pane_id: PaneId(7),
+                ticket: 1,
+                confirmed_revision: None,
+            },
+        ] {
+            let control = ClientCtl::Workspace { req_id: 1, req };
+            assert!(!control_supported(
+                &control,
+                proto::DaemonFeatures::default()
+            ));
+            assert!(!control_supported(
+                &control,
+                proto::DaemonFeatures::CHAT_SEND
+            ));
+            assert!(control_supported(
+                &control,
+                proto::DaemonFeatures::CHAT_INTERRUPT
             ));
         }
     }

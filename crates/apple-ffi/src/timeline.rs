@@ -33,6 +33,33 @@ impl DaemonClient {
         .await
     }
 
+    pub async fn chat_interrupt_prepare(&self, pane_id: u64) -> Result<String, WorkspaceError> {
+        self.ws_call(|client| async move {
+            encoded(
+                &client
+                    .chat_interrupt_prepare(proto::PaneId(pane_id))
+                    .await?,
+            )
+        })
+        .await
+    }
+
+    pub async fn chat_interrupt(
+        &self,
+        pane_id: u64,
+        ticket: u64,
+        confirmed_revision: Option<u64>,
+    ) -> Result<String, WorkspaceError> {
+        self.ws_call(|client| async move {
+            encoded(
+                &client
+                    .chat_interrupt(proto::PaneId(pane_id), ticket, confirmed_revision)
+                    .await?,
+            )
+        })
+        .await
+    }
+
     pub async fn timeline_watch(&self, pane_id: u64) -> Result<String, WorkspaceError> {
         self.ws_call(|client| async move {
             encoded(&client.timeline_watch(proto::PaneId(pane_id)).await?)

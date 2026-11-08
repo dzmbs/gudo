@@ -5,9 +5,11 @@ mod chat;
 mod chat_tests;
 mod draft;
 mod hooks;
+mod interrupt;
 
 pub(crate) use chat::request as chat_request;
 pub(crate) use hooks::record as record_hook;
+pub(crate) use interrupt::request as interrupt_request;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -218,8 +220,12 @@ pub(crate) async fn serve(core: &Arc<Core>, call: AgentInputCall) -> AgentInputR
     }
 }
 
+#[cfg(test)]
 pub(crate) fn submitted(pane: &crate::pane::Pane, session: &str, prompt: &str, seq: u64) {
-    let mut gate = lock(&pane.agent_input_gate);
+    submitted_locked(&mut lock(&pane.agent_input_gate), session, prompt, seq);
+}
+
+fn submitted_locked(gate: &mut AgentInputGate, session: &str, prompt: &str, seq: u64) {
     // A delayed pre-write hook or replay cannot clear a newer draft or acknowledge a new send.
     if seq <= gate.last_prompt_seq || seq <= gate.last_user_input_seq {
         return;

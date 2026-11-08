@@ -421,5 +421,7 @@ bitset! {
         /// Reads bounded complete recorded tool changes through a scoped result handle.
         TIMELINE_TOOL_DIFF = 28;
         CHAT_SEND = 29;
+        /// Native interrupt controls with live-turn tickets and draft-risk confirmation.
+        CHAT_INTERRUPT = 30;
     }
 }

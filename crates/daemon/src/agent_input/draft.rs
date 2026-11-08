@@ -24,9 +24,16 @@ pub(crate) struct Offer {
     pub needs_confirmation: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Intent {
+    Prompt,
+    Interrupt(u64),
+}
+
 struct Ticket {
     id: u64,
     session: Option<String>,
+    intent: Intent,
 }
 
 struct Pending {
@@ -47,11 +54,14 @@ pub(crate) struct Draft {
     tainted_submission: bool,
     ticket: Option<Ticket>,
     pending: Option<Pending>,
+    active_turn: Option<String>,
+    turn_seq: u64,
+    interrupted_turn: Option<u64>,
 }
 
-pub(crate) enum Admission {
+pub(crate) enum Admission<T = watch::Receiver<Receipt>> {
     Confirm(Offer),
-    Ready(watch::Receiver<Receipt>),
+    Ready(T),
     Refused,
 }
 
@@ -76,8 +86,42 @@ impl Draft {
     }
 
     pub(crate) fn prepare(&mut self, session: Option<&str>, now: Instant) -> Option<Offer> {
+        self.prepare_for(Intent::Prompt, session, now)
+    }
+
+    pub(crate) fn record_turn(&mut self, session: Option<&str>, seq: u64) {
+        if seq <= self.turn_seq {
+            return;
+        }
+        self.turn_seq = seq;
+        self.active_turn = session
+            .filter(|session| !session.is_empty())
+            .map(str::to_owned);
+    }
+
+    fn interrupt_intent(&self, session: Option<&str>) -> Option<Intent> {
+        (session.is_some()
+            && self.active_turn.as_deref() == session
+            && self.interrupted_turn != Some(self.turn_seq))
+        .then_some(Intent::Interrupt(self.turn_seq))
+    }
+
+    pub(crate) fn prepare_interrupt(
+        &mut self,
+        session: Option<&str>,
+        now: Instant,
+    ) -> Option<Offer> {
+        self.prepare_for(self.interrupt_intent(session)?, session, now)
+    }
+
+    fn prepare_for(
+        &mut self,
+        intent: Intent,
+        session: Option<&str>,
+        now: Instant,
+    ) -> Option<Offer> {
         self.expire(now);
-        if self.pending.is_some() || self.revision == u64::MAX {
+        if (intent == Intent::Prompt && self.pending.is_some()) || self.revision == u64::MAX {
             return None;
         }
         // Neither a replacement pane nor a new daemon process on this boot may recycle a ticket.
@@ -90,6 +134,7 @@ impl Draft {
         self.ticket = Some(Ticket {
             id: previous + 1,
             session: session.map(str::to_owned),
+            intent,
         });
         Some(self.offer(session))
     }
@@ -104,19 +149,23 @@ impl Draft {
         }
     }
 
-    pub(crate) fn admit(
+    fn authorize(
         &mut self,
+        intent: Intent,
         ticket: u64,
         session: Option<&str>,
-        prompt: &str,
         confirmation: Option<u64>,
         now: Instant,
-    ) -> Admission {
+    ) -> Admission<()> {
         self.expire(now);
         let Some(active) = self.ticket.as_ref() else {
             return Admission::Refused;
         };
-        if active.id != ticket || active.session.as_deref() != session || self.pending.is_some() {
+        if active.id != ticket
+            || active.session.as_deref() != session
+            || active.intent != intent
+            || (intent == Intent::Prompt && self.pending.is_some())
+        {
             return Admission::Refused;
         }
         let offer = self.offer(session);
@@ -125,6 +174,41 @@ impl Draft {
         }
         if offer.needs_confirmation && confirmation != Some(self.revision) {
             return Admission::Confirm(offer);
+        }
+        Admission::Ready(())
+    }
+
+    pub(crate) fn admit_interrupt(
+        &mut self,
+        ticket: u64,
+        session: Option<&str>,
+        confirmation: Option<u64>,
+        now: Instant,
+    ) -> Admission<()> {
+        let Some(intent) = self.interrupt_intent(session) else {
+            return Admission::Refused;
+        };
+        let admission = self.authorize(intent, ticket, session, confirmation, now);
+        if matches!(admission, Admission::Ready(())) {
+            self.ticket = None;
+            self.interrupted_turn = Some(self.turn_seq);
+            self.input(b"\x1b");
+        }
+        admission
+    }
+
+    pub(crate) fn admit(
+        &mut self,
+        ticket: u64,
+        session: Option<&str>,
+        prompt: &str,
+        confirmation: Option<u64>,
+        now: Instant,
+    ) -> Admission {
+        match self.authorize(Intent::Prompt, ticket, session, confirmation, now) {
+            Admission::Confirm(offer) => return Admission::Confirm(offer),
+            Admission::Refused => return Admission::Refused,
+            Admission::Ready(()) => {}
         }
         let Some(prompt) = normalize(prompt) else {
             return Admission::Refused;
@@ -192,6 +276,7 @@ impl Draft {
         self.finish(Receipt::NotConfirmed);
         self.ticket = None;
         self.baseline = None;
+        self.active_turn = None;
         self.input.clear();
         self.byte_count = 0;
         self.revision = self.revision.saturating_add(1);
@@ -224,7 +309,126 @@ mod tests {
     fn clean() -> Draft {
         let mut draft = Draft::default();
         draft.submitted("session", "previous", false, Instant::now());
+        draft.record_turn(Some("session"), 1);
         draft
+    }
+
+    #[test]
+    fn an_interrupt_needs_a_hook_turn_and_cannot_cancel_a_new_turn_in_the_same_session() {
+        let mut draft = Draft::default();
+        let now = Instant::now();
+        draft.submitted("session", "baseline alone is not working proof", false, now);
+        assert!(draft.prepare_interrupt(Some("session"), now).is_none());
+        draft.record_turn(Some("session"), 10);
+        let offer = draft.prepare_interrupt(Some("session"), now).unwrap();
+        draft.record_turn(Some("session"), 20);
+        assert!(matches!(
+            draft.admit_interrupt(offer.ticket, Some("session"), None, now),
+            Admission::Refused
+        ));
+        let offer = draft.prepare_interrupt(Some("session"), now).unwrap();
+        draft.record_turn(None, 19);
+        assert!(draft.interrupt_intent(Some("session")).is_some());
+        draft.record_turn(None, 21);
+        assert!(matches!(
+            draft.admit_interrupt(offer.ticket, Some("session"), None, now),
+            Admission::Refused
+        ));
+        assert!(draft.prepare_interrupt(Some("session"), now).is_none());
+    }
+
+    #[test]
+    fn an_interrupt_is_once_only_and_dirties_the_next_prompt() {
+        let mut draft = clean();
+        let now = Instant::now();
+        let offer = draft.prepare_interrupt(Some("session"), now).unwrap();
+        assert!(!offer.needs_confirmation);
+        assert!(matches!(
+            draft.admit_interrupt(offer.ticket, Some("session"), None, now),
+            Admission::Ready(())
+        ));
+        assert!(matches!(
+            draft.admit_interrupt(offer.ticket, Some("session"), None, now),
+            Admission::Refused
+        ));
+        assert!(draft.prepare_interrupt(Some("session"), now).is_none());
+        assert!(
+            draft
+                .prepare(Some("session"), now)
+                .unwrap()
+                .needs_confirmation
+        );
+    }
+
+    #[test]
+    fn interrupt_confirmation_tracks_the_current_draft_revision() {
+        let mut draft = clean();
+        let now = Instant::now();
+        draft.input(b"Mac draft");
+        let offer = draft.prepare_interrupt(Some("session"), now).unwrap();
+        assert!(offer.needs_confirmation);
+        assert!(matches!(
+            draft.admit_interrupt(offer.ticket, Some("session"), None, now),
+            Admission::Confirm(_)
+        ));
+        draft.input(b"more");
+        let current =
+            match draft.admit_interrupt(offer.ticket, Some("session"), Some(offer.revision), now) {
+                Admission::Confirm(current) => current,
+                _ => panic!("a stale warning cannot authorize Escape"),
+            };
+        assert!(current.revision > offer.revision);
+        assert!(matches!(
+            draft.admit_interrupt(offer.ticket, Some("session"), Some(current.revision), now),
+            Admission::Ready(())
+        ));
+    }
+
+    #[test]
+    fn interrupt_tickets_are_not_prompt_tickets_or_replacement_session_authority() {
+        let mut draft = clean();
+        let now = Instant::now();
+        let offer = draft.prepare(Some("session"), now).unwrap();
+        assert!(matches!(
+            draft.admit_interrupt(offer.ticket, Some("session"), None, now),
+            Admission::Refused
+        ));
+        let offer = draft.prepare_interrupt(Some("session"), now).unwrap();
+        assert!(matches!(
+            draft.admit(offer.ticket, Some("session"), "hello", None, now),
+            Admission::Refused
+        ));
+        assert!(matches!(
+            draft.admit_interrupt(offer.ticket, Some("replacement"), None, now),
+            Admission::Refused
+        ));
+        draft.close();
+        assert!(matches!(
+            draft.admit_interrupt(offer.ticket, Some("session"), None, now),
+            Admission::Refused
+        ));
+    }
+
+    #[test]
+    fn an_explicit_interrupt_can_cancel_a_pending_receipt_without_making_a_late_hook_clean() {
+        let mut draft = clean();
+        let receipt = send(&mut draft);
+        let now = Instant::now();
+        let offer = draft.prepare_interrupt(Some("session"), now).unwrap();
+        assert!(offer.needs_confirmation);
+        assert!(matches!(
+            draft.admit_interrupt(offer.ticket, Some("session"), Some(offer.revision), now),
+            Admission::Ready(())
+        ));
+        assert_eq!(*receipt.borrow(), Receipt::NotConfirmed);
+        draft.submitted("session", "hello world", false, now);
+        assert_eq!(*receipt.borrow(), Receipt::NotConfirmed);
+        assert!(
+            draft
+                .prepare(Some("session"), now)
+                .unwrap()
+                .needs_confirmation
+        );
     }
 
     fn send(draft: &mut Draft) -> watch::Receiver<Receipt> {

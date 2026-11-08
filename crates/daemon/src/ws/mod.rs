@@ -200,6 +200,9 @@ pub(crate) async fn handle(
                 .await
                 .map(Response::ChatSend)
         }
+        request @ (Request::ChatInterruptPrepare { .. } | Request::ChatInterrupt { .. }) => {
+            crate::agent_input::interrupt_request(core, conn, request).map(Response::ChatSend)
+        }
         Request::ListPorts => Ok(Response::Ports(ports::scan(core).await)),
         Request::EditorStatus => {
             let mut editors = ws.editors.status(&core.cfg).await;

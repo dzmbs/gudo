@@ -10,6 +10,12 @@ fn expired_disconnected_or_cancelled_chat_controls_never_leave_the_queue() {
             text: "hello".into(),
             confirmed_revision: None,
         },
+        WorkspaceRequest::ChatInterruptPrepare { pane_id: PaneId(7) },
+        WorkspaceRequest::ChatInterrupt {
+            pane_id: PaneId(7),
+            ticket: 1,
+            confirmed_revision: None,
+        },
     ] {
         let state = WsState::default();
         let control = proto::ClientCtl::Workspace { req_id: 1, req };
