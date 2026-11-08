@@ -26,6 +26,7 @@
 
 mod accounts;
 mod agent;
+mod agent_driver;
 pub mod agent_input;
 mod agent_integration;
 mod anchor;

@@ -1,7 +1,8 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use proto::{AgentKind, ChatSendStatus, WorkspaceRequest, WsError};
+use crate::agent_driver::{UnconfirmedSend, driver};
+use proto::{ChatSendStatus, WorkspaceRequest, WsError};
 
 use super::draft::{Admission, Receipt};
 use super::{AgentInputPhase, lock};
@@ -24,7 +25,7 @@ pub(crate) async fn request(
     };
     let entry = core.pane(pane).ok_or_else(unavailable)?;
     let bracketed = entry.pane.line_snapshot().bracketed;
-    let (kind, mut receipt, audit) = {
+    let (unconfirmed, mut receipt, audit) = {
         let mut gate = lock(&entry.pane.agent_input_gate);
         // Same input -> runtime order as hook admission. A known question must use its signed
         // decision route, not a pasted prompt interpreted by the dialog as an approval key.
@@ -68,8 +69,7 @@ pub(crate) async fn request(
                 confirmed_revision,
                 ..
             } => {
-                crate::mp::prompt::check(&text)
-                    .map_err(|error| WsError::Failed(error.to_string()))?;
+                driver(kind).check_prompt(&text)?;
                 let receipt = match gate.draft.admit(
                     ticket,
                     session.as_deref(),
@@ -87,16 +87,26 @@ pub(crate) async fn request(
                 };
                 // The fence and ticket remain locked through the single atomic queue admission.
                 // No delayed Return, prompt clearing, retry or write into a replacement process.
-                let bytes = format!("\x1b[200~{text}\x1b[201~\r").into_bytes();
                 gate.last_user_input_seq = crate::hook_seq();
                 gate.advance_revision();
-                let queued = matches!(&gate.phase, AgentInputPhase::Open(_))
-                    && entry.pane.pty().try_write(bytes).is_ok();
-                if !queued {
+                let submission = matches!(&gate.phase, AgentInputPhase::Open(_))
+                    .then(|| {
+                        driver(kind)
+                            .send(core, &entry.pane, session.as_deref(), &text)
+                            .ok()
+                    })
+                    .flatten();
+                if submission.is_none() {
                     gate.draft.finish(Receipt::NotConfirmed);
                 }
-                let audit = queued.then(|| prompt_audit(conn.actor, pane, &text));
-                (kind, receipt, audit)
+                let audit = submission
+                    .is_some()
+                    .then(|| prompt_audit(conn.actor, pane, &text));
+                (
+                    submission.unwrap_or(UnconfirmedSend::NotConfirmed),
+                    receipt,
+                    audit,
+                )
             }
             _ => return Err(unavailable()),
         }
@@ -115,8 +125,8 @@ pub(crate) async fn request(
         .expire(Instant::now());
     let status = match *receipt.borrow() {
         Receipt::Confirmed => ChatSendStatus::Confirmed,
-        Receipt::Expired if kind == AgentKind::Codex => ChatSendStatus::SentNotConfirmed,
-        Receipt::Waiting | Receipt::Expired | Receipt::NotConfirmed => ChatSendStatus::NotConfirmed,
+        Receipt::Expired => unconfirmed.status(),
+        Receipt::Waiting | Receipt::NotConfirmed => ChatSendStatus::NotConfirmed,
     };
     Ok(status)
 }

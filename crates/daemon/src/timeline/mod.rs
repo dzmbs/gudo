@@ -1,6 +1,7 @@
 mod claude;
 mod claude_diff;
 mod claude_record;
+pub(crate) mod claude_source;
 mod commands;
 mod complete_diff;
 mod native_watch;
@@ -10,22 +11,25 @@ mod transcript;
 mod value_weight;
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use proto::{
-    AgentKind, Caps, PaneId, ServerCtl, TimelineCursor, TimelineOp, TimelineSession,
-    TimelineSnapshot, TimelineUpdate, UnixMillis, WorkspaceRequest, WorkspaceResponse, WsError,
+    Caps, PaneId, ServerCtl, TimelineOp, TimelineSnapshot, TimelineUpdate, UnixMillis,
+    WorkspaceRequest, WorkspaceResponse, WsError,
 };
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, broadcast, mpsc};
 use tokio::task::AbortHandle;
 
+use crate::agent_driver::{AgentSession, TimelineRead};
 use crate::core::{Core, Event, lock};
 use crate::ws::ConnCtx;
-use native_watch::NativeWatch;
-use transcript::Transcript;
+
+#[cfg(test)]
+use claude_source::{ClaudeSession as LiveState, Source};
+#[cfg(test)]
+use proto::{AgentKind, TimelineCursor, TimelineSession};
 
 static NEXT_EPOCH: AtomicU64 = AtomicU64::new(1);
 static NEXT_WATCH: AtomicU64 = AtomicU64::new(1);
@@ -43,7 +47,7 @@ pub(crate) struct Timelines {
 }
 
 struct Timeline {
-    state: Mutex<LiveState>,
+    state: Mutex<Box<dyn AgentSession>>,
     updates: broadcast::Sender<Vec<TimelineOp>>,
     worker: Mutex<Option<AbortHandle>>,
 }
@@ -241,116 +245,6 @@ pub(crate) fn bulk_reply(result: &Result<WorkspaceResponse, WsError>) -> bool {
     )
 }
 
-#[derive(Clone, PartialEq, Eq)]
-struct Source {
-    native_session: String,
-    path: Option<PathBuf>,
-    config_directory: PathBuf,
-    working_directory: PathBuf,
-    watch_directory: PathBuf,
-}
-
-struct LiveState {
-    source: Source,
-    transcript: Option<Transcript>,
-    cursor: TimelineCursor,
-    waiting_session: TimelineSession,
-    wake: mpsc::Sender<()>,
-    watcher: NativeWatch,
-}
-
-impl LiveState {
-    fn new(source: Source, epoch: u64, wake: mpsc::Sender<()>) -> Result<Self, WsError> {
-        let watcher = NativeWatch::new(&source.watch_directory, wake.clone())?;
-        let cursor = TimelineCursor { epoch, sequence: 0 };
-        let commands = commands::discover(&source.config_directory, &source.working_directory);
-        let mut transcript = source
-            .path
-            .as_ref()
-            .map(|path| Transcript::open(path.clone(), source.native_session.clone(), epoch))
-            .transpose()?;
-        if let Some(transcript) = &mut transcript {
-            transcript.set_commands(commands.clone());
-        }
-        let waiting_session = TimelineSession {
-            agent: AgentKind::Claude,
-            native_session: source.native_session.clone(),
-            title: None,
-            model: None,
-            permission_mode: None,
-            commands,
-        };
-        Ok(Self {
-            source,
-            transcript,
-            cursor,
-            waiting_session,
-            wake,
-            watcher,
-        })
-    }
-
-    fn cursor(&self) -> TimelineCursor {
-        self.transcript
-            .as_ref()
-            .map_or(self.cursor, Transcript::cursor)
-    }
-
-    fn snapshot(&self, since: Option<UnixMillis>) -> TimelineSnapshot {
-        self.transcript.as_ref().map_or_else(
-            || TimelineSnapshot {
-                cursor: self.cursor,
-                session: self.waiting_session.clone(),
-                items: Vec::new(),
-                before: None,
-            },
-            |transcript| transcript.snapshot(60, since),
-        )
-    }
-
-    fn refresh(&mut self, source: Source) -> Result<Vec<TimelineOp>, WsError> {
-        self.watcher.check()?;
-        if source.native_session != self.source.native_session || source.path != self.source.path {
-            let epoch = self.cursor().epoch.wrapping_add(1);
-            *self = Self::new(source, epoch, self.wake.clone())?;
-            return Ok(vec![TimelineOp::Snapshot(self.snapshot(None))]);
-        }
-        let mut operations = self
-            .transcript
-            .as_mut()
-            .map_or(Ok(Vec::new()), Transcript::refresh)?;
-        if self
-            .transcript
-            .as_ref()
-            .is_some_and(Transcript::has_backlog)
-        {
-            let _ = self.wake.try_send(());
-        }
-        if source.config_directory != self.source.config_directory
-            || source.working_directory != self.source.working_directory
-        {
-            let commands = commands::discover(&source.config_directory, &source.working_directory);
-            if let Some(transcript) = &mut self.transcript {
-                if let Some(operation) = transcript.set_commands(commands) {
-                    operations.push(operation);
-                }
-            } else if self.waiting_session.commands != commands {
-                self.waiting_session.commands = commands;
-                self.cursor.sequence = self.cursor.sequence.wrapping_add(1);
-                operations.push(TimelineOp::Session {
-                    cursor: self.cursor,
-                    session: self.waiting_session.clone(),
-                });
-            }
-        }
-        if source.watch_directory != self.source.watch_directory {
-            self.watcher = NativeWatch::new(&source.watch_directory, self.wake.clone())?;
-        }
-        self.source = source;
-        Ok(operations)
-    }
-}
-
 impl Timelines {
     async fn open(&self, core: &Arc<Core>, pane: PaneId) -> Result<Arc<Timeline>, WsError> {
         let mut entries = self.entries.lock().await;
@@ -366,8 +260,18 @@ impl Timelines {
         NEXT_EPOCH.fetch_max(core.epoch.0, Ordering::Relaxed);
         let epoch = NEXT_EPOCH.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
         let source_core = Arc::clone(core);
-        let state =
-            blocking(move || LiveState::new(source(&source_core, pane)?, epoch, wake)).await?;
+        let state = blocking(move || {
+            let entry = source_core
+                .pane(pane)
+                .ok_or_else(|| WsError::NotFound("agent pane".into()))?;
+            let kind = lock(&entry.record)
+                .agent
+                .as_ref()
+                .map(|agent| agent.kind)
+                .ok_or_else(|| WsError::Unavailable("Chat is available for agent panes".into()))?;
+            crate::agent_driver::driver(kind).open(&source_core, pane, epoch, wake)
+        })
+        .await?;
         let (updates, _) = broadcast::channel(8);
         let timeline = Arc::new(Timeline {
             state: Mutex::new(state),
@@ -467,7 +371,7 @@ async fn refresh_live(
 ) -> Result<Vec<TimelineOp>, WsError> {
     blocking(move || {
         let mut state = lock(&timeline.state);
-        let operations = state.refresh(source(&core, pane)?);
+        let operations = state.refresh(&core, pane);
         // Reopens must not reuse an epoch consumed by a local transcript rewrite.
         NEXT_EPOCH.fetch_max(state.cursor().epoch, Ordering::Relaxed);
         let operations = operations?;
@@ -489,83 +393,11 @@ fn retry_io(failures: &mut usize, error: &WsError) -> bool {
 }
 
 async fn retry_after(timeline: Arc<Timeline>) {
-    let wake = lock(&timeline.state).wake.clone();
+    let wake = lock(&timeline.state).wake();
     // Do not keep an abandoned pane's worker alive while backing off.
     drop(timeline);
     tokio::time::sleep(IO_RETRY_DELAY).await;
     let _ = wake.try_send(());
-}
-
-fn source(core: &Core, pane: PaneId) -> Result<Source, WsError> {
-    let entry = core
-        .pane(pane)
-        .ok_or_else(|| WsError::NotFound("agent pane".into()))?;
-    let record = lock(&entry.record).clone();
-    let agent = record
-        .agent
-        .ok_or_else(|| WsError::Unavailable("Chat is available for agent panes".into()))?;
-    if agent.kind != AgentKind::Claude {
-        return Err(WsError::Unavailable(
-            "Chat is not available for this agent".into(),
-        ));
-    }
-    let (native_session, hook_path) = {
-        let runtime = lock(&entry.agent);
-        let session = runtime.as_ref().map(|runtime| runtime.session());
-        (
-            session
-                .and_then(|session| session.native_id.as_ref())
-                .map(ToString::to_string)
-                .or(agent.session_id),
-            session.and_then(|session| session.transcript.clone()),
-        )
-    };
-    let account = agent.account.as_deref().unwrap_or(proto::SYSTEM_ACCOUNT);
-    let context = core.ws.accounts.context(agent.kind, account);
-    if context.is_none() && account != proto::SYSTEM_ACCOUNT {
-        return Err(WsError::Unavailable(
-            "the agent account is no longer available".into(),
-        ));
-    }
-    let config_directory = context
-        .and_then(|context| context.dir)
-        .or_else(|| core.cfg.pane_var(agents::CLAUDE_DIR_VAR).map(PathBuf::from))
-        .unwrap_or_else(|| core.cfg.home().join(".claude"));
-    let working_directory = record
-        .cwd
-        .map(PathBuf::from)
-        .unwrap_or_else(|| core.cfg.home());
-    let native_session = native_session.unwrap_or_default();
-    if !native_session.is_empty() && !crate::claude_session::is_session_id(&native_session) {
-        return Err(WsError::Invalid("the agent session id is invalid".into()));
-    }
-    let expected = hook_path.unwrap_or_else(|| {
-        crate::claude_session::project_dir(&config_directory, &working_directory)
-            .join(format!("{native_session}.jsonl"))
-    });
-    let path = if !native_session.is_empty() && expected.exists() {
-        Some(transcript::validate_path(
-            &config_directory.join("projects"),
-            &expected,
-            &native_session,
-        )?)
-    } else {
-        None
-    };
-    let watch_directory = expected
-        .parent()
-        .into_iter()
-        .flat_map(|parent| parent.ancestors())
-        .find(|path| path.is_dir())
-        .unwrap_or(&config_directory)
-        .to_owned();
-    Ok(Source {
-        native_session,
-        path,
-        config_directory,
-        working_directory,
-        watch_directory,
-    })
 }
 
 fn negotiate_request(request: WorkspaceRequest) -> Result<WorkspaceRequest, WsError> {
@@ -671,11 +503,12 @@ pub(crate) async fn handle(
             before,
             limit,
         } => {
-            read_timeline(core, connection, pane_id, move |transcript, since| {
-                transcript
-                    .page(before, limit as usize, since)
-                    .map(WorkspaceResponse::Timeline)
-            })
+            read_timeline(
+                core,
+                connection,
+                pane_id,
+                TimelineRead::ItemsBefore { before, limit },
+            )
             .await
         }
         WorkspaceRequest::TimelineToolOutput {
@@ -684,20 +517,20 @@ pub(crate) async fn handle(
             offset,
             len,
         } => {
-            read_timeline(core, connection, pane_id, move |transcript, since| {
-                transcript
-                    .output(&handle, offset, len, since)
-                    .map(WorkspaceResponse::TimelineOutput)
-            })
+            read_timeline(
+                core,
+                connection,
+                pane_id,
+                TimelineRead::ToolOutput {
+                    handle,
+                    offset,
+                    length: len,
+                },
+            )
             .await
         }
         WorkspaceRequest::TimelineToolDiff { pane_id, handle } => {
-            read_timeline(core, connection, pane_id, move |transcript, since| {
-                transcript
-                    .tool_diff(&handle, since)
-                    .map(WorkspaceResponse::TimelineDiff)
-            })
-            .await
+            read_timeline(core, connection, pane_id, TimelineRead::ToolDiff { handle }).await
         }
         _ => Err(WsError::Invalid("not a Chat request".into())),
     }
@@ -707,28 +540,24 @@ async fn read_timeline(
     core: &Arc<Core>,
     connection: &ConnCtx,
     pane: PaneId,
-    work: impl FnOnce(&mut Transcript, Option<UnixMillis>) -> Result<WorkspaceResponse, WsError>
-    + Send
-    + 'static,
+    request: TimelineRead,
 ) -> Result<WorkspaceResponse, WsError> {
     let timeline = watched(connection, pane)?;
     let core = Arc::clone(core);
     let since = connection.timeline_since;
+    let reading = Arc::clone(&timeline);
+    let read_core = Arc::clone(&core);
+    let (epoch, pending) = blocking(move || {
+        let mut state = lock(&reading.state);
+        state.check_current(&read_core, pane)?;
+        Ok((state.cursor().epoch, state.read(request, since)))
+    })
+    .await?;
+    let response = pending.await?;
     blocking(move || {
-        let current = source(&core, pane)?;
-        let mut state = lock(&timeline.state);
-        if current.native_session != state.source.native_session
-            || current.path != state.source.path
-        {
-            return Err(WsError::Conflict(
-                "the agent session changed; reopen Chat".into(),
-            ));
-        }
-        let transcript = state
-            .transcript
-            .as_mut()
-            .ok_or_else(|| WsError::Unavailable("the conversation has not started yet".into()))?;
-        work(transcript, since).map(|response| match response {
+        let state = lock(&timeline.state);
+        validate_read(state.as_ref(), &core, pane, epoch)?;
+        Ok(match response {
             WorkspaceResponse::Timeline(snapshot) => {
                 WorkspaceResponse::Timeline(proto::TimelineVersion::V1.snapshot(snapshot))
             }
@@ -736,6 +565,21 @@ async fn read_timeline(
         })
     })
     .await
+}
+
+pub(crate) fn validate_read(
+    session: &dyn AgentSession,
+    core: &Core,
+    pane: PaneId,
+    epoch: u64,
+) -> Result<(), WsError> {
+    session.check_current(core, pane)?;
+    if session.cursor().epoch != epoch {
+        return Err(WsError::Conflict(
+            "the agent session changed; reopen Chat".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn watched(connection: &ConnCtx, pane: PaneId) -> Result<Arc<Timeline>, WsError> {

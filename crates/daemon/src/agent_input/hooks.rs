@@ -1,59 +1,45 @@
-use serde_json::Value;
-
 use super::AgentInputGate;
 use crate::HookRequest;
+use crate::agent_driver::InputEvent;
 
+// Called only after token, pane, agent-kind and tracked-session admission in handle_hook.
 pub(crate) fn record(gate: &mut AgentInputGate, request: &HookRequest) {
-    if let Some((session, prompt)) = submission(request) {
-        if request.agent == "claude" {
-            // An older, delayed hook cannot renew eligibility after an admitted Escape/input.
-            // Retire the previous identity too: the current turn is no longer unambiguous.
+    match event(request) {
+        InputEvent::TurnStarted { session, prompt } => {
+            // An older hook cannot renew eligibility after admitted input.
             let turn = (request.seq > gate.last_user_input_seq).then_some(session);
             gate.draft.record_turn(turn, request.seq);
+            super::submitted_locked(gate, session, prompt, request.seq);
         }
-        super::submitted_locked(gate, session, prompt, request.seq);
-    } else if request.agent == "claude"
-        && matches!(request.event.as_str(), "Stop" | "StopFailure")
-        && request
-            .payload
-            .get("hook_event_name")
-            .and_then(Value::as_str)
-            == Some(request.event.as_str())
-    {
-        gate.draft.record_turn(None, request.seq);
-    } else if request.event == "SessionEnd" {
-        gate.draft.close();
+        InputEvent::Submitted { session, prompt } => {
+            super::submitted_locked(gate, session, prompt, request.seq)
+        }
+        InputEvent::TurnEnded => gate.draft.record_turn(None, request.seq),
+        InputEvent::SessionEnded => gate.draft.close(),
+        InputEvent::Ignored => {}
     }
 }
 
-// Called only after token, pane, agent-kind and tracked-session admission in handle_hook.
+fn event(request: &HookRequest) -> InputEvent<'_> {
+    crate::agent::agent_kind(&request.agent).map_or(InputEvent::Ignored, |kind| {
+        crate::agent_driver::driver(kind).input_event(request)
+    })
+}
+
+#[cfg(test)]
 fn submission(request: &HookRequest) -> Option<(&str, &str)> {
-    let payload = &request.payload;
-    if matches!(request.agent.as_str(), "claude" | "codex")
-        && request.event == "UserPromptSubmit"
-        && payload.get("hook_event_name")?.as_str()? == "UserPromptSubmit"
-    {
-        return Some((
-            payload.get("session_id")?.as_str()?,
-            payload.get("prompt")?.as_str()?,
-        ));
+    match event(request) {
+        InputEvent::Submitted { session, prompt } | InputEvent::TurnStarted { session, prompt } => {
+            Some((session, prompt))
+        }
+        _ => None,
     }
-    if request.agent != "codex"
-        || request.event != crate::CODEX_NOTIFY_EVENT
-        || payload.get("type")?.as_str()? != "agent-turn-complete"
-    {
-        return None;
-    }
-    let [Value::String(prompt)] = payload.get("input-messages")?.as_array()?.as_slice() else {
-        return None;
-    };
-    Some((payload.get("thread-id")?.as_str()?, prompt))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     #[test]
     fn only_a_claude_prompt_hook_supplies_interrupt_turn_identity_and_stop_retires_it() {

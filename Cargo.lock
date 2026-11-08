@@ -1055,6 +1055,7 @@ version = "0.0.0"
 dependencies = [
  "agents",
  "base64 0.23.1",
+ "bitflags",
  "brand",
  "brotli",
  "bytes",

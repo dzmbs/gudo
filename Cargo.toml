@@ -52,6 +52,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 tempfile = "3.27.0"
 notify = "8"
 ignore = "0.4"
+bitflags = "2.13.2"
 
 # Apple FFI (crates/apple-ffi): proc-macro UniFFI, no UDL. xtask generates the Swift bindings
 # with uniffi_bindgen's library mode, so the app build never runs a Rust binary.

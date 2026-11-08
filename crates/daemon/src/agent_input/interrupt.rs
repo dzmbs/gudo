@@ -1,9 +1,10 @@
-//! One explicit Escape to a fenced, hook-identified Claude turn; never a stopped acknowledgement.
+//! Fenced, turn-bound interrupt admission; never a stopped acknowledgement.
 
 use std::sync::Arc;
 use std::time::Instant;
 
-use proto::{AgentKind, ChatSendStatus, WorkspaceRequest, WsError};
+use crate::agent_driver::{AgentCapabilities, AgentDriver, driver};
+use proto::{ChatSendStatus, WorkspaceRequest, WsError};
 
 use super::draft::Admission;
 use super::{AgentInputPhase, lock};
@@ -29,17 +30,23 @@ pub(crate) fn request(
     // Same input -> runtime order as authenticated hook admission. A prepared interrupt cannot
     // cross an admitted new turn, even in the same process/session, or escape the exit fence.
     let mut gate = lock(&entry.pane.agent_input_gate);
-    let session = {
+    let (driver, session) = {
         let runtime = lock(&entry.agent);
         let runtime = runtime.as_ref().ok_or_else(unavailable)?;
-        if runtime.kind() != AgentKind::Claude || runtime.state() != agents::AgentState::Working {
+        let driver = driver(runtime.kind());
+        if !driver.capabilities().contains(AgentCapabilities::STOP)
+            || runtime.state() != agents::AgentState::Working
+        {
             return Err(unavailable());
         }
-        runtime
-            .session()
-            .native_id
-            .as_ref()
-            .map(|id| id.as_str().to_owned())
+        (
+            driver,
+            runtime
+                .session()
+                .native_id
+                .as_ref()
+                .map(|id| id.as_str().to_owned()),
+        )
     };
     if !matches!(&gate.phase, AgentInputPhase::Open(_))
         || !core.agent_has_terminal(pane)
@@ -47,10 +54,19 @@ pub(crate) fn request(
     {
         return Err(unavailable());
     }
-    admit(&entry.pane, &mut gate, session.as_deref(), request)
+    admit(
+        driver,
+        core,
+        &entry.pane,
+        &mut gate,
+        session.as_deref(),
+        request,
+    )
 }
 
 fn admit(
+    driver: &dyn AgentDriver,
+    core: &Core,
     pane: &crate::pane::Pane,
     gate: &mut super::AgentInputGate,
     session: Option<&str>,
@@ -88,7 +104,7 @@ fn admit(
             gate.last_user_input_seq = crate::hook_seq();
             gate.advance_revision();
             if matches!(&gate.phase, AgentInputPhase::Open(_))
-                && pane.pty().try_write(vec![0x1b]).is_ok()
+                && driver.stop(core, pane, session).is_ok()
             {
                 Ok(ChatSendStatus::InterruptRequested)
             } else {

@@ -2,7 +2,7 @@
 
 mod chat;
 #[cfg(test)]
-mod chat_tests;
+pub(crate) mod chat_tests;
 mod draft;
 mod hooks;
 mod interrupt;

@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 agents.workspace = true
+bitflags.workspace = true
 brand.workspace = true
 data-encoding.workspace = true
 libc.workspace = true

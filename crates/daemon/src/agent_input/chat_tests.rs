@@ -11,6 +11,16 @@ use tokio::net::UnixStream;
 use super::{AgentInputGate, lock};
 
 async fn hook(daemon: &crate::Daemon, root: &Path, pane: PaneId, prompt: &str) {
+    hook_session(daemon, root, pane, "native", prompt).await;
+}
+
+pub(crate) async fn hook_session(
+    daemon: &crate::Daemon,
+    root: &Path,
+    pane: PaneId,
+    session: &str,
+    prompt: &str,
+) {
     let request = crate::HookRequest {
         v: 1,
         token: std::fs::read_to_string(root.join("hook.token")).unwrap(),
@@ -18,7 +28,7 @@ async fn hook(daemon: &crate::Daemon, root: &Path, pane: PaneId, prompt: &str) {
         agent: "claude".into(),
         event: "UserPromptSubmit".into(),
         seq: crate::hook_seq(),
-        payload: json!({"session_id":"native", "hook_event_name":"UserPromptSubmit", "prompt":prompt}),
+        payload: json!({"session_id":session, "hook_event_name":"UserPromptSubmit", "prompt":prompt}),
     };
     relay(daemon, &request).await;
 }
@@ -31,11 +41,14 @@ async fn notify(daemon: &crate::Daemon, root: &Path, pane: PaneId, prompt: &str)
     }).await;
 }
 
-async fn relay(daemon: &crate::Daemon, request: &crate::HookRequest) -> crate::HookResponse {
+pub(crate) async fn relay(
+    daemon: &crate::Daemon,
+    request: &crate::HookRequest,
+) -> crate::HookResponse {
     relay_at(daemon.hook_socket(), request).await
 }
 
-async fn relay_at(socket: &Path, request: &crate::HookRequest) -> crate::HookResponse {
+pub(crate) async fn relay_at(socket: &Path, request: &crate::HookRequest) -> crate::HookResponse {
     let mut stream = UnixStream::connect(socket).await.unwrap();
     let mut bytes = serde_json::to_vec(request).unwrap();
     bytes.push(b'\n');
@@ -45,7 +58,7 @@ async fn relay_at(socket: &Path, request: &crate::HookRequest) -> crate::HookRes
     serde_json::from_str(&answer).unwrap()
 }
 
-async fn wait_until(mut check: impl FnMut() -> bool) {
+pub(crate) async fn wait_until(mut check: impl FnMut() -> bool) {
     tokio::time::timeout(Duration::from_secs(10), async {
         while !check() {
             tokio::time::sleep(Duration::from_millis(5)).await;
@@ -55,16 +68,20 @@ async fn wait_until(mut check: impl FnMut() -> bool) {
     .unwrap();
 }
 
-struct RawFixture {
-    root: tempfile::TempDir,
-    daemon: crate::Daemon,
-    client: Arc<Client>,
-    entry: Arc<crate::core::PaneEntry>,
-    captured: std::path::PathBuf,
+pub(crate) struct RawFixture {
+    pub root: tempfile::TempDir,
+    pub daemon: crate::Daemon,
+    pub client: Arc<Client>,
+    pub entry: Arc<crate::core::PaneEntry>,
+    pub captured: std::path::PathBuf,
     _events: tokio::sync::mpsc::UnboundedReceiver<ClientEvent>,
 }
 
-async fn raw_fixture() -> RawFixture {
+pub(crate) async fn raw_fixture() -> RawFixture {
+    raw_fixture_with_session("native").await
+}
+
+pub(crate) async fn raw_fixture_with_session(session: &str) -> RawFixture {
     let root = tempfile::tempdir().unwrap();
     let mut config = crate::Config::new(root.path());
     config.relay = crate::RelayMode::Disabled;
@@ -73,6 +90,10 @@ async fn raw_fixture() -> RawFixture {
     config.pane_env = vec![
         ("ENV".into(), String::new()),
         ("PS1".into(), "FIXTURE_READY ".into()),
+        (
+            "CLAUDE_CONFIG_DIR".into(),
+            root.path().join("agent").display().to_string(),
+        ),
     ];
     let daemon = crate::Daemon::start(config).await.unwrap();
     let (entry, captured) = raw_pane(&daemon, root.path()).await;
@@ -81,7 +102,7 @@ async fn raw_fixture() -> RawFixture {
         *gate = AgentInputGate::pending("fixture".into());
         assert!(gate.arm("fixture"));
     }
-    hook(&daemon, root.path(), entry.pane.id, "previous").await;
+    hook_session(&daemon, root.path(), entry.pane.id, session, "previous").await;
     let (client, events) = owner_client(&daemon).await;
     RawFixture {
         root,
@@ -283,6 +304,24 @@ async fn private_dev_interrupt_is_one_escape_bound_to_the_live_hook_turn_and_cur
 }
 
 impl RawFixture {
+    pub(crate) async fn type_draft(&self, text: &str) {
+        self.entry
+            .pane
+            .write(text.as_bytes().to_vec())
+            .await
+            .unwrap();
+        wait_until(|| {
+            std::fs::read(&self.captured).is_ok_and(|bytes| bytes.ends_with(text.as_bytes()))
+        })
+        .await;
+    }
+
+    pub(crate) fn reset_input(&self, launch: &str) {
+        let mut gate = lock(&self.entry.pane.agent_input_gate);
+        *gate = AgentInputGate::pending(launch.into());
+        assert!(gate.arm(launch));
+    }
+
     async fn interrupt_offer(&self) -> super::draft::Offer {
         match self
             .client

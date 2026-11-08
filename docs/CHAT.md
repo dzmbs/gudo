@@ -365,6 +365,41 @@ reader rather than treating its short output reference preview as complete. Inpu
 native virtual text rows; oversized input gets an explicit Terminal fallback. No detail action
 submits text or launches another process.
 
+## Shared daemon agent interface
+
+`agent_driver::AgentDriver` is the daemon boundary for capabilities, opening a pane's session,
+queueing a prompt, requesting an interrupt and delivering an approved/denied request. It also
+normalizes transport acknowledgements and turn boundaries. Adapter capabilities describe read,
+send, acknowledged send, stop, approvals, diffs, streaming deltas, thinking and plans; they do not
+authorize an action.
+
+`AgentSession` exposes common snapshots, incremental operations, history, tool output and recorded
+diffs. It owns its notification source and reports session changes through snapshot epochs.
+On-demand reads return owned futures: file readers can complete in the blocking pool, while RPC
+readers can await a response after releasing the service mutex. The service checks identity and
+epoch again before returning a deferred response. No session file or RPC shape is part of either
+interface.
+
+Claude's account/path discovery, transcript lifecycle, prompt/turn hook interpretation, interrupt
+encoding and approval reply format belong to its adapter/read backend. The common daemon retains
+owner/role checks, signed approval policy, audit ordering, draft revisions, single-use tickets,
+input-to-runtime locking and exit fencing. Queue admission does not acknowledge consumption or a
+unique CLI submission. No action is automatically retried.
+
+The terminal-only compatibility adapter preserves the existing Codex paste/notify behavior; it has
+no readable session or native interrupt. It is not the official app-server adapter.
+
+`agent_driver::conformance` runs the same capability-driven contract against each registered adapter's
+fixtures. It covers stable snapshots, disjoint paging, malformed/unknown records, upserts, output,
+recorded changes, rotation, stale deferred replies, session replacement, draft consent/revision,
+single-use send/stop, matching and absent acknowledgements, and signed allow/deny without PTY text.
+Format-specific fixture setup and response decoding stay beside the adapter. Raw PTY tests prove
+queue bytes and hook correlation, not real CLI consumption.
+
+Capability publication to apps and replacement of legacy kind-based Chat control conditions remain
+part of this interface step before enabling another readable harness. The daemon-side capability set
+alone does not complete that migration. Codex proxy work follows the completed interface step.
+
 ## Codex adapter foundation (phase 2)
 
 `agents::CodexBinding` passively correlates one proven pane-owned TUI connection's official

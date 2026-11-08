@@ -134,7 +134,7 @@ pub(crate) fn running_agent(process: &pty::ForegroundProcess) -> Option<AgentKin
     })
 }
 
-fn agent_kind(name: &str) -> Option<AgentKind> {
+pub(crate) fn agent_kind(name: &str) -> Option<AgentKind> {
     match name {
         "claude" | "claude-code" => Some(AgentKind::Claude),
         "codex" => Some(AgentKind::Codex),
@@ -625,9 +625,8 @@ impl HeldRequest {
 
     /// The editable input: Claude Code takes `updatedInput` for its `Bash` tool.
     pub fn editable(&self) -> Option<&str> {
-        (self.agent == Some(AgentKind::Claude) && self.tool == "Bash")
-            .then(|| self.command())
-            .flatten()
+        self.agent
+            .and_then(|kind| crate::agent_driver::driver(kind).editable_command(self))
     }
 }
 
@@ -752,23 +751,12 @@ impl HookServer {
         }))
     }
 
-    pub fn resolve(&self, pane: PaneId, request: &agents::RequestId, choice: ApprovalChoice) {
-        let mut pending = lock(&self.pending);
-        if pending
-            .get(&pane)
-            .is_some_and(|held| &held.request == request)
-        {
-            let held = pending.remove(&pane).expect("checked above");
-            let stdout = ClaudeCode::permission_response(choice, &held.suggestions).to_string();
-            let _ = held.reply.send(HookResponse {
-                stdout: Some(stdout),
-            });
-        }
-    }
-
-    /// Answers a held request with "allow", running `command` instead of what the agent
-    /// asked for (Claude Code's `updatedInput`). False if the request is no longer held.
-    pub fn resolve_edited(&self, pane: PaneId, request: &agents::RequestId, command: &str) -> bool {
+    pub(crate) fn resolve_with(
+        &self,
+        pane: PaneId,
+        request: &agents::RequestId,
+        encode: impl FnOnce(&[Value], &Value) -> String,
+    ) -> bool {
         let mut pending = lock(&self.pending);
         if !pending
             .get(&pane)
@@ -777,17 +765,7 @@ impl HookServer {
             return false;
         }
         let held = pending.remove(&pane).expect("checked above");
-        let mut input = held.input.clone();
-        if let Some(fields) = input.as_object_mut() {
-            fields.insert("command".into(), command.into());
-        }
-        let stdout = serde_json::json!({
-            "hookSpecificOutput": {
-                "hookEventName": "PermissionRequest",
-                "decision": { "behavior": "allow", "updatedInput": input },
-            }
-        })
-        .to_string();
+        let stdout = encode(&held.suggestions, &held.input);
         let _ = held.reply.send(HookResponse {
             stdout: Some(stdout),
         });

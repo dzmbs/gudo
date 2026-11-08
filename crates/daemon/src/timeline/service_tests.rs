@@ -407,7 +407,7 @@ fn test_timeline(root: &std::path::Path) -> Arc<Timeline> {
     let source = test_source(root);
     let (wake, _) = mpsc::channel(1);
     Arc::new(Timeline {
-        state: Mutex::new(LiveState::new(source, 7, wake).unwrap()),
+        state: Mutex::new(Box::new(LiveState::new(source, 7, wake).unwrap())),
         updates: broadcast::channel(8).0,
         worker: Mutex::default(),
     })

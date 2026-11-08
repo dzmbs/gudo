@@ -2266,6 +2266,7 @@ impl Core {
             if !runtime.knows_request(decide.request_id) {
                 continue;
             }
+            let driver = crate::agent_driver::driver(runtime.kind());
             let outcome = runtime.decide(decide.request_id, decide.option_id, actor);
             drop(agent);
             return match outcome {
@@ -2278,12 +2279,11 @@ impl Core {
                         at: proto::UnixMillis(crate::identity::now_millis()),
                     };
                     record(&decided, &details);
-                    match edited {
-                        Some(command) => {
-                            self.hooks.resolve_edited(id, &details.request, command);
-                        }
-                        None => self.hooks.resolve(id, &details.request, details.choice),
-                    }
+                    let decision = edited.map_or(
+                        crate::agent_driver::ApprovalDecision::Choice(details.choice),
+                        crate::agent_driver::ApprovalDecision::Edited,
+                    );
+                    driver.approve(self, id, &details.request, decision);
                     self.approvals.clear_request(id);
                     self.emit(Event::Decided(decided));
                     self.emit(Event::PaneMeta(id));
