@@ -195,6 +195,11 @@ pub(crate) async fn handle(
         | Request::TimelineItemsBefore { .. }
         | Request::TimelineToolOutput { .. }
         | Request::TimelineToolDiff { .. }) => crate::timeline::handle(core, conn, request).await,
+        request @ (Request::ChatPrepare { .. } | Request::ChatSend { .. }) => {
+            crate::agent_input::chat_request(core, conn, request)
+                .await
+                .map(Response::ChatSend)
+        }
         Request::ListPorts => Ok(Response::Ports(ports::scan(core).await)),
         Request::EditorStatus => {
             let mut editors = ws.editors.status(&core.cfg).await;

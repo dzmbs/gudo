@@ -152,7 +152,8 @@ host nor give it changing layout; removal stops the display link and releases GP
 Reactivation reuses the same view and backend. Both directions veto marked text before resigning.
 A shared typed presentation gate blocks stale terminal keys and pastes while Chat is selected,
 including the prediction path; generated VT replies remain independent. This gate is not a
-prompt-consumption acknowledgement. The composer is draft-only, with Send disabled.
+prompt-consumption acknowledgement. The iOS composer uses the separate owner-only, capability-gated
+send path below; old helpers cannot receive its new wire variants.
 
 Before the first Chat layout, `DeferredPaneSizing` stages the hidden viewport without sending
 a resize or claiming ownership. Actual input or an explicit sizing claim admits it; generated
@@ -291,25 +292,61 @@ Real Claude 2.1.318/2.1.319 captures in `crates/daemon/tests/fixtures/agent-inpu
 important limits: Ctrl-U after a multiline paste leaves an earlier line intact, and a spaces-only
 draft with the cursor at Home has exactly the same input-region cells and cursor as an empty
 draft. Layout, styles, blank-cell distinctions and cursor position cannot establish emptiness
-by themselves. Constrained submission also needs input-revision provenance and a trusted empty
-checkpoint. Manual/raw input must invalidate that proof immediately; unknown versions/layouts,
-unproven resumed drafts and changed revisions retain the draft and fall back to Terminal.
+by themselves. Chat instead uses explicit draft-risk admission: real input after the last accepted
+`UserPromptSubmit` dirties the draft, including Escape, interrupt, deletion and whitespace. Unknown
+sessions and missing hooks require confirmation rather than acquiring an inferred empty checkpoint.
 
 The gate now belongs to `Pane`, so every non-protocol `Pane.write` advances its input revision
 before enqueue and again when enqueue finishes or is cancelled. An owned guard counts writes
 waiting under backpressure; native legacy writes advance the same revision under that gate.
 Revision exhaustion disables native input instead of wrapping. These are input bookkeeping,
 not a child-read acknowledgement: even a later Stop hook cannot prove an older raw write has
-finished traversing the kernel and the TUI's own input queues. No trusted empty checkpoint or
-new atomic submission API is enabled by this bookkeeping alone.
+finished traversing the kernel and the TUI's own input queues. The new path does not claim that
+bookkeeping is a trusted empty checkpoint or that a writer flush is consumption.
 
 A small bracketed-paste-plus-Return packet reached the isolated loopback API exactly once on
 both probed versions. That observation does not prove all bindings, payload sizes or modal
 states safe. Signed approval routes and owner-only permission-mode changes remain separate.
 
+## Native sending
+
+`ChatPrepare` (request 68) mints one single-use, session-bound ticket for the live fenced pane.
+`ChatSend` (69), response `ChatSend` (38), and helper feature `CHAT_SEND` (29) are append-only.
+Client methods check the feature before constructing requests and again against the current peer when
+queued control traffic leaves after a reconnect. Expired/disconnected Chat controls are dropped before
+serialization instead of reaching a later connection. Sending requires pane Prompt permission
+and a paired owner; guests cannot send through this path. Read-only timeline requests still require View.
+
+The daemon accounts for every real input byte at `Pane.write`, before enqueue/backpressure, and for
+legacy native input under the same gate. Generated VT replies and focus reports do not dirty drafts.
+The ephemeral journal retains at most 16KiB, counts overflow without becoming clean, and is never
+persisted or returned to clients. It is not a screen-based draft reconstruction. A dirty/unknown draft
+requires the displayed revision's explicit Send anyway. Any intervening input requires confirmation
+again. Preparing another ticket invalidates the previous unconsumed ticket; consumed tickets cannot
+replay, even after timeout or pane replacement. Ticket allocation is monotonic across launch state and
+starts beyond this boot's clock so a fresh daemon process does not recycle earlier same-boot tickets. Native text is sanitized and limited to 16KiB.
+
+The admitted write is one bracketed-paste-plus-Return packet under the existing exit fence. It neither
+clears a Mac draft nor retries. Bracketed-paste mode and the same live foreground agent are required.
+Adopted panes without an exit fence remain unavailable: confirmation cannot create that process fence.
+
+For Claude, the authenticated `UserPromptSubmit` hook must match the tracked native session and
+whitespace-normalized prompt within five seconds. Replayed or pre-input hook timestamps cannot clear
+newer drafts or confirm a send. Mismatch, concurrent real input, timeout or exit reports
+**Not confirmed, check the terminal**. A late hook cannot change a terminal receipt; concurrent input
+keeps a late hook from establishing a clean baseline. Matching session/text is the requested hook-based
+confirmation policy, not a cryptographic submission ID or proof that all preexisting PTY bytes were read.
+For Codex, an available `UserPromptSubmit`, or a same-thread `agent-turn-complete` notify with exactly
+one matching `input-messages` entry, can confirm within the same window. Missing/ambiguous notify input
+cannot be guessed or aggregated. Codex with no correlated acknowledgement reports **Sent, not confirmed**
+after that window; mismatch, concurrent typing and exit remain **Not confirmed, check the terminal**.
+Native request waits end after ten seconds on transport loss, without resend.
+The phone preserves an unconfirmed draft and blocks accidental reuse of that unchanged text; confirmed
+text clears only if the user has not edited the composer while awaiting the receipt.
+
 ## Scope and bounds
 
-Every request requires View on its pane. A guest's since-join policy filters items and full
+Every read request requires View on its pane. A guest's since-join policy filters items and full
 output, including reads made with a guessed handle. Output handles cannot bypass the record-kind
 and sidechain exclusions of the main timeline. A transcript must resolve inside the
 pane's agent account's `projects` directory and its filename must match the captured session.

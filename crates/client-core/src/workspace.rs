@@ -8,6 +8,10 @@
 //! [`WorkspaceListener`] set with [`Client::set_workspace_listener`], separate from
 //! [`ClientListener`](crate::ClientListener) so existing event handling is unaffected.
 
+#[cfg(test)]
+#[path = "workspace_tests.rs"]
+mod tests;
+
 use std::collections::HashMap;
 use std::net::TcpListener as StdTcpListener;
 use std::path::PathBuf;
@@ -130,6 +134,18 @@ pub(crate) struct WsState {
 }
 
 impl WsState {
+    pub(crate) fn control_is_live(&self, control: &proto::ClientCtl) -> bool {
+        match control {
+            proto::ClientCtl::Workspace {
+                req_id,
+                req: WorkspaceRequest::ChatPrepare { .. } | WorkspaceRequest::ChatSend { .. },
+            } => lock(&self.pending)
+                .get(req_id)
+                .is_some_and(|reply| !reply.is_closed()),
+            _ => true,
+        }
+    }
+
     /// Handles a workspace message from `ctl`; returns it back if it is not one.
     pub(crate) fn dispatch(&self, msg: ServerCtl) -> Option<ServerCtl> {
         let event = match msg {
@@ -203,6 +219,14 @@ impl Client {
     /// The daemon's [`WsError`], or [`WsError::Disconnected`] if the connection dropped (or
     /// nothing came back within five minutes).
     pub async fn workspace(&self, request: WorkspaceRequest) -> Result<WorkspaceResponse, WsError> {
+        self.workspace_with_timeout(request, REQUEST_TIMEOUT).await
+    }
+
+    async fn workspace_with_timeout(
+        &self,
+        request: WorkspaceRequest,
+        timeout: Duration,
+    ) -> Result<WorkspaceResponse, WsError> {
         let req_id = self
             .inner
             .next_op
@@ -217,7 +241,7 @@ impl Client {
         // The timer runs on the client's runtime, so any executor can await this.
         self.handle
             .spawn(async move {
-                match tokio::time::timeout(REQUEST_TIMEOUT, rx).await {
+                match tokio::time::timeout(timeout, rx).await {
                     Ok(Ok(result)) => result,
                     _ => {
                         lock(&inner.ws.pending).remove(&req_id);
@@ -888,6 +912,26 @@ impl Client {
         let request = crate::timeline_diff::request(self.inner.daemon_features(), pane_id, handle)?;
         expect!(self.workspace(request).await?,
             WorkspaceResponse::TimelineDiff(files) => files)
+    }
+
+    /// Obtains a single-use ticket. Does not write to the pane.
+    pub async fn chat_prepare(&self, pane_id: PaneId) -> Result<proto::ChatSendStatus, WsError> {
+        crate::chat_send::require(self.inner.daemon_features())?;
+        expect!(self.workspace_with_timeout(WorkspaceRequest::ChatPrepare { pane_id }, Duration::from_secs(10)).await?,
+            WorkspaceResponse::ChatSend(status) => status)
+    }
+
+    /// Sends once; a disconnected or unconfirmed result must never be automatically retried.
+    pub async fn chat_send(
+        &self,
+        pane_id: PaneId,
+        ticket: u64,
+        text: String,
+        confirmed_revision: Option<u64>,
+    ) -> Result<proto::ChatSendStatus, WsError> {
+        crate::chat_send::require(self.inner.daemon_features())?;
+        expect!(self.workspace_with_timeout(WorkspaceRequest::ChatSend { pane_id, ticket, text, confirmed_revision }, Duration::from_secs(10)).await?,
+            WorkspaceResponse::ChatSend(status) => status)
     }
 
     fn require_timeline(&self) -> Result<(), WsError> {

@@ -972,6 +972,7 @@ async fn handle_hook(core: &Arc<Core>, request: HookRequest) -> HookResponse {
     if let Some(kind) = attached {
         crate::core::record_agent_started_by_hand(core, &entry, kind, None);
     }
+    crate::agent_input::record_hook(&entry.pane, &request);
     core.agent_event(pane_id, event);
     if request.event != "PermissionRequest" {
         return HookResponse::default();

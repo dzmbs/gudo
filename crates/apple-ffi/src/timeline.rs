@@ -9,6 +9,30 @@ fn encoded<T: serde::Serialize>(value: &T) -> Result<String, proto::WsError> {
 
 #[uniffi::export]
 impl DaemonClient {
+    pub async fn chat_prepare(&self, pane_id: u64) -> Result<String, WorkspaceError> {
+        self.ws_call(|client| async move {
+            encoded(&client.chat_prepare(proto::PaneId(pane_id)).await?)
+        })
+        .await
+    }
+
+    pub async fn chat_send(
+        &self,
+        pane_id: u64,
+        ticket: u64,
+        text: String,
+        confirmed_revision: Option<u64>,
+    ) -> Result<String, WorkspaceError> {
+        self.ws_call(|client| async move {
+            encoded(
+                &client
+                    .chat_send(proto::PaneId(pane_id), ticket, text, confirmed_revision)
+                    .await?,
+            )
+        })
+        .await
+    }
+
     pub async fn timeline_watch(&self, pane_id: u64) -> Result<String, WorkspaceError> {
         self.ws_call(|client| async move {
             encoded(&client.timeline_watch(proto::PaneId(pane_id)).await?)

@@ -345,6 +345,7 @@ pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {
         | DaemonFeatures::AGENT_TIMELINE
         | DaemonFeatures::VERSIONED_TIMELINE
         | DaemonFeatures::TIMELINE_TOOL_DIFF
+        | DaemonFeatures::CHAT_SEND
         | DaemonFeatures::GENERATED_INPUT
         | DaemonFeatures::ACTIVE_SIZING;
     if core.cfg.push.enabled && core.cfg.push.live_activity {
@@ -906,7 +907,12 @@ async fn read_input(client: &Arc<Client>, mut stream: RecvStream) -> Result<(), 
                 .core
                 .apply_client_size(&entry, client.id, &client.authz, size, true);
         }
-        let at_seq = match entry.pane.write(bytes).await {
+        let written = if records_typing && !is_focus_report {
+            entry.pane.write(bytes).await
+        } else {
+            entry.pane.write_generated(bytes).await
+        };
+        let at_seq = match written {
             Ok(at_seq) => at_seq,
             Err(crate::pane::InputError::Closed) => {
                 client.send(reject(InputRejectReason::UnknownPane));

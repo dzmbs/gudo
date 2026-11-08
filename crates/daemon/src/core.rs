@@ -2752,6 +2752,7 @@ fn end_exited_agent(core: &Core, entry: &PaneEntry) {
     };
     let id = entry.pane.id;
     tracing::info!(pane = %id, "agent exited");
+    crate::agent_input::agent_exited(&entry.pane);
     // While the runtime is still there, so its open requests are retired.
     core.agent_event(id, event);
     *lock(&entry.agent) = None;

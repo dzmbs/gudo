@@ -35,6 +35,7 @@ mod assist;
 mod browser;
 mod conn;
 pub use conn::{PROBE_DEADLINE, PROBE_SLOW_DEADLINE};
+mod chat_send;
 pub mod knock;
 mod listen;
 mod mirror;

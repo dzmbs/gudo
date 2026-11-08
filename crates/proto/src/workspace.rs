@@ -357,6 +357,17 @@ pub enum WorkspaceRequest {
         pane_id: PaneId,
         handle: String,
     },
+    /// Mint a single-use send ticket for the current live agent and draft revision.
+    ChatPrepare {
+        pane_id: PaneId,
+    },
+    /// Consume a ticket once; a stale draft confirmation never authorizes newer input.
+    ChatSend {
+        pane_id: PaneId,
+        ticket: u64,
+        text: String,
+        confirmed_revision: Option<u64>,
+    },
 }
 
 /// The answer to a [`WorkspaceRequest`].
@@ -433,6 +444,23 @@ pub enum WorkspaceResponse {
     Timeline(crate::TimelineSnapshot),
     TimelineOutput(crate::TimelineToolOutput),
     TimelineDiff(Vec<FileDiff>),
+    ChatSend(ChatSendStatus),
+}
+
+/// Draft admission and agent-reported acknowledgement are separate from transport delivery.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ChatSendStatus {
+    Prepared {
+        ticket: u64,
+        revision: u64,
+        needs_confirmation: bool,
+    },
+    ConfirmationRequired {
+        revision: u64,
+    },
+    Confirmed,
+    NotConfirmed,
+    SentNotConfirmed,
 }
 
 /// A command that registers or removes the daemon's MCP server with an agent.

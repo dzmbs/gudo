@@ -636,7 +636,7 @@ async fn run(inner: &Arc<Inner>, live: Live) -> String {
     let (ctl_out, ctl_out_rx) = mpsc::unbounded_channel();
     let ack_notify = Arc::new(Notify::new());
     let mut tasks = JoinSet::new();
-    tasks.spawn(write_ctl(ctl_tx, ctl_out_rx));
+    tasks.spawn(write_ctl(Arc::clone(inner), ctl_tx, ctl_out_rx));
     tasks.spawn(read_ctl(Arc::clone(inner), ctl_rx));
     tasks.spawn(accept_panes(
         Arc::clone(inner),
@@ -657,7 +657,7 @@ async fn run(inner: &Arc<Inner>, live: Live) -> String {
                 let Some(msg) = msg else { break "client dropped".to_owned() };
                 match msg {
                     Outgoing::Ctl(ctl) => {
-                        if control_supported(&ctl, input_features) { let _ = ctl_out.send(ctl); }
+                        if control_supported(&ctl, input_features) && inner.ws.control_is_live(&ctl) { let _ = ctl_out.send(ctl); }
                     }
                     Outgoing::Input { pane_id, payload } => {
                         let input_seq = lock(&inner.input).send(pane_id, &payload, resends);
@@ -692,6 +692,11 @@ async fn run(inner: &Arc<Inner>, live: Live) -> String {
 
 fn control_supported(control: &ClientCtl, features: proto::DaemonFeatures) -> bool {
     match control {
+        ClientCtl::Workspace {
+            req:
+                proto::WorkspaceRequest::ChatPrepare { .. } | proto::WorkspaceRequest::ChatSend { .. },
+            ..
+        } => features.contains(proto::DaemonFeatures::CHAT_SEND),
         ClientCtl::PaneActivity { .. }
         | ClientCtl::ClaimSize { .. }
         | ClientCtl::SetSizePolicy { .. } => {
@@ -736,6 +741,7 @@ async fn run_incompatible(inner: &Arc<Inner>, live: Live) -> String {
 }
 
 async fn write_ctl(
+    inner: Arc<Inner>,
     mut send_stream: SendStream,
     mut ctl_rx: mpsc::UnboundedReceiver<ClientCtl>,
 ) -> String {
@@ -744,7 +750,9 @@ async fn write_ctl(
         batch.clear();
         let mut next = Some(msg);
         while let Some(msg) = next {
-            if let Err(err) = proto::frame::encode(&msg, &mut batch) {
+            if inner.ws.control_is_live(&msg)
+                && let Err(err) = proto::frame::encode(&msg, &mut batch)
+            {
                 tracing::warn!("encoding ctl: {err}");
             }
             next = ctl_rx.try_recv().ok();
@@ -1293,6 +1301,29 @@ mod tests {
             &ClientCtl::Ping { nonce: 1 },
             proto::DaemonFeatures::default()
         ));
+    }
+
+    #[test]
+    fn a_reconnect_to_a_legacy_daemon_cannot_receive_queued_chat_variants() {
+        for req in [
+            proto::WorkspaceRequest::ChatPrepare { pane_id: PaneId(7) },
+            proto::WorkspaceRequest::ChatSend {
+                pane_id: PaneId(7),
+                ticket: 1,
+                text: "hello".into(),
+                confirmed_revision: None,
+            },
+        ] {
+            let control = ClientCtl::Workspace { req_id: 1, req };
+            assert!(!control_supported(
+                &control,
+                proto::DaemonFeatures::default()
+            ));
+            assert!(control_supported(
+                &control,
+                proto::DaemonFeatures::CHAT_SEND
+            ));
+        }
     }
 
     #[test]

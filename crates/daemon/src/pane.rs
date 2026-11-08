@@ -1015,8 +1015,20 @@ impl Pane {
     /// Queues input for the child. Returns the output offset at the time of writing, which
     /// the input's echo (if any) follows.
     pub async fn write(&self, data: Vec<u8>) -> Result<Seq, InputError> {
-        let _input = (!data.is_empty())
-            .then(|| crate::agent_input::begin_unproven_write(&self.agent_input_gate));
+        self.write_input(data, false).await
+    }
+
+    pub(crate) async fn write_generated(&self, data: Vec<u8>) -> Result<Seq, InputError> {
+        self.write_input(data, true).await
+    }
+
+    async fn write_input(&self, data: Vec<u8>, generated: bool) -> Result<Seq, InputError> {
+        let _input = (!data.is_empty()).then(|| {
+            crate::agent_input::begin_unproven_write(
+                &self.agent_input_gate,
+                if generated { &[] } else { &data },
+            )
+        });
         let head = self.head();
         if !data.is_empty() {
             tokio::time::timeout(INPUT_STALL, self.pty.write(data))

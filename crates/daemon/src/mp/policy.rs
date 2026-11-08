@@ -216,6 +216,9 @@ pub(crate) fn workspace(req: &WorkspaceRequest) -> (Need, Target) {
         R::ListTurns { pane_id } | R::TurnDiff { pane_id, .. } => {
             (Need::Prompt, Target::Pane(*pane_id))
         }
+        R::ChatPrepare { pane_id } | R::ChatSend { pane_id, .. } => {
+            (Need::Prompt, Target::Pane(*pane_id))
+        }
         R::SendReview(review) => (Need::Prompt, Target::Pane(review.pane_id)),
         R::WorktreeLaunch { split_from, .. } => (Need::Drive, Target::SessionOf(*split_from)),
         R::GitStatus { .. }

@@ -134,8 +134,13 @@ launch. Driver input remains a code-execution capability, not a constrained comp
 
 This fence prevents queued native input from crossing an agent-to-shell transition. It does not
 prove an agent consumed a prompt, recognize a safe/empty TUI draft or make the legacy paste/Enter
-pair transactional. Version-tested draft classification and revision-checked atomic submission
-are separate prerequisites for the new Chat composer.
+pair transactional. Chat uses a separate owner-only, revision-checked, single-use ticket path and
+one bracketed-paste-plus-Return write. Dirty or unknown drafts require explicit confirmation; real
+input invalidates that confirmation. A matching same-session Claude UserPromptSubmit confirms the
+normalized text, not an independently identified submission or a proven-empty PTY queue. Timeout,
+mismatch, concurrent input and exit remain unconfirmed, never automatically retried. Codex can use a
+same-thread notify only when it carries exactly one matching input message; otherwise it remains
+sent but unconfirmed. Non-fenced adopted panes remain unavailable. See [Native sending](../CHAT.md#native-sending).
 
 **Files and git.** Path policy (DAEMON.md §5.0): paths must be absolute, with no `..`, and their
 real path must lie inside `$HOME` or `files.allow`. Symlinks are checked through their real

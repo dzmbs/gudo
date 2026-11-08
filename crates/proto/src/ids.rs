@@ -420,5 +420,6 @@ bitset! {
         VERSIONED_TIMELINE = 27;
         /// Reads bounded complete recorded tool changes through a scoped result handle.
         TIMELINE_TOOL_DIFF = 28;
+        CHAT_SEND = 29;
     }
 }

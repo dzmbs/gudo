@@ -1,5 +1,14 @@
 //! The local exit fence for daemon-launched agent PTYs.
 
+mod chat;
+#[cfg(test)]
+mod chat_tests;
+mod draft;
+mod hooks;
+
+pub(crate) use chat::request as chat_request;
+pub(crate) use hooks::record as record_hook;
+
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -38,6 +47,10 @@ pub(crate) struct AgentInputGate {
     phase: AgentInputPhase,
     revision: u64,
     pending_unproven_writes: u64,
+    pending_user_writes: u64,
+    draft: draft::Draft,
+    last_user_input_seq: u64,
+    last_prompt_seq: u64,
 }
 
 #[derive(Default)]
@@ -76,6 +89,7 @@ impl AgentInputGate {
         if matches!(&self.phase, AgentInputPhase::Pending(active) | AgentInputPhase::Open(active) if active == launch)
         {
             self.phase = AgentInputPhase::Disabled;
+            self.draft.close();
             self.advance_revision();
             true
         } else {
@@ -88,19 +102,36 @@ impl AgentInputGate {
 /// Even a later Stop hook cannot prove that all buffered raw input has been consumed.
 pub(crate) struct UnprovenWrite<'a> {
     gate: &'a Mutex<AgentInputGate>,
+    user: bool,
 }
 
-pub(crate) fn begin_unproven_write(gate: &Mutex<AgentInputGate>) -> UnprovenWrite<'_> {
+pub(crate) fn begin_unproven_write<'a>(
+    gate: &'a Mutex<AgentInputGate>,
+    bytes: &[u8],
+) -> UnprovenWrite<'a> {
     let mut state = lock(gate);
+    if !matches!(state.phase, AgentInputPhase::Disabled) {
+        state.draft.input(bytes);
+        if !bytes.is_empty() {
+            state.last_user_input_seq = crate::hook_seq();
+        }
+    }
     state.advance_revision();
     state.pending_unproven_writes = state.pending_unproven_writes.saturating_add(1);
-    UnprovenWrite { gate }
+    let user = !bytes.is_empty();
+    if user {
+        state.pending_user_writes = state.pending_user_writes.saturating_add(1);
+    }
+    UnprovenWrite { gate, user }
 }
 
 impl Drop for UnprovenWrite<'_> {
     fn drop(&mut self) {
         let mut state = lock(self.gate);
         state.pending_unproven_writes = state.pending_unproven_writes.saturating_sub(1);
+        if self.user {
+            state.pending_user_writes = state.pending_user_writes.saturating_sub(1);
+        }
         state.advance_revision();
     }
 }
@@ -122,6 +153,10 @@ pub(crate) fn enqueue(
     }
     if gate.pending_unproven_writes != 0 {
         return Err(EnqueueError::Busy);
+    }
+    gate.draft.input(&bytes);
+    if !bytes.is_empty() {
+        gate.last_user_input_seq = crate::hook_seq();
     }
     gate.advance_revision();
     if !matches!(&gate.phase, AgentInputPhase::Open(_)) {
@@ -183,6 +218,22 @@ pub(crate) async fn serve(core: &Arc<Core>, call: AgentInputCall) -> AgentInputR
     }
 }
 
+pub(crate) fn submitted(pane: &crate::pane::Pane, session: &str, prompt: &str, seq: u64) {
+    let mut gate = lock(&pane.agent_input_gate);
+    // A delayed pre-write hook or replay cannot clear a newer draft or acknowledge a new send.
+    if seq <= gate.last_prompt_seq || seq <= gate.last_user_input_seq {
+        return;
+    }
+    gate.last_prompt_seq = seq;
+    let writes_pending = gate.pending_user_writes != 0;
+    gate.draft
+        .submitted(session, prompt, writes_pending, std::time::Instant::now());
+}
+
+pub(crate) fn agent_exited(pane: &crate::pane::Pane) {
+    lock(&pane.agent_input_gate).draft.close();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,7 +276,7 @@ mod tests {
         let gate = Mutex::new(AgentInputGate::pending("current".into()));
         assert!(lock(&gate).arm("current"));
         let result = tokio::time::timeout(Duration::from_millis(10), async {
-            let _input = begin_unproven_write(&gate);
+            let _input = begin_unproven_write(&gate, b"input");
             assert_eq!(lock(&gate).revision, 1);
             assert_eq!(lock(&gate).pending_unproven_writes, 1);
             std::future::pending::<()>().await;
@@ -241,7 +292,7 @@ mod tests {
     fn closing_with_an_unproven_write_pending_cannot_be_undone_by_its_completion() {
         let gate = Mutex::new(AgentInputGate::pending("current".into()));
         assert!(lock(&gate).arm("current"));
-        let input = begin_unproven_write(&gate);
+        let input = begin_unproven_write(&gate, b"input");
         assert!(lock(&gate).close("current"));
         drop(input);
         let mut state = lock(&gate);
@@ -255,7 +306,7 @@ mod tests {
         let gate = Mutex::new(AgentInputGate::pending("current".into()));
         assert!(lock(&gate).arm("current"));
         lock(&gate).revision = u64::MAX - 1;
-        let input = begin_unproven_write(&gate);
+        let input = begin_unproven_write(&gate, b"input");
         drop(input);
         let mut state = lock(&gate);
         assert_eq!(state.revision, u64::MAX);
