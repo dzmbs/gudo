@@ -197,6 +197,11 @@ interrupt controls. Idle/agent/presentation/lifetime changes discard stale nativ
 IME composition vetoes both actions. Codex interrupt is unavailable until its official same-process
 control adapter is installed; use Terminal. This is not a proof of an empty PTY queue.
 
+Select Text presents one read-only TextKit2 `UITextView`, not an editor in every row. Native range
+selection keeps Unicode/UTF-16 boundaries, with data detectors disabled and DS literal type, ink
+and accent. An immutable snapshot identity avoids reassigning the whole string on parent/theme
+updates, preserving selection and reading position; a new snapshot replaces it explicitly.
+
 Tool details read output through the existing authenticated same-pane output API, one bounded
 native page at a time, with Input/Output tabs and Beginning/Previous/Next navigation. Closing the
 sheet invalidates pending replies. Diff details use read-only native unified/side-by-side rows,

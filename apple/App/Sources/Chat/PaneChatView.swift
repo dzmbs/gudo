@@ -234,38 +234,6 @@ private struct ChatDetail: Identifiable {
     let content: Content
 }
 
-private struct ChatSelectedText: Identifiable {
-    let id = UUID()
-    let title: String
-    let text: String
-}
-
-private struct ChatSelectedTextSheet: View {
-    let selection: ChatSelectedText
-    let openTerminal: () -> Void
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                Text(verbatim: selection.text).font(DS.Font.literal).textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(DS.Space.l)
-            }
-            .background(DS.Palette.base).foregroundStyle(DS.Palette.text)
-            .navigationTitle(selection.title).navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Terminal", systemImage: "terminal", action: openTerminal)
-                        .frame(minHeight: DS.Size.touchTarget)
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }.frame(minHeight: DS.Size.touchTarget)
-                }
-            }
-        }
-    }
-}
-
 struct PaneChatToggle: View {
     let pane: Pane
     @Bindable var state: PaneChatState
