@@ -199,9 +199,13 @@ eight-profile LRU of heights calibrated through the same native row/environment 
 line count. Three-plus lines, styled, Unicode, control-character and custom text-case/line-height
 values keep the sizing-host fallback; there is no guessed UIFont equivalent or line-height formula.
 This preflight is synchronous, so its cold cost is still a performance acceptance gate.
-Newly revealed scroll rows still use the deferred measurement pass; finishing their
-pre-display/prefetch path remains follow-up work. That pass yields after 3 ms and
-updates prefix positions without re-hashing every row. Prepends restore the same reading row;
+Scrolling opts into the same viewport fitting before the native collection layout prepares
+cell attributes, repeating if fitted heights expose more rows and preserving the reading anchor.
+The hook is weak and optional; other native lists do not acquire Chat fitting. Active snapshot
+transactions and reentrant sizing are excluded. The fallback measurement pass still yields after
+3 ms and updates prefix positions without re-hashing every row. Valid subpoint reading offsets
+near a row end remain exact; only offsets outside a resized row use the end fallback.
+Prepends restore the same reading row;
 following updates pin to the bottom unless a newer user drag invalidates that adjustment.
 The New capsule remains separate from the reusable cells.
 

@@ -80,6 +80,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
     private var latest = UIHostingController(rootView: AnyView(EmptyView()))
     private(set) var configuredCells = 0
     private(set) var measuredCells = 0
+    private(set) var unfittedDisplays = 0
     var retainedMeasurementCount: Int { measured.count }
     var retainedHeightBytes: Int { heights.cost.bytes }
     private(set) var applyDurations: [Double] = []
@@ -96,6 +97,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         self.layout = layout
         collection = UICollectionView(frame: .zero, collectionViewLayout: layout)
         super.init(nibName: nil, bundle: nil)
+        layout.beforePreparingAttributes = { [weak self] in self?.prepareRevealedRows() }
     }
 
     required init?(coder: NSCoder) { nil }
@@ -257,6 +259,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { updateFollowing() }
 
     func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
+        if let identifier = source?.itemIdentifier(for: indexPath), !measured.contains(identifier) { unfittedDisplays += 1 }
         needsMeasurement = true
         ensureClock()
         clock?.isPaused = false
@@ -436,8 +439,28 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         return CGPoint(x: 0, y: following ? bottom : min(bottom, max(top, reading)))
     }
 
+    private func prepareRevealedRows() {
+        guard isActive, !isApplying, !isMeasuring, collection.bounds.width > 0, collection.bounds.height > 0 else { return }
+        isMeasuring = true
+        defer { isMeasuring = false }
+        let anchor = document.anchor(at: collection.contentOffset.y + collection.adjustedContentInset.top)
+        let atEnd = model.followsBottom
+            && document.height - collection.bounds.maxY + collection.adjustedContentInset.bottom < 40
+        guard fitViewport(anchor: anchor, following: atEnd, includingCurrent: false) else { return }
+        layout.document = document
+        let destination = targetOffset(anchor: anchor, following: atEnd)
+        if destination != collection.contentOffset { collection.setContentOffset(destination, animated: false) }
+    }
+
     private func measureBeforeSnapshot(anchor: NativeListLayout.Anchor?, following: Bool, includingCurrent: Bool) {
-        guard collection.bounds.height > 0 else { return }
+        _ = fitViewport(anchor: anchor, following: following, includingCurrent: includingCurrent)
+        layout.document = document
+        layout.invalidateLayout()
+    }
+
+    private func fitViewport(anchor: NativeListLayout.Anchor?, following: Bool, includingCurrent: Bool) -> Bool {
+        guard collection.bounds.height > 0 else { return false }
+        var updated = false
         while true {
             let viewport = CGRect(origin: targetOffset(anchor: anchor, following: following), size: collection.bounds.size)
             var candidates = Set(document.visibleRows(in: viewport))
@@ -450,9 +473,9 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
             }
             guard !changed.isEmpty else { break }
             document.setHeights(changed)
+            updated = true
         }
-        layout.document = document
-        layout.invalidateLayout()
+        return updated
     }
 
     private func measureVisible() {

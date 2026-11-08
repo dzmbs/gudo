@@ -96,6 +96,39 @@ final class ChatCollectionTests: XCTestCase {
         XCTAssertTrue(measuredAtSubmission.allSatisfy { $0 >= 3 }, "Visible rows must fit before UIKit receives their snapshot")
     }
 
+    func testScrollingRevealsRowsWithFittedGeometryBeforeTheyAreDisplayed() async throws {
+        let (window, controller) = try open(preparedFrame(800), following: false)
+        defer { close(window) }
+        try await settle()
+        for index in [300, 500, 200] { assertFittedScroll(index, controller: controller) }
+    }
+
+    func testRevealedCodeTablesAndToolsAlsoFitBeforeDisplay() async throws {
+        let fixture = try await ChatTestFixtures.conversation()
+        let rows = (0..<20).flatMap { batch in fixture.rows.map { row in
+            ChatRow(id: ChatRowID(item: "\(batch):\(row.id.item)", part: row.id.part), revision: row.revision,
+                    turn: row.turn, content: row.content)
+        } }
+        let frame = TimelineFrame(rows: rows, rowIDs: Set(rows.map(\.id)), revision: 1)
+        let (window, controller) = try open(frame, following: false)
+        defer { close(window) }
+        try await settle()
+        for index in [rows.count / 2, rows.count * 3 / 4, rows.count / 4] {
+            assertFittedScroll(index, controller: controller)
+        }
+    }
+
+    private func assertFittedScroll(_ index: Int, controller: ChatViewController) {
+        let before = controller.unfittedDisplays
+        let configured = controller.configuredCells
+        let target = IndexPath(item: index, section: 0)
+        controller.collection.scrollToItem(at: target, at: .top, animated: false)
+        controller.collection.layoutIfNeeded()
+        XCTAssertTrue(controller.collection.indexPathsForVisibleItems.contains(target))
+        XCTAssertGreaterThan(controller.configuredCells, configured)
+        XCTAssertEqual(controller.unfittedDisplays, before, "Revealed rows must fit before willDisplay, not a later frame")
+    }
+
     func testVisibleRevisionsFitBeforeTheirSnapshotReconfiguration() async throws {
         var frame = preparedFrame(3)
         let (window, controller) = try open(frame, following: false)

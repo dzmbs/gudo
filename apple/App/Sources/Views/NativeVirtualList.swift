@@ -266,6 +266,7 @@ private final class NativeCollectionCell: UICollectionViewCell {
 
 final class NativeCollectionLayout: UICollectionViewLayout {
     var document: NativeListLayout
+    var beforePreparingAttributes: (() -> Void)?
 
     init(document: NativeListLayout) {
         self.document = document
@@ -276,6 +277,11 @@ final class NativeCollectionLayout: UICollectionViewLayout {
 
     override var collectionViewContentSize: CGSize {
         CGSize(width: max(collectionView?.bounds.width ?? 0, document.contentWidth), height: document.height)
+    }
+
+    override func prepare() {
+        super.prepare()
+        beforePreparingAttributes?()
     }
 
     override func shouldInvalidateLayout(forBoundsChange newBounds: CGRect) -> Bool { true }
