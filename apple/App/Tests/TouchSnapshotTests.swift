@@ -91,6 +91,28 @@ final class TouchSnapshotTests: XCTestCase {
         try capture(window, "agent-toasts")
     }
 
+    func testFileViewer() async throws {
+        let theme = mode == "light" ? "Apple System Colors Light" : "Ghostty Default"
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let model = WindowModel(app: .shared)
+        let window = UIWindow(windowScene: scene)
+        window.frame = scene.screen.bounds
+        window.isHidden = false
+        for (name, target) in [
+            ("file-viewer-code", FileTarget(hostId: "studio", path: "~/projects/gudo/src/main.rs", line: 20)),
+            ("file-viewer-markdown", FileTarget(hostId: "studio", path: "~/projects/gudo/README.md")),
+            ("file-viewer-missing", FileTarget(hostId: "studio", path: "~/projects/gudo/gone.rs", line: 4)),
+        ] {
+            model.fileViewerTarget = target
+            window.rootViewController = UIHostingController(rootView: FileViewerSheet()
+                .environment(model)
+                .chromeTheme(ThemeCatalog.theme(named: theme), windowTheme: .auto))
+            await pump(1.5)
+            try capture(window, name)
+        }
+        window.isHidden = true
+    }
+
     func testProjects() async throws {
         let theme = mode == "light" ? "Apple System Colors Light" : "Ghostty Default"
         var arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)

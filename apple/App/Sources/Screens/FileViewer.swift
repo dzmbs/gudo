@@ -250,17 +250,34 @@ private struct FileViewerBody: View {
         }
     }
 
-    @ViewBuilder private var actions: some View {
-        if target.isMarkdown, case .text = model.content {
-            Picker("View", selection: $markdownMode) {
-                ForEach(FileViewerMode.allCases) { Text($0.title).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
-            .accessibilityIdentifier("file-viewer-mode")
+    private var offersModes: Bool {
+        guard target.isMarkdown, case .text = model.content else { return false }
+        return true
+    }
+
+    private var modePicker: some View {
+        Picker("View", selection: $markdownMode) {
+            ForEach(FileViewerMode.allCases) { Text($0.title).tag($0) }
         }
+        .accessibilityIdentifier("file-viewer-mode")
+    }
+
+    @ViewBuilder private var actions: some View {
+        #if os(macOS)
+        if offersModes {
+            modePicker
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+        }
+        #endif
         Menu("More", systemImage: "ellipsis") {
+            #if os(iOS)
+            if offersModes {
+                modePicker.pickerStyle(.inline)
+                Divider()
+            }
+            #endif
             Button("Copy Path", systemImage: "doc.on.doc") { FileViewerPasteboard.copy(target.path) }
             if target.line != nil {
                 Button("Copy Path and Line", systemImage: "number") { FileViewerPasteboard.copy(target.pathWithLine) }
@@ -342,7 +359,7 @@ struct FileLinesView: View {
         }
         .frame(height: Self.rowHeight, alignment: .leading)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(isTarget ? chrome.selection.color.opacity(chrome.selectionLevel) : .clear)
+        .background(isTarget ? chrome.accent.color.opacity(0.18) : .clear)
         .accessibilityAddTraits(isTarget ? .isSelected : [])
     }
 
