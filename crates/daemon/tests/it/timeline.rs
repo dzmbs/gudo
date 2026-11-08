@@ -338,6 +338,32 @@ async fn legacy_and_versioned_watches_negotiate_without_losing_an_existing_watch
         panic!("Missing snapshot")
     };
     assert!(snapshot.items.iter().any(|item| item.id == "legacy-live:0"));
+    let metadata = harness
+        .owner
+        .client
+        .timeline_watch_capabilities(harness.pane)
+        .await
+        .unwrap();
+    assert_eq!(metadata.snapshot, snapshot);
+    assert!(metadata.capabilities.contains(
+        proto::AgentCapabilities::READ
+            | proto::AgentCapabilities::STOP
+            | proto::AgentCapabilities::APPROVALS
+    ));
+    assert!(
+        !metadata
+            .capabilities
+            .contains(proto::AgentCapabilities::STREAMING_DELTAS)
+    );
+    let invalid = harness
+        .owner
+        .client
+        .workspace(WorkspaceRequest::TimelineWatchCapabilities {
+            pane_id: harness.pane,
+            version: 0,
+        })
+        .await;
+    assert!(matches!(invalid, Err(WsError::Invalid(_))));
     harness.append(
         "negotiated-live",
         "The mutually supported stream stays live",
@@ -545,6 +571,24 @@ async fn a_scoped_viewer_can_read_only_its_pane_and_since_join_history() {
     guest.client.set_workspace_listener(listener);
     let snapshot = guest.client.timeline_watch(harness.pane).await.unwrap();
     assert!(snapshot.items.is_empty());
+    let metadata = guest
+        .client
+        .timeline_watch_capabilities(harness.pane)
+        .await
+        .unwrap();
+    assert_eq!(metadata.snapshot, snapshot);
+    assert!(
+        metadata
+            .capabilities
+            .contains(proto::AgentCapabilities::READ)
+    );
+    assert!(matches!(
+        guest
+            .client
+            .timeline_watch_capabilities(PaneId(harness.pane.0 + 1000))
+            .await,
+        Err(WsError::Denied(_))
+    ));
     assert!(matches!(
         guest
             .client

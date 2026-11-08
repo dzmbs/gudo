@@ -398,9 +398,23 @@ single-use send/stop, matching and absent acknowledgements, and signed allow/den
 Format-specific fixture setup and response decoding stay beside the adapter. Raw PTY tests prove
 queue bytes and hook correlation, not real CLI consumption.
 
-Capability publication to apps and replacement of legacy kind-based Chat control conditions remain
-part of this interface step before enabling another readable harness. The daemon-side capability set
-alone does not complete that migration. Codex proxy work follows the completed interface step.
+`DaemonFeatures::AGENT_CAPABILITIES` gates `TimelineWatchCapabilities` (workspace request72).
+Its `AgentTimeline` reply (response39) pairs the existing snapshot with the producing session's
+`AgentCapabilities`, captured under one state lock. Legacy watches retain their exact reply shape;
+no metadata pushes or extra fields are sent to old apps. Metadata watches use the same View scope,
+since-join filtering, schema negotiation and bounded watch/bulk queues as legacy watches. The client
+checks the current link's feature bit at serialization as well as before requesting metadata.
+
+The FFI exposes the snapshot's JSON with an additional numeric `capabilities` field. On a helper without
+the bit, it performs the legacy watch and derives the readable block-level contract and controls from
+that link's existing feature bits, without looking at agent kinds. A snapshot lacking FFI metadata is
+read-only in the app; unknown feature bits never grant a known action. Chat selects Send, Stop,
+approvals and recorded-diff controls by feature, with the existing role/context checks still required.
+A capability round trip rotates the local intent generation even when both transitions arrive in one
+render batch, so restoring support cannot revive a deferred action. Live timeline operations retain
+the watch's features; reconnects and agent/session replacement retire its context.
+
+Codex proxy work follows this shared interface and capability contract.
 
 ## Codex adapter foundation (phase 2)
 

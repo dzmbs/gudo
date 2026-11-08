@@ -3,6 +3,8 @@ import HostKit
 import Observation
 
 nonisolated struct TimelineFrame: Sendable {
+    var capabilities: AgentCapabilities = []
+    var capabilityGeneration = UUID()
     var rows: [ChatRow] = []
     var rowIDs: Set<ChatRowID> = []
     var session: TimelineSession?
@@ -44,6 +46,8 @@ actor TimelineRenderWorker {
     private var renderCost = LRUCost()
     private var revision = 0
     private var generation = UUID()
+    private var capabilities: AgentCapabilities = []
+    private var capabilityGeneration = UUID()
     private var orderRevision = 0
     private var identifiers: [ChatRowID] = []
     private let pane: UInt64
@@ -66,6 +70,8 @@ actor TimelineRenderWorker {
             switch job {
             case .snapshot(let json):
                 let snapshot = try TimelineJSON.decode(TimelineSnapshot.self, from: json)
+                let advertised = snapshot.capabilities ?? [.read]
+                if capabilities != advertised { capabilities = advertised; capabilityGeneration = UUID() }
                 changes = next.reconcile(snapshot, reset: resetsSnapshot && !consumedSnapshot, protectsHistory: protectsHistory)
                 consumedSnapshot = true
                 hasLiveChanges = hasLiveChanges || !changes.changed.isEmpty || !changes.removed.isEmpty
@@ -110,6 +116,7 @@ actor TimelineRenderWorker {
         let identifiers = rows.map(\.id)
         if self.identifiers != identifiers { orderRevision += 1; self.identifiers = identifiers }
         let frame = TimelineFrame(
+            capabilities: capabilities, capabilityGeneration: capabilityGeneration,
             rows: rows, rowIDs: Set(identifiers), session: window.session,
             cursor: window.cursor, before: window.before, hasNewerGap: window.hasNewerGap,
             note: window.note, revision: revision, generation: generation,

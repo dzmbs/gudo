@@ -14,20 +14,7 @@ use tokio::sync::mpsc;
 use crate::core::Core;
 use crate::pane::Pane;
 
-bitflags::bitflags! {
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    pub(crate) struct AgentCapabilities: u16 {
-        const READ = 1 << 0;
-        const SEND = 1 << 1;
-        const ACKNOWLEDGED_SEND = 1 << 2;
-        const STOP = 1 << 3;
-        const APPROVALS = 1 << 4;
-        const DIFFS = 1 << 5;
-        const STREAMING_DELTAS = 1 << 6;
-        const THINKING = 1 << 7;
-        const PLANS = 1 << 8;
-    }
-}
+pub(crate) use proto::AgentCapabilities;
 
 pub(crate) enum TimelineRead {
     ItemsBefore {
@@ -48,6 +35,7 @@ pub(crate) type ReadFuture =
     Pin<Box<dyn Future<Output = Result<WorkspaceResponse, WsError>> + Send>>;
 
 pub(crate) trait AgentSession: Send {
+    fn capabilities(&self) -> AgentCapabilities;
     fn cursor(&self) -> TimelineCursor;
     fn snapshot(&self, since: Option<UnixMillis>) -> TimelineSnapshot;
     fn refresh(&mut self, core: &Core, pane: PaneId) -> Result<Vec<TimelineOp>, WsError>;

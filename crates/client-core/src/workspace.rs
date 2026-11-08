@@ -876,6 +876,25 @@ impl Client {
             WorkspaceResponse::Timeline(snapshot) => snapshot)
     }
 
+    /// Watches one session with its adapter features, retaining the legacy watch fallback.
+    pub async fn timeline_watch_capabilities(
+        &self,
+        pane_id: PaneId,
+    ) -> Result<proto::AgentTimelineSnapshot, WsError> {
+        self.require_timeline()?;
+        let features = self.inner.daemon_features();
+        if features.contains(proto::DaemonFeatures::AGENT_CAPABILITIES) {
+            let version = proto::TimelineVersion::CURRENT.as_u16();
+            return expect!(self.workspace(WorkspaceRequest::TimelineWatchCapabilities { pane_id, version }).await?,
+                WorkspaceResponse::AgentTimeline(snapshot) => snapshot);
+        }
+        let snapshot = self.timeline_watch(pane_id).await?;
+        Ok(proto::AgentTimelineSnapshot {
+            snapshot,
+            capabilities: crate::chat_send::legacy_capabilities(features),
+        })
+    }
+
     pub async fn timeline_unwatch(&self, pane_id: PaneId) -> Result<(), WsError> {
         if !self.daemon_has(proto::DaemonFeatures::AGENT_TIMELINE) {
             return Ok(());

@@ -21,6 +21,58 @@ final class PaneChatViewTests: XCTestCase {
         let window: UIWindow
     }
 
+    func testCapabilitiesNotKindSelectNativeControls() async throws {
+        let suite = "chat-agent-capabilities-" + UUID().uuidString
+        let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let saved = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        defer {
+            preferences.removePersistentDomain(forName: suite)
+            UserDefaults.standard.setVolatileDomain(saved, forName: UserDefaults.argumentDomain)
+        }
+        for theme in ["Dracula", "Apple System Colors Light"] {
+            var arguments = saved
+            arguments[TerminalPreferences.Key.theme] = theme
+            arguments[TerminalPreferences.Key.windowTheme] = TerminalPreferences.WindowTheme.auto.rawValue
+            UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
+            try await verifyCapabilities(preferences: preferences, theme: theme.contains("Light") ? "light" : "dark")
+        }
+    }
+
+    private func verifyCapabilities(preferences: UserDefaults, theme: String) async throws {
+        for (agent, capabilities) in [("Claude", UInt16(1)), ("Codex", UInt16(9))] {
+            let fixture = try makeFixture(preferences: preferences, permitsSending: true, working: true,
+                                          nativeMessageReceipts: true, capabilities: capabilities, agent: agent)
+            defer {
+                fixture.state.deactivate()
+                fixture.window.isHidden = true
+                fixture.window.rootViewController = nil
+            }
+            try await wait {
+                fixture.state.model?.frame.rows.count == 60 && fixture.state.controller?.collection.visibleCells.isEmpty == false
+            }
+            XCTAssertEqual(fixture.state.capabilities.rawValue, capabilities)
+            fixture.state.draft = "Keep this local draft"
+            let owner = PaneChatView(pane: fixture.pane, state: fixture.state, hub: fixture.hub,
+                                     permitsSending: true, working: true) { _ in Color.clear }
+            owner.send()
+            owner.interrupt()
+            await Task.yield()
+            await Task.yield()
+            if capabilities & 8 != 0 {
+                try await wait { fixture.state.interrupt.phase == .finished }
+                XCTAssertTrue(fixture.client.calls.contains("interrupt 7 7 none"))
+            } else {
+                XCTAssertEqual(fixture.state.interrupt.phase, .idle)
+            }
+            XCTAssertEqual(fixture.state.composer.phase, .idle)
+            XCTAssertEqual(fixture.state.draft, "Keep this local draft")
+            XCTAssertFalse(fixture.client.calls.contains { $0.hasPrefix("send ") })
+            try await wait { fixture.state.controller?.collection.visibleCells.isEmpty == false }
+            let profile = capabilities == 1 ? "read-only" : "stop-only"
+            try capture(fixture.window, name: "chat-capabilities-\(profile)-\(theme)")
+        }
+    }
+
     func testBothPresentationsRetainTheirNativeViewsWhileTheSharedTimelineAdvances() async throws {
         let suite = "chat-pane-view-test-" + UUID().uuidString
         let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -472,16 +524,17 @@ final class PaneChatViewTests: XCTestCase {
 
     private func makeFixture(preferences: UserDefaults, permitsSending: Bool = false, working: Bool = false,
                              interruptNeedsConfirmation: Bool = false, nativeMessageReceipts: Bool = false,
-                             dictation: ChatDictation = .init(), photoUploads: Bool = false) throws -> Fixture {
+                             dictation: ChatDictation = .init(), photoUploads: Bool = false,
+                             capabilities: UInt16 = 447, agent: String = "Claude") throws -> Fixture {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let backend = PanePresentationTests.Backend()
         let pane = try Pane(id: PaneId(7), backend: backend, appearance: .fromPreferences(), onExit: {})
         pane.view.surface.terminal.write(Array("Private live terminal fixture\r\nOriginal terminal draft stays here".utf8))
         let state = PaneChatState(member: HostPane(hostId: "fixture", pane: pane.id), defaultPresentation: .chat,
-                                  agent: .claude, inputPresentation: pane.inputPresentation,
+                                  agent: agent == "Codex" ? .codex : .claude, inputPresentation: pane.inputPresentation,
                                   preferences: preferences, pool: ChatModelPool(capacity: 1), dictation: dictation)
         state.prepareInitialPresentation { pane.prepareToParkTerminal() }
-        let client = TimelineFixtureClient(snapshot: try TimelineFixtureJSON.snapshot(0..<60, before: nil),
+        let client = TimelineFixtureClient(snapshot: try TimelineFixtureJSON.snapshot(0..<60, before: nil, capabilities: capabilities, agent: agent),
                                            interruptNeedsConfirmation: interruptNeedsConfirmation,
                                            nativeMessageReceipts: nativeMessageReceipts, photoUploads: photoUploads)
         let events = WorkspaceEventHub()

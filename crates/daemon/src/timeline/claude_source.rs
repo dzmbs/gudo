@@ -112,6 +112,10 @@ impl ClaudeSession {
 }
 
 impl AgentSession for ClaudeSession {
+    fn capabilities(&self) -> crate::agent_driver::AgentCapabilities {
+        crate::agent_driver::driver(AgentKind::Claude).capabilities()
+    }
+
     fn cursor(&self) -> TimelineCursor {
         self.transcript
             .as_ref()

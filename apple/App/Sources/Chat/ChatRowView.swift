@@ -5,6 +5,7 @@ import SwiftUI
 import UIKit
 
 struct ChatRowActions {
+    var supportsDiffs = true
     var showTerminal: (UInt64?) -> Void = { _ in }
     var selectText: (String) -> Void = { _ in }
     var showTool: (TimelineItem) -> Void = { _ in }
@@ -222,7 +223,9 @@ struct ChatRowView: View {
             Text("Worked for \(duration(end.durationMs))")
             if let tokens = end.outputTokens { Text("· \(tokens.formatted(.number.notation(.compactName))) tokens") }
             Spacer(minLength: 0)
-            Button("Changes", systemImage: "plus.forwardslash.minus") { actions.showDiff(.turn(item.turn)) }
+            if actions.supportsDiffs {
+                Button("Changes", systemImage: "plus.forwardslash.minus") { actions.showDiff(.turn(item.turn)) }
+            }
         }.font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary).padding(.vertical, DS.Space.s)
     }
 
@@ -277,7 +280,7 @@ struct ChatRowView: View {
                 }
                 HStack {
                     Button("Details", systemImage: "arrow.up.left.and.arrow.down.right") { actions.showTool(item) }
-                    if !tool.diff.isEmpty {
+                    if actions.supportsDiffs, !tool.diff.isEmpty {
                         Button("Changes", systemImage: "plus.forwardslash.minus") {
                             actions.showDiff(.tool(item: item.id, path: nil))
                         }.accessibilityIdentifier("chat-tool-changes-\(item.id)")

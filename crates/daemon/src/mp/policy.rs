@@ -212,6 +212,7 @@ pub(crate) fn workspace(req: &WorkspaceRequest) -> (Need, Target) {
         | R::TimelineUnwatch { pane_id }
         | R::TimelineItemsBefore { pane_id, .. }
         | R::TimelineToolOutput { pane_id, .. }
+        | R::TimelineWatchCapabilities { pane_id, .. }
         | R::TimelineToolDiff { pane_id, .. } => (Need::View, Target::Pane(*pane_id)),
         R::ListTurns { pane_id } | R::TurnDiff { pane_id, .. } => {
             (Need::Prompt, Target::Pane(*pane_id))

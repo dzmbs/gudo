@@ -6,7 +6,7 @@ import UIKit
 extension Workspace {
     func updateChatState(of pane: Pane) {
         let reported = (host as? DaemonConnection)?.meta[pane.id]?.agent?.kind
-        guard let kind = reported.flatMap(AgentKind.init(rawValue:)), kind != .other else {
+        guard let kind = reported.flatMap(AgentKind.init(rawValue:)) else {
             pane.chat?.updateAgent(nil)
             return
         }

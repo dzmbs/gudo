@@ -693,6 +693,10 @@ async fn run(inner: &Arc<Inner>, live: Live) -> String {
 fn control_supported(control: &ClientCtl, features: proto::DaemonFeatures) -> bool {
     match control {
         ClientCtl::Workspace {
+            req: proto::WorkspaceRequest::TimelineWatchCapabilities { .. },
+            ..
+        } => features.contains(proto::DaemonFeatures::AGENT_CAPABILITIES),
+        ClientCtl::Workspace {
             req:
                 proto::WorkspaceRequest::ChatPrepare { .. } | proto::WorkspaceRequest::ChatSend { .. },
             ..
@@ -1356,6 +1360,25 @@ mod tests {
                 proto::DaemonFeatures::CHAT_INTERRUPT
             ));
         }
+    }
+
+    #[test]
+    fn queued_metadata_watches_require_the_current_link_capability() {
+        let control = ClientCtl::Workspace {
+            req_id: 1,
+            req: proto::WorkspaceRequest::TimelineWatchCapabilities {
+                pane_id: PaneId(7),
+                version: 1,
+            },
+        };
+        assert!(!control_supported(
+            &control,
+            proto::DaemonFeatures::AGENT_TIMELINE | proto::DaemonFeatures::VERSIONED_TIMELINE
+        ));
+        assert!(control_supported(
+            &control,
+            proto::DaemonFeatures::AGENT_CAPABILITIES
+        ));
     }
 
     #[test]

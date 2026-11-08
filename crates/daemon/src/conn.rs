@@ -347,6 +347,7 @@ pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {
         | DaemonFeatures::TIMELINE_TOOL_DIFF
         | DaemonFeatures::CHAT_SEND
         | DaemonFeatures::CHAT_INTERRUPT
+        | DaemonFeatures::AGENT_CAPABILITIES
         | DaemonFeatures::GENERATED_INPUT
         | DaemonFeatures::ACTIVE_SIZING;
     if core.cfg.push.enabled && core.cfg.push.live_activity {

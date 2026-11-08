@@ -12,6 +12,7 @@ final class PaneChatState {
         let presentation: UUID
         let session: String?
         let epoch: UInt64?
+        var capabilityGeneration: UUID? = nil
     }
     enum TerminalNotice: Equatable {
         case unavailableCommand(UInt64)
@@ -40,13 +41,17 @@ final class PaneChatState {
     let photos = ChatPhotos()
     var detail: ChatDetail?
     var model: TimelineModel? { lease?.model }
+    var capabilities: AgentCapabilities {
+        guard let model, model.error == nil else { return [] }
+        return model.frame.capabilities
+    }
     @ObservationIgnored weak var controller: ChatViewController?
     @ObservationIgnored private weak var hub: DaemonWorkspace?
     @ObservationIgnored private var actionEpoch = UUID()
 
     var actionContext: ActionContext {
         ActionContext(presentation: actionEpoch, session: model?.frame.session?.nativeSession,
-                      epoch: model?.frame.cursor?.epoch)
+                      epoch: model?.frame.cursor?.epoch, capabilityGeneration: model?.frame.capabilityGeneration)
     }
 
     private let member: HostPane
@@ -70,7 +75,7 @@ final class PaneChatState {
         self.member = member
         self.defaultPresentation = defaultPresentation
         self.inputPresentation = inputPresentation
-        self.agent = agent == .other ? nil : agent
+        self.agent = agent
         self.preferences = preferences
         self.pool = pool
         self.dictation = dictation
@@ -92,7 +97,7 @@ final class PaneChatState {
     }
 
     func updateAgent(_ agent: AgentKind?) {
-        let supported = agent == .other ? nil : agent
+        let supported = agent
         guard self.agent != supported else { return }
         invalidateActions()
         self.agent = supported

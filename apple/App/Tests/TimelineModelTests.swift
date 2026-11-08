@@ -161,6 +161,24 @@ final class TimelineModelTests: XCTestCase {
         XCTAssertEqual(resolutions.withLock { $0 }, initial)
     }
 
+    func testCapabilityRoundTripsInvalidateDeferredIntentEvenInOneWorkerBatch() async throws {
+        let worker = TimelineRenderWorker(pane: 7)
+        let full = try TimelineFixtureJSON.snapshot(0..<1)
+        let readOnly = try TimelineFixtureJSON.snapshot(0..<1, capabilities: 1)
+        let first = try await worker.apply([.snapshot(full)], resetsSnapshot: true, protectsHistory: false)
+        let second = try await worker.apply([.snapshot(readOnly), .snapshot(full)], resetsSnapshot: false, protectsHistory: false)
+        XCTAssertEqual(first.frame.capabilities, second.frame.capabilities)
+        XCTAssertNotEqual(first.frame.capabilityGeneration, second.frame.capabilityGeneration)
+        let unknown = try await worker.apply([.snapshot(try TimelineFixtureJSON.snapshot(0..<1, capabilities: 0x8001))], resetsSnapshot: false, protectsHistory: false)
+        XCTAssertTrue(unknown.frame.capabilities.contains(.read))
+        XCTAssertFalse(unknown.frame.capabilities.contains(.send))
+        XCTAssertEqual(unknown.frame.capabilities.rawValue, 0x8001)
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(full.utf8)) as? [String: Any])
+        legacy.removeValue(forKey: "capabilities")
+        let fallback = try await worker.apply([.snapshot(try TimelineFixtureJSON.json(legacy))], resetsSnapshot: false, protectsHistory: false)
+        XCTAssertEqual(fallback.frame.capabilities, [.read])
+    }
+
     func testSnapshotAndStreamingUpdatesRenderThroughTheWorker() async throws {
         let model = TimelineModel(pane: 7)
         model.receive(.snapshot(try TimelineFixtureJSON.snapshot(0..<60)))
@@ -318,8 +336,8 @@ final class TimelineModelTests: XCTestCase {
 }
 
 nonisolated enum TimelineFixtureJSON {
-    static func snapshot(_ range: Range<Int>, sequence: UInt64 = 0, epoch: UInt64 = 1, before: UInt64? = 100) throws -> String {
-        try json(["cursor": ["epoch": epoch, "sequence": sequence], "session": ["agent": "Claude", "native_session": "fixture", "title": "Review the change", "model": "fixture-model", "permission_mode": "default", "commands": []], "items": range.map { item($0) }, "before": before.map { $0 as Any } ?? NSNull()])
+    static func snapshot(_ range: Range<Int>, sequence: UInt64 = 0, epoch: UInt64 = 1, before: UInt64? = 100, capabilities: UInt16 = 447, agent: String = "Claude") throws -> String {
+        try json(["capabilities": capabilities, "cursor": ["epoch": epoch, "sequence": sequence], "session": ["agent": agent, "native_session": "fixture", "title": "Review the change", "model": "fixture-model", "permission_mode": "default", "commands": []], "items": range.map { item($0) }, "before": before.map { $0 as Any } ?? NSNull()])
     }
 
     static func item(_ number: Int) -> [String: Any] {

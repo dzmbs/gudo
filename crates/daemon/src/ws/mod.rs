@@ -191,6 +191,7 @@ pub(crate) async fn handle(
         }
         request @ (Request::TimelineWatch { .. }
         | Request::TimelineWatchVersioned { .. }
+        | Request::TimelineWatchCapabilities { .. }
         | Request::TimelineUnwatch { .. }
         | Request::TimelineItemsBefore { .. }
         | Request::TimelineToolOutput { .. }

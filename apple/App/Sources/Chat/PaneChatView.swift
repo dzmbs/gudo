@@ -126,15 +126,17 @@ struct PaneChatView<Terminal: View>: View {
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: DS.Space.s) {
-            if let approval { approval.frame(maxWidth: .infinity) }
-            TextField("Message", text: $state.draft, axis: .vertical)
-                .font(DS.Font.prose).lineLimit(1...6)
-                .disabled(state.dictation.isActive)
-                .accessibilityIdentifier("chat-draft")
-            if state.draft.hasPrefix("/"), ChatCommands.query(state.draft) != nil {
-                Button("Choose command…", systemImage: "slash.circle", action: openCommands)
-                    .font(DS.Font.caption).frame(minHeight: DS.Size.touchTarget)
-                    .disabled(!permitsSending || state.dictation.isActive || state.composer.isBusy || state.interrupt.isBusy)
+            if state.capabilities.contains(.approvals), let approval { approval.frame(maxWidth: .infinity) }
+            if state.capabilities.contains(.send) {
+                TextField("Message", text: $state.draft, axis: .vertical)
+                    .font(DS.Font.prose).lineLimit(1...6)
+                    .disabled(state.dictation.isActive)
+                    .accessibilityIdentifier("chat-draft")
+                if state.draft.hasPrefix("/"), ChatCommands.query(state.draft) != nil {
+                    Button("Choose command…", systemImage: "slash.circle", action: openCommands)
+                        .font(DS.Font.caption).frame(minHeight: DS.Size.touchTarget)
+                        .disabled(!permitsSending || state.dictation.isActive || state.composer.isBusy || state.interrupt.isBusy)
+                }
             }
             if let message = composerStatus {
                 HStack {
@@ -152,27 +154,29 @@ struct PaneChatView<Terminal: View>: View {
                 }
             }
             HStack(spacing: DS.Space.s) {
-                Menu {
-                    Button("Commands", systemImage: "slash.circle", action: openCommands)
-                        .keyboardShortcut("/", modifiers: .command)
-                        .disabled(ChatCommands.query(state.draft) == nil)
-                    Button("Upload photo to host…", systemImage: "photo", action: choosePhoto)
-                } label: {
-                    Label("Add to message", systemImage: "plus").labelStyle(.iconOnly)
-                        .frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
+                if state.capabilities.contains(.send) {
+                    Menu {
+                        Button("Commands", systemImage: "slash.circle", action: openCommands)
+                            .keyboardShortcut("/", modifiers: .command)
+                            .disabled(ChatCommands.query(state.draft) == nil)
+                        Button("Upload photo to host…", systemImage: "photo", action: choosePhoto)
+                    } label: {
+                        Label("Add to message", systemImage: "plus").labelStyle(.iconOnly)
+                            .frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
+                    }
+                    .buttonStyle(.quiet)
+                    .disabled(!permitsSending || state.dictation.isActive || state.photos.isBusy
+                              || state.composer.isBusy || state.interrupt.isBusy)
+                    .accessibilityIdentifier("chat-add")
+                    dictationControls
                 }
-                .buttonStyle(.quiet)
-                .disabled(!permitsSending || state.dictation.isActive || state.photos.isBusy
-                          || state.composer.isBusy || state.interrupt.isBusy)
-                .accessibilityIdentifier("chat-add")
-                dictationControls
                 Spacer(minLength: 0)
                 Button { state.show(.terminal, terminal: pane) } label: {
                     Label("Open Terminal", systemImage: "terminal").labelStyle(.iconOnly).font(DS.Font.caption)
                         .frame(minHeight: DS.Size.touchTarget)
                 }
                 .buttonStyle(.quiet)
-                if working, state.agent == .claude, !state.dictation.isActive {
+                if working, state.capabilities.contains(.stop), !state.dictation.isActive {
                     Button(action: interrupt) {
                         Label("Stop", systemImage: "stop.fill").labelStyle(.iconOnly)
                             .frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
@@ -182,15 +186,17 @@ struct PaneChatView<Terminal: View>: View {
                         .disabled(state.presentation != .chat || !permitsSending || state.photos.isBusy || !state.interrupt.canBegin)
                         .accessibilityIdentifier("chat-stop")
                 }
-                Button(action: send) {
-                    Label("Send", systemImage: "arrow.up").labelStyle(.iconOnly)
-                        .frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
+                if state.capabilities.contains(.send) {
+                    Button(action: send) {
+                        Label("Send", systemImage: "arrow.up").labelStyle(.iconOnly)
+                            .frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
+                    }
+                        .buttonStyle(.quietProminent)
+                        .keyboardShortcut(.return, modifiers: .command)
+                    .disabled(state.presentation != .chat || !permitsSending || state.dictation.isActive || state.photos.isBusy || state.interrupt.isBusy
+                              || approval?.hasBlockedRequest == true || !state.composer.canSend(state.draft))
+                    .accessibilityIdentifier("chat-send")
                 }
-                    .buttonStyle(.quietProminent)
-                    .keyboardShortcut(.return, modifiers: .command)
-                .disabled(state.presentation != .chat || !permitsSending || state.dictation.isActive || state.photos.isBusy || state.interrupt.isBusy
-                          || approval?.hasBlockedRequest == true || !state.composer.canSend(state.draft))
-                .accessibilityIdentifier("chat-send")
             }
         }
         .padding(DS.Space.l).foregroundStyle(DS.Palette.text).background(DS.Palette.sidebar)
@@ -217,7 +223,7 @@ struct PaneChatView<Terminal: View>: View {
     }
 
     func choosePhoto() {
-        guard prepareAction(state.actionContext), !state.composer.isBusy, !state.interrupt.isBusy else { return }
+        guard state.capabilities.contains(.send), prepareAction(state.actionContext), !state.composer.isBusy, !state.interrupt.isBusy else { return }
         state.invalidateActions()
         state.photos.begin(in: state)
         photoPickerPresented = true
@@ -245,19 +251,19 @@ struct PaneChatView<Terminal: View>: View {
     }
 
     private func isCurrentPhotoContext(_ context: PaneChatState.ActionContext) -> Bool {
-        !Task.isCancelled && permitsSending && state.actionContext == context && state.presentation == .chat
+        !Task.isCancelled && state.capabilities.contains(.send) && permitsSending && state.actionContext == context && state.presentation == .chat
             && state.photos.isBusy && !state.composer.isBusy && !state.interrupt.isBusy && !state.dictation.isActive
     }
 
     func openCommands() {
-        guard prepareAction(state.actionContext), ChatCommands.query(state.draft) != nil,
+        guard state.capabilities.contains(.send), prepareAction(state.actionContext), ChatCommands.query(state.draft) != nil,
               !state.composer.isBusy, !state.interrupt.isBusy else { return }
         state.presentDetail { .commands(ChatCommandOffer(state: $0)) }
     }
 
     func dictate() {
         if state.dictation.isActive { state.dictation.finish(); return }
-        guard prepareAction(state.actionContext), !state.composer.isBusy, !state.interrupt.isBusy else { return }
+        guard state.capabilities.contains(.send), prepareAction(state.actionContext), !state.composer.isBusy, !state.interrupt.isBusy else { return }
         state.invalidateActions()
         state.dictation.start(in: state)
     }
@@ -280,23 +286,22 @@ struct PaneChatView<Terminal: View>: View {
     }
 
     private var unsentWarning: String {
-        let agent = state.agent == .codex ? "Codex" : "Claude Code"
-        return "\(agent) on the Mac may have unsent text."
+        "The agent in Terminal may have unsent text."
     }
 
     func send() {
         let context = state.actionContext
-        guard !state.interrupt.isBusy, prepareAction(context), state.composer.canSend(state.draft) else { return }
+        guard state.capabilities.contains(.send), !state.interrupt.isBusy, prepareAction(context), state.composer.canSend(state.draft) else { return }
         state.dictation.cancel()
         state.photos.cancel()
         let draft = state.draft
         let generation = state.composer.requestGeneration
         Task {
             guard generation == state.composer.requestGeneration,
-                  !state.interrupt.isBusy, prepareAction(context) else { return }
+                  state.capabilities.contains(.send), !state.interrupt.isBusy, prepareAction(context) else { return }
             if state.interrupt.phase == .finished { state.interrupt.reset() }
             await state.composer.begin(draft) { command in
-                guard !state.interrupt.isBusy, prepareAction(context) else { throw CancellationError() }
+                guard state.capabilities.contains(.send), !state.interrupt.isBusy, prepareAction(context) else { throw CancellationError() }
                 let client = try hub.timelineClient()
                 let json: String
                 switch command {
@@ -312,17 +317,17 @@ struct PaneChatView<Terminal: View>: View {
 
     func interrupt() {
         let context = state.actionContext
-        guard working, state.agent == .claude, state.interrupt.canBegin, prepareAction(context) else { return }
+        guard working, state.capabilities.contains(.stop), state.interrupt.canBegin, prepareAction(context) else { return }
         state.dictation.cancel()
         state.photos.cancel()
         state.composer.cancelBeforeSend()
         let generation = state.interrupt.requestGeneration
         Task {
             guard generation == state.interrupt.requestGeneration,
-                  working, state.agent == .claude, state.interrupt.canBegin, prepareAction(context) else { return }
+                  working, state.capabilities.contains(.stop), state.interrupt.canBegin, prepareAction(context) else { return }
             state.composer.cancelBeforeSend()
             await state.interrupt.begin { command in
-                guard working, state.agent == .claude, prepareAction(context) else { throw CancellationError() }
+                guard working, state.capabilities.contains(.stop), prepareAction(context) else { throw CancellationError() }
                 let client = try hub.timelineClient()
                 let json: String
                 switch command {
@@ -360,7 +365,7 @@ struct PaneChatView<Terminal: View>: View {
     }
 
     private var actions: ChatRowActions {
-        ChatRowActions(showTerminal: { state.showTerminal(commandMark: $0, terminal: pane) }, selectText: { text in
+        ChatRowActions(supportsDiffs: state.capabilities.contains(.diffs), showTerminal: { state.showTerminal(commandMark: $0, terminal: pane) }, selectText: { text in
             state.presentDetail { _ in .text(ChatSelectedText(title: "Select Text", text: text)) }
         }, showTool: { item in
             guard case .tool(let tool) = item.body else { return }
@@ -369,6 +374,7 @@ struct PaneChatView<Terminal: View>: View {
     }
 
     private func selectDiffPreview(_ target: ChatDiffTarget) {
+        guard state.capabilities.contains(.diffs) else { return }
         let groups = ChatDiffPreview.groups(for: target, rows: state.model?.frame.rows ?? [])
         state.presentDetail { _ in .diff(groups) }
     }

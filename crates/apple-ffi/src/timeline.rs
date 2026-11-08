@@ -7,6 +7,13 @@ fn encoded<T: serde::Serialize>(value: &T) -> Result<String, proto::WsError> {
     serde_json::to_string(value).map_err(|error| proto::WsError::Failed(error.to_string()))
 }
 
+#[derive(serde::Serialize)]
+struct SnapshotMetadata<'a> {
+    #[serde(flatten)]
+    snapshot: &'a proto::TimelineSnapshot,
+    capabilities: proto::AgentCapabilities,
+}
+
 #[uniffi::export]
 impl DaemonClient {
     pub async fn chat_prepare(&self, pane_id: u64) -> Result<String, WorkspaceError> {
@@ -62,7 +69,13 @@ impl DaemonClient {
 
     pub async fn timeline_watch(&self, pane_id: u64) -> Result<String, WorkspaceError> {
         self.ws_call(|client| async move {
-            encoded(&client.timeline_watch(proto::PaneId(pane_id)).await?)
+            let snapshot = client
+                .timeline_watch_capabilities(proto::PaneId(pane_id))
+                .await?;
+            encoded(&SnapshotMetadata {
+                snapshot: &snapshot.snapshot,
+                capabilities: snapshot.capabilities,
+            })
         })
         .await
     }
@@ -128,6 +141,37 @@ pub(crate) fn encode_update(update: &proto::TimelineUpdate) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snapshot_metadata_preserves_the_app_json_shape_and_unknown_feature_bits() {
+        let snapshot = proto::TimelineSnapshot {
+            cursor: proto::TimelineCursor {
+                epoch: 1,
+                sequence: 2,
+            },
+            session: proto::TimelineSession {
+                agent: proto::AgentKind::Claude,
+                native_session: "fixture".into(),
+                title: None,
+                model: None,
+                permission_mode: None,
+                commands: vec![],
+            },
+            items: vec![],
+            before: None,
+        };
+        let json = encoded(&SnapshotMetadata {
+            snapshot: &snapshot,
+            capabilities: proto::AgentCapabilities(0x8001),
+        })
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["capabilities"], 0x8001);
+        assert_eq!(
+            serde_json::from_str::<proto::TimelineSnapshot>(&json).unwrap(),
+            snapshot
+        );
+    }
 
     #[test]
     fn timeline_json_keeps_large_integer_cursors_and_text_exactly() {

@@ -146,6 +146,21 @@ macro_rules! bitset {
 }
 
 bitset! {
+    /// Adapter features, independent of permission to perform an action.
+    AgentCapabilities: u16 {
+        READ = 0;
+        SEND = 1;
+        ACKNOWLEDGED_SEND = 2;
+        STOP = 3;
+        APPROVALS = 4;
+        DIFFS = 5;
+        STREAMING_DELTAS = 6;
+        THINKING = 7;
+        PLANS = 8;
+    }
+}
+
+bitset! {
     /// The roles a grant confers. Roles combine: `DRIVER | APPROVER` is normal for a
     /// pair-programming partner.
     ///
@@ -423,5 +438,7 @@ bitset! {
         CHAT_SEND = 29;
         /// Native interrupt controls with live-turn tickets and draft-risk confirmation.
         CHAT_INTERRUPT = 30;
+        /// Returns session-bound adapter features with a timeline watch snapshot.
+        AGENT_CAPABILITIES = 31;
     }
 }

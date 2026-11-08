@@ -63,6 +63,7 @@ nonisolated public struct TimelineCommand: Codable, Equatable, Sendable, Identif
 }
 
 nonisolated public struct TimelineSnapshot: Codable, Equatable, Sendable {
+    public var capabilities: AgentCapabilities? = nil
     public var cursor: TimelineCursor
     public var session: TimelineSession
     public var items: [TimelineItem]

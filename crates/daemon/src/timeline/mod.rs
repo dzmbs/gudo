@@ -230,6 +230,7 @@ pub(crate) fn bulk_request(request: &WorkspaceRequest) -> bool {
         request,
         WorkspaceRequest::TimelineWatch { .. }
             | WorkspaceRequest::TimelineWatchVersioned { .. }
+            | WorkspaceRequest::TimelineWatchCapabilities { .. }
             | WorkspaceRequest::TimelineItemsBefore { .. }
             | WorkspaceRequest::TimelineToolOutput { .. }
             | WorkspaceRequest::TimelineToolDiff { .. }
@@ -239,7 +240,8 @@ pub(crate) fn bulk_request(request: &WorkspaceRequest) -> bool {
 pub(crate) fn bulk_reply(result: &Result<WorkspaceResponse, WsError>) -> bool {
     matches!(
         result,
-        Ok(WorkspaceResponse::Timeline(_)
+        Ok(WorkspaceResponse::AgentTimeline(_)
+            | WorkspaceResponse::Timeline(_)
             | WorkspaceResponse::TimelineOutput(_)
             | WorkspaceResponse::TimelineDiff(_))
     )
@@ -401,7 +403,9 @@ async fn retry_after(timeline: Arc<Timeline>) {
 }
 
 fn negotiate_request(request: WorkspaceRequest) -> Result<WorkspaceRequest, WsError> {
-    let WorkspaceRequest::TimelineWatchVersioned { pane_id, version } = request else {
+    let (WorkspaceRequest::TimelineWatchVersioned { pane_id, version }
+    | WorkspaceRequest::TimelineWatchCapabilities { pane_id, version }) = request
+    else {
         return Ok(request);
     };
     let version = proto::TimelineVersion::negotiate(version)
@@ -419,6 +423,7 @@ pub(crate) async fn handle(
     if !connection.caps.contains(Caps::AGENT_TIMELINE) {
         return Err(WsError::Unavailable("update the app to use Chat".into()));
     }
+    let wants_capabilities = matches!(request, WorkspaceRequest::TimelineWatchCapabilities { .. });
     match negotiate_request(request)? {
         WorkspaceRequest::TimelineUnwatch { pane_id } => {
             lock(&connection.timeline_watches).remove(&pane_id);
@@ -440,8 +445,13 @@ pub(crate) async fn handle(
                     "Chat stopped; reopen it to retry".into(),
                 ));
             }
-            let snapshot = proto::TimelineVersion::V1
-                .snapshot(lock(&timeline.state).snapshot(connection.timeline_since));
+            let (snapshot, capabilities) = {
+                let state = lock(&timeline.state);
+                (
+                    proto::TimelineVersion::V1.snapshot(state.snapshot(connection.timeline_since)),
+                    state.capabilities(),
+                )
+            };
             let mut watches = lock(&connection.timeline_watches);
             if watches.len() >= MAX_WATCHES && !watches.contains_key(&pane_id) {
                 return Err(WsError::Invalid("too many Chat panes are open".into()));
@@ -496,7 +506,16 @@ pub(crate) async fn handle(
                 timeline,
             };
             watches.insert(pane_id, watch);
-            Ok(WorkspaceResponse::Timeline(snapshot))
+            if wants_capabilities {
+                Ok(WorkspaceResponse::AgentTimeline(
+                    proto::AgentTimelineSnapshot {
+                        snapshot,
+                        capabilities,
+                    },
+                ))
+            } else {
+                Ok(WorkspaceResponse::Timeline(snapshot))
+            }
         }
         WorkspaceRequest::TimelineItemsBefore {
             pane_id,

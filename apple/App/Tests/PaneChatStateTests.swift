@@ -83,12 +83,22 @@ final class PaneChatStateTests: XCTestCase {
         XCTAssertEqual(first.draft, "Unsent draft")
     }
 
-    func testUnsupportedAgentsCannotAcquireATimelineModel() throws {
+    func testAbsentAgentsCannotAcquireATimelineModel() throws {
         let first = try state()
-        first.updateAgent(.other)
+        first.updateAgent(nil)
         first.activate(in: DaemonWorkspace(hostId: "first", events: WorkspaceEventHub(), resolve: { nil }))
         XCTAssertNil(first.agent)
         XCTAssertNil(first.model)
+    }
+
+    func testARecognizedKindDoesNotInventAdapterFeatures() throws {
+        let first = try state()
+        first.updateAgent(.other)
+        first.activate(in: DaemonWorkspace(hostId: "first", events: WorkspaceEventHub(), resolve: { nil }))
+        XCTAssertNotNil(first.agent)
+        XCTAssertNotNil(first.model)
+        XCTAssertEqual(first.capabilities, [])
+        first.deactivate()
     }
 
     func testDraftSurvivesRenderModelEviction() throws {

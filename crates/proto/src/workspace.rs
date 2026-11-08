@@ -378,6 +378,10 @@ pub enum WorkspaceRequest {
         ticket: u64,
         confirmed_revision: Option<u64>,
     },
+    TimelineWatchCapabilities {
+        pane_id: PaneId,
+        version: u16,
+    },
 }
 
 /// The answer to a [`WorkspaceRequest`].
@@ -455,6 +459,14 @@ pub enum WorkspaceResponse {
     TimelineOutput(crate::TimelineToolOutput),
     TimelineDiff(Vec<FileDiff>),
     ChatSend(ChatSendStatus),
+    AgentTimeline(AgentTimelineSnapshot),
+}
+
+/// A snapshot and the features of the adapter that produced it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentTimelineSnapshot {
+    pub snapshot: crate::TimelineSnapshot,
+    pub capabilities: crate::AgentCapabilities,
 }
 
 /// Draft admission and agent-reported acknowledgement are separate from transport delivery.
