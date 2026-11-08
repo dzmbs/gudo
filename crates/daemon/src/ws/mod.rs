@@ -15,6 +15,7 @@ mod paths;
 pub(crate) mod ports;
 pub(crate) mod repo;
 mod repo_ops;
+mod resolve;
 pub(crate) mod review;
 pub(crate) mod trust;
 pub(crate) mod tunnel;
@@ -365,6 +366,32 @@ pub(crate) async fn handle(
         Request::FsStat { path } => blocking(move || files::stat(&policy.resolve(&path)?))
             .await
             .map(Response::Stat),
+        Request::ResolvePaths(query) => {
+            resolve::validate(&query)?;
+            let entry = core
+                .pane(query.pane_id)
+                .filter(|_| core.scope_within(proto::Scope::Pane(query.pane_id), conn.scope))
+                .ok_or_else(|| WsError::NotFound(format!("pane {}", query.pane_id.0)))?;
+            let home = core
+                .cfg
+                .pane_var("HOME")
+                .map_or_else(|| policy.home().to_owned(), PathBuf::from);
+            blocking(move || {
+                let directory = query
+                    .command_id
+                    .and_then(|id| entry.pane.command_cwd(id))
+                    .or_else(|| lock(&entry.meta).cwd.clone())
+                    .map(PathBuf::from);
+                Ok(resolve::resolve_all(
+                    &policy,
+                    &query.paths,
+                    directory.as_deref(),
+                    &home,
+                ))
+            })
+            .await
+            .map(Response::ResolvedPaths)
+        }
         Request::FsRead { path, offset, len } => {
             blocking(move || files::read(&policy, &path, offset, len))
                 .await

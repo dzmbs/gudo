@@ -279,7 +279,7 @@ impl<'a> LinkCollector<'a> {
 }
 
 /// Removes `.` and resolves `..` lexically (symlinks are kept as written).
-fn normalize(path: &Path) -> PathBuf {
+pub(crate) fn normalize(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in path.components() {
         match component {

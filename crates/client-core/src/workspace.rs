@@ -676,6 +676,15 @@ impl Client {
             WorkspaceResponse::Stat(stat) => stat)
     }
 
+    /// Paths printed in a pane, resolved where the printing command ran.
+    pub async fn resolve_paths(
+        &self,
+        query: proto::PathQuery,
+    ) -> Result<Vec<proto::ResolvedPath>, WsError> {
+        expect!(self.workspace(WorkspaceRequest::ResolvePaths(query)).await?,
+            WorkspaceResponse::ResolvedPaths(paths) => paths)
+    }
+
     /// Reads up to 1 MiB of a file.
     pub async fn fs_read(&self, path: String, offset: u64, len: u32) -> Result<FileChunk, WsError> {
         expect!(self.workspace(WorkspaceRequest::FsRead { path, offset, len }).await?,

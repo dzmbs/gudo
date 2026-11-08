@@ -23,6 +23,7 @@ mod kitty;
 mod multiplayer;
 mod multiplayer_mp2;
 mod notify;
+mod paths;
 mod presence;
 mod program_status;
 mod projects;

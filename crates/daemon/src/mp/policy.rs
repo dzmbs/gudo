@@ -228,6 +228,7 @@ pub(crate) fn workspace(req: &WorkspaceRequest) -> (Need, Target) {
         | R::FsList { .. }
         | R::FsStat { .. }
         | R::FsRead { .. }
+        | R::ResolvePaths(_)
         | R::FsWatch { .. }
         | R::FsUnwatch { .. }
         | R::FsWrite { .. }

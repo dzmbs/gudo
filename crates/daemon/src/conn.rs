@@ -323,7 +323,7 @@ fn conn_err(error: iroh::endpoint::ConnectionError) -> NetError {
 }
 
 pub(crate) fn more_daemon_features() -> proto::MoreDaemonFeatures {
-    proto::MoreDaemonFeatures::EMPTY
+    proto::MoreDaemonFeatures::RESOLVE_PATHS
 }
 
 pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {

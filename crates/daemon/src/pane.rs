@@ -8,7 +8,7 @@
 
 use std::collections::VecDeque;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
@@ -867,7 +867,7 @@ impl Pane {
         home: Option<&Path>,
     ) -> Links {
         // Extract under the lock, scan (regexes, file system checks) after releasing it.
-        let regions: Vec<(LinkSource, String, String)> = {
+        let regions: Vec<(LinkSource, String, String, Option<PathBuf>)> = {
             let vt = lock(&self.vt);
             let since = viewer.map(|principal| {
                 vt.view(principal)
@@ -877,33 +877,41 @@ impl Pane {
                 LinkSource::Screen,
                 vt.term.vt(TextRegion::Active).unwrap_or_default(),
                 vt.text(TextRegion::Active),
+                None,
             )];
-            let ids: Vec<u64> = vt
+            let marks: Vec<(u64, Option<PathBuf>)> = vt
                 .commands
                 .finished()
                 .filter(|mark| since.is_none_or(|since| mark.started_at >= since))
                 .take(usize::from(commands))
-                .map(|mark| mark.command_id)
+                .map(|mark| (mark.command_id, mark.cwd.as_ref().map(PathBuf::from)))
                 .collect();
-            for id in ids {
+            for (id, command_cwd) in marks {
                 if let Some((Some(region), _)) = vt.commands.output_range(&vt.term, id) {
                     regions.push((
                         LinkSource::Command { command_id: id },
                         vt.term.vt(region).unwrap_or_default(),
                         vt.text(region),
+                        command_cwd,
                     ));
                 }
             }
             regions
         };
         let mut collector = LinkCollector::new(cwd, home);
-        for (source, vt_text, plain) in &regions {
+        for (source, vt_text, plain, command_cwd) in &regions {
+            collector.cwd = command_cwd.as_deref().or(cwd);
             collector.scan(vt_text, plain, *source);
         }
         Links {
             cwd: cwd.map(|cwd| cwd.to_string_lossy().into_owned()),
             links: collector.links,
         }
+    }
+
+    /// The directory command `id` started in, if the pane still remembers it.
+    pub fn command_cwd(&self, id: u64) -> Option<String> {
+        lock(&self.vt).commands.mark(id)?.cwd.clone()
     }
 
     /// The shell-integration commands the pane remembers. A `viewer` gets those that started

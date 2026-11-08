@@ -382,6 +382,9 @@ pub enum WorkspaceRequest {
         pane_id: PaneId,
         version: u16,
     },
+    /// Paths a pane printed, resolved where the printing command ran →
+    /// [`WorkspaceResponse::ResolvedPaths`]. Needs `MoreDaemonFeatures::RESOLVE_PATHS`.
+    ResolvePaths(PathQuery),
 }
 
 /// The answer to a [`WorkspaceRequest`].
@@ -460,6 +463,8 @@ pub enum WorkspaceResponse {
     TimelineDiff(Vec<FileDiff>),
     ChatSend(ChatSendStatus),
     AgentTimeline(AgentTimelineSnapshot),
+    /// One per asked path, in order.
+    ResolvedPaths(Vec<ResolvedPath>),
 }
 
 /// A snapshot and the features of the adapter that produced it.
@@ -1300,6 +1305,42 @@ pub struct PushActivityToken {
     /// The capability the relay issued for the activity's push token (`kind: "activity"`);
     /// `None`: the activity ended or was dismissed.
     pub cap: Option<String>,
+}
+
+/// Paths as a pane printed them ([`WorkspaceRequest::ResolvePaths`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PathQuery {
+    pub pane_id: PaneId,
+    /// The command whose output holds them; `None` for the pane's current directory.
+    pub command_id: Option<u64>,
+    /// Absolute, `~/…` or relative, without a line suffix; at most [`PathQuery::MAX_PATHS`].
+    pub paths: Vec<String>,
+}
+
+impl PathQuery {
+    pub const MAX_PATHS: usize = 64;
+}
+
+/// A path from a [`PathQuery`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedPath {
+    /// Absolute and normalised, or as asked when there was no directory to resolve it in.
+    pub path: String,
+    pub found: PathFound,
+}
+
+/// What is at a [`ResolvedPath`], with symlinks followed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PathFound {
+    File {
+        size: u64,
+    },
+    Dir,
+    /// A socket, FIFO or device.
+    Other,
+    Missing,
+    /// Outside the directories the daemon serves; not looked at.
+    Denied,
 }
 
 /// One agent's notifications on a device ([`WorkspaceRequest::PushAgents`]), on top of

@@ -320,6 +320,13 @@ impl CommandLog {
             .collect()
     }
 
+    pub fn mark(&self, id: u64) -> Option<&CommandMark> {
+        self.commands
+            .iter()
+            .map(|command| &command.mark)
+            .find(|mark| mark.command_id == id)
+    }
+
     /// The most recent finished commands, newest first.
     pub fn finished(&self) -> impl Iterator<Item = &CommandMark> {
         self.commands

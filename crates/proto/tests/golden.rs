@@ -534,6 +534,7 @@ fn every_message_matches_its_frozen_bytes() {
     terminal_limits_messages(&mut checker);
     guest_answer_messages(&mut checker);
     terminal_colors_messages(&mut checker);
+    resolve_paths_messages(&mut checker);
 
     assert!(
         checker.failures.is_empty(),
@@ -3398,5 +3399,48 @@ fn terminal_colors_messages(checker: &mut Checker) {
             palette: vec![[0, 0, 0], [0xcc, 0x66, 0x66]],
         }),
         "13000000011effffff282c3401526fff02000000cc6666",
+    );
+}
+
+/// Paths printed in a pane (`MoreDaemonFeatures::RESOLVE_PATHS`, bit 1; `ResolvePaths` and
+/// `ResolvedPaths` appended last).
+fn resolve_paths_messages(checker: &mut Checker) {
+    checker.check(
+        "MoreDaemonFeatures::RESOLVE_PATHS",
+        MoreDaemonFeatures::RESOLVE_PATHS,
+        "020000000102",
+    );
+    checker.check(
+        "ClientCtl::Workspace(ResolvePaths)",
+        ClientCtl::Workspace {
+            req_id: 9,
+            req: WorkspaceRequest::ResolvePaths(PathQuery {
+                pane_id: PANE,
+                command_id: Some(4),
+                paths: vec!["src/a.rs".into(), "~/b".into()],
+            }),
+        },
+        "150000000115094903010402087372632f612e7273037e2f62",
+    );
+    checker.check(
+        "ServerCtl::WorkspaceResult(ResolvedPaths)",
+        ServerCtl::WorkspaceResult {
+            req_id: 9,
+            result: Ok(WorkspaceResponse::ResolvedPaths(vec![
+                ResolvedPath {
+                    path: "/w/src/a.rs".into(),
+                    found: PathFound::File { size: 300 },
+                },
+                ResolvedPath {
+                    path: "/h/b".into(),
+                    found: PathFound::Dir,
+                },
+                ResolvedPath {
+                    path: "/etc".into(),
+                    found: PathFound::Denied,
+                },
+            ])),
+        },
+        "210000000118090028030b2f772f7372632f612e727300ac02042f682f6201042f65746304",
     );
 }
