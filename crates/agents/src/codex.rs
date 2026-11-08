@@ -7,6 +7,9 @@
 //! the shim then runs the user's own `notify` too. Hook payloads are still parsed for users who
 //! opt into the marker-block install.
 
+mod live_launch;
+pub use live_launch::{CodexLiveLaunch, InvalidCodexSocket};
+
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
