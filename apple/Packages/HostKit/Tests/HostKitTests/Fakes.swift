@@ -10,13 +10,14 @@ struct TestError: Error, CustomStringConvertible {
 }
 
 /// A `DaemonClientAPI` that records calls; tests push events through `listener`.
-nonisolated final class FakeClient: DaemonClientAPI, GeneratedInputClient, PaneSizingClient {
+nonisolated final class FakeClient: DaemonClientAPI, GeneratedInputClient, PaneSizingClient, RunAgainClient {
     enum Call: Equatable {
         case attach(UInt64?), op(GudoCore.LayoutOp), subscribe(UInt64), unsubscribe(UInt64)
         case setView(UInt64?, [UInt64]), resize(UInt64, PaneSize), input(UInt64, Data), paste(UInt64, String)
         case generatedInput(UInt64, Data)
         case activity(UInt64, PaneActivity), claimSize(UInt64), sizePolicy(UInt64, SizePolicy)
         case fetchHistory(UInt64), decide(UInt64, UInt32), reconnect, suspend, probe
+        case runAgain(UInt64, String)
     }
 
     let listener: any ClientEventListener
@@ -44,6 +45,7 @@ nonisolated final class FakeClient: DaemonClientAPI, GeneratedInputClient, PaneS
     func resize(paneId: UInt64, size: PaneSize) { record(.resize(paneId, size)) }
     func setPaneActivity(paneId: UInt64, activity: PaneActivity) { record(.activity(paneId, activity)) }
     func claimPaneSize(paneId: UInt64) { record(.claimSize(paneId)) }
+    func runAgain(offer: RunAgainOffer) { record(.runAgain(offer.paneId, offer.command)) }
     func setSizePolicy(paneId: UInt64, policy: SizePolicy) { record(.sizePolicy(paneId, policy)) }
     func sendInput(paneId: UInt64, data: Data) { record(.input(paneId, data)) }
     func sendGeneratedInput(paneId: UInt64, data: Data) { record(.generatedInput(paneId, data)) }

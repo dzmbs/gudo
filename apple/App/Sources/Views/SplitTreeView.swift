@@ -644,6 +644,7 @@ struct PaneSlot: View {
             .fadedTowardTerminalBackground(pane.showsSavedScreen ? 0.25 : 0)
             .overlay { SavedScreenOverlay(pane: pane) }
             .overlay(alignment: .bottomTrailing) { PaneSizingOverlay(pane: pane, workspace: workspace) }
+            .overlay(alignment: .bottomLeading) { RunAgainOverlay(pane: pane, workspace: workspace) }
             .overlay {
                 StalePaneOverlay(connection: pane.connection, paneId: id,
                     hostIsLive: namesHost ? model.connectionState(ofGroup: workspace.groupId).isLive : nil)

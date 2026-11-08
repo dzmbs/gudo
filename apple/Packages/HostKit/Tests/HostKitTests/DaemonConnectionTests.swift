@@ -34,6 +34,23 @@ import GudoCore
         try await eventually("disconnected ownership is not live") { connection.sizing.isEmpty }
     }
 
+    @Test func runAgainOffersFollowTheDaemonAndTypeTheCommand() async throws {
+        let (connection, client) = try makeConnection()
+        let devServer = RunAgainOffer(paneId: 3, command: "npm run dev")
+        client().send(.runAgainOffers(offers: [devServer, RunAgainOffer(paneId: 4, command: "tail -f log")]))
+        try await eventually("offers") { connection.runAgain.all.count == 2 }
+        connection.runAgain(in: PaneId(3))
+        #expect(client().calls.last == .runAgain(3, "npm run dev"))
+
+        client().send(.runAgainOffers(offers: [devServer]))
+        try await eventually("withdrawn offer") { connection.runAgain[PaneId(4)] == nil }
+        #expect(connection.runAgain[PaneId(3)] == devServer)
+        client().send(.paneClosed(paneId: 3))
+        try await eventually("closed pane offers nothing") { connection.runAgain.isEmpty }
+        connection.runAgain(in: PaneId(3))
+        #expect(client().calls.last == .runAgain(3, "npm run dev"), "nothing more is typed")
+    }
+
     @Test func connectAttachAndShowTheLayout() async throws {
         let (connection, client) = try makeConnection()
         #expect(connection.status == .connecting(.dialing))

@@ -45,6 +45,8 @@ public final class DaemonConnection: HostConnection {
     /// Pane metadata (title, cwd, agent) by pane, observed per pane.
     public let meta = PaneTable<PaneMeta>()
     public let sizing = PaneTable<PaneSizing>()
+    /// The command each restored pane offers to run again (a restart stopped it), by pane.
+    public let runAgain = PaneTable<RunAgainOffer>()
     /// What any program in a pane last reported about itself (OSC 7501, `status_set`), by pane.
     /// A blocked report is a status only: approvals stay in `meta[pane].agent`.
     public let programs = PaneTable<ProgramReport>()
@@ -247,6 +249,12 @@ public final class DaemonConnection: HostConnection {
     public func type(_ text: String, into pane: UInt64) {
         paste(text, into: pane)
         client?.sendInput(paneId: pane, data: Data("\r".utf8))
+    }
+
+    /// Types the command `pane` offers to run again, then Return.
+    public func runAgain(in pane: PaneId) {
+        guard let offer = runAgain[pane], let client = client as? any RunAgainClient else { return }
+        client.runAgain(offer: offer)
     }
 
     /// Pastes `text` into a pane, for the user to send.
@@ -565,6 +573,7 @@ public final class DaemonConnection: HostConnection {
             sizing.set(state, for: PaneId(state.paneId))
         case .paneClosed(let pane):
             sizing.set(nil, for: PaneId(pane))
+            runAgain.set(nil, for: PaneId(pane))
             meta.set(nil, for: PaneId(pane))
             programs.set(nil, for: PaneId(pane))
         case .sessions(let sessions):
@@ -588,6 +597,10 @@ public final class DaemonConnection: HostConnection {
             layout.receive(report)
         case .clipboard(let pane, let text):
             onClipboard?(PaneId(pane), text)
+        case .runAgainOffers(let offers):
+            let offered = Dictionary(offers.map { (PaneId($0.paneId), $0) }, uniquingKeysWith: { $1 })
+            for pane in runAgain.all.keys where offered[pane] == nil { runAgain.set(nil, for: pane) }
+            for (pane, offer) in offered { runAgain.set(offer, for: pane) }
         case .paneSnapshot(let pane, _, _):
             cachedPanes[PaneId(pane)] = nil
             noteOutput()

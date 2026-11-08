@@ -92,6 +92,14 @@ nonisolated public protocol TabHistoryClient: AnyObject, Sendable {
 
 extension DaemonClient: TabHistoryClient {}
 
+/// Typing the command a restored pane offers (`ClientEvent.runAgainOffers`), apart from
+/// `DaemonClientAPI` so test fakes need not implement it.
+nonisolated public protocol RunAgainClient: AnyObject, Sendable {
+    func runAgain(offer: RunAgainOffer)
+}
+
+extension DaemonClient: RunAgainClient {}
+
 /// The host's terminal limits its panes' mirrors follow (`DaemonClient.imageStorageLimit`),
 /// apart from `DaemonClientAPI` so test fakes need not implement it.
 nonisolated public protocol TerminalLimitsClient: AnyObject, Sendable {
