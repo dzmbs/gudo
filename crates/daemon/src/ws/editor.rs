@@ -789,7 +789,7 @@ pub(crate) async fn prewarm_on_connect(core: std::sync::Arc<crate::core::Core>) 
 /// busy server is never restarted.
 async fn accepts_token(port: u16, token: &str) -> bool {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+    const PROBE_TIMEOUT: Duration = Duration::from_millis(300);
     let probe = async {
         let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
             .await
@@ -1057,6 +1057,15 @@ mod tests {
         assert!(accepts_token(answering("302 Found").await, "t").await);
         assert!(accepts_token(answering("200 OK").await, "t").await);
         assert!(!accepts_token(answering("403 Forbidden").await, "t").await);
+        let silent = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let started = Instant::now();
+        assert!(accepts_token(silent.local_addr().unwrap().port(), "t").await);
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "a busy server never holds up its reuse"
+        );
         let gone = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = gone.local_addr().unwrap().port();
         drop(gone);
