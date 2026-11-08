@@ -121,9 +121,9 @@ fn install_exe(exe: &Path, state_dir: &Path) -> Result<()> {
          ExecStart={exe} --state-dir {state} run\n\
          Restart=on-failure\n\
          RestartSec=2\n\
-         # Panes are children of the daemon; stopping it ends them (the layout is restored on\n\
-         # the next start and agents resume their sessions).\n\
-         KillMode=control-group\n\n\
+         # The daemon is stopped first, so it saves the panes as they are; it then ends them,\n\
+         # and anything left is killed. They come back on the next start.\n\
+         KillMode=mixed\n\n\
          [Install]\n\
          WantedBy=default.target\n",
         name = brand::PRODUCT_NAME,
