@@ -227,6 +227,14 @@ Copy/Select Text use rendered plain block content, while Copy as Markdown preser
 source. If structured rendering omits content, menus explicitly offer the full raw Markdown
 rather than labeling a partial table/list preview as complete plain text.
 
+Tool headers distinguish Running, Completed, Failed, Denied and Interrupted in text as well as
+colour; future status tags never become success. Titles are bounded for native layout and
+accessibility. Empty/redacted thinking has no false expand affordance or invented duration.
+Expanded tools reuse the existing read-only diff-line renderer for the first six bounded lines,
+prepared off-main and charged to the render cache. Copy/selection menus explicitly label output
+previews rather than presenting a tail as complete output. Task tools show recorded input/output
+and status; nested subagent transcripts remain a Terminal fallback, never a guessed file/thread.
+
 Tool details read output through the existing authenticated same-pane output API, one bounded
 native page at a time, with Input/Output tabs and Beginning/Previous/Next navigation. Closing the
 sheet invalidates pending replies. Diff details use read-only native unified/side-by-side rows,

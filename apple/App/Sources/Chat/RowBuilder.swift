@@ -38,6 +38,7 @@ nonisolated struct ChatRow: Equatable, Sendable, Identifiable {
     let content: Content
     var preview: String?
     var planPreview: TimelinePlan?
+    var inlineDiff: ChatInlineDiff?
 
     enum Content: Equatable, Sendable {
         case markdown(ChatMarkdownBlock)
@@ -156,7 +157,11 @@ actor RowBuilder {
             }
             // Preserve ID/turn/actor charges as well as copied Markdown buffers and row metadata.
             bytes += assistant.text.utf8.count * 2
-        } else { rows = [plainRow(item)] }
+        } else {
+            let row = plainRow(item)
+            rows = [row]
+            bytes += row.inlineDiff?.bytes ?? 0
+        }
         bytes += rows.count * rowOverhead + 256
         let cost = LRUCost(bytes: bytes, units: rows.count)
         cache.insert(Entry(revision: item.revision, rows: rows, cost: cost, partition: partition),
@@ -196,8 +201,10 @@ actor RowBuilder {
             }
             planPreview = limited
         }
+        let diff: ChatInlineDiff?
+        if case .tool(let tool) = item.body { diff = ChatInlineDiff(tool: tool, item: item.id) } else { diff = nil }
         return ChatRow(id: ChatRowID(item: item.id, part: 0), revision: item.revision, turn: item.turn,
-                       content: .item(item), preview: preview, planPreview: planPreview)
+                       content: .item(item), preview: preview, planPreview: planPreview, inlineDiff: diff)
     }
 
     private func prefix(_ text: String, bytes: Int) -> String {

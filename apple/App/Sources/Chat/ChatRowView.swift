@@ -19,6 +19,7 @@ struct ChatRowView: View {
     private static let maximumIndentationDepth = 12
     @ScaledMetric(relativeTo: .callout) private var tableLineHeight = DS.Size.proseTableLineHeight
     @ScaledMetric(relativeTo: .caption) private var outputLineHeight = DS.Size.proseOutputLineHeight
+    @ScaledMetric(relativeTo: .body) private var diffLineHeight = DS.Size.proseDiffLineHeight
     @Environment(\.terminalTheme) private var terminalTheme
 
     var body: some View {
@@ -31,6 +32,12 @@ struct ChatRowView: View {
             .contextMenu {
                 Button(copyTitle, systemImage: "doc.on.doc") { UIPasteboard.general.string = plainText }
                 Button(selectionTitle, systemImage: "text.cursor") { actions.selectText(plainText) }
+                if case .item(let item) = row.content, case .tool(let tool) = item.body {
+                    if !tool.input.isEmpty, let output = tool.output, !output.preview.isEmpty {
+                        Button("Copy input") { UIPasteboard.general.string = tool.input }
+                        Button("Copy output preview") { UIPasteboard.general.string = output.preview }
+                    }
+                }
                 if case .markdown(let block) = row.content, !usesRawMarkdownSelection {
                     Button("Copy as Markdown") { UIPasteboard.general.string = block.source }
                 }
@@ -161,15 +168,16 @@ struct ChatRowView: View {
             Button(action: toggle) {
                 HStack(spacing: DS.Space.s) {
                     Image(systemName: "sparkle")
-                    Text(thinking.durationMs.map { "Thought for \(duration($0))" } ?? "Thinking")
+                    Text(ChatItemPresentation.thinkingTitle(thinking))
                     Spacer(minLength: DS.Space.s)
-                    if thinking.text != nil {
+                    if ChatItemPresentation.hasThinkingText(thinking) {
                         Image(systemName: isExpanded ? "chevron.down" : "chevron.right").font(DS.Font.captionDetail)
                     }
                 }.font(DS.Font.proseSecondary).foregroundStyle(DS.Palette.textSecondary)
                     .frame(minHeight: DS.Size.touchTarget)
-            }.buttonStyle(ChatRowButtonStyle()).disabled(thinking.text == nil)
-            if isExpanded, let text = thinking.text {
+            }.buttonStyle(ChatRowButtonStyle()).disabled(!ChatItemPresentation.hasThinkingText(thinking))
+                .accessibilityValue(ChatItemPresentation.hasThinkingText(thinking) ? (isExpanded ? "Expanded" : "Collapsed") : "Text not recorded")
+            if isExpanded, ChatItemPresentation.hasThinkingText(thinking), let text = thinking.text {
                 Text(verbatim: row.preview ?? text).font(DS.Font.proseSecondary)
                     .foregroundStyle(DS.Palette.textSecondary).fixedSize(horizontal: false, vertical: true)
                 if row.preview != nil { Button("Read all") { actions.selectText(text) }.font(DS.Font.caption) }
@@ -225,9 +233,15 @@ struct ChatRowView: View {
                     Image(systemName: toolGlyph(tool.kind))
                         .frame(width: DS.Space.l)
                         .foregroundStyle(tool.status == .known(.failed) ? DS.Palette.error : DS.Palette.textSecondary)
-                    Text(verbatim: tool.title).font(DS.Font.proseSecondary)
-                        .lineLimit(2).multilineTextAlignment(.leading)
-                        .shimmering(tool.status == .known(.running), text: tool.title)
+                    VStack(alignment: .leading, spacing: DS.Space.xxs) {
+                        Text(verbatim: ChatItemPresentation.toolTitle(tool)).font(DS.Font.proseSecondary)
+                            .lineLimit(2).multilineTextAlignment(.leading)
+                            .shimmering(tool.status == .known(.running), text: ChatItemPresentation.toolTitle(tool))
+                        Text(ChatItemPresentation.toolKind(tool) + " · " + ChatItemPresentation.toolStatus(tool))
+                            .font(DS.Font.captionDetail)
+                            .foregroundStyle(tool.status == .known(.failed) || tool.status == .known(.denied)
+                                             ? DS.Palette.error : DS.Palette.textSecondary)
+                    }
                     Spacer(minLength: DS.Space.xs)
                     if !tool.diff.isEmpty {
                         Text("+\(tool.diff.reduce(UInt64(0)) { $0 + UInt64($1.additions) })")
@@ -239,6 +253,9 @@ struct ChatRowView: View {
                         .font(DS.Font.captionDetail).foregroundStyle(DS.Palette.textTertiary)
                 }.font(DS.Font.meta).frame(minHeight: DS.Size.touchTarget)
             }.buttonStyle(ChatRowButtonStyle())
+                .accessibilityLabel(ChatItemPresentation.toolKind(tool) + ": " + ChatItemPresentation.toolTitle(tool))
+                .accessibilityValue([ChatItemPresentation.toolStatus(tool), tool.durationMs.map(duration),
+                                     isExpanded ? "Expanded" : "Collapsed"].compactMap { $0 }.joined(separator: ", "))
             if isExpanded {
                 if !tool.input.isEmpty {
                     Text(verbatim: String(tool.input.prefix(2_000))).font(DS.Font.literalSmall)
@@ -252,6 +269,11 @@ struct ChatRowView: View {
                     }
                     .frame(height: CGFloat(min(output.preview.split(separator: "\n", omittingEmptySubsequences: false).count, 12)) * outputLineHeight + 2 * DS.Space.m)
                     .background(DS.Palette.terminal, in: .rect(cornerRadius: DS.Radius.pane))
+                }
+                if let preview = row.inlineDiff { inlineDiff(preview) }
+                if tool.kind == .known(.task) {
+                    Text("Nested subagent transcripts are not available in this Chat. Use Terminal.")
+                        .font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
                 }
                 HStack {
                     Button("Details", systemImage: "arrow.up.left.and.arrow.down.right") { actions.showTool(item) }
@@ -268,13 +290,43 @@ struct ChatRowView: View {
         .accessibilityElement(children: .combine)
     }
 
+    private func inlineDiff(_ preview: ChatInlineDiff) -> some View {
+        VStack(alignment: .leading, spacing: DS.Space.xs) {
+            Text("Recorded diff preview").font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
+            ScrollView(.horizontal) {
+                VStack(spacing: 0) {
+                    ForEach(preview.file.hunks.first?.lines ?? []) { line in
+                        DiffLineContent(file: preview.file, left: line, right: nil, split: false, lineHeight: diffLineHeight)
+                    }
+                }
+            }
+            .frame(height: CGFloat(preview.file.hunks.first?.lines.count ?? 0) * diffLineHeight)
+            .clipShape(.rect(cornerRadius: DS.Radius.secureBadge))
+        }
+    }
+
+    private func toolSelectionText(_ tool: TimelineTool) -> String {
+        let text = [tool.input, tool.output?.preview ?? ""].filter { !$0.isEmpty }.joined(separator: "\n")
+        return text.isEmpty ? ChatItemPresentation.toolTitle(tool) + "\n" + ChatItemPresentation.toolStatus(tool) : text
+    }
+
     private var usesRawMarkdownSelection: Bool {
         if case .markdown(let block) = row.content { return block.hasOmittedContent }
         return false
     }
 
-    var copyTitle: String { usesRawMarkdownSelection ? "Copy raw Markdown" : "Copy" }
-    var selectionTitle: String { usesRawMarkdownSelection ? "Select raw Markdown" : "Select Text" }
+    private var toolSelectionContent: String? {
+        guard case .item(let item) = row.content, case .tool(let tool) = item.body else { return nil }
+        let input = !tool.input.isEmpty, output = tool.output?.preview.isEmpty == false
+        return input && output ? "input and output preview" : input ? "input" : output ? "output preview" : "tool summary"
+    }
+
+    var copyTitle: String {
+        toolSelectionContent.map { "Copy " + $0 } ?? (usesRawMarkdownSelection ? "Copy raw Markdown" : "Copy")
+    }
+    var selectionTitle: String {
+        toolSelectionContent.map { "Select " + $0 } ?? (usesRawMarkdownSelection ? "Select raw Markdown" : "Select Text")
+    }
 
     var plainText: String {
         switch row.content {
@@ -284,8 +336,8 @@ struct ChatRowView: View {
             switch item.body {
             case .user(let value): value.text
             case .assistant(let value): value.text
-            case .thinking(let value): value.text ?? "Thinking"
-            case .tool(let value): [value.input, value.output?.preview ?? ""].filter { !$0.isEmpty }.joined(separator: "\n")
+            case .thinking(let value): ChatItemPresentation.hasThinkingText(value) ? value.text ?? "" : ChatItemPresentation.thinkingTitle(value)
+            case .tool(let value): toolSelectionText(value)
             case .plan(let value): value.entries.map(\.text).joined(separator: "\n")
             case .notice(let value): value.text
             case .turnEnd(let value): "Worked for \(duration(value.durationMs))"
@@ -312,11 +364,7 @@ struct ChatRowView: View {
         }
     }
 
-    private func duration(_ milliseconds: UInt64) -> String {
-        if milliseconds < 1_000 { return "\(milliseconds)ms" }
-        let seconds = milliseconds / 1_000
-        return seconds >= 60 ? "\(seconds / 60)m \(seconds % 60)s" : "\(seconds)s"
-    }
+    private func duration(_ milliseconds: UInt64) -> String { ChatItemPresentation.duration(milliseconds) }
 
     private func toolGlyph(_ kind: TimelineToolKind) -> String {
         switch kind {

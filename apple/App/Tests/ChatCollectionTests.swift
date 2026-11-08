@@ -509,7 +509,14 @@ final class ChatCollectionTests: XCTestCase {
                         if case .markdown(let block) = row.content, case .code = block.kind { return true }
                         return false
                     } ?? 0
-                    for (label, index) in [("start", 0), ("code", code), ("tools", frame.rows.count - 1)] {
+                    func toolIndex(_ kind: TimelineToolKindTag) -> Int {
+                        frame.rows.firstIndex { row in
+                            if case .item(let item) = row.content, case .tool(let tool) = item.body { return tool.kind == .known(kind) }
+                            return false
+                        } ?? 0
+                    }
+                    for (label, index) in [("start", 0), ("code", code), ("files", toolIndex(.edit)),
+                                           ("agents", toolIndex(.task)), ("tools", frame.rows.count - 1)] {
                         controller.collection.scrollToItem(at: IndexPath(item: index, section: 0), at: .top, animated: false)
                         try await settle()
                         let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
@@ -567,17 +574,18 @@ enum ChatTestFixtures {
 
         <details>Literal HTML, not a web view.</details>
         """
-        let bodies: [[String: Any]] = [
+        var bodies: [[String: Any]] = [
             ["User": ["text": "Review the list update and keep the terminal running.", "attachments": [["path": "diagram.png", "media_type": "image/png"]], "queued": false]],
             ["Thinking": ["text": "Check the row identities before changing geometry.", "duration_ms": 1_200]],
             ["Assistant": ["text": markdown, "streaming": false]],
-            ["Tool": ["kind": "Shell", "name": "Bash", "title": "cargo test", "input": "cargo test", "status": "Succeeded", "diff": [], "exit": 0, "duration_ms": 840,
+            ["Tool": ["kind": "Shell", "name": "Bash", "title": "cargo test", "input": "cargo test", "status": "Done", "diff": [], "exit": 0, "duration_ms": 840,
                       "output": ["handle": "fixture-output", "preview": "running 42 tests\ntest result: ok. 42 passed", "bytes": 57]]],
             ["Tool": ["kind": "Search", "name": "Grep", "title": "Checking references", "input": "timeline", "status": "Running", "diff": []]],
             ["Plan": ["entries": [["text": "Cache the completed rows", "status": "Completed"], ["text": "Check reading anchors", "status": "InProgress"], ["text": "Review both colour schemes", "status": "Pending"]]]],
             ["Notice": ["kind": "Info", "text": "Context compacted. Earlier messages remain in history."]],
             ["TurnEnd": ["duration_ms": 13_500, "input_tokens": 1_024, "output_tokens": 184]]
         ]
+        bodies.insert(contentsOf: toolBodies(), at: bodies.count - 1)
         let builder = RowBuilder()
         var rows: [ChatRow] = []
         for (index, body) in bodies.enumerated() {
@@ -588,6 +596,30 @@ enum ChatTestFixtures {
             rows += await builder.rows(for: item)
         }
         return TimelineFrame(rows: rows, rowIDs: Set(rows.map(\.id)), revision: 1)
+    }
+
+    private static func toolBodies() -> [[String: Any]] {
+        func tool(_ kind: String, _ title: String, status: String = "Done", diff: [[String: Any]] = []) -> [String: Any] {
+            ["Tool": ["kind": kind, "name": kind, "title": title, "input": "Recorded input for " + title,
+                      "status": status, "diff": diff, "duration_ms": 1_250,
+                      "output": ["handle": "fixture-" + kind, "preview": "Recorded tool output\nNo host command is executed by this fixture.", "bytes": 256]]]
+        }
+        let diff: [String: Any] = ["path": "Sources/Chat.swift", "change": "Modified", "binary": false,
+            "additions": 2, "deletions": 1, "hunks_omitted": true,
+            "hunks": [["old_start": 4, "old_lines": 1, "new_start": 4, "new_lines": 2, "header": "@@ -4 +4,2 @@",
+                       "lines": [["kind": "Removed", "text": "let polling = true"],
+                                 ["kind": "Added", "text": "let bounded = true"],
+                                 ["kind": "Added", "text": "let eventDriven = true"]]]]]
+        return [
+            ["Thinking": [:]], ["Thinking": ["text": ""]],
+            tool("Read", "Read Sources/Chat.swift"), tool("Search", "Find native row identities"),
+            tool("Edit", "Keep finished rows in place", diff: [diff]), tool("Write", "Write the bounded fixture", diff: [diff]),
+            tool("Fetch", "Read documentation"), tool("WebSearch", "Search public references"),
+            tool("Mcp", "Inspect the workspace through MCP"), tool("Task", "Review the native changes", status: "Running"),
+            tool("Shell", "A failed command", status: "Failed"), tool("Shell", "A denied command", status: "Denied"),
+            tool("Shell", "An interrupted command", status: "Interrupted"), tool("Other", "Another tool"),
+            tool("FutureTool", "Unknown tool and status stay conservative", status: "FutureStatus")
+        ]
     }
 }
 #endif

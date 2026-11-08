@@ -77,6 +77,7 @@ public extension DS {
         public static let proseTableColumn: CGFloat = 80
         public static let proseTableLineHeight: CGFloat = 24
         public static let proseOutputLineHeight: CGFloat = 16
+        public static let proseDiffLineHeight: CGFloat = 20
         /// macOS 26 titlebar tabs are 28 inside a 36 bar.
         public static let tabBar: CGFloat = 36
         public static let tab: CGFloat = 28
