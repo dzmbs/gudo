@@ -82,6 +82,9 @@ public extension DS {
         public static let tabBar: CGFloat = 36
         public static let tab: CGFloat = 28
         public static let tabStrip: CGFloat = 34
+        /// A strip chip's share of the strip stays between these; more tabs scroll.
+        public static let tabMinWidth: CGFloat = 160
+        public static let tabMaxWidth: CGFloat = 240
         public static let avatar: CGFloat = 22
         /// Room for a title and its context on one line, wider for touch.
         #if os(macOS)

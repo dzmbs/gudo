@@ -105,6 +105,7 @@ tab strip at XXL, pane headers and the iPhone bar at XL.
 | Divider visible / hit (pointer) / hit (touch) | 1 / +6 / 20 pt | Ghostty `SplitView` (1 + 6); touch is ours |
 | Pane header | 24 pt | Ghostty-quiet |
 | Tab strip / tab | 34 / 28 pt (selected pill inset 3) | macOS 26 titlebar tabs, Ghostty native tabs |
+| Strip chip width | an equal share of the strip, 160 to 240 pt; more tabs scroll | - |
 | Command palette width | 580 pt Mac / 640 pt touch | Spotlight: a title and its context on one line |
 | Key bar row | 44 iPhone / 52 iPad, keys 34 / 40, hardware strip 28 | keyboard key height |
 | Window padding | 2 pt, balanced | Ghostty `window-padding-x/y` = 2, `window-padding-balance` |
@@ -336,6 +337,12 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
   glyph opens its agents on hover (`HoverPopover`). On iPad the sidebar's bar holds Settings (⌘,)
   and New Tab only: no app name.
 - Footer: Settings only (no connection summary, §3.7 rule 1).
+- Tab strip: one scrolling row of chips, leading-aligned, each an equal share of the strip
+  between 160 and 240 pt. Adding a tab never moves the chips already there: they keep their
+  width (the strip scrolls to the new one) until the pointer leaves the strip or the window
+  resizes; a close under the pointer keeps the width the same way. The selected chip has its
+  own fill (no sliding pill); only the two chips involved change. A tab's terminal replaces
+  the shown one once it has drawn its screen (at most 300 ms), never a blank terminal.
 - Tab strip: a single-host window shows no host; with tabs from several hosts, each tab gets the
   host's name as a second line (`meta`, `.tertiary`).
 - iPhone: the bar shows the tab's title with the host's name as a second line (state glyph after

@@ -302,6 +302,18 @@ final class MacSnapshotTests: XCTestCase {
         try await window("nosidebar") { $0.isSidebarShown = false }
     }
 
+    /// The tab strip: a few tabs at their widest, then more than fit, scrolled to the selected one.
+    func testTabStrip() async throws {
+        try await window("tab-strip", screen: "single") { model in
+            model.isSidebarShown = false
+            for _ in 0..<3 { model.newTab() }
+        }
+        try await window("tab-strip-crowded", screen: "single", size: CGSize(width: 900, height: 520)) { model in
+            model.isSidebarShown = false
+            for _ in 0..<9 { model.newTab() }
+        }
+    }
+
     /// Projects across hosts in the sidebar, then a reorder recorded frame by frame: the rows
     /// must slide apart (never overlap) and the drop must not move anything again.
     func testProjects() async throws {

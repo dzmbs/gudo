@@ -7,20 +7,28 @@ import SwiftUI
 struct TabBar: View {
     let workspace: Workspace
     @Environment(WindowModel.self) private var model
-    @Namespace private var selection
-    /// After a close under the pointer, tabs keep their width until the pointer leaves the strip,
-    /// so the next close button lands under it.
-    @State private var isPointerInside = false
-    @State private var frozenWidth: CGFloat?
-    @State private var chipWidth: CGFloat = 0
+    @State private var widths = TabStripWidths()
 
     var body: some View {
         let active = model.destination == .terminal ? model.currentTab : nil
+        let refs = chipRefs
         HStack(spacing: 0) {
-            // More tabs than the strip holds scroll instead of widening the window.
-            ViewThatFits(in: .horizontal) {
-                chips
-                ScrollView(.horizontal, showsIndicators: false) { chips }
+            ScrollViewReader { scroller in
+                ScrollView(.horizontal) {
+                    chips(active: active)
+                        .animation(DS.Motion.snappy, value: refs)
+                }
+                .scrollIndicators(.never)
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { width in widths.stripWidth = width }
+                .onChange(of: refs) { old, new in
+                    withAnimation(DS.Motion.snappy) { widths.tabsChanged(to: new.count) }
+                    if new.count > old.count { TabTimeline.mark(.chipInserted) }
+                }
+                .onChange(of: active, initial: true) { _, ref in
+                    guard let ref else { return }
+                    withAnimation(DS.Motion.snappy) { scroller.scrollTo(ref) }
+                    TabTimeline.mark(.scrolledIntoView)
+                }
             }
             NewTabButton(workspace: workspace)
                 .padding(.leading, DS.Space.xs)
@@ -32,29 +40,39 @@ struct TabBar: View {
         .overlay(alignment: .bottom) { Hairline(style: DS.Palette.separator) }
         // A 34 pt strip: titles grow with Dynamic Type only as far as it holds them.
         .dynamicTypeSize(...DynamicTypeSize.xxLarge)
-        .animation(DS.Motion.quick, value: active)
         .onHover { inside in
-            isPointerInside = inside
-            if !inside, frozenWidth != nil { withAnimation(DS.Motion.quick) { frozenWidth = nil } }
+            if inside {
+                widths.isPointerInside = true
+            } else {
+                withAnimation(DS.Motion.quick) { widths.pointerLeft() }
+            }
         }
-        .onChange(of: model.groups.tabs.count) { old, new in
-            if new < old, isPointerInside, chipWidth > 0 { frozenWidth = chipWidth }
-        }
+        .onAppear { widths.tabsChanged(to: refs.count) }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("tab-bar")
     }
 
-    @ViewBuilder private var chips: some View {
+    /// Every chip in strip order: window tabs, then each host's tabs.
+    private var chipRefs: [TabRef] {
+        let windowTabs = model.composites.ordered.map { WindowModel.mixedRef($0.id) }
+        return windowTabs + model.groups.groups.flatMap { group in group.tabs.map { group.ref($0.id) } }
+    }
+
+    private func chips(active: TabRef?) -> some View {
         let groups = model.groups.groups
         let allTabs = model.groups.tabs
-        let active = model.destination == .terminal ? model.currentTab : nil
         let activeIndex = active.flatMap { allTabs.firstIndex(of: $0) }
-        HStack(spacing: 0) {
-            // Tabs name their host only while the window holds more than one host.
-            let isMultiHost = Set(allTabs.map(\.hostId)).count > 1
+        let width = widths.chipWidth
+        // Tabs name their host only while the window holds more than one host.
+        let isMultiHost = Set(allTabs.map(\.hostId)).count > 1
+        return HStack(spacing: 0) {
             ForEach(model.composites.ordered) { tab in
-                MixedTabChip(tab: tab, isActive: WindowModel.mixedRef(tab.id) == active)
-                    .frame(maxWidth: .infinity)
+                let ref = WindowModel.mixedRef(tab.id)
+                MixedTabChip(tab: tab, isActive: ref == active)
+                    .frame(width: width)
+                    .id(ref)
+                    .modifier(ChipFrameReport(ref: ref))
+                    .transition(.opacity)
                 Hairline(.vertical, style: DS.Palette.separator).frame(height: 16)
             }
             ForEach(groups) { group in
@@ -67,13 +85,76 @@ struct TabBar: View {
                             .frame(height: 16)
                             .opacity(index == activeIndex || index - 1 == activeIndex ? 0 : 1)
                     }
-                    TabChip(tab: tab, ref: ref, group: group, isActive: ref == active, showsHost: isMultiHost, namespace: selection)
-                        .frame(maxWidth: frozenWidth ?? .infinity)
-                        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { if frozenWidth == nil { chipWidth = $0 } }
+                    TabChip(tab: tab, ref: ref, group: group, isActive: ref == active, showsHost: isMultiHost)
+                        .frame(width: width)
+                        .id(ref)
+                        .modifier(ChipFrameReport(ref: ref))
+                        .transition(.opacity)
                 }
             }
-            if frozenWidth != nil { Spacer(minLength: 0) }
         }
+    }
+}
+
+#if DEBUG
+extension EnvironmentValues {
+    /// Tests: each strip chip's frame in the window, whenever its layout changes.
+    @Entry var tabChipFrames: (@MainActor (TabRef, CGRect) -> Void)?
+}
+#endif
+
+private struct ChipFrameReport: ViewModifier {
+    let ref: TabRef
+    #if DEBUG
+    @Environment(\.tabChipFrames) private var report
+    #endif
+
+    func body(content: Content) -> some View {
+        #if DEBUG
+        if let report {
+            content.onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { frame in report(ref, frame) }
+        } else {
+            content
+        }
+        #else
+        content
+        #endif
+    }
+}
+
+/// Chips share the strip within `DS.Size.tabMinWidth...tabMaxWidth`; a tab added or closed under the pointer holds the width until the pointer leaves.
+struct TabStripWidths: Equatable {
+    var stripWidth: CGFloat = 0 {
+        didSet { if stripWidth != oldValue { heldWidth = nil } }
+    }
+    var isPointerInside = false
+    private(set) var count = 0
+    private(set) var heldWidth: CGFloat?
+
+    var chipWidth: CGFloat { heldWidth ?? share(of: count) }
+
+    func share(of count: Int) -> CGFloat {
+        guard count > 0, stripWidth > 0 else { return DS.Size.tabMaxWidth }
+        let equal = (stripWidth / CGFloat(count)).rounded(.down)
+        return min(DS.Size.tabMaxWidth, max(DS.Size.tabMinWidth, equal))
+    }
+
+    mutating func tabsChanged(to newCount: Int) {
+        guard newCount != count else { return }
+        let hadTabs = count > 0
+        let isInsertion = newCount > count
+        let shownWidth = chipWidth
+        count = newCount
+        if hadTabs, count > 0, isInsertion || isPointerInside, shownWidth != share(of: count) {
+            heldWidth = shownWidth
+        } else if !isPointerInside {
+            heldWidth = nil
+        }
+    }
+
+    mutating func pointerLeft() {
+        isPointerInside = false
+        heldWidth = nil
     }
 }
 
@@ -84,7 +165,6 @@ private struct TabChip: View {
     let isActive: Bool
     /// The window holds tabs from more than one host: name the host under the title.
     let showsHost: Bool
-    let namespace: Namespace.ID
     @Environment(WindowModel.self) private var model
     @State private var isHovered = false
 
@@ -99,8 +179,8 @@ private struct TabChip: View {
                 RoundedRectangle(cornerRadius: DS.Radius.tabPill)
                     .fill(DS.Palette.selectedFill)
                     .overlay(RoundedRectangle(cornerRadius: DS.Radius.tabPill).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
-                    .matchedGeometryEffect(id: "selection", in: namespace)
                     .padding(.vertical, 3)
+                    .transition(.opacity)
             } else if isHovered {
                 RoundedRectangle(cornerRadius: DS.Radius.tabPill)
                     .fill(DS.Palette.hoverFill)
@@ -150,6 +230,7 @@ private struct TabChip: View {
             .animation(DS.Motion.quick, value: CommandKeyState.shared.held)
         }
         .frame(height: DS.Size.tabStrip)
+        .animation(DS.Motion.quick, value: isActive)
         .contentShape(.rect)
         .onTapGesture { model.focus(ref) }
         .onHover { hovering in withAnimation(DS.Motion.hover) { isHovered = hovering } }
