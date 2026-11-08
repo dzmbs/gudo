@@ -7,6 +7,8 @@ struct PaneChatView<Terminal: View>: View {
     let pane: Pane
     @Bindable var state: PaneChatState
     let hub: DaemonWorkspace
+    var approval: SharedApproval? = nil
+    var permitsSending = false
     @ViewBuilder var terminal: (Bool) -> Terminal
     @State private var selectedDetail: ChatDetail?
 
@@ -79,6 +81,7 @@ struct PaneChatView<Terminal: View>: View {
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: DS.Space.s) {
+            if let approval { approval.frame(maxWidth: .infinity) }
             TextField("Message", text: $state.draft, axis: .vertical)
                 .font(DS.Font.prose).lineLimit(1...6)
                 .accessibilityIdentifier("chat-draft")
@@ -91,7 +94,7 @@ struct PaneChatView<Terminal: View>: View {
                     .font(DS.Font.caption).frame(minHeight: DS.Size.touchTarget)
                 Button("Send", systemImage: "arrow.up", action: send)
                     .labelStyle(.iconOnly).frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
-                    .disabled(!state.composer.canSend(state.draft)).accessibilityIdentifier("chat-send")
+                    .disabled(!permitsSending || !state.composer.canSend(state.draft)).accessibilityIdentifier("chat-send")
             }
         }
         .padding(DS.Space.l).foregroundStyle(DS.Palette.text).background(DS.Palette.sidebar)
@@ -102,7 +105,8 @@ struct PaneChatView<Terminal: View>: View {
     }
 
     private func send() {
-        guard pane.view.markedTextRange == nil, state.controller?.prepareToPark() != false else { return }
+        guard permitsSending, pane.view.markedTextRange == nil,
+              state.controller?.prepareToPark() != false else { return }
         Task {
             await state.composer.begin(state.draft) { command in
                 let client = try hub.timelineClient()

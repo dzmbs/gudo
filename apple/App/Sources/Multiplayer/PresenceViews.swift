@@ -151,6 +151,14 @@ struct MultiplayerPaneOverlay: View {
     let pane: PaneId
     let isFocused: Bool
 
+    private var showsOverlayApproval: Bool {
+        #if os(iOS)
+        workspace.pane(pane)?.chat?.presentation != .chat
+        #else
+        true
+        #endif
+    }
+
     var body: some View {
         if let session = workspace.multiplayer, session.me != nil, !LaunchOptions.mock || MockMultiplayer.onPanes {
             ZStack {
@@ -165,11 +173,13 @@ struct MultiplayerPaneOverlay: View {
                         .padding(DS.Space.s)
                         .scalingTransition(0.96, anchor: .topTrailing)
                 }
-                SharedApproval(workspace: workspace, session: session, pane: pane.rawValue)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    // Under the control chip, never over it.
-                    .padding(.top, 52)
-                    .padding(.horizontal, DS.Space.m)
+                if showsOverlayApproval {
+                    SharedApproval(workspace: workspace, session: session, pane: pane.rawValue)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        // Under the control chip, never over it.
+                        .padding(.top, 52)
+                        .padding(.horizontal, DS.Space.m)
+                }
                 VStack(alignment: .leading, spacing: DS.Space.s) {
                     if isFocused {
                         FollowPill(session: session)

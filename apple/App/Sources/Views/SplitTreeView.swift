@@ -614,7 +614,10 @@ struct PaneSlot: View {
     @ViewBuilder private func paneContent(_ pane: Pane) -> some View {
         #if os(iOS)
         if let state = pane.chat, state.agent != nil, let daemon = workspace.host as? DaemonConnection {
-            PaneChatView(pane: pane, state: state, hub: daemon.workspace) { active in
+            PaneChatView(pane: pane, state: state, hub: daemon.workspace,
+                         approval: SharedApproval(workspace: workspace, session: daemon.multiplayer,
+                                                  pane: pane.id.rawValue, placement: .chatComposer),
+                         permitsSending: daemon.multiplayer.isOwner) { active in
                 terminalContent(pane, isActive: active)
             }
         } else { terminalContent(pane) }

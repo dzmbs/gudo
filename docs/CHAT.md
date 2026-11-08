@@ -160,6 +160,18 @@ a resize or claiming ownership. Actual input or an explicit sizing claim admits 
 replies and focus do not. Deferred candidates are excluded from automatic local-tap handover.
 Native fixture tests cover retained views, reading position, live updates while parked, original
 VT geometry and zero resize/claim/input calls. Real paired no-SIGWINCH acceptance remains separate.
+
+Chat pins the existing structured approval card above its composer, including for a solo joined owner.
+It uses the same `DaemonConnection.decide` signed-decision route, policy/claim/two-person gates and
+first-valid-answer handling as the existing shared overlay, never prompt input. An action revalidates
+this pane's current request, exact option identity, unanswered state and policy immediately before
+calling that route. Empty/unstructured dialogs still require Terminal. Joining is required; another
+pane's metadata cannot produce this card. The Terminal/shared overlay is hidden while Chat owns the
+card, so it is not duplicated over transcript rows. Chat actions have44pt minimum touch targets and
+do not introduce the shared overlay's idle receipt timer. Existing short-lived Terminal/shared receipts
+are unchanged. A known owner can answer before the participant roster arrives; the card does not
+mislabel that interval as nobody being able to answer.
+
 Tool details read output through the existing authenticated same-pane output API, one bounded
 native page at a time, with Input/Output tabs and Beginning/Previous/Next navigation. Closing the
 sheet invalidates pending replies. Diff details use read-only native unified/side-by-side rows,

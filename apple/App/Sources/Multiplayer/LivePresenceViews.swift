@@ -211,21 +211,23 @@ struct FollowPill: View {
 /// An agent's permission request on its pane, shown to everyone in a shared session. The host
 /// takes the first valid answer.
 struct SharedApproval: View {
+    enum Placement { case sharedOverlay, chatComposer }
     let workspace: Workspace
     let session: MultiplayerSession
     let pane: UInt64
+    var placement: Placement = .sharedOverlay
     @State private var options: [UInt64: [DecisionOption]] = [:]
 
     var body: some View {
-        if !session.others.isEmpty {
+        if Self.shows(hasOthers: !session.others.isEmpty, joined: session.me != nil, placement: placement) {
             let agent = workspace.daemon?.meta[PaneId(pane)]?.agent
             // Still "blocked" until the agent's next event: an answered request is done.
             if case .blocked(let request, let summary, let choices)? = agent?.state, Self.shows(summary: summary),
                !session.decisions.contains(where: { $0.requestId == request }) {
                 card(request: request, summary: summary, choices: choices, agent: workspace.agentName(PaneId(pane)) ?? "The agent")
                     .task(id: request) { options[request] = choices }
-            } else {
-                // A short-lived "Allowed · Kim" after someone answered.
+            } else if placement == .sharedOverlay {
+                // Chat's idle composer must not acquire the shared overlay's receipt timer.
                 TimelineView(.periodic(from: .now, by: 1)) { _ in
                     if let decided = recent { answered(decided) }
                 }
@@ -237,6 +239,10 @@ struct SharedApproval: View {
     /// menu such as Claude's folder-trust prompt) carries no words to show.
     static func shows(summary: String) -> Bool {
         !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    static func shows(hasOthers: Bool, joined: Bool, placement: Placement) -> Bool {
+        joined && (placement == .chatComposer || hasOthers)
     }
 
     /// The last answer on this pane, for a few seconds after it came.
@@ -275,12 +281,16 @@ struct SharedApproval: View {
                 HStack(spacing: DS.Space.s) {
                     Spacer(minLength: 0)
                     if let deny = LiveAgentFeed.option(choices, allow: false) {
-                        Button(deny.label) { workspace.daemon?.decide(requestId: request, optionId: deny.id) }
+                        Button { answer(request: request, option: deny) } label: {
+                            Text(deny.label).frame(minHeight: placement == .chatComposer ? DS.Size.touchTarget : 0)
+                        }
                             .buttonStyle(.quiet)
                             .accessibilityIdentifier("shared-approval-deny")
                     }
                     if let allow = LiveAgentFeed.option(choices, allow: true) {
-                        Button(allow.label) { workspace.daemon?.decide(requestId: request, optionId: allow.id) }
+                        Button { answer(request: request, option: allow) } label: {
+                            Text(allow.label).frame(minHeight: placement == .chatComposer ? DS.Size.touchTarget : 0)
+                        }
                             .buttonStyle(.primaryGlass)
                             .accessibilityIdentifier("shared-approval-allow")
                     }
@@ -300,8 +310,20 @@ struct SharedApproval: View {
         .accessibilityIdentifier("shared-approval")
     }
 
+    func answer(request: UInt64, option: DecisionOption) {
+        guard session.me != nil, let daemon = workspace.daemon,
+              case .blocked(let current, let summary, let options)? = daemon.meta[PaneId(pane)]?.agent?.state,
+              current == request, Self.shows(summary: summary),
+              options.contains(where: { $0.id == option.id && $0.label == option.label }),
+              !session.decisions.contains(where: { $0.requestId == request }),
+              !session.approvedAlready(requestId: request),
+              session.approvalBlock(requestId: request, risk: session.approvalStatuses[request]?.risk ?? .any) == nil
+        else { return }
+        daemon.decide(requestId: request, optionId: option.id)
+    }
+
     /// "Kim or you can answer", per the session's rules.
-    private func answerers(risk: Risk) -> String {
+    func answerers(risk: Risk) -> String {
         let policy = session.approvalPolicy
         let ownersOnly = policy.mode == .ownerOnly || risk.rank > policy.maxRisk.rank
         var names: [String] = []
@@ -311,6 +333,7 @@ struct SharedApproval: View {
             guard isOwner || (!ownersOnly && person.roles.contains(.approver)) else { continue }
             names.append(person.actor.principal == session.myPrincipal ? "you" : person.name.split(separator: " ").first.map(String.init) ?? person.name)
         }
+        if names.isEmpty, session.isOwner || (!ownersOnly && session.canApprove) { return "You answer" }
         guard !names.isEmpty else { return "Nobody here can answer" }
         if names.count == 1 { return names[0] == "you" ? "You answer" : "\(names[0]) answers" }
         let list = names.dropLast().joined(separator: ", ") + " or " + names.last!

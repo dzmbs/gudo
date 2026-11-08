@@ -152,6 +152,15 @@ final class WorkspaceScreenModelTests: XCTestCase {
         XCTAssertTrue(SharedApproval.shows(summary: "rm -rf build"))
     }
 
+    func testChatApprovalsRemainVisibleForTheSoloOwnerButNotBeforeJoining() {
+        XCTAssertTrue(SharedApproval.shows(hasOthers: false, joined: true, placement: .chatComposer))
+        XCTAssertFalse(SharedApproval.shows(hasOthers: false, joined: true, placement: .sharedOverlay))
+        XCTAssertTrue(SharedApproval.shows(hasOthers: true, joined: true, placement: .sharedOverlay))
+        for placement in [SharedApproval.Placement.sharedOverlay, .chatComposer] {
+            XCTAssertFalse(SharedApproval.shows(hasOthers: true, joined: false, placement: placement))
+        }
+    }
+
     /// The daemon drops a pane's agent once its process exits: the pane leaves the Agents list.
     func testAnAgentThatExitedLeavesTheList() {
         let running: [PaneId: PaneMeta] = [PaneId(1): meta(1, agent: AgentStatus(kind: "claude", state: .idle))]
