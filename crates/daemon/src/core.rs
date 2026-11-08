@@ -1791,11 +1791,7 @@ impl Core {
                         session_id: pinned.clone().map(agents::NativeSessionId::new),
                     },
                 };
-                let spec = if brand::IS_DEV
-                    && self.cfg.codex_chat
-                    && *kind == AgentKind::Codex
-                    && resume.is_none()
-                {
+                let spec = if brand::IS_DEV && self.cfg.codex_chat && *kind == AgentKind::Codex {
                     let (source, spec) =
                         crate::agent_driver::codex::Live::start(&context, &mode)
                             .map_err(|error| (OpError::SpawnFailed, error.to_string()))?;

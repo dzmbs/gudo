@@ -15,12 +15,14 @@ pub(super) struct Owner {
 }
 
 pub(super) enum Effect {
-    Bound(String),
+    Bound(String, Option<PathBuf>),
     Started,
     Completed(CodexTurnOutcome),
     Waiting(CodexRpcId, CodexApprovalKind),
     Resolved(CodexRpcId),
     Lost,
+    Hydrate(agents::CodexThreadBinding),
+    Ready,
 }
 
 impl Effect {
@@ -47,10 +49,13 @@ pub(super) struct Runtime {
 }
 
 impl Runtime {
-    fn apply(&mut self, effect: Effect) -> Signal {
+    fn apply(&mut self, effect: Effect) -> Option<Signal> {
         let (kind, claim, outcome) = match effect {
-            Effect::Bound(thread) => {
+            Effect::Bound(thread, cwd) => {
                 self.thread = Some(thread);
+                if let Some(cwd) = cwd {
+                    self.cwd = Some(cwd);
+                }
                 self.pending.clear();
                 (EventKind::SessionStarted, Claim::Idle, None)
             }
@@ -96,6 +101,7 @@ impl Runtime {
                 self.pending.clear();
                 (EventKind::Stale, Claim::Release, None)
             }
+            Effect::Hydrate(_) | Effect::Ready => return None,
         };
         let mut signal =
             Signal::new(Source::Structured, Confidence::Authoritative, kind).with_claim(claim);
@@ -105,7 +111,7 @@ impl Runtime {
             outcome,
             last_message: None,
         });
-        signal
+        Some(signal)
     }
 
     fn claim(&self) -> Claim {
@@ -143,7 +149,7 @@ impl Live {
         }
     }
 
-    fn target(self: &Arc<Self>) -> Option<(Arc<Core>, Arc<PaneEntry>)> {
+    pub(super) fn target(self: &Arc<Self>) -> Option<(Arc<Core>, Arc<PaneEntry>)> {
         let owner = self.owner.borrow().clone()?;
         let (core, entry) = (owner.core.upgrade()?, owner.entry.upgrade()?);
         if !core
@@ -166,7 +172,14 @@ impl Live {
             return;
         };
         for effect in effects {
-            let signal = lock(&self.runtime).apply(effect);
+            if let Effect::Hydrate(binding) = effect {
+                self.load_history(binding);
+                continue;
+            }
+            let Some(signal) = lock(&self.runtime).apply(effect) else {
+                core.emit(crate::core::Event::PaneMeta(entry.pane.id));
+                continue;
+            };
             let event = lock(&entry.agent)
                 .as_mut()
                 .and_then(|runtime| runtime.structured_signal(signal));

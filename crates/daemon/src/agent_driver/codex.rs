@@ -1,3 +1,4 @@
+mod history;
 #[cfg(test)]
 mod live_probe;
 mod projection;
@@ -17,6 +18,9 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::mpsc;
 
+type ObservationSender = mpsc::Sender<(bool, Vec<u8>)>;
+type HistoryReply = (CodexThreadBinding, std::io::Result<String>);
+
 pub(crate) struct Live {
     owner: tokio::sync::watch::Sender<Option<runtime::Owner>>,
     runtime: Mutex<runtime::Runtime>,
@@ -24,6 +28,9 @@ pub(crate) struct Live {
     state: Mutex<State>,
     process: Mutex<Option<tokio::process::Child>>,
     task: Mutex<Option<tokio::task::AbortHandle>>,
+    history_task: Mutex<Option<tokio::task::AbortHandle>>,
+    history_result: Mutex<Option<HistoryReply>>,
+    observations: Mutex<Option<ObservationSender>>,
     directory: std::path::PathBuf,
 }
 
@@ -36,6 +43,12 @@ struct State {
     operation_bytes: usize,
     wake: Option<mpsc::Sender<()>>,
     closed: bool,
+    suspended: bool,
+    requires_history: bool,
+    history_ready: bool,
+    deferred_history: bool,
+    captured: Vec<agents::CodexLiveEvent>,
+    captured_bytes: usize,
     effects: Vec<runtime::Effect>,
 }
 
@@ -50,24 +63,17 @@ impl State {
             operation_bytes: 0,
             wake: None,
             closed: false,
+            suspended: false,
+            requires_history: false,
+            history_ready: true,
+            deferred_history: false,
+            captured: Vec::new(),
+            captured_bytes: 0,
             effects: Vec::new(),
         }
     }
 
     fn observe(&mut self, frame: &str, outgoing: bool) {
-        #[derive(serde::Deserialize)]
-        struct Method<'a> {
-            method: Option<&'a str>,
-        }
-        if outgoing
-            && serde_json::from_str::<Method<'_>>(frame)
-                .ok()
-                .is_some_and(|request| {
-                    matches!(request.method, Some("thread/resume" | "thread/fork"))
-                })
-        {
-            self.fail();
-        }
         if self.closed {
             return;
         }
@@ -80,26 +86,58 @@ impl State {
             self.fail();
             return;
         }
-        if self.current.as_ref() != self.binding.binding() {
-            self.current = self.binding.binding().cloned();
-            self.events = self.current.clone().map(CodexLiveEvents::new);
-            if let Some(current) = &self.current {
-                self.effects
-                    .push(runtime::Effect::Bound(current.thread_id().to_owned()));
+        if outgoing {
+            #[derive(serde::Deserialize)]
+            struct Method<'a> {
+                id: Option<agents::CodexRpcId>,
+                method: Option<&'a str>,
+                params: Option<HistoryOptions>,
             }
-            self.projection = Projection::new(
-                self.current
-                    .as_ref()
-                    .map_or("", CodexThreadBinding::thread_id)
-                    .to_owned(),
-            );
-            self.operations.clear();
-            self.operation_bytes = 0;
-            self.push(TimelineOp::Snapshot(self.projection.snapshot(60, None)));
+            #[derive(serde::Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct HistoryOptions {
+                exclude_turns: Option<bool>,
+            }
+            if let Ok(request) = serde_json::from_str::<Method<'_>>(frame)
+                && request.id.is_some()
+                && self.binding.pending_request() == request.id.as_ref()
+            {
+                self.requires_history =
+                    matches!(request.method, Some("thread/resume" | "thread/fork"));
+                self.deferred_history = self.requires_history
+                    && request
+                        .params
+                        .and_then(|params| params.exclude_turns)
+                        .unwrap_or(false);
+            }
+        }
+        let Some(binding) = self.binding.binding().cloned() else {
+            if self.current.is_some() && !self.suspended {
+                self.suspended = true;
+                self.effects.push(runtime::Effect::Lost);
+                if let Some(wake) = &self.wake {
+                    let _ = wake.try_send(());
+                }
+            }
+            return;
+        };
+        if self.current.as_ref() != Some(&binding) {
+            self.bind_reply(binding, frame);
+            if self.closed {
+                return;
+            }
         }
         if !outgoing && let Some(events) = &mut self.events {
             match events.observe(&self.binding, frame) {
                 Ok(Some(event)) => {
+                    if !self.history_ready {
+                        self.captured_bytes = self.captured_bytes.saturating_add(frame.len());
+                        if self.captured.len() >= 256 || self.captured_bytes > 1024 * 1024 {
+                            self.fail();
+                            return;
+                        }
+                        self.captured.push(event.clone());
+                    }
                     if let Some(effect) = runtime::Effect::from_event(&event) {
                         self.effects.push(effect);
                     }
@@ -115,6 +153,48 @@ impl State {
                 Ok(None) => {}
                 Err(_) => self.fail(),
             }
+        }
+    }
+
+    fn is_bound(&self) -> bool {
+        !self.closed
+            && self
+                .current
+                .as_ref()
+                .is_some_and(|binding| self.binding.is_current(binding))
+    }
+
+    fn is_ready(&self) -> bool {
+        self.is_bound() && self.history_ready
+    }
+
+    fn bind_reply(&mut self, binding: CodexThreadBinding, frame: &str) {
+        self.suspended = false;
+        self.captured.clear();
+        self.captured_bytes = 0;
+        self.history_ready = !self.deferred_history;
+        self.events = Some(CodexLiveEvents::new(binding.clone()));
+        self.projection = Projection::new(binding.thread_id().to_owned());
+        let thread = binding.thread_id().to_owned();
+        let effect_index = self.effects.len();
+        self.current = Some(binding);
+        self.operations.clear();
+        self.operation_bytes = 0;
+        let cwd = match history::hydrate(self, frame) {
+            Ok(cwd) => cwd,
+            Err(_) => {
+                self.effects
+                    .insert(effect_index, runtime::Effect::Bound(thread, None));
+                self.fail();
+                return;
+            }
+        };
+        self.effects
+            .insert(effect_index, runtime::Effect::Bound(thread, cwd));
+        if self.history_ready {
+            self.push(TimelineOp::Snapshot(self.projection.snapshot(60, None)));
+        } else if let Some(binding) = &self.current {
+            self.effects.push(runtime::Effect::Hydrate(binding.clone()));
         }
     }
 
@@ -143,6 +223,8 @@ impl State {
             return;
         }
         self.closed = true;
+        self.captured.clear();
+        self.captured_bytes = 0;
         self.effects.push(runtime::Effect::Lost);
         self.binding.close();
         self.operations.clear();
@@ -162,6 +244,9 @@ impl Live {
 impl Drop for Live {
     fn drop(&mut self) {
         if let Some(task) = lock(&self.task).take() {
+            task.abort();
+        }
+        if let Some(task) = lock(&self.history_task).take() {
             task.abort();
         }
         let process = self
@@ -189,7 +274,7 @@ pub(super) fn open(
     let entry = core.pane(pane).ok_or_else(unavailable)?;
     let source = lock(&entry.codex).clone().ok_or_else(unavailable)?;
     let mut state = lock(&source.state);
-    if state.closed || source.fault.load(std::sync::atomic::Ordering::Acquire) {
+    if !state.is_ready() || source.fault.load(std::sync::atomic::Ordering::Acquire) {
         return Err(unavailable());
     }
     state.wake = Some(wake.clone());
@@ -212,7 +297,7 @@ impl Session {
             .as_ref()
             .is_some_and(|current| Arc::ptr_eq(current, &source))
             || source.fault.load(std::sync::atomic::Ordering::Acquire)
-            || lock(&source.state).closed
+            || !lock(&source.state).is_ready()
         {
             return Err(unavailable());
         }
@@ -284,7 +369,7 @@ impl AgentSession for Session {
         }
         let result = self.source().and_then(|source| {
             let state = lock(&source.state);
-            if state.closed || state.projection.cursor().epoch != self.cursor.epoch {
+            if !state.is_ready() || state.projection.cursor().epoch != self.cursor.epoch {
                 return Err(unavailable());
             }
             match request {

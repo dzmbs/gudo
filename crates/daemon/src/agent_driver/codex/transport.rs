@@ -1,5 +1,6 @@
 mod bootstrap;
 mod frames;
+mod history;
 mod peer;
 #[cfg(test)]
 mod tests;
@@ -54,6 +55,7 @@ fn prepare(
     recipe.tui.args.insert(0, "codex-remote".into());
     recipe.tui.program = context.hook_bin.clone().into_os_string();
     let (owner, mut owner_ready) = tokio::sync::watch::channel(None);
+    let (observations, receiver) = tokio::sync::mpsc::channel(64);
     let source = Arc::new(Live {
         owner,
         fault: std::sync::atomic::AtomicBool::new(false),
@@ -61,11 +63,13 @@ fn prepare(
         runtime: Mutex::new(super::runtime::Runtime::default()),
         process: Mutex::new(None),
         task: Mutex::new(None),
+        history_task: Mutex::new(None),
+        history_result: Mutex::new(None),
+        observations: Mutex::new(Some(observations.clone())),
         directory: directory.to_owned(),
     });
     let weak = Arc::downgrade(&source);
     let expected = agents::pane_env(context);
-    let (observations, receiver) = tokio::sync::mpsc::channel(64);
     let observer = weak.clone();
     tokio::task::spawn_blocking(move || observe(observer, receiver));
     let task = tokio::spawn(async move {
@@ -89,6 +93,9 @@ fn prepare(
         if let Some(source) = weak.upgrade() {
             source.fault.store(true, Ordering::Release);
             lock(&source.state).fail();
+            if let Some(sender) = lock(&source.observations).as_ref() {
+                let _ = sender.try_send((false, Vec::new()));
+            }
             let process = lock(&source.process).take();
             if let Some(mut process) = process {
                 let _ =
@@ -184,6 +191,7 @@ fn observe(source: Weak<Live>, mut receiver: tokio::sync::mpsc::Receiver<(bool, 
         let Some(source) = source.upgrade() else {
             return;
         };
+        let history = lock(&source.history_result).take();
         let (effects, closed) = {
             let mut state = lock(&source.state);
             if source.fault.load(Ordering::Acquire) {
@@ -200,6 +208,17 @@ fn observe(source: Weak<Live>, mut receiver: tokio::sync::mpsc::Receiver<(bool, 
                 {
                     state.fail();
                 }
+            }
+            if !state.closed
+                && let Some((binding, result)) = history
+                && state.binding.is_current(&binding)
+                && result
+                    .and_then(|frame| {
+                        super::history::install(&mut state, &frame).map_err(io::Error::other)
+                    })
+                    .is_err()
+            {
+                state.fail();
             }
             (std::mem::take(&mut state.effects), state.closed)
         };

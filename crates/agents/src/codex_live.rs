@@ -8,8 +8,10 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 mod events;
+mod history;
 mod items;
 pub use events::{CodexApprovalKind, CodexLiveEvent, CodexLiveEvents, CodexTurnOutcome};
+pub use history::{CodexHistoryStatus, CodexHistoryTurn, CodexThreadHistory};
 pub use items::{CodexInput, CodexItem};
 
 use serde::de::{DeserializeOwned, IgnoredAny};
@@ -175,6 +177,14 @@ impl CodexBinding {
     /// Whether deferred work still belongs to this exact successful binding.
     pub fn is_current(&self, binding: &CodexThreadBinding) -> bool {
         self.binding() == Some(binding)
+    }
+
+    /// The exact outstanding binding request, not authority to issue a request.
+    pub fn pending_request(&self) -> Option<&CodexRpcId> {
+        match &self.state {
+            State::Waiting { id, .. } => Some(id),
+            _ => None,
+        }
     }
 
     /// Observes an outgoing TUI frame without changing or forwarding it.

@@ -65,6 +65,8 @@ anyhow = "1.0.104"
 iroh = { version = "1.3.0", default-features = false, features = ["tls-ring", "fast-apple-datapath"] }
 n0-future = "0.3"
 tokio = { version = "1.53.3", default-features = false, features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio-websockets = { version = "0.13.3", default-features = false, features = ["client", "ring", "getrandom"] }
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 
 # SSH (crates/ssh, D7): russh on ring, the crypto provider iroh already uses (no aws-lc). RSA for
 # imported keys, flate2 for `zlib@openssh.com` and gzip-compressed uploads.

@@ -465,8 +465,8 @@ identity. Resolution does not establish approval, execution or success.
 
 ### Opt-in Dev read producer
 
-`Config::codex_chat` defaults to false and is only consulted in Dev builds for fresh dedicated
-launches. It is not enabled by the app or normal helper configuration. The pane owns an app-server,
+`Config::codex_chat` defaults to false and is only consulted in Dev builds for dedicated
+fresh or explicitly resumed launches. It is not enabled by the app or normal helper configuration. The pane owns an app-server,
 private randomized 0700 directory and 0600 environment/relay sockets; timeline watches own none of
 these. A matching Debug helper's `codex-remote` bootstrap captures the TUI's actual post-login
 environment and cwd before exec into the official remote TUI. A second login shell is not used to
@@ -485,14 +485,25 @@ command status is explicit, and non-success turn endings are notices, never infe
 
 The common `AgentSession` exposes only READ and STREAMING_DELTAS. Snapshots are frozen at the
 session cursor so a concurrently arriving delta cannot appear in both a snapshot and its subsequent
-append stream. Paging and late watches read the captured fresh-launch history; source/epoch
+append stream. Paging and late watches read captured or hydrated history; source/epoch
 changes invalidate stale reads. Since-join access is explicitly unavailable until original event
 time can be established safely: projection time cannot authorize buffered pre-join content. This
 source-specific scope check also precedes common watch and history delivery. Native Send, Stop,
 approval delivery, diffs and tool-output reads
 remain unavailable. Legacy terminal-only Codex launch and control behavior is unchanged when this
-opt-in producer is absent. Switching the TUI to resume/fork disables native observation; it does not
-replace or restart that conversation.
+opt-in producer is absent. Switching the TUI to resume/fork retires the old source until the exact
+correlated reply establishes a new projection epoch. Old rows remain frozen during this transition;
+no replacement conversation or bootstrap turn is created.
+
+Resume/fork history must be complete, with unambiguous turn/item identities. When the TUI requests
+`excludeTurns`, an independent, read-only connection to the same owned app-server initializes and
+calls `thread/read(includeTurns: true)` for the already proven thread. It never calls thread/start,
+thread/resume or turn/start. Peer ownership and current binding are checked; the request has a
+5-second deadline, bounded notification allowance and 64KiB reply limit, without retries. Captured
+new live turns replace their corresponding snapshot turns, avoiding duplicate text; completed
+baseline turn identities reject delayed replay. An active read snapshot without an observed turn
+start has no ordered baseline and disables native Chat, leaving Terminal intact. Historical
+completions never increment runtime turn counts or send completion notifications.
 
 This remains experimental scaffolding, not completed Codex Chat enablement. The daemon/client
 stream, unwatch/catch-up, bounded frame decoder, environment validation and forwarding-failure tests
@@ -501,20 +512,23 @@ capture and same-PID exec. A separately opted-in test runs actual Codex 0.166.0 
 Dev daemon, private named account with placeholder file credentials and loopback model: one explicit
 Terminal PTY prompt produces live appends and a final item over the common client API, and a late
 watch catches up without ending the server. The probe checks the exact session record, named-account
-pin, working status during streaming and once-only completed runtime turn. This does not validate
+pin, working status during streaming and once-only completed runtime turn. It then shuts down the
+private daemon, explicitly recovers the saved pane, and verifies the same thread/account and hydrated
+assistant history, no recounted completion, and no additional model request. This does not validate
 arbitrary MCP tools, real account permissions, latency or the app UI.
 
 Launch-owned callbacks run outside the projection lock and recheck the current pane/source identity.
 The bound thread updates the runtime session and persisted pane record through the common agent-event
-path, retaining the resolved account pin and captured post-login cwd. This runtime accepts only
+path, retaining the resolved account pin. Validated app-server thread cwd supersedes the captured
+post-login launch directory when resuming another thread context. This runtime accepts only
 structured evidence: notify, hooks, OSC, screen heuristics and idle timers cannot finish its turn.
 Mapped turn boundaries drive status and worktree boundaries; approval resolution leaves the runtime
 blocked while another request remains pending. Observation loss releases the claim to unknown rather
 than inventing completion. Session discovery does not guess identities for a live Codex source.
 
-Historical resume hydration and relay recovery/handoff, signed controls, richer item/output streaming,
-lifecycle stress/MCP/latency validation and simulator acceptance are still open. Do not use the
-experimental launch for resume/reopen/recovery workflows. Hot helper
+Relay recovery/handoff, unsupported-version fallback before default enablement, signed controls,
+richer item/output streaming, lifecycle stress/MCP/latency validation and simulator acceptance remain
+open. The isolated cold-recovery probe is not general recovery acceptance. Hot helper
 upgrade/restart is refused while this opt-in launch owns an active server/transport because relay
 handoff is not implemented. Existing Codex panes are never restarted or silently replaced to enable
 Chat. Claude MessageDisplay streaming is not implemented by this producer.

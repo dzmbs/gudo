@@ -9,6 +9,9 @@ async fn failed_native_queue_never_truncates_official_terminal_bytes() {
         runtime: Mutex::new(super::super::runtime::Runtime::default()),
         process: Mutex::new(None),
         task: Mutex::new(None),
+        history_task: Mutex::new(None),
+        history_result: Mutex::new(None),
+        observations: Mutex::new(None),
         directory: crate::fsutil::create_private_temp_dir("gudo-codex-forward").unwrap(),
     });
     let (sender, receiver) = tokio::sync::mpsc::channel(1);

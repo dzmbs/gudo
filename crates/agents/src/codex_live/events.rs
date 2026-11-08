@@ -58,6 +58,7 @@ pub enum CodexLiveEvent {
 pub struct CodexLiveEvents {
     binding: CodexThreadBinding,
     turn: Option<String>,
+    seen_turns: std::collections::HashSet<String>,
     approvals: Vec<Approval>,
     closed: bool,
 }
@@ -77,9 +78,41 @@ impl CodexLiveEvents {
         Self {
             binding,
             turn: None,
+            seen_turns: std::collections::HashSet::new(),
             approvals: Vec::new(),
             closed: false,
         }
+    }
+
+    /// Restores the active turn reported in this binding's correlated history reply.
+    /// # Errors
+    /// Rejects invalid turn identities.
+    pub fn with_active_turn(mut self, turn: String) -> Result<Self, CodexBindingError> {
+        self.reserve_turn(&turn)?;
+        self.turn = Some(turn);
+        Ok(self)
+    }
+
+    /// Reserves completed baseline turns so delayed live frames cannot replay their text.
+    /// # Errors
+    /// Rejects invalid identities or an exhausted turn allowance.
+    pub fn with_completed_turns(
+        mut self,
+        turns: impl IntoIterator<Item = String>,
+    ) -> Result<Self, CodexBindingError> {
+        for turn in turns {
+            self.reserve_turn(&turn)?;
+        }
+        Ok(self)
+    }
+
+    fn reserve_turn(&mut self, turn: &str) -> Result<(), CodexBindingError> {
+        validate_id(turn)?;
+        if !self.seen_turns.contains(turn) && self.seen_turns.len() >= 500 {
+            return Err(CodexBindingError::Exhausted);
+        }
+        self.seen_turns.insert(turn.to_owned());
+        Ok(())
     }
 
     /// Parses a frame from this binding's proven physical transport.
@@ -129,8 +162,7 @@ impl CodexLiveEvents {
     }
 
     fn started(&mut self, params: TurnParams) -> Result<Option<CodexLiveEvent>, CodexBindingError> {
-        if params.thread_id != self.binding.thread_id()
-            || self.is_current(&params.thread_id, &params.turn.id)
+        if params.thread_id != self.binding.thread_id() || self.seen_turns.contains(&params.turn.id)
         {
             return Ok(None);
         }
@@ -138,6 +170,7 @@ impl CodexLiveEvents {
         if params.turn.status != TurnStatus::InProgress {
             return Err(CodexBindingError::InvalidFrame);
         }
+        self.reserve_turn(&params.turn.id)?;
         self.turn = Some(params.turn.id.clone());
         Ok(Some(CodexLiveEvent::TurnStarted {
             turn: params.turn.id,

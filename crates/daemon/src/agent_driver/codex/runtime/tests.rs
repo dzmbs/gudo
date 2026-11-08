@@ -154,7 +154,7 @@ async fn mapped_events_register_the_session_and_drive_status_without_notify() {
     let replacement = super::super::tests::source();
     *lock(&raw.entry.codex) = Some(replacement);
     source.publish(vec![
-        Effect::Bound("obsolete".into()),
+        Effect::Bound("obsolete".into(), None),
         Effect::Completed(CodexTurnOutcome::Completed),
     ]);
     assert_eq!(
@@ -171,22 +171,41 @@ async fn mapped_events_register_the_session_and_drive_status_without_notify() {
 }
 
 #[test]
+fn bound_thread_context_replaces_the_post_login_launch_directory() {
+    let mut runtime = Runtime {
+        cwd: Some("/launch".into()),
+        ..Runtime::default()
+    };
+    let signal = runtime
+        .apply(Effect::Bound(
+            "primary".into(),
+            Some("/resumed-project".into()),
+        ))
+        .unwrap();
+    assert_eq!(signal.session.cwd, Some("/resumed-project".into()));
+}
+
+#[test]
 fn resolution_of_one_request_does_not_unblock_another() {
     let mut runtime = Runtime::default();
-    runtime.apply(Effect::Bound("primary".into()));
-    runtime.apply(Effect::Started);
-    runtime.apply(Effect::Waiting(
+    let _ = runtime.apply(Effect::Bound("primary".into(), None));
+    let _ = runtime.apply(Effect::Started);
+    let _ = runtime.apply(Effect::Waiting(
         CodexRpcId::Integer(7),
         CodexApprovalKind::Command,
     ));
-    runtime.apply(Effect::Waiting(
+    let _ = runtime.apply(Effect::Waiting(
         CodexRpcId::Text("7".into()),
         CodexApprovalKind::FileChange,
     ));
-    let signal = runtime.apply(Effect::Resolved(CodexRpcId::Integer(7)));
+    let signal = runtime
+        .apply(Effect::Resolved(CodexRpcId::Integer(7)))
+        .unwrap();
     assert_eq!(signal.kind, EventKind::Blocked);
     assert!(matches!(signal.claim, Some(Claim::Blocked(_))));
-    let signal = runtime.apply(Effect::Resolved(CodexRpcId::Text("7".into())));
+    let signal = runtime
+        .apply(Effect::Resolved(CodexRpcId::Text("7".into())))
+        .unwrap();
     assert_eq!(signal.claim, Some(Claim::Working));
     assert_eq!(
         signal.turn, None,
