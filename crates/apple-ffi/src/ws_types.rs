@@ -545,6 +545,46 @@ impl From<proto::FileKind> for FileKind {
     }
 }
 
+/// What is at a path a pane printed, with symlinks followed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum PathFound {
+    File {
+        size: u64,
+    },
+    Dir,
+    Other,
+    Missing,
+    /// Outside the directories the daemon serves.
+    Denied,
+}
+
+impl From<proto::PathFound> for PathFound {
+    fn from(found: proto::PathFound) -> Self {
+        match found {
+            proto::PathFound::File { size } => Self::File { size },
+            proto::PathFound::Dir => Self::Dir,
+            proto::PathFound::Other => Self::Other,
+            proto::PathFound::Missing => Self::Missing,
+            proto::PathFound::Denied => Self::Denied,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ResolvedPath {
+    pub path: String,
+    pub found: PathFound,
+}
+
+impl From<proto::ResolvedPath> for ResolvedPath {
+    fn from(resolved: proto::ResolvedPath) -> Self {
+        Self {
+            path: resolved.path,
+            found: resolved.found.into(),
+        }
+    }
+}
+
 /// `lstat` of a path.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct FileStat {

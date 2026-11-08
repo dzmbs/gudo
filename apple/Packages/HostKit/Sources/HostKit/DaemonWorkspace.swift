@@ -68,6 +68,14 @@ nonisolated public protocol DaemonUsageAPI: AnyObject, Sendable {
 
 extension DaemonClient: DaemonUsageAPI {}
 
+/// Paths a pane printed, resolved where the printing command ran (daemons that offer it).
+nonisolated public protocol DaemonPathAPI: AnyObject, Sendable {
+    func resolvePaths(paneId: UInt64, commandId: UInt64?, paths: [String]) async throws -> [ResolvedPath]
+    func offersResolvePaths() -> Bool
+}
+
+extension DaemonClient: DaemonPathAPI {}
+
 /// Whether each agent's command is on the host (helpers too old to check answer
 /// `Unavailable` without being asked).
 nonisolated public protocol DaemonAgentInstallAPI: AnyObject, Sendable {

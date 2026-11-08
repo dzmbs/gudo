@@ -17,8 +17,8 @@ use crate::on_runtime;
 use crate::types::{AgentKind, Axis, OpOutcome};
 use crate::ws_types::{
     AttentionList, AttentionSeen, DeleteMode, DirListing, FileChunk, FileStat, GitDiff,
-    GitDiffRequest, GitStatus, PortInfo, ReviewRequest, TurnInfo, WorkspaceError, WorkspaceEvent,
-    WorktreeCreate, WorktreeInfo, WorktreeLaunch, WriteTarget,
+    GitDiffRequest, GitStatus, PortInfo, ResolvedPath, ReviewRequest, TurnInfo, WorkspaceError,
+    WorkspaceEvent, WorktreeCreate, WorktreeInfo, WorktreeLaunch, WriteTarget,
 };
 
 /// Receives [`WorkspaceEvent`]s; implemented in Swift.
@@ -468,6 +468,34 @@ impl DaemonClient {
     pub async fn fs_stat(&self, path: String) -> Result<FileStat, WorkspaceError> {
         self.ws_call(|client| async move { client.fs_stat(path).await })
             .await
+    }
+
+    /// Paths pane `pane_id` printed, resolved where command `command_id` ran (`nil`: the pane's
+    /// current directory). Only for daemons that [`offers_resolve_paths`](Self::offers_resolve_paths).
+    ///
+    /// # Errors
+    ///
+    /// The daemon's [`WorkspaceError`].
+    pub async fn resolve_paths(
+        &self,
+        pane_id: u64,
+        command_id: Option<u64>,
+        paths: Vec<String>,
+    ) -> Result<Vec<ResolvedPath>, WorkspaceError> {
+        let query = proto::PathQuery {
+            pane_id: proto::PaneId(pane_id),
+            command_id,
+            paths,
+        };
+        let resolved: Vec<proto::ResolvedPath> = self
+            .ws_call(|client| async move { client.resolve_paths(query).await })
+            .await?;
+        Ok(resolved.into_iter().map(Into::into).collect())
+    }
+
+    pub fn offers_resolve_paths(&self) -> bool {
+        self.inner
+            .daemon_offers(proto::MoreDaemonFeatures::RESOLVE_PATHS)
     }
 
     /// Reads up to 1 MiB of a file (use [`download_file`](Self::download_file) for more).
