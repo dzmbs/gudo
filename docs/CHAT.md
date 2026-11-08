@@ -80,7 +80,9 @@ consume entry slots. A single document beyond the block budget remains uncached;
 freezing for that larger prefix is not finished. Only HTTP, HTTPS and mail links are interactive; HTML
 stays literal text. Original block source comes from cmark's UTF-8 ranges, not a padded table
 formatter. Nested tables rendered inline keep their literal source instead of expanding columns.
-The upstream Markdown and cmark-gfm licences ship with the app.
+The upstream Markdown and cmark-gfm licences ship with the app. One parse may reuse up to 32
+identical inline fragments within a 64KiB conservative charge; this scratch LRU is cleared after
+each parse and shares no styles across documents.
 
 Rendering separately admits at most 256 KiB of UTF-8 per Markdown message before invoking
 cmark, and at most 3,000 resulting native rows per message. Over-limit messages become a
@@ -294,7 +296,11 @@ also bound the number of views constructed in one cell. The Mac has no Chat pres
 `ChatCollectionTests` exercises native reading anchors, bottom following, frozen visible rows,
 coalescing, reused connection IDs, cached opening, streaming apply, two-pass memory and teardown.
 The replay here uses synthetic cached rows on the Simulator; real transcript replay and device
-performance verification are separate gates.
+performance verification are separate gates. `RowBuilderTests.testColdFourKiBRowBuildMedianBudget`
+is an opt-in timing check (`TEST_RUNNER_GUDO_CHAT_PERFORMANCE=1` with xcodebuild); it measures both
+repeated and varied paragraphs, with worker time separate from actor scheduling. Its 2ms median
+assertion remains strict. An ordinary functional test run skips it rather than implying performance
+acceptance. Optimized Debug measurements are still Debug simulator evidence, not Release or hardware.
 
 ## Claude adapter
 

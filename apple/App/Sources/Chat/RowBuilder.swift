@@ -124,12 +124,16 @@ actor RowBuilder {
     private let cache = BoundedLRU<String, Entry>(
         capacity: ChatCacheLimits.entries, byteLimit: ChatCacheLimits.bytes, unitLimit: ChatCacheLimits.entries
     )
+    private let inlineCache = BoundedLRU<String, AttributedString>(capacity: 32, byteLimit: 64 * 1_024, unitLimit: 32)
     private(set) var parseCount = 0
     private(set) var parsedBytes = 0
+    private(set) var lastRenderDuration = Duration.zero
 
     func rows(for item: TimelineItem) -> [ChatRow] { render(item).rows }
 
     func render(_ item: TimelineItem) -> RenderedChatRows {
+        let start = ContinuousClock.now
+        defer { lastRenderDuration = start.duration(to: .now) }
         let previous = cache.value(for: item.id)
         if let previous, previous.revision == item.revision {
             return RenderedChatRows(rows: previous.rows, cost: previous.cost)
@@ -228,6 +232,8 @@ actor RowBuilder {
             offset = previous.stableBytes
             pending = String(source[index...])
         }
+        inlineCache.removeAll()
+        defer { inlineCache.removeAll() }
         parseCount += 1
         parsedBytes += pending.utf8.count
         let document = Document(parsing: pending)
@@ -363,6 +369,7 @@ actor RowBuilder {
     }
 
     private func inline(_ markdown: String) -> AttributedString {
+        if let cached = inlineCache.value(for: markdown) { return cached }
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace, failurePolicy: .returnPartiallyParsedIfPossible)
         var text = (try? AttributedString(markdown: markdown, options: options)) ?? AttributedString(markdown)
         for run in Array(text.runs) {
@@ -370,6 +377,7 @@ actor RowBuilder {
                 text[run.range].link = nil
             }
         }
+        inlineCache.insert(text, for: markdown, cost: LRUCost(bytes: markdown.utf8.count * 4 + 512, units: 1))
         return text
     }
 }

@@ -52,6 +52,39 @@ final class RowBuilderTests: XCTestCase {
         XCTAssertEqual(parseCount, 1)
     }
 
+    func testColdFourKiBRowBuildMedianBudget() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["GUDO_CHAT_PERFORMANCE"] == "1",
+                          "Opt-in timing check; use an optimized Debug simulator build.")
+        let repeated = String(repeating: "A **finished** paragraph with a [safe link](https://example.com).\n\n", count: 80)
+        let varied = (0..<80).map { "Paragraph \($0): **finished \($0)** with a [safe link](https://example.com/\($0))." }
+            .joined(separator: "\n\n")
+        try await measureColdRows(String(repeated.prefix(4_096)), label: "repeated")
+        try await measureColdRows(String(varied.prefix(4_096)), label: "varied")
+    }
+
+    private func measureColdRows(_ text: String, label: String) async throws {
+        XCTAssertEqual(text.utf8.count, 4_096)
+        let builder = RowBuilder(), clock = ContinuousClock()
+        var samples: [Double] = [], roundTrips: [Double] = []
+        for index in 0..<100 {
+            var item = try assistant(text)
+            item.id = "cold-4k-\(index)"
+            let start = clock.now
+            let rows = await builder.rows(for: item)
+            let roundTrip = start.duration(to: clock.now).components
+            let duration = await builder.lastRenderDuration.components
+            XCTAssertFalse(rows.isEmpty)
+            samples.append(Double(duration.seconds) * 1_000 + Double(duration.attoseconds) / 1e15)
+            roundTrips.append(Double(roundTrip.seconds) * 1_000 + Double(roundTrip.attoseconds) / 1e15)
+        }
+        samples.sort()
+        roundTrips.sort()
+        print("Chat cold 4KiB \(label) worker median: \(samples[50]) ms, p99: \(samples[98]) ms; actor round-trip median: \(roundTrips[50]) ms")
+        XCTAssertLessThan(samples[50], 2)
+        let count = await builder.parseCount
+        XCTAssertEqual(count, 100)
+    }
+
     func testOnlyAChangedRevisionIsRebuilt() async throws {
         let builder = RowBuilder()
         let first = try assistant("First paragraph.\n\nSecond paragraph.")
