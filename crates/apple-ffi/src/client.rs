@@ -164,6 +164,12 @@ pub enum ClientEvent {
     Floats {
         floats: crate::types::DaemonFloats,
     },
+    /// Every command restored panes offer to run again, from daemons that keep them, on owner
+    /// connections: the whole list each time. Show a Run again chip in each pane; `run_again`
+    /// types the command.
+    RunAgainOffers {
+        offers: Vec<crate::types::RunAgainOffer>,
+    },
     /// A program in the pane wrote to the clipboard (OSC 52) after this device typed into it
     /// (`ConnectOptions.clipboard`): put it on this device's clipboard, local only, and say
     /// so. Programs can never read the clipboard.
@@ -335,6 +341,9 @@ impl From<client_core::ClientEvent> for ClientEvent {
             },
             E::Floats { floats } => Self::Floats {
                 floats: floats.into(),
+            },
+            E::RunAgainOffers { offers } => Self::RunAgainOffers {
+                offers: offers.into_iter().map(Into::into).collect(),
             },
             E::PaneBytes { pane_id, seq, data } => Self::PaneBytes {
                 pane_id: pane_id.0,
@@ -793,6 +802,11 @@ impl DaemonClient {
     /// Queued while disconnected.
     pub fn send_input(&self, pane_id: u64, data: &[u8]) {
         self.inner.send_input(PaneId(pane_id), data.to_vec());
+    }
+
+    /// Types a restored pane's offered command and presses Return, as the user would.
+    pub fn run_again(&self, offer: crate::types::RunAgainOffer) {
+        self.inner.run_again(&offer.into());
     }
 
     /// Sends encoded terminal reports without treating them as typing.

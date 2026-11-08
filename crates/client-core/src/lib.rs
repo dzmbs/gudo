@@ -284,6 +284,12 @@ pub enum ClientEvent {
         /// The session's floats, as far as this connection sees.
         floats: proto::SessionFloats,
     },
+    /// Every command restored panes offer to run again (a reboot stopped them), from daemons
+    /// with `MoreDaemonFeatures::RUN_AGAIN`, on owner devices: the whole list each time.
+    /// Running one is typing it ([`Client::run_again`]).
+    RunAgainOffers {
+        offers: Vec<proto::RunAgainOffer>,
+    },
     /// A program in the pane wrote to the clipboard (OSC 52) after this device typed into it,
     /// with [`ConnectOptions::clipboard`]. Put it on this device's clipboard, local only, and
     /// say so.
@@ -881,6 +887,15 @@ impl Client {
         for piece in data.chunks(PIECE) {
             self.send_payload(pane_id, InputPayload::Bytes(piece.to_vec()));
         }
+    }
+
+    /// Types `offer`'s command into its pane and presses Return, as the user would. A command
+    /// with control characters is not typed: they would act as keys.
+    pub fn run_again(&self, offer: &proto::RunAgainOffer) {
+        if offer.command.is_empty() || offer.command.chars().any(char::is_control) {
+            return;
+        }
+        self.send_input(offer.pane_id, format!("{}\r", offer.command).into_bytes());
     }
 
     /// Sends encoded terminal reports without claiming the pane's size. Older daemons receive

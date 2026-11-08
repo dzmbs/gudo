@@ -659,6 +659,9 @@ fn requests_needing_features(inner: &Inner, features: proto::DaemonFeatures) -> 
     {
         requests.push(ClientCtl::TerminalColors(colors.clone()));
     }
+    if lock(&inner.more_daemon_features).contains(proto::MoreDaemonFeatures::RUN_AGAIN) {
+        requests.push(ClientCtl::WatchRunAgain);
+    }
     requests
 }
 
@@ -981,6 +984,7 @@ async fn read_ctl(inner: Arc<Inner>, mut ctl_rx: RecvStream) -> String {
             }
             ServerCtl::Projects(projects) => ClientEvent::Projects { projects },
             ServerCtl::Floats(floats) => ClientEvent::Floats { floats },
+            ServerCtl::RunAgainOffers(offers) => ClientEvent::RunAgainOffers { offers },
             // Only what this connection asked for; a daemon is not trusted to honour it.
             ServerCtl::Clipboard { pane_id, text } if inner.options.clipboard => {
                 ClientEvent::Clipboard { pane_id, text }

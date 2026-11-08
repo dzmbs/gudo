@@ -502,6 +502,31 @@ pub struct DaemonFloat {
     pub close_when_done: bool,
 }
 
+/// A command that was running in a pane when its daemon stopped, offered to run again.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct RunAgainOffer {
+    pub pane_id: u64,
+    pub command: String,
+}
+
+impl From<proto::RunAgainOffer> for RunAgainOffer {
+    fn from(offer: proto::RunAgainOffer) -> Self {
+        Self {
+            pane_id: offer.pane_id.0,
+            command: offer.command,
+        }
+    }
+}
+
+impl From<RunAgainOffer> for proto::RunAgainOffer {
+    fn from(offer: RunAgainOffer) -> Self {
+        Self {
+            pane_id: proto::PaneId(offer.pane_id),
+            command: offer.command,
+        }
+    }
+}
+
 /// A session's floating windows, back to front.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct DaemonFloats {
