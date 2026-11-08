@@ -14,10 +14,118 @@ fn reply(binding: &mut CodexBinding, id: Value, thread: &str) -> Result<(), Code
 }
 
 #[test]
+fn physical_tui_title_generation_cannot_replace_the_user_thread() {
+    let frames: Vec<Value> = serde_json::from_str(include_str!(
+        "../../tests/fixtures/codex-live/physical-tui-0.166.0.json"
+    ))
+    .unwrap();
+    let mut binding = CodexBinding::default();
+    binding
+        .observe_tui(&frames[0]["frame"].to_string())
+        .unwrap();
+    binding
+        .observe_server(&frames[1]["frame"].to_string())
+        .unwrap();
+    let user = binding.binding().unwrap().clone();
+    binding
+        .observe_tui(&frames[2]["frame"].to_string())
+        .unwrap();
+    assert!(
+        binding.is_current(&user),
+        "background title generation retired the visible conversation"
+    );
+    binding
+        .observe_server(&frames[3]["frame"].to_string())
+        .unwrap();
+    assert!(
+        binding.is_current(&user),
+        "background title reply replaced the visible conversation"
+    );
+}
+
+fn title(binding: &mut CodexBinding, id: i64) -> Result<(), CodexBindingError> {
+    binding.observe_tui(
+        &json!({"id": id, "method": "thread/start", "params": {
+            "threadSource": "thread_title", "ephemeral": true
+        }})
+        .to_string(),
+    )
+}
+
+#[test]
+fn title_replies_cannot_bind_or_supersede_pending_user_requests() {
+    let mut binding = CodexBinding::default();
+    title(&mut binding, 1).unwrap();
+    reply(&mut binding, json!(1), "title").unwrap();
+    assert!(binding.binding().is_none());
+    start(&mut binding, json!(2));
+    title(&mut binding, 3).unwrap();
+    reply(&mut binding, json!(3), "another-title").unwrap();
+    assert!(binding.binding().is_none());
+    reply(&mut binding, json!(2), "user").unwrap();
+    assert_eq!(binding.binding().unwrap().thread_id(), "user");
+    assert_eq!(title(&mut binding, 2), Err(CodexBindingError::InvalidFrame));
+    assert!(binding.binding().is_none());
+}
+
+#[test]
+fn title_request_ids_are_reserved_and_bounded() {
+    let mut binding = CodexBinding::default();
+    title(&mut binding, 1).unwrap();
+    assert!(
+        binding
+            .observe_tui(r#"{"id":1,"method":"thread/start"}"#)
+            .is_err()
+    );
+    let mut binding = CodexBinding::default();
+    for id in 0..MAX_BINDING_REQUESTS {
+        title(&mut binding, id as i64).unwrap();
+    }
+    assert_eq!(
+        title(&mut binding, MAX_BINDING_REQUESTS as i64),
+        Err(CodexBindingError::Exhausted)
+    );
+}
+
+#[test]
+fn ephemeral_user_threads_bind_but_unverified_purposes_close() {
+    for params in [
+        json!({"threadSource":"thread_title", "ephemeral":false}),
+        json!({"threadSource":"thread_title"}),
+        json!({"threadSource":"future_feature", "ephemeral":true}),
+        json!({"ephemeral":true}),
+    ] {
+        let mut binding = CodexBinding::default();
+        binding
+            .observe_tui(
+                &json!({"id":1, "method":"thread/start", "params": {
+                    "threadSource":"user", "ephemeral":true
+                }})
+                .to_string(),
+            )
+            .unwrap();
+        reply(&mut binding, json!(1), "user").unwrap();
+        assert!(binding.binding().is_some());
+        assert_eq!(
+            binding
+                .observe_tui(&json!({"id":2,"method":"thread/start","params":params}).to_string()),
+            Err(CodexBindingError::InvalidFrame)
+        );
+        assert!(binding.binding().is_none());
+        assert_eq!(
+            reply(&mut binding, json!(2), "unverified"),
+            Err(CodexBindingError::Closed)
+        );
+    }
+}
+
+#[test]
 fn ambiguous_duplicate_identity_fields_never_bind() {
     for frame in [
         r#"{"id":1,"id":2,"method":"thread/start"}"#,
         r#"{"id":1,"method":"thread/resume","params":{"threadId":"first","threadId":"second"}}"#,
+        r#"{"id":1,"method":"thread/start","params":{"threadSource":"user","threadSource":"thread_title"}}"#,
+        r#"{"id":1,"method":"thread/start","params":{"ephemeral":true,"ephemeral":false}}"#,
     ] {
         let mut binding = CodexBinding::default();
         assert_eq!(

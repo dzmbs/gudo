@@ -84,6 +84,28 @@ struct TuiFrame {
 struct ThreadParams {
     #[serde(rename = "threadId")]
     thread: Option<String>,
+    #[serde(rename = "threadSource")]
+    purpose: Option<ThreadPurpose>,
+    ephemeral: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ThreadPurpose {
+    User,
+    ThreadTitle,
+    #[serde(other)]
+    Unknown,
+}
+
+impl ThreadParams {
+    fn is_auxiliary(&self) -> Result<bool, CodexBindingError> {
+        match (&self.purpose, self.ephemeral) {
+            (Some(ThreadPurpose::ThreadTitle), Some(true)) => Ok(true),
+            (Some(ThreadPurpose::User), _) | (None, None | Some(false)) => Ok(false),
+            _ => Err(CodexBindingError::InvalidFrame),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -149,7 +171,8 @@ impl CodexBinding {
 
     /// Observes an outgoing TUI frame without changing or forwarding it.
     ///
-    /// A new binding request retires the old binding before any response arrives.
+    /// A user binding request retires the old binding before any response arrives.
+    /// Version-tested ephemeral title requests preserve the visible conversation.
     ///
     /// # Errors
     ///
@@ -181,6 +204,13 @@ impl CodexBinding {
         if let RpcId::Text(text) = &id {
             validate_id(text)?;
         }
+        let auxiliary = method == "thread/start"
+            && frame
+                .params
+                .as_ref()
+                .map(ThreadParams::is_auxiliary)
+                .transpose()?
+                .unwrap_or(false);
         let parent = if method != "thread/start" {
             let thread = frame
                 .params
@@ -196,6 +226,9 @@ impl CodexBinding {
         }
         if !self.seen.insert(id.clone()) {
             return Err(CodexBindingError::InvalidFrame);
+        }
+        if auxiliary {
+            return Ok(());
         }
         self.state = State::Waiting {
             id,

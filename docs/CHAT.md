@@ -420,8 +420,11 @@ Codex proxy work follows this shared interface and capability contract.
 
 `agents::CodexBinding` passively correlates one proven pane-owned TUI connection's official
 thread/start, thread/resume and thread/fork replies. An unsolicited thread/started notification
-or matching cwd cannot establish ownership. A new request retires the old binding immediately;
-resume requires the exact requested thread. Each successful binding has a non-reused identity,
+or matching cwd cannot establish ownership. A user binding request retires the old binding immediately;
+resume requires the exact requested thread. Version-tested ephemeral `thread_title` requests and replies
+preserve the user binding, including a pending user request. Their request IDs remain reserved within
+the same bounded allowance. Ephemeral user threads remain supported; unverified purpose combinations
+close native observation rather than guessing. Each successful binding has a non-reused identity,
 so deferred work cannot survive a same-thread round trip or another connection. Typed envelopes
 reject duplicate identity fields. Observation retains at most 256 bounded binding-request IDs
 and parses at most 64KiB per pending control frame; exhaustion closes native binding, not Terminal.
@@ -429,10 +432,18 @@ A future proxy must forward official frames unchanged, independently of these na
 
 This is the adapter's correlation foundation, not an enabled production Codex timeline/control
 transport. It opens no sockets, starts/resumes no process, sends no bootstrap turn and writes no
-session file. Tests use synthetic requests plus the previously recorded official response fixture;
-they do not prove a new real-TUI proxy integration. Pane/account-owned transport lifecycle, exact
-live notification materialization and signed approval routing still need integration. Existing
-Codex panes are not restarted or silently replaced to enable Chat.
+session file. Tests include recorded requests and replies from an isolated Codex 0.166.0 physical TUI
+behind a temporary Unix relay. A loopback model fixture received one user turn entered through the TUI;
+a second client attached after it began and received that thread's live deltas and completion.
+The TUI also generated an auxiliary title thread. This proves physical-connection correlation, not
+production daemon integration or authorized native controls.
+
+The same probe found a remote-mode compatibility prerequisite: the TUI's per-run notify override did
+not reach `thread/start.config`; the account-default notify program ran in the server environment,
+including for the auxiliary title turn. TUI OSC 9 still appeared. Per-pane notify routing and MCP
+parity need proof before enablement. Pane/account-owned transport lifecycle, exact live notification
+materialization and signed approval routing still need integration. Existing Codex panes are not
+restarted or silently replaced to enable Chat.
 
 ## Native composer safety prerequisites
 
