@@ -8,6 +8,7 @@ mod corrupt;
 mod forget;
 mod queries;
 mod size;
+mod styled;
 
 /// Small deterministic PRNG (xorshift64*), so failures reproduce from a seed alone.
 pub struct Rng(u64);

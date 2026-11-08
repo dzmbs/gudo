@@ -242,6 +242,7 @@ pub struct SemanticPrompt {
 enum Format {
     Plain,
     Vt,
+    Styled,
 }
 
 impl Terminal {
@@ -769,6 +770,34 @@ impl Terminal {
         self.format(region, Format::Vt, Wrap::Rows)
     }
 
+    /// Serializes `region` as text with its styles and hyperlinks as VT sequences, and no
+    /// other terminal state: written to another terminal, it reads the same, wraps soft-wrapped
+    /// lines at that terminal's width, and leaves its modes, cursor and palette alone.
+    ///
+    /// # Errors
+    ///
+    /// As for [`text`](Self::text).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), ghostty_vt::Error> {
+    /// use ghostty_vt::{Terminal, TextRegion};
+    ///
+    /// let mut terminal = Terminal::new(10, 3)?;
+    /// terminal.write(b"\x1b[?2004hplain \x1b[1mbold\x1b[0m");
+    /// let styled = terminal.styled_text(TextRegion::Active)?;
+    /// let mut copy = Terminal::new(10, 3)?;
+    /// copy.write(styled.as_bytes());
+    /// assert_eq!(copy.text(TextRegion::Active)?, "plain bold");
+    /// assert!(!styled.contains("2004"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn styled_text(&self, region: TextRegion) -> Result<String, Error> {
+        self.format(region, Format::Styled, Wrap::Join)
+    }
+
     fn format(&self, region: TextRegion, format: Format, wrap: Wrap) -> Result<String, Error> {
         let range = |start: ffi::GhosttyGridRef, end: ffi::GhosttyGridRef| ffi::GhosttySelection {
             size: mem::size_of::<ffi::GhosttySelection>(),
@@ -800,7 +829,9 @@ impl Terminal {
             size: mem::size_of::<ffi::GhosttyFormatterTerminalOptions>(),
             emit: match format {
                 Format::Plain => ffi::GhosttyFormatterFormat_GHOSTTY_FORMATTER_FORMAT_PLAIN,
-                Format::Vt => ffi::GhosttyFormatterFormat_GHOSTTY_FORMATTER_FORMAT_VT,
+                Format::Vt | Format::Styled => {
+                    ffi::GhosttyFormatterFormat_GHOSTTY_FORMATTER_FORMAT_VT
+                }
             },
             unwrap: wrap == Wrap::Join,
             trim: !vt,
