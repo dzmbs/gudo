@@ -162,6 +162,14 @@ struct DaemonWorkspaceTests {
         return (connection, client)
     }
 
+    @Test func theRepositoryRootSkipsGitStatusWhereTheHelperOffersIt() async {
+        let api = FakeWorkspaceAPI()
+        #expect(await api.repositoryRoot(of: "/r/src") == nil, "an older helper answers through git status")
+        api.state.withLock { $0.offersRepoRoot = true }
+        #expect(await api.repositoryRoot(of: "/r/src") == "/r")
+        #expect(await api.repositoryRoot(of: "/tmp") == nil)
+    }
+
     private func port(_ number: UInt16) -> PortInfo {
         PortInfo(port: number, loopbackOnly: true, paneId: nil, pid: 1, process: "node", kind: .http, url: nil)
     }
@@ -188,6 +196,7 @@ nonisolated final class FakeWorkspaceAPI: DaemonClientAPI, DaemonWorkspaceAPI, W
         /// `worktreeList` answers by repository, and the repositories asked.
         var worktreeLists: [String: [WorktreeInfo]] = [:]
         var listed: [String] = []
+        var offersRepoRoot = false
     }
 
     let state = Mutex(State())
@@ -287,4 +296,9 @@ extension FakeWorkspaceAPI: DaemonWorktreeListAPI {
             return state.worktreeLists[repo] ?? []
         }
     }
+}
+
+extension FakeWorkspaceAPI: DaemonRepoRootAPI {
+    func offersRepoRoot() -> Bool { state.withLock { $0.offersRepoRoot } }
+    func repoRoot(path: String) async throws -> String? { path.hasPrefix("/r/") ? "/r" : nil }
 }

@@ -59,6 +59,24 @@ nonisolated public protocol DaemonWorkspaceAPI: AnyObject, Sendable {
 
 extension DaemonClient: DaemonWorkspaceAPI {}
 
+/// The repository root of a path without a `git status` (helpers that `offersRepoRoot`).
+nonisolated public protocol DaemonRepoRootAPI: AnyObject, Sendable {
+    func offersRepoRoot() -> Bool
+    func repoRoot(path: String) async throws -> String?
+}
+
+extension DaemonClient: DaemonRepoRootAPI {}
+
+extension DaemonWorkspaceAPI {
+    /// The repository root holding `path`, nil outside one or when the host cannot say.
+    public func repositoryRoot(of path: String) async -> String? {
+        if let roots = self as? any DaemonRepoRootAPI, roots.offersRepoRoot() {
+            return try? await roots.repoRoot(path: path)
+        }
+        return try? await gitStatus(path: path).root
+    }
+}
+
 /// Agent plan usage (daemons whose `DaemonInfo.agentUsage` is true). Kept out of
 /// `DaemonWorkspaceAPI`'s list so fakes that do not care need nothing.
 nonisolated public protocol DaemonUsageAPI: AnyObject, Sendable {

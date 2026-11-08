@@ -130,7 +130,7 @@ final class LiveEditorSource: EditorSource {
         let directory = context.directory ?? "~"
         // The repository root when the pane is inside one (VS Code shows the project), else the directory.
         var target = directory
-        if let status = try? await context.api().gitStatus(path: directory) { target = status.root }
+        if let root = await (try? context.api())?.repositoryRoot(of: directory) { target = root }
         folder = target
         return (context, target)
     }
@@ -195,17 +195,20 @@ final class LiveEditorSource: EditorSource {
 
     private func start(context: HostContext, folder: String, key: String) async {
         startedAt = .now
-        phase = .checking
+        phase = .starting
         do {
             let api = try context.api()
-            if let status = try? await api.editorStatus(),
-               let vscode = status.available.first(where: { $0.kind == .vsCode }) {
-                phase = vscode.installed ? .starting : .installing
-            } else {
-                phase = .starting
+            let installLabel = Task { [weak self] in
+                guard let status = try? await api.editorStatus(),
+                      status.available.first(where: { $0.kind == .vsCode })?.installed == false,
+                      let self, self.current == key, self.phase == .starting
+                else { return }
+                self.phase = .installing
             }
+            defer { installLabel.cancel() }
             // The user accepted Microsoft's terms for this host in the first-use sheet.
             let session = try await api.openEditor(folder: folder, acceptVscodeLicense: licence.isAccepted(host: context.hostId))
+            installLabel.cancel()
             sessions[key] = (context.hub, session)
             watchRestart(context.daemon)
             let elapsed = startedAt.map { (ContinuousClock.now - $0) / .milliseconds(1) } ?? 0

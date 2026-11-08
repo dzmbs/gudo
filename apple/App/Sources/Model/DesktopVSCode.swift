@@ -99,7 +99,7 @@ enum DesktopVSCode {
             let api = try context.api()
             let directory = context.directory ?? "~"
             var folder = directory
-            if let status = try? await api.gitStatus(path: directory) { folder = status.root }
+            if let root = await api.repositoryRoot(of: directory) { folder = root }
             let port = try forward(api, host: context.hostId)
             guard await sshdAnswers(port: port) else {
                 return "\(context.name) has no SSH server that desktop VS Code could use."

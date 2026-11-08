@@ -443,6 +443,21 @@ final class WorkspaceScreenModelTests: XCTestCase {
         XCTAssertTrue(client.calls.contains("closeEditor true"))
     }
 
+    func testEditorStartsWithoutWaitingForTheHostsEditorList() async throws {
+        let client = FakeWorkspaceClient()
+        client.state.withLock { $0.editorStatusDelay = .seconds(5) }
+        let editor = LiveEditorSource(app: .shared)
+        editor.licence = Self.freshLicence()
+        editor.licence.accept(host: "h1")
+        let context = try fakeContext(client, directory: "/home/me/proj")
+        editor.contextOverride = { context }
+
+        let started = ContinuousClock.now
+        await editor.open()
+        XCTAssertLessThan(ContinuousClock.now - started, .seconds(2))
+        guard case .loading = editor.phase else { return XCTFail("loading: \(editor.phase)") }
+    }
+
     private static func freshLicence() -> EditorLicence {
         let suite = "editor-licence-tests-\(UUID().uuidString)"
         return EditorLicence(defaults: UserDefaults(suiteName: suite)!)

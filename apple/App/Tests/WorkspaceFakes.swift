@@ -27,6 +27,7 @@ nonisolated class FakeWorkspaceClient: DaemonClientAPI, DaemonWorkspaceAPI, Work
         var nextPort: UInt16 = 50_000
         var editorInstalled = false
         var editorDelay: Duration = .zero
+        var editorStatusDelay: Duration = .zero
         var attention = AttentionList(items: [], unseen: 0)
         var seen: [AttentionSeen] = []
         var ports: [PortInfo] = []
@@ -184,6 +185,7 @@ nonisolated class FakeWorkspaceClient: DaemonClientAPI, DaemonWorkspaceAPI, Work
     }
 
     func editorStatus() async throws -> EditorList {
+        try await Task.sleep(for: state.withLock { $0.editorStatusDelay })
         let installed = state.withLock { $0.editorInstalled }
         return EditorList(
             available: [EditorAvailability(kind: .vsCode, installed: installed, downloadable: true, path: nil, version: nil, note: nil)],
