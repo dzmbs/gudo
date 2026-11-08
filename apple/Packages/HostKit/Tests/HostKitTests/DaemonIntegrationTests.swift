@@ -233,7 +233,9 @@ nonisolated final class LocalDaemon {
         let resumed = ContinuousClock.now
         connection.foreground()
         try await eventually("resumed", timeout: .seconds(15)) { connection.status.isLive && sink.lastConnection == .live }
-        print("local daemon: resume from suspend \(ContinuousClock.now - resumed)")
+        let resumeDuration = ContinuousClock.now - resumed
+        print("local daemon: resume from suspend \(resumeDuration)")
+        #expect(resumeDuration < .seconds(1), "a loopback resume shows the live pane within a second")
         Array("echo resumed-$((3+4))\r".utf8).withUnsafeBytes { backend.write($0) }
         try await eventually("echo after resume", timeout: .seconds(10)) { connection.paneText(pane)?.contains("resumed-7") == true }
 

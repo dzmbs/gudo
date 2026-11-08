@@ -164,6 +164,8 @@ import GudoCore
         let live = ContinuousClock.now - resumed
         try await eventually("caught up", timeout: .seconds(20)) { pane.snapshots > before.1 || pane.bytes > before.0 }
         let firstPaint = ContinuousClock.now - resumed
+        #expect(live < .seconds(3), "live \(live) after resuming over a backlog")
+        #expect(firstPaint < .seconds(3), "first paint \(firstPaint) after resuming over a backlog")
         pane.type("\u{03}")
         try await stress.quiesce(pane)
         let during = peaks.stop()

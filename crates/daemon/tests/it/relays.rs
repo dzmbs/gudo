@@ -282,3 +282,53 @@ fn relay_settings_come_from_config_toml() {
     assert_eq!(config.push.relay_url, brand::PUSH_RELAY_URL);
     assert!(config.push.enabled);
 }
+
+/// A phone back from the background may hold a direct address that no longer answers: the
+/// relay must carry the connection at once, not after that path times out.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stale_direct_address_does_not_hold_back_the_relay() {
+    let (_server, url, cert) = spawn_relay().await;
+    let state = tempfile::tempdir().unwrap();
+    let ca = state.path().join("relay-ca.pem");
+    std::fs::write(&ca, pem(&cert)).unwrap();
+    let relay_url = url.clone();
+    let daemon = start_with(state.path(), move |config| {
+        config.relay = daemon::RelayMode::Custom(CustomRelays {
+            urls: vec![relay_url],
+            auth_token: None,
+            ca_files: vec![ca],
+        });
+    })
+    .await;
+    daemon.wait_online(Duration::from_secs(10)).await;
+
+    let link = daemon.pairing_link(daemon::PAIRING_TTL).unwrap();
+    let (ticket, extras) = Ticket::parse_with_extras(&link).unwrap();
+    let silent_socket = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let stale_direct = Ticket {
+        addrs: vec![silent_socket.local_addr().unwrap()],
+        ..ticket
+    }
+    .to_string_with(&extras);
+    let mut config = ClientConfig::new(ClientConfig::generate_key());
+    config.relay = RelayMode::Default;
+    let dialled = std::time::Instant::now();
+    let mut client = TestClient::connect_with(
+        &stale_direct,
+        config,
+        ConnectOptions {
+            relay_ca_der: vec![cert],
+            ..ConnectOptions::default()
+        },
+    );
+    client
+        .until("connected through the relay", |client| client.connected > 0)
+        .await;
+    let elapsed = dialled.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "the stale direct path held the dial for {elapsed:?}"
+    );
+    drop(client);
+    daemon.shutdown().await;
+}
