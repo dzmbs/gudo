@@ -26,6 +26,7 @@ final class PaneChatState {
     private(set) var error: String?
     private(set) var terminalNotice: TerminalNotice?
     var draft = ""
+    let composer = ChatComposer()
     var model: TimelineModel? { lease?.model }
     @ObservationIgnored weak var controller: ChatViewController?
     @ObservationIgnored private weak var hub: DaemonWorkspace?
@@ -73,6 +74,7 @@ final class PaneChatState {
     func updateAgent(_ agent: AgentKind?) {
         let supported = agent == .other ? nil : agent
         guard self.agent != supported else { return }
+        composer.cancelBeforeSend()
         self.agent = supported
         terminalNotice = nil
         model?.stop()

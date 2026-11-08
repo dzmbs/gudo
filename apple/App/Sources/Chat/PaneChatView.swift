@@ -33,7 +33,20 @@ struct PaneChatView<Terminal: View>: View {
         }
         .overlay(alignment: .top) { fallbackNote }
         .onAppear { state.activate(in: hub) }
-        .onDisappear { state.deactivate() }
+        .onDisappear { state.composer.cancelBeforeSend(); state.deactivate() }
+        .onChange(of: state.draft) { _, draft in state.composer.draftChanged(draft) }
+        .onChange(of: state.presentation) { _, presentation in
+            if presentation == .terminal { state.composer.cancelBeforeSend() }
+        }
+        .onChange(of: state.composer.confirmedText) { _, text in
+            if let text, state.draft == text { state.draft = "" }
+        }
+        .alert(unsentWarning, isPresented: Binding(
+            get: { state.composer.needsConfirmation }, set: { _ in }
+        )) {
+            Button("Send anyway") { Task { await state.composer.confirm() } }
+            Button("Cancel", role: .cancel) { state.composer.cancelConfirmation() }
+        }
         .onChange(of: state.agent) { _, agent in if agent != nil { state.activate(in: hub) } }
         .onChange(of: state.model?.error) { _, error in
             if error != nil { state.show(.terminal, terminal: pane, persistence: .transient) }
@@ -66,20 +79,43 @@ struct PaneChatView<Terminal: View>: View {
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: DS.Space.s) {
-            TextField("Draft (not sent)", text: $state.draft, axis: .vertical)
+            TextField("Message", text: $state.draft, axis: .vertical)
                 .font(DS.Font.prose).lineLimit(1...6)
                 .accessibilityIdentifier("chat-draft")
             HStack(spacing: DS.Space.s) {
-                Text("Chat sending is unavailable.").font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
+                Text(state.composer.message ?? (state.composer.isBusy ? "Waiting for confirmation…" : ""))
+                    .font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
+                    .accessibilityIdentifier("chat-send-status")
                 Spacer(minLength: 0)
                 Button("Open Terminal", systemImage: "terminal") { state.show(.terminal, terminal: pane) }
                     .font(DS.Font.caption).frame(minHeight: DS.Size.touchTarget)
-                Button("Send", systemImage: "arrow.up") {}
+                Button("Send", systemImage: "arrow.up", action: send)
                     .labelStyle(.iconOnly).frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
-                    .disabled(true).accessibilityIdentifier("chat-send-disabled")
+                    .disabled(!state.composer.canSend(state.draft)).accessibilityIdentifier("chat-send")
             }
         }
         .padding(DS.Space.l).foregroundStyle(DS.Palette.text).background(DS.Palette.sidebar)
+    }
+
+    private var unsentWarning: String {
+        state.agent == .codex ? "Codex on the Mac has unsent text." : "Claude Code on the Mac has unsent text."
+    }
+
+    private func send() {
+        guard pane.view.markedTextRange == nil, state.controller?.prepareToPark() != false else { return }
+        Task {
+            await state.composer.begin(state.draft) { command in
+                let client = try hub.timelineClient()
+                let json: String
+                switch command {
+                case .prepare: json = try await client.chatPrepare(paneId: pane.id.rawValue)
+                case .send(let ticket, let text, let revision):
+                    json = try await client.chatSend(paneId: pane.id.rawValue, ticket: ticket,
+                                                     text: text, confirmedRevision: revision)
+                }
+                return try ChatSendStatus.decode(json)
+            }
+        }
     }
 
     private var actions: ChatRowActions {

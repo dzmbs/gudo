@@ -78,6 +78,52 @@ final class PaneChatViewTests: XCTestCase {
         XCTAssertNotNil(editor.markedTextRange)
     }
 
+    func testNativeComposerClearsOnlyConfirmedUneditedTextAndShowsUnconfirmedAndDirtyStates() async throws {
+        let suite = "chat-send-view-test-" + UUID().uuidString
+        let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let fixture = try makeFixture(preferences: preferences)
+        defer {
+            fixture.state.deactivate()
+            fixture.window.isHidden = true
+            fixture.window.rootViewController = nil
+            preferences.removePersistentDomain(forName: suite)
+        }
+        try await wait { fixture.state.controller != nil && fixture.state.model?.frame.rows.count == 60 }
+        let state = fixture.state
+        state.draft = "confirmed phone draft"
+        await state.composer.begin(state.draft) { command in
+            if case .prepare = command { return .prepared(.init(ticket: 1, revision: 0, needsConfirmation: false)) }
+            return .confirmed
+        }
+        try await wait { state.draft.isEmpty }
+        state.draft = "sent text"
+        await state.composer.begin(state.draft) { command in
+            if case .prepare = command { return .prepared(.init(ticket: 2, revision: 0, needsConfirmation: false)) }
+            state.draft = "new phone draft while sending"
+            return .confirmed
+        }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(state.draft, "new phone draft while sending")
+        await state.composer.begin(state.draft) { command in
+            if case .prepare = command { return .prepared(.init(ticket: 3, revision: 0, needsConfirmation: false)) }
+            return .notConfirmed
+        }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(state.draft, "new phone draft while sending")
+        XCTAssertEqual(state.composer.message, "Not confirmed, check the terminal")
+        try capture(fixture.window, name: "chat-send-not-confirmed")
+        state.draft = "another message"
+        await state.composer.begin(state.draft) { command in
+            if case .send = command { XCTFail("Dirty draft must wait for the user's choice") }
+            return .prepared(.init(ticket: 4, revision: 1, needsConfirmation: true))
+        }
+        try await Task.sleep(for: .milliseconds(250))
+        XCTAssertTrue(state.composer.needsConfirmation)
+        try capture(fixture.window, name: "chat-send-draft-warning")
+        state.composer.cancelConfirmation()
+        XCTAssertTrue(fixture.backend.state.withLock { $0.input.isEmpty })
+    }
+
     private func makeFixture(preferences: UserDefaults) throws -> Fixture {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let backend = PanePresentationTests.Backend()
