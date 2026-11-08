@@ -3,6 +3,9 @@ import HostKit
 import os
 import PaneLayout
 import TerminalCore
+#if os(iOS)
+import UIKit
+#endif
 
 /// Saves each daemon host's workspace for instant start: a moment after its layout, names or projects change, every half minute while its screens
 /// change, and at once when the app goes to the background or quits. Only hosts that are
@@ -46,7 +49,23 @@ final class WorkspaceCacheWriter {
         }
     }
 
-    /// The app is leaving (background, quit): everything that changed, now, on this thread.
+    /// Going to the background: everything that changed, encoded and written off the main
+    /// actor while the app still has time to run.
+    func saveBeforeSuspension() {
+        pending?.cancel()
+        pending = nil
+        let saves = saveChanged(screens: true)
+        guard !saves.isEmpty else { return }
+        #if os(iOS)
+        let backgroundTime = UIApplication.shared.beginBackgroundTask(withName: "Save workspace")
+        Task {
+            for save in saves { await save.value }
+            UIApplication.shared.endBackgroundTask(backgroundTime)
+        }
+        #endif
+    }
+
+    /// The app quits: everything that changed, now, on this thread.
     func flush() {
         pending?.cancel()
         pending = nil
@@ -89,11 +108,12 @@ final class WorkspaceCacheWriter {
 
     /// Saves hosts whose layout or names changed (and, with `screens`, whose screens did),
     /// encoding the screens off the main actor.
-    private func saveChanged(screens: Bool) {
+    @discardableResult
+    private func saveChanged(screens: Bool) -> [Task<Void, Never>] {
         let store = store
-        for (id, work) in drafts(screens: screens) {
+        return drafts(screens: screens).map { id, work in
             saved[id] = work.basis
-            Task.detached(priority: .utility) {
+            return Task.detached(priority: .utility) {
                 do {
                     try store.save(work.draft.capturingScreens(work.terminals, limits: store.limits))
                 } catch {

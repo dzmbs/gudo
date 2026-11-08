@@ -60,7 +60,7 @@ struct TerminalApp: App {
                 app.hosts.foreground()
             case .background:
                 // What is on screen now is what the next launch shows first.
-                app.cacheWriter?.flush()
+                app.cacheWriter?.saveBeforeSuspension()
                 #if os(iOS)
                 BackgroundGrace.shared.enter()
                 #endif
