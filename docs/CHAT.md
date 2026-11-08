@@ -165,7 +165,9 @@ Chat pins the existing structured approval card above its composer, including fo
 It uses the same `DaemonConnection.decide` signed-decision route, policy/claim/two-person gates and
 first-valid-answer handling as the existing shared overlay, never prompt input. An action revalidates
 this pane's current request, exact option identity, unanswered state and policy immediately before
-calling that route. Empty/unstructured dialogs still require Terminal. Joining is required; another
+calling that route. A known blocked dialog disables Send and refuses prompt prepare/admit on the
+host as well; typed chat text cannot act as an unsigned approval key. Empty/unstructured dialogs
+still require Terminal. Joining is required; another
 pane's metadata cannot produce this card. The Terminal/shared overlay is hidden while Chat owns the
 card, so it is not duplicated over transcript rows. Chat actions have44pt minimum touch targets and
 do not introduce the shared overlay's idle receipt timer. Existing short-lived Terminal/shared receipts
@@ -176,6 +178,24 @@ Chat is actually selected, owner membership is known, and terminal/composer IME 
 park; a retained hidden Chat view cannot send from Terminal. Presentation/lifetime, native session
 and timeline epoch are rechecked when the action task runs and again before either native request,
 so navigation or a scope replacement between a tap and deferred dispatch cannot start a late send.
+Deferred actions keep their tapped text and model generation; a confirmation also keeps its exact
+warning revision, never implicitly approving a newer warning.
+
+Claude's working composer also offers Stop/Escape through a separate interrupt capability and
+prepare/admit path. Its ticket is bound to the authenticated `UserPromptSubmit` turn sequence as
+well as the live session; a delayed request cannot cross an admitted new turn in the same session.
+Stop/StopFailure retire that hook identity; a hook generated before the latest input cannot renew it.
+This is not proof of a unique CLI submission, or of the input queue being consumed or clean.
+The handler requires owner/Prompt authorization, a still-working Claude runtime, actual foreground,
+open exit fence and no pending writer. Dirty/unknown input requires the same current-revision warning
+with an explicit Interrupt anyway action. Admission consumes the ticket and dirties the draft before
+one Escape is enqueued. A second ticket cannot repeat Escape in that hook turn. The only positive
+receipt is **Interrupt requested**, not Stopped. UI/transport failures never automatically retry;
+phone text is never cleared. The state machine is independent of a pending prompt receipt, which an
+interrupt may make unconfirmed. Current-link capability and live-request checks also cover queued
+interrupt controls. Idle/agent/presentation/lifetime changes discard stale native completions;
+IME composition vetoes both actions. Codex interrupt is unavailable until its official same-process
+control adapter is installed; use Terminal. This is not a proof of an empty PTY queue.
 
 Tool details read output through the existing authenticated same-pane output API, one bounded
 native page at a time, with Input/Output tabs and Beginning/Previous/Next navigation. Closing the

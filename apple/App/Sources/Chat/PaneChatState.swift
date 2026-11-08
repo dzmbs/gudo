@@ -26,7 +26,7 @@ final class PaneChatState {
     private(set) var presentation: PanePresentation {
         get { access(keyPath: \.presentation); return inputPresentation.value }
         set {
-            if inputPresentation.value != newValue { actionEpoch = UUID() }
+            if inputPresentation.value != newValue { invalidateActions() }
             withMutation(keyPath: \.presentation) { inputPresentation.value = newValue }
         }
     }
@@ -35,6 +35,7 @@ final class PaneChatState {
     private(set) var terminalNotice: TerminalNotice?
     var draft = ""
     let composer = ChatComposer()
+    let interrupt = ChatInterrupt()
     var model: TimelineModel? { lease?.model }
     @ObservationIgnored weak var controller: ChatViewController?
     @ObservationIgnored private weak var hub: DaemonWorkspace?
@@ -88,8 +89,7 @@ final class PaneChatState {
     func updateAgent(_ agent: AgentKind?) {
         let supported = agent == .other ? nil : agent
         guard self.agent != supported else { return }
-        composer.cancelBeforeSend()
-        actionEpoch = UUID()
+        invalidateActions()
         self.agent = supported
         terminalNotice = nil
         model?.stop()
@@ -115,9 +115,18 @@ final class PaneChatState {
         model.start(in: hub)
     }
 
-    func deactivate() {
-        actionEpoch = UUID()
+    func cancelPreparedActions() {
         composer.cancelBeforeSend()
+        interrupt.reset()
+    }
+
+    func invalidateActions() {
+        actionEpoch = UUID()
+        cancelPreparedActions()
+    }
+
+    func deactivate() {
+        invalidateActions()
         lease?.close()
         lease = nil
         controller = nil

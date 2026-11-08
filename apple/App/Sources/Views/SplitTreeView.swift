@@ -617,7 +617,8 @@ struct PaneSlot: View {
             PaneChatView(pane: pane, state: state, hub: daemon.workspace,
                          approval: SharedApproval(workspace: workspace, session: daemon.multiplayer,
                                                   pane: pane.id.rawValue, placement: .chatComposer),
-                         permitsSending: daemon.multiplayer.isOwner) { active in
+                         permitsSending: daemon.multiplayer.isOwner,
+                         working: daemon.meta[pane.id]?.agent?.state == .running) { active in
                 terminalContent(pane, isActive: active)
             }
         } else { terminalContent(pane) }

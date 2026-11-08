@@ -63,6 +63,15 @@ final class PaneChatViewTests: XCTestCase {
         XCTAssertEqual(fixture.state.presentation, .chat)
         XCTAssertTrue(editor.isFirstResponder)
         XCTAssertNotNil(editor.markedTextRange)
+        fixture.state.draft = "Retain while composing"
+        let owner = PaneChatView(pane: fixture.pane, state: fixture.state, hub: fixture.hub,
+                                 permitsSending: true, working: true) { _ in Color.clear }
+        owner.send()
+        owner.interrupt()
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(fixture.state.composer.phase, .idle)
+        XCTAssertEqual(fixture.state.interrupt.phase, .idle)
+        XCTAssertFalse(fixture.client.calls.contains { $0.hasPrefix("interrupt") })
         let picker = try XCTUnwrap(presentationControl(in: fixture.window))
         picker.selectedSegmentIndex = 1
         picker.sendActions(for: .valueChanged)
@@ -93,16 +102,20 @@ final class PaneChatViewTests: XCTestCase {
         fixture.state.draft = "Never send from the parked Chat view"
         XCTAssertTrue(fixture.state.show(.terminal, terminal: fixture.pane, persistence: .transient))
         let owner = PaneChatView(pane: fixture.pane, state: fixture.state, hub: fixture.hub,
-                                 permitsSending: true) { _ in Color.clear }
+                                 permitsSending: true, working: true) { _ in Color.clear }
         owner.send()
+        owner.interrupt()
         try await Task.sleep(for: .milliseconds(30))
         XCTAssertEqual(fixture.state.composer.phase, .idle)
+        XCTAssertEqual(fixture.state.interrupt.phase, .idle)
+        XCTAssertFalse(fixture.client.calls.contains { $0.hasPrefix("interrupt") })
         XCTAssertTrue(fixture.state.select(.chat, persistence: .transient) { true })
         PaneChatView(pane: fixture.pane, state: fixture.state, hub: fixture.hub) { _ in Color.clear }.send()
         try await Task.sleep(for: .milliseconds(30))
         XCTAssertEqual(fixture.state.composer.phase, .idle)
         XCTAssertEqual(fixture.state.draft, "Never send from the parked Chat view")
         owner.send()
+        owner.interrupt()
         XCTAssertTrue(fixture.state.show(.terminal, terminal: fixture.pane, persistence: .transient))
         XCTAssertTrue(fixture.state.select(.chat, persistence: .transient) { true })
         try await Task.sleep(for: .milliseconds(30))
@@ -111,11 +124,166 @@ final class PaneChatViewTests: XCTestCase {
         fixture.state.deactivate()
         try await Task.sleep(for: .milliseconds(30))
         XCTAssertEqual(fixture.state.composer.phase, .idle)
+        XCTAssertEqual(fixture.state.interrupt.phase, .idle)
+        XCTAssertFalse(fixture.client.calls.contains { $0.hasPrefix("interrupt") })
         fixture.state.activate(in: fixture.hub)
         try await wait { fixture.state.model?.frame.rows.count == 60 }
         owner.send()
         try await wait { fixture.state.composer.phase == .finished }
         XCTAssertTrue(fixture.backend.state.withLock { $0.input.isEmpty })
+    }
+
+    func testADeferredSendUsesTheTappedTextAndPreservesEditsMadeBeforeItsTaskRuns() async throws {
+        let suite = "chat-send-tapped-draft-test-" + UUID().uuidString
+        let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let fixture = try makeFixture(preferences: preferences, permitsSending: true, nativeMessageReceipts: true)
+        defer {
+            fixture.state.deactivate()
+            fixture.window.isHidden = true
+            fixture.window.rootViewController = nil
+            preferences.removePersistentDomain(forName: suite)
+        }
+        try await wait { fixture.state.controller != nil && fixture.state.model?.frame.rows.count == 60 }
+        fixture.state.draft = "Tapped text"
+        PaneChatView(pane: fixture.pane, state: fixture.state, hub: fixture.hub,
+                     permitsSending: true) { _ in Color.clear }.send()
+        fixture.state.draft = "New unsent text"
+        try await wait { fixture.state.composer.confirmedText != nil }
+        XCTAssertEqual(fixture.client.calls.filter { $0.hasPrefix("send ") }, ["send 7 Tapped text"])
+        XCTAssertEqual(fixture.state.composer.confirmedText, "Tapped text")
+        XCTAssertEqual(fixture.state.draft, "New unsent text")
+        XCTAssertTrue(fixture.backend.state.withLock { $0.input.isEmpty })
+    }
+
+    func testQueuedActionsCannotReissueAfterTheirOriginalGenerationCompletesOrResets() async throws {
+        let suite = "chat-action-generation-test-" + UUID().uuidString
+        let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let fixture = try makeFixture(preferences: preferences, permitsSending: true, working: true, nativeMessageReceipts: true)
+        defer {
+            fixture.state.deactivate()
+            fixture.window.isHidden = true
+            fixture.window.rootViewController = nil
+            preferences.removePersistentDomain(forName: suite)
+        }
+        try await wait { fixture.state.controller != nil && fixture.state.model?.frame.rows.count == 60 }
+        let owner = PaneChatView(pane: fixture.pane, state: fixture.state, hub: fixture.hub,
+                                 permitsSending: true, working: true) { _ in Color.clear }
+        fixture.state.draft = "Queued text"
+        owner.send()
+        await fixture.state.composer.begin("A different explicit intent") { command in
+            if case .prepare = command { return .prepared(.init(ticket: 9, revision: 1, needsConfirmation: false)) }
+            return .confirmed
+        }
+        fixture.state.draft = ""
+        fixture.state.composer.draftChanged("")
+        owner.interrupt()
+        fixture.state.interrupt.reset()
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertFalse(fixture.client.calls.contains { $0.hasPrefix("send ") || $0.hasPrefix("interrupt") })
+        XCTAssertEqual(fixture.state.interrupt.phase, .idle)
+        XCTAssertTrue(fixture.backend.state.withLock { $0.input.isEmpty })
+    }
+
+    func testAQueuedConfirmationCannotApproveANewerWarningRevision() async throws {
+        let suite = "chat-confirm-generation-test-" + UUID().uuidString
+        let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let fixture = try makeFixture(preferences: preferences, permitsSending: true)
+        defer {
+            fixture.state.deactivate()
+            fixture.window.isHidden = true
+            fixture.window.rootViewController = nil
+            preferences.removePersistentDomain(forName: suite)
+        }
+        try await wait { fixture.state.controller != nil && fixture.state.model?.frame.rows.count == 60 }
+        let owner = PaneChatView(pane: fixture.pane, state: fixture.state, hub: fixture.hub,
+                                 permitsSending: true) { _ in Color.clear }
+        var writes = 0
+        await fixture.state.composer.begin("Confirm this text") { command in
+            if case .prepare = command { return .prepared(.init(ticket: 7, revision: 1, needsConfirmation: true)) }
+            writes += 1
+            return writes == 1 ? .confirmationRequired(2) : .confirmed
+        }
+        owner.confirmAction()
+        owner.confirmAction()
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(writes, 1)
+        XCTAssertTrue(fixture.state.composer.needsConfirmation)
+        XCTAssertEqual(fixture.state.composer.confirmationRevision, 2)
+        owner.confirmAction()
+        try await wait { fixture.state.composer.confirmedText != nil }
+        XCTAssertEqual(writes, 2)
+        XCTAssertEqual(fixture.state.composer.confirmedText, "Confirm this text")
+    }
+
+    func testTheActualComposerMarkedTextVetoesSendInterruptAndParking() async throws {
+        let suite = "chat-composer-ime-test-" + UUID().uuidString
+        let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let fixture = try makeFixture(preferences: preferences, permitsSending: true, working: true, nativeMessageReceipts: true)
+        defer {
+            fixture.state.deactivate()
+            fixture.window.isHidden = true
+            fixture.window.rootViewController = nil
+            preferences.removePersistentDomain(forName: suite)
+        }
+        func input(in view: UIView) -> (UIView & UITextInput)? {
+            if let text = view as? UITextView, text.isEditable, text.text == "Draft in progress" { return text }
+            if let field = view as? UITextField, field.isEnabled, field.text == "Draft in progress" { return field }
+            return view.subviews.lazy.compactMap { input(in: $0) }.first
+        }
+        try await wait { fixture.state.controller != nil && fixture.state.model?.frame.rows.count == 60 }
+        fixture.state.draft = "Draft in progress"
+        fixture.window.makeKeyAndVisible()
+        try await Task.sleep(for: .milliseconds(30))
+        let editor = try XCTUnwrap(input(in: fixture.window))
+        XCTAssertTrue(editor.becomeFirstResponder())
+        editor.setMarkedText("候補", selectedRange: NSRange(location: 2, length: 0))
+        XCTAssertNotNil(editor.markedTextRange)
+        XCTAssertNil(fixture.pane.view.markedTextRange)
+        let owner = PaneChatView(pane: fixture.pane, state: fixture.state, hub: fixture.hub,
+                                 permitsSending: true, working: true) { _ in Color.clear }
+        owner.send()
+        owner.interrupt()
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertFalse(fixture.client.calls.contains { $0.hasPrefix("send ") || $0.hasPrefix("interrupt") })
+        XCTAssertNotNil(editor.markedTextRange)
+        XCTAssertFalse(fixture.state.showTerminal(commandMark: nil, terminal: fixture.pane))
+        XCTAssertEqual(fixture.state.presentation, .chat)
+        editor.unmarkText()
+        XCTAssertTrue(fixture.state.showTerminal(commandMark: nil, terminal: fixture.pane))
+    }
+
+    func testNativeInterruptUsesItsTicketAndWarningWithoutClearingDraftOrWritingRawKeys() async throws {
+        let suite = "chat-interrupt-view-test-" + UUID().uuidString
+        let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let fixture = try makeFixture(preferences: preferences, permitsSending: true, working: true,
+                                      interruptNeedsConfirmation: true)
+        defer {
+            fixture.state.deactivate()
+            fixture.window.isHidden = true
+            fixture.window.rootViewController = nil
+            preferences.removePersistentDomain(forName: suite)
+        }
+        try await wait { fixture.state.controller != nil && fixture.state.model?.frame.rows.count == 60 }
+        fixture.state.draft = "Keep the phone draft while interrupting"
+        let owner = PaneChatView(pane: fixture.pane, state: fixture.state, hub: fixture.hub,
+                                 permitsSending: true, working: true) { _ in Color.clear }
+        owner.interrupt()
+        try await wait { fixture.state.interrupt.needsConfirmation }
+        XCTAssertEqual(fixture.client.calls.filter { $0.hasPrefix("interrupt") }, ["interrupt prepare 7"])
+        try await wait { fixture.window.rootViewController?.presentedViewController != nil }
+        try await Task.sleep(for: .milliseconds(250))
+        try capture(fixture.window, name: "chat-stop-warning")
+        await fixture.state.interrupt.confirm()
+        try await wait { fixture.state.interrupt.message == "Interrupt requested" }
+        owner.interrupt()
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(fixture.client.calls.filter { $0.hasPrefix("interrupt") }, ["interrupt prepare 7", "interrupt 7 7 4"])
+        XCTAssertEqual(fixture.state.draft, "Keep the phone draft while interrupting")
+        XCTAssertEqual(fixture.backend.state.withLock { $0.resizes }, 0)
+        XCTAssertEqual(fixture.backend.state.withLock { $0.claims }, 0)
+        XCTAssertTrue(fixture.backend.state.withLock { $0.input.isEmpty })
+        try await wait { fixture.window.rootViewController?.presentedViewController == nil }
+        try capture(fixture.window, name: "chat-stop-requested")
     }
 
     func testNativeComposerClearsOnlyConfirmedUneditedTextAndShowsUnconfirmedAndDirtyStates() async throws {
@@ -164,7 +332,8 @@ final class PaneChatViewTests: XCTestCase {
         XCTAssertTrue(fixture.backend.state.withLock { $0.input.isEmpty })
     }
 
-    private func makeFixture(preferences: UserDefaults) throws -> Fixture {
+    private func makeFixture(preferences: UserDefaults, permitsSending: Bool = false, working: Bool = false,
+                             interruptNeedsConfirmation: Bool = false, nativeMessageReceipts: Bool = false) throws -> Fixture {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let backend = PanePresentationTests.Backend()
         let pane = try Pane(id: PaneId(7), backend: backend, appearance: .fromPreferences(), onExit: {})
@@ -173,21 +342,23 @@ final class PaneChatViewTests: XCTestCase {
                                   agent: .claude, inputPresentation: pane.inputPresentation,
                                   preferences: preferences, pool: ChatModelPool(capacity: 1))
         state.prepareInitialPresentation { pane.prepareToParkTerminal() }
-        let client = TimelineFixtureClient(snapshot: try TimelineFixtureJSON.snapshot(0..<60, before: nil))
+        let client = TimelineFixtureClient(snapshot: try TimelineFixtureJSON.snapshot(0..<60, before: nil),
+                                           interruptNeedsConfirmation: interruptNeedsConfirmation,
+                                           nativeMessageReceipts: nativeMessageReceipts)
         let events = WorkspaceEventHub()
         let hub = DaemonWorkspace(hostId: "fixture", events: events, resolve: { client })
         let window = UIWindow(windowScene: scene)
         window.frame = scene.screen.bounds
         window.rootViewController = UIHostingController(rootView: ThemedRoot {
             NavigationStack {
-                PaneChatView(pane: pane, state: state, hub: hub) { active in
+                PaneChatView(pane: pane, state: state, hub: hub, permitsSending: permitsSending, working: working) { active in
                     NativeTerminalFixture(pane: pane, active: active)
                 }
                 .navigationTitle("Review the change").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .principal) { PaneChatToggle(pane: pane, state: state) } }
             }
         })
-        window.isHidden = false
+        window.makeKeyAndVisible()
         return Fixture(pane: pane, state: state, backend: backend, events: events, hub: hub, client: client, window: window)
     }
 
@@ -268,12 +439,12 @@ final class PaneChatViewTests: XCTestCase {
         return view.subviews.lazy.compactMap { self.presentationControl(in: $0) }.first
     }
 
-    private func wait(_ condition: () -> Bool) async throws {
+    private func wait(_ condition: () -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
         for _ in 0..<2_000 {
             if condition() { return }
             try await Task.sleep(for: .milliseconds(1))
         }
-        XCTFail("Chat pane did not reach its expected state")
+        XCTFail("Chat pane did not reach its expected state", file: file, line: line)
         throw CancellationError()
     }
 
@@ -307,7 +478,32 @@ private struct NativeTerminalFixture: UIViewRepresentable {
 
 nonisolated private final class TimelineFixtureClient: FakeWorkspaceClient, DaemonTimelineAPI, @unchecked Sendable {
     private let snapshot: String
-    init(snapshot: String) { self.snapshot = snapshot; super.init() }
+    private let interruptNeedsConfirmation: Bool
+    private let nativeMessageReceipts: Bool
+    init(snapshot: String, interruptNeedsConfirmation: Bool = false, nativeMessageReceipts: Bool = false) {
+        self.snapshot = snapshot
+        self.interruptNeedsConfirmation = interruptNeedsConfirmation
+        self.nativeMessageReceipts = nativeMessageReceipts
+        super.init()
+    }
+    func chatPrepare(paneId: UInt64) async throws -> String {
+        guard nativeMessageReceipts else { throw CancellationError() }
+        return try TimelineFixtureJSON.json(["Prepared": ["ticket": 1, "revision": 0, "needs_confirmation": false]])
+    }
+    func chatSend(paneId: UInt64, ticket: UInt64, text: String, confirmedRevision: UInt64?) async throws -> String {
+        guard nativeMessageReceipts else { throw CancellationError() }
+        record("send \(paneId) \(text)")
+        return #""Confirmed""#
+    }
+    func chatInterruptPrepare(paneId: UInt64) async throws -> String {
+        record("interrupt prepare \(paneId)")
+        return try TimelineFixtureJSON.json(["Prepared": ["ticket": 7, "revision": 4,
+                                                          "needs_confirmation": interruptNeedsConfirmation]])
+    }
+    func chatInterrupt(paneId: UInt64, ticket: UInt64, confirmedRevision: UInt64?) async throws -> String {
+        record("interrupt \(paneId) \(ticket) \(confirmedRevision.map(String.init) ?? "none")")
+        return #""InterruptRequested""#
+    }
     func timelineWatch(paneId: UInt64) async throws -> String { record("watch \(paneId)"); return snapshot }
     func timelineUnwatch(paneId: UInt64) async throws { record("unwatch \(paneId)") }
     func timelineItemsBefore(paneId: UInt64, before: UInt64, limit: UInt16) async throws -> String {

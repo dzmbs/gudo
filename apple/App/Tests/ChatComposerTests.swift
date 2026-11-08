@@ -38,6 +38,17 @@ final class ChatComposerTests: XCTestCase {
         XCTAssertTrue(composer.canSend("hello"))
     }
 
+    func testAnInterruptReceiptCannotConfirmOrClearAPrompt() async {
+        let composer = ChatComposer()
+        await composer.begin("Retain this prompt") { command in
+            if case .prepare = command { return .prepared(.init(ticket: 7, revision: 4, needsConfirmation: false)) }
+            return .interruptRequested
+        }
+        XCTAssertNil(composer.confirmedText)
+        XCTAssertEqual(composer.message, "Not confirmed, check the terminal")
+        XCTAssertFalse(composer.canSend("Retain this prompt"))
+    }
+
     func testDirtyDraftRequiresExplicitConfirmationAndNewTypingRequiresAnother() async {
         let composer = ChatComposer()
         var writes = 0

@@ -66,6 +66,10 @@ final class ChatApprovalTests: XCTestCase {
         XCTAssertEqual(state.draft, "Retained phone draft")
         try capture(window, name: "chat-approval-owner")
         let approval = SharedApproval(workspace: workspace, session: connection.multiplayer, pane: 7, placement: .chatComposer)
+        PaneChatView(pane: pane, state: state, hub: connection.workspace, approval: approval,
+                     permitsSending: true) { _ in Color.clear }.send()
+        try await Task.sleep(for: .milliseconds(30))
+        guard state.composer.phase == .idle else { XCTFail("A blocked composer must use signed decisions, not prompt input"); return }
         let allow = DecisionOption(id: 0, label: "Allow once")
         approval.answer(request: 98, option: allow)
         approval.answer(request: 99, option: DecisionOption(id: 0, label: "Different option"))
@@ -79,6 +83,7 @@ final class ChatApprovalTests: XCTestCase {
         XCTAssertEqual(client.calls.filter { $0.hasPrefix("decide ") }, ["decide 99 0"])
         client.send(.paneMeta(meta: metadata(summary: "", request: 100)))
         try await wait { abs(controller.collection.bounds.height - available) < 1 }
+        XCTAssertTrue(approval.hasBlockedRequest, "An unstructured question still blocks native prompt input")
         client.send(.paneMeta(meta: metadata(summary: "Another pane's request", request: 888, pane: 8)))
         try await wait { connection.meta[PaneId(8)] != nil }
         XCTAssertEqual(controller.collection.bounds.height, available, accuracy: 1)

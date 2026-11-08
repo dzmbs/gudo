@@ -218,6 +218,11 @@ struct SharedApproval: View {
     var placement: Placement = .sharedOverlay
     @State private var options: [UInt64: [DecisionOption]] = [:]
 
+    var hasBlockedRequest: Bool {
+        if case .blocked? = workspace.daemon?.meta[PaneId(pane)]?.agent?.state { return true }
+        return false
+    }
+
     var body: some View {
         if Self.shows(hasOthers: !session.others.isEmpty, joined: session.me != nil, placement: placement) {
             let agent = workspace.daemon?.meta[PaneId(pane)]?.agent

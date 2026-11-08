@@ -18,6 +18,8 @@ final class ChatComposer {
     @ObservationIgnored private var source: Source?
 
     var needsConfirmation: Bool { phase == .confirming }
+    var requestGeneration: UUID { generation }
+    var confirmationRevision: UInt64? { needsConfirmation ? offer?.revision : nil }
     var isBusy: Bool { phase == .preparing || phase == .sending || phase == .confirming }
 
     func canSend(_ draft: String) -> Bool {
