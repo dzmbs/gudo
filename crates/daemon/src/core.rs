@@ -1,6 +1,6 @@
 //! Daemon-wide state: the layout, the panes, the event bus, and the operations on them.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Command;
@@ -129,6 +129,8 @@ pub(crate) enum Event {
         pane_id: PaneId,
         text: Arc<str>,
     },
+    /// The commands restored panes offer to run again changed (`Core::run_again_offers`).
+    RunAgain,
 }
 
 /// What restoring a pane after a daemon restart needs.
@@ -148,6 +150,26 @@ pub(crate) struct PaneRecord {
         deserialize_with = "crate::resumable::lenient"
     )]
     pub resumable: Option<ResumableAgent>,
+    /// The command the pane runs or last ran, offered again after a restart that stopped it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_command: Option<LastCommand>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct LastCommand {
+    pub command: String,
+    /// `None` while it runs, or while a restored pane offers to run it again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<proto::UnixMillis>,
+}
+
+impl LastCommand {
+    /// Whether it was still running when the daemon saved the state at `saved_at`, counting
+    /// one that ended just before a shutdown as stopped by it ([`ENDED_BY_SHUTDOWN`]).
+    pub fn was_running_at(&self, saved_at: proto::UnixMillis) -> bool {
+        self.ended_at
+            .is_none_or(|ended_at| ended_at.0 + ENDED_BY_SHUTDOWN.as_millis() as u64 >= saved_at.0)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -259,6 +281,9 @@ pub(crate) struct PaneEntry {
     /// The pane's resumable agent's process and when it was first seen, for matching its
     /// session to it.
     resumable_process: Mutex<Option<(u32, SystemTime)>>,
+    /// The shell reports its commands (OSC 133), so the foreground process is not read for
+    /// them.
+    reports_commands: AtomicBool,
 }
 
 impl PaneEntry {
@@ -344,6 +369,8 @@ pub(crate) struct Core {
     pub mp: crate::mp::Mp,
     /// Drawings and images.
     pub art: crate::art::Art,
+    /// Commands restored panes offer to run again, until a command runs there.
+    run_again: Mutex<BTreeMap<PaneId, String>>,
     /// Panes' screens saved for after a restart.
     pub screens: crate::screens::Screens,
     /// Input assistance: foreground programs, prompt watches, history, completion caches.
@@ -407,6 +434,7 @@ impl Core {
             mp,
             art: crate::art::Art::open(&config.state_dir, config.artifacts),
             screens: crate::screens::Screens::new(&config.state_dir),
+            run_again: Mutex::new(BTreeMap::new()),
             assist: crate::assist::Assist::new(&config),
             term: crate::term::Term::default(),
             upgrade: crate::upgrade::Upgrade::new(config.exe.as_deref()),
@@ -1468,6 +1496,9 @@ impl Core {
     }
 
     fn after_removal(&self, session: Option<SessionId>, removed: Removed) {
+        for pane_id in &removed.panes {
+            self.withdraw_run_again(*pane_id);
+        }
         self.kill_panes(&removed.panes);
         if let Some(closed) = removed.session {
             self.art.delete_session(closed);
@@ -1588,6 +1619,33 @@ impl Core {
         }
     }
 
+    /// Every command restored panes offer to run again.
+    pub fn run_again_offers(&self) -> Vec<proto::RunAgainOffer> {
+        lock(&self.run_again)
+            .iter()
+            .map(|(&pane_id, command)| proto::RunAgainOffer {
+                pane_id,
+                command: command.clone(),
+            })
+            .collect()
+    }
+
+    fn offers_run_again(&self, pane_id: PaneId) -> bool {
+        lock(&self.run_again).contains_key(&pane_id)
+    }
+
+    fn offer_run_again(&self, pane_id: PaneId, command: String) {
+        lock(&self.run_again).insert(pane_id, command);
+        self.emit(Event::RunAgain);
+    }
+
+    /// A command ran in the pane, or it closed: it no longer offers its old one.
+    fn withdraw_run_again(&self, pane_id: PaneId) {
+        if lock(&self.run_again).remove(&pane_id).is_some() {
+            self.emit(Event::RunAgain);
+        }
+    }
+
     /// A program is about to end on its own and the saved state to lose it: keeps the state
     /// from before the first of a burst of such endings.
     pub fn note_program_ending(&self) {
@@ -1638,12 +1696,13 @@ impl Core {
         cwd_hint: Option<String>,
         start: PaneStart,
     ) -> Result<(), (OpError, String)> {
-        let (restored, preamble, resumable) = match start {
-            PaneStart::New => (false, Vec::new(), None),
+        let (restored, preamble, resumable, run_again) = match start {
+            PaneStart::New => (false, Vec::new(), None, None),
             PaneStart::Restored(restored) => (
                 restored.agent == AgentStart::Resumed,
                 restored.preamble,
                 restored.resumable,
+                restored.run_again,
             ),
         };
         let (launch, restored) = match launch {
@@ -2019,6 +2078,10 @@ impl Core {
                 }),
             worktree,
             resumable: resumable.clone(),
+            last_command: run_again.clone().map(|command| LastCommand {
+                command,
+                ended_at: None,
+            }),
         };
         let accounts_changed = agent.is_some();
         let entry = Arc::new(PaneEntry {
@@ -2038,12 +2101,16 @@ impl Core {
             task: Mutex::new(None),
             launched_at: SystemTime::now(),
             resumable_process: Mutex::new(None),
+            reports_commands: AtomicBool::new(false),
         });
         let task = tokio::spawn(pane_task(Arc::clone(self), Arc::clone(&entry), vt_events));
         *lock(&entry.task) = Some(task.abort_handle());
         lock(&self.panes).insert(id, Arc::clone(&entry));
         if let Some(source) = lock(&entry.codex).as_ref() {
             source.set_owner(self, &entry);
+        }
+        if let Some(command) = run_again {
+            self.offer_run_again(id, command);
         }
         if accounts_changed {
             self.emit(Event::Accounts);
@@ -2129,6 +2196,7 @@ impl Core {
             task: Mutex::new(None),
             launched_at: carried.launched_at,
             resumable_process: Mutex::new(None),
+            reports_commands: AtomicBool::new(false),
         });
         let task = tokio::spawn(pane_task(Arc::clone(self), Arc::clone(&entry), vt_events));
         *lock(&entry.task) = Some(task.abort_handle());
@@ -2696,6 +2764,7 @@ fn handle_command(core: &Core, entry: &PaneEntry, update: CommandUpdate) {
             refresh_hint(core, entry);
         }
         CommandUpdate::Mark(mark) => {
+            note_command(core, entry, &mark);
             let long = mark.finished.is_some_and(|finished| {
                 finished.duration_ms >= core.cfg.long_command.as_millis() as u64
             });
@@ -2712,6 +2781,88 @@ fn handle_command(core: &Core, entry: &PaneEntry, update: CommandUpdate) {
             core.emit_command(mark);
         }
     }
+}
+
+/// Keeps the pane's running command for after a restart; a private one (typed with a leading
+/// space) is not kept.
+fn note_command(core: &Core, entry: &PaneEntry, mark: &proto::CommandMark) {
+    entry.reports_commands.store(true, Ordering::Relaxed);
+    let mut record = lock(&entry.record);
+    match (&mark.finished, &mark.command) {
+        (None, Some(command)) => {
+            core.withdraw_run_again(entry.pane.id);
+            record.last_command = (!entry.pane.command_private(mark.command_id)
+                && can_run_again(command))
+            .then(|| LastCommand {
+                command: command.clone(),
+                ended_at: None,
+            });
+        }
+        (None, None) => {
+            core.withdraw_run_again(entry.pane.id);
+            record.last_command = None;
+        }
+        (Some(_), _) => {
+            let Some(last) = record
+                .last_command
+                .as_mut()
+                .filter(|last| last.ended_at.is_none())
+            else {
+                return;
+            };
+            last.ended_at = Some(proto::UnixMillis(crate::identity::now_millis()));
+        }
+    }
+    drop(record);
+    core.mark_dirty();
+}
+
+/// Typing the command again types exactly it: control characters would act as keys.
+fn can_run_again(command: &str) -> bool {
+    !command.trim().is_empty() && !command.chars().any(char::is_control)
+}
+
+/// For shells that do not report their commands: the program in the foreground is the
+/// running command, its arguments its command line.
+fn track_foreground_command(core: &Core, entry: &PaneEntry, foreground: &pty::ForegroundProcess) {
+    if entry.reports_commands.load(Ordering::Relaxed) {
+        return;
+    }
+    let at_shell = foreground.pid == entry.pane.pty().pid();
+    let mut record = lock(&entry.record);
+    if at_shell {
+        if let Some(last) = record.last_command.as_mut()
+            && last.ended_at.is_none()
+            && !core.offers_run_again(entry.pane.id)
+        {
+            last.ended_at = Some(proto::UnixMillis(crate::identity::now_millis()));
+            drop(record);
+            core.mark_dirty();
+        }
+        return;
+    }
+    if foreground.argv.is_empty() {
+        return;
+    }
+    let command = foreground
+        .argv
+        .iter()
+        .map(|arg| shell_quote(arg))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let already_kept = record
+        .last_command
+        .as_ref()
+        .is_some_and(|last| last.command == command && last.ended_at.is_none());
+    if can_run_again(&command) && !already_kept {
+        record.last_command = Some(LastCommand {
+            command,
+            ended_at: None,
+        });
+        core.mark_dirty();
+    }
+    drop(record);
+    core.withdraw_run_again(entry.pane.id);
 }
 
 /// While an agent pane's session id is unknown, looks for it off the async runtime (process
@@ -2798,6 +2949,7 @@ fn detect_agent(core: &Core, entry: &PaneEntry) {
     };
     track_foreground_agent(core, entry, &foreground);
     track_resumable_agent(core, entry, &foreground);
+    track_foreground_command(core, entry, &foreground);
 }
 
 /// Records the pi or Kimi agent a pane runs, and forgets it once the agent ended.
@@ -2987,6 +3139,8 @@ pub(crate) struct Restored {
     pub agent: AgentStart,
     /// An agent started by hand to resume before the shell.
     pub resumable: Option<ResumableAgent>,
+    /// The command it was running, offered to run again.
+    pub run_again: Option<String>,
 }
 
 /// Whether a restored pane's agent continues its session.
@@ -3013,10 +3167,14 @@ pub(crate) fn shell_quote(word: &str) -> String {
 /// longer has.
 pub(crate) fn restore(
     core: &Arc<Core>,
-    panes: HashMap<PaneId, PaneRecord>,
-    closed: Vec<ClosedPane>,
+    saved: persist::Restore,
     adopted: &mut crate::handoff::Adopted,
 ) {
+    let persist::Restore {
+        panes,
+        closed,
+        saved_at,
+    } = saved;
     core.restore_closed(closed);
     let ids = lock(&core.layout).all_panes();
     let mut failed = Vec::new();
@@ -3043,6 +3201,21 @@ pub(crate) fn restore(
             }
         }
         let mut launch = record.launch.clone();
+        let stopped_command = match &record.launch {
+            PaneLaunch::Command { argv, .. } => Some(
+                argv.iter()
+                    .map(|arg| shell_quote(arg))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ),
+            _ => record
+                .last_command
+                .as_ref()
+                .filter(|last| {
+                    saved_at.map_or(last.ended_at.is_none(), |at| last.was_running_at(at))
+                })
+                .map(|last| last.command.clone()),
+        };
         // An agent the user started by hand in a shell pane comes back as one launched there.
         if let (PaneLaunch::Shell { .. } | PaneLaunch::Command { .. }, Some(agent)) =
             (&launch, &record.agent)
@@ -3102,6 +3275,8 @@ pub(crate) fn restore(
         } else {
             Vec::new()
         };
+        let resumes_something =
+            restored_agent || resumable.is_some() || matches!(launch, PaneLaunch::Agent { .. });
         let start = PaneStart::Restored(Restored {
             preamble,
             agent: if restored_agent {
@@ -3110,6 +3285,8 @@ pub(crate) fn restore(
                 AgentStart::Fresh
             },
             resumable,
+            run_again: stopped_command
+                .filter(|command| !resumes_something && can_run_again(command)),
         });
         if let Err((_, message)) = core.spawn_pane(id, launch, None, start) {
             tracing::warn!(pane = %id, "restoring pane failed: {message}");

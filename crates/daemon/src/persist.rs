@@ -5,7 +5,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use proto::PaneId;
+use proto::{PaneId, UnixMillis};
 use serde::{Deserialize, Serialize};
 
 use crate::core::{ClosedPane, Core, PaneRecord, saved_state};
@@ -27,6 +27,17 @@ pub(crate) struct Saved {
     /// opened after a restart.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     creators: Vec<(u64, u64)>,
+    /// When this state was taken (absent in older files).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    saved_at: Option<UnixMillis>,
+}
+
+/// What restoring the panes needs from the saved state.
+#[derive(Debug, Default)]
+pub(crate) struct Restore {
+    pub panes: HashMap<PaneId, PaneRecord>,
+    pub closed: Vec<ClosedPane>,
+    pub saved_at: Option<UnixMillis>,
 }
 
 impl Saved {
@@ -37,6 +48,7 @@ impl Saved {
             panes,
             closed,
             creators: Vec::new(),
+            saved_at: Some(UnixMillis(crate::identity::now_millis())),
         }
     }
 
@@ -56,13 +68,18 @@ impl Saved {
             .collect()
     }
 
-    pub fn into_parts(self) -> (Layout, HashMap<PaneId, PaneRecord>, Vec<ClosedPane>) {
+    pub fn into_parts(self) -> (Layout, Restore) {
         let panes = self
             .panes
             .into_iter()
             .map(|(id, record)| (PaneId(id), record))
             .collect();
-        (self.layout, panes, self.closed)
+        let restore = Restore {
+            panes,
+            closed: self.closed,
+            saved_at: self.saved_at,
+        };
+        (self.layout, restore)
     }
 }
 

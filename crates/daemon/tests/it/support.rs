@@ -134,6 +134,8 @@ pub struct TestClient {
     pub projects: Vec<client_core::proto::SessionProjects>,
     /// `ClientEvent::Floats` pushes, in order.
     pub floats: Vec<client_core::proto::SessionFloats>,
+    /// The latest `RunAgainOffers`, if any came.
+    pub run_again: Option<Vec<client_core::proto::RunAgainOffer>>,
     /// `ClientEvent::Clipboard` writes (connections with `clipboard`).
     pub clipboard: Vec<(PaneId, String)>,
     script: client_core::script::EventMapper,
@@ -266,6 +268,7 @@ impl TestClient {
             programs: Vec::new(),
             projects: Vec::new(),
             floats: Vec::new(),
+            run_again: None,
             clipboard: Vec::new(),
             script: client_core::script::EventMapper::new(),
             script_events: Vec::new(),
@@ -331,6 +334,7 @@ impl TestClient {
             }
             ClientEvent::Projects { projects } => self.projects.push(projects),
             ClientEvent::Floats { floats } => self.floats.push(floats),
+            ClientEvent::RunAgainOffers { offers } => self.run_again = Some(offers),
             ClientEvent::Clipboard { pane_id, text } => self.clipboard.push((pane_id, text)),
             _ => {}
         }

@@ -324,3 +324,96 @@ async fn an_agent_killed_just_before_shutdown_still_resumes() {
     drop(owner);
     daemon.shutdown().await;
 }
+
+/// A dev server, a watcher, `tail -f`: never started again by itself (it could do anything),
+/// but offered, and typed on request.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_running_command_is_offered_again_and_never_run_by_itself() {
+    let state = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let daemon = start_with(state.path(), configure(home.path())).await;
+    let (owner, pane) = restored_pane(&daemon).await;
+    owner.type_line(pane, "sleep 599");
+    wait_layout(
+        state.path(),
+        |text| text.contains("sleep 599"),
+        "kept the command",
+    );
+    drop(owner);
+    daemon.shutdown().await;
+
+    let daemon = start_with(state.path(), configure(home.path())).await;
+    let (mut owner, restored) = restored_pane(&daemon).await;
+    assert_eq!(restored, pane);
+    owner
+        .until("the offer", |owner| owner.run_again.is_some())
+        .await;
+    let offers = owner.run_again.clone().unwrap();
+    assert_eq!(
+        offers,
+        vec![client_core::proto::RunAgainOffer {
+            pane_id: pane,
+            command: "sleep 599".into(),
+        }]
+    );
+    owner.type_line(pane, "echo \"the shell is free $((6 * 7))\"");
+    owner.wait_text(pane, "the shell is free 42").await;
+
+    owner.client.run_again(&offers[0]);
+    owner
+        .until("the offer withdrawn", |owner| {
+            owner.run_again.as_ref().is_some_and(Vec::is_empty)
+        })
+        .await;
+    drop(owner);
+    daemon.shutdown().await;
+}
+
+/// A `layout.json` from before screens, resumable agents and Run again still loads, and one
+/// from a newer daemon (fields and agents this build does not know) does too.
+#[tokio::test(flavor = "multi_thread")]
+async fn older_and_newer_layout_files_load() {
+    let state = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let daemon = start_with(state.path(), configure(home.path())).await;
+    let (owner, pane) = restored_pane(&daemon).await;
+    drop(owner);
+    daemon.shutdown().await;
+    let layout = state.path().join("layout.json");
+    let mut saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&layout).unwrap()).unwrap();
+
+    let mut older = saved.clone();
+    older.as_object_mut().unwrap().remove("saved_at");
+    for record in older["panes"].as_object_mut().unwrap().values_mut() {
+        let record = record.as_object_mut().unwrap();
+        record.remove("resumable");
+        record.remove("last_command");
+    }
+    std::fs::write(&layout, serde_json::to_vec(&older).unwrap()).unwrap();
+    let daemon = start_with(state.path(), configure(home.path())).await;
+    let (owner, restored) = restored_pane(&daemon).await;
+    assert_eq!(restored, pane);
+    drop(owner);
+    daemon.shutdown().await;
+
+    saved["from_the_future"] = serde_json::json!(true);
+    let record = saved["panes"][pane.0.to_string()].as_object_mut().unwrap();
+    record.insert(
+        "resumable".into(),
+        serde_json::json!({"program": "an-agent-from-later", "session_id": "x"}),
+    );
+    record.insert("also_later".into(), serde_json::json!({"any": 1}));
+    std::fs::write(&layout, serde_json::to_vec(&saved).unwrap()).unwrap();
+    let daemon = start_with(state.path(), configure(home.path())).await;
+    let (owner, restored) = restored_pane(&daemon).await;
+    assert_eq!(restored, pane);
+    drop(owner);
+    daemon.shutdown().await;
+    let backups = std::fs::read_dir(state.path())
+        .unwrap()
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().contains(".bad-"))
+        .count();
+    assert_eq!(backups, 0, "a layout file was set aside");
+}

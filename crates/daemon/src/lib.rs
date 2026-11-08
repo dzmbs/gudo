@@ -182,7 +182,7 @@ impl Daemon {
             Err(error) => tracing::warn!("writing the hook launcher: {error}"),
         }
         let identity = Arc::new(Identity::load_or_create(&config.state_dir)?);
-        let (creators, (layout, records, closed)) = match persist::load(&config.state_dir)? {
+        let (creators, (layout, restore)) = match persist::load(&config.state_dir)? {
             Some(mut saved) => (saved.take_creators(), saved.into_parts()),
             None => Default::default(),
         };
@@ -220,7 +220,7 @@ impl Daemon {
             .carry_on(std::mem::take(&mut adopted.carried.inputs));
         repair_hook_paths(&core);
         let mut tasks = vec![HookServer::listen(&core)?];
-        core::restore(&core, records, closed, adopted);
+        core::restore(&core, restore, adopted);
         core.term
             .restore(creators, |pane| core.pane(pane).is_some());
 

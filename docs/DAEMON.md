@@ -490,6 +490,19 @@ saved layout. A restored pane's output starts with it (`pty::SpawnOptions::pream
 in the ring and the VT like any output), then a dim `Restored after restart · <saved time>`
 line, then the new shell or agent. Hot upgrades carry the terminal itself and ignore these.
 
+**Run again** (`MoreDaemonFeatures::RUN_AGAIN`). A pane's record keeps `last_command
+{command, ended_at}`: the command line from shell integration (OSC 133, never one typed with a
+leading space), or for shells without it the foreground process's arguments, or a one-off
+command pane's argv. Commands with control characters are not kept. A command that was running
+when the state was saved (`saved_at` in `layout.json`), or ended within `ENDED_BY_SHUTDOWN`
+before, is never run again by itself: the restored pane is a shell that offers it until a
+command runs there or the pane closes. Panes that resume an agent offer nothing. Owner
+connections send `ClientCtl::WatchRunAgain` and get `ServerCtl::RunAgainOffers` (the whole list)
+now and on each change; older apps send nothing and see nothing. Running it is typing it
+(`Client::run_again`: the command and Return, as input, with the usual rights; never with
+control characters). The apps show a `Run again <command>` chip at the pane's bottom leading
+corner (`RunAgainOverlay`).
+
 **Shutdown.** `gudo-hostd run` stops on SIGTERM or SIGINT (launchd and systemd at logout and
 reboot) and saves screens and layout before ending the panes. The system may stop the panes'
 programs a moment before the daemon: an agent or a pane that ends on its own within 5 s

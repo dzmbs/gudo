@@ -48,6 +48,8 @@ struct ConnState {
     /// title set again) leave what this client sees as it was.
     sent_meta: HashMap<PaneId, proto::PaneMeta>,
     sent_sizing: HashMap<PaneId, proto::PaneSizing>,
+    /// Sent `ClientCtl::WatchRunAgain`, so it reads `ServerCtl::RunAgainOffers`.
+    watches_run_again: bool,
 }
 
 impl ConnState {
@@ -327,7 +329,9 @@ fn conn_err(error: iroh::endpoint::ConnectionError) -> NetError {
 }
 
 pub(crate) fn more_daemon_features() -> proto::MoreDaemonFeatures {
-    proto::MoreDaemonFeatures::REPO_ROOT | proto::MoreDaemonFeatures::RESOLVE_PATHS
+    proto::MoreDaemonFeatures::REPO_ROOT
+        | proto::MoreDaemonFeatures::RESOLVE_PATHS
+        | proto::MoreDaemonFeatures::RUN_AGAIN
 }
 
 pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {
@@ -1282,6 +1286,11 @@ impl Client {
             Event::Repos => {
                 if let Some(snapshot) = self.scoped_repos() {
                     self.send(ServerCtl::Repos(snapshot));
+                }
+            }
+            Event::RunAgain => {
+                if lock(&self.state).watches_run_again && is_owner(&self.core, &self.authz) {
+                    self.send(ServerCtl::RunAgainOffers(self.core.run_again_offers()));
                 }
             }
             Event::Accounts => {
@@ -2452,6 +2461,12 @@ impl Client {
                 {
                     self.core
                         .pane_activity(&entry, self.id, &self.authz, activity);
+                }
+            }
+            ClientCtl::WatchRunAgain => {
+                if is_owner(&self.core, &self.authz) {
+                    lock(&self.state).watches_run_again = true;
+                    self.send(ServerCtl::RunAgainOffers(self.core.run_again_offers()));
                 }
             }
             ClientCtl::ClaimSize { pane_id } => {
