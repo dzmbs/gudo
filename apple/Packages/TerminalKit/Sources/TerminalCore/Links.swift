@@ -20,6 +20,8 @@ public struct TerminalLink: Equatable, Sendable {
     public var column: Int?
     /// Came from OSC 8, not from the text.
     public var isHyperlink: Bool
+    /// A `file://` link's host, unless it is `localhost`.
+    public var host: String?
     /// What the screen shows for it: the printed text, or an OSC 8 link's cells, which the
     /// program chooses freely and may name another place than `target`. Cells nobody can read
     /// (concealed, or in their background colour) are left out.
@@ -29,13 +31,14 @@ public struct TerminalLink: Equatable, Sendable {
     public var columns: ClosedRange<Int>
 
     public init(kind: Kind, text: String, target: String, line: Int? = nil, column: Int? = nil, isHyperlink: Bool = false,
-                label: String? = nil, row: Int = 0, columns: ClosedRange<Int> = 0...0) {
+                host: String? = nil, label: String? = nil, row: Int = 0, columns: ClosedRange<Int> = 0...0) {
         self.kind = kind
         self.text = text
         self.target = target
         self.line = line
         self.column = column
         self.isHyperlink = isHyperlink
+        self.host = host
         self.label = label ?? text
         self.row = row
         self.columns = columns
@@ -50,14 +53,55 @@ public struct TerminalLink: Equatable, Sendable {
         }
     }
 
-    /// The path made absolute against `directory` (a pane's working directory); `~` kept.
+    /// Made absolute against `directory` and normalised; `~` kept.
     public func resolvedPath(relativeTo directory: String?) -> String {
-        guard kind == .path, !target.hasPrefix("/"), !target.hasPrefix("~"), let directory, !directory.isEmpty else { return target }
-        var base = directory
-        while base.count > 1, base.hasSuffix("/") { base.removeLast() }
-        var rest = Substring(target)
-        if rest.hasPrefix("./") { rest = rest.dropFirst(2) }
-        return (base == "/" ? "" : base) + "/" + rest
+        guard kind == .path else { return target }
+        return TerminalPath.resolved(target, relativeTo: directory)
+    }
+
+    static func fileTarget(_ url: URL) -> (path: String, host: String?) {
+        let host = url.host(percentEncoded: false).flatMap { $0.isEmpty || $0.lowercased() == "localhost" ? nil : $0 }
+        return (url.path(percentEncoded: false), host)
+    }
+}
+
+public enum TerminalPath {
+    public static func resolved(_ path: String, relativeTo directory: String?) -> String {
+        guard !path.hasPrefix("/"), !path.hasPrefix("~"), let directory, !directory.isEmpty else { return normalized(path) }
+        return normalized(directory + "/" + path)
+    }
+
+    /// Folds `.` and `..` lexically; the file may be on another host.
+    public static func normalized(_ path: String) -> String {
+        let prefix: String
+        var rest = Substring(path)
+        if rest.hasPrefix("/") {
+            prefix = "/"
+        } else if rest == "~" || rest.hasPrefix("~/") {
+            prefix = "~/"
+            rest = rest.dropFirst()
+        } else {
+            prefix = ""
+        }
+        var components: [Substring] = []
+        for component in rest.split(separator: "/") {
+            switch component {
+            case ".": continue
+            case "..":
+                if let last = components.last, last != ".." {
+                    components.removeLast()
+                } else if prefix.isEmpty {
+                    components.append(component)
+                }
+            default: components.append(component)
+            }
+        }
+        let joined = components.joined(separator: "/")
+        switch prefix {
+        case "~/": return joined.isEmpty ? "~" : "~/" + joined
+        case "/": return "/" + joined
+        default: return joined.isEmpty ? "." : joined
+        }
     }
 }
 
@@ -71,16 +115,22 @@ public enum LinkDetector {
         public var target: String
         public var line: Int?
         public var column: Int?
+        public var host: String?
     }
+
+    private typealias Location = (line: Int?, column: Int?)
 
     private static let schemes = "(?:https?://|ftp://|file://|ssh://|git://|gemini://|gopher://|mailto:)"
     private static let url = try! NSRegularExpression(pattern: schemes + #"[\w\-.~:/?#@!$&*+,;=%()\[\]']+"#)
-    /// Rooted (`/`, `~/`, `./`, `../`) or relative with a slash, or a bare file name with an
-    /// extension and a `:line` (`main.rs:12:5`). Not after a word or `://`.
+    /// Rooted, relative with a slash, or a bare `name.ext` followed by a line suffix.
     private static let path = try! NSRegularExpression(pattern:
-        #"(?<![\w/:.~\-])(?:(?:~|\.{1,2})?/[\w\-.~/@+%,]*[\w\-~/@+%]|[\w\-.@+]+(?:/[\w\-.@+]+)+|[\w\-.@+]*\w\.\w+(?=:\d))(?::\d+(?::\d+)?)?"#)
+        #"(?<![\w/:.~\-])(?:(?:~|\.{1,2})?/[\w\-.~/@+%,]*[\w\-~/@+%]|[\w\-.@+]+(?:/[\w\-.@+]+)+|[\w\-.@+]*\w\.\w+(?=:\d|\(\d| \[\d))"#)
+    private static let quoted = try! NSRegularExpression(pattern: #"(?<![\w"'`])(["'`])([^"'`\s][^"'`\t\n]{0,1023}?)\1"#)
+    /// `:12`, `:12:5`, `:12.5`, `(12)`, `(12,5)`, ` [12, 5]`.
+    private static let suffix = try! NSRegularExpression(pattern: #":(\d+)(?:[:.](\d+))?|\((\d+)(?:, ?(\d+))?\)| \[(\d+), ?(\d+)\]"#)
+    private static let quotedSuffix = try! NSRegularExpression(pattern: #", line (\d+)"#)
 
-    /// Every link in `line`, in order, URLs first where they overlap paths.
+    /// Every link in `line`, in order; URLs win over quoted paths, quoted over bare ones.
     public static func matches(in line: String) -> [Match] {
         let ns = line as NSString
         let full = NSRange(location: 0, length: ns.length)
@@ -93,21 +143,68 @@ public enum LinkDetector {
             taken.insert(integersIn: result.range.location..<result.range.location + (text as NSString).length)
             // A printed `file://` URL is a path, opened the way paths are.
             if let url = URL(string: text), url.isFileURL {
-                matches.append(Match(kind: .path, range: range, text: text, target: url.path))
+                let file = TerminalLink.fileTarget(url)
+                matches.append(Match(kind: .path, range: range, text: text, target: file.path, host: file.host))
             } else {
                 matches.append(Match(kind: .url, range: range, text: text, target: text))
             }
         }
+        for result in quoted.matches(in: line, range: full) {
+            guard !taken.intersects(integersIn: result.range.location..<NSMaxRange(result.range)) else { continue }
+            let inner = result.range(at: 2)
+            let text = ns.substring(with: inner)
+            var path = text
+            var location = trailingNumbers(&path)
+            let afterQuote = NSMaxRange(result.range)
+            if location.line == nil,
+               let python = quotedSuffix.firstMatch(in: line, options: .anchored, range: NSRange(location: afterQuote, length: ns.length - afterQuote)) {
+                location = (Int(ns.substring(with: python.range(at: 1))), nil)
+            }
+            guard let target = pathTarget(path, hasLine: location.line != nil, allowsSpaces: true), let range = characterRange(line, inner) else { continue }
+            taken.insert(integersIn: result.range.location..<NSMaxRange(result.range))
+            matches.append(Match(kind: .path, range: range, text: text, target: target, line: location.line, column: location.column))
+        }
         for result in path.matches(in: line, range: full) {
             guard !taken.intersects(integersIn: result.range.location..<NSMaxRange(result.range)) else { continue }
-            var text = ns.substring(with: result.range)
-            while let last = text.last, ".,;:)]'\"".contains(last) { text.removeLast() }
-            guard let match = pathMatch(text), match.target.count > 1,
-                  let range = characterRange(line, NSRange(location: result.range.location, length: (text as NSString).length))
+            var path = ns.substring(with: result.range)
+            while let last = path.last, ".,;:)]'\"".contains(last) { path.removeLast() }
+            var length = (path as NSString).length
+            var location: Location = (nil, nil)
+            let suffixStart = result.range.location + length
+            if let found = suffix.firstMatch(in: line, options: .anchored, range: NSRange(location: suffixStart, length: ns.length - suffixStart)) {
+                location = suffixLocation(found, in: ns)
+                length += found.range.length
+            }
+            let printed = NSRange(location: result.range.location, length: length)
+            guard let target = pathTarget(path, hasLine: location.line != nil, allowsSpaces: false), target.count > 1,
+                  let range = characterRange(line, printed)
             else { continue }
-            matches.append(Match(kind: .path, range: range, text: text, target: match.target, line: match.line, column: match.column))
+            matches.append(Match(kind: .path, range: range, text: ns.substring(with: printed), target: target, line: location.line, column: location.column))
         }
         return matches.sorted { $0.range.lowerBound < $1.range.lowerBound }
+    }
+
+    private static func suffixLocation(_ result: NSTextCheckingResult, in line: NSString) -> Location {
+        let groups = (1..<result.numberOfRanges).map { index -> Int? in
+            let range = result.range(at: index)
+            return range.location == NSNotFound ? nil : Int(line.substring(with: range))
+        }
+        for pair in stride(from: 0, to: groups.count - 1, by: 2) where groups[pair] != nil {
+            return (groups[pair], groups[pair + 1])
+        }
+        return (nil, nil)
+    }
+
+    private static func trailingNumbers(_ text: inout String) -> Location {
+        var path = Substring(text)
+        var numbers: [Int] = []
+        for _ in 0..<2 {
+            guard let colon = path.lastIndex(of: ":"), let number = Int(path[path.index(after: colon)...]) else { break }
+            numbers.insert(number, at: 0)
+            path = path[..<colon]
+        }
+        text = String(path)
+        return (numbers.first, numbers.count > 1 ? numbers[1] : nil)
     }
 
     /// Ghostty's URL rules: no trailing `.`/`,`, and a trailing `)` only when the URL opened one.
@@ -128,21 +225,22 @@ public enum LinkDetector {
 
     /// Splits `path:line:col`; a path that is only a number or a version-like word is not one.
     static func pathMatch(_ text: String) -> (target: String, line: Int?, column: Int?)? {
-        var path = Substring(text)
-        var numbers: [Int] = []
-        for _ in 0..<2 {
-            guard let colon = path.lastIndex(of: ":"), let number = Int(path[path.index(after: colon)...]) else { break }
-            numbers.insert(number, at: 0)
-            path = path[..<colon]
-        }
+        var path = text
+        let location = trailingNumbers(&path)
+        guard let target = pathTarget(path, hasLine: location.line != nil, allowsSpaces: false) else { return nil }
+        return (target, location.line, location.column)
+    }
+
+    // As in Ghostty's matcher, a relative path needs an extension, a line or a trailing slash:
+    // `and/or` is a word, `src/app.rs` a path.
+    private static func pathTarget(_ path: String, hasLine: Bool, allowsSpaces: Bool) -> String? {
         guard path.contains(where: \.isLetter) else { return nil }
+        if path.contains(" "), !allowsSpaces || !path.contains("/") { return nil }
         let rooted = path.hasPrefix("/") || path.hasPrefix("~/") || path.hasPrefix("./") || path.hasPrefix("../")
-        // A relative path needs a file name with an extension, a `:line`, or a trailing slash, as
-        // Ghostty's matcher does: `and/or` and `TCP/IP` are words, `src/app.rs` is a path.
-        if !rooted, numbers.isEmpty, !path.hasSuffix("/"), !(path.split(separator: "/").last?.dropFirst().contains(".") ?? false) {
+        if !rooted, !hasLine, !path.hasSuffix("/"), !(path.split(separator: "/").last?.dropFirst().contains(".") ?? false) {
             return nil
         }
-        return (String(path), numbers.first, numbers.count > 1 ? numbers[1] : nil)
+        return path
     }
 
     private static func characterRange(_ line: String, _ range: NSRange) -> Range<Int>? {
@@ -166,9 +264,10 @@ extension Terminal {
                 let label = Self.seenText(handle, cells.filter { Self.hyperlinkAt(handle, $0.point) == uri })
                 if let url = URL(string: uri), url.isFileURL {
                     let suffix = url.fragment.flatMap { Int($0.drop { !$0.isNumber }) }
+                    let file = TerminalLink.fileTarget(url)
                     return TerminalLink(
-                        kind: .path, text: uri, target: url.path, line: suffix, isHyperlink: true, label: label, row: point.y,
-                        columns: columns)
+                        kind: .path, text: uri, target: file.path, line: suffix, isHyperlink: true, host: file.host, label: label,
+                        row: point.y, columns: columns)
                 }
                 return TerminalLink(kind: .url, text: uri, target: uri, isHyperlink: true, label: label, row: point.y, columns: columns)
             }
@@ -179,7 +278,7 @@ extension Terminal {
             guard let match = LinkDetector.matches(in: text).first(where: { $0.range.contains(index) }) else { return nil }
             let onRow = cells[match.range].filter { $0.point.y == screen.y }.map(\.point.x)
             return TerminalLink(
-                kind: match.kind, text: match.text, target: match.target, line: match.line, column: match.column,
+                kind: match.kind, text: match.text, target: match.target, line: match.line, column: match.column, host: match.host,
                 label: Self.seenText(handle, Array(cells[match.range])), row: point.y,
                 columns: (onRow.min() ?? point.x)...(onRow.max() ?? point.x))
         }

@@ -44,6 +44,68 @@ import Testing
         #expect(rooted.resolvedPath(relativeTo: "/home") == "/etc/hosts")
     }
 
+    private func located(_ line: String) -> [String] {
+        LinkDetector.matches(in: line).map { match in
+            [match.target, match.line.map(String.init), match.column.map(String.init)].compactMap { $0 }.joined(separator: " ")
+        }
+    }
+
+    @Test func findsQuotedPathsWithSpaces() {
+        #expect(kinds(#"open "/home/me/My Notes/plan.md" now"#) == ["path:/home/me/My Notes/plan.md"])
+        #expect(kinds("saved 'src/app view.swift'") == ["path:src/app view.swift"])
+        #expect(kinds("run `./scripts/build.sh` first") == ["path:./scripts/build.sh"])
+        #expect(kinds("don't touch it's fine") == [])
+        #expect(kinds("say 'hello there' twice") == [])
+    }
+
+    @Test func findsEveryLineAndColumnFormat() {
+        #expect(located("src/a.ts(12,5): error TS2322") == ["src/a.ts 12 5"])
+        #expect(located("lib/b.cs(7): warning") == ["lib/b.cs 7"])
+        #expect(located(#"  File "/usr/lib/tool.py", line 42, in main"#) == ["/usr/lib/tool.py 42"])
+        #expect(located("app/main.c:10.4: parse error") == ["app/main.c 10 4"])
+        #expect(located("main.rs [3, 9] unused import") == ["main.rs 3 9"])
+        #expect(located("main.go:42:7: undefined") == ["main.go 42 7"])
+        #expect(located("see src/a.rs:12.") == ["src/a.rs 12"])
+    }
+
+    @Test func pythonTracebackUnderlinesOnlyThePath() throws {
+        let line = #"  File "/srv/app.py", line 3"#
+        let match = try #require(LinkDetector.matches(in: line).first)
+        #expect(match.text == "/srv/app.py")
+        #expect(match.range == 8..<19)
+    }
+
+    @Test func resolvingNormalisesDotDot() {
+        let link = TerminalLink(kind: .path, text: "../lib/./b.rs", target: "../lib/./b.rs")
+        #expect(link.resolvedPath(relativeTo: "/home/me/app/src") == "/home/me/app/lib/b.rs")
+        let rooted = TerminalLink(kind: .path, text: "/a/b/../../../c", target: "/a/b/../../../c")
+        #expect(rooted.resolvedPath(relativeTo: nil) == "/c")
+        let home = TerminalLink(kind: .path, text: "~/x/../y.md", target: "~/x/../y.md")
+        #expect(home.resolvedPath(relativeTo: "/tmp") == "~/y.md")
+        #expect(TerminalPath.normalized("a/../../b") == "../b")
+    }
+
+    @Test func fileURLKeepsItsHost() throws {
+        let local = try #require(LinkDetector.matches(in: "at file:///etc/hosts ok").first)
+        #expect(local.kind == .path)
+        #expect(local.host == nil)
+        let remote = try #require(LinkDetector.matches(in: "at file://build-box/etc/hosts ok").first)
+        #expect(remote.kind == .path)
+        #expect(remote.host == "build-box")
+        #expect(remote.target == "/etc/hosts")
+        let loopback = try #require(LinkDetector.matches(in: "file://localhost/tmp/a.txt").first)
+        #expect(loopback.host == nil)
+    }
+
+    @Test func hyperlinkFileURLKeepsItsHost() throws {
+        let terminal = Terminal(cols: 40, rows: 3) { _ in }
+        terminal.write(Array("\u{1b}]8;;file://other-mac/tmp/a.txt\u{1b}\\a.txt\u{1b}]8;;\u{1b}\\".utf8))
+        let link = try #require(terminal.link(atViewport: GridPoint(x: 1, y: 0)))
+        #expect(link.kind == .path)
+        #expect(link.host == "other-mac")
+        #expect(link.target == "/tmp/a.txt")
+    }
+
     // MARK: On a terminal
 
     @Test func linkUnderACellCoversItsCells() throws {
