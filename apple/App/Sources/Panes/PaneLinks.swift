@@ -128,7 +128,7 @@ enum PaneLinks {
     #if os(iOS)
     private static func linkMenu(_ link: TerminalLink, from pane: Pane, in workspace: Workspace) -> UIMenu? {
         guard let window = ActiveWindow.model(for: workspace) else { return nil }
-        let block = PaneCommandMarks.of(pane.id)?.block(atViewportRow: link.row)
+        let block = PaneCommandMarks.of(pane)?.block(atViewportRow: link.row)
         let directory = block?.mark.cwd ?? (pane.workingDirectory.isEmpty ? pane.foreground()?.directory : pane.workingDirectory)
         let target = FileTarget(
             hostId: workspace.isRemote ? workspace.hostId : nil, path: link.resolvedPath(relativeTo: directory),

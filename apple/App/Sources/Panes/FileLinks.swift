@@ -85,7 +85,7 @@ enum FileLinks {
             PaneLinks.confirmOpen(url, from: pane) { PaneLinks.openExternally(url) }
             return
         }
-        let block = PaneCommandMarks.of(pane.id)?.block(atViewportRow: link.row)
+        let block = PaneCommandMarks.of(pane)?.block(atViewportRow: link.row)
         let current = pane.workingDirectory.isEmpty ? pane.foreground()?.directory : pane.workingDirectory
         let directory = block?.mark.cwd ?? current
         let target = FileTarget(
@@ -275,7 +275,7 @@ final class PathUnderlines {
             onLearned: { [weak pane] in pane?.view.refreshHoverLink() })
         pane.view.underlinesPath = { [weak workspace, weak pane] link in
             guard let workspace, let pane, pathAPI(workspace) != nil else { return true }
-            let command = PaneCommandMarks.of(pane.id)?.block(atViewportRow: link.row)?.mark.commandId
+            let command = PaneCommandMarks.of(pane)?.block(atViewportRow: link.row)?.mark.commandId
             return underlines.underlines(Key(command: command, printed: link.target))
         }
     }
