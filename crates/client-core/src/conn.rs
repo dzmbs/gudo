@@ -1065,6 +1065,7 @@ async fn accept_panes(
         tokio::spawn(async move {
             match recv(&mut stream).await {
                 Ok(Some(StreamHeader::Pane { pane_id })) => {
+                    inner.emit(ClientEvent::PaneStreaming { pane_id });
                     while let Ok(Some(output)) = recv::<PaneOutput>(&mut stream).await {
                         apply_output(&inner, pane_id, output, &ctl);
                         acks.notify_one();

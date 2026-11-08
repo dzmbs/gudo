@@ -185,6 +185,10 @@ pub enum ClientEvent {
         seq: u64,
         data: Bytes,
     },
+    /// The daemon streams this pane from where the client left off, on this connection.
+    PaneStreaming {
+        pane_id: u64,
+    },
     /// Resize the pane's VT at this point of the stream.
     PaneResized {
         pane_id: u64,
@@ -342,6 +346,7 @@ impl From<client_core::ClientEvent> for ClientEvent {
                 seq,
                 data: data.into(),
             },
+            E::PaneStreaming { pane_id } => Self::PaneStreaming { pane_id: pane_id.0 },
             E::PaneResized { pane_id, seq, size } => Self::PaneResized {
                 pane_id: pane_id.0,
                 seq,

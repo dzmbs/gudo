@@ -56,6 +56,17 @@ import GudoCore
         #expect(client().calls.last == .op(.split(paneId: 3, axis: .horizontal, launch: .shell(cwd: nil))))
     }
 
+    @Test func aPaneWhoseStreamNeverOpensIsShownLiveAfterTheGrace() async throws {
+        let (connection, client) = try makeConnection()
+        let sink = EventSink()
+        try connection.makeBackend(for: PaneId(3)).start(events: sink.handler)
+        client().send(.connected(epoch: 1, resumed: true))
+        #expect(sink.lastConnection == .stale(reason: PaneRouter.catchingUp))
+        try await eventually("the pane goes live without its stream", timeout: .seconds(6)) {
+            sink.lastConnection == .live
+        }
+    }
+
     @Test func paneOutputInputAndHistory() async throws {
         let (connection, client) = try makeConnection()
         let backend = try connection.makeBackend(for: PaneId(3))
@@ -146,6 +157,8 @@ import GudoCore
         #expect(sink.lastConnection == .stale(reason: "Connecting…"))
 
         client().send(.connected(epoch: 1, resumed: false))
+        #expect(sink.lastConnection == .stale(reason: PaneRouter.catchingUp))
+        client().send(.paneStreaming(paneId: 1))
         #expect(sink.lastConnection == .live)
         client().send(.layout(layout: sampleLayout(revision: 9)))
         try await eventually("ready") { connection.isReady }
@@ -156,6 +169,8 @@ import GudoCore
         #expect(connection.status.summary.contains("timed out"))
 
         client().send(.connected(epoch: 1, resumed: true))
+        #expect(sink.lastConnection == .stale(reason: PaneRouter.catchingUp), "dimmed until the daemon streams it again")
+        client().send(.paneStreaming(paneId: 1))
         #expect(sink.lastConnection == .live)
         try await eventually("live again") { connection.status.isLive }
         #expect(client().calls.filter { $0 == .attach(7) }.count == 1, "client-core re-attaches by itself")

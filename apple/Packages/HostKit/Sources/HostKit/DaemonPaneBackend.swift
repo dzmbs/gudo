@@ -51,6 +51,8 @@ nonisolated final class PaneRouter: Sendable {
         /// The daemon sent this pane's state (a snapshot or bytes) on this connection: the taps
         /// show the host's screen, not a saved one.
         var live = false
+        /// The daemon streams the pane on the current connection, so its screen is current.
+        var isStreaming = false
         /// Inputs not acknowledged yet, in send order (the daemon acks each input frame once):
         /// when it was sent, the predictor's sequence number for keystrokes, and whose it was.
         var unacked: [(sent: ContinuousClock.Instant, predicted: UInt64?, tap: UInt64)] = []
@@ -77,6 +79,7 @@ nonisolated final class PaneRouter: Sendable {
     private let connection = Mutex(PaneConnection.stale(reason: "Connecting…"))
     /// Set by `suspend`: the disconnect the suspension causes keeps the "Paused" reason.
     private let suspended = Mutex(false)
+    private let connectionGeneration = Atomic<UInt64>(0)
     /// Multiplayer: panes this connection may not type into (a viewer's role, another
     /// person's lease). Gated input is dropped here, never predicted, and reported.
     private let gate = Mutex(MultiplayerSession.InputGate.open)
@@ -116,7 +119,7 @@ nonisolated final class PaneRouter: Sendable {
     func start(_ pane: UInt64, tap id: UInt64, sink: @escaping Sink, seed: Seed? = nil) -> Bool {
         delivery.withLock { _ in
             let state = connection.withLock { $0 }
-            let (first, source, pending, offsets, lastApplied) = routes.withLock { routes in
+            let (first, source, pending, offsets, lastApplied, isStreaming) = routes.withLock { routes in
                 var route = routes[pane] ?? Route()
                 let running = route.started
                 let source = route.driver.flatMap { route.taps[$0]?.sink != nil ? route.taps[$0]?.seed : nil }
@@ -131,9 +134,9 @@ nonisolated final class PaneRouter: Sendable {
                     route.pendingApplied = []
                 }
                 routes[pane] = route
-                return (running.isEmpty, source, pendingEvents, pendingOffsets, route.lastApplied)
+                return (running.isEmpty, source, pendingEvents, pendingOffsets, route.lastApplied, route.isStreaming)
             }
-            sink(.connection(state))
+            sink(.connection(state == .live && !isStreaming ? .stale(reason: Self.catchingUp) : state))
             if first {
                 for (event, offset) in zip(pending, offsets) {
                     sink(event)
@@ -314,14 +317,20 @@ nonisolated final class PaneRouter: Sendable {
                 }
             }
             if let echo { onEchoRoundTrip(echo) }
-            routes.withLock { $0[pane]?.live = true }
+            let wasCatchingUp = routes.withLock { routes in
+                routes[pane]?.live = true
+                return routes[pane]?.isStreaming == false
+            }
+            if wasCatchingUp { markStreaming(pane) }
             deliver(pane, .output(data), applied: Offset(seq: seq + UInt64(data.count), snapshot: false))
             flushAck(pane, through: seq + UInt64(data.count))
         case .paneSnapshot(let pane, let seq, let data):
-            routes.withLock {
-                $0[pane]?.snapshotSeq = seq
-                $0[pane]?.live = true
+            let wasCatchingUp = routes.withLock { routes in
+                routes[pane]?.snapshotSeq = seq
+                routes[pane]?.live = true
+                return routes[pane]?.isStreaming == false
             }
+            if wasCatchingUp { markStreaming(pane) }
             deliver(pane, .snapshot(data), applied: Offset(seq: seq, snapshot: true))
             flushAck(pane, through: seq)
         case .paneHistory(let pane, let snapshotSeq, let data, _, let done):
@@ -345,15 +354,52 @@ nonisolated final class PaneRouter: Sendable {
             break
         case .connected:
             suspended.withLock { $0 = false }
-            broadcast(.live)
+            beginCatchingUp()
             return false
+        case .paneStreaming(let pane):
+            markStreaming(pane)
         case .disconnected(let reason), .refused(let reason):
+            connectionGeneration.wrappingAdd(1, ordering: .relaxed)
+            routes.withLock { routes in for pane in routes.keys { routes[pane]?.isStreaming = false } }
             if !suspended.withLock({ $0 }) { broadcast(.stale(reason: reason)) }
             return false
         default:
             return false
         }
         return true
+    }
+
+    static let catchingUp = "Catching up…"
+    /// A pane whose stream has not opened by then is shown live anyway: a pane must never stay
+    /// dimmed because one event went missing.
+    static let streamGrace = DispatchTimeInterval.seconds(3)
+
+    /// Connected again: each pane stays dimmed until the daemon streams it from where it left off.
+    private func beginCatchingUp() {
+        let generation = connectionGeneration.wrappingAdd(1, ordering: .relaxed).newValue
+        routes.withLock { routes in for pane in routes.keys { routes[pane]?.isStreaming = false } }
+        broadcast(.stale(reason: Self.catchingUp))
+        connection.withLock { $0 = .live }
+        DispatchQueue.global().asyncAfter(deadline: .now() + Self.streamGrace) { [weak self] in
+            guard let self, connectionGeneration.load(ordering: .relaxed) == generation else { return }
+            let waiting = routes.withLock { routes in routes.keys.filter { routes[$0]?.isStreaming == false } }
+            for pane in waiting { markStreaming(pane) }
+        }
+    }
+
+    private func markStreaming(_ pane: UInt64) {
+        delivery.withLock { _ in
+            let targets = routes.withLock { routes -> [(Sink?, Prediction?, TerminalCore.EchoHint?)] in
+                guard routes[pane] != nil, routes[pane]?.isStreaming == false else { return [] }
+                routes[pane]?.isStreaming = true
+                let hint = isGated(pane) ? nil : routes[pane]?.hint
+                return routes[pane]?.taps.values.map { ($0.sink, $0.prediction, hint) } ?? []
+            }
+            for (sink, prediction, hint) in targets {
+                sink?(.connection(.live))
+                prediction?(.hint(hint))
+            }
+        }
     }
 
     /// The app suspended the connection (iOS background): panes show "Paused" until it is back.

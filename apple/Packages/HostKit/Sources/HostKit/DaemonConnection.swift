@@ -109,6 +109,7 @@ public final class DaemonConnection: HostConnection {
         public var connected: Duration?
         public var firstLayout: Duration?
         public var firstOutput: Duration?
+        public var firstLivePane: Duration?
     }
 
     public var layoutStore: any LayoutStore { layout }
@@ -204,13 +205,13 @@ public final class DaemonConnection: HostConnection {
             // so snapshots and history pages are not queued for it.
             switch event {
             case .paneSnapshot(let pane, let seq, _): continuation.yield(.paneSnapshot(paneId: pane, seq: seq, data: Data()))
-            case .paneResized: continuation.yield(event)
+            case .paneResized, .paneStreaming: continuation.yield(event)
             default: break
             }
         }
         status = .connecting(.dialing)
         dials += 1
-        timings = Timings(dialStarted: .now)
+        startTiming()
         Self.log.info("dialing host=\(self.hostId, privacy: .public)")
         let client = try dialer(ticket, listener)
         self.client = client
@@ -332,7 +333,7 @@ public final class DaemonConnection: HostConnection {
             Self.log.info("foreground: resuming host=\(self.hostId, privacy: .public)")
             status = .connecting(.dialing)
             dials += 1
-            timings.dialStarted = .now
+            startTiming()
         }
         if let resuming = client as? any ForegroundResumeClient {
             lastProbe = .now
@@ -378,7 +379,7 @@ public final class DaemonConnection: HostConnection {
         }
         Self.log.info("network changed: redialing host=\(self.hostId, privacy: .public)")
         dials += 1
-        timings.dialStarted = .now
+        startTiming()
         client.reconnect()
     }
 
@@ -390,7 +391,7 @@ public final class DaemonConnection: HostConnection {
         if status != .suspended {
             status = .connecting(.dialing)
             dials += 1
-            timings.dialStarted = .now
+            startTiming()
         }
         client.setRelays(relay: relay, options: options)
     }
@@ -592,6 +593,8 @@ public final class DaemonConnection: HostConnection {
             noteOutput()
         case .paneResized:
             noteOutput()
+        case .paneStreaming:
+            noteLivePane()
         default:
             break
         }
@@ -605,6 +608,17 @@ public final class DaemonConnection: HostConnection {
         for pane in meta.all.keys where !live.contains(pane) { meta.set(nil, for: pane) }
         cachedPanes = cachedPanes.filter { live.contains($0.key) }
         Self.log.info("saved workspace replaced by the host's host=\(self.hostId, privacy: .public)")
+    }
+
+    private func startTiming() {
+        timings = Timings(dialStarted: .now)
+        sawOutput = false
+    }
+
+    private func noteLivePane() {
+        guard timings.firstLivePane == nil, let start = timings.dialStarted else { return }
+        timings.firstLivePane = .now - start
+        Self.log.info("first live pane host=\(self.hostId, privacy: .public) after \(self.timings.firstLivePane.map { $0 / .milliseconds(1) } ?? -1, format: .fixed(precision: 1)) ms")
     }
 
     private func noteOutput() {

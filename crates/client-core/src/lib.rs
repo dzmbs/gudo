@@ -305,6 +305,10 @@ pub enum ClientEvent {
         seq: u64,
         data: Vec<u8>,
     },
+    /// The daemon streams this pane from where the client left off, on this connection.
+    PaneStreaming {
+        pane_id: PaneId,
+    },
     /// Resize the pane's VT here in the stream.
     PaneResized {
         pane_id: PaneId,

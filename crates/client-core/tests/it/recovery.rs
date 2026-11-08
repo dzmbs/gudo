@@ -208,3 +208,43 @@ async fn a_host_frozen_while_away_is_redialled_soon_after_the_app_returns() {
         "the frozen link looked live for {elapsed:?} after the app returned"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_idle_pane_reports_its_stream_open_after_a_reconnect() {
+    let state_directory = tempfile::tempdir().unwrap();
+    let daemon = super::daemon(state_directory.path()).await;
+    let ticket = daemon
+        .pairing_ticket(daemon::PAIRING_TTL)
+        .unwrap()
+        .to_string();
+    let (client, mut events) = super::connect(&ticket, true);
+    client.attach(None);
+    let ClientEvent::Layout { layout } = super::next_matching(&mut events, |event| {
+        matches!(event, ClientEvent::Layout { .. })
+    })
+    .await
+    else {
+        unreachable!()
+    };
+    let pane = layout.tabs[0].focused;
+    client.subscribe(pane);
+    super::next_matching(
+        &mut events,
+        |event| matches!(event, ClientEvent::PaneSnapshot { pane_id, .. } if *pane_id == pane),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    client.reconnect();
+    super::next_matching(&mut events, |event| {
+        matches!(event, ClientEvent::Connected { .. })
+    })
+    .await;
+    super::next_matching(
+        &mut events,
+        |event| matches!(event, ClientEvent::PaneStreaming { pane_id } if *pane_id == pane),
+    )
+    .await;
+    drop(client);
+    daemon.shutdown().await;
+}
