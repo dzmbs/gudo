@@ -8,6 +8,11 @@ import PaneLayout
 @Observable
 final class PaneChatState {
     enum Persistence { case remembered, transient }
+    struct ActionContext: Equatable {
+        let presentation: UUID
+        let session: String?
+        let epoch: UInt64?
+    }
     enum TerminalNotice: Equatable {
         case unavailableCommand(UInt64)
 
@@ -20,7 +25,10 @@ final class PaneChatState {
 
     private(set) var presentation: PanePresentation {
         get { access(keyPath: \.presentation); return inputPresentation.value }
-        set { withMutation(keyPath: \.presentation) { inputPresentation.value = newValue } }
+        set {
+            if inputPresentation.value != newValue { actionEpoch = UUID() }
+            withMutation(keyPath: \.presentation) { inputPresentation.value = newValue }
+        }
     }
     private(set) var agent: AgentKind?
     private(set) var error: String?
@@ -30,6 +38,12 @@ final class PaneChatState {
     var model: TimelineModel? { lease?.model }
     @ObservationIgnored weak var controller: ChatViewController?
     @ObservationIgnored private weak var hub: DaemonWorkspace?
+    @ObservationIgnored private var actionEpoch = UUID()
+
+    var actionContext: ActionContext {
+        ActionContext(presentation: actionEpoch, session: model?.frame.session?.nativeSession,
+                      epoch: model?.frame.cursor?.epoch)
+    }
 
     private let member: HostPane
     private let defaultPresentation: PanePresentation
@@ -75,6 +89,7 @@ final class PaneChatState {
         let supported = agent == .other ? nil : agent
         guard self.agent != supported else { return }
         composer.cancelBeforeSend()
+        actionEpoch = UUID()
         self.agent = supported
         terminalNotice = nil
         model?.stop()
@@ -101,6 +116,8 @@ final class PaneChatState {
     }
 
     func deactivate() {
+        actionEpoch = UUID()
+        composer.cancelBeforeSend()
         lease?.close()
         lease = nil
         controller = nil

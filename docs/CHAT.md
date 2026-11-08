@@ -173,7 +173,9 @@ are unchanged. A known owner can answer before the participant roster arrives; t
 mislabel that interval as nobody being able to answer. Command-Return uses the same once-only
 composer admission as the Send button. Both the shortcut's enabled state and its action check that
 Chat is actually selected, owner membership is known, and terminal/composer IME composition can
-park; a retained hidden Chat view cannot send from Terminal.
+park; a retained hidden Chat view cannot send from Terminal. Presentation/lifetime, native session
+and timeline epoch are rechecked when the action task runs and again before either native request,
+so navigation or a scope replacement between a tap and deferred dispatch cannot start a late send.
 
 Tool details read output through the existing authenticated same-pane output API, one bounded
 native page at a time, with Input/Output tabs and Beginning/Previous/Next navigation. Closing the

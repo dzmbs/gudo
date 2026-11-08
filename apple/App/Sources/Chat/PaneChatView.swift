@@ -37,6 +37,7 @@ struct PaneChatView<Terminal: View>: View {
         .onAppear { state.activate(in: hub) }
         .onDisappear { state.composer.cancelBeforeSend(); state.deactivate() }
         .onChange(of: state.draft) { _, draft in state.composer.draftChanged(draft) }
+        .onChange(of: state.actionContext) { _, _ in state.composer.cancelBeforeSend() }
         .onChange(of: state.presentation) { _, presentation in
             if presentation == .terminal { state.composer.cancelBeforeSend() }
         }
@@ -107,10 +108,12 @@ struct PaneChatView<Terminal: View>: View {
     }
 
     func send() {
-        guard state.presentation == .chat, permitsSending, pane.view.markedTextRange == nil,
-              state.controller?.prepareToPark() != false else { return }
+        let context = state.actionContext
+        guard prepareAction(context) else { return }
         Task {
+            guard prepareAction(context) else { return }
             await state.composer.begin(state.draft) { command in
+                guard prepareAction(context) else { throw CancellationError() }
                 let client = try hub.timelineClient()
                 let json: String
                 switch command {
@@ -122,6 +125,11 @@ struct PaneChatView<Terminal: View>: View {
                 return try ChatSendStatus.decode(json)
             }
         }
+    }
+
+    private func prepareAction(_ context: PaneChatState.ActionContext) -> Bool {
+        state.actionContext == context && state.presentation == .chat && permitsSending
+            && pane.view.markedTextRange == nil && state.controller?.prepareToPark() != false
     }
 
     private var actions: ChatRowActions {

@@ -103,6 +103,17 @@ final class PaneChatViewTests: XCTestCase {
         XCTAssertEqual(fixture.state.composer.phase, .idle)
         XCTAssertEqual(fixture.state.draft, "Never send from the parked Chat view")
         owner.send()
+        XCTAssertTrue(fixture.state.show(.terminal, terminal: fixture.pane, persistence: .transient))
+        XCTAssertTrue(fixture.state.select(.chat, persistence: .transient) { true })
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(fixture.state.composer.phase, .idle)
+        owner.send()
+        fixture.state.deactivate()
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(fixture.state.composer.phase, .idle)
+        fixture.state.activate(in: fixture.hub)
+        try await wait { fixture.state.model?.frame.rows.count == 60 }
+        owner.send()
         try await wait { fixture.state.composer.phase == .finished }
         XCTAssertTrue(fixture.backend.state.withLock { $0.input.isEmpty })
     }
