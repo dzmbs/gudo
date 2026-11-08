@@ -1492,6 +1492,15 @@ on its way shows nothing for a 1 s grace: no notice, no "Connecting to…" page,
 full strength (`HostGroup.showsAsLive`). `LaunchTimeline` logs process start → first frame → live (category
 `launch`). Numbers: docs/PERFORMANCE.md "Instant start".
 
+**Tab handoff.** Selecting or opening a tab lays its panes out under the shown tab's
+(`TabHandoff`); they take over once each has presented a frame of its screen (the host's
+snapshot or output, or the saved screen; `TerminalSurface.hasPresentedFrame`/`hasPresentedOutput`),
+or after 300 ms. Focus moves at once, so typing never lands in the tab being left. The newest
+selection cancels the wait for an older one. `TabTimeline` marks each step from the action to
+the first frame (chip inserted, scrolled into view, backend ready, first snapshot, surface ready,
+focus handed over, first frame presented) as `Tab handoff` signposts and log lines (category
+`tabs`) with the milliseconds since the action.
+
 **Scroll position.** A pane saved scrolled back keeps that position when it goes live: the
 host's snapshot has only its screen, so `Pane` asks for older scrollback pages until the rows
 above reach the saved distance from the bottom (or there are none), then scrolls there. Scrolling

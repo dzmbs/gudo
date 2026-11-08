@@ -252,6 +252,12 @@ final class Pane {
         }
     }
 
+    /// The view shows a frame of this pane's screen (the host's or the saved one), not an empty grid.
+    var hasPresentedScreen: Bool {
+        let surface = view.surface
+        return surface.hasPresentedFrame && (surface.hasPresentedOutput || showsSavedScreen)
+    }
+
     func foreground() -> PaneForeground? {
         backend.foreground()
     }

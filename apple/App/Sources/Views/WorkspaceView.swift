@@ -617,30 +617,24 @@ struct ActiveTabView: View {
     @Environment(\.terminalTheme) private var theme
     @AppStorage(TerminalPreferences.Key.paneStyle) private var paneStyle = TerminalPreferences.PaneStyle.compact
 
+    @State private var handoff = TabHandoff()
+
     var body: some View {
         Group {
-            if let tab = workspace.session.activeTab {
-                // Floating windows ride above the tiled panes; on iPhone the focused pane shows
-                // alone and the windows become picture in picture.
-                let tiled = workspace.session.tiledRoot(of: tab) ?? tab.root
-                let floats = compact ? FloatScene.none : FloatScene(workspace: workspace, tab: tab, hidden: model.floatsHidden)
-                // A zoomed pane keeps its header: its lit Zoom button is the way back.
-                let isSplit = !compact && (tiled.panes.count > 1 || !floats.windows.isEmpty)
-                SplitTreeView(
-                    node: compact ? .leaf(tab.focused) : tiled, workspace: workspace, isSplit: isSplit, animated: !compact,
-                    floats: floats, zoomed: compact ? nil : tab.zoomed)
-                    .overlay {
-                        if compact { PictureInPicture(workspace: workspace, tab: tab) }
+            if workspace.session.activeTab != nil {
+                ZStack {
+                    ForEach(handoff.layers, id: \.self) { tabId in
+                        if let tab = workspace.session.tabs.first(where: { $0.id == tabId }) {
+                            panes(of: tab)
+                                .allowsHitTesting(tabId == handoff.layers.last)
+                        }
                     }
-                    // Another tab replaces the panes at once; only this tab's own changes animate.
-                    .id(tab.id)
-                    .padding(paneStyle == .comfortable && isSplit ? DS.Space.row : 0)
-                    .background(paneStyle == .comfortable && isSplit ? theme.splitDivider : theme.background, ignoresSafeAreaEdges: [])
-                    // Lost link: the last frame stays, faded toward the background, under the card.
-                    .connectionOverlay(
-                        model.connection, hostName: model.hostName, showsSavedState: workspace.showsSavedWorkspace,
-                        onRetry: { model.retryConnection() },
-                        onDisconnect: { model.disconnect() })
+                }
+                // Lost link: the last frame stays, faded toward the background, under the card.
+                .connectionOverlay(
+                    model.connection, hostName: model.hostName, showsSavedState: workspace.showsSavedWorkspace,
+                    onRetry: { model.retryConnection() },
+                    onDisconnect: { model.disconnect() })
             } else if workspace.host?.isReady == false {
                 ConnectingView(
                     hostName: model.hostName, state: model.connection,
@@ -657,6 +651,28 @@ struct ActiveTabView: View {
             // An external display showing this window's tab scales to this area.
             if !model.isPresentation, model.terminalArea != size { model.terminalArea = size }
         }
+        .onChange(of: workspace.session.activeTabId, initial: true) { _, selected in
+            handoff.select(selected) { [workspace, compact] in
+                selected.map { workspace.hasPresentedScreens(of: $0, focusedPaneOnly: compact) } ?? true
+            }
+        }
+    }
+
+    private func panes(of tab: Tab) -> some View {
+        // Floating windows ride above the tiled panes; on iPhone the focused pane shows alone
+        // and the windows become picture in picture.
+        let tiled = workspace.session.tiledRoot(of: tab) ?? tab.root
+        let floats = compact ? FloatScene.none : FloatScene(workspace: workspace, tab: tab, hidden: model.floatsHidden)
+        // A zoomed pane keeps its header: its lit Zoom button is the way back.
+        let isSplit = !compact && (tiled.panes.count > 1 || !floats.windows.isEmpty)
+        return SplitTreeView(
+            node: compact ? .leaf(tab.focused) : tiled, workspace: workspace, isSplit: isSplit, animated: !compact,
+            floats: floats, zoomed: compact ? nil : tab.zoomed)
+            .overlay {
+                if compact { PictureInPicture(workspace: workspace, tab: tab) }
+            }
+            .padding(paneStyle == .comfortable && isSplit ? DS.Space.row : 0)
+            .background(paneStyle == .comfortable && isSplit ? theme.splitDivider : theme.background, ignoresSafeAreaEdges: [])
     }
 }
 

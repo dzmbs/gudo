@@ -42,6 +42,10 @@ public final class TerminalSurface {
     /// Called after each presented frame (hosts reposition selection handles, which follow
     /// scrolling and output).
     public var onFrameRendered: (() -> Void)?
+    /// The current layer shows a presented frame (reset when `releaseGPUResources` replaces it).
+    public private(set) var hasPresentedFrame = false
+    /// The frame on the current layer was drawn after output arrived, not from an empty grid.
+    public private(set) var hasPresentedOutput = false
     public private(set) var grid: Grid?
     /// The cursor cell in view points as of the last rendered frame (IME candidate window
     /// placement); nil when the cursor is hidden or scrolled out of the viewport.
@@ -1192,6 +1196,7 @@ public final class TerminalSurface {
         gpuReleased = false
         let start = CACurrentMediaTime()
         scheduleAnimationFrame(terminal.tickKittyAnimations(nowMs: Self.nowMs()))
+        let outputSeen = outputSerial.load(ordering: .acquiring)
         state.update(from: terminal)
         let cursor = state.cursor
         let overlay = currentOverlay(cursor: cursor)
@@ -1236,6 +1241,10 @@ public final class TerminalSurface {
                 belowBackground: kittyDraws.belowBackground, belowText: kittyDraws.belowText, images: draws, imageClip: imageClip, gutter: stripes, gutterClip: gutterClip
             ) {
                 stats.recordGPU(seconds: $0)
+            }
+            if drawable != nil {
+                hasPresentedFrame = true
+                if outputSeen > 0 { hasPresentedOutput = true }
             }
         }
         let encoded = CACurrentMediaTime()
@@ -1297,6 +1306,8 @@ public final class TerminalSurface {
         #endif
         fresh.drawableSize = pixelSize
         layer = fresh
+        hasPresentedFrame = false
+        hasPresentedOutput = false
         onLayerReplaced?(old, fresh)
         previousDrawableSize = .zero
         renderer.releaseBuffers()
