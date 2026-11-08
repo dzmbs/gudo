@@ -27,6 +27,7 @@ use proto::{
 };
 use tokio::process::{Child, Command};
 
+use super::editor_ports::EditorPorts;
 use super::editor_proxy::{AssetCache, EditorProxy};
 use super::vscode_server::{self, Servers};
 use crate::config::Config;
@@ -101,7 +102,6 @@ impl Drop for Running {
     }
 }
 
-#[derive(Default)]
 pub(crate) struct Editors {
     running: tokio::sync::Mutex<HashMap<String, Running>>,
     /// Serialises the openvscode and VSCodium downloads.
@@ -111,6 +111,7 @@ pub(crate) struct Editors {
     /// Microsoft's server, run directly.
     servers: Servers,
     update_wanted: tokio::sync::Notify,
+    ports: EditorPorts,
 }
 
 /// The user's own VS Code CLI, else the one the daemon installed from Microsoft.
@@ -223,6 +224,17 @@ fn free_port() -> Result<u16, WsError> {
 }
 
 impl Editors {
+    pub(crate) fn new(config: &Config) -> Self {
+        Self {
+            running: tokio::sync::Mutex::default(),
+            install: tokio::sync::Mutex::default(),
+            asset_cache: std::sync::OnceLock::new(),
+            servers: Servers::default(),
+            update_wanted: tokio::sync::Notify::new(),
+            ports: EditorPorts::load(config.state_dir.join("editors").join("ports.json")),
+        }
+    }
+
     pub async fn status(&self, config: &Config) -> EditorList {
         let code = find_code(config);
         let openvscode = openvscode_dir(config);
@@ -349,7 +361,20 @@ impl Editors {
             }
             EditorChoice::Auto => EditorKind::VsCode,
         };
-        let port = free_port()?;
+        let stable = self
+            .ports
+            .bind(&folder_key)
+            .map_err(|error| WsError::Failed(format!("no free port: {error}")))?;
+        let (port, proxy_listener) = if config.editor_compress {
+            (free_port()?, Some(stable))
+        } else {
+            let port = stable
+                .local_addr()
+                .map_err(|error| WsError::Failed(error.to_string()))?
+                .port();
+            drop(stable);
+            (port, None)
+        };
         let token = token();
         let log_dir = config.state_dir.join("editors");
         // From a private file, never the command line: other users of the host can read the
@@ -456,12 +481,11 @@ impl Editors {
             server_dir,
         };
         wait_ready(&mut editor, &log_path).await?;
-        if config.editor_compress {
+        if let Some(listener) = proxy_listener {
             let cache = self
                 .asset_cache
                 .get_or_init(|| AssetCache::new(config.state_dir.join("editors").join("cache")));
-            let proxy = EditorProxy::start(port, Some(std::sync::Arc::clone(cache)))
-                .await
+            let proxy = EditorProxy::start(listener, port, Some(std::sync::Arc::clone(cache)))
                 .map_err(|error| WsError::Failed(format!("starting the editor proxy: {error}")))?;
             editor.info.port = proxy.port();
             editor.proxy = Some(proxy);

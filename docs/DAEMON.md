@@ -889,8 +889,10 @@ openvscode-server must be asked for with `Only(OpenVsCode)`.
   argv: other users can read the process list); own process group, killed on
   `EditorStop` and daemon shutdown; logs in `<state>/editors/`. Returns port, token and
   `url_path` (`/?tkn=…&folder=…`; the server answers with the token cookie and a redirect).
-  The returned port is the **compressing proxy's** (below), not the server's; the app forwards
-  whatever port it gets, so nothing changed there.
+  The returned port is the **compressing proxy's** (below), not the server's. It is stable per
+  folder (`<state>/editors/ports.json`, a random port in 20000-29999 kept while it can be bound),
+  and the app forwards the same local port when free, so the workbench's origin and with it
+  WebKit's cache and VS Code's browser storage survive server restarts and app relaunches.
 - **Compression (`ws/editor_proxy.rs`).** The VS Code server sends everything uncompressed
   whatever `Accept-Encoding` says (~24 MB on a cold load). Each editor server gets an
   HTTP/1.1 reverse proxy (hyper) on another loopback port; it is what `EditorInstance.port`

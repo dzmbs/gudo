@@ -89,14 +89,14 @@ pub(crate) struct EditorProxy {
 }
 
 impl EditorProxy {
-    /// Listens on `127.0.0.1` (a free port) and proxies to `127.0.0.1:upstream`, keeping
-    /// static assets in `cache` when given.
-    ///
-    /// # Errors
-    ///
-    /// Binding the listener failed.
-    pub(crate) async fn start(upstream: u16, cache: Option<Arc<AssetCache>>) -> io::Result<Self> {
-        let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+    /// Proxies `listener` to `127.0.0.1:upstream`, keeping static assets in `cache` when given.
+    pub(crate) fn start(
+        listener: std::net::TcpListener,
+        upstream: u16,
+        cache: Option<Arc<AssetCache>>,
+    ) -> io::Result<Self> {
+        listener.set_nonblocking(true)?;
+        let listener = TcpListener::from_std(listener)?;
         let port = listener.local_addr()?.port();
         let mut connector = HttpConnector::new();
         connector.set_nodelay(true);

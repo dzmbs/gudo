@@ -1496,6 +1496,10 @@ async fn editor_servers_launch_per_folder_and_open_files() {
         .await
         .unwrap();
     assert_eq!(editor_again.kind, EditorKind::VsCode);
+    assert_eq!(
+        editor_again.port, editor.port,
+        "a folder keeps its origin across server restarts"
+    );
     let args = std::fs::read_to_string(home.join("bin/args.txt")).unwrap();
     assert!(args.starts_with("serve-web"), "{args}");
     assert!(args.contains("--accept-server-license-terms"), "{args}");

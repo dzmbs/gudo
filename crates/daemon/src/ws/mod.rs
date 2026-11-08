@@ -6,6 +6,7 @@
 
 mod attention;
 pub(crate) mod editor;
+mod editor_ports;
 mod editor_proxy;
 mod files;
 mod gh;
@@ -77,7 +78,7 @@ impl Ws {
             ports: ports::Ports::new(),
             attention: Attention::default(),
             turns: turns::Turns::new(),
-            editors: editor::Editors::default(),
+            editors: editor::Editors::new(config),
             tunnel: tunnel::Tunnel::new(events.clone()),
             workflows: Arc::new(workflows::Workflows::new(events)),
             worktrees: worktree::Worktrees::load(&config.state_dir, config.worktree_port_base),

@@ -217,7 +217,8 @@ async fn fixture() -> Fixture {
     let port = upstream(Arc::clone(&hits)).await;
     let cache_dir = tempfile::tempdir().unwrap();
     let cache = AssetCache::new(cache_dir.path().to_owned());
-    let proxy = EditorProxy::start(port, Some(cache)).await.unwrap();
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let proxy = EditorProxy::start(listener, port, Some(cache)).unwrap();
     Fixture {
         proxy,
         hits,
