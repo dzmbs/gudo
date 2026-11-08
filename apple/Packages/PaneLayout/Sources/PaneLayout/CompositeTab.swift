@@ -69,17 +69,24 @@ public struct BrowserMember: Hashable, Sendable, Codable, Identifiable, CustomSt
 /// opened for; a relaunch brings it back.
 public struct ToolMember: Hashable, Sendable, Codable, Identifiable, CustomStringConvertible {
     public enum Tool: String, Hashable, Sendable, Codable, CaseIterable {
-        case files, changes, ports, replays
+        case files, changes, ports, replays, viewer
     }
 
     public var id: UUID
     public var hostId: String
     public var tool: Tool
+    /// The viewer's file, as the host spells it.
+    public var path: String?
+    public var line: Int?
+    public var column: Int?
 
-    public init(id: UUID = UUID(), hostId: String, tool: Tool) {
+    public init(id: UUID = UUID(), hostId: String, tool: Tool, path: String? = nil, line: Int? = nil, column: Int? = nil) {
         self.id = id
         self.hostId = hostId
         self.tool = tool
+        self.path = path
+        self.line = line
+        self.column = column
     }
 
     public var description: String { "\(hostId):\(tool.rawValue)" }
@@ -287,6 +294,11 @@ public struct CompositeTab: Identifiable, Hashable, Sendable, Codable {
     public mutating func update(browser: BrowserMember) {
         guard let leaf = leaf(forBrowser: browser.id) else { return }
         browsers[leaf] = browser
+    }
+
+    public mutating func update(tool: ToolMember) {
+        guard let leaf = leaf(forTool: tool.id) else { return }
+        tools[leaf] = tool
     }
 
     private mutating func splitLeaf(_ leaf: PaneId, axis: Axis) -> PaneId? {
@@ -518,6 +530,12 @@ public final class CompositeTabs {
     }
 
     // MARK: Tools
+
+    /// Keeps what a tool shows (the viewer moved to another file).
+    public func update(tool: ToolMember) {
+        guard let index = tabs.firstIndex(where: { $0.leaf(forTool: tool.id) != nil }) else { return }
+        tabs[index].update(tool: tool)
+    }
 
     @discardableResult
     public func openTool(_ tool: ToolMember) -> TabId {

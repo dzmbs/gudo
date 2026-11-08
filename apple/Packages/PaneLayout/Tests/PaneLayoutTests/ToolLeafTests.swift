@@ -51,6 +51,19 @@ import Testing
         #expect(hosts.store.tab(id)?.focusedTool == changes)
     }
 
+    @Test func theViewerKeepsTheFileItShowsAcrossARelaunch() throws {
+        let hosts = Hosts()
+        var viewer = ToolMember(hostId: "alpha", tool: .viewer, path: "/w/a.rs", line: 3)
+        let id = hosts.store.addTool(viewer, besideHost: "alpha", tab: hosts.sessions["alpha"]!.tabs[0])
+        viewer.path = "/w/b.md"
+        viewer.line = nil
+        hosts.store.update(tool: viewer)
+        #expect(hosts.tab(id).focusedTool == viewer)
+        let data = try JSONEncoder().encode(hosts.store.tabs)
+        let back = try JSONDecoder().decode([CompositeTab].self, from: data)
+        #expect(back.first?.tools.values.first == viewer)
+    }
+
     @Test func toolsAreRestoredAndOlderSavesStillDecode() throws {
         let hosts = Hosts()
         let id = hosts.store.openTool(files)
