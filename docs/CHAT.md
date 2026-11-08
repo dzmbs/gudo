@@ -458,7 +458,10 @@ native observation, not transport forwarding. Unknown outcomes are not success. 
 includes an app-server command approval held without sending a decision. Approval signals are not
 sufficient policy metadata or authority to approve; supported choices and the complete requested
 permissions still need the shared signed-policy path. Notify is not a live adapter completion or
-approval source.
+approval source. `serverRequest/resolved` retires only the exact pending numeric or string request
+on the bound thread and active turn; duplicate, foreign and obsolete resolutions are ignored. Resolved
+request identities remain reserved within a bounded allowance so late frames cannot resolve a reused
+identity. Resolution does not establish approval, execution or success.
 
 ### Opt-in Dev read producer
 
@@ -497,9 +500,19 @@ use recorded or synthetic fixtures. A Debug helper probe with a fake Codex verif
 capture and same-PID exec. A separately opted-in test runs actual Codex 0.166.0 through a temporary
 Dev daemon, private named account with placeholder file credentials and loopback model: one explicit
 Terminal PTY prompt produces live appends and a final item over the common client API, and a late
-watch catches up without ending the server. This does not validate arbitrary MCP tools, real account
-permissions, latency or the app UI. Historical resume hydration, complete event-to-runtime status
-routing and pane session-record/recovery integration, signed controls, richer item/output streaming,
+watch catches up without ending the server. The probe checks the exact session record, named-account
+pin, working status during streaming and once-only completed runtime turn. This does not validate
+arbitrary MCP tools, real account permissions, latency or the app UI.
+
+Launch-owned callbacks run outside the projection lock and recheck the current pane/source identity.
+The bound thread updates the runtime session and persisted pane record through the common agent-event
+path, retaining the resolved account pin and captured post-login cwd. This runtime accepts only
+structured evidence: notify, hooks, OSC, screen heuristics and idle timers cannot finish its turn.
+Mapped turn boundaries drive status and worktree boundaries; approval resolution leaves the runtime
+blocked while another request remains pending. Observation loss releases the claim to unknown rather
+than inventing completion. Session discovery does not guess identities for a live Codex source.
+
+Historical resume hydration and relay recovery/handoff, signed controls, richer item/output streaming,
 lifecycle stress/MCP/latency validation and simulator acceptance are still open. Do not use the
 experimental launch for resume/reopen/recovery workflows. Hot helper
 upgrade/restart is refused while this opt-in launch owns an active server/transport because relay

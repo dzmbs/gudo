@@ -9,6 +9,7 @@ struct Fixture {
     root: PathBuf,
     helper: PathBuf,
     codex: PathBuf,
+    model_url: String,
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -57,12 +58,13 @@ async fn real_cli_streams_through_the_owned_daemon_adapter() {
             .map(|name| ((*name).into(), String::new())),
     );
     let daemon = crate::Daemon::start(config).await.unwrap();
-    let result = run(&daemon, &fixture.root).await;
+    assert!(fixture.model_url.starts_with("http://127.0.0.1:"));
+    let result = run(&daemon, &fixture.root, &fixture.model_url).await;
     daemon.shutdown().await;
     result.unwrap();
 }
 
-async fn run(daemon: &crate::Daemon, root: &Path) -> Result<(), String> {
+async fn run(daemon: &crate::Daemon, root: &Path, model_url: &str) -> Result<(), String> {
     let account = daemon.core.ws.accounts.add(&proto::AccountAdd {
         agent: AgentKind::Codex,
         label: "Private loopback fixture".into(),
@@ -79,7 +81,7 @@ async fn run(daemon: &crate::Daemon, root: &Path) -> Result<(), String> {
             "Codex private stream".into(),
             PaneLaunch::AccountAgent {
                 agent: AgentKind::Codex,
-                account: Some(account.id),
+                account: Some(account.id.clone()),
                 resume: None,
                 cwd: Some(root.join("project").display().to_string()),
             },
@@ -109,6 +111,34 @@ async fn run(daemon: &crate::Daemon, root: &Path) -> Result<(), String> {
     std::fs::write(root.join("startup-screen.txt"), entry.pane.screen_text())
         .map_err(|error| error.to_string())?;
     ready?;
+    let thread = lock(&source.state)
+        .current
+        .as_ref()
+        .unwrap()
+        .thread_id()
+        .to_owned();
+    crate::agent_input::chat_tests::wait_until(|| {
+        lock(&entry.record)
+            .agent
+            .as_ref()
+            .unwrap()
+            .session_id
+            .as_deref()
+            == Some(thread.as_str())
+    })
+    .await;
+    let recovered = daemon
+        .core
+        .ws
+        .accounts
+        .resolve(AgentKind::Codex, None, Some(&thread), None)
+        .map_err(|error| error.to_string())?;
+    if recovered.id != account.id {
+        return Err("bound thread did not retain its named account".into());
+    }
+    if lock(&entry.agent).as_ref().unwrap().session().lane != agents::Lane::AppServer {
+        return Err("runtime has no structured event authority".into());
+    }
     let (client, _connection_events) = crate::agent_input::chat_tests::owner_client(daemon).await;
     let (listener, mut events) = WorkspaceEventQueue::channel();
     client.set_workspace_listener(listener);
@@ -134,7 +164,11 @@ async fn run(daemon: &crate::Daemon, root: &Path) -> Result<(), String> {
             let WorkspaceEvent::Timeline { update } = events.recv().await.ok_or("event stream closed")? else { continue; };
             for operation in update.operations {
                 match operation {
-                    TimelineOp::Append { text, .. } if text.contains("same-process") => delta = true,
+                    TimelineOp::Append { text, .. } if text.contains("same-process") && !delta => {
+                        if lock(&entry.agent).as_ref().unwrap().state() != agents::AgentState::Working { return Err("streaming turn is not working".to_owned()); }
+                        delta = true;
+                        advance_model(model_url).await?;
+                    }
                     TimelineOp::Upsert { item, .. } if matches!(&item.body, proto::TimelineBody::Assistant { text, streaming: false } if text == "A same-process live mirror.\n") => {
                         if !delta { return Err("no live append before final item".to_string()); }
                         return Ok(());
@@ -148,6 +182,12 @@ async fn run(daemon: &crate::Daemon, root: &Path) -> Result<(), String> {
     std::fs::write(root.join("final-screen.txt"), entry.pane.screen_text())
         .map_err(|error| error.to_string())?;
     result?;
+    crate::agent_input::chat_tests::wait_until(|| lock(&entry.meta).turns == 1).await;
+    if lock(&entry.agent).as_ref().unwrap().state() != agents::AgentState::Idle
+        || lock(&entry.meta).last_turn.as_ref().unwrap().outcome != agents::TurnOutcome::Completed
+    {
+        return Err("app-server completion did not complete the runtime turn".into());
+    }
     client
         .timeline_unwatch(pane)
         .await
@@ -161,4 +201,37 @@ async fn run(daemon: &crate::Daemon, root: &Path) -> Result<(), String> {
         .map_err(|error| format!("rewatch: {error:?}"))?;
     if !snapshot.snapshot.items.iter().any(|item| matches!(&item.body, proto::TimelineBody::Assistant { text, .. } if text == "A same-process live mirror.\n")) { return Err("late watch lost captured text".into()); }
     Ok(())
+}
+
+async fn advance_model(model_url: &str) -> Result<(), String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let address: std::net::SocketAddr = model_url
+        .strip_prefix("http://")
+        .ok_or("not a loopback model")?
+        .parse()
+        .map_err(|error: std::net::AddrParseError| error.to_string())?;
+    if !address.ip().is_loopback() {
+        return Err("not a loopback model".into());
+    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut connection = tokio::net::TcpStream::connect(address)
+            .await
+            .map_err(|error| error.to_string())?;
+        connection
+            .write_all(b"GET /continue HTTP/1.0\r\nHost: localhost\r\n\r\n")
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut response = Vec::new();
+        connection
+            .take(4096)
+            .read_to_end(&mut response)
+            .await
+            .map_err(|error| error.to_string())?;
+        if !response.starts_with(b"HTTP/1.0 200") {
+            return Err("model did not acknowledge the delta".into());
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| "model acknowledgement timeout".to_owned())?
 }

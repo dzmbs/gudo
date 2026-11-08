@@ -1852,7 +1852,11 @@ impl Core {
                     *kind,
                     session_id,
                     account.id,
-                    AgentRuntime::new(*kind, id, adapter, restored),
+                    if codex.is_some() {
+                        AgentRuntime::structured(*kind, id, adapter)
+                    } else {
+                        AgentRuntime::new(*kind, id, adapter, restored)
+                    },
                 ));
             }
             PaneLaunch::Canvas { .. } => unreachable!("canvas panes returned above"),
@@ -1923,9 +1927,6 @@ impl Core {
         )
         .map_err(|error| (OpError::SpawnFailed, error.to_string()))?;
         *lock(&pane.agent_input_gate) = native_input_launch;
-        if let Some(source) = &codex {
-            source.set_owner(pane.pty().pid());
-        }
         let record = PaneRecord {
             // A sign-in is not run again after a restart.
             launch: match &launch {
@@ -1964,7 +1965,10 @@ impl Core {
         });
         let task = tokio::spawn(pane_task(Arc::clone(self), Arc::clone(&entry), vt_events));
         *lock(&entry.task) = Some(task.abort_handle());
-        lock(&self.panes).insert(id, entry);
+        lock(&self.panes).insert(id, Arc::clone(&entry));
+        if let Some(source) = lock(&entry.codex).as_ref() {
+            source.set_owner(self, &entry);
+        }
         if accounts_changed {
             self.emit(Event::Accounts);
         }
@@ -2634,6 +2638,9 @@ fn handle_command(core: &Core, entry: &PaneEntry, update: CommandUpdate) {
 /// While an agent pane's session id is unknown, looks for it off the async runtime (process
 /// table and file system) and records it when found.
 fn capture_agent_session(core: &Arc<Core>, entry: &Arc<PaneEntry>, busy: &Arc<AtomicBool>) {
+    if lock(&entry.codex).is_some() {
+        return;
+    }
     let Some((kind, account)) = lock(&entry.record)
         .agent
         .as_ref()

@@ -214,8 +214,29 @@ impl AgentRuntime {
         adapter: Box<dyn AgentAdapter + Send + Sync>,
         restored: bool,
     ) -> Self {
-        let config = ArbiterConfig::new(adapter.hook_coverage());
-        let session = SessionInfo::new(adapter.kind(), agents::Lane::Pty);
+        Self::in_lane(kind, pane, adapter, restored, agents::Lane::Pty)
+    }
+
+    pub(crate) fn structured(
+        kind: AgentKind,
+        pane: PaneId,
+        adapter: Box<dyn AgentAdapter + Send + Sync>,
+    ) -> Self {
+        Self::in_lane(kind, pane, adapter, false, agents::Lane::AppServer)
+    }
+
+    fn in_lane(
+        kind: AgentKind,
+        pane: PaneId,
+        adapter: Box<dyn AgentAdapter + Send + Sync>,
+        restored: bool,
+        lane: agents::Lane,
+    ) -> Self {
+        let mut config = ArbiterConfig::new(adapter.hook_coverage());
+        if lane == agents::Lane::AppServer {
+            config.exclusive_source = Some(agents::Source::Structured);
+        }
+        let session = SessionInfo::new(adapter.kind(), lane);
         let pane_id = Some(agents::PaneId::new(pane.0.to_string()));
         let arbiter = if restored {
             Arbiter::restored(config, pane_id, session, now())
@@ -324,7 +345,20 @@ impl AgentRuntime {
         self.take(update)
     }
 
+    pub(crate) fn structured_signal(&mut self, signal: agents::Signal) -> Option<AgentEvent> {
+        if self.session().lane != agents::Lane::AppServer
+            || signal.source != agents::Source::Structured
+        {
+            return None;
+        }
+        let update = self.arbiter.apply(signal, now());
+        self.take(update)
+    }
+
     pub fn hook(&mut self, payload: &[u8], seq: u64) -> Option<AppliedHook> {
+        if self.session().lane == agents::Lane::AppServer {
+            return None;
+        }
         let signal = match self.adapter.parse_hook(payload, agents::Seq(seq)) {
             Ok(Some(signal)) => signal,
             Ok(None) => return None,

@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod live_probe;
 mod projection;
+mod runtime;
 #[cfg(test)]
 mod tests;
 mod transport;
@@ -17,7 +18,8 @@ use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::mpsc;
 
 pub(crate) struct Live {
-    owner: tokio::sync::watch::Sender<Option<u32>>,
+    owner: tokio::sync::watch::Sender<Option<runtime::Owner>>,
+    runtime: Mutex<runtime::Runtime>,
     fault: std::sync::atomic::AtomicBool,
     state: Mutex<State>,
     process: Mutex<Option<tokio::process::Child>>,
@@ -34,6 +36,7 @@ struct State {
     operation_bytes: usize,
     wake: Option<mpsc::Sender<()>>,
     closed: bool,
+    effects: Vec<runtime::Effect>,
 }
 
 impl State {
@@ -47,6 +50,7 @@ impl State {
             operation_bytes: 0,
             wake: None,
             closed: false,
+            effects: Vec::new(),
         }
     }
 
@@ -79,6 +83,10 @@ impl State {
         if self.current.as_ref() != self.binding.binding() {
             self.current = self.binding.binding().cloned();
             self.events = self.current.clone().map(CodexLiveEvents::new);
+            if let Some(current) = &self.current {
+                self.effects
+                    .push(runtime::Effect::Bound(current.thread_id().to_owned()));
+            }
             self.projection = Projection::new(
                 self.current
                     .as_ref()
@@ -91,14 +99,19 @@ impl State {
         }
         if !outgoing && let Some(events) = &mut self.events {
             match events.observe(&self.binding, frame) {
-                Ok(Some(event)) => match self.projection.apply(event) {
-                    Ok(operations) => {
-                        for operation in operations {
-                            self.push(operation);
-                        }
+                Ok(Some(event)) => {
+                    if let Some(effect) = runtime::Effect::from_event(&event) {
+                        self.effects.push(effect);
                     }
-                    Err(_) => self.fail(),
-                },
+                    match self.projection.apply(event) {
+                        Ok(operations) => {
+                            for operation in operations {
+                                self.push(operation);
+                            }
+                        }
+                        Err(_) => self.fail(),
+                    }
+                }
                 Ok(None) => {}
                 Err(_) => self.fail(),
             }
@@ -126,7 +139,11 @@ impl State {
     }
 
     fn fail(&mut self) {
+        if self.closed {
+            return;
+        }
         self.closed = true;
+        self.effects.push(runtime::Effect::Lost);
         self.binding.close();
         self.operations.clear();
         self.operation_bytes = 0;
@@ -137,10 +154,6 @@ impl State {
 }
 
 impl Live {
-    pub(crate) fn set_owner(&self, pid: u32) {
-        self.owner.send_replace(Some(pid));
-    }
-
     pub(crate) fn is_running(&self) -> bool {
         !self.fault.load(std::sync::atomic::Ordering::Acquire) || lock(&self.process).is_some()
     }

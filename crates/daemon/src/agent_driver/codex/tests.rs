@@ -1,11 +1,12 @@
 use super::*;
 use serde_json::{Value, json};
 
-fn source() -> Arc<Live> {
+pub(super) fn source() -> Arc<Live> {
     Arc::new(Live {
         owner: tokio::sync::watch::channel(None).0,
         fault: std::sync::atomic::AtomicBool::new(false),
         state: Mutex::new(State::new()),
+        runtime: Mutex::new(runtime::Runtime::default()),
         process: Mutex::new(None),
         task: Mutex::new(None),
         directory: crate::fsutil::create_private_temp_dir("gudo-codex-fixture").unwrap(),

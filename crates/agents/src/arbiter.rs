@@ -54,6 +54,8 @@ pub struct ArbiterConfig {
     pub idle_override: Duration,
     /// How long a `working` claim survives with no PTY output or newer signal. Default 30 min.
     pub stale_after: Duration,
+    /// A launch-owned live source excludes other evidence and owns its claim until release.
+    pub exclusive_source: Option<Source>,
 }
 
 impl ArbiterConfig {
@@ -64,6 +66,7 @@ impl ArbiterConfig {
             blocked_debounce: Duration::from_millis(1500),
             idle_override: Duration::from_secs(2),
             stale_after: Duration::from_secs(30 * 60),
+            exclusive_source: None,
         }
     }
 }
@@ -349,7 +352,12 @@ impl Arbiter {
 
     /// Applies a parsed signal.
     pub fn apply(&mut self, signal: Signal, now: UnixMillis) -> Update {
-        if self.process == Process::Exited {
+        if self.process == Process::Exited
+            || self
+                .config
+                .exclusive_source
+                .is_some_and(|source| source != signal.source)
+        {
             return Update::default();
         }
         if let Some(seq) = signal.seq {
@@ -421,6 +429,9 @@ impl Arbiter {
 
     /// Applies a screen-manifest verdict. Call it whenever the screen or title changes.
     pub fn observe_screen(&mut self, verdict: &ScreenVerdict, now: UnixMillis) -> Update {
+        if self.config.exclusive_source.is_some() {
+            return Update::default();
+        }
         let ScreenVerdict::State(matched) = verdict else {
             return Update::default();
         };
@@ -528,7 +539,9 @@ impl Arbiter {
             }) {
                 deadlines.push(screen.since.saturating_add(self.config.idle_override));
             }
-            if claim.state() == AgentState::Working {
+            if claim.state() == AgentState::Working
+                && self.config.exclusive_source != Some(claim.source)
+            {
                 deadlines.push(
                     self.last_activity
                         .max(claim.at)
@@ -603,6 +616,7 @@ impl Arbiter {
                 }
             }
             if claim_state == AgentState::Working
+                && self.config.exclusive_source != Some(claim.source)
                 && now.since(self.last_activity.max(claim.at)) >= self.config.stale_after
             {
                 self.claim = None;
@@ -813,6 +827,10 @@ fn derive_kind(old: AgentState, new: AgentState, stale: bool) -> EventKind {
         (_, AgentState::Idle) => EventKind::TurnEnded,
     }
 }
+
+#[cfg(test)]
+#[path = "arbiter/exclusive_tests.rs"]
+mod exclusive_tests;
 
 #[cfg(test)]
 mod tests {

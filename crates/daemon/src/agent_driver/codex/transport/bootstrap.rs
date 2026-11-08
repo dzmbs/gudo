@@ -32,6 +32,7 @@ pub(super) async fn start(
     let environment = tokio::task::spawn_blocking(move || decode(&bytes, &expected))
         .await
         .map_err(io::Error::other)??;
+    let cwd = environment.cwd.clone();
     let mut command = tokio::process::Command::new(&spec.program);
     command
         .args(&spec.args)
@@ -53,6 +54,7 @@ pub(super) async fn start(
         .upgrade()
         .ok_or_else(|| io::Error::other("pane closed"))?;
     *lock(&source.process) = Some(process);
+    source.capture_context(cwd, tui);
     drop(source);
     connection.write_all(&[1]).await?;
     Ok(Peers { tui, server })

@@ -58,6 +58,7 @@ fn prepare(
         owner,
         fault: std::sync::atomic::AtomicBool::new(false),
         state: Mutex::new(State::new()),
+        runtime: Mutex::new(super::runtime::Runtime::default()),
         process: Mutex::new(None),
         task: Mutex::new(None),
         directory: directory.to_owned(),
@@ -69,16 +70,17 @@ fn prepare(
     tokio::task::spawn_blocking(move || observe(observer, receiver));
     let task = tokio::spawn(async move {
         let result = async {
-            let root = *owner_ready
-                .wait_for(|pid| pid.is_some())
+            let owner = owner_ready
+                .wait_for(|owner| owner.is_some())
                 .await
-                .map_err(io::Error::other)?;
+                .map_err(io::Error::other)?
+                .clone();
             let peers = bootstrap::start(
                 environment_listener,
                 recipe.server,
                 expected,
                 &weak,
-                root.ok_or_else(|| io::Error::other("pane closed"))?,
+                owner.ok_or_else(|| io::Error::other("pane closed"))?.root,
             )
             .await?;
             run(relay_listener, server, weak.clone(), observations, peers).await
@@ -182,25 +184,38 @@ fn observe(source: Weak<Live>, mut receiver: tokio::sync::mpsc::Receiver<(bool, 
         let Some(source) = source.upgrade() else {
             return;
         };
-        let mut state = lock(&source.state);
-        if source.fault.load(Ordering::Acquire) {
-            state.fail();
-            return;
-        }
-        let decoder = if from_tui {
-            &mut outgoing
-        } else {
-            &mut incoming
+        let (effects, closed) = {
+            let mut state = lock(&source.state);
+            if source.fault.load(Ordering::Acquire) {
+                state.fail();
+            } else {
+                let decoder = if from_tui {
+                    &mut outgoing
+                } else {
+                    &mut incoming
+                };
+                if decoder
+                    .feed(&bytes, |frame| state.observe(frame, from_tui))
+                    .is_err()
+                {
+                    state.fail();
+                }
+            }
+            (std::mem::take(&mut state.effects), state.closed)
         };
-        if decoder
-            .feed(&bytes, |frame| state.observe(frame, from_tui))
-            .is_err()
-        {
-            state.fail();
-        }
-        if state.closed {
+        source.publish(effects);
+        if closed {
             source.fault.store(true, Ordering::Release);
             return;
         }
+    }
+    if let Some(source) = source.upgrade() {
+        source.fault.store(true, Ordering::Release);
+        let effects = {
+            let mut state = lock(&source.state);
+            state.fail();
+            std::mem::take(&mut state.effects)
+        };
+        source.publish(effects);
     }
 }
