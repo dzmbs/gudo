@@ -13,7 +13,7 @@
 //! the VS Code Server licence accepted in the app, the acceptance serve-web needs too.
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use proto::WsError;
 use tokio::process::Command;
@@ -29,6 +29,8 @@ pub(crate) const RECONNECTION_GRACE: Duration = Duration::from_secs(48 * 3600);
 const CHECK_INTERVAL: Duration = Duration::from_secs(3600);
 /// Names the commit of the newest server in the root.
 const LATEST: &str = "latest";
+/// Unix milliseconds of the last update check.
+const LAST_CHECK: &str = "last-check";
 
 /// Microsoft's name for this host's web server build.
 fn platform() -> Option<&'static str> {
@@ -74,56 +76,114 @@ pub(crate) fn command(dir: &Path, port: u16, token_file: &Path) -> Command {
     command
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum UpdateCheck {
+    NotDue,
+    NothingInstalled,
+    Checked(PathBuf),
+}
+
 #[derive(Default)]
 pub(crate) struct Servers {
-    /// When the update service last answered, and with which server.
-    checked: tokio::sync::Mutex<Option<(Instant, PathBuf)>>,
+    updating: tokio::sync::Mutex<()>,
 }
 
 impl Servers {
-    /// The server to start: Microsoft's latest (downloaded first when it is new; the service
-    /// is asked at most hourly), else the newest one here when the service cannot be reached.
-    ///
-    /// # Errors
-    ///
-    /// `Unavailable` when Microsoft publishes no server for this host; `Failed` when none is
-    /// here and the download failed.
+    /// The newest server here, never asking the update service; downloads one only when none is here.
     pub(crate) async fn ensure(&self, config: &Config) -> Result<PathBuf, WsError> {
-        let platform = platform().ok_or_else(|| {
-            WsError::Unavailable("Microsoft publishes no VS Code server for this host".into())
-        })?;
-        // Held across the download: one download at a time.
-        let mut checked = self.checked.lock().await;
-        if let Some((checked_at, dir)) = checked.as_ref()
-            && checked_at.elapsed() < CHECK_INTERVAL
-            && entry(dir).is_file()
-        {
-            return Ok(dir.clone());
-        }
         let root = root(config);
-        let base_url = config.vscode_update_url.clone();
-        let install_root = root.clone();
-        let fetched =
-            tokio::task::spawn_blocking(move || install(&base_url, platform, &install_root))
-                .await
-                .map_err(|error| WsError::Failed(error.to_string()))
-                .flatten();
-        match fetched {
-            Ok(dir) => {
-                *checked = Some((Instant::now(), dir.clone()));
-                Ok(dir)
-            }
-            Err(error) => latest(&root).ok_or(error).inspect(|dir| {
-                tracing::warn!(dir = %dir.display(), "VS Code server update check failed; using the one here");
-            }),
+        if let Some(dir) = latest(&root) {
+            return Ok(dir);
         }
+        let platform = server_platform()?;
+        let _updating = self.updating.lock().await;
+        if let Some(dir) = latest(&root) {
+            return Ok(dir);
+        }
+        download_latest(config, platform, Vec::new()).await
+    }
+
+    /// Downloads a newer server for the next start when one is installed and the last check is stale.
+    pub(crate) async fn update_if_due(
+        &self,
+        config: &Config,
+        in_use: Vec<PathBuf>,
+    ) -> Result<UpdateCheck, WsError> {
+        let root = root(config);
+        if latest(&root).is_none() {
+            return Ok(UpdateCheck::NothingInstalled);
+        }
+        if checked_recently(&root, SystemTime::now()) {
+            return Ok(UpdateCheck::NotDue);
+        }
+        let platform = server_platform()?;
+        let _updating = self.updating.lock().await;
+        if checked_recently(&root, SystemTime::now()) {
+            return Ok(UpdateCheck::NotDue);
+        }
+        download_latest(config, platform, in_use)
+            .await
+            .map(UpdateCheck::Checked)
     }
 }
 
-/// Asks the update service for the latest server and, when it is not here yet, downloads it,
-/// checks the published SHA-256 and unpacks it; the one before stays (it may be running),
-/// older ones go.
-fn install(base_url: &str, platform: &str, root: &Path) -> Result<PathBuf, WsError> {
+fn server_platform() -> Result<&'static str, WsError> {
+    platform().ok_or_else(|| {
+        WsError::Unavailable("Microsoft publishes no VS Code server for this host".into())
+    })
+}
+
+async fn download_latest(
+    config: &Config,
+    platform: &'static str,
+    in_use: Vec<PathBuf>,
+) -> Result<PathBuf, WsError> {
+    let root = root(config);
+    let base_url = config.vscode_update_url.clone();
+    let started = Instant::now();
+    let installed = tokio::task::spawn_blocking(move || {
+        let installed = install(&base_url, platform, &root, &in_use);
+        record_check(&root, SystemTime::now());
+        installed
+    })
+    .await
+    .map_err(|error| WsError::Failed(error.to_string()))
+    .flatten();
+    let elapsed_ms = started.elapsed().as_millis();
+    match &installed {
+        Ok(dir) => tracing::info!(dir = %dir.display(), elapsed_ms, "VS Code server is current"),
+        Err(error) => tracing::warn!(elapsed_ms, "VS Code server update check failed: {error}"),
+    }
+    installed
+}
+
+fn checked_recently(root: &Path, now: SystemTime) -> bool {
+    std::fs::read_to_string(root.join(LAST_CHECK))
+        .ok()
+        .and_then(|text| text.trim().parse::<u64>().ok())
+        .map(|millis| UNIX_EPOCH + Duration::from_millis(millis))
+        .and_then(|checked_at| now.duration_since(checked_at).ok())
+        .is_some_and(|since| since < CHECK_INTERVAL)
+}
+
+fn record_check(root: &Path, now: SystemTime) {
+    let millis = now
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    if let Err(error) = fsutil::write_atomic(&root.join(LAST_CHECK), millis.to_string().as_bytes())
+    {
+        tracing::warn!("recording the VS Code server update check: {error}");
+    }
+}
+
+/// Installs the update service's latest server; keeps the previous one and those `in_use`.
+fn install(
+    base_url: &str,
+    platform: &str,
+    root: &Path,
+    in_use: &[PathBuf],
+) -> Result<PathBuf, WsError> {
     let failed = |error: std::io::Error| WsError::Failed(error.to_string());
     std::fs::create_dir_all(root).map_err(failed)?;
     let tag = fsutil::hex(&fsutil::random::<4>());
@@ -159,7 +219,11 @@ fn install(base_url: &str, platform: &str, root: &Path) -> Result<PathBuf, WsErr
     fsutil::write_atomic(&root.join(LATEST), release.version.as_bytes()).map_err(failed)?;
     if let Ok(entries) = std::fs::read_dir(root) {
         for old in entries.filter_map(Result::ok).map(|entry| entry.path()) {
-            if old.is_dir() && old != dir && Some(&old) != previous.as_ref() {
+            if old.is_dir()
+                && old != dir
+                && Some(&old) != previous.as_ref()
+                && !in_use.contains(&old)
+            {
                 let _ = std::fs::remove_dir_all(&old);
             }
         }
@@ -268,7 +332,7 @@ mod tests {
         for (commit, body) in [("aa11", "one"), ("bb22", "two"), ("cc33", "three")] {
             let service_dir = temp.path().join(commit);
             let base_url = service(&service_dir, platform, commit, body);
-            let dir = install(&base_url, platform, &root).unwrap();
+            let dir = install(&base_url, platform, &root, &[]).unwrap();
             assert_eq!(std::fs::read_to_string(entry(&dir)).unwrap(), body);
             assert_eq!(latest(&root).as_deref(), Some(dir.as_path()));
             installed.push(dir);
@@ -284,10 +348,90 @@ mod tests {
             &format!("file://{}", service_dir.display()),
             platform,
             &root,
+            &[],
         )
         .unwrap();
         assert_eq!(again, installed[2]);
         assert!(installed[1].exists());
+    }
+
+    #[test]
+    fn a_server_in_use_survives_two_updates() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let platform = "server-test-web";
+        let first_url = service(&temp.path().join("aa11"), platform, "aa11", "one");
+        let running = install(&first_url, platform, &root, &[]).unwrap();
+        for commit in ["bb22", "cc33"] {
+            let base_url = service(&temp.path().join(commit), platform, commit, commit);
+            install(&base_url, platform, &root, std::slice::from_ref(&running)).unwrap();
+        }
+        assert!(running.exists());
+    }
+
+    fn test_config(state_dir: &Path, update_url: String) -> Config {
+        let mut config = Config::new(state_dir);
+        config.vscode_update_url = update_url;
+        config
+    }
+
+    #[tokio::test]
+    async fn an_installed_server_starts_without_the_update_service() {
+        let Some(platform) = platform() else { return };
+        let temp = tempfile::tempdir().unwrap();
+        let state_dir = temp.path().join("state");
+        let old_url = service(&temp.path().join("aa11"), platform, "aa11", "old");
+        let new_url = service(&temp.path().join("bb22"), platform, "bb22", "new");
+        let servers = Servers::default();
+
+        let unreachable = test_config(&state_dir, "file:///nonexistent".into());
+        assert_eq!(
+            servers
+                .update_if_due(&unreachable, Vec::new())
+                .await
+                .unwrap(),
+            UpdateCheck::NothingInstalled
+        );
+        let first = servers
+            .ensure(&test_config(&state_dir, old_url))
+            .await
+            .unwrap();
+        assert!(first.ends_with("aa11"));
+
+        let started = Instant::now();
+        assert_eq!(servers.ensure(&unreachable).await.unwrap(), first);
+        assert!(started.elapsed() < Duration::from_millis(100));
+
+        let newer = test_config(&state_dir, new_url);
+        assert_eq!(servers.ensure(&newer).await.unwrap(), first);
+        assert_eq!(
+            servers.update_if_due(&newer, Vec::new()).await.unwrap(),
+            UpdateCheck::NotDue,
+            "the first download counts as a check"
+        );
+        let root = root(&newer);
+        std::fs::remove_file(root.join(LAST_CHECK)).unwrap();
+        let UpdateCheck::Checked(updated) =
+            servers.update_if_due(&newer, Vec::new()).await.unwrap()
+        else {
+            panic!("a stale check asks the update service");
+        };
+        assert!(updated.ends_with("bb22"));
+        assert_eq!(servers.ensure(&unreachable).await.unwrap(), updated);
+    }
+
+    #[test]
+    fn a_check_is_due_an_hour_later_or_when_the_clock_went_back() {
+        let temp = tempfile::tempdir().unwrap();
+        let now = SystemTime::now();
+        assert!(!checked_recently(temp.path(), now));
+        record_check(temp.path(), now);
+        assert!(checked_recently(temp.path(), now + Duration::from_secs(60)));
+        assert!(!checked_recently(temp.path(), now + CHECK_INTERVAL));
+        assert!(!checked_recently(
+            temp.path(),
+            now - Duration::from_secs(60)
+        ));
     }
 
     #[test]
@@ -297,7 +441,7 @@ mod tests {
         let base_url = service(temp.path(), platform, "dd44", "x");
         std::fs::write(temp.path().join("dd44.tar.gz"), b"not it").unwrap();
         let root = temp.path().join("root");
-        let error = install(&base_url, platform, &root).unwrap_err();
+        let error = install(&base_url, platform, &root, &[]).unwrap_err();
         assert!(matches!(error, WsError::Failed(message) if message.contains("checksum")));
         assert!(latest(&root).is_none());
     }

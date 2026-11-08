@@ -858,13 +858,17 @@ openvscode-server must be asked for with `Only(OpenVsCode)`.
   these ends every open workbench's session ("Cannot reconnect", reload). Run directly, the server
   gets `--reconnection-grace-time 172800` (48 h: a sleeping iPad comes back to its session) and
   lives until `EditorStop`, daemon shutdown, or 48 h without any connection through its proxy
-  (`EditorProxy::idle_for`; checked whenever editors are listed, launched or opened).
+  (`EditorProxy::idle_for`; checked whenever editors are listed, launched or opened, and every
+  10 min).
   - Download: `/api/update/server-<linux-x64|linux-arm64|linux-armhf|linux-alpine|alpine-arm64|
     darwin|darwin-arm64>-web/stable/latest` on Microsoft's update service gives `url` and
     `sha256hash`; curl, else wget; the SHA-256 is checked; unpacked to
-    `<state>/vscode/server/<commit>/` (`latest` names the newest). The service is asked at most
-    hourly, when a server starts; offline, the newest one here is used. The one before stays (it
-    may still run); older ones are removed.
+    `<state>/vscode/server/<commit>/` (`latest` names the newest). A launch starts the newest one
+    here and never waits for the network; only the very first one downloads in the open path.
+    The service is asked in the background (`editor::run`: at daemon start, every 10 min if the
+    last check in `<state>/vscode/server/last-check` is over an hour old, and after a launch), and
+    the next server started uses what it fetched. The one before and any still running stay;
+    older ones are removed.
   - Launch: `bin/code-server --host 127.0.0.1 --port <free> --connection-token-file <file holding a random 128-bit token>
     --accept-server-license-terms --reconnection-grace-time 172800` in the folder. Server data in
     `~/.vscode-server`, as under serve-web (extensions and settings carry over).

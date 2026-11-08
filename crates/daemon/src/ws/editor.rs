@@ -80,6 +80,7 @@ const VSCODIUM_BUILDS: &[(&str, &str, &str, &str)] = &[
 ];
 /// Long because `code serve-web` downloads Microsoft's server on its first run.
 const START_TIMEOUT: Duration = Duration::from_secs(180);
+const HOUSEKEEPING_INTERVAL: Duration = Duration::from_secs(600);
 
 struct Running {
     /// `info.port` is the proxy's port when there is one, else the server's.
@@ -87,6 +88,7 @@ struct Running {
     upstream_port: u16,
     child: Child,
     proxy: Option<EditorProxy>,
+    server_dir: Option<PathBuf>,
 }
 
 impl Drop for Running {
@@ -108,6 +110,7 @@ pub(crate) struct Editors {
     asset_cache: std::sync::OnceLock<std::sync::Arc<AssetCache>>,
     /// Microsoft's server, run directly.
     servers: Servers,
+    update_wanted: tokio::sync::Notify,
 }
 
 /// The user's own VS Code CLI, else the one the daemon installed from Microsoft.
@@ -300,6 +303,7 @@ impl Editors {
                 folder.display()
             )));
         }
+        let started = Instant::now();
         let folder_key = folder.to_string_lossy().into_owned();
         let reusable = {
             let mut running = self.running.lock().await;
@@ -316,6 +320,7 @@ impl Editors {
         };
         if let Some((info, upstream_port)) = reusable {
             if accepts_token(upstream_port, &info.token).await {
+                tracing::info!(elapsed_ms = started.elapsed().as_millis(), folder = %folder.display(), "editor reused");
                 return Ok(info);
             }
             tracing::warn!(folder = %folder.display(), pid = info.pid, "editor refuses its token; restarting it");
@@ -352,6 +357,7 @@ impl Editors {
         let token_file = log_dir.join(format!("{port}.token"));
         fsutil::write_atomic(&token_file, token.as_bytes())
             .map_err(|error| WsError::Failed(error.to_string()))?;
+        let mut server_dir = None;
         let mut command = match kind {
             EditorKind::VsCode => {
                 let code = code.ok_or_else(|| {
@@ -377,6 +383,7 @@ impl Editors {
                         })
                         .ok()
                 };
+                server_dir.clone_from(&direct);
                 match direct {
                     Some(dir) => vscode_server::command(&dir, port, &token_file),
                     None => {
@@ -446,6 +453,7 @@ impl Editors {
             upstream_port: port,
             child,
             proxy: None,
+            server_dir,
         };
         wait_ready(&mut editor, &log_path).await?;
         if config.editor_compress {
@@ -459,9 +467,31 @@ impl Editors {
             editor.proxy = Some(proxy);
         }
         let info = editor.info.clone();
+        let runs_microsoft_server = editor.server_dir.is_some();
         self.running.lock().await.insert(folder_key, editor);
-        tracing::info!(?kind, port, proxy = info.port, folder = %folder.display(), "editor started");
+        if runs_microsoft_server {
+            self.update_wanted.notify_one();
+        }
+        tracing::info!(?kind, port, proxy = info.port, folder = %folder.display(), elapsed_ms = started.elapsed().as_millis(), "editor started");
         Ok(info)
+    }
+
+    /// Reaps idle servers and fetches a newer VS Code server when a check is due.
+    pub(crate) async fn keep_current(&self, config: &Config) {
+        let in_use = {
+            let mut running = self.running.lock().await;
+            reap(&mut running);
+            running
+                .values()
+                .filter_map(|editor| editor.server_dir.clone())
+                .collect()
+        };
+        if config.vscode_serve_web {
+            return;
+        }
+        if let Err(error) = self.servers.update_if_due(config, in_use).await {
+            tracing::debug!("VS Code server update: {error}");
+        }
     }
 
     pub async fn stop(&self, folder: &str) -> Result<(), WsError> {
@@ -593,6 +623,18 @@ impl Editors {
             .await
             .map_err(|error| WsError::Failed(error.to_string()))??;
         Ok(dir)
+    }
+}
+
+/// [`Editors::keep_current`] at start, periodically and after each launch.
+pub(crate) async fn run(core: std::sync::Arc<crate::core::Core>) {
+    let editors = &core.ws.editors;
+    loop {
+        editors.keep_current(&core.cfg).await;
+        tokio::select! {
+            () = tokio::time::sleep(HOUSEKEEPING_INTERVAL) => {}
+            () = editors.update_wanted.notified() => {}
+        }
     }
 }
 

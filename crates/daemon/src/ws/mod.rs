@@ -5,7 +5,7 @@
 //! tables) runs on `spawn_blocking`; every path goes through [`paths::Policy`] first.
 
 mod attention;
-mod editor;
+pub(crate) mod editor;
 mod editor_proxy;
 mod files;
 mod gh;
