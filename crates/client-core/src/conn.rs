@@ -37,6 +37,37 @@ pub const PROBE_DEADLINE: Duration = Duration::from_secs(3);
 /// How long it waits on a link that still carries packets but answers slowly (a congested
 /// mobile network) before calling it dead.
 pub const PROBE_SLOW_DEADLINE: Duration = Duration::from_secs(10);
+/// By consecutive timeouts. Without them a dead path holds a dial for the whole idle timeout.
+const DIAL_DEADLINES: [Duration; 3] = [
+    Duration::from_secs(4),
+    Duration::from_secs(8),
+    proto::IDLE_TIMEOUT,
+];
+const MIN_BACKOFF: Duration = Duration::from_millis(100);
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ProbeDeadlines {
+    silent_link: Duration,
+    /// Packets still arrive: a congested link, not a dead one.
+    busy_link: Duration,
+}
+
+impl ProbeDeadlines {
+    pub(crate) const TYPING: Self = Self {
+        silent_link: PROBE_DEADLINE,
+        busy_link: PROBE_SLOW_DEADLINE,
+    };
+    pub(crate) const FOREGROUND: Self = Self {
+        silent_link: Duration::from_millis(1500),
+        busy_link: Duration::from_secs(4),
+    };
+}
+
+enum DialOutcome {
+    Finished(Result<Live, ConnError>),
+    TimedOut,
+    Interrupted,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ConnError {
@@ -220,7 +251,29 @@ pub(crate) fn endpoint_builder(
 }
 
 fn daemon_addr(inner: &Inner) -> Result<EndpointAddr, ConnError> {
-    ticket_addr(&inner.ticket, &route(inner))
+    let ticket_address = ticket_addr(&inner.ticket, &route(inner))?;
+    Ok(lock(&inner.last_direct_addresses)
+        .iter()
+        .fold(ticket_address, |address, &direct_address| {
+            address.with_ip_addr(direct_address)
+        }))
+}
+
+async fn remember_direct_addresses(inner: Arc<Inner>, connection: Connection) {
+    use n0_future::StreamExt;
+    let mut path_snapshots = connection.paths_stream();
+    while let Some(paths) = path_snapshots.next().await {
+        let direct_addresses: Vec<std::net::SocketAddr> = paths
+            .iter()
+            .filter_map(|path| match path.remote_addr() {
+                iroh::TransportAddr::Ip(socket_address) => Some(*socket_address),
+                _ => None,
+            })
+            .collect();
+        if !direct_addresses.is_empty() {
+            *lock(&inner.last_direct_addresses) = direct_addresses;
+        }
+    }
 }
 
 /// Where to dial the ticket's daemon: its direct addresses, plus the relays `route` allows
@@ -257,26 +310,37 @@ pub(crate) fn ticket_addr(
 pub(crate) async fn supervise(inner: Arc<Inner>) {
     let mut endpoint = bind_until_ok(&inner).await;
     *lock(&inner.endpoint) = Some(endpoint.clone());
-    let mut backoff = Duration::from_millis(100);
+    let mut backoff = MIN_BACKOFF;
+    let mut consecutive_timeouts = 0;
     loop {
         if *lock(&inner.paused) {
             inner.reconnect.notified().await;
             continue;
+        }
+        if inner.skips_backoff.swap(false, Ordering::SeqCst) {
+            backoff = MIN_BACKOFF;
+            consecutive_timeouts = 0;
         }
         if inner.rebind.load(Ordering::SeqCst) {
             endpoint.close().await;
             endpoint = bind_until_ok(&inner).await;
             *lock(&inner.endpoint) = Some(endpoint.clone());
         }
-        // A redial asked for meanwhile starts over now: the daemon may have just come up
-        // where this dial found nothing (the Mac app's own helper starting at launch).
-        let attempt = tokio::select! {
-            result = connect_once(&inner, &endpoint) => Some(result),
-            () = inner.reconnect.notified() => None,
+        let dial_deadline = DIAL_DEADLINES[consecutive_timeouts.min(DIAL_DEADLINES.len() - 1)];
+        let result = match dial_within(&inner, &endpoint, dial_deadline).await {
+            DialOutcome::Finished(result) => result,
+            DialOutcome::Interrupted => continue,
+            DialOutcome::TimedOut => {
+                consecutive_timeouts += 1;
+                inner.emit(ClientEvent::Disconnected {
+                    reason: format!("no answer within {} s", dial_deadline.as_secs()),
+                });
+                endpoint.network_change().await;
+                backoff = MIN_BACKOFF;
+                continue;
+            }
         };
-        let Some(result) = attempt else {
-            continue;
-        };
+        consecutive_timeouts = 0;
         match result {
             Ok(live) => {
                 let connected_at = tokio::time::Instant::now();
@@ -294,7 +358,7 @@ pub(crate) async fn supervise(inner: Arc<Inner>) {
                     continue;
                 }
                 if connected_at.elapsed() >= STABLE_FOR {
-                    backoff = Duration::from_millis(100);
+                    backoff = MIN_BACKOFF;
                     continue;
                 }
             }
@@ -314,6 +378,24 @@ pub(crate) async fn supervise(inner: Arc<Inner>) {
         let _ = tokio::time::timeout(backoff, inner.reconnect.notified()).await;
         backoff = (backoff * 2).min(MAX_BACKOFF);
     }
+}
+
+async fn dial_within(
+    inner: &Arc<Inner>,
+    endpoint: &Endpoint,
+    dial_deadline: Duration,
+) -> DialOutcome {
+    inner.is_dialing.store(true, Ordering::SeqCst);
+    // A redial asked for meanwhile starts over now: the daemon may have just come up where
+    // this dial found nothing (the Mac app's own helper starting at launch).
+    let outcome = tokio::select! {
+        result = tokio::time::timeout(dial_deadline, connect_once(inner, endpoint)) => {
+            result.map_or(DialOutcome::TimedOut, DialOutcome::Finished)
+        }
+        () = inner.reconnect.notified() => DialOutcome::Interrupted,
+    };
+    inner.is_dialing.store(false, Ordering::SeqCst);
+    outcome
 }
 
 struct Live {
@@ -650,6 +732,8 @@ async fn run(inner: &Arc<Inner>, live: Live) -> String {
         ctl_out.clone(),
     ));
 
+    let direct_address_watch =
+        tokio::spawn(remember_direct_addresses(Arc::clone(inner), conn.clone()));
     let mut outgoing = inner.outgoing_rx.lock().await;
     let reason = loop {
         tokio::select! {
@@ -686,6 +770,7 @@ async fn run(inner: &Arc<Inner>, live: Live) -> String {
         }
     };
     tasks.abort_all();
+    direct_address_watch.abort();
     conn.close(0u32.into(), b"");
     reason
 }
@@ -776,7 +861,7 @@ async fn write_ctl(
 
 /// Pings the daemon on `conn` and closes `conn` if the answer does not come back in time
 /// (see [`Client::probe`](crate::Client::probe)).
-pub(crate) async fn probe(inner: Arc<Inner>, conn: Connection) {
+pub(crate) async fn probe(inner: Arc<Inner>, conn: Connection, deadlines: ProbeDeadlines) {
     let nonce = inner.next_ping.fetch_add(1, Ordering::Relaxed) + 1;
     let mut pongs = inner.pong.subscribe();
     let received = |conn: &Connection| conn.stats().udp_rx.datagrams;
@@ -784,11 +869,10 @@ pub(crate) async fn probe(inner: Arc<Inner>, conn: Connection) {
     inner.send(ClientCtl::Ping { nonce });
     let mut answered =
         std::pin::pin!(async move { pongs.wait_for(|&last| last >= nonce).await.is_ok() });
-    let alive = match tokio::time::timeout(PROBE_DEADLINE, &mut answered).await {
+    let alive = match tokio::time::timeout(deadlines.silent_link, &mut answered).await {
         Ok(alive) => alive,
-        // Packets arrived meanwhile: the link is slow, not gone.
         Err(_) if received(&conn) > before => {
-            tokio::time::timeout(PROBE_SLOW_DEADLINE - PROBE_DEADLINE, answered)
+            tokio::time::timeout(deadlines.busy_link - deadlines.silent_link, answered)
                 .await
                 .unwrap_or(false)
         }

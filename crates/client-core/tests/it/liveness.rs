@@ -14,7 +14,7 @@ use tokio::sync::oneshot;
 /// A daemon stand-in on its own single-threaded runtime: it welcomes a client and answers its
 /// pings after `pong_delay`. Sending on the returned channel freezes the whole runtime (its QUIC
 /// stack included), as a stopped or hung host would be.
-fn host(pong_delay: Duration) -> (Ticket, oneshot::Sender<()>) {
+pub(super) fn host(pong_delay: Duration) -> (Ticket, oneshot::Sender<()>) {
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
     let (freeze_tx, freeze_rx) = oneshot::channel::<()>();
     std::thread::spawn(move || {

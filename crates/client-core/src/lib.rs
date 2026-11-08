@@ -476,6 +476,10 @@ pub(crate) struct Inner {
     pub connection: Mutex<Option<Connection>>,
     pub endpoint: Mutex<Option<iroh::Endpoint>>,
     pub reconnect: Notify,
+    pub skips_backoff: AtomicBool,
+    pub is_dialing: AtomicBool,
+    /// iroh forgets learned paths a minute after the last connection.
+    pub last_direct_addresses: Mutex<Vec<std::net::SocketAddr>>,
     pub paused: Mutex<bool>,
     /// Bumped on each resume from [`Client::suspend`]: forward listeners bind again.
     pub resumed: watch::Sender<u64>,
@@ -712,6 +716,9 @@ impl Client {
             connection: Mutex::new(None),
             endpoint: Mutex::new(None),
             reconnect: Notify::new(),
+            skips_backoff: AtomicBool::new(false),
+            is_dialing: AtomicBool::new(false),
+            last_direct_addresses: Mutex::new(Vec::new()),
             paused: Mutex::new(false),
             resumed: watch::Sender::new(0),
             epoch: Mutex::new(None),
@@ -1097,31 +1104,71 @@ impl Client {
         self.inner.reconnect.notify_one();
     }
 
-    /// Drops the connection and redials immediately (network change, app foregrounded).
+    /// Drops the connection and redials immediately.
     pub fn reconnect(&self) {
-        if std::mem::replace(&mut *lock(&self.inner.paused), false) {
-            self.inner.resumed.send_modify(|resumes| *resumes += 1);
-        }
+        self.unpause();
         if let Some(connection) = lock(&self.inner.connection).take() {
             connection.close(0u32.into(), b"reconnect");
         }
+        self.refresh_network();
+        self.inner.skips_backoff.store(true, Ordering::SeqCst);
         self.inner.reconnect.notify_one();
+    }
+
+    /// Back in the foreground: probes a live link, otherwise redials at once.
+    pub fn resume_now(&self) {
+        self.unpause();
+        self.refresh_network();
+        match self.live_connection() {
+            Some(connection) => {
+                let inner = Arc::clone(&self.inner);
+                self.handle.spawn(conn::probe(
+                    inner,
+                    connection,
+                    conn::ProbeDeadlines::FOREGROUND,
+                ));
+            }
+            None => self.redial_unless_dialing(),
+        }
     }
 
     /// The device's network changed. A live connection is kept: iroh moves it onto a path that
     /// works (a new direct address, or the relay), so streams on it (forwarded websockets)
-    /// survive. Without one the client redials now; a suspended client stays suspended.
+    /// survive. Without one the client redials, unless a dial is in flight; a suspended client
+    /// stays suspended.
     pub fn network_changed(&self) {
         if *lock(&self.inner.paused) {
             return;
         }
-        let live = lock(&self.inner.connection)
-            .as_ref()
-            .is_some_and(|connection| connection.close_reason().is_none());
-        if !live {
-            self.inner.reconnect.notify_one();
-            return;
+        self.refresh_network();
+        if self.live_connection().is_none() {
+            self.redial_unless_dialing();
         }
+    }
+
+    fn live_connection(&self) -> Option<Connection> {
+        lock(&self.inner.connection)
+            .clone()
+            .filter(|connection| connection.close_reason().is_none())
+    }
+
+    fn unpause(&self) {
+        if std::mem::replace(&mut *lock(&self.inner.paused), false) {
+            self.inner.resumed.send_modify(|resumes| *resumes += 1);
+        }
+    }
+
+    // A dial in flight carries on over the refreshed endpoint: restarting it throws away a
+    // handshake that may be about to finish.
+    fn redial_unless_dialing(&self) {
+        self.inner.skips_backoff.store(true, Ordering::SeqCst);
+        if !self.inner.is_dialing.load(Ordering::SeqCst) {
+            self.inner.reconnect.notify_one();
+        }
+    }
+
+    // Otherwise a relay connection that died in the background is noticed only at its next ping.
+    fn refresh_network(&self) {
         if let Some(endpoint) = lock(&self.inner.endpoint).clone() {
             self.handle
                 .spawn(async move { endpoint.network_change().await });
@@ -1139,7 +1186,8 @@ impl Client {
             return;
         };
         let inner = Arc::clone(&self.inner);
-        self.handle.spawn(conn::probe(inner, connection));
+        self.handle
+            .spawn(conn::probe(inner, connection, conn::ProbeDeadlines::TYPING));
     }
 
     /// Drops the connection and stays offline until [`reconnect`](Self::reconnect), keeping

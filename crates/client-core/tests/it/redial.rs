@@ -14,7 +14,7 @@ use iroh::endpoint::presets;
 /// A daemon stand-in that welcomes every client, waits for its input stream (so the client
 /// counts the connection as up) and closes the connection. Returns the endpoint, a ticket
 /// for it and the number of connections admitted so far.
-async fn flaky_daemon() -> (iroh::Endpoint, Ticket, Arc<AtomicUsize>) {
+pub(super) async fn flaky_daemon() -> (iroh::Endpoint, Ticket, Arc<AtomicUsize>) {
     let endpoint = iroh::Endpoint::builder(presets::Minimal)
         .alpns(vec![proto::ALPN.to_vec()])
         .clear_ip_transports()

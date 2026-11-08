@@ -63,6 +63,7 @@ camino = "1"
 # datapath because iOS/macOS are the targets.
 anyhow = "1.0.104"
 iroh = { version = "1.3.0", default-features = false, features = ["tls-ring", "fast-apple-datapath"] }
+n0-future = "0.3"
 tokio = { version = "1.53.3", default-features = false, features = ["rt-multi-thread", "macros", "sync", "time"] }
 
 # SSH (crates/ssh, D7): russh on ring, the crypto provider iroh already uses (no aws-lc). RSA for

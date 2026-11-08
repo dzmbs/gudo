@@ -789,6 +789,7 @@ dependencies = [
  "ghostty-vt",
  "grants",
  "iroh",
+ "n0-future",
  "proto",
  "push",
  "rustls-pki-types",
