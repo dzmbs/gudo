@@ -13,8 +13,7 @@ import AppKit
 ///   callback forwarded to the host.
 /// - A dev server's URL opens in the in-app browser, through a forward when the pane is on a
 ///   remote host, so it shows what the host serves.
-/// - A path opens in the editor at its `:line:col`, or in the Mac's default app (anything that
-///   would run is shown in the Finder instead).
+/// - A path opens in the file viewer, VS Code or the Mac's default app (`FileLinks`).
 /// - Any other URL: the default browser; on iPad and iPhone, Safari or the in-app browser as the
 ///   user chose.
 ///
@@ -28,6 +27,12 @@ enum PaneLinks {
             guard let workspace, let pane else { return }
             open(link, from: pane, in: workspace)
         }
+        #if os(iOS)
+        pane.view.linkActions = { [weak workspace, weak pane] link in
+            guard link.kind == .path, let workspace, let pane else { return nil }
+            return linkMenu(link, from: pane, in: workspace)
+        }
+        #endif
         pane.view.onHoverLink = { [weak workspace] link in
             guard let workspace else { return }
             let text = link.map { $0.kind == .path ? $0.text : $0.target }
@@ -41,10 +46,12 @@ enum PaneLinks {
         guard let window = ActiveWindow.model(for: workspace) else { return }
         switch link.kind {
         case .path:
-            let directory = pane.workingDirectory.isEmpty ? pane.foreground()?.directory : pane.workingDirectory
-            let path = link.resolvedPath(relativeTo: directory)
-            window.open(DetectedLink(
-                kind: .path, text: link.text, line: 0, target: path, targetLine: link.line, targetColumn: link.column))
+            #if os(macOS)
+            let optionHeld = NSEvent.modifierFlags.contains(.option)
+            #else
+            let optionHeld = false
+            #endif
+            FileLinks.open(link, from: pane, in: workspace, window: window, optionHeld: optionHeld)
         case .url:
             guard let url = URL(string: link.target) else { return }
             #if os(macOS)
@@ -118,6 +125,20 @@ enum PaneLinks {
     }
 
     #if os(iOS)
+    private static func linkMenu(_ link: TerminalLink, from pane: Pane, in workspace: Workspace) -> UIMenu? {
+        guard let window = ActiveWindow.model(for: workspace) else { return nil }
+        let block = PaneCommandMarks.of(pane.id)?.block(atViewportRow: link.row)
+        let directory = block?.mark.cwd ?? (pane.workingDirectory.isEmpty ? pane.foreground()?.directory : pane.workingDirectory)
+        let target = FileTarget(
+            hostId: workspace.isRemote ? workspace.hostId : nil, path: link.resolvedPath(relativeTo: directory),
+            line: link.line, column: link.column)
+        let open = { FileLinks.open(link, from: pane, in: workspace, window: window, optionHeld: false) }
+        let actions = FileLinks.actions(for: target, window: window, open: open).map { action in
+            UIAction(title: action.title, image: UIImage(systemName: action.systemImage)) { _ in action.run() }
+        }
+        return UIMenu(title: target.name, options: .displayInline, children: actions)
+    }
+
     /// Asks on the first web link where links go from now on.
     private static func ask(_ url: URL, window: WindowModel, from pane: Pane) {
         let sheet = UIAlertController(

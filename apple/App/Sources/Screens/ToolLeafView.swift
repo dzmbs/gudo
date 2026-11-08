@@ -285,6 +285,8 @@ struct ToolContent: View {
             SessionReplaysSheet(request: model.replayRequest)
                 // Asked again for other sessions: start over on them.
                 .id(model.replayRequest)
+        case .viewer:
+            if let target = model.fileViewerTarget { FileViewerScreen(target: target) }
         }
     }
 }
@@ -299,22 +301,30 @@ struct ToolLeafView: View {
     @Environment(\.terminalTheme) private var theme
 
     var body: some View {
-        ToolContent(tool: member.tool)
-            .environment(\.isToolWindow, true)
-            .environment(\.toolLeaf, ToolLeafContext(
-                member: member, isSplit: isSplit, isFocused: isFocused, focus: focus,
-                close: { model.closeTool(member.id) },
-                openInWindow: model.hasToolWindows ? { model.moveToolToWindow(member) } : nil))
-            .background(theme.background)
-            .simultaneousGesture(TapGesture().onEnded { if !isFocused { focus() } })
-            .overlay(alignment: .topLeading) {
-                // A marker: an identifier on the container would replace its controls' own.
-                Color.clear.frame(width: 1, height: 1)
-                    .accessibilityElement()
-                    .accessibilityLabel(member.tool.title)
-                    .accessibilityIdentifier("tool-leaf-\(member.tool.rawValue)")
+        Group {
+            if member.tool == .viewer, let path = member.path {
+                FileViewerScreen(target: FileTarget(
+                    hostId: member.hostId == HostGroups.localId ? nil : member.hostId, path: path, line: member.line,
+                    column: member.column))
+            } else {
+                ToolContent(tool: member.tool)
             }
-            // One leaf's screens are never another's.
-            .id(member.id)
+        }
+        .environment(\.isToolWindow, true)
+        .environment(\.toolLeaf, ToolLeafContext(
+            member: member, isSplit: isSplit, isFocused: isFocused, focus: focus,
+            close: { model.closeTool(member.id) },
+            openInWindow: model.hasToolWindows && member.tool != .viewer ? { model.moveToolToWindow(member) } : nil))
+        .background(theme.background)
+        .simultaneousGesture(TapGesture().onEnded { if !isFocused { focus() } })
+        .overlay(alignment: .topLeading) {
+            // A marker: an identifier on the container would replace its controls' own.
+            Color.clear.frame(width: 1, height: 1)
+                .accessibilityElement()
+                .accessibilityLabel(member.tool.title)
+                .accessibilityIdentifier("tool-leaf-\(member.tool.rawValue)")
+        }
+        // One leaf's screens are never another's.
+        .id(member.id)
     }
 }

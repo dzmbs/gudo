@@ -165,6 +165,7 @@ struct SettingsView: View {
             CursorSection().chromeRows()
             SplitsSection().chromeRows()
             LinksSettingsSection().chromeRows()
+            FileLinksSettingsSection().chromeRows()
             BrowserSettingsSection().chromeRows()
             ReplaySettingsSection().chromeRows()
             KeyboardSection().chromeRows()
@@ -204,7 +205,7 @@ struct SettingsView: View {
     @ViewBuilder private func detail(_ pane: SettingsPane) -> some View {
         switch pane {
         case .appearance: AppearanceSection(); TabsSettingsSection()
-        case .terminal: FontSection(); CursorSection(); SplitsSection(); LinksSettingsSection()
+        case .terminal: FontSection(); CursorSection(); SplitsSection(); LinksSettingsSection(); FileLinksSettingsSection()
         case .keyboard: KeyboardSection(); VoiceSettingsSection()
         case .browser: BrowserSettingsSection(); ReplaySettingsSection()
         case .notifications: NotificationsSection()

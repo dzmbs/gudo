@@ -266,6 +266,12 @@ final class PaneCommandMarks: NSObject {
         }
     }
 
+    func block(atViewportRow row: Int) -> CommandBlock? {
+        guard let top = pane?.view.surface.terminal.viewportTopRow else { return nil }
+        let screenRow = top + row
+        return screenRows().last { $0.first <= screenRow && screenRow <= $0.last }?.entry.block
+    }
+
     private func block(at point: CGPoint) -> CommandBlock? {
         guard let id = surface?.gutterMark(at: point)?.id else { return nil }
         return entries.first { $0.block.id == id }?.block

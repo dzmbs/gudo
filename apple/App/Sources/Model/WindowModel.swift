@@ -50,6 +50,7 @@ enum SheetRoute: String, Identifiable {
     case pairing, pairDevice, launchAgent, invite, sharing, join, links, diff, files, browser, editor, settings, shortcuts, replays
     /// Every tab, project and agent on a page of its own (compact width).
     case tabs
+    case fileViewer
     var id: String { rawValue }
 }
 
@@ -89,6 +90,10 @@ final class WindowModel {
     var isHostSwitcherShown = false
     /// What the Replays sheet shows.
     var replayRequest = ReplayRequest.all
+    /// The file the viewer sheet shows (iPhone, compact iPad).
+    var fileViewerTarget: FileTarget?
+    /// Where the next Files sheet starts, once.
+    var filesStartFolder: String?
     /// What the next New Agent sheet starts with, once: a prompt (Ask Agent about a command with
     /// no agent open), the host and repository whose + opened it.
     @ObservationIgnored var newAgentSeed = NewAgentSeed()

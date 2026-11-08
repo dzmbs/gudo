@@ -20,6 +20,7 @@ extension SheetRoute {
         case .diff: "Changes"
         case .browser: "Ports"
         case .replays: "Session Replays"
+        case .fileViewer: "File"
         default: ""
         }
     }

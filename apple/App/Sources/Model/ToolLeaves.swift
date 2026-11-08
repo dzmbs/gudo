@@ -28,6 +28,7 @@ extension ToolMember.Tool {
         case .changes: .diff
         case .ports: .browser
         case .replays: .replays
+        case .viewer: .fileViewer
         }
     }
 
@@ -43,6 +44,7 @@ extension ToolMember.Tool {
         case .changes: "plusminus"
         case .ports: "globe"
         case .replays: "play.rectangle.on.rectangle"
+        case .viewer: "doc.text"
         }
     }
 }
@@ -73,13 +75,16 @@ extension WindowModel {
     /// Shows a tool beside the focused pane: the leaf already showing it in this tab when there
     /// is one, else a new leaf to its right (a tab of its own when no tab is on screen).
     @discardableResult
-    func openToolLeaf(_ tool: ToolMember.Tool) -> ToolMember {
+    func openToolLeaf(_ tool: ToolMember.Tool, configure: (inout ToolMember) -> Void = { _ in }) -> ToolMember {
         destination = .terminal
-        if let mixed = activeMixed, let leaf = mixed.leaf(showing: tool), let member = mixed.tools[leaf] {
+        if let mixed = activeMixed, let leaf = mixed.leaf(showing: tool), var member = mixed.tools[leaf] {
+            configure(&member)
+            composites.update(tool: member)
             focusLeaf(leaf, inMixedTab: mixed.id)
             return member
         }
-        let member = ToolMember(hostId: currentGroupId, tool: tool)
+        var member = ToolMember(hostId: currentGroupId, tool: tool)
+        configure(&member)
         AppModel.log.info("\(tool.rawValue, privacy: .public) opens in a leaf")
         if let mixed = activeMixed {
             composites.addTool(member, to: mixed.id)

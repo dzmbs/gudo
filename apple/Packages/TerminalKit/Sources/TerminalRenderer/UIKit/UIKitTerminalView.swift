@@ -62,6 +62,8 @@ public final class TerminalView: UIView {
     /// shell command's Copy Output, Re-run… The menu shows after a long-press, a selection, or
     /// a secondary click; return nil for nothing.
     public var contextActions: ((CGPoint) -> UIMenu?)?
+    /// Actions for the link under a long-press, first in the edit menu.
+    public var linkActions: ((TerminalLink) -> UIMenu?)?
 
     private let repeater = KeyRepeater()
     private var repeatingKey: UIKeyboardHIDUsage?
@@ -1188,6 +1190,9 @@ extension TerminalView: @MainActor UIEditMenuInteractionDelegate {
                 self?.copy(nil)
                 self?.clearSelection()
             })
+        }
+        if let point = menuPoint, let link = surface.link(at: point), let menu = linkActions?(link) {
+            actions.insert(menu, at: 0)
         }
         // What the rows under the press (or the selection's start) belong to.
         if let point = menuPoint ?? selection?.start.map({ CGPoint(x: $0.midX, y: $0.midY) }),

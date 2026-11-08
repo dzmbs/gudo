@@ -51,6 +51,12 @@ struct FilesBrowserView: View {
                     .id(root)
             }
         }
+        .onAppear {
+            if let folder = model.filesStartFolder {
+                start = folder
+                model.filesStartFolder = nil
+            }
+        }
         .navigationDestination(for: DirectoryRoute.self) { route in
             DirectoryListing(source: source, directory: route.path, actions: actions)
         }
