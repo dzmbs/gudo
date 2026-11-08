@@ -49,7 +49,7 @@ final class EditorPane: Identifiable {
     var isWebViewShown = false
     /// The snapshot stands in until the workbench is back.
     private(set) var isSuspended = false
-    /// JPEG, shown while a suspended editor reloads.
+    /// JPEG, shown while the workbench loads.
     private(set) var snapshot: Data?
     var phaseStarted = Date.now
     var installedThisRun = false
@@ -69,9 +69,13 @@ final class EditorPane: Identifiable {
 
     static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app", category: "editor")
 
-    init(member: EditorMember, source: any EditorSource) {
+    @ObservationIgnored private let snapshots: EditorSnapshots
+
+    init(member: EditorMember, source: any EditorSource, snapshots: EditorSnapshots = .shared) {
         self.member = member
         self.source = source
+        self.snapshots = snapshots
+        snapshot = snapshots.load(for: member)
         source.onServerLost { [weak self] reason in self?.recover(reason) }
     }
 
@@ -180,7 +184,7 @@ final class EditorPane: Identifiable {
     func suspend() async {
         guard let browser, !isOnScreen, isWorkbenchVisible else { return }
         resumeURL = browser.webView.url ?? loadedURL
-        if snapshot == nil { snapshot = await Self.snapshot(of: browser.webView) }
+        if snapshot == nil, let picture = await Self.snapshot(of: browser.webView) { await keep(picture) }
         guard !isOnScreen, self.browser === browser else { return }
         snapshotTask?.cancel()
         unwatchTouches()
@@ -237,10 +241,26 @@ final class EditorPane: Identifiable {
                 guard let self, let webView = self.webView else { return }
                 if self.isOnScreen, self.isWorkbenchVisible, webView.window != nil,
                    let picture = await Self.snapshot(of: webView) {
-                    self.snapshot = picture
+                    await self.keep(picture)
                 }
                 try? await Task.sleep(for: .seconds(60))
             }
+        }
+    }
+
+    private func keep(_ picture: Data) async {
+        snapshot = picture
+        await snapshots.save(picture, for: member)
+    }
+
+    /// The words over the last picture while the workbench loads; nil shows the progress instead.
+    var lastPictureCaption: String? {
+        guard !isWorkbenchVisible else { return nil }
+        if isSuspended { return "Resuming VS Code" }
+        guard snapshot != nil else { return nil }
+        switch source.phase {
+        case .checking, .starting, .loading: return "Opening VS Code"
+        default: return nil
         }
     }
 
@@ -325,6 +345,7 @@ private final class TouchRelay: NSObject, UIGestureRecognizerDelegate {
 final class EditorPanes {
     @ObservationIgnored private(set) var panes: [UUID: EditorPane] = [:]
     private let makeSource: (EditorMember) -> any EditorSource
+    private let snapshots: EditorSnapshots
     /// Off-screen time before the web view is released; `-editorSuspendAfter <seconds>` for tests.
     var suspendAfter: Duration
     private var sweeper: Task<Void, Never>?
@@ -334,14 +355,18 @@ final class EditorPanes {
         return seconds > 0 ? .seconds(seconds) : .seconds(600)
     }
 
-    init(suspendAfter: Duration = EditorPanes.defaultSuspendAfter, makeSource: @escaping (EditorMember) -> any EditorSource) {
+    init(
+        suspendAfter: Duration = EditorPanes.defaultSuspendAfter, snapshots: EditorSnapshots = .shared,
+        makeSource: @escaping (EditorMember) -> any EditorSource
+    ) {
         self.suspendAfter = suspendAfter
+        self.snapshots = snapshots
         self.makeSource = makeSource
     }
 
     func pane(for member: EditorMember) -> EditorPane {
         if let pane = panes[member.id] { return pane }
-        let pane = EditorPane(member: member, source: makeSource(member))
+        let pane = EditorPane(member: member, source: makeSource(member), snapshots: snapshots)
         panes[member.id] = pane
         startSweeping()
         return pane
@@ -449,7 +474,7 @@ extension WindowModel {
             directory = context.directory ?? "~"
         }
         var folder = directory
-        if let status = try? await context.api().gitStatus(path: directory) { folder = status.root }
+        if let root = await (try? context.api())?.repositoryRoot(of: directory) { folder = root }
         return EditorMember(hostId: context.hostId, folder: folder)
     }
 

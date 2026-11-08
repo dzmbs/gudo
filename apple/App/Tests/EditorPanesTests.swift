@@ -120,6 +120,29 @@ final class EditorPanesTests: XCTestCase {
         XCTAssertNil(tunnel.webView.configuration.websiteDataStore.identifier, "vscode.dev uses the shared store")
     }
 
+    func testAFolderSeenBeforeOpensOnItsLastPicture() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "editor-snapshots-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let snapshots = EditorSnapshots(directory: directory)
+        await snapshots.save(Data([0xff, 0xd8]), for: EditorMember(hostId: "h1", folder: "/home/me/proj"))
+
+        let source = FakeSource()
+        let editors = EditorPanes(suspendAfter: .seconds(600), snapshots: snapshots) { _ in source }
+        defer { editors.stop() }
+        let reopened = editors.pane(for: proj)
+        XCTAssertEqual(reopened.snapshot, Data([0xff, 0xd8]), "another leaf, the same host and folder")
+        XCTAssertNil(reopened.lastPictureCaption, "idle: nothing is opening yet")
+        source.phase = .starting
+        XCTAssertEqual(reopened.lastPictureCaption, "Opening VS Code")
+        source.phase = .failed("gone")
+        XCTAssertNil(reopened.lastPictureCaption, "a failure says why instead")
+        source.phase = .starting
+        reopened.isWorkbenchVisible = true
+        XCTAssertNil(reopened.lastPictureCaption)
+
+        XCTAssertNil(editors.pane(for: site).snapshot, "a folder never shown has no picture")
+    }
+
     func testTheDefaultIsTenMinutes() {
         XCTAssertEqual(EditorPanes.defaultSuspendAfter, .seconds(600))
     }

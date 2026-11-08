@@ -55,8 +55,8 @@ struct EditorPaneView: View {
                     .accessibilityValue(pane.isWebViewShown ? "showing" : "empty")
                 }
                 if !pane.isWorkbenchVisible {
-                    if pane.isSuspended {
-                        resuming
+                    if let caption = pane.lastPictureCaption {
+                        lastPicture(caption)
                     } else {
                         EditorProgress(
                             phase: source.phase, mode: source.mode, folder: source.folder, hostName: source.hostName,
@@ -153,8 +153,8 @@ struct EditorPaneView: View {
         }, set: { _ in })
     }
 
-    /// A suspended editor coming back: its last snapshot until the workbench loads.
-    @ViewBuilder private var resuming: some View {
+    /// The editor's last picture until the workbench loads.
+    private func lastPicture(_ caption: String) -> some View {
         ZStack {
             theme.background
             if let data = pane.snapshot, let image = Self.image(data) {
@@ -168,7 +168,7 @@ struct EditorPaneView: View {
             HStack(spacing: DS.Space.s) {
                 Spinner(color: DS.Palette.accent, lineWidth: 2)
                     .frame(width: 14, height: 14)
-                Text("Resuming VS Code")
+                Text(caption)
                     .font(DS.Font.rowSubtitle)
                     .foregroundStyle(DS.Palette.text)
             }

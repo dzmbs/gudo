@@ -804,7 +804,8 @@ load). `HostGroups.mixedTabs` lists VS Code tabs first, then mixed tabs, so ⌘N
 sidebar.
 
 **Opening.** Open in VS Code (palette, Open In menu, Files, Links, a path ⌘-clicked in a pane) resolves
-the focused pane's host and directory, takes its worktree root (`gitStatus.root`), and:
+the focused pane's host and directory, takes its worktree root (`repoRoot`, a file-system lookup on
+helpers offering `MoreDaemonFeatures::REPO_ROOT`, else `gitStatus.root`), and:
 - for a path, an editor already open on that host whose folder holds it (the focused one first)
   comes forward and opens the file at the line;
 - else a new editor, every time (several on one folder are several windows on its one server, sharing
@@ -829,6 +830,10 @@ keeps running on the host, as before; More ▸ Stop Editor ends it).
 its web view and web content process are released; a JPEG snapshot (taken every minute while on
 screen, at most 900 pt wide) stands in under "Resuming VS Code" when it is shown again, and the
 page it was on reloads (VS Code restores open files and unsaved changes from its own storage).
+The snapshot is also kept on disk per host and folder (`EditorSnapshots`, in Caches): an editor on a
+folder seen before opens on its last picture under "Opening VS Code" while the server starts and the
+workbench loads, instead of the progress steps (failures, the licence sheet and first-run installs
+still show those). `editorStatus` only labels the first-run install and runs beside `openEditor`.
 
 **Staying connected.** The workbench's websockets run through the local forward over the host's
 one QUIC connection; VS Code reconnects by itself as long as the forward answers and the server
