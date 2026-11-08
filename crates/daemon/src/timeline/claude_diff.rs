@@ -17,6 +17,9 @@ pub(super) fn result_diff(result: &RichResult) -> Vec<FileDiff> {
     let Some(path) = &result.file_path else {
         return Vec::new();
     };
+    if matches!(result.kind, ResultKind::Other) {
+        return Vec::new();
+    }
     let created = matches!(result.kind, ResultKind::Create);
     if result.structured_patch.is_none() && !created {
         return Vec::new();
@@ -124,6 +127,28 @@ impl Preview {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unknown_recorded_change_kinds_do_not_become_modified_previews() {
+        let mut value = serde_json::json!({
+            "type": "future-change", "filePath": "/fixture/file",
+            "structuredPatch": [{"oldStart": 0, "oldLines": 0, "newStart": 1, "newLines": 1, "lines": ["+new"]}]
+        });
+        for kind in ["future-change", "missing"] {
+            value["type"] = serde_json::json!(kind);
+            let result: RichResult = serde_json::from_value(value.clone()).unwrap();
+            assert!(
+                result_diff(&result).is_empty(),
+                "unknown kind {kind} became a known modification"
+            );
+        }
+        value.as_object_mut().unwrap().remove("type");
+        let legacy: RichResult = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(result_diff(&legacy)[0].change, FileChange::Modified);
+        value["type"] = serde_json::json!("create");
+        let created: RichResult = serde_json::from_value(value).unwrap();
+        assert_eq!(result_diff(&created)[0].change, FileChange::Added);
+    }
 
     #[test]
     fn literal_missing_newline_markers_are_not_context_lines() {

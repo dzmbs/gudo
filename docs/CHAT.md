@@ -244,7 +244,9 @@ Blocking I/O and parsing run on the blocking executor. Reusable tool IDs merge c
 on disk until requested. Inline output is a terminal-control-free tail of at most 4 KiB,
 and inline diff previews retain at most six lines. Each preview line retains at most 512
 Unicode scalar values; either line-count or line-text truncation marks the hunks incomplete,
-including created-file previews.
+including created-file previews. Unknown recorded change kinds do not become familiar Modified
+previews; literal tool text/output and Terminal remain available. The historical edit shape with no
+change-kind field remains distinct from an explicit unknown kind.
 
 The fixture in `crates/daemon/tests/fixtures/timeline/` is emitted by the installed Claude
 Code CLI against a loopback-only mock API with an isolated home and placeholder key. Its
@@ -264,8 +266,8 @@ semantics reject the whole selection with a Terminal fallback. Hunk coordinates,
 markers and omission flags survive conversion. The native Chat diff sheet uses this snapshot
 without a `DiffSource`, repository identity, note callback or review submission path. Snapshot
 conversion and native geometry run off-main. Scaled header metrics preserve touch targets and
-summary room without changing repository-review defaults. The inline timeline still contains
-bounded previews, not a complete-diff fetch path.
+summary room without changing repository-review defaults. The inline timeline retains bounded
+previews; the separate feature-gated recorded-result endpoint loads selected tool changes.
 
 ## Output reader foundation
 
