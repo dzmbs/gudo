@@ -36,7 +36,7 @@ pub(crate) async fn request(
         )
     };
     let bracketed = entry.pane.line_snapshot().bracketed;
-    let mut receipt = {
+    let (mut receipt, audit) = {
         let mut gate = lock(&entry.pane.agent_input_gate);
         if !matches!(&gate.phase, AgentInputPhase::Open(_))
             || !core.agent_has_terminal(pane)
@@ -85,16 +85,21 @@ pub(crate) async fn request(
                 let bytes = format!("\x1b[200~{text}\x1b[201~\r").into_bytes();
                 gate.last_user_input_seq = crate::hook_seq();
                 gate.advance_revision();
-                if !matches!(&gate.phase, AgentInputPhase::Open(_))
-                    || entry.pane.pty().try_write(bytes).is_err()
-                {
+                let queued = matches!(&gate.phase, AgentInputPhase::Open(_))
+                    && entry.pane.pty().try_write(bytes).is_ok();
+                if !queued {
                     gate.draft.finish(Receipt::NotConfirmed);
                 }
-                receipt
+                let audit = queued.then(|| prompt_audit(conn.actor, pane, &text));
+                (receipt, audit)
             }
             _ => return Err(unavailable()),
         }
     };
+    // Disk I/O must not hold the input/exit mutex or delay a hook from publishing its receipt.
+    if let Some(audit) = audit {
+        core.mp.audit.append(proto::AuditKind::Prompt, audit);
+    }
     let _ = tokio::time::timeout(
         super::draft::CONFIRMATION_WAIT,
         receipt.wait_for(|value| *value != Receipt::Waiting),
@@ -109,6 +114,20 @@ pub(crate) async fn request(
         Receipt::Waiting | Receipt::Expired | Receipt::NotConfirmed => ChatSendStatus::NotConfirmed,
     };
     Ok(status)
+}
+
+fn prompt_audit(actor: proto::Actor, pane: proto::PaneId, text: &str) -> crate::mp::AuditEntry {
+    let digest = grants::sha256(&[text.as_bytes()]);
+    crate::mp::AuditEntry {
+        actor: Some(actor),
+        pane_id: Some(pane),
+        detail: format!(
+            "chat prompt of {} chars, sha256 {}",
+            text.chars().count(),
+            crate::fsutil::hex(&digest[..8])
+        ),
+        ..crate::mp::AuditEntry::default()
+    }
 }
 
 fn unavailable() -> WsError {

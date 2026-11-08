@@ -159,6 +159,23 @@ async fn private_dev_daemon_sends_once_and_requires_hook_and_current_draft_confi
         ChatSendStatus::NotConfirmed
     );
     assert_eq!(std::fs::read(&captured).unwrap(), expected);
+    let audit = daemon.core.mp.audit.query(proto::AuditQuery {
+        after: None,
+        limit: 1_000,
+    });
+    let prompts: Vec<_> = audit
+        .records
+        .iter()
+        .filter(|record| record.kind == proto::AuditKind::Prompt)
+        .collect();
+    assert_eq!(
+        prompts.len(),
+        1,
+        "native send must be audited once, never for replay"
+    );
+    assert_eq!(prompts[0].pane_id, Some(pane));
+    assert!(prompts[0].actor.is_some());
+    assert!(!prompts[0].detail.contains("hello"));
 
     entry.pane.write(b"draft\x1b".to_vec()).await.unwrap();
     let ChatSendStatus::Prepared {
