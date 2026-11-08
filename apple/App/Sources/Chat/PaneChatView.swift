@@ -94,7 +94,9 @@ struct PaneChatView<Terminal: View>: View {
                     .font(DS.Font.caption).frame(minHeight: DS.Size.touchTarget)
                 Button("Send", systemImage: "arrow.up", action: send)
                     .labelStyle(.iconOnly).frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
-                    .disabled(!permitsSending || !state.composer.canSend(state.draft)).accessibilityIdentifier("chat-send")
+                    .keyboardShortcut(.return, modifiers: .command)
+                .disabled(state.presentation != .chat || !permitsSending || !state.composer.canSend(state.draft))
+                .accessibilityIdentifier("chat-send")
             }
         }
         .padding(DS.Space.l).foregroundStyle(DS.Palette.text).background(DS.Palette.sidebar)
@@ -104,8 +106,8 @@ struct PaneChatView<Terminal: View>: View {
         state.agent == .codex ? "Codex on the Mac has unsent text." : "Claude Code on the Mac has unsent text."
     }
 
-    private func send() {
-        guard permitsSending, pane.view.markedTextRange == nil,
+    func send() {
+        guard state.presentation == .chat, permitsSending, pane.view.markedTextRange == nil,
               state.controller?.prepareToPark() != false else { return }
         Task {
             await state.composer.begin(state.draft) { command in

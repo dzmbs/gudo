@@ -14,6 +14,7 @@ final class PaneChatViewTests: XCTestCase {
         let state: PaneChatState
         let backend: PanePresentationTests.Backend
         let events: WorkspaceEventHub
+        let hub: DaemonWorkspace
         let client: TimelineFixtureClient
         let window: UIWindow
     }
@@ -76,6 +77,34 @@ final class PaneChatViewTests: XCTestCase {
         XCTAssertEqual(fixture.state.presentation, .chat)
         XCTAssertTrue(editor.isFirstResponder)
         XCTAssertNotNil(editor.markedTextRange)
+    }
+
+    func testRetainedHiddenChatCannotBeginSendingFromAnActionOrHardwareShortcut() async throws {
+        let suite = "chat-send-hidden-test-" + UUID().uuidString
+        let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let fixture = try makeFixture(preferences: preferences)
+        defer {
+            fixture.state.deactivate()
+            fixture.window.isHidden = true
+            fixture.window.rootViewController = nil
+            preferences.removePersistentDomain(forName: suite)
+        }
+        try await wait { fixture.state.controller != nil && fixture.state.model?.frame.rows.count == 60 }
+        fixture.state.draft = "Never send from the parked Chat view"
+        XCTAssertTrue(fixture.state.show(.terminal, terminal: fixture.pane, persistence: .transient))
+        let owner = PaneChatView(pane: fixture.pane, state: fixture.state, hub: fixture.hub,
+                                 permitsSending: true) { _ in Color.clear }
+        owner.send()
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(fixture.state.composer.phase, .idle)
+        XCTAssertTrue(fixture.state.select(.chat, persistence: .transient) { true })
+        PaneChatView(pane: fixture.pane, state: fixture.state, hub: fixture.hub) { _ in Color.clear }.send()
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(fixture.state.composer.phase, .idle)
+        XCTAssertEqual(fixture.state.draft, "Never send from the parked Chat view")
+        owner.send()
+        try await wait { fixture.state.composer.phase == .finished }
+        XCTAssertTrue(fixture.backend.state.withLock { $0.input.isEmpty })
     }
 
     func testNativeComposerClearsOnlyConfirmedUneditedTextAndShowsUnconfirmedAndDirtyStates() async throws {
@@ -148,7 +177,7 @@ final class PaneChatViewTests: XCTestCase {
             }
         })
         window.isHidden = false
-        return Fixture(pane: pane, state: state, backend: backend, events: events, client: client, window: window)
+        return Fixture(pane: pane, state: state, backend: backend, events: events, hub: hub, client: client, window: window)
     }
 
     private func exercise(_ fixture: Fixture, name: String) async throws {
