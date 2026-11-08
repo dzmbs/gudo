@@ -1,7 +1,7 @@
 //! Build automation (`cargo xtask <command>`, alias in `.cargo/config.toml`).
 //!
-//! - `build-xcframework [--macos-only]`: the Rust core for the app. Builds `apple-ffi` for
-//!   iOS, the iOS simulator and macOS (arm64, release), generates the Swift bindings,
+//! - `build-xcframework [--macos-only] [--debug]`: the Rust core for the app. Builds `apple-ffi` for
+//!   iOS, the iOS simulator and macOS (arm64, release unless --debug), generates the Swift bindings,
 //!   hides every symbol but the UniFFI API (so the core's private copy of libghostty-vt and
 //!   Rust's std cannot clash with the app's), strips, and assembles
 //!   `apple/Packages/GudoCore/GudoCore.xcframework` plus the generated Swift source.
@@ -70,8 +70,9 @@ const MACOS: Slice = Slice {
 const USAGE: &str = "usage: cargo xtask <command>
 
 commands:
-  build-xcframework [--macos-only]   build apple/Packages/GudoCore (GudoCore.xcframework
-                                     + generated Swift); --macos-only skips the iOS slices
+  build-xcframework [--macos-only] [--debug]
+                                     build apple/Packages/GudoCore (GudoCore.xcframework
+                                     + generated Swift); --debug avoids Release builds
   build-hostd-linux                  stripped, gzipped static musl daemons (aarch64, x86_64)
                                      into apple/build/hostd/
   build-hostd-macos                  the Mac app's own daemon (arm64) into apple/build/hostd/macos/
@@ -81,12 +82,17 @@ fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("build-xcframework") => {
-            let macos_only = match &args[1..] {
-                [] => false,
-                [flag] if flag == "--macos-only" => true,
-                _ => bail!("{USAGE}"),
-            };
-            build_xcframework(macos_only)
+            let flags = &args[1..];
+            if flags
+                .iter()
+                .any(|flag| flag != "--macos-only" && flag != "--debug")
+            {
+                bail!("{USAGE}");
+            }
+            build_xcframework(
+                flags.iter().any(|flag| flag == "--macos-only"),
+                flags.iter().any(|flag| flag == "--debug"),
+            )
         }
         Some("build-hostd-linux") if args.len() == 1 => build_hostd_linux(),
         Some("build-hostd-macos") if args.len() == 1 => build_hostd_macos(),
@@ -168,7 +174,7 @@ fn dir_size(path: &Path) -> u64 {
         .sum()
 }
 
-fn build_xcframework(macos_only: bool) -> Result<()> {
+fn build_xcframework(macos_only: bool, debug: bool) -> Result<()> {
     let start = Instant::now();
     let slices: Vec<&Slice> = if macos_only {
         vec![&MACOS]
@@ -180,20 +186,31 @@ fn build_xcframework(macos_only: bool) -> Result<()> {
     let work = target.join("apple-ffi");
     let package = root.join("apple/Packages").join(CORE_NAME);
 
-    // Debug info off: it would only be stripped again. The profile's thin LTO stays.
+    let profile = if debug { "dev" } else { "release" };
+    let artifacts = if debug { "debug" } else { "release" };
+    // Debug info off: it would only be stripped again. Release retains thin LTO.
     for slice in &slices {
         eprintln!("==> cargo build {}", slice.target);
         run(cargo()
-            .args(["build", "--release", "--lib", "-p", "apple-ffi", "--target"])
+            .args([
+                "build",
+                "--profile",
+                profile,
+                "--lib",
+                "-p",
+                "apple-ffi",
+                "--target",
+            ])
             .arg(slice.target)
             .env("CARGO_PROFILE_RELEASE_DEBUG", "false")
+            .env("CARGO_PROFILE_DEV_DEBUG", "false")
             .env("IPHONEOS_DEPLOYMENT_TARGET", IOS_MIN)
             .env("MACOSX_DEPLOYMENT_TARGET", MACOS_MIN))?;
     }
     let raw_archive = |slice: &Slice| {
         target
             .join(slice.target)
-            .join("release")
+            .join(artifacts)
             .join(format!("lib{LIB_NAME}.a"))
     };
 

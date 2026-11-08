@@ -23,7 +23,7 @@ the bundle prefix. The Debug icon carries a DEV badge. Debug builds do not start
 
 ```sh
 GUDO_FLAVOR=dev cargo xtask build-hostd-macos
-cargo xtask build-xcframework
+GUDO_FLAVOR=dev CARGO_TARGET_DIR="$PWD/target/dev" cargo xtask build-xcframework --debug
 cd apple
 xcodegen generate
 xcodebuild -project App.xcodeproj -scheme App -configuration Debug \
@@ -36,6 +36,10 @@ bundling the release helper. Do not overwrite a helper that a running installati
 
 For direct Rust builds, use `GUDO_FLAVOR=dev CARGO_TARGET_DIR=target/dev cargo build -p hostd`.
 Cargo's executable target retains its declared filename; the xtask packages it with the dev name.
+
+`build-xcframework --debug` builds all core slices with Cargo's dev profile and never invokes a
+Release build. Omit it only when an optimized core is explicitly wanted; `--macos-only` can be
+combined with `--debug`. Neither option packages or replaces a daemon helper.
 
 The Rust core in the app can pair with either flavor's helper. Pasteable pairing tickets and
 invites accept both URL schemes; the app registers only its own scheme with the operating system.
