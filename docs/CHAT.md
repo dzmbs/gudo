@@ -201,6 +201,9 @@ Select Text presents one read-only TextKit2 `UITextView`, not an editor in every
 selection keeps Unicode/UTF-16 boundaries, with data detectors disabled and DS literal type, ink
 and accent. An immutable snapshot identity avoids reassigning the whole string on parent/theme
 updates, preserving selection and reading position; a new snapshot replaces it explicitly.
+Copy/Select Text use rendered plain block content, while Copy as Markdown preserves the exact
+source. If structured rendering omits content, menus explicitly offer the full raw Markdown
+rather than labeling a partial table/list preview as complete plain text.
 
 Tool details read output through the existing authenticated same-pane output API, one bounded
 native page at a time, with Input/Output tabs and Beginning/Previous/Next navigation. Closing the

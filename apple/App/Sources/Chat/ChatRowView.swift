@@ -29,9 +29,9 @@ struct ChatRowView: View {
             .foregroundStyle(DS.Palette.text)
             .buttonStyle(ChatRowButtonStyle())
             .contextMenu {
-                Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = plainText }
-                Button("Select Text", systemImage: "text.cursor") { actions.selectText(plainText) }
-                if case .markdown(let block) = row.content {
+                Button(copyTitle, systemImage: "doc.on.doc") { UIPasteboard.general.string = plainText }
+                Button(selectionTitle, systemImage: "text.cursor") { actions.selectText(plainText) }
+                if case .markdown(let block) = row.content, !usesRawMarkdownSelection {
                     Button("Copy as Markdown") { UIPasteboard.general.string = block.source }
                 }
                 Button("Show in Terminal", systemImage: "terminal") {
@@ -268,9 +268,17 @@ struct ChatRowView: View {
         .accessibilityElement(children: .combine)
     }
 
-    private var plainText: String {
+    private var usesRawMarkdownSelection: Bool {
+        if case .markdown(let block) = row.content { return block.hasOmittedContent }
+        return false
+    }
+
+    var copyTitle: String { usesRawMarkdownSelection ? "Copy raw Markdown" : "Copy" }
+    var selectionTitle: String { usesRawMarkdownSelection ? "Select raw Markdown" : "Select Text" }
+
+    var plainText: String {
         switch row.content {
-        case .markdown(let block): block.source
+        case .markdown(let block): markdownSelectionText(block)
         case .omitted: ChatRenderLimits.omittedMessage
         case .item(let item):
             switch item.body {
@@ -282,6 +290,25 @@ struct ChatRowView: View {
             case .notice(let value): value.text
             case .turnEnd(let value): "Worked for \(duration(value.durationMs))"
             }
+        }
+    }
+
+    private func markdownSelectionText(_ block: ChatMarkdownBlock) -> String {
+        // Do not label an omitted table/list preview as complete plain text. Its menu explicitly
+        // offers the original raw Markdown instead; Copy as Markdown never uses a padded formatter.
+        if block.hasOmittedContent { return block.source }
+        switch block.kind {
+        case .list:
+            return block.list.map { line in
+                let depth = max(0, min(line.depth, Self.maximumIndentationDepth))
+                return String(repeating: "  ", count: depth) + line.marker + " " + String(line.text.characters)
+            }.joined(separator: "\n")
+        case .table:
+            return block.table.map { cells in
+                cells.map { String($0.characters) }.joined(separator: "\t")
+            }.joined(separator: "\n")
+        case .separator: return block.source
+        default: return String(block.text.characters)
         }
     }
 
