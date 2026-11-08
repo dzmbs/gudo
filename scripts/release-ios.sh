@@ -89,6 +89,9 @@ xcodebuild -exportArchive \
   -archivePath "$archive_path" -exportPath "$output_dir/export" -exportOptionsPlist "$export_options"
 ipa="$(ls "$output_dir"/export/*.ipa)"
 echo "signed build $build_number: $ipa"
+symbols_dir="$apple_dir/build/symbols/ios-$build_number"
+mkdir -p "$symbols_dir"
+ditto "$archive_path/dSYMs" "$symbols_dir"
 [ "$upload" = 1 ] || exit 0
 
 # altool reads the key from API_PRIVATE_KEYS_DIR; it lives there only for the upload.

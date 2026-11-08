@@ -98,6 +98,11 @@ rm -rf "$work_dir/DerivedData"
 app="$work_dir/export/$brand_name.app"
 [ -d "$app" ] || fail "export made no $brand_name.app"
 version="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$app/Contents/Info.plist")"
+# Kept outside the work and output folders, which each release wipes: hang and crash reports
+# from this build can only be read with these.
+symbols_dir="$apple_dir/build/symbols/mac-$version-$build_number"
+mkdir -p "$symbols_dir"
+ditto "$archive_path/dSYMs" "$symbols_dir"
 public_key="$(/usr/libexec/PlistBuddy -c 'Print SUPublicEDKey' "$app/Contents/Info.plist")"
 [ "$("$sparkle_bin/generate_keys" -p)" = "$public_key" ] \
   || fail "the Keychain's update signing key does not match the app's SUPublicEDKey"
