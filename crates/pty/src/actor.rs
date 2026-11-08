@@ -53,6 +53,7 @@ pub struct SpawnOptions {
     size: WinSize,
     ring_capacity: usize,
     output_hook: Option<OutputHook>,
+    preamble: Vec<u8>,
 }
 
 impl SpawnOptions {
@@ -62,6 +63,7 @@ impl SpawnOptions {
             size,
             ring_capacity: DEFAULT_RING_CAPACITY,
             output_hook: None,
+            preamble: Vec::new(),
         }
     }
 
@@ -80,6 +82,13 @@ impl SpawnOptions {
         self.output_hook = Some(Box::new(hook));
         self
     }
+
+    /// Sets output that comes before the program's own: it takes the first offsets, and the
+    /// hook and subscribers see it as if the program had written it.
+    pub fn preamble(mut self, bytes: Vec<u8>) -> Self {
+        self.preamble = bytes;
+        self
+    }
 }
 
 impl Default for SpawnOptions {
@@ -94,6 +103,7 @@ impl fmt::Debug for SpawnOptions {
             .field("size", &self.size)
             .field("ring_capacity", &self.ring_capacity)
             .field("output_hook", &self.output_hook.is_some())
+            .field("preamble", &self.preamble.len())
             .finish()
     }
 }
@@ -353,7 +363,14 @@ impl PtyActor {
     ///
     /// Panics if the ring capacity in `options` is zero.
     pub fn spawn(command: Command, options: SpawnOptions) -> io::Result<Self> {
-        let ring = OutputRing::new(options.ring_capacity);
+        let mut ring = OutputRing::new(options.ring_capacity);
+        let mut output_hook = options.output_hook;
+        if !options.preamble.is_empty() {
+            if let Some(hook) = &mut output_hook {
+                hook(ring.head(), &options.preamble);
+            }
+            ring.push(&options.preamble);
+        }
         let spawn::Spawned { master, child } = spawn::spawn(command, options.size)?;
         let pid = Pid::from_child(&child);
         Self::start(
@@ -362,7 +379,7 @@ impl PtyActor {
             ring,
             wait::Reap::Spawned(child),
             None,
-            options.output_hook,
+            output_hook,
         )
     }
 

@@ -95,3 +95,23 @@ async fn read_from_serves_ring_and_reports_out_of_range() {
     ));
     assert!(pty.subscribe_from(Seq::ZERO).is_err());
 }
+
+#[tokio::test]
+async fn the_preamble_comes_first_for_the_hook_and_subscribers() {
+    let hooked = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let options = SpawnOptions::default()
+        .preamble(b"earlier screen\r\n".to_vec())
+        .output_hook({
+            let hooked = Arc::clone(&hooked);
+            move |seq, data| {
+                let mut hooked = hooked.lock().unwrap();
+                assert_eq!(seq.get(), hooked.len() as u64);
+                hooked.extend_from_slice(data);
+            }
+        });
+    let pty = spawn_with(&["/bin/sh", "-c", "printf now"], options);
+    let mut output = pty.subscribe_from(Seq::ZERO).unwrap();
+    let all = read_to_end(&mut output).await;
+    assert_eq!(all, "earlier screen\r\nnow");
+    assert_eq!(*hooked.lock().unwrap(), all.as_bytes());
+}
