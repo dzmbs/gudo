@@ -456,6 +456,17 @@ changing their policy requires a helper update.
   started that no other pane claimed (Claude Code's config directory: `CLAUDE_CONFIG_DIR`,
   else `~/.claude`). After a restart such a pane comes back as the agent resuming that
   session in the same directory, then a shell when it exits, as a launched one does.
+- pi and Kimi Code started by hand in a shell pane (`daemon::resumable`; not driven, no
+  `AgentKind`) are recorded in the pane's `resumable {program, session_id, cwd}` with the
+  agent's own directory. The session id comes from `--session`/`-S` in its argv, else from the
+  newest session file it wrote in that directory since it started that no other pane claimed
+  (pi: `$PI_CODING_AGENT_DIR/sessions/--<cwd>--/<time>_<id>.jsonl`; Kimi:
+  `$KIMI_CODE_HOME/sessions/wd_<name>_<sha256 of cwd, 12 hex>/session_<id>/`), read with the
+  agent process's environment. After a restart the pane runs `pi --session <id>` or
+  `kimi --session <id>` (`--continue` when no id was found) there, then the shell. Nothing else
+  from the first command line is run again (a prompt argument would be sent twice). Other
+  agents (Gemini CLI, opencode, aider, cursor-agent) are not resumed; their pane offers the
+  command again instead (Run again, below).
 - A pane that resumes its agent after a cold restart shows `Restored after restart` (dim)
   above it, below its saved screen.
 

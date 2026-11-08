@@ -60,6 +60,7 @@ mod persist;
 mod power;
 mod preauth;
 mod procinfo;
+mod resumable;
 mod resume;
 mod scan;
 mod screens;

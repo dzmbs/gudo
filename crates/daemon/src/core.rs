@@ -28,6 +28,7 @@ use crate::mp::policy::{Need, Target};
 use crate::osc::Osc;
 use crate::pane::{Pane, VtEvent};
 use crate::persist;
+use crate::resumable::{ResumableAgent, ResumableProgram};
 use crate::shell::ShellIntegration;
 use crate::sizing::{EmptyGrid, SizeChoice, Sizing};
 use crate::ws::Viewer;
@@ -140,6 +141,13 @@ pub(crate) struct PaneRecord {
     /// The worktree the pane runs in and the `PORT` it was given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<WorktreeRecord>,
+    /// An agent started by hand that the daemon resumes but does not drive (pi, Kimi).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::resumable::lenient"
+    )]
+    pub resumable: Option<ResumableAgent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -248,6 +256,9 @@ pub(crate) struct PaneEntry {
     task: Mutex<Option<AbortHandle>>,
     /// When the pane's process started, for matching a Codex rollout to it.
     launched_at: SystemTime,
+    /// The pane's resumable agent's process and when it was first seen, for matching its
+    /// session to it.
+    resumable_process: Mutex<Option<(u32, SystemTime)>>,
 }
 
 impl PaneEntry {
@@ -1627,12 +1638,13 @@ impl Core {
         cwd_hint: Option<String>,
         start: PaneStart,
     ) -> Result<(), (OpError, String)> {
-        let (restored, preamble) = match start {
-            PaneStart::New => (false, Vec::new()),
-            PaneStart::Restored {
-                preamble,
-                agent: agent_start,
-            } => (agent_start == AgentStart::Resumed, preamble),
+        let (restored, preamble, resumable) = match start {
+            PaneStart::New => (false, Vec::new(), None),
+            PaneStart::Restored(restored) => (
+                restored.agent == AgentStart::Resumed,
+                restored.preamble,
+                restored.resumable,
+            ),
         };
         let (launch, restored) = match launch {
             PaneLaunch::Reopen { pane_id, cwd } => {
@@ -1743,18 +1755,33 @@ impl Core {
             .take_pre_command(std::path::Path::new(&cwd))
             .map(|script| format!("{script}\n"));
         match &launch {
-            PaneLaunch::Shell { .. } | PaneLaunch::Reopen { .. } => match &pre_command {
-                Some(pre_command) => {
-                    command.args(["-l", "-c", &format!("{pre_command}{}", then_shell())]);
-                }
-                None => {
-                    if let Some(injection) = &injection {
-                        command.args(&injection.args);
-                        inject_env.clone_from(&injection.env);
+            PaneLaunch::Shell { .. } | PaneLaunch::Reopen { .. } => {
+                let resume_line = resumable
+                    .as_ref()
+                    .map(|agent| agent.program.resume_line(agent.session_id.as_deref()));
+                match (&resume_line, &pre_command) {
+                    (Some(resume_line), pre_command) => {
+                        let pre_command = pre_command.as_deref().unwrap_or_default();
+                        // Interactive, so rc files set `PATH` as in any pane.
+                        command.args([
+                            "-i",
+                            "-l",
+                            "-c",
+                            &format!("{pre_command}{resume_line}; {}", then_shell()),
+                        ]);
                     }
-                    command.arg("-l");
+                    (None, Some(pre_command)) => {
+                        command.args(["-l", "-c", &format!("{pre_command}{}", then_shell())]);
+                    }
+                    (None, None) => {
+                        if let Some(injection) = &injection {
+                            command.args(&injection.args);
+                            inject_env.clone_from(&injection.env);
+                        }
+                        command.arg("-l");
+                    }
                 }
-            },
+            }
             PaneLaunch::Command { argv, .. } => {
                 if argv.is_empty() {
                     return Err((OpError::Invalid, "empty argv".into()));
@@ -1991,6 +2018,7 @@ impl Core {
                     account: Some(account.clone()),
                 }),
             worktree,
+            resumable: resumable.clone(),
         };
         let accounts_changed = agent.is_some();
         let entry = Arc::new(PaneEntry {
@@ -2009,6 +2037,7 @@ impl Core {
             ticks: AtomicU64::new(0),
             task: Mutex::new(None),
             launched_at: SystemTime::now(),
+            resumable_process: Mutex::new(None),
         });
         let task = tokio::spawn(pane_task(Arc::clone(self), Arc::clone(&entry), vt_events));
         *lock(&entry.task) = Some(task.abort_handle());
@@ -2099,6 +2128,7 @@ impl Core {
             ticks: AtomicU64::new(0),
             task: Mutex::new(None),
             launched_at: carried.launched_at,
+            resumable_process: Mutex::new(None),
         });
         let task = tokio::spawn(pane_task(Arc::clone(self), Arc::clone(&entry), vt_events));
         *lock(&entry.task) = Some(task.abort_handle());
@@ -2561,6 +2591,7 @@ async fn pane_task(core: Arc<Core>, entry: Arc<PaneEntry>, mut vt_events: mpsc::
                 }
                 if detect_tick.is_multiple_of(2) {
                     capture_agent_session(&core, &entry, &session_lookup);
+                    capture_resumable_session(&core, &entry, &session_lookup);
                 }
                 let screen = screen_dirty.then(|| pane.screen_text());
                 screen_dirty = false;
@@ -2766,6 +2797,89 @@ fn detect_agent(core: &Core, entry: &PaneEntry) {
         return;
     };
     track_foreground_agent(core, entry, &foreground);
+    track_resumable_agent(core, entry, &foreground);
+}
+
+/// Records the pi or Kimi agent a pane runs, and forgets it once the agent ended.
+fn track_resumable_agent(core: &Core, entry: &PaneEntry, foreground: &pty::ForegroundProcess) {
+    let running = ResumableProgram::of(foreground);
+    let mut record = lock(&entry.record);
+    match (running, record.resumable.as_mut()) {
+        (Some(program), Some(agent)) if agent.program == program => {
+            if agent.session_id.is_none()
+                && let Some(session_id) = program.session_from_argv(&foreground.argv)
+            {
+                agent.session_id = Some(session_id);
+                core.mark_dirty();
+            }
+        }
+        (Some(program), _) => {
+            record.resumable = Some(ResumableAgent {
+                program,
+                session_id: program.session_from_argv(&foreground.argv),
+                cwd: crate::procinfo::process_cwd(foreground.pid)
+                    .map(|cwd| cwd.to_string_lossy().into_owned()),
+            });
+            *lock(&entry.resumable_process) = Some((foreground.pid, SystemTime::now()));
+            core.mark_dirty();
+        }
+        (None, Some(_)) => {
+            drop(record);
+            core.note_program_ending();
+            lock(&entry.record).resumable = None;
+            lock(&entry.resumable_process).take();
+            core.mark_dirty();
+        }
+        (None, None) => {}
+    }
+}
+
+/// While a pane's pi or Kimi session is unknown, looks for the session file it writes, off
+/// the async runtime.
+fn capture_resumable_session(core: &Arc<Core>, entry: &Arc<PaneEntry>, busy: &Arc<AtomicBool>) {
+    let Some(program) = lock(&entry.record)
+        .resumable
+        .as_ref()
+        .filter(|agent| agent.session_id.is_none())
+        .map(|agent| agent.program)
+    else {
+        return;
+    };
+    let Some((pid, since)) = *lock(&entry.resumable_process) else {
+        return;
+    };
+    if busy.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let claimed: Vec<String> = core
+        .pane_entries()
+        .iter()
+        .filter_map(|(_, other)| lock(&other.record).resumable.as_ref()?.session_id.clone())
+        .collect();
+    let recorded_cwd = lock(&entry.record).cwd.clone().unwrap_or_default();
+    let (core, entry, busy) = (Arc::clone(core), Arc::clone(entry), Arc::clone(busy));
+    tokio::task::spawn_blocking(move || {
+        let cwd = crate::procinfo::process_cwd(pid).unwrap_or_else(|| recorded_cwd.into());
+        let env = |name: &str| {
+            crate::procinfo::process_env_var(pid, name).or_else(|| {
+                core.cfg
+                    .pane_var(name)
+                    .map(|value| value.to_string_lossy().into_owned())
+            })
+        };
+        if let Some(session_id) = program.find_session(env, &cwd, since, &claimed) {
+            let mut record = lock(&entry.record);
+            if let Some(agent) = record.resumable.as_mut()
+                && agent.program == program
+                && agent.session_id.is_none()
+            {
+                tracing::info!(pane = %entry.pane.id, %session_id, ?program, "agent session found");
+                agent.session_id = Some(session_id);
+                core.mark_dirty();
+            }
+        }
+        busy.store(false, Ordering::Release);
+    });
 }
 
 fn track_foreground_agent(core: &Core, entry: &PaneEntry, foreground: &pty::ForegroundProcess) {
@@ -2861,11 +2975,18 @@ fn end_exited_agent(core: &Core, entry: &PaneEntry) {
 pub(crate) enum PaneStart {
     /// Asked for by a client or an agent.
     New,
-    /// Brought back after a restart, its output starting with `preamble`.
-    Restored {
-        preamble: Vec<u8>,
-        agent: AgentStart,
-    },
+    /// Brought back after a restart.
+    Restored(Restored),
+}
+
+/// What a pane brought back after a restart starts with.
+#[derive(Debug)]
+pub(crate) struct Restored {
+    /// The start of its output: the saved screen and the restored line.
+    pub preamble: Vec<u8>,
+    pub agent: AgentStart,
+    /// An agent started by hand to resume before the shell.
+    pub resumable: Option<ResumableAgent>,
 }
 
 /// Whether a restored pane's agent continues its session.
@@ -2967,20 +3088,29 @@ pub(crate) fn restore(
             }
             _ => false,
         };
+        let resumable = match &mut launch {
+            PaneLaunch::Shell { cwd } => record.resumable.clone().inspect(|agent| {
+                if agent.cwd.is_some() {
+                    cwd.clone_from(&agent.cwd);
+                }
+            }),
+            _ => None,
+        };
         let saved_screen = core.screens.load(id);
-        let preamble = if saved_screen.is_some() || restored_agent {
+        let preamble = if saved_screen.is_some() || restored_agent || resumable.is_some() {
             crate::screens::restored_preamble(saved_screen.as_ref())
         } else {
             Vec::new()
         };
-        let start = PaneStart::Restored {
+        let start = PaneStart::Restored(Restored {
             preamble,
             agent: if restored_agent {
                 AgentStart::Resumed
             } else {
                 AgentStart::Fresh
             },
-        };
+            resumable,
+        });
         if let Err((_, message)) = core.spawn_pane(id, launch, None, start) {
             tracing::warn!(pane = %id, "restoring pane failed: {message}");
             failed.push(id);
