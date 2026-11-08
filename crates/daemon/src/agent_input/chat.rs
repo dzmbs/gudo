@@ -44,7 +44,10 @@ pub(crate) async fn request(
                     .map(|id| id.as_str().to_owned()),
             )
         };
-        if !matches!(&gate.phase, AgentInputPhase::Open(_))
+        if !driver(kind)
+            .current_capabilities(core, pane)
+            .contains(proto::AgentCapabilities::SEND)
+            || !matches!(&gate.phase, AgentInputPhase::Open(_))
             || !core.agent_has_terminal(pane)
             || !bracketed
             || gate.pending_unproven_writes != 0

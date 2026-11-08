@@ -1,4 +1,5 @@
 mod claude;
+pub(crate) mod codex;
 mod terminal;
 
 use std::future::Future;
@@ -37,6 +38,9 @@ pub(crate) type ReadFuture =
 pub(crate) trait AgentSession: Send {
     fn capabilities(&self) -> AgentCapabilities;
     fn cursor(&self) -> TimelineCursor;
+    fn check_history_scope(&self, _since: Option<UnixMillis>) -> Result<(), WsError> {
+        Ok(())
+    }
     fn snapshot(&self, since: Option<UnixMillis>) -> TimelineSnapshot;
     fn refresh(&mut self, core: &Core, pane: PaneId) -> Result<Vec<TimelineOp>, WsError>;
     fn check_current(&self, core: &Core, pane: PaneId) -> Result<(), WsError>;
@@ -110,6 +114,9 @@ pub(crate) trait AgentDriver: Send + Sync {
     fn approval_is_pending(&self, core: &Core, pane: PaneId, request: &agents::RequestId) -> bool;
     fn input_event<'a>(&self, request: &'a crate::HookRequest) -> InputEvent<'a>;
     fn capabilities(&self) -> AgentCapabilities;
+    fn current_capabilities(&self, _core: &Core, _pane: PaneId) -> AgentCapabilities {
+        self.capabilities()
+    }
     fn check_prompt(&self, text: &str) -> Result<(), WsError>;
     fn open(
         &self,

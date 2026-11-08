@@ -225,6 +225,7 @@ pub(crate) struct PaneEntry {
     pub meta: Mutex<MetaState>,
     pub record: Mutex<PaneRecord>,
     pub agent: Mutex<Option<AgentRuntime>>,
+    pub codex: Mutex<Option<Arc<crate::agent_driver::codex::Live>>>,
     /// Wakes the pane task when an agent attaches from outside it (a hook), so its timers run.
     pub agent_attached: Notify,
     /// Serializes policy decisions, request replacement and actual PTY resizes.
@@ -241,6 +242,7 @@ pub(crate) struct PaneEntry {
 impl PaneEntry {
     /// Stops the pane's task, which reacts to its output and exit.
     pub fn stop_task(&self) {
+        lock(&self.codex).take();
         if let Some(task) = lock(&self.task).take() {
             task.abort();
         }
@@ -1504,6 +1506,14 @@ impl Core {
     }
 
     /// The closed panes, oldest first (persisted with the layout).
+    pub(crate) fn has_live_codex(&self) -> bool {
+        self.pane_entries().iter().any(|(_, entry)| {
+            lock(&entry.codex)
+                .as_ref()
+                .is_some_and(|source| source.is_running())
+        })
+    }
+
     pub fn closed_panes(&self) -> Vec<ClosedPane> {
         lock(&self.closed).iter().cloned().collect()
     }
@@ -1640,6 +1650,7 @@ impl Core {
             }
         }
         let mut agent = None;
+        let mut codex = None;
         let mut native_input_launch = crate::agent_input::AgentInputGate::default();
         let injection = self
             .shell
@@ -1780,7 +1791,19 @@ impl Core {
                         session_id: pinned.clone().map(agents::NativeSessionId::new),
                     },
                 };
-                let spec = adapter.launch(&context, &mode);
+                let spec = if brand::IS_DEV
+                    && self.cfg.codex_chat
+                    && *kind == AgentKind::Codex
+                    && resume.is_none()
+                {
+                    let (source, spec) =
+                        crate::agent_driver::codex::Live::start(&context, &mode)
+                            .map_err(|error| (OpError::SpawnFailed, error.to_string()))?;
+                    codex = Some(source);
+                    spec
+                } else {
+                    adapter.launch(&context, &mode)
+                };
                 for file in &spec.files {
                     if let Some(dir) = file.path.parent() {
                         let _ = std::fs::create_dir_all(dir);
@@ -1900,6 +1923,9 @@ impl Core {
         )
         .map_err(|error| (OpError::SpawnFailed, error.to_string()))?;
         *lock(&pane.agent_input_gate) = native_input_launch;
+        if let Some(source) = &codex {
+            source.set_owner(pane.pty().pid());
+        }
         let record = PaneRecord {
             // A sign-in is not run again after a restart.
             launch: match &launch {
@@ -1927,6 +1953,7 @@ impl Core {
             }),
             record: Mutex::new(record),
             agent: Mutex::new(agent.map(|(_, _, _, runtime)| runtime)),
+            codex: Mutex::new(codex),
             agent_attached: Notify::new(),
             sizing: Mutex::new(Sizing::default()),
             pending_resize: Mutex::new(None),
@@ -2013,6 +2040,7 @@ impl Core {
             }),
             record: Mutex::new(record),
             agent: Mutex::new(agent),
+            codex: Mutex::new(None),
             agent_attached: Notify::new(),
             sizing: Mutex::new(Sizing::default()),
             pending_resize: Mutex::new(None),

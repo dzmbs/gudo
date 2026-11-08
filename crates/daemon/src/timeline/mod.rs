@@ -33,6 +33,10 @@ use proto::{AgentKind, TimelineCursor, TimelineSession};
 
 static NEXT_EPOCH: AtomicU64 = AtomicU64::new(1);
 static NEXT_WATCH: AtomicU64 = AtomicU64::new(1);
+
+pub(crate) fn next_epoch() -> u64 {
+    NEXT_EPOCH.fetch_add(1, Ordering::Relaxed).wrapping_add(1)
+}
 const MAX_WATCHES: usize = 4;
 const MAX_PUSH_BYTES: usize = 1024 * 1024;
 const MAX_BULK_REQUESTS: usize = 4;
@@ -260,7 +264,7 @@ impl Timelines {
         }
         let (wake, wakes) = mpsc::channel(1);
         NEXT_EPOCH.fetch_max(core.epoch.0, Ordering::Relaxed);
-        let epoch = NEXT_EPOCH.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+        let epoch = next_epoch();
         let source_core = Arc::clone(core);
         let state = blocking(move || {
             let entry = source_core
@@ -447,6 +451,7 @@ pub(crate) async fn handle(
             }
             let (snapshot, capabilities) = {
                 let state = lock(&timeline.state);
+                state.check_history_scope(connection.timeline_since)?;
                 (
                     proto::TimelineVersion::V1.snapshot(state.snapshot(connection.timeline_since)),
                     state.capabilities(),
@@ -569,6 +574,7 @@ async fn read_timeline(
     let (epoch, pending) = blocking(move || {
         let mut state = lock(&reading.state);
         state.check_current(&read_core, pane)?;
+        state.check_history_scope(since)?;
         Ok((state.cursor().epoch, state.read(request, since)))
     })
     .await?;

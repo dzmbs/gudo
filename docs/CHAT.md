@@ -428,11 +428,11 @@ close native observation rather than guessing. Each successful binding has a non
 so deferred work cannot survive a same-thread round trip or another connection. Typed envelopes
 reject duplicate identity fields. Observation retains at most 256 bounded binding-request IDs
 and parses at most 64KiB per pending control frame; exhaustion closes native binding, not Terminal.
-A future proxy must forward official frames unchanged, independently of these native limits.
+The opt-in relay forwards official frames unchanged, independently of these native limits.
 
 This is the adapter's correlation foundation, not an enabled production Codex timeline/control
-transport. It opens no sockets, starts/resumes no process, sends no bootstrap turn and writes no
-session file. Tests include recorded requests and replies from an isolated Codex 0.166.0 physical TUI
+transport. `CodexBinding` itself opens no sockets, starts/resumes no process, sends no bootstrap turn
+and writes no session file. Tests include recorded requests and replies from an isolated Codex 0.166.0 physical TUI
 behind a temporary Unix relay. A loopback model fixture received one user turn entered through the TUI;
 a second client attached after it began and received that thread's live deltas and completion.
 The TUI also generated an auxiliary title thread. This proves physical-connection correlation, not
@@ -460,10 +460,51 @@ sufficient policy metadata or authority to approve; supported choices and the co
 permissions still need the shared signed-policy path. Notify is not a live adapter completion or
 approval source.
 
-These are launch and decoder foundations, not an enabled daemon adapter. Launch-owned server/relay
-lifecycle, common `AgentSession` materialization, snapshot hydration for late observers, bounded
-streaming queues and signed control delivery still need integration. Mobile watch lifetime must not
-own the server. Existing Codex panes are not restarted or silently replaced to enable Chat.
+### Opt-in Dev read producer
+
+`Config::codex_chat` defaults to false and is only consulted in Dev builds for fresh dedicated
+launches. It is not enabled by the app or normal helper configuration. The pane owns an app-server,
+private randomized 0700 directory and 0600 environment/relay sockets; timeline watches own none of
+these. A matching Debug helper's `codex-remote` bootstrap captures the TUI's actual post-login
+environment and cwd before exec into the official remote TUI. A second login shell is not used to
+approximate the server environment. The daemon checks the peer UID, bootstrap ancestry under the
+owned PTY, exact pane environment, and TUI/server peer process trees. Secrets stay in environment
+and private socket payloads, never argv, event metadata or persisted bootstrap files. The helper
+currently accepts exactly Codex 0.166.0.
+
+A bounded observer runs independently of byte forwarding: 64 chunks of at most 16KiB, 64KiB native
+messages, and at most 256 queued timeline operations / 1MiB. Observation failure or queue overflow
+closes the native producer, not official frame forwarding. The projection handles user/assistant
+items, assistant deltas, command summaries and completed reasoning. It admits at most 500 items
+and 768KiB of serialized bodies; exceeding admission limits disables Chat rather than silently
+losing older history. Item identity is turn-scoped. Final items reconcile partial text, unknown
+command status is explicit, and non-success turn endings are notices, never inferred success.
+
+The common `AgentSession` exposes only READ and STREAMING_DELTAS. Snapshots are frozen at the
+session cursor so a concurrently arriving delta cannot appear in both a snapshot and its subsequent
+append stream. Paging and late watches read the captured fresh-launch history; source/epoch
+changes invalidate stale reads. Since-join access is explicitly unavailable until original event
+time can be established safely: projection time cannot authorize buffered pre-join content. This
+source-specific scope check also precedes common watch and history delivery. Native Send, Stop,
+approval delivery, diffs and tool-output reads
+remain unavailable. Legacy terminal-only Codex launch and control behavior is unchanged when this
+opt-in producer is absent. Switching the TUI to resume/fork disables native observation; it does not
+replace or restart that conversation.
+
+This remains experimental scaffolding, not completed Codex Chat enablement. The daemon/client
+stream, unwatch/catch-up, bounded frame decoder, environment validation and forwarding-failure tests
+use recorded or synthetic fixtures. A Debug helper probe with a fake Codex verifies post-login
+capture and same-PID exec. A separately opted-in test runs actual Codex 0.166.0 through a temporary
+Dev daemon, private named account with placeholder file credentials and loopback model: one explicit
+Terminal PTY prompt produces live appends and a final item over the common client API, and a late
+watch catches up without ending the server. This does not validate arbitrary MCP tools, real account
+permissions, latency or the app UI. Historical resume hydration, complete event-to-runtime status
+routing and pane session-record/recovery integration, signed controls, richer item/output streaming,
+lifecycle stress/MCP/latency validation and simulator acceptance are still open. Do not use the
+experimental launch for resume/reopen/recovery workflows. Hot helper
+upgrade/restart is refused while this opt-in launch owns an active server/transport because relay
+handoff is not implemented. Existing Codex panes are never restarted or silently replaced to enable
+Chat. Claude MessageDisplay streaming is not implemented by this producer.
 
 ## Native composer safety prerequisites
 

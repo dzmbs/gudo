@@ -117,6 +117,8 @@ pub struct Config {
     /// Keys, paired devices, layout and the hook socket live here.
     pub state_dir: PathBuf,
     pub agent_integration: AgentIntegration,
+    /// Experimental read-only Codex Chat for fresh dedicated launches; not hot-handoff capable.
+    pub codex_chat: bool,
     /// UDP address the iroh endpoint binds (port 0 picks one). `None` binds every interface,
     /// IPv4 and IPv6, on random ports.
     pub bind: Option<SocketAddr>,
@@ -319,6 +321,7 @@ impl Config {
             bind: None,
             relay: RelayMode::Default,
             shell: None,
+            codex_chat: false,
             pane_env: Vec::new(),
             ring_capacity: pty::DEFAULT_RING_CAPACITY,
             scrollback_bytes: 10 * 1024 * 1024,

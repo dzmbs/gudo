@@ -34,7 +34,9 @@ pub(crate) fn request(
         let runtime = lock(&entry.agent);
         let runtime = runtime.as_ref().ok_or_else(unavailable)?;
         let driver = driver(runtime.kind());
-        if !driver.capabilities().contains(AgentCapabilities::STOP)
+        if !driver
+            .current_capabilities(core, pane)
+            .contains(AgentCapabilities::STOP)
             || runtime.state() != agents::AgentState::Working
         {
             return Err(unavailable());

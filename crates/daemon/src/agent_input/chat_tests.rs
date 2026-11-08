@@ -149,7 +149,7 @@ async fn raw_pane(
     (entry, captured)
 }
 
-async fn owner_client(
+pub(crate) async fn owner_client(
     daemon: &crate::Daemon,
 ) -> (
     Arc<Client>,

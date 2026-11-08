@@ -1,0 +1,164 @@
+use super::*;
+use client_core::{WorkspaceEvent, WorkspaceEventQueue};
+use proto::{AgentKind, PaneLaunch};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+#[derive(serde::Deserialize)]
+struct Fixture {
+    root: PathBuf,
+    helper: PathBuf,
+    codex: PathBuf,
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires an explicit private loopback fixture and matching Debug helper"]
+async fn real_cli_streams_through_the_owned_daemon_adapter() {
+    let path = std::env::var_os("GUDO_CODEX_NATIVE_FIXTURE")
+        .filter(|_| brand::IS_DEV)
+        .expect("this probe requires a Dev build and an explicit private fixture");
+    let fixture: Fixture = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert!(
+        fixture
+            .root
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("gudo-codex-daemon-owned-")
+    );
+    let mut config = crate::Config::new(fixture.root.join("daemon"));
+    config.codex_chat = true;
+    config.relay = crate::RelayMode::Disabled;
+    config.bind = Some("127.0.0.1:0".parse().unwrap());
+    config.shell = Some("/bin/sh".into());
+    config.hook_bin = Some(fixture.helper.clone());
+    config.cli_exe = Some(fixture.helper);
+    config.pane_env = vec![
+        (
+            "HOME".into(),
+            fixture.root.join("home").display().to_string(),
+        ),
+        (
+            "PATH".into(),
+            format!(
+                "{}:/usr/bin:/bin:/usr/sbin:/sbin",
+                fixture.codex.parent().unwrap().display()
+            ),
+        ),
+        ("ENV".into(), String::new()),
+        ("NO_PROXY".into(), "127.0.0.1,localhost".into()),
+        ("HTTP_PROXY".into(), String::new()),
+        ("HTTPS_PROXY".into(), String::new()),
+        ("ALL_PROXY".into(), String::new()),
+    ];
+    config.pane_env.extend(
+        agents::CREDENTIAL_VARS
+            .iter()
+            .map(|name| ((*name).into(), String::new())),
+    );
+    let daemon = crate::Daemon::start(config).await.unwrap();
+    let result = run(&daemon, &fixture.root).await;
+    daemon.shutdown().await;
+    result.unwrap();
+}
+
+async fn run(daemon: &crate::Daemon, root: &Path) -> Result<(), String> {
+    let account = daemon.core.ws.accounts.add(&proto::AccountAdd {
+        agent: AgentKind::Codex,
+        label: "Private loopback fixture".into(),
+        color: 0,
+    })?;
+    let directory = daemon.core.ws.accounts.dir(AgentKind::Codex, &account.id);
+    for name in ["config.toml", "auth.json"] {
+        std::fs::copy(root.join("codex").join(name), directory.join(name))
+            .map_err(|error| error.to_string())?;
+    }
+    let (_, _, pane) = daemon
+        .core
+        .create_session(
+            "Codex private stream".into(),
+            PaneLaunch::AccountAgent {
+                agent: AgentKind::Codex,
+                account: Some(account.id),
+                resume: None,
+                cwd: Some(root.join("project").display().to_string()),
+            },
+        )
+        .map_err(|error| format!("launch: {error:?}"))?;
+    let entry = daemon.core.pane(pane).ok_or("missing pane")?;
+    let source = lock(&entry.codex)
+        .clone()
+        .ok_or("missing native producer")?;
+    let ready = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if source.fault.load(std::sync::atomic::Ordering::Acquire) {
+                return Err("native observation closed before input".to_string());
+            }
+            if lock(&source.state).current.is_some()
+                && entry.pane.line_snapshot().bracketed
+                && entry.pane.screen_text().contains('›')
+            {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .map_err(|_| "TUI startup timeout".to_string())
+    .and_then(|result| result);
+    std::fs::write(root.join("startup-screen.txt"), entry.pane.screen_text())
+        .map_err(|error| error.to_string())?;
+    ready?;
+    let (client, _connection_events) = crate::agent_input::chat_tests::owner_client(daemon).await;
+    let (listener, mut events) = WorkspaceEventQueue::channel();
+    client.set_workspace_listener(listener);
+    let snapshot = client
+        .timeline_watch_capabilities(pane)
+        .await
+        .map_err(|error| format!("watch: {error:?}"))?;
+    if snapshot.capabilities != AgentCapabilities::READ | AgentCapabilities::STREAMING_DELTAS {
+        return Err("wrong live capabilities".into());
+    }
+    if client.chat_prepare(pane).await.is_ok() {
+        return Err("read-only source issued a Send ticket".into());
+    }
+    // Explicit user input through the actual Terminal PTY, never a native/bootstrap request.
+    entry
+        .pane
+        .write(b"\x1b[200~Reply with a short fixture sentence.\x1b[201~\r".to_vec())
+        .await
+        .map_err(|error| error.to_string())?;
+    let result = tokio::time::timeout(Duration::from_secs(30), async {
+        let mut delta = false;
+        loop {
+            let WorkspaceEvent::Timeline { update } = events.recv().await.ok_or("event stream closed")? else { continue; };
+            for operation in update.operations {
+                match operation {
+                    TimelineOp::Append { text, .. } if text.contains("same-process") => delta = true,
+                    TimelineOp::Upsert { item, .. } if matches!(&item.body, proto::TimelineBody::Assistant { text, streaming: false } if text == "A same-process live mirror.\n") => {
+                        if !delta { return Err("no live append before final item".to_string()); }
+                        return Ok(());
+                    }
+                    TimelineOp::Unavailable { .. } => return Err("native timeline became unavailable".to_string()),
+                    _ => {}
+                }
+            }
+        }
+    }).await.map_err(|_| "stream timeout".to_string()).and_then(|result| result);
+    std::fs::write(root.join("final-screen.txt"), entry.pane.screen_text())
+        .map_err(|error| error.to_string())?;
+    result?;
+    client
+        .timeline_unwatch(pane)
+        .await
+        .map_err(|error| format!("unwatch: {error:?}"))?;
+    if source.fault.load(std::sync::atomic::Ordering::Acquire) || lock(&source.process).is_none() {
+        return Err("unwatch ended the launch".into());
+    }
+    let snapshot = client
+        .timeline_watch_capabilities(pane)
+        .await
+        .map_err(|error| format!("rewatch: {error:?}"))?;
+    if !snapshot.snapshot.items.iter().any(|item| matches!(&item.body, proto::TimelineBody::Assistant { text, .. } if text == "A same-process live mirror.\n")) { return Err("late watch lost captured text".into()); }
+    Ok(())
+}

@@ -12,10 +12,13 @@ pub(super) struct TerminalDriver;
 
 impl AgentDriver for TerminalDriver {
     fn pending_approval(&self, core: &Core, pane: PaneId) -> Option<super::PendingApproval> {
+        if live(core, pane) {
+            return None;
+        }
         super::claude::pending_hook(core, pane)
     }
     fn approval_is_pending(&self, core: &Core, pane: PaneId, request: &agents::RequestId) -> bool {
-        core.hooks.is_pending(pane, request)
+        !live(core, pane) && core.hooks.is_pending(pane, request)
     }
     fn input_event<'a>(&self, request: &'a crate::HookRequest) -> super::InputEvent<'a> {
         use super::InputEvent;
@@ -34,17 +37,28 @@ impl AgentDriver for TerminalDriver {
         AgentCapabilities::SEND | AgentCapabilities::ACKNOWLEDGED_SEND
     }
 
+    fn current_capabilities(&self, core: &Core, pane: PaneId) -> AgentCapabilities {
+        if live(core, pane) {
+            AgentCapabilities::READ | AgentCapabilities::STREAMING_DELTAS
+        } else {
+            self.capabilities()
+        }
+    }
+
     fn check_prompt(&self, text: &str) -> Result<(), WsError> {
         check_prompt(text)
     }
 
     fn open(
         &self,
-        _: &Core,
-        _: PaneId,
+        core: &Core,
+        pane: PaneId,
         _: u64,
-        _: mpsc::Sender<()>,
+        wake: mpsc::Sender<()>,
     ) -> Result<Box<dyn AgentSession>, WsError> {
+        if live(core, pane) {
+            return super::codex::open(core, pane, wake);
+        }
         Err(WsError::Unavailable(
             "Chat is not available for this agent".into(),
         ))
@@ -52,11 +66,16 @@ impl AgentDriver for TerminalDriver {
 
     fn send(
         &self,
-        _: &Core,
+        core: &Core,
         pane: &Pane,
         _: Option<&str>,
         text: &str,
     ) -> Result<UnconfirmedSend, WsError> {
+        if live(core, pane.id) {
+            return Err(WsError::Unavailable(
+                "Use Terminal to send to this Codex session.".into(),
+            ));
+        }
         send(pane, text)?;
         Ok(UnconfirmedSend::SentNotConfirmed)
     }
@@ -74,12 +93,20 @@ impl AgentDriver for TerminalDriver {
         request: &agents::RequestId,
         decision: ApprovalDecision<'_>,
     ) -> bool {
+        if live(core, pane) {
+            return false;
+        }
         // The terminal hook lane retains its held PermissionRequest reply format, not RPC approvals.
         core.hooks
             .resolve_with(pane, request, |suggestions, input| {
                 super::claude::approval_response(suggestions, input, decision)
             })
     }
+}
+
+fn live(core: &Core, pane: PaneId) -> bool {
+    core.pane(pane)
+        .is_some_and(|entry| crate::core::lock(&entry.codex).is_some())
 }
 
 fn notify_submission(request: &crate::HookRequest) -> Option<(&str, &str)> {
