@@ -205,6 +205,20 @@ finish/cancel cannot control a replacement recording in another pane, and failur
 target. Agent/presentation/lifetime changes and backgrounding cancel. Starting may survive an inactive
 scene for system permission dialogs, but host controls remain unavailable during that interval.
 
+The composer Add menu offers Claude's bounded session command list (built-ins plus user/project
+command directories). Selecting a command only edits an unchanged, current-scope draft; it never
+submits. Offers are replaced rather than reused across navigation or session changes.
+
+Photo selection uses the system's limited picker, not unrestricted photo-library access. An off-main
+ImageIO worker admits at most 20MiB of source data, produces a metadata-free JPEG with a longest edge
+of 2,048 pixels, and caps uploads at 8MiB. Private, protected local staging files are removed when their
+transfer ends. The existing authenticated upload stream creates a unique, non-overwriting 0600 file
+under the host's `Downloads/Gudo-Attachments`, then appends its escaped `@path` to the current local
+draft without Send or PTY input. Typing during upload is preserved; marked text or a full draft defers
+insertion until explicit Add photo. Native controls are blocked during selection/upload. Cancellation,
+backgrounding and scope changes discard late completions; a remotely committed image may remain in
+Downloads after cancellation, but is never silently attached or retried.
+
 Select Text presents one read-only TextKit2 `UITextView`, not an editor in every row. Native range
 selection keeps Unicode/UTF-16 boundaries, with data detectors disabled and DS literal type, ink
 and accent. An immutable snapshot identity avoids reassigning the whole string on parent/theme
@@ -223,7 +237,7 @@ native diff budget; a rejected, cancelled or stale request retains the original 
 cannot broaden the selection and incomplete replies cannot acquire the recorded-result label.
 The sheet labels recorded tool changes, not a complete turn or the current working tree. It never
 maps opaque timeline turns to numeric repository captures. Complete-turn aggregation beyond the
-retained results, device snapshot persistence and composer photos/slash commands remain pending.
+retained results and device snapshot persistence remain pending.
 Turn-summary Changes uses the opaque turn identity, not a file path. Tool-file selections also
 carry the owning item identity. Missing or empty turn correlation offers Terminal rather than
 showing changes from other visible turns. Command-mark lookup is associated with the exact

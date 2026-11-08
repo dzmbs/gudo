@@ -37,6 +37,8 @@ final class PaneChatState {
     let composer = ChatComposer()
     let interrupt = ChatInterrupt()
     let dictation: ChatDictation
+    let photos = ChatPhotos()
+    var detail: ChatDetail?
     var model: TimelineModel? { lease?.model }
     @ObservationIgnored weak var controller: ChatViewController?
     @ObservationIgnored private weak var hub: DaemonWorkspace?
@@ -126,6 +128,8 @@ final class PaneChatState {
     func invalidateActions() {
         actionEpoch = UUID()
         dictation.cancel()
+        photos.cancel()
+        detail = nil
         cancelPreparedActions()
     }
 

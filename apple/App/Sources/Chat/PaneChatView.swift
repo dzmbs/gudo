@@ -1,6 +1,8 @@
 #if os(iOS)
 import DesignSystem
 import HostKit
+import GudoCore
+import PhotosUI
 import SwiftUI
 
 struct PaneChatView<Terminal: View>: View {
@@ -12,7 +14,12 @@ struct PaneChatView<Terminal: View>: View {
     var working = false
     @Environment(\.scenePhase) private var scenePhase
     @ViewBuilder var terminal: (Bool) -> Terminal
-    @State private var selectedDetail: ChatDetail?
+    private var selectedDetail: ChatDetail? {
+        get { state.detail }
+        nonmutating set { state.detail = newValue }
+    }
+    @State private var photoPickerPresented = false
+    @State private var selectedPhoto: PhotosPickerItem?
 
     private var nativePresentations: some View {
         ZStack {
@@ -46,7 +53,11 @@ struct PaneChatView<Terminal: View>: View {
         .onChange(of: state.actionContext) { _, _ in
             state.cancelPreparedActions()
             state.dictation.cancelIfStale()
+            state.photos.cancelIfStale(in: state)
+            if !state.photos.isBusy { photoPickerPresented = false }
+            if case .commands(let offer) = selectedDetail?.content, offer.context != state.actionContext { selectedDetail = nil }
         }
+        .onChange(of: permitsSending) { _, permits in if !permits { state.invalidateActions() } }
         .onChange(of: working) { _, working in if !working { state.interrupt.reset() } }
         .onChange(of: scenePhase) { _, phase in sceneChanged(phase) }
         .onChange(of: state.composer.confirmedText) { _, text in
@@ -62,11 +73,34 @@ struct PaneChatView<Terminal: View>: View {
         .onChange(of: state.model?.error) { _, error in
             if error != nil { state.show(.terminal, terminal: pane, persistence: .transient) }
         }
-        .sheet(item: $selectedDetail, content: detailSheet)
+        .sheet(item: $state.detail, content: detailSheet)
+        .photosPicker(isPresented: $photoPickerPresented, selection: $selectedPhoto, matching: .images,
+                      preferredItemEncoding: .current)
+        .onChange(of: selectedPhoto) { _, item in
+            guard let item else { return }
+            selectedPhoto = nil
+            receivePhoto(item)
+        }
+        .onChange(of: photoPickerPresented) { _, presented in
+            guard !presented else { return }
+            let generation = state.photos.generation
+            Task {
+                await Task.yield()
+                if state.photos.generation == generation, state.photos.phase == .picking, selectedPhoto == nil {
+                    state.photos.cancel()
+                }
+            }
+        }
     }
 
     @ViewBuilder private func detailSheet(_ detail: ChatDetail) -> some View {
         switch detail.content {
+        case .commands(let offer):
+            ChatCommandSheet(offer: offer) { command in
+                if !state.photos.isBusy, canEditDraft(offer.context), ChatCommands.apply(command, offer: offer, to: state) {
+                    selectedDetail = nil
+                }
+            }
         case .text(let selection):
             ChatSelectedTextSheet(selection: selection, openTerminal: openTerminalFromDetail)
         case .tool(let tool):
@@ -97,15 +131,44 @@ struct PaneChatView<Terminal: View>: View {
                 .font(DS.Font.prose).lineLimit(1...6)
                 .disabled(state.dictation.isActive)
                 .accessibilityIdentifier("chat-draft")
+            if state.draft.hasPrefix("/"), ChatCommands.query(state.draft) != nil {
+                Button("Choose command…", systemImage: "slash.circle", action: openCommands)
+                    .font(DS.Font.caption).frame(minHeight: DS.Size.touchTarget)
+                    .disabled(!permitsSending || state.dictation.isActive || state.composer.isBusy || state.interrupt.isBusy)
+            }
             if let message = composerStatus {
-                Text(message).font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
-                    .accessibilityIdentifier("chat-send-status")
+                HStack {
+                    Text(message).font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
+                        .accessibilityIdentifier("chat-send-status")
+                    if state.photos.isBusy {
+                        Button("Cancel") { state.photos.cancel(); photoPickerPresented = false }
+                            .font(DS.Font.caption).frame(minHeight: DS.Size.touchTarget)
+                    } else if state.photos.phase == .ready {
+                        Button("Add photo") {
+                            if canEditDraft(state.actionContext) { state.photos.append(to: state) }
+                        }
+                            .font(DS.Font.caption).frame(minHeight: DS.Size.touchTarget)
+                    }
+                }
             }
             HStack(spacing: DS.Space.s) {
+                Menu {
+                    Button("Commands", systemImage: "slash.circle", action: openCommands)
+                        .keyboardShortcut("/", modifiers: .command)
+                        .disabled(ChatCommands.query(state.draft) == nil)
+                    Button("Upload photo to host…", systemImage: "photo", action: choosePhoto)
+                } label: {
+                    Label("Add to message", systemImage: "plus").labelStyle(.iconOnly)
+                        .frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
+                }
+                .buttonStyle(.quiet)
+                .disabled(!permitsSending || state.dictation.isActive || state.photos.isBusy
+                          || state.composer.isBusy || state.interrupt.isBusy)
+                .accessibilityIdentifier("chat-add")
                 dictationControls
                 Spacer(minLength: 0)
                 Button { state.show(.terminal, terminal: pane) } label: {
-                    Label("Open Terminal", systemImage: "terminal").font(DS.Font.caption)
+                    Label("Open Terminal", systemImage: "terminal").labelStyle(.iconOnly).font(DS.Font.caption)
                         .frame(minHeight: DS.Size.touchTarget)
                 }
                 .buttonStyle(.quiet)
@@ -116,7 +179,7 @@ struct PaneChatView<Terminal: View>: View {
                     }
                         .buttonStyle(.quiet)
                         .keyboardShortcut(.escape, modifiers: [])
-                        .disabled(state.presentation != .chat || !permitsSending || !state.interrupt.canBegin)
+                        .disabled(state.presentation != .chat || !permitsSending || state.photos.isBusy || !state.interrupt.canBegin)
                         .accessibilityIdentifier("chat-stop")
                 }
                 Button(action: send) {
@@ -125,7 +188,7 @@ struct PaneChatView<Terminal: View>: View {
                 }
                     .buttonStyle(.quietProminent)
                     .keyboardShortcut(.return, modifiers: .command)
-                .disabled(state.presentation != .chat || !permitsSending || state.dictation.isActive || state.interrupt.isBusy
+                .disabled(state.presentation != .chat || !permitsSending || state.dictation.isActive || state.photos.isBusy || state.interrupt.isBusy
                           || approval?.hasBlockedRequest == true || !state.composer.canSend(state.draft))
                 .accessibilityIdentifier("chat-send")
             }
@@ -140,7 +203,7 @@ struct PaneChatView<Terminal: View>: View {
                 .labelStyle(.iconOnly).frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
         }
         .buttonStyle(.quiet)
-        .disabled(state.presentation != .chat || !permitsSending || state.composer.isBusy || state.interrupt.isBusy
+        .disabled(state.presentation != .chat || !permitsSending || state.photos.isBusy || state.composer.isBusy || state.interrupt.isBusy
                   || (state.dictation.isActive && !state.dictation.canFinish))
         .accessibilityIdentifier("chat-dictate")
         if state.dictation.isActive {
@@ -151,6 +214,46 @@ struct PaneChatView<Terminal: View>: View {
             .buttonStyle(.quiet).keyboardShortcut(.escape, modifiers: [])
             .accessibilityIdentifier("chat-cancel-dictation")
         }
+    }
+
+    func choosePhoto() {
+        guard prepareAction(state.actionContext), !state.composer.isBusy, !state.interrupt.isBusy else { return }
+        state.invalidateActions()
+        state.photos.begin(in: state)
+        photoPickerPresented = true
+    }
+
+    private func receivePhoto(_ item: PhotosPickerItem) {
+        let context = state.actionContext
+        guard canEditDraft(context) else { state.photos.cancel(); return }
+        state.photos.load(in: state, photo: {
+            guard let file = try await item.loadTransferable(type: ChatPhotoFile.self) else { throw ChatPhotoError.invalidImage }
+            return file
+        }, source: { file in try await uploadPhoto(file, context: context) })
+    }
+
+    func uploadPhoto(_ file: ChatPhotoFile, context: PaneChatState.ActionContext) async throws -> String {
+        guard isCurrentPhotoContext(context), let client = hub.api else { throw CancellationError() }
+        let home = try await client.fsStat(path: "~")
+        guard isCurrentPhotoContext(context), home.kind == .dir else { throw CancellationError() }
+        let path = (home.path as NSString).appendingPathComponent("Downloads/Gudo-Attachments/" + UUID().uuidString + ".jpg")
+        _ = try ChatPhotos.reference(path)
+        let result = try await client.uploadFile(localPath: file.url.path,
+            target: WriteTarget(path: path, ifMatch: nil, createNew: true, mkdirs: true, mode: 0o600), progress: nil)
+        guard isCurrentPhotoContext(context), result.size == UInt64(file.bytes) else { throw CancellationError() }
+        return result.path
+    }
+
+    private func isCurrentPhotoContext(_ context: PaneChatState.ActionContext) -> Bool {
+        !Task.isCancelled && permitsSending && state.actionContext == context && state.presentation == .chat
+            && state.photos.isBusy && !state.composer.isBusy && !state.interrupt.isBusy && !state.dictation.isActive
+    }
+
+    func openCommands() {
+        guard prepareAction(state.actionContext), ChatCommands.query(state.draft) != nil,
+              !state.composer.isBusy, !state.interrupt.isBusy else { return }
+        state.invalidateActions()
+        selectedDetail = ChatDetail(content: .commands(ChatCommandOffer(state: state)))
     }
 
     func dictate() {
@@ -164,12 +267,13 @@ struct PaneChatView<Terminal: View>: View {
         guard phase != .active else { return }
         // System microphone/speech permission dialogs make the scene inactive. This target only
         // edits a local draft; host controls remain vetoed while it starts. Background always cancels.
-        if phase == .inactive, state.dictation.isStarting { state.cancelPreparedActions() }
+        if phase == .inactive, state.dictation.isStarting || state.photos.phase == .picking { state.cancelPreparedActions() }
         else { state.invalidateActions() }
     }
 
     private var composerStatus: String? {
         if state.composer.needsConfirmation || state.interrupt.needsConfirmation { return "Waiting for confirmation…" }
+        if let message = state.photos.status { return message }
         if let message = state.dictation.status { return message }
         if let message = state.interrupt.message { return message }
         if state.interrupt.isBusy { return "Requesting interrupt…" }
@@ -185,6 +289,7 @@ struct PaneChatView<Terminal: View>: View {
         let context = state.actionContext
         guard !state.interrupt.isBusy, prepareAction(context), state.composer.canSend(state.draft) else { return }
         state.dictation.cancel()
+        state.photos.cancel()
         let draft = state.draft
         let generation = state.composer.requestGeneration
         Task {
@@ -210,6 +315,7 @@ struct PaneChatView<Terminal: View>: View {
         let context = state.actionContext
         guard working, state.agent == .claude, state.interrupt.canBegin, prepareAction(context) else { return }
         state.dictation.cancel()
+        state.photos.cancel()
         state.composer.cancelBeforeSend()
         let generation = state.interrupt.requestGeneration
         Task {
@@ -246,6 +352,10 @@ struct PaneChatView<Terminal: View>: View {
     }
 
     private func prepareAction(_ context: PaneChatState.ActionContext) -> Bool {
+        selectedDetail == nil && !state.photos.isBusy && canEditDraft(context)
+    }
+
+    private func canEditDraft(_ context: PaneChatState.ActionContext) -> Bool {
         state.actionContext == context && state.presentation == .chat && permitsSending && !state.dictation.isActive
             && approval?.hasBlockedRequest != true && pane.view.markedTextRange == nil && state.controller?.prepareToPark() != false
     }
@@ -274,8 +384,8 @@ struct PaneChatView<Terminal: View>: View {
     }
 }
 
-private struct ChatDetail: Identifiable {
-    enum Content { case text(ChatSelectedText), tool(TimelineTool), diff([ChatToolDiff]) }
+struct ChatDetail: Identifiable {
+    enum Content { case text(ChatSelectedText), tool(TimelineTool), diff([ChatToolDiff]), commands(ChatCommandOffer) }
     let id = UUID()
     let content: Content
 }

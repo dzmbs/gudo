@@ -85,6 +85,10 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
     var retainedHeightBytes: Int { heights.cost.bytes }
     private(set) var applyDurations: [Double] = []
 
+    var hasMarkedText: Bool {
+        (viewIfLoaded?.firstResponderWithin() as? any UITextInput)?.markedTextRange != nil
+    }
+
     func prepareToPark() -> Bool {
         guard isViewLoaded, let responder = view.firstResponderWithin() else { return true }
         if let input = responder as? any UITextInput, input.markedTextRange != nil { return false }

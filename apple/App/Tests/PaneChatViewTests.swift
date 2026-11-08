@@ -1,6 +1,7 @@
 #if os(iOS)
 import DesignSystem
 import HostKit
+import GudoCore
 import PaneLayout
 import SwiftUI
 import VoiceKit
@@ -384,9 +385,69 @@ final class PaneChatViewTests: XCTestCase {
         XCTAssertEqual(fixture.state.draft, "Draft in progress add these words")
     }
 
+    func testPhotoUploadUsesTheExistingStreamAndDefersDraftInsertionWhileNativeTextIsMarked() async throws {
+        let suite = "chat-photo-pane-test-" + UUID().uuidString
+        let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let fixture = try makeFixture(preferences: preferences, permitsSending: true, working: true, photoUploads: true)
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appending(path: "photo.jpg")
+        try Data(repeating: 1, count: 10).write(to: url)
+        let file = ChatPhotoFile(url: url, bytes: 10)
+        defer {
+            fixture.state.deactivate()
+            fixture.window.isHidden = true
+            fixture.window.rootViewController = nil
+            preferences.removePersistentDomain(forName: suite)
+        }
+        try await wait { fixture.state.controller != nil && fixture.state.model?.frame.rows.count == 60 }
+        fixture.state.draft = "Review this photo"
+        fixture.state.invalidateActions()
+        fixture.state.photos.begin(in: fixture.state)
+        let owner = PaneChatView(pane: fixture.pane, state: fixture.state, hub: fixture.hub,
+                                 permitsSending: true, working: true) { _ in Color.clear }
+        owner.send()
+        owner.interrupt()
+        let context = fixture.state.actionContext
+        let editor = UITextView(frame: CGRect(x: 0, y: 0, width: 200, height: 60))
+        try XCTUnwrap(fixture.state.controller).view.addSubview(editor)
+        XCTAssertTrue(editor.becomeFirstResponder())
+        editor.setMarkedText("かな", selectedRange: NSRange(location: 2, length: 0))
+        fixture.state.photos.load(in: fixture.state, photo: { file }, source: { file in
+            try await owner.uploadPhoto(file, context: context)
+        })
+        try await wait { fixture.state.photos.phase == .ready }
+        XCTAssertEqual(fixture.state.draft, "Review this photo")
+        XCTAssertNotNil(editor.markedTextRange)
+        let uploads = fixture.client.state.withLock { $0.uploads }
+        let target = try XCTUnwrap(uploads.first)
+        XCTAssertEqual(uploads.count, 1)
+        XCTAssertTrue(target.path.hasPrefix("/fixture/home/Downloads/Gudo-Attachments/"))
+        XCTAssertTrue(target.createNew && target.mkdirs)
+        XCTAssertEqual(target.mode, 0o600)
+        editor.unmarkText()
+        XCTAssertTrue(fixture.state.photos.append(to: fixture.state))
+        editor.resignFirstResponder()
+        editor.removeFromSuperview()
+        XCTAssertEqual(fixture.state.draft, "Review this photo\n@" + target.path)
+        XCTAssertFalse(fixture.state.photos.append(to: fixture.state))
+        XCTAssertEqual(fixture.state.composer.phase, .idle)
+        XCTAssertEqual(fixture.state.interrupt.phase, .idle)
+        XCTAssertTrue(fixture.backend.state.withLock { $0.input.isEmpty })
+        func draftEditor(in view: UIView) -> UITextView? {
+            if let text = view as? UITextView, text.isEditable, text.text == fixture.state.draft { return text }
+            return view.subviews.lazy.compactMap { draftEditor(in: $0) }.first
+        }
+        try await wait { draftEditor(in: fixture.window) != nil }
+        let draftEditor = try XCTUnwrap(draftEditor(in: fixture.window))
+        try await wait { draftEditor.bounds.height >= (draftEditor.font?.lineHeight ?? 1) * 1.9 }
+        try await Task.sleep(for: .milliseconds(350))
+        try capture(fixture.window, name: "photo-mock-added")
+    }
+
     private func makeFixture(preferences: UserDefaults, permitsSending: Bool = false, working: Bool = false,
                              interruptNeedsConfirmation: Bool = false, nativeMessageReceipts: Bool = false,
-                             dictation: ChatDictation = .init()) throws -> Fixture {
+                             dictation: ChatDictation = .init(), photoUploads: Bool = false) throws -> Fixture {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let backend = PanePresentationTests.Backend()
         let pane = try Pane(id: PaneId(7), backend: backend, appearance: .fromPreferences(), onExit: {})
@@ -397,7 +458,7 @@ final class PaneChatViewTests: XCTestCase {
         state.prepareInitialPresentation { pane.prepareToParkTerminal() }
         let client = TimelineFixtureClient(snapshot: try TimelineFixtureJSON.snapshot(0..<60, before: nil),
                                            interruptNeedsConfirmation: interruptNeedsConfirmation,
-                                           nativeMessageReceipts: nativeMessageReceipts)
+                                           nativeMessageReceipts: nativeMessageReceipts, photoUploads: photoUploads)
         let events = WorkspaceEventHub()
         let hub = DaemonWorkspace(hostId: "fixture", events: events, resolve: { client })
         let window = UIWindow(windowScene: scene)
@@ -529,14 +590,17 @@ private struct NativeTerminalFixture: UIViewRepresentable {
     func updateUIView(_ host: TerminalHost.Container, context: Context) { host.isActive = active }
 }
 
-nonisolated private final class TimelineFixtureClient: FakeWorkspaceClient, DaemonTimelineAPI, @unchecked Sendable {
+nonisolated final class TimelineFixtureClient: FakeWorkspaceClient, DaemonTimelineAPI, @unchecked Sendable {
     private let snapshot: String
     private let interruptNeedsConfirmation: Bool
     private let nativeMessageReceipts: Bool
-    init(snapshot: String, interruptNeedsConfirmation: Bool = false, nativeMessageReceipts: Bool = false) {
+    private let photoUploads: Bool
+    init(snapshot: String, interruptNeedsConfirmation: Bool = false, nativeMessageReceipts: Bool = false,
+         photoUploads: Bool = false) {
         self.snapshot = snapshot
         self.interruptNeedsConfirmation = interruptNeedsConfirmation
         self.nativeMessageReceipts = nativeMessageReceipts
+        self.photoUploads = photoUploads
         super.init()
     }
     func chatPrepare(paneId: UInt64) async throws -> String {
@@ -556,6 +620,16 @@ nonisolated private final class TimelineFixtureClient: FakeWorkspaceClient, Daem
     func chatInterrupt(paneId: UInt64, ticket: UInt64, confirmedRevision: UInt64?) async throws -> String {
         record("interrupt \(paneId) \(ticket) \(confirmedRevision.map(String.init) ?? "none")")
         return #""InterruptRequested""#
+    }
+    override func fsStat(path: String) async throws -> FileStat {
+        if photoUploads, path == "~" { return Self.stat("/fixture/home", size: 0, kind: .dir) }
+        return try await super.fsStat(path: path)
+    }
+    override func uploadFile(localPath: String, target: WriteTarget, progress: (any TransferProgress)?) async throws -> FileStat {
+        guard photoUploads else { return try await super.uploadFile(localPath: localPath, target: target, progress: progress) }
+        let bytes = try Data(contentsOf: URL(fileURLWithPath: localPath))
+        state.withLock { $0.uploads.append(target) }
+        return Self.stat(target.path, size: UInt64(bytes.count))
     }
     func timelineWatch(paneId: UInt64) async throws -> String { record("watch \(paneId)"); return snapshot }
     func timelineUnwatch(paneId: UInt64) async throws { record("unwatch \(paneId)") }
