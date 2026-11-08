@@ -250,6 +250,9 @@ impl Daemon {
         tasks.push(tokio::spawn(art::run(Arc::clone(&core))));
         tasks.push(tokio::spawn(assist::run(Arc::clone(&core))));
         tasks.push(tokio::spawn(ws::editor::run(Arc::clone(&core))));
+        tasks.push(tokio::spawn(ws::editor::prewarm_on_connect(Arc::clone(
+            &core,
+        ))));
         core.ws.tunnel.autostart(&core.cfg);
         core.mark_dirty();
         Ok(Self {

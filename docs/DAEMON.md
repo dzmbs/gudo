@@ -893,6 +893,10 @@ openvscode-server must be asked for with `Only(OpenVsCode)`.
   folder (`<state>/editors/ports.json`, a random port in 20000-29999 kept while it can be bound),
   and the app forwards the same local port when free, so the workbench's origin and with it
   WebKit's cache and VS Code's browser storage survive server restarts and app relaunches.
+  When an owner app connects (`Caps::BROWSER`; not the CLI), the editor a client launched last (`<state>/editors/last-launch.json`,
+  within 7 days, already installed, folder still allowed) is started ahead of time if nothing
+  serves it; one prewarm at a time, stopped after 15 min if no client used it. Hot hand-off still
+  stops every editor server.
 - **Compression (`ws/editor_proxy.rs`).** The VS Code server sends everything uncompressed
   whatever `Accept-Encoding` says (~24 MB on a cold load). Each editor server gets an
   HTTP/1.1 reverse proxy (hyper) on another loopback port; it is what `EditorInstance.port`

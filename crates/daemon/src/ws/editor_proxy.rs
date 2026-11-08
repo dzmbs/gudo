@@ -108,6 +108,7 @@ impl EditorProxy {
             upstream,
             cache,
             open: AtomicUsize::new(0),
+            served: AtomicBool::new(false),
             idle_since: Mutex::new(Instant::now()),
         });
         let task = tokio::spawn(accept(listener, Arc::clone(&shared)));
@@ -116,6 +117,11 @@ impl EditorProxy {
 
     pub(crate) fn port(&self) -> u16 {
         self.port
+    }
+
+    /// Whether any client has connected since it started.
+    pub(crate) fn has_served(&self) -> bool {
+        self.shared.served.load(Ordering::SeqCst)
     }
 
     /// How long no connection has been open (`None` while one is: a workbench, a load).
@@ -139,6 +145,7 @@ struct Shared {
     cache: Option<Arc<AssetCache>>,
     /// Connections open now, websockets included.
     open: AtomicUsize,
+    served: AtomicBool,
     /// When the last connection closed.
     idle_since: Mutex<Instant>,
 }
@@ -149,6 +156,7 @@ struct Busy(Arc<Shared>);
 impl Busy {
     fn new(shared: &Arc<Shared>) -> Self {
         shared.open.fetch_add(1, Ordering::SeqCst);
+        shared.served.store(true, Ordering::SeqCst);
         Self(Arc::clone(shared))
     }
 }

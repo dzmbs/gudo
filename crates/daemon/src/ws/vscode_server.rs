@@ -89,6 +89,10 @@ pub(crate) struct Servers {
 }
 
 impl Servers {
+    pub(crate) fn installed(&self, config: &Config) -> Option<PathBuf> {
+        latest(&root(config))
+    }
+
     /// The newest server here, never asking the update service; downloads one only when none is here.
     pub(crate) async fn ensure(&self, config: &Config) -> Result<PathBuf, WsError> {
         let root = root(config);

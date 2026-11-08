@@ -25,6 +25,7 @@ use proto::{
     EditorAvailability, EditorChoice, EditorInstance, EditorKind, EditorLaunch, EditorList,
     EditorOpened, UnixMillis, WsError,
 };
+use serde::{Deserialize, Serialize};
 use tokio::process::{Child, Command};
 
 use super::editor_ports::EditorPorts;
@@ -82,6 +83,10 @@ const VSCODIUM_BUILDS: &[(&str, &str, &str, &str)] = &[
 /// Long because `code serve-web` downloads Microsoft's server on its first run.
 const START_TIMEOUT: Duration = Duration::from_secs(180);
 const HOUSEKEEPING_INTERVAL: Duration = Duration::from_secs(600);
+/// Only a folder opened this recently is prewarmed.
+const PREWARM_RECENCY: Duration = Duration::from_secs(7 * 24 * 3600);
+/// A prewarmed server no client used stops after this long.
+const PREWARM_UNUSED: Duration = Duration::from_secs(15 * 60);
 
 struct Running {
     /// `info.port` is the proxy's port when there is one, else the server's.
@@ -90,6 +95,23 @@ struct Running {
     child: Child,
     proxy: Option<EditorProxy>,
     server_dir: Option<PathBuf>,
+    origin: LaunchOrigin,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LaunchOrigin {
+    Client,
+    /// Started ahead of a client for the folder opened last.
+    Prewarm,
+}
+
+/// The editor a client launched last, prewarmed when an owner connects.
+#[derive(Debug, Serialize, Deserialize)]
+struct LastLaunch {
+    folder: PathBuf,
+    kind: EditorKind,
+    accept_vscode_license: bool,
+    at: UnixMillis,
 }
 
 impl Drop for Running {
@@ -111,7 +133,9 @@ pub(crate) struct Editors {
     /// Microsoft's server, run directly.
     servers: Servers,
     update_wanted: tokio::sync::Notify,
+    prewarm_wanted: tokio::sync::Notify,
     ports: EditorPorts,
+    last_launch_path: PathBuf,
 }
 
 /// The user's own VS Code CLI, else the one the daemon installed from Microsoft.
@@ -231,7 +255,9 @@ impl Editors {
             asset_cache: std::sync::OnceLock::new(),
             servers: Servers::default(),
             update_wanted: tokio::sync::Notify::new(),
+            prewarm_wanted: tokio::sync::Notify::new(),
             ports: EditorPorts::load(config.state_dir.join("editors").join("ports.json")),
+            last_launch_path: config.state_dir.join("editors").join("last-launch.json"),
         }
     }
 
@@ -308,6 +334,93 @@ impl Editors {
         config: &Config,
         request: &EditorLaunch,
         folder: &Path,
+    ) -> Result<EditorInstance, WsError> {
+        let instance = self
+            .start(config, request, folder, LaunchOrigin::Client)
+            .await?;
+        let last = LastLaunch {
+            folder: folder.to_owned(),
+            kind: instance.kind,
+            accept_vscode_license: request.accept_vscode_license,
+            at: UnixMillis(crate::identity::now_millis()),
+        };
+        let saved = serde_json::to_vec(&last)
+            .map_err(std::io::Error::other)
+            .and_then(|bytes| fsutil::write_atomic(&self.last_launch_path, &bytes));
+        if let Err(error) = saved {
+            tracing::warn!("recording the last editor launch: {error}");
+        }
+        Ok(instance)
+    }
+
+    /// Asks [`prewarm_on_connect`] to start the last launched editor ahead of the client.
+    pub(crate) fn want_prewarm(&self) {
+        self.prewarm_wanted.notify_one();
+    }
+
+    async fn prewarm(&self, config: &Config, policy: &super::Policy) {
+        let Some(last) = std::fs::read(&self.last_launch_path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<LastLaunch>(&bytes).ok())
+        else {
+            return;
+        };
+        let age = Duration::from_millis(crate::identity::now_millis().saturating_sub(last.at.0));
+        if age > PREWARM_RECENCY || !config.editor_compress || !self.is_installed(config, last.kind)
+        {
+            return;
+        }
+        let folder_key = last.folder.to_string_lossy().into_owned();
+        if policy.resolve(&folder_key).is_err() {
+            return;
+        }
+        {
+            let mut running = self.running.lock().await;
+            reap(&mut running);
+            if running.contains_key(&folder_key)
+                || running
+                    .values()
+                    .any(|editor| editor.origin == LaunchOrigin::Prewarm)
+            {
+                return;
+            }
+        }
+        let request = EditorLaunch {
+            folder: folder_key,
+            choice: EditorChoice::Only(last.kind),
+            accept_vscode_license: last.accept_vscode_license,
+        };
+        if let Err(error) = self
+            .start(config, &request, &last.folder, LaunchOrigin::Prewarm)
+            .await
+        {
+            tracing::info!(folder = %last.folder.display(), "no editor prewarmed: {error}");
+        }
+    }
+
+    /// Whether `kind` starts without downloading anything first.
+    fn is_installed(&self, config: &Config, kind: EditorKind) -> bool {
+        match kind {
+            EditorKind::VsCode => {
+                !config.vscode_serve_web
+                    && find_code(config).is_some()
+                    && self.servers.installed(config).is_some()
+            }
+            EditorKind::OpenVsCode => {
+                openvscode_dir(config).is_some_and(|dir| openvscode_bin(&dir).is_file())
+            }
+            EditorKind::Vscodium => {
+                vscodium_dir(config).is_some_and(|dir| vscodium_bin(&dir).is_file())
+            }
+        }
+    }
+
+    async fn start(
+        &self,
+        config: &Config,
+        request: &EditorLaunch,
+        folder: &Path,
+        origin: LaunchOrigin,
     ) -> Result<EditorInstance, WsError> {
         if !folder.is_dir() {
             return Err(WsError::NotFound(format!(
@@ -479,6 +592,7 @@ impl Editors {
             child,
             proxy: None,
             server_dir,
+            origin,
         };
         wait_ready(&mut editor, &log_path).await?;
         if let Some(listener) = proxy_listener {
@@ -496,7 +610,7 @@ impl Editors {
         if runs_microsoft_server {
             self.update_wanted.notify_one();
         }
-        tracing::info!(?kind, port, proxy = info.port, folder = %folder.display(), elapsed_ms = started.elapsed().as_millis(), "editor started");
+        tracing::info!(?kind, ?origin, port, proxy = info.port, folder = %folder.display(), elapsed_ms = started.elapsed().as_millis(), "editor started");
         Ok(info)
     }
 
@@ -662,6 +776,15 @@ pub(crate) async fn run(core: std::sync::Arc<crate::core::Core>) {
     }
 }
 
+/// Prewarms the last launched editor each time [`Editors::want_prewarm`] is called, one at a time.
+pub(crate) async fn prewarm_on_connect(core: std::sync::Arc<crate::core::Core>) {
+    let editors = &core.ws.editors;
+    loop {
+        editors.prewarm_wanted.notified().await;
+        editors.prewarm(&core.cfg, &core.ws.policy).await;
+    }
+}
+
 /// Whether the server on `port` still accepts its own token. A slow answer counts as yes, so a
 /// busy server is never restarted.
 async fn accepts_token(port: u16, token: &str) -> bool {
@@ -695,13 +818,22 @@ async fn accepts_token(port: u16, token: &str) -> bool {
 /// may stay away and still come back.
 fn reap(running: &mut HashMap<String, Running>) {
     running.retain(|_, editor| {
+        let has_served = editor.proxy.as_ref().is_some_and(EditorProxy::has_served);
+        let grace = idle_limit(editor.origin, has_served);
         matches!(editor.child.try_wait(), Ok(None))
             && editor
                 .proxy
                 .as_ref()
                 .and_then(EditorProxy::idle_for)
-                .is_none_or(|idle| idle < vscode_server::RECONNECTION_GRACE)
+                .is_none_or(|idle| idle < grace)
     });
+}
+
+fn idle_limit(origin: LaunchOrigin, has_served: bool) -> Duration {
+    match origin {
+        LaunchOrigin::Prewarm if !has_served => PREWARM_UNUSED,
+        _ => vscode_server::RECONNECTION_GRACE,
+    }
 }
 
 /// Waits until the server accepts connections, or fails with the end of its log.
@@ -888,6 +1020,19 @@ mod tests {
         assert_eq!(url_path("t", root.path(), &home), "/?tkn=t");
         assert_eq!(url_path("t", Path::new("/"), &home), "/?tkn=t");
         assert!(url_path("t", &project, &home).ends_with("/me/projects/app"));
+    }
+
+    #[test]
+    fn an_unused_prewarm_stops_long_before_a_used_server() {
+        assert_eq!(idle_limit(LaunchOrigin::Prewarm, false), PREWARM_UNUSED);
+        assert_eq!(
+            idle_limit(LaunchOrigin::Prewarm, true),
+            vscode_server::RECONNECTION_GRACE
+        );
+        assert_eq!(
+            idle_limit(LaunchOrigin::Client, false),
+            vscode_server::RECONNECTION_GRACE
+        );
     }
 
     /// A one-shot server answering with `status`; its port.

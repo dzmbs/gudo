@@ -255,6 +255,10 @@ async fn run(
     });
     core.client_connected(true);
     core.device_connected(device, client.id, conn.clone());
+    // Only the apps announce BROWSER; a CLI connection never opens an editor.
+    if owner && hello.caps.contains(Caps::BROWSER) {
+        core.ws.editors.want_prewarm();
+    }
     core.askpass.register(client.id, &client.authz, client.caps);
     core.browser.register(client.id, &client.authz, client.caps);
     client.approvals_state();

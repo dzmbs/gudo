@@ -1741,6 +1741,79 @@ async fn editor_traffic_is_compressed_through_the_forward() {
 
 /// VSCodium: chosen explicitly or as the configured default, launched with a token and no
 /// licence flag, per folder, stopped with the daemon. A fake `codium-server` stands in.
+/// After a restart, an owner app connecting has the folder opened last started again, on its port.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_last_editor_is_prewarmed_when_the_owner_connects() {
+    if !have("python3") {
+        eprintln!("skipping: python3 not installed");
+        return;
+    }
+    let (_state, state) = canonical_tempdir();
+    let (_home, home) = canonical_tempdir();
+    let codium = home.join("codium");
+    install_fake(&codium.join("bin/codium-server"));
+    let folder = home.join("project");
+    std::fs::create_dir_all(&folder).unwrap();
+    let start = || {
+        let (codium, home) = (codium.clone(), home.clone());
+        start_with(&state, move |config| {
+            config.pane_env.push(("HOME".into(), path_string(&home)));
+            config.fs_allow.push(home);
+            config.vscodium_dir = Some(codium);
+        })
+    };
+
+    let daemon = start().await;
+    let client = connected(&daemon).await;
+    let launched = client
+        .client
+        .editor_launch(EditorLaunch {
+            folder: path_string(&folder),
+            choice: EditorChoice::Only(EditorKind::Vscodium),
+            accept_vscode_license: false,
+        })
+        .await
+        .unwrap();
+    drop(client);
+    daemon.shutdown().await;
+
+    let daemon = start().await;
+    let client = connected(&daemon).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let status = client.client.editor_status().await.unwrap();
+    assert!(
+        status.running.is_empty(),
+        "a CLI connection prewarms nothing"
+    );
+    let mut app = TestClient::connect_browser(&ticket(&daemon), ClientConfig::generate_key());
+    app.until("connected", |app| app.connected > 0).await;
+    let prewarmed = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let status = client.client.editor_status().await.unwrap();
+            if let Some(running) = status.running.into_iter().next() {
+                return running;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("prewarmed");
+    assert_eq!(prewarmed.folder, path_string(&folder));
+    assert_eq!(prewarmed.port, launched.port);
+    let reused = client
+        .client
+        .editor_launch(EditorLaunch {
+            folder: path_string(&folder),
+            choice: EditorChoice::Auto,
+            accept_vscode_license: false,
+        })
+        .await;
+    drop(app);
+    drop(client);
+    daemon.shutdown().await;
+    assert_eq!(reused.unwrap().pid, prewarmed.pid);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn vscodium_launches_without_a_licence_and_as_the_default() {
     if !have("python3") {
