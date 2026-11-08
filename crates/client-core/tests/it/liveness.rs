@@ -85,7 +85,7 @@ pub(super) fn host(pong_delay: Duration) -> (Ticket, oneshot::Sender<()>) {
     (ready_rx.recv().unwrap(), freeze_tx)
 }
 
-async fn read(rx: &mut RecvStream) -> Option<ClientCtl> {
+pub(super) async fn read(rx: &mut RecvStream) -> Option<ClientCtl> {
     let mut prefix = [0; proto::frame::LEN_PREFIX];
     rx.read_exact(&mut prefix).await.ok()?;
     let len = proto::frame::body_len(prefix, proto::MAX_FRAME_LEN).ok()?;

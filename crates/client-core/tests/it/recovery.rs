@@ -248,3 +248,75 @@ async fn an_idle_pane_reports_its_stream_open_after_a_reconnect() {
     drop(client);
     daemon.shutdown().await;
 }
+
+/// A daemon stand-in that collects what a client sends after its Hello for `listen_for`, then
+/// welcomes it, and reports what arrived before the Welcome.
+async fn listening_daemon(
+    listen_for: Duration,
+) -> (
+    iroh::Endpoint,
+    Ticket,
+    tokio::sync::oneshot::Receiver<Vec<ClientCtl>>,
+) {
+    let endpoint = iroh::Endpoint::builder(presets::Minimal)
+        .alpns(vec![proto::ALPN.to_vec()])
+        .clear_ip_transports()
+        .bind_addr("127.0.0.1:0".parse::<std::net::SocketAddr>().unwrap())
+        .unwrap()
+        .bind()
+        .await
+        .unwrap();
+    let ticket = ticket_for(
+        DaemonId(*endpoint.id().as_bytes()),
+        endpoint.bound_sockets(),
+    );
+    let (report_tx, report_rx) = tokio::sync::oneshot::channel();
+    let server = endpoint.clone();
+    let daemon_id = ticket.daemon_id;
+    tokio::spawn(async move {
+        let incoming = server.accept().await.unwrap();
+        let connection = incoming.await.unwrap();
+        let (mut control_tx, mut control_rx) = connection.accept_bi().await.unwrap();
+        let _hello = super::liveness::read(&mut control_rx).await.unwrap();
+        let mut before_welcome = Vec::new();
+        let deadline = tokio::time::Instant::now() + listen_for;
+        while let Ok(Some(request)) =
+            tokio::time::timeout_at(deadline, super::liveness::read(&mut control_rx)).await
+        {
+            before_welcome.push(request);
+        }
+        let welcome = ServerCtl::Welcome(Welcome {
+            daemon_id,
+            session_epoch: SessionEpoch(1),
+            roles: Roles::OWNER,
+            snapshot_format: u32::from(ghostty_vt::snapshot_format()),
+            panes: vec![],
+            resume_token: ResumeToken(vec![1]),
+        });
+        let _ = report_tx.send(before_welcome);
+        let _ = control_tx
+            .write_all(&proto::frame::to_vec(&welcome).unwrap())
+            .await;
+        connection.closed().await;
+    });
+    (endpoint, ticket, report_rx)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn session_requests_reach_the_daemon_without_waiting_for_its_welcome() {
+    let (endpoint, ticket, before_welcome) = listening_daemon(Duration::from_millis(500)).await;
+    let (client, _events) = super::connect(&ticket.to_string(), false);
+    client.attach(None);
+    let requests = tokio::time::timeout(Duration::from_secs(10), before_welcome)
+        .await
+        .expect("the daemon heard the client")
+        .unwrap();
+    assert!(
+        requests
+            .iter()
+            .any(|request| matches!(request, ClientCtl::Attach { .. })),
+        "the attach waited for the welcome: {requests:?}"
+    );
+    drop(client);
+    endpoint.close().await;
+}

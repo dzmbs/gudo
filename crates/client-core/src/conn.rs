@@ -543,6 +543,11 @@ async fn handshake(
         resume_token: lock(&inner.resume_token).clone(),
     };
     send(&mut ctl_tx, &ClientCtl::Hello(hello)).await?;
+    // Sent before the Welcome to save a round trip: every daemon that admits this Hello reads
+    // them after it, and a refused connection drops them.
+    for request in requests_every_daemon_reads(inner) {
+        send(&mut ctl_tx, &request).await?;
+    }
     // Daemons that know `Caps::DAEMON_INFO` describe themselves first; older ones answer
     // with `Welcome` or `Refused` straight away.
     let mut first = recv::<ServerCtl>(&mut ctl_rx).await?;
@@ -614,6 +619,51 @@ fn resume_points(inner: &Inner) -> Vec<ResumePoint> {
         .collect()
 }
 
+/// What the client wants, in requests any daemon decodes. Panes in the Hello's resume list are
+/// already streaming.
+fn requests_every_daemon_reads(inner: &Inner) -> Vec<ClientCtl> {
+    let wanted = lock(&inner.wanted);
+    let mut requests = Vec::new();
+    if wanted.attach_requested {
+        requests.push(ClientCtl::Attach {
+            session_id: wanted.session,
+        });
+    }
+    requests.push(ClientCtl::Visible {
+        pane_ids: wanted.visible.clone(),
+    });
+    requests.push(ClientCtl::Focus {
+        pane_id: wanted.focus,
+    });
+    for (&pane_id, &size) in &wanted.sizes {
+        requests.push(ClientCtl::Resize { pane_id, size });
+    }
+    for &pane_id in &wanted.subscribed {
+        requests.push(ClientCtl::Subscribe {
+            pane_id,
+            mode: proto::SubscribeMode::Live,
+            rows_hint: 0,
+        });
+    }
+    requests
+}
+
+fn requests_needing_features(inner: &Inner, features: proto::DaemonFeatures) -> Vec<ClientCtl> {
+    let wanted = lock(&inner.wanted);
+    let mut requests = Vec::new();
+    if features.contains(proto::DaemonFeatures::ACTIVE_SIZING) {
+        for (&pane_id, &activity) in &wanted.activities {
+            requests.push(ClientCtl::PaneActivity { pane_id, activity });
+        }
+    }
+    if let Some(colors) = &wanted.colors
+        && features.contains(proto::DaemonFeatures::TERMINAL_COLORS)
+    {
+        requests.push(ClientCtl::TerminalColors(colors.clone()));
+    }
+    requests
+}
+
 /// Runs one live connection; returns why it ended.
 async fn run(inner: &Arc<Inner>, live: Live) -> String {
     if live.incompatible {
@@ -669,45 +719,8 @@ async fn run(inner: &Arc<Inner>, live: Live) -> String {
         }
     }
 
-    // Replay what the client wants. Panes in the Hello's resume list are already streaming.
-    let replay: Vec<ClientCtl> = {
-        let wanted = lock(&inner.wanted);
-        let mut messages = Vec::new();
-        if wanted.attach_requested {
-            messages.push(ClientCtl::Attach {
-                session_id: wanted.session,
-            });
-        }
-        if input_features.contains(proto::DaemonFeatures::ACTIVE_SIZING) {
-            for (&pane_id, &activity) in &wanted.activities {
-                messages.push(ClientCtl::PaneActivity { pane_id, activity });
-            }
-        }
-        if let Some(colors) = &wanted.colors
-            && inner.daemon_has(proto::DaemonFeatures::TERMINAL_COLORS)
-        {
-            messages.push(ClientCtl::TerminalColors(colors.clone()));
-        }
-        messages.push(ClientCtl::Visible {
-            pane_ids: wanted.visible.clone(),
-        });
-        messages.push(ClientCtl::Focus {
-            pane_id: wanted.focus,
-        });
-        for (&pane_id, &size) in &wanted.sizes {
-            messages.push(ClientCtl::Resize { pane_id, size });
-        }
-        for &pane_id in &wanted.subscribed {
-            messages.push(ClientCtl::Subscribe {
-                pane_id,
-                mode: proto::SubscribeMode::Live,
-                rows_hint: 0,
-            });
-        }
-        messages
-    };
-    for msg in &replay {
-        if let Err(err) = send(&mut ctl_tx, msg).await {
+    for request in requests_needing_features(inner, input_features) {
+        if let Err(err) = send(&mut ctl_tx, &request).await {
             return err.to_string();
         }
     }
