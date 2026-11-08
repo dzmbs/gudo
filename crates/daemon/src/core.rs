@@ -169,6 +169,17 @@ pub(crate) struct ClosedPane {
     pub agent: Option<AgentRecord>,
 }
 
+/// Programs that end on their own this long before the daemon shuts down count as ended by
+/// it: a reboot or logout stops them as well, sometimes a moment before the daemon, and the
+/// panes come back as they were before.
+pub(crate) const ENDED_BY_SHUTDOWN: Duration = Duration::from_secs(5);
+
+#[derive(Debug)]
+struct BeforeExits {
+    latest_exit: Instant,
+    saved: persist::Saved,
+}
+
 /// How many closed panes the daemon remembers, oldest dropped first.
 pub(crate) const CLOSED_PANES: usize = 64;
 
@@ -306,6 +317,9 @@ pub(crate) struct Core {
     attached: Mutex<HashMap<ConnId, SessionId>>,
     next_conn: AtomicU64,
     pub persist_dirty: Notify,
+    /// What was saved before the latest burst of programs ending on their own, kept so a
+    /// shutdown right after it saves what they lost ([`ENDED_BY_SHUTDOWN`]).
+    before_exits: Mutex<Option<BeforeExits>>,
     pub shutting_down: AtomicBool,
     pub hooks: HookServer,
     shell: Option<ShellIntegration>,
@@ -319,6 +333,8 @@ pub(crate) struct Core {
     pub mp: crate::mp::Mp,
     /// Drawings and images.
     pub art: crate::art::Art,
+    /// Panes' screens saved for after a restart.
+    pub screens: crate::screens::Screens,
     /// Input assistance: foreground programs, prompt watches, history, completion caches.
     pub assist: crate::assist::Assist,
     pub(crate) term: crate::term::Term,
@@ -370,6 +386,7 @@ impl Core {
             attached: Mutex::new(HashMap::new()),
             next_conn: AtomicU64::new(1),
             persist_dirty: Notify::new(),
+            before_exits: Mutex::new(None),
             shutting_down: AtomicBool::new(false),
             hooks,
             shell,
@@ -378,6 +395,7 @@ impl Core {
             push: crate::notifier::Push::load(&config.state_dir),
             mp,
             art: crate::art::Art::open(&config.state_dir, config.artifacts),
+            screens: crate::screens::Screens::new(&config.state_dir),
             assist: crate::assist::Assist::new(&config),
             term: crate::term::Term::default(),
             upgrade: crate::upgrade::Upgrade::new(config.exe.as_deref()),
@@ -1153,6 +1171,7 @@ impl Core {
 
     /// Applies a layout op and broadcasts its effects.
     pub fn apply_op(self: &Arc<Self>, op: LayoutOp) -> OpOutcome {
+        lock(&self.before_exits).take();
         match self.try_op(op) {
             Ok(outcome) => outcome,
             Err((code, message)) => OpOutcome::Failed { code, message },
@@ -1178,7 +1197,7 @@ impl Core {
                     .pane(pane_id)
                     .and_then(|entry| lock(&entry.meta).cwd.clone());
                 let new = lock(&self.layout).alloc_pane();
-                self.spawn_pane(new, launch, cwd_hint, false)?;
+                self.spawn_pane(new, launch, cwd_hint, PaneStart::New)?;
                 let result = lock(&self.layout).split(pane_id, axis, new);
                 if let Err(error) = result {
                     self.kill_panes(&[new]);
@@ -1221,7 +1240,7 @@ impl Core {
                     return Err(fail(OpError::NotFound));
                 }
                 let pane = lock(&self.layout).alloc_pane();
-                self.spawn_pane(pane, launch, None, false)?;
+                self.spawn_pane(pane, launch, None, PaneStart::New)?;
                 let tab = lock(&self.layout).new_tab(session_id, name, pane);
                 let tab_id = tab.map_err(|error| {
                     self.kill_panes(&[pane]);
@@ -1343,7 +1362,7 @@ impl Core {
                     .pane(pane_id)
                     .and_then(|entry| lock(&entry.meta).cwd.clone());
                 let new = lock(&self.layout).alloc_pane();
-                self.spawn_pane(new, launch, cwd_hint, false)?;
+                self.spawn_pane(new, launch, cwd_hint, PaneStart::New)?;
                 let result = lock(&self.layout).new_float(pane_id, new, frame, focus, close);
                 if let Err(error) = result {
                     self.kill_panes(&[new]);
@@ -1396,7 +1415,7 @@ impl Core {
             .check_session_name(&name)
             .map_err(|error| (error, format!("session name {name:?}: {error:?}")))?;
         let pane = lock(&self.layout).alloc_pane();
-        self.spawn_pane(pane, launch, None, false)?;
+        self.spawn_pane(pane, launch, None, PaneStart::New)?;
         let created = lock(&self.layout).create_session(name, pane);
         let (session, tab) = created.map_err(|error| {
             self.kill_panes(&[pane]);
@@ -1558,11 +1577,41 @@ impl Core {
         }
     }
 
+    /// A program is about to end on its own and the saved state to lose it: keeps the state
+    /// from before the first of a burst of such endings.
+    pub fn note_program_ending(&self) {
+        let mut before_exits = lock(&self.before_exits);
+        match before_exits.as_mut() {
+            Some(burst) if burst.latest_exit.elapsed() < ENDED_BY_SHUTDOWN => {
+                burst.latest_exit = Instant::now();
+            }
+            _ => {
+                *before_exits = Some(BeforeExits {
+                    latest_exit: Instant::now(),
+                    saved: saved_state(self),
+                });
+            }
+        }
+    }
+
+    /// What a shutdown saves: the state from before programs started ending, if that was a
+    /// moment ago, else the current one.
+    pub fn state_to_save_on_shutdown(&self) -> persist::Saved {
+        match lock(&self.before_exits).take() {
+            Some(burst) if burst.latest_exit.elapsed() < ENDED_BY_SHUTDOWN => {
+                tracing::info!("saving the panes as they were before their programs ended");
+                burst.saved
+            }
+            _ => saved_state(self),
+        }
+    }
+
     /// The pane's process exited: remove it from the layout like `ClosePane`.
     fn pane_exited(self: &Arc<Self>, id: PaneId) {
         if self.shutting_down.load(Ordering::Acquire) || self.pane(id).is_none() {
             return;
         }
+        self.note_program_ending();
         let session = lock(&self.layout).session_of_pane(id);
         let removed = lock(&self.layout).close_pane(id);
         if let Ok(removed) = removed {
@@ -1570,15 +1619,21 @@ impl Core {
         }
     }
 
-    /// Starts a pane process and its task. `restored` marks an agent resumed after a restart.
+    /// Starts a pane process and its task.
     pub fn spawn_pane(
         self: &Arc<Self>,
         id: PaneId,
         launch: PaneLaunch,
         cwd_hint: Option<String>,
-        restored: bool,
+        start: PaneStart,
     ) -> Result<(), (OpError, String)> {
-        let after_restart = restored;
+        let (restored, preamble) = match start {
+            PaneStart::New => (false, Vec::new()),
+            PaneStart::Restored {
+                preamble,
+                agent: agent_start,
+            } => (agent_start == AgentStart::Resumed, preamble),
+        };
         let (launch, restored) = match launch {
             PaneLaunch::Reopen { pane_id, cwd } => {
                 let launch = self.reopen_launch(pane_id, cwd);
@@ -1819,11 +1874,6 @@ impl Core {
                 // that shell. Interactive, so rc files set `PATH` as in any pane and the install
                 // check holds.
                 let pre_command = pre_command.as_deref().unwrap_or_default();
-                let marker = if after_restart && resume.is_some() {
-                    RESUMED_MARKER
-                } else {
-                    ""
-                };
                 let launch_id = crate::agent::new_uuid();
                 native_input_launch =
                     crate::agent_input::AgentInputGate::pending(launch_id.clone());
@@ -1834,7 +1884,7 @@ impl Core {
                     "-l",
                     "-c",
                     &format!(
-                        "{pre_command}{marker}{shim} agent-input-arm {launch_id} </dev/null; {line}; {shim} agent-exit-fence {launch_id} && {}",
+                        "{pre_command}{shim} agent-input-arm {launch_id} </dev/null; {line}; {shim} agent-exit-fence {launch_id} && {}",
                         then_shell()
                     ),
                 ]);
@@ -1913,6 +1963,7 @@ impl Core {
             id,
             self.pane_gen,
             command,
+            preamble,
             size,
             self.cfg.ring_capacity,
             crate::pane::VtLimits {
@@ -2431,6 +2482,7 @@ async fn pane_task(core: Arc<Core>, entry: Arc<PaneEntry>, mut vt_events: mpsc::
                     }
                     VtEvent::Activity => {
                         screen_dirty = true;
+                        core.screens.note_output();
                         if lock(&entry.meta).secret_prompt.is_some()
                             || pane.echo().is_hidden_input()
                         {
@@ -2791,6 +2843,7 @@ fn end_exited_agent(core: &Core, entry: &PaneEntry) {
     crate::agent_input::agent_exited(&entry.pane);
     // While the runtime is still there, so its open requests are retired.
     core.agent_event(id, event);
+    core.note_program_ending();
     *lock(&entry.agent) = None;
     {
         let mut record = lock(&entry.record);
@@ -2803,8 +2856,24 @@ fn end_exited_agent(core: &Core, entry: &PaneEntry) {
     core.emit(Event::PaneMeta(id));
 }
 
-/// Printed in dim text above an agent that resumes its session after a daemon restart.
-const RESUMED_MARKER: &str = "printf '\\033[2m%s\\033[0m\\n' 'Resumed after restart'; ";
+/// How a pane comes to be started.
+#[derive(Debug)]
+pub(crate) enum PaneStart {
+    /// Asked for by a client or an agent.
+    New,
+    /// Brought back after a restart, its output starting with `preamble`.
+    Restored {
+        preamble: Vec<u8>,
+        agent: AgentStart,
+    },
+}
+
+/// Whether a restored pane's agent continues its session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AgentStart {
+    Resumed,
+    Fresh,
+}
 
 /// Quotes `word` for a POSIX shell as one word.
 pub(crate) fn shell_quote(word: &str) -> String {
@@ -2898,7 +2967,21 @@ pub(crate) fn restore(
             }
             _ => false,
         };
-        if let Err((_, message)) = core.spawn_pane(id, launch, None, restored_agent) {
+        let saved_screen = core.screens.load(id);
+        let preamble = if saved_screen.is_some() || restored_agent {
+            crate::screens::restored_preamble(saved_screen.as_ref())
+        } else {
+            Vec::new()
+        };
+        let start = PaneStart::Restored {
+            preamble,
+            agent: if restored_agent {
+                AgentStart::Resumed
+            } else {
+                AgentStart::Fresh
+            },
+        };
+        if let Err((_, message)) = core.spawn_pane(id, launch, None, start) {
             tracing::warn!(pane = %id, "restoring pane failed: {message}");
             failed.push(id);
         }

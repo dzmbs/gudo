@@ -171,13 +171,13 @@ async fn agents_resume_their_sessions_after_a_cold_restart() {
         )
         .await;
     for pane in [hand_codex, hand_claude, launched_codex] {
-        owner.wait_text(pane, "Resumed after restart").await;
+        owner.wait_text(pane, "Restored after restart").await;
     }
     owner.type_line(shell, "pwd -P");
     owner
         .wait_text(shell, &elsewhere.display().to_string())
         .await;
-    assert!(!owner.text(shell).contains("Resumed"));
+    assert!(!owner.text(shell).contains("fake"));
     drop(owner);
     daemon.shutdown().await;
 }

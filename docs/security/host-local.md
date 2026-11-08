@@ -8,7 +8,9 @@ the editor servers, the state directory, logs, the service and self-upgrade, and
 
 - **The state directory** (`~/Library/Application Support/gudo`, `~/.local/state/gudo`):
   the daemon's iroh secret key, paired devices, grants and invites, pairing secrets, the
-  audit log, `hook.token`, editor tokens.
+  audit log, `hook.token`, editor tokens. Also what the panes showed: `layout.json` (each
+  pane's directory, agent session ids, the last running command line) and `screens/` (each
+  pane's screen and newest scrollback, up to 4000 rows, zstd).
 - **The hook token** and the per-pane tokens derived from it (HMAC-SHA256 of the pane id).
   With `hook.token`, a caller can act as any pane. With a pane token, only as that pane.
 - **The owner's devices**: the app's in-app browser holds the owner's sign-ins, and the askpass
@@ -197,6 +199,9 @@ forwards end with it.
 - Browser snapshots and screenshots saved for agents are created as new 0600 files with
   random names: no symlink following, no world-readable page content.
 - A self-upgrade is staged with `O_CREAT|O_EXCL`.
+- Saved screens (`screens/<pane>.zst`) are written like `layout.json`: atomically, 0600, in a
+  0700 directory. A screen is removed when its pane leaves the saved layout. All of them
+  together are capped at 64 MiB, and each at 1 MiB of text before compression.
 - `gudo` keeps its device key, tickets and invites as 0600 files in a 0700 directory.
 
 **Logs.** No tokens, answers or terminal text are logged at info level. The first-run pairing
@@ -273,6 +278,11 @@ unless the owner asked for a downgrade, and is then swapped in atomically (the o
   program another daemon thread starts at that instant could inherit them. By then the daemon
   has stopped serving and its tasks, so little can start a program; the window is a few
   system calls.
+- **Terminal text at rest.** Saved screens hold whatever the panes showed: a secret printed
+  to the terminal (a token from `cat`, an API key in a command's output) stays on disk until
+  the pane closes or its scrollback moves past it. Text typed at a hidden password prompt is
+  never echoed, so it is not saved. Protection is the same as `layout.json`: file mode and
+  the user's disk encryption; anyone who can read the user's files can read them.
 - **The local restart has no rollback check.** It runs whatever build is at the daemon's own
   path, put there by someone who could run it anyway (the same user, a package manager, the Mac
   app's update).

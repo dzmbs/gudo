@@ -456,8 +456,8 @@ changing their policy requires a helper update.
   started that no other pane claimed (Claude Code's config directory: `CLAUDE_CONFIG_DIR`,
   else `~/.claude`). After a restart such a pane comes back as the agent resuming that
   session in the same directory, then a shell when it exits, as a launched one does.
-- A pane that resumes its agent after a cold restart shows `Resumed after restart` (dim)
-  above it.
+- A pane that resumes its agent after a cold restart shows `Restored after restart` (dim)
+  above it, below its saved screen.
 
 ### Persistence
 
@@ -467,6 +467,25 @@ atomically (tmp, fsync, rename, fsync dir) 500 ms after the last change and on s
 start the layout is restored with the same ids; shells restart in their last directory
 (OSC 7), agents resume, one-off commands come back as shells. An unreadable file is moved
 aside, never overwritten.
+
+**Screens** (`daemon::screens`): `<state>/screens/<pane>.zst` holds a pane's primary screen
+and newest scrollback (up to 4000 rows, to the cursor's) as styled text: text, colours and
+links as VT sequences, no modes, cursor or palette (`ghostty_vt::Terminal::styled_text`). A
+full-screen program's screen is left out; the shell's under it is kept. It is saved
+`screen_save_delay` (5 s) after output, at most that often while output goes on, on the
+blocking pool, and for every pane on shutdown (at most 5 s). Atomic, 0600, 1 MiB of text per
+pane (older rows go first), 64 MiB compressed for all; the file goes when its pane leaves the
+saved layout. A restored pane's output starts with it (`pty::SpawnOptions::preamble`, so it is
+in the ring and the VT like any output), then a dim `Restored after restart · <saved time>`
+line, then the new shell or agent. Hot upgrades carry the terminal itself and ignore these.
+
+**Shutdown.** `gudo-hostd run` stops on SIGTERM or SIGINT (launchd and systemd at logout and
+reboot) and saves screens and layout before ending the panes. The system may stop the panes'
+programs a moment before the daemon: an agent or a pane that ends on its own within 5 s
+before shutdown (`ENDED_BY_SHUTDOWN`) is saved as it was before the first of those endings
+(any layout op in between drops that). The systemd unit uses `KillMode=mixed`, so the daemon
+alone gets SIGTERM first. Without a shutdown (power loss, `kill -9`) the last periodic saves
+are what comes back.
 
 **Closed panes (recently closed tabs).** When a pane closes (a close op or its process exiting,
 not a shutdown) the daemon keeps `{pane_id, cwd, agent{kind, session_id}}` (the agent only while
@@ -555,8 +574,8 @@ and only once), `mp::policy` unit test.
   streams. **Lost**: open hook connections (a held agent permission prompt falls back to the
   agent's own), command marks from before the upgrade (numbering continues), drawing anchors
   and since-join views (opened again on demand), in-memory workspace state (attention items,
-  turn snapshots, editor servers; §9). After a cold restart, as before: the layout,
-  directories and Claude/Codex sessions (`--resume`) come back, the processes do not.
+  turn snapshots, editor servers; §9). After a cold restart: the layout, directories,
+  saved screens and agent sessions (`--resume`) come back, the processes do not.
 - `gudo daemon info` / `gudo daemon upgrade <file> [--build ID]` drive it from a terminal.
 - **Installs from before the rename** (`brand::legacy`: `unnamed-hostd`, state in `unnamed`,
   ALPN `unnamed/1`). The daemon accepts both ALPNs and the client offers both, so either side

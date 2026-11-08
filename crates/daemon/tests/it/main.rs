@@ -28,6 +28,7 @@ mod presence;
 mod program_status;
 mod projects;
 mod pull;
+mod reboot;
 mod redteam;
 mod relays;
 mod reopen;

@@ -675,5 +675,5 @@ async fn an_app_update_keeps_codex_running_and_resumable() {
     client
         .wait_text(pane, &format!("resumed-session={CODEX_ID}"))
         .await;
-    client.wait_text(pane, "Resumed after restart").await;
+    client.wait_text(pane, "Restored after restart").await;
 }

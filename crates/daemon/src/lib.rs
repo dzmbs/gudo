@@ -62,6 +62,7 @@ mod preauth;
 mod procinfo;
 mod resume;
 mod scan;
+mod screens;
 mod shell;
 mod sizing;
 mod stream;
@@ -241,6 +242,7 @@ impl Daemon {
         )));
         tasks.push(tokio::spawn(power::run(Arc::clone(&core))));
         tasks.push(tokio::spawn(persist::run(Arc::clone(&core))));
+        tasks.push(tokio::spawn(screens::run(Arc::clone(&core))));
         tasks.push(tokio::spawn(ws::ports::run(Arc::clone(&core))));
         tasks.push(tokio::spawn(ws::turns::run(Arc::clone(&core))));
         tasks.push(tokio::spawn(ws::repo::run(Arc::clone(&core))));
@@ -404,7 +406,15 @@ impl Daemon {
             task.abort();
         }
         self.core.art.flush();
-        if let Err(error) = persist::save(&self.core).await {
+        let saving = Arc::clone(&self.core);
+        let screens = tokio::task::spawn_blocking(move || saving.screens.save_all(&saving));
+        if tokio::time::timeout(SHUTDOWN_SCREENS_WAIT, screens)
+            .await
+            .is_err()
+        {
+            tracing::warn!("saving the screens took too long; the newest may be missing");
+        }
+        if let Err(error) = persist::save_on_shutdown(&self.core).await {
             tracing::warn!("saving layout on shutdown: {error}");
         }
         self.endpoint.close().await;
@@ -420,6 +430,10 @@ impl Daemon {
         self.core.hooks.remove_socket();
     }
 }
+
+/// How long shutdown waits for the panes' screens to be saved: well within the time a
+/// service manager gives a stopping daemon (launchd's 20 s, systemd's 90 s).
+const SHUTDOWN_SCREENS_WAIT: Duration = Duration::from_secs(5);
 
 /// Points hook and MCP server paths that earlier daemons wrote at this daemon's launcher.
 fn repair_hook_paths(core: &Core) {

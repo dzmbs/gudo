@@ -345,10 +345,13 @@ fn internal(error: impl std::fmt::Display) -> RpcError {
 }
 
 impl Pane {
+    /// Starts `command` in a new pane whose output begins with `preamble`.
+    #[allow(clippy::too_many_arguments)]
     pub fn spawn(
         id: PaneId,
         snap_gen: SnapGen,
         command: Command,
+        preamble: Vec<u8>,
         size: PaneSize,
         ring_capacity: usize,
         limits: VtLimits,
@@ -361,6 +364,7 @@ impl Pane {
         let hook_vt = Arc::clone(&vt);
         let options = SpawnOptions::new(win_size(size))
             .ring_capacity(ring_capacity)
+            .preamble(preamble)
             .output_hook(move |seq, data| lock(&hook_vt).feed(seq, data));
         let pty = PtyActor::spawn(command, options)?;
         Ok((Self::new(id, snap_gen, pty, vt, latest), events_rx))
@@ -503,6 +507,28 @@ impl Pane {
 
     pub fn echo_updates(&self) -> watch::Receiver<EchoState> {
         self.pty.echo_updates()
+    }
+
+    /// The primary screen and its newest scrollback as styled text, to show again after a
+    /// restart (`screens`), with the output offset it reflects; `None` while the output is
+    /// still at `since`. A full-screen program's screen is left out: the shell's is kept.
+    pub fn restorable_screen(
+        &self,
+        since: Seq,
+    ) -> Result<Option<(Seq, String)>, ghostty_vt::Error> {
+        let (seq, alternate_snapshot) = {
+            let vt = lock(&self.vt);
+            if vt.seq == since.0 {
+                return Ok(None);
+            }
+            match vt.term.active_screen() {
+                Screen::Primary => return Ok(Some((Seq(vt.seq), restorable_text(&vt.term)?))),
+                Screen::Alternate => (Seq(vt.seq), vt.term.encode_snapshot()?),
+            }
+        };
+        let mut term = ghostty_vt::SnapshotDecoder::new(&alternate_snapshot)?.decode()?;
+        term.write(b"\x1b[?1049l");
+        Ok(Some((seq, restorable_text(&term)?)))
     }
 
     /// The visible screen as plain text, for screen-based agent detection.
@@ -1208,6 +1234,23 @@ pub(crate) struct PaneHandOff {
     pub last_command_id: u64,
 }
 
+/// Newest rows of a pane's primary screen kept for after a restart, up to the cursor's.
+const RESTORABLE_ROWS: u32 = 4000;
+
+fn restorable_text(term: &Terminal) -> Result<String, ghostty_vt::Error> {
+    let last = term.cursor_point().y;
+    term.styled_text(TextRegion::Range {
+        start: ghostty_vt::Point {
+            y: last.saturating_sub(RESTORABLE_ROWS - 1),
+            x: 0,
+        },
+        end: ghostty_vt::Point {
+            y: last,
+            x: term.cols().saturating_sub(1),
+        },
+    })
+}
+
 /// The terminal a snapshot describes, sized and limited like a pane's own.
 fn restore_terminal(
     snapshot: &[u8],
@@ -1289,6 +1332,7 @@ mod tests {
             PaneId(1),
             SnapGen(1),
             command,
+            Vec::new(),
             original,
             1 << 20,
             VtLimits {
@@ -1351,6 +1395,7 @@ mod tests {
             PaneId(1),
             SnapGen(1),
             command,
+            Vec::new(),
             size,
             1 << 20,
             limits,
@@ -1449,6 +1494,7 @@ mod tests {
             PaneId(1),
             SnapGen(1),
             command,
+            Vec::new(),
             size,
             1 << 20,
             limits,

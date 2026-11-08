@@ -1,6 +1,6 @@
 //! Debounced, atomic persistence of the layout and per-pane restore records.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -15,7 +15,7 @@ use crate::layout::Layout;
 const FILE: &str = "layout.json";
 const VERSION: u32 = 1;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Saved {
     version: u32,
     layout: Layout,
@@ -100,13 +100,28 @@ fn backup(file: &Path) -> io::Result<()> {
     std::fs::rename(file, aside)
 }
 
-pub(crate) async fn save(core: &Core) -> io::Result<()> {
-    let saved = saved_state(core);
+pub(crate) async fn save(core: &Arc<Core>) -> io::Result<()> {
+    write(core, saved_state(core)).await
+}
+
+/// Saves on shutdown, keeping what programs that ended a moment before lost
+/// (`core::ENDED_BY_SHUTDOWN`).
+pub(crate) async fn save_on_shutdown(core: &Arc<Core>) -> io::Result<()> {
+    write(core, core.state_to_save_on_shutdown()).await
+}
+
+async fn write(core: &Arc<Core>, saved: Saved) -> io::Result<()> {
     let bytes = serde_json::to_vec_pretty(&saved).map_err(io::Error::other)?;
     let file = path(&core.cfg.state_dir);
-    tokio::task::spawn_blocking(move || write_atomic(&file, &bytes))
-        .await
-        .map_err(io::Error::other)?
+    let panes: HashSet<PaneId> = saved.panes.keys().map(|&id| PaneId(id)).collect();
+    let core = Arc::clone(core);
+    tokio::task::spawn_blocking(move || {
+        write_atomic(&file, &bytes)?;
+        core.screens.keep_only(&panes);
+        Ok(())
+    })
+    .await
+    .map_err(io::Error::other)?
 }
 
 /// Saves after every burst of changes, once the debounce window has been quiet.
