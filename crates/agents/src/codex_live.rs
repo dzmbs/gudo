@@ -7,8 +7,11 @@
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use serde::Deserialize;
+mod events;
+pub use events::{CodexApprovalKind, CodexLiveEvent, CodexLiveEvents, CodexTurnOutcome};
+
 use serde::de::{DeserializeOwned, IgnoredAny};
+use serde::{Deserialize, Serialize};
 
 const MAX_FRAME_BYTES: usize = 64 * 1024;
 const MAX_ID_BYTES: usize = 128;
@@ -66,12 +69,15 @@ enum State {
     Closed,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize)]
+/// Official JSON-RPC identifiers retain their numeric or string identity.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(untagged)]
-enum RpcId {
+pub enum CodexRpcId {
     Integer(i64),
     Text(String),
 }
+
+type RpcId = CodexRpcId;
 
 #[derive(Deserialize)]
 struct TuiFrame {

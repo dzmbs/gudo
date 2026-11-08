@@ -438,12 +438,32 @@ a second client attached after it began and received that thread's live deltas a
 The TUI also generated an auxiliary title thread. This proves physical-connection correlation, not
 production daemon integration or authorized native controls.
 
-The same probe found a remote-mode compatibility prerequisite: the TUI's per-run notify override did
-not reach `thread/start.config`; the account-default notify program ran in the server environment,
-including for the auxiliary title turn. TUI OSC 9 still appeared. Per-pane notify routing and MCP
-parity need proof before enablement. Pane/account-owned transport lifecycle, exact live notification
-materialization and signed approval routing still need integration. Existing Codex panes are not
-restarted or silently replaced to enable Chat.
+Remote-mode TUI notify overrides do not reach `thread/start.config`. The live design therefore uses
+one daemon-owned app-server per Codex pane, with that pane's resolved environment and account
+`CODEX_HOME`, not one server shared by an account. `Codex::live_launch` builds separate server/TUI
+recipes and distinct server/correlation-relay endpoints. MCP overrides belong on the server;
+notify stays with the user's configuration. No token value appears in argv. Existing legacy launch
+recipes are unchanged.
+
+Codex scrubs MCP subprocess environments. The Gudo MCP recipe explicitly passes pane, endpoint,
+account and daemon-boundary variable names through `env_vars`, not literal secrets. An isolated
+real-version probe verified MCP initialization with the expected pane token and account home, plus
+the user notify program running in the pane environment. This is fixture MCP evidence, not a test
+of all Gudo MCP tools or arbitrary user MCP configurations.
+
+`CodexLiveEvents` decodes turn boundaries, assistant deltas and approval identities from the proven
+physical transport. It requires the exact private binding identity and active turn; auxiliary threads
+and obsolete turn deltas/completions are ignored. Parsing is bounded to 64KiB; malformed frames close
+native observation, not transport forwarding. Unknown outcomes are not success. A real TUI capture
+includes an app-server command approval held without sending a decision. Approval signals are not
+sufficient policy metadata or authority to approve; supported choices and the complete requested
+permissions still need the shared signed-policy path. Notify is not a live adapter completion or
+approval source.
+
+These are launch and decoder foundations, not an enabled daemon adapter. Launch-owned server/relay
+lifecycle, common `AgentSession` materialization, snapshot hydration for late observers, bounded
+streaming queues and signed control delivery still need integration. Mobile watch lifetime must not
+own the server. Existing Codex panes are not restarted or silently replaced to enable Chat.
 
 ## Native composer safety prerequisites
 

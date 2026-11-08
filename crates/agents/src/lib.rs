@@ -33,7 +33,10 @@ pub use adapter::{AgentAdapter, HookCoverage, HookError};
 pub use arbiter::{Arbiter, ArbiterConfig, DecisionError, Notify, Update};
 pub use claude::ClaudeCode;
 pub use codex::{Codex, CodexLiveLaunch, InvalidCodexSocket, NOTIFY_EVENT as CODEX_NOTIFY_EVENT};
-pub use codex_live::{CodexBinding, CodexBindingError, CodexThreadBinding};
+pub use codex_live::{
+    CodexApprovalKind, CodexBinding, CodexBindingError, CodexLiveEvent, CodexLiveEvents,
+    CodexRpcId, CodexThreadBinding, CodexTurnOutcome,
+};
 pub use event::{
     ActorId, AgentEvent, AgentKind, AgentState, AnswerPath, ApprovalChoice, ApprovalOption,
     Blocked, BlockedReason, Blocker, Confidence, Decided, Decision, EventKind, Lane,
