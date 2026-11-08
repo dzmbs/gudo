@@ -233,7 +233,9 @@ pub fn pane_env(ctx: &LaunchContext) -> Vec<(String, OsString)> {
 /// # Examples
 ///
 /// ```
-/// assert_eq!(agents::mcp_server_name(), "gudo");
+/// let name = agents::mcp_server_name();
+/// assert!(!name.is_empty());
+/// assert!(name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'));
 /// ```
 pub fn mcp_server_name() -> String {
     brand::PRODUCT_NAME
@@ -360,20 +362,15 @@ mod tests {
         let names: Vec<&str> = env.iter().map(|(name, _)| name.as_str()).collect();
         assert_eq!(
             names,
-            [
-                "GUDO_PANE_ID",
-                "GUDO_SOCK",
-                "GUDO_TOKEN",
-                "GUDO_ENDPOINT_FILE",
-                "GUDO_HOOK"
-            ]
+            ["PANE_ID", "SOCK", "TOKEN", "ENDPOINT_FILE", "HOOK"]
+                .map(|suffix| format!("{}{suffix}", brand::ENV_PREFIX))
         );
         assert_eq!(env[0].1, "p_9f2");
     }
 
     #[test]
     fn mcp_server_runs_the_shim_for_this_pane() {
-        assert_eq!(mcp_server_name(), "gudo");
+        assert_eq!(mcp_server_name(), crate::EXPECTED_MCP_SERVER_NAME);
         assert_eq!(legacy_mcp_server_names(), ["unnamed", "unnamed_drawings"]);
         assert_eq!(
             mcp_args(&test_context()),
@@ -435,12 +432,16 @@ mod tests {
             );
         }
         let (_, set) = account_env(&test_context().account, CLAUDE_DIR_VAR);
-        assert_eq!(names(&set), ["GUDO_ACCOUNT"]);
+        assert_eq!(names(&set), [format!("{}ACCOUNT", brand::ENV_PREFIX)]);
         assert_eq!(set[0].1, "system");
         let (_, set) = account_env(&work_context().account, CLAUDE_DIR_VAR);
         assert_eq!(
             names(&set),
-            ["GUDO_ACCOUNT", "CLAUDE_CONFIG_DIR", "GUDO_ACCOUNT_DIR"]
+            [
+                format!("{}ACCOUNT", brand::ENV_PREFIX),
+                "CLAUDE_CONFIG_DIR".to_owned(),
+                format!("{}ACCOUNT_DIR", brand::ENV_PREFIX),
+            ]
         );
         assert_eq!(set[1].1, "/state/accounts/claude/a1b2");
     }

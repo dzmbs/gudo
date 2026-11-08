@@ -56,7 +56,10 @@ impl ClaudeCode {
     /// ```
     /// use std::path::Path;
     /// let add = agents::ClaudeCode::user_mcp_command("claude", Path::new("/b/gudo-hook"), Path::new("/s"), true);
-    /// assert_eq!(add.join(" "), "claude mcp add --scope user gudo -- /b/gudo-hook mcp --state /s");
+    /// assert_eq!(
+    ///     add.join(" "),
+    ///     format!("claude mcp add --scope user {} -- /b/gudo-hook mcp --state /s", agents::mcp_server_name()),
+    /// );
     /// ```
     pub fn user_mcp_command(
         program: &str,
@@ -754,11 +757,9 @@ mod tests {
             ]
         );
         assert_eq!(spec.cwd, ctx.cwd);
-        assert!(
-            spec.env
-                .iter()
-                .any(|(name, value)| name == "GUDO_PANE_ID" && value == "p_9f2")
-        );
+        assert!(spec.env.iter().any(|(name, value)| name
+            == &format!("{}PANE_ID", brand::ENV_PREFIX)
+            && value == "p_9f2"));
         assert_eq!(spec.files[0].path, ClaudeCode::settings_path(&ctx));
         let settings: Value = serde_json::from_str(&spec.files[0].contents).unwrap();
         assert_eq!(
@@ -773,7 +774,10 @@ mod tests {
             settings["hooks"]["PreToolUse"][0]["matcher"],
             "AskUserQuestion"
         );
-        assert_eq!(settings["permissions"]["allow"], json!(["mcp__gudo"]));
+        assert_eq!(
+            settings["permissions"]["allow"],
+            json!([format!("mcp__{}", crate::EXPECTED_MCP_SERVER_NAME)])
+        );
     }
 
     #[test]
@@ -831,7 +835,7 @@ mod tests {
             config,
             json!({
                 "mcpServers": {
-                    "gudo": {
+                    (crate::EXPECTED_MCP_SERVER_NAME): {
                         "type": "stdio",
                         "command": "/opt/gudo/bin/gudo-hook",
                         "args": ["mcp", "--state", "/state", "--pane", "p_9f2"],

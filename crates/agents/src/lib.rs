@@ -51,3 +51,6 @@ pub use manifest::{
 pub use notify_chain::{CODEX_NOTIFY_SUBCOMMAND, NotifyChain, NotifyChainError, is_hook_program};
 pub use program_status::{ProgramKind, ProgramState, ProgramStatus};
 pub use signal::{Claim, SessionUpdate, Signal};
+
+#[cfg(test)]
+const EXPECTED_MCP_SERVER_NAME: &str = if brand::IS_DEV { "gudo_dev" } else { "gudo" };

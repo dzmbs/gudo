@@ -89,7 +89,7 @@ impl Codex {
     /// ```
     /// use std::path::Path;
     /// let remove = agents::Codex::user_mcp_command("codex", Path::new("/b/gudo-hook"), Path::new("/s"), false);
-    /// assert_eq!(remove.join(" "), "codex mcp remove gudo");
+    /// assert_eq!(remove.join(" "), format!("codex mcp remove {}", agents::mcp_server_name()));
     /// ```
     pub fn user_mcp_command(
         program: &str,
@@ -498,13 +498,23 @@ mod tests {
                 "-c",
                 r#"notify=["/opt/gudo/bin/gudo-hook","codex","notify"]"#,
                 "-c",
-                r#"mcp_servers.gudo.command="/opt/gudo/bin/gudo-hook""#,
+                &format!(
+                    r#"mcp_servers.{}.command="/opt/gudo/bin/gudo-hook""#,
+                    crate::EXPECTED_MCP_SERVER_NAME
+                ),
                 "-c",
-                r#"mcp_servers.gudo.args=["mcp","--state","/state","--pane","p_9f2"]"#,
+                &format!(
+                    r#"mcp_servers.{}.args=["mcp","--state","/state","--pane","p_9f2"]"#,
+                    crate::EXPECTED_MCP_SERVER_NAME
+                ),
             ]
         );
         assert!(spec.files.is_empty());
-        assert!(spec.env.iter().any(|(name, _)| name == "GUDO_HOOK"));
+        assert!(
+            spec.env
+                .iter()
+                .any(|(name, _)| name == &format!("{}HOOK", brand::ENV_PREFIX))
+        );
     }
 
     #[test]
