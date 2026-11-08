@@ -385,6 +385,12 @@ pub enum WorkspaceRequest {
     /// Paths a pane printed, resolved where the printing command ran →
     /// [`WorkspaceResponse::ResolvedPaths`]. Needs `MoreDaemonFeatures::RESOLVE_PATHS`.
     ResolvePaths(PathQuery),
+    /// The repository root holding `path`, read from the file system without running git →
+    /// [`WorkspaceResponse::RepoRoot`]. Only daemons offering
+    /// [`MoreDaemonFeatures::REPO_ROOT`](crate::MoreDaemonFeatures::REPO_ROOT) understand it.
+    RepoRoot {
+        path: String,
+    },
 }
 
 /// The answer to a [`WorkspaceRequest`].
@@ -465,6 +471,8 @@ pub enum WorkspaceResponse {
     AgentTimeline(AgentTimelineSnapshot),
     /// One per asked path, in order.
     ResolvedPaths(Vec<ResolvedPath>),
+    /// `None`: the path is in no repository.
+    RepoRoot(Option<String>),
 }
 
 /// A snapshot and the features of the adapter that produced it.

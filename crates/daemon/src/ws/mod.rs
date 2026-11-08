@@ -150,6 +150,13 @@ fn workspace_folder(file: &Path) -> PathBuf {
         .to_owned()
 }
 
+fn repo_root(dir: &Path) -> Option<String> {
+    let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_owned());
+    dir.ancestors()
+        .find(|ancestor| ancestor.join(".git").exists())
+        .map(|root| root.to_string_lossy().into_owned())
+}
+
 static NEXT_WATCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 pub(crate) async fn handle(
@@ -265,6 +272,12 @@ pub(crate) async fn handle(
             blocking(move || git::status(&dir))
                 .await
                 .map(Response::GitStatus)
+        }
+        Request::RepoRoot { path } => {
+            let dir = existing_dir(&policy, &path)?;
+            blocking(move || Ok(repo_root(&dir)))
+                .await
+                .map(Response::RepoRoot)
         }
         Request::GitDiff(diff) => {
             let dir = existing_dir(&policy, &diff.path)?;

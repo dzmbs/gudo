@@ -11,3 +11,11 @@ fn more_daemon_features_keep_their_wire_bytes() {
         vec![65, 0]
     );
 }
+
+#[test]
+fn repo_root_keeps_its_bit() {
+    assert_eq!(
+        postcard::to_allocvec(&MoreDaemonFeatures::REPO_ROOT).unwrap(),
+        vec![1]
+    );
+}

@@ -449,6 +449,8 @@ bitset! {
     /// What a daemon can do beyond [`DaemonFeatures`], whose bits are all taken: sent in
     /// `ServerCtl::MoreDaemonFeatures` to clients with [`Caps::MORE_DAEMON_FEATURES`].
     MoreDaemonFeatures: u64 {
+        /// Answers `WorkspaceRequest::RepoRoot`.
+        REPO_ROOT = 0;
         /// Answers `WorkspaceRequest::ResolvePaths`.
         RESOLVE_PATHS = 1;
     }

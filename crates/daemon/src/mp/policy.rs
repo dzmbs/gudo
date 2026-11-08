@@ -224,6 +224,7 @@ pub(crate) fn workspace(req: &WorkspaceRequest) -> (Need, Target) {
         R::SendReview(review) => (Need::Prompt, Target::Pane(review.pane_id)),
         R::WorktreeLaunch { split_from, .. } => (Need::Drive, Target::SessionOf(*split_from)),
         R::GitStatus { .. }
+        | R::RepoRoot { .. }
         | R::GitDiff(_)
         | R::FsList { .. }
         | R::FsStat { .. }

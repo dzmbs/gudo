@@ -535,6 +535,7 @@ fn every_message_matches_its_frozen_bytes() {
     guest_answer_messages(&mut checker);
     terminal_colors_messages(&mut checker);
     resolve_paths_messages(&mut checker);
+    repo_root_messages(&mut checker);
 
     assert!(
         checker.failures.is_empty(),
@@ -3442,5 +3443,28 @@ fn resolve_paths_messages(checker: &mut Checker) {
             ])),
         },
         "210000000118090028030b2f772f7372632f612e727300ac02042f682f6201042f65746304",
+    );
+}
+
+/// `WorkspaceRequest::RepoRoot` (appended after `ResolvePaths`) and
+/// `WorkspaceResponse::RepoRoot` (appended after `ResolvedPaths`).
+fn repo_root_messages(checker: &mut Checker) {
+    checker.check(
+        "ClientCtl::Workspace(RepoRoot)",
+        ClientCtl::Workspace {
+            req_id: 9,
+            req: WorkspaceRequest::RepoRoot {
+                path: "~/src".into(),
+            },
+        },
+        "0a0000000115094a057e2f737263",
+    );
+    checker.check(
+        "ServerCtl::WorkspaceResult(RepoRoot)",
+        ServerCtl::WorkspaceResult {
+            req_id: 9,
+            result: Ok(WorkspaceResponse::RepoRoot(Some("/src".into()))),
+        },
+        "0b000000011809002901042f737263",
     );
 }

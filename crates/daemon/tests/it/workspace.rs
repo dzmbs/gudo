@@ -704,6 +704,14 @@ async fn git_status_diffs_turn_changes_and_review_notes() {
         .await
         .unwrap();
     assert_eq!(status.root, path_string(&repo));
+    assert_eq!(
+        client
+            .client
+            .repo_root(path_string(&repo.join("src")))
+            .await
+            .unwrap(),
+        Some(status.root.clone())
+    );
     assert_eq!(status.branch.as_deref(), Some("main"));
     let file = |path: &str| status.files.iter().find(|file| file.path == path).cloned();
     assert_eq!(file("src/a.rs").unwrap().staged, FileChange::Modified);
@@ -837,6 +845,10 @@ async fn git_status_diffs_turn_changes_and_review_notes() {
     client.wait_flat(pane, "Keep the old name").await;
 
     // Bad requests.
+    assert_eq!(
+        client.client.repo_root(path_string(&home)).await.unwrap(),
+        None
+    );
     assert!(matches!(
         client.client.git_status(path_string(&home)).await,
         Err(WsError::NotFound(_))

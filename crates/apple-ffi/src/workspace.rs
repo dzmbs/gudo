@@ -203,6 +203,23 @@ impl DaemonClient {
             .await
     }
 
+    /// The repository root holding `path`, `nil` outside one; much cheaper than
+    /// [`git_status`](Self::git_status). Only when [`offers_repo_root`](Self::offers_repo_root).
+    ///
+    /// # Errors
+    ///
+    /// The daemon's [`WorkspaceError`].
+    pub async fn repo_root(&self, path: String) -> Result<Option<String>, WorkspaceError> {
+        self.ws_call(|client| async move { client.repo_root(path).await })
+            .await
+    }
+
+    /// Whether the daemon answers [`repo_root`](Self::repo_root).
+    pub fn offers_repo_root(&self) -> bool {
+        self.inner
+            .daemon_offers(proto::MoreDaemonFeatures::REPO_ROOT)
+    }
+
     /// A diff, file by file.
     ///
     /// # Errors

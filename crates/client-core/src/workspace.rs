@@ -584,6 +584,12 @@ impl Client {
             WorkspaceResponse::GitStatus(status) => status)
     }
 
+    /// The repository root holding `path` (`None` outside one), without running git.
+    pub async fn repo_root(&self, path: String) -> Result<Option<String>, WsError> {
+        expect!(self.workspace(WorkspaceRequest::RepoRoot { path }).await?,
+            WorkspaceResponse::RepoRoot(root) => root)
+    }
+
     /// A diff, file by file (renames detected, binaries flagged, large patches capped).
     pub async fn git_diff(&self, request: GitDiffRequest) -> Result<GitDiff, WsError> {
         expect!(self.workspace(WorkspaceRequest::GitDiff(request)).await?,
