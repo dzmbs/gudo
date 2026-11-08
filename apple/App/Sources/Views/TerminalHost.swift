@@ -104,11 +104,13 @@ struct TerminalHost {
                 #if os(macOS)
                 if let window = view.window {
                     if window.firstResponder !== view { window.makeFirstResponder(view) }
+                    TabTimeline.mark(.focusHandedOver)
                     return
                 }
                 #else
                 if view.window != nil {
                     if !view.isFirstResponder { view.becomeFirstResponder() }
+                    TabTimeline.mark(.focusHandedOver)
                     return
                 }
                 #endif
@@ -147,6 +149,7 @@ extension Pane {
         #if os(iOS)
         view.isSelected = target.isFocusedPane
         #endif
+        TabTimeline.mark(.surfaceReady)
         #if os(macOS)
         // AppKit hands first responder to the window as soon as the old container leaves it, so
         // the focused pane takes it back whenever nothing else in the window has it. Only the

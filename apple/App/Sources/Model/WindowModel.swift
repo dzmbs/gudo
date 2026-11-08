@@ -617,7 +617,10 @@ final class WindowModel {
     /// Selects a tab on any host: the window switches to that host's workspace (already live)
     /// and the host selects the tab.
     func focus(_ ref: TabRef) {
-        if ref != currentTab { noteLeavingTab() }
+        if ref != currentTab {
+            TabTimeline.began(.selectTab)
+            noteLeavingTab()
+        }
         leaveTabOverview()
         // A tab kept out of sight at launch comes back once it is asked for.
         groups.unhide(ref)
@@ -649,6 +652,7 @@ final class WindowModel {
     /// ⌘T (the current host), ⌥⌘T's choice or a group's +: a new tab on that host. Where this
     /// device has no shell (iPhone, iPad) a new tab goes to an open host, else Add Host.
     func newTab(onGroup id: String? = nil) {
+        TabTimeline.began(.newTab)
         // ⌘T from a project's tab: the new terminal joins that project, next to it.
         if id == nil, let current = currentTab, let project = groups.project(of: current) {
             newTab(inProject: project.id)

@@ -159,6 +159,7 @@ final class Pane {
                 surface.outputArrived()
                 leaveSaved()
             case .snapshot(let ready):
+                TabTimeline.mark(.firstSnapshot)
                 // Resume after a gap or first attach: the daemon's state replaces ours. A bad
                 // snapshot keeps what is on screen (stale beats blank) and is logged. The
                 // host's screen replacing a saved one keeps where that was scrolled to.

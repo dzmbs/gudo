@@ -588,6 +588,7 @@ final class Workspace {
             made[id] = pane
             slot(id).pane = pane
             Self.signposter.endInterval("Make pane", signpost)
+            TabTimeline.mark(.backendReady)
             Pane.log.debug("pane \(id.description, privacy: .public) made in \((ContinuousClock.now - start).formatted(.units(allowed: [.milliseconds])), privacy: .public)")
             return true
         } catch {
