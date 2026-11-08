@@ -3,8 +3,8 @@
 //!
 //! Rules live per pane, in memory only: a daemon restart ends them, as does the agent
 //! session they were made in (it ends, restarts or changes id), the pane closing, their
-//! expiry and their turn limit. A rule answers only requests a hook holds open (the answer
-//! must reach the agent), always with the "allow once" option, as the person who made it,
+//! expiry and their turn limit. A rule answers only a live request the adapter can deliver to,
+//! always with the "allow once" option, as the person who made it,
 //! and every answer is in the audit log with the rule's signature.
 
 use std::collections::HashMap;
@@ -75,10 +75,9 @@ fn emit_rules(core: &Core, pane: PaneId) {
     }));
 }
 
-/// A hook now holds `pane`'s permission request open: answer it from a rule if one covers
-/// it, else tell clients what they may do with it.
+/// Answers a live permission request from a matching rule, or publishes its available actions.
 pub(crate) fn request_held(core: &Core, pane: PaneId) {
-    let Some(held) = core.hooks.held(pane) else {
+    let Some(held) = crate::agent_driver::pending_approval(core, pane) else {
         return;
     };
     let Some((wire, _, allow)) = core.pane(pane).and_then(|entry| {
@@ -264,7 +263,7 @@ pub(crate) fn add_rule(
     }
     // "Approve this and all like it": answer the open request now if the rule covers it.
     if let Some(request) = request
-        && let Some(held) = core.hooks.held(pane)
+        && let Some(held) = crate::agent_driver::pending_approval(core, pane)
         && let Some((wire, _, Some(allow))) = core.pane(pane).and_then(|entry| {
             lock(&entry.agent)
                 .as_mut()
@@ -337,9 +336,7 @@ pub(crate) fn editable(
     if current != wire {
         return Err(ApprovalError::NotFound);
     }
-    let held = core
-        .hooks
-        .held(pane)
+    let held = crate::agent_driver::pending_approval(core, pane)
         .filter(|held| held.request == request)
         .ok_or(ApprovalError::NotEditable)?;
     let original = held

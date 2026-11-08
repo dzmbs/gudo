@@ -11,6 +11,12 @@ use crate::pane::Pane;
 pub(super) struct TerminalDriver;
 
 impl AgentDriver for TerminalDriver {
+    fn pending_approval(&self, core: &Core, pane: PaneId) -> Option<super::PendingApproval> {
+        super::claude::pending_hook(core, pane)
+    }
+    fn approval_is_pending(&self, core: &Core, pane: PaneId, request: &agents::RequestId) -> bool {
+        core.hooks.is_pending(pane, request)
+    }
     fn input_event<'a>(&self, request: &'a crate::HookRequest) -> super::InputEvent<'a> {
         use super::InputEvent;
         let submission = super::claude::prompt_hook(request).or_else(|| notify_submission(request));

@@ -238,6 +238,18 @@ fn identity_change(session: &mut dyn AgentSession, fixture: &dyn AdapterFixture)
     assert_ne!(session.cursor().epoch, previous.cursor.epoch);
 }
 
+pub(super) fn pending_metadata(core: &Core, pane: PaneId, request: &agents::RequestId) {
+    let pending =
+        super::pending_approval(core, pane).expect("adapter must expose the live request");
+    assert_eq!(&pending.request, request);
+    assert!(super::approval_is_pending(core, pane, request));
+    assert!(!super::approval_is_pending(
+        core,
+        pane,
+        &agents::RequestId::new("missing-request")
+    ));
+}
+
 async fn controls(fixture: &dyn AdapterFixture, capabilities: AgentCapabilities) {
     if capabilities.contains(AgentCapabilities::SEND) {
         send(fixture, capabilities).await;

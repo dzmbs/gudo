@@ -85,11 +85,42 @@ pub(crate) enum InputEvent<'a> {
     Ignored,
 }
 
-pub(crate) trait AgentDriver: Send + Sync {
-    fn input_event<'a>(&self, request: &'a crate::HookRequest) -> InputEvent<'a>;
-    fn editable_command<'a>(&self, _: &'a crate::agent::HeldRequest) -> Option<&'a str> {
-        None
+pub(crate) struct PendingApproval {
+    pub request: agents::RequestId,
+    pub tool: String,
+    pub command: Option<String>,
+    pub editable: Option<String>,
+}
+
+impl PendingApproval {
+    pub fn command(&self) -> Option<&str> {
+        self.command.as_deref()
     }
+    pub fn editable(&self) -> Option<&str> {
+        self.editable.as_deref()
+    }
+}
+
+pub(crate) fn pending_approval(core: &Core, pane: PaneId) -> Option<PendingApproval> {
+    let entry = core.pane(pane)?;
+    let kind = crate::core::lock(&entry.agent).as_ref()?.kind();
+    driver(kind).pending_approval(core, pane)
+}
+
+pub(crate) fn approval_is_pending(core: &Core, pane: PaneId, request: &agents::RequestId) -> bool {
+    let Some(entry) = core.pane(pane) else {
+        return false;
+    };
+    let kind = crate::core::lock(&entry.agent)
+        .as_ref()
+        .map(|runtime| runtime.kind());
+    kind.is_some_and(|kind| driver(kind).approval_is_pending(core, pane, request))
+}
+
+pub(crate) trait AgentDriver: Send + Sync {
+    fn pending_approval(&self, core: &Core, pane: PaneId) -> Option<PendingApproval>;
+    fn approval_is_pending(&self, core: &Core, pane: PaneId, request: &agents::RequestId) -> bool;
+    fn input_event<'a>(&self, request: &'a crate::HookRequest) -> InputEvent<'a>;
     fn capabilities(&self) -> AgentCapabilities;
     fn check_prompt(&self, text: &str) -> Result<(), WsError>;
     fn open(

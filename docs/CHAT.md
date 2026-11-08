@@ -378,7 +378,9 @@ diffs. It owns its notification source and reports session changes through snaps
 On-demand reads return owned futures: file readers can complete in the blocking pool, while RPC
 readers can await a response after releasing the service mutex. The service checks identity and
 epoch again before returning a deferred response. No session file or RPC shape is part of either
-interface.
+interface. Pending approvals expose normalized request IDs, tool names and optional command/editable
+text, plus a cheap live-delivery check. Policy, edited approvals and input assistance query the driver,
+not a particular hook or RPC transport.
 
 Claude's account/path discovery, transcript lifecycle, prompt/turn hook interpretation, interrupt
 encoding and approval reply format belong to its adapter/read backend. The common daemon retains

@@ -535,7 +535,7 @@ fn blocked_prompt(core: &Core, entry: &PaneEntry) -> Option<BlockedPrompt> {
             Some(blocked.wire),
             blocked.summary.clone(),
             blocked.options.clone(),
-            core.hooks.is_pending(pane, &blocked.request),
+            crate::agent_driver::approval_is_pending(core, pane, &blocked.request),
         ),
         None => (None, String::new(), Vec::new(), false),
     };

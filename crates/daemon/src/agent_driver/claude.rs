@@ -11,6 +11,12 @@ use crate::pane::Pane;
 pub(super) struct ClaudeDriver;
 
 impl AgentDriver for ClaudeDriver {
+    fn pending_approval(&self, core: &Core, pane: PaneId) -> Option<super::PendingApproval> {
+        pending_hook(core, pane)
+    }
+    fn approval_is_pending(&self, core: &Core, pane: PaneId, request: &agents::RequestId) -> bool {
+        core.hooks.is_pending(pane, request)
+    }
     fn input_event<'a>(&self, request: &'a crate::HookRequest) -> super::InputEvent<'a> {
         use super::InputEvent;
         if let Some((session, prompt)) = prompt_hook(request) {
@@ -31,12 +37,6 @@ impl AgentDriver for ClaudeDriver {
         } else {
             InputEvent::Ignored
         }
-    }
-
-    fn editable_command<'a>(&self, request: &'a crate::agent::HeldRequest) -> Option<&'a str> {
-        (request.tool == "Bash")
-            .then(|| request.command())
-            .flatten()
     }
 
     fn capabilities(&self) -> AgentCapabilities {
@@ -95,6 +95,20 @@ impl AgentDriver for ClaudeDriver {
                 approval_response(suggestions, input, decision)
             })
     }
+}
+
+pub(super) fn pending_hook(core: &Core, pane: PaneId) -> Option<super::PendingApproval> {
+    let held = core.hooks.held(pane)?;
+    let command = held.command().map(str::to_owned);
+    let editable = (held.agent == Some(proto::AgentKind::Claude) && held.tool == "Bash")
+        .then(|| command.clone())
+        .flatten();
+    Some(super::PendingApproval {
+        request: held.request,
+        tool: held.tool,
+        command,
+        editable,
+    })
 }
 
 pub(super) fn prompt_hook(request: &crate::HookRequest) -> Option<(&str, &str)> {

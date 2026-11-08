@@ -622,12 +622,6 @@ impl HeldRequest {
             .then(|| self.input.get("command").and_then(Value::as_str))
             .flatten()
     }
-
-    /// The editable input: Claude Code takes `updatedInput` for its `Bash` tool.
-    pub fn editable(&self) -> Option<&str> {
-        self.agent
-            .and_then(|kind| crate::agent_driver::driver(kind).editable_command(self))
-    }
 }
 
 /// The hook socket and the hook decisions waiting for a client.

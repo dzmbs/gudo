@@ -157,12 +157,12 @@ impl AdapterFixture for Fixture {
                     .is_some_and(|runtime| runtime.is_blocked())
             })
             .await;
-            let approval = lock(&self.raw.entry.agent)
+            let (approval, native, _) = lock(&self.raw.entry.agent)
                 .as_mut()
                 .unwrap()
                 .blocked_wire()
-                .unwrap()
-                .0;
+                .unwrap();
+            crate::agent_driver::conformance::pending_metadata(self.core(), self.pane(), &native);
             let option = match choice {
                 ApprovalChoice::AllowOnce => 0,
                 ApprovalChoice::AllowSession => 1,
@@ -175,6 +175,11 @@ impl AdapterFixture for Fixture {
                 .unwrap();
             let response: Value =
                 serde_json::from_str(response.stdout.as_deref().unwrap()).unwrap();
+            assert!(!crate::agent_driver::approval_is_pending(
+                self.core(),
+                self.pane(),
+                &native
+            ));
             match response["hookSpecificOutput"]["decision"]["behavior"].as_str() {
                 Some("allow") => ApprovalChoice::AllowOnce,
                 Some("deny") => ApprovalChoice::Deny,
