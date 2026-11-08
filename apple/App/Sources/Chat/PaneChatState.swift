@@ -36,6 +36,7 @@ final class PaneChatState {
     var draft = ""
     let composer = ChatComposer()
     let interrupt = ChatInterrupt()
+    let dictation: ChatDictation
     var model: TimelineModel? { lease?.model }
     @ObservationIgnored weak var controller: ChatViewController?
     @ObservationIgnored private weak var hub: DaemonWorkspace?
@@ -61,7 +62,8 @@ final class PaneChatState {
         agent: AgentKind? = nil,
         inputPresentation: PaneInputPresentation = .init(),
         preferences: UserDefaults = .standard,
-        pool: ChatModelPool = .shared
+        pool: ChatModelPool = .shared,
+        dictation: ChatDictation = .init()
     ) {
         self.member = member
         self.defaultPresentation = defaultPresentation
@@ -69,6 +71,7 @@ final class PaneChatState {
         self.agent = agent == .other ? nil : agent
         self.preferences = preferences
         self.pool = pool
+        self.dictation = dictation
         preferenceKey = "chat.presentation.\(member.hostId.utf8.count):\(member.hostId):\(member.pane.rawValue)"
         presentation = rememberedPresentation
     }
@@ -122,6 +125,7 @@ final class PaneChatState {
 
     func invalidateActions() {
         actionEpoch = UUID()
+        dictation.cancel()
         cancelPreparedActions()
     }
 

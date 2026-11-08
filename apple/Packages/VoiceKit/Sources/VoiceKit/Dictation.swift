@@ -54,7 +54,7 @@ nonisolated public enum DictationRoute: Equatable, Sendable {
     /// Typed into the pane as a paste (bracketed when the program asked for it): a shell prompt,
     /// or an agent's prompt box when this person may type there.
     case paste
-    /// Sent to the agent as a prompt without submitting it (a guest who may prompt but not type).
+    /// An unsubmitted agent prompt: a local Chat draft, or delivered without Return for a guest.
     case agentPrompt
     case refused(String)
 
@@ -76,6 +76,12 @@ public protocol DictationTarget: AnyObject {
     func showPreview(_ text: String?)
     /// No Return, nothing submitted.
     func commit(_ text: String, via route: DictationRoute)
+    /// A failure belongs to this target even after a different recording starts.
+    func dictationFailed(_ error: VoiceError)
+}
+
+public extension DictationTarget {
+    func dictationFailed(_ error: VoiceError) {}
 }
 
 /// Hold-to-talk on a hardware keyboard (⌃⌥Space in the app): the trigger chord pressed starts,

@@ -123,7 +123,8 @@ public final class PushToTalk {
 
     /// Commits what was heard (no Return), waiting up to `finishTimeout` for the last words.
     @discardableResult
-    public func stop() async -> Outcome {
+    public func stop(target explicit: (any DictationTarget)? = nil) async -> Outcome {
+        if let explicit, target !== explicit { return .nothing }
         guard isActive, let task = sessionTask else {
             if case .failed(let error) = phase { return .failed(error) }
             return .nothing
@@ -153,7 +154,13 @@ public final class PushToTalk {
         return commit(session: sessionId)
     }
 
-    public func cancel() {
+    /// A scoped caller must not cancel a replacement recording in another pane.
+    public func isRecording(into candidate: any DictationTarget) -> Bool {
+        isActive && target === candidate
+    }
+
+    public func cancel(target explicit: (any DictationTarget)? = nil) {
+        if let explicit, target !== explicit { return }
         guard isActive else {
             if case .failed = phase { phase = .idle }
             return
@@ -219,6 +226,7 @@ public final class PushToTalk {
     private func end(session id: Int, phase: Phase) {
         guard id == session else { return }
         session += 1
+        let endedTarget = target
         target?.showPreview(nil)
         target = nil
         recognizer = nil
@@ -227,6 +235,7 @@ public final class PushToTalk {
         transcript = Transcript()
         self.phase = phase
         broadcast(transcript)
+        if case .failed(let error) = phase { endedTarget?.dictationFailed(error) }
     }
 
     private func broadcast(_ transcript: Transcript) {

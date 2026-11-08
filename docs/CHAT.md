@@ -197,6 +197,14 @@ interrupt controls. Idle/agent/presentation/lifetime changes discard stale nativ
 IME composition vetoes both actions. Codex interrupt is unavailable until its official same-process
 control adapter is installed; use Terminal. This is not a proof of an empty PTY queue.
 
+VoiceKit dictation uses an explicit local-draft target, never the focused-Terminal fallback. It
+previews without changing the draft and appends only on Use dictation, with no automatic Send or
+PTY paste. Context and unchanged-draft checks plus the 16KiB draft budget apply at commit. Starting
+dictation invalidates older queued native controls; Send/Stop are vetoed while recording. Target-scoped
+finish/cancel cannot control a replacement recording in another pane, and failures stay with their
+target. Agent/presentation/lifetime changes and backgrounding cancel. Starting may survive an inactive
+scene for system permission dialogs, but host controls remain unavailable during that interval.
+
 Select Text presents one read-only TextKit2 `UITextView`, not an editor in every row. Native range
 selection keeps Unicode/UTF-16 boundaries, with data detectors disabled and DS literal type, ink
 and accent. An immutable snapshot identity avoids reassigning the whole string on parent/theme
@@ -215,7 +223,7 @@ native diff budget; a rejected, cancelled or stale request retains the original 
 cannot broaden the selection and incomplete replies cannot acquire the recorded-result label.
 The sheet labels recorded tool changes, not a complete turn or the current working tree. It never
 maps opaque timeline turns to numeric repository captures. Complete-turn aggregation beyond the
-retained results, device snapshot persistence and the rest of the composer remain pending.
+retained results, device snapshot persistence and composer photos/slash commands remain pending.
 Turn-summary Changes uses the opaque turn identity, not a file path. Tool-file selections also
 carry the owning item identity. Missing or empty turn correlation offers Terminal rather than
 showing changes from other visible turns. Command-mark lookup is associated with the exact
@@ -329,7 +337,7 @@ submits text or launches another process.
 
 ## Native composer safety prerequisites
 
-The native collection is not yet an integrated Chat composer. The exit fence protects existing
+The integrated native Chat composer retains the exit-fence boundary. That fence protects existing
 composer/reviewer PTY writes from crossing into the fallback shell; it does not prove the TUI
 has an empty draft or make those legacy paste/Enter pairs transactional.
 

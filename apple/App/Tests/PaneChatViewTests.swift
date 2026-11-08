@@ -3,6 +3,7 @@ import DesignSystem
 import HostKit
 import PaneLayout
 import SwiftUI
+import VoiceKit
 import UIKit
 import XCTest
 @testable import App
@@ -332,15 +333,67 @@ final class PaneChatViewTests: XCTestCase {
         XCTAssertTrue(fixture.backend.state.withLock { $0.input.isEmpty })
     }
 
+    func testDictationPermissionInactivityKeepsOnlyTheLocalDraftAndVetoesHostControls() async throws {
+        let suite = "chat-dictation-pane-test-" + UUID().uuidString
+        let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let recognizer = ChatSpeechFixture()
+        let voice = PushToTalk(recognizer: { recognizer }, settings: { VoiceSettings(isEnabled: true) })
+        let fixture = try makeFixture(preferences: preferences, permitsSending: true, working: true,
+                                      dictation: ChatDictation(voice: voice))
+        defer {
+            fixture.state.deactivate()
+            fixture.window.isHidden = true
+            fixture.window.rootViewController = nil
+            preferences.removePersistentDomain(forName: suite)
+        }
+        try await wait { fixture.state.controller != nil && fixture.state.model?.frame.rows.count == 60 }
+        fixture.state.draft = "Draft in progress"
+        let owner = PaneChatView(pane: fixture.pane, state: fixture.state, hub: fixture.hub,
+                                 permitsSending: true, working: true) { _ in Color.clear }
+        owner.send()
+        owner.interrupt()
+        owner.dictate()
+        fixture.state.dictation.cancel()
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(fixture.state.composer.phase, .idle)
+        XCTAssertEqual(fixture.state.interrupt.phase, .idle)
+        owner.dictate()
+        XCTAssertTrue(fixture.state.dictation.isStarting)
+        let context = fixture.state.actionContext
+        owner.sceneChanged(.inactive)
+        XCTAssertEqual(fixture.state.actionContext, context)
+        owner.send()
+        owner.interrupt()
+        try await wait { voice.phase == .listening }
+        recognizer.emit(.volatile("add these words"))
+        try await wait { fixture.state.dictation.preview == "add these words" }
+        try capture(fixture.window, name: "voice-mock-listening")
+        owner.send()
+        owner.interrupt()
+        owner.dictate()
+        try await wait { !fixture.state.dictation.isActive }
+        XCTAssertEqual(fixture.state.draft, "Draft in progress add these words")
+        XCTAssertFalse(fixture.client.calls.contains { $0.hasPrefix("send ") || $0.hasPrefix("interrupt") })
+        XCTAssertEqual(fixture.state.composer.phase, .idle)
+        XCTAssertEqual(fixture.state.interrupt.phase, .idle)
+        XCTAssertTrue(fixture.backend.state.withLock { $0.input.isEmpty })
+        try capture(fixture.window, name: "voice-mock-draft")
+        owner.dictate()
+        owner.sceneChanged(.background)
+        XCTAssertFalse(voice.isActive)
+        XCTAssertEqual(fixture.state.draft, "Draft in progress add these words")
+    }
+
     private func makeFixture(preferences: UserDefaults, permitsSending: Bool = false, working: Bool = false,
-                             interruptNeedsConfirmation: Bool = false, nativeMessageReceipts: Bool = false) throws -> Fixture {
+                             interruptNeedsConfirmation: Bool = false, nativeMessageReceipts: Bool = false,
+                             dictation: ChatDictation = .init()) throws -> Fixture {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let backend = PanePresentationTests.Backend()
         let pane = try Pane(id: PaneId(7), backend: backend, appearance: .fromPreferences(), onExit: {})
         pane.view.surface.terminal.write(Array("Private live terminal fixture\r\nOriginal terminal draft stays here".utf8))
         let state = PaneChatState(member: HostPane(hostId: "fixture", pane: pane.id), defaultPresentation: .chat,
                                   agent: .claude, inputPresentation: pane.inputPresentation,
-                                  preferences: preferences, pool: ChatModelPool(capacity: 1))
+                                  preferences: preferences, pool: ChatModelPool(capacity: 1), dictation: dictation)
         state.prepareInitialPresentation { pane.prepareToParkTerminal() }
         let client = TimelineFixtureClient(snapshot: try TimelineFixtureJSON.snapshot(0..<60, before: nil),
                                            interruptNeedsConfirmation: interruptNeedsConfirmation,

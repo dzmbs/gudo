@@ -5,6 +5,8 @@ import Observation
 @MainActor
 @Observable
 final class ChatComposer {
+    static let maximumDraftBytes = 16 * 1_024
+
     enum Command { case prepare, send(ticket: UInt64, text: String, confirmation: UInt64?) }
     typealias Source = @MainActor (Command) async throws -> ChatSendStatus
     enum Phase: Equatable { case idle, preparing, confirming, sending, finished }
@@ -24,7 +26,7 @@ final class ChatComposer {
 
     func canSend(_ draft: String) -> Bool {
         !isBusy && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && draft.utf8.count <= 16 * 1_024 && !(phase == .finished && draft == text)
+            && draft.utf8.count <= Self.maximumDraftBytes && !(phase == .finished && draft == text)
     }
 
     func draftChanged(_ draft: String) {

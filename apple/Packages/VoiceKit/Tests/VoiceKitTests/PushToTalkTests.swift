@@ -47,6 +47,7 @@ final class FakeTarget: DictationTarget {
     var route: DictationRoute
     private(set) var previews: [String?] = []
     private(set) var commits: [(String, DictationRoute)] = []
+    private(set) var failures: [VoiceError] = []
 
     init(route: DictationRoute = .paste) { self.route = route }
 
@@ -54,6 +55,7 @@ final class FakeTarget: DictationTarget {
 
     func showPreview(_ text: String?) { previews.append(text) }
     func commit(_ text: String, via route: DictationRoute) { commits.append((text, route)) }
+    func dictationFailed(_ error: VoiceError) { failures.append(error) }
 }
 
 @MainActor
@@ -273,6 +275,36 @@ struct PushToTalkTests {
         #expect(await iterator.next() == Transcript(finalized: "ls -la"))
         _ = await voice.stop()
         #expect(await iterator.next() == Transcript())
+    }
+
+    @Test func scopedControlCannotFinishOrCancelAnotherTarget() async {
+        let voice = makeVoice(), other = FakeTarget()
+        voice.start()
+        await settle { voice.phase == .listening }
+        #expect(voice.isRecording(into: target))
+        #expect(!voice.isRecording(into: other))
+        #expect(await voice.stop(target: other) == .nothing)
+        voice.cancel(target: other)
+        #expect(voice.isRecording(into: target))
+        #expect(recognizer.finished == 0 && recognizer.cancelled == 0)
+        voice.cancel(target: target)
+        #expect(!voice.isActive && recognizer.cancelled == 1)
+    }
+
+    @Test func endedTargetReceivesItsOwnFailureAndCannotStopAReplacement() async {
+        let voice = makeVoice(), replacement = FakeTarget()
+        recognizer.startError = .microphoneDenied
+        voice.start()
+        await settle { voice.phase == .failed(.microphoneDenied) }
+        #expect(target.failures == [.microphoneDenied])
+        recognizer.startError = nil
+        voice.start(target: replacement)
+        await settle { voice.phase == .listening }
+        #expect(await voice.stop(target: target) == .nothing)
+        voice.cancel(target: target)
+        #expect(voice.isRecording(into: replacement))
+        #expect(replacement.failures.isEmpty)
+        voice.cancel(target: replacement)
     }
 
     @Test func previewFitsTheRowEnd() {

@@ -43,9 +43,12 @@ struct PaneChatView<Terminal: View>: View {
         .onAppear { state.activate(in: hub) }
         .onDisappear { state.deactivate() }
         .onChange(of: state.draft) { _, draft in state.composer.draftChanged(draft) }
-        .onChange(of: state.actionContext) { _, _ in state.cancelPreparedActions() }
+        .onChange(of: state.actionContext) { _, _ in
+            state.cancelPreparedActions()
+            state.dictation.cancelIfStale()
+        }
         .onChange(of: working) { _, working in if !working { state.interrupt.reset() } }
-        .onChange(of: scenePhase) { _, phase in if phase != .active { state.invalidateActions() } }
+        .onChange(of: scenePhase) { _, phase in sceneChanged(phase) }
         .onChange(of: state.composer.confirmedText) { _, text in
             if let text, state.draft == text { state.draft = "" }
         }
@@ -92,19 +95,21 @@ struct PaneChatView<Terminal: View>: View {
             if let approval { approval.frame(maxWidth: .infinity) }
             TextField("Message", text: $state.draft, axis: .vertical)
                 .font(DS.Font.prose).lineLimit(1...6)
+                .disabled(state.dictation.isActive)
                 .accessibilityIdentifier("chat-draft")
             if let message = composerStatus {
                 Text(message).font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
                     .accessibilityIdentifier("chat-send-status")
             }
             HStack(spacing: DS.Space.s) {
+                dictationControls
                 Spacer(minLength: 0)
                 Button { state.show(.terminal, terminal: pane) } label: {
                     Label("Open Terminal", systemImage: "terminal").font(DS.Font.caption)
                         .frame(minHeight: DS.Size.touchTarget)
                 }
                 .buttonStyle(.quiet)
-                if working, state.agent == .claude {
+                if working, state.agent == .claude, !state.dictation.isActive {
                     Button(action: interrupt) {
                         Label("Stop", systemImage: "stop.fill").labelStyle(.iconOnly)
                             .frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
@@ -120,7 +125,7 @@ struct PaneChatView<Terminal: View>: View {
                 }
                     .buttonStyle(.quietProminent)
                     .keyboardShortcut(.return, modifiers: .command)
-                .disabled(state.presentation != .chat || !permitsSending || state.interrupt.isBusy
+                .disabled(state.presentation != .chat || !permitsSending || state.dictation.isActive || state.interrupt.isBusy
                           || approval?.hasBlockedRequest == true || !state.composer.canSend(state.draft))
                 .accessibilityIdentifier("chat-send")
             }
@@ -128,8 +133,44 @@ struct PaneChatView<Terminal: View>: View {
         .padding(DS.Space.l).foregroundStyle(DS.Palette.text).background(DS.Palette.sidebar)
     }
 
+    @ViewBuilder private var dictationControls: some View {
+        Button(action: dictate) {
+            Label(state.dictation.isActive ? "Use dictation" : "Dictate",
+                  systemImage: state.dictation.isActive ? "checkmark" : "mic.fill")
+                .labelStyle(.iconOnly).frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
+        }
+        .buttonStyle(.quiet)
+        .disabled(state.presentation != .chat || !permitsSending || state.composer.isBusy || state.interrupt.isBusy
+                  || (state.dictation.isActive && !state.dictation.canFinish))
+        .accessibilityIdentifier("chat-dictate")
+        if state.dictation.isActive {
+            Button { state.dictation.cancel() } label: {
+                Label("Cancel dictation", systemImage: "xmark").labelStyle(.iconOnly)
+                    .frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
+            }
+            .buttonStyle(.quiet).keyboardShortcut(.escape, modifiers: [])
+            .accessibilityIdentifier("chat-cancel-dictation")
+        }
+    }
+
+    func dictate() {
+        if state.dictation.isActive { state.dictation.finish(); return }
+        guard prepareAction(state.actionContext), !state.composer.isBusy, !state.interrupt.isBusy else { return }
+        state.invalidateActions()
+        state.dictation.start(in: state)
+    }
+
+    func sceneChanged(_ phase: ScenePhase) {
+        guard phase != .active else { return }
+        // System microphone/speech permission dialogs make the scene inactive. This target only
+        // edits a local draft; host controls remain vetoed while it starts. Background always cancels.
+        if phase == .inactive, state.dictation.isStarting { state.cancelPreparedActions() }
+        else { state.invalidateActions() }
+    }
+
     private var composerStatus: String? {
         if state.composer.needsConfirmation || state.interrupt.needsConfirmation { return "Waiting for confirmation…" }
+        if let message = state.dictation.status { return message }
         if let message = state.interrupt.message { return message }
         if state.interrupt.isBusy { return "Requesting interrupt…" }
         return state.composer.message ?? (state.composer.isBusy ? "Waiting for confirmation…" : nil)
@@ -143,6 +184,7 @@ struct PaneChatView<Terminal: View>: View {
     func send() {
         let context = state.actionContext
         guard !state.interrupt.isBusy, prepareAction(context), state.composer.canSend(state.draft) else { return }
+        state.dictation.cancel()
         let draft = state.draft
         let generation = state.composer.requestGeneration
         Task {
@@ -167,6 +209,7 @@ struct PaneChatView<Terminal: View>: View {
     func interrupt() {
         let context = state.actionContext
         guard working, state.agent == .claude, state.interrupt.canBegin, prepareAction(context) else { return }
+        state.dictation.cancel()
         state.composer.cancelBeforeSend()
         let generation = state.interrupt.requestGeneration
         Task {
@@ -203,20 +246,23 @@ struct PaneChatView<Terminal: View>: View {
     }
 
     private func prepareAction(_ context: PaneChatState.ActionContext) -> Bool {
-        state.actionContext == context && state.presentation == .chat && permitsSending
+        state.actionContext == context && state.presentation == .chat && permitsSending && !state.dictation.isActive
             && approval?.hasBlockedRequest != true && pane.view.markedTextRange == nil && state.controller?.prepareToPark() != false
     }
 
     private var actions: ChatRowActions {
         ChatRowActions(showTerminal: { state.showTerminal(commandMark: $0, terminal: pane) }, selectText: { text in
+            state.dictation.cancel()
             selectedDetail = ChatDetail(content: .text(ChatSelectedText(title: "Select Text", text: text)))
         }, showTool: { item in
             guard case .tool(let tool) = item.body else { return }
+            state.dictation.cancel()
             selectedDetail = ChatDetail(content: .tool(tool))
         }, showDiff: { selectDiffPreview($0) })
     }
 
     private func selectDiffPreview(_ target: ChatDiffTarget) {
+        state.dictation.cancel()
         let groups = ChatDiffPreview.groups(for: target, rows: state.model?.frame.rows ?? [])
         selectedDetail = ChatDetail(content: .diff(groups))
     }
