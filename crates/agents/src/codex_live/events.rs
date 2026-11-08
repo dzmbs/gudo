@@ -45,6 +45,12 @@ pub enum CodexLiveEvent {
         item: String,
         kind: CodexApprovalKind,
     },
+    ApprovalResolved {
+        request: super::CodexRpcId,
+        turn: String,
+        item: String,
+        kind: CodexApprovalKind,
+    },
 }
 
 /// Launch-owned event cursor. Start before the first turn; late joins require snapshot hydration.
@@ -52,7 +58,17 @@ pub enum CodexLiveEvent {
 pub struct CodexLiveEvents {
     binding: CodexThreadBinding,
     turn: Option<String>,
+    approvals: Vec<Approval>,
     closed: bool,
+}
+
+#[derive(Debug)]
+struct Approval {
+    request: RpcId,
+    turn: String,
+    item: String,
+    kind: CodexApprovalKind,
+    resolved: bool,
 }
 
 impl CodexLiveEvents {
@@ -61,6 +77,7 @@ impl CodexLiveEvents {
         Self {
             binding,
             turn: None,
+            approvals: Vec::new(),
             closed: false,
         }
     }
@@ -100,6 +117,7 @@ impl CodexLiveEvents {
             Frame::Event(Event::FileApproval { id, params }) => {
                 self.approval(id, params, CodexApprovalKind::FileChange)
             }
+            Frame::Event(Event::RequestResolved { params }) => self.resolved(params),
             Frame::Event(Event::Other) => Ok(None),
             Frame::Reply(reply) => {
                 if let RpcId::Text(text) = reply.id {
@@ -186,7 +204,7 @@ impl CodexLiveEvents {
     }
 
     fn approval(
-        &self,
+        &mut self,
         request: RpcId,
         params: ApprovalParams,
         kind: CodexApprovalKind,
@@ -198,11 +216,54 @@ impl CodexLiveEvents {
             validate_id(text)?;
         }
         validate_id(&params.item_id)?;
+        if let Some(known) = self.approvals.iter().find(|known| known.request == request) {
+            if known.turn == params.turn_id && known.item == params.item_id && known.kind == kind {
+                return Ok(None);
+            }
+            return Err(CodexBindingError::InvalidFrame);
+        }
+        // Resolved identities stay reserved so delayed notifications cannot resolve a reused id.
+        if self.approvals.len() >= 256 {
+            return Err(CodexBindingError::Exhausted);
+        }
+        self.approvals.push(Approval {
+            request: request.clone(),
+            turn: params.turn_id.clone(),
+            item: params.item_id.clone(),
+            kind,
+            resolved: false,
+        });
         Ok(Some(CodexLiveEvent::ApprovalWaiting {
             request,
             turn: params.turn_id,
             item: params.item_id,
             kind,
+        }))
+    }
+
+    fn resolved(
+        &mut self,
+        params: ResolutionParams,
+    ) -> Result<Option<CodexLiveEvent>, CodexBindingError> {
+        if params.thread_id != self.binding.thread_id() {
+            return Ok(None);
+        }
+        if let RpcId::Text(text) = &params.request_id {
+            validate_id(text)?;
+        }
+        let Some(approval) = self.approvals.iter_mut().find(|approval| {
+            approval.request == params.request_id
+                && !approval.resolved
+                && Some(approval.turn.as_str()) == self.turn.as_deref()
+        }) else {
+            return Ok(None);
+        };
+        approval.resolved = true;
+        Ok(Some(CodexLiveEvent::ApprovalResolved {
+            request: approval.request.clone(),
+            turn: approval.turn.clone(),
+            item: approval.item.clone(),
+            kind: approval.kind,
         }))
     }
 }
@@ -241,8 +302,17 @@ enum Event {
     CommandApproval { id: RpcId, params: ApprovalParams },
     #[serde(rename = "item/fileChange/requestApproval")]
     FileApproval { id: RpcId, params: ApprovalParams },
+    #[serde(rename = "serverRequest/resolved")]
+    RequestResolved { params: ResolutionParams },
     #[serde(other)]
     Other,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ResolutionParams {
+    thread_id: String,
+    request_id: RpcId,
 }
 
 #[derive(Deserialize)]

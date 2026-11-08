@@ -1,4 +1,5 @@
 mod items;
+mod resolution;
 
 use super::*;
 use serde_json::{Value, json};
@@ -203,10 +204,6 @@ fn approval_signals_keep_rpc_types_and_current_turn_scope() {
         (json!("7"), RpcId::Text("7".into())),
     ] {
         let connection = connection("primary");
-        let mut stream = CodexLiveEvents::new(connection.binding().unwrap().clone());
-        stream
-            .observe(&connection, &start("primary", "turn"))
-            .unwrap();
         for (method, kind) in [
             (
                 "item/commandExecution/requestApproval",
@@ -217,6 +214,10 @@ fn approval_signals_keep_rpc_types_and_current_turn_scope() {
                 CodexApprovalKind::FileChange,
             ),
         ] {
+            let mut stream = CodexLiveEvents::new(connection.binding().unwrap().clone());
+            stream
+                .observe(&connection, &start("primary", "turn"))
+                .unwrap();
             let mut frame = json!({"id":identifier,"method":method,"params":{"threadId":"title","turnId":"turn","itemId":"tool"}});
             assert!(
                 stream

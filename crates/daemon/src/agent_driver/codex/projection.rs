@@ -167,9 +167,9 @@ impl Projection {
                 }
                 Ok(operations)
             }
-            CodexLiveEvent::TurnStarted { .. } | CodexLiveEvent::ApprovalWaiting { .. } => {
-                Ok(Vec::new())
-            }
+            CodexLiveEvent::TurnStarted { .. }
+            | CodexLiveEvent::ApprovalWaiting { .. }
+            | CodexLiveEvent::ApprovalResolved { .. } => Ok(Vec::new()),
         }
     }
 
