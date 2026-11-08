@@ -20,6 +20,7 @@ mod adapter;
 mod arbiter;
 mod claude;
 mod codex;
+mod codex_live;
 mod event;
 mod hook;
 mod launch;
@@ -32,6 +33,7 @@ pub use adapter::{AgentAdapter, HookCoverage, HookError};
 pub use arbiter::{Arbiter, ArbiterConfig, DecisionError, Notify, Update};
 pub use claude::ClaudeCode;
 pub use codex::{Codex, NOTIFY_EVENT as CODEX_NOTIFY_EVENT};
+pub use codex_live::{CodexBinding, CodexBindingError, CodexThreadBinding};
 pub use event::{
     ActorId, AgentEvent, AgentKind, AgentState, AnswerPath, ApprovalChoice, ApprovalOption,
     Blocked, BlockedReason, Blocker, Confidence, Decided, Decision, EventKind, Lane,

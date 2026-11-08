@@ -363,6 +363,24 @@ reader rather than treating its short output reference preview as complete. Inpu
 native virtual text rows; oversized input gets an explicit Terminal fallback. No detail action
 submits text or launches another process.
 
+## Codex adapter foundation (phase 2)
+
+`agents::CodexBinding` passively correlates one proven pane-owned TUI connection's official
+thread/start, thread/resume and thread/fork replies. An unsolicited thread/started notification
+or matching cwd cannot establish ownership. A new request retires the old binding immediately;
+resume requires the exact requested thread. Each successful binding has a non-reused identity,
+so deferred work cannot survive a same-thread round trip or another connection. Typed envelopes
+reject duplicate identity fields. Observation retains at most 256 bounded binding-request IDs
+and parses at most 64KiB per pending control frame; exhaustion closes native binding, not Terminal.
+A future proxy must forward official frames unchanged, independently of these native limits.
+
+This is the adapter's correlation foundation, not an enabled production Codex timeline/control
+transport. It opens no sockets, starts/resumes no process, sends no bootstrap turn and writes no
+session file. Tests use synthetic requests plus the previously recorded official response fixture;
+they do not prove a new real-TUI proxy integration. Pane/account-owned transport lifecycle, exact
+live notification materialization and signed approval routing still need integration. Existing
+Codex panes are not restarted or silently replaced to enable Chat.
+
 ## Native composer safety prerequisites
 
 The integrated native Chat composer retains the exit-fence boundary. That fence protects existing
