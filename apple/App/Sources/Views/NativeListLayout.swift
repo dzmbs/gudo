@@ -88,7 +88,9 @@ nonisolated struct NativeListLayout: Sendable {
 
     func position(of anchor: Anchor) -> CGFloat? {
         guard let index = indices[anchor.id] ?? anchor.sectionID.flatMap({ indices[$0] }) else { return nil }
-        return positions[index] + min(max(0, anchor.offset), max(0, rows[index].height - 1))
+        let offset = max(0, anchor.offset)
+        let height = rows[index].height
+        return positions[index] + (offset < height ? offset : max(0, height - 1))
     }
 
     private func headerInsertion(after rowIndex: Int) -> Int {

@@ -33,6 +33,20 @@ final class NativeListLayoutTests: XCTestCase {
         XCTAssertEqual(layout.positions, [0, 36, 88, 118])
     }
 
+    func testAnchorsKeepValidSubpointPositionsAtTheEndOfARow() throws {
+        let rows = [NativeListRow(id: "first", height: 18), NativeListRow(id: "reading", height: 36),
+                    NativeListRow(id: "next", height: 18)]
+        let layout = NativeListLayout(rows: rows)
+        let anchor = try XCTUnwrap(layout.anchor(at: 53.75))
+        XCTAssertEqual(anchor.id, "reading")
+        XCTAssertEqual(try XCTUnwrap(layout.position(of: anchor)), 53.75, accuracy: 0.000_001)
+        let prepended = NativeListLayout(rows: [NativeListRow(id: "earlier", height: 100.5)] + rows)
+        XCTAssertEqual(try XCTUnwrap(prepended.position(of: anchor)), 154.25, accuracy: 0.000_001)
+        var shortened = layout
+        shortened.setHeights([1: 12])
+        XCTAssertEqual(shortened.position(of: anchor), 29, "Only offsets outside the resized row need its end fallback")
+    }
+
     func testEmptyLayoutAndPinnedHeaderBoundaries() {
         let empty = NativeListLayout()
         XCTAssertNil(empty.row(at: 0))
