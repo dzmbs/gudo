@@ -32,10 +32,13 @@ mod signal;
 pub use adapter::{AgentAdapter, HookCoverage, HookError};
 pub use arbiter::{Arbiter, ArbiterConfig, DecisionError, Notify, Update};
 pub use claude::ClaudeCode;
-pub use codex::{Codex, CodexLiveLaunch, InvalidCodexSocket, NOTIFY_EVENT as CODEX_NOTIFY_EVENT};
+pub use codex::{
+    CODEX_ENVIRONMENT_LIMIT, Codex, CodexLiveLaunch, CodexPaneEnvironment, InvalidCodexSocket,
+    NOTIFY_EVENT as CODEX_NOTIFY_EVENT,
+};
 pub use codex_live::{
-    CodexApprovalKind, CodexBinding, CodexBindingError, CodexLiveEvent, CodexLiveEvents,
-    CodexRpcId, CodexThreadBinding, CodexTurnOutcome,
+    CodexApprovalKind, CodexBinding, CodexBindingError, CodexInput, CodexItem, CodexLiveEvent,
+    CodexLiveEvents, CodexRpcId, CodexThreadBinding, CodexTurnOutcome,
 };
 pub use event::{
     ActorId, AgentEvent, AgentKind, AgentState, AnswerPath, ApprovalChoice, ApprovalOption,

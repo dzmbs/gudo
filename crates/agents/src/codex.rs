@@ -8,7 +8,9 @@
 //! opt into the marker-block install.
 
 mod live_launch;
+mod pane_environment;
 pub use live_launch::{CodexLiveLaunch, InvalidCodexSocket};
+pub use pane_environment::{CODEX_ENVIRONMENT_LIMIT, CodexPaneEnvironment};
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};

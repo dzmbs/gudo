@@ -34,6 +34,11 @@ pub enum CodexLiveEvent {
         item: String,
         text: String,
     },
+    Item {
+        turn: String,
+        item: super::CodexItem,
+        completed: bool,
+    },
     ApprovalWaiting {
         request: super::CodexRpcId,
         turn: String,
@@ -87,6 +92,8 @@ impl CodexLiveEvents {
             Frame::Event(Event::TurnStarted { params }) => self.started(params),
             Frame::Event(Event::TurnCompleted { params }) => self.completed(params),
             Frame::Event(Event::AssistantDelta { params }) => self.delta(params),
+            Frame::Event(Event::ItemStarted { params }) => self.item(params, false),
+            Frame::Event(Event::ItemCompleted { params }) => self.item(params, true),
             Frame::Event(Event::CommandApproval { id, params }) => {
                 self.approval(id, params, CodexApprovalKind::Command)
             }
@@ -152,6 +159,28 @@ impl CodexLiveEvents {
         }))
     }
 
+    fn item(
+        &self,
+        params: ItemParams,
+        completed: bool,
+    ) -> Result<Option<CodexLiveEvent>, CodexBindingError> {
+        if !self.is_current(&params.thread_id, &params.turn_id) {
+            return Ok(None);
+        }
+        match &params.item {
+            super::CodexItem::UserMessage { id, .. }
+            | super::CodexItem::AgentMessage { id, .. }
+            | super::CodexItem::CommandExecution { id, .. }
+            | super::CodexItem::Reasoning { id, .. } => validate_id(id)?,
+            super::CodexItem::Unsupported => {}
+        }
+        Ok(Some(CodexLiveEvent::Item {
+            turn: params.turn_id,
+            item: params.item,
+            completed,
+        }))
+    }
+
     fn is_current(&self, thread: &str, turn: &str) -> bool {
         thread == self.binding.thread_id() && self.turn.as_deref() == Some(turn)
     }
@@ -204,6 +233,10 @@ enum Event {
     TurnCompleted { params: TurnParams },
     #[serde(rename = "item/agentMessage/delta")]
     AssistantDelta { params: DeltaParams },
+    #[serde(rename = "item/started")]
+    ItemStarted { params: ItemParams },
+    #[serde(rename = "item/completed")]
+    ItemCompleted { params: ItemParams },
     #[serde(rename = "item/commandExecution/requestApproval")]
     CommandApproval { id: RpcId, params: ApprovalParams },
     #[serde(rename = "item/fileChange/requestApproval")]
@@ -243,6 +276,14 @@ struct DeltaParams {
     turn_id: String,
     item_id: String,
     delta: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ItemParams {
+    thread_id: String,
+    turn_id: String,
+    item: super::CodexItem,
 }
 
 #[derive(Deserialize)]

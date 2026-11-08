@@ -36,7 +36,7 @@ fn script(shim: &Path, daemon: Option<&Path>) -> String {
         "#!/bin/sh\n\
          shim={}\n\
          if [ -x \"$shim\" ]; then exec \"$shim\" {}\"$@\"; fi\n\
-         case \"$1\" in askpass|agent-input-arm|agent-exit-fence) exit 1 ;; esac\n\
+         case \"$1\" in askpass|agent-input-arm|agent-exit-fence|codex-remote) exit 1 ;; esac\n\
          exit 0\n",
         shell_quote(&shim.to_string_lossy()),
         if daemon == Some(shim) { "hook " } else { "" },

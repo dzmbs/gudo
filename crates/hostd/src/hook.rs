@@ -26,6 +26,7 @@ mod askpass;
 mod browser;
 mod browser_tools;
 mod browser_upload;
+mod codex_remote;
 mod mcp;
 mod term_tools;
 
@@ -40,6 +41,7 @@ use serde_json::Value;
 
 pub fn run_hook(arguments: &[String]) {
     match arguments.first().map(String::as_str) {
+        Some("codex-remote") => std::process::exit(codex_remote::main(&arguments[1..])),
         Some("agent-input-arm") => std::process::exit(agent_exit_fence::main(
             &arguments[1..],
             agent_exit_fence::FenceAction::Arm,

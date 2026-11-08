@@ -8,7 +8,9 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 mod events;
+mod items;
 pub use events::{CodexApprovalKind, CodexLiveEvent, CodexLiveEvents, CodexTurnOutcome};
+pub use items::{CodexInput, CodexItem};
 
 use serde::de::{DeserializeOwned, IgnoredAny};
 use serde::{Deserialize, Serialize};
