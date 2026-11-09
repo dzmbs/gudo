@@ -809,3 +809,28 @@ fn path_validation_refuses_another_session_and_symlink_escapes() {
     std::os::unix::fs::symlink(&secret, &direct_link).unwrap();
     assert!(Transcript::open(direct_link, "test".into(), 7).is_err());
 }
+
+#[test]
+fn a_full_snapshot_with_many_commands_still_fits_one_push() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("test.jsonl");
+    let mut file = File::create(&path).unwrap();
+    for index in 0..8 {
+        let record = json!({"type":"assistant","uuid":format!("message-{index}"),"timestamp":"2026-01-01T00:00:00Z","message":{"content":[{"type":"text","text":"a".repeat(120 * 1024)}]}});
+        writeln!(file, "{record}").unwrap();
+    }
+    let mut transcript = open(&path);
+    let commands = (0..256)
+        .map(|index| proto::TimelineCommand {
+            name: format!("command-{index}"),
+            description: "d".repeat(1024),
+            source: proto::TimelineCommandSource::Project,
+        })
+        .collect();
+    transcript.set_commands(commands);
+    let update = proto::TimelineUpdate {
+        pane_id: proto::PaneId(1),
+        operations: vec![TimelineOp::Snapshot(transcript.snapshot(60, None))],
+    };
+    assert!(super::super::value_weight::update(&update) <= super::super::MAX_PUSH_BYTES);
+}

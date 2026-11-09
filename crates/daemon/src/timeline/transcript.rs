@@ -143,8 +143,21 @@ impl Transcript {
             self.order.iter().filter_map(|id| self.items.get(id)),
             limit,
             since,
-            budget.min(SNAPSHOT_BYTES),
+            budget.min(self.snapshot_push_budget()),
         )
+    }
+
+    fn snapshot_push_budget(&self) -> usize {
+        let metadata = proto::TimelineUpdate {
+            pane_id: proto::PaneId(0),
+            operations: vec![TimelineOp::Snapshot(Self::empty_page(
+                self.parser.session.clone(),
+                self.cursor,
+            ))],
+        };
+        super::MAX_PUSH_BYTES
+            .saturating_sub(super::value_weight::update(&metadata))
+            .min(SNAPSHOT_BYTES)
     }
 
     pub fn next_cursor(&mut self) -> TimelineCursor {
