@@ -19,7 +19,9 @@ pub use items::{CodexInput, CodexItem};
 use serde::de::{DeserializeOwned, IgnoredAny};
 use serde::{Deserialize, Serialize};
 
-const MAX_FRAME_BYTES: usize = 64 * 1024;
+/// The largest app-server message observed; Codex caps one command's output at 1 MiB, which
+/// JSON escaping can grow several times over.
+pub const CODEX_FRAME_LIMIT: usize = 8 * 1024 * 1024;
 const MAX_ID_BYTES: usize = 128;
 const MAX_BINDING_REQUESTS: usize = 256;
 static NEXT_BINDING: AtomicU64 = AtomicU64::new(1);
@@ -44,8 +46,8 @@ impl CodexThreadBinding {
 /// Bounded passive observer owned by one proven pane/account TUI transport, never by a view.
 ///
 /// Feed only TUI-origin frames to [`Self::observe_tui`], and that connection's upstream frames
-/// to [`Self::observe_server`]. An observation failure closes native binding permanently; a
-/// future proxy must still forward official frames unchanged so Terminal remains usable.
+/// to [`Self::observe_server`]. An observation failure closes native binding permanently; the
+/// relay still forwards official frames unchanged so Terminal remains usable.
 ///
 /// # Examples
 ///
@@ -263,8 +265,8 @@ impl CodexBinding {
 
     /// Observes an upstream frame; unsolicited thread notifications cannot create a binding.
     ///
-    /// Large unrelated output is ignored when no binding reply is pending. This tighter native
-    /// observation limit must not become a smaller transport limit for the TUI.
+    /// Frames are not decoded while no binding reply is pending. The observation limit is never
+    /// a transport limit for the TUI.
     ///
     /// # Errors
     ///
@@ -344,7 +346,7 @@ impl CodexBinding {
 }
 
 fn parse<T: DeserializeOwned>(frame: &str) -> Result<T, CodexBindingError> {
-    if frame.len() > MAX_FRAME_BYTES {
+    if frame.len() > CODEX_FRAME_LIMIT {
         return Err(CodexBindingError::TooLarge);
     }
     if !frame.trim_start().starts_with('{') {

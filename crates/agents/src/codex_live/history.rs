@@ -129,6 +129,14 @@ mod tests {
     }
 
     #[test]
+    fn history_larger_than_one_websocket_read_still_parses() {
+        let text = "remembered ".repeat(32 * 1024);
+        let frame = json!({"result":{"thread":{"id":"thread","turns":[{"id":"turn","status":"completed","items":[{"type":"agentMessage","id":"message","text":text}]}]}}});
+        let history = CodexThreadHistory::parse(&frame.to_string()).unwrap();
+        assert_eq!(history.turns.unwrap().len(), 1);
+    }
+
+    #[test]
     fn thread_context_requires_an_absolute_non_nul_directory() {
         for cwd in ["relative", "/invalid\0directory"] {
             let frame = json!({"result":{"thread":{"id":"thread","cwd":cwd,"turns":[]}}});

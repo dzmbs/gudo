@@ -244,7 +244,7 @@ fn approval_signals_keep_rpc_types_and_current_turn_scope() {
 fn malformed_frames_permanently_close_only_native_observation() {
     for frame in [
         "not json".to_owned(),
-        " ".repeat(super::super::MAX_FRAME_BYTES + 1),
+        " ".repeat(super::super::CODEX_FRAME_LIMIT + 1),
         r#"{"method":"turn/started","params":{"threadId":"primary","threadId":"other","turn":{"id":"turn","status":"inProgress"}}}"#.to_owned(),
         r#"{"id":true,"method":"item/commandExecution/requestApproval","params":{"threadId":"primary","turnId":"turn","itemId":"tool"}}"#.to_owned(),
         r#"{"method":"turn/started","params":{"threadId":"primary","turn":{"id":"","status":"inProgress"}}}"#.to_owned(),
@@ -302,4 +302,102 @@ fn unknown_outcome_is_not_success_and_retired_bindings_never_revive() {
         stream.observe(&connection, &start("primary", "turn")),
         Err(CodexBindingError::Closed)
     );
+}
+
+fn approval(thread: &str, turn: &str, request: usize) -> String {
+    json!({"id":request,"method":"item/commandExecution/requestApproval","params":{"threadId":thread,"turnId":turn,"itemId":format!("tool-{request}")}}).to_string()
+}
+
+fn resolve(thread: &str, request: usize) -> String {
+    json!({"method":"serverRequest/resolved","params":{"threadId":thread,"requestId":request}})
+        .to_string()
+}
+
+#[test]
+fn a_long_thread_keeps_binding_past_the_turn_and_approval_allowances() {
+    let connection = connection("primary");
+    let mut stream = CodexLiveEvents::new(connection.binding().unwrap().clone())
+        .with_completed_turns((0..REMEMBERED_TURNS + 10).map(|turn| format!("history-{turn}")))
+        .unwrap();
+    let mut request = 0;
+    for turn in 0..REMEMBERED_TURNS + 10 {
+        let turn = format!("live-{turn}");
+        assert!(
+            stream
+                .observe(&connection, &start("primary", &turn))
+                .unwrap()
+                .is_some()
+        );
+        for _ in 0..2 {
+            request += 1;
+            stream
+                .observe(&connection, &approval("primary", &turn, request))
+                .unwrap();
+            stream
+                .observe(&connection, &resolve("primary", request))
+                .unwrap();
+        }
+        stream
+            .observe(&connection, &complete("primary", &turn, "completed"))
+            .unwrap();
+    }
+    assert!(stream.seen_turns.len() <= REMEMBERED_TURNS);
+    assert!(stream.approvals.len() <= 2);
+    assert!(
+        stream
+            .observe(&connection, &start("primary", "live-last"))
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+fn one_turn_retires_resolved_approvals_before_refusing_more() {
+    let connection = connection("primary");
+    let mut stream = CodexLiveEvents::new(connection.binding().unwrap().clone());
+    stream
+        .observe(&connection, &start("primary", "turn"))
+        .unwrap();
+    for request in 0..TURN_APPROVALS + 10 {
+        assert!(
+            stream
+                .observe(&connection, &approval("primary", "turn", request))
+                .unwrap()
+                .is_some()
+        );
+        stream
+            .observe(&connection, &resolve("primary", request))
+            .unwrap();
+    }
+    assert_eq!(stream.approvals.len(), TURN_APPROVALS);
+}
+
+#[test]
+fn large_unrelated_frames_are_skipped_and_large_completions_keep_an_output_tail() {
+    let connection = connection("primary");
+    let mut stream = CodexLiveEvents::new(connection.binding().unwrap().clone());
+    stream
+        .observe(&connection, &start("primary", "turn"))
+        .unwrap();
+    let output = "x".repeat(2 * 1024 * 1024);
+    let delta = json!({"method":"item/commandExecution/outputDelta","params":{"threadId":"primary","turnId":"turn","itemId":"tool","delta":output}});
+    assert!(
+        stream
+            .observe(&connection, &delta.to_string())
+            .unwrap()
+            .is_none()
+    );
+    let completed = json!({"method":"item/completed","params":{"threadId":"primary","turnId":"turn","item":{"type":"commandExecution","id":"tool","command":"yes","status":"completed","aggregatedOutput":output,"exitCode":0}}});
+    let Some(CodexLiveEvent::Item {
+        item:
+            super::super::CodexItem::CommandExecution {
+                aggregated_output: Some(kept),
+                ..
+            },
+        ..
+    }) = stream.observe(&connection, &completed.to_string()).unwrap()
+    else {
+        panic!("a large command completion must still reach Chat");
+    };
+    assert_eq!(kept.len(), super::super::items::CODEX_OUTPUT_TAIL);
 }

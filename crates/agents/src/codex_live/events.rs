@@ -1,7 +1,21 @@
+use std::collections::{HashSet, VecDeque};
+
 use serde::Deserialize;
-use serde::de::IgnoredAny;
 
 use super::{CodexBinding, CodexBindingError, CodexThreadBinding, RpcId, parse, validate_id};
+
+const REMEMBERED_TURNS: usize = 500;
+const TURN_APPROVALS: usize = 256;
+const EVENT_METHODS: [&str; 8] = [
+    "turn/started",
+    "turn/completed",
+    "item/agentMessage/delta",
+    "item/started",
+    "item/completed",
+    "item/commandExecution/requestApproval",
+    "item/fileChange/requestApproval",
+    "serverRequest/resolved",
+];
 
 /// A turn outcome reported by the mapped app-server, never inferred from notify or pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,8 +73,10 @@ pub enum CodexLiveEvent {
 pub struct CodexLiveEvents {
     binding: CodexThreadBinding,
     turn: Option<String>,
-    seen_turns: std::collections::HashSet<String>,
+    seen_turns: HashSet<String>,
+    turn_order: VecDeque<String>,
     approvals: Vec<Approval>,
+    retired_requests: VecDeque<RpcId>,
     closed: bool,
 }
 
@@ -80,8 +96,10 @@ impl CodexLiveEvents {
         Self {
             binding,
             turn: None,
-            seen_turns: std::collections::HashSet::new(),
+            seen_turns: HashSet::new(),
+            turn_order: VecDeque::new(),
             approvals: Vec::new(),
+            retired_requests: VecDeque::new(),
             closed: false,
         }
     }
@@ -114,8 +132,9 @@ impl CodexLiveEvents {
     }
 
     /// Reserves completed baseline turns so delayed live frames cannot replay their text.
+    /// Only the most recent turns stay reserved; a frame delayed past them is not a risk.
     /// # Errors
-    /// Rejects invalid identities or an exhausted turn allowance.
+    /// Rejects invalid identities.
     pub fn with_completed_turns(
         mut self,
         turns: impl IntoIterator<Item = String>,
@@ -126,12 +145,24 @@ impl CodexLiveEvents {
         Ok(self)
     }
 
+    fn retire_request(&mut self, request: RpcId) {
+        self.retired_requests.push_back(request);
+        if self.retired_requests.len() > TURN_APPROVALS {
+            self.retired_requests.pop_front();
+        }
+    }
+
     fn reserve_turn(&mut self, turn: &str) -> Result<(), CodexBindingError> {
         validate_id(turn)?;
-        if !self.seen_turns.contains(turn) && self.seen_turns.len() >= 500 {
-            return Err(CodexBindingError::Exhausted);
+        if !self.seen_turns.insert(turn.to_owned()) {
+            return Ok(());
         }
-        self.seen_turns.insert(turn.to_owned());
+        self.turn_order.push_back(turn.to_owned());
+        while self.turn_order.len() > REMEMBERED_TURNS {
+            if let Some(oldest) = self.turn_order.pop_front() {
+                self.seen_turns.remove(&oldest);
+            }
+        }
         Ok(())
     }
 
@@ -150,34 +181,42 @@ impl CodexLiveEvents {
             self.closed = true;
             return Err(CodexBindingError::Closed);
         }
-        let result = parse(frame).and_then(|frame| self.apply(frame));
+        let result = self.decode(frame);
         if result.is_err() {
             self.closed = true;
         }
         result
     }
 
-    fn apply(&mut self, frame: Frame) -> Result<Option<CodexLiveEvent>, CodexBindingError> {
-        match frame {
-            Frame::Event(Event::TurnStarted { params }) => self.started(params),
-            Frame::Event(Event::TurnCompleted { params }) => self.completed(params),
-            Frame::Event(Event::AssistantDelta { params }) => self.delta(params),
-            Frame::Event(Event::ItemStarted { params }) => self.item(params, false),
-            Frame::Event(Event::ItemCompleted { params }) => self.item(params, true),
-            Frame::Event(Event::CommandApproval { id, params }) => {
+    fn decode(&mut self, frame: &str) -> Result<Option<CodexLiveEvent>, CodexBindingError> {
+        let envelope: Envelope = parse(frame)?;
+        let Some(method) = envelope.method else {
+            if let Some(RpcId::Text(text)) = envelope.id {
+                validate_id(&text)?;
+            }
+            return Ok(None);
+        };
+        if !EVENT_METHODS.contains(&method.as_str()) {
+            return Ok(None);
+        }
+        let event = serde_json::from_str(frame).map_err(|_| CodexBindingError::InvalidFrame)?;
+        self.apply(event)
+    }
+
+    fn apply(&mut self, event: Event) -> Result<Option<CodexLiveEvent>, CodexBindingError> {
+        match event {
+            Event::TurnStarted { params } => self.started(params),
+            Event::TurnCompleted { params } => self.completed(params),
+            Event::AssistantDelta { params } => self.delta(params),
+            Event::ItemStarted { params } => self.item(params, false),
+            Event::ItemCompleted { params } => self.item(params, true),
+            Event::CommandApproval { id, params } => {
                 self.approval(id, params, CodexApprovalKind::Command)
             }
-            Frame::Event(Event::FileApproval { id, params }) => {
+            Event::FileApproval { id, params } => {
                 self.approval(id, params, CodexApprovalKind::FileChange)
             }
-            Frame::Event(Event::RequestResolved { params }) => self.resolved(params),
-            Frame::Event(Event::Other) => Ok(None),
-            Frame::Reply(reply) => {
-                if let RpcId::Text(text) = reply.id {
-                    validate_id(&text)?;
-                }
-                Ok(None)
-            }
+            Event::RequestResolved { params } => self.resolved(params),
         }
     }
 
@@ -191,6 +230,9 @@ impl CodexLiveEvents {
             return Err(CodexBindingError::InvalidFrame);
         }
         self.reserve_turn(&params.turn.id)?;
+        for approval in std::mem::take(&mut self.approvals) {
+            self.retire_request(approval.request);
+        }
         self.turn = Some(params.turn.id.clone());
         Ok(Some(CodexLiveEvent::TurnStarted {
             turn: params.turn.id,
@@ -269,6 +311,9 @@ impl CodexLiveEvents {
             validate_id(text)?;
         }
         validate_id(&params.item_id)?;
+        if self.retired_requests.contains(&request) {
+            return Err(CodexBindingError::InvalidFrame);
+        }
         if let Some(known) = self.approvals.iter().find(|known| known.request == request) {
             if known.turn == params.turn_id
                 && known.item == params.item_id
@@ -280,8 +325,14 @@ impl CodexLiveEvents {
             return Err(CodexBindingError::InvalidFrame);
         }
         // Resolved identities stay reserved so delayed notifications cannot resolve a reused id.
-        if self.approvals.len() >= 256 {
-            return Err(CodexBindingError::Exhausted);
+        if self.approvals.len() >= TURN_APPROVALS {
+            let resolved = self
+                .approvals
+                .iter()
+                .position(|approval| approval.resolved)
+                .ok_or(CodexBindingError::Exhausted)?;
+            let retired = self.approvals.remove(resolved);
+            self.retire_request(retired.request);
         }
         self.approvals.push(Approval {
             request: request.clone(),
@@ -328,20 +379,9 @@ impl CodexLiveEvents {
 }
 
 #[derive(Deserialize)]
-#[serde(untagged)]
-enum Frame {
-    Event(Event),
-    Reply(Reply),
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Reply {
-    id: RpcId,
-    #[serde(rename = "result")]
-    _result: Option<IgnoredAny>,
-    #[serde(rename = "error")]
-    _error: Option<IgnoredAny>,
+struct Envelope {
+    id: Option<RpcId>,
+    method: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -363,8 +403,6 @@ enum Event {
     FileApproval { id: RpcId, params: ApprovalParams },
     #[serde(rename = "serverRequest/resolved")]
     RequestResolved { params: ResolutionParams },
-    #[serde(other)]
-    Other,
 }
 
 #[derive(Deserialize)]

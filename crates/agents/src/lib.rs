@@ -42,9 +42,9 @@ pub use codex::{
     CodexTerminalLaunch, InvalidCodexSocket, NOTIFY_EVENT as CODEX_NOTIFY_EVENT,
 };
 pub use codex_live::{
-    CodexApprovalDetails, CodexApprovalKind, CodexBinding, CodexBindingError, CodexHistoryStatus,
-    CodexHistoryTurn, CodexInput, CodexItem, CodexLiveEvent, CodexLiveEvents, CodexRpcId,
-    CodexThreadBinding, CodexThreadHistory, CodexTurnOutcome,
+    CODEX_FRAME_LIMIT, CodexApprovalDetails, CodexApprovalKind, CodexBinding, CodexBindingError,
+    CodexHistoryStatus, CodexHistoryTurn, CodexInput, CodexItem, CodexLiveEvent, CodexLiveEvents,
+    CodexRpcId, CodexThreadBinding, CodexThreadHistory, CodexTurnOutcome,
 };
 pub use event::{
     ActorId, AgentEvent, AgentKind, AgentState, AnswerPath, ApprovalChoice, ApprovalOption,

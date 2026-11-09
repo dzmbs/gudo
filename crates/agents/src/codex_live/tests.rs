@@ -272,7 +272,7 @@ fn malformed_change_and_pending_id_collision_retire_native_binding() {
 
 #[test]
 fn allowance_does_not_shrink_terminal_transport_but_fails_closed_for_pending_identity() {
-    let oversized = "x".repeat(MAX_FRAME_BYTES + 1);
+    let oversized = "x".repeat(CODEX_FRAME_LIMIT + 1);
     let mut binding = CodexBinding::default();
     start(&mut binding, json!(1));
     reply(&mut binding, json!(1), "current").unwrap();
@@ -285,7 +285,7 @@ fn allowance_does_not_shrink_terminal_transport_but_fails_closed_for_pending_ide
         Err(CodexBindingError::TooLarge)
     );
     assert!(!binding.is_current(&snapshot));
-    assert_eq!(oversized.len(), MAX_FRAME_BYTES + 1);
+    assert_eq!(oversized.len(), CODEX_FRAME_LIMIT + 1);
 }
 
 #[test]
