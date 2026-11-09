@@ -135,7 +135,17 @@ impl DaemonClient {
 }
 
 pub(crate) fn encode_update(update: &proto::TimelineUpdate) -> String {
-    encoded(update).unwrap_or_else(|_| "{\"operations\":[{\"Unavailable\":{\"message\":\"Chat could not read this update. Open Terminal.\"}}]}".into())
+    encoded(update).unwrap_or_else(|_| unreadable_update(update.pane_id))
+}
+
+fn unreadable_update(pane_id: proto::PaneId) -> String {
+    serde_json::json!({
+        "pane_id": pane_id.0,
+        "operations": [
+            { "Unavailable": { "message": "Chat could not read this update. Open Terminal." } }
+        ],
+    })
+    .to_string()
 }
 
 #[cfg(test)]
@@ -171,6 +181,20 @@ mod tests {
             serde_json::from_str::<proto::TimelineSnapshot>(&json).unwrap(),
             snapshot
         );
+    }
+
+    #[test]
+    fn an_unreadable_update_still_names_its_pane_in_the_shape_the_app_decodes() {
+        let json = unreadable_update(proto::PaneId(u64::MAX));
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["pane_id"], u64::MAX);
+        assert!(value["operations"][0]["Unavailable"]["message"].is_string());
+        let decoded: proto::TimelineUpdate = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.pane_id, proto::PaneId(u64::MAX));
+        assert!(matches!(
+            decoded.operations.as_slice(),
+            [proto::TimelineOp::Unavailable { .. }]
+        ));
     }
 
     #[test]
