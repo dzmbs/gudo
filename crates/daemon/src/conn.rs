@@ -3239,7 +3239,14 @@ impl Client {
                 Err(error) => tracing::debug!(%pane_id, "pane stream: {error}"),
             }
         });
-        lock(&self.state).subscriptions.insert(
+        let mut state = lock(&self.state);
+        // A view reported while the stream was opening reclassified the subscriptions before
+        // this one was among them.
+        let current = state.class(pane_id);
+        if current != class {
+            let _ = cmds.send(StreamCmd::Class(current));
+        }
+        state.subscriptions.insert(
             pane_id,
             Subscription {
                 acks,
