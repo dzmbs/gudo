@@ -101,3 +101,30 @@ fn reused_request_ids_fail_closed_instead_of_resolving_a_different_request() {
             .is_err()
     );
 }
+
+#[test]
+fn changed_approval_metadata_cannot_reuse_an_admitted_native_identity() {
+    let connection = connection("primary");
+    let mut stream = CodexLiveEvents::new(connection.binding().unwrap().clone());
+    stream
+        .observe(&connection, &start("primary", "turn"))
+        .unwrap();
+    let mut frame: Value = serde_json::from_str(&waiting(json!(7), "turn")).unwrap();
+    frame["params"]["command"] = json!("printf allowed");
+    frame["params"]["cwd"] = json!("/fixture");
+    frame["params"]["availableDecisions"] = json!(["accept", "cancel"]);
+    let Some(CodexLiveEvent::ApprovalWaiting { details, .. }) =
+        stream.observe(&connection, &frame.to_string()).unwrap()
+    else {
+        panic!("missing approval");
+    };
+    assert_eq!(details.command.as_deref(), Some("printf allowed"));
+    assert!(
+        stream
+            .observe(&connection, &frame.to_string())
+            .unwrap()
+            .is_none()
+    );
+    frame["params"]["command"] = json!("printf different");
+    assert!(stream.observe(&connection, &frame.to_string()).is_err());
+}

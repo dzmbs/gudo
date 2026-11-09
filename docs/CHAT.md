@@ -456,14 +456,14 @@ physical transport. It requires the exact private binding identity and active tu
 and obsolete turn deltas/completions are ignored. Parsing is bounded to 64KiB; malformed frames close
 native observation, not transport forwarding. Unknown outcomes are not success. A real TUI capture
 includes an app-server command approval held without sending a decision. Approval signals are not
-sufficient policy metadata or authority to approve; supported choices and the complete requested
-permissions still need the shared signed-policy path. Notify is not a live adapter completion or
+authority to approve. Native delivery retains the complete request metadata and offered decisions,
+then uses the shared signed-policy path described below. Notify is not a live adapter completion or
 approval source. `serverRequest/resolved` retires only the exact pending numeric or string request
 on the bound thread and active turn; duplicate, foreign and obsolete resolutions are ignored. Resolved
 request identities remain reserved within a bounded allowance so late frames cannot resolve a reused
 identity. Resolution does not establish approval, execution or success.
 
-### Opt-in Dev read producer
+### Opt-in Dev producer and controls
 
 `Config::codex_chat` defaults to false and is only consulted in Dev builds for dedicated
 fresh or explicitly resumed launches. It is not enabled by the app or normal helper configuration. The pane owns an app-server,
@@ -483,14 +483,14 @@ and 768KiB of serialized bodies; exceeding admission limits disables Chat rather
 losing older history. Item identity is turn-scoped. Final items reconcile partial text, unknown
 command status is explicit, and non-success turn endings are notices, never inferred success.
 
-The common `AgentSession` exposes only READ and STREAMING_DELTAS. Snapshots are frozen at the
+The common `AgentSession` exposes READ and STREAMING_DELTAS, adding SEND, ACKNOWLEDGED_SEND,
+STOP and APPROVALS only when the current source and bounded control worker are ready. Snapshots are frozen at the
 session cursor so a concurrently arriving delta cannot appear in both a snapshot and its subsequent
 append stream. Paging and late watches read captured or hydrated history; source/epoch
 changes invalidate stale reads. Since-join access is explicitly unavailable until original event
 time can be established safely: projection time cannot authorize buffered pre-join content. This
-source-specific scope check also precedes common watch and history delivery. Native Send, Stop,
-approval delivery, diffs and tool-output reads
-remain unavailable. Legacy terminal-only Codex launch and control behavior is unchanged when this
+source-specific scope check also precedes common watch and history delivery. Native diff and
+on-demand tool-output reads remain unavailable. Legacy terminal-only Codex launch and control behavior is unchanged when this
 opt-in producer is absent. Switching the TUI to resume/fork retires the old source until the exact
 correlated reply establishes a new projection epoch. Old rows remain frozen during this transition;
 no replacement conversation or bootstrap turn is created.
@@ -508,17 +508,57 @@ completions never increment runtime turn counts or send completion notifications
 TUI rollback disables native observation until ordered rollback hydration is implemented; it cannot
 leave stale history advertised as current. Foreign-thread rollbacks do not retire this source.
 
-This remains experimental scaffolding, not completed Codex Chat enablement. The daemon/client
+Native controls use independent, peer-verified connections to that same owned app-server, not a
+second conversation. A four-entry launch-owned queue has a four-second deadline per admitted action;
+there are no retries. Immediately before JSON serialization, the worker rechecks the current pane,
+producer, exact binding/active turn, foreground process and input-fence revision. Encoded requests
+are limited to 60KiB; incoming messages remain limited to 64KiB and 256 messages per response wait.
+A server request sharing a numeric ID with a client request is not a response.
+
+An explicit Send uses `turn/start`, or `turn/steer` with the exact `expectedTurnId`, and confirms only
+a validated official turn receipt on the current source. This does not submit or clear a draft in
+Terminal. Stop uses `turn/interrupt` for the captured active turn and reports **Interrupt requested**,
+not stopped; only the structured completion establishes interruption. Send/Stop retain the common
+owner-device, prepared-ticket, confirmation, once-only and exit-fence admission checks.
+
+Command and file-change answers map the common signed request back to the exact pending numeric or
+string app-server RPC ID. Only supported one-request acceptance and refusal/cancellation are exposed;
+no session/policy amendment or additional persistent grant is inferred. Metadata and offered choices
+are retained in blocker compatibility checks; conflicting reuse fails closed. File-change approval
+explicitly directs the user to review proposed edits in Terminal: the approval card does not claim
+an inline diff preview. Unknown/oversized permission shapes remain Terminal-only. Additional command
+permission context cannot match a plain Bash auto-approval rule. A second queued request or a
+non-visible resolution cannot reissue an already-admitted common request.
+
+The signed role/scope, policy, consent, audit and two-person admission precedes queueing. The worker
+retains the exact grants of the answering actor and any required prior witness, including expiry,
+issuer chain and scope. It rechecks all their validity and pane authority and the unchanged policy
+at serialization. A signed auto-approval rule retains its exact consent record and must still be
+present, unrevoked and unexpired at serialization; a rule ID alone is insufficient. A Terminal resolution first retires a queued mobile answer; duplicate signed
+answers cannot execute it again. Delivery failure withdraws the native producer rather than retrying
+an admitted decision or reporting execution. Official forwarding and launch-owned server lifetime
+remain independent of observation/control failure.
+
+This remains off-by-default Dev integration, not completed production Codex Chat enablement. The daemon/client
 stream, unwatch/catch-up, bounded frame decoder, environment validation and forwarding-failure tests
 use recorded or synthetic fixtures. A Debug helper probe with a fake Codex verifies post-login
 capture and same-PID exec. A separately opted-in test runs actual Codex 0.166.0 through a temporary
-Dev daemon, private named account with placeholder file credentials and loopback model: one explicit
-Terminal PTY prompt produces live appends and a final item over the common client API, and a late
+Dev daemon, private named account with placeholder file credentials and loopback model: an explicit
+native Send receives a confirmed receipt, produces live appends and a final item over the common client API, and a late
 watch catches up without ending the server. The probe checks the exact session record, named-account
 pin, working status during streaming and once-only completed runtime turn. It then shuts down the
 private daemon, explicitly recovers the saved pane, and verifies the same thread/account and hydrated
 assistant history, no recounted completion, and no additional model request. This does not validate
-arbitrary MCP tools, real account permissions, latency or the app UI.
+arbitrary MCP tools, real account permissions, latency or the app UI. Additional isolated scenarios
+exercise native interruption, signed command/file acceptance, refusal and a Terminal-origin turn's
+cancellation winning over an obsolete mobile answer. The two-person case holds the first signature
+and accepts a distinct, pane-scoped guest approver's second signature; repeated answers append the
+private command marker exactly once. Two paired owner devices are one principal, not two witnesses.
+The signed-rule case approves an actual file change through the existing owner-signed task rule.
+A separate case preserves a genuine unsent Terminal draft, while the native prompt alone enters the
+conversation. Native-first approvals may encounter the official TUI's startup protected-input quarantine; probes
+do not bypass it or inject synthetic priming input. The Terminal race starts with genuine fixture
+Terminal input, while the other control scenarios start with native Send.
 
 Launch-owned callbacks run outside the projection lock and recheck the current pane/source identity.
 The bound thread updates the runtime session and persisted pane record through the common agent-event
@@ -529,7 +569,7 @@ Mapped turn boundaries drive status and worktree boundaries; approval resolution
 blocked while another request remains pending. Observation loss releases the claim to unknown rather
 than inventing completion. Session discovery does not guess identities for a live Codex source.
 
-Relay recovery/handoff, unsupported-version fallback before default enablement, signed controls,
+Relay recovery/handoff, unsupported-version fallback before default enablement,
 richer item/output streaming, lifecycle stress/MCP/latency validation and simulator acceptance remain
 open. The isolated cold-recovery probe is not general recovery acceptance. Hot helper
 upgrade/restart is refused while this opt-in launch owns an active server/transport because relay

@@ -7,8 +7,10 @@
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+mod approval;
 mod events;
 mod history;
+pub use approval::CodexApprovalDetails;
 mod items;
 pub use events::{CodexApprovalKind, CodexLiveEvent, CodexLiveEvents, CodexTurnOutcome};
 pub use history::{CodexHistoryStatus, CodexHistoryTurn, CodexThreadHistory};

@@ -1,7 +1,9 @@
 mod bootstrap;
+pub(super) mod control;
 mod frames;
 mod history;
 mod peer;
+mod rpc;
 #[cfg(test)]
 mod tests;
 
@@ -56,6 +58,7 @@ fn prepare(
     recipe.tui.program = context.hook_bin.clone().into_os_string();
     let (owner, mut owner_ready) = tokio::sync::watch::channel(None);
     let (observations, receiver) = tokio::sync::mpsc::channel(64);
+    let (controls, commands) = tokio::sync::mpsc::channel(8);
     let source = Arc::new(Live {
         owner,
         fault: std::sync::atomic::AtomicBool::new(false),
@@ -64,11 +67,15 @@ fn prepare(
         process: Mutex::new(None),
         task: Mutex::new(None),
         history_task: Mutex::new(None),
+        controls: Mutex::new(Some(controls)),
+        control_task: Mutex::new(None),
         history_result: Mutex::new(None),
         observations: Mutex::new(Some(observations.clone())),
         directory: directory.to_owned(),
     });
     let weak = Arc::downgrade(&source);
+    let control = tokio::spawn(control::run(weak.clone(), commands));
+    *lock(&source.control_task) = Some(control.abort_handle());
     let expected = agents::pane_env(context);
     let observer = weak.clone();
     tokio::task::spawn_blocking(move || observe(observer, receiver));

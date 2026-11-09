@@ -2424,6 +2424,17 @@ impl Core {
         edited: Option<&str>,
         record: impl FnOnce(&Decided, &crate::agent::DecidedRequest),
     ) -> Result<Decided, Option<Actor>> {
+        self.decide_authorized(actor, decide, edited, None, record)
+    }
+
+    pub(crate) fn decide_authorized(
+        &self,
+        actor: Actor,
+        decide: &Decide,
+        edited: Option<&str>,
+        authorization: Option<crate::agent_driver::ApprovalEvidence<'_>>,
+        record: impl FnOnce(&Decided, &crate::agent::DecidedRequest),
+    ) -> Result<Decided, Option<Actor>> {
         if self.term.asks.caller_of(decide.request_id).is_some() {
             // A drive request runs exactly the action asked; it has no edited form.
             if edited.is_some() {
@@ -2460,7 +2471,15 @@ impl Core {
                         crate::agent_driver::ApprovalDecision::Choice(details.choice),
                         crate::agent_driver::ApprovalDecision::Edited,
                     );
-                    driver.approve(self, id, &details.request, decision);
+                    let authority = crate::agent_driver::ApprovalAuthority::for_decision(
+                        self,
+                        id,
+                        decide.request_id,
+                        details.choice,
+                        actor,
+                        authorization,
+                    );
+                    driver.approve(self, id, &details.request, decision, authority);
                     self.approvals.clear_request(id);
                     self.emit(Event::Decided(decided));
                     self.emit(Event::PaneMeta(id));

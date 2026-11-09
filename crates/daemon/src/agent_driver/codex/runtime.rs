@@ -10,15 +10,19 @@ use std::sync::{Arc, Weak};
 #[derive(Clone)]
 pub(super) struct Owner {
     pub root: u32,
-    core: Weak<Core>,
-    entry: Weak<PaneEntry>,
+    pub(super) core: Weak<Core>,
+    pub(super) entry: Weak<PaneEntry>,
 }
 
 pub(super) enum Effect {
     Bound(String, Option<PathBuf>),
     Started,
     Completed(CodexTurnOutcome),
-    Waiting(CodexRpcId, CodexApprovalKind),
+    Waiting(
+        CodexRpcId,
+        CodexApprovalKind,
+        Box<agents::CodexApprovalDetails>,
+    ),
     Resolved(CodexRpcId),
     Lost,
     Hydrate(agents::CodexThreadBinding),
@@ -30,9 +34,12 @@ impl Effect {
         match event {
             CodexLiveEvent::TurnStarted { .. } => Some(Self::Started),
             CodexLiveEvent::TurnCompleted { outcome, .. } => Some(Self::Completed(*outcome)),
-            CodexLiveEvent::ApprovalWaiting { request, kind, .. } => {
-                Some(Self::Waiting(request.clone(), *kind))
-            }
+            CodexLiveEvent::ApprovalWaiting {
+                request,
+                kind,
+                details,
+                ..
+            } => Some(Self::Waiting(request.clone(), *kind, details.clone())),
             CodexLiveEvent::ApprovalResolved { request, .. } => {
                 Some(Self::Resolved(request.clone()))
             }
@@ -45,7 +52,25 @@ impl Effect {
 pub(super) struct Runtime {
     pub cwd: Option<PathBuf>,
     thread: Option<String>,
-    pending: Vec<(CodexRpcId, CodexApprovalKind)>,
+    pub(super) pending: Vec<Pending>,
+}
+
+pub(super) struct Pending {
+    pub id: CodexRpcId,
+    pub kind: CodexApprovalKind,
+    pub details: Box<agents::CodexApprovalDetails>,
+    pub common: Option<agents::RequestId>,
+    pub admitted: bool,
+}
+
+impl Pending {
+    pub(super) fn tool(&self) -> &'static str {
+        match self.kind {
+            CodexApprovalKind::Command if self.details.is_plain_command() => "Bash",
+            CodexApprovalKind::Command => "Codex permissions",
+            CodexApprovalKind::FileChange => "Edit",
+        }
+    }
 }
 
 impl Runtime {
@@ -84,12 +109,28 @@ impl Runtime {
                     CodexTurnOutcome::Unknown => (EventKind::Error, Claim::Error, None),
                 }
             }
-            Effect::Waiting(request, kind) => {
-                self.pending.push((request, kind));
+            Effect::Waiting(request, kind, details) => {
+                self.pending.push(Pending {
+                    id: request,
+                    kind,
+                    details,
+                    common: None,
+                    admitted: false,
+                });
+                if self.pending.len() > 1 {
+                    return None;
+                }
                 (EventKind::Blocked, self.claim(), None)
             }
             Effect::Resolved(request) => {
-                self.pending.retain(|(known, _)| *known != request);
+                let first = self
+                    .pending
+                    .first()
+                    .is_some_and(|pending| pending.id == request);
+                self.pending.retain(|pending| pending.id != request);
+                if !first {
+                    return None;
+                }
                 let kind = if self.pending.is_empty() {
                     EventKind::Unblocked
                 } else {
@@ -115,18 +156,50 @@ impl Runtime {
     }
 
     fn claim(&self) -> Claim {
-        let Some((_, kind)) = self.pending.first() else {
+        let Some(pending) = self.pending.first() else {
             return Claim::Working;
         };
         let mut blocker = agents::Blocker::new(agents::BlockedReason::Permission);
-        blocker.tool = Some(
-            match kind {
-                CodexApprovalKind::Command => "command",
-                CodexApprovalKind::FileChange => "file change",
+        blocker.tool = Some(pending.tool().into());
+        let summary = if pending.kind == CodexApprovalKind::FileChange {
+            format!(
+                "File changes. Review the proposed edits in Terminal.\n{}",
+                pending.details.summary()
+            )
+        } else {
+            pending.details.summary()
+        };
+        blocker.answer_paths.push(agents::AnswerPath::AppServer);
+        blocker.detail = Some(serde_json::json!({"request":pending.id,"context":summary}));
+        if summary.chars().count() <= 500 {
+            blocker.summary = Some(summary);
+            let supported = match pending.kind {
+                CodexApprovalKind::Command => pending.details.is_supported_command(),
+                CodexApprovalKind::FileChange => pending.details.is_file_change(),
+            };
+            if supported && pending.details.offers("accept") {
+                blocker.options.push(agents::ApprovalOption::new(
+                    agents::ApprovalChoice::AllowOnce,
+                    if pending.kind == CodexApprovalKind::FileChange {
+                        "Allow file changes once"
+                    } else {
+                        "Allow once"
+                    },
+                ));
             }
-            .into(),
-        );
-        blocker.summary = Some("Approval requested. Answer in Terminal.".into());
+            if let Some(denial) = pending.details.denial() {
+                blocker.options.push(agents::ApprovalOption::new(
+                    agents::ApprovalChoice::Deny,
+                    if denial == "cancel" {
+                        "Cancel turn"
+                    } else {
+                        "Deny"
+                    },
+                ));
+            }
+        } else {
+            blocker.summary = Some("Approval request is too long. Answer in Terminal.".into());
+        }
         Claim::Blocked(blocker)
     }
 }
@@ -180,10 +253,29 @@ impl Live {
                 core.emit(crate::core::Event::PaneMeta(entry.pane.id));
                 continue;
             };
-            let event = lock(&entry.agent)
-                .as_mut()
-                .and_then(|runtime| runtime.structured_signal(signal));
+            let blocked = signal.kind == EventKind::Blocked;
+            let event = {
+                let mut gate = lock(&entry.pane.agent_input_gate);
+                if signal.kind == EventKind::TurnStarted
+                    && let Some(session) = &signal.session.native_id
+                {
+                    gate.native_turn(session.as_str());
+                }
+                let mut agent = lock(&entry.agent);
+                let event = agent
+                    .as_mut()
+                    .and_then(|runtime| runtime.structured_signal(signal));
+                if let Some(detail) = agent.as_mut().and_then(|runtime| runtime.blocked_detail())
+                    && let Some(pending) = lock(&self.runtime).pending.first_mut()
+                {
+                    pending.common = Some(detail.request);
+                }
+                event
+            };
             core.agent_event(entry.pane.id, event);
+            if blocked {
+                crate::approve::request_held(&core, entry.pane.id);
+            }
         }
     }
 }

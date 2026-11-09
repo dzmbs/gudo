@@ -1508,10 +1508,13 @@ impl Client {
                         },
                     );
                 };
-                match self
-                    .core
-                    .decide_with(self.actor, &decide, Some(input), record)
-                {
+                match self.core.decide_authorized(
+                    self.actor,
+                    &decide,
+                    Some(input),
+                    Some(crate::agent_driver::ApprovalEvidence::Device(&self.authz)),
+                    record,
+                ) {
                     Ok(_) => Ok(proto::ApprovalResponse::Done),
                     Err(Some(_)) => Err(E::AlreadyDecided),
                     Err(None) => Err(E::NotFound),
@@ -2654,6 +2657,7 @@ impl Client {
             actor: self.actor,
             name: &name,
             owner: is_owner(&self.core, &self.authz),
+            authorization: Some(&self.authz),
         };
         // Approval policies are for agents' own tool calls; a drive request is the owner's.
         let gate = if drive {
@@ -2699,7 +2703,13 @@ impl Client {
                 },
             );
         };
-        match self.core.decide(self.actor, &decide, record) {
+        match self.core.decide_authorized(
+            self.actor,
+            &decide,
+            None,
+            Some(crate::agent_driver::ApprovalEvidence::Device(&self.authz)),
+            record,
+        ) {
             Ok(_) => self.core.mp.approvals.forget(decide.request_id),
             Err(Some(by)) => self.send(ServerCtl::AlreadyDecided {
                 request_id: decide.request_id,
@@ -2858,6 +2868,7 @@ impl Client {
             actor: self.actor,
             name: &name,
             owner: is_owner(&self.core, &self.authz),
+            authorization: Some(&self.authz),
         };
         let risk = proto::Risk::of_tool(facts.tool.as_deref());
         let status = mp

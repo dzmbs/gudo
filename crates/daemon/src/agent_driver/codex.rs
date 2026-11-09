@@ -29,6 +29,8 @@ pub(crate) struct Live {
     process: Mutex<Option<tokio::process::Child>>,
     task: Mutex<Option<tokio::task::AbortHandle>>,
     history_task: Mutex<Option<tokio::task::AbortHandle>>,
+    controls: Mutex<Option<transport::control::Sender>>,
+    control_task: Mutex<Option<tokio::task::AbortHandle>>,
     history_result: Mutex<Option<HistoryReply>>,
     observations: Mutex<Option<ObservationSender>>,
     directory: std::path::PathBuf,
@@ -217,6 +219,21 @@ impl State {
 }
 
 impl Live {
+    pub(crate) fn capabilities(&self) -> AgentCapabilities {
+        let read = AgentCapabilities::READ | AgentCapabilities::STREAMING_DELTAS;
+        if lock(&self.controls).is_some()
+            && lock(&self.state).is_ready()
+            && !self.fault.load(std::sync::atomic::Ordering::Acquire)
+        {
+            read | AgentCapabilities::SEND
+                | AgentCapabilities::ACKNOWLEDGED_SEND
+                | AgentCapabilities::STOP
+                | AgentCapabilities::APPROVALS
+        } else {
+            read
+        }
+    }
+
     pub(crate) fn is_running(&self) -> bool {
         !self.fault.load(std::sync::atomic::Ordering::Acquire) || lock(&self.process).is_some()
     }
@@ -228,6 +245,9 @@ impl Drop for Live {
             task.abort();
         }
         if let Some(task) = lock(&self.history_task).take() {
+            task.abort();
+        }
+        if let Some(task) = lock(&self.control_task).take() {
             task.abort();
         }
         let process = self
@@ -288,7 +308,9 @@ impl Session {
 
 impl AgentSession for Session {
     fn capabilities(&self) -> AgentCapabilities {
-        AgentCapabilities::READ | AgentCapabilities::STREAMING_DELTAS
+        self.source
+            .upgrade()
+            .map_or(AgentCapabilities::READ, |source| source.capabilities())
     }
     fn cursor(&self) -> TimelineCursor {
         self.cursor

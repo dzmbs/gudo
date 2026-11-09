@@ -64,6 +64,12 @@ impl UnconfirmedSend {
     }
 }
 
+pub(crate) struct SendAcknowledgement {
+    pub revision: u64,
+    pub actor: proto::Actor,
+    pub receipt: tokio::sync::watch::Sender<crate::agent_input::Receipt>,
+}
+
 pub(crate) enum ApprovalDecision<'a> {
     Choice(ApprovalChoice),
     Edited(&'a str),
@@ -75,6 +81,68 @@ pub(crate) enum InputEvent<'a> {
     TurnEnded,
     SessionEnded,
     Ignored,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum ApprovalEvidence<'a> {
+    Device(&'a crate::mp::Authz),
+    Rule(&'a proto::ActiveRule),
+}
+
+/// Retains already-checked admission evidence; never replaces signed-policy admission.
+pub(crate) struct ApprovalAuthority {
+    pub actor: proto::Actor,
+    pub policy: proto::ApprovalPolicy,
+    pub signers: Vec<crate::mp::Authz>,
+    pub rule: Option<proto::AutoApproveRule>,
+}
+
+impl ApprovalAuthority {
+    pub(crate) fn for_decision(
+        core: &Core,
+        pane: PaneId,
+        request: proto::RequestId,
+        choice: agents::ApprovalChoice,
+        actor: proto::Actor,
+        evidence: Option<ApprovalEvidence<'_>>,
+    ) -> Self {
+        let policy = core.mp.policy_of_pane(core, pane);
+        let owner = || {
+            core.identity
+                .is_owner_device(actor.device)
+                .then(|| crate::mp::Authz::owner(actor))
+        };
+        let (authorization, rule) = match evidence {
+            Some(ApprovalEvidence::Device(authz)) => (Some(authz.clone()), None),
+            Some(ApprovalEvidence::Rule(rule)) => (
+                (rule.rule.actor == actor).then(owner).flatten(),
+                Some(rule.rule.clone()),
+            ),
+            None => (owner(), None),
+        };
+        let signers = authorization
+            .as_ref()
+            .and_then(|authz| {
+                core.mp.approvals.delivery_signers(
+                    policy,
+                    request,
+                    choice != agents::ApprovalChoice::Deny,
+                    crate::mp::approvals::Ballot {
+                        actor,
+                        name: &authz.name,
+                        owner: authz.is_owner_device(core),
+                        authorization: Some(authz),
+                    },
+                )
+            })
+            .unwrap_or_default();
+        Self {
+            actor,
+            policy,
+            signers,
+            rule,
+        }
+    }
 }
 
 pub(crate) struct PendingApproval {
@@ -132,8 +200,16 @@ pub(crate) trait AgentDriver: Send + Sync {
         pane: &Pane,
         session: Option<&str>,
         text: &str,
+        acknowledgement: Option<SendAcknowledgement>,
     ) -> Result<UnconfirmedSend, WsError>;
-    fn stop(&self, core: &Core, pane: &Pane, session: Option<&str>) -> Result<(), WsError>;
+    fn stop(
+        &self,
+        core: &Core,
+        pane: &Pane,
+        session: Option<&str>,
+        revision: u64,
+        actor: proto::Actor,
+    ) -> Result<(), WsError>;
     // Role, signature, policy, pending request and audit checks precede delivery.
     fn approve(
         &self,
@@ -141,6 +217,7 @@ pub(crate) trait AgentDriver: Send + Sync {
         pane: PaneId,
         request: &agents::RequestId,
         decision: ApprovalDecision<'_>,
+        authority: ApprovalAuthority,
     ) -> bool;
 }
 

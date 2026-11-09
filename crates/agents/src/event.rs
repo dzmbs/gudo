@@ -280,6 +280,8 @@ pub enum AnswerPath {
     AcpPermission,
     /// Type the choice into the PTY after re-verifying the dialog on screen.
     Keystrokes,
+    /// Reply on the exact pane-owned app-server.
+    AppServer,
 }
 
 /// What an agent is blocked on, as reported by a source, before the arbiter assigns a request id.
@@ -326,7 +328,10 @@ impl Blocker {
         let reasons = self.reason == other.reason
             || self.reason == BlockedReason::Other
             || other.reason == BlockedReason::Other;
+        let native = self.answer_paths.contains(&AnswerPath::AppServer)
+            || other.answer_paths.contains(&AnswerPath::AppServer);
         reasons
+            && (!native || self.detail == other.detail)
             && agree(self.tool.as_ref(), other.tool.as_ref())
             && agree(self.summary.as_ref(), other.summary.as_ref())
     }

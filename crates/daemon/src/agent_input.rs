@@ -8,6 +8,7 @@ mod hooks;
 mod interrupt;
 
 pub(crate) use chat::request as chat_request;
+pub(crate) use draft::Receipt;
 pub(crate) use hooks::record as record_hook;
 pub(crate) use interrupt::request as interrupt_request;
 
@@ -64,6 +65,15 @@ enum AgentInputPhase {
 }
 
 impl AgentInputGate {
+    pub(crate) fn control_revision(&self) -> Option<u64> {
+        (matches!(self.phase, AgentInputPhase::Open(_)) && self.pending_unproven_writes == 0)
+            .then_some(self.revision)
+    }
+
+    pub(crate) fn native_turn(&mut self, session: &str) {
+        self.draft.record_turn(Some(session), crate::hook_seq());
+    }
+
     pub(crate) fn pending(launch: String) -> Self {
         Self {
             phase: AgentInputPhase::Pending(launch),

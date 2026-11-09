@@ -256,6 +256,31 @@ impl Draft {
         self.tainted_submission = false;
     }
 
+    pub(crate) fn acknowledgement(
+        &self,
+        revision: u64,
+        actor: proto::Actor,
+    ) -> Option<crate::agent_driver::SendAcknowledgement> {
+        self.pending
+            .as_ref()
+            .map(|pending| crate::agent_driver::SendAcknowledgement {
+                revision,
+                actor,
+                receipt: pending.receipt.clone(),
+            })
+    }
+
+    pub(crate) fn retire_receipt(&mut self, receiver: &watch::Receiver<Receipt>) {
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.receipt.subscribe().same_channel(receiver))
+        {
+            let receipt = *receiver.borrow();
+            self.finish(receipt);
+        }
+    }
+
     pub(crate) fn expire(&mut self, now: Instant) {
         if self
             .pending

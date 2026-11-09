@@ -72,12 +72,20 @@ impl AgentDriver for ClaudeDriver {
         pane: &Pane,
         _: Option<&str>,
         text: &str,
+        _: Option<super::SendAcknowledgement>,
     ) -> Result<UnconfirmedSend, WsError> {
         super::terminal::send(pane, text)?;
         Ok(UnconfirmedSend::NotConfirmed)
     }
 
-    fn stop(&self, _: &Core, pane: &Pane, _: Option<&str>) -> Result<(), WsError> {
+    fn stop(
+        &self,
+        _: &Core,
+        pane: &Pane,
+        _: Option<&str>,
+        _: u64,
+        _: proto::Actor,
+    ) -> Result<(), WsError> {
         pane.pty()
             .try_write(vec![0x1b])
             .map_err(|error| WsError::Failed(error.to_string()))
@@ -89,6 +97,7 @@ impl AgentDriver for ClaudeDriver {
         pane: PaneId,
         request: &agents::RequestId,
         decision: ApprovalDecision<'_>,
+        _: super::ApprovalAuthority,
     ) -> bool {
         core.hooks
             .resolve_with(pane, request, |suggestions, input| {

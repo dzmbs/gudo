@@ -232,7 +232,8 @@ fn approval_signals_keep_rpc_types_and_current_turn_scope() {
                     request: expected.clone(),
                     turn: "turn".into(),
                     item: "tool".into(),
-                    kind
+                    kind,
+                    details: Box::default(),
                 })
             );
         }

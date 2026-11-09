@@ -23,6 +23,7 @@ pub(crate) struct Ballot<'a> {
     /// A paired owner device on the whole daemon: not held back by `max_risk`, may answer
     /// under `OwnerOnly` and over someone else's claim.
     pub owner: bool,
+    pub authorization: Option<&'a super::Authz>,
 }
 
 impl Ballot<'_> {
@@ -48,6 +49,7 @@ struct Open {
     pane: PaneId,
     risk: Risk,
     approvals: Vec<ApprovalVote>,
+    authorizations: Vec<super::Authz>,
     claimed: Option<ApprovalVote>,
 }
 
@@ -99,14 +101,46 @@ impl Approvals {
             pane,
             risk,
             approvals: Vec::new(),
+            authorizations: Vec::new(),
             claimed: None,
         });
         let verdict = rule(policy, entry, allow, ballot)?;
         if verdict == Outcome::Hold {
             entry.approvals.push(ballot.vote());
+            if let Some(authorization) = ballot.authorization {
+                entry.authorizations.push(authorization.clone());
+            }
             return Ok(Verdict::Held(entry.status(request, policy)));
         }
         Ok(Verdict::Decide)
+    }
+
+    /// Rechecks the admitted decision and retains the exact grants behind required votes.
+    pub(crate) fn delivery_signers(
+        &self,
+        policy: ApprovalPolicy,
+        request: RequestId,
+        allow: bool,
+        ballot: Ballot<'_>,
+    ) -> Option<Vec<super::Authz>> {
+        let open = lock(&self.open);
+        let entry = open.get(&request)?;
+        if rule(policy, entry, allow, ballot).ok()? != Outcome::Decide {
+            return None;
+        }
+        let mut signers = vec![ballot.authorization?.clone()];
+        if allow && needed(policy, entry.risk) == 2 {
+            for vote in &entry.approvals {
+                signers.push(
+                    entry
+                        .authorizations
+                        .iter()
+                        .find(|authorization| authorization.actor == vote.actor)?
+                        .clone(),
+                );
+            }
+        }
+        Some(signers)
     }
 
     /// Claims `request` for `ballot`'s principal, or releases a claim.
@@ -134,6 +168,7 @@ impl Approvals {
             pane,
             risk,
             approvals: Vec::new(),
+            authorizations: Vec::new(),
             claimed: None,
         });
         let theirs = entry
@@ -168,6 +203,7 @@ impl Approvals {
             pane,
             risk,
             approvals: Vec::new(),
+            authorizations: Vec::new(),
             claimed: None,
         });
         Some(entry.status(request, policy))
@@ -300,6 +336,9 @@ pub(crate) fn describe(policy: ApprovalPolicy) -> String {
 }
 
 #[cfg(test)]
+mod delivery_tests;
+
+#[cfg(test)]
 mod tests {
     use proto::{DeviceId, PrincipalId};
 
@@ -317,6 +356,7 @@ mod tests {
             actor: actor(seed),
             name: if owner { "owner" } else { "guest" },
             owner,
+            authorization: None,
         }
     }
 

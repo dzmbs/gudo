@@ -178,7 +178,15 @@ fn decide_by_rule(core: &Core, rule: &ActiveRule, wire: RequestId, allow: proto:
         actor,
         sig: rule.rule.sig.clone(),
     };
-    let decided = core.decide(actor, &decide, record).is_ok();
+    let decided = core
+        .decide_authorized(
+            actor,
+            &decide,
+            None,
+            Some(crate::agent_driver::ApprovalEvidence::Rule(rule)),
+            record,
+        )
+        .is_ok();
     if decided {
         core.approvals.clear_request(rule.rule.pane_id);
     }

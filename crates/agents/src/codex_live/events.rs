@@ -44,6 +44,7 @@ pub enum CodexLiveEvent {
         turn: String,
         item: String,
         kind: CodexApprovalKind,
+        details: Box<super::CodexApprovalDetails>,
     },
     ApprovalResolved {
         request: super::CodexRpcId,
@@ -69,6 +70,7 @@ struct Approval {
     turn: String,
     item: String,
     kind: CodexApprovalKind,
+    details: super::CodexApprovalDetails,
     resolved: bool,
 }
 
@@ -82,6 +84,24 @@ impl CodexLiveEvents {
             approvals: Vec::new(),
             closed: false,
         }
+    }
+
+    pub fn active_turn(&self) -> Option<&str> {
+        self.turn.as_deref()
+    }
+
+    pub fn has_pending_approval(&self) -> bool {
+        self.approvals.iter().any(|approval| {
+            !approval.resolved && Some(approval.turn.as_str()) == self.turn.as_deref()
+        })
+    }
+
+    pub fn approval_pending(&self, request: &RpcId) -> bool {
+        self.approvals.iter().any(|approval| {
+            &approval.request == request
+                && !approval.resolved
+                && Some(approval.turn.as_str()) == self.turn.as_deref()
+        })
     }
 
     /// Restores the active turn reported in this binding's correlated history reply.
@@ -250,7 +270,11 @@ impl CodexLiveEvents {
         }
         validate_id(&params.item_id)?;
         if let Some(known) = self.approvals.iter().find(|known| known.request == request) {
-            if known.turn == params.turn_id && known.item == params.item_id && known.kind == kind {
+            if known.turn == params.turn_id
+                && known.item == params.item_id
+                && known.kind == kind
+                && known.details == params.details
+            {
                 return Ok(None);
             }
             return Err(CodexBindingError::InvalidFrame);
@@ -264,6 +288,7 @@ impl CodexLiveEvents {
             turn: params.turn_id.clone(),
             item: params.item_id.clone(),
             kind,
+            details: params.details.clone(),
             resolved: false,
         });
         Ok(Some(CodexLiveEvent::ApprovalWaiting {
@@ -271,6 +296,7 @@ impl CodexLiveEvents {
             turn: params.turn_id,
             item: params.item_id,
             kind,
+            details: Box::new(params.details),
         }))
     }
 
@@ -395,6 +421,8 @@ struct ApprovalParams {
     thread_id: String,
     turn_id: String,
     item_id: String,
+    #[serde(flatten)]
+    details: super::CodexApprovalDetails,
 }
 
 #[cfg(test)]

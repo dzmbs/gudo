@@ -10,6 +10,8 @@ async fn failed_native_queue_never_truncates_official_terminal_bytes() {
         process: Mutex::new(None),
         task: Mutex::new(None),
         history_task: Mutex::new(None),
+        controls: Mutex::new(None),
+        control_task: Mutex::new(None),
         history_result: Mutex::new(None),
         observations: Mutex::new(None),
         directory: crate::fsutil::create_private_temp_dir("gudo-codex-forward").unwrap(),

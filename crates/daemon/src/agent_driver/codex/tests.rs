@@ -10,6 +10,8 @@ pub(super) fn source() -> Arc<Live> {
         process: Mutex::new(None),
         task: Mutex::new(None),
         history_task: Mutex::new(None),
+        controls: Mutex::new(None),
+        control_task: Mutex::new(None),
         history_result: Mutex::new(None),
         observations: Mutex::new(None),
         directory: crate::fsutil::create_private_temp_dir("gudo-codex-fixture").unwrap(),
@@ -114,7 +116,8 @@ async fn common_watch_is_read_only_and_catches_up_after_unwatch() {
                 &raw.daemon.core,
                 &raw.entry.pane,
                 None,
-                "must not reach the PTY"
+                "must not reach the PTY",
+                None,
             )
             .is_err()
     );

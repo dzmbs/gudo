@@ -463,10 +463,12 @@ pub(crate) fn action(
     ]
     .concat();
     // Push actions come from owner devices only, so only the two-person rule can hold them.
+    let authorization = crate::mp::Authz::owner(actor);
     let ballot = crate::mp::approvals::Ballot {
         actor,
         name: "The owner",
         owner: true,
+        authorization: Some(&authorization),
     };
     // A drive request is the owner's alone; approval policies are for agents' tool calls.
     let gate = if core.term.asks.caller_of(token.request).is_some() {

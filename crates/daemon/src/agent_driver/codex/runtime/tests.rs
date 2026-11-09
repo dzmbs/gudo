@@ -73,14 +73,56 @@ async fn mapped_events_register_the_session_and_drive_status_without_notify() {
         observe(&source, waiting(request), false);
     }
     assert!(lock(&raw.entry.agent).as_ref().unwrap().is_blocked());
-    assert!(
+    assert_eq!(
         lock(&raw.entry.agent)
             .as_mut()
             .unwrap()
             .blocked_detail()
             .unwrap()
-            .options
-            .is_empty()
+            .options,
+        vec![("Deny".into(), agents::ApprovalChoice::Deny)]
+    );
+    let first = lock(&raw.entry.agent)
+        .as_mut()
+        .unwrap()
+        .blocked_detail()
+        .unwrap();
+    let paired = core.identity.paired().remove(0);
+    let actor = proto::Actor {
+        principal: paired.principal,
+        device: paired.device,
+    };
+    lock(&raw.entry.agent)
+        .as_mut()
+        .unwrap()
+        .decide(first.wire, proto::OptionId(0), actor)
+        .unwrap();
+    lock(&source.runtime).pending[0].admitted = true;
+    observe(&source, waiting(9), false);
+    assert_eq!(
+        lock(&raw.entry.agent)
+            .as_mut()
+            .unwrap()
+            .blocked_detail()
+            .unwrap()
+            .wire,
+        first.wire,
+        "another queued approval cannot reissue an admitted request"
+    );
+    observe(
+        &source,
+        json!({"method":"serverRequest/resolved","params":{"threadId":"primary","requestId":9}}),
+        false,
+    );
+    assert_eq!(
+        lock(&raw.entry.agent)
+            .as_mut()
+            .unwrap()
+            .blocked_detail()
+            .unwrap()
+            .wire,
+        first.wire,
+        "resolving a non-visible request cannot reissue the admitted request"
     );
     for (thread, request) in [("helper", 7), ("primary", 99), ("primary", 7)] {
         observe(
@@ -193,10 +235,12 @@ fn resolution_of_one_request_does_not_unblock_another() {
     let _ = runtime.apply(Effect::Waiting(
         CodexRpcId::Integer(7),
         CodexApprovalKind::Command,
+        Box::default(),
     ));
     let _ = runtime.apply(Effect::Waiting(
         CodexRpcId::Text("7".into()),
         CodexApprovalKind::FileChange,
+        Box::default(),
     ));
     let signal = runtime
         .apply(Effect::Resolved(CodexRpcId::Integer(7)))

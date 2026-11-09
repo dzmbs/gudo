@@ -4,12 +4,17 @@ use proto::{AgentKind, PaneLaunch};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+mod controls;
+mod recovery;
+
 #[derive(serde::Deserialize)]
 struct Fixture {
     root: PathBuf,
     helper: PathBuf,
     codex: PathBuf,
     model_url: String,
+    #[serde(default)]
+    scenario: String,
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -29,11 +34,20 @@ async fn real_cli_streams_through_the_owned_daemon_adapter() {
     );
     assert!(fixture.model_url.starts_with("http://127.0.0.1:"));
     let daemon = crate::Daemon::start(configuration(&fixture)).await.unwrap();
-    let result = run(&daemon, &fixture.root, &fixture.model_url).await;
+    let result = run(
+        &daemon,
+        &fixture.root,
+        &fixture.model_url,
+        &fixture.scenario,
+    )
+    .await;
     daemon.shutdown().await;
     let conversation = result.unwrap();
+    if matches!(fixture.scenario.as_str(), "stop" | "deny" | "terminal-race") {
+        return;
+    }
     let daemon = crate::Daemon::start(configuration(&fixture)).await.unwrap();
-    let result = recover(&daemon, &fixture.root, &conversation).await;
+    let result = recovery::recover(&daemon, &fixture.root, &conversation).await;
     daemon.shutdown().await;
     result.unwrap();
 }
@@ -78,7 +92,12 @@ struct Conversation {
     account: String,
 }
 
-async fn run(daemon: &crate::Daemon, root: &Path, model_url: &str) -> Result<Conversation, String> {
+async fn run(
+    daemon: &crate::Daemon,
+    root: &Path,
+    model_url: &str,
+    scenario: &str,
+) -> Result<Conversation, String> {
     let account = daemon.core.ws.accounts.add(&proto::AccountAdd {
         agent: AgentKind::Codex,
         label: "Private loopback fixture".into(),
@@ -160,18 +179,62 @@ async fn run(daemon: &crate::Daemon, root: &Path, model_url: &str) -> Result<Con
         .timeline_watch_capabilities(pane)
         .await
         .map_err(|error| format!("watch: {error:?}"))?;
-    if snapshot.capabilities != AgentCapabilities::READ | AgentCapabilities::STREAMING_DELTAS {
-        return Err("wrong live capabilities".into());
+    if !snapshot.capabilities.contains(
+        AgentCapabilities::SEND
+            | AgentCapabilities::ACKNOWLEDGED_SEND
+            | AgentCapabilities::STOP
+            | AgentCapabilities::APPROVALS,
+    ) {
+        return Err("missing native controls".into());
     }
-    if client.chat_prepare(pane).await.is_ok() {
-        return Err("read-only source issued a Send ticket".into());
+    if scenario == "draft" {
+        controls::draft(&entry).await?;
     }
-    // Explicit user input through the actual Terminal PTY, never a native/bootstrap request.
-    entry
-        .pane
-        .write(b"\x1b[200~Reply with a short fixture sentence.\x1b[201~\r".to_vec())
-        .await
-        .map_err(|error| error.to_string())?;
+    if scenario == "terminal-race" {
+        entry
+            .pane
+            .write(b"\x1b[200~Reply with a short fixture sentence.\x1b[201~\r".to_vec())
+            .await
+            .map_err(|error| error.to_string())?;
+    } else {
+        let proto::ChatSendStatus::Prepared {
+            ticket, revision, ..
+        } = client
+            .chat_prepare(pane)
+            .await
+            .map_err(|error| format!("prepare: {error:?}"))?
+        else {
+            return Err("no send ticket".into());
+        };
+        let status = client
+            .chat_send(
+                pane,
+                ticket,
+                "Reply with a short fixture sentence.".into(),
+                Some(revision),
+            )
+            .await
+            .map_err(|error| format!("send: {error:?}"))?;
+        if status != proto::ChatSendStatus::Confirmed {
+            return Err(format!("native send was not acknowledged: {status:?}"));
+        }
+    }
+    if matches!(
+        scenario,
+        "approve" | "deny" | "terminal-race" | "two-person" | "file-approve" | "rule-approve"
+    ) {
+        controls::approval(daemon, &client, &entry, &source, root, scenario).await?;
+        if !matches!(
+            scenario,
+            "approve" | "two-person" | "file-approve" | "rule-approve"
+        ) {
+            return Ok(Conversation {
+                pane,
+                thread,
+                account: account.id,
+            });
+        }
+    }
     let result = tokio::time::timeout(Duration::from_secs(30), async {
         let mut delta = false;
         loop {
@@ -181,6 +244,10 @@ async fn run(daemon: &crate::Daemon, root: &Path, model_url: &str) -> Result<Con
                     TimelineOp::Append { text, .. } if text.contains("same-process") && !delta => {
                         if lock(&entry.agent).as_ref().unwrap().state() != agents::AgentState::Working { return Err("streaming turn is not working".to_owned()); }
                         delta = true;
+                        if scenario == "stop" {
+                            controls::stop(&client, &entry).await?;
+                            return Ok(());
+                        }
                         advance_model(model_url).await?;
                     }
                     TimelineOp::Upsert { item, .. } if matches!(&item.body, proto::TimelineBody::Assistant { text, streaming: false } if text == "A same-process live mirror.\n") => {
@@ -196,11 +263,31 @@ async fn run(daemon: &crate::Daemon, root: &Path, model_url: &str) -> Result<Con
     std::fs::write(root.join("final-screen.txt"), entry.pane.screen_text())
         .map_err(|error| error.to_string())?;
     result?;
+    if scenario == "stop" {
+        return Ok(Conversation {
+            pane,
+            thread,
+            account: account.id,
+        });
+    }
     crate::agent_input::chat_tests::wait_until(|| lock(&entry.meta).turns == 1).await;
     if lock(&entry.agent).as_ref().unwrap().state() != agents::AgentState::Idle
         || lock(&entry.meta).last_turn.as_ref().unwrap().outcome != agents::TurnOutcome::Completed
     {
         return Err("app-server completion did not complete the runtime turn".into());
+    }
+    crate::agent_input::chat_tests::wait_until(|| {
+        entry
+            .pane
+            .screen_text()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .contains("A same-process live mirror.")
+    })
+    .await;
+    if scenario == "draft" {
+        controls::check_draft(&entry, &source, root)?;
     }
     client
         .timeline_unwatch(pane)
@@ -227,69 +314,6 @@ async fn run(daemon: &crate::Daemon, root: &Path, model_url: &str) -> Result<Con
         thread,
         account: account.id,
     })
-}
-
-async fn recover(
-    daemon: &crate::Daemon,
-    root: &Path,
-    conversation: &Conversation,
-) -> Result<(), String> {
-    let (entry, source) = tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            if let Some(entry) = daemon.core.pane(conversation.pane) {
-                let source = lock(&entry.codex).clone();
-                if let Some(source) = source {
-                    if source.fault.load(std::sync::atomic::Ordering::Acquire) {
-                        let _ = std::fs::write(
-                            root.join("recovered-screen.txt"),
-                            entry.pane.screen_text(),
-                        );
-                        return Err("recovered native source failed".to_owned());
-                    }
-                    if lock(&source.state).is_ready() {
-                        return Ok((entry, source));
-                    }
-                }
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .map_err(|_| "native recovery timeout".to_owned())??;
-    std::fs::write(root.join("recovered-screen.txt"), entry.pane.screen_text())
-        .map_err(|error| error.to_string())?;
-    crate::agent_input::chat_tests::wait_until(|| {
-        lock(&entry.agent)
-            .as_ref()
-            .unwrap()
-            .session()
-            .native_id
-            .as_ref()
-            .is_some_and(|id| id.as_str() == conversation.thread)
-    })
-    .await;
-    if !lock(&source.state).requires_history {
-        return Err("recovery did not observe an official resume".into());
-    }
-    if daemon
-        .core
-        .pane_account(conversation.pane)
-        .as_ref()
-        .map(|(_, account)| account.as_str())
-        != Some(conversation.account.as_str())
-    {
-        return Err("recovery lost the named account".into());
-    }
-    let (client, _events) = crate::agent_input::chat_tests::owner_client(daemon).await;
-    let snapshot = client
-        .timeline_watch_capabilities(conversation.pane)
-        .await
-        .map_err(|error| format!("recovered watch: {error:?}"))?;
-    if !snapshot.snapshot.items.iter().any(|item| matches!(&item.body, proto::TimelineBody::Assistant { text, streaming: false } if text == "A same-process live mirror.\n")) { return Err(format!("official resume did not hydrate history: {:?}", snapshot.snapshot.items)); }
-    if lock(&entry.meta).turns != 0 {
-        return Err("recovery recounted historical completion".into());
-    }
-    Ok(())
 }
 
 fn rollout_contains(directory: &Path, text: &str, depth: usize) -> bool {

@@ -95,7 +95,13 @@ pub(crate) async fn request(
                 let submission = matches!(&gate.phase, AgentInputPhase::Open(_))
                     .then(|| {
                         driver(kind)
-                            .send(core, &entry.pane, session.as_deref(), &text)
+                            .send(
+                                core,
+                                &entry.pane,
+                                session.as_deref(),
+                                &text,
+                                gate.draft.acknowledgement(gate.revision, conn.actor),
+                            )
                             .ok()
                     })
                     .flatten();
@@ -126,6 +132,9 @@ pub(crate) async fn request(
     lock(&entry.pane.agent_input_gate)
         .draft
         .expire(Instant::now());
+    lock(&entry.pane.agent_input_gate)
+        .draft
+        .retire_receipt(&receipt);
     let status = match *receipt.borrow() {
         Receipt::Confirmed => ChatSendStatus::Confirmed,
         Receipt::Expired => unconfirmed.status(),

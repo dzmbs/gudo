@@ -63,6 +63,7 @@ pub(crate) fn request(
         &mut gate,
         session.as_deref(),
         request,
+        conn.actor,
     )
 }
 
@@ -73,6 +74,7 @@ fn admit(
     gate: &mut super::AgentInputGate,
     session: Option<&str>,
     request: WorkspaceRequest,
+    actor: proto::Actor,
 ) -> Result<ChatSendStatus, WsError> {
     match request {
         WorkspaceRequest::ChatInterruptPrepare { .. } => {
@@ -106,7 +108,9 @@ fn admit(
             gate.last_user_input_seq = crate::hook_seq();
             gate.advance_revision();
             if matches!(&gate.phase, AgentInputPhase::Open(_))
-                && driver.stop(core, pane, session).is_ok()
+                && driver
+                    .stop(core, pane, session, gate.revision, actor)
+                    .is_ok()
             {
                 Ok(ChatSendStatus::InterruptRequested)
             } else {
