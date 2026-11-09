@@ -481,6 +481,9 @@ pub(crate) struct Inner {
     pub listener: Arc<dyn ClientListener>,
     pub wanted: Mutex<Wanted>,
     pub mirrors: Mutex<HashMap<PaneId, Mirror>>,
+    /// Held while one stream applies a pane's frame and hands it to the app, so a pane being
+    /// followed on two streams at once still reaches the app in the order it was applied.
+    pub pane_output_turns: Mutex<HashMap<PaneId, Arc<Mutex<()>>>>,
     pub outgoing_tx: mpsc::UnboundedSender<Outgoing>,
     pub outgoing_rx: tokio::sync::Mutex<mpsc::UnboundedReceiver<Outgoing>>,
     pub connection: Mutex<Option<Connection>>,
@@ -540,6 +543,10 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl Inner {
+    pub(crate) fn pane_output_turn(&self, pane_id: PaneId) -> Arc<Mutex<()>> {
+        Arc::clone(lock(&self.pane_output_turns).entry(pane_id).or_default())
+    }
+
     pub fn emit(&self, event: ClientEvent) {
         self.listener.on_event(event);
     }
@@ -722,6 +729,7 @@ impl Client {
             listener,
             wanted: Mutex::new(Wanted::default()),
             mirrors: Mutex::new(HashMap::new()),
+            pane_output_turns: Mutex::new(HashMap::new()),
             outgoing_tx,
             outgoing_rx: tokio::sync::Mutex::new(outgoing_rx),
             connection: Mutex::new(None),

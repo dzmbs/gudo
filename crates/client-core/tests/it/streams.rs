@@ -228,3 +228,78 @@ async fn unsubscribing_a_flooding_pane_stops_its_stream() {
     drop(client);
     daemon.shutdown().await;
 }
+
+/// Following a busy pane again before its last stream drained: whatever that stream still
+/// carries is older than the new one, so the pane never jumps back in time. Every snapshot is
+/// at or after the previous one, and bytes always continue exactly where the screen is.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_late_snapshot_from_an_earlier_follow_never_rewinds_the_pane() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = daemon(dir.path()).await;
+    let ticket = daemon
+        .pairing_ticket(daemon::PAIRING_TTL)
+        .unwrap()
+        .to_string();
+    let (client, mut events) = connect(&ticket, true);
+    client.attach(None);
+    let ClientEvent::Layout { layout } = next_matching(&mut events, |event| {
+        matches!(event, ClientEvent::Layout { .. })
+    })
+    .await
+    else {
+        unreachable!()
+    };
+    let pane = layout.tabs[0].focused;
+    client.subscribe(pane);
+    next_matching(&mut events, |event| {
+        matches!(event, ClientEvent::PaneSnapshot { .. })
+    })
+    .await;
+    client.send_input(pane, b"yes\r".to_vec());
+    let mut flooded = 0;
+    next_matching(&mut events, |event| {
+        if let ClientEvent::PaneBytes { data, .. } = event {
+            flooded += data.len();
+        }
+        flooded > 1 << 20
+    })
+    .await;
+    while events.try_recv().is_ok() {}
+
+    for _ in 0..60 {
+        client.unsubscribe(pane);
+        client.subscribe(pane);
+        tokio::time::sleep(Duration::from_millis(3)).await;
+    }
+
+    let mut last_snapshot = 0;
+    let mut screen_seq: Option<u64> = None;
+    let mut snapshots = 0;
+    let settle = tokio::time::Instant::now() + Duration::from_secs(3);
+    while let Ok(Some(event)) = tokio::time::timeout_at(settle, events.recv()).await {
+        match event {
+            ClientEvent::PaneSnapshot { pane_id, seq, .. } if pane_id == pane => {
+                assert!(
+                    seq >= last_snapshot,
+                    "snapshot at {seq} after one at {last_snapshot}"
+                );
+                last_snapshot = seq;
+                screen_seq = Some(seq);
+                snapshots += 1;
+            }
+            ClientEvent::PaneBytes {
+                pane_id, seq, data, ..
+            } if pane_id == pane => {
+                if let Some(at) = screen_seq {
+                    assert_eq!(seq, at, "bytes do not continue the screen");
+                    screen_seq = Some(seq + data.len() as u64);
+                }
+            }
+            _ => {}
+        }
+    }
+    assert!(snapshots > 0, "the pane was followed again");
+    client.send_input(pane, vec![3]);
+    drop(client);
+    daemon.shutdown().await;
+}

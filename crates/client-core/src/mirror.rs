@@ -92,6 +92,12 @@ impl Mirror {
         self.seq
     }
 
+    /// Whether this mirror already shows output past a snapshot of the same terminal
+    /// generation taken at `seq`.
+    pub fn is_ahead_of(&self, snap_gen: SnapGen, seq: u64) -> bool {
+        self.snap_gen == snap_gen && self.seq > seq
+    }
+
     /// Applies output at `seq`, trimming any part already applied.
     pub fn apply(&mut self, seq: u64, data: &[u8]) -> Applied {
         let end = seq + data.len() as u64;

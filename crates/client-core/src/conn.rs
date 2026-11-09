@@ -991,6 +991,7 @@ async fn read_ctl(inner: Arc<Inner>, mut ctl_rx: RecvStream) -> String {
             }
             ServerCtl::PaneClosed { pane_id } => {
                 lock(&inner.mirrors).remove(&pane_id);
+                lock(&inner.pane_output_turns).remove(&pane_id);
                 lock(&inner.programs).remove(&pane_id);
                 lock(&inner.wanted).subscribed.retain(|&id| id != pane_id);
                 ClientEvent::PaneClosed { pane_id }
@@ -1107,6 +1108,8 @@ fn apply_output(
     output: PaneOutput,
     ctl: &mpsc::UnboundedSender<ClientCtl>,
 ) {
+    let turn = inner.pane_output_turn(pane_id);
+    let _turn = lock(&turn);
     let keep_vt = inner.config.mirror_vt;
     let event = match output {
         PaneOutput::Bytes { seq, data } => {
@@ -1172,9 +1175,17 @@ fn apply_output(
             None => return,
         },
         PaneOutput::Resized { seq, size } => {
-            if let Some(mirror) = lock(&inner.mirrors).get_mut(&pane_id) {
-                mirror.resize(size);
-            }
+            let mut mirrors = lock(&inner.mirrors);
+            // Only a resize at or after the screen belongs to it: anything older is from a
+            // stream this pane was followed on before, and the screen already includes it.
+            let Some(mirror) = mirrors
+                .get_mut(&pane_id)
+                .filter(|mirror| seq.0 >= mirror.seq())
+            else {
+                return;
+            };
+            mirror.resize(size);
+            drop(mirrors);
             ClientEvent::PaneResized {
                 pane_id,
                 seq: seq.0,
@@ -1276,7 +1287,18 @@ fn snapshot_event(
     }
     let image_storage = crate::image_storage_limit(*lock(&inner.image_storage_bytes));
     let mirror = Mirror::from_snapshot(snap_gen, seq.0, &raw, keep_vt, image_storage);
-    lock(&inner.mirrors).insert(pane_id, mirror);
+    let mut mirrors = lock(&inner.mirrors);
+    // Following a pane again opens a new stream while the old one drains, and the two are not
+    // ordered: an older snapshot arriving last must not take the screen back.
+    if mirrors
+        .get(&pane_id)
+        .is_some_and(|shown| shown.is_ahead_of(snap_gen, seq.0))
+    {
+        tracing::debug!(%pane_id, seq = seq.0, "dropping a snapshot older than the screen");
+        return None;
+    }
+    mirrors.insert(pane_id, mirror);
+    drop(mirrors);
     Some(ClientEvent::PaneSnapshot {
         pane_id,
         seq: seq.0,
@@ -1615,5 +1637,194 @@ mod tests {
             panic!("a bad relay url is rejected");
         };
         assert!(err.to_string().contains("relay settings"), "{err}");
+    }
+
+    struct Followed {
+        client: crate::Client,
+        events: mpsc::UnboundedReceiver<ClientEvent>,
+        ctl: mpsc::UnboundedSender<ClientCtl>,
+        pane_id: PaneId,
+    }
+
+    impl Followed {
+        /// A client following one pane of a daemon it never reaches, so each test decides
+        /// exactly which frames arrive and in what order.
+        fn new() -> Self {
+            let (listener, events) = crate::EventQueue::channel();
+            let mut config = crate::ClientConfig::new(crate::ClientConfig::generate_key());
+            config.relay = RelayMode::Disabled;
+            let client = crate::Client::connect(&ticket().to_string(), config, listener).unwrap();
+            let pane_id = PaneId(4);
+            client.subscribe(pane_id);
+            let (ctl, _) = mpsc::unbounded_channel();
+            Self {
+                client,
+                events,
+                ctl,
+                pane_id,
+            }
+        }
+
+        fn arrives(&self, output: PaneOutput) {
+            apply_output(&self.client.inner, self.pane_id, output, &self.ctl);
+        }
+
+        fn snapshot(&self, seq: u64) {
+            self.arrives(PaneOutput::Snapshot {
+                seq: Seq(seq),
+                snap_gen: proto::SnapGen(3),
+                data: vec![],
+            });
+        }
+
+        fn shown(&mut self) -> Vec<ClientEvent> {
+            std::iter::from_fn(|| self.events.try_recv().ok())
+                .filter(|event| {
+                    matches!(
+                        event,
+                        ClientEvent::PaneSnapshot { .. }
+                            | ClientEvent::PaneBytes { .. }
+                            | ClientEvent::PaneResized { .. }
+                    )
+                })
+                .collect()
+        }
+    }
+
+    #[test]
+    fn a_snapshot_older_than_the_screen_is_dropped() {
+        let mut followed = Followed::new();
+        followed.snapshot(2000);
+        followed.arrives(PaneOutput::Bytes {
+            seq: Seq(2000),
+            data: b"newer".to_vec(),
+        });
+        followed.snapshot(1000);
+        followed.arrives(PaneOutput::Bytes {
+            seq: Seq(2005),
+            data: b" still".to_vec(),
+        });
+        let shown = followed.shown();
+        assert!(
+            matches!(
+                shown.as_slice(),
+                [
+                    ClientEvent::PaneSnapshot { seq: 2000, .. },
+                    ClientEvent::PaneBytes { seq: 2000, .. },
+                    ClientEvent::PaneBytes { seq: 2005, .. },
+                ]
+            ),
+            "{shown:?}"
+        );
+    }
+
+    #[test]
+    fn a_snapshot_from_a_new_terminal_generation_replaces_the_screen() {
+        let mut followed = Followed::new();
+        followed.snapshot(2000);
+        followed.arrives(PaneOutput::Snapshot {
+            seq: Seq(10),
+            snap_gen: proto::SnapGen(4),
+            data: vec![],
+        });
+        let shown = followed.shown();
+        assert!(
+            matches!(
+                shown.as_slice(),
+                [
+                    ClientEvent::PaneSnapshot { seq: 2000, .. },
+                    ClientEvent::PaneSnapshot { seq: 10, .. },
+                ]
+            ),
+            "{shown:?}"
+        );
+    }
+
+    #[test]
+    fn a_resize_older_than_the_screen_or_for_no_screen_is_dropped() {
+        let mut followed = Followed::new();
+        let size = |cols| proto::PaneSize {
+            cols,
+            rows: 24,
+            width_px: 0,
+            height_px: 0,
+        };
+        followed.arrives(PaneOutput::Resized {
+            seq: Seq(500),
+            size: size(80),
+        });
+        followed.snapshot(2000);
+        followed.arrives(PaneOutput::Resized {
+            seq: Seq(1500),
+            size: size(100),
+        });
+        followed.arrives(PaneOutput::Resized {
+            seq: Seq(2000),
+            size: size(120),
+        });
+        let shown = followed.shown();
+        assert!(
+            matches!(
+                shown.as_slice(),
+                [
+                    ClientEvent::PaneSnapshot { seq: 2000, .. },
+                    ClientEvent::PaneResized { seq: 2000, .. },
+                ]
+            ),
+            "{shown:?}"
+        );
+    }
+
+    /// Holds the first snapshot inside the app's listener until told to let it go.
+    struct StallsFirstSnapshot {
+        stalled: std::sync::Mutex<bool>,
+        release: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+        shown: std::sync::Mutex<Vec<u64>>,
+    }
+
+    impl crate::ClientListener for StallsFirstSnapshot {
+        fn on_event(&self, event: ClientEvent) {
+            let ClientEvent::PaneSnapshot { seq, .. } = event else {
+                return;
+            };
+            let first = !std::mem::replace(&mut *self.stalled.lock().unwrap(), true);
+            if first {
+                let _ = self.release.lock().unwrap().recv();
+            }
+            self.shown.lock().unwrap().push(seq);
+        }
+    }
+
+    #[test]
+    fn a_snapshot_still_being_shown_is_not_overtaken_by_a_newer_one() {
+        let (release, released) = std::sync::mpsc::channel();
+        let listener = Arc::new(StallsFirstSnapshot {
+            stalled: std::sync::Mutex::new(false),
+            release: std::sync::Mutex::new(released),
+            shown: std::sync::Mutex::new(vec![]),
+        });
+        let mut config = crate::ClientConfig::new(crate::ClientConfig::generate_key());
+        config.relay = RelayMode::Disabled;
+        let client =
+            crate::Client::connect(&ticket().to_string(), config, listener.clone()).unwrap();
+        let pane_id = PaneId(4);
+        client.subscribe(pane_id);
+        let snapshot = |seq| PaneOutput::Snapshot {
+            seq: Seq(seq),
+            snap_gen: proto::SnapGen(3),
+            data: vec![],
+        };
+        let (ctl, _) = mpsc::unbounded_channel();
+        std::thread::scope(|scope| {
+            let earlier =
+                scope.spawn(|| apply_output(&client.inner, pane_id, snapshot(1000), &ctl));
+            std::thread::sleep(Duration::from_millis(50));
+            let newer = scope.spawn(|| apply_output(&client.inner, pane_id, snapshot(2000), &ctl));
+            std::thread::sleep(Duration::from_millis(100));
+            release.send(()).unwrap();
+            earlier.join().unwrap();
+            newer.join().unwrap();
+        });
+        assert_eq!(*listener.shown.lock().unwrap(), [1000, 2000]);
     }
 }
