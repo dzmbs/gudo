@@ -338,11 +338,23 @@ README records which data is preserved. No real account is used.
 
 ### Experimental display-only streaming
 
-`Config::claude_chat_streaming` defaults to false. The daemon has a bounded, purpose-authenticated
-loopback `MessageDisplay` receiver and transcript overlay, but launch-time hook installation and
-supported-version selection are not wired yet. Normal Claude launches remain transcript-backed.
-The parser recognizes the documented 2.1.69+ version boundary; real standalone protocol captures
-use 2.1.319. This is not yet real-CLI-through-daemon or Apple UI acceptance.
+`Config::claude_chat_streaming` defaults to false. Dedicated launches can install the bounded,
+purpose-authenticated loopback `MessageDisplay` receiver and transcript overlay. After login-shell
+startup and account pins, a same-PID helper checks `claude --version` (128 bytes, two seconds,
+including cleanup of a hung child). Successful supported 2.1.69+ output selects separate versioned
+display settings; unsupported, failed or malformed queries select the unchanged Terminal recipe
+and transcript-backed Chat before any conversation starts. Listener/settings preparation failure
+also selects that recipe. Running sessions' settings and existing/adopted/manual launches are not
+upgraded. No bootstrap prompt, extra model request or automatic conversation retry is used.
+
+Private real-CLI-through-daemon acceptance uses installed 2.1.319, placeholder credentials and a
+loopback model paused until a client receives the live row. It covers ordinary/multiple-block text,
+unsupported-version fallback, opt-out, capture failure and settings/listener failure, unchanged
+Terminal text, canonical reconciliation and late rewatch. Each fixture makes one model request.
+The older-version fixture advertises an older version and runs the installed binary in legacy
+mode; it is version-selection evidence, not actual older-binary acceptance. Receiver-only Debug
+loopback round trips are about 0.16–0.19 ms p95 in these runs, not Release/CLI end-to-end or RSS
+acceptance. Apple UI acceptance is separate.
 
 The HTTP response is exactly `{}` without `displayContent`, and reaches an independent caller
 before capture, rendering or transcript work. Display tokens cannot call the ordinary input/exit
@@ -360,8 +372,9 @@ interleaved tools, while preserving overlapping older history. No transcript is 
 Capture admits at most 64 panes, 16 active messages and 64 message identities per prompt, with
 256 KiB/message and 768 KiB/stream budgets (including retained replay delta). The overlay has a
 separate 768 KiB conservative value budget and shares the existing push/snapshot budget. These
-are bounds, not latency or RSS acceptance. Hot relay handoff remains deferred; launch integration
-must retain an active-stream upgrade guard before this path can be enabled.
+are bounds, not latency or RSS acceptance. Hot relay handoff remains deferred. Upgrades/restarts
+are refused while a dedicated Claude launch using the enabled recipe is pending/open, as for
+owned Codex sources; the guard is conservative even when version selection falls back to Terminal.
 
 ## Read-only diff foundation
 

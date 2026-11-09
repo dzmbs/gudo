@@ -1575,6 +1575,19 @@ impl Core {
         })
     }
 
+    pub(crate) fn has_live_agent_chat(&self) -> bool {
+        self.has_live_codex()
+            || (self.cfg.claude_chat_streaming
+                && self.hooks.display_http.is_some()
+                && self.pane_entries().iter().any(|(_, entry)| {
+                    let has_launch = lock(&entry.pane.agent_input_gate).has_launch();
+                    has_launch
+                        && lock(&entry.agent)
+                            .as_ref()
+                            .is_some_and(|runtime| runtime.kind() == AgentKind::Claude)
+                }))
+    }
+
     pub fn closed_panes(&self) -> Vec<ClosedPane> {
         lock(&self.closed).iter().cloned().collect()
     }
@@ -1938,6 +1951,21 @@ impl Core {
                             .map_err(|error| (OpError::SpawnFailed, error.to_string()))?;
                     codex = Some(source);
                     spec
+                } else if self.cfg.claude_chat_streaming
+                    && *kind == AgentKind::Claude
+                    && let Some(port) = self
+                        .hooks
+                        .display_http
+                        .as_ref()
+                        .and_then(|listener| std::num::NonZeroU16::new(listener.port()))
+                {
+                    crate::claude_display::prepare_launch(
+                        &context,
+                        &mode,
+                        port,
+                        &self.hooks.display.token(id),
+                    )
+                    .unwrap_or_else(|| adapter.launch(&context, &mode))
                 } else {
                     adapter.launch(&context, &mode)
                 };

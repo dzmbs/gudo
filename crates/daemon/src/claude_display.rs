@@ -1,5 +1,10 @@
 pub(crate) mod http;
+mod launch;
 
+pub(crate) use launch::prepare as prepare_launch;
+
+#[cfg(test)]
+mod live_probe;
 #[cfg(test)]
 pub(crate) mod tests;
 

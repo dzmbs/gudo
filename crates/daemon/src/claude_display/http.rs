@@ -64,6 +64,10 @@ impl HttpListener {
         })
     }
 
+    pub fn port(&self) -> u16 {
+        self.address.port()
+    }
+
     pub fn url(&self) -> String {
         format!("http://{}/claude/message-display", self.address)
     }

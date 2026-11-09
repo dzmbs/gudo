@@ -1,5 +1,7 @@
 //! Claude Code.
 
+mod display_launch;
+
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 

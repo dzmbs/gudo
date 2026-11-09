@@ -107,10 +107,10 @@ pub(crate) async fn serve(
     mut send: SendStream,
     mut recv: RecvStream,
 ) {
-    let result = if owner && core.has_live_codex() {
+    let result = if owner && core.has_live_agent_chat() {
         Err(fail(
             UpgradeFailure::Forbidden,
-            "Experimental Codex Chat cannot survive a helper restart yet.",
+            "Live agent Chat cannot survive a helper restart yet.",
         ))
     } else if owner {
         install(&core, &header, downgrade, &mut send, &mut recv).await
@@ -485,9 +485,9 @@ pub(crate) async fn serve_restart(core: &Arc<Core>, call: &RestartCall) -> Resta
         tracing::warn!("refused a restart request with a bad token");
         return RestartReply::Refused("not allowed".into());
     }
-    if core.has_live_codex() {
+    if core.has_live_agent_chat() {
         return RestartReply::Refused(
-            "Experimental Codex Chat cannot survive a helper restart yet.".into(),
+            "Live agent Chat cannot survive a helper restart yet.".into(),
         );
     }
     let Some(exe) = core.cfg.exe.clone() else {

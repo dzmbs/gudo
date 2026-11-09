@@ -65,6 +65,10 @@ enum AgentInputPhase {
 }
 
 impl AgentInputGate {
+    pub(crate) fn has_launch(&self) -> bool {
+        !matches!(self.phase, AgentInputPhase::Disabled)
+    }
+
     pub(crate) fn active_launch(&self) -> Option<&str> {
         match &self.phase {
             AgentInputPhase::Open(launch) => Some(launch),

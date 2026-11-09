@@ -1,5 +1,6 @@
 use super::*;
 use std::os::unix::fs::PermissionsExt;
+use std::time::Instant;
 
 fn executable(directory: &std::path::Path, body: &str) -> std::path::PathBuf {
     let path = directory.join("codex");

@@ -200,6 +200,7 @@ async fn stop_is_not_a_display_lifetime_fence_but_launch_exit_is() {
     assert_eq!(snapshot.messages[0].text, "First line.\nLast line.");
     let core = &fixture.raw.daemon.core;
     let pane = fixture.raw.entry.pane.id;
+    assert!(core.has_live_agent_chat());
     let call = crate::agent_input::AgentInputCall::Close {
         token: fixture.capture().token(pane),
         pane,
@@ -218,6 +219,7 @@ async fn stop_is_not_a_display_lifetime_fence_but_launch_exit_is() {
         crate::agent_input::serve(core, call).await,
         crate::agent_input::AgentInputReply::Closed
     );
+    assert!(!core.has_live_agent_chat());
     fixture.feed(fixture.batch(2, "unreachable", true));
     assert_eq!(fixture.snapshot().unwrap().revision, snapshot.revision);
     *lock(&fixture.raw.entry.pane.agent_input_gate) =
@@ -231,6 +233,7 @@ async fn stop_is_not_a_display_lifetime_fence_but_launch_exit_is() {
         crate::agent_input::serve(core, call).await,
         crate::agent_input::AgentInputReply::Ready
     );
+    assert!(core.has_live_agent_chat());
     fixture.feed(fixture.batch(2, "unreachable in replacement", true));
     assert_eq!(fixture.snapshot().unwrap().revision, snapshot.revision);
     fixture.raw.daemon.shutdown().await;
