@@ -75,6 +75,7 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         }
         // Off screen until it is first responder of a key window: a hollow, steady cursor.
         surface.isFocused = false
+        surface.onFrameRendered = { [weak self] in self?.accessibleScreen?.frameRendered() }
         registerForDraggedTypes([.string, .fileURL, .png, .tiff, NSPasteboard.PasteboardType("public.jpeg")])
     }
 
@@ -197,12 +198,108 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
 
     // MARK: Accessibility
 
+    /// Created on the first accessibility query, so a terminal nobody reads aloud does no work.
+    private var accessibleScreen: AccessibleScreen?
+
+    private var screenText: AccessibleScreen {
+        if let accessibleScreen { return accessibleScreen }
+        let screen = AccessibleScreen(surface: surface)
+        screen.onValueChanged = { [weak self] in
+            guard let self else { return }
+            NSAccessibility.post(element: self, notification: .valueChanged)
+        }
+        screen.onSelectedTextChanged = { [weak self] in
+            guard let self else { return }
+            NSAccessibility.post(element: self, notification: .selectedTextChanged)
+        }
+        accessibleScreen = screen
+        return screen
+    }
+
     override public func isAccessibilityElement() -> Bool { true }
     override public func accessibilityRole() -> NSAccessibility.Role? { .textArea }
+    /// A secure text field while the program reads a password, so VoiceOver does not echo the
+    /// keys typed into it.
+    override public func accessibilitySubrole() -> NSAccessibility.Subrole? { surface.isHiddenInput ? .secureTextField : nil }
     override public func accessibilityLabel() -> String? { "Terminal" }
+
     /// The visible screen as text (or the IME composition while composing).
     override public func accessibilityValue() -> Any? {
-        hasMarkedText() ? "composing \(markedText.string)" : surface.terminal.visibleText()
+        guard !hasMarkedText() else { return surface.isHiddenInput ? "" : "composing \(markedText.string)" }
+        return screenText.text.string
+    }
+
+    override public func accessibilityNumberOfCharacters() -> Int { screenText.text.length }
+
+    override public func accessibilityVisibleCharacterRange() -> NSRange {
+        NSRange(location: 0, length: screenText.text.length)
+    }
+
+    override public func accessibilitySelectedText() -> String? {
+        let screen = screenText
+        return screen.text.substring(in: screen.selectedRange)
+    }
+
+    override public func accessibilitySelectedTextRange() -> NSRange { NSRange(screenText.selectedRange) }
+
+    override public func setAccessibilitySelectedTextRange(_ range: NSRange) {
+        guard let selectedRange = Range(range) else { return }
+        screenText.select(selectedRange)
+    }
+
+    override public func accessibilitySelectedTextRanges() -> [NSValue]? {
+        [NSValue(range: accessibilitySelectedTextRange())]
+    }
+
+    override public func setAccessibilitySelectedTextRanges(_ ranges: [NSValue]?) {
+        guard let range = ranges?.first?.rangeValue else { return }
+        setAccessibilitySelectedTextRange(range)
+    }
+
+    override public func accessibilityInsertionPointLineNumber() -> Int {
+        let screen = screenText
+        return screen.text.line(forOffset: screen.selectedRange.lowerBound)
+    }
+
+    override public func accessibilityLine(for index: Int) -> Int { screenText.text.line(forOffset: index) }
+
+    override public func accessibilityRange(forLine line: Int) -> NSRange {
+        screenText.text.range(forLine: line).map(NSRange.init) ?? NSRange(location: NSNotFound, length: 0)
+    }
+
+    override public func accessibilityString(for range: NSRange) -> String? {
+        Range(range).map(screenText.text.substring(in:))
+    }
+
+    /// Plain text, with OSC 8 hyperlinks as links.
+    override public func accessibilityAttributedString(for range: NSRange) -> NSAttributedString? {
+        guard let characterRange = Range(range) else { return nil }
+        let text = screenText.text
+        let attributed = NSMutableAttributedString(string: text.substring(in: characterRange))
+        for link in text.links where link.range.overlaps(characterRange) {
+            let overlap = link.range.clamped(to: characterRange)
+            guard let url = URL(string: link.url) else { continue }
+            attributed.addAttribute(.link, value: url, range: NSRange(location: overlap.lowerBound - characterRange.lowerBound, length: overlap.count))
+        }
+        return attributed
+    }
+
+    override public func accessibilityRange(for index: Int) -> NSRange {
+        let text = screenText.text
+        guard index >= 0, index < text.length else { return NSRange(location: NSNotFound, length: 0) }
+        return (text.string as NSString).rangeOfComposedCharacterSequence(at: index)
+    }
+
+    override public func accessibilityRange(for point: NSPoint) -> NSRange {
+        guard let window else { return NSRange(location: NSNotFound, length: 0) }
+        let offset = screenText.offset(at: convert(window.convertPoint(fromScreen: point), from: nil))
+        let range = accessibilityRange(for: offset)
+        return range.location == NSNotFound ? NSRange(location: offset, length: 0) : range
+    }
+
+    override public func accessibilityFrame(for range: NSRange) -> NSRect {
+        guard let window, let characterRange = Range(range) else { return .zero }
+        return window.convertToScreen(convert(screenText.frame(for: characterRange), to: nil))
     }
 
     // MARK: Mouse
