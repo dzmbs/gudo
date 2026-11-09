@@ -74,6 +74,13 @@ nonisolated public protocol ForegroundResumeClient: AnyObject, Sendable {
 
 extension DaemonClient: ForegroundResumeClient {}
 
+/// A client that tells its host when the device is in Low Data Mode.
+nonisolated public protocol LowDataModeClient: AnyObject, Sendable {
+    func setLowDataMode(lowDataMode: Bool)
+}
+
+extension DaemonClient: LowDataModeClient {}
+
 /// A client that can check its live connection with a ping (`DaemonClient.probe`): one that
 /// gets no answer within seconds is dropped and redialled. Not part of `DaemonClientAPI` so
 /// test fakes need not implement it.

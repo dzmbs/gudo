@@ -122,6 +122,10 @@ public final class HostsModel {
             sshInventory = SSHInventory.live { [repository] in repository.loadSSHConfig() }
         }
         network.onChange = { [weak self] in self?.networkChanged() }
+        network.onLowDataModeChange = { [weak self] isOn in
+            guard let self else { return }
+            for case let connection as DaemonConnection in connections.values { connection.isLowDataMode = isOn }
+        }
     }
 
     // MARK: The list
@@ -277,7 +281,9 @@ public final class HostsModel {
     /// The client config for this device's key: the relay settings' direct-only choice wins
     /// over every ticket.
     func clientConfig(_ key: Data, mirrorVt: Bool? = nil) -> ClientConfig {
-        ClientConfig(secretKey: key, relay: relaySettings.clientRelay(base: configuration.relay), mirrorVt: mirrorVt ?? configuration.mirrorVt)
+        ClientConfig(
+            secretKey: key, relay: relaySettings.clientRelay(base: configuration.relay), mirrorVt: mirrorVt ?? configuration.mirrorVt,
+            lowDataMode: network.isLowDataMode)
     }
 
     /// Saves new relay settings; open daemon connections redial with them at once.

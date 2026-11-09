@@ -217,6 +217,7 @@ public final class DaemonConnection: HostConnection {
         Self.log.info("dialing host=\(self.hostId, privacy: .public)")
         let client = try dialer(ticket, listener)
         self.client = client
+        if isLowDataMode { pushLowDataMode() }
         lastView = nil
         lastActivities.removeAll()
         if windowsReported { pushView() }
@@ -236,6 +237,16 @@ public final class DaemonConnection: HostConnection {
 
     /// This device's terminal theme: programs in the host's panes that ask for their colors
     /// are told it while this device uses the pane. Kept across reconnects.
+    /// The device is in Low Data Mode: the host then sends only the panes on screen. Kept
+    /// across reconnects.
+    @ObservationIgnored public var isLowDataMode = false {
+        didSet { if isLowDataMode != oldValue { pushLowDataMode() } }
+    }
+
+    private func pushLowDataMode() {
+        (client as? any LowDataModeClient)?.setLowDataMode(lowDataMode: isLowDataMode)
+    }
+
     @ObservationIgnored public var terminalColors: TerminalColors? {
         didSet { if terminalColors != oldValue { pushTerminalColors() } }
     }

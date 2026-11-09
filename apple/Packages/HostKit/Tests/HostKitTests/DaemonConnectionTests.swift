@@ -34,6 +34,17 @@ import GudoCore
         try await eventually("disconnected ownership is not live") { connection.sizing.isEmpty }
     }
 
+    @Test func lowDataModeReachesTheClientOnceAndAgainForANewClient() throws {
+        let (connection, client) = try makeConnection()
+        connection.isLowDataMode = true
+        connection.isLowDataMode = true
+        #expect(client().calls.filter { if case .lowDataMode = $0 { true } else { false } } == [.lowDataMode(true)])
+
+        connection.close()
+        try connection.connect()
+        #expect(client().calls.contains(.lowDataMode(true)))
+    }
+
     @Test func runAgainOffersFollowTheDaemonAndTypeTheCommand() async throws {
         let (connection, client) = try makeConnection()
         let devServer = RunAgainOffer(paneId: 3, command: "npm run dev")

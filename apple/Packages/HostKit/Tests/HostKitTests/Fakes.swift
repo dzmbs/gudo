@@ -18,6 +18,7 @@ nonisolated final class FakeClient: DaemonClientAPI, GeneratedInputClient, PaneS
         case activity(UInt64, PaneActivity), claimSize(UInt64), sizePolicy(UInt64, SizePolicy)
         case fetchHistory(UInt64), decide(UInt64, UInt32), reconnect, suspend, probe
         case runAgain(UInt64, String)
+        case lowDataMode(Bool)
     }
 
     let listener: any ClientEventListener
@@ -62,6 +63,10 @@ nonisolated final class FakeClient: DaemonClientAPI, GeneratedInputClient, PaneS
 
 extension FakeClient: LivenessClient {
     func probe() { record(.probe) }
+}
+
+extension FakeClient: LowDataModeClient {
+    func setLowDataMode(lowDataMode: Bool) { record(.lowDataMode(lowDataMode)) }
 }
 
 /// Collects a backend's events.

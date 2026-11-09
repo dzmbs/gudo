@@ -10,8 +10,12 @@ public final class NetworkMonitor {
     public private(set) var isOffline = false
     /// Interface types of the current path ("wifi", "cellular", "wired", "other").
     public private(set) var interfaces: [String] = []
+    /// Low Data Mode is on for the current path.
+    public private(set) var isLowDataMode = false
     /// Called after the usable path changed (debounced), not for the first report.
     @ObservationIgnored public var onChange: (() -> Void)?
+    /// Called when Low Data Mode turns on or off.
+    @ObservationIgnored public var onLowDataModeChange: ((Bool) -> Void)?
 
     @ObservationIgnored private let monitor = NWPathMonitor()
     @ObservationIgnored private var started = false
@@ -34,14 +38,21 @@ public final class NetworkMonitor {
                 }
             }
             let signature = "\(offline)|\(interfaces.joined(separator: ","))|\(path.isExpensive)"
-            Task { @MainActor [weak self] in self?.update(offline: offline, interfaces: interfaces, signature: signature) }
+            let lowDataMode = path.isConstrained
+            Task { @MainActor [weak self] in
+                self?.update(offline: offline, interfaces: interfaces, lowDataMode: lowDataMode, signature: signature)
+            }
         }
         monitor.start(queue: DispatchQueue(label: "network-monitor"))
     }
 
-    private func update(offline: Bool, interfaces: [String], signature: String) {
+    private func update(offline: Bool, interfaces: [String], lowDataMode: Bool, signature: String) {
         isOffline = offline
         self.interfaces = interfaces
+        if lowDataMode != isLowDataMode {
+            isLowDataMode = lowDataMode
+            onLowDataModeChange?(lowDataMode)
+        }
         defer { lastSignature = signature }
         guard let lastSignature, lastSignature != signature, !offline else { return }
         // Interfaces flap while Wi-Fi hands over; act once it settles.
