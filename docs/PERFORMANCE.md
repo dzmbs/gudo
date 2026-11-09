@@ -164,7 +164,9 @@ A window opens on the workspace this device saved of each host, before the host 
 
 | | Time |
 |---|---|
-| Saved workspace read, decoded and seeded into its connection (`model.open`, local daemon) | 1.0 ms median of 5 (cache file 1.4 KB, one pane) |
+| Saved workspace read, decoded and seeded into its connection (`model.open`, local daemon) | 1.0 ms median of 5 (cache file 1.4 KB, one pane); 0.9-4.9 ms sealed, on a busy machine |
+| Opening the sealed file (AES-GCM) / the whole `load` (read, open, LZFSE, plist) | 0.004 / 0.18 ms for a 6 KB file (one 120×40 pane); 0.05 / 0.84 ms for a 92 KB file (three 240×70 panes of random hex, 388 KB of screens) |
+| Reading the cache key from the Keychain (once per launch, then kept in memory) | 1.2 ms (login keychain, test item) |
 | …then connected / daemon layout / the focused pane's live screen on it (local daemon, loopback) | 7.1 / 8.4 / 8.1 ms median of 5 (the screen comes before the layout: panes subscribe before attaching) |
 | First frame of a window on the saved workspace, no host connected (seed + window model + 3 panes + layout + draw, in-process offscreen) | 0.37-0.86 s first window of a test process; 0.17-0.36 s warm (three runs, machine shared with other builds) |
 | The same window on this device's plain shell, for comparison | 0.14-0.24 s warm |

@@ -44,6 +44,20 @@ Provider), the packages under `apple/Packages`, and the Rust core it links
   - the hosts that the File Provider may show.
 - Shared secrets (tickets, device key, seal key) go through the shared Keychain group only.
 
+**Saved screens at rest.** The workspace cache (each host's layout, titles and terminal screens,
+for instant start) is sealed:
+- AES-GCM with a 256-bit key made on this device (`cache-seal-key`, in the app's Keychain like
+  the secrets above, never synced). The host id is authenticated with each file, so a file
+  moved to another host's name does not open.
+- A file that does not open (changed, cut short, another key's) is deleted, never shown. A lost
+  key only loses the cache: the next save makes a new key. While the Keychain refuses the key,
+  files stay and nothing is shown or saved.
+- A cache an older app left in the clear is read once and sealed in its place (a stale one is
+  deleted).
+- Files are also owner-only, in Caches, excluded from backups, and on iOS
+  `completeUntilFirstUserAuthentication` (the app saves as it goes to the background, which
+  can be after the device locks).
+
 **Secrets in the Mac app.** A Developer ID build without a provisioning profile cannot use the
 data-protection keychain. Before this pass it silently stored every secret in plain files.
 Now:
@@ -230,6 +244,10 @@ collected data. Required-reason APIs are declared: UserDefaults `CA92.1`/`1C8F.1
   terminal opening Safari would), in the app's default store with vscode.dev's sign-in.
 - **Editor servers' stores** (per host and folder, for VS Code on the host) are not deleted
   when the host is removed; they hold only the server's connection token.
+- **The cache key sits with the other secrets.** On an ad-hoc Mac build it is an owner-only
+  file like they are, so sealing there protects only against copies of the cache alone.
+- **Agent browser recordings** (`Replays` in Application Support: page events and pictures, up
+  to 30 days) are not sealed and are in device backups.
 - **Saved preferences on the Mac.** Tooling hooks ignore saved defaults, but real preferences
   (themes, Git scripts, hosts to reopen) are still the user's files; a process running as the
   user can change them.
@@ -274,6 +292,10 @@ by removing it).
   keep working (WebKit sending the credential, cookies, websockets, OAuth callbacks).
   `AppTests/WorkspaceScreenModelTests`: `testPortsOpenAtThePrintedURLThroughTheHost` (another
   program's request gets no forward), `testOnlyPortsOpenedForTheBrowserReachTheHost`.
+- `HostKitTests/WorkspaceCacheTests`: `aSavedFileOpensOnlyWithThisDevicesKey`,
+  `aTamperedFileIsDropped` (header, nonce, ciphertext and tag bytes flipped, cut short, another
+  host's file), `aPlainFileFromAnOlderAppIsSealedInPlace`, `aLostKeyOnlyLosesTheCache`,
+  `aKeychainThatRefusesTheKeyKeepsTheFileForLater`.
 - `client-core` `browser::tests`: a daemon pushing browser requests to a connection that did
   not announce the capability (or to a guest) reaches nothing.
 - `apple-ffi` `debug_output_leaves_secrets_out`: every FFI type that carries a secret.

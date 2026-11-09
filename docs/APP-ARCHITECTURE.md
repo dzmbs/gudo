@@ -1445,12 +1445,15 @@ first (focused first), then the other tabs in order; panes the layout no longer 
 and the layout always stay.
 
 **Where and how.** One file per host in Caches/<bundle id>/Workspaces (tests: the isolated
-`AppData` folder): binary plist, LZFSE-compressed, behind a magic and a version. The folder is
-0700 and excluded from backups, files are 0600, and on iOS written with
-`completeUntilFirstUserAuthentication`. App Lock's cover hides the window as before, so a saved
-screen is never shown while locked. A file is dropped when it is not the host's any more: another
-daemon id (paired again), another session than the record's, an older format, older than 14 days,
-unreadable; forgetting a host deletes it. **Guests:** a guest's view of someone else's host is
+`AppData` folder): binary plist, LZFSE-compressed, then sealed with AES-GCM under this device's
+cache key (`CacheSeal`, Keychain item `cache-seal-key`; the host id is authenticated with it),
+behind a magic and a version (`UNWE` 1; older apps wrote `UNWS` in the clear, which is read once
+and sealed in place). The folder is 0700 and excluded from backups, files are 0600, and on iOS
+written with `completeUntilFirstUserAuthentication`. App Lock's cover hides the window as before,
+so a saved screen is never shown while locked. A file is dropped when it is not the host's any
+more: another daemon id (paired again), another session than the record's, an older format,
+older than 14 days, unreadable or not opening with the key (a lost key only loses the cache);
+forgetting a host deletes it. docs/security/apple-client.md "Saved screens at rest". **Guests:** a guest's view of someone else's host is
 never saved or shown from disk (`HostsModel.openDaemon` skips guests; the writer skips them), so
 nothing of the owner's terminals outlives the invite on the guest's device.
 
