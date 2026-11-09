@@ -18,8 +18,8 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use proto::{
-    Caps, PaneId, ServerCtl, TimelineOp, TimelineSnapshot, TimelineUpdate, UnixMillis,
-    WorkspaceRequest, WorkspaceResponse, WsError,
+    Caps, PaneId, ServerCtl, TimelineOp, TimelineUpdate, UnixMillis, WorkspaceRequest,
+    WorkspaceResponse, WsError,
 };
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, broadcast, mpsc};
 use tokio::task::AbortHandle;
@@ -31,7 +31,7 @@ use crate::ws::ConnCtx;
 #[cfg(test)]
 use claude_source::{ClaudeSession as LiveState, Source};
 #[cfg(test)]
-use proto::{AgentKind, TimelineCursor, TimelineSession};
+use proto::{AgentKind, TimelineCursor, TimelineSession, TimelineSnapshot};
 
 static NEXT_EPOCH: AtomicU64 = AtomicU64::new(1);
 static NEXT_WATCH: AtomicU64 = AtomicU64::new(1);
@@ -46,6 +46,7 @@ const MAX_IO_RETRIES: usize = 3;
 const IO_RETRY_DELAY: Duration = Duration::from_millis(250);
 const MIN_REFRESH_INTERVAL: Duration = Duration::from_millis(35);
 const MAX_COALESCED_EVENTS: usize = 64;
+const MAX_VISIBLE_ITEMS: usize = 3000;
 
 #[derive(Default)]
 pub(crate) struct Timelines {
@@ -122,6 +123,13 @@ struct MailboxSlot {
     pending: Option<CachedUpdate>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum Delivery {
+    Queued,
+    NeedsSnapshot,
+    Closed,
+}
+
 struct CachedUpdate {
     value: TimelineUpdate,
     wire_bound: usize,
@@ -133,6 +141,31 @@ impl CachedUpdate {
             wire_bound: value_weight::update(&value),
             value,
         }
+    }
+
+    fn ends_watch(&self) -> bool {
+        self.value
+            .operations
+            .iter()
+            .any(|operation| matches!(operation, TimelineOp::Unavailable { .. }))
+    }
+
+    fn starts_over(&self) -> bool {
+        matches!(self.value.operations.first(), Some(TimelineOp::Snapshot(_)))
+    }
+
+    fn absorb(&mut self, update: CachedUpdate) -> bool {
+        if update.starts_over() && update.wire_bound <= MAX_PUSH_BYTES {
+            *self = update;
+            return true;
+        }
+        let combined_bound = self.wire_bound.saturating_add(update.wire_bound);
+        if combined_bound > MAX_PUSH_BYTES {
+            return false;
+        }
+        self.value.operations.extend(update.value.operations);
+        self.wire_bound = combined_bound;
+        true
     }
 
     fn bounded(self) -> Self {
@@ -159,35 +192,55 @@ impl Mailbox {
         );
     }
 
-    fn push(
-        &self,
-        watch: u64,
-        update: TimelineUpdate,
-        snapshot: impl FnOnce() -> TimelineSnapshot,
-    ) {
+    fn offer(&self, watch: u64, update: TimelineUpdate) -> Delivery {
+        let update = CachedUpdate::new(update);
+        if update.ends_watch() {
+            return self.replace_pending(watch, update);
+        }
         let mut slots = lock(&self.slots);
+        // Cancellation can leave a forwarder finishing its batch after the watch was replaced.
         let Some(slot) = slots
-            .get_mut(&update.pane_id)
+            .get_mut(&update.value.pane_id)
             .filter(|slot| slot.watch == watch)
         else {
-            return;
+            return Delivery::Closed;
         };
-        // Cancellation can leave a forwarder finishing its batch after the watch was replaced.
-        let mut update = CachedUpdate::new(update);
-        if (slot.pending.is_some() || update.wire_bound > MAX_PUSH_BYTES)
-            && !update
-                .value
-                .operations
-                .iter()
-                .any(|operation| matches!(operation, TimelineOp::Unavailable { .. }))
-        {
-            update = CachedUpdate::new(TimelineUpdate {
-                pane_id: update.value.pane_id,
-                operations: vec![TimelineOp::Snapshot(snapshot())],
-            });
+        let queued = if let Some(pending) = slot.pending.as_mut() {
+            pending.absorb(update)
+        } else if update.wire_bound <= MAX_PUSH_BYTES {
+            slot.pending = Some(update);
+            true
+        } else {
+            false
+        };
+        if !queued {
+            return Delivery::NeedsSnapshot;
         }
-        slot.pending = Some(update.bounded());
         self.ready.notify_one();
+        Delivery::Queued
+    }
+
+    fn replace(&self, watch: u64, update: TimelineUpdate) -> Delivery {
+        self.replace_pending(watch, CachedUpdate::new(update))
+    }
+
+    fn replace_pending(&self, watch: u64, update: CachedUpdate) -> Delivery {
+        let update = update.bounded();
+        let delivery = if update.ends_watch() {
+            Delivery::Closed
+        } else {
+            Delivery::Queued
+        };
+        let mut slots = lock(&self.slots);
+        let Some(slot) = slots
+            .get_mut(&update.value.pane_id)
+            .filter(|slot| slot.watch == watch)
+        else {
+            return Delivery::Closed;
+        };
+        slot.pending = Some(update);
+        self.ready.notify_one();
+        delivery
     }
 
     pub fn take(&self) -> Vec<ServerCtl> {
@@ -401,9 +454,10 @@ fn retry_io(failures: &mut usize, error: &WsError) -> bool {
 }
 
 async fn retry_after(timeline: Arc<Timeline>) {
-    let wake = lock(&timeline.state).wake();
-    // Do not keep an abandoned pane's worker alive while backing off.
-    drop(timeline);
+    // Moving the lease into the read keeps an abandoned pane's worker from living through the delay.
+    let Ok(wake) = blocking(move || Ok(lock(&timeline.state).wake())).await else {
+        return;
+    };
     tokio::time::sleep(IO_RETRY_DELAY).await;
     let _ = wake.try_send(());
 }
@@ -444,70 +498,39 @@ pub(crate) async fn handle(
                 }
             }
             let timeline = core.ws.timelines.open(core, pane_id).await?;
-            let mut updates = timeline.updates.subscribe();
+            let updates = timeline.updates.subscribe();
             // Subscribe before checking liveness so a concurrent exit cannot be missed.
             if !timeline.is_running() {
                 return Err(WsError::Unavailable(
                     "Chat stopped; reopen it to retry".into(),
                 ));
             }
-            let (snapshot, capabilities) = {
-                let state = lock(&timeline.state);
-                state.check_history_scope(connection.timeline_since)?;
-                (
-                    proto::TimelineVersion::V1.snapshot(state.snapshot(connection.timeline_since)),
+            let since = connection.timeline_since;
+            let reading = Arc::clone(&timeline);
+            let (snapshot, capabilities) = blocking(move || {
+                let state = lock(&reading.state);
+                state.check_history_scope(since)?;
+                Ok((
+                    proto::TimelineVersion::V1.snapshot(state.snapshot(since)),
                     state.capabilities(),
-                )
-            };
+                ))
+            })
+            .await?;
             let mut watches = lock(&connection.timeline_watches);
             if watches.len() >= MAX_WATCHES && !watches.contains_key(&pane_id) {
                 return Err(WsError::Invalid("too many Chat panes are open".into()));
             }
             let watch_token = NEXT_WATCH.fetch_add(1, Ordering::Relaxed);
             connection.timeline_mailbox.register(pane_id, watch_token);
-            let mut visible: HashSet<String> =
-                snapshot.items.iter().map(|item| item.id.clone()).collect();
-            let mailbox = Arc::clone(&connection.timeline_mailbox);
-            let since = connection.timeline_since;
-            let watched = Arc::clone(&timeline);
-            let task = tokio::spawn(async move {
-                loop {
-                    let operations = match updates.recv().await {
-                        Ok(operations) => proto::TimelineVersion::V1.operations(filter(
-                            operations,
-                            since,
-                            &mut visible,
-                        )),
-                        Err(broadcast::error::RecvError::Lagged(_)) => {
-                            let snapshot = proto::TimelineVersion::V1
-                                .snapshot(lock(&watched.state).snapshot(since));
-                            visible = snapshot.items.iter().map(|item| item.id.clone()).collect();
-                            vec![TimelineOp::Snapshot(snapshot)]
-                        }
-                        Err(broadcast::error::RecvError::Closed) => return,
-                    };
-                    if visible.len() > 3000 {
-                        visible.clear();
-                    }
-                    let unavailable = operations
-                        .iter()
-                        .any(|operation| matches!(operation, TimelineOp::Unavailable { .. }));
-                    mailbox.push(
-                        watch_token,
-                        TimelineUpdate {
-                            pane_id,
-                            operations,
-                        },
-                        || {
-                            proto::TimelineVersion::V1
-                                .snapshot(lock(&watched.state).snapshot(since))
-                        },
-                    );
-                    if unavailable {
-                        return;
-                    }
-                }
-            });
+            let forwarder = Forwarder {
+                pane_id,
+                watch_token,
+                since,
+                visible: snapshot.items.iter().map(|item| item.id.clone()).collect(),
+                timeline: Arc::clone(&timeline),
+                mailbox: Arc::clone(&connection.timeline_mailbox),
+            };
+            let task = tokio::spawn(forwarder.run(updates));
             let watch = Watch {
                 task: task.abort_handle(),
                 timeline,
@@ -559,6 +582,86 @@ pub(crate) async fn handle(
             read_timeline(core, connection, pane_id, TimelineRead::ToolDiff { handle }).await
         }
         _ => Err(WsError::Invalid("not a Chat request".into())),
+    }
+}
+
+struct Forwarder {
+    pane_id: PaneId,
+    watch_token: u64,
+    since: Option<UnixMillis>,
+    visible: HashSet<String>,
+    timeline: Arc<Timeline>,
+    mailbox: Arc<Mailbox>,
+}
+
+impl Forwarder {
+    async fn run(mut self, mut updates: broadcast::Receiver<Vec<TimelineOp>>) {
+        loop {
+            let operations = match updates.recv().await {
+                Ok(operations) => self.visible_operations(operations).await,
+                Err(broadcast::error::RecvError::Lagged(_)) => self.fresh_snapshot().await,
+                Err(broadcast::error::RecvError::Closed) => return,
+            };
+            if !self.deliver(operations).await {
+                return;
+            }
+        }
+    }
+
+    async fn visible_operations(&mut self, operations: Vec<TimelineOp>) -> Vec<TimelineOp> {
+        let operations = proto::TimelineVersion::V1.operations(filter(
+            operations,
+            self.since,
+            &mut self.visible,
+        ));
+        if self.visible.len() > MAX_VISIBLE_ITEMS {
+            return self.fresh_snapshot().await;
+        }
+        operations
+    }
+
+    async fn fresh_snapshot(&mut self) -> Vec<TimelineOp> {
+        let timeline = Arc::clone(&self.timeline);
+        let since = self.since;
+        let snapshot = blocking(move || {
+            Ok(proto::TimelineVersion::V1.snapshot(lock(&timeline.state).snapshot(since)))
+        })
+        .await;
+        match snapshot {
+            Ok(snapshot) => {
+                self.visible = snapshot.items.iter().map(|item| item.id.clone()).collect();
+                filter(
+                    vec![TimelineOp::Snapshot(snapshot)],
+                    self.since,
+                    &mut self.visible,
+                )
+            }
+            Err(_) => vec![TimelineOp::Unavailable {
+                message: "Chat could not read this session. Open Terminal to continue.".into(),
+            }],
+        }
+    }
+
+    async fn deliver(&mut self, operations: Vec<TimelineOp>) -> bool {
+        let update = TimelineUpdate {
+            pane_id: self.pane_id,
+            operations,
+        };
+        // Snapshots are built after the mailbox lock is released; the ctl writer shares it.
+        let delivery = match self.mailbox.offer(self.watch_token, update) {
+            Delivery::NeedsSnapshot => {
+                let operations = self.fresh_snapshot().await;
+                self.mailbox.replace(
+                    self.watch_token,
+                    TimelineUpdate {
+                        pane_id: self.pane_id,
+                        operations,
+                    },
+                )
+            }
+            delivery => delivery,
+        };
+        delivery == Delivery::Queued
     }
 }
 

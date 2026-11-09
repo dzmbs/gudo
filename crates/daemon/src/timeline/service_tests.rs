@@ -179,41 +179,113 @@ fn update(sequence: u64) -> TimelineUpdate {
     }
 }
 
+fn push(
+    mailbox: &Mailbox,
+    watch: u64,
+    update: TimelineUpdate,
+    snapshot: impl FnOnce() -> TimelineSnapshot,
+) -> Delivery {
+    let pane_id = update.pane_id;
+    match mailbox.offer(watch, update) {
+        Delivery::NeedsSnapshot => mailbox.replace(
+            watch,
+            TimelineUpdate {
+                pane_id,
+                operations: vec![TimelineOp::Snapshot(snapshot())],
+            },
+        ),
+        delivery => delivery,
+    }
+}
+
+fn last_cursor(update: &TimelineUpdate) -> Option<TimelineCursor> {
+    match update.operations.last()? {
+        TimelineOp::Checkpoint { cursor } => Some(*cursor),
+        TimelineOp::Snapshot(snapshot) => Some(snapshot.cursor),
+        _ => None,
+    }
+}
+
 #[test]
-fn a_slow_reader_keeps_one_current_snapshot_instead_of_an_unbounded_delta_queue() {
+fn a_slow_reader_keeps_one_bounded_update_instead_of_an_unbounded_delta_queue() {
     let mailbox = Mailbox::default();
     mailbox.register(PaneId(1), 42);
     for sequence in 1..10_000 {
-        mailbox.push(42, update(sequence), || snapshot(sequence));
+        push(&mailbox, 42, update(sequence), || snapshot(sequence));
     }
     let messages = mailbox.take();
     assert_eq!(messages.len(), 1);
     let ServerCtl::Timeline(received) = &messages[0] else {
         panic!()
     };
-    assert!(
-        matches!(&received.operations[0], TimelineOp::Snapshot(snapshot) if snapshot.cursor == cursor(9999))
-    );
+    assert!(matches!(&received.operations[0], TimelineOp::Snapshot(_)));
+    assert_eq!(last_cursor(received), Some(cursor(9999)));
+    assert!(value_weight::update(received) <= MAX_PUSH_BYTES);
     assert!(mailbox.take().is_empty());
-    mailbox.push(42, update(10_000), || panic!("no pending update"));
+    push(&mailbox, 42, update(10_000), || panic!("no pending update"));
     assert_eq!(mailbox.take(), vec![ServerCtl::Timeline(update(10_000))]);
+}
+
+#[test]
+fn a_slow_link_appends_small_updates_instead_of_resending_the_whole_timeline() {
+    let mailbox = Mailbox::default();
+    mailbox.register(PaneId(1), 42);
+    for sequence in 1..=3 {
+        assert_eq!(
+            push(&mailbox, 42, update(sequence), || panic!(
+                "fits in one push"
+            )),
+            Delivery::Queued
+        );
+    }
+    let expected = TimelineUpdate {
+        pane_id: PaneId(1),
+        operations: (1..=3)
+            .map(|sequence| TimelineOp::Checkpoint {
+                cursor: cursor(sequence),
+            })
+            .collect(),
+    };
+    assert_eq!(mailbox.take(), vec![ServerCtl::Timeline(expected)]);
+}
+
+#[test]
+fn a_snapshot_supersedes_pending_updates_without_growing_them() {
+    let mailbox = Mailbox::default();
+    mailbox.register(PaneId(1), 42);
+    push(&mailbox, 42, update(1), || panic!("fits"));
+    let fresh = TimelineUpdate {
+        pane_id: PaneId(1),
+        operations: vec![TimelineOp::Snapshot(snapshot(2))],
+    };
+    push(&mailbox, 42, fresh.clone(), || panic!("fits"));
+    assert_eq!(mailbox.take(), vec![ServerCtl::Timeline(fresh)]);
 }
 
 #[test]
 fn old_forwarders_cannot_publish_after_unwatch_or_replace_the_current_watch() {
     let mailbox = Mailbox::default();
     mailbox.register(PaneId(1), 10);
-    mailbox.push(10, update(1), || snapshot(1));
+    push(&mailbox, 10, update(1), || snapshot(1));
     mailbox.remove(PaneId(1));
-    mailbox.push(10, update(2), || panic!("unwatched"));
+    assert_eq!(
+        push(&mailbox, 10, update(2), || panic!("unwatched")),
+        Delivery::Closed
+    );
     assert!(mailbox.take().is_empty());
     mailbox.register(PaneId(1), 11);
-    mailbox.push(10, update(3), || panic!("replaced"));
+    assert_eq!(
+        push(&mailbox, 10, update(3), || panic!("replaced")),
+        Delivery::Closed
+    );
     assert!(mailbox.take().is_empty());
-    mailbox.push(11, update(4), || snapshot(4));
+    push(&mailbox, 11, update(4), || snapshot(4));
     assert_eq!(mailbox.take(), vec![ServerCtl::Timeline(update(4))]);
     mailbox.clear();
-    mailbox.push(11, update(5), || panic!("disconnected"));
+    assert_eq!(
+        push(&mailbox, 11, update(5), || panic!("disconnected")),
+        Delivery::Closed
+    );
     assert!(mailbox.take().is_empty());
 }
 
@@ -233,7 +305,8 @@ fn a_large_push_is_replaced_by_a_bounded_snapshot_before_encoding_on_ctl() {
             item: Box::new(item),
         });
     }
-    mailbox.push(
+    push(
+        &mailbox,
         42,
         TimelineUpdate {
             pane_id: PaneId(1),
@@ -251,15 +324,20 @@ fn a_large_push_is_replaced_by_a_bounded_snapshot_before_encoding_on_ctl() {
 }
 
 #[test]
-fn an_oversized_coalescing_snapshot_becomes_a_bounded_terminal_failure() {
+fn an_oversized_coalescing_snapshot_becomes_a_bounded_terminal_failure_that_ends_the_watch() {
     let mailbox = Mailbox::default();
     mailbox.register(PaneId(1), 42);
-    mailbox.push(42, update(1), || snapshot(1));
-    mailbox.push(42, update(2), || {
-        let mut value = snapshot(2);
-        value.session.title = Some("x".repeat(MAX_PUSH_BYTES + 1));
-        value
-    });
+    push(&mailbox, 42, update(1), || snapshot(1));
+    let mut oversized = snapshot(2);
+    oversized.session.title = Some("x".repeat(MAX_PUSH_BYTES + 1));
+    let delivery = mailbox.replace(
+        42,
+        TimelineUpdate {
+            pane_id: PaneId(1),
+            operations: vec![TimelineOp::Snapshot(oversized)],
+        },
+    );
+    assert_eq!(delivery, Delivery::Closed);
     let messages = mailbox.take();
     let ServerCtl::Timeline(received) = &messages[0] else {
         panic!("timeline update")
@@ -274,7 +352,8 @@ fn an_oversized_coalescing_snapshot_becomes_a_bounded_terminal_failure() {
 fn oversized_failure_text_cannot_bypass_the_mailbox_byte_allowance() {
     let mailbox = Mailbox::default();
     mailbox.register(PaneId(1), 42);
-    mailbox.push(
+    let delivery = push(
+        &mailbox,
         42,
         TimelineUpdate {
             pane_id: PaneId(1),
@@ -284,6 +363,7 @@ fn oversized_failure_text_cannot_bypass_the_mailbox_byte_allowance() {
         },
         || panic!("failure must not become a successful snapshot"),
     );
+    assert_eq!(delivery, Delivery::Closed);
     let messages = mailbox.take();
     let ServerCtl::Timeline(received) = &messages[0] else {
         panic!("timeline update")
@@ -298,14 +378,14 @@ fn oversized_failure_text_cannot_bypass_the_mailbox_byte_allowance() {
 fn failure_notes_are_not_hidden_by_backpressure_coalescing() {
     let mailbox = Mailbox::default();
     mailbox.register(PaneId(1), 42);
-    mailbox.push(42, update(1), || snapshot(1));
+    push(&mailbox, 42, update(1), || snapshot(1));
     let failure = TimelineUpdate {
         pane_id: PaneId(1),
         operations: vec![TimelineOp::Unavailable {
             message: "Open Terminal".into(),
         }],
     };
-    mailbox.push(42, failure.clone(), || panic!("preserve failure"));
+    push(&mailbox, 42, failure.clone(), || panic!("preserve failure"));
     assert_eq!(mailbox.take(), vec![ServerCtl::Timeline(failure)]);
 }
 
@@ -537,4 +617,80 @@ fn unrelated_workspace_results_do_not_release_a_timeline_reply_budget() {
     assert!(bulk_reply(&Ok(WorkspaceResponse::Timeline(snapshot(0)))));
     assert!(!bulk_reply(&Ok(WorkspaceResponse::Done)));
     assert!(!bulk_reply(&Err(WsError::Denied("not this pane".into()))));
+}
+
+fn forwarder(timeline: Arc<Timeline>, mailbox: Arc<Mailbox>) -> Forwarder {
+    Forwarder {
+        pane_id: PaneId(1),
+        watch_token: 42,
+        since: Some(UnixMillis(10)),
+        visible: HashSet::new(),
+        timeline,
+        mailbox,
+    }
+}
+
+#[tokio::test]
+async fn a_since_join_watch_over_its_visible_allowance_starts_over_from_a_snapshot() {
+    let root = tempfile::tempdir().unwrap();
+    let mut forwarder = forwarder(test_timeline(root.path()), Arc::default());
+    forwarder.visible = (0..=MAX_VISIBLE_ITEMS)
+        .map(|index| format!("item-{index}"))
+        .collect();
+    let operations = forwarder
+        .visible_operations(vec![TimelineOp::Append {
+            cursor: cursor(1),
+            id: "item-0".into(),
+            field: TimelineField::Text,
+            text: "more".into(),
+        }])
+        .await;
+    assert!(matches!(operations.as_slice(), [TimelineOp::Snapshot(_)]));
+    assert!(forwarder.visible.len() <= MAX_VISIBLE_ITEMS);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn building_a_snapshot_never_holds_the_mailbox_the_ctl_writer_needs() {
+    let root = tempfile::tempdir().unwrap();
+    let timeline = test_timeline(root.path());
+    let mailbox = Arc::new(Mailbox::default());
+    mailbox.register(PaneId(1), 42);
+    let (held, holding) = std::sync::mpsc::channel();
+    let holder = {
+        let timeline = Arc::clone(&timeline);
+        std::thread::spawn(move || {
+            let _state = lock(&timeline.state);
+            held.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(600));
+        })
+    };
+    holding.recv().unwrap();
+    let mut operations = Vec::new();
+    for sequence in 1..=5 {
+        let mut item = item(&format!("item-{sequence}"), 20);
+        item.body = TimelineBody::Assistant {
+            text: "a".repeat(256 * 1024),
+            streaming: false,
+        };
+        operations.push(TimelineOp::Upsert {
+            cursor: cursor(sequence),
+            item: Box::new(item),
+        });
+    }
+    let mut forwarder = forwarder(Arc::clone(&timeline), Arc::clone(&mailbox));
+    let delivering = tokio::spawn(async move { forwarder.deliver(operations).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let writer = Arc::clone(&mailbox);
+    let started = std::time::Instant::now();
+    tokio::task::spawn_blocking(move || writer.take())
+        .await
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_millis(300));
+    holder.join().unwrap();
+    assert!(delivering.await.unwrap());
+    assert!(matches!(
+        &mailbox.take()[..],
+        [ServerCtl::Timeline(TimelineUpdate { operations, .. })]
+            if matches!(operations.as_slice(), [TimelineOp::Snapshot(_)])
+    ));
 }
