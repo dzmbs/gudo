@@ -162,7 +162,7 @@ public final class PushToTalk {
     }
 
     public func cancel(target explicit: (any DictationTarget)? = nil) {
-        if let explicit, target !== explicit { return }
+        if let explicit, let target, target !== explicit { return }
         guard isActive else {
             if case .failed = phase { phase = .idle }
             return

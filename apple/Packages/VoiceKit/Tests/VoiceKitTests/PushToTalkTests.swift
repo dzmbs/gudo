@@ -323,6 +323,15 @@ struct PushToTalkTests {
         voice.cancel(target: replacement)
     }
 
+    @Test func cancellingTheFailedTargetClearsTheFailure() async {
+        recognizer.startError = .microphoneDenied
+        let voice = makeVoice()
+        voice.start()
+        await settle { voice.phase == .failed(.microphoneDenied) }
+        voice.cancel(target: target)
+        #expect(voice.phase == .idle)
+    }
+
     @Test func previewFitsTheRowEnd() {
         #expect(DictationPreview.fit("git status", columns: 20) == "git status")
         #expect(DictationPreview.fit("git status", columns: 6) == "…tatus")
