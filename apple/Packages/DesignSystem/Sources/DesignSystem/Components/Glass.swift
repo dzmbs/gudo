@@ -94,18 +94,21 @@ public extension PrimitiveButtonStyle where Self == PrimaryGlassButtonStyle {
 /// A plain, chrome-quiet button for bars: icon only, secondary until hovered or pressed.
 public struct BarButtonStyle: ButtonStyle {
     @State private var isHovered = false
+    @Environment(\.isEnabled) private var isEnabled
 
     public init() {}
 
     public func makeBody(configuration: Configuration) -> some View {
+        let isLit = isEnabled && (isHovered || configuration.isPressed)
         configuration.label
             .labelStyle(.iconOnly)
-            .foregroundStyle(isHovered || configuration.isPressed ? DS.Palette.text : DS.Palette.textSecondary)
+            .foregroundStyle(isEnabled ? (isLit ? DS.Palette.text : DS.Palette.textSecondary) : DS.Palette.textSecondary.disabled)
             .frame(minWidth: 26, minHeight: 26)
             .padding(.horizontal, 2)
             .background(
                 RoundedRectangle(cornerRadius: DS.Radius.field)
-                    .fill(DS.Palette.ink.opacity(configuration.isPressed ? 0.2 : isHovered ? 0.1 : 0)))
+                    .fill(DS.Palette.ink.opacity(isLit ? (configuration.isPressed ? 0.2 : 0.1) : 0))
+                    .animation(DS.Motion.hover, value: isLit))
             .contentShape(.rect)
             .onHover { isHovered = $0 }
             #if os(iOS)
@@ -123,6 +126,7 @@ public struct RowButtonStyle: ButtonStyle {
     var isSelected: Bool
     var cornerRadius = DS.Radius.control
     @State private var isHovered = false
+    @Environment(\.isEnabled) private var isEnabled
 
     public init(isSelected: Bool = false, cornerRadius: CGFloat = DS.Radius.control) {
         self.isSelected = isSelected
@@ -134,7 +138,8 @@ public struct RowButtonStyle: ButtonStyle {
             .contentShape(.rect)
             .background(
                 RoundedRectangle(cornerRadius: cornerRadius)
-                    .fill(fill(configuration.isPressed)))
+                    .fill(fill(configuration.isPressed))
+                    .animation(DS.Motion.hover, value: isHovered))
             .onHover { isHovered = $0 }
             #if os(iOS)
             .hoverEffect(.highlight)
@@ -142,8 +147,8 @@ public struct RowButtonStyle: ButtonStyle {
     }
 
     private func fill(_ pressed: Bool) -> AnyShapeStyle {
-        if isSelected || pressed { return AnyShapeStyle(DS.Palette.selection) }
-        if isHovered { return AnyShapeStyle(DS.Palette.hoverFill) }
+        if isSelected || (isEnabled && pressed) { return AnyShapeStyle(DS.Palette.selection) }
+        if isEnabled && isHovered { return AnyShapeStyle(DS.Palette.hoverFill) }
         return AnyShapeStyle(Color.clear)
     }
 }
@@ -250,7 +255,7 @@ public struct QuietButtonStyle: ButtonStyle {
             .frame(minHeight: 28)
             .background(
                 RoundedRectangle(cornerRadius: DS.Radius.field)
-                    .fill(DS.Palette.ink.opacity(configuration.isPressed ? 0.15 : isHovered ? 0.08 : 0)))
+                    .fill(DS.Palette.ink.opacity(isEnabled ? (configuration.isPressed ? 0.15 : isHovered ? 0.08 : 0) : 0)))
             .contentShape(.rect(cornerRadius: DS.Radius.field))
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .animation(DS.Motion.press, value: configuration.isPressed)
@@ -262,7 +267,7 @@ public struct QuietButtonStyle: ButtonStyle {
     }
 
     private func foreground(_ pressed: Bool) -> AnyShapeStyle {
-        guard isEnabled else { return AnyShapeStyle(DS.Palette.textTertiary) }
+        guard isEnabled else { return AnyShapeStyle(prominent ? DS.Palette.accent.disabled : DS.Palette.textSecondary.disabled) }
         if prominent { return AnyShapeStyle(DS.Palette.accent) }
         return AnyShapeStyle(isHovered || pressed ? DS.Palette.text : DS.Palette.textSecondary)
     }
