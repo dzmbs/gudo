@@ -53,7 +53,7 @@ stay monochrome and keep their disabled look). UIKit/AppKit views read
 | `accent` | the cursor colour when it is a real colour (chroma ≥ 20, not the foreground, not a red/green/yellow); else the theme's blue (bright, or normal where the bright is grey) when it stands clear of both inks; else the blue/magenta/cyan farthest (CIEDE2000) from background and foreground. Then refined in OKLCH: chroma ≤ 0.13, lightness 0.48-0.62 (light chrome) / 0.68-0.86 (dark), hue kept, so a raw `#0000FF` never reaches the chrome | focus, toggles, links, the selected theme card |
 | `selection` / `onSelection` | the accent at 14 % (light) / 24 % (dark), translucent, under the normal text (≥ 4.5:1) | the selected row in the palette and lists (as in Spotlight) |
 | `prominent` / `onProminent` | the accent deepened toward the darker ink until the lighter ink reads on it at 4.5:1 | the one primary button (`.primaryGlass`) |
-| `done` / `error` / `attention` / `working` / `info` | the theme's ANSI green / red / yellow / magenta / blue mixed 35 % toward the foreground (50 % would turn a dark theme's amber into cream); a slot that is grey or off-hue keeps Ghostty's hue | state glyphs, status chips (10 %, radius 4), diff counts, PR states |
+| `done` / `error` / `attention` / `working` / `info` | the theme's ANSI green / red / yellow / magenta / blue mixed 35 % toward the foreground (50 % would turn a dark theme's amber into cream); a slot that is grey or off-hue keeps Ghostty's hue. Where that falls short of 4.5:1, its OKLab lightness moves away from the surfaces with the hue kept | state glyphs and words, status chips (10 %, radius 4), diff counts, PR states |
 | `terminal`, `ansi(n)` | the theme itself | the grid, presence avatars |
 | `bell` | `#FFCC00` 50 % | bell border (Ghostty `BellBorderOverlay`) |
 | split divider | background × 0.6 brightness (dark) / × 0.92 (light) | splits only (Ghostty `splitDividerColor`) |
@@ -62,7 +62,10 @@ stay monochrome and keep their disabled look). UIKit/AppKit views read
 Guarantees (unit-tested over all 464 bundled themes, in the theme's scheme and forced to the
 other): main text ≥ 4.5:1 on every surface (the ink moves toward white or black only as far as
 needed; for a garish mid-tone background the chrome's background steps away from the terminal's),
-state colours and the accent ≥ 3:1 on base, sidebar and overlay, selection text ≥ 4.5:1.
+secondary text ≥ 4.5:1 and tertiary ≥ 3:1 on every surface and on a selected row (tertiary is
+the third step of meta text; at 4.5:1 it would reach the secondary level on menus), state colours
+≥ 4.5:1 on every surface (they are words too), the accent ≥ 3:1 on base, sidebar and overlay,
+selection text ≥ 4.5:1, and a program's symbol, dimmed in the style it inherits, ≥ 3:1.
 
 `window-theme`: Match Terminal (default) takes the theme's scheme; Light/Dark/System that
 differ from the theme put the chrome on a neutral near-white (tinted 3 % with the theme) or
