@@ -9,20 +9,6 @@ import GudoCore
 /// RPC answers matched to their requests.
 @MainActor
 struct DaemonWorkspaceTests {
-    @Test func timelineObserversArePaneScopedAndRemovable() async throws {
-        let (connection, _) = try connected()
-        let hub = connection.workspace
-        var received: [String] = []
-        let token = hub.observeTimeline(pane: 7) { received.append($0) }
-        hub.receive(.timeline(paneId: 8, updateJson: "other pane"))
-        #expect(received.isEmpty)
-        hub.receive(.timeline(paneId: 7, updateJson: "watched pane"))
-        #expect(received == ["watched pane"])
-        hub.removeObserver(token)
-        hub.receive(.timeline(paneId: 7, updateJson: "removed"))
-        #expect(received == ["watched pane"])
-    }
-
     @Test func pushesUpdatePortsAndAttention() async throws {
         let (connection, client) = try connected()
         let hub = connection.workspace

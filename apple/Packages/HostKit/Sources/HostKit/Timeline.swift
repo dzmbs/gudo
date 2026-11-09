@@ -325,12 +325,6 @@ nonisolated public enum TimelineJSON {
 }
 
 extension DaemonWorkspace {
-    public func observeTimeline(pane: UInt64, _ handler: @escaping (String) -> Void) -> UUID {
-        let token = UUID()
-        timelineObservers[token] = (pane, handler)
-        return token
-    }
-
     public func timelineClient() throws -> any DaemonTimelineAPI {
         guard let client = try client() as? any DaemonTimelineAPI else { throw HostError.notConnected }
         return client
