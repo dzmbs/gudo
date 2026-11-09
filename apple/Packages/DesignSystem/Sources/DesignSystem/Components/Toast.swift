@@ -32,13 +32,21 @@ nonisolated public struct Toast: Identifiable, Equatable, Sendable {
 
     public static func == (lhs: Toast, rhs: Toast) -> Bool { lhs.id == rhs.id }
 
+    /// Says the same thing as `other`: shown again, it refreshes the toast on screen instead of
+    /// replacing it.
+    public func repeats(_ other: Toast) -> Bool {
+        message == other.message && systemImage == other.systemImage && style == other.style
+            && action?.title == other.action?.title && person?.id == other.person?.id
+    }
+
     var duration: Duration {
         if action != nil { return .seconds(5) }
         return style == .failure ? DS.Motion.bannerErrorDuration : DS.Motion.toastDuration
     }
 }
 
-/// Shows one toast at a time; a new toast replaces the current one.
+/// Shows one toast at a time; a new toast replaces the current one, and the same toast again
+/// keeps it on screen for its full time.
 @Observable
 public final class ToastCenter {
     public private(set) var current: Toast?
@@ -47,7 +55,11 @@ public final class ToastCenter {
     public init() {}
 
     public func show(_ toast: Toast) {
-        withAnimation(DS.Motion.banner) { current = toast }
+        if let current, current.repeats(toast) {
+            self.current?.action = toast.action
+        } else {
+            withAnimation(DS.Motion.banner) { current = toast }
+        }
         dismissTask?.cancel()
         dismissTask = Task { [weak self] in
             guard (try? await Task.sleep(for: toast.duration)) != nil else { return }
