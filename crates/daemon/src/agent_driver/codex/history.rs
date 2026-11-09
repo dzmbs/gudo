@@ -14,6 +14,13 @@ pub(super) enum HistoryError {
     Active,
 }
 
+impl HistoryError {
+    /// Whether the binding reply itself is unusable, rather than only Chat's view of it.
+    pub(super) fn closes_observation(&self) -> bool {
+        matches!(self, Self::Decode(_))
+    }
+}
+
 pub(super) fn observe_tui(state: &mut State, frame: &str) {
     #[derive(serde::Deserialize)]
     struct Method<'a> {
@@ -43,8 +50,8 @@ pub(super) fn observe_tui(state: &mut State, frame: &str) {
         })
     {
         // Until rollback has an ordered baseline, never present old rows as current.
-        // Stop observation only; the official request is forwarded unchanged.
-        state.fail();
+        // Status keeps flowing; the official request is forwarded unchanged.
+        state.lose_projection();
         return;
     }
     if state.binding.pending_request() == request.id.as_ref() {
@@ -153,7 +160,9 @@ pub(super) fn install(state: &mut State, frame: &str) -> Result<(), HistoryError
     state.operations.clear();
     state.operation_bytes = 0;
     state.push(proto::TimelineOp::Snapshot(
-        state.projection.snapshot(60, None),
+        state
+            .projection
+            .snapshot(super::projection::SNAPSHOT_ITEMS, None),
     ));
     state.effects.push(Effect::Ready);
     Ok(())

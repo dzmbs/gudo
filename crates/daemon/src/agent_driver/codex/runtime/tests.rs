@@ -1,11 +1,12 @@
+use super::super::Direction;
 use super::*;
 use crate::agent::AgentRuntime;
 use serde_json::{Value, json};
 
-fn observe(source: &Arc<Live>, frame: Value, outgoing: bool) {
+fn observe(source: &Arc<Live>, frame: Value, direction: Direction) {
     let effects = {
         let mut state = lock(&source.state);
-        state.observe(&frame.to_string(), outgoing);
+        state.observe(&frame.to_string(), direction);
         std::mem::take(&mut state.effects)
     };
     source.publish(effects);
@@ -40,11 +41,15 @@ async fn mapped_events_register_the_session_and_drive_status_without_notify() {
     *lock(&raw.entry.codex) = Some(Arc::clone(&source));
     source.set_owner(core, &raw.entry);
     source.capture_context(raw.root.path().to_owned(), raw.entry.pane.pty().pid());
-    observe(&source, json!({"id":1,"method":"thread/start"}), true);
+    observe(
+        &source,
+        json!({"id":1,"method":"thread/start"}),
+        Direction::FromTui,
+    );
     observe(
         &source,
         json!({"id":1,"result":{"thread":{"id":"primary"}}}),
-        false,
+        Direction::FromServer,
     );
     assert_eq!(
         lock(&raw.entry.record)
@@ -64,13 +69,13 @@ async fn mapped_events_register_the_session_and_drive_status_without_notify() {
             .as_deref(),
         Some(raw.root.path())
     );
-    observe(&source, started(), false);
+    observe(&source, started(), Direction::FromServer);
     assert_eq!(
         lock(&raw.entry.agent).as_ref().unwrap().state(),
         agents::AgentState::Working
     );
     for request in [7, 8] {
-        observe(&source, waiting(request), false);
+        observe(&source, waiting(request), Direction::FromServer);
     }
     assert!(lock(&raw.entry.agent).as_ref().unwrap().is_blocked());
     assert_eq!(
@@ -98,7 +103,7 @@ async fn mapped_events_register_the_session_and_drive_status_without_notify() {
         .decide(first.wire, proto::OptionId(0), actor)
         .unwrap();
     lock(&source.runtime).pending[0].admitted = true;
-    observe(&source, waiting(9), false);
+    observe(&source, waiting(9), Direction::FromServer);
     assert_eq!(
         lock(&raw.entry.agent)
             .as_mut()
@@ -112,7 +117,7 @@ async fn mapped_events_register_the_session_and_drive_status_without_notify() {
     observe(
         &source,
         json!({"method":"serverRequest/resolved","params":{"threadId":"primary","requestId":9}}),
-        false,
+        Direction::FromServer,
     );
     assert_eq!(
         lock(&raw.entry.agent)
@@ -128,14 +133,14 @@ async fn mapped_events_register_the_session_and_drive_status_without_notify() {
         observe(
             &source,
             json!({"method":"serverRequest/resolved","params":{"threadId":thread,"requestId":request}}),
-            false,
+            Direction::FromServer,
         );
         assert!(lock(&raw.entry.agent).as_ref().unwrap().is_blocked());
     }
     observe(
         &source,
         json!({"method":"serverRequest/resolved","params":{"threadId":"primary","requestId":8}}),
-        false,
+        Direction::FromServer,
     );
     assert_eq!(
         lock(&raw.entry.agent).as_ref().unwrap().state(),
@@ -144,13 +149,13 @@ async fn mapped_events_register_the_session_and_drive_status_without_notify() {
     observe(
         &source,
         json!({"method":"turn/completed","params":{"threadId":"helper","turn":{"id":"turn","status":"completed"}}}),
-        false,
+        Direction::FromServer,
     );
     assert_eq!(lock(&raw.entry.meta).turns, 0);
     observe(
         &source,
         json!({"method":"turn/completed","params":{"threadId":"primary","turn":{"id":"turn","status":"completed"}}}),
-        false,
+        Direction::FromServer,
     );
     assert_eq!(
         lock(&raw.entry.agent).as_ref().unwrap().state(),
@@ -160,18 +165,18 @@ async fn mapped_events_register_the_session_and_drive_status_without_notify() {
     observe(
         &source,
         json!({"method":"turn/completed","params":{"threadId":"primary","turn":{"id":"turn","status":"completed"}}}),
-        false,
+        Direction::FromServer,
     );
     assert_eq!(lock(&raw.entry.meta).turns, 1);
     observe(
         &source,
         json!({"method":"turn/started","params":{"threadId":"primary","turn":{"id":"next","status":"inProgress"}}}),
-        false,
+        Direction::FromServer,
     );
     observe(
         &source,
         json!({"method":"turn/completed","params":{"threadId":"primary","turn":{"id":"next","status":"newUnknownOutcome"}}}),
-        false,
+        Direction::FromServer,
     );
     assert_eq!(
         lock(&raw.entry.agent).as_ref().unwrap().state(),

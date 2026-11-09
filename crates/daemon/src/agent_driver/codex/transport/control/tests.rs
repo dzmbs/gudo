@@ -1,3 +1,4 @@
+use super::super::Direction;
 use super::*;
 use crate::agent_driver::codex;
 use crate::agent_input::chat_tests::{RawFixture, raw_fixture};
@@ -33,8 +34,8 @@ impl Fixture {
         .unwrap();
         let effects = {
             let mut state = lock(&source.state);
-            state.observe(&recording["request"].to_string(), true);
-            state.observe(&recording["response"].to_string(), false);
+            state.observe(&recording["request"].to_string(), Direction::FromTui);
+            state.observe(&recording["response"].to_string(), Direction::FromServer);
             std::mem::take(&mut state.effects)
         };
         source.publish(effects);
@@ -69,8 +70,8 @@ impl Fixture {
             .to_owned();
         let effects = {
             let mut state = lock(&self.source.state);
-            state.observe(&json!({"method":"turn/started","params":{"threadId":thread,"turn":{"id":"active","status":"inProgress"}}}).to_string(), false);
-            state.observe(&json!({"id":7,"method":"item/commandExecution/requestApproval","params":{"threadId":thread,"turnId":"active","itemId":"command","command":"printf fixture","cwd":"/fixture","kind":"command","availableDecisions":["accept","cancel"]}}).to_string(), false);
+            state.observe(&json!({"method":"turn/started","params":{"threadId":thread,"turn":{"id":"active","status":"inProgress"}}}).to_string(), Direction::FromServer);
+            state.observe(&json!({"id":7,"method":"item/commandExecution/requestApproval","params":{"threadId":thread,"turnId":"active","itemId":"command","command":"printf fixture","cwd":"/fixture","kind":"command","availableDecisions":["accept","cancel"]}}).to_string(), Direction::FromServer);
             std::mem::take(&mut state.effects)
         };
         self.source.publish(effects);
@@ -236,7 +237,7 @@ async fn terminal_resolution_retires_an_admitted_native_answer_before_serializat
     let source = Arc::downgrade(&fixture.source);
     let command = fixture.approval();
     assert!(serialize(&source, &command).is_ok());
-    lock(&fixture.source.state).observe(&json!({"method":"serverRequest/resolved","params":{"threadId":command.binding.thread_id(),"requestId":7}}).to_string(), false);
+    lock(&fixture.source.state).observe(&json!({"method":"serverRequest/resolved","params":{"threadId":command.binding.thread_id(),"requestId":7}}).to_string(), Direction::FromServer);
     assert!(serialize(&source, &command).is_err());
     fixture.raw.daemon.shutdown().await;
 }

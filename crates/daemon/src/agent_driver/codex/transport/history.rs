@@ -52,7 +52,7 @@ impl Live {
                 *lock(&source.history_result) = Some((binding, result));
             }
             if let Some(sender) = lock(&source.observations).as_ref() {
-                let _ = sender.try_send((false, Vec::new()));
+                let _ = sender.try_send(super::Observation::HistoryReady);
             }
         });
         *lock(&self.history_task) = Some(task.abort_handle());
@@ -139,18 +139,22 @@ async fn reply(connection: &mut Connection, expected: i64) -> io::Result<String>
 
 #[cfg(test)]
 mod tests {
+    use super::super::Direction;
     use super::*;
 
     #[test]
     fn serialization_rejects_a_binding_retired_during_connection_initialization() {
         let mut state = super::super::super::State::new();
-        state.observe(r#"{"id":1,"method":"thread/start"}"#, true);
-        state.observe(r#"{"id":1,"result":{"thread":{"id":"primary"}}}"#, false);
+        state.observe(r#"{"id":1,"method":"thread/start"}"#, Direction::FromTui);
+        state.observe(
+            r#"{"id":1,"result":{"thread":{"id":"primary"}}}"#,
+            Direction::FromServer,
+        );
         let binding = state.current.clone().unwrap();
         assert!(history_request(&state, &binding).is_ok());
         state.observe(
             r#"{"id":2,"method":"thread/resume","params":{"threadId":"other"}}"#,
-            true,
+            Direction::FromTui,
         );
         assert!(history_request(&state, &binding).is_err());
     }

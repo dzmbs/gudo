@@ -182,7 +182,9 @@ pub(super) fn check_draft(entry: &PaneEntry, source: &Live, root: &Path) -> Resu
     if !screen.contains(DRAFT) {
         return Err("the official TUI did not preserve the unrelated Terminal draft".into());
     }
-    let snapshot = lock(&source.state).projection.snapshot(60, None);
+    let snapshot = lock(&source.state)
+        .projection
+        .snapshot(projection::SNAPSHOT_ITEMS, None);
     if !snapshot.items.iter().any(|item| matches!(&item.body, proto::TimelineBody::User { text, .. } if text == "Reply with a short fixture sentence.")) || snapshot.items.iter().any(|item| matches!(&item.body, proto::TimelineBody::User { text, .. } if text.contains(DRAFT))) {
         return Err("native Send submitted a different prompt or the unrelated Terminal draft".into());
     }

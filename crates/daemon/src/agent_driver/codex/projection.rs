@@ -9,9 +9,11 @@ mod tests;
 
 use std::collections::{HashMap, VecDeque};
 
+pub(super) const SNAPSHOT_ITEMS: usize = 60;
 const MAX_ITEMS: usize = 500;
 const MAX_TEXT: usize = 256 * 1024;
 const MAX_BYTES: usize = 768 * 1024;
+const TOO_LARGE: &str = "This is too large for Chat. Check Terminal.";
 
 pub(super) struct Projection {
     cursor: TimelineCursor,
@@ -20,6 +22,7 @@ pub(super) struct Projection {
     order: VecDeque<String>,
     next_item: u64,
     bytes: usize,
+    skipped: u64,
 }
 
 impl Projection {
@@ -41,7 +44,18 @@ impl Projection {
             order: VecDeque::new(),
             next_item: 0,
             bytes: 0,
+            skipped: 0,
         }
+    }
+
+    /// Marks where a message too large to observe went past.
+    pub fn skipped(&mut self) -> Result<Vec<TimelineOp>, WsError> {
+        self.skipped += 1;
+        self.upsert(
+            format!("skipped:{}", self.skipped),
+            String::new(),
+            too_large(),
+        )
     }
     pub fn cursor(&self) -> TimelineCursor {
         self.cursor
@@ -200,22 +214,23 @@ impl Projection {
             streaming: true,
         } = &mut item.body
         else {
-            return Err(budget());
+            return Ok(operations);
         };
-        if current.len().saturating_add(text.len()) > MAX_TEXT
-            || self.bytes.saturating_add(additional) > MAX_BYTES
-        {
-            return Err(budget());
+        if current.len().saturating_add(text.len()) > MAX_TEXT {
+            let turn = item.turn.clone().unwrap_or_default();
+            operations.extend(self.upsert(id, turn, too_large())?);
+            return Ok(operations);
         }
         current.push_str(&text);
         self.bytes += additional;
         item.revision = item.revision.saturating_add(1);
         operations.push(TimelineOp::Append {
             cursor: self.advance(),
-            id,
+            id: id.clone(),
             field: TimelineField::Text,
             text,
         });
+        self.evict(&id);
         Ok(operations)
     }
 
@@ -225,10 +240,14 @@ impl Projection {
         turn: String,
         body: TimelineBody,
     ) -> Result<Vec<TimelineOp>, WsError> {
-        let size = serde_json::to_vec(&body).map_err(|_| budget())?.len();
-        if size > MAX_TEXT {
-            return Err(budget());
-        }
+        let mut size = serde_json::to_vec(&body).map_err(|_| budget())?.len();
+        let body = if size > MAX_TEXT {
+            let body = too_large();
+            size = serde_json::to_vec(&body).map_err(|_| budget())?.len();
+            body
+        } else {
+            body
+        };
         let previous = self.items.remove(&id);
         let (ordinal, revision, at) = match previous {
             Some((ordinal, item)) => {
@@ -262,10 +281,31 @@ impl Projection {
             cursor: self.advance(),
             item: Box::new(item),
         }];
-        if self.items.len() > MAX_ITEMS || self.bytes > MAX_BYTES {
-            return Err(budget());
-        }
+        self.evict(&id);
         Ok(operations)
+    }
+
+    /// Forgets the oldest items over the budget; clients keep the rows they already have.
+    fn evict(&mut self, current: &str) {
+        while self.items.len() > MAX_ITEMS || self.bytes > MAX_BYTES {
+            let Some(index) = self.order.iter().position(|id| id != current) else {
+                return;
+            };
+            let Some(oldest) = self.order.remove(index) else {
+                return;
+            };
+            if let Some((_, item)) = self.items.remove(&oldest) {
+                let size = serde_json::to_vec(&item.body).map_or(0, |bytes| bytes.len());
+                self.bytes = self.bytes.saturating_sub(size);
+            }
+        }
+    }
+}
+
+fn too_large() -> TimelineBody {
+    TimelineBody::Notice {
+        kind: TimelineNoticeKind::Error,
+        text: TOO_LARGE.into(),
     }
 }
 
@@ -339,7 +379,7 @@ fn body(item: CodexItem, completed: bool, turn: &str) -> (String, TimelineBody) 
                     return (
                         id,
                         TimelineBody::Notice {
-                            kind: TimelineNoticeKind::ModeChanged,
+                            kind: TimelineNoticeKind::Error,
                             text: "Command state is unknown. Check Terminal.".into(),
                         },
                     );

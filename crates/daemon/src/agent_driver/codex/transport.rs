@@ -9,14 +9,32 @@ mod tests;
 
 use super::{Live, State};
 use crate::core::lock;
+pub(super) use frames::Direction;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, Weak};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-type Observations = tokio::sync::mpsc::Sender<(bool, Vec<u8>)>;
+type Observations = tokio::sync::mpsc::Sender<Observation>;
+
+const OBSERVATION_QUEUE: usize = 64;
+const CONTROL_QUEUE: usize = 8;
+const RELAY_BUFFER_BYTES: usize = 16 * 1024;
+/// A wedged observer gives up observation rather than holding Terminal bytes longer.
+const OBSERVATION_STALL: Duration = Duration::from_secs(2);
+const PROCESS_EXIT_WAIT: Duration = Duration::from_secs(2);
+const SERVER_CONNECT_WAIT: Duration = Duration::from_secs(5);
+const SERVER_CONNECT_RETRY: Duration = Duration::from_millis(20);
+
+/// What the relay hands the observer, in the order it read it.
+pub(in crate::agent_driver::codex) enum Observation {
+    Bytes(Direction, Vec<u8>),
+    HistoryReady,
+    Closed,
+}
 
 impl Live {
     pub(crate) fn start(
@@ -57,8 +75,8 @@ fn prepare(
     recipe.tui.args.insert(0, "codex-remote".into());
     recipe.tui.program = context.hook_bin.clone().into_os_string();
     let (owner, mut owner_ready) = tokio::sync::watch::channel(None);
-    let (observations, receiver) = tokio::sync::mpsc::channel(64);
-    let (controls, commands) = tokio::sync::mpsc::channel(8);
+    let (observations, receiver) = tokio::sync::mpsc::channel(OBSERVATION_QUEUE);
+    let (controls, commands) = tokio::sync::mpsc::channel(CONTROL_QUEUE);
     let source = Arc::new(Live {
         owner,
         fault: std::sync::atomic::AtomicBool::new(false),
@@ -79,7 +97,7 @@ fn prepare(
     let expected = agents::pane_env(context);
     let fallback = agents::AgentAdapter::launch(&agents::Codex::new(), context, mode);
     let observer = weak.clone();
-    tokio::task::spawn_blocking(move || observe(observer, receiver));
+    tokio::spawn(observe(observer, receiver));
     let task = tokio::spawn(async move {
         let result = async {
             let owner = owner_ready
@@ -108,12 +126,11 @@ fn prepare(
             source.fault.store(true, Ordering::Release);
             lock(&source.state).fail();
             if let Some(sender) = lock(&source.observations).as_ref() {
-                let _ = sender.try_send((false, Vec::new()));
+                let _ = sender.try_send(Observation::Closed);
             }
             let process = lock(&source.process).take();
             if let Some(mut process) = process {
-                let _ =
-                    tokio::time::timeout(std::time::Duration::from_secs(2), process.kill()).await;
+                let _ = tokio::time::timeout(PROCESS_EXIT_WAIT, process.kill()).await;
             }
             if let Err(error) = result {
                 tracing::debug!(%error, "Codex live relay closed");
@@ -134,7 +151,7 @@ async fn run(
     let listener = tokio::net::UnixListener::from_std(listener)?;
     let (tui, _) = listener.accept().await?;
     let native_tui = peer::in_tree(peer::pid(&tui)?, peers.tui).await;
-    let upstream = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+    let upstream = tokio::time::timeout(SERVER_CONNECT_WAIT, async {
         loop {
             match tokio::net::UnixStream::connect(&server).await {
                 Ok(stream) => return Ok::<_, io::Error>(stream),
@@ -144,7 +161,7 @@ async fn run(
                         io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
                     ) =>
                 {
-                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                    tokio::time::sleep(SERVER_CONNECT_RETRY).await;
                 }
                 Err(error) => return Err(error),
             }
@@ -163,45 +180,87 @@ async fn run(
     forward(tui, upstream, source, observations).await
 }
 
-async fn forward(
-    mut tui: tokio::net::UnixStream,
-    mut upstream: tokio::net::UnixStream,
+pub(super) async fn forward(
+    tui: tokio::net::UnixStream,
+    upstream: tokio::net::UnixStream,
     source: Weak<Live>,
     observations: Observations,
 ) -> io::Result<()> {
-    let mut from_tui = [0u8; 16384];
-    let mut from_server = [0u8; 16384];
+    let (tui_reader, tui_writer) = tui.into_split();
+    let (server_reader, server_writer) = upstream.into_split();
+    let to_server = relay(
+        tui_reader,
+        server_writer,
+        Direction::FromTui,
+        &source,
+        observations.clone(),
+    );
+    let to_tui = relay(
+        server_reader,
+        tui_writer,
+        Direction::FromServer,
+        &source,
+        observations,
+    );
+    tokio::select! {
+        result = to_server => result,
+        result = to_tui => result,
+    }
+}
+
+async fn relay(
+    mut reader: impl AsyncRead + Unpin,
+    mut writer: impl AsyncWrite + Unpin,
+    direction: Direction,
+    source: &Weak<Live>,
+    observations: Observations,
+) -> io::Result<()> {
+    let mut buffer = vec![0u8; RELAY_BUFFER_BYTES];
+    let mut tap = Some(observations);
     loop {
-        tokio::select! {
-            count = tui.read(&mut from_tui) => {
-                let count = count?;
-                if count == 0 { return Ok(()); }
-                enqueue(&source, &observations, &from_tui[..count], true);
-                upstream.write_all(&from_tui[..count]).await?;
-            }
-            count = upstream.read(&mut from_server) => {
-                let count = count?;
-                if count == 0 { return Ok(()); }
-                enqueue(&source, &observations, &from_server[..count], false);
-                tui.write_all(&from_server[..count]).await?;
-            }
+        let count = reader.read(&mut buffer).await?;
+        if count == 0 {
+            return Ok(());
         }
+        if let Some(sender) = &tap
+            && !observed(source, sender, direction, &buffer[..count]).await
+        {
+            tap = None;
+        }
+        writer.write_all(&buffer[..count]).await?;
     }
 }
 
-fn enqueue(source: &Weak<Live>, sender: &Observations, bytes: &[u8], outgoing: bool) {
-    if let Some(source) = source.upgrade()
-        && !source.fault.load(Ordering::Acquire)
-        && sender.try_send((outgoing, bytes.to_vec())).is_err()
-    {
-        source.fault.store(true, Ordering::Release);
+async fn observed(
+    source: &Weak<Live>,
+    sender: &Observations,
+    direction: Direction,
+    bytes: &[u8],
+) -> bool {
+    let Some(live) = source.upgrade() else {
+        return false;
+    };
+    if live.fault.load(Ordering::Acquire) {
+        return false;
     }
+    drop(live);
+    let observation = Observation::Bytes(direction, bytes.to_vec());
+    if matches!(
+        tokio::time::timeout(OBSERVATION_STALL, sender.send(observation)).await,
+        Ok(Ok(()))
+    ) {
+        return true;
+    }
+    if let Some(live) = source.upgrade() {
+        live.fault.store(true, Ordering::Release);
+    }
+    false
 }
 
-fn observe(source: Weak<Live>, mut receiver: tokio::sync::mpsc::Receiver<(bool, Vec<u8>)>) {
-    let mut outgoing = frames::Decoder::new(true);
-    let mut incoming = frames::Decoder::new(false);
-    while let Some((from_tui, bytes)) = receiver.blocking_recv() {
+async fn observe(source: Weak<Live>, mut receiver: tokio::sync::mpsc::Receiver<Observation>) {
+    let mut from_tui = frames::Decoder::new(Direction::FromTui);
+    let mut from_server = frames::Decoder::new(Direction::FromServer);
+    while let Some(observation) = receiver.recv().await {
         let Some(source) = source.upgrade() else {
             return;
         };
@@ -210,20 +269,21 @@ fn observe(source: Weak<Live>, mut receiver: tokio::sync::mpsc::Receiver<(bool, 
             let mut state = lock(&source.state);
             if source.fault.load(Ordering::Acquire) {
                 state.fail();
-            } else {
-                let decoder = if from_tui {
-                    &mut outgoing
-                } else {
-                    &mut incoming
+            } else if let Observation::Bytes(direction, bytes) = observation {
+                let decoder = match direction {
+                    Direction::FromTui => &mut from_tui,
+                    Direction::FromServer => &mut from_server,
                 };
-                if decoder
-                    .feed(&bytes, |frame| state.observe(frame, from_tui))
-                    .is_err()
-                {
+                let fed = decoder.feed(&bytes, |observed| match observed {
+                    frames::Observed::Text(frame) => state.observe(frame, direction),
+                    frames::Observed::Skipped => state.skipped(direction),
+                });
+                if fed.is_err() {
                     state.fail();
                 }
             }
             if !state.closed
+                && !state.projection_lost
                 && let Some((binding, result)) = history
                 && state.binding.is_current(&binding)
                 && result
@@ -232,7 +292,7 @@ fn observe(source: Weak<Live>, mut receiver: tokio::sync::mpsc::Receiver<(bool, 
                     })
                     .is_err()
             {
-                state.fail();
+                state.lose_projection();
             }
             (std::mem::take(&mut state.effects), state.closed)
         };
