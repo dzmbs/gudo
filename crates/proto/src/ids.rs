@@ -353,9 +353,12 @@ bitset! {
         /// On an owner device, wants `ServerCtl::GuestAnswered` whenever someone else answers
         /// an agent's request.
         ANSWER_ALERTS = 26;
+        /// Shows Chat: may send the `WorkspaceRequest::Timeline*` requests and wants
+        /// `ServerCtl::Timeline` for the panes it watches.
         AGENT_TIMELINE = 27;
         /// Understands `SizePolicy::LastActive` and reports `ClientCtl::PaneActivity`.
         ACTIVE_SIZING = 28;
+        /// Wants `ServerCtl::PaneSizing`: which peer's size a shared pane follows.
         PANE_SIZING = 29;
         /// Wants `ServerCtl::MoreDaemonFeatures` before `Welcome`.
         MORE_DAEMON_FEATURES = 30;
@@ -428,6 +431,8 @@ bitset! {
         /// `ClientCtl::TerminalColors`.
         TERMINAL_COLORS = 22;
         POWER_SETTINGS = 23;
+        /// Answers `WorkspaceRequest::TimelineWatch`, `TimelineUnwatch`, `TimelineItemsBefore`
+        /// and `TimelineToolOutput`, and pushes `ServerCtl::Timeline`.
         AGENT_TIMELINE = 24;
         /// Accepts `InputPayload::GeneratedBytes` without treating reports as typing.
         GENERATED_INPUT = 25;
@@ -437,6 +442,7 @@ bitset! {
         VERSIONED_TIMELINE = 27;
         /// Reads bounded complete recorded tool changes through a scoped result handle.
         TIMELINE_TOOL_DIFF = 28;
+        /// Answers `WorkspaceRequest::ChatPrepare` and `ChatSend` with single-use send tickets.
         CHAT_SEND = 29;
         /// Native interrupt controls with live-turn tickets and draft-risk confirmation.
         CHAT_INTERRUPT = 30;

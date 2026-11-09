@@ -400,15 +400,11 @@ pub enum ServerCtl {
     /// Accepts a `Hello`.
     Welcome(Welcome),
     /// Rejects a `Hello`; the daemon closes the connection after sending it.
-    Refused {
-        reason: RefuseReason,
-    },
+    Refused { reason: RefuseReason },
     /// A pane's metadata changed (or is being listed for the first time).
     PaneMeta(PaneMeta),
     /// A pane no longer exists.
-    PaneClosed {
-        pane_id: PaneId,
-    },
+    PaneClosed { pane_id: PaneId },
     /// The PTY facts local echo prediction depends on changed.
     EchoHint(EchoHint),
     /// Input was not applied. Input is never dropped silently. Sent on `ctl` rather than the
@@ -432,13 +428,9 @@ pub enum ServerCtl {
     /// Another participant's presence. Reserved for multiplayer.
     Presence(Presence),
     /// The grant this connection used was revoked. Streams close after this.
-    Revoked {
-        grant_id: GrantId,
-    },
+    Revoked { grant_id: GrantId },
     /// Answer to [`ClientCtl::Ping`].
-    Pong {
-        nonce: u64,
-    },
+    Pong { nonce: u64 },
     /// The daemon's sessions. Answers [`ClientCtl::ListSessions`] and is re-sent to every
     /// client when a session is created, renamed or closed.
     Sessions {
@@ -510,9 +502,7 @@ pub enum ServerCtl {
         result: Result<WorkspaceResponse, WsError>,
     },
     /// The listening ports in panes changed (the whole list; sent to every client).
-    PortsChanged {
-        ports: Vec<PortInfo>,
-    },
+    PortsChanged { ports: Vec<PortInfo> },
     /// A directory this connection watches changed.
     FsChanged(FsChange),
     /// The attention feed changed (sent to every client, whatever session it is attached
@@ -673,6 +663,8 @@ pub enum ServerCtl {
     /// picked on screen), to owner devices with [`Caps::ANSWER_ALERTS`], so no guest ever
     /// answers for the owner unnoticed.
     GuestAnswered(crate::mp::GuestAnswer),
+    /// Changes to the agent timeline of a pane the connection watches, to clients with
+    /// [`Caps::AGENT_TIMELINE`].
     Timeline(crate::TimelineUpdate),
     /// Connection-level sizing identity, only with `Caps::PANE_SIZING`.
     PaneSizing(PaneSizing),

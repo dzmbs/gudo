@@ -330,17 +330,25 @@ pub enum WorkspaceRequest {
     /// [`DaemonFeatures::PUSH_AGENTS`](crate::DaemonFeatures::PUSH_AGENTS) understand it.
     PushAgents(Vec<PushAgentRule>),
     PowerSettings(Option<crate::PowerPolicy>),
+    /// Start sending the pane's agent timeline as `ServerCtl::Timeline` →
+    /// [`WorkspaceResponse::Timeline`]. Needs `DaemonFeatures::AGENT_TIMELINE`.
     TimelineWatch {
         pane_id: PaneId,
     },
+    /// Stop sending the pane's agent timeline.
     TimelineUnwatch {
         pane_id: PaneId,
     },
+    /// At most `limit` items older than a snapshot's
+    /// [`TimelineSnapshot::before`](crate::TimelineSnapshot::before) →
+    /// [`WorkspaceResponse::Timeline`].
     TimelineItemsBefore {
         pane_id: PaneId,
         before: u64,
         limit: u16,
     },
+    /// Part of a tool's recorded output, read through its scoped result handle →
+    /// [`WorkspaceResponse::TimelineOutput`].
     TimelineToolOutput {
         pane_id: PaneId,
         handle: String,
@@ -353,6 +361,7 @@ pub enum WorkspaceRequest {
         pane_id: PaneId,
         version: u16,
     },
+    /// A tool's complete recorded changes. Needs `DaemonFeatures::TIMELINE_TOOL_DIFF`.
     TimelineToolDiff {
         pane_id: PaneId,
         handle: String,
@@ -378,6 +387,8 @@ pub enum WorkspaceRequest {
         ticket: u64,
         confirmed_revision: Option<u64>,
     },
+    /// A versioned timeline watch whose snapshot carries the session's agent capabilities.
+    /// Needs `DaemonFeatures::AGENT_CAPABILITIES`.
     TimelineWatchCapabilities {
         pane_id: PaneId,
         version: u16,
