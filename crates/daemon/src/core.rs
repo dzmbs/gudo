@@ -1945,13 +1945,15 @@ impl Core {
                         session_id: pinned.clone().map(agents::NativeSessionId::new),
                     },
                 };
-                let spec = if self.cfg.codex_chat && *kind == AgentKind::Codex {
+                let native_chat = self.cfg.hook_bin_runs();
+                let spec = if native_chat && self.cfg.codex_chat && *kind == AgentKind::Codex {
                     let (source, spec) =
                         crate::agent_driver::codex::Live::start(&context, &mode)
                             .map_err(|error| (OpError::SpawnFailed, error.to_string()))?;
                     codex = Some(source);
                     spec
-                } else if self.cfg.claude_chat_streaming
+                } else if native_chat
+                    && self.cfg.claude_chat_streaming
                     && *kind == AgentKind::Claude
                     && let Some(port) = self
                         .hooks

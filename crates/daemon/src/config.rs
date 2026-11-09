@@ -153,6 +153,8 @@ pub struct Config {
     pub drive_ask_wait: Duration,
     /// The agent hook shim; next to the current executable when `None`.
     pub hook_bin: Option<PathBuf>,
+    /// The shim itself once `hook_bin` points at the launcher in front of it.
+    pub(crate) hook_shim: Option<PathBuf>,
     /// Inject Ghostty's shell integration into bash, zsh and fish panes (OSC 133 command
     /// marks, OSC 7 working directory). On by default.
     pub shell_integration: bool,
@@ -342,6 +344,7 @@ impl Config {
             screen_save_delay: Duration::from_secs(5),
             drive_ask_wait: Duration::from_secs(120),
             hook_bin: None,
+            hook_shim: None,
             shell_integration: true,
             long_command: Duration::from_secs(10),
             fs_allow: Vec::new(),
@@ -555,6 +558,14 @@ impl Config {
                 .and_then(|exe| exe.parent().map(|dir| dir.join(brand::HOOK_BIN)))
                 .unwrap_or_else(|| PathBuf::from(brand::HOOK_BIN))
         })
+    }
+
+    /// Whether the hook shim is there to run: native Chat launches go through it, and without
+    /// it they would exit before the agent starts.
+    pub(crate) fn hook_bin_runs(&self) -> bool {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(self.hook_shim.clone().unwrap_or_else(|| self.hook_bin()))
+            .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
     }
 }
 
