@@ -690,6 +690,66 @@ struct SidebarTabIcon: View {
     }
 }
 
+/// A tab with several panes opens into a list of them from this chevron, beside its icon.
+struct TreeChevron: View {
+    let isShown: Bool
+    let isExpanded: Bool
+    let toggle: () -> Void
+
+    static let width: CGFloat = 12
+
+    var body: some View {
+        Image(systemName: "chevron.right")
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(DS.Palette.textTertiary)
+            .rotationEffect(.degrees(isExpanded ? 90 : 0))
+            .frame(width: Self.width, height: SidebarFont.icon)
+            .contentShape(.rect)
+            .opacity(isShown ? 1 : 0)
+            .highPriorityGesture(TapGesture().onEnded { if isShown { toggle() } })
+            .accessibilityHidden(!isShown)
+            .accessibilityLabel(isExpanded ? "Hide panes" : "Show panes")
+            .accessibilityAddTraits(.isButton)
+    }
+}
+
+/// One pane of an opened tab: its program and state, named as its tab would be; showing it
+/// focuses that pane.
+struct PaneTreeRow: View {
+    let pane: PaneId
+    let group: HostGroup
+    let isFocusedPane: Bool
+    @Environment(WindowModel.self) private var model
+
+    var body: some View {
+        let program = model.programIdentity(ofPane: pane, onGroup: group.id)
+        let state = model.agentState(ofPane: pane, onGroup: group.id)
+        let paneTitle = model.workspace(ofGroup: group.id)?.panes[pane]?.title
+        let title = program.kind == .agent
+            ? AgentTabTitle(terminalTitle: paneTitle, kind: AgentKind(program.id)).resolved
+            : paneTitle?.nonEmpty ?? program.displayName
+        Button {
+            model.focus(pane: pane, onGroup: group.id)
+        } label: {
+            HStack(spacing: DS.Space.gap10) {
+                SidebarTabIcon(program: program, state: state)
+                    .scaleEffect(0.82)
+                Text(title)
+                    .font(SidebarFont.subtitle)
+                    .foregroundStyle(isFocusedPane ? DS.Palette.text : DS.Palette.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+            }
+            // One level in: the pane's icon sits under its tab's title.
+            .padding(.leading, SidebarFont.icon + DS.Space.gap10)
+            .sidebarRow(selected: false)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(TabLeadingMark.label(title: title, program: program, state: state, host: nil))
+    }
+}
+
 /// A tab's number at the row's trailing edge, quiet; its ⌘ shortcut while ⌘ is held.
 struct TabNumber: View {
     let number: Int
@@ -811,7 +871,23 @@ struct TabRow: View {
     var showsHost = false
     @Environment(WindowModel.self) private var model
 
+    @Environment(\.sidebarListStyle) private var listStyle
+
     var body: some View {
+        let expanded = model.expandedTabs.contains(ref)
+        VStack(alignment: .leading, spacing: 0) {
+            mainRow
+            if expanded, listStyle == .plain {
+                ForEach(tab.root.panes, id: \.self) { pane in
+                    PaneTreeRow(pane: pane, group: group, isFocusedPane: model.currentTab == ref && tab.focused == pane)
+                        .transition(.opacity)
+                }
+            }
+        }
+        .animation(DS.Motion.snappy, value: expanded)
+    }
+
+    @ViewBuilder private var mainRow: some View {
         let workspace = model.workspace(ofGroup: group.id)
         let isActive = model.destination == .terminal && model.currentTab == ref
         let states = tab.root.panes.compactMap { model.agentState(ofPane: $0, onGroup: group.id) }
@@ -830,6 +906,15 @@ struct TabRow: View {
         } label: {
             HStack(alignment: .center, spacing: DS.Space.gap10) {
                 SidebarTabIcon(program: program, state: state)
+                    // In the row's leading margin, so it costs no title any room.
+                    .overlay(alignment: .leading) {
+                        if listStyle == .plain, tab.root.panes.count > 1 {
+                            TreeChevron(isShown: true, isExpanded: model.expandedTabs.contains(ref)) {
+                                withAnimation(DS.Motion.snappy) { model.expandedTabs.formSymmetricDifference([ref]) }
+                            }
+                            .offset(x: -(TreeChevron.width + DS.Space.xxs))
+                        }
+                    }
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: DS.Space.row) {
                         Text(title)

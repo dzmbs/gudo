@@ -123,6 +123,8 @@ final class WindowModel {
     @ObservationIgnored var followsJoins = false
     /// Each Files leaf's place, kept here so a leaf rebuilt by a split or a move keeps it.
     @ObservationIgnored var filesNavigators: [UUID: FilesNavigator] = [:]
+    /// Tabs opened in the sidebar into their panes.
+    var expandedTabs: Set<TabRef> = []
     var isPaletteShown = false {
         didSet {
             if !isPaletteShown { paletteMode = .commands }

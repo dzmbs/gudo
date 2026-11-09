@@ -38,6 +38,12 @@ enum SidebarFixture {
             model.groups.toggleCollapsed(project: website.id)
         }
         model.focus(refs[0])
+        // The first tab split, a Codex beside its Claude Code, opened into its panes.
+        workspace.split(.horizontal)
+        if let tab = workspace.session.tabs.first, let added = tab.root.panes.last {
+            MockPaneStatus.fixture?[added.description] = ("codex", .working)
+        }
+        model.expandedTabs.insert(refs[0])
     }
 
 }
