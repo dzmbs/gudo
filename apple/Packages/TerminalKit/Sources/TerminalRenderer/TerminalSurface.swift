@@ -94,6 +94,10 @@ public final class TerminalSurface {
 
     /// Echo prediction for this surface, once `enablePrediction` was called (remote backends).
     public private(set) var predictor: EchoPredictor?
+    /// The program reads input without echoing it (a password prompt), as the backend reports.
+    public var isHiddenInput: Bool { predictor?.hint?.isHiddenInput == true }
+    /// Counts frames that showed a change to the terminal's cells, cursor or viewport.
+    public private(set) var contentGeneration = 0
 
     /// Inline images over the grid (placements), asked for before every frame so they follow
     /// pinned rows as the output scrolls. Call `invalidateInlineImages()` when the set changes
@@ -1223,6 +1227,7 @@ public final class TerminalSurface {
         guard state.dirty != .clean || needsFullRender || overlayChanged || imagesChanged || marksChanged || kittyChanged
             || builder.isIncomplete
         else { return false }
+        if state.dirty != .clean || needsFullRender { contentGeneration &+= 1 }
         if cursor.blinking != cursorBlinks {
             cursorBlinks = cursor.blinking
             restartBlink()
