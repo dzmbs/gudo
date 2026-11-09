@@ -80,8 +80,9 @@ struct SearchColors {
 final class FrameBuilder {
     private struct CachedRow {
         var bg: [SIMD4<UInt8>]
-        /// Instances with `gridPos.y == 0`; the row's current y is patched in at assembly.
+        /// Instances at row `y`, patched when the row moves.
         var text: [CellText]
+        var y: UInt16 = 0
         /// Columns holding the first half of a wide character (for the cursor width).
         var wide: [Bool]
         /// The row has SGR 5 cells, so it must be rebuilt when the blink phase flips.
@@ -162,13 +163,23 @@ final class FrameBuilder {
             let y = row.viewportY
             guard y >= 0, y < Int32(rows) else { return }
             let id = row.id
-            let cached: CachedRow
-            if !fullRebuild, !row.isDirty, let hit = cache[id], hit.complete, !hit.hasBlink || hit.blinkOn == overlay.textBlinkOn {
+            var cached: CachedRow
+            // Taken out of the old cache, so moving the row patches its only copy.
+            if !fullRebuild, !row.isDirty, let hit = cache.removeValue(forKey: id), hit.complete,
+               !hit.hasBlink || hit.blinkOn == overlay.textBlinkOn
+            {
                 cached = hit
                 stats.rowsReused += 1
             } else {
                 cached = buildRow(row, cols: Int(cols), colors: colors, fonts: fonts, blinkOn: overlay.textBlinkOn)
                 stats.rowsRebuilt += 1
+            }
+            let rowY = UInt16(y)
+            if cached.y != rowY {
+                cached.text.withUnsafeMutableBufferPointer { text in
+                    for i in text.indices { text[i].gridPos.y = rowY }
+                }
+                cached.y = rowY
             }
             next[id] = cached
             let rowStart = frame.bgCells.count
@@ -183,16 +194,9 @@ final class FrameBuilder {
                         frame.bgCells[rowStart + cell.x + dx] = frame.background
                     }
                 }
-                for var instance in cached.text where !hidden.contains(Int(instance.gridPos.x)) {
-                    instance.gridPos.y = UInt16(y)
-                    frame.text.append(instance)
-                }
+                frame.text.append(contentsOf: cached.text.lazy.filter { !hidden.contains(Int($0.gridPos.x)) })
             } else {
                 frame.text.append(contentsOf: cached.text)
-                let rowY = UInt16(y)
-                frame.text.withUnsafeMutableBufferPointer { text in
-                    for i in textStart..<text.count { text[i].gridPos.y = rowY }
-                }
             }
             if let ranges = highlightRows[Int(y)] {
                 highlight(ranges, rowStart: rowStart, textStart: textStart, cols: Int(cols), frame: &frame)

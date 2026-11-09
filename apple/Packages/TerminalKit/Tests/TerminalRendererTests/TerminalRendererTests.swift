@@ -99,6 +99,42 @@ import TerminalCore
         #expect(frame.text.filter { $0.gridPos.y == 1 && $0.flags == 0 }.count == 6)
     }
 
+    /// Reused rows keep their instances in place between frames: every frame equals one built
+    /// from scratch, through typing, scrolling output, a scroll region and an overlay cell.
+    @Test func reusedRowsMatchAFreshBuild() {
+        let terminal = Terminal(cols: 30, rows: 6) { _ in }
+        let state = RenderState()
+        let fonts = FontGrid(pixelSize: 26)
+        let builder = FrameBuilder()
+        var frame = FrameContents()
+        var reused = 0
+        let steps = ["one\r\ntwo\r\nthree", "!", "\r\nfour\r\nfive\r\nsix\r\nseven", "x", "\u{1b}[2;4r\u{1b}[4;1H\nmoved", "\u{1b}[r\u{1b}[6;1Hy"]
+        for (index, input) in steps.enumerated() {
+            terminal.write(Array(input.utf8))
+            var overlay = FrameOverlay()
+            if index.isMultiple(of: 2) {
+                overlay.cells = [OverlayCell(x: 1, y: 0, text: "Z", span: 1, underline: .single)]
+            }
+            state.update(from: terminal)
+            reused += builder.build(state, fonts: fonts, overlay: overlay, into: &frame).rowsReused
+            var fresh = FrameContents()
+            _ = FrameBuilder().build(state, fonts: fonts, overlay: overlay, into: &fresh)
+            state.markClean()
+            #expect(frame.bgCells == fresh.bgCells)
+            #expect(frame.text.map(Self.fields) == fresh.text.map(Self.fields), "step \(index)")
+        }
+        #expect(reused > 0)
+    }
+
+    private static func fields(_ instance: CellText) -> [Int] {
+        [
+            Int(instance.glyphPos.x), Int(instance.glyphPos.y), Int(instance.glyphSize.x), Int(instance.glyphSize.y),
+            Int(instance.bearings.x), Int(instance.bearings.y), Int(instance.gridPos.x), Int(instance.gridPos.y),
+            Int(instance.color.x), Int(instance.color.y), Int(instance.color.z), Int(instance.color.w),
+            Int(instance.atlas), Int(instance.flags),
+        ]
+    }
+
     @Test func inverseAndColorsResolveToCellBackgrounds() {
         let terminal = Terminal(cols: 4, rows: 1) { _ in }
         let state = RenderState()
