@@ -34,6 +34,10 @@ public final class TerminalSurface {
     /// The layer was replaced: swap `old` for `new` in the host's layer tree.
     public var onLayerReplaced: ((_ old: CAMetalLayer, _ new: CAMetalLayer) -> Void)?
     public let stats = FrameStats()
+    public nonisolated let keyToScreen = KeyToScreen()
+    /// When the system received the key being handled (its event's timestamp), so the key is
+    /// timed from then rather than from when it reached the terminal.
+    public var keyEventTimestamp: CFTimeInterval?
     /// Called when the cell grid changes size, e.g. to send TIOCSWINSZ to the PTY.
     public var onGridChange: ((Grid) -> Void)?
     /// Called after the user scrolled the viewport (negative = towards history), e.g. to fetch
@@ -687,8 +691,17 @@ public final class TerminalSurface {
     /// The input also goes through the echo predictor and restarts the cursor blink.
     public func encode(_ key: KeyEvent) -> [UInt8] {
         let bytes = terminal.encode(key)
-        if !bytes.isEmpty { noteInput(bytes) }
+        if !bytes.isEmpty {
+            noteInput(bytes)
+            if key.action == .press { noteKeyPressSent() }
+        }
         return bytes
+    }
+
+    /// A key press just sent input: time it to the screen.
+    public func noteKeyPressSent() {
+        let now = CACurrentMediaTime()
+        keyToScreen.keyReceived(at: keyEventTimestamp ?? now, sentAt: now)
     }
 
     /// Bookkeeping for bytes about to be sent as user input (keys, key bar, mouse-free paths).
@@ -805,7 +818,8 @@ public final class TerminalSurface {
     /// Output was written to the terminal (any thread). Wakes the renderer and has the predictor
     /// reconcile against the new screen on the next frame.
     public nonisolated func outputArrived() {
-        outputSerial.add(1, ordering: .releasing)
+        let serial = outputSerial.add(1, ordering: .releasing).newValue
+        keyToScreen.outputArrived(serial: serial, at: CACurrentMediaTime())
         outputPending.store(true, ordering: .releasing)
         searchOutputPending.store(true, ordering: .releasing)
         setNeedsRender()
@@ -1235,6 +1249,14 @@ public final class TerminalSurface {
 
         let stats = stats
         let drawable = offscreen ? nil : layer.nextDrawable()
+#if !targetEnvironment(simulator)
+        if let drawable,
+           let timedFrame = keyToScreen.frameEncoding(
+               showingOutput: outputSeen, showsLocalEcho: overlayChanged && !overlay.cells.isEmpty, at: built) {
+            let keyToScreen = keyToScreen
+            drawable.addPresentedHandler { presented in keyToScreen.framePresented(timedFrame, at: presented.presentedTime) }
+        }
+#endif
         if let target = drawable?.texture ?? (offscreen ? offscreenTarget() : nil) {
             renderer.draw(
                 frame, uniforms: uniforms(fonts.metrics), fonts: fonts, to: target, present: drawable,

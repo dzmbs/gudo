@@ -973,10 +973,14 @@ public final class TerminalView: UIView {
             return true
         }
         let mods = KeyModifiers(uiKey.modifierFlags)
+        surface.keyEventTimestamp = press.timestamp
+        defer { surface.keyEventTimestamp = nil }
         if markedText == nil, !inputSourceComposes,
            let bytes = KeyEvent(key: key, action: action, mods: mods, text: "", unshiftedCodepoint: 0).lineEditingBytes {
             if action == .press {
                 if surface.terminal.selection != nil { clearSelection() }
+                surface.noteInput(bytes)
+                surface.noteKeyPressSent()
                 emit(bytes)
                 repeatingKey = uiKey.keyCode
                 repeater.start { [weak self] in self?.emit(bytes) }

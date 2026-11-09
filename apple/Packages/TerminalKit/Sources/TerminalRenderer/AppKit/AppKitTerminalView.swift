@@ -602,8 +602,12 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
 
     override public func keyDown(with event: NSEvent) {
         let action: KeyEvent.Action = event.isARepeat ? .repeat : .press
+        surface.keyEventTimestamp = event.timestamp
+        defer { surface.keyEventTimestamp = nil }
         if !hasMarkedText(), let bytes = keyEvent(event, action: action).lineEditingBytes {
             if surface.terminal.selection != nil { surface.terminal.clearSelection() }
+            surface.noteInput(bytes)
+            if action == .press { surface.noteKeyPressSent() }
             emit(bytes)
             return
         }
