@@ -204,7 +204,8 @@ private struct Tile<Mark: View>: View {
             Spacer(minLength: 0)
         }
         .padding(DS.Space.m)
-        .background(isHovered ? DS.Palette.hoverFill : DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.pane))
+        .controlFill(ControlState(isHovered: isHovered), in: .rect(cornerRadius: DS.Radius.pane))
+        .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.pane))
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.pane).strokeBorder(DS.Palette.hairline))
         .contentShape(.rect)
         .onHover { isHovered = $0 }
