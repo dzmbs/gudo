@@ -132,7 +132,20 @@ enum SidebarWidth {
         case .xxxLarge: 44
         default: 72
         }
-        return min(max(stored, range.lowerBound) + extra, range.upperBound + 72)
+        return min(max(stored, range.lowerBound) + extra + systemSizeExtra, range.upperBound + 72)
+    }
+
+    /// The Mac's sidebar size (System Settings › Appearance) scales the column with its text.
+    @MainActor private static var systemSizeExtra: Double {
+        #if os(macOS)
+        switch SidebarSize.shared.mode {
+        case 1: -24
+        case 3: 36
+        default: 0
+        }
+        #else
+        0
+        #endif
     }
 }
 

@@ -27,11 +27,17 @@ final class PhoneTabListGalleryTests: XCTestCase {
         await SidebarFixture.arrangeProjects(model)
         let workspace = try XCTUnwrap(model.workspace)
 
-        for (name, size) in [("phone", DynamicTypeSize.large), ("phone-xxxl", .xxxLarge)] {
+        let screens: [(name: String, size: DynamicTypeSize, width: CGFloat, view: AnyView)] = [
+            ("phone", .large, 393, AnyView(TabOverview(workspace: workspace))),
+            ("phone-xxxl", .xxxLarge, 393, AnyView(TabOverview(workspace: workspace))),
+            // The iPad's sidebar column: the same rows, dense.
+            ("ipad-sidebar", .large, 320, AnyView(WorkspaceSidebar())),
+        ]
+        for (name, size, width, view) in screens {
             let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
             let window = UIWindow(windowScene: scene)
-            window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
-            window.rootViewController = UIHostingController(rootView: TabOverview(workspace: workspace)
+            window.frame = CGRect(x: 0, y: 0, width: width, height: 852)
+            window.rootViewController = UIHostingController(rootView: view
                 .environment(model)
                 .environment(AppModel.shared)
                 .dynamicTypeSize(size))

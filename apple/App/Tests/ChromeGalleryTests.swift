@@ -36,7 +36,8 @@ final class ChromeGalleryTests: XCTestCase {
     }
 
     /// What the captures change in the window's saved state, put back afterwards.
-    private static let windowStateKeys = ["window.projects", "window.focusedTab", "window.focusedPane", "window.mixedTabs", "tab-touches"]
+    private static let windowStateKeys = ["window.projects", "window.focusedTab", "window.focusedPane", "window.mixedTabs", "tab-touches", sidebarSizeKey]
+    private static let sidebarSizeKey = "NSTableViewDefaultSizeMode"
     private static let size = NSSize(width: 1280, height: 800)
     private static let themes = ["dark": TerminalPreferences.Default.theme, "light": ThemePair.resolvedDefaultLight]
 
@@ -47,6 +48,12 @@ final class ChromeGalleryTests: XCTestCase {
             UserDefaults.standard.set(theme, forKey: TerminalPreferences.Key.theme)
             try await capture("\(appearance)-sidebar") { model in model.isSidebarShown = true }
             try await capture("\(appearance)-sidebar-projects") { model in await SidebarFixture.arrangeProjects(model) }
+            // System Settings › Appearance › Sidebar icon size: small and large.
+            for (size, mode) in [("small", 1), ("large", 3)] {
+                UserDefaults.standard.set(mode, forKey: Self.sidebarSizeKey)
+                try await capture("\(appearance)-sidebar-projects-\(size)") { model in await SidebarFixture.arrangeProjects(model) }
+            }
+            UserDefaults.standard.removeObject(forKey: Self.sidebarSizeKey)
             try await capture("\(appearance)-agents") { model in
                 model.isSidebarShown = true
                 model.destination = .inbox
