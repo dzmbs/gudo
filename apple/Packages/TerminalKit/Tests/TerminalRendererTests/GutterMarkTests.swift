@@ -81,4 +81,39 @@ import Testing
         #expect(surface.renderIfDirty(offscreen: true))
         #expect(surface.gutterMarkFrames.isEmpty)
     }
+
+    /// An idle display-link tick costs next to nothing: with the terminal unchanged and nothing
+    /// invalidated, marks and images cannot have moved, so they are not asked for again.
+    @Test func cleanFramesDoNotAskForMarksOrImages() throws {
+        let terminal = Terminal(cols: 20, rows: 6) { _ in }
+        terminal.write(Array("$ true\r\n".utf8))
+        let surface = try surface(terminal)
+        var markRequests = 0
+        var imageRequests = 0
+        surface.gutterMarks = {
+            markRequests += 1
+            return [GutterMark(id: 1, row: 0, rows: 1, tint: .foreground)]
+        }
+        surface.inlineImages = {
+            imageRequests += 1
+            return []
+        }
+        #expect(surface.renderIfDirty(offscreen: true))
+        #expect((markRequests, imageRequests) == (1, 1))
+
+        for _ in 0..<5 { #expect(!surface.renderIfDirty(offscreen: true)) }
+        #expect((markRequests, imageRequests) == (1, 1))
+
+        terminal.write(Array("a".utf8))
+        #expect(surface.renderIfDirty(offscreen: true))
+        #expect((markRequests, imageRequests) == (2, 2))
+
+        surface.invalidateGutterMarks()
+        surface.renderIfDirty(offscreen: true)
+        #expect(markRequests == 3)
+        surface.invalidateInlineImages()
+        surface.renderIfDirty(offscreen: true)
+        #expect(imageRequests == 3)
+        #expect(surface.gutterMarkFrames.count == 1)
+    }
 }

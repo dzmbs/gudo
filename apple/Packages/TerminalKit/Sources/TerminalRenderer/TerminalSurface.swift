@@ -1223,15 +1223,17 @@ public final class TerminalSurface {
         let cursor = state.cursor
         let overlay = currentOverlay(cursor: cursor)
         let overlayChanged = overlay != lastOverlay || overlayDirty
-        let images = inlineImages?() ?? []
+        let dirty = state.dirty
+        let terminalChanged = dirty != .clean || needsFullRender
+        let images = terminalChanged || imagesDirty ? inlineImages?() ?? [] : lastImages
         let imagesChanged = imagesDirty || images != lastImages
-        let marks = gutterMarks?() ?? []
+        let marks = terminalChanged || marksDirty ? gutterMarks?() ?? [] : lastMarks
         let marksChanged = marksDirty || marks != lastMarks
-        let kittyChanged = refreshKittyImages(full: state.dirty == .full || needsFullRender)
-        guard state.dirty != .clean || needsFullRender || overlayChanged || imagesChanged || marksChanged || kittyChanged
+        let kittyChanged = refreshKittyImages(full: dirty == .full || needsFullRender)
+        guard terminalChanged || overlayChanged || imagesChanged || marksChanged || kittyChanged
             || builder.isIncomplete
         else { return false }
-        if state.dirty != .clean || needsFullRender { contentGeneration &+= 1 }
+        if terminalChanged { contentGeneration &+= 1 }
         if cursor.blinking != cursorBlinks {
             cursorBlinks = cursor.blinking
             restartBlink()
