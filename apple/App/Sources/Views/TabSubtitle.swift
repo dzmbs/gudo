@@ -23,6 +23,8 @@ struct TabSubtitle: View {
     var worktree: WorktreeState?
     /// Leads the line in a project, whose header does not name the host.
     var host: String?
+    /// The agent's kind, state and how long, in place of `context`.
+    var status: AgentStatusLine?
 
     /// Quick commands never show: the line would flicker on every `ls`.
     static let threshold = 3
@@ -70,7 +72,18 @@ struct TabSubtitle: View {
 
     /// Always one line, so a row keeps its height while its context comes and goes.
     @ViewBuilder private var contextLine: some View {
-        if let context, worktree == nil {
+        if let status {
+            HStack(spacing: 0) {
+                separator
+                TimelineView(.periodic(from: .now, by: 30)) { timeline in
+                    // The kind gives way first: the state and its age always show.
+                    ViewThatFits(in: .horizontal) {
+                        Text(status.text(at: timeline.date))
+                        Text(status.stateWords(at: timeline.date)).truncationMode(.tail)
+                    }
+                }
+            }
+        } else if let context, worktree == nil {
             HStack(spacing: 0) {
                 separator
                 // "Claude Code · working" that does not fit keeps its state, whole.

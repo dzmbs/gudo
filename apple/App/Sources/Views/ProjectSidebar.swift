@@ -589,7 +589,7 @@ private struct ProjectHeader: View {
         .frame(minHeight: 32)
         .padding(.leading, DS.Space.l)
         .padding(.trailing, DS.Space.gap10)
-        .padding(.top, DS.Space.gap10)
+        .padding(.top, DS.Space.m + DS.Space.xxs)
         .animation(DS.Motion.hover, value: controlsShown)
         .background {
             RoundedRectangle(cornerRadius: DS.Radius.control)
@@ -602,6 +602,9 @@ private struct ProjectHeader: View {
             if id == project.id { startRename() }
         }
         .contentShape(.rect)
+        #if os(macOS)
+        .onTapGesture(count: 2) { startRename() }
+        #endif
         .onTapGesture { withAnimation(DS.Motion.snappy) { model.groups.toggleCollapsed(project: project.id) } }
         .onHover { hovered = $0 }
         .onDrag {
@@ -782,30 +785,39 @@ private struct ProjectEmptyRow: View {
 
     var body: some View {
         let dropping = { if case .insert(_, .project(let id), _)? = drag.plan { id == project.id } else { false } }()
+        let tint = DS.Palette.project(project.color)
+        let size = SidebarFont.icon
         Button {
             model.newTab(inProject: project.id)
         } label: {
             HStack(spacing: DS.Space.gap10) {
                 Image(systemName: "plus")
-                    .font(.caption)
-                    .foregroundStyle(DS.Palette.textTertiary)
-                    .frame(width: 16)
-                Text(dropping ? "Drop to add" : "Drag tabs here or press +")
-                    .font(SidebarFont.subtitle)
-                    .foregroundStyle(DS.Palette.textTertiary)
-                    .lineLimit(1)
-                    .contentTransition(.opacity)
+                    .font(.system(size: size * 0.45, weight: .semibold))
+                    .foregroundStyle(dropping ? AnyShapeStyle(tint) : AnyShapeStyle(DS.Palette.textSecondary))
+                    .frame(width: size, height: size)
+                    .background {
+                        RoundedRectangle(cornerRadius: size * 0.27, style: .continuous)
+                            .fill(tint.opacity(dropping ? 0.16 : 0))
+                            .strokeBorder(dropping ? AnyShapeStyle(tint) : AnyShapeStyle(DS.Palette.border),
+                                          style: StrokeStyle(lineWidth: 1, dash: dropping ? [] : [3, 2]))
+                    }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(dropping ? "Drop to add" : "New Terminal")
+                        .font(SidebarFont.title)
+                        .foregroundStyle(DS.Palette.textSecondary)
+                    if !dropping {
+                        Text("or drag a tab here")
+                            .font(SidebarFont.subtitle)
+                            .foregroundStyle(DS.Palette.textTertiary)
+                    }
+                }
+                .lineLimit(1)
+                .contentTransition(.opacity)
+                Spacer(minLength: 0)
             }
             .sidebarRow(selected: false)
         }
         .buttonStyle(.plain)
-        .overlay(alignment: .leading) {
-            Rectangle()
-                .fill(DS.Palette.project(project.color).opacity(0.5))
-                .frame(width: 2)
-                .padding(.leading, DS.Space.s + 2)
-                .accessibilityHidden(true)
-        }
         .animation(DS.Motion.quick, value: dropping)
         .accessibilityLabel("No tabs in \(project.name). New Terminal")
         .accessibilityIdentifier("project-empty-\(project.name)")

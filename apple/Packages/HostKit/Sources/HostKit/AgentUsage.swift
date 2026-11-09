@@ -27,6 +27,8 @@ public struct UsageMeter: Equatable, Sendable, Identifiable {
     public var agent: AgentKind
     /// "Claude · 62% of 5h · resets 14:20".
     public var text: String
+    /// "Claude 62%", for one line with every agent's.
+    public var short: String
     public var tone: UsageTone
     public var id: String { UsageText.name(agent) }
 
@@ -45,7 +47,9 @@ public struct UsageMeter: Equatable, Sendable, Identifiable {
         if let reset = window.resetsAtMs {
             parts.append("resets \(UsageText.reset(UsageText.date(reset), now: now, calendar: calendar, locale: locale, compact: true))")
         }
-        return UsageMeter(agent: usage.agent, text: parts.joined(separator: " · "), tone: .of(window))
+        return UsageMeter(
+            agent: usage.agent, text: parts.joined(separator: " · "),
+            short: "\(UsageText.name(usage.agent)) \(UsageText.percent(window.usedPermille))", tone: .of(window))
     }
 
     /// Meters for every agent that has one, in the report's order.

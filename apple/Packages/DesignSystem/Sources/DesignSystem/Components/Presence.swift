@@ -70,9 +70,7 @@ public struct PresenceAvatar: View {
     }
 }
 
-/// Overlapping avatars, at most `limit`, then "+N", at fixed places so no container can squeeze
-/// one over the next. Each avatar cuts a thin gap out of the one under it, so the stack reads on
-/// any background (a selected sidebar row, glass, the terminal) without a ring in a guessed colour.
+/// Avatars side by side, whole, at most `limit`, then "+N".
 public struct PresenceStack: View {
     let participants: [Participant]
     var limit: Int
@@ -87,13 +85,9 @@ public struct PresenceStack: View {
     public var body: some View {
         let shown = Array(participants.prefix(limit))
         let extra = participants.count - shown.count
-        let count = shown.count + (extra > 0 ? 1 : 0)
-        ZStack(alignment: .leading) {
-            ForEach(Array(shown.enumerated()), id: \.element.id) { index, participant in
+        HStack(spacing: max(2, size * 0.12)) {
+            ForEach(shown) { participant in
                 PresenceAvatar(participant, size: size, showsActivity: false)
-                    .mask { cutout(index > 0) }
-                    .offset(x: CGFloat(index) * step)
-                    .zIndex(Double(limit - index))
             }
             if extra > 0 {
                 Text("+\(extra)")
@@ -102,29 +96,9 @@ public struct PresenceStack: View {
                     .minimumScaleFactor(0.7)
                     .frame(width: size, height: size)
                     .background(DS.Palette.selectedFill, in: .circle)
-                    .mask { cutout(true) }
-                    .offset(x: CGFloat(shown.count) * step)
             }
         }
-        .frame(width: size + CGFloat(max(count - 1, 0)) * step, height: size, alignment: .leading)
         .fixedSize()
         .accessibilityElement(children: .combine)
-    }
-
-    private var overlap: CGFloat { size * 0.16 }
-    private var step: CGFloat { size - overlap }
-
-    /// Everything but a ring around the avatar to the left, which overlaps this one.
-    private func cutout(_ hasLeftNeighbour: Bool) -> some View {
-        Rectangle()
-            .overlay {
-                if hasLeftNeighbour {
-                    Circle()
-                        .frame(width: size + 3, height: size + 3)
-                        .offset(x: -(size - overlap))
-                        .blendMode(.destinationOut)
-                }
-            }
-            .compositingGroup()
     }
 }

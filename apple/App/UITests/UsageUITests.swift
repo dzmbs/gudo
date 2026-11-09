@@ -51,22 +51,20 @@ final class UsageUITests: XCTestCase {
         ]
         app.launch()
 
-        // Sidebar: one line per agent, under the host's name.
-        let claude = element(app, matching: "identifier BEGINSWITH 'usage-meter-' AND identifier ENDSWITH '-claude'")
-        if !claude.waitForExistence(timeout: 20) {
+        // Sidebar: every agent on one line under the host's name, each in full when read aloud.
+        let meters = element(app, matching: "identifier BEGINSWITH 'usage-meters-'")
+        if !meters.waitForExistence(timeout: 20) {
             // iPad portrait hides the sidebar.
             let toggle = app.buttons["ToggleSidebar"].firstMatch
             if toggle.exists { press(toggle) }
         }
-        XCTAssertTrue(claude.waitForExistence(timeout: 10), "Claude meter in the sidebar")
-        XCTAssertTrue(claude.label.contains("Claude · 62% of 5h · resets"), claude.label)
-        let codex = element(app, matching: "identifier BEGINSWITH 'usage-meter-' AND identifier ENDSWITH '-codex'")
-        XCTAssertTrue(codex.exists)
-        XCTAssertTrue(codex.label.contains("Codex · 92% of weekly"), codex.label)
+        XCTAssertTrue(meters.waitForExistence(timeout: 10), "usage line in the sidebar")
+        XCTAssertTrue(meters.label.contains("Claude · 62% of 5h · resets"), meters.label)
+        XCTAssertTrue(meters.label.contains("Codex · 92% of weekly"), meters.label)
         attach(app, "usage-sidebar")
 
         // The detail: every window, with its source.
-        press(claude)
+        press(meters)
         let detail = element(app, matching: "identifier == 'usage-detail'")
         XCTAssertTrue(detail.waitForExistence(timeout: 5), "detail popover")
         XCTAssertTrue(app.staticTexts["Claude Code · Max"].firstMatch.exists)

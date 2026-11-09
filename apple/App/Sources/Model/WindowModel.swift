@@ -949,6 +949,11 @@ final class WindowModel {
         return (app.hosts.connection(id) as? DaemonConnection)?.report(of: pane)?.state
     }
 
+    /// When the agent in a pane entered its current state, as the Agents feed tracks it.
+    func agentSince(ofPane pane: PaneId, onGroup id: String) -> Date? {
+        agents.items.first { $0.hostId == id && $0.paneId == pane.rawValue }?.since
+    }
+
     /// The state that most needs attention across a project's tabs, for its collapsed header.
     func mostUrgentState(inProject project: Project) -> DesignSystem.AgentState? {
         project.tabs.flatMap { ref -> [DesignSystem.AgentState] in

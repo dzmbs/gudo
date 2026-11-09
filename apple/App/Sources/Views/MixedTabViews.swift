@@ -465,6 +465,9 @@ struct MixedTabRow: View {
             .sidebarRow(selected: isActive)
         }
         .buttonStyle(.plain)
+        #if os(macOS)
+        .simultaneousGesture(TapGesture(count: 2).onEnded { perform(.rename, busy: state == .working || state == .blocked) })
+        #endif
         .alert("Rename Tab", isPresented: $renaming) {
             TextField("Title", text: $draft)
             Button("Rename") { model.composites.apply(.rename(tab.id, draft), to: tab.id) }

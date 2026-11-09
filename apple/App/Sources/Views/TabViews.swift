@@ -724,8 +724,8 @@ struct TabRow: View {
         let running = workspace?.runningCommand(of: tab)
         let program = model.programIdentity(of: tab, onGroup: group.id)
         let worktree = model.groups.worktree(of: ref)
-        let informative = context.flatMap { Self.isInformative($0, title: title) ? $0 : nil }
-            ?? Self.agentLine(program: program, state: state)
+        let status = Self.statusLine(program: program, state: state, context: context, since: model.agentSince(ofPane: tab.focused, onGroup: group.id))
+        let informative = status == nil ? context.flatMap { Self.isInformative($0, title: title) ? $0 : nil } : nil
         let host = showsHost ? group.name : nil
 
         Button {
@@ -752,13 +752,13 @@ struct TabRow: View {
                     }
                     // Nothing to say under the title: one line, centred on the icon, not a
                     // blank second line that pushes the title up.
-                    if informative != nil || running != nil || worktree != nil || host != nil {
+                    if status != nil || informative != nil || running != nil || worktree != nil || host != nil {
                         // In a project it leads with the host, which the section header doesn't name.
-                        TabSubtitle(context: informative, running: running, worktree: worktree, host: host)
+                        TabSubtitle(context: informative, running: running, worktree: worktree, host: host, status: status)
                             .transition(.opacity)
                     }
                 }
-                .animation(DS.Motion.snappy, value: informative != nil || running != nil)
+                .animation(DS.Motion.snappy, value: status != nil || informative != nil || running != nil)
                 Spacer(minLength: DS.Space.xs)
                 if let worktree { TabGitBadges(worktree: worktree, selected: isActive) }
                 TabPresence(workspace: workspace, panes: tab.root.panes)
@@ -777,6 +777,9 @@ struct TabRow: View {
             .sidebarRow(selected: isActive && !model.isSelectingTabs)
         }
         .buttonStyle(.plain)
+        #if os(macOS)
+        .simultaneousGesture(TapGesture(count: 2).onEnded { perform(.rename) })
+        #endif
         .accessibilityElement(children: .combine)
         .accessibilityLabel(TabLeadingMark.label(title: title, program: program, state: isActive ? nil : state, host: group.name))
         .accessibilityValue([worktree.map(TabGitBadges.accessibilityValue) ?? "", running.map { "Running: \($0.command ?? "a command")" } ?? context ?? "", TabPresence.value(workspace, tab.root.panes)]
@@ -831,10 +834,13 @@ struct TabRow: View {
     }
 
     /// A context line worth a second line in the row.
-    /// "Claude Code · working" for an agent whose host reports only its state.
-    static func agentLine(program: ProgramIdentity, state: AgentState?) -> String? {
+    /// An agent tab's kind, state and how long; what it asks while it waits (from the host's
+    /// "Claude Code · needs you: …" context).
+    static func statusLine(program: ProgramIdentity, state: AgentState?, context: String?, since: Date?) -> AgentStatusLine? {
         guard program.kind == .agent, let state, state != .unknown else { return nil }
-        return "\(program.displayName) · \(state.title.lowercased())"
+        let asking = "\(program.displayName) · needs you: "
+        let question = state == .blocked ? context.flatMap { $0.hasPrefix(asking) ? String($0.dropFirst(asking.count)) : nil } : nil
+        return AgentStatusLine(kind: program.displayName, state: state, since: since, question: question)
     }
 
     static func isInformative(_ context: String, title: String) -> Bool {

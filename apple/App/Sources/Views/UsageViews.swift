@@ -48,20 +48,26 @@ struct HostUsageMeters: View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             let meters = UsageMeter.compact(model.usage.usage(forHost: hostId), now: context.date)
             if !meters.isEmpty {
-                VStack(alignment: .leading, spacing: 1) {
-                    ForEach(meters) { meter in
-                        Button {
-                            model.usageDetailHost = hostId
-                        } label: {
-                            UsageMeterLine(meter: meter)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .contentShape(.rect)
+                Button {
+                    model.usageDetailHost = hostId
+                } label: {
+                    HStack(spacing: 0) {
+                        ForEach(Array(meters.enumerated()), id: \.element.id) { index, meter in
+                            if index > 0 { Text(" · ").foregroundStyle(DS.Palette.textTertiary) }
+                            Text(meter.short)
+                                .foregroundStyle(meter.tone.color.map { AnyShapeStyle($0) } ?? AnyShapeStyle(DS.Palette.textTertiary))
                         }
-                        .buttonStyle(.plain)
-                        .help("Agent plan usage on \(hostName)")
-                        .accessibilityIdentifier("usage-meter-\(hostName)-\(meter.id.lowercased())")
                     }
+                    .font(DS.Font.meta)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(.rect)
                 }
+                .buttonStyle(.plain)
+                .help(meters.map(\.text).joined(separator: "\n"))
+                .accessibilityLabel(meters.map(\.text).joined(separator: ", "))
+                .accessibilityHint("Shows plan usage on \(hostName)")
+                .accessibilityIdentifier("usage-meters-\(hostName)")
             }
         }
         .onAppear { model.usage.watch(host: hostId) }
