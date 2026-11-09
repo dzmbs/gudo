@@ -96,6 +96,8 @@ public final class TerminalSurface {
     public private(set) var predictor: EchoPredictor?
     /// The program reads input without echoing it (a password prompt), as the backend reports.
     public var isHiddenInput: Bool { predictor?.hint?.isHiddenInput == true }
+    /// `isHiddenInput` changed (a password prompt began or ended).
+    public var onHiddenInputChanged: (() -> Void)?
     /// Counts frames that showed a change to the terminal's cells, cursor or viewport.
     public private(set) var contentGeneration = 0
 
@@ -815,7 +817,9 @@ public final class TerminalSurface {
     }
 
     public func applyPrediction(_ update: PredictionUpdate) {
+        let wasHiddenInput = isHiddenInput
         predictor?.apply(update)
+        if isHiddenInput != wasHiddenInput { onHiddenInputChanged?() }
         invalidateOverlay()
     }
 

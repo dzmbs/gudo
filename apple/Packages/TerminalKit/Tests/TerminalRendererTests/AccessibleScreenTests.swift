@@ -74,6 +74,21 @@ import Testing
         #expect(screen.links.map(\.link.target) == ["https://example.com", "/tmp/a.txt", "https://gudo.dev"])
     }
 
+    @Test func hiddenInputChangesAreReportedOnce() throws {
+        let screen = try screen()
+        let surface = screen.surface
+        var changes: [Bool] = []
+        surface.onHiddenInputChanged = { changes.append(surface.isHiddenInput) }
+        surface.enablePrediction()
+        let password = EchoHint(echo: false, canonical: true, atPrompt: false, altScreen: false)
+        let shell = EchoHint(echo: true, canonical: false, atPrompt: true, altScreen: false)
+        surface.applyPrediction(.hint(shell))
+        surface.applyPrediction(.hint(password))
+        surface.applyPrediction(.acknowledged(upTo: 0, hint: password))
+        surface.applyPrediction(.hint(shell))
+        #expect(changes == [true, false])
+    }
+
     private func waitUntil(_ condition: () -> Bool) async throws {
         let deadline = ContinuousClock.now + .seconds(10)
         while !condition(), ContinuousClock.now < deadline {

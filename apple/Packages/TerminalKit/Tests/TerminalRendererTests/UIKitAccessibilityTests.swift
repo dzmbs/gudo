@@ -89,6 +89,22 @@ import UIKit
         withExtendedLifetime(window) {}
     }
 
+    @Test func passwordPromptSwitchesTheKeyboardToSecureEntry() throws {
+        let (view, window) = try makeView("Password: ")
+        #expect(!view.isSecureTextEntry)
+        #expect(view.textContentType == nil)
+        view.surface.enablePrediction()
+        view.surface.applyPrediction(.hint(EchoHint(echo: false, canonical: true, atPrompt: false, altScreen: false)))
+        #expect(view.isSecureTextEntry)
+        #expect(view.textContentType == .password)
+        #expect(view.autocorrectionType == .no)
+        #expect(view.spellCheckingType == .no)
+        view.surface.applyPrediction(.hint(EchoHint(echo: true, canonical: false, atPrompt: true, altScreen: false)))
+        #expect(!view.isSecureTextEntry)
+        #expect(view.textContentType == nil)
+        withExtendedLifetime(window) {}
+    }
+
     @Test func passwordPromptCompositionIsNotRead() throws {
         let (view, window) = try makeView("Password: ")
         view.surface.enablePrediction()

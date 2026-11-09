@@ -130,6 +130,21 @@ public final class TerminalView: UIView {
     public var keyboardAppearance = UIKeyboardAppearance.dark
     /// `.asciiCapable` keeps the software keyboard on a Latin layout (a user setting).
     public var keyboardType = UIKeyboardType.default
+    /// While the program reads a password: the keyboard's secure entry, which keeps keys out of
+    /// its learned words and suggestions and offers saved passwords.
+    public var isSecureTextEntry: Bool {
+        get { surface.isHiddenInput }
+        set {}
+    }
+
+    public var textContentType: UITextContentType? {
+        get { surface.isHiddenInput ? .password : nil }
+        set {}
+    }
+
+    private func hiddenInputChanged() {
+        if isFirstResponder { reloadInputViews() }
+    }
 
     public init(surface: TerminalSurface) {
         self.surface = surface
@@ -166,6 +181,7 @@ public final class TerminalView: UIView {
         MemoryPressure.observe()
 
         surface.onFrameRendered = { [weak self] in self?.layoutSelectionHandles() }
+        surface.onHiddenInputChanged = { [weak self] in self?.hiddenInputChanged() }
         registerForTraitChanges([UITraitDisplayScale.self]) { (view: TerminalView, _) in view.setNeedsLayout() }
     }
 
