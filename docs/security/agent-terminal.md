@@ -34,8 +34,8 @@ directory (it holds `hook.token` and can do anything the user can anyway).
   runtime has a native session id, hooks with a different or missing id are ignored before
   advancing hook order, changing status or replacing a pending approval. A different native
   session needs a fresh tracked runtime.
-- **Display is not authority.** The experimental Claude `MessageDisplay` receiver is disabled by
-  default and uses a separate, pane/purpose-derived bearer token, not an input/approval credential.
+- **Display is not authority.** Dedicated Claude launches use a version-gated `MessageDisplay`
+  receiver with a separate, pane/purpose-derived bearer token, not an input/approval credential.
   Its loopback endpoint rejects browser origins, rebinding hosts and ambiguous request framing;
   bounded capture occurs only after an empty `{}` acknowledgement, never `displayContent`.
   Exact open-launch, pane-object, session, admitted prompt and path checks fence delivery.

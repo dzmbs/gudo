@@ -45,7 +45,10 @@ async fn real_claude_streams_through_the_daemon() {
     );
     assert!(fixture.model_url.starts_with("http://127.0.0.1:"));
     let mut config = crate::Config::new(fixture.root.join("daemon"));
-    config.claude_chat_streaming = !matches!(fixture.scenario, Scenario::OptOut);
+    assert!(config.claude_chat_streaming);
+    if matches!(fixture.scenario, Scenario::OptOut) {
+        config.claude_chat_streaming = false;
+    }
     config.relay = crate::RelayMode::Disabled;
     config.bind = Some("127.0.0.1:0".parse().unwrap());
     config.shell = Some("/bin/sh".into());

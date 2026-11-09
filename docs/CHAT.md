@@ -336,16 +336,17 @@ The fixture in `crates/daemon/tests/fixtures/timeline/` is emitted by the instal
 Code CLI against a loopback-only mock API with an isolated home and placeholder key. Its
 README records which data is preserved. No real account is used.
 
-### Experimental display-only streaming
+### Display-only streaming
 
-`Config::claude_chat_streaming` defaults to false. Dedicated launches can install the bounded,
+`Config::claude_chat_streaming` defaults to true. Dedicated launches install the bounded,
 purpose-authenticated loopback `MessageDisplay` receiver and transcript overlay. After login-shell
 startup and account pins, a same-PID helper checks `claude --version` (128 bytes, two seconds,
 including cleanup of a hung child). Successful supported 2.1.69+ output selects separate versioned
 display settings; unsupported, failed or malformed queries select the unchanged Terminal recipe
 and transcript-backed Chat before any conversation starts. Listener/settings preparation failure
 also selects that recipe. Running sessions' settings and existing/adopted/manual launches are not
-upgraded. No bootstrap prompt, extra model request or automatic conversation retry is used.
+upgraded. Setting `claude_chat_streaming=false` retains the legacy recipe. No bootstrap prompt,
+extra model request or automatic conversation retry is used.
 
 Private real-CLI-through-daemon acceptance uses installed 2.1.319, placeholder credentials and a
 loopback model paused until a client receives the live row. It covers ordinary/multiple-block text,
@@ -353,7 +354,7 @@ unsupported-version fallback, opt-out, capture failure and settings/listener fai
 Terminal text, canonical reconciliation and late rewatch. Each fixture makes one model request.
 The older-version fixture advertises an older version and runs the installed binary in legacy
 mode; it is version-selection evidence, not actual older-binary acceptance. Receiver-only Debug
-loopback round trips are about 0.16–0.19 ms p95 in these runs, not Release/CLI end-to-end or RSS
+loopback round trips are about 0.16 to 0.19 ms p95 in these runs, not Release/CLI end-to-end or RSS
 acceptance. Apple UI acceptance is separate.
 
 The HTTP response is exactly `{}` without `displayContent`, and reaches an independent caller
