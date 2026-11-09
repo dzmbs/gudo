@@ -38,9 +38,7 @@ pub(crate) type ReadFuture =
 pub(crate) trait AgentSession: Send {
     fn capabilities(&self) -> AgentCapabilities;
     fn cursor(&self) -> TimelineCursor;
-    fn check_history_scope(&self, _since: Option<UnixMillis>) -> Result<(), WsError> {
-        Ok(())
-    }
+    fn check_history_scope(&self, since: Option<UnixMillis>) -> Result<(), WsError>;
     fn snapshot(&self, since: Option<UnixMillis>) -> TimelineSnapshot;
     fn refresh(&mut self, core: &Core, pane: PaneId) -> Result<Vec<TimelineOp>, WsError>;
     fn check_current(&self, core: &Core, pane: PaneId) -> Result<(), WsError>;

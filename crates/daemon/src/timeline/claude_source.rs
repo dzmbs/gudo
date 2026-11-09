@@ -167,6 +167,11 @@ impl AgentSession for ClaudeSession {
             .map_or(self.cursor, Transcript::cursor)
     }
 
+    fn check_history_scope(&self, _since: Option<UnixMillis>) -> Result<(), WsError> {
+        // Every transcript read filters by record time, so the whole session is never refused.
+        Ok(())
+    }
+
     fn snapshot(&self, since: Option<UnixMillis>) -> TimelineSnapshot {
         self.transcript.as_ref().map_or_else(
             || TimelineSnapshot {
