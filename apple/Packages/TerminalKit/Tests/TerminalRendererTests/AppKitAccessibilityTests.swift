@@ -86,6 +86,35 @@ import Testing
         withExtendedLifetime(window) {}
     }
 
+    private func children(_ view: TerminalView, role: NSAccessibility.Role) -> [NSAccessibilityElement] {
+        (view.accessibilityChildren() ?? []).compactMap { $0 as? NSAccessibilityElement }.filter { $0.accessibilityRole() == role }
+    }
+
+    @Test func linksAreChildLinksThatOpenLikeACommandClick() throws {
+        let (view, window) = try #require(makeView("\u{1b}]8;;https://example.com\u{1b}\\docs\u{1b}]8;;\u{1b}\\ and https://gudo.dev"))
+        var opened: [TerminalLink] = []
+        view.onOpenLink = { opened.append($0) }
+        let links = children(view, role: .link)
+        #expect(links.map { $0.accessibilityLabel() } == ["docs", "https://gudo.dev"])
+        #expect(links.map { $0.accessibilityURL() } == [URL(string: "https://example.com"), URL(string: "https://gudo.dev")])
+        let first = try #require(links.first)
+        #expect(first.accessibilityFrame() == view.accessibilityFrame(for: NSRange(location: 0, length: 4)))
+        #expect(first.accessibilityParent() as? TerminalView === view)
+        #expect(first.accessibilityPerformPress())
+        #expect(opened.map(\.target) == ["https://example.com"])
+        let attributed = try #require(view.accessibilityAttributedString(for: NSRange(location: 0, length: 4)))
+        #expect(attributed.attribute(.accessibilityLink, at: 0, effectiveRange: nil) as? NSAccessibilityElement === first)
+        #expect(children(view, role: .link).first === first)
+        withExtendedLifetime(window) {}
+    }
+
+    @Test func printedPathsAreLinksOnlyWhenTheyAreUnderlined() throws {
+        let (view, window) = try #require(makeView("/tmp/kept.txt /tmp/gone.txt"))
+        view.underlinesPath = { $0.target == "/tmp/kept.txt" }
+        #expect(children(view, role: .link).map { $0.accessibilityLabel() } == ["/tmp/kept.txt"])
+        withExtendedLifetime(window) {}
+    }
+
     @Test func passwordPromptIsASecureFieldThatDoesNotReadTyping() throws {
         let (view, window) = try #require(makeView("Password: "))
         #expect(view.accessibilitySubrole() == nil)

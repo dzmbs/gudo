@@ -216,6 +216,33 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         return screen
     }
 
+    private var shownLinks: [AccessibleScreen.Link] = []
+    private var linkElements: [ScreenPartElement] = []
+
+    /// The links on screen as child elements (the Links rotor's list), made again only when the
+    /// links change. A path printed as text is one only while it is underlined.
+    private func accessibleLinks() -> [ScreenPartElement] {
+        let screen = screenText
+        let links = screen.links.filter { shown in
+            shown.link.isHyperlink || shown.link.kind == .url || underlinesPath?(shown.link) != false
+        }
+        if links != shownLinks {
+            shownLinks = links
+            linkElements = links.map { shown in
+                let element = ScreenPartElement(view: self, role: .link, label: shown.link.label)
+                element.url = shown.link.url()
+                element.press = { [weak self] in self?.openLink(shown.link) }
+                return element
+            }
+        }
+        for (element, shown) in zip(linkElements, shownLinks) { element.rect = screen.frame(for: shown.range) }
+        return linkElements
+    }
+
+    override public func accessibilityChildren() -> [Any]? {
+        (super.accessibilityChildren() ?? []) + accessibleLinks()
+    }
+
     override public func isAccessibilityElement() -> Bool { true }
     override public func accessibilityRole() -> NSAccessibility.Role? { .textArea }
     /// A secure text field while the program reads a password, so VoiceOver does not echo the
@@ -271,7 +298,7 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         Range(range).map(screenText.text.substring(in:))
     }
 
-    /// Plain text, with OSC 8 hyperlinks as links.
+    /// Plain text, with OSC 8 hyperlinks as links and every link's text tied to its element.
     override public func accessibilityAttributedString(for range: NSRange) -> NSAttributedString? {
         guard let characterRange = Range(range) else { return nil }
         let text = screenText.text
@@ -280,6 +307,12 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
             let overlap = link.range.clamped(to: characterRange)
             guard let url = URL(string: link.url) else { continue }
             attributed.addAttribute(.link, value: url, range: NSRange(location: overlap.lowerBound - characterRange.lowerBound, length: overlap.count))
+        }
+        let elements = accessibleLinks()
+        for (element, shown) in zip(elements, shownLinks) where shown.range.overlaps(characterRange) {
+            let overlap = shown.range.clamped(to: characterRange)
+            attributed.addAttribute(
+                .accessibilityLink, value: element, range: NSRange(location: overlap.lowerBound - characterRange.lowerBound, length: overlap.count))
         }
         return attributed
     }
@@ -834,6 +867,41 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
     }
 
     public func characterIndex(for point: NSPoint) -> Int { NSNotFound }
+}
+
+/// A link or an image on the terminal screen, an element inside its text area.
+private final class ScreenPartElement: NSAccessibilityElement {
+    private weak var view: NSView?
+    private let role: NSAccessibility.Role
+    private let label: String
+    var url: URL?
+    /// In view points.
+    var rect = CGRect.zero
+    var press: (() -> Void)?
+
+    init(view: NSView, role: NSAccessibility.Role, label: String) {
+        self.view = view
+        self.role = role
+        self.label = label
+        super.init()
+    }
+
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { role }
+    override func accessibilityLabel() -> String? { label }
+    override func accessibilityURL() -> URL? { url }
+    override func accessibilityParent() -> Any? { view }
+
+    override func accessibilityFrame() -> NSRect {
+        guard let view, let window = view.window else { return .zero }
+        return window.convertToScreen(view.convert(rect, to: nil))
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        guard let press else { return false }
+        press()
+        return true
+    }
 }
 
 extension KeyModifiers {

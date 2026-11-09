@@ -63,6 +63,17 @@ import Testing
         #expect(screen.offset(at: point) == 5)
     }
 
+    @Test func linksAreThoseACommandClickOpensAndFollowTheText() throws {
+        let screen = try screen()
+        show("\u{1b}]8;;https://example.com\u{1b}\\docs\u{1b}]8;;\u{1b}\\ see /tmp/a.txt", on: screen)
+        #expect(screen.links.map(\.range) == [0..<4, 9..<19])
+        #expect(screen.links.map(\.link.target) == ["https://example.com", "/tmp/a.txt"])
+        #expect(screen.links.map(\.link.isHyperlink) == [true, false])
+        #expect(screen.links.first?.link.label == "docs")
+        show("\r\nhttps://gudo.dev", on: screen)
+        #expect(screen.links.map(\.link.target) == ["https://example.com", "/tmp/a.txt", "https://gudo.dev"])
+    }
+
     private func waitUntil(_ condition: () -> Bool) async throws {
         let deadline = ContinuousClock.now + .seconds(10)
         while !condition(), ContinuousClock.now < deadline {

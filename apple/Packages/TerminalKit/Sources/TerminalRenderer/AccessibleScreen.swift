@@ -13,10 +13,17 @@ final class AccessibleScreen {
         var viewportTop: Int
     }
 
+    /// A link on screen as ⌘-click finds it, and its text.
+    struct Link: Equatable {
+        var range: Range<Int>
+        var link: TerminalLink
+    }
+
     let surface: TerminalSurface
     private let quietPeriod: Duration
     private var cachedText: AccessibleScreenText?
     private var cachedGeneration = 0
+    private var cachedLinks: (generation: Int, links: [Link])?
     private var observedGeneration = 0
     private var observedCaret: Caret?
     private var hasPendingValueChange = false
@@ -37,6 +44,17 @@ final class AccessibleScreen {
         cachedText = text
         cachedGeneration = surface.contentGeneration
         return text
+    }
+
+    /// Every link on screen in reading order, found again only when the text changes.
+    var links: [Link] {
+        let text = text
+        if let cachedLinks, cachedLinks.generation == cachedGeneration { return cachedLinks.links }
+        let links = text.linkRanges().compactMap { range in
+            surface.terminal.link(atViewport: text.cell(atOffset: range.lowerBound)).map { Link(range: range, link: $0) }
+        }
+        cachedLinks = (cachedGeneration, links)
+        return links
     }
 
     /// The selection, or the insertion point at the cursor (the end of the text while the cursor
