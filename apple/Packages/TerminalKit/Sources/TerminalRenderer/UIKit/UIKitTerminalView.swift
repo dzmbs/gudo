@@ -267,11 +267,14 @@ public final class TerminalView: UIView {
 
     /// The terminal screen as one element (identifier `<view id>-screen`; its value reports IME
     /// composition), next to the selection handles while they show.
-    private lazy var screenElement: ScreenElement = {
-        let element = ScreenElement(accessibilityContainer: self)
-        element.text = { [weak self] in
+    private lazy var screenElement: ReadableScreenElement = {
+        let element = ReadableScreenElement(accessibilityContainer: self)
+        element.view = self
+        element.screen = AccessibleScreen(surface: surface)
+        element.text = { [weak self, weak element] in
             guard let self else { return nil }
-            return self.markedText.map { "composing \($0)" } ?? self.surface.terminal.visibleText()
+            if let markedText { return surface.isHiddenInput ? "" : "composing \(markedText)" }
+            return element?.screen?.text.string
         }
         element.accessibilityLabel = "Terminal"
         element.accessibilityTraits = .allowsDirectInteraction
@@ -1308,13 +1311,39 @@ private final class SelectionHandle: UIView {
 
 /// The terminal screen for assistive technologies: its value is the visible text, or the IME
 /// composition while composing.
-private final class ScreenElement: UIAccessibilityElement {
+private class ScreenElement: UIAccessibilityElement {
     var text: (() -> String?)?
 
     override var accessibilityValue: String? {
         get { text?() }
         set {}
     }
+}
+
+/// The screen element read line by line: each viewport row is a line, and the page is the
+/// whole screen.
+private final class ReadableScreenElement: ScreenElement, UIAccessibilityReadingContent {
+    weak var view: UIView?
+    var screen: AccessibleScreen?
+
+    func accessibilityLineNumber(for point: CGPoint) -> Int {
+        guard let view, let screen, let window = view.window else { return NSNotFound }
+        let local = view.convert(point, from: window.screen.coordinateSpace)
+        return screen.text.line(forOffset: screen.offset(at: local))
+    }
+
+    func accessibilityContent(forLineNumber lineNumber: Int) -> String? {
+        guard let text = screen?.text, let range = text.range(forLine: lineNumber) else { return nil }
+        let line = text.substring(in: range)
+        return line.hasSuffix("\n") ? String(line.dropLast()) : line
+    }
+
+    func accessibilityFrame(forLineNumber lineNumber: Int) -> CGRect {
+        guard let view, let screen, let range = screen.text.range(forLine: lineNumber) else { return .zero }
+        return UIAccessibility.convertToScreenCoordinates(screen.frame(for: range), in: view)
+    }
+
+    func accessibilityPageContent() -> String? { screen?.text.string }
 }
 
 /// A UTF-16 offset into the marked text.
