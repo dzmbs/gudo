@@ -316,13 +316,7 @@ pub(crate) fn bulk_reply(result: &Result<WorkspaceResponse, WsError>) -> bool {
 
 impl Timelines {
     async fn open(&self, core: &Arc<Core>, pane: PaneId) -> Result<Arc<Timeline>, WsError> {
-        let mut entries = self.entries.lock().await;
-        entries.retain(|_, timeline| timeline.strong_count() > 0);
-        if let Some(timeline) = entries
-            .get(&pane)
-            .and_then(Weak::upgrade)
-            .filter(|timeline| timeline.is_running())
-        {
+        if let Some(timeline) = self.running(pane).await {
             return Ok(timeline);
         }
         let (wake, wakes) = mpsc::channel(1);
@@ -341,6 +335,10 @@ impl Timelines {
             crate::agent_driver::driver(kind).open(&source_core, pane, epoch, wake)
         })
         .await?;
+        let mut entries = self.entries.lock().await;
+        if let Some(timeline) = running_entry(&mut entries, pane) {
+            return Ok(timeline);
+        }
         let (updates, _) = broadcast::channel(8);
         let timeline = Arc::new(Timeline {
             state: Mutex::new(state),
@@ -362,6 +360,21 @@ impl Timelines {
         entries.insert(pane, Arc::downgrade(&timeline));
         Ok(timeline)
     }
+
+    async fn running(&self, pane: PaneId) -> Option<Arc<Timeline>> {
+        running_entry(&mut *self.entries.lock().await, pane)
+    }
+}
+
+fn running_entry(
+    entries: &mut HashMap<PaneId, Weak<Timeline>>,
+    pane: PaneId,
+) -> Option<Arc<Timeline>> {
+    entries.retain(|_, timeline| timeline.strong_count() > 0);
+    entries
+        .get(&pane)
+        .and_then(Weak::upgrade)
+        .filter(|timeline| timeline.is_running())
 }
 
 async fn run(
