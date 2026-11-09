@@ -20,6 +20,12 @@ public extension View {
         modifier(ThemedGlass(shape: .capsule, interactive: interactive, elevated: false))
     }
 
+    /// The theme's surface as glass behind the content, opaque under Reduce Transparency: the
+    /// one fill every glass surface uses.
+    func themedGlass(in shape: some InsettableShape, interactive: Bool = false) -> some View {
+        modifier(ThemedGlassFill(shape: shape, interactive: interactive))
+    }
+
     /// A lit rim on dark chrome, a faint ink line on light.
     func glassEdge(_ shape: some InsettableShape) -> some View {
         modifier(GlassEdge(shape: shape))
@@ -41,34 +47,54 @@ private struct GlassEdge<S: InsettableShape>: ViewModifier {
     }
 }
 
-/// Glass tinted with the chrome's surface: the paper itself on light chrome (a raised grey there
-/// reads as a flat grey card), the raised surface on dark. Under Reduce Transparency the surface
-/// is opaque, as the system's own bars are.
+/// What a glass surface shows: Liquid Glass tinted with the chrome's surface, or under Reduce
+/// Transparency that surface opaque, as the system's own bars are. The surface is the paper itself
+/// on light chrome (a raised grey there reads as a flat grey card), the raised surface on dark.
+nonisolated public enum GlassSurface: Equatable, Sendable {
+    case glass(tint: ThemeColor, opacity: Double)
+    case opaque(ThemeColor)
+
+    /// How much of the surface tints dark glass: enough to carry the theme's hue, little enough
+    /// that the glass still reads as glass. Light chrome needs more of its paper: text under
+    /// clear glass reads through it.
+    static let tintOpacity = (light: 0.88, dark: 0.55)
+
+    public static func choose(for chrome: ChromePalette, reduceTransparency: Bool) -> GlassSurface {
+        let light = chrome.scheme == .light
+        let surface = light ? chrome.base : chrome.raised
+        guard !reduceTransparency else { return .opaque(surface) }
+        return .glass(tint: surface, opacity: light ? tintOpacity.light : tintOpacity.dark)
+    }
+}
+
+private struct ThemedGlassFill<S: InsettableShape>: ViewModifier {
+    let shape: S
+    let interactive: Bool
+    @Environment(\.chrome) private var chrome
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    func body(content: Content) -> some View {
+        switch GlassSurface.choose(for: chrome, reduceTransparency: reduceTransparency) {
+        case .glass(let tint, let opacity):
+            let glass = Glass.regular.tint(tint.color.opacity(opacity))
+            content.glassEffect(interactive ? glass.interactive() : glass, in: shape)
+        case .opaque(let surface):
+            content.background(surface.color, in: shape)
+        }
+    }
+}
+
+/// A floating surface: the themed glass with its edge and shadow.
 private struct ThemedGlass<S: InsettableShape>: ViewModifier {
     let shape: S
     let interactive: Bool
     let elevated: Bool
-    @Environment(\.chrome) private var chrome
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-
-    /// How much of the surface tints the glass: enough to carry the theme's hue, little enough
-    /// that the glass still reads as glass.
-    static var tint: Double { 0.55 }
 
     func body(content: Content) -> some View {
-        let light = chrome.scheme == .light
-        let surface = light ? chrome.baseColor : chrome.raisedColor
-        // Light chrome needs more of its paper: text under clear glass reads through it.
-        let glass = Glass.regular.tint(surface.opacity(light ? 0.88 : Self.tint))
-        Group {
-            if reduceTransparency {
-                content.background(surface, in: shape)
-            } else {
-                content.glassEffect(interactive ? glass.interactive() : glass, in: shape)
-            }
-        }
-        .glassEdge(shape)
-        .shadow(elevated ? .panel : .float)
+        content
+            .themedGlass(in: shape, interactive: interactive)
+            .glassEdge(shape)
+            .shadow(elevated ? .panel : .float)
     }
 }
 

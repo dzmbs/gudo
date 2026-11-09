@@ -223,7 +223,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         footer.rootView = composer
         latest.rootView = AnyView(Button { [weak self] in self?.jumpToLatest() } label: {
             Label("New", systemImage: "arrow.down").font(.callout.weight(.medium)).padding(.horizontal, 14).padding(.vertical, 10)
-        }.buttonStyle(.plain).glassEffect(.regular, in: .capsule).environment(\.self, environment))
+        }.buttonStyle(.plain).themedGlass(in: .capsule, interactive: true).environment(\.self, environment))
         latest.view.isHidden = !(model.hasNewItems || frame.hasNewerGap)
         guard isViewLoaded else { pending = frame; return }
         view.backgroundColor = UIColor(environment.chrome.background.color)

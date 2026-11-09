@@ -1,4 +1,5 @@
 #if os(iOS)
+import DesignSystem
 import UIKit
 
 /// A key inside a capsule: a bare label or symbol with no fill of its own. A press shows a soft pill
@@ -89,7 +90,7 @@ final class CapsuleKey: UIButton {
 /// A floating Liquid Glass capsule holding keys edge to edge (no dead gaps between them). Its
 /// touch area reaches 6 pt above and below, so a 40 pt capsule is a 52 pt target.
 final class CapsuleView: UIView {
-    private let glass = UIVisualEffectView(effect: UIGlassEffect())
+    private let glass = ThemedGlassView { KeyBarTheme.chrome }
     private(set) var keys: [UIView] = []
     var metrics: CapsuleMetrics
 
@@ -145,7 +146,7 @@ final class KeyStripView: UIView, UIScrollViewDelegate {
     private static let dividerWidth: CGFloat = 9
     private static let fadeWidth: CGFloat = 18
 
-    private let glass = UIVisualEffectView(effect: UIGlassEffect())
+    private let glass = ThemedGlassView { KeyBarTheme.chrome }
     private let divider = UIView()
     private let scrollView = KeyScrollView()
     private let fade = CAGradientLayer()

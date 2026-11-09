@@ -8,7 +8,6 @@ import SwiftUI
 struct UpdateCard: View {
     let prompt: UpdatePrompt
     @Environment(\.chrome) private var chrome
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     private static let shape = RoundedRectangle(cornerRadius: DS.Radius.searchPanel, style: .continuous)
 
@@ -45,20 +44,15 @@ struct UpdateCard: View {
     }
 
     /// The theme's surface as glass, lit from the top corner with a breath of its accent.
-    @ViewBuilder private var surface: some View {
+    private var surface: some View {
         let light = chrome.scheme == .light
-        let paper = light ? chrome.baseColor : chrome.raisedColor
-        if reduceTransparency {
-            Self.shape.fill(paper)
-        } else {
-            Color.clear
-                .glassEffect(.regular.tint(paper.opacity(light ? 0.85 : 0.6)), in: Self.shape)
-                .overlay {
-                    Self.shape.fill(LinearGradient(
-                        colors: [chrome.accentColor.opacity(light ? 0.08 : 0.12), .clear],
-                        startPoint: .topLeading, endPoint: .center))
-                }
-        }
+        return Color.clear
+            .themedGlass(in: Self.shape)
+            .overlay {
+                Self.shape.fill(LinearGradient(
+                    colors: [chrome.accentColor.opacity(light ? 0.08 : 0.12), .clear],
+                    startPoint: .topLeading, endPoint: .center))
+            }
     }
 
     // MARK: Header

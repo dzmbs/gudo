@@ -131,7 +131,7 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
     private let favourites: FavouriteKeys
     private var metrics = CapsuleMetrics.for(width: 400, compactHeight: false, isPad: false)
 
-    private let panelCard = UIVisualEffectView(effect: UIGlassEffect())
+    private let panelCard = ThemedGlassView { KeyBarTheme.chrome }
     private let column = UIStackView()
     private let composer: ComposerView
     private let lineEditor: LineEditorController
@@ -253,6 +253,7 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
         overrideUserInterfaceStyle = KeyBarTheme.style
         tintColor = KeyBarTheme.accent
         for case let key as UIButton in allSubviews(of: self) { key.setNeedsUpdateConfiguration() }
+        for case let glass as ThemedGlassView in allSubviews(of: self) { glass.refresh() }
         configureCircles()
         strip.applyInk()
         joystick.applyInk()
@@ -1036,7 +1037,7 @@ private final class BandView: UIView {
 
 /// A glass circle around one button (⋯, ⌄).
 private final class CircleView: UIView {
-    private let glass = UIVisualEffectView(effect: UIGlassEffect())
+    private let glass = ThemedGlassView { KeyBarTheme.chrome }
 
     init(content: UIView) {
         super.init(frame: .zero)

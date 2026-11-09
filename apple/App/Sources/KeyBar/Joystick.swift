@@ -1,4 +1,5 @@
 #if os(iOS)
+import DesignSystem
 import TerminalCore
 import UIKit
 
@@ -23,7 +24,7 @@ final class JoystickView: UIView {
     private static let deadZone: CGFloat = 8
     private static let repeatDelay = Duration.milliseconds(350)
 
-    private let glass = UIVisualEffectView(effect: UIGlassEffect())
+    private let glass = ThemedGlassView { KeyBarTheme.chrome }
     private let icon = UIImageView()
     private let label = UILabel()
     private let dot = UIView()
