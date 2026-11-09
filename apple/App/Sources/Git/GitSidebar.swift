@@ -72,9 +72,7 @@ private struct GitRowStyle: ViewModifier {
             .frame(minHeight: 32)
             #endif
             .contentShape(.rect)
-            .background(
-                RoundedRectangle(cornerRadius: DS.Radius.control)
-                    .fill(DS.Palette.ink.opacity(selected ? ChromePalette.fillLevels.selected : hovered ? ChromePalette.fillLevels.hover : 0)))
+            .controlFill(ControlState(isHovered: hovered, isSelected: selected))
             .padding(.horizontal, DS.Space.s)
             .onHover { hovered = $0 }
             #if os(iOS)

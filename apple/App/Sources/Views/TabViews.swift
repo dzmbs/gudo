@@ -147,9 +147,7 @@ private struct SidebarRowStyle: ViewModifier {
             .padding(.vertical, DS.Space.row)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(.rect)
-            .background(
-                RoundedRectangle(cornerRadius: DS.Radius.control)
-                    .fill(DS.Palette.ink.opacity(selected ? ChromePalette.fillLevels.selected : hovered ? ChromePalette.fillLevels.hover : 0)))
+            .controlFill(ControlState(isHovered: hovered, isSelected: selected))
             #if os(iOS)
             .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: DS.Radius.control))
             .hoverEffect(.highlight)
