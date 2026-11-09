@@ -123,13 +123,13 @@ public extension DS {
         public static let indicator = Animation.spring(response: 0.3, dampingFraction: 0.8)
         public static let bell = Animation.easeInOut(duration: 0.3)
         public static let panel = Animation.smooth(duration: panelDuration)
-        public static let panelDuration = 0.35
+        public static let panelDuration = 0.3
         /// A curve that ends on time, so the terminals' one reflow follows straight after.
         public static let sidebar = Animation.easeInOut(duration: sidebarDuration)
         public static let sidebarDuration = 0.25
         /// Ends on time so the terminals reflow once, straight after.
         public static let fold = Animation.smooth(duration: foldDuration)
-        public static let foldDuration = 0.4
+        public static let foldDuration = 0.34
         /// How long the cols × rows overlay stays after the last resize.
         public static let resizeOverlayDuration = Duration.milliseconds(750)
         /// Long enough to read eight words.
@@ -149,11 +149,11 @@ public extension DS {
         public static let reorder = Animation.spring(response: 0.3, dampingFraction: 0.84)
         /// A collapsed group opening under a drag that rests on it.
         public static let springOpenDelay = Duration.milliseconds(600)
-        public static let press = Animation.spring(response: 0.2, dampingFraction: 0.7)
+        public static let press = Animation.spring(response: 0.2, dampingFraction: 0.86)
         /// A pane lifting into a floating window, docking back or going to the tray. Grids hold
         /// for `liftDuration`, then reflow once.
-        public static let lift = Animation.spring(duration: 0.42, bounce: 0.12)
-        public static let liftDuration = 0.5
+        public static let lift = Animation.spring(duration: 0.34, bounce: 0)
+        public static let liftDuration = 0.42
         public static let settle = Animation.spring(response: 0.34, dampingFraction: 0.86)
         /// Errors stay longer than confirmations: they are read, not glanced at.
         public static let bannerErrorDuration = Duration.seconds(4)
