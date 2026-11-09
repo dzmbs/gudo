@@ -265,11 +265,13 @@ struct StressProbeTests {
 
     /// With GUDO_STRESS_SAMPLE=<file>, samples this process for a few seconds in the background.
     func startSampling() {
+        #if os(macOS)
         guard let file = ProcessInfo.processInfo.environment["GUDO_STRESS_SAMPLE"] else { return }
         let sample = Process()
         sample.executableURL = URL(fileURLWithPath: "/usr/bin/sample")
         sample.arguments = ["\(getpid())", "5", "-file", file]
         try? sample.run()
+        #endif
     }
 
     /// With GUDO_STRESS_PAUSE=<file>, writes the pid there and waits for `leaks`/`vmmap`.
