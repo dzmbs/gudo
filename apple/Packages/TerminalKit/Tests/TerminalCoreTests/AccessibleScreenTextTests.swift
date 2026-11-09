@@ -121,6 +121,17 @@ import Testing
         #expect(text.links == [AccessibleScreenText.Link(range: 4..<8, url: "https://example.com")])
     }
 
+    @Test func linkRangesCoverHyperlinksAndPrintedURLsAndPathsInOrder() {
+        let (_, text) = screen(cols: 30, "😀 https://gudo.dev/a\r\n\u{1b}]8;;https://example.com\u{1b}\\docs\u{1b}]8;;\u{1b}\\ src/main.rs:12")
+        #expect(text.string == "😀 https://gudo.dev/a\ndocs src/main.rs:12")
+        #expect(text.linkRanges() == [3..<21, 22..<26, 27..<41])
+    }
+
+    @Test func printedURLInsideAHyperlinkIsOneLink() {
+        let (_, text) = screen(cols: 40, "\u{1b}]8;;https://example.com\u{1b}\\https://example.com\u{1b}]8;;\u{1b}\\")
+        #expect(text.linkRanges() == [0..<19])
+    }
+
     @Test func concealedTextReadsAsBlank() {
         let (_, text) = screen(cols: 20, "pw \u{1b}[8mhunter2\u{1b}[0m\r\nok")
         #expect(text.string == "pw\nok")

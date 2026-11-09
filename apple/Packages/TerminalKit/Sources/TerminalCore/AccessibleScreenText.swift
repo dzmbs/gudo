@@ -191,6 +191,24 @@ public struct AccessibleScreenText: Sendable, Equatable {
         return spans.isEmpty ? [insertionSpan] : spans
     }
 
+    /// Every link in reading order: the OSC 8 hyperlinks, and the URLs and paths printed as text
+    /// outside them, found on each line as ⌘-click finds them.
+    public func linkRanges() -> [Range<Int>] {
+        var ranges = links.map(\.range)
+        var lineStart = 0
+        for line in string.split(separator: "\n", omittingEmptySubsequences: false) {
+            for match in LinkDetector.matches(in: String(line)) {
+                let start = line.index(line.startIndex, offsetBy: match.range.lowerBound)
+                let end = line.index(start, offsetBy: match.range.count)
+                let lower = lineStart + line.utf16.distance(from: line.startIndex, to: start)
+                let range = lower..<(lower + line.utf16.distance(from: start, to: end))
+                if !links.contains(where: { $0.range.overlaps(range) }) { ranges.append(range) }
+            }
+            lineStart += line.utf16.count + 1
+        }
+        return ranges.sorted { $0.lowerBound < $1.lowerBound }
+    }
+
     /// The text in a range, clamped to the text.
     public func substring(in range: Range<Int>) -> String {
         let lower = min(max(range.lowerBound, 0), length)
