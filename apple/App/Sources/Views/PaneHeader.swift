@@ -174,7 +174,8 @@ private struct PaneHeaderButtons: View {
             if model.activeMixedTab == nil {
                 HeaderButton(
                     window == nil ? "Float Pane" : "Dock Pane", systemImage: "square.on.square",
-                    shortcut: WorkspaceAction.toggleFloat, lit: window != nil
+                    shortcut: WorkspaceAction.toggleFloat, lit: window != nil,
+                    disabledReason: "a tab keeps one docked pane, so split first"
                 ) {
                     model.toggleFloat(id, in: workspace)
                 }
@@ -223,44 +224,67 @@ private struct PaneHeaderButtons: View {
     }
 }
 
-/// One header glyph: a hover fill like Ghostty's search buttons, the accent while lit.
+/// One header glyph: a hover fill like Ghostty's search buttons, the accent while lit. A
+/// disabled glyph says why in its tooltip.
 private struct HeaderButton: View {
     let title: String
     let systemImage: String
     let shortcut: WorkspaceAction
     var lit = false
+    var disabledReason: String?
     let action: () -> Void
-    @State private var hovered = false
     @Environment(\.isEnabled) private var isEnabled
 
-    init(_ title: String, systemImage: String, shortcut: WorkspaceAction, lit: Bool = false, action: @escaping () -> Void) {
+    init(
+        _ title: String, systemImage: String, shortcut: WorkspaceAction, lit: Bool = false, disabledReason: String? = nil,
+        action: @escaping () -> Void
+    ) {
         self.title = title
         self.systemImage = systemImage
         self.shortcut = shortcut
         self.lit = lit
+        self.disabledReason = disabledReason
         self.action = action
     }
 
     var body: some View {
+        let reason = isEnabled ? nil : disabledReason
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(lit ? AnyShapeStyle(DS.Palette.accent) : AnyShapeStyle(DS.Palette.textSecondary))
-                .frame(width: 22, height: 20)
-                .background {
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(lit ? AnyShapeStyle(DS.Palette.accent.opacity(0.14)) : (hovered ? AnyShapeStyle(DS.Palette.hoverFill) : AnyShapeStyle(Color.clear)))
-                }
-                .contentShape(.rect)
-                .opacity(isEnabled ? 1 : 0.35)
         }
-        .buttonStyle(.plain)
-        .onHover { hovered = $0 }
-        .help("\(title) (\(shortcut.shortcut.symbols.joined()))")
+        .buttonStyle(HeaderButtonStyle(isLit: lit))
+        .help(reason.map { "\(title): \($0)" } ?? "\(title) (\(shortcut.shortcut.symbols.joined()))")
         .accessibilityLabel(title)
+        .accessibilityHint(reason ?? "")
         #if os(iOS)
         .hoverEffect(.highlight)
         #endif
+    }
+}
+
+private struct HeaderButtonStyle: ButtonStyle {
+    let isLit: Bool
+    @State private var isHovered = false
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        let state = ControlState(isHovered: isHovered, isPressed: configuration.isPressed, isEnabled: isEnabled)
+        let shape = RoundedRectangle(cornerRadius: 5, style: .continuous)
+        configuration.label
+            .font(.caption.weight(.medium))
+            .foregroundStyle(ink)
+            .frame(width: 22, height: 20)
+            .background {
+                if isLit { shape.fill(DS.Palette.accent.opacity(isEnabled ? 0.14 : 0)) }
+            }
+            .controlFill(state, in: shape)
+            .contentShape(.rect)
+            .onHover { isHovered = $0 }
+    }
+
+    private var ink: ChromeStyle {
+        let rest = isLit ? DS.Palette.accent : DS.Palette.textSecondary
+        return isEnabled ? rest : rest.disabled
     }
 }
 
