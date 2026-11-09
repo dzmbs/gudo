@@ -804,7 +804,6 @@ struct GroupAgents: View {
                             HStack(spacing: DS.Space.xs) {
                                 ProgramMark(program, size: 12)
                                     .foregroundStyle(.primary)
-                                    .opacity(DS.Opacity.mutedGlyph)
                                 let name = program.isShell ? "agent" : program.displayName
                                 Text(name)
                                     .font(SidebarFont.subtitle)

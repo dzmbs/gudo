@@ -706,7 +706,6 @@ private struct InboxRow: View {
             if !item.isCommand {
                 ProgramMark(item.identity, size: 12)
                     .foregroundStyle(.primary)
-                    .opacity(DS.Opacity.mutedGlyph)
             }
             Text([item.isCommand ? "Command" : item.title, item.hostName, item.sessionTitle]
                 .filter { !$0.isEmpty }.joined(separator: " · "))
