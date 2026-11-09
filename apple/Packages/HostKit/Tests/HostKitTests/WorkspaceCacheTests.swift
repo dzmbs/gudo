@@ -1,6 +1,7 @@
 import Foundation
 @testable import HostKit
 import PaneLayout
+import Security
 import Synchronization
 import TerminalCore
 import Testing
@@ -18,6 +19,17 @@ nonisolated final class HeldStates: Sendable {
     private let states = Mutex<[DaemonPaneBackend.HeldInputState]>([])
     var all: [DaemonPaneBackend.HeldInputState] { states.withLock { $0 } }
     func append(_ state: DaemonPaneBackend.HeldInputState) { states.withLock { $0.append(state) } }
+}
+
+/// A Keychain that refuses every read and write, as a locked device's does.
+nonisolated final class RefusingSecretStore: SecretStore {
+    func data(for key: String) throws -> Data? { throw refusal(key) }
+    func set(_ data: Data, for key: String) throws { throw refusal(key) }
+    func remove(_ key: String) throws { throw refusal(key) }
+
+    private func refusal(_ key: String) -> SecretStoreError {
+        SecretStoreError(status: errSecInteractionNotAllowed, operation: key)
+    }
 }
 
 /// The layout `sampleLayout()` describes, as a session (one tab 10: 1 | (2 / 3), 3 focused).
@@ -46,7 +58,7 @@ struct WorkspaceCacheTests {
     // MARK: The store
 
     @Test func roundTripKeepsTheLayoutNamesAndScreens() throws {
-        let store = WorkspaceCacheStore(directory: temporaryDirectory())
+        let store = WorkspaceCacheStore(directory: temporaryDirectory(), secrets: MemorySecretStore())
         let source = terminal((1...60).map { "line \($0)" } + ["$ cargo test", "test result: ok"])
         source.scrollViewport(by: -5)
         let pane = CachedPane(terminal: source, title: "cargo", cwd: "/srv/api")
@@ -70,7 +82,7 @@ struct WorkspaceCacheTests {
     }
 
     @Test func theFileIsOwnerOnlyAndOutOfBackups() throws {
-        let store = WorkspaceCacheStore(directory: temporaryDirectory().appending(path: "Workspaces"))
+        let store = WorkspaceCacheStore(directory: temporaryDirectory().appending(path: "Workspaces"), secrets: MemorySecretStore())
         try store.save(cached())
         let attributes = try FileManager.default.attributesOfItem(atPath: store.file(for: "h").path)
         #if os(macOS)
@@ -113,7 +125,7 @@ struct WorkspaceCacheTests {
     }
 
     @Test func aCacheThatIsNoLongerTheHostsIsDropped() throws {
-        let store = WorkspaceCacheStore(directory: temporaryDirectory())
+        let store = WorkspaceCacheStore(directory: temporaryDirectory(), secrets: MemorySecretStore())
         try store.save(cached())
         #expect(store.load(hostId: "h", daemonId: "d2", sessionId: 7) == nil, "paired again with another daemon")
         #expect(!FileManager.default.fileExists(atPath: store.file(for: "h").path))
@@ -129,6 +141,101 @@ struct WorkspaceCacheTests {
         try Data("UNWSgarbage".utf8).write(to: store.file(for: "h"))
         #expect(store.load(hostId: "h", daemonId: "d1", sessionId: 7) == nil, "unreadable")
         #expect(store.load(hostId: "other", daemonId: "d1", sessionId: 7) == nil)
+    }
+
+    // MARK: Sealed at rest
+
+    /// What an older app wrote: the plist in the clear, compressed.
+    private func plainFile(_ workspace: CachedWorkspace) throws -> Data {
+        let encoder = PropertyListEncoder()
+        encoder.outputFormat = .binary
+        let plist = try encoder.encode(workspace)
+        return Data("UNWS".utf8) + (try (plist as NSData).compressed(using: .lzfse) as Data)
+    }
+
+    @Test func aSavedFileOpensOnlyWithThisDevicesKey() throws {
+        let directory = temporaryDirectory()
+        let secrets = MemorySecretStore()
+        let store = WorkspaceCacheStore(directory: directory, secrets: secrets)
+        let workspace = cached()
+        try store.save(workspace)
+        let raw = try Data(contentsOf: store.file(for: "h"))
+        #expect(raw.starts(with: Data("UNWE".utf8) + [1]))
+        #expect(try secrets.data(for: CacheSeal.keyName)?.count == 32)
+        let reopened = WorkspaceCacheStore(directory: directory, secrets: secrets)
+        #expect(reopened.load(hostId: "h", daemonId: "d1", sessionId: 7) == workspace)
+
+        let otherDevice = WorkspaceCacheStore(directory: directory, secrets: MemorySecretStore())
+        #expect(otherDevice.load(hostId: "h", daemonId: "d1", sessionId: 7) == nil)
+        #expect(!FileManager.default.fileExists(atPath: store.file(for: "h").path))
+    }
+
+    @Test func aTamperedFileIsDropped() throws {
+        let store = WorkspaceCacheStore(directory: temporaryDirectory(), secrets: MemorySecretStore())
+        try store.save(cached())
+        let original = try Data(contentsOf: store.file(for: "h"))
+        for offset in [4, 5, 20, original.count / 2, original.count - 1] {
+            var tampered = original
+            tampered[offset] ^= 0x01
+            try tampered.write(to: store.file(for: "h"))
+            #expect(store.load(hostId: "h", daemonId: "d1", sessionId: 7) == nil, "byte \(offset) changed")
+            #expect(!FileManager.default.fileExists(atPath: store.file(for: "h").path))
+        }
+        try original.prefix(30).write(to: store.file(for: "h"))
+        #expect(store.load(hostId: "h", daemonId: "d1", sessionId: 7) == nil, "cut short")
+
+        // Another host's sealed file under this host's name.
+        try store.save(cached(hostId: "other"))
+        try FileManager.default.copyItem(at: store.file(for: "other"), to: store.file(for: "h"))
+        #expect(store.load(hostId: "h", daemonId: "d1", sessionId: 7) == nil)
+    }
+
+    @Test func aPlainFileFromAnOlderAppIsSealedInPlace() throws {
+        let store = WorkspaceCacheStore(directory: temporaryDirectory(), secrets: MemorySecretStore())
+        let workspace = cached()
+        try plainFile(workspace).write(to: store.file(for: "h"))
+
+        #expect(store.load(hostId: "h", daemonId: "d1", sessionId: 7) == workspace)
+        let raw = try Data(contentsOf: store.file(for: "h"))
+        #expect(raw.starts(with: Data("UNWE".utf8) + [1]))
+        #expect(store.load(hostId: "h", daemonId: "d1", sessionId: 7) == workspace)
+
+        // A stale one is deleted, never sealed.
+        try plainFile(cached(daemonId: "d0")).write(to: store.file(for: "h"))
+        #expect(store.load(hostId: "h", daemonId: "d1", sessionId: 7) == nil)
+        #expect(!FileManager.default.fileExists(atPath: store.file(for: "h").path))
+    }
+
+    @Test func aLostKeyOnlyLosesTheCache() throws {
+        let directory = temporaryDirectory()
+        let secrets = MemorySecretStore()
+        try WorkspaceCacheStore(directory: directory, secrets: secrets).save(cached())
+        try secrets.remove(CacheSeal.keyName)
+
+        let store = WorkspaceCacheStore(directory: directory, secrets: secrets)
+        #expect(store.load(hostId: "h", daemonId: "d1", sessionId: 7) == nil)
+        #expect(!FileManager.default.fileExists(atPath: store.file(for: "h").path))
+        try store.save(cached())
+        #expect(store.load(hostId: "h", daemonId: "d1", sessionId: 7) != nil, "a new key seals the next save")
+
+        try secrets.set(Data([1, 2, 3]), for: CacheSeal.keyName)
+        let damagedKey = WorkspaceCacheStore(directory: directory, secrets: secrets)
+        #expect(damagedKey.load(hostId: "h", daemonId: "d1", sessionId: 7) == nil)
+        try damagedKey.save(cached())
+        #expect(damagedKey.load(hostId: "h", daemonId: "d1", sessionId: 7) != nil)
+    }
+
+    @Test func aKeychainThatRefusesTheKeyKeepsTheFileForLater() throws {
+        let directory = temporaryDirectory()
+        let secrets = MemorySecretStore()
+        try WorkspaceCacheStore(directory: directory, secrets: secrets).save(cached())
+
+        let locked = WorkspaceCacheStore(directory: directory, secrets: RefusingSecretStore())
+        #expect(locked.load(hostId: "h", daemonId: "d1", sessionId: 7) == nil)
+        #expect(FileManager.default.fileExists(atPath: locked.file(for: "h").path))
+        #expect(throws: SecretStoreError.self) { try locked.save(cached()) }
+
+        #expect(WorkspaceCacheStore(directory: directory, secrets: secrets).load(hostId: "h", daemonId: "d1", sessionId: 7) != nil)
     }
 
     // MARK: A connection before and after the daemon answers
@@ -173,7 +280,7 @@ struct WorkspaceCacheTests {
 
     @Test func hostGroupsListSavedTabsWhileConnecting() throws {
         let model = HostsModel(secrets: MemorySecretStore(), repository: HostRepository(directory: temporaryDirectory()))
-        let store = WorkspaceCacheStore(directory: temporaryDirectory())
+        let store = WorkspaceCacheStore(directory: temporaryDirectory(), secrets: MemorySecretStore())
         model.workspaceCache = store
         model.dialer = { _, listener in FakeClient(listener: listener) }
         var record = HostRecord(id: "h", name: "studio", kind: .daemon, daemonId: "d1")
@@ -197,7 +304,7 @@ struct WorkspaceCacheTests {
 
     @Test func aGuestsViewOfAnotherHostIsNeverShownFromTheCache() throws {
         let model = HostsModel(secrets: MemorySecretStore(), repository: HostRepository(directory: temporaryDirectory()))
-        let store = WorkspaceCacheStore(directory: temporaryDirectory())
+        let store = WorkspaceCacheStore(directory: temporaryDirectory(), secrets: MemorySecretStore())
         model.workspaceCache = store
         model.joinDialer = { _, listener in FakeClient(listener: listener) }
         var record = HostRecord(id: "h", name: "theirs", kind: .daemon, daemonId: "d1")

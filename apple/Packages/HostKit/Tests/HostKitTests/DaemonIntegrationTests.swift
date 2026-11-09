@@ -253,7 +253,7 @@ nonisolated final class LocalDaemon {
     @Test func instantStartShowsTheSavedWorkspaceThenGoesLive() async throws {
         let daemon = try LocalDaemon()
         let model = makeModel()
-        let store = WorkspaceCacheStore(directory: temporaryDirectory())
+        let store = WorkspaceCacheStore(directory: temporaryDirectory(), secrets: MemorySecretStore())
         model.workspaceCache = store
         let hostId = try await model.pair(try PairingTicket(try await daemon.ticket()), name: "local")
         let first = try #require(model.connection(hostId) as? DaemonConnection)
@@ -329,7 +329,7 @@ nonisolated final class LocalDaemon {
     @Test func theFocusedTabAndPaneComeBackAfterARestartAndRelaunch() async throws {
         let daemon = try LocalDaemon()
         let model = makeModel()
-        let store = WorkspaceCacheStore(directory: temporaryDirectory())
+        let store = WorkspaceCacheStore(directory: temporaryDirectory(), secrets: MemorySecretStore())
         model.workspaceCache = store
         let hostId = try await model.pair(try PairingTicket(try await daemon.ticket()), name: "local")
         let first = try #require(model.connection(hostId) as? DaemonConnection)

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import os
 import PaneLayout
@@ -156,33 +157,49 @@ nonisolated public struct WorkspaceCacheLimits: Sendable, Equatable {
     public init() {}
 }
 
-/// Cached workspaces on disk, one file per host: owner-only, out of backups, and on iOS
-/// readable only after the first unlock. Safe to use from any thread.
+/// Cached workspaces on disk, one file per host: sealed with this device's cache key
+/// (`CacheSeal`), owner-only, out of backups, and on iOS readable only after the first unlock.
+/// Safe to use from any thread.
 nonisolated public final class WorkspaceCacheStore: Sendable {
     public let directory: URL
     public let limits: WorkspaceCacheLimits
-    private static let magic = Data("UNWS".utf8)
+    private let seal: CacheSeal
+    /// Older apps' files: the plist in the clear, LZFSE-compressed.
+    private static let plainMagic = Data("UNWS".utf8)
+    /// Then the plist, LZFSE-compressed and sealed (AES-GCM: nonce, ciphertext, tag).
+    private static let sealedHeader = Data("UNWE".utf8) + [1]
     private static let log = Logger(subsystem: Log.subsystem, category: "cache")
 
-    public init(directory: URL, limits: WorkspaceCacheLimits = .init()) {
+    /// `secrets` keeps the cache key.
+    public init(directory: URL, secrets: any SecretStore, limits: WorkspaceCacheLimits = .init()) {
         self.directory = directory
         self.limits = limits
+        seal = CacheSeal(secrets: secrets)
     }
 
     /// The app's store: in Caches (never backed up; the system may purge it, which only costs
     /// one instant start), or in `isolated` for tests and tooling.
-    public static func appDefault(isolated: URL? = nil) -> WorkspaceCacheStore {
+    public static func appDefault(isolated: URL? = nil, secrets: any SecretStore) -> WorkspaceCacheStore {
         let base = isolated ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appending(path: Bundle.main.bundleIdentifier ?? "app", directoryHint: .isDirectory)
-        return WorkspaceCacheStore(directory: base.appending(path: "Workspaces", directoryHint: .isDirectory))
+        return WorkspaceCacheStore(
+            directory: base.appending(path: "Workspaces", directoryHint: .isDirectory), secrets: secrets)
     }
 
     /// The host's cached workspace, if it is still the host's: same daemon, same session,
-    /// this format, not too old. Anything else is deleted.
+    /// this format, not too old. Anything else is deleted; a file an older app left in the
+    /// clear is sealed in its place. While the Keychain refuses the key, the file is kept.
     public func load(hostId: String, daemonId: String?, sessionId: UInt64?, now: Date = .now) -> CachedWorkspace? {
         let url = file(for: hostId)
         guard let data = try? Data(contentsOf: url) else { return nil }
-        guard let cached = Self.decode(data), cached.hostId == hostId, cached.daemonId == daemonId,
+        let read: Read
+        do {
+            read = try Self.decode(data, hostId: hostId, seal: seal)
+        } catch {
+            Self.log.error("workspace cache key unreadable: \(String(describing: error), privacy: .public)")
+            return nil
+        }
+        guard let cached = read.workspace, cached.hostId == hostId, cached.daemonId == daemonId,
               sessionId == nil || cached.sessionId == sessionId,
               now.timeIntervalSince(cached.savedAt) < limits.maxAge
         else {
@@ -190,15 +207,25 @@ nonisolated public final class WorkspaceCacheStore: Sendable {
             try? FileManager.default.removeItem(at: url)
             return nil
         }
+        if read.wasPlain {
+            do {
+                try save(cached)
+            } catch {
+                Self.log.error("sealing a plain workspace cache: \(String(describing: error), privacy: .public)")
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
         return cached
     }
 
-    /// Writes the workspace within the limits, replacing the host's previous one.
+    /// Writes the workspace within the limits, sealed, replacing the host's previous one.
     public func save(_ workspace: CachedWorkspace) throws {
         try prepareDirectory()
-        let data = try Self.encode(workspace.bounded(by: limits))
+        let data = try Self.encode(workspace.bounded(by: limits), seal: seal)
         let url = file(for: workspace.hostId)
         #if os(iOS)
+        // Not `.complete`: the writer saves as the app goes to the background and while its
+        // connections stay up there, which can be after the device locked.
         try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         #else
         try data.write(to: url, options: .atomic)
@@ -229,17 +256,44 @@ nonisolated public final class WorkspaceCacheStore: Sendable {
         try? url.setResourceValues(values)
     }
 
-    static func encode(_ workspace: CachedWorkspace) throws -> Data {
+    struct Read {
+        /// Nil: unreadable (damaged, another host's, or sealed with a key this device no
+        /// longer has).
+        var workspace: CachedWorkspace?
+        var wasPlain = false
+    }
+
+    /// Authenticated with the data, so a file moved to another host's name does not open.
+    private static func context(hostId: String) -> Data {
+        sealedHeader + Data(hostId.utf8)
+    }
+
+    static func encode(_ workspace: CachedWorkspace, seal: CacheSeal) throws -> Data {
         let encoder = PropertyListEncoder()
         encoder.outputFormat = .binary
         let plist = try encoder.encode(workspace)
         let compressed = try (plist as NSData).compressed(using: .lzfse) as Data
-        return magic + compressed
+        return sealedHeader + (try seal.seal(compressed, context: context(hostId: workspace.hostId)))
     }
 
-    static func decode(_ data: Data) -> CachedWorkspace? {
-        guard data.starts(with: magic),
-              let plist = try? (data.dropFirst(magic.count) as NSData).decompressed(using: .lzfse) as Data,
+    /// Throws only when the key cannot be read now (the file may still open later).
+    static func decode(_ data: Data, hostId: String, seal: CacheSeal) throws -> Read {
+        if data.starts(with: plainMagic) {
+            return Read(workspace: decompress(Data(data.dropFirst(plainMagic.count))), wasPlain: true)
+        }
+        guard data.starts(with: sealedHeader) else { return Read() }
+        do {
+            let compressed = try seal.open(Data(data.dropFirst(sealedHeader.count)), context: context(hostId: hostId))
+            return Read(workspace: decompress(compressed))
+        } catch is CacheSealError {
+            return Read()
+        } catch is CryptoKitError {
+            return Read()
+        }
+    }
+
+    private static func decompress(_ compressed: Data) -> CachedWorkspace? {
+        guard let plist = try? (compressed as NSData).decompressed(using: .lzfse) as Data,
               let cached = try? PropertyListDecoder().decode(CachedWorkspace.self, from: plist),
               cached.version == CachedWorkspace.currentVersion
         else { return nil }

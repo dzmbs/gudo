@@ -80,7 +80,7 @@ final class AppModel {
         hosts.hostKeyPrompts.trustNewHostsAutomatically = arguments.bool(forKey: "testTrustHostKeys")
         // Instant start: each daemon host opens on what this device saved of it.
         if !LaunchOptions.mock, LaunchOptions.screen == nil {
-            hosts.workspaceCache = WorkspaceCacheStore.appDefault(isolated: isolated)
+            hosts.workspaceCache = WorkspaceCacheStore.appDefault(isolated: isolated, secrets: secrets)
         }
         #if os(macOS)
         let helper = LaunchOptions.mock || LaunchOptions.screen != nil ? nil : LocalHelper.app(hosts: hosts)
