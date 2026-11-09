@@ -260,6 +260,8 @@ pub struct Arbiter {
     viewed: bool,
     unseen_done: bool,
     restored_unconfirmed: bool,
+    /// A turn is under way: the agent worked or stopped to ask since it was last idle.
+    in_turn: bool,
     last_activity: UnixMillis,
 }
 
@@ -287,6 +289,7 @@ impl Arbiter {
             viewed: false,
             unseen_done: false,
             restored_unconfirmed: false,
+            in_turn: false,
             last_activity: now,
         }
     }
@@ -728,7 +731,19 @@ impl Arbiter {
                     .as_ref()
                     .is_some_and(|turn| turn.outcome == TurnOutcome::Cancelled)
             });
-        if old_state == AgentState::Working
+        // A turn ends finished whether it was working or still waiting on a request answered
+        // elsewhere (the terminal); not when that request was refused.
+        let refused = old_state == AgentState::Blocked
+            && self
+                .decided
+                .as_ref()
+                .is_some_and(|decided| decided.choice == ApprovalChoice::Deny);
+        let turn_ended = self.in_turn && old_state != new_state && !refused;
+        self.in_turn = match new_state {
+            AgentState::Working | AgentState::Blocked => true,
+            AgentState::Idle | AgentState::Error | AgentState::Unknown => false,
+        };
+        if turn_ended
             && matches!(new_state, AgentState::Idle | AgentState::Error)
             && !self.restored_unconfirmed
             && !self.viewed
@@ -1214,6 +1229,46 @@ mod tests {
         );
         assert_ne!(request_id(&arbiter), first);
         assert!(matches!(update.notify, Some(Notify::Blocked { .. })));
+    }
+
+    #[test]
+    fn a_turn_that_ends_while_still_blocked_is_a_finished_turn() {
+        // Answered in the terminal: the next signal is the turn's end, with no working claim
+        // in between.
+        let mut arbiter = new_arbiter(HookCoverage::FullLifecycle);
+        let _ = arbiter.apply(hook(EventKind::TurnStarted, Claim::Working, 1), at(0));
+        let _ = arbiter.apply(
+            hook(EventKind::Blocked, Claim::Blocked(permission("Bash")), 2),
+            at(10),
+        );
+        let update = arbiter.apply(hook(EventKind::TurnEnded, Claim::Idle, 3), at(20));
+        assert_eq!(update.notify, Some(Notify::Done));
+    }
+
+    #[test]
+    fn an_approval_that_lets_the_agent_carry_on_is_no_finished_turn() {
+        let mut arbiter = new_arbiter(HookCoverage::FullLifecycle);
+        let _ = arbiter.apply(hook(EventKind::TurnStarted, Claim::Working, 1), at(0));
+        let _ = arbiter.apply(
+            hook(EventKind::Blocked, Claim::Blocked(permission("Bash")), 2),
+            at(10),
+        );
+        let update = arbiter.apply(hook(EventKind::ToolStarted, Claim::Working, 3), at(20));
+        assert_eq!(update.notify, None);
+    }
+
+    #[test]
+    fn a_denied_request_that_ends_the_turn_is_no_finished_turn() {
+        let mut arbiter = new_arbiter(HookCoverage::FullLifecycle);
+        let _ = arbiter.apply(hook(EventKind::TurnStarted, Claim::Working, 1), at(0));
+        let _ = arbiter.apply(
+            hook(EventKind::Blocked, Claim::Blocked(permission("Bash")), 2),
+            at(10),
+        );
+        let deny = decision(&arbiter, ApprovalChoice::Deny, "alice");
+        arbiter.decide(deny, at(15)).unwrap();
+        let update = arbiter.apply(hook(EventKind::TurnEnded, Claim::Idle, 3), at(20));
+        assert_eq!(update.notify, None);
     }
 
     #[test]
