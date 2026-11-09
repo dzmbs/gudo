@@ -133,7 +133,23 @@ final class ReplayStore {
         self.capacity = capacity
         self.maxAge = maxAge
         self.sessionEventCap = sessionEventCap
+        protectRoot()
         reload()
+    }
+
+    /// Recordings hold page content and pictures: owner-only, never in backups, and on iOS
+    /// readable only after the first unlock (files made inside inherit the folder's class).
+    private func protectRoot() {
+        var attributes: [FileAttributeKey: Any] = [.posixPermissions: 0o700]
+        #if os(iOS)
+        attributes[.protectionKey] = FileProtectionType.completeUntilFirstUserAuthentication
+        #endif
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true, attributes: attributes)
+        try? FileManager.default.setAttributes(attributes, ofItemAtPath: root.path)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        var root = root
+        try? root.setResourceValues(values)
     }
 
     func directory(_ id: UUID) -> URL { root.appending(path: id.uuidString, directoryHint: .isDirectory) }

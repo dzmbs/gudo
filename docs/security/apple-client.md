@@ -247,7 +247,8 @@ collected data. Required-reason APIs are declared: UserDefaults `CA92.1`/`1C8F.1
 - **The cache key sits with the other secrets.** On an ad-hoc Mac build it is an owner-only
   file like they are, so sealing there protects only against copies of the cache alone.
 - **Agent browser recordings** (`Replays` in Application Support: page events and pictures, up
-  to 30 days) are not sealed and are in device backups.
+  to 30 days) are owner-only, out of backups and on iOS readable only after the first unlock,
+  but not sealed.
 - **Saved preferences on the Mac.** Tooling hooks ignore saved defaults, but real preferences
   (themes, Git scripts, hosts to reopen) are still the user's files; a process running as the
   user can change them.

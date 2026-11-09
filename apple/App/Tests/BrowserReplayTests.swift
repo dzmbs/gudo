@@ -59,6 +59,15 @@ final class BrowserReplayTests: XCTestCase {
         XCTAssertEqual(try other.bundle(opened.id), file)
     }
 
+    func testRecordingsStayOutOfBackupsAndAreTheOwnersOnly() throws {
+        let store = ReplayStore(root: root.appending(path: "Replays"))
+        try store.create(session())
+        let values = try store.root.resourceValues(forKeys: [.isExcludedFromBackupKey])
+        XCTAssertEqual(values.isExcludedFromBackup, true)
+        let permissions = try FileManager.default.attributesOfItem(atPath: store.root.path)[.posixPermissions] as? Int
+        XCTAssertEqual(permissions, 0o700)
+    }
+
     func testImportRejectsOtherFilesAndUnsafeKeyframeNames() throws {
         let store = ReplayStore(root: root)
         XCTAssertThrowsError(try store.importBundle(Data(#"{"format":"other"}"#.utf8)))
