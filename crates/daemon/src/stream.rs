@@ -95,15 +95,22 @@ pub(crate) enum Start {
 struct InFlight {
     frames: VecDeque<(Seq, usize)>,
     bytes: usize,
+    acked: Seq,
 }
 
 impl InFlight {
     fn push(&mut self, end: Seq, len: usize) {
+        // A snapshot can be taken behind bytes already sent (the terminal state trails the
+        // ring): the client is past it already and will not ack it again.
+        if end <= self.acked {
+            return;
+        }
         self.frames.push_back((end, len));
         self.bytes += len;
     }
 
     fn ack(&mut self, acked: Seq) {
+        self.acked = self.acked.max(acked);
         while let Some(&(end, len)) = self.frames.front() {
             if end > acked {
                 break;
@@ -406,5 +413,31 @@ async fn sleep_until(at: Option<Instant>) {
     match at {
         Some(at) => tokio::time::sleep_until(at.into()).await,
         None => std::future::pending().await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_frame_the_client_already_acked_past_is_not_waited_for() {
+        let mut in_flight = InFlight::default();
+        in_flight.push(Seq(100), 50);
+        in_flight.ack(Seq(200));
+        in_flight.push(Seq(150), 630);
+        assert!(in_flight.is_empty());
+        assert_eq!(in_flight.bytes, 0);
+    }
+
+    #[test]
+    fn frames_wait_until_acked() {
+        let mut in_flight = InFlight::default();
+        in_flight.push(Seq(100), 50);
+        in_flight.push(Seq(200), 70);
+        in_flight.ack(Seq(100));
+        assert_eq!(in_flight.bytes, 70);
+        in_flight.ack(Seq(200));
+        assert!(in_flight.is_empty());
     }
 }
