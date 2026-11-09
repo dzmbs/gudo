@@ -316,7 +316,7 @@ actor RowBuilder {
         if markup is HTMLBlock {
             return ChatMarkdownBlock(kind: .plain, source: source, text: AttributedString(source))
         }
-        return ChatMarkdownBlock(kind: .paragraph, source: source, text: inline(source))
+        return ChatMarkdownBlock(kind: .paragraph, source: source, text: inline(source, markup: markup))
     }
 
     private func listLines(_ markup: any Markup, depth: Int, original: MarkdownSource) -> [ChatListLine] {
@@ -362,6 +362,9 @@ actor RowBuilder {
         var start = text.startIndex
         while start < text.endIndex {
             let end = text.characters.index(start, offsetBy: 2_048, limitedBy: text.endIndex) ?? text.endIndex
+            // Most blocks already fit. Preserve their attributed storage instead of rebuilding
+            // an identical whole-value slice for every paragraph in a cold document.
+            if start == text.startIndex, end == text.endIndex { return [text] }
             chunks.append(AttributedString(text[start..<end]))
             start = end
         }
@@ -373,14 +376,22 @@ actor RowBuilder {
         return (inline(prefix(source, bytes: 512)), source.utf8.count > 512)
     }
 
-    private func inline(_ markdown: String) -> AttributedString {
+    private func inline(_ markdown: String, markup: (any Markup)? = nil) -> AttributedString {
         if let cached = inlineCache.value(for: markdown) { return cached }
-        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace, failurePolicy: .returnPartiallyParsedIfPossible)
-        var text = (try? AttributedString(markdown: markdown, options: options)) ?? AttributedString(markdown)
-        for run in Array(text.runs) {
-            if let link = run.link, !["https", "http", "mailto"].contains(link.scheme?.lowercased() ?? "") {
-                text[run.range].link = nil
+        var text: AttributedString
+        if let prepared = ChatInlineValues.flat(markup, source: markdown) { text = prepared }
+        else {
+            let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace, failurePolicy: .returnPartiallyParsedIfPossible)
+            text = (try? AttributedString(markdown: markdown, options: options)) ?? AttributedString(markdown)
+            var unsafeLinks: [Range<AttributedString.Index>] = []
+            for run in text.runs {
+                guard let link = run.link else { continue }
+                switch link.scheme?.lowercased() {
+                case "https", "http", "mailto": break
+                default: unsafeLinks.append(run.range)
+                }
             }
+            for range in unsafeLinks { text[range].link = nil }
         }
         inlineCache.insert(text, for: markdown, cost: LRUCost(bytes: markdown.utf8.count * 4 + 512, units: 1))
         return text

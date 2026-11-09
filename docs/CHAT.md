@@ -289,8 +289,14 @@ Prepends restore the same reading row;
 following updates pin to the bottom unless a newer user drag invalidates that adjustment.
 The New capsule remains separate from the reusable cells.
 
-Markdown rows use prepared attributed values. Long lists and paragraphs split into bounded
-native rows. Code uses the terminal's font and background, with a 30-line/8-KiB prepared preview
+Markdown rows use prepared attributed values. Simple, single-line paragraph values reuse the
+existing Swift Markdown inline nodes instead of invoking a second parser. Unsupported/nested
+constructs, whitespace-sensitive input, smart-punctuation candidates, titled/reference links and
+bare URL/email candidates retain Foundation's existing interpretation and link policy. Parity
+tests compare characters and all attributes, not just visual text. Short attributed blocks retain
+their existing storage instead of copying a whole-value slice. The inline cache stays bounded at
+32 entries/64 KiB; it was not enlarged to pass the cold-row check. Long lists and paragraphs split
+into bounded native rows. Code uses the terminal's font and background, with a 30-line/8-KiB prepared preview
 and an explicit full-code action. `ChatSyntax` prepares Tree-sitter token ranges on the rendering
 worker for both agents. Rust, Swift, JS/JSX, TS/TSX, Python, Go, shell, JSON, YAML, TOML, Markdown,
 C/C++, HTML, CSS and diff fences use the theme's ANSI hues, adjusted to 4.5:1 text contrast;
