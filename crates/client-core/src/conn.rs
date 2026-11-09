@@ -688,6 +688,7 @@ async fn run(inner: &Arc<Inner>, live: Live) -> String {
         .as_ref()
         .map_or(proto::DaemonFeatures::default(), |info| info.features);
     let resends = input_features.contains(proto::DaemonFeatures::INPUT_RESUME);
+    let more_features = *lock(&inner.more_daemon_features);
     lock(&inner.stats).connections += 1;
     inner.mp.reset_for_connection();
     // History requests in flight died with the previous connection.
@@ -755,7 +756,7 @@ async fn run(inner: &Arc<Inner>, live: Live) -> String {
                 let Some(msg) = msg else { break "client dropped".to_owned() };
                 match msg {
                     Outgoing::Ctl(ctl) => {
-                        if control_supported(&ctl, input_features) && inner.ws.control_is_live(&ctl) { let _ = ctl_out.send(ctl); }
+                        if control_supported(&ctl, input_features, more_features) && inner.ws.control_is_live(&ctl) { let _ = ctl_out.send(ctl); }
                     }
                     Outgoing::Input { pane_id, payload } => {
                         let input_seq = lock(&inner.input).send(pane_id, &payload, resends);
@@ -789,8 +790,36 @@ async fn run(inner: &Arc<Inner>, live: Live) -> String {
     reason
 }
 
-fn control_supported(control: &ClientCtl, features: proto::DaemonFeatures) -> bool {
+fn control_supported(
+    control: &ClientCtl,
+    features: proto::DaemonFeatures,
+    more_features: proto::MoreDaemonFeatures,
+) -> bool {
     match control {
+        ClientCtl::Workspace {
+            req:
+                proto::WorkspaceRequest::TimelineWatch { .. }
+                | proto::WorkspaceRequest::TimelineUnwatch { .. }
+                | proto::WorkspaceRequest::TimelineItemsBefore { .. }
+                | proto::WorkspaceRequest::TimelineToolOutput { .. },
+            ..
+        } => features.contains(proto::DaemonFeatures::AGENT_TIMELINE),
+        ClientCtl::Workspace {
+            req: proto::WorkspaceRequest::TimelineWatchVersioned { .. },
+            ..
+        } => features.contains(proto::DaemonFeatures::VERSIONED_TIMELINE),
+        ClientCtl::Workspace {
+            req: proto::WorkspaceRequest::TimelineToolDiff { .. },
+            ..
+        } => features.contains(proto::DaemonFeatures::TIMELINE_TOOL_DIFF),
+        ClientCtl::Workspace {
+            req: proto::WorkspaceRequest::ResolvePaths(_),
+            ..
+        } => more_features.contains(proto::MoreDaemonFeatures::RESOLVE_PATHS),
+        ClientCtl::Workspace {
+            req: proto::WorkspaceRequest::RepoRoot { .. },
+            ..
+        } => more_features.contains(proto::MoreDaemonFeatures::REPO_ROOT),
         ClientCtl::Workspace {
             req: proto::WorkspaceRequest::TimelineWatchCapabilities { .. },
             ..
@@ -1422,16 +1451,19 @@ mod tests {
         ] {
             assert!(!control_supported(
                 &control,
-                proto::DaemonFeatures::default()
+                proto::DaemonFeatures::default(),
+                proto::MoreDaemonFeatures::EMPTY
             ));
             assert!(control_supported(
                 &control,
-                proto::DaemonFeatures::ACTIVE_SIZING
+                proto::DaemonFeatures::ACTIVE_SIZING,
+                proto::MoreDaemonFeatures::EMPTY
             ));
         }
         assert!(control_supported(
             &ClientCtl::Ping { nonce: 1 },
-            proto::DaemonFeatures::default()
+            proto::DaemonFeatures::default(),
+            proto::MoreDaemonFeatures::EMPTY
         ));
     }
 
@@ -1449,11 +1481,13 @@ mod tests {
             let control = ClientCtl::Workspace { req_id: 1, req };
             assert!(!control_supported(
                 &control,
-                proto::DaemonFeatures::default()
+                proto::DaemonFeatures::default(),
+                proto::MoreDaemonFeatures::EMPTY
             ));
             assert!(control_supported(
                 &control,
-                proto::DaemonFeatures::CHAT_SEND
+                proto::DaemonFeatures::CHAT_SEND,
+                proto::MoreDaemonFeatures::EMPTY
             ));
         }
     }
@@ -1471,15 +1505,18 @@ mod tests {
             let control = ClientCtl::Workspace { req_id: 1, req };
             assert!(!control_supported(
                 &control,
-                proto::DaemonFeatures::default()
+                proto::DaemonFeatures::default(),
+                proto::MoreDaemonFeatures::EMPTY
             ));
             assert!(!control_supported(
                 &control,
-                proto::DaemonFeatures::CHAT_SEND
+                proto::DaemonFeatures::CHAT_SEND,
+                proto::MoreDaemonFeatures::EMPTY
             ));
             assert!(control_supported(
                 &control,
-                proto::DaemonFeatures::CHAT_INTERRUPT
+                proto::DaemonFeatures::CHAT_INTERRUPT,
+                proto::MoreDaemonFeatures::EMPTY
             ));
         }
     }
@@ -1495,11 +1532,128 @@ mod tests {
         };
         assert!(!control_supported(
             &control,
-            proto::DaemonFeatures::AGENT_TIMELINE | proto::DaemonFeatures::VERSIONED_TIMELINE
+            proto::DaemonFeatures::AGENT_TIMELINE | proto::DaemonFeatures::VERSIONED_TIMELINE,
+            proto::MoreDaemonFeatures::EMPTY
         ));
         assert!(control_supported(
             &control,
-            proto::DaemonFeatures::AGENT_CAPABILITIES
+            proto::DaemonFeatures::AGENT_CAPABILITIES,
+            proto::MoreDaemonFeatures::EMPTY
+        ));
+    }
+
+    #[test]
+    fn old_daemons_are_not_sent_queued_timeline_requests_they_cannot_read() {
+        let timeline_requests = [
+            proto::WorkspaceRequest::TimelineWatch { pane_id: PaneId(7) },
+            proto::WorkspaceRequest::TimelineUnwatch { pane_id: PaneId(7) },
+            proto::WorkspaceRequest::TimelineItemsBefore {
+                pane_id: PaneId(7),
+                before: 10,
+                limit: 5,
+            },
+            proto::WorkspaceRequest::TimelineToolOutput {
+                pane_id: PaneId(7),
+                handle: "tool".into(),
+                offset: 0,
+                len: 64,
+            },
+        ];
+        for req in timeline_requests {
+            let control = ClientCtl::Workspace { req_id: 1, req };
+            assert!(!control_supported(
+                &control,
+                proto::DaemonFeatures::default(),
+                proto::MoreDaemonFeatures::EMPTY
+            ));
+            assert!(control_supported(
+                &control,
+                proto::DaemonFeatures::AGENT_TIMELINE,
+                proto::MoreDaemonFeatures::EMPTY
+            ));
+        }
+
+        let versioned_watch = ClientCtl::Workspace {
+            req_id: 1,
+            req: proto::WorkspaceRequest::TimelineWatchVersioned {
+                pane_id: PaneId(7),
+                version: 2,
+            },
+        };
+        assert!(!control_supported(
+            &versioned_watch,
+            proto::DaemonFeatures::AGENT_TIMELINE,
+            proto::MoreDaemonFeatures::EMPTY
+        ));
+        assert!(control_supported(
+            &versioned_watch,
+            proto::DaemonFeatures::VERSIONED_TIMELINE,
+            proto::MoreDaemonFeatures::EMPTY
+        ));
+
+        let tool_diff = ClientCtl::Workspace {
+            req_id: 1,
+            req: proto::WorkspaceRequest::TimelineToolDiff {
+                pane_id: PaneId(7),
+                handle: "tool".into(),
+            },
+        };
+        assert!(!control_supported(
+            &tool_diff,
+            proto::DaemonFeatures::AGENT_TIMELINE | proto::DaemonFeatures::VERSIONED_TIMELINE,
+            proto::MoreDaemonFeatures::EMPTY
+        ));
+        assert!(control_supported(
+            &tool_diff,
+            proto::DaemonFeatures::TIMELINE_TOOL_DIFF,
+            proto::MoreDaemonFeatures::EMPTY
+        ));
+    }
+
+    #[test]
+    fn old_daemons_are_not_sent_queued_path_requests_they_cannot_read() {
+        let resolve_paths = ClientCtl::Workspace {
+            req_id: 1,
+            req: proto::WorkspaceRequest::ResolvePaths(proto::PathQuery {
+                pane_id: PaneId(7),
+                command_id: None,
+                paths: vec!["src/lib.rs".into()],
+            }),
+        };
+        let repo_root = ClientCtl::Workspace {
+            req_id: 2,
+            req: proto::WorkspaceRequest::RepoRoot {
+                path: "/srv/project".into(),
+            },
+        };
+        for control in [&resolve_paths, &repo_root] {
+            assert!(!control_supported(
+                control,
+                proto::DaemonFeatures::AGENT_TIMELINE
+                    | proto::DaemonFeatures::VERSIONED_TIMELINE
+                    | proto::DaemonFeatures::TIMELINE_TOOL_DIFF,
+                proto::MoreDaemonFeatures::EMPTY
+            ));
+        }
+        assert!(control_supported(
+            &resolve_paths,
+            proto::DaemonFeatures::default(),
+            proto::MoreDaemonFeatures::RESOLVE_PATHS
+        ));
+        assert!(!control_supported(
+            &resolve_paths,
+            proto::DaemonFeatures::default(),
+            proto::MoreDaemonFeatures::REPO_ROOT
+        ));
+        assert!(control_supported(
+            &repo_root,
+            proto::DaemonFeatures::default(),
+            proto::MoreDaemonFeatures::REPO_ROOT
+        ));
+        assert!(!control_supported(
+            &repo_root,
+            proto::DaemonFeatures::default(),
+            proto::MoreDaemonFeatures::RESOLVE_PATHS
         ));
     }
 
