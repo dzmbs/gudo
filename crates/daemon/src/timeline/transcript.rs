@@ -17,6 +17,7 @@ const CACHE_ITEMS: usize = 512;
 const CACHE_VALUE_BYTES: usize = 16 * 1024 * 1024;
 const INDEXED_VALUE_FACTOR: usize = 4;
 const OUTPUT_PAGE_BYTES: usize = 256 * 1024;
+const DISPLAY_TEXT_BYTES: usize = 256 * 1024;
 
 pub(super) struct Transcript {
     pub path: PathBuf,
@@ -176,7 +177,7 @@ impl Transcript {
             let TimelineBody::Assistant { text: part, .. } = &self.items.get(id)?.item.body else {
                 return None;
             };
-            if text.len().saturating_add(part.len()) > 256 * 1024 {
+            if text.len().saturating_add(part.len()) > DISPLAY_TEXT_BYTES {
                 return None;
             }
             text.push_str(part);
