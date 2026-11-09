@@ -33,7 +33,8 @@ final class PhoneTabListGalleryTests: XCTestCase {
             // The iPad's sidebar column: the same rows, dense.
             ("ipad-sidebar", .large, 320, AnyView(WorkspaceSidebar())),
         ]
-        for (name, size, width, view) in screens {
+        let only = ProcessInfo.processInfo.environment["GUDO_CHROME_ONLY"]
+        for (name, size, width, view) in screens where only.map({ $0 == name }) ?? true {
             let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
             let window = UIWindow(windowScene: scene)
             window.frame = CGRect(x: 0, y: 0, width: width, height: 852)

@@ -130,7 +130,13 @@ struct WindowRoot: View {
         } else {
             ThemeCatalog.theme(named: themeName).background
                 .ignoresSafeArea()
-                .onAppear { appeared = true }
+                .onAppear {
+                    // Made here, outside a view update: starting it builds the key bar, a UIKit
+                    // input view whose setup asks the hosting controller for its status bar,
+                    // which reads the view graph being updated (a cycle).
+                    _ = box.model
+                    appeared = true
+                }
         }
         #else
         WindowContent(request: request, model: box.model)
