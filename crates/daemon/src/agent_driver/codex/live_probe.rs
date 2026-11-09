@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 mod controls;
+mod fallback;
 mod recovery;
 
 #[derive(serde::Deserialize)]
@@ -42,8 +43,13 @@ async fn real_cli_streams_through_the_owned_daemon_adapter() {
     )
     .await;
     daemon.shutdown().await;
-    let conversation = result.unwrap();
-    if matches!(fixture.scenario.as_str(), "stop" | "deny" | "terminal-race") {
+    let Some(conversation) = result.unwrap() else {
+        return;
+    };
+    if matches!(
+        fixture.scenario.as_str(),
+        "stop" | "deny" | "terminal-race" | "terminal-native-race"
+    ) {
         return;
     }
     let daemon = crate::Daemon::start(configuration(&fixture)).await.unwrap();
@@ -97,7 +103,7 @@ async fn run(
     root: &Path,
     model_url: &str,
     scenario: &str,
-) -> Result<Conversation, String> {
+) -> Result<Option<Conversation>, String> {
     let account = daemon.core.ws.accounts.add(&proto::AccountAdd {
         agent: AgentKind::Codex,
         label: "Private loopback fixture".into(),
@@ -121,6 +127,10 @@ async fn run(
         )
         .map_err(|error| format!("launch: {error:?}"))?;
     let entry = daemon.core.pane(pane).ok_or("missing pane")?;
+    if scenario == "fallback" {
+        fallback::terminal(daemon, &entry, root, model_url).await?;
+        return Ok(None);
+    }
     let source = lock(&entry.codex)
         .clone()
         .ok_or("missing native producer")?;
@@ -221,18 +231,24 @@ async fn run(
     }
     if matches!(
         scenario,
-        "approve" | "deny" | "terminal-race" | "two-person" | "file-approve" | "rule-approve"
+        "approve"
+            | "deny"
+            | "terminal-race"
+            | "terminal-native-race"
+            | "two-person"
+            | "file-approve"
+            | "rule-approve"
     ) {
         controls::approval(daemon, &client, &entry, &source, root, scenario).await?;
         if !matches!(
             scenario,
             "approve" | "two-person" | "file-approve" | "rule-approve"
         ) {
-            return Ok(Conversation {
+            return Ok(Some(Conversation {
                 pane,
                 thread,
                 account: account.id,
-            });
+            }));
         }
     }
     let result = tokio::time::timeout(Duration::from_secs(30), async {
@@ -264,11 +280,11 @@ async fn run(
         .map_err(|error| error.to_string())?;
     result?;
     if scenario == "stop" {
-        return Ok(Conversation {
+        return Ok(Some(Conversation {
             pane,
             thread,
             account: account.id,
-        });
+        }));
     }
     crate::agent_input::chat_tests::wait_until(|| lock(&entry.meta).turns == 1).await;
     if lock(&entry.agent).as_ref().unwrap().state() != agents::AgentState::Idle
@@ -309,11 +325,11 @@ async fn run(
         )
     })
     .await;
-    Ok(Conversation {
+    Ok(Some(Conversation {
         pane,
         thread,
         account: account.id,
-    })
+    }))
 }
 
 fn rollout_contains(directory: &Path, text: &str, depth: usize) -> bool {

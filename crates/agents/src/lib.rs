@@ -33,8 +33,8 @@ pub use adapter::{AgentAdapter, HookCoverage, HookError};
 pub use arbiter::{Arbiter, ArbiterConfig, DecisionError, Notify, Update};
 pub use claude::ClaudeCode;
 pub use codex::{
-    CODEX_ENVIRONMENT_LIMIT, Codex, CodexLiveLaunch, CodexPaneEnvironment, InvalidCodexSocket,
-    NOTIFY_EVENT as CODEX_NOTIFY_EVENT,
+    CODEX_ENVIRONMENT_LIMIT, Codex, CodexLiveLaunch, CodexPaneEnvironment, CodexPaneMode,
+    CodexTerminalLaunch, InvalidCodexSocket, NOTIFY_EVENT as CODEX_NOTIFY_EVENT,
 };
 pub use codex_live::{
     CodexApprovalDetails, CodexApprovalKind, CodexBinding, CodexBindingError, CodexHistoryStatus,

@@ -1,8 +1,12 @@
+use std::ffi::OsStr;
 use std::io::{self, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
-use std::process::Command;
-use std::time::Duration;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+#[cfg(test)]
+mod tests;
 
 pub(super) fn main(arguments: &[String]) -> i32 {
     if run(arguments).is_err() {
@@ -14,17 +18,20 @@ pub(super) fn main(arguments: &[String]) -> i32 {
 }
 
 fn run(arguments: &[String]) -> io::Result<()> {
-    let Some(socket) = arguments.first() else {
-        return Err(io::Error::other("missing launch socket"));
-    };
+    let socket = arguments
+        .first()
+        .ok_or_else(|| io::Error::other("missing launch socket"))?;
     let mut connection = UnixStream::connect(socket)?;
     connection.set_read_timeout(Some(Duration::from_secs(10)))?;
     connection.set_write_timeout(Some(Duration::from_secs(10)))?;
-    if Command::new("codex").arg("--version").output()?.stdout != b"codex-cli 0.166.0\n" {
-        return Err(io::Error::other("unsupported Codex version"));
-    }
+    let mode = if supports_native(OsStr::new("codex"))? {
+        agents::CodexPaneMode::Native
+    } else {
+        agents::CodexPaneMode::Terminal
+    };
     let environment = agents::CodexPaneEnvironment {
         version: 1,
+        mode,
         variables: std::env::vars_os().collect(),
         cwd: std::env::current_dir()?,
     };
@@ -34,12 +41,86 @@ fn run(arguments: &[String]) -> io::Result<()> {
     }
     connection.write_all(&(bytes.len() as u32).to_be_bytes())?;
     connection.write_all(&bytes)?;
-    let mut ack = [0];
-    connection.read_exact(&mut ack)?;
-    if ack != [1] {
-        return Err(io::Error::other("launch refused"));
+    let mut acknowledgement = [0];
+    connection.read_exact(&mut acknowledgement)?;
+    let mut command = Command::new("codex");
+    match (mode, acknowledgement) {
+        (agents::CodexPaneMode::Native, [1]) => {
+            command.args(&arguments[1..]);
+        }
+        (agents::CodexPaneMode::Terminal, [2]) => {
+            let mut length = [0; 4];
+            connection.read_exact(&mut length)?;
+            let length = u32::from_be_bytes(length) as usize;
+            if length > agents::CODEX_ENVIRONMENT_LIMIT {
+                return Err(io::Error::other("launch arguments too large"));
+            }
+            let mut bytes = vec![0; length];
+            connection.read_exact(&mut bytes)?;
+            let plan: agents::CodexTerminalLaunch =
+                serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+            apply_terminal(&mut command, plan);
+            eprintln!("Codex Chat is unavailable for this version. Continuing in Terminal.");
+        }
+        _ => return Err(io::Error::other("launch refused")),
     }
     drop(connection);
-    let error = Command::new("codex").args(&arguments[1..]).exec();
-    Err(error)
+    Err(command.exec())
+}
+
+fn apply_terminal(command: &mut Command, plan: agents::CodexTerminalLaunch) {
+    // Named-account fences must also win over post-login shell changes on the legacy path.
+    command.args(plan.arguments).envs(plan.env_pinned);
+    for name in plan.env_remove {
+        command.env_remove(name);
+    }
+}
+
+fn supports_native(program: &OsStr) -> io::Result<bool> {
+    let mut process = Command::new(program)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let result = (|| {
+        let mut stdout = process
+            .stdout
+            .take()
+            .ok_or_else(|| io::Error::other("missing version output"))?;
+        let flags = rustix::fs::fcntl_getfl(&stdout)?;
+        rustix::fs::fcntl_setfl(&stdout, flags | rustix::fs::OFlags::NONBLOCK)?;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut bytes = [0; 128];
+        let mut used = 0;
+        let mut ended = false;
+        loop {
+            if !ended {
+                match stdout.read(&mut bytes[used..]) {
+                    Ok(0) => ended = true,
+                    Ok(count) => {
+                        used += count;
+                        if used == bytes.len() {
+                            return Ok(false);
+                        }
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(error) => return Err(error),
+                }
+            }
+            if ended && let Some(status) = process.try_wait()? {
+                return Ok(status.success() && &bytes[..used] == b"codex-cli 0.166.0\n");
+            }
+            if Instant::now() >= deadline {
+                return Ok(false);
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    })();
+    if process.try_wait()?.is_none() {
+        process.kill()?;
+        process.wait()?;
+    }
+    result
 }

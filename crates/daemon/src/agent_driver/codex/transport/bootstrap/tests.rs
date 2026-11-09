@@ -9,6 +9,7 @@ fn bootstrap_preserves_post_login_environment_bytes_and_requires_the_exact_pane(
     ];
     let mut captured = agents::CodexPaneEnvironment {
         version: 1,
+        mode: agents::CodexPaneMode::Native,
         variables: expected
             .iter()
             .map(|(name, value)| (name.clone().into(), value.clone()))
@@ -24,6 +25,20 @@ fn bootstrap_preserves_post_login_environment_bytes_and_requires_the_exact_pane(
     let bytes = serde_json::to_vec(&captured).unwrap();
     let decoded = decode(&bytes, &expected).unwrap();
     assert_eq!(decoded.variables, captured.variables);
+    assert!(
+        serde_json::from_slice::<serde_json::Value>(&bytes)
+            .unwrap()
+            .get("mode")
+            .is_none(),
+        "native bootstrap preserves the old private frame"
+    );
+    captured.mode = agents::CodexPaneMode::Terminal;
+    assert_eq!(
+        decode(&serde_json::to_vec(&captured).unwrap(), &expected)
+            .unwrap()
+            .mode,
+        agents::CodexPaneMode::Terminal
+    );
     captured.variables[0].1 = "different-pane".into();
     let error = decode(&serde_json::to_vec(&captured).unwrap(), &expected)
         .err()
@@ -35,6 +50,7 @@ fn bootstrap_preserves_post_login_environment_bytes_and_requires_the_exact_pane(
 fn duplicate_environment_names_unknown_versions_and_relative_cwd_are_rejected() {
     let mut captured = agents::CodexPaneEnvironment {
         version: 2,
+        mode: agents::CodexPaneMode::Native,
         variables: Vec::new(),
         cwd: "/fixture".into(),
     };

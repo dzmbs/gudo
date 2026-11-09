@@ -89,18 +89,18 @@ pub(super) async fn approval(
     if client.chat_prepare(entry.pane.id).await.is_ok() {
         return Err("approval allowed a Send bypass".into());
     }
-    if scenario == "terminal-race" {
+    if matches!(scenario, "terminal-race" | "terminal-native-race") {
         crate::agent_input::chat_tests::wait_until(|| {
             entry.pane.screen_text().contains("Would you like to run")
         })
         .await;
         std::fs::write(root.join("approval-screen.txt"), entry.pane.screen_text())
             .map_err(|error| error.to_string())?;
-        entry
-            .pane
-            .write(vec![0x03])
-            .await
-            .map_err(|error| error.to_string())?;
+        if scenario == "terminal-native-race" {
+            // Diagnostic human handoff after the official one-second startup input drain; no priming input.
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+        client.send_input(entry.pane.id, vec![0x03]);
         tokio::time::timeout(Duration::from_secs(10), async {
             while lock(&entry.agent).as_ref().unwrap().is_blocked() {
                 tokio::time::sleep(Duration::from_millis(10)).await;

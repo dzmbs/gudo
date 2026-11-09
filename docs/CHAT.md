@@ -468,7 +468,14 @@ identity. Resolution does not establish approval, execution or success.
 `Config::codex_chat` defaults to false and is only consulted in Dev builds for dedicated
 fresh or explicitly resumed launches. It is not enabled by the app or normal helper configuration. The pane owns an app-server,
 private randomized 0700 directory and 0600 environment/relay sockets; timeline watches own none of
-these. A matching Debug helper's `codex-remote` bootstrap captures the TUI's actual post-login
+these. Before any native server or conversation exists, a bounded successful `--version` check
+selects exactly 0.166.0 for native operation. Other, malformed or timed-out version results select
+the existing standalone Terminal recipe. The private bootstrap still validates the pane and returns
+bounded arguments, account pins and credential removals. The helper execs that recipe in the same
+PID and withdraws native authority; it does not restart or replace an existing conversation.
+Version output is capped at 128 bytes and two seconds.
+
+A matching Debug helper's `codex-remote` bootstrap captures the TUI's actual post-login
 environment and cwd before exec into the official remote TUI. A second login shell is not used to
 approximate the server environment. The daemon checks the peer UID, bootstrap ancestry under the
 owned PTY, exact pane environment, and TUI/server peer process trees. Secrets stay in environment
@@ -556,9 +563,16 @@ and accepts a distinct, pane-scoped guest approver's second signature; repeated 
 private command marker exactly once. Two paired owner devices are one principal, not two witnesses.
 The signed-rule case approves an actual file change through the existing owner-signed task rule.
 A separate case preserves a genuine unsent Terminal draft, while the native prompt alone enters the
-conversation. Native-first approvals may encounter the official TUI's startup protected-input quarantine; probes
-do not bypass it or inject synthetic priming input. The Terminal race starts with genuine fixture
-Terminal input, while the other control scenarios start with native Send.
+conversation. Native-first approvals may discard immediate keys during the official TUI's startup
+protected-input drain. A separate native-first case waits two seconds after the visible approval,
+then cancels through authenticated daemon Terminal input; the obsolete signed mobile answer cannot
+execute the command. No priming input is injected. The immediate-key failures remain recorded.
+The Terminal-origin race remains a distinct case.
+
+The fallback fixture advertises an unsupported version before execing the installed 0.166.0 CLI in
+standalone Terminal mode. It verifies no daemon-owned app-server or remote TUI invocation, withdrawn
+native authority and a genuine Terminal prompt/reply. This is version-gate evidence, not acceptance
+of an actual older CLI binary.
 
 Launch-owned callbacks run outside the projection lock and recheck the current pane/source identity.
 The bound thread updates the runtime session and persisted pane record through the common agent-event

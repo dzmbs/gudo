@@ -77,6 +77,7 @@ fn prepare(
     let control = tokio::spawn(control::run(weak.clone(), commands));
     *lock(&source.control_task) = Some(control.abort_handle());
     let expected = agents::pane_env(context);
+    let fallback = agents::AgentAdapter::launch(&agents::Codex::new(), context, mode);
     let observer = weak.clone();
     tokio::task::spawn_blocking(move || observe(observer, receiver));
     let task = tokio::spawn(async move {
@@ -86,15 +87,21 @@ fn prepare(
                 .await
                 .map_err(io::Error::other)?
                 .clone();
-            let peers = bootstrap::start(
+            let started = bootstrap::start(
                 environment_listener,
                 recipe.server,
                 expected,
+                fallback,
                 &weak,
                 owner.ok_or_else(|| io::Error::other("pane closed"))?.root,
             )
             .await?;
-            run(relay_listener, server, weak.clone(), observations, peers).await
+            match started {
+                bootstrap::Started::Native(peers) => {
+                    run(relay_listener, server, weak.clone(), observations, peers).await
+                }
+                bootstrap::Started::Terminal => Ok(()),
+            }
         }
         .await;
         if let Some(source) = weak.upgrade() {

@@ -13,13 +13,19 @@ pub(super) struct Peers {
     pub server: u32,
 }
 
+pub(super) enum Started {
+    Native(Peers),
+    Terminal,
+}
+
 pub(super) async fn start(
     listener: std::os::unix::net::UnixListener,
     spec: agents::LaunchSpec,
     expected: Vec<(String, OsString)>,
+    fallback: agents::LaunchSpec,
     source: &Weak<Live>,
     owner: u32,
-) -> io::Result<Peers> {
+) -> io::Result<Started> {
     let listener = tokio::net::UnixListener::from_std(listener)?;
     let (mut connection, _) = listener.accept().await?;
     let tui = super::peer::pid(&connection)?;
@@ -32,6 +38,23 @@ pub(super) async fn start(
     let environment = tokio::task::spawn_blocking(move || decode(&bytes, &expected))
         .await
         .map_err(io::Error::other)??;
+    if environment.mode == agents::CodexPaneMode::Terminal {
+        let plan = agents::CodexTerminalLaunch {
+            arguments: fallback.args,
+            env_remove: fallback.env_remove,
+            env_pinned: fallback.env_pinned,
+        };
+        let bytes = serde_json::to_vec(&plan).map_err(io::Error::other)?;
+        if bytes.len() > agents::CODEX_ENVIRONMENT_LIMIT {
+            return Err(invalid());
+        }
+        let source = source.upgrade().ok_or_else(invalid)?;
+        terminal(&source, tui)?;
+        connection.write_all(&[2]).await?;
+        connection.write_u32(bytes.len() as u32).await?;
+        connection.write_all(&bytes).await?;
+        return Ok(Started::Terminal);
+    }
     let cwd = environment.cwd.clone();
     let mut command = tokio::process::Command::new(&spec.program);
     command
@@ -57,7 +80,36 @@ pub(super) async fn start(
     source.capture_context(cwd, tui);
     drop(source);
     connection.write_all(&[1]).await?;
-    Ok(Peers { tui, server })
+    Ok(Started::Native(Peers { tui, server }))
+}
+
+fn terminal(source: &std::sync::Arc<Live>, tui: u32) -> io::Result<()> {
+    let (core, entry) = source.target().ok_or_else(invalid)?;
+    if lock(&source.process).is_some() || lock(&source.state).current.is_some() {
+        return Err(invalid());
+    }
+    let mut installed = lock(&entry.codex);
+    if !installed
+        .as_ref()
+        .is_some_and(|current| std::sync::Arc::ptr_eq(current, source))
+    {
+        return Err(invalid());
+    }
+    let mut runtime = crate::agent::AgentRuntime::new(
+        proto::AgentKind::Codex,
+        entry.pane.id,
+        Box::new(agents::Codex::new()),
+        true,
+    );
+    runtime.note_process(tui);
+    *lock(&entry.agent) = Some(runtime);
+    source
+        .fault
+        .store(true, std::sync::atomic::Ordering::Release);
+    *installed = None;
+    drop(installed);
+    core.emit(crate::core::Event::PaneMeta(entry.pane.id));
+    Ok(())
 }
 
 async fn receive(connection: &mut tokio::net::UnixStream) -> io::Result<Vec<u8>> {
