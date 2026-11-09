@@ -34,3 +34,32 @@ fn chat_send_variants_are_appended_without_changing_old_indices() {
         r#"{"Prepared":{"ticket":7,"revision":3,"needs_confirmation":true}}"#
     );
 }
+
+#[test]
+fn chat_send_statuses_keep_their_wire_indices() {
+    assert_eq!(
+        postcard::to_stdvec(&ChatSendStatus::Prepared {
+            ticket: 7,
+            revision: 3,
+            needs_confirmation: true,
+        })
+        .unwrap(),
+        [0, 7, 3, 1]
+    );
+    assert_eq!(
+        postcard::to_stdvec(&ChatSendStatus::ConfirmationRequired { revision: 3 }).unwrap(),
+        [1, 3]
+    );
+    assert_eq!(
+        postcard::to_stdvec(&ChatSendStatus::Confirmed).unwrap(),
+        [2]
+    );
+    assert_eq!(
+        postcard::to_stdvec(&ChatSendStatus::NotConfirmed).unwrap(),
+        [3]
+    );
+    assert_eq!(
+        postcard::to_stdvec(&ChatSendStatus::SentNotConfirmed).unwrap(),
+        [4]
+    );
+}

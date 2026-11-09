@@ -225,3 +225,69 @@ fn timeline_bodies_keep_their_wire_bytes() {
         &[6, 5, 1, 7, 1, 8],
     );
 }
+
+#[test]
+fn timeline_unsupported_body_keeps_its_wire_index() {
+    frozen(TimelineBody::Unsupported, &[7]);
+}
+
+#[test]
+fn timeline_origins_keep_their_wire_indices() {
+    frozen(TimelineOrigin::Terminal, &[0]);
+    let actor = Actor {
+        principal: PrincipalId([0xaa; 16]),
+        device: DeviceId([0xbb; 32]),
+    };
+    let expected_app = [[1].as_slice(), &[0xaa; 16], &[0xbb; 32]].concat();
+    frozen(TimelineOrigin::App(actor), &expected_app);
+    frozen(TimelineOrigin::Agent, &[2]);
+}
+
+#[test]
+fn timeline_tool_kinds_and_statuses_keep_their_wire_indices() {
+    for (kind, index) in [
+        (TimelineToolKind::Shell, 0),
+        (TimelineToolKind::Read, 1),
+        (TimelineToolKind::Search, 2),
+        (TimelineToolKind::Edit, 3),
+        (TimelineToolKind::Write, 4),
+        (TimelineToolKind::Fetch, 5),
+        (TimelineToolKind::WebSearch, 6),
+        (TimelineToolKind::Mcp, 7),
+        (TimelineToolKind::Task, 8),
+        (TimelineToolKind::Other, 9),
+    ] {
+        frozen(kind, &[index]);
+    }
+    for (status, index) in [
+        (TimelineToolStatus::Running, 0),
+        (TimelineToolStatus::Done, 1),
+        (TimelineToolStatus::Failed, 2),
+        (TimelineToolStatus::Denied, 3),
+        (TimelineToolStatus::Interrupted, 4),
+    ] {
+        frozen(status, &[index]);
+    }
+}
+
+#[test]
+fn timeline_notice_kinds_and_plan_statuses_keep_their_wire_indices() {
+    for (kind, index) in [
+        (TimelineNoticeKind::Compacted, 0),
+        (TimelineNoticeKind::Cleared, 1),
+        (TimelineNoticeKind::ModelChanged, 2),
+        (TimelineNoticeKind::ModeChanged, 3),
+        (TimelineNoticeKind::Error, 4),
+        (TimelineNoticeKind::Retry, 5),
+        (TimelineNoticeKind::Interrupted, 6),
+    ] {
+        frozen(kind, &[index]);
+    }
+    for (status, index) in [
+        (TimelinePlanStatus::Pending, 0),
+        (TimelinePlanStatus::InProgress, 1),
+        (TimelinePlanStatus::Completed, 2),
+    ] {
+        frozen(status, &[index]);
+    }
+}
