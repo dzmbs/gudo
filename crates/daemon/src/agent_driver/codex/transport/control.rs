@@ -242,7 +242,7 @@ async fn execute(source: &Weak<Live>, command: &Command) -> io::Result<()> {
     if matches!(command.action, Action::Approve { .. }) {
         return Ok(());
     }
-    let reply = rpc::reply(&mut connection, 2).await?;
+    let reply = rpc::reply(&mut connection, rpc::REQUEST_ID).await?;
     let reply: Value = serde_json::from_str(&reply).map_err(io::Error::other)?;
     match &command.action {
         Action::Send(_) => {
@@ -315,9 +315,9 @@ fn serialize(source: &Weak<Live>, command: &Command) -> io::Result<String> {
             }
             let input = json!([{"type":"text","text":text,"text_elements":[]}]);
             if let Some(turn) = &command.turn {
-                json!({"id":2,"method":"turn/steer","params":{"threadId":thread,"expectedTurnId":turn,"input":input}})
+                json!({"id":rpc::REQUEST_ID,"method":"turn/steer","params":{"threadId":thread,"expectedTurnId":turn,"input":input}})
             } else {
-                json!({"id":2,"method":"turn/start","params":{"threadId":thread,"input":input}})
+                json!({"id":rpc::REQUEST_ID,"method":"turn/start","params":{"threadId":thread,"input":input}})
             }
         }
         Action::Stop => {
@@ -325,7 +325,7 @@ fn serialize(source: &Weak<Live>, command: &Command) -> io::Result<String> {
             {
                 return Err(io::Error::other("Codex interrupt is not authorized"));
             }
-            json!({"id":2,"method":"turn/interrupt","params":{"threadId":thread,"turnId":command.turn}})
+            json!({"id":rpc::REQUEST_ID,"method":"turn/interrupt","params":{"threadId":thread,"turnId":command.turn}})
         }
         Action::Approve {
             request,

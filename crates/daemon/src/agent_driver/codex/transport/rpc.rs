@@ -6,6 +6,11 @@ use tokio_websockets::{ClientBuilder, Limits, Message, WebSocketStream};
 
 pub(super) type Connection = WebSocketStream<tokio::net::UnixStream>;
 
+const INITIALIZE_ID: i64 = 1;
+/// The one request each control or history connection makes after initializing.
+pub(super) const REQUEST_ID: i64 = 2;
+const REPLY_ALLOWANCE: usize = 256;
+
 pub(super) async fn connect(path: &Path, server: u32) -> io::Result<Connection> {
     let stream = tokio::net::UnixStream::connect(path).await?;
     if !peer::in_tree(peer::pid(&stream)?, server).await {
@@ -14,12 +19,12 @@ pub(super) async fn connect(path: &Path, server: u32) -> io::Result<Connection> 
     let (mut connection, _) = ClientBuilder::new()
         .uri("ws://localhost/")
         .map_err(io::Error::other)?
-        .limits(Limits::default().max_payload_len(Some(64 * 1024)))
+        .limits(Limits::default().max_payload_len(Some(agents::CODEX_FRAME_LIMIT)))
         .connect_on(stream)
         .await
         .map_err(io::Error::other)?;
-    connection.send(Message::text(serde_json::json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":brand::CLI_BIN,"version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}}}).to_string())).await.map_err(io::Error::other)?;
-    reply(&mut connection, 1).await?;
+    connection.send(Message::text(serde_json::json!({"id":INITIALIZE_ID,"method":"initialize","params":{"clientInfo":{"name":brand::CLI_BIN,"version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}}}).to_string())).await.map_err(io::Error::other)?;
+    reply(&mut connection, INITIALIZE_ID).await?;
     connection
         .send(Message::text(r#"{"method":"initialized"}"#))
         .await
@@ -28,7 +33,7 @@ pub(super) async fn connect(path: &Path, server: u32) -> io::Result<Connection> 
 }
 
 pub(super) async fn reply(connection: &mut Connection, expected: i64) -> io::Result<String> {
-    for _ in 0..256 {
+    for _ in 0..REPLY_ALLOWANCE {
         let message = connection
             .next()
             .await
