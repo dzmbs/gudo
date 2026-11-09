@@ -55,6 +55,8 @@ public final class TerminalView: UIView {
     }
     private var focusObservers: [NSObjectProtocol] = []
     private var kittyElements: [UInt32: UIAccessibilityElement] = [:]
+    private var shownLinks: [AccessibleScreen.Link] = []
+    private var linkElements: [LinkElement] = []
     private var hoveredLinkTarget: TerminalLink?
     /// Where the last tap landed (view points), to anchor what it opens (a link's popover).
     public private(set) var lastTapLocation: CGPoint?
@@ -315,7 +317,8 @@ public final class TerminalView: UIView {
             screenElement.accessibilityFrameInContainerSpace = bounds
             // Views hosts add over the grid (the draw overlay, placement markers) come first.
             let hosted = subviews.filter { $0 !== startHandle && $0 !== endHandle && !$0.isHidden }.reversed()
-            var elements = Array(hosted) + kittyImageElements() + [screenElement] + [startHandle, endHandle].filter { !$0.isHidden }
+            var elements = Array(hosted) + kittyImageElements() + accessibleLinks() + [screenElement]
+                + [startHandle, endHandle].filter { !$0.isHidden }
             #if DEBUG
             predictionElement.accessibilityFrameInContainerSpace = CGRect(x: 0, y: 0, width: 1, height: 1)
             elements.append(predictionElement)
@@ -323,6 +326,47 @@ public final class TerminalView: UIView {
             return elements
         }
         set {}
+    }
+
+    /// The rotor's Links: the link elements in reading order.
+    override public var accessibilityCustomRotors: [UIAccessibilityCustomRotor]? {
+        get { [UIAccessibilityCustomRotor(systemType: .link) { [weak self] predicate in self?.link(after: predicate) }] }
+        set {}
+    }
+
+    private func link(after predicate: UIAccessibilityCustomRotorSearchPredicate) -> UIAccessibilityCustomRotorItemResult? {
+        let links = accessibleLinks()
+        let current = links.firstIndex { $0 === predicate.currentItem.targetElement }
+        let index = switch predicate.searchDirection {
+        case .next: current.map { $0 + 1 } ?? 0
+        case .previous: current.map { $0 - 1 } ?? links.count - 1
+        @unknown default: links.count
+        }
+        guard links.indices.contains(index) else { return nil }
+        return UIAccessibilityCustomRotorItemResult(targetElement: links[index], targetRange: nil)
+    }
+
+    /// The links on screen, made again only when they change. A path printed as text is one only
+    /// while it is underlined.
+    private func accessibleLinks() -> [UIAccessibilityElement] {
+        guard let screen = screenElement.screen else { return [] }
+        let links = screen.links.filter { shown in
+            shown.link.isHyperlink || shown.link.kind == .url || underlinesPath?(shown.link) != false
+        }
+        if links != shownLinks {
+            shownLinks = links
+            linkElements = links.map { shown in
+                let element = LinkElement(accessibilityContainer: self)
+                element.accessibilityLabel = shown.link.label
+                element.accessibilityTraits = .link
+                element.open = { [weak self] in self?.openLink(shown.link) }
+                return element
+            }
+        }
+        for (element, shown) in zip(linkElements, shownLinks) {
+            element.accessibilityFrameInContainerSpace = screen.frame(for: shown.range)
+        }
+        return linkElements
     }
 
     /// One element per kitty image on screen, topmost first, kept per image id so VoiceOver's
@@ -1317,6 +1361,17 @@ private class ScreenElement: UIAccessibilityElement {
     override var accessibilityValue: String? {
         get { text?() }
         set {}
+    }
+}
+
+/// A link on the screen; activating it opens it as a tap does.
+private final class LinkElement: UIAccessibilityElement {
+    var open: (() -> Void)?
+
+    override func accessibilityActivate() -> Bool {
+        guard let open else { return false }
+        open()
+        return true
     }
 }
 

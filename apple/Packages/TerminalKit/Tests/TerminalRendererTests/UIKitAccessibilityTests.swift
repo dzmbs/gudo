@@ -4,7 +4,7 @@ import UIKit
 @testable import TerminalCore
 @testable import TerminalRenderer
 
-/// The iOS terminal's screen element read line by line, as VoiceOver's reading content.
+/// The iOS terminal for VoiceOver: the screen read line by line, its links, images and password prompts.
 @MainActor
 @Suite(.serialized) struct UIKitAccessibilityTests {
     private func makeView(_ output: String) throws -> (TerminalView, UIWindow) {
@@ -37,6 +37,44 @@ import UIKit
         #expect(abs(lineFrame.height - cell.height) < 0.01)
         #expect(abs(lineFrame.width - 8 * cell.width) < 0.01)
         #expect(element.accessibilityLineNumber(for: CGPoint(x: lineFrame.midX, y: lineFrame.midY)) == 1)
+        withExtendedLifetime(window) {}
+    }
+
+    private func links(_ view: TerminalView) -> [UIAccessibilityElement] {
+        (view.accessibilityElements ?? []).compactMap { $0 as? UIAccessibilityElement }.filter { $0.accessibilityTraits.contains(.link) }
+    }
+
+    @Test func linksAreLinkElementsThatOpenLikeATap() throws {
+        let (view, window) = try makeView("\u{1b}]8;;https://example.com\u{1b}\\docs\u{1b}]8;;\u{1b}\\ and https://gudo.dev")
+        var opened: [TerminalLink] = []
+        view.onOpenLink = { opened.append($0) }
+        let found = links(view)
+        #expect(found.map(\.accessibilityLabel) == ["docs", "https://gudo.dev"])
+        let first = try #require(found.first)
+        let cell = try #require(view.surface.cellSize)
+        #expect(abs(first.accessibilityFrameInContainerSpace.width - 4 * cell.width) < 0.01)
+        #expect(first.accessibilityActivate())
+        #expect(opened.map(\.target) == ["https://example.com"])
+        #expect(links(view).first === first)
+        withExtendedLifetime(window) {}
+    }
+
+    @Test func linksRotorStepsThroughTheLinks() throws {
+        let (view, window) = try makeView("https://one.dev https://two.dev")
+        let rotor = try #require(view.accessibilityCustomRotors?.first)
+        #expect(rotor.systemRotorType == .link)
+        let found = links(view)
+        let predicate = UIAccessibilityCustomRotorSearchPredicate()
+        predicate.searchDirection = .next
+        let first = try #require(rotor.itemSearchBlock(predicate))
+        #expect(first.targetElement === found.first)
+        predicate.currentItem = first
+        let second = try #require(rotor.itemSearchBlock(predicate))
+        #expect(second.targetElement === found.last)
+        predicate.currentItem = second
+        #expect(rotor.itemSearchBlock(predicate) == nil)
+        predicate.searchDirection = .previous
+        #expect(rotor.itemSearchBlock(predicate)?.targetElement === found.first)
         withExtendedLifetime(window) {}
     }
 
