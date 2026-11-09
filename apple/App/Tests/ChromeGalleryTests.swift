@@ -45,6 +45,10 @@ final class ChromeGalleryTests: XCTestCase {
             UserDefaults.standard.set(theme, forKey: TerminalPreferences.Key.theme)
             try await capture("\(appearance)-sidebar") { model in model.isSidebarShown = true }
             try await capture("\(appearance)-sidebar-projects") { model in await Self.arrangeProjects(model) }
+            try await capture("\(appearance)-agents") { model in
+                model.isSidebarShown = true
+                model.destination = .inbox
+            }
             try await capture("\(appearance)-tab-strip") { model in
                 model.isSidebarShown = false
                 for _ in 0..<4 { model.newTab() }

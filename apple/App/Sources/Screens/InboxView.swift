@@ -212,14 +212,14 @@ struct InboxView: View {
                                 .chromeRows()
                         }
                     } header: {
-                        SectionTitle("Asking to join", count: knocks.count, small: true)
+                        SectionTitle("Asking to join", count: knocks.count, small: InboxType.sectionIsSmall)
                     }
                 }
                 ForEach(sections(items), id: \.title) { section in
                     Section {
                         ForEach(section.items) { item in row(item) }
                     } header: {
-                        SectionTitle(section.title, count: section.items.count, small: true)
+                        SectionTitle(section.title, count: section.items.count, small: InboxType.sectionIsSmall)
                             .padding(.top, DS.Space.m)
                             .padding(.bottom, DS.Space.xxs)
                     }
@@ -548,12 +548,12 @@ private struct InboxFilterBar: View {
                 } label: {
                     HStack(spacing: DS.Space.xs) {
                         Text(filter.title)
-                            .font(.footnote.weight(.medium))
+                            .font(InboxType.filter.weight(.medium))
                             .lineLimit(1)
                             .fixedSize()
                         if filter != .all, count > 0 {
                             Text("\(count)")
-                                .font(DS.Font.meta)
+                                .font(InboxType.age)
                                 .foregroundStyle(filter == .needsYou ? AnyShapeStyle(DS.Palette.attention)
                                     : filter == .errors ? AnyShapeStyle(DS.Palette.error) : AnyShapeStyle(DS.Palette.textTertiary))
                                 .contentTransition(.numericText())
@@ -606,6 +606,32 @@ private struct EquatableRow<Key: Equatable, Content: View>: View, Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.key == rhs.key }
 }
 
+/// The Agents page's type. The Mac's text styles run small for a page this wide, so it reads a
+/// step up there; touch keeps the text styles, and Dynamic Type with them.
+private enum InboxType {
+    #if os(macOS)
+    static let title = Font.title3
+    static let command = Font.system(.body, design: .monospaced)
+    static let meta = Font.body
+    static let detail = Font.body
+    static let age = Font.callout.monospacedDigit()
+    static let filter = Font.body
+    static let glyph: CGFloat = 16
+    static let mark: CGFloat = 14
+    static let sectionIsSmall = false
+    #else
+    static let title = Font.subheadline
+    static let command = DS.Font.literalSmall
+    static let meta = Font.footnote
+    static let detail = DS.Font.rowDetail
+    static let age = DS.Font.meta
+    static let filter = Font.footnote
+    static let glyph: CGFloat = 13
+    static let mark: CGFloat = 12
+    static let sectionIsSmall = true
+    #endif
+}
+
 private struct InboxRow: View {
     let item: AgentItem
     /// The session's approval rules as they apply here (multiplayer).
@@ -636,7 +662,7 @@ private struct InboxRow: View {
     @FocusState private var isEditFocused: Bool
 
     /// A 16 pt glyph slot, then the text column (where separators start).
-    static let glyphSlot: CGFloat = 16
+    static let glyphSlot: CGFloat = InboxType.glyph + 4
     static let textColumn: CGFloat = glyphSlot + DS.Space.m
 
     var body: some View {
@@ -655,7 +681,7 @@ private struct InboxRow: View {
                 meta
                 if let summary = item.summary {
                     Text(verbatim: summary)
-                        .font(DS.Font.rowDetail)
+                        .font(InboxType.detail)
                         .foregroundStyle(item.state == .error ? AnyShapeStyle(DS.Palette.error) : AnyShapeStyle(DS.Palette.textSecondary))
                         .lineLimit(1)
                 }
@@ -685,7 +711,7 @@ private struct InboxRow: View {
                 .foregroundStyle(item.state == .error ? AnyShapeStyle(DS.Palette.error) : AnyShapeStyle(DS.Palette.textSecondary))
         } else {
             // What needs you stays at full strength; the rest is muted.
-            StatusIndicator(item.state, size: 13)
+            StatusIndicator(item.state, size: InboxType.glyph)
                 .opacity(item.state.needsYou ? 1 : DS.Opacity.mutedGlyph)
         }
     }
@@ -693,7 +719,7 @@ private struct InboxRow: View {
     /// What the agent is on (its prompt or state, a command line), unread in the heavier weight.
     private var title: some View {
         Text(verbatim: item.prompt)
-            .font(item.isCommand ? DS.Font.literalSmall : .subheadline.weight(item.unseen || item.state.needsYou ? .semibold : .regular))
+            .font(item.isCommand ? InboxType.command : InboxType.title.weight(item.unseen || item.state.needsYou ? .semibold : .regular))
             .foregroundStyle(DS.Palette.text)
             .lineLimit(1)
             .truncationMode(item.isCommand ? .middle : .tail)
@@ -704,7 +730,7 @@ private struct InboxRow: View {
     private var meta: some View {
         HStack(spacing: DS.Space.xs) {
             if !item.isCommand {
-                ProgramMark(item.identity, size: 12)
+                ProgramMark(item.identity, size: InboxType.mark)
                     .foregroundStyle(.primary)
             }
             Text([item.isCommand ? "Command" : item.title, item.hostName, item.sessionTitle]
@@ -712,7 +738,7 @@ private struct InboxRow: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
-        .font(.footnote)
+        .font(InboxType.meta)
         .foregroundStyle(DS.Palette.textTertiary)
     }
 
@@ -729,7 +755,7 @@ private struct InboxRow: View {
             }
             TimelineView(.periodic(from: .now, by: item.state == .working ? 1 : 30)) { context in
                 Text(age(at: context.date))
-                    .font(DS.Font.meta)
+                    .font(InboxType.age)
                     .foregroundStyle(item.state == .working ? AnyShapeStyle(item.state.color) : AnyShapeStyle(DS.Palette.textTertiary))
             }
             if canReply, !isReplying {
@@ -794,7 +820,7 @@ private struct InboxRow: View {
             }
         case .question(let question)?:
             Text(verbatim: question)
-                .font(DS.Font.rowSubtitle)
+                .font(InboxType.detail)
                 .foregroundStyle(DS.Palette.text)
                 .fixedSize(horizontal: false, vertical: true)
         case nil:
