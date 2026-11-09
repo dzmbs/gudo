@@ -377,7 +377,7 @@ public final class TerminalView: UIView {
             let id = frame.placement.imageID
             let element = kept[id] ?? kittyElements[id] ?? UIAccessibilityElement(accessibilityContainer: self)
             element.accessibilityIdentifier = "kitty-image-\(id)"
-            element.accessibilityLabel = "Image"
+            element.accessibilityLabel = frame.placement.accessibilityLabel
             element.accessibilityHint = "Touch and hold to drag it out"
             element.accessibilityTraits = .image
             element.accessibilityFrameInContainerSpace = frame.rect

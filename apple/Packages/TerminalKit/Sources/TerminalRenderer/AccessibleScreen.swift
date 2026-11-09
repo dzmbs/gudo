@@ -122,3 +122,9 @@ final class AccessibleScreen {
         return Caret(selection: terminal.selection, cursor: terminal.cursorPosition, viewportTop: terminal.viewportTopRow)
     }
 }
+
+extension ImagePlacement {
+    /// What VoiceOver reads for a kitty image: the protocol carries no name or description, so
+    /// the size of the part shown, in image pixels.
+    var accessibilityLabel: String { "Image, \(sourceWidth) by \(sourceHeight)" }
+}

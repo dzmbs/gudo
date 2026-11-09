@@ -5,7 +5,7 @@ import Testing
 @testable import TerminalRenderer
 
 /// The Mac terminal view as a VoiceOver text area: its text, lines, selection, insertion point,
-/// character frames and links.
+/// character frames, links and images.
 @MainActor
 @Suite(.serialized) struct AppKitAccessibilityTests {
     private func makeView(_ output: String) -> (TerminalView, NSWindow)? {
@@ -112,6 +112,19 @@ import Testing
         let (view, window) = try #require(makeView("/tmp/kept.txt /tmp/gone.txt"))
         view.underlinesPath = { $0.target == "/tmp/kept.txt" }
         #expect(children(view, role: .link).map { $0.accessibilityLabel() } == ["/tmp/kept.txt"])
+        withExtendedLifetime(window) {}
+    }
+
+    @Test func kittyImagesAreImagesWithTheirSize() throws {
+        let (view, window) = try #require(makeView(""))
+        let pixels = Array(repeating: [UInt8]([255, 0, 0, 255]), count: 12 * 8).flatMap { $0 }
+        let payload = Data(pixels).base64EncodedString()
+        show("\u{1b}_Ga=T,f=32,s=12,v=8,i=3,q=2;\(payload)\u{1b}\\", in: view)
+        view.surface.renderIfDirty(offscreen: true)
+        let images = children(view, role: .image)
+        #expect(images.map { $0.accessibilityLabel() } == ["Image, 12 by 8"])
+        let frame = try #require(view.surface.kittyImageFrames.first).rect
+        #expect(images.first?.accessibilityFrame() == window.convertToScreen(view.convert(frame, to: nil)))
         withExtendedLifetime(window) {}
     }
 

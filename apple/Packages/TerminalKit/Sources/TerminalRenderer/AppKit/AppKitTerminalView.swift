@@ -239,8 +239,26 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         return linkElements
     }
 
+    private var imageElements: [UInt32: ScreenPartElement] = [:]
+
+    /// One element per kitty image on screen, topmost first, kept per image id so VoiceOver's
+    /// focus survives redraws.
+    private func accessibleImages() -> [ScreenPartElement] {
+        var kept: [UInt32: ScreenPartElement] = [:]
+        let elements = surface.kittyImageFrames.reversed().map { frame in
+            let id = frame.placement.imageID
+            let element = kept[id] ?? imageElements[id] ?? ScreenPartElement(view: self, role: .image, label: "")
+            element.label = frame.placement.accessibilityLabel
+            element.rect = frame.rect
+            kept[id] = element
+            return element
+        }
+        imageElements = kept
+        return elements
+    }
+
     override public func accessibilityChildren() -> [Any]? {
-        (super.accessibilityChildren() ?? []) + accessibleLinks()
+        (super.accessibilityChildren() ?? []) + accessibleImages() + accessibleLinks()
     }
 
     override public func isAccessibilityElement() -> Bool { true }
@@ -873,7 +891,7 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
 private final class ScreenPartElement: NSAccessibilityElement {
     private weak var view: NSView?
     private let role: NSAccessibility.Role
-    private let label: String
+    var label: String
     var url: URL?
     /// In view points.
     var rect = CGRect.zero

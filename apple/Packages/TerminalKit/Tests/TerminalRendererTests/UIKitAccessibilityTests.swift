@@ -78,6 +78,17 @@ import UIKit
         withExtendedLifetime(window) {}
     }
 
+    @Test func kittyImagesAreImagesWithTheirSize() throws {
+        let (view, window) = try makeView("")
+        let pixels = Array(repeating: [UInt8]([255, 0, 0, 255]), count: 12 * 8).flatMap { $0 }
+        view.surface.terminal.write(Array("\u{1b}_Ga=T,f=32,s=12,v=8,i=3,q=2;\(Data(pixels).base64EncodedString())\u{1b}\\".utf8))
+        view.surface.renderIfDirty(offscreen: true)
+        view.surface.renderIfDirty(offscreen: true)
+        let images = (view.accessibilityElements ?? []).compactMap { $0 as? UIAccessibilityElement }.filter { $0.accessibilityTraits.contains(.image) }
+        #expect(images.map(\.accessibilityLabel) == ["Image, 12 by 8"])
+        withExtendedLifetime(window) {}
+    }
+
     @Test func passwordPromptCompositionIsNotRead() throws {
         let (view, window) = try makeView("Password: ")
         view.surface.enablePrediction()
