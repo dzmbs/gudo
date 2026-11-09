@@ -106,6 +106,9 @@ pub struct ClientConfig {
     /// Ask for the repository snapshot ([`WorkspaceEvent::Repos`]): the daemon then watches
     /// the panes' repositories while this client is connected.
     pub repo_status: bool,
+    /// How much the device's network can carry when the client starts; see
+    /// [`Client::set_link`].
+    pub link: proto::LinkClass,
 }
 
 impl std::fmt::Debug for ClientConfig {
@@ -115,18 +118,20 @@ impl std::fmt::Debug for ClientConfig {
             .field("relay", &self.relay)
             .field("mirror_vt", &self.mirror_vt)
             .field("repo_status", &self.repo_status)
+            .field("link", &self.link)
             .finish()
     }
 }
 
 impl ClientConfig {
-    /// Defaults: n0 relays, VT mirror on, no repository snapshot.
+    /// Defaults: n0 relays, VT mirror on, no repository snapshot, a normal link.
     pub fn new(secret_key: Vec<u8>) -> Self {
         Self {
             secret_key,
             relay: RelayMode::Default,
             mirror_vt: true,
             repo_status: false,
+            link: proto::LinkClass::Normal,
         }
     }
 
@@ -489,6 +494,8 @@ pub(crate) struct Inner {
     pub connection: Mutex<Option<Connection>>,
     pub endpoint: Mutex<Option<iroh::Endpoint>>,
     pub reconnect: Notify,
+    /// Told to the daemon in each `Hello`.
+    pub link: Mutex<proto::LinkClass>,
     pub skips_backoff: AtomicBool,
     pub is_dialing: AtomicBool,
     /// iroh forgets learned paths a minute after the last connection.
@@ -725,6 +732,7 @@ impl Client {
             net: Mutex::new((config.relay, options.clone())),
             rebind: AtomicBool::new(false),
             options,
+            link: Mutex::new(config.link),
             config,
             listener,
             wanted: Mutex::new(Wanted::default()),
@@ -1147,6 +1155,17 @@ impl Client {
         self.refresh_network();
         self.inner.skips_backoff.store(true, Ordering::SeqCst);
         self.inner.reconnect.notify_one();
+    }
+
+    /// How much the device's network can carry (`Constrained` in Low Data Mode). The daemon
+    /// hears it in the handshake, so a change reconnects a live connection.
+    pub fn set_link(&self, link: proto::LinkClass) {
+        if std::mem::replace(&mut *lock(&self.inner.link), link) == link {
+            return;
+        }
+        if !*lock(&self.inner.paused) && self.live_connection().is_some() {
+            self.reconnect();
+        }
     }
 
     /// Back in the foreground: probes a live link, otherwise redials at once.

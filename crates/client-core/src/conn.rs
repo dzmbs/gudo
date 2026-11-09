@@ -10,8 +10,8 @@ use iroh::endpoint::{Connection, ReadExactError, RecvStream, SendStream, presets
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayUrl};
 use proto::{
     AttachFailure, AttachVia, Attachment, Bulk, Caps, ClientCtl, ClientInput, ForwardReply, Hello,
-    Input, InputPayload, InputSeq, LinkClass, OpOutcome, PaneId, PaneOutput, ResumePoint, Seq,
-    ServerCtl, SignedGrant, StreamHeader,
+    Input, InputPayload, InputSeq, OpOutcome, PaneId, PaneOutput, ResumePoint, Seq, ServerCtl,
+    SignedGrant, StreamHeader,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -540,7 +540,7 @@ async fn handshake(
             | Caps::INPUT_RESUME
             | Caps::MORE_DAEMON_FEATURES
             | inner.options.extra_caps,
-        link: LinkClass::Normal,
+        link: *lock(&inner.link),
         resume_token: lock(&inner.resume_token).clone(),
     };
     send(&mut ctl_tx, &ClientCtl::Hello(hello)).await?;

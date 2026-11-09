@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use iroh::endpoint::{Connection, SendStream};
-use proto::{InputSeq, PaneOutput, Seq};
+use proto::{InputSeq, LinkClass, PaneOutput, Seq};
 use pty::{RecvError, Subscriber};
 use tokio::sync::{mpsc, watch};
 
@@ -41,25 +41,41 @@ impl Class {
 
     /// Delay this pane's in-flight bytes may add in front of a keystroke, and budget bounds.
     /// The budget is link rate × allowed delay, not bandwidth × RTT.
-    fn budget_params(self) -> (Duration, usize, usize) {
-        match self {
-            Self::Focused => (Duration::from_millis(50), 64 << 10, 1 << 20),
-            Self::Visible | Self::Background => (Duration::from_millis(10), 16 << 10, 256 << 10),
+    fn budget_params(self, link: LinkClass) -> (Duration, usize, usize) {
+        match (self, link) {
+            (Self::Focused, LinkClass::Normal) => (Duration::from_millis(50), 64 << 10, 1 << 20),
+            (Self::Focused, LinkClass::Constrained) => {
+                (Duration::from_millis(50), 64 << 10, 256 << 10)
+            }
+            (Self::Visible | Self::Background, LinkClass::Normal) => {
+                (Duration::from_millis(10), 16 << 10, 256 << 10)
+            }
+            (Self::Visible | Self::Background, LinkClass::Constrained) => {
+                (Duration::from_millis(10), 16 << 10, 64 << 10)
+            }
         }
     }
 
     /// Minimum time between snapshots of a flooding pane.
-    fn snapshot_interval(self) -> Duration {
-        match self {
-            Self::Focused => Duration::from_millis(33),
-            Self::Visible | Self::Background => Duration::from_millis(250),
+    fn snapshot_interval(self, link: LinkClass) -> Duration {
+        match (self, link) {
+            (Self::Focused, LinkClass::Normal) => Duration::from_millis(33),
+            (Self::Focused, LinkClass::Constrained) => Duration::from_millis(100),
+            (Self::Visible | Self::Background, LinkClass::Normal) => Duration::from_millis(250),
+            (Self::Visible | Self::Background, LinkClass::Constrained) => Duration::from_secs(1),
         }
+    }
+
+    /// Whether output only marks the pane changed, to be sent as one snapshot once the client
+    /// shows the pane again.
+    fn holds_output(self, link: LinkClass) -> bool {
+        self == Self::Background && link == LinkClass::Constrained
     }
 }
 
 /// Unacked budget for `class` on `conn`'s current path.
-fn budget(class: Class, conn: &Connection) -> usize {
-    let (delay, min, max) = class.budget_params();
+fn budget(class: Class, link: LinkClass, conn: &Connection) -> usize {
+    let (delay, min, max) = class.budget_params(link);
     let rate = conn
         .paths()
         .iter()
@@ -138,6 +154,7 @@ pub(crate) struct PaneStream {
     pub acks: watch::Receiver<Seq>,
     pub cmds: mpsc::UnboundedReceiver<StreamCmd>,
     pub class: Class,
+    pub link: LinkClass,
     pub one_shot: bool,
     /// Snapshots come from this principal's since-join view (multiplayer).
     pub viewer: Option<proto::PrincipalId>,
@@ -165,7 +182,7 @@ impl PaneStream {
             dirty: true,
             last_snapshot: None,
             retry_at: None,
-            budget: budget(self.class, &self.conn),
+            budget: budget(self.class, self.link, &self.conn),
             budget_at: Instant::now(),
             frame_buf: Vec::with_capacity(64 << 10),
             stats: StreamStats::default(),
@@ -183,24 +200,26 @@ impl PaneStream {
         }
         let mut resizes = self.pane.resize_updates();
         loop {
-            if state.dirty && state.in_flight.is_empty() {
-                let due = self.snapshot_due(&state);
-                if due <= Instant::now() {
-                    self.send_snapshot(&mut state).await?;
-                    if self.one_shot && !state.dirty {
-                        self.send.finish().ok();
-                        return Ok(state.stats);
-                    }
+            if state.dirty
+                && state.in_flight.is_empty()
+                && let Some(due) = self.snapshot_due(&state)
+                && due <= Instant::now()
+            {
+                self.send_snapshot(&mut state).await?;
+                if self.one_shot && !state.dirty {
+                    self.send.finish().ok();
+                    return Ok(state.stats);
                 }
             }
             if state.budget_at.elapsed() > Duration::from_millis(100) {
-                state.budget = budget(self.class, &self.conn);
+                state.budget = budget(self.class, self.link, &self.conn);
                 state.budget_at = Instant::now();
             }
             let can_read =
                 !state.dirty && state.in_flight.bytes < state.budget && state.subscriber.is_some();
-            let wake =
-                (state.dirty && state.in_flight.is_empty()).then(|| self.snapshot_due(&state));
+            let wake = (state.dirty && state.in_flight.is_empty())
+                .then(|| self.snapshot_due(&state))
+                .flatten();
             tokio::select! {
                 biased;
                 cmd = self.cmds.recv() => match cmd {
@@ -208,9 +227,12 @@ impl PaneStream {
                         self.write(&mut state, &PaneOutput::InputAck { input_seq, at_seq }, None).await?;
                     }
                     Some(StreamCmd::Class(class)) => {
+                        if self.class.holds_output(self.link) && !class.holds_output(self.link) {
+                            state.last_snapshot = None;
+                        }
                         self.class = class;
                         let _ = self.send.set_priority(class.priority());
-                        state.budget = budget(class, &self.conn);
+                        state.budget = budget(class, self.link, &self.conn);
                     }
                     None => return Ok(state.stats),
                 },
@@ -228,6 +250,7 @@ impl PaneStream {
                 }
                 () = sleep_until(wake), if wake.is_some() => {}
                 read = recv(state.subscriber.as_mut()), if can_read => match read {
+                    Ok(_) if self.class.holds_output(self.link) => state.dirty = true,
                     Ok(chunk) => self.send_bytes(&mut state, Seq(chunk.seq.get()), &chunk.data).await?,
                     Err(RecvError::Evicted { .. }) => state.dirty = true,
                     Err(RecvError::Closed) => {
@@ -240,13 +263,20 @@ impl PaneStream {
         }
     }
 
-    fn snapshot_due(&self, state: &State) -> Instant {
-        let by_rate = state
-            .last_snapshot
-            .map_or_else(Instant::now, |last| last + self.class.snapshot_interval());
-        state
-            .retry_at
-            .map_or(by_rate, |retry_at| retry_at.max(by_rate))
+    /// When the next snapshot may go; none while output is held and the client already has
+    /// a screen.
+    fn snapshot_due(&self, state: &State) -> Option<Instant> {
+        if self.class.holds_output(self.link) && state.last_snapshot.is_some() {
+            return None;
+        }
+        let by_rate = state.last_snapshot.map_or_else(Instant::now, |last| {
+            last + self.class.snapshot_interval(self.link)
+        });
+        Some(
+            state
+                .retry_at
+                .map_or(by_rate, |retry_at| retry_at.max(by_rate)),
+        )
     }
 
     async fn write(

@@ -71,6 +71,19 @@ pub struct ClientConfig {
     /// panes' repositories while this client is connected.
     #[uniffi(default = true)]
     pub repo_status: bool,
+    /// The device is in Low Data Mode as the client starts: hosts send only the panes it
+    /// shows, with smaller budgets.
+    #[uniffi(default = false)]
+    pub low_data_mode: bool,
+}
+
+/// What the device's network allows, as the daemon is told it.
+fn link_class(low_data_mode: bool) -> proto::LinkClass {
+    if low_data_mode {
+        proto::LinkClass::Constrained
+    } else {
+        proto::LinkClass::Normal
+    }
 }
 
 impl std::fmt::Debug for ClientConfig {
@@ -80,6 +93,7 @@ impl std::fmt::Debug for ClientConfig {
             .field("relay", &self.relay)
             .field("mirror_vt", &self.mirror_vt)
             .field("repo_status", &self.repo_status)
+            .field("low_data_mode", &self.low_data_mode)
             .finish()
     }
 }
@@ -612,6 +626,7 @@ impl From<ClientConfig> for client_core::ClientConfig {
             relay: config.relay.into(),
             mirror_vt: config.mirror_vt,
             repo_status: config.repo_status,
+            link: link_class(config.low_data_mode),
         }
     }
 }
@@ -907,6 +922,12 @@ impl DaemonClient {
         self.inner.pane_seq(PaneId(pane_id))
     }
 
+    /// The device entered or left Low Data Mode; a live connection reconnects so the host
+    /// hears it.
+    pub fn set_low_data_mode(&self, low_data_mode: bool) {
+        self.inner.set_link(link_class(low_data_mode));
+    }
+
     /// Drops the connection and redials now.
     pub fn reconnect(&self) {
         self.inner.reconnect();
@@ -1089,6 +1110,7 @@ mod tests {
             relay: RelayMode::Default,
             mirror_vt: true,
             repo_status: true,
+            low_data_mode: false,
         };
         assert!(!format!("{config:?}").contains("171"));
         let options = ConnectOptions {

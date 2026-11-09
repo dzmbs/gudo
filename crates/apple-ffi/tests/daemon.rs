@@ -55,6 +55,7 @@ fn connect_attach_split_echo() {
             relay: RelayMode::Disabled,
             mirror_vt: true,
             repo_status: false,
+            low_data_mode: false,
         },
         events.clone(),
     )

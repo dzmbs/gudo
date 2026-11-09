@@ -141,6 +141,7 @@ impl Host {
             relay: RelayMode::Disabled,
             mirror_vt: true,
             repo_status: false,
+            low_data_mode: false,
         };
         let client = DaemonClient::connect(ticket, config, events.clone()).unwrap();
         events.wait("connected", |all| {

@@ -72,6 +72,8 @@ struct Client {
     /// Roles and scope, fixed at the handshake; re-validated on every message.
     authz: Authz,
     caps: Caps,
+    /// What the client said about its network (Low Data Mode is `Constrained`).
+    link: proto::LinkClass,
     /// The input stream this connection continues, for clients that resend input after a
     /// reconnect (`Caps::INPUT_RESUME`).
     input_stream: Option<u64>,
@@ -245,6 +247,7 @@ async fn run(
         actor: authz.actor,
         authz,
         caps: hello.caps,
+        link: hello.link,
         input_stream: hello
             .caps
             .contains(Caps::INPUT_RESUME)
@@ -3230,6 +3233,7 @@ impl Client {
             acks: acks_rx,
             cmds: cmds_rx,
             class,
+            link: self.link,
             one_shot: mode == SubscribeMode::Snapshot,
             viewer,
         };
