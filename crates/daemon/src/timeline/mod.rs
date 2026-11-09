@@ -515,7 +515,7 @@ pub(crate) async fn handle(
             {
                 let watches = lock(&connection.timeline_watches);
                 if watches.len() >= MAX_WATCHES && !watches.contains_key(&pane_id) {
-                    return Err(WsError::Invalid("too many Chat panes are open".into()));
+                    return Err(WsError::Denied("too many Chat panes are open".into()));
                 }
             }
             let timeline = core.ws.timelines.open(core, pane_id).await?;
@@ -539,7 +539,7 @@ pub(crate) async fn handle(
             .await?;
             let mut watches = lock(&connection.timeline_watches);
             if watches.len() >= MAX_WATCHES && !watches.contains_key(&pane_id) {
-                return Err(WsError::Invalid("too many Chat panes are open".into()));
+                return Err(WsError::Denied("too many Chat panes are open".into()));
             }
             let watch_token = NEXT_WATCH.fetch_add(1, Ordering::Relaxed);
             connection.timeline_mailbox.register(pane_id, watch_token);
