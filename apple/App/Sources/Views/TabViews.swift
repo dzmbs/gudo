@@ -11,10 +11,13 @@ import SwiftUI
 /// Native list reuse with the system's row fills hidden, so the terminal palette owns the chrome.
 struct WorkspaceSidebar: View {
     @Environment(WindowModel.self) private var model
+    @Environment(\.sidebarListStyle) private var listStyle
     /// Inbox and Hosts on top; the tab overview leaves them to the iPhone's tab bar.
     var showsDestinations = true
     @State private var swipe = RowSwipeState()
     @State private var geometry = SidebarGeometry()
+    @State private var scrollOffset: CGFloat = 0
+    @State private var contentTop: CGFloat = 0
 
     var body: some View {
         List {
@@ -45,6 +48,18 @@ struct WorkspaceSidebar: View {
         .listStyle(.plain)
         .contentMargins(.all, 0, for: .scrollContent)
         .coordinateSpace(name: "sidebar-list")
+        .onScrollGeometryChange(for: [CGFloat].self) { [$0.contentOffset.y, $0.contentInsets.top] } action: { _, values in
+            scrollOffset = values[0]
+            contentTop = values[1]
+        }
+        .overlay(alignment: .top) {
+            if listStyle == .plain {
+                StickyProjectHeader(geometry: geometry, scrollOffset: scrollOffset, top: contentTop)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    // A header pushed up leaves under the bars, not over them.
+                    .mask(alignment: .top) { Rectangle().padding(.top, contentTop) }
+            }
+        }
         .onDrop(of: [.text], delegate: SidebarDropDelegate(model: model, drag: model.sidebarDrag, geometry: geometry))
         .environment(model.sidebarDrag)
         #if os(iOS)
@@ -64,10 +79,11 @@ struct WorkspaceSidebar: View {
         .scrollIndicators(.never)
         .environment(swipe)
         .onScrollPhaseChange { _, phase in if phase != .idle { swipe.open = nil } }
-        // Dense rows in a fixed column; the column grows with them (`SidebarWidth`).
-        .dynamicTypeSize(...DynamicTypeSize.accessibility1)
+        // Dense rows in a fixed column; the column grows with them (`SidebarWidth`). The
+        // iPhone's full-width list takes every size.
+        .dynamicTypeSize(...(listStyle == .grouped ? DynamicTypeSize.accessibility5 : .accessibility1))
         .chromeContent()
-        .chromeBackground(DS.Palette.sidebar)
+        .chromeBackground(listStyle == .grouped ? DS.Palette.groupedPage : DS.Palette.sidebar)
         #if os(macOS)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             SidebarFooter()
@@ -120,6 +136,23 @@ enum SidebarWidth {
     }
 }
 
+/// How the tab list draws: the sidebar's dense rows, or the iPhone's grouped cards per project.
+enum SidebarListStyle {
+    case plain, grouped
+}
+
+/// Where a row sits among its section's rows, for the corners of a grouped card.
+struct GroupedRowPosition: Equatable {
+    var isFirst: Bool
+    var isLast: Bool
+    static let alone = GroupedRowPosition(isFirst: true, isLast: true)
+}
+
+extension EnvironmentValues {
+    @Entry var sidebarListStyle = SidebarListStyle.plain
+    @Entry var groupedRowPosition = GroupedRowPosition.alone
+}
+
 extension View {
     /// A sidebar row: a full-width hit area with a soft selection and hover fill.
     func sidebarRow(selected: Bool) -> some View {
@@ -137,8 +170,41 @@ extension View {
 private struct SidebarRowStyle: ViewModifier {
     let selected: Bool
     @State private var hovered = false
+    @Environment(\.sidebarListStyle) private var listStyle
+    @Environment(\.groupedRowPosition) private var position
 
     func body(content: Content) -> some View {
+        switch listStyle {
+        case .plain: plain(content)
+        case .grouped: grouped(content)
+        }
+    }
+
+    /// An inset grouped card, as iOS lists draw them: 44 pt at least, rounded at the section's
+    /// ends, a hairline between rows that starts at the text.
+    private func grouped(_ content: Content) -> some View {
+        let shape = UnevenRoundedRectangle(
+            topLeadingRadius: position.isFirst ? DS.Radius.pane : 0, bottomLeadingRadius: position.isLast ? DS.Radius.pane : 0,
+            bottomTrailingRadius: position.isLast ? DS.Radius.pane : 0, topTrailingRadius: position.isFirst ? DS.Radius.pane : 0,
+            style: .continuous)
+        return content
+            .padding(.horizontal, DS.Space.l)
+            .padding(.vertical, DS.Space.s)
+            .frame(maxWidth: .infinity, minHeight: DS.Size.touchTarget, alignment: .leading)
+            .contentShape(.rect)
+            .background(selected ? AnyShapeStyle(DS.Palette.selectedFill) : AnyShapeStyle(DS.Palette.groupedRow), in: shape)
+            .overlay(alignment: .bottom) {
+                if !position.isLast {
+                    Rectangle()
+                        .fill(DS.Palette.separator)
+                        .frame(height: 0.5)
+                        .padding(.leading, DS.Space.l + SidebarFont.icon + DS.Space.gap10)
+                }
+            }
+            .padding(.horizontal, DS.Space.l)
+    }
+
+    private func plain(_ content: Content) -> some View {
         content
             .padding(.horizontal, DS.Space.m)
             .padding(.vertical, DS.Space.row)
@@ -553,12 +619,19 @@ struct SidebarTabIcon: View {
     let program: ProgramIdentity
     let state: AgentState?
     var favicon: Image?
+    @Environment(\.sidebarListStyle) private var listStyle
 
     var body: some View {
         let size = SidebarFont.icon
+        let badge = Self.badge(for: state)
+        let dot = size * 0.4
+        let gap = size * 0.09
+        // The dot's centre, out past the tile's corner.
+        let centre = CGPoint(x: size + size * 0.2 - dot / 2, y: size + size * 0.2 - dot / 2)
         ZStack {
+            // On a grouped card the raised surface is the card's own colour.
             RoundedRectangle(cornerRadius: size * 0.27, style: .continuous)
-                .fill(DS.Palette.raised)
+                .fill(listStyle == .grouped ? DS.Palette.selectedFill : DS.Palette.raised)
             if let favicon {
                 Favicon(image: favicon, size: size * 0.64)
             } else {
@@ -567,14 +640,25 @@ struct SidebarTabIcon: View {
             }
         }
         .frame(width: size, height: size)
-        .overlay(alignment: .bottomTrailing) {
-            if let badge = Self.badge(for: state) {
+        // A gap cut around the dot, so it reads on any row: a card, a selected row, the sidebar.
+        .mask {
+            Rectangle()
+                .overlay {
+                    if badge != nil {
+                        Circle()
+                            .frame(width: dot + gap * 2, height: dot + gap * 2)
+                            .position(centre)
+                            .blendMode(.destinationOut)
+                    }
+                }
+                .compositingGroup()
+        }
+        .overlay(alignment: .topLeading) {
+            if let badge {
                 Circle()
                     .fill(badge)
-                    .frame(width: size * 0.4, height: size * 0.4)
-                    .padding(size * 0.09)
-                    .background(Circle().fill(DS.Palette.sidebar))
-                    .offset(x: size * 0.2, y: size * 0.2)
+                    .frame(width: dot, height: dot)
+                    .position(centre)
                     .transition(.scale(scale: 0.5).combined(with: .opacity))
             }
         }

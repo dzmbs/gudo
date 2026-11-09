@@ -12,6 +12,7 @@ struct TabOverview: View {
     var body: some View {
         NavigationStack {
             WorkspaceSidebar(showsDestinations: false)
+                .environment(\.sidebarListStyle, .grouped)
                 .navigationTitle("Tabs")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -29,7 +30,7 @@ struct TabOverview: View {
                 }
                 .chromeBarBackground(.sidebar)
         }
-        .chromeBackground(DS.Palette.sidebar)
+        .chromeBackground(DS.Palette.groupedPage)
         .accessibilityIdentifier("tab-overview")
         .onDisappear { model.endTabSelection() }
     }

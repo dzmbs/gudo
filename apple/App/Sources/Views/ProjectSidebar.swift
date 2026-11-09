@@ -231,6 +231,7 @@ struct SidebarTabList: View {
         Group {
             ForEach(items) { item in
                 SidebarItemView(item: item, numbers: numbers)
+                    .environment(\.groupedRowPosition, Self.position(of: item, in: items))
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.space)) } action: { geometry.frames[item.id] = $0 }
             }
         }
@@ -238,6 +239,27 @@ struct SidebarTabList: View {
         // Taught once: the first project, however made, retires the hint for good.
         .onChange(of: model.projects.isEmpty, initial: true) { _, empty in
             if !empty, !introDismissed { introDismissed = true }
+        }
+    }
+}
+
+extension SidebarTabList {
+    /// Rows of one section (and a project's empty row) draw as one card in the grouped list.
+    static func position(of item: SidebarItem, in items: [SidebarItem]) -> GroupedRowPosition {
+        guard let index = items.firstIndex(of: item), let section = item.cardSection else { return .alone }
+        let previous = index > items.startIndex ? items[index - 1].cardSection : nil
+        let next = index < items.index(before: items.endIndex) ? items[index + 1].cardSection : nil
+        return GroupedRowPosition(isFirst: previous != section, isLast: next != section)
+    }
+}
+
+private extension SidebarItem {
+    /// The card a row belongs to: its section's container.
+    var cardSection: String? {
+        switch self {
+        case .row(_, let container): "\(container)"
+        case .projectEmpty(let id): "\(SidebarContainer.project(id))"
+        default: nil
         }
     }
 }
@@ -535,6 +557,50 @@ struct ProjectTile: View {
 
     static func monogram(_ name: String) -> String {
         name.first(where: { $0.isLetter || $0.isNumber }).map { String($0).uppercased() } ?? "•"
+    }
+}
+
+/// The header of the project whose rows run under the list's top edge, pinned there until the
+/// next project's header pushes it up, as list section headers do.
+struct StickyProjectHeader: View {
+    let geometry: SidebarGeometry
+    /// Read so the header follows every scroll.
+    let scrollOffset: CGFloat
+    /// Where the list's content starts under the window's bars.
+    let top: CGFloat
+    @Environment(WindowModel.self) private var model
+    @State private var height: CGFloat = 46
+
+    var body: some View {
+        let _ = scrollOffset
+        if let pinned = Self.pinned(in: geometry, top: top, height: height), let project = model.groups.project(pinned.project) {
+            ProjectHeader(project: project)
+                .background(DS.Palette.sidebar)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
+                .offset(y: top + pinned.offset)
+                .transition(.identity)
+        }
+    }
+
+    /// The project scrolled past the top whose rows still show, and how far the next header has
+    /// pushed it up.
+    static func pinned(in geometry: SidebarGeometry, top: CGFloat, height: CGFloat) -> (project: String, offset: CGFloat)? {
+        var headers: [(project: String, top: CGFloat)] = []
+        var bottoms: [String: CGFloat] = [:]
+        for (id, item) in geometry.items {
+            guard let frame = geometry.frames[id] else { continue }
+            switch item {
+            case .projectHeader(let project): headers.append((project, frame.minY))
+            case .row(_, .project(let project)), .projectEmpty(let project): bottoms[project] = max(bottoms[project] ?? -.infinity, frame.maxY)
+            default: break
+            }
+        }
+        headers.sort { $0.top < $1.top }
+        guard let current = headers.last(where: { $0.top < top }), let bottom = bottoms[current.project], bottom > top + height else {
+            return nil
+        }
+        let next = headers.first { $0.top >= top }?.top ?? .infinity
+        return (current.project, min(0, next - top - height))
     }
 }
 
