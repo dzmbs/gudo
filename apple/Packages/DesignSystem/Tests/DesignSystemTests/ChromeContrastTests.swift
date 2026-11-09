@@ -55,6 +55,24 @@ struct ChromeContrastTests {
         #expect(failures.isEmpty, "\(Self.summary(failures))")
     }
 
+    /// Tertiary is the third step of meta text (tab numbers, paths, timestamps). Held to 4.5:1 on
+    /// menus it would reach the secondary level on most dark themes and the hierarchy would be
+    /// gone, so it is held to the large-text and graphics minimum instead.
+    @Test(arguments: schemes)
+    func tertiaryTextReadsAt3To1SoItStaysAStepBelowSecondary(scheme: ColorScheme?) {
+        let failures = Self.failures(scheme: scheme, minimum: ChromePalette.minimumGlyphContrast) { chrome in
+            Self.textSurfaces(of: chrome).map { surface in
+                ("textTertiary on \(surface.name)", surface.color.blended(with: chrome.foreground, chrome.tertiaryLevel), surface.color)
+            }
+        }
+        #expect(failures.isEmpty, "\(Self.summary(failures))")
+        let collapsed = Self.themes.filter { theme in
+            let chrome = ChromePalette(theme: theme, scheme: scheme)
+            return chrome.tertiaryLevel >= chrome.secondaryLevel
+        }
+        #expect(collapsed.isEmpty, "\(collapsed.map(\.name))")
+    }
+
     /// States are words as well as glyphs ("Can't reach", "Reconnecting", an error under a form).
     @Test(arguments: schemes)
     func stateColoursReadAsTextAt4_5OnEverySurface(scheme: ColorScheme?) {

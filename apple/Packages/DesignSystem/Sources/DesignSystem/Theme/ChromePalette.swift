@@ -55,7 +55,7 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
     /// Text: main / secondary / tertiary / disabled.
     public static let textLevels = (primary: 0.90, secondary: 0.60, tertiary: 0.40, quaternary: 0.20)
     /// The most secondary and tertiary text are raised to for contrast.
-    public static let levelCaps = (secondary: 0.78, tertiary: 0.60)
+    public static let levelCaps = (secondary: 0.78, tertiary: 0.62)
     public static let fillLevels = (hover: 0.05, selected: 0.10, pressed: 0.15)
     public static let lineLevels = (hairline: 0.10, separator: 0.15, border: 0.20)
     /// How far a state hue is mixed toward the foreground. At 50 % a dark theme's amber "needs
@@ -143,7 +143,8 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
         self.selection = selection
         self.onSelection = selection.blended(with: foreground, Self.textLevels.primary)
 
-        let textSurfaces = [background, sidebar, background.blended(with: foreground, Self.raisedStrength), overlay]
+        let selectedRows = [background, sidebar].map { $0.blended(with: foreground, Self.fillLevels.selected) }
+        let textSurfaces = [background, sidebar, raised, overlay] + selectedRows
         secondaryLevel = Self.level(Self.textLevels.secondary, cap: Self.levelCaps.secondary, of: foreground, on: textSurfaces, minimum: Self.minimumTextContrast)
         tertiaryLevel = Self.level(Self.textLevels.tertiary, cap: Self.levelCaps.tertiary, of: foreground, on: textSurfaces, minimum: Self.minimumGlyphContrast)
 
