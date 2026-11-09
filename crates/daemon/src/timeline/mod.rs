@@ -39,6 +39,14 @@ static NEXT_WATCH: AtomicU64 = AtomicU64::new(1);
 pub(crate) fn next_epoch() -> u64 {
     NEXT_EPOCH.fetch_add(1, Ordering::Relaxed).wrapping_add(1)
 }
+
+// A hot hand-off carries the session epoch over, so it alone would repeat earlier epochs.
+fn seed_epochs(session_epoch: u64) {
+    NEXT_EPOCH.fetch_max(
+        session_epoch.max(crate::identity::now_millis()),
+        Ordering::Relaxed,
+    );
+}
 const MAX_WATCHES: usize = 4;
 const MAX_PUSH_BYTES: usize = 1024 * 1024;
 const MAX_BULK_REQUESTS: usize = 4;
@@ -318,7 +326,7 @@ impl Timelines {
             return Ok(timeline);
         }
         let (wake, wakes) = mpsc::channel(1);
-        NEXT_EPOCH.fetch_max(core.epoch.0, Ordering::Relaxed);
+        seed_epochs(core.epoch.0);
         let epoch = next_epoch();
         let source_core = Arc::clone(core);
         let state = blocking(move || {

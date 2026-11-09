@@ -694,3 +694,10 @@ async fn building_a_snapshot_never_holds_the_mailbox_the_ctl_writer_needs() {
             if matches!(operations.as_slice(), [TimelineOp::Snapshot(_)])
     ));
 }
+
+#[test]
+fn reopened_timelines_never_reuse_an_epoch_from_before_a_hand_off() {
+    let started = crate::identity::now_millis();
+    seed_epochs(1);
+    assert!(next_epoch() > started);
+}
