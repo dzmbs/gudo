@@ -122,11 +122,25 @@ nonisolated public struct ChromeStyle: ShapeStyle, Hashable, Sendable {
     }
 
     public func resolve(in environment: EnvironmentValues) -> Color.Resolved {
+        let token = environment.colorSchemeContrast == .increased ? token.increasedContrast : token
         if case .ansi(let index) = token { return environment.terminalTheme.ansiRGB(index).color.resolve(in: environment) }
         if case .project(let index) = token {
             return ProjectColor.color(index, theme: environment.terminalTheme, chrome: environment.chrome).color.resolve(in: environment)
         }
         return environment.chrome.color(token).resolve(in: environment)
+    }
+}
+
+nonisolated public extension ChromeStyle.Token {
+    /// The token drawn under Increase Contrast: secondary text as main text, tertiary as
+    /// secondary, hairlines and separators as borders.
+    var increasedContrast: Self {
+        switch self {
+        case .textSecondary: .text
+        case .textTertiary: .textSecondary
+        case .hairline, .separator: .border
+        default: self
+        }
     }
 }
 
