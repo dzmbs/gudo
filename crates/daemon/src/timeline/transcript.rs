@@ -331,6 +331,12 @@ impl Transcript {
         limit: usize,
         since: Option<UnixMillis>,
     ) -> Result<TimelineSnapshot, WsError> {
+        let metadata = std::fs::metadata(&self.path).map_err(failed)?;
+        if self.was_rewritten(&metadata)? {
+            return Err(WsError::Conflict(
+                "the transcript changed; reopen Chat".into(),
+            ));
+        }
         let length = self.file.metadata().map_err(failed)?.len();
         if before == 0 || before > length || !record_boundary(&mut self.file, before)? {
             return Err(WsError::Invalid(

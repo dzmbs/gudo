@@ -834,3 +834,18 @@ fn a_full_snapshot_with_many_commands_still_fits_one_push() {
     };
     assert!(super::super::value_weight::update(&update) <= super::super::MAX_PUSH_BYTES);
 }
+
+#[test]
+fn history_pages_refuse_a_rewritten_transcript() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("test.jsonl");
+    let contents: String = (0..80).map(message).collect();
+    std::fs::write(&path, &contents).unwrap();
+    let mut transcript = open(&path);
+    let before = transcript.snapshot(60, None).before.unwrap();
+    std::fs::write(&path, contents.replace("message-", "messages")).unwrap();
+    assert!(matches!(
+        transcript.page(before, 10, None),
+        Err(WsError::Conflict(_))
+    ));
+}
