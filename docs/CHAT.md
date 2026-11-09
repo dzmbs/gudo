@@ -290,8 +290,17 @@ following updates pin to the bottom unless a newer user drag invalidates that ad
 The New capsule remains separate from the reusable cells.
 
 Markdown rows use prepared attributed values. Long lists and paragraphs split into bounded
-native rows. Code uses the terminal's font, foreground and background, with a 30-line/8-KiB
-prepared preview and an explicit full-code action. Large user, thinking and notice text have
+native rows. Code uses the terminal's font and background, with a 30-line/8-KiB prepared preview
+and an explicit full-code action. `ChatSyntax` prepares Tree-sitter token ranges on the rendering
+worker for both agents. Rust, Swift, JS/JSX, TS/TSX, Python, Go, shell, JSON, YAML, TOML, Markdown,
+C/C++, HTML, CSS and diff fences use the theme's ANSI hues, adjusted to 4.5:1 text contrast;
+Increase Contrast targets 7:1 or the surface's maximum possible contrast. Unknown, unavailable or
+over-budget highlighting stays plain. Source/copy text is unchanged, and no links/actions are added.
+Mutable parsers never cross to the UI; immutable queries are shared once per bundled language.
+Highlighting has separate 128-entry/512-KiB content and 64-entry/512-KiB theme-projection caches;
+retained token ranges are also charged to row/page budgets. Theme/contrast changes do not reparse
+code or change its geometry. See `apple/Packages/ChatSyntax/README.md` for parser/query limits and
+pinned dependency details. Large user, thinking and notice text have
 4-KiB UTF-8-safe previews; full values remain available for detail and copy actions. Plans and tables
 also bound the number of views constructed in one cell. The Mac has no Chat presentation.
 

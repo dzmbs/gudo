@@ -401,6 +401,7 @@ private struct ChatCodeBlock: View {
     let showAll: () -> Void
     @Environment(\.terminalTheme) private var terminalTheme
     @AppStorage(TerminalPreferences.Key.fontSize) private var fontSize = TerminalPreferences.Default.fontSize
+    @Environment(\.colorSchemeContrast) private var contrast
     @ScaledMetric(relativeTo: .callout) private var scale: CGFloat = 1
 
     private var lineHeight: CGFloat {
@@ -419,9 +420,8 @@ private struct ChatCodeBlock: View {
                 .padding(.horizontal, DS.Space.m).frame(height: DS.Size.touchTarget)
                 .background(DS.Palette.raised)
             ScrollView(.horizontal) {
-                Text(verbatim: code.preview)
+                Text(ChatCodeStyler.text(code, theme: terminalTheme, increasedContrast: contrast == .increased))
                     .font(TerminalFont.font(size: fontSize, relativeTo: .callout)).lineSpacing(DS.Space.xxs * scale)
-                    .foregroundStyle(terminalTheme.foreground)
                     .fixedSize(horizontal: true, vertical: true).padding(DS.Space.m)
             }
             .frame(height: CGFloat(code.visibleLineCount) * lineHeight + 2 * DS.Space.m)

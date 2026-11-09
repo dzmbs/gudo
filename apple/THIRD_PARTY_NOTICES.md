@@ -207,6 +207,15 @@ for native rows and Swift Markdown source ranges. No Ratatui rendering code is i
 The complete licence is in `scripts/notices/codex.txt` and ships in
 `App/Resources/THIRD_PARTY_NOTICES.txt`.
 
+## Tree-sitter code colours
+
+`Packages/ChatSyntax` links SwiftTreeSitter 0.25.0 (BSD-3-Clause), Tree-sitter 0.25.10 (MIT)
+and the pinned upstream grammars and highlight queries listed in its package manifest. The
+grammars are MIT licensed; mutable parser state stays on a rendering worker, not in a web view.
+Complete upstream copyright and licence notices are in `scripts/notices/tree-sitter.txt`.
+Tree-sitter's ICU/Unicode header notices are retained verbatim in
+`scripts/notices/tree-sitter-unicode.txt`. Both ship in `App/Resources/THIRD_PARTY_NOTICES.txt`.
+
 ## Sparkle
 
 Source: https://github.com/sparkle-project/Sparkle 2.10.1, linked unmodified into the Mac app as

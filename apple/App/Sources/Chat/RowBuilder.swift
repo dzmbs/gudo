@@ -1,5 +1,6 @@
 // Incremental partitioning adapted from OpenAI Codex, Copyright 2025 OpenAI, Apache-2.0.
 // Modified for native block rows and Swift Markdown source ranges.
+import ChatSyntax
 import Foundation
 import HostKit
 import Markdown
@@ -67,6 +68,7 @@ nonisolated struct ChatCodeSnippet: Equatable, Sendable {
     let lineCount: Int
     let visibleLineCount: Int
     let isTruncated: Bool
+    var highlights: [CodeToken] = []
 }
 
 nonisolated struct ChatListLine: Equatable, Sendable {
@@ -124,6 +126,7 @@ actor RowBuilder {
     private let cache = BoundedLRU<String, Entry>(
         capacity: ChatCacheLimits.entries, byteLimit: ChatCacheLimits.bytes, unitLimit: ChatCacheLimits.entries
     )
+    private let codeHighlighter = ChatSyntax.CodeHighlighter()
     private let inlineCache = BoundedLRU<String, AttributedString>(capacity: 32, byteLimit: 64 * 1_024, unitLimit: 32)
     private(set) var parseCount = 0
     private(set) var parsedBytes = 0
@@ -161,6 +164,7 @@ actor RowBuilder {
             }
             // Preserve ID/turn/actor charges as well as copied Markdown buffers and row metadata.
             bytes += assistant.text.utf8.count * 2
+            bytes += blocks.reduce(0) { $0 + ($1.code?.highlights.count ?? 0) * 32 }
         } else {
             let row = plainRow(item)
             rows = [row]
@@ -284,7 +288,8 @@ actor RowBuilder {
             let preview = prefix(lines.prefix(30).joined(separator: "\n"), bytes: 8_192)
             let snippet = ChatCodeSnippet(text: text, preview: preview, lineCount: lines.count,
                                           visibleLineCount: preview.split(separator: "\n", omittingEmptySubsequences: false).count,
-                                          isTruncated: lines.count > 30 || text.utf8.count > preview.utf8.count)
+                                          isTruncated: lines.count > 30 || text.utf8.count > preview.utf8.count,
+                                          highlights: codeHighlighter.highlights(preview, language: CodeLanguage(fence: code.language)))
             return ChatMarkdownBlock(kind: .code(code.language), source: source, text: AttributedString(text), code: snippet)
         }
         if markup is ThematicBreak {

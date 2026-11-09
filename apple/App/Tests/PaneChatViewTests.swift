@@ -21,6 +21,73 @@ final class PaneChatViewTests: XCTestCase {
         let window: UIWindow
     }
 
+    func testBothAgentsRenderColouredCodeWhileTheTimelineStreams() async throws {
+        let suite = "chat-code-colours-" + UUID().uuidString
+        let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let saved = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        defer {
+            preferences.removePersistentDomain(forName: suite)
+            UserDefaults.standard.setVolatileDomain(saved, forName: UserDefaults.argumentDomain)
+        }
+        let markdown = """
+        # Native code colours
+
+        Both agents keep the same readable code and full copy text.
+
+        ```rust
+        // Cache values, not native parser state.
+        fn greet(name: &str) -> String {
+            format!("Hello, {}", name)
+        }
+        ```
+
+        ```swift
+        func update(_ frame: Frame) {
+            collection.apply(frame)
+        }
+        ```
+        """
+        for theme in ["Dracula", "Apple System Colors Light"] {
+            var arguments = saved
+            arguments[TerminalPreferences.Key.theme] = theme
+            arguments[TerminalPreferences.Key.windowTheme] = TerminalPreferences.WindowTheme.auto.rawValue
+            UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
+            for agent in ["Claude", "Codex"] {
+                let base = try TimelineFixtureJSON.snapshot(0..<0, before: nil, agent: agent)
+                var value = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(base.utf8)) as? [String: Any])
+                var item = TimelineFixtureJSON.item(0)
+                item["id"] = "code-colours"
+                item["body"] = ["Assistant": ["text": markdown, "streaming": true]]
+                value["items"] = [item]
+                let fixture = try makeFixture(preferences: preferences, permitsSending: true, working: true,
+                    nativeMessageReceipts: true, agent: agent, snapshot: TimelineFixtureJSON.json(value))
+                defer {
+                    fixture.state.deactivate()
+                    fixture.window.isHidden = true
+                    fixture.window.rootViewController = nil
+                }
+                try await wait { fixture.state.controller?.collection.visibleCells.isEmpty == false }
+                let codes = fixture.state.model?.frame.rows.compactMap { row -> ChatCodeSnippet? in
+                    guard case .markdown(let block) = row.content else { return nil }
+                    return block.code
+                } ?? []
+                XCTAssertEqual(codes.count, 2)
+                XCTAssertTrue(codes.allSatisfy { !$0.highlights.isEmpty })
+                fixture.events.deliver(.timeline(paneId: 7, updateJson: try TimelineFixtureJSON.append("code-colours", text: "\n\nStreaming stays readable.", sequence: 1)))
+                try await wait { fixture.state.model?.frame.rows.contains { row in
+                    if case .markdown(let block) = row.content { return String(block.text.characters).contains("Streaming stays readable.") }
+                    return false
+                } == true }
+                XCTAssertEqual(fixture.state.model?.frame.rows.compactMap { row -> ChatCodeSnippet? in
+                    guard case .markdown(let block) = row.content else { return nil }
+                    return block.code
+                }, codes)
+                try await Task.sleep(for: .milliseconds(180))
+                try capture(fixture.window, name: "code-colours-\(agent.lowercased())-\(theme.contains("Light") ? "light" : "dark")")
+            }
+        }
+    }
+
     func testCapabilitiesNotKindSelectNativeControls() async throws {
         let suite = "chat-agent-capabilities-" + UUID().uuidString
         let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -525,7 +592,7 @@ final class PaneChatViewTests: XCTestCase {
     private func makeFixture(preferences: UserDefaults, permitsSending: Bool = false, working: Bool = false,
                              interruptNeedsConfirmation: Bool = false, nativeMessageReceipts: Bool = false,
                              dictation: ChatDictation = .init(), photoUploads: Bool = false,
-                             capabilities: UInt16 = 447, agent: String = "Claude") throws -> Fixture {
+                             capabilities: UInt16 = 447, agent: String = "Claude", snapshot: String? = nil) throws -> Fixture {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let backend = PanePresentationTests.Backend()
         let pane = try Pane(id: PaneId(7), backend: backend, appearance: .fromPreferences(), onExit: {})
@@ -534,7 +601,7 @@ final class PaneChatViewTests: XCTestCase {
                                   agent: agent == "Codex" ? .codex : .claude, inputPresentation: pane.inputPresentation,
                                   preferences: preferences, pool: ChatModelPool(capacity: 1), dictation: dictation)
         state.prepareInitialPresentation { pane.prepareToParkTerminal() }
-        let client = TimelineFixtureClient(snapshot: try TimelineFixtureJSON.snapshot(0..<60, before: nil, capabilities: capabilities, agent: agent),
+        let client = TimelineFixtureClient(snapshot: try snapshot ?? TimelineFixtureJSON.snapshot(0..<60, before: nil, capabilities: capabilities, agent: agent),
                                            interruptNeedsConfirmation: interruptNeedsConfirmation,
                                            nativeMessageReceipts: nativeMessageReceipts, photoUploads: photoUploads)
         let events = WorkspaceEventHub()

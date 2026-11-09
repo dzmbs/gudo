@@ -41,6 +41,8 @@ packages:
     path: Packages/VoiceKit
   FilesProviderKit:
     path: Packages/FilesProviderKit
+  ChatSyntax:
+    path: Packages/ChatSyntax
   Markdown:
     url: https://github.com/swiftlang/swift-markdown
     exactVersion: 0.7.3
@@ -280,6 +282,7 @@ targets:
         destinationFilters: [iOS]
       - package: Markdown
         product: Markdown
+      - package: ChatSyntax
       - package: Sparkle
         product: Sparkle
         destinationFilters: [macOS]

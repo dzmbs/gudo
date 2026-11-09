@@ -28,6 +28,8 @@ pub fn notices(check: bool) -> Result<()> {
     let mac_app = fs::read_to_string(root.join("scripts/notices/mac-app.txt"))?;
     let markdown = fs::read_to_string(root.join("scripts/notices/markdown.txt"))?;
     let codex = fs::read_to_string(root.join("scripts/notices/codex.txt"))?;
+    let syntax = fs::read_to_string(root.join("scripts/notices/tree-sitter.txt"))?;
+    let syntax_unicode = fs::read_to_string(root.join("scripts/notices/tree-sitter-unicode.txt"))?;
     let hostd = rust_crates("crates/hostd/Cargo.toml")?;
     let core = rust_crates("crates/apple-ffi/Cargo.toml")?;
     let excalidraw = npm_packages("excalidraw", false)?;
@@ -43,6 +45,8 @@ pub fn notices(check: bool) -> Result<()> {
         section("Frameworks in the Mac app", &mac_app),
         section("Swift Markdown and cmark-gfm in the app", &markdown),
         section("Codex incremental Markdown partitioning in the app", &codex),
+        section("Tree-sitter syntax colours in the app", &syntax),
+        section("Unicode headers in Tree-sitter", &syntax_unicode),
         section("Rust crates in the app (GudoCore)", &core),
         section("Rust crates in the bundled helpers (gudo-hostd)", &hostd),
         section("npm packages in the Excalidraw canvas bundle", &excalidraw),
