@@ -324,7 +324,7 @@ extension Terminal {
         return ghostty_row_get(row, flag, &value) == GHOSTTY_SUCCESS && value
     }
 
-    private static func hyperlinkURI(_ ref: GhosttyGridRef) -> String? {
+    static func hyperlinkURI(_ ref: GhosttyGridRef) -> String? {
         var ref = ref
         var buffer = [UInt8](repeating: 0, count: 2048)
         var length = 0

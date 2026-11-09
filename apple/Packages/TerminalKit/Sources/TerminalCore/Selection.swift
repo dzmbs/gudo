@@ -49,6 +49,15 @@ extension Terminal {
         }
     }
 
+    /// Converts an active-area cell (the cursor's coordinates) to the viewport (nil when scrolled
+    /// out of view).
+    public func viewportPoint(fromActive point: GridPoint) -> GridPoint? {
+        withHandle { handle in
+            guard var ref = Self.gridRef(handle, point, GHOSTTY_POINT_TAG_ACTIVE) else { return nil }
+            return Self.point(handle, &ref, GHOSTTY_POINT_TAG_VIEWPORT)
+        }
+    }
+
     static func point(_ handle: GhosttyTerminal, _ ref: inout GhosttyGridRef, _ tag: GhosttyPointTag) -> GridPoint? {
         var coordinate = GhosttyPointCoordinate()
         guard ghostty_terminal_point_from_grid_ref(handle, &ref, tag, &coordinate) == GHOSTTY_SUCCESS else { return nil }
