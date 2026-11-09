@@ -336,6 +336,33 @@ The fixture in `crates/daemon/tests/fixtures/timeline/` is emitted by the instal
 Code CLI against a loopback-only mock API with an isolated home and placeholder key. Its
 README records which data is preserved. No real account is used.
 
+### Experimental display-only streaming
+
+`Config::claude_chat_streaming` defaults to false. The daemon has a bounded, purpose-authenticated
+loopback `MessageDisplay` receiver and transcript overlay, but launch-time hook installation and
+supported-version selection are not wired yet. Normal Claude launches remain transcript-backed.
+The parser recognizes the documented 2.1.69+ version boundary; real standalone protocol captures
+use 2.1.319. This is not yet real-CLI-through-daemon or Apple UI acceptance.
+
+The HTTP response is exactly `{}` without `displayContent`, and reaches an independent caller
+before capture, rendering or transcript work. Display tokens cannot call the ordinary input/exit
+fence. Admission requires the exact pane object, open launch, native session, admitted top-level
+prompt, transcript and cwd. Replay conflicts, gaps and limits withdraw display usability without
+changing Terminal input or approval authority. Stop does not reject the final display flush.
+
+Provisional assistant rows have no trustworthy original time (`UnixMillis(0)`) and are excluded
+from all since-filtered delivery. Prompt identity and observed text-response order reconcile
+unrelated display/API/transcript IDs; tool-only responses consume no display ordinal. A canonical
+prefix cannot truncate a longer live row. Partial canonical text is held behind that row until
+canonical text covers it; bounded same-epoch snapshots hand over in canonical order, including
+interleaved tools, while preserving overlapping older history. No transcript is rewritten.
+
+Capture admits at most 64 panes, 16 active messages and 64 message identities per prompt, with
+256 KiB/message and 768 KiB/stream budgets (including retained replay delta). The overlay has a
+separate 768 KiB conservative value budget and shares the existing push/snapshot budget. These
+are bounds, not latency or RSS acceptance. Hot relay handoff remains deferred; launch integration
+must retain an active-stream upgrade guard before this path can be enabled.
+
 ## Read-only diff foundation
 
 Native diff rows accept an explicit note callback; without one, they expose copy actions but
@@ -661,7 +688,9 @@ output, including reads made with a guessed handle. Output handles cannot bypass
 and sidechain exclusions of the main timeline. A transcript must resolve inside the
 pane's agent account's `projects` directory and its filename must match the captured session.
 Files are opened without following a final symlink. Output reads reject stale file identity
-or tail anchors, even before the file watcher runs.
+or tail anchors, even before the file watcher runs. Missing original time is never replaced by
+receipt time: zero-time items are excluded even at a zero since boundary. Withdrawing a visible
+item's time also removes its append visibility, while checkpoints preserve cursor continuity.
 
 The daemon retains at most 512 items per watched pane and 128 tool-call merge entries.
 A separate 16 MiB indexed-value allowance is maintained incrementally on insertion,

@@ -34,6 +34,14 @@ directory (it holds `hook.token` and can do anything the user can anyway).
   runtime has a native session id, hooks with a different or missing id are ignored before
   advancing hook order, changing status or replacing a pending approval. A different native
   session needs a fresh tracked runtime.
+- **Display is not authority.** The experimental Claude `MessageDisplay` receiver is disabled by
+  default and uses a separate, pane/purpose-derived bearer token, not an input/approval credential.
+  Its loopback endpoint rejects browser origins, rebinding hosts and ambiguous request framing;
+  bounded capture occurs only after an empty `{}` acknowledgement, never `displayContent`.
+  Exact open-launch, pane-object, session, admitted prompt and path checks fence delivery.
+  Display text can create only provisional assistant rows, never tool/approval decisions or input
+  rights. Unknown original time is excluded from since-join snapshots and pushes, including a zero
+  join boundary; withdrawing an item's scope also withdraws subsequent append visibility.
 - **Own panes only, without asking.** An agent types into, runs in and closes the panes it (or
   its workers) opened; never its own pane (it would type into its own prompt), never another
   session's. Ownership survives a restart (`layout.json`) and is dropped with the pane, so an id

@@ -59,7 +59,7 @@ fn operation(value: &TimelineOp) -> usize {
     2 * std::mem::size_of_val(value) + fields
 }
 
-fn snapshot(value: &TimelineSnapshot) -> usize {
+pub(super) fn snapshot(value: &TimelineSnapshot) -> usize {
     2 * std::mem::size_of_val(value)
         + session_fields(&value.session)
         + value.items.iter().map(item).sum::<usize>()

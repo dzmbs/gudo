@@ -122,6 +122,8 @@ pub struct Config {
     pub agent_integration: AgentIntegration,
     /// Pane-owned, version-gated Codex Chat for dedicated launches; not hot-handoff capable.
     pub codex_chat: bool,
+    /// Live display capture for dedicated Claude Code launches.
+    pub claude_chat_streaming: bool,
     /// UDP address the iroh endpoint binds (port 0 picks one). `None` binds every interface,
     /// IPv4 and IPv6, on random ports.
     pub bind: Option<SocketAddr>,
@@ -328,6 +330,7 @@ impl Config {
             relay: RelayMode::Default,
             shell: None,
             codex_chat: true,
+            claude_chat_streaming: false,
             pane_env: Vec::new(),
             ring_capacity: pty::DEFAULT_RING_CAPACITY,
             scrollback_bytes: 10 * 1024 * 1024,

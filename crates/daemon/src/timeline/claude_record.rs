@@ -13,6 +13,8 @@ pub(super) struct Record {
     pub kind: RecordKind,
     pub session_id: Option<String>,
     pub uuid: Option<String>,
+    pub prompt_id: Option<String>,
+    pub request_ref: Option<String>,
     pub timestamp: Option<String>,
     pub is_sidechain: bool,
     pub is_meta: bool,

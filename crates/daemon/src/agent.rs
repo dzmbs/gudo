@@ -660,6 +660,8 @@ impl HeldRequest {
 
 /// The hook socket and the hook decisions waiting for a client.
 pub(crate) struct HookServer {
+    pub(crate) display: Arc<crate::claude_display::Capture>,
+    pub(crate) display_http: Option<crate::claude_display::http::HttpListener>,
     socket: PathBuf,
     token: String,
     /// Derives each pane's own token from `token`.
@@ -687,6 +689,8 @@ impl HookServer {
             socket = fsutil::create_private_temp_dir(brand::DIR_NAME)?.join("hook.sock");
         }
         Ok(Self {
+            display: Arc::new(crate::claude_display::Capture::new(token.as_bytes())),
+            display_http: None,
             endpoint_file: state_dir.join("hook.endpoint"),
             socket,
             pane_key: ring::hmac::Key::new(ring::hmac::HMAC_SHA256, token.as_bytes()),
@@ -975,6 +979,11 @@ async fn handle_hook(core: &Arc<Core>, request: HookRequest) -> HookResponse {
             return HookResponse::default();
         };
         crate::agent_input::record_hook(&mut input, &request);
+        if core.cfg.claude_chat_streaming
+            && let Some(launch) = input.active_launch()
+        {
+            core.hooks.display.prompt(pane_id, &entry, launch, &request);
+        }
         // Register wire ids now so a client can answer as soon as it sees the event.
         let _ = runtime.wire_status();
         (event, runtime.blocked_request())

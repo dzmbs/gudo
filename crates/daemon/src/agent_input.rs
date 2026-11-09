@@ -65,6 +65,13 @@ enum AgentInputPhase {
 }
 
 impl AgentInputGate {
+    pub(crate) fn active_launch(&self) -> Option<&str> {
+        match &self.phase {
+            AgentInputPhase::Open(launch) => Some(launch),
+            _ => None,
+        }
+    }
+
     pub(crate) fn control_revision(&self) -> Option<u64> {
         (matches!(self.phase, AgentInputPhase::Open(_)) && self.pending_unproven_writes == 0)
             .then_some(self.revision)

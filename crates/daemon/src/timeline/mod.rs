@@ -4,6 +4,8 @@ mod claude_record;
 pub(crate) mod claude_source;
 mod commands;
 mod complete_diff;
+mod display_index;
+mod display_overlay;
 mod native_watch;
 mod record_stream;
 mod text;
@@ -615,6 +617,11 @@ fn watched(connection: &ConnCtx, pane: PaneId) -> Result<Arc<Timeline>, WsError>
         .ok_or_else(|| WsError::Unavailable("open Chat before reading its history".into()))
 }
 
+// Zero represents unavailable original time, not permission to share it with every join.
+fn is_visible_since(at: UnixMillis, since: UnixMillis) -> bool {
+    at.0 != 0 && at >= since
+}
+
 fn filter(
     operations: Vec<TimelineOp>,
     since: Option<UnixMillis>,
@@ -626,8 +633,15 @@ fn filter(
     operations
         .into_iter()
         .map(|operation| match operation {
-            TimelineOp::Upsert { cursor, item } if item.at < since => {
-                TimelineOp::Checkpoint { cursor }
+            TimelineOp::Upsert { cursor, item } if !is_visible_since(item.at, since) => {
+                if visible.remove(&item.id) {
+                    TimelineOp::Remove {
+                        cursor,
+                        id: item.id.clone(),
+                    }
+                } else {
+                    TimelineOp::Checkpoint { cursor }
+                }
             }
             TimelineOp::Upsert { cursor, item } => {
                 visible.insert(item.id.clone());
@@ -658,7 +672,9 @@ fn filter(
                 }
             }
             TimelineOp::Snapshot(mut snapshot) => {
-                snapshot.items.retain(|item| item.at >= since);
+                snapshot
+                    .items
+                    .retain(|item| is_visible_since(item.at, since));
                 if snapshot.items.is_empty() {
                     snapshot.before = None;
                 }

@@ -35,6 +35,7 @@ mod art;
 mod askpass;
 mod assist;
 mod browser;
+mod claude_display;
 mod claude_session;
 mod clock;
 mod codex_session;
@@ -186,7 +187,16 @@ impl Daemon {
             Some(mut saved) => (saved.take_creators(), saved.into_parts()),
             None => Default::default(),
         };
-        let hooks = HookServer::new(&config.state_dir, config.hook_bin())?;
+        let mut hooks = HookServer::new(&config.state_dir, config.hook_bin())?;
+        if config.claude_chat_streaming {
+            match claude_display::http::HttpListener::bind(&config.state_dir) {
+                Ok(listener) => {
+                    tracing::debug!(endpoint = %listener.url(), "Claude display receiver ready");
+                    hooks.display_http = Some(listener);
+                }
+                Err(error) => tracing::warn!(%error, "Claude live display is unavailable"),
+            }
+        }
         let shell = match shell::ShellIntegration::install(&config.state_dir) {
             Ok(mut integration) => {
                 if let Some(exe) = &config.cli_exe
@@ -220,6 +230,9 @@ impl Daemon {
             .carry_on(std::mem::take(&mut adopted.carried.inputs));
         repair_hook_paths(&core);
         let mut tasks = vec![HookServer::listen(&core)?];
+        if let Some(listener) = &core.hooks.display_http {
+            tasks.push(listener.listen(&core)?);
+        }
         core::restore(&core, restore, adopted);
         core.term
             .restore(creators, |pane| core.pane(pane).is_some());

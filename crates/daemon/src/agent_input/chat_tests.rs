@@ -82,8 +82,16 @@ pub(crate) async fn raw_fixture() -> RawFixture {
 }
 
 pub(crate) async fn raw_fixture_with_session(session: &str) -> RawFixture {
+    raw_fixture_with_claude_streaming(session, false).await
+}
+
+pub(crate) async fn raw_fixture_with_claude_streaming(
+    session: &str,
+    streaming: bool,
+) -> RawFixture {
     let root = tempfile::tempdir().unwrap();
     let mut config = crate::Config::new(root.path());
+    config.claude_chat_streaming = streaming;
     config.relay = crate::RelayMode::Disabled;
     config.bind = Some("127.0.0.1:0".parse().unwrap());
     config.shell = Some("/bin/sh".into());

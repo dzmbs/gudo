@@ -27,6 +27,7 @@ pub(super) enum ParseError {
 pub(super) struct ClaudeTimeline {
     pub session: TimelineSession,
     turn: Option<String>,
+    pub(super) display: super::display_index::DisplayIndex,
     tools: HashMap<String, TimelineItem>,
     tool_order: VecDeque<String>,
     seen_usage: VecDeque<String>,
@@ -46,6 +47,7 @@ impl ClaudeTimeline {
                 commands: Vec::new(),
             },
             turn: None,
+            display: super::display_index::DisplayIndex::default(),
             tools: HashMap::new(),
             tool_order: VecDeque::new(),
             seen_usage: VecDeque::new(),
@@ -126,6 +128,7 @@ impl ClaudeTimeline {
         }
         let id = record_id(record, offset);
         self.turn = Some(id.clone());
+        self.display.begin(record, &id);
         self.input_tokens = 0;
         self.output_tokens = 0;
         let body = match text {
@@ -149,6 +152,7 @@ impl ClaudeTimeline {
         for (index, block) in record.message.content.blocks().iter().enumerate() {
             items.extend(self.assistant_block(record, block, &record_id, index));
         }
+        self.display.assistant(record, &record_id);
         items
     }
 

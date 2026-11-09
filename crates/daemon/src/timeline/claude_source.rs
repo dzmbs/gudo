@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use proto::{
     AgentKind, PaneId, TimelineCursor, TimelineOp, TimelineSession, TimelineSnapshot, UnixMillis,
@@ -26,6 +27,7 @@ pub(crate) struct ClaudeSession {
     waiting_session: TimelineSession,
     wake: mpsc::Sender<()>,
     pub(super) watcher: NativeWatch,
+    display: Option<super::display_overlay::DisplayOverlay>,
 }
 
 impl ClaudeSession {
@@ -35,7 +37,23 @@ impl ClaudeSession {
         epoch: u64,
         wake: mpsc::Sender<()>,
     ) -> Result<Self, WsError> {
-        Self::new(source(core, pane)?, epoch, wake)
+        let mut session = Self::new(source(core, pane)?, epoch, wake.clone())?;
+        if core.cfg.claude_chat_streaming
+            && let Some(entry) = core.pane(pane)
+        {
+            core.hooks.display.subscribe(pane, &entry, &wake);
+            session.display = Some(super::display_overlay::DisplayOverlay::new(
+                Arc::clone(&core.hooks.display),
+                pane,
+                &entry,
+            ));
+            if let (Some(display), Some(transcript)) =
+                (&mut session.display, &mut session.transcript)
+            {
+                display.refresh(&session.source, transcript);
+            }
+        }
+        Ok(session)
     }
 
     pub(super) fn new(source: Source, epoch: u64, wake: mpsc::Sender<()>) -> Result<Self, WsError> {
@@ -65,6 +83,7 @@ impl ClaudeSession {
             waiting_session,
             wake,
             watcher,
+            display: None,
         })
     }
 
@@ -72,7 +91,15 @@ impl ClaudeSession {
         self.watcher.check()?;
         if source.native_session != self.source.native_session || source.path != self.source.path {
             let epoch = self.cursor().epoch.wrapping_add(1);
+            let mut display = self.display.take();
+            if let Some(display) = &mut display {
+                display.reset();
+            }
             *self = Self::new(source, epoch, self.wake.clone())?;
+            self.display = display;
+            if let (Some(display), Some(transcript)) = (&mut self.display, &mut self.transcript) {
+                display.refresh(&self.source, transcript);
+            }
             return Ok(vec![TimelineOp::Snapshot(self.snapshot(None))]);
         }
         let mut operations = self
@@ -106,6 +133,16 @@ impl ClaudeSession {
         if source.watch_directory != self.source.watch_directory {
             self.watcher = NativeWatch::new(&source.watch_directory, self.wake.clone())?;
         }
+        if let (Some(display), Some(transcript)) = (&mut self.display, &mut self.transcript) {
+            if operations
+                .iter()
+                .any(|operation| matches!(operation, TimelineOp::Snapshot(_)))
+            {
+                display.reset();
+            }
+            operations.extend(display.refresh(&source, transcript));
+            display.filter_operations(transcript, &mut operations);
+        }
         self.source = source;
         Ok(operations)
     }
@@ -113,7 +150,15 @@ impl ClaudeSession {
 
 impl AgentSession for ClaudeSession {
     fn capabilities(&self) -> crate::agent_driver::AgentCapabilities {
-        crate::agent_driver::driver(AgentKind::Claude).capabilities()
+        let mut capabilities = crate::agent_driver::driver(AgentKind::Claude).capabilities();
+        if self
+            .display
+            .as_ref()
+            .is_some_and(|display| display.is_streaming)
+        {
+            capabilities |= crate::agent_driver::AgentCapabilities::STREAMING_DELTAS;
+        }
+        capabilities
     }
 
     fn cursor(&self) -> TimelineCursor {
@@ -130,7 +175,12 @@ impl AgentSession for ClaudeSession {
                 items: Vec::new(),
                 before: None,
             },
-            |transcript| transcript.snapshot(60, since),
+            |transcript| {
+                self.display.as_ref().map_or_else(
+                    || transcript.snapshot(60, since),
+                    |display| display.snapshot(transcript, since),
+                )
+            },
         )
     }
 
@@ -150,7 +200,7 @@ impl AgentSession for ClaudeSession {
     }
 
     fn read(&mut self, request: TimelineRead, since: Option<UnixMillis>) -> ReadFuture {
-        let response = self
+        let mut response = self
             .transcript
             .as_mut()
             .ok_or_else(|| WsError::Unavailable("the conversation has not started yet".into()))
@@ -169,6 +219,11 @@ impl AgentSession for ClaudeSession {
                     .tool_diff(&handle, since)
                     .map(WorkspaceResponse::TimelineDiff),
             });
+        if let (Some(display), Ok(WorkspaceResponse::Timeline(snapshot))) =
+            (&self.display, &mut response)
+        {
+            display.filter_snapshot(snapshot);
+        }
         Box::pin(std::future::ready(response))
     }
 

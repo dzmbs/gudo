@@ -130,11 +130,44 @@ impl Transcript {
     }
 
     pub fn snapshot(&self, limit: usize, since: Option<UnixMillis>) -> TimelineSnapshot {
+        self.snapshot_with_budget(limit, since, SNAPSHOT_BYTES)
+    }
+
+    pub fn snapshot_with_budget(
+        &self,
+        limit: usize,
+        since: Option<UnixMillis>,
+        budget: usize,
+    ) -> TimelineSnapshot {
         self.select_records(
             self.order.iter().filter_map(|id| self.items.get(id)),
             limit,
             since,
+            budget.min(SNAPSHOT_BYTES),
         )
+    }
+
+    pub fn next_cursor(&mut self) -> TimelineCursor {
+        self.cursor.sequence = self.cursor.sequence.wrapping_add(1);
+        self.cursor
+    }
+
+    pub fn display_prompt(&self, prompt: &str) -> Option<&super::display_index::DisplayPrompt> {
+        self.parser.display.prompt(prompt)
+    }
+
+    pub fn display_text(&self, group: &super::display_index::DisplayGroup) -> Option<String> {
+        let mut text = String::new();
+        for id in &group.items {
+            let TimelineBody::Assistant { text: part, .. } = &self.items.get(id)?.item.body else {
+                return None;
+            };
+            if text.len().saturating_add(part.len()) > 256 * 1024 {
+                return None;
+            }
+            text.push_str(part);
+        }
+        Some(text)
     }
 
     fn select_records<'a>(
@@ -142,12 +175,13 @@ impl Transcript {
         values: impl DoubleEndedIterator<Item = &'a StoredItem>,
         limit: usize,
         since: Option<UnixMillis>,
+        budget: usize,
     ) -> TimelineSnapshot {
         // A byte cursor names a whole JSONL record, never an individual visible child.
         // Original offsets stay ordered even when a later result revises an earlier tool.
         let mut values = values
             .rev()
-            .filter(|value| since.is_none_or(|since| value.item.at >= since))
+            .filter(|value| since.is_none_or(|since| super::is_visible_since(value.item.at, since)))
             .peekable();
         let mut page = Self::empty_page(self.parser.session.clone(), self.cursor);
         let mut bytes = 0;
@@ -164,7 +198,7 @@ impl Transcript {
                 .iter()
                 .map(|value| value.encoded_bound)
                 .sum::<usize>();
-            if bytes + weight > SNAPSHOT_BYTES {
+            if bytes + weight > budget {
                 if page.items.is_empty() {
                     page.items.push(record_notice(offset, first.item.at));
                     page.before = (offset > 0).then_some(offset);
@@ -297,7 +331,7 @@ impl Transcript {
         for (offset, record) in window.records {
             let parsed = parser.parse_record(&record, offset);
             for item in bounded_record(parsed, offset) {
-                if since.is_some_and(|since| item.at < since) {
+                if since.is_some_and(|since| !super::is_visible_since(item.at, since)) {
                     continue;
                 }
                 if let Some(stored) = items.get_mut(&item.id) {
@@ -313,6 +347,7 @@ impl Transcript {
             order.iter().filter_map(|id| items.get(id)),
             limit.clamp(1, 100),
             since,
+            SNAPSHOT_BYTES,
         ))
     }
 
@@ -418,9 +453,9 @@ impl Transcript {
                 .and_then(crate::usage::rfc3339_millis)
                 .unwrap_or(0),
         );
-        if since.is_some_and(|since| at < since) {
+        if since.is_some_and(|since| !super::is_visible_since(at, since)) {
             return Err(WsError::Denied(
-                "this output predates joining the session".into(),
+                "this output is outside the shared time scope".into(),
             ));
         }
         if record

@@ -357,6 +357,67 @@ fn since_join_filtering_advances_the_cursor_without_exposing_hidden_items() {
 }
 
 #[test]
+fn unknown_original_times_are_hidden_even_at_a_zero_since_boundary() {
+    let mut page = snapshot(3);
+    page.items = vec![item("unknown", 0), item("known", 1)];
+    let operations = vec![
+        TimelineOp::Upsert {
+            cursor: cursor(1),
+            item: Box::new(item("unknown", 0)),
+        },
+        TimelineOp::Append {
+            cursor: cursor(2),
+            id: "unknown".into(),
+            field: TimelineField::Text,
+            text: "private".into(),
+        },
+        TimelineOp::Snapshot(page),
+    ];
+    let mut visible = HashSet::new();
+    let filtered = filter(operations, Some(UnixMillis(0)), &mut visible);
+    assert_eq!(filtered[0], TimelineOp::Checkpoint { cursor: cursor(1) });
+    assert_eq!(filtered[1], TimelineOp::Checkpoint { cursor: cursor(2) });
+    let TimelineOp::Snapshot(page) = &filtered[2] else {
+        panic!()
+    };
+    assert_eq!(
+        page.items
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<Vec<_>>(),
+        ["known"]
+    );
+    assert_eq!(visible, HashSet::from(["known".into()]));
+}
+
+#[test]
+fn withdrawing_a_visible_items_time_also_withdraws_append_visibility() {
+    let mut visible = HashSet::from(["changed".into()]);
+    let operations = vec![
+        TimelineOp::Upsert {
+            cursor: cursor(1),
+            item: Box::new(item("changed", 0)),
+        },
+        TimelineOp::Append {
+            cursor: cursor(2),
+            id: "changed".into(),
+            field: TimelineField::Text,
+            text: "private".into(),
+        },
+    ];
+    let filtered = filter(operations, Some(UnixMillis(10)), &mut visible);
+    assert_eq!(
+        filtered[0],
+        TimelineOp::Remove {
+            cursor: cursor(1),
+            id: "changed".into()
+        }
+    );
+    assert_eq!(filtered[1], TimelineOp::Checkpoint { cursor: cursor(2) });
+    assert!(visible.is_empty());
+}
+
+#[test]
 fn a_new_agent_pane_can_open_chat_before_its_first_transcript_exists() {
     let root = tempfile::tempdir().unwrap();
     let source = test_source(root.path());
