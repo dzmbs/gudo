@@ -87,28 +87,9 @@ impl State {
             return;
         }
         if outgoing {
-            #[derive(serde::Deserialize)]
-            struct Method<'a> {
-                id: Option<agents::CodexRpcId>,
-                method: Option<&'a str>,
-                params: Option<HistoryOptions>,
-            }
-            #[derive(serde::Deserialize)]
-            #[serde(rename_all = "camelCase")]
-            struct HistoryOptions {
-                exclude_turns: Option<bool>,
-            }
-            if let Ok(request) = serde_json::from_str::<Method<'_>>(frame)
-                && request.id.is_some()
-                && self.binding.pending_request() == request.id.as_ref()
-            {
-                self.requires_history =
-                    matches!(request.method, Some("thread/resume" | "thread/fork"));
-                self.deferred_history = self.requires_history
-                    && request
-                        .params
-                        .and_then(|params| params.exclude_turns)
-                        .unwrap_or(false);
+            history::observe_tui(self, frame);
+            if self.closed {
+                return;
             }
         }
         let Some(binding) = self.binding.binding().cloned() else {

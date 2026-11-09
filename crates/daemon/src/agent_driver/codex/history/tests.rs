@@ -121,6 +121,29 @@ fn read_baseline_merges_new_live_turns_without_duplicating_snapshot_text() {
 }
 
 #[test]
+fn unsupported_rollback_cannot_leave_an_authoritative_stale_timeline() {
+    let mut state = State::new();
+    state.observe(r#"{"id":1,"method":"thread/start"}"#, true);
+    state.observe(r#"{"id":1,"result":{"thread":{"id":"primary"}}}"#, false);
+    state.observe(
+        r#"{"id":2,"method":"thread/rollback","params":{"threadId":"foreign","numTurns":1}}"#,
+        true,
+    );
+    assert!(
+        state.is_ready(),
+        "foreign rollback must not retire the primary"
+    );
+    state.observe(
+        r#"{"id":3,"method":"thread/rollback","params":{"threadId":"primary","numTurns":1}}"#,
+        true,
+    );
+    assert!(
+        state.closed,
+        "unsupported history mutation must disable native observation"
+    );
+}
+
+#[test]
 fn a_read_snapshot_of_an_unobserved_active_turn_is_not_a_safe_baseline() {
     let mut state = State::new();
     state.observe(

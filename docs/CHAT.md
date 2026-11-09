@@ -498,12 +498,15 @@ no replacement conversation or bootstrap turn is created.
 Resume/fork history must be complete, with unambiguous turn/item identities. When the TUI requests
 `excludeTurns`, an independent, read-only connection to the same owned app-server initializes and
 calls `thread/read(includeTurns: true)` for the already proven thread. It never calls thread/start,
-thread/resume or turn/start. Peer ownership and current binding are checked; the request has a
+thread/resume or turn/start. Peer ownership and current binding are checked, including after asynchronous initialization at
+request serialization and again on receipt; the request has a
 5-second deadline, bounded notification allowance and 64KiB reply limit, without retries. Captured
 new live turns replace their corresponding snapshot turns, avoiding duplicate text; completed
 baseline turn identities reject delayed replay. An active read snapshot without an observed turn
 start has no ordered baseline and disables native Chat, leaving Terminal intact. Historical
-completions never increment runtime turn counts or send completion notifications.
+completions never increment runtime turn counts or send completion notifications. A current-thread
+TUI rollback disables native observation until ordered rollback hydration is implemented; it cannot
+leave stale history advertised as current. Foreign-thread rollbacks do not retire this source.
 
 This remains experimental scaffolding, not completed Codex Chat enablement. The daemon/client
 stream, unwatch/catch-up, bounded frame decoder, environment validation and forwarding-failure tests

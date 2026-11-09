@@ -14,6 +14,49 @@ pub(super) enum HistoryError {
     Active,
 }
 
+pub(super) fn observe_tui(state: &mut State, frame: &str) {
+    #[derive(serde::Deserialize)]
+    struct Method<'a> {
+        id: Option<agents::CodexRpcId>,
+        method: Option<&'a str>,
+        params: Option<ThreadOptions>,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ThreadOptions {
+        exclude_turns: Option<bool>,
+        thread_id: Option<String>,
+    }
+    let Ok(request) = serde_json::from_str::<Method<'_>>(frame) else {
+        return;
+    };
+    if request.id.is_none() {
+        return;
+    }
+    if request.method == Some("thread/rollback")
+        && state.binding.binding().is_some_and(|binding| {
+            request
+                .params
+                .as_ref()
+                .and_then(|params| params.thread_id.as_deref())
+                == Some(binding.thread_id())
+        })
+    {
+        // Until rollback has an ordered baseline, never present old rows as current.
+        // Stop observation only; the official request is forwarded unchanged.
+        state.fail();
+        return;
+    }
+    if state.binding.pending_request() == request.id.as_ref() {
+        state.requires_history = matches!(request.method, Some("thread/resume" | "thread/fork"));
+        state.deferred_history = state.requires_history
+            && request
+                .params
+                .and_then(|params| params.exclude_turns)
+                .unwrap_or(false);
+    }
+}
+
 fn thread(state: &State, frame: &str) -> Result<CodexThreadHistory, HistoryError> {
     let mut history = CodexThreadHistory::parse(frame)?;
     if state.current.as_ref().map(|binding| binding.thread_id()) != Some(history.id.as_str()) {
