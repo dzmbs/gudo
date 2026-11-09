@@ -27,7 +27,6 @@ enum SidebarItem: Identifiable, Hashable {
     case repoFold(host: String, repo: String)
     case worktree(host: String, repo: String, path: String)
     case hostPlaceholder(String)
-    case hostAgents(String)
 
     var id: String {
         switch self {
@@ -43,7 +42,6 @@ enum SidebarItem: Identifiable, Hashable {
         case .repoFold(let host, let repo): "repos/\(host)/\(repo)"
         case .worktree(let host, let repo, let path): "worktree/\(host)/\(repo)/\(path)"
         case .hostPlaceholder(let id): "placeholder/\(id)"
-        case .hostAgents(let id): "agents/\(id)"
         }
     }
 }
@@ -178,7 +176,6 @@ extension WindowModel {
                 }
             }
             if group.tabs.isEmpty { items.append(.hostPlaceholder(group.id)) }
-            items.append(.hostAgents(group.id))
         }
         return (items, sections)
     }
@@ -296,8 +293,6 @@ private struct SidebarItemView: View {
             }
         case .hostPlaceholder(let id):
             if let group = model.groups.group(id) { GroupPlaceholder(group: group) }
-        case .hostAgents(let id):
-            if let group = model.groups.group(id) { GroupAgents(group: group, numbers: numbers) }
         }
     }
 }
@@ -479,7 +474,7 @@ struct SidebarDropDelegate: DropDelegate {
             if ref.hostId == HostGroups.mixedId, !geometry.section(.window).rows.contains(ref) {
                 next = .insert(ref, into: .window, at: 0)
             }
-        case .suggestion, .projectsIntro, .hostAgents, .restoreTabs, .idleTabs:
+        case .suggestion, .projectsIntro, .restoreTabs, .idleTabs:
             break
         }
         if next != drag.plan {

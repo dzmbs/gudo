@@ -21,7 +21,7 @@ final class ChromeGalleryTests: XCTestCase {
             "set TEST_RUNNER_GUDO_CHROME_CAPTURE_DIR to capture")
         captureDirectory = URL(fileURLWithPath: path, isDirectory: true)
         try FileManager.default.createDirectory(at: captureDirectory, withIntermediateDirectories: true)
-        for key in [TerminalPreferences.Key.theme, ThemePair.enabledKey] {
+        for key in [TerminalPreferences.Key.theme, ThemePair.enabledKey] + Self.windowStateKeys {
             savedDefaults[key] = UserDefaults.standard.object(forKey: key)
         }
         savedDefaults["sidebar"] = TabPlacement.sidebarShown
@@ -35,6 +35,8 @@ final class ChromeGalleryTests: XCTestCase {
         if let sidebar = savedDefaults["sidebar"] as? Bool { TabPlacement.sidebarShown = sidebar }
     }
 
+    /// What the captures change in the window's saved state, put back afterwards.
+    private static let windowStateKeys = ["window.projects", "window.focusedTab", "window.focusedPane", "window.mixedTabs", "tab-touches"]
     private static let size = NSSize(width: 1280, height: 800)
     private static let themes = ["dark": TerminalPreferences.Default.theme, "light": ThemePair.resolvedDefaultLight]
 

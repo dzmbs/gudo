@@ -31,9 +31,6 @@ struct WorkspaceSidebar: View {
                     .padding(.top, DS.Space.s)
                 }
 
-                // Tabs whose agent waits or failed, on any host, hoisted.
-                NeedsYouSection()
-
                 SidebarTabList(geometry: geometry)
 
                 if model.groups.groups.isEmpty {
@@ -423,7 +420,7 @@ private struct HostAgentsPopover: View {
     @Environment(WindowModel.self) private var model
 
     var body: some View {
-        let numbers = Dictionary(uniqueKeysWithValues: model.groups.tabs.enumerated().map { ($1, $0 + 1) })
+        let workspace = model.workspace(ofGroup: group.id)
         VStack(alignment: .leading) {
             Text("Agents on \(group.name)").font(.headline)
             Divider()
@@ -435,16 +432,20 @@ private struct HostAgentsPopover: View {
                             onSelect()
                             model.focus(pane: pane, onGroup: group.id)
                         } label: {
-                            HStack(spacing: DS.Space.row) {
-                                AgentGlyph(state: state)
-                                Text(program.isShell ? "Agent" : program.displayName)
-                                Text("\(numbers[group.ref(tab.id)] ?? 0)")
-                                    .monospacedDigit()
-                                    .foregroundStyle(DS.Palette.textTertiary)
+                            HStack(spacing: DS.Space.s) {
+                                SidebarTabIcon(program: program, state: state)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(workspace?.title(of: tab) ?? tab.title ?? program.displayName)
+                                        .font(SidebarFont.title)
+                                        .lineLimit(1)
+                                    Text("\(program.isShell ? "Agent" : program.displayName) · \(state.title.lowercased())")
+                                        .font(SidebarFont.subtitle)
+                                        .foregroundStyle(DS.Palette.textSecondary)
+                                        .lineLimit(1)
+                                }
                                 Spacer(minLength: DS.Space.s)
-                                Text(state.title).foregroundStyle(DS.Palette.textSecondary)
                             }
-                            .font(.caption)
+                            .frame(minWidth: 240)
                             .contentShape(.rect)
                         }
                         .buttonStyle(.plain)
@@ -839,115 +840,6 @@ struct TabRow: View {
     static func isInformative(_ context: String, title: String) -> Bool {
         let trimmed = context.trimmingCharacters(in: .whitespaces)
         return !trimmed.isEmpty && trimmed != "~" && trimmed != title
-    }
-}
-
-/// A host's agents: every pane whose program reports status, across its tabs.
-struct GroupAgents: View {
-    let group: HostGroup
-    let numbers: [TabRef: Int]
-    @Environment(WindowModel.self) private var model
-    @State private var hovered = false
-
-    private struct Row: Identifiable {
-        var number: Int
-        var tab: TabId
-        var pane: PaneId
-        var state: AgentState
-        var id: PaneId { pane }
-    }
-
-    var body: some View {
-        let rows: [Row] = group.tabs.flatMap { tab in
-            tab.root.panes.compactMap { pane in
-                model.agentState(ofPane: pane, onGroup: group.id).map { Row(number: numbers[group.ref(tab.id)] ?? 0, tab: tab.id, pane: pane, state: $0) }
-            }
-        }
-        if !rows.isEmpty {
-            Group {
-                header
-                ForEach(rows) { row in
-                    Button {
-                        model.focus(pane: row.pane, onGroup: group.id)
-                    } label: {
-                        let program = model.programIdentity(ofPane: row.pane, onGroup: group.id)
-                        HStack(spacing: DS.Space.gap10) {
-                            AgentGlyph(state: row.state)
-                                .frame(minWidth: 16)
-                            HStack(spacing: DS.Space.xs) {
-                                ProgramMark(program, size: 12)
-                                    .foregroundStyle(.primary)
-                                let name = program.isShell ? "agent" : program.displayName
-                                Text(name)
-                                    .font(SidebarFont.subtitle)
-                                    .lineLimit(1)
-                                    .shimmering(row.state == .working, text: name)
-                            }
-                            .layoutPriority(-1)
-                            Text("\(row.number)")
-                                .font(DS.Font.meta)
-                                .foregroundStyle(DS.Palette.textTertiary)
-                                .fixedSize()
-                            Spacer(minLength: DS.Space.xs)
-                            Text(row.state.title.lowercased())
-                                .font(DS.Font.meta)
-                                .foregroundStyle(row.state.color)
-                                .lineLimit(1)
-                                .fixedSize()
-                        }
-                        .sidebarRow(selected: false)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityElement(children: .combine)
-                    .accessibilityLabel("\(model.programIdentity(ofPane: row.pane, onGroup: group.id).displayName), tab \(row.number), \(row.state.title)")
-                    .accessibilityIdentifier("agent-\(group.name)-\(row.pane.rawValue)")
-                    .rowActions(
-                        RowActions(.agent(row.state, canMarkRead: group.kind == .daemon)),
-                        id: "agent-\(group.id)-\(row.pane.rawValue)",
-                        name: model.programIdentity(ofPane: row.pane, onGroup: group.id).displayName
-                    ) { action in
-                        switch action {
-                        case .stopAgent: model.stopAgent(pane: row.pane, onGroup: group.id)
-                        case .closeTab: model.closeTab(group.ref(row.tab), undoable: false)
-                        case .markRead: model.markAgentRead(pane: row.pane, onGroup: group.id)
-                        default: break
-                        }
-                    } menu: {
-                        Button("Show Agent", systemImage: "arrow.up.forward") { model.focus(pane: row.pane, onGroup: group.id) }
-                    }
-                }
-            }
-        }
-    }
-
-    /// "Agents" and + New Agent on this host (on hover on the Mac, muted on touch).
-    private var header: some View {
-        HStack(spacing: DS.Space.xs) {
-            Text("Agents")
-                .font(DS.Font.meta)
-                .foregroundStyle(DS.Palette.textTertiary)
-            Spacer(minLength: DS.Space.xs)
-            if group.kind == .daemon, group.isReady {
-                Button(WorkspaceAction.newAgent.title, systemImage: "plus") { model.newAgent(onGroup: group.id) }
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.plain)
-                    .font(.subheadline)
-                    .foregroundStyle(DS.Palette.textSecondary)
-                    #if os(macOS)
-                    .opacity(hovered ? 1 : 0)
-                    #else
-                    .opacity(DS.Opacity.mutedGlyph)
-                    #endif
-                    .help("New Agent on \(group.name) (⇧⌘N)")
-                    .accessibilityIdentifier("agents-new-\(group.name)")
-            }
-        }
-        .padding(.leading, DS.Space.l + DS.Space.xs)
-        .padding(.trailing, DS.Space.l)
-        .padding(.top, DS.Space.s)
-        .padding(.bottom, 2)
-        .contentShape(.rect)
-        .onHover { hovered = $0 }
     }
 }
 
