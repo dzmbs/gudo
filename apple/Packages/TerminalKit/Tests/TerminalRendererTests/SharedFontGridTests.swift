@@ -26,6 +26,18 @@ import TerminalCore
         #expect(other.fonts !== grid)
     }
 
+    /// The launch warm-up runs off the main thread, and surfaces made after it draw with what it
+    /// prepared.
+    @Test func prewarmPreparesTheRendererOffTheMainThread() async throws {
+        let ranOnMain = await Task.detached {
+            TerminalSurface.prepareSharedResources()
+            return pthread_main_np() != 0
+        }.value
+        #expect(!ranOnMain)
+        let warmed = try surface(text: "warm ✓\r\n")
+        #expect(warmed.fonts?.grayscaleTexture != nil)
+    }
+
     /// The shared grid lives as long as a surface uses it.
     @Test func sharedGridIsFreedWithItsLastSurface() async throws {
         weak var grid: FontGrid?

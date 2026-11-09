@@ -2,6 +2,7 @@ import DesignSystem
 import HostKit
 import PaneLayout
 import SwiftUI
+import TerminalRenderer
 #if os(macOS)
 import AppKit
 #endif
@@ -18,6 +19,7 @@ struct TerminalApp: App {
 
     init() {
         _ = AppModel.launchedAt
+        TerminalSurface.prewarm()
         TerminalPreferences.WindowTheme.migrate()
         // `-resetFontSize` (UI tests): forget a size a pinch kept.
         if ProcessInfo.processInfo.arguments.contains("-resetFontSize") {

@@ -215,6 +215,18 @@ public final class TerminalSurface {
                 selectedBackground: appearance.searchSelectedBackground, selectedForeground: appearance.searchSelectedForeground))
     }
 
+    /// Starts compiling the shared pipelines and reading the bundled fonts on a background
+    /// thread, so the first terminal of a launch finds them ready. A surface created before
+    /// they are done waits for that work instead of doing it again.
+    public nonisolated static func prewarm() {
+        Task.detached(priority: .userInitiated) { prepareSharedResources() }
+    }
+
+    nonisolated static func prepareSharedResources() {
+        _ = GPUContext.shared
+        _ = FontGrid.bundledDescriptors
+    }
+
     /// Seconds spent compiling shaders.metal at startup.
     public var shaderCompileSeconds: Double { renderer.shaderCompileSeconds }
 
