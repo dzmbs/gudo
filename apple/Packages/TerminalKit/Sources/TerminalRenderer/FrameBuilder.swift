@@ -137,6 +137,10 @@ final class FrameBuilder {
         frame.bgCells.removeAll(keepingCapacity: true)
         frame.bgCells.reserveCapacity(frame.cols * frame.rows)
         frame.text.removeAll(keepingCapacity: true)
+        // The block cursor goes first, under the text it inverts; its slot is kept from the start
+        // so placing it never moves every instance of a large frame.
+        let cursorStyle = overlay.cursorBlinkOn || !overlay.focused ? Self.cursorStyle(state.cursor, overlay: overlay) : nil
+        if cursorStyle == .block { frame.text.append(Self.cursorSlot) }
 
         // Overlay cells per row, and the columns they hide.
         var overlayRows: [Int: [OverlayCell]] = [:]
@@ -211,8 +215,10 @@ final class FrameBuilder {
         }
 
         frame.blockCursor = nil
-        if overlay.cursorBlinkOn || !overlay.focused {
-            addCursor(state.cursor, overlay: overlay, colors: colors, rowWide: rowWide, rowFg: rowFg, fonts: fonts, frame: &frame)
+        if let cursorStyle {
+            addCursor(
+                state.cursor, style: cursorStyle, overlay: overlay, colors: colors, rowWide: rowWide, rowFg: rowFg, fonts: fonts,
+                frame: &frame)
         }
         return stats
     }
@@ -351,12 +357,27 @@ final class FrameBuilder {
         }
     }
 
-    /// Ghostty's `addCursor` plus the block-cursor uniforms from `rebuildCells`.
+    private static let cursorSlot = CellText(
+        glyphPos: .zero, glyphSize: .zero, bearings: .zero, gridPos: .zero, color: .zero, atlas: 0, flags: 0)
+
+    /// The shape the cursor is drawn in.
+    private static func cursorStyle(_ cursor: RenderState.Cursor, overlay: FrameOverlay) -> RenderState.CursorStyle? {
+        guard cursor.visible, cursor.position != nil else { return nil }
+        // Ghostty draws every cursor as a hollow block in an unfocused surface.
+        if !overlay.focused { return .blockHollow }
+        if overlay.barCursor { return .bar }
+        return cursor.style
+    }
+
+    /// Ghostty's `addCursor` plus the block-cursor uniforms from `rebuildCells`. A block cursor
+    /// fills the slot reserved at the front of the text, or gives it up when it draws nothing.
     private func addCursor(
-        _ cursor: RenderState.Cursor, overlay: FrameOverlay, colors: RenderState.Colors, rowWide: [[Bool]], rowFg: [[SIMD4<UInt8>]],
-        fonts: FontGrid, frame: inout FrameContents
+        _ cursor: RenderState.Cursor, style: RenderState.CursorStyle, overlay: FrameOverlay, colors: RenderState.Colors,
+        rowWide: [[Bool]], rowFg: [[SIMD4<UInt8>]], fonts: FontGrid, frame: inout FrameContents
     ) {
-        guard cursor.visible, let position = cursor.position else { return }
+        var slotFilled = false
+        defer { if style == .block, !slotFilled { frame.text.removeFirst() } }
+        guard let position = cursor.position else { return }
         var x = Int(position.x)
         var y = Int(position.y)
         var onWideTail = cursor.onWideTail
@@ -372,10 +393,6 @@ final class FrameBuilder {
             wide = true
         }
 
-        var style = cursor.style
-        // Ghostty draws every cursor as a hollow block in an unfocused surface.
-        if !overlay.focused { style = .blockHollow }
-        if overlay.barCursor, overlay.focused { style = .bar }
         let sprite: Sprite = switch style {
         case .block: .cursorRect
         case .blockHollow: .cursorHollowRect
@@ -388,7 +405,8 @@ final class FrameBuilder {
         glyph.flags = CellText.Flags.isCursorGlyph.rawValue
 
         if style == .block {
-            frame.text.insert(glyph, at: 0)
+            frame.text[0] = glyph
+            slotFilled = true
             frame.blockCursor = (SIMD2(UInt16(x), UInt16(y)), wide, rowFg[y][x])
         } else {
             frame.text.append(glyph)

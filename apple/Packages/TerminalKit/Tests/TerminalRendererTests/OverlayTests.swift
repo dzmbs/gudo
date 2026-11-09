@@ -73,6 +73,22 @@ import Testing
         #expect(build("x", overlay: off).text.contains { $0.flags == CellText.Flags.isCursorGlyph.rawValue })
     }
 
+    /// The block cursor is the first instance (drawn under the text it inverts); one that falls
+    /// outside the grid leaves nothing behind in its place.
+    @Test func blockCursorComesFirstOrNotAtAll() {
+        let frame = build("abc")
+        #expect(frame.text.first?.flags == CellText.Flags.isCursorGlyph.rawValue)
+        #expect(frame.text.filter { $0.flags == CellText.Flags.isCursorGlyph.rawValue }.count == 1)
+        #expect(frame.blockCursor?.pos == SIMD2(3, 0))
+
+        var outside = FrameOverlay()
+        outside.cursorOverride = GridPoint(x: 40, y: 0)
+        let clipped = build("abc", overlay: outside)
+        #expect(clipped.blockCursor == nil)
+        #expect(clipped.text.count == frame.text.count - 1)
+        #expect(clipped.text.allSatisfy { $0.flags == 0 && $0.glyphSize != .zero })
+    }
+
     @Test func overlayCellsReplaceGridCellsAndMoveTheCursor() {
         var overlay = FrameOverlay()
         overlay.cells = [OverlayCell(x: 1, y: 0, text: "Z", span: 1, underline: .single)]
