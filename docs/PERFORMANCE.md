@@ -147,6 +147,20 @@ What changed:
 
 Guard: `SharedFontGridTests` checks the grid is shared and freed with its last surface, and that the released layer is deallocated.
 
+### Frame edges (release, in-process)
+
+| Change | Measure | Before | After |
+|---|---|---|---|
+| A clean frame no longer asks for gutter marks and inline images (they cannot move while the terminal is unchanged) | Idle display-link tick with one mark and one image source | 411 ns | 206 ns |
+| The block cursor fills a slot reserved at the front of the frame instead of being inserted at index 0 | Cost of a focused block cursor, 1201×306 grid (6K at 4 pt, 367k instances) | 0.27-0.39 ms | 0.04 ms |
+| Cached rows carry their row position and are patched only when they move | Frame with one changed row, same grid, median of 600 | 0.94-1.51 ms | 0.42-0.60 ms |
+| Shared pipelines and bundled fonts warm up on a background task at launch | First surface to first frame in a fresh process | 20.1-23.8 ms | 3.5 ms |
+
+A shader compile with a cold Metal cache (a new build) took 182 ms in `TerminalBench`; the warm-up
+moves that off the main thread too. Guards: `GutterMarkTests.cleanFramesDoNotAskForMarksOrImages`,
+`OverlayTests.blockCursorComesFirstOrNotAtAll`, `FrameBuilderTests.reusedRowsMatchAFreshBuild`
+(every incremental frame equals one built from scratch), `SharedFontGridTests.prewarmPreparesTheRendererOffTheMainThread`.
+
 ### Timers and invalidation
 
 | Before | After |
@@ -278,9 +292,14 @@ App (not measured end to end, because the Mac app is not launched in the foregro
   another, one lock per batch. With bridging in place, our remaining flood cost is parsing itself
   (libghostty, same code). A split would move it off the PTY thread but not shrink it. Worth it only if focused-pane
   latency during floods shows up in a measurement.
-- **The renderer's idle tick does work before it can say "clean".** `renderIfDirty` runs the
-  inline-image, gutter and kitty closures (allocating arrays) before checking dirty flags. Checking flags first would make
-  every idle display-link tick near free.
+- **A viewport scroll rebuilds every row.** libghostty-vt's render state reports a full redraw
+  and marks every row dirty when the viewport moves (its `render.h` says so), so the row cache
+  cannot tell a moved row from a changed one. Scrolling one row per frame rebuilds all 35 rows of a
+  112×35 pane (0.29 ms a frame), and would rebuild all of a 6K grid. The fix belongs in libghostty-vt:
+  keep a row's dirty flag clear when only the viewport moved.
+- **Each frame's instances are copied twice:** cached rows into the frame, then the frame into the
+  Metal buffer. Writing them straight into the buffer would save the second copy, about 0.3 ms a
+  frame at 6K with a 4 pt font.
 - **Atlases keep a CPU copy of every glyph bitmap** alongside the texture. Dropping it after upload
   would roughly halve atlas memory (the atlas is now shared, so about 1.3 MB per font size).
 - **Other periodic SwiftUI views:** `TabSubtitle` (one per tab, 1 s) and the presence/knock timelines. Each is small,
