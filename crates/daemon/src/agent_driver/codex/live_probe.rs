@@ -60,7 +60,9 @@ async fn real_cli_streams_through_the_owned_daemon_adapter() {
 
 fn configuration(fixture: &Fixture) -> crate::Config {
     let mut config = crate::Config::new(fixture.root.join("daemon"));
-    config.codex_chat = true;
+    if fixture.scenario == "legacy-opt-out" {
+        config.codex_chat = false;
+    }
     config.relay = crate::RelayMode::Disabled;
     config.bind = Some("127.0.0.1:0".parse().unwrap());
     config.shell = Some("/bin/sh".into());
@@ -127,7 +129,7 @@ async fn run(
         )
         .map_err(|error| format!("launch: {error:?}"))?;
     let entry = daemon.core.pane(pane).ok_or("missing pane")?;
-    if scenario == "fallback" {
+    if matches!(scenario, "fallback" | "legacy-opt-out") {
         fallback::terminal(daemon, &entry, root, model_url).await?;
         return Ok(None);
     }

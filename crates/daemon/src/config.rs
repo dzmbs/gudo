@@ -4,6 +4,9 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
+#[cfg(test)]
+mod codex_tests;
+
 /// Which relays the daemon's iroh endpoint uses. Pairing tickets carry the choice, so paired
 /// devices dial the same way (`proto::TicketRelays`).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -117,7 +120,7 @@ pub struct Config {
     /// Keys, paired devices, layout and the hook socket live here.
     pub state_dir: PathBuf,
     pub agent_integration: AgentIntegration,
-    /// Experimental read-only Codex Chat for fresh dedicated launches; not hot-handoff capable.
+    /// Pane-owned, version-gated Codex Chat for dedicated launches; not hot-handoff capable.
     pub codex_chat: bool,
     /// UDP address the iroh endpoint binds (port 0 picks one). `None` binds every interface,
     /// IPv4 and IPv6, on random ports.
@@ -324,7 +327,7 @@ impl Config {
             bind: None,
             relay: RelayMode::Default,
             shell: None,
-            codex_chat: false,
+            codex_chat: true,
             pane_env: Vec::new(),
             ring_capacity: pty::DEFAULT_RING_CAPACITY,
             scrollback_bytes: 10 * 1024 * 1024,

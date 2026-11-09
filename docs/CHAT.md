@@ -463,10 +463,11 @@ on the bound thread and active turn; duplicate, foreign and obsolete resolutions
 request identities remain reserved within a bounded allowance so late frames cannot resolve a reused
 identity. Resolution does not establish approval, execution or success.
 
-### Opt-in Dev producer and controls
+### Version-gated pane producer and controls
 
-`Config::codex_chat` defaults to false and is only consulted in Dev builds for dedicated
-fresh or explicitly resumed launches. It is not enabled by the app or normal helper configuration. The pane owns an app-server,
+`Config::codex_chat` defaults to true for dedicated fresh or explicitly resumed Codex launches.
+Setting it to false retains the legacy Terminal path. Existing, adopted and manually launched agents
+are not upgraded into native conversations. The pane owns an app-server,
 private randomized 0700 directory and 0600 environment/relay sockets; timeline watches own none of
 these. Before any native server or conversation exists, a bounded successful `--version` check
 selects exactly 0.166.0 for native operation. Other, malformed or timed-out version results select
@@ -475,7 +476,7 @@ bounded arguments, account pins and credential removals. The helper execs that r
 PID and withdraws native authority; it does not restart or replace an existing conversation.
 Version output is capped at 128 bytes and two seconds.
 
-A matching Debug helper's `codex-remote` bootstrap captures the TUI's actual post-login
+A matching helper's `codex-remote` bootstrap captures the TUI's actual post-login
 environment and cwd before exec into the official remote TUI. A second login shell is not used to
 approximate the server environment. The daemon checks the peer UID, bootstrap ancestry under the
 owned PTY, exact pane environment, and TUI/server peer process trees. Secrets stay in environment
@@ -546,7 +547,8 @@ answers cannot execute it again. Delivery failure withdraws the native producer 
 an admitted decision or reporting execution. Official forwarding and launch-owned server lifetime
 remain independent of observation/control failure.
 
-This remains off-by-default Dev integration, not completed production Codex Chat enablement. The daemon/client
+This is the default dedicated launch path, not a claim of completed production acceptance. Validation
+remains isolated Debug/Dev evidence, with no Release build, real-account sign-in or deployment. The daemon/client
 stream, unwatch/catch-up, bounded frame decoder, environment validation and forwarding-failure tests
 use recorded or synthetic fixtures. A Debug helper probe with a fake Codex verifies post-login
 capture and same-PID exec. A separately opted-in test runs actual Codex 0.166.0 through a temporary
