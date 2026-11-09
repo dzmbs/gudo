@@ -96,8 +96,13 @@ final class TabStripTests: XCTestCase {
         let before = try await settled(frames, count: 6)
         workspace.apply(.newTab)
         let after = try await settled(frames, count: 7)
+        // The strip may scroll to show the new tab; the others keep their size and spacing.
+        let anchor = try XCTUnwrap(before.min { $0.value.minX < $1.value.minX }?.key)
+        let shiftBefore = try XCTUnwrap(before[anchor]).minX, shiftAfter = try XCTUnwrap(after[anchor]).minX
         for (ref, frame) in before {
-            XCTAssertEqual(after[ref], frame, "\(ref) moved when a tab was added")
+            let moved = try XCTUnwrap(after[ref], "\(ref) gone when a tab was added")
+            XCTAssertEqual(moved.size, frame.size, "\(ref) changed size when a tab was added")
+            XCTAssertEqual(moved.minX - shiftAfter, frame.minX - shiftBefore, "\(ref) moved among the other chips when a tab was added")
         }
     }
 
