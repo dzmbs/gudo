@@ -10,6 +10,7 @@ public final class TimelineChannel {
     }
 
     public let pane: UInt64
+    var onIdle: (() -> Void)?
     private let resolve: () throws -> any DaemonTimelineAPI
     private var observers: [UUID: (Packet) -> Void] = [:]
     private var watchTask: Task<Void, Never>?
@@ -133,7 +134,7 @@ public final class TimelineChannel {
 
     private func stop() {
         // An in-flight watch must finish before unwatch, even if its last viewer leaves.
-        guard watchTask == nil, stopTask == nil, let client else { return }
+        guard watchTask == nil, stopTask == nil, let client else { releaseIfIdle(); return }
         pending.removeAll(keepingCapacity: false)
         pendingBytes = 0
         needsRefresh = false
@@ -143,8 +144,13 @@ public final class TimelineChannel {
             try? await client.timelineUnwatch(paneId: pane)
             guard self.attempt == attempt else { return }
             stopTask = nil
-            if !observers.isEmpty { requestSnapshot() }
+            if observers.isEmpty { releaseIfIdle() } else { requestSnapshot() }
         }
+    }
+
+    private func releaseIfIdle() {
+        guard observers.isEmpty, watchTask == nil, stopTask == nil, client == nil else { return }
+        onIdle?()
     }
 }
 
@@ -154,6 +160,10 @@ extension DaemonWorkspace {
         let channel = TimelineChannel(pane: pane) { [weak self] in
             guard let self else { throw HostError.notConnected }
             return try timelineClient()
+        }
+        channel.onIdle = { [weak self, weak channel] in
+            guard let self, let channel, timelineChannels[pane] === channel else { return }
+            timelineChannels[pane] = nil
         }
         timelineChannels[pane] = channel
         return channel

@@ -9,6 +9,17 @@ import GudoCore
 /// RPC answers matched to their requests.
 @MainActor
 struct DaemonWorkspaceTests {
+    @Test func timelineChannelsWithoutViewersAreReleased() throws {
+        let (connection, _) = try connected()
+        let hub = connection.workspace
+        let channel = hub.timelineChannel(pane: 7)
+        let token = channel.observe { _ in }
+        #expect(hub.timelineChannel(pane: 7) === channel)
+        channel.removeObserver(token)
+        #expect(hub.timelineChannels[7] == nil)
+        #expect(hub.timelineChannel(pane: 7) !== channel)
+    }
+
     @Test func pushesUpdatePortsAndAttention() async throws {
         let (connection, client) = try connected()
         let hub = connection.workspace

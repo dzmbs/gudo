@@ -24,6 +24,22 @@ struct TimelineChannelTests {
         try await wait { await client.stopCalls == 1 }
     }
 
+    @Test func theChannelIsReleasedOnlyAfterItsUnwatchFinishes() async throws {
+        let client = TimelineTestClient()
+        await client.holdStops()
+        let channel = TimelineChannel(pane: 7) { client }
+        var idleCalls = 0
+        channel.onIdle = { idleCalls += 1 }
+        let token = channel.observe { _ in }
+        try await wait { await client.watchCalls == 1 }
+        await client.finishWatch("snapshot")
+        channel.removeObserver(token)
+        try await wait { await client.stopCalls == 1 }
+        #expect(idleCalls == 0)
+        await client.finishStop()
+        try await wait { idleCalls == 1 }
+    }
+
     @Test func leavingDuringAWatchStillUnwatchesAfterTheReply() async throws {
         let client = TimelineTestClient()
         let channel = TimelineChannel(pane: 7) { client }
