@@ -33,7 +33,8 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
     public let prominent: ThemeColor
     public let onProminent: ThemeColor
     /// State hues: the theme's ANSI green, red, yellow, magenta and blue, mixed toward the
-    /// foreground so they sit in the chrome, each ≥ 3:1 on every surface.
+    /// foreground so they sit in the chrome, each ≥ 4.5:1 on every surface: they are words too
+    /// ("Can't reach", an error under a form).
     public let done: ThemeColor
     public let error: ThemeColor
     public let attention: ThemeColor
@@ -129,7 +130,7 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
         let surfaces = [background, sidebar, overlay]
 
         let refined = Self.refined(Self.accent(of: theme), scheme: scheme)
-        let accent = Self.legible(refined, on: surfaces, toward: foreground, minimum: Self.minimumGlyphContrast)
+        let accent = Self.legible(refined, on: surfaces, minimum: Self.minimumGlyphContrast)
         self.accent = accent
         let (prominent, onProminent) = Self.prominent(accent: accent, background: background, foreground: foreground)
         self.prominent = prominent
@@ -153,7 +154,7 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
             // with the default hue.
             if hue.chroma < 12 || Self.hueDistance(hue.hue, referenceHue.hue) > 60 { hue = referenceHue }
             let mixed = foreground.blended(with: hue, 1 - Self.stateMix)
-            return Self.legible(mixed, on: surfaces, toward: foreground, minimum: Self.minimumGlyphContrast)
+            return Self.legible(mixed, on: [background, sidebar, raised, overlay], minimum: Self.minimumTextContrast)
         }
         done = state(2, reference: "#b5bd68")
         error = state(1, reference: "#cc6666")
@@ -203,15 +204,25 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
         return cap
     }
 
-    /// The colour mixed toward `ink` until it reaches `minimum` against every surface.
-    static func legible(_ color: ThemeColor, on surfaces: [ThemeColor], toward ink: ThemeColor, minimum: Double) -> ThemeColor {
-        var mix = 0.0
-        while mix <= 1 {
-            let candidate = color.blended(with: ink, mix)
-            if surfaces.allSatisfy({ candidate.contrast(with: $0) >= minimum }) { return candidate }
-            mix += 0.02
+    /// The colour with its OKLab lightness moved away from the surfaces, hue kept and chroma
+    /// eased only where sRGB runs out, just until it reaches `minimum` against every surface.
+    static func legible(_ color: ThemeColor, on surfaces: [ThemeColor], minimum: Double) -> ThemeColor {
+        func readsOnEverySurface(_ candidate: ThemeColor) -> Bool {
+            surfaces.allSatisfy { candidate.contrast(with: $0) >= minimum }
         }
-        return ink
+        guard !readsOnEverySurface(color) else { return color }
+        let whiteContrast = surfaces.map { $0.contrast(with: .white) }.min() ?? 0
+        let blackContrast = surfaces.map { $0.contrast(with: .black) }.min() ?? 0
+        let extreme: ThemeColor = whiteContrast >= blackContrast ? .white : .black
+        let lab = color.oklab, targetLightness = extreme.oklab.l
+        var shift = 0.01
+        while shift <= 1 {
+            let lightness = lab.l + (targetLightness - lab.l) * shift
+            let candidate = ThemeColor(oklabInGamut: (lightness, lab.a, lab.b))
+            if readsOnEverySurface(candidate) { return candidate }
+            shift += 0.01
+        }
+        return extreme
     }
 
     /// The cursor colour when it is a real colour distinct from the foreground; otherwise the

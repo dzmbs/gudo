@@ -29,7 +29,7 @@ nonisolated public enum ProjectColor {
         case let slot: hue(slot)
         }
         let mixed = foreground.blended(with: base, 1 - mix)
-        return ChromePalette.legible(mixed, on: surfaces, toward: foreground, minimum: ChromePalette.minimumGlyphContrast)
+        return ChromePalette.legible(mixed, on: surfaces, minimum: ChromePalette.minimumGlyphContrast)
     }
 }
 

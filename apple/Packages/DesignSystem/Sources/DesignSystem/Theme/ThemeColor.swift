@@ -85,14 +85,37 @@ nonisolated public struct ThemeColor: Hashable, Sendable, CustomStringConvertibl
 
     /// From OKLab; out-of-gamut channels clamp.
     public init(oklab: (l: Double, a: Double, b: Double)) {
+        let linear = Self.linearRGB(oklab: oklab)
+        func gamma(_ c: Double) -> Double { c <= 0.0031308 ? 12.92 * c : 1.055 * pow(max(c, 0), 1 / 2.4) - 0.055 }
+        self.init(gamma(linear.r), gamma(linear.g), gamma(linear.b))
+    }
+
+    /// From OKLab with its lightness and hue kept, the chroma reduced as far as sRGB needs
+    /// (clamping channels instead would shift the hue).
+    public init(oklabInGamut oklab: (l: Double, a: Double, b: Double)) {
+        func fits(_ scale: Double) -> Bool {
+            let linear = Self.linearRGB(oklab: (oklab.l, oklab.a * scale, oklab.b * scale))
+            return [linear.r, linear.g, linear.b].allSatisfy { (-1e-6...1 + 1e-6).contains($0) }
+        }
+        guard !fits(1) else {
+            self.init(oklab: oklab)
+            return
+        }
+        var fitting = 0.0, overflowing = 1.0
+        for _ in 0..<20 {
+            let middle = (fitting + overflowing) / 2
+            if fits(middle) { fitting = middle } else { overflowing = middle }
+        }
+        self.init(oklab: (oklab.l, oklab.a * fitting, oklab.b * fitting))
+    }
+
+    private static func linearRGB(oklab: (l: Double, a: Double, b: Double)) -> (r: Double, g: Double, b: Double) {
         let l = pow(oklab.l + 0.3963377774 * oklab.a + 0.2158037573 * oklab.b, 3)
         let m = pow(oklab.l - 0.1055613458 * oklab.a - 0.0638541728 * oklab.b, 3)
         let s = pow(oklab.l - 0.0894841775 * oklab.a - 1.2914855480 * oklab.b, 3)
-        func gamma(_ c: Double) -> Double { c <= 0.0031308 ? 12.92 * c : 1.055 * pow(max(c, 0), 1 / 2.4) - 0.055 }
-        self.init(
-            gamma(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s),
-            gamma(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s),
-            gamma(-0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s))
+        return (4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+                -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+                -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s)
     }
 
     /// CIELAB chroma: 0 for greys, ~30+ for a clearly coloured hue.
