@@ -849,3 +849,35 @@ fn history_pages_refuse_a_rewritten_transcript() {
         Err(WsError::Conflict(_))
     ));
 }
+
+#[test]
+fn a_history_window_without_conversation_records_still_offers_older_history() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("test.jsonl");
+    let mut file = File::create(&path).unwrap();
+    file.write_all(message(0).as_bytes()).unwrap();
+    let filler = format!(
+        "{}\n",
+        json!({"type":"progress","data":"p".repeat(64 * 1024)})
+    );
+    for _ in 0..(READ_LIMIT / filler.len() + 2) {
+        file.write_all(filler.as_bytes()).unwrap();
+    }
+    for index in 1..3 {
+        file.write_all(message(index).as_bytes()).unwrap();
+    }
+    drop(file);
+    let mut transcript = open(&path);
+    let mut before = transcript.snapshot(60, None).before;
+    let mut seen = Vec::new();
+    let mut pages = 0;
+    while let Some(cursor) = before {
+        let page = transcript.page(cursor, 100, None).unwrap();
+        seen.extend(page.items.into_iter().map(|item| item.id));
+        assert!(page.before.is_none_or(|older| older < cursor));
+        before = page.before;
+        pages += 1;
+        assert!(pages < 10);
+    }
+    assert!(seen.contains(&"message-0:0".to_owned()), "{seen:?}");
+}

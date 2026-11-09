@@ -65,6 +65,7 @@ impl StoredItem {
 struct Window {
     records: Vec<(u64, Record)>,
     stream: RecordStream,
+    oldest_boundary: Option<u64>,
 }
 
 impl Transcript {
@@ -344,6 +345,7 @@ impl Transcript {
             ));
         }
         let window = read_window(&mut self.file, before, limit.clamp(1, 100))?;
+        let oldest_boundary = window.oldest_boundary;
         let mut order = Vec::new();
         let mut items: HashMap<String, StoredItem> = HashMap::new();
         let mut parser = ClaudeTimeline::new(self.native_session.clone());
@@ -362,12 +364,16 @@ impl Transcript {
                 }
             }
         }
-        Ok(self.select_records(
+        let mut page = self.select_records(
             order.iter().filter_map(|id| items.get(id)),
             limit.clamp(1, 100),
             since,
             SNAPSHOT_BYTES,
-        ))
+        );
+        if page.items.is_empty() {
+            page.before = oldest_boundary.filter(|offset| *offset > 0 && *offset < before);
+        }
+        Ok(page)
     }
 
     pub fn output(
@@ -632,9 +638,11 @@ fn read_window(file: &mut File, end: u64, limit: usize) -> Result<Window, WsErro
         .take(end - start)
         .read_to_end(&mut bytes)
         .map_err(failed)?;
+    let complete_records = stream.push(&bytes);
+    let oldest_boundary = complete_records.first().map(|(offset, _)| *offset);
     let mut records = Vec::new();
     let mut candidates = 0;
-    for (offset, bytes) in stream.push(&bytes).into_iter().rev() {
+    for (offset, bytes) in complete_records.into_iter().rev() {
         let Ok(record) = serde_json::from_slice::<Record>(&bytes) else {
             continue;
         };
@@ -649,7 +657,11 @@ fn read_window(file: &mut File, end: u64, limit: usize) -> Result<Window, WsErro
         }
     }
     records.reverse();
-    Ok(Window { records, stream })
+    Ok(Window {
+        records,
+        stream,
+        oldest_boundary,
+    })
 }
 
 fn read_anchor(file: &mut File, end: u64) -> Result<Vec<u8>, WsError> {
