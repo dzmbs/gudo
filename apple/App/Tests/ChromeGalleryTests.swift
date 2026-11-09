@@ -28,6 +28,7 @@ final class ChromeGalleryTests: XCTestCase {
     }
 
     override func tearDown() async throws {
+        MockPaneStatus.fixture = nil
         for (key, value) in savedDefaults where key != "sidebar" {
             if let value { UserDefaults.standard.set(value, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
         }
@@ -43,6 +44,7 @@ final class ChromeGalleryTests: XCTestCase {
             UserDefaults.standard.set(false, forKey: ThemePair.enabledKey)
             UserDefaults.standard.set(theme, forKey: TerminalPreferences.Key.theme)
             try await capture("\(appearance)-sidebar") { model in model.isSidebarShown = true }
+            try await capture("\(appearance)-sidebar-projects") { model in await Self.arrangeProjects(model) }
             try await capture("\(appearance)-tab-strip") { model in
                 model.isSidebarShown = false
                 for _ in 0..<4 { model.newTab() }
@@ -58,6 +60,40 @@ final class ChromeGalleryTests: XCTestCase {
             }
             try await capture("\(appearance)-settings") { model in model.sheet = .settings }
         }
+    }
+
+    /// Two projects, three Claude Codes and a Codex in one, a long name, a project folded away
+    /// and an agent that needs the user: the sidebar's hard cases.
+    private static func arrangeProjects(_ model: WindowModel) async {
+        model.isSidebarShown = true
+        guard let workspace = model.workspace else { return }
+        while workspace.session.tabs.count < 9 { model.newTab() }
+        let tabs = workspace.session.tabs
+        let rows: [(title: String, program: String, state: AgentState?)] = [
+            ("Chat view timeline", "claude", .working),
+            ("Release blockers A to D", "codex", .done),
+            ("~/Downloads", "zsh", nil),
+            ("Pricing page copy", "claude", .blocked),
+            ("Refactor the authentication middleware and its session storage", "claude", .working),
+            ("Onboarding tests", "claude", nil),
+            ("Landing page", "zsh", nil),
+            ("Deploy preview", "zsh", nil),
+            ("Scratch", "zsh", nil),
+        ]
+        var fixture: [String: (program: String, state: AgentState?)] = [:]
+        for (tab, row) in zip(tabs, rows) {
+            workspace.apply(.rename(tab.id, row.title))
+            for pane in tab.root.panes { fixture[pane.description] = (row.program, row.state) }
+        }
+        MockPaneStatus.fixture = fixture
+        let refs = tabs.map { TabRef(hostId: model.groups.groups.first?.id ?? HostGroups.localId, tab: $0.id) }
+        model.newProject(from: Array(refs[0..<3]), name: "Gudo", naming: false)
+        model.newProject(from: Array(refs[3..<6]), name: "ascend", naming: false)
+        model.newProject(from: Array(refs[6..<8]), name: "website", naming: false)
+        if let website = model.groups.projects.first(where: { $0.name == "website" }) {
+            model.groups.toggleCollapsed(project: website.id)
+        }
+        model.focus(refs[0])
     }
 
     private final class OffscreenWindow: NSWindow {

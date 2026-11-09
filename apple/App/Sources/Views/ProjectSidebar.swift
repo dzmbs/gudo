@@ -302,8 +302,8 @@ private struct SidebarItemView: View {
     }
 }
 
-/// A tab's row in any section: a host tab or one of the window's own. Rows in a project carry
-/// its colour as a thread down their leading edge and name their host.
+/// A tab's row in any section: a host tab or one of the window's own. Rows in a project name
+/// their host when there is more than one.
 private struct SidebarTabRow: View {
     let ref: TabRef
     let container: SidebarContainer
@@ -330,16 +330,6 @@ private struct SidebarTabRow: View {
                         .overlay(Capsule().fill(tint.opacity(0.14)))
                         .padding(.trailing, DS.Space.l)
                         .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .trailing)))
-                        .accessibilityHidden(true)
-                }
-            }
-            .overlay(alignment: .leading) {
-                if let project {
-                    // Rows touch, so the threads of a project's rows read as one line.
-                    Rectangle()
-                        .fill(DS.Palette.project(project.color))
-                        .frame(width: 2)
-                        .padding(.leading, DS.Space.s + 2)
                         .accessibilityHidden(true)
                 }
             }
@@ -530,6 +520,29 @@ struct SidebarDropDelegate: DropDelegate {
 
 /// A project: its colour, name (renamed in place), tab count while collapsed and + New Terminal.
 /// A tap collapses it; dragging it reorders projects; its menu holds the rest.
+/// A project's mark: a rounded tile in its colour with its initial, in whichever ink reads on it.
+struct ProjectTile: View {
+    let project: Project
+    @Environment(\.terminalTheme) private var theme
+    @Environment(\.chrome) private var chrome
+
+    var body: some View {
+        let fill = ProjectColor.color(project.color, theme: theme, chrome: chrome)
+        let ink: ThemeColor = fill.contrast(with: .white) >= fill.contrast(with: .black) ? .white : .black
+        let size = SidebarFont.icon * 0.91
+        Text(Self.monogram(project.name))
+            .font(.system(size: size * 0.55, weight: .bold, design: .rounded))
+            .foregroundStyle(ink.color)
+            .frame(width: size, height: size)
+            .background(fill.color, in: RoundedRectangle(cornerRadius: size * 0.25, style: .continuous))
+            .accessibilityHidden(true)
+    }
+
+    static func monogram(_ name: String) -> String {
+        name.first(where: { $0.isLetter || $0.isNumber }).map { String($0).uppercased() } ?? "•"
+    }
+}
+
 private struct ProjectHeader: View {
     let project: Project
     @Environment(WindowModel.self) private var model
@@ -544,38 +557,45 @@ private struct ProjectHeader: View {
         let collapsed = model.groups.collapsedProjects.contains(project.id)
         // A tab joining from elsewhere lights the project it joins.
         let dropping = { if case .insert(let ref, .project(let id), _)? = drag.plan { id == project.id && !project.tabs.contains(ref) } else { false } }()
-        HStack(spacing: DS.Space.s) {
-            Circle()
-                .fill(DS.Palette.project(project.color))
-                .frame(width: 8, height: 8)
-                .frame(minWidth: 16)
+        HStack(spacing: DS.Space.gap10) {
+            ProjectTile(project: project)
             if renaming {
                 nameField
             } else {
                 Text(project.name)
-                    .font(SidebarFont.section)
-                    .foregroundStyle(DS.Palette.textSecondary)
+                    .font(SidebarFont.project)
+                    .foregroundStyle(DS.Palette.text)
                     .lineLimit(1)
                     .layoutPriority(-1)
             }
             Spacer(minLength: DS.Space.xs)
             if collapsed, !project.tabs.isEmpty {
-                Text("\(project.tabs.count)")
-                    .font(DS.Font.meta)
+                Text(project.tabs.count == 1 ? "1 tab" : "\(project.tabs.count) tabs")
+                    .font(SidebarFont.number)
                     .foregroundStyle(DS.Palette.textTertiary)
                     .contentTransition(.numericText())
+                if let badge = SidebarTabIcon.badge(for: model.mostUrgentState(inProject: project)) {
+                    Circle().fill(badge).frame(width: 7, height: 7).transition(.opacity)
+                }
             }
             Button("New Terminal in \(project.name)", systemImage: "plus") { model.newTab(inProject: project.id) }
                 .labelStyle(.iconOnly)
                 .buttonStyle(.bar)
                 .font(.callout)
-                .opacity(plusEmphasized ? 1 : 0.45)
+                .opacity(controlsShown ? 1 : 0)
                 .accessibilityIdentifier("project-new-tab-\(project.name)")
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(DS.Palette.textTertiary)
+                .rotationEffect(.degrees(collapsed ? 0 : 90))
+                .opacity(controlsShown || collapsed ? 1 : 0)
+                .accessibilityHidden(true)
         }
+        .frame(minHeight: 32)
         .padding(.leading, DS.Space.l)
         .padding(.trailing, DS.Space.gap10)
-        .padding(.top, DS.Space.m)
-        .padding(.bottom, DS.Space.xs)
+        .padding(.top, DS.Space.gap10)
+        .animation(DS.Motion.hover, value: controlsShown)
         .background {
             RoundedRectangle(cornerRadius: DS.Radius.control)
                 .fill(DS.Palette.project(project.color).opacity(dropping ? 0.14 : 0))
@@ -594,7 +614,7 @@ private struct ProjectHeader: View {
             model.draggedTab = nil
             return TabDrag.provider(forProject: project.id, in: model)
         } preview: {
-            DragLiftPreview(title: project.name, systemImage: "circle.fill")
+            DragLiftPreview(title: project.name, systemImage: "square.fill")
         }
         .opacity(drag.projectMove?.id == project.id ? 0.4 : 1)
         .contextMenu { ProjectMenu(project: project, collapsed: collapsed) { startRename() } }
@@ -609,7 +629,7 @@ private struct ProjectHeader: View {
         .accessibilityAction(named: "Rename") { startRename() }
     }
 
-    private var plusEmphasized: Bool {
+    private var controlsShown: Bool {
         #if os(macOS)
         hovered
         #else
@@ -620,7 +640,7 @@ private struct ProjectHeader: View {
     private var nameField: some View {
         TextField("Project Name", text: $draft, selection: $selection)
             .textFieldStyle(.plain)
-            .font(SidebarFont.section)
+            .font(SidebarFont.project)
             .foregroundStyle(DS.Palette.text)
             .focused($fieldFocused)
             .onSubmit { finishRename() }

@@ -302,10 +302,16 @@ final class Workspace {
     /// Instruments' Points of Interest: layout ops and pane creation (what a split waits on).
     static let signposter = OSSignposter(subsystem: Bundle.main.bundleIdentifier ?? "app", category: .pointsOfInterest)
 
-    /// The tab's name: the user's rename, else the friendly name it got when it was created
+    /// The tab's name: the user's rename, else, while an agent runs in it, what the agent is
+    /// working on (`AgentTabTitle`), else the friendly name it got when it was created
     /// ("quiet-otter"). With Settings ▸ "Title from shell", a program's OSC 0/2 title, else the
     /// directory, replaces a generated name (never a rename).
     func title(of tab: Tab) -> String {
+        if let daemon = host as? DaemonConnection, let agent = daemon.meta[tab.focused]?.agent,
+           tab.title.map(FriendlyName.isGenerated) ?? true
+        {
+            return AgentTabTitle(terminalTitle: pane(tab.focused)?.title, kind: AgentKind(agent.kind)).resolved
+        }
         if let title = tab.title {
             if UserDefaults.standard.bool(forKey: TabNaming.titleFromShell), FriendlyName.isGenerated(title),
                let shell = pane(tab.focused)?.title.nonEmpty ?? directory(of: tab)
@@ -328,11 +334,12 @@ final class Workspace {
         if let drawing = canvasTitles[paneId] { return drawing }
         let name = title(of: tab)
         if let daemon = host as? DaemonConnection, let agent = daemon.meta[paneId]?.agent {
-            let kind = agent.kind.prefix(1).uppercased() + agent.kind.dropFirst()
+            let kind = AgentKind(agent.kind).title
             switch agent.state {
-            case .blocked(_, let summary, _): return SharedApproval.shows(summary: summary) ? "\(kind): \(summary)" : "\(kind) needs you"
-            case .running: return daemon.meta[paneId].map { $0.title.isEmpty ? "\(kind) working" : "\(kind): \($0.title)" }
-            case .idle, .done: break
+            case .blocked(_, let summary, _): return SharedApproval.shows(summary: summary) ? "\(kind) · needs you: \(summary)" : "\(kind) · needs you"
+            case .running: return "\(kind) · working"
+            case .done: return "\(kind) · done"
+            case .idle: return "\(kind) · idle"
             }
         } else if let daemon = host as? DaemonConnection, let report = daemon.report(of: paneId), report.state != .idle {
             let words = report.detail ?? report.state.title

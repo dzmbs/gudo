@@ -949,6 +949,15 @@ final class WindowModel {
         return (app.hosts.connection(id) as? DaemonConnection)?.report(of: pane)?.state
     }
 
+    /// The state that most needs attention across a project's tabs, for its collapsed header.
+    func mostUrgentState(inProject project: Project) -> DesignSystem.AgentState? {
+        project.tabs.flatMap { ref -> [DesignSystem.AgentState] in
+            guard let tab = groups.group(ref.hostId)?.tabs.first(where: { $0.id == ref.tab }) else { return [] }
+            return tab.root.panes.compactMap { agentState(ofPane: $0, onGroup: ref.hostId) }
+        }
+        .min { $0.urgency < $1.urgency }
+    }
+
     /// The program that reports an agent state in a pane of any group.
     func agentProgram(ofPane pane: PaneId, onGroup id: String) -> String? {
         if id == HostGroups.localId { return paneStatus.program(of: pane.description) }

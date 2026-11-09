@@ -448,31 +448,19 @@ struct MixedTabRow: View {
         Button {
             withAnimation(DS.Motion.snappy) { model.focus(ref) }
         } label: {
-            HStack(alignment: .firstTextBaseline, spacing: DS.Space.gap10) {
-                Text("\(number)")
-                    .font(SidebarFont.subtitle.monospacedDigit())
-                    .foregroundStyle(isActive ? DS.Palette.textSecondary : DS.Palette.textTertiary)
-                    .frame(width: 20, alignment: .trailing)
-                    .lineLimit(1)
+            HStack(alignment: .center, spacing: DS.Space.gap10) {
+                SidebarTabIcon(program: program, state: state, favicon: model.favicon(ofMixedTab: tab))
                 VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: DS.Space.row) {
-                        TabLeadingMark(program: program, state: isActive ? nil : state, favicon: model.favicon(ofMixedTab: tab))
-                        Text(title)
-                            .font(SidebarFont.title)
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
+                    Text(title)
+                        .font(SidebarFont.title)
+                        .fontWeight(state == .done && !isActive ? .semibold : .regular)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                     MixedHostsLine(tab: tab)
-                        .padding(.leading, ProgramMark.rowSlot + DS.Space.row)
                 }
                 Spacer(minLength: DS.Space.xs)
-                if CommandKeyState.shared.held, let shortcut = model.groups.shortcutNumber(of: ref) {
-                    Text("⌘\(shortcut)")
-                        .font(DS.Font.meta)
-                        .foregroundStyle(DS.Palette.textSecondary)
-                        .transition(.opacity)
-                }
+                TabNumber(number: number, shortcut: CommandKeyState.shared.held ? model.groups.shortcutNumber(of: ref) : nil)
             }
             .sidebarRow(selected: isActive)
         }

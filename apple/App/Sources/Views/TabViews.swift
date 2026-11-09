@@ -109,7 +109,7 @@ struct WorkspaceSidebar: View {
 /// rows keep their titles and state words on one line.
 enum SidebarWidth {
     static let range: ClosedRange<Double> = 200...360
-    static let standard = 248.0
+    static let standard = 264.0
 
     static func effective(_ stored: Double, for size: DynamicTypeSize) -> Double {
         let extra: Double = switch size {
@@ -166,10 +166,16 @@ enum SidebarFont {
     static var title: Font { .system(size: SidebarSize.shared.metrics.title) }
     static var subtitle: Font { .system(size: SidebarSize.shared.metrics.subtitle) }
     static var section: Font { .system(size: SidebarSize.shared.metrics.section, weight: .semibold) }
+    static var project: Font { .system(size: SidebarSize.shared.metrics.title, weight: .semibold) }
+    static var number: Font { .system(size: SidebarSize.shared.metrics.subtitle).monospacedDigit() }
+    static var icon: CGFloat { SidebarSize.shared.metrics.icon }
     #else
     static let title = Font.body
     static let subtitle = Font.subheadline
     static let section = Font.subheadline.weight(.semibold)
+    static let project = Font.headline
+    static let number = Font.subheadline.monospacedDigit()
+    static let icon: CGFloat = 28
     #endif
 }
 
@@ -184,6 +190,8 @@ final class SidebarSize {
         var title: CGFloat
         var subtitle: CGFloat
         var section: CGFloat
+        /// The program tile leading each tab row.
+        var icon: CGFloat
     }
 
     /// `NSTableViewDefaultSizeMode`: 1 small, 2 medium (also when unset), 3 large.
@@ -191,9 +199,9 @@ final class SidebarSize {
 
     var metrics: Metrics {
         switch mode {
-        case 1: Metrics(title: 11, subtitle: 10, section: 10)
-        case 3: Metrics(title: 15, subtitle: 12, section: 13)
-        default: Metrics(title: 13, subtitle: 10, section: 11)
+        case 1: Metrics(title: 11, subtitle: 10, section: 10, icon: 18)
+        case 3: Metrics(title: 15, subtitle: 13, section: 13, icon: 26)
+        default: Metrics(title: 13, subtitle: 11, section: 11, icon: 22)
         }
     }
 
@@ -284,8 +292,9 @@ private struct HostGroupHeader: View {
                     .imageScale(.small)
                     .frame(minWidth: 16)
                     .help(group.failure ?? (live ? group.name : state.title))
-                Text(group.name)
+                Text(group.name.uppercased())
                     .font(SidebarFont.section)
+                    .tracking(0.5)
                     .foregroundStyle(live ? DS.Palette.textSecondary : DS.Palette.textTertiary)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -341,8 +350,8 @@ private struct HostGroupHeader: View {
         }
         .padding(.leading, DS.Space.l)
         .padding(.trailing, DS.Space.gap10)
-        .padding(.top, DS.Space.m)
-        .padding(.bottom, DS.Space.xs)
+        .padding(.top, DS.Space.l)
+        .padding(.bottom, DS.Space.xxs)
         .contentShape(.rect)
         .onTapGesture { withAnimation(DS.Motion.snappy) { model.groups.toggleCollapsed(group.id) } }
         .onHover { hovered = $0 }
@@ -537,6 +546,69 @@ struct TabLeadingMark: View {
     }
 }
 
+/// A sidebar row's program on a small tile, its agent's state a badge on the tile's corner, so
+/// the state never takes the title's room and every row's title starts at the same place.
+struct SidebarTabIcon: View {
+    let program: ProgramIdentity
+    let state: AgentState?
+    var favicon: Image?
+
+    var body: some View {
+        let size = SidebarFont.icon
+        ZStack {
+            RoundedRectangle(cornerRadius: size * 0.27, style: .continuous)
+                .fill(DS.Palette.raised)
+            if let favicon {
+                Favicon(image: favicon, size: size * 0.64)
+            } else {
+                ProgramMark(program, size: size * 0.64)
+                    .foregroundStyle(.primary)
+            }
+        }
+        .frame(width: size, height: size)
+        .overlay(alignment: .bottomTrailing) {
+            if let badge = Self.badge(for: state) {
+                Circle()
+                    .fill(badge)
+                    .frame(width: size * 0.4, height: size * 0.4)
+                    .padding(size * 0.09)
+                    .background(Circle().fill(DS.Palette.sidebar))
+                    .offset(x: size * 0.2, y: size * 0.2)
+                    .transition(.scale(scale: 0.5).combined(with: .opacity))
+            }
+        }
+        .animation(DS.Motion.indicator, value: state)
+        .accessibilityHidden(true)
+    }
+
+    static func badge(for state: AgentState?) -> ChromeStyle? {
+        switch state {
+        case .working: DS.Palette.working
+        case .blocked: DS.Palette.attention
+        case .done: DS.Palette.done
+        case .error: DS.Palette.error
+        case .idle, .unknown, nil: nil
+        }
+    }
+}
+
+/// A tab's number at the row's trailing edge, quiet; its ⌘ shortcut while ⌘ is held.
+struct TabNumber: View {
+    let number: Int
+    let shortcut: Int?
+
+    var body: some View {
+        Text(shortcut.map { "⌘\($0)" } ?? "\(number)")
+            .font(SidebarFont.number)
+            .foregroundStyle(shortcut == nil ? DS.Palette.textTertiary : DS.Palette.textSecondary)
+            .lineLimit(1)
+            .fixedSize()
+            // A renumbered row swaps its digit in place, never a cross-fade.
+            .contentTransition(.identity)
+            .accessibilityHidden(true)
+    }
+}
+
 /// New Terminal on a host, and New Agent where it runs agents (a daemon).
 private struct NewOnHostItems: View {
     let group: HostGroup
@@ -640,8 +712,6 @@ struct TabRow: View {
     let group: HostGroup
     var showsHost = false
     @Environment(WindowModel.self) private var model
-    /// Two digits at the row's size (⌘-numbers run past 9 across hosts).
-    @ScaledMetric(relativeTo: .footnote) private var numberWidth: CGFloat = 20
 
     var body: some View {
         let workspace = model.workspace(ofGroup: group.id)
@@ -653,26 +723,24 @@ struct TabRow: View {
         let running = workspace?.runningCommand(of: tab)
         let program = model.programIdentity(of: tab, onGroup: group.id)
         let worktree = model.groups.worktree(of: ref)
+        let informative = context.flatMap { Self.isInformative($0, title: title) ? $0 : nil }
+            ?? Self.agentLine(program: program, state: state)
+        let host = showsHost ? group.name : nil
 
         Button {
             model.clickTab(ref, modifiers: ClickModifiers.current)
         } label: {
-            HStack(alignment: .firstTextBaseline, spacing: DS.Space.gap10) {
-                Text("\(number)")
-                    .font(SidebarFont.subtitle.monospacedDigit())
-                    .foregroundStyle(isActive ? DS.Palette.textSecondary : DS.Palette.textTertiary)
-                    .frame(width: numberWidth, alignment: .trailing)
-                    .lineLimit(1)
-                    // A renumbered row swaps its digit in place, never a cross-fade.
-                    .contentTransition(.identity)
-                VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .center, spacing: DS.Space.gap10) {
+                SidebarTabIcon(program: program, state: state)
+                VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: DS.Space.row) {
-                        TabLeadingMark(program: program, state: isActive ? nil : state)
                         Text(title)
                             .font(SidebarFont.title)
+                            // Finished work not yet looked at, until it is opened.
+                            .fontWeight(state == .done && !isActive ? .semibold : .regular)
                             .lineLimit(1)
                             // A path keeps its end: the directory you are in.
-                            .truncationMode(title.hasPrefix("/") || title.hasPrefix("~") ? .head : .middle)
+                            .truncationMode(title.hasPrefix("/") || title.hasPrefix("~") ? .head : .tail)
                             .shimmering(state == .working, text: title)
                             .foregroundStyle(.primary)
                         if tab.zoomed != nil {
@@ -681,11 +749,15 @@ struct TabRow: View {
                                 .foregroundStyle(DS.Palette.textTertiary)
                         }
                     }
-                    let informative = context.flatMap { Self.isInformative($0, title: title) ? $0 : nil }
-                    // In a project it leads with the host, which the section header doesn't name.
-                    TabSubtitle(context: informative, running: running, worktree: worktree, host: showsHost ? group.name : nil)
-                        .padding(.leading, ProgramMark.rowSlot + DS.Space.row)
+                    // Nothing to say under the title: one line, centred on the icon, not a
+                    // blank second line that pushes the title up.
+                    if informative != nil || running != nil || worktree != nil || host != nil {
+                        // In a project it leads with the host, which the section header doesn't name.
+                        TabSubtitle(context: informative, running: running, worktree: worktree, host: host)
+                            .transition(.opacity)
+                    }
                 }
+                .animation(DS.Motion.snappy, value: informative != nil || running != nil)
                 Spacer(minLength: DS.Space.xs)
                 if let worktree { TabGitBadges(worktree: worktree, selected: isActive) }
                 TabPresence(workspace: workspace, panes: tab.root.panes)
@@ -697,12 +769,7 @@ struct TabRow: View {
                         .contentTransition(.symbolEffect(.replace))
                         .accessibilityHidden(true)
                 }
-                if CommandKeyState.shared.held, let shortcut = model.groups.shortcutNumber(of: ref) {
-                    Text("⌘\(shortcut)")
-                        .font(DS.Font.meta)
-                        .foregroundStyle(DS.Palette.textSecondary)
-                        .transition(.opacity)
-                }
+                TabNumber(number: number, shortcut: CommandKeyState.shared.held ? model.groups.shortcutNumber(of: ref) : nil)
             }
             .opacity(group.showsAsLive ? 1 : 0.6)
             // In Select mode only the checks say what is selected.
@@ -763,6 +830,12 @@ struct TabRow: View {
     }
 
     /// A context line worth a second line in the row.
+    /// "Claude Code · working" for an agent whose host reports only its state.
+    static func agentLine(program: ProgramIdentity, state: AgentState?) -> String? {
+        guard program.kind == .agent, let state, state != .unknown else { return nil }
+        return "\(program.displayName) · \(state.title.lowercased())"
+    }
+
     static func isInformative(_ context: String, title: String) -> Bool {
         let trimmed = context.trimmingCharacters(in: .whitespaces)
         return !trimmed.isEmpty && trimmed != "~" && trimmed != title

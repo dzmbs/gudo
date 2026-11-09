@@ -73,7 +73,15 @@ struct TabSubtitle: View {
         if let context, worktree == nil {
             HStack(spacing: 0) {
                 separator
-                Text(context).truncationMode(.head)
+                // "Claude Code · working" that does not fit keeps its state, whole.
+                if let state = context.components(separatedBy: " · ").last, state != context {
+                    ViewThatFits(in: .horizontal) {
+                        Text(context)
+                        Text(state)
+                    }
+                } else {
+                    Text(context).truncationMode(.head)
+                }
             }
         } else if worktree == nil && host == nil {
             Text(verbatim: " ").accessibilityHidden(true)
