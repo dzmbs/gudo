@@ -106,4 +106,23 @@ struct ChromeContrastTests {
         }
         #expect(failures.isEmpty, "\(Self.summary(failures))")
     }
+
+    /// A program's symbol dims the style it inherits; the dimmed glyph still reads as a graphic
+    /// (WCAG 1.4.11): in main text on every surface (the palette, menus), in secondary text on
+    /// the bands that carry an unfocused or inactive one (pane headers, tab strips, the sidebar).
+    @Test(arguments: schemes)
+    func mutedProgramMarksReadAt3To1(scheme: ColorScheme?) {
+        let failures = Self.failures(scheme: scheme, minimum: ChromePalette.minimumGlyphContrast) { chrome in
+            let inText = Self.textSurfaces(of: chrome).prefix(4).map { surface in
+                ("mark in text on \(surface.name)", ChromePalette.textLevels.primary, surface.color)
+            }
+            let inSecondaryText = Self.textSurfaces(of: chrome).prefix(2).map { surface in
+                ("mark in textSecondary on \(surface.name)", chrome.secondaryLevel, surface.color)
+            }
+            return (inText + inSecondaryText).map { pair, level, surface in
+                (pair, surface.blended(with: chrome.foreground, level * chrome.markOpacity), surface)
+            }
+        }
+        #expect(failures.isEmpty, "\(Self.summary(failures))")
+    }
 }

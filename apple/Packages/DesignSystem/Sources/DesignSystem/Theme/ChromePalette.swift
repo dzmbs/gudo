@@ -45,6 +45,9 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
     /// light themes: secondary toward 4.5:1, tertiary toward 3:1.
     public let secondaryLevel: Double
     public let tertiaryLevel: Double
+    /// How strongly a program's symbol draws in the style it inherits: `markStrength`, raised
+    /// where the mark in secondary text (an unfocused pane header) would fall below 3:1.
+    public let markOpacity: Double
 
     // MARK: Strengths
 
@@ -56,6 +59,8 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
     public static let textLevels = (primary: 0.90, secondary: 0.60, tertiary: 0.40, quaternary: 0.20)
     /// The most secondary and tertiary text are raised to for contrast.
     public static let levelCaps = (secondary: 0.78, tertiary: 0.62)
+    /// A program's symbol dims the style it inherits, so it sits no heavier than the words beside it.
+    public static let markStrength = 0.6
     public static let fillLevels = (hover: 0.05, selected: 0.10, pressed: 0.15)
     public static let lineLevels = (hairline: 0.10, separator: 0.15, border: 0.20)
     /// How far a state hue is mixed toward the foreground. At 50 % a dark theme's amber "needs
@@ -147,6 +152,8 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
         let textSurfaces = [background, sidebar, raised, overlay] + selectedRows
         secondaryLevel = Self.level(Self.textLevels.secondary, cap: Self.levelCaps.secondary, of: foreground, on: textSurfaces, minimum: Self.minimumTextContrast)
         tertiaryLevel = Self.level(Self.textLevels.tertiary, cap: Self.levelCaps.tertiary, of: foreground, on: textSurfaces, minimum: Self.minimumGlyphContrast)
+        let markLevel = Self.level(Self.markStrength * secondaryLevel, cap: secondaryLevel, of: foreground, on: [background, sidebar], minimum: Self.minimumGlyphContrast)
+        markOpacity = markLevel / secondaryLevel
 
         func state(_ index: Int, reference: String) -> ThemeColor {
             var hue = theme.ansiRGB(index)

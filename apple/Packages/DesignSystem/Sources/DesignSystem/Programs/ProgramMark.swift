@@ -19,12 +19,12 @@ public struct ProgramMark: View {
     public static let rowSlot: CGFloat = 18
     public static let rowSize: CGFloat = 16
     #endif
-    /// Symbols and one-colour logos draw at `DS.Opacity.mutedGlyph` of the inherited foreground.
-    /// Colour logos stay as their owners publish them.
-    public static let mutedOpacity: Double = 0.6
 
     let identity: ProgramIdentity
     var size: CGFloat
+    /// Symbols and one-colour logos draw at its `markOpacity` of the inherited foreground. Colour
+    /// logos stay as their owners publish them.
+    @Environment(\.chrome) private var chrome
 
     public init(_ identity: ProgramIdentity, size: CGFloat = ProgramMark.rowSize) {
         self.identity = identity
@@ -56,12 +56,12 @@ public struct ProgramMark: View {
                 .interpolation(.high)
                 .aspectRatio(contentMode: .fit)
                 .frame(width: size, height: size)
-                .opacity(logo.template ? Self.mutedOpacity : 1)
+                .opacity(logo.template ? chrome.markOpacity : 1)
         } else {
             Image(systemName: identity.symbol)
                 .font(.system(size: size * 0.82, weight: .medium))
                 .frame(width: size, height: size)
-                .opacity(Self.mutedOpacity)
+                .opacity(chrome.markOpacity)
         }
     }
 }
