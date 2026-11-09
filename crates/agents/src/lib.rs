@@ -19,6 +19,7 @@
 mod adapter;
 mod arbiter;
 mod claude;
+mod claude_live;
 mod codex;
 mod codex_live;
 mod event;
@@ -32,6 +33,10 @@ mod signal;
 pub use adapter::{AgentAdapter, HookCoverage, HookError};
 pub use arbiter::{Arbiter, ArbiterConfig, DecisionError, Notify, Update};
 pub use claude::ClaudeCode;
+pub use claude_live::{
+    CLAUDE_DISPLAY_BATCH_LIMIT, ClaudeDisplayBatch, ClaudeDisplayChange, ClaudeDisplayError,
+    ClaudeDisplayMessage, ClaudeDisplayStream, claude_supports_message_display,
+};
 pub use codex::{
     CODEX_ENVIRONMENT_LIMIT, Codex, CodexLiveLaunch, CodexPaneEnvironment, CodexPaneMode,
     CodexTerminalLaunch, InvalidCodexSocket, NOTIFY_EVENT as CODEX_NOTIFY_EVENT,
