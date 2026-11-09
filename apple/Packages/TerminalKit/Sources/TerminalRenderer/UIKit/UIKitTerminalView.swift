@@ -972,9 +972,22 @@ public final class TerminalView: UIView {
             if markedText == nil { send(KeyEvent(key: .escape, action: action, mods: [], consumedMods: [], text: "", unshiftedCodepoint: 0)) }
             return true
         }
+        let mods = KeyModifiers(uiKey.modifierFlags)
+        if markedText == nil, !inputSourceComposes,
+           let bytes = KeyEvent(key: key, action: action, mods: mods, text: "", unshiftedCodepoint: 0).lineEditingBytes {
+            if action == .press {
+                if surface.terminal.selection != nil { clearSelection() }
+                emit(bytes)
+                repeatingKey = uiKey.keyCode
+                repeater.start { [weak self] in self?.emit(bytes) }
+            } else if uiKey.keyCode == repeatingKey {
+                repeater.stop()
+                repeatingKey = nil
+            }
+            return true
+        }
         guard !uiKey.modifierFlags.contains(.command), markedText == nil, !inputSourceComposes else { return false }
 
-        let mods = KeyModifiers(uiKey.modifierFlags)
         let unshifted = uiKey.charactersIgnoringModifiers.unicodeScalars.first?.value ?? 0
         let event: KeyEvent
         let meta = mods.contains(.alt) && optionAsMeta.applies(

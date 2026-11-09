@@ -601,8 +601,13 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
     // MARK: Keyboard
 
     override public func keyDown(with event: NSEvent) {
-        guard !event.modifierFlags.contains(.command) else { return super.keyDown(with: event) }
         let action: KeyEvent.Action = event.isARepeat ? .repeat : .press
+        if !hasMarkedText(), let bytes = keyEvent(event, action: action).lineEditingBytes {
+            if surface.terminal.selection != nil { surface.terminal.clearSelection() }
+            emit(bytes)
+            return
+        }
+        guard !event.modifierFlags.contains(.command) else { return super.keyDown(with: event) }
         if !hasMarkedText(), keyInterceptor?(keyEvent(event, action: action)) == true { return }
         if surface.terminal.selection != nil { surface.terminal.clearSelection() }
         if !hasMarkedText(), let meta = metaEvent(event, action: action) {
@@ -626,16 +631,19 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
     }
 
     override public func keyUp(with event: NSEvent) {
-        guard !event.modifierFlags.contains(.command), !hasMarkedText() else { return }
+        guard !event.modifierFlags.contains(.command), !hasMarkedText(),
+              keyEvent(event, action: .release).lineEditingBytes == nil
+        else { return }
         if keyInterceptor?(keyEvent(event, action: .release)) == true { return }
         send(keyEvent(event, action: .release))
     }
 
-    /// Control combos (e.g. ctrl+tab) can arrive here before `keyDown`; route them to the terminal
-    /// and leave command shortcuts to the menu.
+    /// Control combos (e.g. ctrl+tab) and the line-editing ⌘ chords can arrive here before
+    /// `keyDown`; route them to the terminal and leave other command shortcuts to the menu.
     override public func performKeyEquivalent(with event: NSEvent) -> Bool {
-        guard window?.firstResponder === self, event.type == .keyDown,
-              event.modifierFlags.contains(.control), !event.modifierFlags.contains(.command)
+        let isTerminalChord = event.modifierFlags.contains(.control) && !event.modifierFlags.contains(.command)
+            || keyEvent(event, action: .press).lineEditingBytes != nil
+        guard window?.firstResponder === self, event.type == .keyDown, isTerminalChord
         else { return super.performKeyEquivalent(with: event) }
         keyDown(with: event)
         return true
