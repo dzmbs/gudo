@@ -40,7 +40,9 @@ private func line(_ state: PromptState?) -> String? {
         let daemon = try LocalDaemon(
             shell: "/bin/zsh",
             environment: ["HOME": "{state}", "ZDOTDIR": "{state}"],
-            setup: { try Data().write(to: $0.appending(path: ".zshrc")) }
+            // The system's default prompt names the user, host and directory, so where the
+            // line wraps would depend on the machine.
+            setup: { try Data("PS1='%# '\n".utf8).write(to: $0.appending(path: ".zshrc")) }
         )
         let ticket = try await daemon.ticket()
         let events = Recorder()
