@@ -258,10 +258,11 @@ extension Terminal {
             let top = TerminalSearch.viewportTop(handle)
             let cells = Self.logicalLine(handle, screenRow: top + point.y)
             if let uri = Self.hyperlinkURI(ref) {
+                let linked = cells.filter { Self.hyperlinkAt(handle, $0.point) == uri }
                 // The run of cells on this row that carry the same URI.
-                let row = cells.filter { $0.point.y == top + point.y && Self.hyperlinkAt(handle, $0.point) == uri }
+                let row = linked.filter { $0.point.y == top + point.y }
                 let columns = (row.map(\.point.x).min() ?? point.x)...(row.map(\.point.x).max() ?? point.x)
-                let label = Self.seenText(handle, cells.filter { Self.hyperlinkAt(handle, $0.point) == uri })
+                let label = Self.seenText(handle, linked)
                 if let url = URL(string: uri), url.isFileURL {
                     let suffix = url.fragment.flatMap { Int($0.drop { !$0.isNumber }) }
                     let file = TerminalLink.fileTarget(url)
@@ -328,7 +329,12 @@ extension Terminal {
         var ref = ref
         var buffer = [UInt8](repeating: 0, count: 2048)
         var length = 0
-        guard ghostty_grid_ref_hyperlink_uri(&ref, &buffer, buffer.count, &length) == GHOSTTY_SUCCESS, length > 0 else { return nil }
+        var result = ghostty_grid_ref_hyperlink_uri(&ref, &buffer, buffer.count, &length)
+        if result == GHOSTTY_OUT_OF_SPACE {
+            buffer = [UInt8](repeating: 0, count: length)
+            result = ghostty_grid_ref_hyperlink_uri(&ref, &buffer, buffer.count, &length)
+        }
+        guard result == GHOSTTY_SUCCESS, length > 0 else { return nil }
         return String(decoding: buffer.prefix(length), as: UTF8.self)
     }
 

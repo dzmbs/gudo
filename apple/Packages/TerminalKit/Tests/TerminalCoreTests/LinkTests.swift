@@ -141,6 +141,17 @@ import Testing
         #expect(path.target == "/tmp/x.txt")
     }
 
+    @Test func longHyperlinksAreReadWhole() throws {
+        let terminal = Terminal(cols: 40, rows: 3) { _ in }
+        // As long as libghostty-vt's OSC parser keeps (2048 bytes with the `8;;` before it).
+        let uri = "https://example.com/?q=" + String(repeating: "a", count: 2020)
+        terminal.write(Array("\u{1b}]8;;\(uri)\u{1b}\\click here\u{1b}]8;;\u{1b}\\ after".utf8))
+        let link = try #require(terminal.link(atViewport: GridPoint(x: 3, y: 0)))
+        #expect(link.target == uri)
+        #expect(link.columns == 0...9)
+        #expect(link.label == "click here")
+    }
+
     @Test func wideCharactersKeepColumnsRight() throws {
         let terminal = Terminal(cols: 40, rows: 3) { _ in }
         terminal.write(Array("你好 ./a.txt:3".utf8))
