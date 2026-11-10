@@ -20,7 +20,7 @@ mod svg;
 
 pub use ascii::{ASCII_CELL, to_ascii};
 pub use excalidraw::{ExScene, ExcalidrawFile, parse_element, parse_file, wins};
-pub use image::{encode_png, sniff};
+pub use image::{encode_png, sniff, sniff_reader};
 pub use points::{InkPoint, MAX_POINTS, PointsError, QUANTUM, count, pack, simplify, unpack};
 pub use raster::{RasterOptions, Rgba, braille, rasterize};
 pub use scene::{Scene, VersionGap};
