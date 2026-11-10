@@ -190,6 +190,18 @@ impl WsState {
             let _ = tx.send(Err(WsError::Disconnected));
         }
     }
+
+    /// The connected daemon cannot read `control`, so it is not sent: its caller hears that
+    /// now instead of waiting out the request timeout.
+    pub(crate) fn refuse_unsupported(&self, control: &proto::ClientCtl) {
+        if let proto::ClientCtl::Workspace { req_id, .. } = control
+            && let Some(reply) = lock(&self.pending).remove(req_id)
+        {
+            let _ = reply.send(Err(WsError::Unavailable(
+                "update the host's helper to use this".into(),
+            )));
+        }
+    }
 }
 
 fn failed(err: impl std::fmt::Display) -> WsError {

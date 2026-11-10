@@ -756,7 +756,11 @@ async fn run(inner: &Arc<Inner>, live: Live) -> String {
                 let Some(msg) = msg else { break "client dropped".to_owned() };
                 match msg {
                     Outgoing::Ctl(ctl) => {
-                        if control_supported(&ctl, input_features, more_features) && inner.ws.control_is_live(&ctl) { let _ = ctl_out.send(ctl); }
+                        if !control_supported(&ctl, input_features, more_features) {
+                            inner.ws.refuse_unsupported(&ctl);
+                        } else if inner.ws.control_is_live(&ctl) {
+                            let _ = ctl_out.send(ctl);
+                        }
                     }
                     Outgoing::Input { pane_id, payload } => {
                         let input_seq = lock(&inner.input).send(pane_id, &payload, resends);
