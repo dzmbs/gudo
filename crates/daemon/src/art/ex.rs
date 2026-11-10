@@ -103,7 +103,7 @@ impl Art {
         // Files must be stored blobs; trust our own reading of them, not the offer.
         let mut files = Vec::new();
         for offered in &put.files {
-            let (image, _) = self.read_blob(&offered.image.hash)?;
+            let image = self.blob_info(&offered.image.hash)?;
             files.push(ExFile {
                 file_id: offered.file_id.clone(),
                 image,

@@ -6,14 +6,17 @@
 //! into an `[Image #N]` attachment and the user keeps typing.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use iroh::endpoint::{RecvStream, SendStream};
 use proto::{
     Actor, ArtifactCreate, ArtifactError, ArtifactEvent, ArtifactId, ArtifactKind, ArtifactSend,
-    BlobHeader, BlobReply, CoordSpace, InputPayload, MediaType, PngSource, Sent,
+    BlobHash, BlobHeader, BlobReply, CoordSpace, InputPayload, MediaType, PngSource, Sent,
 };
+use tokio::io::AsyncReadExt;
 
 use super::{INLINE_MAX, Result, failed};
+use crate::budget::{read_or_stall, write_or_stall};
 use crate::core::Core;
 
 /// The text pasted for `path`: the path itself when it holds only `[A-Za-z0-9_./@:-]` (or
@@ -164,42 +167,78 @@ fn write_send_file(
     Ok(absolute.to_string_lossy().into_owned())
 }
 
-/// Serves one blob stream (the caller checked the roles).
+/// Bytes of a blob read from disk or the stream at a time.
+const BLOB_CHUNK: usize = 64 << 10;
+
+/// Serves one blob stream (the caller checked the roles). A peer that takes or sends nothing
+/// for `stall` ends it.
 pub(crate) async fn serve_blob(
     core: Arc<Core>,
     header: BlobHeader,
     mut send: SendStream,
     mut recv: RecvStream,
+    stall: Duration,
 ) {
     let result = match header {
-        BlobHeader::Put { size, media, .. } => put(&core, size, media, &mut send, &mut recv).await,
-        BlobHeader::Get { hash } => match core.art.read_blob(&hash) {
-            Ok((image, bytes)) => {
-                if crate::net::send(&mut send, &BlobReply::Found(image))
-                    .await
-                    .is_ok()
-                {
-                    // QUIC flow control paces this write: a slow reader holds it back.
-                    let _ = send.write_all(&bytes).await;
-                }
-                Ok(())
-            }
-            Err(error) => Err(error),
-        },
+        BlobHeader::Put { size, media, .. } => {
+            put(&core, size, media, &mut send, &mut recv, stall).await
+        }
+        BlobHeader::Get { hash } => get(&core, hash, &mut send, stall).await,
     };
     if let Err(error) = result {
+        let _ = recv.stop(0u32.into());
         let _ = crate::net::send(&mut send, &BlobReply::Failed(error)).await;
     }
     let _ = send.finish();
-    let _ = send.stopped().await;
+    let _ = tokio::time::timeout(stall, send.stopped()).await;
+}
+
+async fn send_reply(send: &mut SendStream, reply: &BlobReply, stall: Duration) -> Result<()> {
+    let frame = proto::frame::to_vec(reply).map_err(failed)?;
+    write_or_stall(send, &frame, stall).await.map_err(failed)
+}
+
+async fn get(
+    core: &Arc<Core>,
+    hash: BlobHash,
+    send: &mut SendStream,
+    stall: Duration,
+) -> Result<()> {
+    let opened = {
+        let core = Arc::clone(core);
+        tokio::task::spawn_blocking(move || core.art.open_blob(&hash))
+            .await
+            .map_err(failed)??
+    };
+    let (image, file) = opened;
+    send_reply(send, &BlobReply::Found(image), stall).await?;
+    let mut file = tokio::fs::File::from_std(file);
+    let mut chunk = vec![0; BLOB_CHUNK];
+    loop {
+        let read = match file.read(&mut chunk).await {
+            Ok(0) => return Ok(()),
+            Ok(read) => read,
+            Err(error) => {
+                tracing::debug!("reading blob {}: {error}", hash.to_hex());
+                let _ = send.reset(1u32.into());
+                return Ok(());
+            }
+        };
+        if let Err(error) = write_or_stall(send, &chunk[..read], stall).await {
+            tracing::debug!("blob stream: {error}");
+            let _ = send.reset(1u32.into());
+            return Ok(());
+        }
+    }
 }
 
 async fn put(
-    core: &Core,
+    core: &Arc<Core>,
     size: u64,
     media: MediaType,
     send: &mut SendStream,
     recv: &mut RecvStream,
+    stall: Duration,
 ) -> Result<()> {
     if size > core.art.limits.blob_max {
         return Err(ArtifactError::TooLarge(format!(
@@ -207,21 +246,63 @@ async fn put(
             core.art.limits.blob_max
         )));
     }
-    crate::net::send(send, &BlobReply::Ready)
-        .await
-        .map_err(failed)?;
-    let mut bytes = vec![0; size as usize];
-    recv.read_exact(&mut bytes)
-        .await
-        .map_err(|error| failed(format!("upload ended early: {error}")))?;
-    let image = core.art.put_blob(&bytes)?;
+    let upload = {
+        let core = Arc::clone(core);
+        tokio::task::spawn_blocking(move || core.art.begin_blob())
+            .await
+            .map_err(failed)??
+    };
+    send_reply(send, &BlobReply::Ready, stall).await?;
+    // Written from a blocking thread fed through a small channel: a slow disk slows the
+    // stream instead of the bytes piling up in memory.
+    let (chunks, mut chunks_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(4);
+    let writer = tokio::task::spawn_blocking(move || {
+        let mut upload = upload;
+        while let Some(chunk) = chunks_rx.blocking_recv() {
+            upload.write(&chunk)?;
+        }
+        Ok::<_, ArtifactError>(upload)
+    });
+    let mut received: u64 = 0;
+    let mut buffer = vec![0; BLOB_CHUNK];
+    let read_result = loop {
+        match read_or_stall(recv, &mut buffer, stall).await {
+            Ok(Some(read)) => {
+                received += read as u64;
+                if received > size {
+                    break Err(ArtifactError::Invalid(format!(
+                        "more than the announced {size} bytes"
+                    )));
+                }
+                if chunks.send(buffer[..read].to_vec()).await.is_err() {
+                    break Ok(());
+                }
+                if received == size {
+                    break Ok(());
+                }
+            }
+            Ok(None) => break Ok(()),
+            Err(error) => break Err(failed(format!("upload: {error}"))),
+        }
+    };
+    drop(chunks);
+    let upload = writer.await.map_err(failed)??;
+    read_result?;
+    if received != size {
+        return Err(failed(format!(
+            "upload ended early, after {received} of {size} bytes"
+        )));
+    }
+    let image = {
+        let core = Arc::clone(core);
+        tokio::task::spawn_blocking(move || core.art.finish_blob(upload))
+            .await
+            .map_err(failed)??
+    };
     if image.media != media {
         tracing::debug!("blob declared {media:?}, is {:?}", image.media);
     }
-    crate::net::send(send, &BlobReply::Stored(image))
-        .await
-        .map_err(failed)?;
-    Ok(())
+    send_reply(send, &BlobReply::Stored(image), stall).await
 }
 
 #[cfg(test)]

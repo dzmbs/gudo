@@ -172,12 +172,12 @@ fn image_for(
         .info(artifact)
         .ok_or_else(|| ArtifactError::NotFound(format!("artifact {artifact}")))?;
     if let Some(hash) = png {
-        let (image, _) = art.read_blob(&hash)?;
+        let image = art.blob_info(&hash)?;
         return Ok((version.unwrap_or(info.version), image));
     }
     let exported = super::export(art, artifact, version, ExportFormat::Png)?;
     let image = match exported.blob {
-        Some(hash) => art.read_blob(&hash)?.0,
+        Some(hash) => art.blob_info(&hash)?,
         None => art.put_blob(&exported.data)?,
     };
     Ok((exported.version, image))

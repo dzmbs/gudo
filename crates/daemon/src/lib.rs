@@ -35,6 +35,7 @@ mod art;
 mod askpass;
 mod assist;
 mod browser;
+mod budget;
 mod claude_display;
 mod claude_session;
 mod clock;

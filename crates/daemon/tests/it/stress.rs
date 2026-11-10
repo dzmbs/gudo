@@ -8,9 +8,9 @@ use client_core::proto::{LayoutOp, OpOutcome, PaneLaunch};
 use iroh::endpoint::presets;
 use iroh::{Endpoint, EndpointAddr, EndpointId};
 use proto::{
-    Caps, ClientCtl, ClientInput, DeviceId, GrantId, Hello, Input, InputPayload, InputSeq,
-    LinkClass, PaneId, PrincipalId, ResumePoint, ResumeToken, ServerCtl, SignedGrant, SnapGen,
-    StreamHeader, SubscribeMode, Ticket, Welcome,
+    BlobReply, Caps, ClientCtl, ClientInput, DeviceId, GrantId, Hello, Input, InputPayload,
+    InputSeq, LinkClass, PaneId, PrincipalId, ResumePoint, ResumeToken, ServerCtl, SignedGrant,
+    SnapGen, StreamHeader, SubscribeMode, Ticket, TransferReply, Welcome,
 };
 
 use crate::support::{self, TestClient};
@@ -57,8 +57,13 @@ async fn dial_resuming(
     let (ticket, _) = Ticket::parse_with_extras(ticket).unwrap();
     let secret = iroh::SecretKey::from_bytes(key.try_into().unwrap());
     let device = DeviceId(*secret.public().as_bytes());
+    // A peer that reads nothing holds the daemon's bytes only as far as its window allows.
+    let small_window = iroh::endpoint::QuicTransportConfig::builder()
+        .stream_receive_window((256u32 << 10).into())
+        .build();
     let endpoint = Endpoint::builder(presets::Minimal)
         .secret_key(secret)
+        .transport_config(small_window)
         .bind()
         .await
         .unwrap();
@@ -660,5 +665,184 @@ async fn subscriptions_past_the_cap_are_refused() {
     .await;
     assert!(answered);
     assert_eq!(refused, 2);
+    endpoint.close().await;
+}
+
+/// Reads one frame from a raw stream.
+async fn recv_frame<T: serde::de::DeserializeOwned>(rx: &mut iroh::endpoint::RecvStream) -> T {
+    let mut prefix = [0; proto::frame::LEN_PREFIX];
+    rx.read_exact(&mut prefix).await.unwrap();
+    let mut body = vec![0; proto::frame::body_len(prefix, proto::MAX_FRAME_LEN).unwrap()];
+    rx.read_exact(&mut body).await.unwrap();
+    proto::frame::decode_body(&body).unwrap()
+}
+
+/// Opens a raw bidirectional stream with `header`.
+async fn open_with(
+    connection: &iroh::endpoint::Connection,
+    header: &StreamHeader,
+) -> (iroh::endpoint::SendStream, iroh::endpoint::RecvStream) {
+    let (mut tx, rx) = connection.open_bi().await.unwrap();
+    tx.write_all(&proto::frame::to_vec(header).unwrap())
+        .await
+        .unwrap();
+    (tx, rx)
+}
+
+/// A stream that never sends its header holds up nobody: the next one is served.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stream_without_a_header_does_not_hold_up_the_next() {
+    let directory = tempfile::tempdir().unwrap();
+    let allowed = directory.path().canonicalize().unwrap();
+    let daemon = support::start_with(directory.path(), |config| {
+        config.fs_allow.push(allowed.clone());
+    })
+    .await;
+    let file = allowed.join("hello.txt");
+    std::fs::write(&file, "hello").unwrap();
+    let (endpoint, connection, _tx, _rx) = raw_pair(&support::ticket(&daemon)).await;
+    let (mut silent, _silent_rx) = connection.open_bi().await.unwrap();
+    silent.write_all(&[0]).await.unwrap();
+    let header = StreamHeader::Download(proto::DownloadHeader {
+        path: file.to_string_lossy().into_owned(),
+        offset: 0,
+        len: None,
+    });
+    let (_download, mut replies) = open_with(&connection, &header).await;
+    let reply = tokio::time::timeout(Duration::from_secs(5), recv_frame(&mut replies)).await;
+    assert!(
+        matches!(reply, Ok(TransferReply::Ready { len: 5, .. })),
+        "{reply:?}"
+    );
+    endpoint.close().await;
+}
+
+/// An upload whose sender goes quiet (the connection itself kept alive) fails after the stall
+/// timeout and leaves nothing behind, instead of holding a blocking thread forever.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_upload_that_stops_sending_fails_and_leaves_nothing() {
+    let directory = tempfile::tempdir().unwrap();
+    let allowed = directory.path().canonicalize().unwrap();
+    let daemon = support::start_with(directory.path(), |config| {
+        config.connection.stall = Duration::from_secs(1);
+        config.fs_allow.push(allowed.clone());
+    })
+    .await;
+    let target = allowed.join("uploads");
+    std::fs::create_dir_all(&target).unwrap();
+    let (endpoint, connection, _tx, _rx) = raw_pair(&support::ticket(&daemon)).await;
+    let header = StreamHeader::Upload(proto::UploadHeader {
+        target: proto::WriteTarget {
+            path: target.join("big.bin").to_string_lossy().into_owned(),
+            if_match: None,
+            create_new: false,
+            mkdirs: false,
+            mode: None,
+        },
+        size: 1000,
+    });
+    let (mut upload, mut replies) = open_with(&connection, &header).await;
+    let ready: TransferReply = recv_frame(&mut replies).await;
+    assert!(matches!(ready, TransferReply::Ready { .. }), "{ready:?}");
+    upload.write_all(&[7; 10]).await.unwrap();
+    let reply = tokio::time::timeout(Duration::from_secs(10), recv_frame(&mut replies)).await;
+    assert!(
+        matches!(reply, Ok(TransferReply::Failed(_))),
+        "the upload is still waiting: {reply:?}"
+    );
+    let left: Vec<_> = std::fs::read_dir(&target).unwrap().collect();
+    assert!(left.is_empty(), "{left:?}");
+    endpoint.close().await;
+}
+
+/// A PNG header followed by `size` bytes of padding: what the daemon checks of an image.
+fn padded_png(size: usize) -> Vec<u8> {
+    let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR\0\0\0\x10\0\0\0\x10".to_vec();
+    png.resize(size, 0);
+    png
+}
+
+/// Only a few blob streams run at once per connection, the rest wait their turn, and one
+/// nobody reads gives its turn up.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_blob_download_nobody_reads_gives_up_its_turn() {
+    let directory = tempfile::tempdir().unwrap();
+    let daemon = support::start_with(directory.path(), |config| {
+        config.connection.stall = Duration::from_secs(1);
+        config.connection.transfers = 1;
+    })
+    .await;
+    let (owner, _) = owner_with_panes(&daemon, 1).await;
+    let session = owner.layout.as_ref().unwrap().session_id;
+    let (endpoint, connection, _tx, _rx) = raw_pair(&support::ticket(&daemon)).await;
+    let image = padded_png(31 << 20);
+    let header = StreamHeader::Blob(proto::BlobHeader::Put {
+        session_id: session,
+        size: image.len() as u64,
+        media: proto::MediaType::Png,
+    });
+    let (mut put, mut replies) = open_with(&connection, &header).await;
+    assert_eq!(
+        recv_frame::<BlobReply>(&mut replies).await,
+        BlobReply::Ready
+    );
+    put.write_all(&image).await.unwrap();
+    let BlobReply::Stored(stored) = recv_frame(&mut replies).await else {
+        panic!("not stored")
+    };
+    assert_eq!(stored.size, image.len() as u64);
+
+    let get = StreamHeader::Blob(proto::BlobHeader::Get { hash: stored.hash });
+    let (_unread_tx, _unread) = open_with(&connection, &get).await;
+    let (_waiting_tx, mut waiting) = open_with(&connection, &get).await;
+    let found = tokio::time::timeout(Duration::from_secs(10), recv_frame(&mut waiting)).await;
+    assert!(
+        matches!(found, Ok(BlobReply::Found(_))),
+        "the second download never got its turn: {found:?}"
+    );
+    endpoint.close().await;
+}
+
+/// Pane queries past the per-connection budget are refused at once rather than queued
+/// without bound, and `ctl` keeps being answered.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pane_queries_past_the_budget_are_refused() {
+    let directory = tempfile::tempdir().unwrap();
+    let daemon = support::start_with(directory.path(), |config| {
+        config.connection.requests_running = 1;
+        config.connection.requests_waiting = 2;
+    })
+    .await;
+    let (_owner, panes) = owner_with_panes(&daemon, 1).await;
+    let ((endpoint, _connection, mut tx, mut rx), _) = dial_with(
+        &support::ticket(&daemon),
+        &ClientConfig::generate_key(),
+        true,
+        Caps::ATTACH_RESULT,
+        None,
+    )
+    .await;
+    let mut messages: Vec<ClientCtl> = (0..200)
+        .map(|req_id| ClientCtl::Links {
+            req_id,
+            pane_id: panes[0],
+            commands: 1000,
+        })
+        .collect();
+    messages.push(ClientCtl::Ping { nonce: 11 });
+    send_ctl(&mut tx, &messages).await;
+    let (mut answered, mut busy) = (0, 0);
+    let pong = read_ctl_until(&mut rx, Duration::from_secs(10), |message| {
+        if let ServerCtl::LinksResult { result, .. } = message {
+            answered += 1;
+            if matches!(result, Err(proto::RpcError::Internal(why)) if why.starts_with("busy")) {
+                busy += 1;
+            }
+        }
+        matches!(message, ServerCtl::Pong { nonce: 11 })
+    })
+    .await;
+    assert!(pong);
+    assert!(busy > 0, "{answered} answered, none refused");
     endpoint.close().await;
 }

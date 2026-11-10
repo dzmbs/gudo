@@ -10,6 +10,7 @@ use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use iroh::endpoint::{RecvStream, SendStream};
 use proto::{
@@ -521,14 +522,16 @@ pub(crate) fn write_small(
     pending.commit()
 }
 
-/// Serves an upload stream: header → `Ready` → `size` bytes → `Done`.
+/// Serves an upload stream: header → `Ready` → `size` bytes → `Done`. A peer that sends
+/// nothing for `stall` fails it.
 pub(crate) async fn serve_upload(
     policy: Policy,
     header: UploadHeader,
     mut send: SendStream,
     mut recv: RecvStream,
+    stall: Duration,
 ) {
-    let reply = upload(&policy, &header, &mut send, &mut recv).await;
+    let reply = upload(&policy, &header, &mut send, &mut recv, stall).await;
     let message = match reply {
         Ok(stat) => TransferReply::Done(stat),
         Err(error) => {
@@ -538,7 +541,7 @@ pub(crate) async fn serve_upload(
     };
     let _ = net::send(&mut send, &message).await;
     let _ = send.finish();
-    let _ = send.stopped().await;
+    let _ = tokio::time::timeout(stall, send.stopped()).await;
 }
 
 async fn upload(
@@ -546,6 +549,7 @@ async fn upload(
     header: &UploadHeader,
     send: &mut SendStream,
     recv: &mut RecvStream,
+    stall: Duration,
 ) -> Result<FileStat, WsError> {
     let (policy, target) = (policy.clone(), header.target.clone());
     let (pending, existing) =
@@ -572,7 +576,7 @@ async fn upload(
     let mut received: u64 = 0;
     let mut buffer = vec![0; CHUNK];
     let read_result = loop {
-        match recv.read(&mut buffer).await {
+        match crate::budget::read_or_stall(recv, &mut buffer, stall).await {
             Ok(Some(read)) => {
                 received += read as u64;
                 if received > header.size {
@@ -605,8 +609,14 @@ async fn upload(
         .map_err(|error| WsError::Failed(error.to_string()))?
 }
 
-/// Serves a download stream: header → `Ready{len}` → `len` bytes → finish.
-pub(crate) async fn serve_download(policy: Policy, header: DownloadHeader, mut send: SendStream) {
+/// Serves a download stream: header → `Ready{len}` → `len` bytes → finish. A peer that takes
+/// nothing for `stall` has the stream reset.
+pub(crate) async fn serve_download(
+    policy: Policy,
+    header: DownloadHeader,
+    mut send: SendStream,
+    stall: Duration,
+) {
     let opened = open_download(&policy, &header).await;
     let (file, stat, len) = match opened {
         Ok(opened) => opened,
@@ -629,7 +639,11 @@ pub(crate) async fn serve_download(policy: Policy, header: DownloadHeader, mut s
         match file.read(&mut buffer).await {
             Ok(0) => break,
             Ok(read) => {
-                if send.write_all(&buffer[..read]).await.is_err() {
+                if let Err(error) =
+                    crate::budget::write_or_stall(&mut send, &buffer[..read], stall).await
+                {
+                    tracing::debug!("download: {error}");
+                    let _ = send.reset(1u32.into());
                     return;
                 }
             }
@@ -642,7 +656,7 @@ pub(crate) async fn serve_download(policy: Policy, header: DownloadHeader, mut s
         }
     }
     let _ = send.finish();
-    let _ = send.stopped().await;
+    let _ = tokio::time::timeout(stall, send.stopped()).await;
 }
 
 async fn open_download(

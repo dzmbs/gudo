@@ -17,6 +17,7 @@ use proto::{
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::{AbortHandle, JoinSet};
 
+use crate::budget::{BUSY, Budgets, RequestGate, write_or_stall};
 use crate::core::{ConnId, Core, Event, View, lock};
 use crate::forward;
 use crate::mp::{Authz, Knocker, Mailbox, Need, Redeemed, Target, policy};
@@ -85,6 +86,8 @@ struct Client {
     ws: crate::ws::ConnCtx,
     /// Live presence waiting for the `ctl` writer (clients with `Caps::PRESENCE`).
     peers: Option<Arc<Mailbox>>,
+    /// What this connection may have running at once.
+    budgets: Budgets,
 }
 
 /// Serves one accepted connection until it closes. `pending` is its slot among the
@@ -257,6 +260,7 @@ async fn run(
         bulk: tokio::sync::Mutex::new(None),
         ws,
         peers: presence.then(Arc::default),
+        budgets: Budgets::new(&core.cfg.connection),
     });
     core.client_connected(true);
     core.device_connected(device, client.id, conn.clone());
@@ -755,79 +759,104 @@ async fn forward_events(client: Arc<Client>, mut events: broadcast::Receiver<Eve
     }
 }
 
-async fn accept_uni(client: Arc<Client>) {
-    while let Ok(mut stream) = client.conn.accept_uni().await {
-        match net::recv::<StreamHeader>(&mut stream).await {
-            Ok(Some(StreamHeader::Input)) => {
-                let client = Arc::clone(&client);
-                tokio::spawn(async move {
-                    if let Err(error) = read_input(&client, stream).await {
-                        tracing::debug!("input stream: {error}");
-                    }
-                });
-            }
-            other => tracing::debug!("unexpected uni stream header: {other:?}"),
+/// A stream's header, unless the peer sends none within the `Hello` timeout: each stream is
+/// served by its own task, so a silent one holds only itself.
+async fn stream_header(client: &Client, recv: &mut RecvStream) -> Option<StreamHeader> {
+    let header = tokio::time::timeout(
+        client.core.cfg.hello_timeout,
+        net::recv::<StreamHeader>(recv),
+    )
+    .await;
+    match header {
+        Ok(Ok(Some(header))) => Some(header),
+        Ok(other) => {
+            tracing::debug!("unexpected stream header: {other:?}");
+            None
+        }
+        Err(_) => {
+            let _ = recv.stop(0u32.into());
+            None
         }
     }
 }
 
+async fn accept_uni(client: Arc<Client>) {
+    while let Ok(mut stream) = client.conn.accept_uni().await {
+        let client = Arc::clone(&client);
+        tokio::spawn(async move {
+            match stream_header(&client, &mut stream).await {
+                Some(StreamHeader::Input) => {
+                    if let Err(error) = read_input(&client, stream).await {
+                        tracing::debug!("input stream: {error}");
+                    }
+                }
+                Some(other) => tracing::debug!("unexpected uni stream header: {other:?}"),
+                None => {}
+            }
+        });
+    }
+}
+
 async fn accept_bi(client: Arc<Client>) {
-    while let Ok((mut send, mut recv)) = client.conn.accept_bi().await {
-        let header = net::recv::<StreamHeader>(&mut recv).await;
-        // Forwards and file transfers reach the host beyond the terminal: driver, with a
-        // daemon- or session-wide grant.
-        let host = matches!(
-            header,
-            Ok(Some(
-                StreamHeader::PortForward { .. }
-                    | StreamHeader::Forward { .. }
-                    | StreamHeader::Upload(_)
-                    | StreamHeader::Download(_)
-            ))
-        );
-        if host
-            && let Err(error) = client
-                .live()
-                .and_then(|()| client.allow(Need::Drive, Target::Host))
-        {
-            let _ = match header {
-                Ok(Some(StreamHeader::Upload(_) | StreamHeader::Download(_))) => {
-                    let reply = TransferReply::Failed(WsError::Denied(error.to_string()));
-                    net::send(&mut send, &reply).await
-                }
-                _ => {
-                    let reply = ForwardReply::Refused {
-                        reason: error.to_string(),
-                    };
-                    net::send(&mut send, &reply).await
-                }
-            };
-            let _ = send.finish();
-            continue;
-        }
-        if let Some((header, downgrade)) = header
-            .as_ref()
-            .ok()
-            .and_then(Option::as_ref)
-            .and_then(crate::upgrade::requested)
-        {
-            let owner = client.live().is_ok() && is_owner(&client.core, &client.authz);
-            let _ = send.set_priority(crate::stream::priority::BULK);
-            tokio::spawn(crate::upgrade::serve(
-                Arc::clone(&client.core),
-                client.actor,
-                owner,
-                downgrade,
-                header.clone(),
-                send,
-                recv,
-            ));
-            continue;
-        }
-        if let Ok(Some(StreamHeader::Blob(blob))) = &header {
+    while let Ok((send, recv)) = client.conn.accept_bi().await {
+        tokio::spawn(serve_bi(Arc::clone(&client), send, recv));
+    }
+}
+
+async fn serve_bi(client: Arc<Client>, mut send: SendStream, mut recv: RecvStream) {
+    let Some(header) = stream_header(&client, &mut recv).await else {
+        return;
+    };
+    // Forwards and file transfers reach the host beyond the terminal: driver, with a
+    // daemon- or session-wide grant.
+    let host = matches!(
+        header,
+        StreamHeader::PortForward { .. }
+            | StreamHeader::Forward { .. }
+            | StreamHeader::Upload(_)
+            | StreamHeader::Download(_)
+    );
+    if host
+        && let Err(error) = client
+            .live()
+            .and_then(|()| client.allow(Need::Drive, Target::Host))
+    {
+        let _ = match header {
+            StreamHeader::Upload(_) | StreamHeader::Download(_) => {
+                let reply = TransferReply::Failed(WsError::Denied(error.to_string()));
+                net::send(&mut send, &reply).await
+            }
+            _ => {
+                let reply = ForwardReply::Refused {
+                    reason: error.to_string(),
+                };
+                net::send(&mut send, &reply).await
+            }
+        };
+        let _ = send.finish();
+        return;
+    }
+    if let Some((header, downgrade)) = crate::upgrade::requested(&header) {
+        let owner = client.live().is_ok() && is_owner(&client.core, &client.authz);
+        let _ = send.set_priority(crate::stream::priority::BULK);
+        crate::upgrade::serve(
+            Arc::clone(&client.core),
+            client.actor,
+            owner,
+            downgrade,
+            header.clone(),
+            send,
+            recv,
+        )
+        .await;
+        return;
+    }
+    let stall = client.budgets.stall;
+    match header {
+        StreamHeader::Blob(blob) => {
             // Uploads need the draw role in the session; downloads any role (a blob is named
             // by its SHA-256, which only someone who can see an artifact holding it learns).
-            let allowed = client.live().and_then(|()| match blob {
+            let allowed = client.live().and_then(|()| match &blob {
                 BlobHeader::Put { session_id, .. } => {
                     client.allow(Need::Draw, Target::Session(*session_id))
                 }
@@ -837,35 +866,44 @@ async fn accept_bi(client: Arc<Client>) {
                 let reply = BlobReply::Failed(ArtifactError::Forbidden(error.to_string()));
                 let _ = net::send(&mut send, &reply).await;
                 let _ = send.finish();
-                continue;
+                return;
             }
             let _ = send.set_priority(crate::stream::priority::BULK);
+            let Some(_turn) = turn(&client.budgets.blobs).await else {
+                return;
+            };
             let core = Arc::clone(&client.core);
-            let blob = blob.clone();
-            tokio::spawn(crate::art::send::serve_blob(core, blob, send, recv));
-            continue;
+            crate::art::send::serve_blob(core, blob, send, recv, stall).await;
         }
-        match header {
-            Ok(Some(StreamHeader::PortForward { port })) => {
-                tokio::spawn(forward::serve(port, send, recv));
-            }
-            Ok(Some(StreamHeader::Forward { target })) => {
-                let policy = client.core.ws.policy.clone();
-                tokio::spawn(forward::serve_target(target, policy, send, recv));
-            }
-            Ok(Some(StreamHeader::Upload(header))) => {
-                let _ = send.set_priority(crate::stream::priority::BULK);
-                let policy = client.core.ws.policy.clone();
-                tokio::spawn(crate::ws::serve_upload(policy, header, send, recv));
-            }
-            Ok(Some(StreamHeader::Download(header))) => {
-                let _ = send.set_priority(crate::stream::priority::BULK);
-                let policy = client.core.ws.policy.clone();
-                tokio::spawn(crate::ws::serve_download(policy, header, send));
-            }
-            other => tracing::debug!("unexpected bidi stream header: {other:?}"),
+        StreamHeader::PortForward { port } => forward::serve(port, send, recv).await,
+        StreamHeader::Forward { target } => {
+            let policy = client.core.ws.policy.clone();
+            forward::serve_target(target, policy, send, recv).await;
         }
+        StreamHeader::Upload(header) => {
+            let _ = send.set_priority(crate::stream::priority::BULK);
+            let Some(_turn) = turn(&client.budgets.transfers).await else {
+                return;
+            };
+            let policy = client.core.ws.policy.clone();
+            crate::ws::serve_upload(policy, header, send, recv, stall).await;
+        }
+        StreamHeader::Download(header) => {
+            let _ = send.set_priority(crate::stream::priority::BULK);
+            let Some(_turn) = turn(&client.budgets.transfers).await else {
+                return;
+            };
+            let policy = client.core.ws.policy.clone();
+            crate::ws::serve_download(policy, header, send, stall).await;
+        }
+        other => tracing::debug!("unexpected bidi stream header: {other:?}"),
     }
+}
+
+/// Waits for one of `slots`. Streams waiting here are bounded by how many QUIC lets the
+/// client open at once.
+async fn turn(slots: &Arc<tokio::sync::Semaphore>) -> Option<tokio::sync::OwnedSemaphorePermit> {
+    Arc::clone(slots).acquire_owned().await.ok()
 }
 
 async fn read_input(client: &Arc<Client>, mut stream: RecvStream) -> Result<(), NetError> {
@@ -1876,7 +1914,7 @@ impl Client {
                 if version > info.version {
                     return Err(ArtifactError::NotFound(format!("version {version}")));
                 }
-                let (image, _) = art.read_blob(&png)?;
+                let image = art.blob_info(&png)?;
                 let info = art.update(artifact_id, |info| {
                     info.preview = Some(proto::Preview { image, version });
                 })?;
@@ -2100,7 +2138,7 @@ impl Client {
                         crate::art::export(&core.art, artifact_id, None, proto::ExportFormat::Png)
                             .ok()?;
                     match export.blob {
-                        Some(hash) => core.art.read_blob(&hash).ok().map(|(image, _)| image),
+                        Some(hash) => core.art.blob_info(&hash).ok(),
                         None => core.art.put_blob(&export.data).ok(),
                     }
                 })
@@ -2256,15 +2294,22 @@ impl Client {
         );
     }
 
-    /// Runs a pane query off the async threads and sends its answer.
+    /// Runs a pane query off the async threads, in its turn among those of its kind (`gate`),
+    /// and sends its answer.
     fn query<T: Send + 'static>(
         self: &Arc<Self>,
+        gate: fn(&Budgets) -> &RequestGate,
         pane_id: PaneId,
         run: impl FnOnce(&crate::core::PaneEntry, &Core) -> Result<T, RpcError> + Send + 'static,
         answer: impl FnOnce(Result<T, RpcError>) -> ServerCtl + Send + 'static,
     ) {
+        let Some(accepted) = gate(&self.budgets).accept() else {
+            self.send(answer(Err(RpcError::Internal(BUSY.into()))));
+            return;
+        };
         let client = Arc::clone(self);
         tokio::spawn(async move {
+            let _turn = accepted.turn().await;
             let entry = client
                 .core
                 .pane(pane_id)
@@ -2285,8 +2330,19 @@ impl Client {
     }
 
     fn fetch_history(self: &Arc<Self>, pane_id: PaneId, snapshot_seq: Seq, offset: u64, max: u32) {
+        let accepted = self.budgets.history_pages.accept();
         let client = Arc::clone(self);
         tokio::spawn(async move {
+            let Some(accepted) = accepted else {
+                // A client asks for one page per pane at a time: this one asks for far more.
+                let gone = Bulk::HistoryGone {
+                    pane_id,
+                    snapshot_seq,
+                };
+                client.send_bulk(&gone).await;
+                return;
+            };
+            let _turn = accepted.turn().await;
             let pane = client
                 .core
                 .pane(pane_id)
@@ -2320,24 +2376,39 @@ impl Client {
                     snapshot_seq,
                 },
             };
-            let mut bulk = client.bulk.lock().await;
-            if bulk.is_none() {
-                let Ok(mut stream) = client.conn.open_uni().await else {
-                    return;
-                };
-                let _ = stream.set_priority(crate::stream::priority::BULK);
-                if net::send(&mut stream, &StreamHeader::Bulk).await.is_err() {
-                    return;
-                }
-                *bulk = Some(stream);
-            }
-            if let Some(stream) = bulk.as_mut()
-                && let Err(error) = net::send(stream, &message).await
-            {
-                tracing::debug!("bulk stream: {error}");
-                *bulk = None;
-            }
+            client.send_bulk(&message).await;
         });
+    }
+
+    /// Sends `message` on the `bulk` stream, opening it first if needed. A client that takes
+    /// nothing from it for the stall timeout has it reset; the next message opens another.
+    async fn send_bulk(&self, message: &Bulk) {
+        let (Ok(header), Ok(frame)) = (
+            proto::frame::to_vec(&StreamHeader::Bulk),
+            proto::frame::to_vec(message),
+        ) else {
+            return;
+        };
+        let stall = self.budgets.stall;
+        let mut bulk = self.bulk.lock().await;
+        if bulk.is_none() {
+            let open = self.core.cfg.connection.stream_open;
+            let Ok(Ok(mut stream)) = tokio::time::timeout(open, self.conn.open_uni()).await else {
+                return;
+            };
+            let _ = stream.set_priority(crate::stream::priority::BULK);
+            if write_or_stall(&mut stream, &header, stall).await.is_err() {
+                return;
+            }
+            *bulk = Some(stream);
+        }
+        if let Some(stream) = bulk.as_mut()
+            && let Err(error) = write_or_stall(stream, &frame, stall).await
+        {
+            tracing::debug!("bulk stream: {error}");
+            let _ = stream.reset(0u32.into());
+            *bulk = None;
+        }
     }
 
     async fn handle_ctl(self: &Arc<Self>, message: ClientCtl) {
@@ -2424,6 +2495,7 @@ impl Client {
             } => {
                 let viewer = self.viewer(pane_id);
                 self.query(
+                    |budgets| &budgets.searches,
                     pane_id,
                     move |entry, _| entry.pane.search(viewer, &query, cursor, limit),
                     move |result| ServerCtl::SearchResult {
@@ -2440,6 +2512,7 @@ impl Client {
             } => {
                 let viewer = self.viewer(pane_id);
                 self.query(
+                    |budgets| &budgets.links,
                     pane_id,
                     move |entry, core| {
                         let cwd = lock(&entry.meta).cwd.clone().map(std::path::PathBuf::from);
@@ -2458,6 +2531,7 @@ impl Client {
             ClientCtl::Commands { req_id, pane_id } => {
                 let viewer = self.viewer(pane_id);
                 self.query(
+                    |budgets| &budgets.commands,
                     pane_id,
                     move |entry, _| Ok(entry.pane.commands(viewer)),
                     move |result| ServerCtl::CommandsResult {
@@ -2474,6 +2548,7 @@ impl Client {
             } => {
                 let viewer = self.viewer(pane_id);
                 self.query(
+                    |budgets| &budgets.command_outputs,
                     pane_id,
                     move |entry, _| entry.pane.command_output(viewer, command_id),
                     move |result| ServerCtl::CommandOutputResult {
@@ -2605,8 +2680,14 @@ impl Client {
                 });
             }
             ClientCtl::Artifact { req_id, req } => {
+                let Some(accepted) = self.budgets.artifacts.accept() else {
+                    let result = Err(ArtifactError::Failed(BUSY.into()));
+                    self.send(ServerCtl::ArtifactResult { req_id, result });
+                    return;
+                };
                 let client = Arc::clone(self);
                 tokio::spawn(async move {
+                    let _turn = accepted.turn().await;
                     let result = client.artifact(req).await;
                     client.send(ServerCtl::ArtifactResult { req_id, result });
                 });

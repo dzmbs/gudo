@@ -297,6 +297,14 @@ pub struct ConnectionLimits {
     pub pane_streams: usize,
     /// How long opening a stream to the client may wait for the client to allow another.
     pub stream_open: Duration,
+    /// Blob streams, and file transfers, served at once; more wait their turn.
+    pub transfers: usize,
+    /// Requests of one kind (searches, history pages, drawing changes, …) running at once.
+    pub requests_running: usize,
+    /// Requests of one kind accepted at once, running or waiting; more are refused.
+    pub requests_waiting: usize,
+    /// A transfer, blob or history stream that makes no progress for this long is ended.
+    pub stall: Duration,
 }
 
 impl Default for ConnectionLimits {
@@ -304,6 +312,10 @@ impl Default for ConnectionLimits {
         Self {
             pane_streams: 512,
             stream_open: Duration::from_secs(10),
+            transfers: 4,
+            requests_running: 2,
+            requests_waiting: 32,
+            stall: Duration::from_secs(30),
         }
     }
 }

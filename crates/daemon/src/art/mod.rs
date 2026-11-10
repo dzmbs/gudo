@@ -25,7 +25,8 @@ pub(crate) mod send;
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Seek, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -57,6 +58,31 @@ fn failed(error: impl std::fmt::Display) -> ArtifactError {
 
 fn not_found(id: ArtifactId) -> ArtifactError {
     ArtifactError::NotFound(format!("artifact {id}"))
+}
+
+/// A blob arriving in pieces ([`Art::begin_blob`]); dropped unfinished, it leaves nothing.
+pub(crate) struct BlobUpload {
+    temp: TempFile,
+    file: fs::File,
+    digest: ring::digest::Context,
+    size: u64,
+}
+
+impl BlobUpload {
+    pub fn write(&mut self, bytes: &[u8]) -> Result<()> {
+        self.digest.update(bytes);
+        self.size += bytes.len() as u64;
+        self.file.write_all(bytes).map_err(failed)
+    }
+}
+
+/// Removed when dropped (a no-op once it was renamed into place).
+struct TempFile(PathBuf);
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -275,6 +301,98 @@ impl Art {
         ))
     }
 
+    /// The blob's image facts and its file, at the start, reading only the image's headers.
+    pub fn open_blob(&self, hash: &BlobHash) -> Result<(ImageRef, fs::File)> {
+        let file = fs::File::open(self.blob_path(hash))
+            .map_err(|_| ArtifactError::NotFound(format!("blob {}", hash.to_hex())))?;
+        let size = file.metadata().map_err(failed)?.len();
+        let mut reader = io::BufReader::new(file);
+        let (media, width, height) = drawing::sniff_reader(&mut reader)
+            .ok_or_else(|| ArtifactError::Failed("stored blob is not an image".into()))?;
+        let mut file = reader.into_inner();
+        file.seek(io::SeekFrom::Start(0)).map_err(failed)?;
+        let image = ImageRef {
+            hash: *hash,
+            media,
+            size,
+            width,
+            height,
+        };
+        Ok((image, file))
+    }
+
+    /// The blob's image facts, without reading it.
+    pub fn blob_info(&self, hash: &BlobHash) -> Result<ImageRef> {
+        self.open_blob(hash).map(|(image, _)| image)
+    }
+
+    /// Starts storing a blob that arrives in pieces, into a temporary file next to the blobs.
+    pub fn begin_blob(&self) -> Result<BlobUpload> {
+        let dir = self.dir.join("blobs");
+        fs::create_dir_all(&dir).map_err(failed)?;
+        let temp_path = dir.join(format!(
+            ".upload-{}",
+            crate::fsutil::hex(&crate::fsutil::random::<12>())
+        ));
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temp_path)
+            .map_err(failed)?;
+        Ok(BlobUpload {
+            temp: TempFile(temp_path),
+            file,
+            digest: ring::digest::Context::new(&ring::digest::SHA256),
+            size: 0,
+        })
+    }
+
+    /// Stores the blob `upload` received, unless the store holds it already.
+    pub fn finish_blob(&self, upload: BlobUpload) -> Result<ImageRef> {
+        let BlobUpload {
+            temp,
+            file,
+            digest,
+            size,
+        } = upload;
+        file.sync_all().map_err(failed)?;
+        let mut reader = io::BufReader::new(fs::File::open(&temp.0).map_err(failed)?);
+        let (media, width, height) = drawing::sniff_reader(&mut reader)
+            .ok_or_else(|| ArtifactError::Invalid("not a PNG or JPEG image".into()))?;
+        let hash = BlobHash(
+            digest
+                .finish()
+                .as_ref()
+                .try_into()
+                .expect("SHA-256 is 32 bytes"),
+        );
+        let image = ImageRef {
+            hash,
+            media,
+            size,
+            width,
+            height,
+        };
+        let path = self.blob_path(&hash);
+        if path.exists() {
+            // Touch it so a pending garbage collection keeps it.
+            let _ = fs::File::options()
+                .append(true)
+                .open(&path)
+                .and_then(|file| file.set_modified(std::time::SystemTime::now()));
+            return Ok(image);
+        }
+        self.reserve(size)?;
+        let stored = fs::rename(&temp.0, &path)
+            .and_then(|()| fs::File::open(self.dir.join("blobs"))?.sync_all());
+        if let Err(error) = stored {
+            lock(&self.state).total -= size;
+            return Err(failed(error));
+        }
+        Ok(image)
+    }
+
     /// Room for `bytes` more under the store's cap.
     pub fn reserve(&self, bytes: u64) -> Result<()> {
         let mut state = lock(&self.state);
@@ -442,7 +560,7 @@ impl Art {
             )));
         }
         let image = match (request.kind, request.image) {
-            (ArtifactKind::Image, Some(hash)) => Some(self.read_blob(&hash)?.0),
+            (ArtifactKind::Image, Some(hash)) => Some(self.blob_info(&hash)?),
             (ArtifactKind::Image, None) => {
                 return Err(ArtifactError::Invalid(
                     "an image artifact needs its blob".into(),
