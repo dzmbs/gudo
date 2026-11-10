@@ -276,17 +276,32 @@ impl CommandLog {
         }
         let mut text = String::new();
         let mut remaining = MAX_COMMAND_LINE;
-        let mut x = start.x;
+        let (mut x, mut y) = (start.x, start.y);
+        let last_row = end
+            .y
+            .min(start.y.saturating_add(MAX_COMMAND_LINE as u32 - 1));
         // A hard newline ends input unless the next row has an explicit PS2 mark. Reading
-        // row by row bounds work and never allocates an entire completion listing first.
-        for y in (start.y..=end.y).take(MAX_COMMAND_LINE) {
-            let row = term.row(y).ok()?;
-            let end_x = if y == end.y { end.x } else { term.cols() - 1 };
+        // line by line bounds work and never allocates an entire completion listing first.
+        // A soft-wrapped line is read in one piece: a row read alone loses the spaces in its
+        // last columns.
+        loop {
+            let mut line_end = y;
+            while line_end < last_row && term.row(line_end).ok()?.wrapped {
+                line_end += 1;
+            }
+            let end_x = if line_end == end.y {
+                end.x
+            } else {
+                term.cols() - 1
+            };
             let piece = term
                 .text_wrapped(
                     TextRegion::Range {
                         start: Point { y, x },
-                        end: Point { y, x: end_x },
+                        end: Point {
+                            y: line_end,
+                            x: end_x,
+                        },
                     },
                     Wrap::Join,
                 )
@@ -294,23 +309,20 @@ impl CommandLog {
             let piece: String = piece.chars().take(remaining).collect();
             remaining -= piece.chars().count();
             text.push_str(&piece);
-            if remaining == 0 || y == end.y {
+            if remaining == 0 || line_end == last_row {
                 break;
             }
-            if row.wrapped {
-                x = 0;
-            } else if let Some(next) = self
+            let Some(next) = self
                 .continuations
                 .iter()
                 .filter_map(|&pin| term.pin_point(pin))
-                .find(|point| point.y == y + 1)
-            {
-                text.push('\n');
-                remaining -= 1;
-                x = next.x;
-            } else {
+                .find(|point| point.y == line_end + 1)
+            else {
                 break;
-            }
+            };
+            text.push('\n');
+            remaining -= 1;
+            (x, y) = (next.x, next.y);
         }
         // Leading whitespace is kept for the history privacy rule; the caller trims.
         Some(self.line.strip_right_prompt(text.trim_end()))
@@ -597,5 +609,29 @@ mod tests {
     #[test]
     fn primary_prompt_redraw_replaces_the_old_input_start() {
         assert_eq!(command(b"\x1b]133;A\x07$ \x1b]133;B\x07old\r\nnoise\r\n\x1b]133;P;k=i\x07$ \x1b]133;B\x07new\r\n\x1b]133;C\x07", 40).as_deref(), Some("new"));
+    }
+
+    #[test]
+    fn a_space_in_the_last_column_of_a_wrapped_row_is_kept() {
+        assert_eq!(
+            command(
+                b"\x1b]133;A\x07$ \x1b]133;B\x07echo hi\r\n\x1b]133;C\x07",
+                7
+            )
+            .as_deref(),
+            Some("echo hi")
+        );
+    }
+
+    #[test]
+    fn a_wide_character_that_wrapped_early_is_read_once() {
+        assert_eq!(
+            command(
+                "\x1b]133;A\x07$ \x1b]133;B\x07ech\u{6f22} x\r\n\x1b]133;C\x07".as_bytes(),
+                6
+            )
+            .as_deref(),
+            Some("ech\u{6f22} x")
+        );
     }
 }
