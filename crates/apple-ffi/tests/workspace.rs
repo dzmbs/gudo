@@ -17,9 +17,9 @@ use gudo_core::{
     ClientEventListener, DaemonClient, DeleteMode, DiffBase, EditorKind, FileChange, FileKind,
     ForwardTarget, GitDiffRequest, InputRejectReason, InviteOptions, LayoutOp, MultiplayerEvent,
     MultiplayerListener, OpOutcome, PaneLaunch, PaneSize, PushError, PushPrefs, PushRegistration,
-    RelayMode, RevokeTarget, Role, Scope, TransferProgress, WorkspaceError, WorkspaceEvent,
-    WorkspaceListener, WriteTarget, generate_device_key, generate_push_seal_key, inspect_invite,
-    open_push_notification, push_relay_register_body, push_seal_public_key,
+    RelayMode, RevokeTarget, Role, Scope, TransferCancellation, TransferProgress, WorkspaceError,
+    WorkspaceEvent, WorkspaceListener, WriteTarget, generate_device_key, generate_push_seal_key,
+    inspect_invite, open_push_notification, push_relay_register_body, push_seal_public_key,
 };
 
 /// Records everything a listener is told; tests poll it.
@@ -254,6 +254,7 @@ fn files_round_trip_with_transfers() {
             path_text(&local),
             target(&dir.join("big.bin")),
             Some(up.clone()),
+            TransferCancellation::new(),
         ))
         .unwrap();
     assert_eq!(stat.size, big.len() as u64);
@@ -266,6 +267,7 @@ fn files_round_trip_with_transfers() {
         0,
         None,
         Some(down.clone()),
+        TransferCancellation::new(),
     ))
     .unwrap();
     assert_eq!(std::fs::read(&back).unwrap(), big);
@@ -986,4 +988,31 @@ fn knock_admit_and_session_rules() {
         Err(gudo_core::MultiplayerError::Forbidden { .. })
     ));
     assert_eq!(host.block_on(dee.approval_policy(session)).unwrap(), rules);
+}
+
+#[test]
+fn a_cancelled_transfer_stops_at_once() {
+    let mut host = Host::start();
+    let (client, _events) = host.client();
+    if let Some(daemon) = host.daemon.take() {
+        host.block_on(daemon.shutdown());
+    }
+    let cancellation = TransferCancellation::new();
+    let canceller = Arc::clone(&cancellation);
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        canceller.cancel();
+    });
+    let started = Instant::now();
+    let upload = host.block_on(client.upload_bytes(
+        b"never".to_vec().into(),
+        target(&host.home.join("never.txt")),
+        cancellation,
+    ));
+    assert!(upload.is_err(), "{upload:?}");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the cancelled upload ran for {:?}",
+        started.elapsed()
+    );
 }

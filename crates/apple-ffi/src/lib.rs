@@ -117,7 +117,9 @@ pub use upgrade::{
 };
 pub use usage::{AgentUsage, AgentUsageReport, UsageSource, UsageWindow};
 pub use workflow::*;
-pub use workspace::{AgentLaunch, AgentLaunched, TransferProgress, WorkspaceListener};
+pub use workspace::{
+    AgentLaunch, AgentLaunched, TransferCancellation, TransferProgress, WorkspaceListener,
+};
 pub use ws_types::*;
 
 uniffi::setup_scaffolding!();

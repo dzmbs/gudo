@@ -59,6 +59,39 @@ pub(crate) fn progress_adapter(
     p.map(|p| Arc::new(ProgressForward(p)) as Arc<dyn client_core::TransferProgress>)
 }
 
+/// Stops a transfer. Cancelling the Swift task that awaits one does not reach Rust, so
+/// GudoCore's wrappers call [`cancel`](Self::cancel) from the task's cancellation handler.
+#[derive(uniffi::Object)]
+pub struct TransferCancellation {
+    cancelled: tokio::sync::watch::Sender<bool>,
+}
+
+#[uniffi::export]
+impl TransferCancellation {
+    #[uniffi::constructor]
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            cancelled: tokio::sync::watch::Sender::new(false),
+        })
+    }
+
+    /// Stops the transfer it was passed to; it fails at once.
+    pub fn cancel(&self) {
+        self.cancelled.send_replace(true);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        *self.cancelled.borrow()
+    }
+}
+
+impl TransferCancellation {
+    async fn cancelled(&self) {
+        let mut cancelled = self.cancelled.subscribe();
+        let _ = cancelled.wait_for(|&cancelled| cancelled).await;
+    }
+}
+
 /// What [`DaemonClient::launch_agent_pane`] starts.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct AgentLaunch {
@@ -139,6 +172,35 @@ impl DaemonClient {
     {
         let fut = f(self.core());
         on_runtime(fut).await.map(U::from).map_err(Into::into)
+    }
+
+    /// [`ws_call`](Self::ws_call) that stops, dropping the core's work, once `cancellation`
+    /// is cancelled.
+    async fn ws_call_until_cancelled<T, U, F, Fut>(
+        &self,
+        cancellation: Arc<TransferCancellation>,
+        f: F,
+    ) -> Result<U, WorkspaceError>
+    where
+        F: FnOnce(Arc<client_core::Client>) -> Fut,
+        Fut: Future<Output = Result<T, proto::WsError>> + Send + 'static,
+        T: Send + 'static,
+        U: From<T>,
+    {
+        let work = f(self.core());
+        let finished = on_runtime(async move {
+            tokio::select! {
+                result = work => Some(result),
+                () = cancellation.cancelled() => None,
+            }
+        })
+        .await;
+        match finished {
+            Some(result) => result.map(U::from).map_err(Into::into),
+            None => Err(WorkspaceError::Failed {
+                message: "cancelled".into(),
+            }),
+        }
     }
 
     /// Waits until `pane_id`'s agent reports [`proto::AgentState::Idle`].
@@ -617,9 +679,10 @@ impl DaemonClient {
         local_path: String,
         target: WriteTarget,
         progress: Option<Arc<dyn TransferProgress>>,
+        cancellation: Arc<TransferCancellation>,
     ) -> Result<FileStat, WorkspaceError> {
         let progress = progress_adapter(progress);
-        self.ws_call(|client| async move {
+        self.ws_call_until_cancelled(cancellation, |client| async move {
             client
                 .upload_file(local_path, target.into(), progress)
                 .await
@@ -636,9 +699,12 @@ impl DaemonClient {
         &self,
         data: Bytes,
         target: WriteTarget,
+        cancellation: Arc<TransferCancellation>,
     ) -> Result<FileStat, WorkspaceError> {
-        self.ws_call(|client| async move { client.upload_bytes(data.into(), target.into()).await })
-            .await
+        self.ws_call_until_cancelled(cancellation, |client| async move {
+            client.upload_bytes(data.into(), target.into()).await
+        })
+        .await
     }
 
     /// Downloads a remote file to `local_path` (through a temporary file next to it).
@@ -654,9 +720,10 @@ impl DaemonClient {
         offset: u64,
         len: Option<u64>,
         progress: Option<Arc<dyn TransferProgress>>,
+        cancellation: Arc<TransferCancellation>,
     ) -> Result<FileStat, WorkspaceError> {
         let progress = progress_adapter(progress);
-        self.ws_call(|client| async move {
+        self.ws_call_until_cancelled(cancellation, |client| async move {
             client
                 .download_file(remote_path, local_path, offset, len, progress)
                 .await
