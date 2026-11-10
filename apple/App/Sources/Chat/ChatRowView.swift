@@ -97,24 +97,27 @@ struct ChatRowView: View {
                 ChatCodeBlock(code: code, language: language) { actions.selectText(code.text) }
             }
         case .table:
-            ScrollView(.horizontal) {
-                Grid(alignment: .leading, horizontalSpacing: DS.Space.xl, verticalSpacing: DS.Space.gap10) {
-                    ForEach(Array(block.table.enumerated()), id: \.offset) { index, cells in
-                        GridRow {
-                            ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
-                                Text(cell).fontWeight(index == 0 ? .semibold : .regular)
-                                    .fixedSize(horizontal: true, vertical: true)
-                                    .frame(minWidth: DS.Size.proseTableColumn, alignment: .leading)
+            VStack(alignment: .leading, spacing: DS.Space.s) {
+                ScrollView(.horizontal) {
+                    Grid(alignment: .leading, horizontalSpacing: DS.Space.xl, verticalSpacing: DS.Space.gap10) {
+                        ForEach(Array(block.table.enumerated()), id: \.offset) { index, cells in
+                            GridRow {
+                                ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
+                                    Text(cell).fontWeight(index == 0 ? .semibold : .regular)
+                                        .fixedSize(horizontal: true, vertical: true)
+                                        .frame(minWidth: DS.Size.proseTableColumn, alignment: .leading)
+                                }
                             }
+                            if index == 0 { Divider().gridCellColumns(cells.count) }
                         }
-                        if index == 0 { Divider().gridCellColumns(cells.count) }
-                    }
-                }.font(DS.Font.proseSecondary).padding(DS.Space.l)
-            }
-            .frame(height: CGFloat(block.table.count) * (tableLineHeight + DS.Space.gap10) + 2 * DS.Space.l)
-            .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.secureBadge))
-            if block.hasOmittedContent {
-                Button("Open full table") { actions.selectText(block.source) }.font(DS.Font.caption)
+                    }.font(DS.Font.proseSecondary).padding(DS.Space.l)
+                }
+                .frame(height: CGFloat(block.table.count) * (tableLineHeight + DS.Space.gap10) + 2 * DS.Space.l)
+                .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.secureBadge))
+                if block.hasOmittedContent {
+                    Button("Open full table") { actions.selectText(block.source) }
+                        .font(DS.Font.caption).frame(minHeight: DS.Size.touchTarget)
+                }
             }
         case .separator:
             Rectangle().fill(DS.Palette.separator).frame(height: DS.Size.dividerVisible).padding(.vertical, DS.Space.s)
