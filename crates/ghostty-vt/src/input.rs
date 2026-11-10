@@ -4,7 +4,6 @@
 //! modifyOtherKeys, kitty keyboard flags, mouse tracking and format, bracketed paste), so the
 //! same event produces whatever the running program asked for.
 
-use std::ffi::c_char;
 use std::ptr::{self, NonNull};
 
 use ghostty_vt_sys as ffi;
@@ -236,48 +235,64 @@ impl KeyEncoder {
             .as_deref()
             .filter(|text| !text.chars().any(char::is_control))
             .unwrap_or("");
-        // SAFETY: the handles are live; the terminal is only read, and `&Terminal` keeps it
-        // from being mutated meanwhile. The event borrows the UTF-8 text without copying it;
-        // `text` outlives the encode below and the borrow is cleared right after.
-        unsafe {
-            ffi::ghostty_key_encoder_setopt_from_terminal(self.encoder.as_ptr(), terminal.as_raw());
-            ffi::ghostty_key_event_set_key(
-                raw,
-                event.key.map_or(0, |key| key.0 as ffi::GhosttyKey),
-            );
-            ffi::ghostty_key_event_set_mods(raw, event.mods.0);
-            ffi::ghostty_key_event_set_consumed_mods(raw, event.consumed_mods.0);
-            ffi::ghostty_key_event_set_action(
-                raw,
-                match event.action {
-                    KeyAction::Press => ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_PRESS,
-                    KeyAction::Repeat => ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_REPEAT,
-                    KeyAction::Release => ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_RELEASE,
-                },
-            );
-            ffi::ghostty_key_event_set_composing(raw, event.composing);
-            ffi::ghostty_key_event_set_unshifted_codepoint(
-                raw,
-                event.unshifted.map_or(0, u32::from),
-            );
-            ffi::ghostty_key_event_set_utf8(raw, text.as_ptr().cast::<c_char>(), text.len());
-        }
-        let result = encode_into(|buffer, capacity, written| {
-            // SAFETY: live handles; `buffer` is valid for `capacity` bytes (or null with 0).
-            unsafe {
-                ffi::ghostty_key_encoder_encode(
-                    self.encoder.as_ptr(),
-                    raw,
-                    buffer,
-                    capacity,
-                    written,
-                )
-            }
+        // `text` outlives the encode below, and the event's borrow of it is cleared right after.
+        let result = self.load_event(terminal, event, text).and_then(|()| {
+            encode_into(|buffer, capacity, written| {
+                // SAFETY: live handles; `buffer` is valid for `capacity` bytes (or null with 0).
+                unsafe {
+                    ffi::ghostty_key_encoder_encode(
+                        self.encoder.as_ptr(),
+                        raw,
+                        buffer,
+                        capacity,
+                        written,
+                    )
+                }
+            })
         });
         // Do not keep a pointer to `text` past this call.
-        // SAFETY: the event is live; an empty slice clears the borrowed text.
-        unsafe { ffi::ghostty_key_event_set_utf8(raw, ptr::null(), 0) };
+        // SAFETY: the event is live; an empty string clears the borrowed text, which cannot fail
+        // for a live event.
+        unsafe { ffi::ghostty_key_event_set_utf8(raw, ffi::GhosttyString::default()) };
         result
+    }
+
+    fn load_event(&self, terminal: &Terminal, event: &KeyEvent, text: &str) -> Result<(), Error> {
+        let raw = self.event.as_ptr();
+        let action = match event.action {
+            KeyAction::Press => ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_PRESS,
+            KeyAction::Repeat => ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_REPEAT,
+            KeyAction::Release => ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_RELEASE,
+        };
+        let utf8 = ffi::GhosttyString {
+            ptr: text.as_ptr(),
+            len: text.len(),
+        };
+        // SAFETY: the handles are live; the terminal is only read, and `&Terminal` keeps it
+        // from being mutated meanwhile. The event borrows `text` without copying it; the caller
+        // keeps it alive while the event holds it.
+        unsafe {
+            Error::check(ffi::ghostty_key_encoder_set_from_terminal(
+                self.encoder.as_ptr(),
+                terminal.as_raw(),
+            ))?;
+            Error::check(ffi::ghostty_key_event_set_key(
+                raw,
+                event.key.map_or(0, |key| key.0 as ffi::GhosttyKey),
+            ))?;
+            Error::check(ffi::ghostty_key_event_set_mods(raw, event.mods.0))?;
+            Error::check(ffi::ghostty_key_event_set_consumed_mods(
+                raw,
+                event.consumed_mods.0,
+            ))?;
+            Error::check(ffi::ghostty_key_event_set_action(raw, action))?;
+            Error::check(ffi::ghostty_key_event_set_composing(raw, event.composing))?;
+            Error::check(ffi::ghostty_key_event_set_unshifted_codepoint(
+                raw,
+                event.unshifted.map_or(0, u32::from),
+            ))?;
+            Error::check(ffi::ghostty_key_event_set_utf8(raw, utf8))
+        }
     }
 }
 
@@ -293,12 +308,12 @@ impl Drop for KeyEncoder {
 
 /// Runs a libghostty-vt "encode into a buffer" call, growing the buffer on `OUT_OF_SPACE`.
 fn encode_into(
-    mut call: impl FnMut(*mut c_char, usize, *mut usize) -> ffi::GhosttyResult,
+    mut call: impl FnMut(*mut u8, usize, *mut usize) -> ffi::GhosttyResult,
 ) -> Result<Vec<u8>, Error> {
     let mut buffer = vec![0u8; 64];
     loop {
         let mut len = 0usize;
-        let result = call(buffer.as_mut_ptr().cast(), buffer.len(), &mut len);
+        let result = call(buffer.as_mut_ptr(), buffer.len(), &mut len);
         if result == ffi::GhosttyResult_GHOSTTY_OUT_OF_SPACE && len > buffer.len() {
             buffer.resize(len, 0);
             continue;
@@ -427,20 +442,21 @@ impl MouseEncoder {
             unsafe { ffi::ghostty_mouse_encoder_free(encoder.as_ptr()) };
             return Err(result.err().unwrap_or(Error::InvalidValue));
         };
-        let track = true;
-        // SAFETY: TRACK_LAST_CELL takes a `bool`.
-        unsafe {
-            ffi::ghostty_mouse_encoder_setopt(
-                encoder.as_ptr(),
-                ffi::GhosttyMouseEncoderOption_GHOSTTY_MOUSE_ENCODER_OPT_TRACK_LAST_CELL,
-                (&raw const track).cast(),
-            );
-        }
-        Ok(Self {
+        let mouse_encoder = Self {
             encoder,
             event,
             held: 0,
-        })
+        };
+        let track = true;
+        // SAFETY: the encoder is live; TRACK_LAST_CELL takes a `bool`.
+        Error::check(unsafe {
+            ffi::ghostty_mouse_encoder_set(
+                encoder.as_ptr(),
+                ffi::GhosttyMouseEncoderOption_GHOSTTY_MOUSE_ENCODER_OPT_TRACK_LAST_CELL,
+                (&raw const track).cast(),
+            )
+        })?;
+        Ok(mouse_encoder)
     }
 
     /// Encodes `event` for `terminal`'s current mouse modes. `cell_px` is the client's cell
@@ -474,43 +490,42 @@ impl MouseEncoder {
             }
         }
         let any_pressed = self.held != 0;
+        let action = match event.action {
+            MouseAction::Press => ffi::GhosttyMouseAction_GHOSTTY_MOUSE_ACTION_PRESS,
+            MouseAction::Release => ffi::GhosttyMouseAction_GHOSTTY_MOUSE_ACTION_RELEASE,
+            MouseAction::Motion => ffi::GhosttyMouseAction_GHOSTTY_MOUSE_ACTION_MOTION,
+        };
+        // The centre of the cell, so rounding never lands on a neighbour.
+        let position = ffi::GhosttyMousePosition {
+            x: (f32::from(event.col) + 0.5) * cell_width as f32,
+            y: (f32::from(event.row) + 0.5) * cell_height as f32,
+        };
         let raw = self.event.as_ptr();
         // SAFETY: live handles; option values match their documented types and are read
         // before each call returns. The terminal is only read.
         unsafe {
             let encoder = self.encoder.as_ptr();
-            ffi::ghostty_mouse_encoder_setopt_from_terminal(encoder, terminal.as_raw());
-            ffi::ghostty_mouse_encoder_setopt(
+            Error::check(ffi::ghostty_mouse_encoder_set_from_terminal(
+                encoder,
+                terminal.as_raw(),
+            ))?;
+            Error::check(ffi::ghostty_mouse_encoder_set(
                 encoder,
                 ffi::GhosttyMouseEncoderOption_GHOSTTY_MOUSE_ENCODER_OPT_SIZE,
                 (&raw const size).cast(),
-            );
-            ffi::ghostty_mouse_encoder_setopt(
+            ))?;
+            Error::check(ffi::ghostty_mouse_encoder_set(
                 encoder,
                 ffi::GhosttyMouseEncoderOption_GHOSTTY_MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED,
                 (&raw const any_pressed).cast(),
-            );
-            ffi::ghostty_mouse_event_set_action(
-                raw,
-                match event.action {
-                    MouseAction::Press => ffi::GhosttyMouseAction_GHOSTTY_MOUSE_ACTION_PRESS,
-                    MouseAction::Release => ffi::GhosttyMouseAction_GHOSTTY_MOUSE_ACTION_RELEASE,
-                    MouseAction::Motion => ffi::GhosttyMouseAction_GHOSTTY_MOUSE_ACTION_MOTION,
-                },
-            );
-            match event.button {
+            ))?;
+            Error::check(ffi::ghostty_mouse_event_set_action(raw, action))?;
+            Error::check(match event.button {
                 Some(button) => ffi::ghostty_mouse_event_set_button(raw, button.raw()),
                 None => ffi::ghostty_mouse_event_clear_button(raw),
-            }
-            ffi::ghostty_mouse_event_set_mods(raw, event.mods.0);
-            // The centre of the cell, so rounding never lands on a neighbour.
-            ffi::ghostty_mouse_event_set_position(
-                raw,
-                ffi::GhosttyMousePosition {
-                    x: (f32::from(event.col) + 0.5) * cell_width as f32,
-                    y: (f32::from(event.row) + 0.5) * cell_height as f32,
-                },
-            );
+            })?;
+            Error::check(ffi::ghostty_mouse_event_set_mods(raw, event.mods.0))?;
+            Error::check(ffi::ghostty_mouse_event_set_position(raw, position))?;
         }
         encode_into(|buffer, capacity, written| {
             // SAFETY: live handles; `buffer` is valid for `capacity` bytes.

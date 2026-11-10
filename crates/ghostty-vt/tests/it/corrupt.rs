@@ -167,7 +167,7 @@ fn corrupt_snapshots_fail_cleanly() {
     }
 }
 
-/// Seeds that broke Ghostty 1.4.0's invariants until `patches/ghostty`: an out-of-bounds
+/// Seeds that break Ghostty's invariants without `patches/ghostty`: an out-of-bounds
 /// bitmap access in `findFreeChunks`, `unreachable` for GR = G0 in the formatter, and a
 /// cursor-flags assertion in `index`. Silent memory corruption in `ReleaseFast`, so CI runs
 /// this with the checks on: `LIBGHOSTTY_VT_OPTIMIZE=safe cargo test -p ghostty-vt --test it`.

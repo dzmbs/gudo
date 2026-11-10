@@ -269,8 +269,7 @@ extension Terminal {
         if hasStyling {
             var ref = ref
             var style = GhosttyStyle()
-            style.size = MemoryLayout<GhosttyStyle>.size
-            if ghostty_grid_ref_style(&ref, &style) == GHOSTTY_SUCCESS, style.invisible { return " " }
+            if ghostty_grid_ref_style(&ref, &style) == GHOSTTY_SUCCESS, style.attributes.contains(.invisible) { return " " }
         }
         var tag = GHOSTTY_CELL_CONTENT_CODEPOINT
         ghostty_cell_get(cell, GHOSTTY_CELL_DATA_CONTENT_TAG, &tag)

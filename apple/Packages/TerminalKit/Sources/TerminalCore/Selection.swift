@@ -70,7 +70,6 @@ extension Terminal {
     public var selection: Selection? {
         withHandle { handle in
             var rawSelection = GhosttySelection()
-            rawSelection.size = MemoryLayout<GhosttySelection>.size
             guard ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_SELECTION, &rawSelection) == GHOSTTY_SUCCESS else { return nil }
             return Self.selection(handle, rawSelection)
         }
@@ -102,7 +101,6 @@ extension Terminal {
         guard let startRef = gridRef(handle, clamp(selection.anchor), GHOSTTY_POINT_TAG_SCREEN),
               let endRef = gridRef(handle, clamp(selection.head), GHOSTTY_POINT_TAG_SCREEN) else { return nil }
         var rawSelection = GhosttySelection()
-        rawSelection.size = MemoryLayout<GhosttySelection>.size
         rawSelection.start = startRef
         rawSelection.end = endRef
         rawSelection.rectangle = selection.rectangle
@@ -128,7 +126,6 @@ extension Terminal {
             options.size = MemoryLayout<GhosttyTerminalSelectWordOptions>.size
             options.ref = ref
             var rawSelection = GhosttySelection()
-            rawSelection.size = MemoryLayout<GhosttySelection>.size
             guard ghostty_terminal_select_word(handle, &options, &rawSelection) == GHOSTTY_SUCCESS else { return nil }
             ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_SELECTION, &rawSelection)
             return Self.selection(handle, rawSelection)
@@ -158,7 +155,6 @@ extension Terminal {
             options.ref = ref
             options.semantic_prompt_boundary = true
             var rawSelection = GhosttySelection()
-            rawSelection.size = MemoryLayout<GhosttySelection>.size
             guard ghostty_terminal_select_line(handle, &options, &rawSelection) == GHOSTTY_SUCCESS else { return nil }
             ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_SELECTION, &rawSelection)
             return Self.selection(handle, rawSelection)
@@ -169,7 +165,6 @@ extension Terminal {
     public func selectAll() -> Selection? {
         withHandle { handle in
             var rawSelection = GhosttySelection()
-            rawSelection.size = MemoryLayout<GhosttySelection>.size
             guard ghostty_terminal_select_all(handle, &rawSelection) == GHOSTTY_SUCCESS else { return nil }
             ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_SELECTION, &rawSelection)
             return Self.selection(handle, rawSelection)
@@ -180,17 +175,9 @@ extension Terminal {
     /// block selection separated by newlines. nil without a selection.
     public func selectionText() -> String? {
         withHandle { handle in
-            var options = GhosttyTerminalSelectionFormatOptions()
-            options.size = MemoryLayout<GhosttyTerminalSelectionFormatOptions>.size
-            options.emit = GHOSTTY_FORMATTER_FORMAT_PLAIN
-            options.unwrap = true
-            options.trim = true
-            options.selection = nil
-            var ptr: UnsafeMutablePointer<UInt8>?
-            var len = 0
-            guard ghostty_terminal_selection_format_alloc(handle, nil, options, &ptr, &len) == GHOSTTY_SUCCESS, let ptr else { return nil }
-            defer { ghostty_free(nil, ptr, len) }
-            return String(decoding: UnsafeBufferPointer(start: ptr, count: len), as: UTF8.self)
+            var rawSelection = GhosttySelection()
+            guard ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_SELECTION, &rawSelection) == GHOSTTY_SUCCESS else { return nil }
+            return Self.plainText(handle, selection: rawSelection, trim: true)
         }
     }
 }
@@ -356,7 +343,6 @@ public final class SelectionGesture {
 
     private func apply(_ handle: GhosttyTerminal, _ event: GhosttySelectionGestureEvent) -> Selection? {
         var rawSelection = GhosttySelection()
-        rawSelection.size = MemoryLayout<GhosttySelection>.size
         guard ghostty_selection_gesture_event(gesture, handle, event, &rawSelection) == GHOSTTY_SUCCESS else { return nil }
         ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_SELECTION, &rawSelection)
         return Terminal.selection(handle, rawSelection)

@@ -24,12 +24,12 @@ public struct RGB: Hashable, Sendable {
 public enum CursorShape: Sendable {
     case block, bar, underline, blockHollow
 
-    var ghostty: GhosttyTerminalCursorStyle {
+    var ghostty: GhosttyCursorStyle {
         switch self {
-        case .block: GHOSTTY_TERMINAL_CURSOR_STYLE_BLOCK
-        case .bar: GHOSTTY_TERMINAL_CURSOR_STYLE_BAR
-        case .underline: GHOSTTY_TERMINAL_CURSOR_STYLE_UNDERLINE
-        case .blockHollow: GHOSTTY_TERMINAL_CURSOR_STYLE_BLOCK_HOLLOW
+        case .block: GHOSTTY_CURSOR_STYLE_BLOCK
+        case .bar: GHOSTTY_CURSOR_STYLE_BAR
+        case .underline: GHOSTTY_CURSOR_STYLE_UNDERLINE
+        case .blockHollow: GHOSTTY_CURSOR_STYLE_BLOCK_HOLLOW
         }
     }
 }
@@ -356,14 +356,14 @@ public final class Terminal: @unchecked Sendable {
     /// Scrolls the viewport through scrollback. Negative values scroll up (towards history).
     public func scrollViewport(by rows: Int) {
         var scroll = GhosttyTerminalScrollViewport()
-        scroll.tag = GHOSTTY_SCROLL_VIEWPORT_DELTA
+        scroll.tag = GHOSTTY_TERMINAL_SCROLL_VIEWPORT_DELTA
         scroll.value.delta = rows
         lock.withLock { _ in ghostty_terminal_scroll_viewport(terminal, scroll) }
     }
 
     public func scrollToBottom() {
         var scroll = GhosttyTerminalScrollViewport()
-        scroll.tag = GHOSTTY_SCROLL_VIEWPORT_BOTTOM
+        scroll.tag = GHOSTTY_TERMINAL_SCROLL_VIEWPORT_BOTTOM
         lock.withLock { _ in ghostty_terminal_scroll_viewport(terminal, scroll) }
     }
 
@@ -371,7 +371,7 @@ public final class Terminal: @unchecked Sendable {
     /// keyboard flags, ...). Returns an empty array for events that produce no input.
     public func encode(_ key: KeyEvent) -> [UInt8] {
         lock.withLock { _ in
-            ghostty_key_encoder_setopt_from_terminal(keyEncoder, terminal)
+            ghostty_key_encoder_set_from_terminal(keyEncoder, terminal)
             ghostty_key_event_set_action(keyEvent, key.action.ghostty)
             ghostty_key_event_set_key(keyEvent, key.key.raw)
             ghostty_key_event_set_mods(keyEvent, key.mods.rawValue)
@@ -379,15 +379,17 @@ public final class Terminal: @unchecked Sendable {
             ghostty_key_event_set_unshifted_codepoint(keyEvent, key.unshiftedCodepoint)
             ghostty_key_event_set_composing(keyEvent, false)
 
-            var buffer = [CChar](repeating: 0, count: 128)
+            var buffer = [UInt8](repeating: 0, count: 128)
             var written = 0
-            let result = key.text.withCString { text in
-                // The event borrows `text`, so encode while it is alive.
-                ghostty_key_event_set_utf8(keyEvent, key.text.isEmpty ? nil : text, key.text.utf8.count)
+            var text = key.text
+            let result = text.withUTF8 { utf8 in
+                // The event borrows `utf8`, so encode while it is alive.
+                ghostty_key_event_set_utf8(keyEvent, GhosttyString(ptr: utf8.baseAddress, len: utf8.count))
+                defer { ghostty_key_event_set_utf8(keyEvent, GhosttyString()) }
                 return ghostty_key_encoder_encode(keyEncoder, keyEvent, &buffer, buffer.count, &written)
             }
             guard result == GHOSTTY_SUCCESS else { return [] }
-            return buffer.prefix(written).map { UInt8(bitPattern: $0) }
+            return Array(buffer.prefix(written))
         }
     }
 

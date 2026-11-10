@@ -115,9 +115,9 @@ public final class RenderState {
         cursor.size = MemoryLayout<GhosttyRenderStateCursor>.size
         ghostty_render_state_get(state, GHOSTTY_RENDER_STATE_DATA_CURSOR, &cursor)
         let style: CursorStyle = switch cursor.visual_style {
-        case GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR: .bar
-        case GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE: .underline
-        case GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK_HOLLOW: .blockHollow
+        case GHOSTTY_CURSOR_STYLE_BAR: .bar
+        case GHOSTTY_CURSOR_STYLE_UNDERLINE: .underline
+        case GHOSTTY_CURSOR_STYLE_BLOCK_HOLLOW: .blockHollow
         default: .block
         }
         return Cursor(
@@ -253,9 +253,9 @@ public struct Cell {
         let count = graphemeCount
         guard count > 0 else { return [] }
         return [UInt32](unsafeUninitializedCapacity: count) { buffer, initialized in
-            ghostty_render_state_row_cells_get(
-                cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_BUF, buffer.baseAddress)
-            initialized = count
+            var graphemes = GhosttyCodepointBuffer(ptr: buffer.baseAddress, cap: count, len: 0)
+            ghostty_render_state_row_cells_get(cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_BUF, &graphemes)
+            initialized = min(graphemes.len, count)
         }
     }
 
@@ -271,7 +271,6 @@ public struct Cell {
         ghostty_render_state_row_cells_get(cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_HAS_STYLING, &hasStyling)
         guard hasStyling else { return nil }
         var style = GhosttyStyle()
-        style.size = MemoryLayout<GhosttyStyle>.size
         ghostty_render_state_row_cells_get(cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE, &style)
         return Style(style)
     }
@@ -298,28 +297,55 @@ public struct Cell {
 
 extension Cell.Style {
     init(_ style: GhosttyStyle) {
-        underline = switch style.underline {
-        case Int32(GHOSTTY_SGR_UNDERLINE_SINGLE.rawValue): .single
-        case Int32(GHOSTTY_SGR_UNDERLINE_DOUBLE.rawValue): .double
-        case Int32(GHOSTTY_SGR_UNDERLINE_CURLY.rawValue): .curly
-        case Int32(GHOSTTY_SGR_UNDERLINE_DOTTED.rawValue): .dotted
-        case Int32(GHOSTTY_SGR_UNDERLINE_DASHED.rawValue): .dashed
+        underline = switch style.underlineStyle {
+        case GHOSTTY_SGR_UNDERLINE_SINGLE.rawValue: .single
+        case GHOSTTY_SGR_UNDERLINE_DOUBLE.rawValue: .double
+        case GHOSTTY_SGR_UNDERLINE_CURLY.rawValue: .curly
+        case GHOSTTY_SGR_UNDERLINE_DOTTED.rawValue: .dotted
+        case GHOSTTY_SGR_UNDERLINE_DASHED.rawValue: .dashed
         default: .none
         }
-        underlineColor = switch style.underline_color.tag {
+        underlineColor = switch style.underline_color.kind {
         case GHOSTTY_STYLE_COLOR_PALETTE: .palette(style.underline_color.value.palette)
         case GHOSTTY_STYLE_COLOR_RGB: .rgb(RGB(style.underline_color.value.rgb))
         default: .none
         }
-        bold = style.bold
-        italic = style.italic
-        faint = style.faint
-        inverse = style.inverse
-        invisible = style.invisible
-        strikethrough = style.strikethrough
-        overline = style.overline
-        blink = style.blink
+        let attributes = style.attributes
+        bold = attributes.contains(.bold)
+        italic = attributes.contains(.italic)
+        faint = attributes.contains(.faint)
+        inverse = attributes.contains(.inverse)
+        invisible = attributes.contains(.invisible)
+        strikethrough = attributes.contains(.strikethrough)
+        overline = attributes.contains(.overline)
+        blink = attributes.contains(.blink)
     }
+}
+
+/// The on/off bits of `GhosttyStyleFlags` (`style.h`). Swift does not import the
+/// `GHOSTTY_STYLE_FLAG_*` macros because they cast.
+struct StyleAttributes: OptionSet {
+    let rawValue: GhosttyStyleFlags
+
+    static let bold = Self(rawValue: 1 << 0)
+    static let italic = Self(rawValue: 1 << 1)
+    static let faint = Self(rawValue: 1 << 2)
+    static let blink = Self(rawValue: 1 << 3)
+    static let inverse = Self(rawValue: 1 << 4)
+    static let invisible = Self(rawValue: 1 << 5)
+    static let strikethrough = Self(rawValue: 1 << 6)
+    static let overline = Self(rawValue: 1 << 7)
+}
+
+extension GhosttyStyle {
+    var attributes: StyleAttributes { StyleAttributes(rawValue: flags) }
+
+    /// A `GhosttySgrUnderline` value; `GHOSTTY_SGR_UNDERLINE_NONE` when not underlined.
+    var underlineStyle: UInt32 { UInt32(flags >> GhosttyStyleFlags(GHOSTTY_STYLE_UNDERLINE_SHIFT)) & 0x7 }
+}
+
+extension GhosttyStyleColor {
+    var kind: GhosttyStyleColorTag { GhosttyStyleColorTag(UInt32(tag)) }
 }
 
 extension Cell.Width {

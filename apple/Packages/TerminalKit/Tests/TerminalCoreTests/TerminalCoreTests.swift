@@ -189,3 +189,36 @@ private func text(_ state: RenderState, row y: Int) -> String {
         #expect(gathered.count == 5)
     }
 }
+
+@Test func cellsReportEverySGRAttributeAndWholeClusters() {
+    let terminal = Terminal(cols: 40, rows: 2) { _ in }
+    let state = RenderState()
+    terminal.write(Array("\u{1b}[1;3;2;5;7;8;9;53;4:3;58;5;2mA\u{1b}[0m\u{1b}[4:2mB\u{1b}[0mC 👍🏽".utf8))
+    state.update(from: terminal)
+    var styles: [Cell.Style?] = []
+    var clusters: [[UInt32]] = []
+    state.forEachRow { row in
+        guard styles.isEmpty else { return }
+        row.forEachCell { cell in
+            styles.append(cell.style)
+            clusters.append(cell.graphemes)
+        }
+    }
+    let all = styles[0]
+    #expect(all?.bold == true)
+    #expect(all?.italic == true)
+    #expect(all?.faint == true)
+    #expect(all?.blink == true)
+    #expect(all?.inverse == true)
+    #expect(all?.invisible == true)
+    #expect(all?.strikethrough == true)
+    #expect(all?.overline == true)
+    #expect(all?.underline == .curly)
+    #expect(all?.underlineColor == .palette(2))
+    let doubleUnderline = styles[1]
+    #expect(doubleUnderline?.underline == .double)
+    #expect(doubleUnderline?.bold == false)
+    #expect(doubleUnderline?.underlineColor == Cell.StyleColor.none)
+    #expect(styles[2] == nil)
+    #expect(clusters[4] == [0x1F44D, 0x1F3FD])
+}

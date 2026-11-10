@@ -105,18 +105,18 @@ extension Terminal {
     public func kittyImage(id: UInt32) -> KittyImagePixels? {
         withHandle { handle in
             guard let graphics = Self.kittyGraphics(handle), let image = ghostty_kitty_graphics_image(graphics, id) else { return nil }
-            var width: UInt32 = 0, height: UInt32 = 0, generation: UInt64 = 0, length = 0
+            var width: UInt32 = 0, height: UInt32 = 0, generation: UInt64 = 0
             var format = GHOSTTY_KITTY_IMAGE_FORMAT_RGBA
-            var data: UnsafePointer<UInt8>?
-            guard ghostty_kitty_graphics_image_get(image, GHOSTTY_KITTY_IMAGE_DATA_WIDTH, &width) == GHOSTTY_SUCCESS,
-                  ghostty_kitty_graphics_image_get(image, GHOSTTY_KITTY_IMAGE_DATA_HEIGHT, &height) == GHOSTTY_SUCCESS,
-                  ghostty_kitty_graphics_image_get(image, GHOSTTY_KITTY_IMAGE_DATA_FORMAT, &format) == GHOSTTY_SUCCESS,
-                  ghostty_kitty_graphics_image_get(image, GHOSTTY_KITTY_IMAGE_DATA_GENERATION, &generation) == GHOSTTY_SUCCESS,
-                  ghostty_kitty_graphics_image_get(image, GHOSTTY_KITTY_IMAGE_DATA_DATA_PTR, &data) == GHOSTTY_SUCCESS,
-                  ghostty_kitty_graphics_image_get(image, GHOSTTY_KITTY_IMAGE_DATA_DATA_LEN, &length) == GHOSTTY_SUCCESS,
-                  let data, width > 0, height > 0
+            var pixels = GhosttyString()
+            guard ghostty_kitty_graphics_image_get(image, GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_WIDTH, &width) == GHOSTTY_SUCCESS,
+                  ghostty_kitty_graphics_image_get(image, GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_HEIGHT, &height) == GHOSTTY_SUCCESS,
+                  ghostty_kitty_graphics_image_get(image, GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_FORMAT, &format) == GHOSTTY_SUCCESS,
+                  ghostty_kitty_graphics_image_get(image, GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_GENERATION, &generation) == GHOSTTY_SUCCESS,
+                  ghostty_kitty_graphics_image_get(image, GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_PIXELS, &pixels) == GHOSTTY_SUCCESS,
+                  let data = pixels.ptr, width > 0, height > 0
             else { return nil }
             let count = Int(width) * Int(height)
+            let length = pixels.len
             let source = UnsafeBufferPointer(start: data, count: length)
             let rgba: Data
             switch format {
@@ -245,9 +245,9 @@ extension RenderState {
             // Protocols added later are skipped, as render.h asks.
             guard get(GHOSTTY_RENDER_STATE_IMAGE_DATA_PROTOCOL, GHOSTTY_IMAGE_PROTOCOL_MAX_VALUE) == GHOSTTY_IMAGE_PROTOCOL_KITTY
             else { continue }
-            let layer: ImagePlacement.Layer = switch get(GHOSTTY_RENDER_STATE_IMAGE_DATA_LAYER, GHOSTTY_RENDER_STATE_IMAGE_LAYER_ABOVE_TEXT) {
-            case GHOSTTY_RENDER_STATE_IMAGE_LAYER_BELOW_BACKGROUND: .belowBackground
-            case GHOSTTY_RENDER_STATE_IMAGE_LAYER_BELOW_TEXT: .belowText
+            let layer: ImagePlacement.Layer = switch get(GHOSTTY_RENDER_STATE_IMAGE_DATA_LAYER, GHOSTTY_IMAGE_LAYER_ABOVE_TEXT) {
+            case GHOSTTY_IMAGE_LAYER_BELOW_BACKGROUND: .belowBackground
+            case GHOSTTY_IMAGE_LAYER_BELOW_TEXT: .belowText
             default: .aboveText
             }
             placements.append(ImagePlacement(

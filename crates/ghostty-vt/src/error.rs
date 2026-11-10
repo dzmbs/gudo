@@ -24,6 +24,8 @@ pub enum Error {
     LimitExceeded,
     /// A safety check rejected the operation.
     Rejected,
+    /// The linked libghostty-vt does not know the requested option or data key.
+    Unsupported,
     /// A result code this binding does not know, from a newer libghostty-vt.
     Unknown(i32),
 }
@@ -40,6 +42,7 @@ impl Error {
             ffi::GhosttyResult_GHOSTTY_IO_ERROR => Self::Io,
             ffi::GhosttyResult_GHOSTTY_LIMIT_EXCEEDED => Self::LimitExceeded,
             ffi::GhosttyResult_GHOSTTY_REJECTED => Self::Rejected,
+            ffi::GhosttyResult_GHOSTTY_UNSUPPORTED => Self::Unsupported,
             other => Self::Unknown(other),
         })
     }
@@ -55,6 +58,7 @@ impl fmt::Display for Error {
             Self::Io => f.write_str("libghostty-vt reader or writer failed"),
             Self::LimitExceeded => f.write_str("libghostty-vt limit exceeded"),
             Self::Rejected => f.write_str("libghostty-vt safety check rejected the operation"),
+            Self::Unsupported => f.write_str("libghostty-vt does not support this option"),
             Self::Unknown(code) => write!(f, "libghostty-vt returned unknown result {code}"),
         }
     }

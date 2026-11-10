@@ -130,32 +130,28 @@ impl Terminal {
         };
         let (mut width, mut height, mut format, mut generation) = (0u32, 0u32, 0, 0u64);
         let complete = get(
-            ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_WIDTH,
+            ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_WIDTH,
             (&raw mut width).cast(),
         ) && get(
-            ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_HEIGHT,
+            ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_HEIGHT,
             (&raw mut height).cast(),
         ) && get(
-            ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_FORMAT,
+            ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_FORMAT,
             (&raw mut format).cast(),
         ) && get(
-            ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_GENERATION,
+            ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_GENERATION,
             (&raw mut generation).cast(),
         );
         if !complete {
             return None;
         }
-        let mut data: *const u8 = ptr::null();
-        let mut len = 0usize;
+        let mut data = ffi::GhosttyString::default();
         let pixels = (get(
-            ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_DATA_PTR,
+            ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_PIXELS,
             (&raw mut data).cast(),
-        ) && get(
-            ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_DATA_LEN,
-            (&raw mut len).cast(),
-        ) && !data.is_null())
-        // SAFETY: DATA_PTR is valid for DATA_LEN bytes until the terminal is mutated.
-        .then(|| unsafe { slice::from_raw_parts(data, len) }.to_vec());
+        ) && !data.ptr.is_null())
+        // SAFETY: PIXELS is valid for its length until the terminal is mutated.
+        .then(|| unsafe { slice::from_raw_parts(data.ptr, data.len) }.to_vec());
         Some(KittyImage {
             id,
             width,

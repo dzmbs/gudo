@@ -343,9 +343,8 @@ extension Terminal {
         return cells.filter { cell in
             guard var ref = gridRef(handle, cell.point, GHOSTTY_POINT_TAG_SCREEN) else { return true }
             var style = GhosttyStyle()
-            style.size = MemoryLayout<GhosttyStyle>.size
             guard ghostty_grid_ref_style(&ref, &style) == GHOSTTY_SUCCESS else { return true }
-            return !style.invisible && !colors.blend(style)
+            return !style.attributes.contains(.invisible) && !colors.blend(style)
         }.map(\.text).joined()
     }
 }
@@ -373,7 +372,7 @@ private struct CellColors {
     }
 
     private func resolve(_ color: GhosttyStyleColor, _ fallback: GhosttyColorRgb?) -> GhosttyColorRgb? {
-        switch color.tag {
+        switch color.kind {
         case GHOSTTY_STYLE_COLOR_PALETTE: palette?[Int(color.value.palette)]
         case GHOSTTY_STYLE_COLOR_RGB: color.value.rgb
         default: fallback

@@ -55,8 +55,8 @@ jobs:
           version: 0.17.0
       - name: toolchain (rust-toolchain.toml)
         run: rustup show active-toolchain || rustup toolchain install
-      - name: vendor/ghostty is the pinned release
-        run: test "$(git -C vendor/ghostty rev-parse HEAD)" = 83fb95624b0439ee660c2679b43b38c8b63769cd
+      - name: vendor/ghostty is the pinned commit
+        run: test "$(git -C vendor/ghostty rev-parse HEAD)" = bd1e6a43476325dbf37939de939eac326696b08f
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: cargo deny (advisories, licences, bans, sources)

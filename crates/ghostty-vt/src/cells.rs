@@ -4,8 +4,6 @@
 //! (faint or colored cells, which part of a line the shell marked as prompt or input), which is
 //! what reading a shell's input line off the screen needs.
 
-use std::mem;
-
 use ghostty_vt_sys as ffi;
 
 use crate::{Error, Terminal};
@@ -245,36 +243,23 @@ fn graphemes(grid_ref: &ffi::GhosttyGridRef) -> Result<String, Error> {
 }
 
 fn style(grid_ref: &ffi::GhosttyGridRef) -> Result<CellStyle, Error> {
-    let mut raw = ffi::GhosttyStyle {
-        size: mem::size_of::<ffi::GhosttyStyle>(),
-        fg_color: ffi::GhosttyStyleColor::default(),
-        bg_color: ffi::GhosttyStyleColor::default(),
-        underline_color: ffi::GhosttyStyleColor::default(),
-        bold: false,
-        italic: false,
-        faint: false,
-        blink: false,
-        inverse: false,
-        invisible: false,
-        strikethrough: false,
-        overline: false,
-        underline: 0,
-    };
-    // SAFETY: `raw` is a sized `GhosttyStyle` out struct.
+    let mut raw = ffi::GhosttyStyle::default();
+    // SAFETY: `raw` is a valid `GhosttyStyle` out pointer.
     Error::check(unsafe { ffi::ghostty_grid_ref_style(grid_ref, &mut raw) })?;
+    let has_flag = |flag: u32| u32::from(raw.flags) & flag != 0;
     Ok(CellStyle {
         fg: color(raw.fg_color),
         bg: color(raw.bg_color),
-        faint: raw.faint,
-        bold: raw.bold,
-        italic: raw.italic,
-        underline: raw.underline != 0,
-        inverse: raw.inverse,
+        faint: has_flag(ffi::GHOSTTY_STYLE_FLAG_FAINT),
+        bold: has_flag(ffi::GHOSTTY_STYLE_FLAG_BOLD),
+        italic: has_flag(ffi::GHOSTTY_STYLE_FLAG_ITALIC),
+        underline: has_flag(ffi::GHOSTTY_STYLE_UNDERLINE_MASK),
+        inverse: has_flag(ffi::GHOSTTY_STYLE_FLAG_INVERSE),
     })
 }
 
 fn color(raw: ffi::GhosttyStyleColor) -> Color {
-    match raw.tag {
+    match ffi::GhosttyStyleColorTag::from(raw.tag) {
         // SAFETY: the tag says which union arm is initialized.
         ffi::GhosttyStyleColorTag_GHOSTTY_STYLE_COLOR_PALETTE => {
             Color::Palette(unsafe { raw.value.palette })

@@ -82,18 +82,18 @@ extension Terminal {
 
     private func encodeMouseUnchecked(_ event: MouseEvent, geometry: MouseGeometry, anyButtonPressed: Bool) -> [UInt8] {
         withHandle { handle in
-            ghostty_mouse_encoder_setopt_from_terminal(mouseEncoder, handle)
+            ghostty_mouse_encoder_set_from_terminal(mouseEncoder, handle)
             var size = GhosttyMouseEncoderSize(
                 size: MemoryLayout<GhosttyMouseEncoderSize>.size,
                 screen_width: geometry.screenWidth, screen_height: geometry.screenHeight,
                 cell_width: max(1, geometry.cellWidth), cell_height: max(1, geometry.cellHeight),
                 padding_top: geometry.paddingTop, padding_bottom: geometry.paddingBottom,
                 padding_right: geometry.paddingRight, padding_left: geometry.paddingLeft)
-            ghostty_mouse_encoder_setopt(mouseEncoder, GHOSTTY_MOUSE_ENCODER_OPT_SIZE, &size)
+            ghostty_mouse_encoder_set(mouseEncoder, GHOSTTY_MOUSE_ENCODER_OPT_SIZE, &size)
             var pressed = anyButtonPressed
-            ghostty_mouse_encoder_setopt(mouseEncoder, GHOSTTY_MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED, &pressed)
+            ghostty_mouse_encoder_set(mouseEncoder, GHOSTTY_MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED, &pressed)
             var trackLastCell = true
-            ghostty_mouse_encoder_setopt(mouseEncoder, GHOSTTY_MOUSE_ENCODER_OPT_TRACK_LAST_CELL, &trackLastCell)
+            ghostty_mouse_encoder_set(mouseEncoder, GHOSTTY_MOUSE_ENCODER_OPT_TRACK_LAST_CELL, &trackLastCell)
 
             let action: GhosttyMouseAction = switch event.action {
             case .press: GHOSTTY_MOUSE_ACTION_PRESS
@@ -109,11 +109,11 @@ extension Terminal {
             ghostty_mouse_event_set_mods(mouseEvent, event.mods.rawValue)
             ghostty_mouse_event_set_position(mouseEvent, GhosttyMousePosition(x: Float(event.x), y: Float(event.y)))
 
-            var buffer = [CChar](repeating: 0, count: 64)
+            var buffer = [UInt8](repeating: 0, count: 64)
             var written = 0
             guard ghostty_mouse_encoder_encode(mouseEncoder, mouseEvent, &buffer, buffer.count, &written) == GHOSTTY_SUCCESS
             else { return [] }
-            return buffer.prefix(written).map { UInt8(bitPattern: $0) }
+            return Array(buffer.prefix(written))
         }
     }
 

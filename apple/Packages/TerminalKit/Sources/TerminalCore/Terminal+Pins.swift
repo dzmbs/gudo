@@ -108,7 +108,6 @@ extension Terminal {
     public func isPromptRow(_ pin: RowPin) -> Bool? {
         withHandle { _ in
             var ref = GhosttyGridRef()
-            ref.size = MemoryLayout<GhosttyGridRef>.size
             guard ghostty_tracked_grid_ref_snapshot(pin.ref, &ref) == GHOSTTY_SUCCESS else { return nil }
             var row: GhosttyRow = 0
             guard ghostty_grid_ref_row(&ref, &row) == GHOSTTY_SUCCESS else { return nil }
@@ -127,7 +126,7 @@ extension Terminal {
     /// never passes the active area).
     public func scrollViewport(toScreenRow screenRow: Int) {
         var scroll = GhosttyTerminalScrollViewport()
-        scroll.tag = GHOSTTY_SCROLL_VIEWPORT_ROW
+        scroll.tag = GHOSTTY_TERMINAL_SCROLL_VIEWPORT_ROW
         scroll.value.row = max(0, screenRow)
         withHandle { handle in ghostty_terminal_scroll_viewport(handle, scroll) }
     }
@@ -136,7 +135,7 @@ extension Terminal {
     /// shell marked with OSC 133, as Ghostty's `jump_to_prompt` does. No-op without marks.
     public func scrollViewport(byPrompts prompts: Int) {
         var scroll = GhosttyTerminalScrollViewport()
-        scroll.tag = GHOSTTY_SCROLL_VIEWPORT_DELTA_PROMPT
+        scroll.tag = GHOSTTY_TERMINAL_SCROLL_VIEWPORT_DELTA_PROMPT
         scroll.value.delta_prompt = prompts
         withHandle { handle in ghostty_terminal_scroll_viewport(handle, scroll) }
     }

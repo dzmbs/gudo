@@ -69,8 +69,9 @@ public final class RowCells {
         clusterScalars.append(length)
         clusterScalars.append(contentsOf: repeatElement(0, count: Int(length)))
         clusterScalars.withUnsafeMutableBufferPointer { buffer in
-            _ = ghostty_render_state_row_cells_get(
-                cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_BUF, buffer.baseAddress! + start + 1)
+            var graphemes = GhosttyCodepointBuffer(
+                ptr: buffer.baseAddress.map { $0 + start + 1 }, cap: Int(length), len: 0)
+            _ = ghostty_render_state_row_cells_get(cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_BUF, &graphemes)
         }
         clusterStarts[x] = Int32(start)
     }
@@ -129,7 +130,6 @@ extension Row {
             let cell = Cell(cells: cells)
             if styleID != 0 {
                 var style = GhosttyStyle()
-                style.size = MemoryLayout<GhosttyStyle>.size
                 ghostty_render_state_row_cells_get(cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE, &style)
                 styles[x] = Cell.Style(style)
                 foregrounds[x] = cell.foreground

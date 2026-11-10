@@ -71,27 +71,28 @@ extension Terminal {
     /// Plain text of the whole screen, scrollback included, soft wraps joined and trailing
     /// blanks trimmed (diagnostics, accessibility, tests).
     public func plainText() -> String {
-        withHandle { handle in
-            var options = GhosttyFormatterTerminalOptions()
-            options.size = MemoryLayout<GhosttyFormatterTerminalOptions>.size
-            options.emit = GHOSTTY_FORMATTER_FORMAT_PLAIN
-            options.unwrap = true
-            options.trim = true
-            options.extra.size = MemoryLayout<GhosttyFormatterTerminalExtra>.size
-            options.extra.screen.size = MemoryLayout<GhosttyFormatterScreenExtra>.size
-            var formatter: GhosttyFormatter?
-            guard ghostty_formatter_terminal_new(nil, &formatter, handle, options) == GHOSTTY_SUCCESS,
-                  let formatter
-            else { return "" }
-            defer { ghostty_formatter_free(formatter) }
-            var pointer: UnsafeMutablePointer<UInt8>?
-            var length = 0
-            guard ghostty_formatter_format_alloc(formatter, nil, &pointer, &length) == GHOSTTY_SUCCESS,
-                  let pointer
-            else { return "" }
-            defer { ghostty_free(nil, pointer, length) }
-            return String(decoding: UnsafeBufferPointer(start: pointer, count: length), as: UTF8.self)
+        withHandle { handle in Self.plainText(handle, selection: nil, trim: true) ?? "" }
+    }
+
+    /// The active screen, or only `selection` of it, as plain text with soft wraps joined; nil
+    /// when formatting fails or produces nothing.
+    static func plainText(_ handle: GhosttyTerminal, selection: GhosttySelection?, trim: Bool) -> String? {
+        var formatter: GhosttyFormatter?
+        guard ghostty_formatter_terminal_new(nil, &formatter, handle) == GHOSTTY_SUCCESS, let formatter else { return nil }
+        defer { ghostty_formatter_free(formatter) }
+        var unwrap = true
+        var trim = trim
+        guard ghostty_formatter_set(formatter, GHOSTTY_FORMATTER_OPT_UNWRAP, &unwrap) == GHOSTTY_SUCCESS,
+              ghostty_formatter_set(formatter, GHOSTTY_FORMATTER_OPT_TRIM, &trim) == GHOSTTY_SUCCESS
+        else { return nil }
+        if var selection {
+            guard ghostty_formatter_set(formatter, GHOSTTY_FORMATTER_OPT_SELECTION, &selection) == GHOSTTY_SUCCESS else { return nil }
         }
+        var pointer: UnsafeMutablePointer<UInt8>?
+        var length = 0
+        guard ghostty_formatter_format_alloc(formatter, nil, &pointer, &length) == GHOSTTY_SUCCESS, let pointer else { return nil }
+        defer { ghostty_free(nil, pointer, length) }
+        return String(decoding: UnsafeBufferPointer(start: pointer, count: length), as: UTF8.self)
     }
 
     /// A complete snapshot of this terminal, a held synchronized update included (another

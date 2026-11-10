@@ -324,9 +324,10 @@ impl Terminal {
     ///
     /// Returns [`Error::OutOfMemory`] if pruning needs to allocate and cannot.
     pub fn set_scrollback_max_bytes(&mut self, limit: Option<usize>) -> Result<(), Error> {
+        // NULL restores libghostty-vt's small default; `SIZE_MAX` is what removes the cap.
         self.set_usize(
             ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES,
-            limit,
+            Some(limit.unwrap_or(usize::MAX)),
         )
     }
 
@@ -800,7 +801,6 @@ impl Terminal {
 
     fn format(&self, region: TextRegion, format: Format, wrap: Wrap) -> Result<String, Error> {
         let range = |start: ffi::GhosttyGridRef, end: ffi::GhosttyGridRef| ffi::GhosttySelection {
-            size: mem::size_of::<ffi::GhosttySelection>(),
             start,
             end,
             rectangle: false,
@@ -824,44 +824,61 @@ impl Terminal {
                 self.grid_ref(ffi::GhosttyPointTag_GHOSTTY_POINT_TAG_SCREEN, end.x, end.y)?,
             )),
         };
+        let emit = match format {
+            Format::Plain => ffi::GhosttyFormatterFormat_GHOSTTY_FORMATTER_FORMAT_PLAIN,
+            Format::Vt | Format::Styled => ffi::GhosttyFormatterFormat_GHOSTTY_FORMATTER_FORMAT_VT,
+        };
+        let unwrap = wrap == Wrap::Join;
         let vt = format == Format::Vt;
-        let options = ffi::GhosttyFormatterTerminalOptions {
-            size: mem::size_of::<ffi::GhosttyFormatterTerminalOptions>(),
-            emit: match format {
-                Format::Plain => ffi::GhosttyFormatterFormat_GHOSTTY_FORMATTER_FORMAT_PLAIN,
-                Format::Vt | Format::Styled => {
-                    ffi::GhosttyFormatterFormat_GHOSTTY_FORMATTER_FORMAT_VT
-                }
-            },
-            unwrap: wrap == Wrap::Join,
-            trim: !vt,
-            extra: ffi::GhosttyFormatterTerminalExtra {
-                size: mem::size_of::<ffi::GhosttyFormatterTerminalExtra>(),
-                palette: vt,
-                modes: vt,
-                scrolling_region: vt,
-                tabstops: vt,
-                pwd: vt,
-                keyboard: vt,
-                screen: ffi::GhosttyFormatterScreenExtra {
-                    size: mem::size_of::<ffi::GhosttyFormatterScreenExtra>(),
-                    cursor: vt,
-                    style: vt,
-                    hyperlink: vt,
-                    protection: vt,
-                    kitty_keyboard: vt,
-                    charsets: vt,
-                },
-            },
-            selection: selection.as_ref().map_or(ptr::null(), ptr::from_ref),
+        let trim = !vt;
+        let extras: ffi::GhosttyFormatterExtras = if vt {
+            ffi::GHOSTTY_FORMATTER_EXTRAS_ALL
+        } else {
+            ffi::GHOSTTY_FORMATTER_EXTRAS_NONE
         };
 
         let mut formatter = ptr::null_mut();
         // SAFETY: the handle is live and outlives the formatter, which is freed below before
-        // `self` can be mutated. `options.selection` points at `selection`, alive until then.
+        // `self` can be mutated.
         Error::check(unsafe {
-            ffi::ghostty_formatter_terminal_new(ptr::null(), &mut formatter, self.as_raw(), options)
+            ffi::ghostty_formatter_terminal_new(ptr::null(), &mut formatter, self.as_raw())
         })?;
+        // SAFETY: `formatter` is live, and each value has its option's documented type.
+        let configured = unsafe {
+            [
+                (
+                    ffi::GhosttyFormatterOption_GHOSTTY_FORMATTER_OPT_EMIT,
+                    (&raw const emit).cast(),
+                ),
+                (
+                    ffi::GhosttyFormatterOption_GHOSTTY_FORMATTER_OPT_UNWRAP,
+                    (&raw const unwrap).cast(),
+                ),
+                (
+                    ffi::GhosttyFormatterOption_GHOSTTY_FORMATTER_OPT_TRIM,
+                    (&raw const trim).cast(),
+                ),
+                (
+                    ffi::GhosttyFormatterOption_GHOSTTY_FORMATTER_OPT_EXTRAS,
+                    (&raw const extras).cast(),
+                ),
+                (
+                    ffi::GhosttyFormatterOption_GHOSTTY_FORMATTER_OPT_SELECTION,
+                    selection
+                        .as_ref()
+                        .map_or(ptr::null(), |range| ptr::from_ref(range).cast()),
+                ),
+            ]
+            .into_iter()
+            .try_for_each(|(option, value): (_, *const c_void)| {
+                Error::check(ffi::ghostty_formatter_set(formatter, option, value))
+            })
+        };
+        if let Err(error) = configured {
+            // SAFETY: `formatter` is live and not used again.
+            unsafe { ffi::ghostty_formatter_free(formatter) };
+            return Err(error);
+        }
         let mut formatted = Vec::new();
         // SAFETY: `formatter` is live; the writer's userdata points at `formatted`, which
         // outlives the call.
@@ -879,11 +896,8 @@ impl Terminal {
         x: u16,
         y: u32,
     ) -> Result<ffi::GhosttyGridRef, Error> {
-        let mut grid_ref = ffi::GhosttyGridRef {
-            size: mem::size_of::<ffi::GhosttyGridRef>(),
-            ..Default::default()
-        };
-        // SAFETY: the handle is live and `grid_ref` is a valid, sized out struct.
+        let mut grid_ref = ffi::GhosttyGridRef::default();
+        // SAFETY: the handle is live and `grid_ref` is a valid out struct.
         Error::check(unsafe {
             ffi::ghostty_terminal_grid_ref(self.as_raw(), point(tag, x, y), &mut grid_ref)
         })?;

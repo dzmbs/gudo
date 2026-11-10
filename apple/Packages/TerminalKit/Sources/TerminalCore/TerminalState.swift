@@ -189,7 +189,6 @@ extension Terminal {
     static func gridRef(_ handle: GhosttyTerminal, _ point: GridPoint, _ tag: GhosttyPointTag) -> GhosttyGridRef? {
         guard point.x >= 0, point.y >= 0 else { return nil }
         var ref = GhosttyGridRef()
-        ref.size = MemoryLayout<GhosttyGridRef>.size
         var gridPoint = GhosttyPoint()
         gridPoint.tag = tag
         gridPoint.value.coordinate = GhosttyPointCoordinate(x: UInt16(clamping: point.x), y: UInt32(clamping: point.y))
@@ -252,10 +251,10 @@ extension Terminal {
     /// The focus-in/out report to send when mode 1004 is on, else nothing.
     public func encodeFocus(_ focused: Bool) -> [UInt8] {
         guard modes.focusEvents else { return [] }
-        var buffer = [CChar](repeating: 0, count: 8)
+        var buffer = [UInt8](repeating: 0, count: 8)
         var written = 0
         guard ghostty_focus_encode(focused ? GHOSTTY_FOCUS_GAINED : GHOSTTY_FOCUS_LOST, &buffer, buffer.count, &written) == GHOSTTY_SUCCESS
         else { return [] }
-        return buffer.prefix(written).map { UInt8(bitPattern: $0) }
+        return Array(buffer.prefix(written))
     }
 }

@@ -259,7 +259,7 @@ public final class TerminalSearch {
         // Asked with no room first: the answer is the count.
         _ = ghostty_search_get(search, data, &buffer)
         guard buffer.len > 0 else { return [] }
-        var matches = [GhosttySelection](repeating: Self.emptySelection, count: buffer.len)
+        var matches = [GhosttySelection](repeating: GhosttySelection(), count: buffer.len)
         var written = 0
         let ok = matches.withUnsafeMutableBufferPointer { storage in
             var selectionBuffer = GhosttySelectionBuffer(ptr: storage.baseAddress, cap: storage.count, len: 0)
@@ -331,12 +331,6 @@ public final class TerminalSearch {
         return SearchStatus(total: matches.count, selected: selectedIndex(handle, matches), isComplete: complete)
     }
 
-    private static var emptySelection: GhosttySelection {
-        var selection = GhosttySelection()
-        selection.size = MemoryLayout<GhosttySelection>.size
-        return selection
-    }
-
     /// A match's ends in screen coordinates, in reading order.
     static func screenRange(_ handle: GhosttyTerminal, _ match: GhosttySelection) -> (start: GridPoint, end: GridPoint)? {
         var startRef = match.start, endRef = match.end
@@ -345,20 +339,7 @@ public final class TerminalSearch {
     }
 
     static func text(_ handle: GhosttyTerminal, _ match: GhosttySelection) -> String? {
-        var match = match
-        return withUnsafePointer(to: &match) { pointer in
-            var options = GhosttyTerminalSelectionFormatOptions()
-            options.size = MemoryLayout<GhosttyTerminalSelectionFormatOptions>.size
-            options.emit = GHOSTTY_FORMATTER_FORMAT_PLAIN
-            options.unwrap = true
-            options.trim = false
-            options.selection = pointer
-            var ptr: UnsafeMutablePointer<UInt8>?
-            var len = 0
-            guard ghostty_terminal_selection_format_alloc(handle, nil, options, &ptr, &len) == GHOSTTY_SUCCESS, let ptr else { return nil }
-            defer { ghostty_free(nil, ptr, len) }
-            return String(decoding: UnsafeBufferPointer(start: ptr, count: len), as: UTF8.self)
-        }
+        Terminal.plainText(handle, selection: match, trim: false)
     }
 
     static func viewportTop(_ handle: GhosttyTerminal) -> Int {
@@ -375,7 +356,7 @@ public final class TerminalSearch {
         guard range.start.y < top || range.end.y >= top + rows else { return }
         let height = range.end.y - range.start.y + 1
         var scroll = GhosttyTerminalScrollViewport()
-        scroll.tag = GHOSTTY_SCROLL_VIEWPORT_ROW
+        scroll.tag = GHOSTTY_TERMINAL_SCROLL_VIEWPORT_ROW
         scroll.value.row = max(0, range.start.y - max(0, (rows - height) / 2))
         ghostty_terminal_scroll_viewport(handle, scroll)
     }

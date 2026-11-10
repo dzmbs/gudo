@@ -7,7 +7,7 @@ Native code linked into the app and its helpers
 ================================================================================
 
 --------------------------------------------------------------------------------
-libghostty-vt (Ghostty 1.4.0, https://github.com/ghostty-org/ghostty), MIT
+libghostty-vt (Ghostty 1.4.1-dev, https://github.com/ghostty-org/ghostty), MIT
 
 MIT License
 
