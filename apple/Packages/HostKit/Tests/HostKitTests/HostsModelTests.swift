@@ -56,6 +56,41 @@ nonisolated func temporaryDirectory() -> URL {
         #expect(client.calls.last { if case .lowDataMode = $0 { true } else { false } } == .lowDataMode(false))
     }
 
+    @Test func helperUpdateWaitsForTheNewBuildNotTheOldDaemonAnsweringAgain() async throws {
+        var configuration = HostsModel.Configuration()
+        configuration.bundledDaemons = { bundled }
+        let model = HostsModel(
+            secrets: MemorySecretStore(), repository: HostRepository(directory: temporaryDirectory()),
+            configuration: configuration)
+        model.dialer = { _, listener in FakeClient(listener: listener) }
+        model.upsert(HostRecord(id: "h", name: "studio", kind: .daemon, daemonId: "d1"))
+        try model.secrets.set("ticket", for: "host.h.ticket")
+        let connection = try #require(try model.open("h") as? DaemonConnection)
+        let client = try #require(connection.client as? FakeClient)
+        client.send(.daemonInfo(info: daemonInfo(build: "aaa")))
+        client.send(.connected(epoch: 1, resumed: false))
+        client.send(.attached(sessionId: 7, via: .requested, missing: nil))
+        client.send(.layout(layout: sampleLayout()))
+        try await eventually("live on the old build") { connection.status.isLive && connection.daemonInfo?.build == "aaa" }
+        #expect(model.helperAdvice("h")?.method == .connection)
+
+        let update = Task { try await model.updateHelper("h") }
+        try await eventually("redialled after the install") { client.calls.contains(.reconnect) }
+        // The old daemon answers once more before its restart.
+        client.send(.daemonInfo(info: daemonInfo(build: "aaa")))
+        client.send(.connected(epoch: 1, resumed: true))
+        try await eventually("back on the old daemon") { connection.connectionCount == 2 && connection.status.isLive }
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(model.helperUpdates["h"] != nil, "the update finished before the new build ran")
+
+        client.send(.disconnected(reason: "restarting"))
+        client.send(.daemonInfo(info: daemonInfo(build: "bbb")))
+        client.send(.connected(epoch: 1, resumed: true))
+        try await update.value
+        #expect(connection.daemonInfo?.build == "bbb")
+        #expect(model.helperUpdates["h"] == nil)
+    }
+
     @Test func sshHostsNeedACredential() throws {
         let model = HostsModel(secrets: MemorySecretStore(), repository: HostRepository(directory: temporaryDirectory()))
         let endpoint = SSHEndpoint(user: "me", host: "127.0.0.1", port: 1, identity: .password)

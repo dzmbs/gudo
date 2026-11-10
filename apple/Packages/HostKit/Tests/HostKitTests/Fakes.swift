@@ -69,6 +69,14 @@ extension FakeClient: LowDataModeClient {
     func setLowDataMode(lowDataMode: Bool) { record(.lowDataMode(lowDataMode)) }
 }
 
+extension FakeClient: DaemonUpgradeAPI {
+    /// Installs at once and answers with the build it was sent, as a daemon does before it
+    /// restarts.
+    func upgradeDaemon(path: String, build: String, progress: TransferProgress?) async throws -> DaemonInfo {
+        daemonInfo(build: build)
+    }
+}
+
 /// Collects a backend's events.
 nonisolated final class EventSink: Sendable {
     private let events = Mutex<[PaneEvent]>([])

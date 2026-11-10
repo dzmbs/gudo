@@ -760,32 +760,36 @@ public final class HostsModel {
         defer { helperUpdates[id] = nil }
         let daemon = connections[id] as? DaemonConnection
         let previousConnections = daemon?.connectionCount
+        let installedBuild: String?
         switch advice.method {
         case .ssh:
             guard try await updateOverSSH(record) else { return }
+            installedBuild = advice.bundled?.build
         case .connection:
             guard let daemon, let bundled = advice.bundled, let manifest = configuration.bundledDaemons() else {
                 throw HelperUpdateError.unavailable
             }
             helperUpdates[id]?.step = .uploading(sent: 0, total: 0)
-            _ = try await daemon.updateHelper(path: manifest.path(of: bundled), build: bundled.build) { [weak self] sent, total in
+            installedBuild = try await daemon.updateHelper(path: manifest.path(of: bundled), build: bundled.build) { [weak self] sent, total in
                 Task { @MainActor in
                     if case .uploading = self?.helperUpdates[id]?.step {
                         self?.helperUpdates[id]?.step = .uploading(sent: sent, total: total)
                     }
                 }
-            }
+            }.build
         case .none:
             throw HelperUpdateError.unavailable
         }
         helperUpdates[id]?.step = .restarting
         connections[id]?.retry()
-        // Back when the daemon has been reconnected to and the session is open again. A hot
-        // upgrade keeps the daemon run's epoch, so the reconnection itself is the signal.
+        // Back when a reconnection is open again on the new build. A hot upgrade keeps the
+        // daemon run's epoch, and the old daemon may answer the first redial before it
+        // restarts, so only the build it reports tells them apart.
         let deadline = ContinuousClock.now + .seconds(60)
         while ContinuousClock.now < deadline {
             if let daemon = connections[id] as? DaemonConnection, daemon.status.isLive,
-               previousConnections.map({ daemon.connectionCount > $0 }) ?? true {
+               previousConnections.map({ daemon.connectionCount > $0 }) ?? true,
+               installedBuild.map({ daemon.daemonInfo?.build == $0 }) ?? true {
                 Self.log.info("helper updated host=\(id, privacy: .public) to \(daemon.daemonInfo?.build ?? "?", privacy: .public) in \((ContinuousClock.now - started) / .milliseconds(1), format: .fixed(precision: 0)) ms")
                 return
             }
