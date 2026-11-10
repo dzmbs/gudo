@@ -53,7 +53,16 @@ hook="${hook_cmd% Stop}"
 send() { printf '%s' "$2" | eval "$hook $1"; }
 sid="fake-$$"
 json() { /usr/bin/python3 -c 'import json,sys; print(json.dumps(dict(a.split("=",1) for a in sys.argv[1:])))' "$@"; }
-send SessionStart "$(json session_id=$sid hook_event_name=SessionStart source=startup cwd=$PWD)" >/dev/null
+if [ -n "${CHAT_SESSION_SCRIPT:-}" ]; then
+  # A recorded-format session file where Claude Code keeps it, so Chat has a conversation to show.
+  sid=$(/usr/bin/uuidgen | tr 'A-Z' 'a-z')
+  project="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(pwd -P | sed 's/[^A-Za-z0-9]/-/g')"
+  mkdir -p "$project"
+  /usr/bin/python3 "$CHAT_SESSION_SCRIPT" "$sid" "$(pwd -P)" "$project/$sid.jsonl"
+  send SessionStart "$(json session_id=$sid hook_event_name=SessionStart source=startup cwd=$PWD transcript_path=$project/$sid.jsonl)" >/dev/null
+else
+  send SessionStart "$(json session_id=$sid hook_event_name=SessionStart source=startup cwd=$PWD)" >/dev/null
+fi
 printf '\n  * Claude stand-in for tests\n\n'
 while IFS= read -r line; do
   send UserPromptSubmit "$(json session_id=$sid hook_event_name=UserPromptSubmit cwd=$PWD)" >/dev/null

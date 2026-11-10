@@ -17,6 +17,8 @@ shift || true
 state="$(mktemp -d "${TMPDIR:-/tmp}/gudo-w3.XXXXXX")"
 "$apple/scripts/w3-fixtures.sh" "$state" >/dev/null
 export PORT="${PORT:-47613}"
+# Chat's suite gives the stand-in `claude` a conversation to show.
+[ "${UI_TEST_CLASS:-}" = ChatSwitchUITests ] && export CHAT_SESSION_SCRIPT="$apple/scripts/chat-session.py"
 
 daemon() { PORT="${PORT:-47613}" "$apple/scripts/w3-daemon.sh" "$1" "$state"; }
 ticket="$(daemon start)"
