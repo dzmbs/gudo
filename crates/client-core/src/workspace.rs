@@ -134,20 +134,11 @@ pub(crate) struct WsState {
 }
 
 impl WsState {
-    pub(crate) fn control_is_live(&self, control: &proto::ClientCtl) -> bool {
-        match control {
-            proto::ClientCtl::Workspace {
-                req_id,
-                req:
-                    WorkspaceRequest::ChatPrepare { .. }
-                    | WorkspaceRequest::ChatSend { .. }
-                    | WorkspaceRequest::ChatInterruptPrepare { .. }
-                    | WorkspaceRequest::ChatInterrupt { .. },
-            } => lock(&self.pending)
-                .get(req_id)
-                .is_some_and(|reply| !reply.is_closed()),
-            _ => true,
-        }
+    /// Whether a caller still waits for the answer to `req_id`.
+    pub(crate) fn awaits(&self, req_id: u64) -> bool {
+        lock(&self.pending)
+            .get(&req_id)
+            .is_some_and(|reply| !reply.is_closed())
     }
 
     /// Handles a workspace message from `ctl`; returns it back if it is not one.

@@ -2,6 +2,7 @@
 
 mod liveness;
 mod offline;
+mod queue;
 mod recovery;
 mod redial;
 mod ssh_host;

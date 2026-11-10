@@ -660,11 +660,14 @@ impl DaemonClient {
             op_id
         };
         let tap = Arc::clone(&self.tap);
+        let core = self.core();
         on_runtime(async move {
             match tokio::time::timeout(OP_TIMEOUT, rx).await {
                 Ok(Ok(outcome)) => Ok(outcome),
                 _ => {
                     lock(&tap.ops).remove(&op_id);
+                    // Its caller hears it failed: it must not be applied when the host is back.
+                    core.withdraw_op(op_id);
                     Err(WorkspaceError::Disconnected)
                 }
             }

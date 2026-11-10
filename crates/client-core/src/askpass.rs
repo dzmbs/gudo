@@ -101,6 +101,13 @@ pub(crate) fn announces(options: &crate::ConnectOptions, guest: bool) -> bool {
 }
 
 impl AskpassState {
+    /// Whether a caller still waits for the answer to `req_id`.
+    pub(crate) fn awaits(&self, req_id: u64) -> bool {
+        lock(&self.pending)
+            .get(&req_id)
+            .is_some_and(|reply| !reply.is_closed())
+    }
+
     /// Handles an askpass message from `ctl`; returns it back if it is not one. Pushes on a
     /// connection that did not announce the capability are dropped: a daemon is not trusted
     /// to honour it.

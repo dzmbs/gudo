@@ -40,6 +40,7 @@ pub mod knock;
 mod listen;
 mod mirror;
 mod mp;
+mod outgoing;
 mod peer;
 pub mod push;
 mod resend;
@@ -66,6 +67,7 @@ use tokio::runtime::Runtime;
 use tokio::sync::{Notify, mpsc, watch};
 
 use crate::mirror::Mirror;
+use crate::outgoing::Outgoing;
 
 pub use approvals::{ApprovalEvent, ApprovalEventQueue, ApprovalListener};
 pub use artifacts::{ArtifactEventQueue, ArtifactListener, ArtifactUpdate};
@@ -462,16 +464,6 @@ pub(crate) struct Wanted {
     pub colors: Option<proto::TerminalColors>,
 }
 
-/// Something for the live connection to send.
-#[derive(Debug)]
-pub(crate) enum Outgoing {
-    Ctl(ClientCtl),
-    Input {
-        pane_id: PaneId,
-        payload: InputPayload,
-    },
-}
-
 pub(crate) struct Inner {
     pub ticket: Ticket,
     /// The daemon's relays, from the ticket's extras (self-hosted, none, or the default).
@@ -489,8 +481,7 @@ pub(crate) struct Inner {
     /// Held while one stream applies a pane's frame and hands it to the app, so a pane being
     /// followed on two streams at once still reaches the app in the order it was applied.
     pub pane_output_turns: Mutex<HashMap<PaneId, Arc<Mutex<()>>>>,
-    pub outgoing_tx: mpsc::UnboundedSender<Outgoing>,
-    pub outgoing_rx: tokio::sync::Mutex<mpsc::UnboundedReceiver<Outgoing>>,
+    pub(crate) outgoing: outgoing::OutgoingQueue,
     pub connection: Mutex<Option<Connection>>,
     pub endpoint: Mutex<Option<iroh::Endpoint>>,
     pub reconnect: Notify,
@@ -592,7 +583,31 @@ impl Inner {
     }
 
     fn send(&self, ctl: ClientCtl) {
-        let _ = self.outgoing_tx.send(Outgoing::Ctl(ctl));
+        self.queue(Outgoing::Ctl(ctl));
+    }
+
+    fn queue(&self, item: Outgoing) {
+        let link = if lock(&self.connection).is_some() {
+            outgoing::Link::Up
+        } else {
+            outgoing::Link::Down
+        };
+        self.outgoing
+            .push(item, link, |control| self.request_is_live(control));
+    }
+
+    /// Whether anyone still waits for the answer to `control` (always, for what is not a
+    /// request): a request whose caller gave up or timed out is never sent.
+    pub(crate) fn request_is_live(&self, control: &ClientCtl) -> bool {
+        match control {
+            ClientCtl::Workspace { req_id, .. } => self.ws.awaits(*req_id),
+            ClientCtl::Multiplayer { req_id, .. } => self.mp.awaits(*req_id),
+            ClientCtl::Artifact { req_id, .. } => self.art.awaits(*req_id),
+            ClientCtl::Assist { req_id, .. } => self.assist.awaits(*req_id),
+            ClientCtl::Askpass { req_id, .. } => self.askpass.awaits(*req_id),
+            ClientCtl::Approval { req_id, .. } => self.approvals.awaits(*req_id),
+            _ => true,
+        }
     }
 
     /// Whether the daemon of the current (or last) connection announced `feature`.
@@ -758,7 +773,6 @@ impl Client {
                 (ticket, proto::TicketRelays::default(), Some(invite))
             }
         };
-        let (outgoing_tx, outgoing_rx) = mpsc::unbounded_channel();
         let inner = Arc::new(Inner {
             ticket,
             relays,
@@ -771,8 +785,7 @@ impl Client {
             wanted: Mutex::new(Wanted::default()),
             mirrors: Mutex::new(HashMap::new()),
             pane_output_turns: Mutex::new(HashMap::new()),
-            outgoing_tx,
-            outgoing_rx: tokio::sync::Mutex::new(outgoing_rx),
+            outgoing: outgoing::OutgoingQueue::default(),
             connection: Mutex::new(None),
             endpoint: Mutex::new(None),
             reconnect: Notify::new(),
@@ -923,7 +936,8 @@ impl Client {
         self.inner.send(ClientCtl::Resize { pane_id, size });
     }
 
-    /// Sends input to a pane. Queued while disconnected and delivered after reconnecting.
+    /// Sends input to a pane. Queued while disconnected (up to 8 MiB) and delivered after
+    /// reconnecting.
     /// Input larger than one frame allows is sent in 1 MiB pieces.
     pub fn send_input(&self, pane_id: PaneId, data: Vec<u8>) {
         const PIECE: usize = 1 << 20;
@@ -995,10 +1009,18 @@ impl Client {
     }
 
     fn send_payload(&self, pane_id: PaneId, payload: InputPayload) {
-        let _ = self
-            .inner
-            .outgoing_tx
-            .send(Outgoing::Input { pane_id, payload });
+        self.inner.queue(Outgoing::Input { pane_id, payload });
+    }
+
+    /// Withdraws op `op_id` if it is still waiting for a connection, so it is never applied
+    /// (its caller gave up on it). Returns whether it was waiting.
+    pub fn withdraw_op(&self, op_id: u64) -> bool {
+        self.inner.outgoing.withdraw_op(op_id)
+    }
+
+    /// Requests and input waiting to be sent: a handful, or what waits for a connection.
+    pub fn queued(&self) -> usize {
+        self.inner.outgoing.len()
     }
 
     fn next_id(&self) -> u64 {

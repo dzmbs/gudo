@@ -69,6 +69,13 @@ pub(crate) struct AssistState {
 }
 
 impl AssistState {
+    /// Whether a caller still waits for the answer to `req_id`.
+    pub(crate) fn awaits(&self, req_id: u64) -> bool {
+        lock(&self.pending)
+            .get(&req_id)
+            .is_some_and(|reply| !reply.is_closed())
+    }
+
     /// Handles an input-assistance message from `ctl`; returns it back if it is not one.
     pub(crate) fn dispatch(&self, message: ServerCtl) -> Option<ServerCtl> {
         let event = match message {

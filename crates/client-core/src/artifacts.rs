@@ -94,6 +94,14 @@ pub(crate) struct ArtState {
 }
 
 impl ArtState {
+    /// Whether a caller (or the catch-up after a reconnect) still waits for `req_id`.
+    pub(crate) fn awaits(&self, req_id: u64) -> bool {
+        lock(&self.resync).contains(&req_id)
+            || lock(&self.pending)
+                .get(&req_id)
+                .is_some_and(|reply| !reply.is_closed())
+    }
+
     fn notify(&self, update: ArtifactUpdate) {
         let listener = lock(&self.listener).clone();
         if let Some(listener) = listener {

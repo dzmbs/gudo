@@ -20,7 +20,8 @@ use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinSet;
 
 use crate::mirror::{Applied, Mirror};
-use crate::{ClientEvent, Inner, Outgoing, RelayMode, device_id, lock};
+use crate::outgoing::Outgoing;
+use crate::{ClientEvent, Inner, RelayMode, device_id, lock};
 
 const MAX_BACKOFF: Duration = Duration::from_secs(5);
 /// How long a connection must stay up for its end to count as a drop, redialled at once,
@@ -769,16 +770,14 @@ async fn run(inner: &Arc<Inner>, live: Live) -> String {
 
     let direct_address_watch =
         tokio::spawn(remember_direct_addresses(Arc::clone(inner), conn.clone()));
-    let mut outgoing = inner.outgoing_rx.lock().await;
     let reason = loop {
         tokio::select! {
-            msg = outgoing.recv() => {
-                let Some(msg) = msg else { break "client dropped".to_owned() };
+            msg = inner.outgoing.next() => {
                 match msg {
                     Outgoing::Ctl(ctl) => {
                         if !control_supported(&ctl, input_features, more_features) {
                             inner.ws.refuse_unsupported(&ctl);
-                        } else if inner.ws.control_is_live(&ctl) {
+                        } else if inner.request_is_live(&ctl) {
                             let _ = ctl_out.send(ctl);
                         }
                     }
@@ -901,10 +900,9 @@ async fn run_incompatible(inner: &Arc<Inner>, live: Live) -> String {
     inner.emit(ClientEvent::Incompatible {
         reason: incompatible_words(&proto::RefuseReason::SnapshotFormat { daemon: 0 }),
     });
-    let mut outgoing = inner.outgoing_rx.lock().await;
     let reason = loop {
         tokio::select! {
-            msg = outgoing.recv() => if msg.is_none() { break "client dropped".to_owned() },
+            _ = inner.outgoing.next() => {}
             closed = conn.closed() => break closed.to_string(),
         }
     };
@@ -923,7 +921,7 @@ async fn write_ctl(
         batch.clear();
         let mut next = Some(msg);
         while let Some(msg) = next {
-            if inner.ws.control_is_live(&msg)
+            if inner.request_is_live(&msg)
                 && let Err(err) = proto::frame::encode(&msg, &mut batch)
             {
                 tracing::warn!("encoding ctl: {err}");

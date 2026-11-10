@@ -139,6 +139,13 @@ pub(crate) struct MpState {
 }
 
 impl MpState {
+    /// Whether a caller still waits for the answer to `req_id`.
+    pub(crate) fn awaits(&self, req_id: u64) -> bool {
+        lock(&self.pending)
+            .get(&req_id)
+            .is_some_and(|reply| !reply.is_closed())
+    }
+
     pub(crate) fn with_invite(invite: Option<Invite>) -> Self {
         Self {
             invite,
