@@ -15,8 +15,9 @@ import VoiceKit
 ///   pinned                  scrolls: the profile's keys, then the user's favourites
 /// ```
 ///
-/// - `esc ctrl tab enter` (and `alt` where there is room) never move; the rest scrolls, faded at
-///   the edge while more keys wait. A program's profile puts its keys before the favourites.
+/// - `esc ctrl tab enter` (and `alt` where there is room) never move; the rest scrolls, a key cut
+///   by an edge faded. A program's profile puts its keys before the favourites. The first few
+///   times the keyboard comes up, the keys settle in from further along to show the row scrolls.
 /// - ✥ sends arrows while dragged from it (repeating, faster further out); a tap opens the keys
 ///   panel in place of the keyboard, at the keyboard's height, where the favourites are edited.
 /// - A key's second character is in its long-press menu. ⌫ repeats while held.
@@ -428,6 +429,7 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
         guard shown != softwareKeyboardShown else { return }
         softwareKeyboardShown = shown
         apply()
+        if shown, !compact { strip.settleInIfNeeded() }
     }
 
     /// The panels above the capsules share one glass card.

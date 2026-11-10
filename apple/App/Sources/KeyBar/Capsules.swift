@@ -139,21 +139,22 @@ final class CapsuleView: UIView {
     }
 }
 
-/// The key bar's one row: a Liquid Glass capsule with the pinned keys (esc, ctrl, tab) at its
-/// leading end and the rest in a strip that scrolls sideways, faded at an edge while more keys
-/// wait past it. Like `CapsuleView`, its touch area reaches 6 pt above and below.
+/// The key bar's one row: a Liquid Glass capsule with the pinned keys (esc, ctrl, tab, enter) at
+/// its leading end and the rest in a strip that scrolls sideways, a key cut by an edge faded while
+/// more keys wait past it. Like `CapsuleView`, its touch area reaches 6 pt above and below.
 final class KeyStripView: UIView, UIScrollViewDelegate {
     private static let dividerWidth: CGFloat = 9
-    private static let fadeWidth: CGFloat = 18
+    static let hintsShownKey = "keyBar.stripHintsShown"
+    static let scrolledKey = "keyBar.stripScrolled"
 
     private let glass = ThemedGlassView { KeyBarTheme.chrome }
     private let divider = UIView()
     private let scrollView = KeyScrollView()
-    private let fade = CAGradientLayer()
     private(set) var pinnedKeys: [CapsuleKey] = []
     private(set) var scrollingKeys: [CapsuleKey] = []
     private var pinnedSlots: [CGFloat] = []
     private var scrollingSlots: [CGFloat] = []
+    private var settleIn: UIViewPropertyAnimator?
     var metrics: CapsuleMetrics
 
     init(metrics: CapsuleMetrics) {
@@ -169,9 +170,6 @@ final class KeyStripView: UIView, UIScrollViewDelegate {
         scrollView.scrollsToTop = false
         scrollView.accessibilityIdentifier = "keybar-strip"
         scrollView.delegate = self
-        fade.startPoint = CGPoint(x: 0, y: 0.5)
-        fade.endPoint = CGPoint(x: 1, y: 0.5)
-        scrollView.layer.mask = fade
         addSubview(scrollView)
     }
 
@@ -237,25 +235,54 @@ final class KeyStripView: UIView, UIScrollViewDelegate {
         updateFade()
     }
 
+    private var scroll: KeyStripScroll {
+        KeyStripScroll(keyWidths: scrollingSlots, viewportWidth: scrollView.bounds.width)
+    }
+
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         updateFade()
     }
 
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        settleIn?.stopAnimation(true)
+        settleIn = nil
+        UserDefaults.standard.set(true, forKey: Self.scrolledKey)
+    }
+
+    func scrollViewWillEndDragging(_ scrollView: UIScrollView, withVelocity velocity: CGPoint,
+                                   targetContentOffset: UnsafeMutablePointer<CGPoint>) {
+        targetContentOffset.pointee.x = scroll.restingOffset(near: targetContentOffset.pointee.x)
+    }
+
+    /// The first few times the bar comes up, until the user has scrolled the keys themselves, they
+    /// settle in from two keys along: one motion toward the start, showing that the row moves.
+    func settleInIfNeeded() {
+        layoutIfNeeded()
+        let defaults = UserDefaults.standard
+        let hintsShown = defaults.integer(forKey: Self.hintsShownKey)
+        let scroll = scroll
+        guard settleIn == nil, scrollView.contentOffset.x == 0,
+              scroll.showsHint(hintsShown: hintsShown, hasScrolled: defaults.bool(forKey: Self.scrolledKey),
+                               reduceMotion: UIAccessibility.isReduceMotionEnabled) else { return }
+        defaults.set(hintsShown + 1, forKey: Self.hintsShownKey)
+        scrollView.contentOffset.x = scroll.hintOffset
+        // Critically damped: no overshoot past the first key. A drag stops it where it is.
+        let animator = UIViewPropertyAnimator(duration: 0.7, dampingRatio: 1) { [scrollView] in
+            scrollView.contentOffset.x = 0
+        }
+        animator.addCompletion { [weak self] _ in self?.settleIn = nil }
+        settleIn = animator
+        animator.startAnimation(afterDelay: 0.15)
+    }
+
+    /// Each key fades by how far it reaches past an edge.
     private func updateFade() {
-        let width = scrollView.bounds.width
-        guard width > 0 else { return }
+        guard scrollView.bounds.width > 0 else { return }
         let offset = scrollView.contentOffset.x
-        let fadesStart = offset > 1
-        let fadesEnd = offset + width < scrollView.contentSize.width - 1
-        let edge = min(0.4, Self.fadeWidth / width)
-        let opaque = UIColor.black.cgColor
-        let clear = UIColor.clear.cgColor
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        fade.frame = scrollView.bounds
-        fade.colors = [fadesStart ? clear : opaque, opaque, opaque, fadesEnd ? clear : opaque]
-        fade.locations = [0, NSNumber(value: Double(edge)), NSNumber(value: Double(1 - edge)), 1]
-        CATransaction.commit()
+        let scroll = scroll
+        for key in scrollingKeys {
+            key.alpha = scroll.opacity(ofKeyFrom: key.frame.minX, to: key.frame.maxX, at: offset)
+        }
     }
 
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
