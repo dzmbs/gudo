@@ -50,6 +50,8 @@ enum WorkspaceAction: Hashable {
     case splitBestFit
     /// A browser beside the focused pane, on the dev server it runs.
     case openBrowser
+    /// The focused pane's own font size (Ghostty's View menu).
+    case resetFontSize, increaseFontSize, decreaseFontSize
 
     static let fileActions: [Self] = [.newTab, .newTabOnHost, .newAgent, .newProject, .splitRight, .splitDown, .splitWithHost, .closePane]
     static let paneActions: [Self] = [.toggleZoom, .splitBestFit, .movePaneToNewTab] + Direction.allCases.map(Self.focus)
@@ -61,11 +63,14 @@ enum WorkspaceAction: Hashable {
     static let tabActions: [Self] = [.previousTab, .nextTab] + (1...8).map(Self.selectTab) + [.lastTab, .goToTab, .moveTabUp, .moveTabDown]
     static let hostActions: [Self] = (1...9).map(Self.selectHost)
     static let historyActions: [Self] = [.reopenClosedTab]
+    static let fontActions: [Self] = [.resetFontSize, .increaseFontSize, .decreaseFontSize]
     static let windowActions: [Self] = [.toggleSidebar, .shortcuts, .commandPalette, .commandPaletteGhostty, .find, .findNext, .findPrevious, .links, .inbox, .jumpToWaitingAgent, .hosts]
     /// Every app shortcut. The terminal answers these itself while it has the keyboard (iPad):
     /// UIKit asks the first responder first, so they never depend on the responder chain reaching
     /// the scene's menu commands, which it can miss right after the window switched hosts.
-    static let allShortcutActions: [Self] = fileActions + paneActions + drawActions + browserActions + tabActions + hostActions + windowActions + historyActions + floatActions + [.newWindow]
+    static let allShortcutActions: [Self] = fileActions + paneActions + drawActions + browserActions + tabActions + hostActions + windowActions + historyActions + floatActions + fontActions + [.newWindow]
+    /// `allShortcutActions` key by key, with the keys that share an action (`shortcuts`).
+    static let allShortcutKeys = allShortcutActions.flatMap { action in action.shortcuts.map { (action: action, shortcut: $0) } }
 
     /// Whether the shortcut stays the app's while a VS Code pane has the keyboard:
     /// ⌘1–⌘9 switch tabs (VS Code's own ⌘1–⌘8 focus editor
@@ -128,6 +133,9 @@ enum WorkspaceAction: Hashable {
         case .movePane(let direction): "Move Pane \(direction.moveName)"
         case .splitBestFit: "Split Pane Best Fit"
         case .openBrowser: "Open Browser Beside"
+        case .resetFontSize: "Reset Font Size"
+        case .increaseFontSize: "Increase Font Size"
+        case .decreaseFontSize: "Decrease Font Size"
         }
     }
 
@@ -200,6 +208,18 @@ enum WorkspaceAction: Hashable {
         case .splitBestFit: KeyboardShortcut(.return, modifiers: .command)
         // Free in the app and the systems; ⌘B beside it is the sidebar.
         case .openBrowser: KeyboardShortcut("b", modifiers: [.command, .shift])
+        case .resetFontSize: KeyboardShortcut("0")
+        case .increaseFontSize: KeyboardShortcut("+")
+        case .decreaseFontSize: KeyboardShortcut("-")
+        }
+    }
+
+    /// `shortcut`, which the menu shows, and any other keys that do the same. ⌘+ takes ⇧ on many
+    /// layouts, so ⌘= increases the font size too, as in Ghostty.
+    var shortcuts: [KeyboardShortcut] {
+        switch self {
+        case .increaseFontSize: [shortcut, KeyboardShortcut("=")]
+        default: [shortcut]
         }
     }
 
@@ -282,6 +302,9 @@ enum WorkspaceAction: Hashable {
         case .draw: DrawingCommands.toggleDrawing(in: workspace)
         case .newDrawing: if let window = ActiveWindow.model { DrawingDocuments.newDrawing(window: window) }
         case .commandPalette, .commandPaletteGhostty, .find, .findNext, .findPrevious, .links, .inbox, .jumpToWaitingAgent, .hosts, .toggleSidebar, .shortcuts: break
+        case .resetFontSize: workspace.changeFocusedFontSize(.reset)
+        case .increaseFontSize: workspace.changeFocusedFontSize(.increase)
+        case .decreaseFontSize: workspace.changeFocusedFontSize(.decrease)
         }
     }
 

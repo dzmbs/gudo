@@ -18,6 +18,7 @@ struct ShortcutsSheet: View {
             ("Floating Windows", WorkspaceAction.floatActions),
             ("Drawing", WorkspaceAction.drawActions),
             ("Browser", WorkspaceAction.browserActions),
+            ("Font", WorkspaceAction.fontActions),
         ]
     }
 

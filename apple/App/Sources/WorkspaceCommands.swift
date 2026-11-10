@@ -120,6 +120,8 @@ struct WorkspaceCommands: Commands {
             Button("Archive Worktree") { if let worktree = model?.git.worktree { model?.git.archive(worktree) } }
         }
         CommandGroup(before: .sidebar) {
+            buttons(WorkspaceAction.fontActions)
+            Divider()
             Button(model?.isSidebarShown == false ? "Show Sidebar" : "Hide Sidebar") {
                 if let model { WorkspaceAction.toggleSidebar.perform(window: model) }
             }

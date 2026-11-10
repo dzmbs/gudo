@@ -428,21 +428,21 @@ private final class ChipButton: UIButton {
 /// commands, so it answers the workspace shortcuts itself (⌘T, ⌘D, ⌘W, tabs, panes); otherwise
 /// no ⌘ shortcut works while it holds the keyboard.
 final class ShortcutTextField: UITextField {
-    private static let actions = WorkspaceAction.allShortcutActions
+    private static let keys = WorkspaceAction.allShortcutKeys
 
     override var keyCommands: [UIKeyCommand]? {
-        Self.actions.enumerated().map { index, action in
-            let command = UIKeyCommand(title: action.title, action: #selector(performShortcut(_:)), input: action.shortcut.key.uiKeyInput,
-                                       modifierFlags: action.shortcut.modifiers.uiKeyModifierFlags, propertyList: index)
+        Self.keys.enumerated().map { index, key in
+            let command = UIKeyCommand(title: key.action.title, action: #selector(performShortcut(_:)), input: key.shortcut.key.uiKeyInput,
+                                       modifierFlags: key.shortcut.modifiers.uiKeyModifierFlags, propertyList: index)
             command.wantsPriorityOverSystemBehavior = true
             return command
         }
     }
 
     @objc private func performShortcut(_ command: UIKeyCommand) {
-        guard let index = command.propertyList as? Int, Self.actions.indices.contains(index),
+        guard let index = command.propertyList as? Int, Self.keys.indices.contains(index),
               let workspace = ActiveWindow.workspace else { return }
-        Self.actions[index].perform(on: workspace, window: ActiveWindow.model(for: workspace))
+        Self.keys[index].action.perform(on: workspace, window: ActiveWindow.model(for: workspace))
     }
 }
 #endif

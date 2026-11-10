@@ -21,7 +21,7 @@ enum WorkspaceShortcuts {
     }
 
     private static let actions = WorkspaceAction.fileActions + WorkspaceAction.paneActions + WorkspaceAction.drawActions + WorkspaceAction.tabActions
-        + WorkspaceAction.historyActions + WorkspaceAction.floatActions + WorkspaceAction.browserActions
+        + WorkspaceAction.historyActions + WorkspaceAction.floatActions + WorkspaceAction.browserActions + WorkspaceAction.fontActions
 
     private static func handle(_ event: NSEvent) -> Bool {
         if selectionKey(event) { return true }
@@ -67,15 +67,30 @@ enum WorkspaceShortcuts {
         return false
     }
 
-    private static func action(for event: NSEvent) -> WorkspaceAction? {
+    static func action(for event: NSEvent) -> WorkspaceAction? {
         var modifiers: EventModifiers = []
         let flags = event.modifierFlags
         if flags.contains(.command) { modifiers.insert(.command) }
         if flags.contains(.shift) { modifiers.insert(.shift) }
         if flags.contains(.option) { modifiers.insert(.option) }
         if flags.contains(.control) { modifiers.insert(.control) }
-        let key = keyEquivalent(of: event)
-        return actions.first { $0.shortcut.modifiers == modifiers && $0.shortcut.key == key }
+        return action(key: keyEquivalent(of: event), modifiers: modifiers)
+            ?? shiftedSymbol(of: event).flatMap { action(key: $0, modifiers: modifiers.subtracting(.shift)) }
+    }
+
+    private static func action(key: KeyEquivalent?, modifiers: EventModifiers) -> WorkspaceAction? {
+        actions.first { action in
+            action.shortcuts.contains { $0.modifiers == modifiers && $0.key == key }
+        }
+    }
+
+    /// The symbol ⇧ types, for a shortcut named by it as a menu names it: ⇧⌘= is ⌘+ on a US
+    /// layout. Letters keep ⇧ as a modifier (⇧⌘D is not ⌘D).
+    private static func shiftedSymbol(of event: NSEvent) -> KeyEquivalent? {
+        guard event.modifierFlags.contains(.shift), let character = event.charactersIgnoringModifiers?.first,
+              !character.isLetter
+        else { return nil }
+        return KeyEquivalent(character)
     }
 
     /// The key as a menu would name it: arrows and Return by key, others by the character the

@@ -712,10 +712,10 @@ final class Workspace {
         pane.view.takeLatchedModifiers = { [keyBar] in keyBar.takeLatchedModifiers() }
         // The terminal answers every app shortcut itself: right after the window switches
         // hosts, the menu commands found through the responder chain can miss them.
-        let shortcuts = WorkspaceAction.allShortcutActions
-        pane.view.appKeyCommands = shortcuts.map { action in
+        let shortcuts = WorkspaceAction.allShortcutKeys
+        pane.view.appKeyCommands = shortcuts.map { key in
             UIKeyCommand(
-                input: action.shortcut.key.uiKeyInput, modifierFlags: action.shortcut.modifiers.uiKeyModifierFlags,
+                input: key.shortcut.key.uiKeyInput, modifierFlags: key.shortcut.modifiers.uiKeyModifierFlags,
                 action: #selector(TerminalView.performAppKeyCommand(_:)))
         }
         pane.view.onFontSizeChange = { [weak self] size in
@@ -728,7 +728,7 @@ final class Workspace {
         }
         pane.view.onAppKeyCommand = { [weak self] index in
             guard let self, shortcuts.indices.contains(index) else { return }
-            shortcuts[index].perform(on: self, window: ActiveWindow.model(for: self))
+            shortcuts[index].action.perform(on: self, window: ActiveWindow.model(for: self))
         }
         pane.view.onFocus = { [weak self, weak pane] in
             guard let self, let pane else { return }
