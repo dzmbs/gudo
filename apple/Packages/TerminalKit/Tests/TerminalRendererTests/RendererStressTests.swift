@@ -162,7 +162,7 @@ import Testing
         var busy = 0.0
         // 16 flooding panes at 60 Hz, 5 ms each: 480 ms of work asked for per second.
         for _ in 0..<600 {
-            for pane in 0..<16 where budget.mayRender(focused: pane == 0, now: now) {
+            for pane in 0..<16 where budget.mayRender(focused: pane == 0, waitingSince: nil, now: now) {
                 budget.spend(0.005)
                 busy += 0.005
             }
@@ -176,7 +176,7 @@ import Testing
         now = 0
         var frames = 0
         for _ in 0..<600 {
-            if focused.mayRender(focused: true, now: now) {
+            if focused.mayRender(focused: true, waitingSince: nil, now: now) {
                 focused.spend(0.14)
                 now += 0.14
                 frames += 1
@@ -185,7 +185,39 @@ import Testing
         }
         #expect(frames > 0)
         #expect(Double(frames) * 0.14 / now <= 0.55)
-        #expect(!focused.mayRender(focused: false, now: now) || focused.mayRender(focused: true, now: now))
+        #expect(!focused.mayRender(focused: false, waitingSince: nil, now: now) || focused.mayRender(focused: true, waitingSince: nil, now: now))
+    }
+
+    /// A flooding focused pane never starves the others: a pane waiting past the starvation
+    /// limit renders within a few frames of it, and the main thread keeps its share.
+    @Test func aFloodingFocusedPaneLeavesTheOthersFrames() {
+        var budget = RenderBudget()
+        var now = 0.0
+        var waitingSince: CFTimeInterval?
+        var unfocusedFrames: [CFTimeInterval] = []
+        var busy = 0.0
+        for tick in 0..<1200 {
+            // The focused pane ticks at 120 Hz, the other at 60 Hz; both cost 20 ms a frame.
+            if budget.mayRender(focused: true, waitingSince: nil, now: now) {
+                budget.spend(0.02)
+                busy += 0.02
+            }
+            if tick % 2 == 0 {
+                if budget.mayRender(focused: false, waitingSince: waitingSince, now: now) {
+                    budget.spend(0.02)
+                    busy += 0.02
+                    unfocusedFrames.append(now)
+                    waitingSince = nil
+                } else if waitingSince == nil {
+                    waitingSince = now
+                }
+            }
+            now += 1.0 / 120
+        }
+        let gaps = zip(unfocusedFrames.dropFirst(), unfocusedFrames).map { $0 - $1 }
+        #expect(unfocusedFrames.count >= 25, "\(unfocusedFrames.count) frames in 10 s")
+        #expect((gaps.max() ?? 10) < RenderBudget.starvationLimit + 0.1, "longest wait \(gaps.max() ?? 10) s")
+        #expect(busy / now <= budget.share + 0.02)
     }
 
     /// A frame the layer had no drawable for is not lost: the pane stays dirty and draws it on

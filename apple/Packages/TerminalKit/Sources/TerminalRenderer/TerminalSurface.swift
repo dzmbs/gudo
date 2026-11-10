@@ -1139,17 +1139,27 @@ public final class TerminalSurface {
 
     /// Main-thread time shared by every surface's display-link frames.
     static var renderBudget = RenderBudget()
+    /// When the budget first refused this surface a frame since it last drew.
+    private var budgetWaitStart: CFTimeInterval?
+    /// How long the last frame waited for a drawable and a free frame buffer.
+    private var lastFrameWait: CFTimeInterval = 0
     /// Where frames for the screen come from (tests stand in a layer out of drawables).
     var drawableSource: (CAMetalLayer) -> CAMetalDrawable? = { $0.nextDrawable() }
 
     fileprivate func tick(_ link: CADisplayLink) {
+        let now = CACurrentMediaTime()
         // Over budget: stay dirty and try again on a later tick.
-        guard Self.renderBudget.mayRender(focused: isFocused, now: CACurrentMediaTime()) else { return }
+        guard Self.renderBudget.mayRender(focused: isFocused, waitingSince: budgetWaitStart, now: now) else {
+            if budgetWaitStart == nil { budgetWaitStart = now }
+            return
+        }
+        budgetWaitStart = nil
         wakePending.store(false, ordering: .releasing)
         if terminal.releaseExpiredHeldOutput() { outputArrived() }
         let start = CACurrentMediaTime()
         let rendered = renderIfDirty()
-        Self.renderBudget.spend(CACurrentMediaTime() - start)
+        // Waiting for a drawable or a free frame buffer is the GPU's time, not the main thread's work.
+        Self.renderBudget.spend(max(0, CACurrentMediaTime() - start - lastFrameWait))
         // Keep ticking while predictions wait for confirmation, so their timeouts fire, while a
         // search is still working through the scrollback, and while a synchronized update is
         // held, so it is shown when it times out.
@@ -1249,7 +1259,9 @@ public final class TerminalSurface {
         guard terminalChanged || overlayChanged || imagesChanged || marksChanged || kittyChanged
             || builder.isIncomplete
         else { return false }
+        let waitStart = CACurrentMediaTime()
         let drawable = offscreen ? nil : drawableSource(layer)
+        lastFrameWait = CACurrentMediaTime() - waitStart
         // No drawable (the layer timed out): everything stays dirty for the next tick.
         guard offscreen || drawable != nil else { return true }
         if terminalChanged { contentGeneration &+= 1 }
@@ -1293,6 +1305,7 @@ public final class TerminalSurface {
             ) {
                 stats.recordGPU(seconds: $0)
             }
+            lastFrameWait += renderer.lastFrameBufferWait
             if drawable != nil {
                 hasPresentedFrame = true
                 if outputSeen > 0 { hasPresentedOutput = true }
@@ -1452,17 +1465,31 @@ public final class TerminalSurface {
 /// it (a full 6K grid at a tiny font costs tens of ms per frame), leaving none for input and UI.
 /// Rendering may use `share` of the time on average, in bursts up to `burst`; past that, panes
 /// skip display-link frames (they drop frame rate, never content). The focused pane may run
-/// further into debt, so it keeps priority over the others.
+/// further into debt, so it keeps priority over the others, but a pane kept waiting for
+/// `starvationLimit` takes that priority from it until it has drawn.
 struct RenderBudget {
     var share = 0.5
     var burst: CFTimeInterval = 0.05
+    static let starvationLimit: CFTimeInterval = 0.2
     private var tokens: CFTimeInterval = 0.05
     private var updated: CFTimeInterval?
+    /// Until then the focused pane yields its priority to a starved one.
+    private var starvedUntil: CFTimeInterval = 0
 
-    mutating func mayRender(focused: Bool, now: CFTimeInterval) -> Bool {
+    /// `waitingSince`: when the pane was first refused since it last drew, if it was.
+    mutating func mayRender(focused: Bool, waitingSince: CFTimeInterval?, now: CFTimeInterval) -> Bool {
         if let updated { tokens = min(burst, tokens + max(0, now - updated) * share) }
         updated = now
-        return tokens > (focused ? -burst : 0)
+        let isStarved = waitingSince.map { now - $0 >= Self.starvationLimit } ?? false
+        if isStarved {
+            guard tokens > -burst else {
+                starvedUntil = now + 0.05
+                return false
+            }
+            return true
+        }
+        let hasPriority = focused && now >= starvedUntil
+        return tokens > (hasPriority ? -burst : 0)
     }
 
     mutating func spend(_ seconds: CFTimeInterval) {

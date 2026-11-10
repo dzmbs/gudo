@@ -98,6 +98,8 @@ final class MetalRenderer {
     private var frames = [FrameBuffers](repeating: FrameBuffers(), count: maxFramesInFlight)
     private var frameIndex = 0
     private let inFlight = DispatchSemaphore(value: maxFramesInFlight)
+    /// How long the last `draw` waited for the GPU to give back a frame's buffers.
+    private(set) var lastFrameBufferWait: CFTimeInterval = 0
 
     init() throws {
         gpu = try GPUContext.shared.get()
@@ -122,7 +124,9 @@ final class MetalRenderer {
         gutter: [ImageDraw] = [], gutterClip: MTLScissorRect? = nil,
         onGPUComplete: @escaping @Sendable (Double) -> Void
     ) {
+        let waitStart = CACurrentMediaTime()
         inFlight.wait()
+        lastFrameBufferWait = CACurrentMediaTime() - waitStart
         guard let commands = gpu.queue.makeCommandBuffer() else {
             inFlight.signal()
             return
