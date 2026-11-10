@@ -153,6 +153,10 @@ pub(crate) struct PaneRecord {
     /// The command the pane runs or last ran, offered again after a restart that stopped it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_command: Option<LastCommand>,
+    /// When the pane was first opened, kept across restarts: since-join guests see a pane
+    /// opened before they joined only from when they look, never its saved screen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<proto::UnixMillis>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -278,6 +282,8 @@ pub(crate) struct PaneEntry {
     task: Mutex<Option<AbortHandle>>,
     /// When the pane's process started, for matching a Codex rollout to it.
     launched_at: SystemTime,
+    /// When the pane was first opened, before any restart ([`PaneRecord::created_at`]).
+    created_at: proto::UnixMillis,
     /// The pane's resumable agent's process and when it was first seen, for matching its
     /// session to it.
     resumable_process: Mutex<Option<(u32, SystemTime)>>,
@@ -295,13 +301,9 @@ impl PaneEntry {
         }
     }
 
-    /// Whether the pane existed at `at` (its process started no later).
+    /// Whether the pane existed at `at` (it was first opened no later, restarts aside).
     pub fn existed_at(&self, at: proto::UnixMillis) -> bool {
-        let started = self
-            .launched_at
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |since_epoch| since_epoch.as_millis() as u64);
-        started <= at.0
+        self.created_at <= at
     }
 }
 
@@ -1719,13 +1721,21 @@ impl Core {
         cwd_hint: Option<String>,
         start: PaneStart,
     ) -> Result<(), (OpError, String)> {
-        let (restored, preamble, resumable, run_again) = match start {
-            PaneStart::New => (false, Vec::new(), None, None),
+        let (restored, preamble, resumable, run_again, created_at) = match start {
+            PaneStart::New => (
+                false,
+                Vec::new(),
+                None,
+                None,
+                proto::UnixMillis(crate::identity::now_millis()),
+            ),
+            // Without a recorded creation time the pane may be older than any guest.
             PaneStart::Restored(restored) => (
                 restored.agent == AgentStart::Resumed,
                 restored.preamble,
                 restored.resumable,
                 restored.run_again,
+                restored.created_at.unwrap_or(proto::UnixMillis(0)),
             ),
         };
         let (launch, restored) = match launch {
@@ -2122,6 +2132,7 @@ impl Core {
                 command,
                 ended_at: None,
             }),
+            created_at: Some(created_at),
         };
         let accounts_changed = agent.is_some();
         let entry = Arc::new(PaneEntry {
@@ -2140,6 +2151,7 @@ impl Core {
             ticks: AtomicU64::new(0),
             task: Mutex::new(None),
             launched_at: SystemTime::now(),
+            created_at,
             resumable_process: Mutex::new(None),
             reports_commands: AtomicBool::new(false),
         });
@@ -2192,9 +2204,17 @@ impl Core {
         self: &Arc<Self>,
         carried: crate::handoff::CarriedPane,
         master: std::os::fd::OwnedFd,
-        record: PaneRecord,
+        mut record: PaneRecord,
     ) -> Result<(), pty::AdoptError> {
         let id = carried.id;
+        let created_at = *record.created_at.get_or_insert_with(|| {
+            proto::UnixMillis(
+                carried
+                    .launched_at
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |since_epoch| since_epoch.as_millis() as u64),
+            )
+        });
         let (pane, vt_events) = Pane::adopt(
             id,
             master,
@@ -2235,6 +2255,7 @@ impl Core {
             ticks: AtomicU64::new(0),
             task: Mutex::new(None),
             launched_at: carried.launched_at,
+            created_at,
             resumable_process: Mutex::new(None),
             reports_commands: AtomicBool::new(false),
         });
@@ -3222,6 +3243,8 @@ pub(crate) struct Restored {
     pub resumable: Option<ResumableAgent>,
     /// The command it was running, offered to run again.
     pub run_again: Option<String>,
+    /// When it was first opened, if its record says.
+    pub created_at: Option<proto::UnixMillis>,
 }
 
 /// Whether a restored pane's agent continues its session.
@@ -3368,6 +3391,7 @@ pub(crate) fn restore(
             resumable,
             run_again: stopped_command
                 .filter(|command| !resumes_something && can_run_again(command)),
+            created_at: record.created_at,
         });
         if let Err((_, message)) = core.spawn_pane(id, launch, None, start) {
             tracing::warn!(pane = %id, "restoring pane failed: {message}");

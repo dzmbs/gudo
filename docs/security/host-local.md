@@ -205,6 +205,10 @@ forwards end with it.
 - Saved screens (`screens/<pane>.zst`) are written like `layout.json`: atomically, 0600, in a
   0700 directory. A screen is removed when its pane leaves the saved layout. All of them
   together are capped at 64 MiB, and each at 1 MiB of text before compression.
+- A pane brought back after a restart keeps the time it was first opened (`created_at` in
+  `layout.json`; a record without one counts as older than any guest). A since-join guest
+  therefore gets it as a pane from before they joined, starting from the screen when they next
+  look, never its saved scrollback.
 - `gudo` keeps its device key, tickets and invites as 0600 files in a 0700 directory.
 
 **Logs.** No tokens, answers or terminal text are logged at info level. The first-run pairing
@@ -365,6 +369,9 @@ Each test runs the attack against the real code (real git, real sockets, a real 
   trusted commands run, and changed committed commands are untrusted again.
   `ws::trust::tests::only_the_trusted_commands_of_that_repository_run`: per repository, per
   command, kept across restarts.
+- `multiplayer_mp2::since_join_guests_see_no_saved_screen_after_a_restart` (it): a since-join
+  viewer reconnecting after a cold restart was shown the restored pane whole, with 400 lines
+  of scrollback from before they joined.
 - `agent_input::chat_tests::text_sent_as_a_terminal_report_still_counts_as_typing` and
   `input::tests::only_a_terminals_own_replies_pass_as_reports`: a client sending a command as
   "generated" bytes, which left the draft clean for the owner's next prompt.

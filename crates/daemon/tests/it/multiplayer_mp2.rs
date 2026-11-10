@@ -598,6 +598,65 @@ async fn approval_policies_decide_who_may_answer() {
     daemon.shutdown().await;
 }
 
+/// After a restart a pane comes back with its saved screen and scrollback; to a since-join
+/// guest it is still the pane from before they joined, not a new one shown whole.
+#[tokio::test(flavor = "multi_thread")]
+async fn since_join_guests_see_no_saved_screen_after_a_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let configure = |config: &mut daemon::Config| {
+        config.lease_idle = Duration::from_secs(3);
+        config.screen_save_delay = Duration::from_millis(100);
+    };
+    let daemon = start_with(dir.path(), configure).await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = owner.attach_and_follow().await;
+    owner.type_line(
+        pane,
+        "i=0; while [ $i -lt 400 ]; do echo old-line-$i; i=$((i+1)); done; echo OLD''DONE",
+    );
+    owner.wait_text(pane, "OLDDONE").await;
+    let since = InviteTerms {
+        knock: false,
+        history: History::SinceJoin,
+    };
+    let link = invite(&owner, spec(Roles::VIEWER, "sam"), since).await;
+    let sam_key = ClientConfig::generate_key();
+    let mut sam = TestClient::join(&link, sam_key.clone());
+    sam.client.attach(None);
+    sam.until("guest layout", |c| c.layout.is_some()).await;
+    sam.follow(pane).await;
+    drop((sam, owner));
+    daemon.shutdown().await;
+
+    let daemon = start_with(dir.path(), configure).await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    assert_eq!(owner.attach_and_follow().await, pane);
+    assert!(
+        all_history(&mut owner, pane)
+            .await
+            .contains("old-line-10\n")
+    );
+    let (mut readdressed, terms) = Invite::parse_with_terms(&link).unwrap();
+    readdressed.addrs = ticket(&daemon)
+        .parse::<client_core::proto::Ticket>()
+        .unwrap()
+        .addrs;
+    let mut sam = TestClient::join(&readdressed.to_string_with_terms(terms), sam_key);
+    sam.client.attach(None);
+    sam.until("guest layout", |c| c.layout.is_some()).await;
+    sam.follow(pane).await;
+    owner.type_line(pane, "echo after-''restart");
+    sam.wait_text(pane, "after-restart").await;
+    let sam_text = all_history(&mut sam, pane).await;
+    assert!(
+        !sam_text.contains("old-line-10\n"),
+        "the saved scrollback leaked: {sam_text}"
+    );
+    assert_eq!(search_total(&mut sam, pane, "old-line-1").await, 0);
+    drop((sam, owner));
+    daemon.shutdown().await;
+}
+
 async fn all_history(client: &mut TestClient, pane: PaneId) -> String {
     while client.client.fetch_history(pane, 64 << 10) {
         let before = client.history.len();
