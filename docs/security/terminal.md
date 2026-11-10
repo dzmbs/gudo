@@ -152,6 +152,10 @@ see it.
 
 **In-band channels.** The SSH helper bootstrap uses separate `exec` channels, never the
 interactive stream. Shell-integration marks (OSC 133) are trusted only for display and timing.
+The one command line the daemon keeps to offer again after a restart ("Run again") comes only
+from a mark that starts while no other command runs: marks inside a running command (a remote
+shell over ssh, `tail -f` of hostile data) are nested and ignored for it, and a line with
+control characters or newlines is never kept or offered.
 
 **Replay files.** Imported `.gudoreplay` files:
 - play in a non-persistent WebPage with no network (content rules) and no navigation;
@@ -180,7 +184,10 @@ interactive stream. Shell-integration marks (OSC 133) are trusted only for displ
 - **Unregistered extensions** (`.rs`, `.ps1`) still open in a local Mac pane; an app that
   claims one by name only could act on it.
 - **Forged command lines.** OSC 133 command text is forgeable, so a "command finished"
-  notification title can say anything, cleaned and always suffixed with its outcome.
+  notification title can say anything, cleaned and always suffixed with its outcome. Output
+  that first prints an end mark closes the running command as the shell would, so a later
+  forged start counts as the shell's own and can still become the Run again offer. The app
+  shows the whole command before it types it.
 - **Mac OSC 8 links.** On the Mac, OSC 8 web links open on ⌘-click after the hover preview,
   as in Ghostty. There is no confirmation.
 - **Clipboard writes.** A program can replace the clipboard of the device that typed last, at
@@ -252,6 +259,9 @@ with the fix removed or weakened, its test fails.
     `localFilesThatWouldRunAreNotOpened`.
   - Look-alike and `user@` hosts: `confirmationsNameTheRealHost`.
 - **Replay import/export.** `BrowserReplayTests`.
+- **Run again.** `reboot::a_command_planted_by_output_is_never_offered_again` (it): a running
+  command's output starts `echo planted`; the restart offers the shell's own command.
+  `commands::tests::commands_started_inside_a_running_one_are_nested`.
 
 - **Image bombs.** `KittyGraphicsTests`: JPEG, GIF, TIFF and BMP sent as `f=100` are refused,
   as is a PNG header claiming 10000×10000, through the real terminal.

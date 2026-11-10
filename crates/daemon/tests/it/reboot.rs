@@ -468,6 +468,43 @@ async fn a_running_command_is_offered_again_and_never_run_by_itself() {
     daemon.shutdown().await;
 }
 
+/// Output can carry command marks (`tail -f` of someone else's data, a hostile host over ssh):
+/// a command started inside the running one is never what Run again offers.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_command_planted_by_output_is_never_offered_again() {
+    let state = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let daemon = start_with(state.path(), configure(home.path())).await;
+    let (mut owner, pane) = restored_pane(&daemon).await;
+    let shell_marks = r"printf '\033]133;A\007$ \033]133;B\007\033]133;C;cmdline=sleep 598\007'";
+    let planted = r"printf '\033]133;A\007host$ \033]133;B\007\033]133;C;cmdline=echo planted\007'";
+    owner.type_line(pane, &format!("{shell_marks}; {planted}; sleep 598"));
+    owner.wait_text(pane, "host$").await;
+    wait_layout(
+        state.path(),
+        |text| text.contains("sleep 598") || text.contains("echo planted"),
+        "kept a command",
+    );
+    drop(owner);
+    daemon.shutdown().await;
+
+    let daemon = start_with(state.path(), configure(home.path())).await;
+    let (mut owner, restored) = restored_pane(&daemon).await;
+    assert_eq!(restored, pane);
+    owner
+        .until("the offer", |owner| owner.run_again.is_some())
+        .await;
+    assert_eq!(
+        owner.run_again.clone().unwrap(),
+        vec![client_core::proto::RunAgainOffer {
+            pane_id: pane,
+            command: "sleep 598".into(),
+        }]
+    );
+    drop(owner);
+    daemon.shutdown().await;
+}
+
 /// A `layout.json` from before screens, resumable agents and Run again still loads, and one
 /// from a newer daemon (fields and agents this build does not know) does too.
 #[tokio::test(flavor = "multi_thread")]

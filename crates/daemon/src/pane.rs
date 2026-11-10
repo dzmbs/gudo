@@ -1046,6 +1046,10 @@ impl Pane {
         lock(&self.vt).commands.is_private(id)
     }
 
+    pub fn command_nested(&self, id: u64) -> bool {
+        lock(&self.vt).commands.is_nested(id)
+    }
+
     /// Queues input for the child. Returns the output offset at the time of writing, which
     /// the input's echo (if any) follows.
     pub async fn write(&self, data: Vec<u8>) -> Result<Seq, InputError> {

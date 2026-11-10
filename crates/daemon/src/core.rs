@@ -2858,6 +2858,12 @@ fn handle_command(core: &Core, entry: &PaneEntry, update: CommandUpdate) {
 /// space) is not kept.
 fn note_command(core: &Core, entry: &PaneEntry, mark: &proto::CommandMark) {
     entry.reports_commands.store(true, Ordering::Relaxed);
+    // Only the pane's own shell's commands are offered again. Marks that start while a command
+    // runs come from inside it (a remote shell, or output such as `tail -f` printing them), and
+    // a planted one would otherwise be what Run again types after a restart.
+    if entry.pane.command_nested(mark.command_id) {
+        return;
+    }
     let mut record = lock(&entry.record);
     match (&mark.finished, &mark.command) {
         (None, Some(command)) => {
