@@ -150,6 +150,42 @@ final class AppStressTests: XCTestCase {
         XCTAssertLessThan(idle.worst, .milliseconds(100), idle.description)
     }
 
+    /// Counts the sidebar's and tab bar's view updates while `load` runs.
+    private func renders(_ load: () async -> Void) async -> [String: Int] {
+        // Starts once the window has settled (this device's shell starting, first layouts).
+        for _ in 0..<20 {
+            ChromeRenders.counts = [:]
+            await pump(0.5)
+            if ChromeRenders.counts?.isEmpty == true { break }
+        }
+        ChromeRenders.counts = [:]
+        await load()
+        await pump(0.5)
+        let counts = ChromeRenders.counts ?? [:]
+        ChromeRenders.counts = nil
+        return counts
+    }
+
+    /// Every keystroke's round trip reaches the connection; while the link stays healthy, none
+    /// of it may reach the sidebar, its host headers or the tab bar.
+    func testTypingDoesNotInvalidateSidebar() async throws {
+        let host = try StressHost(id: "stress-typing", tabs: 300, projects: 0)
+        let (model, window) = try await openWindow(on: host, tabs: 300)
+        let router = host.connection.router
+        let typing = await renders {
+            await drive(200, perSecond: 100) { sample in
+                router.onEchoRoundTrip(.milliseconds(4 + sample * 7 % 90))
+            }
+        }
+        let updates = (0..<20).map { host.meta(1, state: .running, title: "building step \($0)") }
+        let busyPane = await renders {
+            await drive(updates.count, perSecond: 20) { step in host.client.send(.paneMeta(meta: updates[step])) }
+        }
+        await close(model, window, host)
+        XCTAssertEqual(typing, [:], "typing re-rendered \(typing)")
+        XCTAssertEqual(Set(busyPane.keys).subtracting(["tab-row stress-typing/1"]), [], "one pane's updates re-rendered \(busyPane)")
+    }
+
     private struct Weak {
         weak var object: AnyObject?
     }

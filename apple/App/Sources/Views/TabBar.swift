@@ -10,6 +10,9 @@ struct TabBar: View {
     @State private var widths = TabStripWidths()
 
     var body: some View {
+        #if DEBUG
+        let _ = ChromeRenders.note("tab-bar")
+        #endif
         let active = model.destination == .terminal ? model.currentTab : nil
         let refs = chipRefs
         HStack(spacing: 0) {
@@ -169,6 +172,9 @@ private struct TabChip: View {
     @State private var isHovered = false
 
     var body: some View {
+        #if DEBUG
+        let _ = ChromeRenders.note("tab-chip")
+        #endif
         let workspace = model.workspace(ofGroup: group.id)
         let states = tab.root.panes.compactMap { model.agentState(ofPane: $0, onGroup: group.id) }
         let state = states.min { $0.urgency < $1.urgency }

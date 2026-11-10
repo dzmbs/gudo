@@ -171,6 +171,8 @@ moves that off the main thread too. Guards: `GutterMarkTests.cleanFramesDoNotAsk
 | The working-title shimmer was a 30 Hz `TimelineView` rebuilding a per-glyph gradient: about 30 % of the main thread in Debug with 10 working titles, and XCUITest never saw the app idle (60 s stalls) | A gradient layer slid by Core Animation, masked by the text; same band, same phase. A sidebar of 12 working rows woke the main run loop 8299 times in 1 s before, under 15 after (`LayerAnimationTests`) |
 | The daemon re-sent a pane's metadata on every title set or agent event, and the app assigned it even when equal, which invalidated every view reading `meta` | Sent and assigned only when it changed |
 | Every terminal's display link asked for 60-120 Hz | 120 Hz only for the focused terminal; others stream output at up to 60 Hz. Every link still pauses when nothing changes. |
+| Every keystroke's round trip set the host's status, which the sidebar, its host headers and the tab bar read: typing re-rendered them all | The status changes only when the link turns slow or healthy (`echoRoundTrip` keeps the exact figure). `AppStressTests.testTypingDoesNotInvalidateSidebar`: 200 round trips over 300 tabs, no sidebar view updates |
+| Each sidebar row read the whole agent feed (every pane's metadata on every host) for its "since", and the Inbox badges counted it on every render: one busy pane re-rendered every row | A row reads its own pane's "since"; the badge count is assigned only when it changes. One pane updating 20 times a second re-renders only its row |
 
 ### Instant start (M5 Max, debug builds; docs/APP-ARCHITECTURE.md §26)
 

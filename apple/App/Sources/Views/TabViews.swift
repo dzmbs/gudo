@@ -5,6 +5,19 @@ import SwiftUI
 
 // MARK: - Sidebar (vertical tabs)
 
+#if DEBUG
+/// Counts body evaluations of the sidebar's and the tab bar's views while a test watches.
+@MainActor
+enum ChromeRenders {
+    static var counts: [String: Int]?
+
+    static func note(_ view: @autoclosure () -> String) {
+        guard counts != nil else { return }
+        counts?[view(), default: 0] += 1
+    }
+}
+#endif
+
 /// The sidebar: Inbox and Hosts on top, then one group per host the window shows. Every host is
 /// live at once, and tab numbers (⌘1…⌘9) run across hosts.
 ///
@@ -19,6 +32,9 @@ struct WorkspaceSidebar: View {
     @State private var scroll = SidebarScroll()
 
     var body: some View {
+        #if DEBUG
+        let _ = ChromeRenders.note("sidebar")
+        #endif
         List {
             Group {
                 if showsDestinations {
@@ -351,9 +367,11 @@ private struct HostGroupHeader: View {
     let collapsed: Bool
     @Environment(WindowModel.self) private var model
     @State private var hovered = false
-    @State private var showsAgents = false
 
     var body: some View {
+        #if DEBUG
+        let _ = ChromeRenders.note("host-header")
+        #endif
         let state = group.connectionState
         let live = group.showsAsLive
         VStack(alignment: .leading, spacing: 2) {
@@ -394,18 +412,7 @@ private struct HostGroupHeader: View {
                         .foregroundStyle(DS.Palette.textTertiary)
                         .contentTransition(.numericText())
                 }
-                if let agents = aggregateAgentState {
-                    HoverPopover(isPresented: $showsAgents) {
-                        AgentGlyph(state: agents)
-                            .frame(minWidth: 22, minHeight: 22)
-                            .contentShape(.rect)
-                    } content: {
-                        HostAgentsPopover(group: group) { showsAgents = false }
-                    }
-                    .buttonStyle(.plain)
-                    .help("Agents on \(group.name)")
-                    .accessibilityIdentifier("host-agents-\(group.name)")
-                }
+                HostAgentsBadge(group: group)
                 plus
                     .labelStyle(.iconOnly)
                     .buttonStyle(.bar)
@@ -482,8 +489,30 @@ private struct HostGroupHeader: View {
         true
         #endif
     }
+}
 
-    /// The most urgent agent state across the host's panes, nil when nothing reports.
+/// The most urgent agent state across a host's panes, opening its agents. A view of its own,
+/// so a pane's title or status changing re-renders this glyph, not the host's header.
+private struct HostAgentsBadge: View {
+    let group: HostGroup
+    @Environment(WindowModel.self) private var model
+    @State private var showsAgents = false
+
+    var body: some View {
+        if let agents = aggregateAgentState {
+            HoverPopover(isPresented: $showsAgents) {
+                AgentGlyph(state: agents)
+                    .frame(minWidth: 22, minHeight: 22)
+                    .contentShape(.rect)
+            } content: {
+                HostAgentsPopover(group: group) { showsAgents = false }
+            }
+            .buttonStyle(.plain)
+            .help("Agents on \(group.name)")
+            .accessibilityIdentifier("host-agents-\(group.name)")
+        }
+    }
+
     private var aggregateAgentState: AgentState? {
         let states = group.tabs.flatMap(\.root.panes).compactMap { model.agentState(ofPane: $0, onGroup: group.id) }
         return states.filter { $0 != .idle && $0 != .unknown }.min { AgentGlyph.priority($0) < AgentGlyph.priority($1) }
@@ -893,6 +922,9 @@ struct TabRow: View {
 
     var body: some View {
         let workspace = model.workspace(ofGroup: group.id)
+        #if DEBUG
+        let _ = ChromeRenders.note("tab-row \(ref.hostId)/\(ref.tab.rawValue)")
+        #endif
         let isActive = model.destination == .terminal && model.currentTab == ref
         let states = tab.root.panes.compactMap { model.agentState(ofPane: $0, onGroup: group.id) }
         let state = states.min { $0.urgency < $1.urgency }

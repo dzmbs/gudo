@@ -185,6 +185,50 @@ enum ToolProblem: Error, Equatable {
 
 // MARK: - Inbox
 
+/// When each pane's agent entered its state, observed per pane: a row that reads its own pane
+/// is not invalidated by changes to any other.
+@MainActor
+@Observable
+final class PaneSinceTable {
+    struct Key: Hashable {
+        var hostId: String
+        var pane: UInt64
+    }
+
+    @MainActor
+    @Observable
+    final class Cell {
+        var date: Date?
+        init(_ date: Date) { self.date = date }
+    }
+
+    /// Changes only when a pane gains or loses its entry; readers of a pane without one depend
+    /// on it until it has one.
+    private var keys: Set<Key> = []
+    @ObservationIgnored private var cells: [Key: Cell] = [:]
+
+    subscript(key: Key) -> Date? {
+        if let cell = cells[key] { return cell.date }
+        _ = keys
+        return nil
+    }
+
+    func update(_ dates: [Key: Date]) {
+        for (key, date) in dates {
+            if let cell = cells[key] {
+                if cell.date != date { cell.date = date }
+            } else {
+                cells[key] = Cell(date)
+            }
+        }
+        for key in cells.keys where dates[key] == nil {
+            cells.removeValue(forKey: key)?.date = nil
+        }
+        let current = Set(dates.keys)
+        if current != keys { keys = current }
+    }
+}
+
 /// The agents of every connected daemon (`PaneMeta.agent`, then other programs' own reports)
 /// merged with each daemon's attention feed (finished turns, failures, long commands, unseen
 /// counts). Approve and Deny are signed decisions; Reply types through the composer path; New
@@ -204,9 +248,35 @@ final class LiveAgentFeed: AgentFeed {
     /// History items kept (newest first); the daemon keeps 500.
     static let historyLimit = 40
 
+    /// Assigned only when it changes, so the badges do not follow every agent's every update.
+    private(set) var needsYouCount = 0
+    @ObservationIgnored private let paneSince = PaneSinceTable()
+
     init(hosts: HostsModel) {
         self.hosts = hosts
         followConnections()
+        followItems()
+    }
+
+    func since(ofPane pane: UInt64, onHost hostId: String) -> Date? {
+        paneSince[PaneSinceTable.Key(hostId: hostId, pane: pane)]
+    }
+
+    /// Keeps the badge count and each pane's "since" up to date as the feed changes, once per
+    /// turn of the main actor however many changes it saw.
+    private func followItems() {
+        let items = withObservationTracking { self.items } onChange: { [weak self] in
+            Task { @MainActor [weak self] in self?.followItems() }
+        }
+        let count = items.filter(\.state.needsYou).count
+        if count != needsYouCount { needsYouCount = count }
+        var dates: [PaneSinceTable.Key: Date] = [:]
+        for item in items {
+            guard let pane = item.paneId, let hostId = item.hostId else { continue }
+            let key = PaneSinceTable.Key(hostId: hostId, pane: pane)
+            if dates[key] == nil { dates[key] = item.since }
+        }
+        paneSince.update(dates)
     }
 
     /// Every connected daemon gets its workspace hub (attention feed) as soon as it connects.

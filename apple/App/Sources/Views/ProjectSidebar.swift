@@ -236,6 +236,9 @@ struct SidebarTabList: View {
     nonisolated private static let space = "sidebar-list"
 
     var body: some View {
+        #if DEBUG
+        let _ = ChromeRenders.note("sidebar-list")
+        #endif
         let drag = model.sidebarDrag
         let (items, sections) = model.sidebarItems(
             drop: drag.plan, projectMove: drag.projectMove, showsIntro: !introDismissed, opensPanes: listStyle == .plain)

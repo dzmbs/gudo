@@ -479,7 +479,7 @@ final class WindowModel {
 
     var connection: ConnectionState { connectionOverride ?? liveConnection }
 
-    var needsYouCount: Int { agents.items.filter(\.state.needsYou).count }
+    var needsYouCount: Int { agents.needsYouCount }
 
     /// The window's host as the chrome names it: the host's name, or this device.
     var hostName: String {
@@ -953,7 +953,7 @@ final class WindowModel {
 
     /// When the agent in a pane entered its current state, as the Agents feed tracks it.
     func agentSince(ofPane pane: PaneId, onGroup id: String) -> Date? {
-        agents.items.first { $0.hostId == id && $0.paneId == pane.rawValue }?.since
+        agents.since(ofPane: pane.rawValue, onHost: id)
     }
 
     /// The state that most needs attention across a project's tabs, for its collapsed header.

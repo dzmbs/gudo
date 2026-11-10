@@ -221,6 +221,8 @@ nonisolated struct AgentAutoApproval: Identifiable, Hashable, Sendable {
 @MainActor
 protocol AgentFeed: AnyObject, Observable {
     var items: [AgentItem] { get }
+    var needsYouCount: Int { get }
+    func since(ofPane pane: UInt64, onHost hostId: String) -> Date?
     /// Unseen attention items per host name, only hosts with any.
     var unseenByHost: [String: Int] { get }
     /// Connected daemons an agent can start on.
@@ -275,6 +277,12 @@ nonisolated struct ApprovalUnavailable: LocalizedError {
 }
 
 extension AgentFeed {
+    /// Agents waiting for someone or failed: the Inbox badge.
+    var needsYouCount: Int { items.filter(\.state.needsYou).count }
+    /// When the agent in a pane entered its current state.
+    func since(ofPane pane: UInt64, onHost hostId: String) -> Date? {
+        items.first { $0.hostId == hostId && $0.paneId == pane }?.since
+    }
     var knocks: [KnockItem] { [] }
     func installs(on host: LaunchHost.ID) async -> [AgentKind: InstallState]? { nil }
     func approval(_ id: AgentItem.ID) -> ApprovalContext? { nil }
