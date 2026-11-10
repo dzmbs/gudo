@@ -557,9 +557,10 @@ currently accepts exactly Codex 0.166.0.
 Each direction is copied on its own and handed to the observer in order: 64 chunks of at most
 16KiB, waiting for the observer rather than dropping bytes. An observer stalled for two seconds
 gives up observation; official frames keep flowing either way. Messages over 8MiB are skipped:
-from the server they leave a Terminal notice in Chat, while a skipped TUI message or binding reply
-closes observation. At most 256 timeline operations / 1MiB are queued. The projection handles
-user/assistant items, assistant deltas, command summaries and completed reasoning. It keeps at most
+from the server they leave a Terminal notice in Chat, and a turn they start or end is still read
+from a bounded outline (arrays emptied, strings over 1KiB blanked, at most 64KiB), so status and
+Send follow it. A skipped TUI message or binding reply closes observation. At most 256 timeline
+operations / 1MiB are queued. The projection handles user/assistant items, assistant deltas, command summaries and completed reasoning. It keeps at most
 500 items and 768KiB of serialized bodies, forgetting the oldest; a single item over 256KiB becomes
 a Terminal notice. When Chat cannot show the conversation (a full capture before history, a missing
 resume history, a rollback), only Chat closes: status, notifications and approvals keep flowing. Item identity is turn-scoped. Final items reconcile partial text, unknown
