@@ -317,6 +317,11 @@ public final class Terminal: @unchecked Sendable {
         lock.withLock { _ in synchronizedOutput.isHolding }
     }
 
+    /// A synchronized update has waited too long for its end (cheap: parses nothing).
+    public func hasExpiredHeldOutput(now: ContinuousClock.Instant = .now) -> Bool {
+        lock.withLock { _ in synchronizedOutput.hasExpired(now: now) }
+    }
+
     /// Parses a synchronized update that has waited too long for its end. Returns whether the
     /// screen may have changed.
     @discardableResult

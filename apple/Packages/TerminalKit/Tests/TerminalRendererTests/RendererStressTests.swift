@@ -220,6 +220,24 @@ import Testing
         #expect(busy / now <= budget.share + 0.02)
     }
 
+    /// A synchronized update that timed out is parsed off the main thread, and shown after.
+    @Test func anExpiredHeldUpdateIsParsedOffTheMainThread() async throws {
+        let terminal = Terminal(cols: 40, rows: 10) { _ in }
+        let surface = try TerminalSurface(terminal: terminal, fontSize: 13)
+        surface.layout(size: CGSize(width: 400, height: 200), scale: 2)
+        terminal.write(Array("\u{1b}[?2026hheld".utf8))
+        #expect(!surface.releasesHeldOutput(), "not expired yet")
+        try await Task.sleep(for: .milliseconds(1100))
+        #expect(surface.releasesHeldOutput())
+        #expect(surface.releasesHeldOutput(), "under way: frames wait")
+        let deadline = ContinuousClock.now + .seconds(5)
+        while surface.releasesHeldOutput(), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(!terminal.isHoldingOutput)
+        #expect(terminal.plainText().hasPrefix("held"))
+    }
+
     /// A frame the layer had no drawable for is not lost: the pane stays dirty and draws it on
     /// the next tick.
     @Test func aMissedDrawableKeepsThePaneDirty() throws {

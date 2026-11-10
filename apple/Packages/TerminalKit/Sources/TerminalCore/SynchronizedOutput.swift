@@ -58,9 +58,14 @@ struct SynchronizedOutput {
         bytes.withUnsafeBufferPointer(parse)
     }
 
+    func hasExpired(now: ContinuousClock.Instant) -> Bool {
+        guard let heldSince else { return false }
+        return now - heldSince >= Self.timeout
+    }
+
     /// Ends the hold if it lasted `timeout`. Returns whether it did.
     mutating func releaseIfExpired(now: ContinuousClock.Instant, _ parse: (UnsafeBufferPointer<UInt8>) -> Void) -> Bool {
-        guard let heldSince, now - heldSince >= Self.timeout else { return false }
+        guard hasExpired(now: now) else { return false }
         release(parse)
         return true
     }

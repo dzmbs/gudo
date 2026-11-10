@@ -1137,6 +1137,25 @@ public final class TerminalSurface {
         setNeedsRender()
     }
 
+    /// A synchronized update past its timeout is parsed off the main thread (up to 4 MiB of
+    /// a stalled program's output). Returns whether that is under way.
+    func releasesHeldOutput() -> Bool {
+        if isReleasingHeldOutput { return true }
+        guard terminal.hasExpiredHeldOutput() else { return false }
+        isReleasingHeldOutput = true
+        let terminal = terminal
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let released = terminal.releaseExpiredHeldOutput()
+            await MainActor.run {
+                self?.isReleasingHeldOutput = false
+                if released { self?.outputArrived() }
+            }
+        }
+        return true
+    }
+
+    private var isReleasingHeldOutput = false
+
     /// Main-thread time shared by every surface's display-link frames.
     static var renderBudget = RenderBudget()
     /// When the budget first refused this surface a frame since it last drew.
@@ -1155,7 +1174,8 @@ public final class TerminalSurface {
         }
         budgetWaitStart = nil
         wakePending.store(false, ordering: .releasing)
-        if terminal.releaseExpiredHeldOutput() { outputArrived() }
+        // A frame now would wait for the terminal while the held update is parsed.
+        guard !releasesHeldOutput() else { return }
         let start = CACurrentMediaTime()
         let rendered = renderIfDirty()
         // Waiting for a drawable or a free frame buffer is the GPU's time, not the main thread's work.
