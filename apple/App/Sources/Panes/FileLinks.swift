@@ -33,7 +33,7 @@ enum FileLinkOpening: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .gudo: "Gudo"
+        case .gudo: Brand.name
         case .vsCode: "VS Code"
         case .defaultApp: "Default App"
         }

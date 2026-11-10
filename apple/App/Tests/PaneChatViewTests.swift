@@ -593,7 +593,7 @@ final class PaneChatViewTests: XCTestCase {
         let uploads = fixture.client.state.withLock { $0.uploads }
         let target = try XCTUnwrap(uploads.first)
         XCTAssertEqual(uploads.count, 1)
-        XCTAssertTrue(target.path.hasPrefix("/fixture/home/Downloads/Gudo-Attachments/"))
+        XCTAssertTrue(target.path.hasPrefix("/fixture/home/" + PaneChatView<EmptyView>.attachmentsFolder))
         XCTAssertTrue(target.createNew && target.mkdirs)
         XCTAssertEqual(target.mode, 0o600)
         editor.unmarkText()

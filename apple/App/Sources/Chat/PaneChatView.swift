@@ -238,11 +238,15 @@ struct PaneChatView<Terminal: View>: View {
         }, source: { file in try await uploadPhoto(file, context: context) })
     }
 
+    static var attachmentsFolder: String {
+        "Downloads/" + Brand.name.replacingOccurrences(of: " ", with: "-") + "-Attachments/"
+    }
+
     func uploadPhoto(_ file: ChatPhotoFile, context: PaneChatState.ActionContext) async throws -> String {
         guard isCurrentPhotoContext(context), let client = hub.api else { throw CancellationError() }
         let home = try await client.fsStat(path: "~")
         guard isCurrentPhotoContext(context), home.kind == .dir else { throw CancellationError() }
-        let path = (home.path as NSString).appendingPathComponent("Downloads/Gudo-Attachments/" + UUID().uuidString + ".jpg")
+        let path = (home.path as NSString).appendingPathComponent(Self.attachmentsFolder + UUID().uuidString + ".jpg")
         _ = try ChatPhotos.reference(path)
         let result = try await client.uploadFile(localPath: file.url.path,
             target: WriteTarget(path: path, ifMatch: nil, createNew: true, mkdirs: true, mode: 0o600), progress: nil)

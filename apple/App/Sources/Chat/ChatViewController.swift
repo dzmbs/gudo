@@ -44,6 +44,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         }
     }
 
+    private static let topClearance: CGFloat = 52
+
     let model: TimelineModel
     let collection: UICollectionView
     private var source: UICollectionViewDiffableDataSource<Int, ChatRowID>?
@@ -119,8 +121,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         collection.alwaysBounceVertical = true
         collection.keyboardDismissMode = .interactive
         collection.contentInsetAdjustmentBehavior = .never
-        collection.contentInset.top = 52
-        collection.verticalScrollIndicatorInsets.top = 52
+        collection.contentInset.top = Self.topClearance
+        collection.verticalScrollIndicatorInsets.top = Self.topClearance
         collection.delegate = self
         collection.prefetchDataSource = self
         collection.register(ChatCollectionCell.self, forCellWithReuseIdentifier: "chat-block")
@@ -169,7 +171,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         guard isActive, collection.bounds.width > 0 else { return }
-        let topInset = 52 + view.safeAreaInsets.top
+        let topInset = Self.topClearance + view.safeAreaInsets.top
         if collection.contentInset.top != topInset {
             collection.contentInset.top = topInset
             collection.verticalScrollIndicatorInsets.top = topInset
