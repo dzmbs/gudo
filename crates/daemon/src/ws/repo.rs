@@ -40,6 +40,7 @@ use proto::{
 };
 use serde::Deserialize;
 use tokio::sync::{Notify, mpsc, oneshot};
+use tokio::task::JoinSet;
 
 use super::gh::{self, ViewError};
 use super::git::git;
@@ -53,6 +54,9 @@ const GH_RECHECK: Duration = Duration::from_secs(300);
 /// Untracked files counted for `+added`, at most this many and this large.
 const MAX_UNTRACKED: usize = 500;
 const MAX_UNTRACKED_BYTES: u64 = 1 << 20;
+/// Longest a refresh request waits for the reads it started; a repository whose git hangs
+/// answers later, in a pushed snapshot.
+const REFRESH_WAIT: Duration = Duration::from_secs(5);
 
 /// `.<product>.json` at a worktree's top level.
 pub(crate) fn config_file_name() -> String {
@@ -355,11 +359,56 @@ struct Tracker {
     gh_inflight: bool,
     results: mpsc::UnboundedSender<Done>,
     rev: u64,
+    /// git runs off the tracker, each directory's at most one at a time, so a repository
+    /// whose git hangs (a stalled mount) holds back neither the others nor the tracker.
+    jobs: JoinSet<Result<Finished, Job>>,
+    busy: BTreeSet<Job>,
 }
 
 enum Done {
     Pr(PathBuf, Result<Option<PullRequest>, ViewError>),
     Gh(GhStatus),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum Job {
+    /// A pane directory's worktree.
+    Root(String),
+    /// The worktrees of the repository at a path.
+    List(PathBuf),
+    Read(PathBuf),
+    Watch(PathBuf),
+}
+
+enum Finished {
+    Root {
+        cwd: String,
+        root: Option<PathBuf>,
+    },
+    Listed {
+        path: PathBuf,
+        listed: Option<(PathBuf, Vec<proto::WorktreeInfo>)>,
+    },
+    Read {
+        path: PathBuf,
+        summary: Result<GitSummary, WsError>,
+        config: (Vec<RepoScript>, RepoHooks),
+    },
+    Watched {
+        root: PathBuf,
+        watchers: Result<Vec<notify::RecommendedWatcher>, notify::Error>,
+    },
+}
+
+impl Finished {
+    fn job(&self) -> Job {
+        match self {
+            Self::Root { cwd, .. } => Job::Root(cwd.clone()),
+            Self::Listed { path, .. } => Job::List(path.clone()),
+            Self::Read { path, .. } => Job::Read(path.clone()),
+            Self::Watched { root, .. } => Job::Watch(root.clone()),
+        }
+    }
 }
 
 pub(crate) async fn run(core: Arc<Core>) {
@@ -385,6 +434,8 @@ pub(crate) async fn run(core: Arc<Core>) {
         gh_inflight: false,
         results,
         rev: 0,
+        jobs: JoinSet::new(),
+        busy: BTreeSet::new(),
     };
     let mut sweep_at = Instant::now() + config.sweep.min(Duration::from_secs(60));
     loop {
@@ -406,12 +457,18 @@ pub(crate) async fn run(core: Arc<Core>) {
             () = tokio::time::sleep(tick) => {}
             Some(request) = requests.recv() => match request {
                 TrackerRequest::Refresh { pr, all_prs, reply: reply_to } => {
-                    tracker.resolve_panes().await;
-                    tracker.list_repos(true).await;
+                    let deadline = tokio::time::Instant::now() + REFRESH_WAIT;
+                    tracker.resolve_panes();
+                    tracker.settle(deadline).await;
+                    tracker.resolve_panes();
+                    tracker.settle(deadline).await;
+                    tracker.list_repos(true);
+                    tracker.settle(deadline).await;
                     for worktree in tracker.worktrees.values_mut() {
                         worktree.due = Some(Instant::now());
                     }
-                    tracker.read_due(&config, true).await;
+                    tracker.read_due(&config, true);
+                    tracker.settle(deadline).await;
                     tracker.refresh_prs_now(pr.as_deref(), all_prs).await;
                     reply = Some(reply_to);
                 }
@@ -423,6 +480,11 @@ pub(crate) async fn run(core: Arc<Core>) {
                 }
             },
             Some(root) = fs_rx.recv() => tracker.touched(&root, config.debounce),
+            Some(joined) = tracker.jobs.join_next() => {
+                if let Ok(finished) = joined {
+                    tracker.finish(finished);
+                }
+            }
             Some(done) = done_rx.recv() => match done {
                 Done::Pr(path, result) => tracker.apply_pr(&path, result),
                 Done::Gh(status) => {
@@ -442,9 +504,9 @@ pub(crate) async fn run(core: Arc<Core>) {
         }
         if watched || reply.is_some() {
             if reply.is_none() {
-                tracker.resolve_panes().await;
-                tracker.list_repos(false).await;
-                tracker.read_due(&config, false).await;
+                tracker.resolve_panes();
+                tracker.list_repos(false);
+                tracker.read_due(&config, false);
                 tracker.ensure_watches();
                 tracker.schedule_prs(&config);
             }
@@ -461,7 +523,82 @@ pub(crate) async fn run(core: Arc<Core>) {
 }
 
 impl Tracker {
-    async fn resolve_panes(&mut self) {
+    /// Runs `work` off the tracker unless `job` is still running.
+    fn start(&mut self, job: Job, work: impl FnOnce() -> Finished + Send + 'static) -> bool {
+        if !self.busy.insert(job.clone()) {
+            return false;
+        }
+        self.jobs
+            .spawn(async move { tokio::task::spawn_blocking(work).await.map_err(|_| job) });
+        true
+    }
+
+    /// Applies finished jobs until none runs or `deadline` passes.
+    async fn settle(&mut self, deadline: tokio::time::Instant) {
+        while !self.busy.is_empty() {
+            match tokio::time::timeout_at(deadline, self.jobs.join_next()).await {
+                Ok(Some(Ok(finished))) => self.finish(finished),
+                Ok(Some(Err(_))) => {}
+                Ok(None) | Err(_) => return,
+            }
+        }
+    }
+
+    fn finish(&mut self, finished: Result<Finished, Job>) {
+        let finished = match finished {
+            Ok(finished) => finished,
+            Err(job) => {
+                self.busy.remove(&job);
+                return;
+            }
+        };
+        self.busy.remove(&finished.job());
+        match finished {
+            Finished::Root { cwd, root } => {
+                self.roots.insert(cwd, (root, Instant::now()));
+            }
+            Finished::Listed { path, listed } => {
+                match listed {
+                    Some((main, list)) => {
+                        self.repos.insert(main, (list, Instant::now()));
+                    }
+                    // Not again until it is due.
+                    None => {
+                        if let Some((_, listed_at)) = self.repos.get_mut(&path) {
+                            *listed_at = Instant::now();
+                        }
+                    }
+                }
+                self.sync_worktrees();
+            }
+            Finished::Read {
+                path,
+                summary,
+                config,
+            } => self.apply_read(&path, summary, config),
+            Finished::Watched { root, watchers } => {
+                let active = self
+                    .worktrees
+                    .get(&root)
+                    .is_some_and(|worktree| worktree.active);
+                if !active {
+                    return;
+                }
+                match watchers {
+                    Ok(watchers) => {
+                        self.fs_watches.insert(root, watchers);
+                    }
+                    Err(error) => {
+                        tracing::debug!("watching {}: {error}", root.display());
+                        // Polling still covers it; do not try again every tick.
+                        self.fs_watches.insert(root, Vec::new());
+                    }
+                }
+            }
+        }
+    }
+
+    fn resolve_panes(&mut self) {
         let mut cwds: Vec<(proto::PaneId, String)> = Vec::new();
         for (id, entry) in self.core.pane_entries() {
             let reported = lock(&entry.meta).cwd.clone();
@@ -481,25 +618,15 @@ impl Tracker {
                     .is_none_or(|(_, resolved_at)| resolved_at.elapsed() > ROOT_TTL)
             })
             .collect();
-        if !stale.is_empty() {
+        for cwd in stale {
             let home = self.core.cfg.home();
-            let answers = tokio::task::spawn_blocking(move || {
-                stale
-                    .into_iter()
-                    .map(|cwd| {
-                        let root = super::git::toplevel(Path::new(&cwd))
-                            .ok()
-                            .map(|root| root.canonicalize().unwrap_or(root))
-                            .filter(|root| !super::paths::holds_home(root, &home));
-                        (cwd, root)
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .await
-            .unwrap_or_default();
-            for (cwd, root) in answers {
-                self.roots.insert(cwd, (root, Instant::now()));
-            }
+            self.start(Job::Root(cwd.clone()), move || {
+                let root = super::git::toplevel(Path::new(&cwd))
+                    .ok()
+                    .map(|root| root.canonicalize().unwrap_or(root))
+                    .filter(|root| !super::paths::holds_home(root, &home));
+                Finished::Root { cwd, root }
+            });
         }
         let mut panes: Vec<PaneRepo> = cwds
             .into_iter()
@@ -523,39 +650,35 @@ impl Tracker {
                 worktree.due = Some(Instant::now());
             }
         }
-        // A pane in a worktree the tracker has not listed yet: list its repository.
-        if active.iter().any(|path| !self.worktrees.contains_key(path)) {
+        // A pane in a worktree the tracker has not listed yet: list its repository, and the
+        // others again (it may be a new worktree of one of them).
+        let unknown: Vec<PathBuf> = active
+            .iter()
+            .filter(|path| !self.worktrees.contains_key(*path))
+            .cloned()
+            .collect();
+        let mut listing = false;
+        for root in unknown {
+            listing |= self.start_list(root);
+        }
+        if listing {
             for (_, listed_at) in self.repos.values_mut() {
                 *listed_at = Instant::now() - LIST_TTL;
             }
-            let unknown: Vec<PathBuf> = active
-                .iter()
-                .filter(|path| !self.worktrees.contains_key(*path))
-                .cloned()
-                .collect();
-            self.list_new(unknown).await;
         }
         self.panes = panes;
     }
 
-    async fn list_new(&mut self, roots: Vec<PathBuf>) {
-        let listed = tokio::task::spawn_blocking(move || {
-            roots
-                .into_iter()
-                .filter_map(|root| list_worktrees(&root).ok())
-                .collect::<Vec<_>>()
+    fn start_list(&mut self, path: PathBuf) -> bool {
+        self.start(Job::List(path.clone()), move || {
+            let listed = list_worktrees(&path).ok();
+            Finished::Listed { path, listed }
         })
-        .await
-        .unwrap_or_default();
-        for (main, list) in listed {
-            self.repos.insert(main, (list, Instant::now()));
-        }
-        self.sync_worktrees();
     }
 
     /// Re-lists repositories whose list is old (or all with `force`) and drops repositories
     /// no pane is in any more.
-    async fn list_repos(&mut self, force: bool) {
+    fn list_repos(&mut self, force: bool) {
         let active: BTreeSet<PathBuf> = self
             .panes
             .iter()
@@ -572,18 +695,8 @@ impl Tracker {
             .filter(|(_, (_, listed_at))| force || listed_at.elapsed() >= LIST_TTL)
             .map(|(main, _)| main.clone())
             .collect();
-        if !stale.is_empty() {
-            let listed = tokio::task::spawn_blocking(move || {
-                stale
-                    .into_iter()
-                    .filter_map(|root| list_worktrees(&root).ok())
-                    .collect::<Vec<_>>()
-            })
-            .await
-            .unwrap_or_default();
-            for (main, list) in listed {
-                self.repos.insert(main, (list, Instant::now()));
-            }
+        for main in stale {
+            self.start_list(main);
         }
         self.sync_worktrees();
     }
@@ -668,14 +781,9 @@ impl Tracker {
     }
 
     /// Reads worktrees that are due (or every one with `all`).
-    async fn read_due(&mut self, config: &crate::config::RepoConfig, all: bool) {
+    fn read_due(&mut self, config: &crate::config::RepoConfig, all: bool) {
         let now = Instant::now();
-        let mains: HashMap<PathBuf, PathBuf> = self
-            .worktrees
-            .iter()
-            .map(|(path, worktree)| (path.clone(), PathBuf::from(&worktree.state.repo)))
-            .collect();
-        let due: Vec<PathBuf> = self
+        let due: Vec<(PathBuf, PathBuf)> = self
             .worktrees
             .iter()
             .filter(|(_, worktree)| {
@@ -695,77 +803,80 @@ impl Tracker {
                     .read_at
                     .is_none_or(|read_at| read_at.elapsed() >= config.debounce)
             })
-            .map(|(path, _)| path.clone())
+            .map(|(path, worktree)| (path.clone(), PathBuf::from(&worktree.state.repo)))
             .collect();
-        if due.is_empty() {
-            return;
+        for (path, main) in due {
+            self.start(Job::Read(path.clone()), move || {
+                let summary = read_git(&path);
+                let config = read_config(&path, Some(&main));
+                Finished::Read {
+                    path,
+                    summary,
+                    config,
+                }
+            });
         }
-        let read = tokio::task::spawn_blocking(move || {
-            due.into_iter()
-                .map(|path| {
-                    let summary = read_git(&path);
-                    let config = read_config(&path, mains.get(&path).map(PathBuf::as_path));
-                    (path, summary, config)
-                })
-                .collect::<Vec<_>>()
-        })
-        .await
-        .unwrap_or_default();
+    }
+
+    fn apply_read(
+        &mut self,
+        path: &Path,
+        summary: Result<GitSummary, WsError>,
+        (scripts, hooks): (Vec<RepoScript>, RepoHooks),
+    ) {
         let stamp = now_ms();
-        for (path, summary, (scripts, hooks)) in read {
-            let Some(worktree) = self.worktrees.get_mut(&path) else {
-                continue;
-            };
-            worktree.read_at = Some(Instant::now());
-            worktree.due = None;
-            let Ok(summary) = summary else {
-                continue;
-            };
-            let state = &mut worktree.state;
-            let before = (
-                state.branch.clone(),
-                state.head.clone(),
-                state.upstream.clone(),
-                state.ahead,
-                state.behind,
-                state.added,
-                state.removed,
-                state.changed_files,
-            );
-            if state.branch != summary.branch {
-                // A new branch: its pull request is another one.
-                state.pr = None;
-                worktree.pr_at = Instant::now();
-                worktree.pr_fail = 0;
-            }
-            if state.head != summary.head || state.ahead != summary.ahead {
-                // Commits or a push: checks may have started.
-                worktree.pr_at = worktree.pr_at.min(Instant::now() + Duration::from_secs(5));
-            }
-            state.branch = summary.branch;
-            state.head = summary.head;
-            state.upstream = summary.upstream;
-            state.ahead = summary.ahead;
-            state.behind = summary.behind;
-            state.added = summary.added;
-            state.removed = summary.removed;
-            state.changed_files = summary.changed_files;
-            state.dirty = summary.changed_files > 0;
-            state.scripts = scripts;
-            state.hooks = hooks;
-            let after = (
-                state.branch.clone(),
-                state.head.clone(),
-                state.upstream.clone(),
-                state.ahead,
-                state.behind,
-                state.added,
-                state.removed,
-                state.changed_files,
-            );
-            if before != after || state.updated_at.0 == 0 {
-                state.updated_at = UnixMillis(stamp);
-            }
+        let Some(worktree) = self.worktrees.get_mut(path) else {
+            return;
+        };
+        worktree.read_at = Some(Instant::now());
+        worktree.due = None;
+        let Ok(summary) = summary else {
+            return;
+        };
+        let state = &mut worktree.state;
+        let before = (
+            state.branch.clone(),
+            state.head.clone(),
+            state.upstream.clone(),
+            state.ahead,
+            state.behind,
+            state.added,
+            state.removed,
+            state.changed_files,
+        );
+        if state.branch != summary.branch {
+            // A new branch: its pull request is another one.
+            state.pr = None;
+            worktree.pr_at = Instant::now();
+            worktree.pr_fail = 0;
+        }
+        if state.head != summary.head || state.ahead != summary.ahead {
+            // Commits or a push: checks may have started.
+            worktree.pr_at = worktree.pr_at.min(Instant::now() + Duration::from_secs(5));
+        }
+        state.branch = summary.branch;
+        state.head = summary.head;
+        state.upstream = summary.upstream;
+        state.ahead = summary.ahead;
+        state.behind = summary.behind;
+        state.added = summary.added;
+        state.removed = summary.removed;
+        state.changed_files = summary.changed_files;
+        state.dirty = summary.changed_files > 0;
+        state.scripts = scripts;
+        state.hooks = hooks;
+        let after = (
+            state.branch.clone(),
+            state.head.clone(),
+            state.upstream.clone(),
+            state.ahead,
+            state.behind,
+            state.added,
+            state.removed,
+            state.changed_files,
+        );
+        if before != after || state.updated_at.0 == 0 {
+            state.updated_at = UnixMillis(stamp);
         }
     }
 
@@ -782,16 +893,11 @@ impl Tracker {
             if self.fs_watches.contains_key(&root) {
                 continue;
             }
-            match watch_worktree(&root, self.fs_tx.clone()) {
-                Ok(watchers) => {
-                    self.fs_watches.insert(root, watchers);
-                }
-                Err(error) => {
-                    tracing::debug!("watching {}: {error}", root.display());
-                    // Polling still covers it; do not try again every tick.
-                    self.fs_watches.insert(root, Vec::new());
-                }
-            }
+            let fs_tx = self.fs_tx.clone();
+            self.start(Job::Watch(root.clone()), move || {
+                let watchers = watch_worktree(&root, fs_tx);
+                Finished::Watched { root, watchers }
+            });
         }
     }
 
@@ -1165,6 +1271,74 @@ async fn sweep(core: &Arc<Core>, tracker: &mut Tracker) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn run_git(dir: &Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .current_dir(dir)
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args([
+                "-c",
+                "init.defaultBranch=main",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "{args:?}");
+    }
+
+    /// One pane sits in a repository whose git hangs (a stalled mount): the sidebar still
+    /// follows the repository of another pane.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_hung_repository_holds_back_no_other() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().canonicalize().unwrap();
+        let stuck = home.join("a-stuck");
+        let healthy = home.join("b-healthy");
+        for repo in [&stuck, &healthy] {
+            std::fs::create_dir(repo).unwrap();
+            run_git(repo, &["init", "-q"]);
+            std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+            run_git(repo, &["add", "a.txt"]);
+            run_git(repo, &["commit", "-qm", "one"]);
+        }
+        super::super::git::tests::fake_git_under(&stuck, "exec sleep 30");
+        let state = tempfile::tempdir().unwrap();
+        let mut config = crate::Config::new(state.path());
+        config.relay = crate::RelayMode::Disabled;
+        config.bind = Some("127.0.0.1:0".parse().unwrap());
+        config.shell = Some("/bin/sh".into());
+        let daemon = crate::Daemon::start(config).await.unwrap();
+        let core = Arc::clone(&daemon.core);
+        for repo in [&stuck, &healthy] {
+            let launch = proto::PaneLaunch::Shell {
+                cwd: Some(repo.to_string_lossy().into_owned()),
+            };
+            core.create_session(file_name(repo), launch).unwrap();
+        }
+        core.ws.repos.watch(true);
+        let healthy_dirty =
+            || {
+                core.ws.repos.snapshot().worktrees.iter().any(|worktree| {
+                    Path::new(&worktree.path) == healthy && worktree.changed_files == 1
+                })
+            };
+        std::fs::write(healthy.join("a.txt"), "two\n").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !healthy_dirty() {
+            assert!(
+                Instant::now() < deadline,
+                "the healthy repository was never read: {:#?}",
+                core.ws.repos.snapshot()
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        core.ws.repos.watch(false);
+        daemon.shutdown().await;
+    }
 
     #[test]
     fn counts_lines_like_git() {
