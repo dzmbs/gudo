@@ -69,7 +69,14 @@ async fn keep_working(client: &Client, pane: PaneId, until: Instant) -> (usize, 
             client.ink_live(ink(chunk));
             client.set_typing(pane, chunk % 2 == 0);
         }
-        client.send_input(pane, b"x".to_vec());
+        // A terminal line holds at most 1024 typed bytes (macOS drops the rest, Return
+        // included): kill the line before it fills, as a long outage types far more.
+        let keystroke = if keystrokes % 500 == 499 {
+            b"\x15"
+        } else {
+            b"x"
+        };
+        client.send_input(pane, keystroke.to_vec());
         keystrokes += 1;
         most_held_besides_input =
             most_held_besides_input.max(client.queued().saturating_sub(keystrokes));
@@ -185,7 +192,11 @@ async fn a_long_outage_while_working_stays_bounded_and_recovers() {
         }
     })
     .await;
-    assert!(rendering.is_ok(), "the pane did not render again");
+    assert!(
+        rendering.is_ok(),
+        "the pane did not render again: {:?}",
+        client.pane_text(pane)
+    );
     tokio::time::sleep(Duration::from_secs(1)).await;
     while let Ok(event) = events.try_recv() {
         if let ClientEvent::OpResult { op_id, .. } = event {
