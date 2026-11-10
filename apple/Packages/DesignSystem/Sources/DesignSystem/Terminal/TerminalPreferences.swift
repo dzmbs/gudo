@@ -27,6 +27,28 @@ nonisolated public enum TerminalPreferences {
         public static let fontFamily = "JetBrains Mono"
     }
 
+    /// The font sizes Settings, pinching and the font size shortcuts may reach.
+    public static let fontSizeRange: ClosedRange<Double> = 8...32
+    /// Ghostty's `increase_font_size:1` and `decrease_font_size:1`.
+    public static let fontSizeStep: Double = 1
+
+    /// Ghostty's `increase_font_size`, `decrease_font_size` and `reset_font_size`: a pane's own
+    /// size apart from the Settings one.
+    public enum FontSizeChange: Sendable {
+        case increase, decrease, reset
+
+        /// The pane's size after the change from `size`; nil for the Settings size.
+        public func applied(to size: Double) -> Double? {
+            let changed: Double
+            switch self {
+            case .increase: changed = size + fontSizeStep
+            case .decrease: changed = size - fontSizeStep
+            case .reset: return nil
+            }
+            return min(max(changed.rounded(), fontSizeRange.lowerBound), fontSizeRange.upperBound)
+        }
+    }
+
     public enum CursorStyle: String, CaseIterable, Identifiable, Sendable {
         case block, bar, underline, blockHollow = "block_hollow"
         public var id: String { rawValue }

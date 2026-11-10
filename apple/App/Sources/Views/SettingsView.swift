@@ -527,7 +527,7 @@ private struct FontSection: View {
                 ConfigLabel("Family", key: "font-family")
             }
             .settingAnchor("font-family")
-            Stepper(value: $fontSize, in: 8...32, step: 1) {
+            Stepper(value: $fontSize, in: TerminalPreferences.fontSizeRange, step: TerminalPreferences.fontSizeStep) {
                 HStack {
                     ConfigLabel("Size", key: "font-size")
                     Spacer()
