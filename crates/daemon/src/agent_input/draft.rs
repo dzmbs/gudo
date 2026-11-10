@@ -5,6 +5,8 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::watch;
 
+use crate::agent_driver::StopDelivery;
+
 static NEXT_TICKET: AtomicU64 = AtomicU64::new(0);
 const INPUT_BYTES: usize = crate::mp::prompt::MAX_PROMPT;
 pub(super) const CONFIRMATION_WAIT: Duration = Duration::from_secs(5);
@@ -191,10 +193,17 @@ impl Draft {
         let admission = self.authorize(intent, ticket, session, confirmation, now);
         if matches!(admission, Admission::Ready(())) {
             self.ticket = None;
-            self.interrupted_turn = Some(self.turn_seq);
-            self.input(b"\x1b");
         }
         admission
+    }
+
+    /// Records an accepted stop: the turn cannot be stopped again, and an Escape written to
+    /// Terminal counts as input.
+    pub(crate) fn interrupted(&mut self, delivery: StopDelivery) {
+        self.interrupted_turn = Some(self.turn_seq);
+        if delivery == StopDelivery::TerminalEscape {
+            self.input(b"\x1b");
+        }
     }
 
     pub(crate) fn admit(
@@ -363,6 +372,34 @@ mod tests {
     }
 
     #[test]
+    fn an_undelivered_stop_can_be_retried_and_an_agent_request_is_not_terminal_input() {
+        let mut draft = clean();
+        let now = Instant::now();
+        let offer = draft.prepare_interrupt(Some("session"), now).unwrap();
+        assert!(matches!(
+            draft.admit_interrupt(offer.ticket, Some("session"), None, now),
+            Admission::Ready(())
+        ));
+        let offer = draft
+            .prepare_interrupt(Some("session"), now)
+            .expect("a stop that was never delivered leaves the turn stoppable");
+        assert!(!offer.needs_confirmation);
+        assert!(matches!(
+            draft.admit_interrupt(offer.ticket, Some("session"), None, now),
+            Admission::Ready(())
+        ));
+        draft.interrupted(StopDelivery::AgentRequest);
+        assert!(draft.prepare_interrupt(Some("session"), now).is_none());
+        assert!(
+            !draft
+                .prepare(Some("session"), now)
+                .unwrap()
+                .needs_confirmation,
+            "no Escape reached Terminal"
+        );
+    }
+
+    #[test]
     fn an_interrupt_is_once_only_and_dirties_the_next_prompt() {
         let mut draft = clean();
         let now = Instant::now();
@@ -372,6 +409,7 @@ mod tests {
             draft.admit_interrupt(offer.ticket, Some("session"), None, now),
             Admission::Ready(())
         ));
+        draft.interrupted(StopDelivery::TerminalEscape);
         assert!(matches!(
             draft.admit_interrupt(offer.ticket, Some("session"), None, now),
             Admission::Refused
@@ -407,6 +445,7 @@ mod tests {
             draft.admit_interrupt(offer.ticket, Some("session"), Some(current.revision), now),
             Admission::Ready(())
         ));
+        draft.interrupted(StopDelivery::TerminalEscape);
     }
 
     #[test]
@@ -445,6 +484,7 @@ mod tests {
             draft.admit_interrupt(offer.ticket, Some("session"), Some(offer.revision), now),
             Admission::Ready(())
         ));
+        draft.interrupted(StopDelivery::TerminalEscape);
         assert_eq!(*receipt.borrow(), Receipt::NotConfirmed);
         draft.submitted("session", "hello world", false, now);
         assert_eq!(*receipt.borrow(), Receipt::NotConfirmed);

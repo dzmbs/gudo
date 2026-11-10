@@ -117,14 +117,15 @@ fn admit(
             }
             gate.last_user_input_seq = crate::hook_seq();
             gate.advance_revision();
-            if matches!(&gate.phase, AgentInputPhase::Open(_))
-                && driver
-                    .stop(core, pane, session, gate.revision, actor)
-                    .is_ok()
-            {
-                Ok(ChatSendStatus::InterruptRequested)
-            } else {
-                Ok(ChatSendStatus::NotConfirmed)
+            if !matches!(&gate.phase, AgentInputPhase::Open(_)) {
+                return Ok(ChatSendStatus::NotConfirmed);
+            }
+            match driver.stop(core, pane, session, gate.revision, actor) {
+                Ok(delivery) => {
+                    gate.draft.interrupted(delivery);
+                    Ok(ChatSendStatus::InterruptRequested)
+                }
+                Err(_) => Ok(ChatSendStatus::NotConfirmed),
             }
         }
         _ => Err(unavailable()),

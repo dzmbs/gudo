@@ -85,10 +85,11 @@ impl AgentDriver for ClaudeDriver {
         _: Option<&str>,
         _: u64,
         _: proto::Actor,
-    ) -> Result<(), WsError> {
+    ) -> Result<super::StopDelivery, WsError> {
         pane.pty()
             .try_write(vec![0x1b])
-            .map_err(|error| WsError::Failed(error.to_string()))
+            .map_err(|error| WsError::Failed(error.to_string()))?;
+        Ok(super::StopDelivery::TerminalEscape)
     }
 
     fn approve(

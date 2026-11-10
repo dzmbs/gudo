@@ -47,6 +47,13 @@ pub(crate) trait AgentSession: Send {
     fn wake(&self) -> mpsc::Sender<()>;
 }
 
+/// How an accepted stop reaches the agent, which decides whether Terminal saw a key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StopDelivery {
+    TerminalEscape,
+    AgentRequest,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum UnconfirmedSend {
     NotConfirmed,
@@ -207,7 +214,7 @@ pub(crate) trait AgentDriver: Send + Sync {
         session: Option<&str>,
         revision: u64,
         actor: proto::Actor,
-    ) -> Result<(), WsError>;
+    ) -> Result<StopDelivery, WsError>;
     // Role, signature, policy, pending request and audit checks precede delivery.
     fn approve(
         &self,

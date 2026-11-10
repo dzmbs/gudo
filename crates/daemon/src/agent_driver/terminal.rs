@@ -95,9 +95,10 @@ impl AgentDriver for TerminalDriver {
         session: Option<&str>,
         revision: u64,
         actor: proto::Actor,
-    ) -> Result<(), WsError> {
+    ) -> Result<super::StopDelivery, WsError> {
         if let Some(source) = source(core, pane.id) {
-            return source.interrupt(session, revision, actor);
+            source.interrupt(session, revision, actor)?;
+            return Ok(super::StopDelivery::AgentRequest);
         }
         Err(WsError::Failed(
             "Chat cannot interrupt this agent right now. Check the terminal.".into(),
