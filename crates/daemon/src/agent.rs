@@ -823,10 +823,11 @@ impl HookServer {
         }
         let held = pending.remove(&pane).expect("checked above");
         let stdout = encode(&held.suggestions, &held.input);
-        let _ = held.reply.send(HookResponse {
-            stdout: Some(stdout),
-        });
-        true
+        held.reply
+            .send(HookResponse {
+                stdout: Some(stdout),
+            })
+            .is_ok()
     }
 
     /// The request a hook holds open on `pane`, if any.
@@ -941,14 +942,25 @@ async fn serve_hook(core: &Arc<Core>, stream: UnixStream) -> io::Result<()> {
         return write.shutdown().await;
     }
     let request: HookRequest = serde_json::from_str(&line).map_err(io::Error::other)?;
-    let response = handle_hook(core, request).await;
+    let hook_gone = closed(reader.into_inner().into_inner());
+    let response = handle_hook(core, request, hook_gone).await;
     let mut encoded = serde_json::to_vec(&response).map_err(io::Error::other)?;
     encoded.push(b'\n');
     write.write_all(&encoded).await?;
     write.shutdown().await
 }
 
-async fn handle_hook(core: &Arc<Core>, request: HookRequest) -> HookResponse {
+/// Resolves once the hook process closed its end: nobody waits for an answer any more.
+async fn closed(mut from_hook: tokio::net::unix::OwnedReadHalf) {
+    let mut ignored = [0u8; 256];
+    while matches!(from_hook.read(&mut ignored).await, Ok(read) if read > 0) {}
+}
+
+async fn handle_hook(
+    core: &Arc<Core>,
+    request: HookRequest,
+    hook_gone: impl Future<Output = ()>,
+) -> HookResponse {
     if !core.hooks.verify(&request.token, &request.pane) {
         tracing::warn!("hook with a bad token");
         return HookResponse::default();
@@ -1033,7 +1045,7 @@ async fn handle_hook(core: &Arc<Core>, request: HookRequest) -> HookResponse {
     lock(&core.hooks.pending).insert(
         pane_id,
         Pending {
-            request: request_id,
+            request: request_id.clone(),
             suggestions,
             agent: agent_kind(&request.agent),
             tool: request
@@ -1052,11 +1064,30 @@ async fn handle_hook(core: &Arc<Core>, request: HookRequest) -> HookResponse {
     );
     // An auto-approve rule may answer at once; otherwise clients learn what they may do.
     crate::approve::request_held(core, pane_id);
-    match tokio::time::timeout(PERMISSION_WAIT, rx).await {
-        Ok(Ok(response)) => response,
-        // No decision: the agent falls back to its own prompt in the terminal.
-        _ => HookResponse::default(),
+    let decided = tokio::select! {
+        waited = tokio::time::timeout(PERMISSION_WAIT, rx) => waited.ok().and_then(Result::ok),
+        () = hook_gone => None,
+    };
+    if let Some(response) = decided {
+        return response;
     }
+    // No decision: the agent falls back to its own prompt in the terminal, so an answer
+    // from now on would never reach it.
+    let withdrawn = {
+        let mut pending = lock(&core.hooks.pending);
+        let ours = pending
+            .get(&pane_id)
+            .is_some_and(|held| held.request == request_id);
+        if ours {
+            pending.remove(&pane_id);
+        }
+        ours
+    };
+    if withdrawn {
+        core.approvals.clear_request(pane_id);
+        core.emit(crate::core::Event::PaneMeta(pane_id));
+    }
+    HookResponse::default()
 }
 
 #[cfg(test)]
@@ -1183,5 +1214,104 @@ mod tests {
         assert!(!runtime.process_gone(Some(&job(20, "claude")), false, |_| true));
         assert!(!runtime.process_gone(Some(&job(10, "zsh")), true, |pid| pid == 20));
         assert!(!runtime.process_gone(None, false, |pid| pid == 20));
+    }
+
+    /// Claude stops waiting for the hook (its own wait ended, or it was interrupted): an
+    /// answer after that never reaches it, so it must not be taken as decided.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_answer_after_the_hook_gave_up_is_not_decided() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = crate::Config::new(directory.path());
+        config.relay = crate::RelayMode::Disabled;
+        config.bind = Some("127.0.0.1:0".parse().unwrap());
+        config.shell = Some("/bin/sh".into());
+        let daemon = crate::Daemon::start(config).await.unwrap();
+        let core = Arc::clone(&daemon.core);
+        core.create_session("agent".into(), proto::PaneLaunch::Shell { cwd: None })
+            .unwrap();
+        let (pane, _) = core.pane_entries().pop().unwrap();
+        let request = HookRequest {
+            v: 1,
+            token: core.hooks.pane_token(pane),
+            pane: pane.0.to_string(),
+            agent: "claude".into(),
+            event: "PermissionRequest".into(),
+            seq: 1,
+            payload: serde_json::json!({
+                "session_id": "s1",
+                "hook_event_name": "PermissionRequest",
+                "cwd": "/tmp",
+                "tool_name": "Bash",
+                "tool_input": { "command": "ls" },
+            }),
+        };
+        let mut hook = UnixStream::connect(core.hooks.socket()).await.unwrap();
+        let mut line = serde_json::to_vec(&request).unwrap();
+        line.push(b'\n');
+        hook.write_all(&line).await.unwrap();
+        let until = |condition: &dyn Fn() -> bool, what: &str| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            while !condition() {
+                assert!(std::time::Instant::now() < deadline, "{what}");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        };
+        until(
+            &|| core.hooks.held(pane).is_some(),
+            "the hook holds the request",
+        );
+        let wire = core
+            .approvals
+            .snapshot()
+            .0
+            .into_iter()
+            .find(|info| info.pane_id == pane)
+            .map(|info| info.request_id)
+            .expect("clients are offered the request");
+        drop(hook);
+        until(
+            &|| core.hooks.held(pane).is_none(),
+            "the request goes once the hook is gone",
+        );
+        let actor = proto::Actor {
+            principal: proto::PrincipalId([1; 16]),
+            device: proto::DeviceId([1; 32]),
+        };
+        let decide = proto::Decide {
+            request_id: wire,
+            option_id: proto::OptionId(0),
+            actor,
+            sig: Vec::new(),
+        };
+        let decided = core.decide(actor, &decide, |_, _| {});
+        assert!(decided.is_err(), "{decided:?}");
+        daemon.shutdown().await;
+    }
+
+    #[test]
+    fn a_reply_nobody_waits_for_is_not_delivered() {
+        let hooks_dir = tempfile::tempdir().unwrap();
+        let hooks = HookServer::new(hooks_dir.path(), "/bin/true".into()).unwrap();
+        let pane = PaneId(7);
+        let mut runtime = runtime();
+        let _ = runtime.hook(
+            br#"{"session_id":"s","hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"ls"}}"#,
+            1,
+        );
+        let request = runtime.blocked_request().unwrap();
+        let (reply, waiting) = oneshot::channel();
+        drop(waiting);
+        lock(&hooks.pending).insert(
+            pane,
+            Pending {
+                request: request.clone(),
+                suggestions: Vec::new(),
+                agent: Some(AgentKind::Claude),
+                tool: "Bash".into(),
+                input: Value::Null,
+                reply,
+            },
+        );
+        assert!(!hooks.resolve_with(pane, &request, |_, _| String::new()));
     }
 }
