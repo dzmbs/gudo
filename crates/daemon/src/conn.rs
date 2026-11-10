@@ -917,7 +917,12 @@ async fn read_input(client: &Arc<Client>, mut stream: RecvStream) -> Result<(), 
         // Keys, mouse and paste are encoded for the program's current modes, which only the
         // daemon's VT knows for sure (the client's may lag behind by the bytes in flight).
         let is_sizing_input = crate::input::is_sizing_input(&input.payload);
-        let records_typing = !matches!(&input.payload, InputPayload::GeneratedBytes(_));
+        // A client could call any bytes generated; only a terminal's own replies are not typing,
+        // or a driver's text would pass for an empty draft and ride along with the owner's prompt.
+        let records_typing = match &input.payload {
+            InputPayload::GeneratedBytes(bytes) => !crate::input::is_terminal_report(bytes),
+            _ => true,
+        };
         let bytes = match input.payload {
             InputPayload::Bytes(bytes) | InputPayload::GeneratedBytes(bytes) => bytes,
             payload => entry.pane.encode_input(payload),

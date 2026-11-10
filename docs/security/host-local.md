@@ -138,7 +138,10 @@ This fence prevents queued native input from crossing an agent-to-shell transiti
 prove an agent consumed a prompt, recognize a safe/empty TUI draft or make the legacy paste/Enter
 pair transactional. Chat uses a separate owner-only, revision-checked, single-use ticket path and
 one bracketed-paste-plus-Return write. Dirty or unknown drafts require explicit confirmation; real
-input invalidates that confirmation. A matching same-session Claude UserPromptSubmit confirms the
+input invalidates that confirmation. Input a client marks as generated is exempt only when it is
+nothing but a terminal's own replies (focus, cursor position, device status and attributes, mode
+and keyboard-flag reports, OSC 4/10/11/12 colours); anything else counts as typing, so a driver
+cannot leave text in the draft unseen. A matching same-session Claude UserPromptSubmit confirms the
 normalized text, not an independently identified submission or a proven-empty PTY queue. Timeout,
 mismatch, concurrent input and exit remain unconfirmed, never automatically retried. A known blocked
 question refuses both prompt preparation and enqueue: text such as `yes` must not become a dialog
@@ -362,6 +365,9 @@ Each test runs the attack against the real code (real git, real sockets, a real 
   trusted commands run, and changed committed commands are untrusted again.
   `ws::trust::tests::only_the_trusted_commands_of_that_repository_run`: per repository, per
   command, kept across restarts.
+- `agent_input::chat_tests::text_sent_as_a_terminal_report_still_counts_as_typing` and
+  `input::tests::only_a_terminals_own_replies_pass_as_reports`: a client sending a command as
+  "generated" bytes, which left the draft clean for the owner's next prompt.
 - `agent::tests::only_this_user_may_use_the_hook_socket`: the peer-uid check, unit level (a
   second uid is not available to the tests); `a_long_state_dir_puts_the_socket_in_a_private_dir`.
 - `pty foreground::tests::a_terminal_with_no_program_has_no_foreground`: macOS reports a

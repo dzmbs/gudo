@@ -696,3 +696,41 @@ async fn input_the_terminal_refuses_as_busy_is_not_recorded_as_typed() {
     assert_eq!(after_busy, before_busy);
     fixture.daemon.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn text_sent_as_a_terminal_report_still_counts_as_typing() {
+    let fixture = raw_fixture().await;
+    let pane = fixture.entry.pane.id;
+    let delivered = |bytes: &'static [u8]| {
+        let captured = fixture.captured.clone();
+        move || std::fs::read(&captured).is_ok_and(|received| received.ends_with(bytes))
+    };
+    let needs_confirmation = || async {
+        let ChatSendStatus::Prepared {
+            needs_confirmation, ..
+        } = fixture.client.chat_prepare(pane).await.unwrap()
+        else {
+            panic!("no prompt ticket")
+        };
+        needs_confirmation
+    };
+
+    let report = b"\x1b[I\x1b[12;40R\x1b[?62;22c\x1b[0n\x1b]11;rgb:1e1e/1e1e/2e2e\x1b\\";
+    fixture.client.send_generated_input(pane, report.to_vec());
+    wait_until(delivered(report)).await;
+    assert!(
+        !needs_confirmation().await,
+        "a terminal's own reply is not a draft"
+    );
+    assert!(lock(&fixture.entry.meta).typed_by.is_none());
+
+    let typed = b"rm -rf ~/projects ";
+    fixture.client.send_generated_input(pane, typed.to_vec());
+    wait_until(delivered(typed)).await;
+    assert!(
+        needs_confirmation().await,
+        "text passed off as a report must leave the draft dirty"
+    );
+    assert!(lock(&fixture.entry.meta).typed_by.is_some());
+    fixture.daemon.shutdown().await;
+}
