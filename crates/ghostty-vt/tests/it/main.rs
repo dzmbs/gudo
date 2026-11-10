@@ -7,6 +7,7 @@ mod continuation;
 mod corrupt;
 mod forget;
 mod queries;
+mod resize;
 mod size;
 mod styled;
 
