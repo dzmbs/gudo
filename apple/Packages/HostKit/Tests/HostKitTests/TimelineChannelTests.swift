@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import GudoCore
 @testable import HostKit
 
 @MainActor
@@ -167,6 +168,17 @@ struct TimelineChannelTests {
         try await wait { await client.stopCalls == 1 }
     }
 
+    @Test func aRefusedWatchShowsTheHostsReason() async throws {
+        let client = TimelineTestClient()
+        let channel = TimelineChannel(pane: 7) { client }
+        var packets: [TimelineChannel.Packet] = []
+        _ = channel.observe { packets.append($0) }
+        try await wait { await client.watchCalls == 1 }
+        await client.failWatch(WorkspaceError.Unavailable(message: "Chat stopped; reopen it to retry"))
+        try await wait { !packets.isEmpty }
+        #expect(packets == [.unavailable("Chat stopped; reopen it to retry. Open Terminal.")])
+    }
+
     private func wait(_ condition: () async -> Bool) async throws {
         for _ in 0..<1_000 {
             if await condition() { return }
@@ -198,5 +210,6 @@ private actor TimelineTestClient: DaemonTimelineAPI {
     func timelineToolOutput(paneId: UInt64, handle: String, offset: UInt64, len: UInt32) async throws -> String { "{}" }
     func holdStops() { shouldHoldStops = true }
     func finishWatch(_ json: String) { watches.removeFirst().resume(returning: json) }
+    func failWatch(_ error: any Error) { watches.removeFirst().resume(throwing: error) }
     func finishStop() { stops.removeFirst().resume() }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import GudoCore
 
 @MainActor
 public final class TimelineChannel {
@@ -76,7 +77,7 @@ public final class TimelineChannel {
                 watchTask = nil
                 pending.removeAll(keepingCapacity: false)
                 pendingBytes = 0
-                publish(.unavailable("Chat could not connect. Open Terminal."))
+                publish(.unavailable(Self.refusal(error)))
                 if observers.isEmpty { stop() }
             }
         }
@@ -126,6 +127,17 @@ public final class TimelineChannel {
         publish(.unavailable("This pane has closed. Open Terminal."))
         observers.removeAll()
         stop()
+    }
+
+    private static func refusal(_ error: any Error) -> String {
+        let reason: String
+        switch error as? WorkspaceError {
+        case .NotFound: return "This pane has closed. Open Terminal."
+        case .Unavailable(let message), .Denied(let message), .Conflict(let message): reason = message
+        default: return "Chat could not connect. Open Terminal."
+        }
+        let sentence = reason.prefix(1).uppercased() + reason.dropFirst()
+        return sentence.hasSuffix(".") ? "\(sentence) Open Terminal." : "\(sentence). Open Terminal."
     }
 
     private func publish(_ packet: Packet) {
