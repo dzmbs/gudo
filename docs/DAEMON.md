@@ -161,6 +161,12 @@ transaction and do not classify TUI draft readiness. See [the exit fence](securi
 | forward bidi | client | 40 | `StreamHeader::PortForward{port}` or `Forward{Tcp\|Unix}` → `ForwardReply` → raw bytes |
 | transfer bidi | client | 1 (bulk) | `StreamHeader::Upload` / `Download` → `TransferReply` and raw bytes (§5.7) |
 
+Both sides allow 1024 unidirectional streams at once (`proto::MAX_UNI_STREAMS`; QUIC's default
+is 100). A connection follows at most 512 panes (a `Subscribe` past it is answered `Forbidden`),
+and each pane's task opens its own stream, waiting at most 10 s for the client to allow one, so
+`ctl` is read meanwhile. An older app that allows only 100 still has every `ctl` message
+answered; panes past its limit are refused after the 10 s.
+
 ### Input encoding
 
 The daemon's VT is the only one guaranteed to know the program's current modes (a client's VT
@@ -1146,6 +1152,14 @@ directory; an interrupted upload leaves nothing behind. Download: `Download{path
 → `Ready{stat, len}` → bytes → FIN (reset on a read error); client-core writes to a temporary
 file and renames. 20 MiB, release, loopback: macOS 28 MB/s up / 39 MB/s down (with other tests
 running), Linux 705 / 393 MB/s.
+
+Each connection serves 4 transfers and 4 blob streams at once (more wait their turn), and a
+transfer, blob or `bulk` stream that moves no bytes for 30 s is failed or reset. Blobs stream
+in 64 KiB pieces to and from disk; only their headers are read for their format and size.
+Pane queries (search, links, commands, command output), history pages and drawing requests
+run 2 at a time per kind and connection, with 32 accepted; more are answered "busy". A
+stream's header must arrive within 10 s, and each stream is served by its own task
+(`Config::connection`).
 
 ### 5.8 Attention feed
 
