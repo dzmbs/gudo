@@ -85,6 +85,13 @@ pub trait AgentAdapter {
         None
     }
 
+    /// Parses an OSC 777 desktop notification (`notify;<title>;<body>`). The body reads as an
+    /// OSC 9 notification unless the agent knows better.
+    fn parse_desktop_notification(&self, title: Option<&str>, body: &str) -> Option<Signal> {
+        let _ = title;
+        self.parse_osc9(body)
+    }
+
     /// Parses an OSC 7501 body (the text after `7501;`), keeping only this agent's reports.
     fn parse_program_status(&self, body: &str) -> Option<Signal> {
         ProgramStatus::parse(body)?.to_signal(self.program_status_app())

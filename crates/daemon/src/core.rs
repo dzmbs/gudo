@@ -2788,6 +2788,12 @@ fn handle_osc(core: &Core, entry: &PaneEntry, osc: Osc) -> bool {
                 .and_then(|runtime| runtime.osc9(&body));
             core.agent_event(id, event);
         }
+        Osc::DesktopNotification(notification) => {
+            let event = lock(&entry.agent)
+                .as_mut()
+                .and_then(|runtime| runtime.desktop_notification(&notification));
+            core.agent_event(id, event);
+        }
         Osc::ProgramStatus(body) => {
             // Reports about sub-records (`id=`) belong to the agent integrations below. Any
             // printed text can claim to be an agent: only a pane running one may.

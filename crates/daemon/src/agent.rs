@@ -36,6 +36,7 @@ use tokio::sync::oneshot;
 
 use crate::core::{Core, lock};
 use crate::fsutil;
+use crate::osc::DesktopNotification;
 
 /// How long a `PermissionRequest` hook waits for a decision (Claude allows 600 s; the
 /// recipe's hook timeout is 590 s).
@@ -335,6 +336,17 @@ impl AgentRuntime {
 
     pub fn osc9(&mut self, body: &str) -> Option<AgentEvent> {
         let signal = self.adapter.parse_osc9(body)?;
+        let update = self.arbiter.apply(signal, now());
+        self.take(update)
+    }
+
+    pub fn desktop_notification(
+        &mut self,
+        notification: &DesktopNotification,
+    ) -> Option<AgentEvent> {
+        let signal = self
+            .adapter
+            .parse_desktop_notification(notification.title.as_deref(), &notification.body)?;
         let update = self.arbiter.apply(signal, now());
         self.take(update)
     }

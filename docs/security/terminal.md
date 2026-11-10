@@ -125,8 +125,8 @@ An unbracketed paste containing `\n` or `\r` needs confirmation in the app.
 - A summary that had to be cut (`…`, by the agent's adapter or to fit a push) gets no
   lock-screen Approve: the notification offers Open only, and the app shows the whole request.
   The app's own local notifications follow the same rule.
-- OSC 9 is read only from a running agent's own TTY. OSC 777 and general desktop notifications
-  are not implemented.
+- OSC 9 and OSC 777 `notify` are read only from a running agent's own TTY; other OSC 777
+  extensions are ignored. General desktop notifications are not implemented.
 - Pushes come only from attention items (agent blocked/done/failed, a long command finished).
   They are debounced and collapsed per pane, and long-command pushes need a real elapsed
   duration, so output cannot cause a push storm.
@@ -161,7 +161,7 @@ interactive stream. Shell-integration marks (OSC 133) are trusted only for displ
   still reaches agents. Provenance marking is the mitigation. libghostty-vt's formatter does not
   expose cell visibility.
 - **Agent-pane spoofing.** Inside a pane where Claude or Codex runs, anything that writes to
-  that TTY (the agent's subprocesses can open `/dev/tty`) can still emit OSC 9/7501 as the
+  that TTY (the agent's subprocesses can open `/dev/tty`) can still emit OSC 9/777/7501 as the
   agent. It can change the shown state and summary, but not create approve/deny buttons.
 - **Title marks.** A printed title starting with Claude's spinner glyph (`✳ …`) gives a plain
   shell pane Claude's mark in the tab bar (the title heuristic for local panes). It sets no

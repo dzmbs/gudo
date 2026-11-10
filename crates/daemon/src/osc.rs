@@ -1,6 +1,7 @@
 //! A streaming OSC extractor for the facts the daemon tracks outside libghostty-vt: titles,
-//! working directory, agent reports and clipboard writes (OSC 52). Shell-integration marks (OSC 133) come from
-//! libghostty-vt itself, with cursor positions (see `commands`).
+//! working directory, agent reports, desktop notifications (OSC 9, OSC 777) and clipboard
+//! writes (OSC 52). Shell-integration marks (OSC 133) come from libghostty-vt itself, with
+//! cursor positions (see `commands`).
 //!
 //! It only recognises `ESC ] … (BEL | ESC \)`; everything else passes through untouched (the
 //! VT parser sees every byte regardless). Bodies longer than [`MAX_BODY`] are dropped.
@@ -21,6 +22,15 @@ pub(crate) enum Osc {
     ProgramStatus(String),
     /// OSC 52 write; reads (`?`) are never recognised.
     Clipboard(String),
+    /// OSC 777 `notify` (the rxvt-unicode extension; Codex's `osc777` notification method).
+    DesktopNotification(DesktopNotification),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DesktopNotification {
+    /// Cleaned like a terminal title; `None` when empty.
+    pub title: Option<String>,
+    pub body: String,
 }
 
 #[derive(Debug, Default)]
@@ -120,6 +130,10 @@ impl OscScanner {
                 Some(text) => Osc::Clipboard(text),
                 None => return,
             },
+            "777" => match desktop_notification(rest) {
+                Some(notification) => Osc::DesktopNotification(notification),
+                None => return,
+            },
             _ => return,
         };
         emit(osc);
@@ -168,6 +182,23 @@ impl Progress {
             Self::Remove | Self::Indeterminate => None,
         }
     }
+}
+
+/// An OSC 777 `notify;<title>;<body>`, read as Ghostty reads it: the title ends at the first
+/// semicolon and the body keeps the rest, semicolons included. A lone field is the body. Other
+/// rxvt extensions are ignored.
+fn desktop_notification(rest: &str) -> Option<DesktopNotification> {
+    let fields = rest.strip_prefix("notify;")?;
+    let (title, body) = match fields.split_once(';') {
+        Some((title, body)) => (Some(title), body),
+        None => (None, fields),
+    };
+    Some(DesktopNotification {
+        title: title
+            .map(|title| proto::clean_prompt_text(title, MAX_TITLE_CHARS))
+            .filter(|title| !title.is_empty()),
+        body: body.to_owned(),
+    })
 }
 
 /// The text of an OSC 52 write, `<targets>;<base64>`: UTF-8 of at most
@@ -326,6 +357,50 @@ mod tests {
         for body in ["4;5;1", "4;1;x", "4", "Approval requested: ls", "44;1;2"] {
             assert_eq!(Progress::parse(body), None, "{body}");
         }
+    }
+
+    #[test]
+    fn desktop_notifications_carry_their_title_and_body() {
+        let notification = |title: Option<&str>, body: &str| {
+            Osc::DesktopNotification(DesktopNotification {
+                title: title.map(str::to_owned),
+                body: body.to_owned(),
+            })
+        };
+        let got = scan(&[
+            b"\x1b]777;notify;Codex;Approval requested: ls\x07",
+            b"\x1b]777;notify;Codex;Turn done\x1b\\",
+            b"\x1b]777;noti",
+            b"fy;Build;step 1; step 2;\x1b",
+            b"\\\x1b]777;notify;;No title\x07",
+            b"\x1b]777;notify;Only a body\x07",
+            b"\x1b]777;preexec;ls\x07\x1b]777;notify\x07\x1b]777;\x07",
+            b"\x1b]9;Approval requested: ls\x07\x1b]9;4;1;50\x07",
+        ]);
+        assert_eq!(
+            got,
+            [
+                notification(Some("Codex"), "Approval requested: ls"),
+                notification(Some("Codex"), "Turn done"),
+                notification(Some("Build"), "step 1; step 2;"),
+                notification(None, "No title"),
+                notification(None, "Only a body"),
+                Osc::Notify("Approval requested: ls".into()),
+                Osc::Notify("4;1;50".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn desktop_notification_titles_print_as_they_are() {
+        let got = scan(&["\x1b]777;notify;Co\u{202e}dex\u{0085};body\x07".as_bytes()]);
+        assert_eq!(
+            got,
+            [Osc::DesktopNotification(DesktopNotification {
+                title: Some("Codex".into()),
+                body: "body".into(),
+            })]
+        );
     }
 
     #[test]

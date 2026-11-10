@@ -698,6 +698,23 @@ mod tests {
     }
 
     #[test]
+    fn desktop_notifications_read_like_osc9() {
+        // Codex's OSC 777 body has its ASCII semicolons replaced, as they delimit fields.
+        let signal = Codex::new()
+            .parse_desktop_notification(Some("Codex"), "Approval requested: cargo test； ls")
+            .unwrap();
+        let Some(Claim::Blocked(blocker)) = signal.claim else {
+            panic!()
+        };
+        assert_eq!(blocker.summary.as_deref(), Some("cargo test； ls"));
+
+        let turn_end = Codex::new()
+            .parse_desktop_notification(None, "Done.")
+            .unwrap();
+        assert_eq!(turn_end.kind, EventKind::TurnEnded);
+    }
+
+    #[test]
     fn osc9_progress_is_not_a_notification() {
         assert_eq!(parse_osc9("4;1;50"), None);
         assert_eq!(parse_osc9("4;0"), None);
