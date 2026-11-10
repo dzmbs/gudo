@@ -934,13 +934,20 @@ A browser page is a leaf of a window-owned tab, as an editor is (§20): `Composi
 navigates and restored after a relaunch), a tab of its own (sidebar "Browser") or beside a
 terminal. `BrowserPanes` keeps one `BrowserPane` (a `WebPage`) per leaf across tab switches; a
 host's page uses that host's data store and claims this device's loopback port before a
-`localhost:<port>` navigation (`DevServerRouting.prepareLoopback`). Opened from the palette (New
-Browser Tab, Open Browser Beside), from the browser sheet (Open as Tab), and by the host: a URL a
-pane opens through `BROWSER` comes up beside that pane (`openFromHost`), a sign-in in the system
-sign-in sheet instead (`HostSignIn`). Where tools are leaves, a dev server or address opened from
-a Ports leaf goes beside that Ports leaf (`openPage(_:hostId:besideTool:)`), whichever leaf had
-the focus, so Ports stays a list with its pages next to it; the port offer and a pane's link go
-beside the focused leaf; a leaf already showing the page comes forward instead (`PortsLeafPlacementTests`).
+`localhost:<port>` navigation (`DevServerRouting.prepareLoopback`). A browser opens as a tab:
+New Browser Tab (⇧⌘B, a pane header's globe, the palette) opens the dev server the focused pane
+runs, else the start page, in a tab that joins the project of the tab it came from, right after
+it; the tab it came from keeps its panes. Open Browser Beside (⌥⇧⌘B, the pane menu, the globe's
+menu) splits the focused pane's tab instead. A browser, VS Code or tool tab merges into another
+tab, keeping its arrangement: Merge Into Tab on its row, or dragged onto a terminal pane's edge
+(`mergeWindowTab`, `CompositeTabs.merge`); a host tab it joins becomes a mixed tab in its place,
+in its project (`BrowserTabPlacementTests`). Also opened from the browser sheet (Open as Tab),
+and by the host: a URL a pane opens through `BROWSER` comes up beside that pane (`openFromHost`),
+where the agents' browser tools find it, a sign-in in the system sign-in sheet instead
+(`HostSignIn`). Where tools are leaves, a dev server or address opened from a Ports leaf goes
+beside that Ports leaf (`openPage(_:hostId:besideTool:)`), whichever leaf had the focus, so Ports
+stays a list with its pages next to it; the port offer and a pane's link open a browser tab; a
+leaf already showing the page, in any tab, comes forward instead (`PortsLeafPlacementTests`).
 
 Agents' browser tools (`BrowserAgent`) act on the page beside the agent's pane, the first
 `browser_navigate` opening it. Pages carry two scripts (`BrowserAgentScript`). One runs in
