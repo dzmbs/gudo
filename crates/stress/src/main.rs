@@ -2,6 +2,7 @@
 //! saved (`$XDG_CONFIG_HOME/gudo`) and drives the daemon over the real protocol. The
 //! scenarios in `scripts/stress/` start the daemon and call this; results go to stdout.
 
+mod deadmount;
 mod outages;
 mod raw;
 mod sink;
@@ -162,6 +163,20 @@ enum Cmd {
         rate: u64,
         #[arg(long, default_value_t = 10)]
         secs: u64,
+    },
+    /// Panes and a repository on a mount that `stall` stops answering, next to the healthy
+    /// repository `healthy`: echo, tab and sidebar latency while it hangs.
+    DeadMount {
+        #[arg(long)]
+        healthy: PathBuf,
+        #[arg(long)]
+        dead: PathBuf,
+        #[arg(long, default_value_t = 30)]
+        secs: u64,
+        #[arg(long)]
+        stall: String,
+        #[arg(long)]
+        resume: String,
     },
 }
 
@@ -404,6 +419,22 @@ async fn run(cli: Cli, handle: tokio::runtime::Handle) -> Result<()> {
                 file,
             };
             outages::run(&handle, key, &ticket, plan).await
+        }
+        Cmd::DeadMount {
+            healthy,
+            dead,
+            secs,
+            stall,
+            resume,
+        } => {
+            let plan = deadmount::Plan {
+                healthy,
+                dead,
+                secs,
+                stall,
+                resume,
+            };
+            deadmount::run(&handle, key, &ticket, plan).await
         }
     }
 }

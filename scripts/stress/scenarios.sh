@@ -108,6 +108,11 @@ case_outages() {
   RECOVER=3 D chaos "$W/s-outages.sh"
 }
 
+case_deadmount() {
+  echo "== a pane, a repository and agent splits on a mount that stops answering"
+  RECOVER=5 D deadmount "$W/s-deadmount.sh"
+}
+
 for s in "$@"; do
   echo "######## $s"
   "case_$s"

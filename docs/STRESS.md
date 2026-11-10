@@ -19,6 +19,7 @@ cargo build --release -p hostd -p cli -p stress     # gudo-hostd, gudo, gudo-hoo
 B=target/release
 scripts/stress/scenarios.sh $B panes churn floods slow clients control lifecycle soak
 scripts/stress/scenarios.sh $B outages hooks term knocks upgrade many   # second pass
+scripts/stress/scenarios.sh $B deadmount     # needs FUSE (bindfs, or sshfs to localhost)
 SOAK_MIN=90 scripts/stress/scenarios.sh $B soak
 ```
 
@@ -33,6 +34,7 @@ SOAK_MIN=90 scripts/stress/scenarios.sh $B soak
 | `s-gen.sh`, `profile-during.sh`, `mem-during.sh` | Diagnostics: RSS of one generator without a client; a `sample(1)` profile; heap and VM regions mid-run |
 | `gudo-stress` (`crates/stress`) | The driver: `churn`, `deep`, `tabs`, `spawn`, `latency`, `clients`, `slow` (raw peers that never read), `reconnect`, `stale-resume` (raw garbage `Hello`s), `keys`, `paste`, `layout`, `projects`, `outages` (lines typed while the daemon is frozen, checked exactly once), `push-sink` (a device registered with a local fake push relay, counting pushes), `knocks` (fresh devices knocking on one invite) |
 | `s-outages.sh`, `s-hooks.sh`, `s-term.sh`, `s-knocks.sh`, `s-upgrade.sh`, `many.sh`, `s-soak-heap.sh` | Second pass: input across outages; real `gudo-hook` floods and approval spam with a push sink; agents' terminal tools at high concurrency (a fake `codex` for `agent_spawn`); knock floods; self-upgrade under full load; 1000 panes and a restart; the soak with heap snapshots |
+| `s-deadmount.sh` | A pane, a git worktree and agents' `pane_split cwd=` on a FUSE mount whose server is stopped (SIGSTOP), next to a healthy repository and a client with `Caps::REPO_STATUS`: echo, tab and sidebar latency while it hangs (`gudo-stress dead-mount`) |
 | `hookload.py`, `jobs.sh` | Load from inside panes (they hold the pane's hook token): `gudo-hook` processes, held approvals, terminal-tool calls on the hook socket |
 
 "Echo latency" is the time from sending a token to a pane running `cat` until it comes back in
@@ -204,6 +206,26 @@ New limits (by design):
 | Input streams remembered | 4096 (idle ones forgotten after 30 min) | A client resuming after that starts a new stream |
 | iroh state per remote key | 60 s after its last connection | A stranger opening connections from fresh keys holds memory for a minute: about 13 KB per key; 118 MB live after 21 000 connections in 90 s, 31 MB a minute later |
 | Canvas panes | three fsynced writes each | about 30 per second at 1000 canvases |
+
+### Stalled mounts
+
+A directory on a network mount whose server stops answering (NFS, SMB, sshfs, an autofs
+`/net` path) blocks `stat` and every git there for minutes. Found in review; each fix has a
+test that makes the hang with a probe that never returns or a fake git that sleeps.
+
+| Severity | Bug | Cause | Fix | Test |
+|---|---|---|---|---|
+| Medium | A pane, split or agent tool with its directory on a stalled mount froze that client's ops, and a few parallel agent calls froze the daemon | `is_dir()` on the pane's directory on an async worker, under the agents' opening lock | The directory is checked on a thread of its own for at most 500 ms (falling back to home), once per stuck path; agent tools check theirs before taking the lock | `fsutil::tests::a_hanging_directory_is_unreachable_without_holding_the_caller` |
+| Medium | One stuck git stopped the git sidebar and turn diffs for every repository, for good | No timeout on daemon git; one tracker task and one serial snapshot queue awaited it | Every daemon git runs in its own process group and is killed after 60 s; the tracker runs git per directory, one at a time each, off its task; turn snapshots run per pane | `git::tests::a_hung_git_is_killed_with_its_helpers`, `repo::tests::a_hung_repository_holds_back_no_other`, `turns::tests::a_stuck_pane_holds_only_its_own_turns` |
+| Low | A stopping daemon waited for blocking work stuck on the mount | The runtime waits for blocking tasks when dropped | At most 2 s | - |
+
+The `deadmount` scenario could not run with a real stalled mount on the test Mac: no FUSE
+(macFUSE, bindfs, sshfs), no `/net` automount, and NFS or SMB servers need root. It ran
+with a stand-in (a plain directory, a stopped `sleep` as the "server") to check the driver:
+echo p99 3.3 ms, a tab in 40 ms, a change in the healthy repository on the sidebar in 0.8 s
+(the 250 ms tick plus the debounce). Run it on Linux with bindfs or sshfs to localhost, or
+set `DEADMOUNT_MOUNT`, `DEADMOUNT_PID` and `DEADMOUNT_UNMOUNT` for an NFS export whose server
+can be stopped.
 
 ### Not tested, and open items
 
