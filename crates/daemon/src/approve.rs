@@ -241,6 +241,17 @@ pub(crate) fn add_rule(
     if !core.is_agent_pane(pane) {
         return Err(ApprovalError::NotFound);
     }
+    // A native Codex answer is delivered later and must carry its author's grant; only the
+    // owner's is held for the life of a rule.
+    if core
+        .pane(pane)
+        .is_some_and(|entry| lock(&entry.codex).is_some())
+        && !core.identity.is_owner_device(rule.actor.device)
+    {
+        return Err(ApprovalError::Forbidden(
+            "only the owner can allow all on this Codex pane".into(),
+        ));
+    }
     let active = ActiveRule {
         rule,
         turns_used: 1,

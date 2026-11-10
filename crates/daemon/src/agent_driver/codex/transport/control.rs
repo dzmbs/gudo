@@ -15,6 +15,20 @@ use tokio_websockets::Message;
 #[cfg(test)]
 mod tests;
 
+const CONTROL_DEADLINE: std::time::Duration = std::time::Duration::from_secs(4);
+const MAX_REQUEST_BYTES: usize = 60 * 1024;
+const MAX_TURN_ID_BYTES: usize = 128;
+
+/// Why a queued control did not run.
+#[derive(Debug, thiserror::Error)]
+enum ControlError {
+    /// The request was answered elsewhere, the turn moved on or input arrived since admission.
+    #[error("Codex control no longer applies")]
+    Obsolete,
+    #[error(transparent)]
+    Transport(#[from] io::Error),
+}
+
 pub(in crate::agent_driver::codex) type Sender = mpsc::Sender<Command>;
 
 pub(in crate::agent_driver::codex) struct Command {
@@ -58,6 +72,27 @@ impl Live {
             std::mem::take(&mut state.effects)
         };
         self.publish(effects);
+    }
+
+    /// Puts an admitted answer that no longer applies back in front of the people who can
+    /// answer it, if Codex still waits for it.
+    fn reopen_approval(self: &std::sync::Arc<Self>, common: &agents::RequestId) {
+        let waiting = lock(&self.runtime)
+            .pending
+            .first_mut()
+            .filter(|pending| pending.common.as_ref() == Some(common) && pending.admitted)
+            .map(|pending| pending.admitted = false)
+            .is_some();
+        let Some((core, entry)) = self.target() else {
+            return;
+        };
+        if let Some(runtime) = lock(&entry.agent).as_mut() {
+            runtime.withdraw_decision(common);
+        }
+        core.emit(crate::core::Event::PaneMeta(entry.pane.id));
+        if waiting {
+            crate::approve::request_held(&core, entry.pane.id);
+        }
     }
 
     pub(crate) fn send_prompt(
@@ -187,7 +222,7 @@ impl Live {
             actor,
             action,
             acknowledgement,
-            deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(4),
+            deadline: tokio::time::Instant::now() + CONTROL_DEADLINE,
             policy: None,
             signers: Vec::new(),
             rule: None,
@@ -204,25 +239,37 @@ impl Live {
 }
 
 pub(super) async fn run(source: Weak<Live>, mut receiver: mpsc::Receiver<Command>) {
-    while let Some(mut command) = receiver.recv().await {
-        let result = tokio::time::timeout_at(command.deadline, execute(&source, &command)).await;
-        if !matches!(result, Ok(Ok(())))
-            && matches!(command.action, Action::Approve { .. })
-            && let Some(source) = source.upgrade()
-        {
-            source.control_failed();
-        }
-        if matches!(result, Ok(Ok(())))
-            && let Some(acknowledgement) = command.acknowledgement.take()
-        {
-            let _ = acknowledgement
-                .receipt
-                .send(crate::agent_input::Receipt::Confirmed);
-        }
+    while let Some(command) = receiver.recv().await {
+        handle(&source, command).await;
     }
 }
 
-async fn execute(source: &Weak<Live>, command: &Command) -> io::Result<()> {
+async fn handle(source: &Weak<Live>, mut command: Command) {
+    let result = tokio::time::timeout_at(command.deadline, execute(source, &command)).await;
+    match (result, &command.action) {
+        (Ok(Ok(())), _) => {
+            if let Some(acknowledgement) = command.acknowledgement.take() {
+                let _ = acknowledgement
+                    .receipt
+                    .send(crate::agent_input::Receipt::Confirmed);
+            }
+        }
+        (Ok(Err(ControlError::Obsolete)), Action::Approve { common, .. }) => {
+            if let Some(source) = source.upgrade() {
+                source.reopen_approval(common);
+            }
+        }
+        (_, Action::Approve { .. }) => {
+            if let Some(source) = source.upgrade() {
+                source.control_failed();
+            }
+        }
+        _ => {}
+    }
+}
+
+async fn execute(source: &Weak<Live>, command: &Command) -> Result<(), ControlError> {
+    serialize(source, command)?;
     let (path, server) = {
         let source = source
             .upgrade()
@@ -253,18 +300,18 @@ async fn execute(source: &Weak<Live>, command: &Command) -> io::Result<()> {
             };
             if turn.is_none_or(|turn| {
                 turn.is_empty()
-                    || turn.len() > 128
+                    || turn.len() > MAX_TURN_ID_BYTES
                     || command
                         .turn
                         .as_deref()
                         .is_some_and(|expected| expected != turn)
             }) {
-                return Err(io::Error::other("invalid Codex turn receipt"));
+                return Err(io::Error::other("invalid Codex turn receipt").into());
             }
         }
         Action::Stop => {
             if !reply["result"].is_object() {
-                return Err(io::Error::other("invalid Codex interrupt receipt"));
+                return Err(io::Error::other("invalid Codex interrupt receipt").into());
             }
         }
         Action::Approve { .. } => {}
@@ -278,12 +325,12 @@ async fn execute(source: &Weak<Live>, command: &Command) -> io::Result<()> {
     if !core.identity.is_owner_device(command.actor.device)
         || !lock(&source.state).binding.is_current(&command.binding)
     {
-        return Err(io::Error::other("Codex binding changed"));
+        return Err(io::Error::other("Codex binding changed").into());
     }
     Ok(())
 }
 
-fn serialize(source: &Weak<Live>, command: &Command) -> io::Result<String> {
+fn serialize(source: &Weak<Live>, command: &Command) -> Result<String, ControlError> {
     let source = source
         .upgrade()
         .ok_or_else(|| io::Error::other("Codex source ended"))?;
@@ -293,25 +340,28 @@ fn serialize(source: &Weak<Live>, command: &Command) -> io::Result<String> {
     let gate = lock(&entry.pane.agent_input_gate);
     if gate.control_revision() != Some(command.revision) || !core.agent_has_terminal(entry.pane.id)
     {
-        return Err(io::Error::other("Codex input fence changed"));
+        return Err(ControlError::Obsolete);
     }
     let state = lock(&source.state);
-    if !state.is_ready() || !state.binding.is_current(&command.binding) {
-        return Err(io::Error::other("Codex binding changed"));
+    if !state.is_ready() {
+        return Err(io::Error::other("Codex observation closed").into());
+    }
+    if !state.binding.is_current(&command.binding) {
+        return Err(ControlError::Obsolete);
     }
     let events = state
         .events
         .as_ref()
         .ok_or_else(|| io::Error::other("Codex events unavailable"))?;
     if events.active_turn() != command.turn.as_deref() {
-        return Err(io::Error::other("Codex turn changed"));
+        return Err(ControlError::Obsolete);
     }
     let thread = command.binding.thread_id();
     let request = match &command.action {
         Action::Send(text) => {
             if !core.identity.is_owner_device(command.actor.device) || events.has_pending_approval()
             {
-                return Err(io::Error::other("Codex prompt is not authorized"));
+                return Err(ControlError::Obsolete);
             }
             let input = json!([{"type":"text","text":text,"text_elements":[]}]);
             if let Some(turn) = &command.turn {
@@ -323,7 +373,7 @@ fn serialize(source: &Weak<Live>, command: &Command) -> io::Result<String> {
         Action::Stop => {
             if !core.identity.is_owner_device(command.actor.device) || events.has_pending_approval()
             {
-                return Err(io::Error::other("Codex interrupt is not authorized"));
+                return Err(ControlError::Obsolete);
             }
             json!({"id":rpc::REQUEST_ID,"method":"turn/interrupt","params":{"threadId":thread,"turnId":command.turn}})
         }
@@ -341,7 +391,7 @@ fn serialize(source: &Weak<Live>, command: &Command) -> io::Result<String> {
                         && pending.id == *request
                         && pending.admitted
                 })
-                .ok_or_else(|| io::Error::other("Codex approval changed"))?;
+                .ok_or(ControlError::Obsolete)?;
             if !events.approval_pending(request)
                 || command.policy != Some(core.mp.policy_of_pane(&core, entry.pane.id))
                 || command.signers.is_empty()
@@ -363,7 +413,7 @@ fn serialize(source: &Weak<Live>, command: &Command) -> io::Result<String> {
                         .is_err()
                 })
             {
-                return Err(io::Error::other("Codex approval policy changed"));
+                return Err(ControlError::Obsolete);
             }
             let decision = if *choice == ApprovalChoice::AllowOnce {
                 "accept"
@@ -374,16 +424,14 @@ fn serialize(source: &Weak<Live>, command: &Command) -> io::Result<String> {
                     .ok_or_else(|| io::Error::other("Codex denial unavailable"))?
             };
             if !pending.details.offers(decision) {
-                return Err(io::Error::other("Codex decision is not offered"));
+                return Err(io::Error::other("Codex decision is not offered").into());
             }
             json!({"id":request,"result":{"decision":decision}})
         }
     };
     let request = request.to_string();
-    if request.len() > 60 * 1024 {
-        return Err(io::Error::other(
-            "Codex control exceeds the observation budget",
-        ));
+    if request.len() > MAX_REQUEST_BYTES {
+        return Err(io::Error::other("Codex control exceeds the request budget").into());
     }
     Ok(request)
 }

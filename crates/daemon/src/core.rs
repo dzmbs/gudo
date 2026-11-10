@@ -2509,7 +2509,13 @@ impl Core {
                         actor,
                         authorization,
                     );
-                    driver.approve(self, id, &details.request, decision, authority);
+                    if !driver.approve(self, id, &details.request, decision, authority) {
+                        if let Some(runtime) = lock(&entry.agent).as_mut() {
+                            runtime.withdraw_decision(&details.request);
+                        }
+                        self.emit(Event::PaneMeta(id));
+                        return Err(None);
+                    }
                     self.approvals.clear_request(id);
                     self.emit(Event::Decided(decided));
                     self.emit(Event::PaneMeta(id));

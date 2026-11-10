@@ -113,11 +113,7 @@ impl AgentDriver for TerminalDriver {
         authority: super::ApprovalAuthority,
     ) -> bool {
         if let Some(source) = source(core, pane) {
-            let delivered = source.approve(request, decision, authority);
-            if !delivered {
-                source.control_failed();
-            }
-            return delivered;
+            return source.approve(request, decision, authority);
         }
         // The terminal hook lane retains its held PermissionRequest reply format, not RPC approvals.
         core.hooks

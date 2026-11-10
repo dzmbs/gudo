@@ -535,6 +535,19 @@ impl AgentRuntime {
         self.requests.iter().any(|(wire, _)| *wire == id)
     }
 
+    /// Reopens `request` after its accepted decision could not be delivered.
+    pub fn withdraw_decision(&mut self, request: &agents::RequestId) {
+        self.arbiter.withdraw(request);
+        if let Some((wire, _)) = self.last_decided
+            && self
+                .requests
+                .iter()
+                .any(|(known_wire, known)| *known_wire == wire && known == request)
+        {
+            self.last_decided = None;
+        }
+    }
+
     /// Accepts the first decision for a request. On refusal returns who decided first, if
     /// known.
     pub fn decide(

@@ -241,3 +241,111 @@ async fn terminal_resolution_retires_an_admitted_native_answer_before_serializat
     assert!(serialize(&source, &command).is_err());
     fixture.raw.daemon.shutdown().await;
 }
+
+impl Fixture {
+    fn waiting(&self) -> crate::agent::BlockedDetail {
+        let thread = lock(&self.source.state)
+            .current
+            .as_ref()
+            .unwrap()
+            .thread_id()
+            .to_owned();
+        let effects = {
+            let mut state = lock(&self.source.state);
+            state.observe(&json!({"method":"turn/started","params":{"threadId":thread,"turn":{"id":"active","status":"inProgress"}}}).to_string(), Direction::FromServer);
+            state.observe(&json!({"id":7,"method":"item/commandExecution/requestApproval","params":{"threadId":thread,"turnId":"active","itemId":"command","command":"printf fixture","cwd":"/fixture","kind":"command","availableDecisions":["accept","cancel"]}}).to_string(), Direction::FromServer);
+            std::mem::take(&mut state.effects)
+        };
+        self.source.publish(effects);
+        lock(&self.raw.entry.agent)
+            .as_mut()
+            .unwrap()
+            .blocked_detail()
+            .unwrap()
+    }
+
+    fn decide(
+        &self,
+        actor: Actor,
+        wire: proto::RequestId,
+    ) -> Result<proto::Decided, Option<Actor>> {
+        let decide = proto::Decide {
+            request_id: wire,
+            option_id: proto::OptionId(0),
+            actor,
+            sig: Vec::new(),
+        };
+        self.raw
+            .daemon
+            .core
+            .decide_authorized(actor, &decide, None, None, |_, _| {})
+    }
+}
+
+fn guest() -> Actor {
+    Actor {
+        principal: proto::PrincipalId([8; 16]),
+        device: proto::DeviceId([8; 32]),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_answer_overtaken_by_terminal_input_is_dropped_and_offered_again() {
+    let fixture = Fixture::new().await;
+    let source = Arc::downgrade(&fixture.source);
+    let command = fixture.approval();
+    {
+        let _write = crate::agent_input::begin_unproven_write(
+            &fixture.raw.entry.pane.agent_input_gate,
+            b"x",
+        );
+    }
+    handle(&source, command).await;
+    assert!(lock(&fixture.source.state).is_chat_ready());
+    assert!(!lock(&fixture.source.runtime).pending[0].admitted);
+    assert!(fixture.source.pending_approval().is_some());
+    fixture.raw.daemon.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_native_answer_is_not_decided_and_can_be_answered_again() {
+    let fixture = Fixture::new().await;
+    let (sender, mut queued) = mpsc::channel(1);
+    *lock(&fixture.source.controls) = Some(sender);
+    let detail = fixture.waiting();
+    let mut events = fixture.raw.daemon.core.events.subscribe();
+    assert_eq!(fixture.decide(guest(), detail.wire), Err(None));
+    assert!(lock(&fixture.source.state).is_chat_ready());
+    assert!(queued.try_recv().is_err());
+    while let Ok(event) = events.try_recv() {
+        assert!(!matches!(event, crate::core::Event::Decided(_)));
+    }
+    assert!(fixture.decide(fixture.actor, detail.wire).is_ok());
+    assert!(queued.try_recv().is_ok());
+    fixture.raw.daemon.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_guest_cannot_add_an_allow_all_rule_on_a_native_codex_pane() {
+    let fixture = Fixture::new().await;
+    let rule = |actor| proto::AutoApproveRule {
+        rule_id: proto::RuleId([4; 16]),
+        pane_id: fixture.raw.entry.pane.id,
+        request_id: None,
+        matcher: proto::RuleMatch {
+            tool: "Bash".into(),
+            prefix: "printf".into(),
+        },
+        expires_at: proto::UnixMillis(crate::identity::now_millis() + 60_000),
+        max_turns: 1,
+        actor,
+        sig: Vec::new(),
+    };
+    let core = &fixture.raw.daemon.core;
+    assert!(matches!(
+        crate::approve::add_rule(core, rule(guest()), "guest".into()),
+        Err(proto::ApprovalError::Forbidden(_))
+    ));
+    assert!(crate::approve::add_rule(core, rule(fixture.actor), "owner".into()).is_ok());
+    fixture.raw.daemon.shutdown().await;
+}

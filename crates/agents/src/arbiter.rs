@@ -527,6 +527,18 @@ impl Arbiter {
         Ok(decided)
     }
 
+    /// Forgets the decision on `request_id` when it could not be delivered, so it can be
+    /// answered again.
+    pub fn withdraw(&mut self, request_id: &RequestId) {
+        if self
+            .decided
+            .as_ref()
+            .is_some_and(|decided| &decided.request_id == request_id)
+        {
+            self.decided = None;
+        }
+    }
+
     /// Returns when [`Arbiter::tick`] should next run, if any time-based rule is armed.
     pub fn next_deadline(&self) -> Option<UnixMillis> {
         let mut deadlines = Vec::new();
