@@ -113,6 +113,11 @@ still names the user's actual home. Dedicated launches retain their per-launch i
 Tests and capture tools must also supply private home and agent configuration directories.
 A start writes these files only when its own entries need to change: the agents rewrite them
 while they run, and a needless rewrite would race them and reformat a hand-edited file.
+The agent skill is written under the same rule into the agents' skill directories, only into
+the folder named for this flavour, never through a symbolic link, and never over a folder that
+lacks our `.hook-launcher` marker. Its text is instructions the agents load: it is built from
+files in this repository and the brand's names only, never from anything a pane, a page or a
+device sent.
 
 **Agent timelines.** Watching a timeline requires View on its pane. A tool's full output and
 recorded changes need Prompt there, like a turn's diff: they hold what the agent read (the whole

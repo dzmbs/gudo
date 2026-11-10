@@ -39,6 +39,23 @@ flavour. Relative commands, custom shell suffixes and unrelated registrations re
 registrations from the other flavour remain; Codex notification chains retain one wrapper per
 flavour and forward the user's original notification command once.
 
+The same start installs the agent skill, `crates/agents/skill/` (the Agent Skills layout:
+`SKILL.md`, `references/` with every MCP tool and its exact arguments, `examples/`), which
+teaches agents in panes to run and watch commands, lay out panes, start and wait on workers and
+use the browser pane. It goes to `<dir>/skills/<name>` for Claude Code (`CLAUDE_CONFIG_DIR` or
+`~/.claude`), Codex (`CODEX_HOME` or `~/.codex`) and pi (`PI_CODING_AGENT_DIR` or
+`~/.pi/agent`, only when that directory exists). The name is `brand::SKILL_NAME` (`gudo`, or
+`gudo-dev` for Gudo Dev) and placeholders in the files take the flavour's names
+(`agents::skill_files`). Each file is written atomically and only when its contents differ.
+A `.hook-launcher` file in the folder names the launcher that installed it: a folder with our
+name but without it is someone else's and stays, a symbolic link in its place is reported and
+left, other skills are never touched, files the bundle no longer has are removed, and the other
+flavour's folder goes once its launcher no longer exists, as stale MCP entries do. Tests:
+`agent_integration::tests` (installs, a second start rewrites nothing, the agents' directory
+variables, foreign and linked folders, removal) and `mcp::tests` (the references list exactly
+the tools and arguments `tools/list` declares; examples call only real tools with real
+arguments).
+
 Wire types live in `proto`; see its crate docs for the frame format and compatibility rules.
 
 ## 1. Model
@@ -2538,7 +2555,7 @@ agent's working tree; keys, credentials, keychains, browser profiles and the sta
 refused (docs/security/host-local.md). The app runs them on the browser leaf beside the agent's pane
 (opened by the first navigate): the user sees each step (cursor and highlight), can take over,
 and approves purchases and form submits on sign-in or payment pages, or types passwords
-themselves; the call waits meanwhile. `crates/agents/skills/browser/SKILL.md` teaches agents
+themselves; the call waits meanwhile. The agent skill's `references/browser.md` teaches agents
 the tools.
 
 ### Terminal tools (`daemon::term`)
