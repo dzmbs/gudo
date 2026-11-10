@@ -646,23 +646,22 @@ fn requests_every_daemon_reads(inner: &Inner) -> Vec<ClientCtl> {
     requests
 }
 
-fn requests_needing_features(inner: &Inner, features: proto::DaemonFeatures) -> Vec<ClientCtl> {
+fn requests_needing_features(
+    inner: &Inner,
+    features: proto::DaemonFeatures,
+    more_features: proto::MoreDaemonFeatures,
+) -> Vec<ClientCtl> {
     let wanted = lock(&inner.wanted);
-    let mut requests = Vec::new();
-    if features.contains(proto::DaemonFeatures::ACTIVE_SIZING) {
-        for (&pane_id, &activity) in &wanted.activities {
-            requests.push(ClientCtl::PaneActivity { pane_id, activity });
-        }
-    }
-    if let Some(colors) = &wanted.colors
-        && features.contains(proto::DaemonFeatures::TERMINAL_COLORS)
-    {
-        requests.push(ClientCtl::TerminalColors(colors.clone()));
-    }
-    if lock(&inner.more_daemon_features).contains(proto::MoreDaemonFeatures::RUN_AGAIN) {
-        requests.push(ClientCtl::WatchRunAgain);
-    }
-    requests
+    let activities = wanted
+        .activities
+        .iter()
+        .map(|(&pane_id, &activity)| ClientCtl::PaneActivity { pane_id, activity });
+    let colors = wanted.colors.clone().map(ClientCtl::TerminalColors);
+    activities
+        .chain(colors)
+        .chain([ClientCtl::WatchRunAgain])
+        .filter(|request| control_supported(request, features, more_features))
+        .collect()
 }
 
 /// Runs one live connection; returns why it ended.
@@ -721,7 +720,7 @@ async fn run(inner: &Arc<Inner>, live: Live) -> String {
         }
     }
 
-    for request in requests_needing_features(inner, input_features) {
+    for request in requests_needing_features(inner, input_features, more_features) {
         if let Err(err) = send(&mut ctl_tx, &request).await {
             return err.to_string();
         }
@@ -839,6 +838,16 @@ fn control_supported(
                 | proto::WorkspaceRequest::ChatInterrupt { .. },
             ..
         } => features.contains(proto::DaemonFeatures::CHAT_INTERRUPT),
+        ClientCtl::Workspace {
+            req: proto::WorkspaceRequest::PushAgents(_),
+            ..
+        } => features.contains(proto::DaemonFeatures::PUSH_AGENTS),
+        ClientCtl::Workspace {
+            req: proto::WorkspaceRequest::PowerSettings(_),
+            ..
+        } => features.contains(proto::DaemonFeatures::POWER_SETTINGS),
+        ClientCtl::TerminalColors(_) => features.contains(proto::DaemonFeatures::TERMINAL_COLORS),
+        ClientCtl::WatchRunAgain => more_features.contains(proto::MoreDaemonFeatures::RUN_AGAIN),
         ClientCtl::PaneActivity { .. }
         | ClientCtl::ClaimSize { .. }
         | ClientCtl::SetSizePolicy { .. } => {
@@ -1659,6 +1668,54 @@ mod tests {
             proto::DaemonFeatures::default(),
             proto::MoreDaemonFeatures::RESOLVE_PATHS
         ));
+    }
+
+    #[test]
+    fn old_daemons_are_not_sent_queued_settings_they_cannot_decode() {
+        let gated = [
+            (
+                ClientCtl::Workspace {
+                    req_id: 1,
+                    req: proto::WorkspaceRequest::PushAgents(Vec::new()),
+                },
+                proto::DaemonFeatures::PUSH_AGENTS,
+                proto::MoreDaemonFeatures::EMPTY,
+            ),
+            (
+                ClientCtl::Workspace {
+                    req_id: 2,
+                    req: proto::WorkspaceRequest::PowerSettings(None),
+                },
+                proto::DaemonFeatures::POWER_SETTINGS,
+                proto::MoreDaemonFeatures::EMPTY,
+            ),
+            (
+                ClientCtl::TerminalColors(proto::TerminalColors {
+                    foreground: [255, 255, 255],
+                    background: [0, 0, 0],
+                    cursor: None,
+                    palette: Vec::new(),
+                }),
+                proto::DaemonFeatures::TERMINAL_COLORS,
+                proto::MoreDaemonFeatures::EMPTY,
+            ),
+            (
+                ClientCtl::WatchRunAgain,
+                proto::DaemonFeatures::default(),
+                proto::MoreDaemonFeatures::RUN_AGAIN,
+            ),
+        ];
+        for (control, features, more_features) in gated {
+            assert!(
+                !control_supported(
+                    &control,
+                    proto::DaemonFeatures::default(),
+                    proto::MoreDaemonFeatures::EMPTY
+                ),
+                "{control:?}"
+            );
+            assert!(control_supported(&control, features, more_features));
+        }
     }
 
     #[test]

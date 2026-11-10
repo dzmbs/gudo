@@ -878,10 +878,8 @@ impl Client {
     /// sent it.
     pub fn set_terminal_colors(&self, colors: proto::TerminalColors) {
         lock(&self.inner.wanted).colors = Some(colors.clone());
-        if self
-            .inner
-            .daemon_has(proto::DaemonFeatures::TERMINAL_COLORS)
-        {
+        // Without a connection the next one sends the wanted colors when it starts.
+        if self.live_connection().is_some() {
             self.inner.send(ClientCtl::TerminalColors(colors));
         }
     }

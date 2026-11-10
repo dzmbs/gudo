@@ -320,3 +320,115 @@ async fn session_requests_reach_the_daemon_without_waiting_for_its_welcome() {
     drop(client);
     endpoint.close().await;
 }
+
+/// A daemon stand-in that announces `features`, welcomes each client and reports every
+/// control message after the Hello with the number of the connection it came on.
+async fn recording_daemon(
+    features: proto::DaemonFeatures,
+) -> (
+    iroh::Endpoint,
+    Ticket,
+    tokio::sync::mpsc::UnboundedReceiver<(usize, ClientCtl)>,
+) {
+    let endpoint = iroh::Endpoint::builder(presets::Minimal)
+        .alpns(vec![proto::ALPN.to_vec()])
+        .clear_ip_transports()
+        .bind_addr("127.0.0.1:0".parse::<std::net::SocketAddr>().unwrap())
+        .unwrap()
+        .bind()
+        .await
+        .unwrap();
+    let ticket = ticket_for(
+        DaemonId(*endpoint.id().as_bytes()),
+        endpoint.bound_sockets(),
+    );
+    let (requests_tx, requests_rx) = tokio::sync::mpsc::unbounded_channel();
+    let server = endpoint.clone();
+    let daemon_id = ticket.daemon_id;
+    tokio::spawn(async move {
+        let mut connection_number = 0;
+        while let Some(incoming) = server.accept().await {
+            connection_number += 1;
+            let requests_tx = requests_tx.clone();
+            tokio::spawn(async move {
+                let Ok(connection) = incoming.await else {
+                    return;
+                };
+                let Ok((mut control_tx, mut control_rx)) = connection.accept_bi().await else {
+                    return;
+                };
+                let Some(ClientCtl::Hello(_)) = super::liveness::read(&mut control_rx).await else {
+                    return;
+                };
+                let info = ServerCtl::DaemonInfo(proto::DaemonInfo {
+                    version: "0.0.0".into(),
+                    build: "test".into(),
+                    built_unix: 0,
+                    protocol: proto::PROTOCOL_LEVEL,
+                    min_client_protocol: 0,
+                    features,
+                    hostname: String::new(),
+                    os: "linux".into(),
+                    os_name: String::new(),
+                    arch: "aarch64".into(),
+                });
+                let welcome = ServerCtl::Welcome(Welcome {
+                    daemon_id,
+                    session_epoch: SessionEpoch(1),
+                    roles: Roles::OWNER,
+                    snapshot_format: u32::from(ghostty_vt::snapshot_format()),
+                    panes: vec![],
+                    resume_token: ResumeToken(vec![1]),
+                });
+                for message in [info, welcome] {
+                    if control_tx
+                        .write_all(&proto::frame::to_vec(&message).unwrap())
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                while let Some(request) = super::liveness::read(&mut control_rx).await {
+                    let _ = requests_tx.send((connection_number, request));
+                }
+            });
+        }
+    });
+    (endpoint, ticket, requests_rx)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn colors_set_while_away_reach_the_next_connection_once() {
+    let (endpoint, ticket, mut requests) =
+        recording_daemon(proto::DaemonFeatures::TERMINAL_COLORS).await;
+    let (client, mut events) = super::connect(&ticket.to_string(), false);
+    let is_connected = |event: &ClientEvent| matches!(event, ClientEvent::Connected { .. });
+    assert!(wait_for(&mut events, Duration::from_secs(10), is_connected).await);
+    client.suspend();
+    assert!(
+        wait_for(&mut events, Duration::from_secs(10), |event| {
+            matches!(event, ClientEvent::Disconnected { .. })
+        })
+        .await
+    );
+    client.set_terminal_colors(proto::TerminalColors {
+        foreground: [220, 220, 220],
+        background: [20, 20, 20],
+        cursor: None,
+        palette: Vec::new(),
+    });
+    client.resume_now();
+    assert!(wait_for(&mut events, Duration::from_secs(10), is_connected).await);
+    let mut colors_sent = 0;
+    while let Ok(Some((connection_number, request))) =
+        tokio::time::timeout(Duration::from_secs(1), requests.recv()).await
+    {
+        if connection_number == 2 && matches!(request, ClientCtl::TerminalColors(_)) {
+            colors_sent += 1;
+        }
+    }
+    assert_eq!(colors_sent, 1);
+    drop(client);
+    endpoint.close().await;
+}
