@@ -407,13 +407,17 @@ final class TimelineModelTests: XCTestCase {
         return String(decoding: try TimelineJSON.encode(page), as: UTF8.self)
     }
 
+    /// The deadline only bounds a hang: on a busy machine deferred highlighting of a long page
+    /// takes several seconds, and how long each sleep really lasts depends on the load.
     private func wait(_ condition: () -> Bool) async throws {
-        for _ in 0..<2_000 {
-            if condition() { return }
+        let deadline = ContinuousClock.now + .seconds(60)
+        while !condition() {
+            guard ContinuousClock.now < deadline else {
+                XCTFail("Timed out waiting for the timeline renderer")
+                throw CancellationError()
+            }
             try await Task.sleep(for: .milliseconds(1))
         }
-        XCTFail("Timed out waiting for the timeline renderer")
-        throw CancellationError()
     }
 }
 
