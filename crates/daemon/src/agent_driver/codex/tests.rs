@@ -215,7 +215,7 @@ fn primary() -> State {
 #[test]
 fn a_skipped_server_message_leaves_a_notice_and_status_keeps_flowing() {
     let mut state = primary();
-    state.skipped(Direction::FromServer);
+    state.skipped(Direction::FromServer, None);
     assert!(state.is_chat_ready());
     assert!(matches!(
         &state
@@ -232,14 +232,14 @@ fn a_skipped_server_message_leaves_a_notice_and_status_keeps_flowing() {
 #[test]
 fn a_skipped_tui_message_or_binding_reply_closes_observation() {
     let mut state = primary();
-    state.skipped(Direction::FromTui);
+    state.skipped(Direction::FromTui, None);
     assert!(state.closed);
     let mut state = primary();
     state.observe(
         r#"{"id":2,"method":"thread/resume","params":{"threadId":"other"}}"#,
         Direction::FromTui,
     );
-    state.skipped(Direction::FromServer);
+    state.skipped(Direction::FromServer, None);
     assert!(state.closed);
 }
 

@@ -62,6 +62,20 @@ struct State {
     effects: Vec<runtime::Effect>,
 }
 
+/// Whether `frame` starts or ends a turn: what a skipped message's outline is read for.
+fn is_turn_lifecycle(frame: &str) -> bool {
+    #[derive(serde::Deserialize)]
+    struct Envelope {
+        method: Option<String>,
+    }
+    serde_json::from_str::<Envelope>(frame).is_ok_and(|envelope| {
+        matches!(
+            envelope.method.as_deref(),
+            Some("turn/started" | "turn/completed")
+        )
+    })
+}
+
 impl State {
     fn new() -> Self {
         Self {
@@ -118,19 +132,24 @@ impl State {
                 return;
             }
         }
-        if direction == Direction::FromServer
-            && let Some(events) = &mut self.events
-        {
-            match events.observe(&self.binding, frame) {
-                Ok(Some(event)) => {
-                    if let Some(effect) = runtime::Effect::from_event(&event) {
-                        self.effects.push(effect);
-                    }
-                    self.project(event, frame.len());
+        if direction == Direction::FromServer {
+            self.observe_event(frame);
+        }
+    }
+
+    fn observe_event(&mut self, frame: &str) {
+        let Some(events) = &mut self.events else {
+            return;
+        };
+        match events.observe(&self.binding, frame) {
+            Ok(Some(event)) => {
+                if let Some(effect) = runtime::Effect::from_event(&event) {
+                    self.effects.push(effect);
                 }
-                Ok(None) => {}
-                Err(_) => self.fail(),
+                self.project(event, frame.len());
             }
+            Ok(None) => {}
+            Err(_) => self.fail(),
         }
     }
 
@@ -158,8 +177,9 @@ impl State {
         }
     }
 
-    /// A message too large to observe went past; the relay forwarded it unchanged.
-    fn skipped(&mut self, direction: Direction) {
+    /// A message too large to observe went past; the relay forwarded it unchanged. A turn it
+    /// started or ended is still read from its `outline`, so status and controls follow it.
+    fn skipped(&mut self, direction: Direction, outline: Option<&str>) {
         if self.closed {
             return;
         }
@@ -168,16 +188,18 @@ impl State {
             self.fail();
             return;
         }
-        if self.projection_lost || self.current.is_none() {
-            return;
-        }
-        match self.projection.skipped() {
-            Ok(operations) => {
-                for operation in operations {
-                    self.push(operation);
+        if !self.projection_lost && self.current.is_some() {
+            match self.projection.skipped() {
+                Ok(operations) => {
+                    for operation in operations {
+                        self.push(operation);
+                    }
                 }
+                Err(_) => self.lose_projection(),
             }
-            Err(_) => self.lose_projection(),
+        }
+        if let Some(outline) = outline.filter(|outline| is_turn_lifecycle(outline)) {
+            self.observe_event(outline);
         }
     }
 

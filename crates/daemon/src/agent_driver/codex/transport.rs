@@ -279,7 +279,7 @@ async fn observe(source: Weak<Live>, mut receiver: tokio::sync::mpsc::Receiver<O
                 };
                 let fed = decoder.feed(&bytes, |observed| match observed {
                     frames::Observed::Text(frame) => state.observe(frame, direction),
-                    frames::Observed::Skipped => state.skipped(direction),
+                    frames::Observed::Skipped(outline) => state.skipped(direction, outline),
                 });
                 if fed.is_err() {
                     state.fail();

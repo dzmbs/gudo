@@ -36,7 +36,8 @@ fn handshake(direction: Direction) -> Vec<u8> {
 fn collect(received: &mut Vec<String>) -> impl FnMut(Observed<'_>) + '_ {
     |observed| match observed {
         Observed::Text(text) => received.push(text.to_string()),
-        Observed::Skipped => received.push("<skipped>".into()),
+        Observed::Skipped(None) => received.push("<skipped>".into()),
+        Observed::Skipped(Some(outline)) => received.push(format!("<skipped {outline}>")),
     }
 }
 
