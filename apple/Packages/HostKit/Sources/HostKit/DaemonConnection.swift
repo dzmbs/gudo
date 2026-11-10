@@ -235,8 +235,6 @@ public final class DaemonConnection: HostConnection {
         }
     }
 
-    /// This device's terminal theme: programs in the host's panes that ask for their colors
-    /// are told it while this device uses the pane. Kept across reconnects.
     /// The device is in Low Data Mode: the host then sends only the panes on screen. Kept
     /// across reconnects.
     @ObservationIgnored public var isLowDataMode = false {
@@ -247,6 +245,8 @@ public final class DaemonConnection: HostConnection {
         (client as? any LowDataModeClient)?.setLowDataMode(lowDataMode: isLowDataMode)
     }
 
+    /// This device's terminal theme: programs in the host's panes that ask for their colors
+    /// are told it while this device uses the pane. Kept across reconnects.
     @ObservationIgnored public var terminalColors: TerminalColors? {
         didSet { if terminalColors != oldValue { pushTerminalColors() } }
     }
