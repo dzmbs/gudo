@@ -200,6 +200,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
             userScrollGeneration += 1
             if isActive, firstContentLatency == nil { openedAt = CACurrentMediaTime() }
         }
+        if self.actions.supportsDiffs != actions.supportsDiffs { needsRestyle = true }
         let metricsChanged = self.codeFontSize != codeFontSize
             || self.environment.dynamicTypeSize != environment.dynamicTypeSize
             || self.environment.legibilityWeight != environment.legibilityWeight

@@ -248,6 +248,18 @@ final class ChatCollectionTests: XCTestCase {
         XCTAssertTrue(controller.model.followsBottom)
     }
 
+    func testChangingDiffSupportReconfiguresVisibleRows() async throws {
+        let frame = preparedFrame(20)
+        let (window, controller) = try open(frame)
+        defer { close(window) }
+        try await settle()
+        let configured = controller.configuredCells
+        controller.update(frame: frame, expanded: [], environment: EnvironmentValues(), actions: ChatRowActions(supportsDiffs: false),
+                          composer: AnyView(Text("Message Claude").font(.body).padding(20).frame(maxWidth: .infinity, alignment: .leading)))
+        try await settle()
+        XCTAssertGreaterThan(controller.configuredCells, configured)
+    }
+
     func testTheLatestGapKeepsItsJumpControlAtTheLoadedBottom() async throws {
         var frame = preparedFrame(200)
         frame.hasNewerGap = true
