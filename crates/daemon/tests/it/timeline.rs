@@ -134,6 +134,10 @@ impl Harness {
     }
 
     async fn guest(&self, history: History) -> TestClient {
+        self.guest_with(Roles::VIEWER, history).await
+    }
+
+    async fn guest_with(&self, roles: Roles, history: History) -> TestClient {
         let terms = InviteTerms {
             knock: false,
             history,
@@ -142,7 +146,7 @@ impl Harness {
             .owner
             .client
             .create_invite_with_terms(
-                GrantSpec::new(Roles::VIEWER, Scope::Pane(self.pane)),
+                GrantSpec::new(roles, Scope::Pane(self.pane)),
                 "owner".into(),
                 terms,
             )
@@ -457,17 +461,46 @@ async fn complete_recorded_changes_are_read_from_the_owning_tool_result() {
     assert_eq!(files[0].path, "/fixture/recorded-only");
     assert_eq!(files[0].hunks[0].lines.len(), 20);
     assert!(!files[0].hunks_omitted);
-    let guest = harness.guest(History::Full).await;
-    guest.client.timeline_watch(harness.pane).await.unwrap();
-    assert_eq!(
-        guest
+    // A tool's full result is what the agent read (a whole file): it needs Prompt, like a
+    // turn's diff, not just a view of the conversation.
+    let viewer = harness.guest(History::Full).await;
+    viewer.client.timeline_watch(harness.pane).await.unwrap();
+    assert!(matches!(
+        viewer
             .client
-            .timeline_tool_diff(harness.pane, handle)
+            .timeline_tool_diff(harness.pane, handle.clone())
+            .await,
+        Err(WsError::Denied(_))
+    ));
+    assert!(matches!(
+        viewer
+            .client
+            .timeline_tool_output(harness.pane, handle.clone(), 0, 4096)
+            .await,
+        Err(WsError::Denied(_))
+    ));
+    let prompter = harness
+        .guest_with(Roles::VIEWER | Roles::PROMPTER, History::Full)
+        .await;
+    prompter.client.timeline_watch(harness.pane).await.unwrap();
+    assert_eq!(
+        prompter
+            .client
+            .timeline_tool_diff(harness.pane, handle.clone())
             .await
             .unwrap(),
         files
     );
-    drop(guest);
+    assert_eq!(
+        prompter
+            .client
+            .timeline_tool_output(harness.pane, handle, 0, 4096)
+            .await
+            .unwrap()
+            .text,
+        "changed"
+    );
+    drop((viewer, prompter));
     harness.shutdown().await;
 }
 

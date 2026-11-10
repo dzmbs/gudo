@@ -32,7 +32,7 @@ says "Update the helper to use Chat."
   working tree or a numeric repository capture. It requires `DaemonFeatures::TIMELINE_TOOL_DIFF`;
   clients construct no request without both this feature and the timeline feature. Request67,
   response37 and feature28 append to the protocol; legacy golden bytes and schema 1 stay unchanged.
-  View on the watched pane, session identity, since-join, file rewrite and epoch checks apply.
+  Prompt on the watched pane, session identity, since-join, file rewrite and epoch checks apply.
   Rich metadata must belong to exactly one matching tool result. The whole selection is rejected
   when unavailable, ambiguous, malformed or over its 1 MiB value allowance, 512 hunks, 20,000 lines
   or 8 KiB per UTF8 line. It never returns another truncated preview as a complete result.
@@ -734,8 +734,10 @@ text clears only if the user has not edited the composer while awaiting the rece
 
 ## Scope and bounds
 
-Every read request requires View on its pane. A guest's since-join policy filters items and full
-output, including reads made with a guessed handle. Output handles cannot bypass the record-kind
+Watching, snapshots and older pages require View on the pane. A tool's full output and recorded
+changes (`TimelineToolOutput`, `TimelineToolDiff`) are what the agent read, a whole file behind a
+Read for one, so they require Prompt, like a turn's diff. A guest's since-join policy filters items
+and full output, including reads made with a guessed handle. Output handles cannot bypass the record-kind
 and sidechain exclusions of the main timeline. A transcript must resolve inside the
 pane's agent account's `projects` directory and its filename must match the captured session.
 Files are opened without following a final symlink. Output reads reject stale file identity

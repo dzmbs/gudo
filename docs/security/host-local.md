@@ -112,8 +112,10 @@ Otherwise startup does not create, edit or clean agent configuration files, even
 still names the user's actual home. Dedicated launches retain their per-launch integration.
 Tests and capture tools must also supply private home and agent configuration directories.
 
-**Agent timelines.** Reading a timeline requires View on its pane. Since-join guests receive no
-older items, output or recorded changes. The captured session selects the file inside that agent account's
+**Agent timelines.** Watching a timeline requires View on its pane. A tool's full output and
+recorded changes need Prompt there, like a turn's diff: they hold what the agent read (the whole
+file behind a Read), which a Viewer otherwise reaches only through what the screen shows.
+Since-join guests receive no older items, output or recorded changes. The captured session selects the file inside that agent account's
 transcript directory; requests carry scoped cursors and output handles, never file paths.
 Canonical roots, matching session filenames, no-follow opens and file identity checks constrain
 reads. Result handles admit only main-conversation user tool-result records; sidechains and unknown
@@ -369,6 +371,8 @@ Each test runs the attack against the real code (real git, real sockets, a real 
   trusted commands run, and changed committed commands are untrusted again.
   `ws::trust::tests::only_the_trusted_commands_of_that_repository_run`: per repository, per
   command, kept across restarts.
+- `timeline::complete_recorded_changes_are_read_from_the_owning_tool_result` (it): a Viewer
+  reading a tool's full output and recorded changes is refused; a Prompter reads them.
 - `multiplayer_mp2::since_join_guests_see_no_saved_screen_after_a_restart` (it): a since-join
   viewer reconnecting after a cold restart was shown the restored pane whole, with 400 lines
   of scrollback from before they joined.

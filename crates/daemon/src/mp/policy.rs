@@ -211,12 +211,13 @@ pub(crate) fn workspace(req: &WorkspaceRequest) -> (Need, Target) {
         | R::TimelineWatchVersioned { pane_id, .. }
         | R::TimelineUnwatch { pane_id }
         | R::TimelineItemsBefore { pane_id, .. }
+        | R::TimelineWatchCapabilities { pane_id, .. } => (Need::View, Target::Pane(*pane_id)),
+        // A tool's whole result is what the agent read (a file's contents, a command's full
+        // output): as much as a turn's diff shows, so it needs as much.
+        R::ListTurns { pane_id }
+        | R::TurnDiff { pane_id, .. }
         | R::TimelineToolOutput { pane_id, .. }
-        | R::TimelineWatchCapabilities { pane_id, .. }
-        | R::TimelineToolDiff { pane_id, .. } => (Need::View, Target::Pane(*pane_id)),
-        R::ListTurns { pane_id } | R::TurnDiff { pane_id, .. } => {
-            (Need::Prompt, Target::Pane(*pane_id))
-        }
+        | R::TimelineToolDiff { pane_id, .. } => (Need::Prompt, Target::Pane(*pane_id)),
         R::ChatPrepare { pane_id } | R::ChatSend { pane_id, .. }
         | R::ChatInterruptPrepare { pane_id } | R::ChatInterrupt { pane_id, .. } => {
             (Need::Prompt, Target::Pane(*pane_id))
