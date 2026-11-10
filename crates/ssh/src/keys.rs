@@ -74,6 +74,54 @@ impl SecretKey {
     }
 }
 
+/// A passphrase-protected private key, decrypted on first use on a blocking thread: its KDF
+/// (bcrypt for OpenSSH keys) takes long enough to stall whichever thread runs it. Cheap to
+/// clone; clones share the decrypted key.
+#[derive(Clone)]
+pub struct EncryptedKey(Arc<EncryptedKeyParts>);
+
+struct EncryptedKeyParts {
+    pem: String,
+    passphrase: String,
+    decrypted: tokio::sync::OnceCell<SecretKey>,
+}
+
+impl EncryptedKey {
+    pub(crate) fn new(pem: &str, passphrase: &str) -> Self {
+        Self(Arc::new(EncryptedKeyParts {
+            pem: pem.to_owned(),
+            passphrase: passphrase.to_owned(),
+            decrypted: tokio::sync::OnceCell::new(),
+        }))
+    }
+
+    /// The decrypted key.
+    ///
+    /// # Errors
+    ///
+    /// As [`SecretKey::decode`]: [`SshError::Key`] for a wrong passphrase.
+    pub async fn decrypted(&self) -> Result<SecretKey, SshError> {
+        let parts = Arc::clone(&self.0);
+        self.0
+            .decrypted
+            .get_or_try_init(|| async move {
+                tokio::task::spawn_blocking(move || {
+                    SecretKey::decode(&parts.pem, Some(&parts.passphrase))
+                })
+                .await
+                .map_err(|error| SshError::Key(format!("decrypting the key: {error}")))?
+            })
+            .await
+            .cloned()
+    }
+}
+
+impl std::fmt::Debug for EncryptedKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("EncryptedKey")
+    }
+}
+
 /// A freshly generated key pair.
 #[derive(Debug, Clone)]
 pub struct GeneratedKey {
@@ -471,6 +519,48 @@ mod tests {
         assert_eq!(key.public_key(), generated.public_key);
         let empty = generate_key(KeyType::Ed25519, "open", Some("")).unwrap();
         assert!(!SecretKey::is_encrypted(&empty.private_key));
+    }
+
+    #[tokio::test]
+    async fn encrypted_key_is_decrypted_on_first_use() {
+        use crate::AuthMethod;
+        let generated = generate_key(KeyType::Ed25519, "locked", Some("s3cret")).unwrap();
+        assert!(matches!(
+            AuthMethod::key(&generated.private_key, None),
+            Err(SshError::KeyEncrypted)
+        ));
+        assert!(matches!(
+            AuthMethod::key("not a key", Some("s3cret")),
+            Err(SshError::Key(_))
+        ));
+        let open = generate_ed25519("open").unwrap();
+        assert!(matches!(
+            AuthMethod::key(&open.private_key, Some("ignored")),
+            Ok(AuthMethod::Key(_))
+        ));
+
+        let Ok(AuthMethod::EncryptedKey(wrong)) =
+            AuthMethod::key(&generated.private_key, Some("wrong"))
+        else {
+            panic!("an encrypted key with a passphrase waits for its first use");
+        };
+        assert!(matches!(wrong.decrypted().await, Err(SshError::Key(_))));
+
+        let Ok(AuthMethod::EncryptedKey(right)) =
+            AuthMethod::key(&generated.private_key, Some("s3cret"))
+        else {
+            panic!("an encrypted key with a passphrase waits for its first use");
+        };
+        let shared = right.clone();
+        assert_eq!(
+            right.decrypted().await.unwrap().public_key(),
+            generated.public_key
+        );
+        assert!(Arc::ptr_eq(
+            &right.decrypted().await.unwrap().0,
+            &shared.decrypted().await.unwrap().0
+        ));
+        assert_eq!(format!("{right:?}"), "EncryptedKey");
     }
 
     #[test]

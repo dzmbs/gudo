@@ -1,6 +1,6 @@
 //! Authentication methods and the order they are tried in.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use russh::MethodKind;
@@ -11,7 +11,7 @@ use russh::{MethodSet, client::AuthResult};
 
 use crate::SshError;
 use crate::client::ClientHandler;
-use crate::keys::{ExternalSigner, ExternalSignerAdapter, SecretKey};
+use crate::keys::{EncryptedKey, ExternalSigner, ExternalSignerAdapter, SecretKey};
 use crate::target::HostSpec;
 
 /// One keyboard-interactive prompt from the server.
@@ -57,13 +57,44 @@ pub enum AuthMethod {
     Password(String),
     /// Keyboard-interactive with arbitrary prompts.
     Interactive(Arc<dyn InteractiveResponder>),
+    /// A passphrase-protected key, decrypted when it is first offered.
+    EncryptedKey(EncryptedKey),
 }
 
 impl AuthMethod {
+    /// A private key from PEM text. An encrypted key with a passphrase is decrypted when it
+    /// is first offered, on a blocking thread, so building credentials never waits on its
+    /// KDF; a wrong passphrase then fails authentication with [`SshError::Key`].
+    ///
+    /// # Errors
+    ///
+    /// [`SshError::KeyEncrypted`] if the key is encrypted and `passphrase` is `None`,
+    /// [`SshError::Key`] if it is not a key this client reads.
+    pub fn key(pem: &str, passphrase: Option<&str>) -> Result<Self, SshError> {
+        match passphrase {
+            Some(passphrase) if SecretKey::is_encrypted(pem) => {
+                Ok(Self::EncryptedKey(EncryptedKey::new(pem, passphrase)))
+            }
+            _ => SecretKey::decode(pem, passphrase).map(Self::Key),
+        }
+    }
+
+    /// As [`key`](Self::key), from a key file.
+    ///
+    /// # Errors
+    ///
+    /// As [`key`](Self::key), plus [`SshError::Io`] if the file cannot be read.
+    pub fn key_file(path: impl AsRef<Path>, passphrase: Option<&str>) -> Result<Self, SshError> {
+        let path = path.as_ref();
+        let pem = std::fs::read_to_string(path)
+            .map_err(|error| SshError::io(format!("reading {}", path.display()), error))?;
+        Self::key(&pem, passphrase)
+    }
+
     fn label(&self) -> &'static str {
         match self {
             Self::Agent(_) | Self::AgentKey { .. } => "agent",
-            Self::Key(_) => "publickey",
+            Self::Key(_) | Self::EncryptedKey(_) => "publickey",
             Self::External(_) => "external-key",
             Self::Password(_) => "password",
             Self::Interactive(_) => "keyboard-interactive",
@@ -73,9 +104,11 @@ impl AuthMethod {
     fn allowed_by(&self, methods: &MethodSet) -> bool {
         let has = |kind: MethodKind| methods.contains(&kind);
         match self {
-            Self::Agent(_) | Self::AgentKey { .. } | Self::Key(_) | Self::External(_) => {
-                has(MethodKind::PublicKey)
-            }
+            Self::Agent(_)
+            | Self::AgentKey { .. }
+            | Self::Key(_)
+            | Self::EncryptedKey(_)
+            | Self::External(_) => has(MethodKind::PublicKey),
             Self::Password(_) => has(MethodKind::Password) || has(MethodKind::KeyboardInteractive),
             Self::Interactive(_) => has(MethodKind::KeyboardInteractive),
         }
@@ -136,6 +169,17 @@ impl Credentials {
     }
 }
 
+async fn publickey_auth(
+    handle: &mut Handle<ClientHandler>,
+    user: &str,
+    key: &SecretKey,
+) -> Result<AuthResult, SshError> {
+    let hash = rsa_hash(handle, key.0.algorithm()).await?;
+    Ok(handle
+        .authenticate_publickey(user, PrivateKeyWithHashAlg::new(Arc::clone(&key.0), hash))
+        .await?)
+}
+
 /// Runs the methods against one server until one succeeds.
 pub(crate) async fn authenticate(
     handle: &mut Handle<ClientHandler>,
@@ -156,11 +200,9 @@ pub(crate) async fn authenticate(
             tried.push(method.label());
         }
         let result = match method {
-            AuthMethod::Key(key) => {
-                let hash = rsa_hash(handle, key.0.algorithm()).await?;
-                handle
-                    .authenticate_publickey(user, PrivateKeyWithHashAlg::new(key.0.clone(), hash))
-                    .await?
+            AuthMethod::Key(key) => publickey_auth(handle, user, key).await?,
+            AuthMethod::EncryptedKey(key) => {
+                publickey_auth(handle, user, &key.decrypted().await?).await?
             }
             AuthMethod::Agent(path) => match agent_auth(handle, user, path.as_ref(), None).await? {
                 Some(result) => result,

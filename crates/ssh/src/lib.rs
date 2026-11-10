@@ -67,8 +67,8 @@ pub use discovery::{
 pub use error::SshError;
 pub use host_input::HostInput;
 pub use keys::{
-    ExternalSigner, GeneratedKey, KeyType, SecretKey, SecurityKeySignature, SignerError,
-    authorize_key_command, generate_ed25519, generate_key,
+    EncryptedKey, ExternalSigner, GeneratedKey, KeyType, SecretKey, SecurityKeySignature,
+    SignerError, authorize_key_command, generate_ed25519, generate_key,
 };
 pub use known_hosts::{
     HostKeyInfo, HostKeyPolicy, HostKeyPrompt, HostKeyStatus, KnownHosts, KnownHostsListener,

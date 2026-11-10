@@ -28,8 +28,9 @@ public final class SshConnection: HostConnection {
         self.layout = layout
     }
 
-    /// Starts the session. Connection problems arrive as `status`; this throws only for a key
-    /// that cannot be decoded.
+    /// Starts the session. Connection problems arrive as `status`, as does a wrong key
+    /// passphrase (the key's KDF runs on the core's threads, not here); this throws only for
+    /// a key that cannot be read or needs a passphrase.
     public func connect(
         target: SshTarget, auth: [SshAuth], jumpAuth: [[SshAuth]] = [], knownHosts: KnownHostsStore,
         hostKeys: HostKeyPolicy, options: SshOptions = defaultSshOptions()

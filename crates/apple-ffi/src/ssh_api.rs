@@ -646,11 +646,18 @@ pub struct SshKeyInfo {
     pub fingerprint: String,
 }
 
-fn decode_key(pem: &[u8], passphrase: Option<&str>) -> Result<ssh::SecretKey, SshError> {
-    let pem = std::str::from_utf8(pem).map_err(|_| SshError::Key {
+fn pem_text(pem: &[u8]) -> Result<&str, SshError> {
+    std::str::from_utf8(pem).map_err(|_| SshError::Key {
         message: "not a PEM text key".into(),
-    })?;
-    Ok(ssh::SecretKey::decode(pem, passphrase)?)
+    })
+}
+
+fn decode_key(pem: &[u8], passphrase: Option<&str>) -> Result<ssh::SecretKey, SshError> {
+    Ok(ssh::SecretKey::decode(pem_text(pem)?, passphrase)?)
+}
+
+fn key_method(pem: &[u8], passphrase: Option<&str>) -> Result<ssh::AuthMethod, SshError> {
+    Ok(ssh::AuthMethod::key(pem_text(pem)?, passphrase)?)
 }
 
 /// Decodes a private key (OpenSSH, PKCS#8, PKCS#1, SEC1 PEM) to show or import it.
@@ -836,11 +843,9 @@ fn credentials(auth: Vec<SshAuth>) -> Result<ssh::Credentials, SshError> {
         creds = creds.with(match method {
             SshAuth::Password { password } => ssh::AuthMethod::Password(password),
             SshAuth::KeyFile { path, passphrase } => {
-                ssh::AuthMethod::Key(ssh::SecretKey::load(&path, passphrase.as_deref())?)
+                ssh::AuthMethod::key_file(&path, passphrase.as_deref())?
             }
-            SshAuth::KeyData { pem, passphrase } => {
-                ssh::AuthMethod::Key(decode_key(&pem, passphrase.as_deref())?)
-            }
+            SshAuth::KeyData { pem, passphrase } => key_method(&pem, passphrase.as_deref())?,
             SshAuth::Signer { signer } => {
                 ssh::AuthMethod::External(Arc::new(SignerAdapter(signer)))
             }
@@ -1456,8 +1461,10 @@ impl SshSession {
     ///
     /// # Errors
     ///
-    /// [`SshError::Key`] / [`SshError::KeyEncrypted`] if a key in `auth` cannot be decoded
-    /// (nothing is dialled then). Connection problems arrive as states.
+    /// [`SshError::Key`] / [`SshError::KeyEncrypted`] if a key in `auth` cannot be read or
+    /// needs a passphrase (nothing is dialled then). Connection problems arrive as states,
+    /// as does a wrong passphrase: an encrypted key is decrypted off the caller's thread when
+    /// it is first offered.
     #[uniffi::constructor(default(listener = None, jump_auth = []))]
     pub fn start(
         target: SshTarget,
