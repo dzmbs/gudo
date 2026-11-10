@@ -4,12 +4,13 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use rustix::process::{Pid, Signal};
+use rustix::process::{Pid, Signal, WaitId, WaitIdOptions};
 
 #[cfg(test)]
 mod tests;
 
 const EXIT_WAIT: Duration = Duration::from_secs(2);
+const EXIT_POLL: Duration = Duration::from_millis(20);
 /// Names the daemon that made the directory, so a later daemon can tell what is left over.
 /// A file, not part of the name: socket paths inside must stay within the platform's limit.
 const OWNER_FILE: &str = "daemon.pid";
@@ -47,21 +48,33 @@ pub(super) fn isolate(command: &mut tokio::process::Command) {
     }
 }
 
-/// Asks the app-server's group to stop, then kills whatever is left.
+/// Asks the app-server's group to stop, then kills whatever is left, and only then reaps the
+/// leader: until it is reaped its id cannot name another process group.
 pub(super) async fn terminate(mut process: tokio::process::Child) {
     let Some(group) = process.id().and_then(group_of) else {
         return;
     };
-    let _ = rustix::process::kill_process_group(group, Signal::TERM);
-    if tokio::time::timeout(EXIT_WAIT, process.wait())
-        .await
-        .is_err()
-    {
-        let _ = rustix::process::kill_process_group(group, Signal::KILL);
-        let _ = tokio::time::timeout(EXIT_WAIT, process.wait()).await;
-    } else {
-        let _ = rustix::process::kill_process_group(group, Signal::KILL);
+    stop_group(group).await;
+    let _ = tokio::time::timeout(EXIT_WAIT, process.wait()).await;
+}
+
+/// Stops the group `leader` leads, leaving the leader unreaped.
+async fn stop_group(leader: Pid) {
+    let _ = rustix::process::kill_process_group(leader, Signal::TERM);
+    let deadline = tokio::time::Instant::now() + EXIT_WAIT;
+    while !has_exited(leader) && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(EXIT_POLL).await;
     }
+    let _ = rustix::process::kill_process_group(leader, Signal::KILL);
+}
+
+/// Whether `leader` exited, without reaping it.
+fn has_exited(leader: Pid) -> bool {
+    rustix::process::waitid(
+        WaitId::Pid(leader),
+        WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
+    )
+    .map_or(true, |status| status.is_some())
 }
 
 /// Teardown without an async context: the group is killed at once.

@@ -93,3 +93,20 @@ fn is_zombie(pid: u32) -> bool {
                 .starts_with('Z')
         })
 }
+
+/// A reaped leader's id can name another process group at once; killing the group after the
+/// reap could hit someone else's programs.
+#[tokio::test]
+async fn the_group_is_killed_before_its_leader_is_reaped() {
+    let mut command = tokio::process::Command::new("/bin/sleep");
+    command.arg("60").kill_on_drop(true);
+    isolate(&mut command);
+    let mut process = command.spawn().unwrap();
+    let leader = process.id().and_then(group_of).unwrap();
+    stop_group(leader).await;
+    assert!(
+        has_exited(leader),
+        "the leader was reaped before its group was killed"
+    );
+    process.wait().await.unwrap();
+}
