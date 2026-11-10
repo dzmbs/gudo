@@ -103,7 +103,8 @@ pub use browser::{
 };
 pub use clock::boot_nanos as hook_seq;
 pub use config::{
-    AgentIntegration, ArtifactLimits, AskpassConfig, Config, RelayMode, default_state_dir,
+    AgentIntegration, ArtifactLimits, AskpassConfig, Config, ConnectionLimits, RelayMode,
+    default_state_dir,
 };
 pub use config::{CustomRelays, PresenceTimes, PushConfig, RepoConfig};
 pub use fsutil::create_private_temp_file;
@@ -674,6 +675,7 @@ fn transport_config() -> iroh::endpoint::QuicTransportConfig {
     iroh::endpoint::QuicTransportConfig::builder()
         .keep_alive_interval(proto::KEEP_ALIVE)
         .max_idle_timeout(Some(idle))
+        .max_concurrent_uni_streams(proto::MAX_UNI_STREAMS.into())
         .build()
 }
 

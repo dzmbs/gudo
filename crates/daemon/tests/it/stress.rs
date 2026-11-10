@@ -9,8 +9,8 @@ use iroh::endpoint::presets;
 use iroh::{Endpoint, EndpointAddr, EndpointId};
 use proto::{
     Caps, ClientCtl, ClientInput, DeviceId, GrantId, Hello, Input, InputPayload, InputSeq,
-    LinkClass, PaneId, PrincipalId, ResumeToken, ServerCtl, SignedGrant, StreamHeader, Ticket,
-    Welcome,
+    LinkClass, PaneId, PrincipalId, ResumePoint, ResumeToken, ServerCtl, SignedGrant, SnapGen,
+    StreamHeader, SubscribeMode, Ticket, Welcome,
 };
 
 use crate::support::{self, TestClient};
@@ -41,6 +41,18 @@ async fn dial_with(
     pairing: bool,
     caps: Caps,
     token: Option<ResumeToken>,
+) -> (Raw, Welcome) {
+    dial_resuming(ticket, key, pairing, caps, token, Vec::new()).await
+}
+
+/// [`dial_with`] resuming the panes in `resume`.
+async fn dial_resuming(
+    ticket: &str,
+    key: &[u8],
+    pairing: bool,
+    caps: Caps,
+    token: Option<ResumeToken>,
+    resume: Vec<ResumePoint>,
 ) -> (Raw, Welcome) {
     let (ticket, _) = Ticket::parse_with_extras(ticket).unwrap();
     let secret = iroh::SecretKey::from_bytes(key.try_into().unwrap());
@@ -73,7 +85,7 @@ async fn dial_with(
             }
         },
         snapshot_format: u32::from(ghostty_vt::snapshot_format()),
-        resume: Vec::new(),
+        resume,
         caps,
         link: LinkClass::Normal,
         resume_token: token,
@@ -471,4 +483,182 @@ async fn input_sent_again_after_a_reconnect_is_applied_once() {
     type_numbered(&third, pane_id, principal, 1..=1).await;
     let text = file_with(&typed_file, "line 7\nline 1").await;
     assert!(text.ends_with("line 7\nline 1\n"), "{text}");
+}
+
+/// Sends `messages` on a raw connection's `ctl`.
+async fn send_ctl(tx: &mut iroh::endpoint::SendStream, messages: &[ClientCtl]) {
+    let mut bytes = Vec::new();
+    for message in messages {
+        bytes.extend(proto::frame::to_vec(message).unwrap());
+    }
+    tx.write_all(&bytes).await.unwrap();
+}
+
+/// Reads a raw connection's `ctl` until `done` holds for a message, for at most `limit`.
+async fn read_ctl_until(
+    rx: &mut iroh::endpoint::RecvStream,
+    limit: Duration,
+    mut done: impl FnMut(&ServerCtl) -> bool,
+) -> bool {
+    tokio::time::timeout(limit, async {
+        loop {
+            let mut prefix = [0; proto::frame::LEN_PREFIX];
+            rx.read_exact(&mut prefix).await.unwrap();
+            let mut body = vec![0; proto::frame::body_len(prefix, proto::MAX_FRAME_LEN).unwrap()];
+            rx.read_exact(&mut body).await.unwrap();
+            if done(&proto::frame::decode_body::<ServerCtl>(&body).unwrap()) {
+                return;
+            }
+        }
+    })
+    .await
+    .is_ok()
+}
+
+/// An owner client and `count` panes (tabs running `sleep`, the first a shell).
+async fn owner_with_panes(daemon: &daemon::Daemon, count: usize) -> (TestClient, Vec<PaneId>) {
+    let mut owner = TestClient::connect(&support::ticket(daemon), ClientConfig::generate_key());
+    let mut panes = vec![owner.attach_and_follow().await];
+    let session = owner.layout.as_ref().unwrap().session_id;
+    while panes.len() < count {
+        let OpOutcome::TabCreated { pane_id, .. } = owner
+            .op(LayoutOp::NewTab {
+                session_id: session,
+                name: String::new(),
+                launch: PaneLaunch::Command {
+                    argv: vec!["sleep".into(), "600".into()],
+                    cwd: None,
+                },
+            })
+            .await
+        else {
+            panic!("no tab")
+        };
+        panes.push(pane_id);
+    }
+    (owner, panes)
+}
+
+fn subscriptions(panes: &[PaneId]) -> Vec<ClientCtl> {
+    panes
+        .iter()
+        .map(|&pane_id| ClientCtl::Subscribe {
+            pane_id,
+            mode: SubscribeMode::Live,
+            rows_hint: 30,
+        })
+        .collect()
+}
+
+/// A client following more panes than it lets the daemon open streams for (QUIC allows 100
+/// by default, and this raw client never accepts one) still has its `ctl` answered.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn following_more_panes_than_the_client_takes_streams_for_keeps_ctl_answering() {
+    let directory = tempfile::tempdir().unwrap();
+    let daemon = support::start(directory.path()).await;
+    let (_owner, panes) = owner_with_panes(&daemon, 120).await;
+    let ((endpoint, _connection, mut tx, mut rx), _) = dial_with(
+        &support::ticket(&daemon),
+        &ClientConfig::generate_key(),
+        true,
+        Caps::ATTACH_RESULT,
+        None,
+    )
+    .await;
+    let mut messages = subscriptions(&panes);
+    messages.push(ClientCtl::Ping { nonce: 7 });
+    send_ctl(&mut tx, &messages).await;
+    let answered = read_ctl_until(&mut rx, Duration::from_secs(5), |message| {
+        matches!(message, ServerCtl::Pong { nonce: 7 })
+    })
+    .await;
+    assert!(answered, "no pong after 120 subscriptions");
+    endpoint.close().await;
+}
+
+/// The same for a client reconnecting with more resume points than it takes streams for,
+/// which are replayed before its `ctl` is read.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resuming_more_panes_than_the_client_takes_streams_for_keeps_ctl_answering() {
+    let directory = tempfile::tempdir().unwrap();
+    let daemon = support::start(directory.path()).await;
+    let (_owner, panes) = owner_with_panes(&daemon, 120).await;
+    let resume = panes
+        .iter()
+        .map(|&pane_id| ResumePoint {
+            pane_id,
+            last_seq: proto::Seq(0),
+            snap_gen: SnapGen(0),
+        })
+        .collect();
+    let ((endpoint, _connection, mut tx, mut rx), _) = dial_resuming(
+        &support::ticket(&daemon),
+        &ClientConfig::generate_key(),
+        true,
+        Caps::ATTACH_RESULT,
+        None,
+        resume,
+    )
+    .await;
+    send_ctl(&mut tx, &[ClientCtl::Ping { nonce: 8 }]).await;
+    let answered = read_ctl_until(&mut rx, Duration::from_secs(5), |message| {
+        matches!(message, ServerCtl::Pong { nonce: 8 })
+    })
+    .await;
+    assert!(answered, "no pong after resuming 120 panes");
+    endpoint.close().await;
+}
+
+/// The app follows more panes than QUIC's default stream limit, and every one streams.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_app_follows_more_panes_than_quics_default_stream_limit() {
+    let directory = tempfile::tempdir().unwrap();
+    let daemon = support::start(directory.path()).await;
+    let (mut owner, panes) = owner_with_panes(&daemon, 120).await;
+    for &pane in &panes {
+        owner.client.subscribe(pane);
+    }
+    owner
+        .until("a snapshot of every pane", |client| {
+            panes
+                .iter()
+                .all(|&pane| client.client.pane_seq(pane).is_some())
+        })
+        .await;
+}
+
+/// Following panes past the per-connection cap is refused with a reason, and the connection
+/// carries on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn subscriptions_past_the_cap_are_refused() {
+    let directory = tempfile::tempdir().unwrap();
+    let daemon = support::start_with(directory.path(), |config| {
+        config.connection.pane_streams = 4;
+    })
+    .await;
+    let (_owner, panes) = owner_with_panes(&daemon, 6).await;
+    let ((endpoint, _connection, mut tx, mut rx), _) = dial_with(
+        &support::ticket(&daemon),
+        &ClientConfig::generate_key(),
+        true,
+        Caps::ATTACH_RESULT,
+        None,
+    )
+    .await;
+    let mut messages = subscriptions(&panes);
+    messages.push(ClientCtl::Ping { nonce: 9 });
+    send_ctl(&mut tx, &messages).await;
+    let mut refused = 0;
+    let answered = read_ctl_until(&mut rx, Duration::from_secs(5), |message| {
+        if let ServerCtl::Forbidden { what, reason } = message {
+            assert_eq!(what, "Subscribe");
+            assert!(reason.contains("at most 4"), "{reason}");
+            refused += 1;
+        }
+        matches!(message, ServerCtl::Pong { nonce: 9 })
+    })
+    .await;
+    assert!(answered);
+    assert_eq!(refused, 2);
+    endpoint.close().await;
 }

@@ -305,7 +305,7 @@ async fn run(
         } else {
             lock(&client.state).visible.push(point.pane_id);
         }
-        client.subscribe(point.pane_id, SubscribeMode::Live).await;
+        client.subscribe(point.pane_id, SubscribeMode::Live);
     }
     client.view_changed();
 
@@ -2324,7 +2324,7 @@ impl Client {
             }
             ClientCtl::Subscribe { pane_id, mode, .. } => {
                 if self.permit("Subscribe", Need::View, Target::Pane(pane_id)) {
-                    self.subscribe(pane_id, mode).await;
+                    self.subscribe(pane_id, mode);
                 } else {
                     self.send(ServerCtl::PaneClosed { pane_id });
                 }
@@ -3232,11 +3232,10 @@ impl Client {
         }
     }
 
-    async fn subscribe(self: &Arc<Self>, pane_id: PaneId, mode: SubscribeMode) {
+    /// Starts streaming `pane_id`. Its task opens the stream: the client may not allow another
+    /// one yet, and `ctl` must keep being read meanwhile.
+    fn subscribe(self: &Arc<Self>, pane_id: PaneId, mode: SubscribeMode) {
         if mode == SubscribeMode::Meta {
-            return;
-        }
-        if lock(&self.state).subscriptions.contains_key(&pane_id) {
             return;
         }
         let Some(entry) = self.core.pane(pane_id) else {
@@ -3244,54 +3243,54 @@ impl Client {
             return;
         };
         let pane = Arc::clone(&entry.pane);
-        pane.pty().refresh_echo();
         let viewer = self.viewer(pane_id);
         // A since-join guest never resumes from before its view opened: the ring would
         // replay output it must not see.
         let floor = viewer.map_or(Seq(0), |principal| pane.view_start(principal));
-        let start = match lock(&self.state).resume.remove(&pane_id) {
+        let limit = self.core.cfg.connection.pane_streams;
+        let mut state = lock(&self.state);
+        if state.subscriptions.contains_key(&pane_id) {
+            return;
+        }
+        if state.subscriptions.len() >= limit {
+            drop(state);
+            self.send(ServerCtl::Forbidden {
+                what: "Subscribe".into(),
+                reason: format!("a connection follows at most {limit} panes at once"),
+            });
+            return;
+        }
+        let start = match state.resume.remove(&pane_id) {
             Some(point) if point.snap_gen == pane.snap_gen && point.last_seq >= floor => {
                 Start::Resume(point.last_seq)
             }
             _ => Start::Snapshot,
         };
-        let Ok(mut send) = self.conn.open_uni().await else {
-            return;
-        };
-        let class = lock(&self.state).class(pane_id);
-        let _ = send.set_priority(class.priority());
-        if net::send(&mut send, &StreamHeader::Pane { pane_id })
-            .await
-            .is_err()
-        {
-            return;
-        }
+        pane.pty().refresh_echo();
         let (acks, acks_rx) = watch::channel(Seq(0));
         let (cmds, cmds_rx) = mpsc::unbounded_channel();
-        let stream = PaneStream {
-            pane,
-            send,
-            conn: self.conn.clone(),
-            acks: acks_rx,
-            cmds: cmds_rx,
-            class,
-            link: self.link,
-            one_shot: mode == SubscribeMode::Snapshot,
-            viewer,
-        };
+        let class = state.class(pane_id);
+        let (client, conn, link) = (Arc::downgrade(self), self.conn.clone(), self.link);
         let task = tokio::spawn(async move {
+            let Some(send) = open_pane_stream(client, pane_id, class).await else {
+                return;
+            };
+            let stream = PaneStream {
+                pane,
+                send,
+                conn,
+                acks: acks_rx,
+                cmds: cmds_rx,
+                class,
+                link,
+                one_shot: mode == SubscribeMode::Snapshot,
+                viewer,
+            };
             match stream.run(start).await {
                 Ok(stats) => tracing::trace!(%pane_id, ?stats, "pane stream done"),
                 Err(error) => tracing::debug!(%pane_id, "pane stream: {error}"),
             }
         });
-        let mut state = lock(&self.state);
-        // A view reported while the stream was opening reclassified the subscriptions before
-        // this one was among them.
-        let current = state.class(pane_id);
-        if current != class {
-            let _ = cmds.send(StreamCmd::Class(current));
-        }
         state.subscriptions.insert(
             pane_id,
             Subscription {
@@ -3301,6 +3300,51 @@ impl Client {
             },
         );
     }
+
+    /// Forgets the subscription to `pane_id` if the current task still serves it.
+    fn end_own_subscription(&self, pane_id: PaneId) {
+        let mut state = lock(&self.state);
+        if state
+            .subscriptions
+            .get(&pane_id)
+            .is_some_and(|subscription| subscription.task.id() == tokio::task::id())
+        {
+            state.subscriptions.remove(&pane_id);
+        }
+    }
+}
+
+/// Opens `pane_id`'s stream to the client, waiting at most `stream_open` for the client to
+/// allow one more; a subscription that cannot get one is dropped and the client told.
+async fn open_pane_stream(
+    client: std::sync::Weak<Client>,
+    pane_id: PaneId,
+    class: Class,
+) -> Option<SendStream> {
+    let (conn, open_timeout) = {
+        let client = client.upgrade()?;
+        (client.conn.clone(), client.core.cfg.connection.stream_open)
+    };
+    let mut send = match tokio::time::timeout(open_timeout, conn.open_uni()).await {
+        Ok(opened) => opened.ok()?,
+        Err(_) => {
+            let client = client.upgrade()?;
+            client.end_own_subscription(pane_id);
+            client.send(ServerCtl::Forbidden {
+                what: "Subscribe".into(),
+                reason: format!(
+                    "pane {pane_id}: the client allowed no new stream within {} s",
+                    open_timeout.as_secs()
+                ),
+            });
+            return None;
+        }
+    };
+    let _ = send.set_priority(class.priority());
+    net::send(&mut send, &StreamHeader::Pane { pane_id })
+        .await
+        .ok()?;
+    Some(send)
 }
 
 fn panes_of(core: &Core, session: SessionId, scope: Scope) -> Vec<PaneId> {

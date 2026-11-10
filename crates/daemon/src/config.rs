@@ -209,6 +209,8 @@ pub struct Config {
     pub history: crate::assist::HistoryConfig,
     /// Size caps for drawings and images.
     pub artifacts: ArtifactLimits,
+    /// What one client connection may hold at once.
+    pub connection: ConnectionLimits,
     /// Native password prompts (`[askpass]` in `config.toml`).
     pub askpass: AskpassConfig,
     /// The executable this daemon runs from, when its owner may replace it over the
@@ -282,6 +284,25 @@ pub struct ArtifactLimits {
     pub batch_max: u64,
     /// Artifacts per session.
     pub per_session: usize,
+}
+
+/// What one client connection may hold at once, so no peer (a guest included) can tie up the
+/// daemon's workers, threads or memory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConnectionLimits {
+    /// Panes followed at once (`pane/<id>` streams); a subscription past it is refused.
+    pub pane_streams: usize,
+    /// How long opening a stream to the client may wait for the client to allow another.
+    pub stream_open: Duration,
+}
+
+impl Default for ConnectionLimits {
+    fn default() -> Self {
+        Self {
+            pane_streams: 512,
+            stream_open: Duration::from_secs(10),
+        }
+    }
 }
 
 /// Native password prompts: the askpass helper in every pane's environment, and how long a
@@ -364,6 +385,7 @@ impl Config {
             pre_auth: crate::preauth::PreAuthLimits::default(),
             presence: PresenceTimes::default(),
             artifacts: ArtifactLimits::default(),
+            connection: ConnectionLimits::default(),
             askpass: AskpassConfig::default(),
             history: crate::assist::HistoryConfig::default(),
             self_exe: None,

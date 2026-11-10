@@ -238,6 +238,7 @@ pub(crate) fn endpoint_builder(
         iroh::endpoint::QuicTransportConfig::builder()
             .keep_alive_interval(proto::KEEP_ALIVE)
             .max_idle_timeout(Some(idle_timeout))
+            .max_concurrent_uni_streams(proto::MAX_UNI_STREAMS.into())
             .build(),
     );
     if !options.relay_ca_der.is_empty() {

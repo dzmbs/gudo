@@ -162,3 +162,8 @@ pub const KEEP_ALIVE: std::time::Duration = std::time::Duration::from_secs(3);
 /// is not dropped, while a host that froze or vanished is noticed in seconds rather than the
 /// 30 s default.
 pub const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(12);
+
+/// Unidirectional streams each side lets the other have open at once (a QUIC transport
+/// parameter). The daemon opens one per followed pane, so it stays well above the daemon's
+/// cap on followed panes; QUIC's default of 100 would stall the 101st.
+pub const MAX_UNI_STREAMS: u32 = 1024;
