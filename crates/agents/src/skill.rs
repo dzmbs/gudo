@@ -23,8 +23,8 @@ const TEMPLATES: &[(&str, &str)] = &[
         include_str!("../skill/references/layout.md"),
     ),
     (
-        "references/agents.md",
-        include_str!("../skill/references/agents.md"),
+        "references/workers.md",
+        include_str!("../skill/references/workers.md"),
     ),
     (
         "references/browser.md",

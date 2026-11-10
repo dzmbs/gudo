@@ -33,7 +33,7 @@ The sections below cover most work. Read a reference only when the task needs it
 - `references/terminal.md` when a run needs more than `cmd_run`: reading by cursor, waiting on
   output or a full-screen program, typing into a pane, following events.
 - `references/layout.md` before opening floating windows or moving panes around.
-- `references/agents.md` before starting workers.
+- `references/workers.md` before starting workers.
 - `references/browser.md` when the task involves a web page.
 - `references/drawings.md` when the user mentions a drawing, sketch or image.
 - `references/examples.md` for three complete runs: parallel workers, a review by a second
