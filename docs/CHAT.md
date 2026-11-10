@@ -286,7 +286,9 @@ transactions and reentrant sizing are excluded. The fallback measurement pass st
 3 ms and updates prefix positions without re-hashing every row. Valid subpoint reading offsets
 near a row end remain exact; only offsets outside a resized row use the end fallback.
 Prepends restore the same reading row;
-following updates pin to the bottom unless a newer user drag invalidates that adjustment.
+following stops as soon as a drag begins, and no update moves the list while a finger is down;
+ending a drag within 40 pt of the bottom resumes following. A failed history page leaves Chat open
+with a note; the next drag may try again.
 The New capsule remains separate from the reusable cells.
 
 Markdown rows use prepared attributed values. Simple, single-line paragraph values reuse the

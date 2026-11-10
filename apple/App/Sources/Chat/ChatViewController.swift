@@ -69,6 +69,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
     private var clock: CADisplayLink?
     private var isActive = true
     private var isApplying = false
+    private var isUserDragging = false
     private var isMeasuring = false
     private var needsMeasurement = false
     private var needsRestyle = true
@@ -183,7 +184,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         if pending != nil, current.rows.isEmpty || widthChanged { applyPending() }
         if lastHeight != collection.bounds.height {
             lastHeight = collection.bounds.height
-            if model.followsBottom { scrollToBottom() }
+            if model.followsBottom, !holdsPosition { scrollToBottom() }
         }
         if !isApplying { measureVisible() }
     }
@@ -248,7 +249,12 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         latest.view.isHidden = true
     }
 
-    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) { userScrollGeneration += 1 }
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        userScrollGeneration += 1
+        isUserDragging = true
+        model.followsBottom = false
+        model.allowHistoryRetry()
+    }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         guard !isApplying, scrollView.isDragging || scrollView.isDecelerating || scrollView.isTracking else { return }
@@ -257,6 +263,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
     }
 
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        isUserDragging = false
         if !decelerate { updateFollowing() }
     }
 
@@ -324,7 +331,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         pending = nil
         isApplying = true
         let generation = userScrollGeneration
-        let wasFollowing = model.followsBottom
+        let wasFollowing = model.followsBottom && !holdsPosition
         let anchor = document.anchor(at: collection.contentOffset.y + collection.adjustedContentInset.top)
         let resets = frame.generation != current.generation
         let changesOrder: Bool
@@ -369,7 +376,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
             firstContentLatency = (CACurrentMediaTime() - openedAt) * 1_000
         }
         if isActive, generation == userScrollGeneration {
-            if following && model.followsBottom { scrollToBottom() }
+            if following, model.followsBottom, !holdsPosition { scrollToBottom() }
             else if let anchor, let y = document.position(of: anchor) { restore(y - collection.adjustedContentInset.top) }
         }
         if changesOrder {
@@ -448,7 +455,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         isMeasuring = true
         defer { isMeasuring = false }
         let anchor = document.anchor(at: collection.contentOffset.y + collection.adjustedContentInset.top)
-        let atEnd = model.followsBottom
+        let atEnd = model.followsBottom && !holdsPosition
             && document.height - collection.bounds.maxY + collection.adjustedContentInset.bottom < 40
         guard fitViewport(anchor: anchor, following: atEnd, includingCurrent: false) else { return }
         layout.document = document
@@ -503,7 +510,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
             layout.document = document
             layout.invalidateLayout()
             collection.layoutIfNeeded()
-            if model.followsBottom { scrollToBottom() }
+            if model.followsBottom, !holdsPosition { scrollToBottom() }
             else if let anchor, let y = document.position(of: anchor) { restore(y - collection.adjustedContentInset.top) }
         }
     }
@@ -538,8 +545,11 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         collection.setContentOffset(CGPoint(x: 0, y: min(maximum, max(-collection.adjustedContentInset.top, y))), animated: false)
     }
 
+    private var holdsPosition: Bool { isUserDragging || collection.isTracking }
+
     private func updateFollowing() {
         model.readingItem = collection.indexPathsForVisibleItems.min().flatMap { source?.itemIdentifier(for: $0)?.item }
+        guard !isUserDragging else { return }
         let distance = document.height - collection.bounds.height + collection.adjustedContentInset.bottom - collection.contentOffset.y
         model.followsBottom = distance < 40
         if model.followsBottom { model.reachedBottom(); latest.view.isHidden = !current.hasNewerGap }

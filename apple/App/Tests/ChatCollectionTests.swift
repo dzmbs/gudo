@@ -224,6 +224,30 @@ final class ChatCollectionTests: XCTestCase {
         XCTAssertFalse(controller.model.followsBottom)
     }
 
+    func testDraggingAwayFromTheBottomStopsFollowingStreamedRows() async throws {
+        var frame = preparedFrame(200)
+        let (window, controller) = try open(frame)
+        defer { close(window) }
+        try await settle()
+        let collection = controller.collection
+        controller.scrollViewWillBeginDragging(collection)
+        collection.contentOffset.y -= 20
+        controller.scrollViewDidScroll(collection)
+        try await settle()
+        let readingOffset = collection.contentOffset.y
+        let more = preparedFrame(5, prefix: "streamed").rows
+        frame.rows += more
+        frame.rowIDs.formUnion(more.map(\.id))
+        frame.revision += 1
+        update(controller, frame)
+        try await settle()
+        XCTAssertFalse(controller.model.followsBottom)
+        XCTAssertEqual(collection.contentOffset.y, readingOffset, accuracy: 1)
+        collection.contentOffset.y = collection.contentSize.height - collection.bounds.height + collection.adjustedContentInset.bottom - 10
+        controller.scrollViewDidEndDragging(collection, willDecelerate: false)
+        XCTAssertTrue(controller.model.followsBottom)
+    }
+
     func testTheLatestGapKeepsItsJumpControlAtTheLoadedBottom() async throws {
         var frame = preparedFrame(200)
         frame.hasNewerGap = true
