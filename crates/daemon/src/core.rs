@@ -1624,7 +1624,7 @@ impl Core {
                 kind,
                 session_id: Some(session_id),
                 account,
-            }) => PaneLaunch::AccountAgent {
+            }) if crate::resumable::is_session_id(&session_id) => PaneLaunch::AccountAgent {
                 agent: kind,
                 account,
                 resume: Some(session_id),
@@ -1951,6 +1951,12 @@ impl Core {
                     .hooks
                     .launch_context(id, PathBuf::from(&cwd), account.clone());
                 let adapter = crate::agent::adapter(*kind);
+                if resume
+                    .as_deref()
+                    .is_some_and(|id| !crate::resumable::is_session_id(id))
+                {
+                    return Err((OpError::Invalid, "not a session id".to_owned()));
+                }
                 let session_id = resume.clone().or_else(|| match kind {
                     // Claude accepts a pinned id, which makes resume work without waiting
                     // for its SessionStart hook.
@@ -2324,7 +2330,12 @@ impl Core {
         };
         self.agent_turn(id, &event);
         if let Some(entry) = self.pane(id) {
-            let native = event.session.native_id.as_ref().map(|id| id.to_string());
+            let native = event
+                .session
+                .native_id
+                .as_ref()
+                .map(|id| id.to_string())
+                .filter(|id| crate::resumable::is_session_id(id));
             let mut record = lock(&entry.record);
             if let (Some(agent), Some(native)) = (record.agent.as_mut(), native)
                 && agent.session_id.as_deref() != Some(native.as_str())
@@ -3254,16 +3265,35 @@ pub(crate) enum AgentStart {
     Fresh,
 }
 
-/// Quotes `word` for a POSIX shell as one word.
+/// Quotes `word` as one word for sh, bash, zsh and fish. Each `'` and `\` goes outside the
+/// single quotes, escaped: fish reads `\'` and `\\` inside them, POSIX shells do not.
 pub(crate) fn shell_quote(word: &str) -> String {
-    if !word.is_empty()
-        && word
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"/._-+=:,@".contains(&byte))
+    if word.is_empty() {
+        return "''".to_owned();
+    }
+    if word
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || b"/._-+=:,@".contains(&byte))
     {
         return word.to_owned();
     }
-    format!("'{}'", word.replace('\'', r"'\''"))
+    let mut quoted = String::with_capacity(word.len() + 2);
+    let mut in_quotes = false;
+    for character in word.chars() {
+        let escaped = matches!(character, '\'' | '\\');
+        if escaped == in_quotes {
+            quoted.push('\'');
+            in_quotes = !in_quotes;
+        }
+        if escaped {
+            quoted.push('\\');
+        }
+        quoted.push(character);
+    }
+    if in_quotes {
+        quoted.push('\'');
+    }
+    quoted
 }
 
 /// Restores the saved layout: continues the panes a previous build handed over (`adopted`),
@@ -3323,7 +3353,10 @@ pub(crate) fn restore(
         // An agent the user started by hand in a shell pane comes back as one launched there.
         if let (PaneLaunch::Shell { .. } | PaneLaunch::Command { .. }, Some(agent)) =
             (&launch, &record.agent)
-            && agent.session_id.is_some()
+            && agent
+                .session_id
+                .as_deref()
+                .is_some_and(crate::resumable::is_session_id)
         {
             launch = PaneLaunch::Agent {
                 agent: agent.kind,
@@ -3333,9 +3366,12 @@ pub(crate) fn restore(
         }
         let restored_agent = match (&mut launch, &record.agent) {
             (PaneLaunch::Agent { resume, cwd, .. }, Some(agent)) => {
-                *resume = agent.session_id.clone();
+                *resume = agent
+                    .session_id
+                    .clone()
+                    .filter(|id| crate::resumable::is_session_id(id));
                 *cwd = record.cwd.clone().or(cwd.take());
-                let resumed = agent.session_id.is_some();
+                let resumed = resume.is_some();
                 // Back under the account it ran under.
                 if let PaneLaunch::Agent {
                     agent: kind,
@@ -3426,6 +3462,41 @@ fn notice_text(message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// fish reads `\'` and `\\` inside single quotes, so a word ending in a backslash would
+    /// leave the quote open there and run what follows.
+    #[test]
+    fn quoted_words_come_back_whole_in_every_shell() {
+        assert_eq!(shell_quote(r"a\"), r"'a'\\");
+        assert_eq!(shell_quote("it's"), r"'it'\''s'");
+        let words = [
+            "plain",
+            "",
+            "it's",
+            "a b",
+            r"trailing\",
+            r"\'",
+            r"'\'; touch pwned; '",
+            "$HOME `id` $(id)",
+            r"back\\slash",
+        ];
+        let line = format!(r"printf '%s\0' {}", words.map(shell_quote).join(" "));
+        for shell in ["/bin/sh", "/bin/bash", "/bin/zsh", "fish"] {
+            let Ok(output) = std::process::Command::new(shell)
+                .arg("-c")
+                .arg(&line)
+                .output()
+            else {
+                continue;
+            };
+            let printed: Vec<String> = output
+                .stdout
+                .split(|byte| *byte == 0)
+                .map(|word| String::from_utf8_lossy(word).into_owned())
+                .collect();
+            assert_eq!(printed[..words.len()], words, "{shell}: {line}");
+        }
+    }
 
     #[tokio::test]
     async fn foreground_agent_detection_publishes_metadata_without_incidental_events() {

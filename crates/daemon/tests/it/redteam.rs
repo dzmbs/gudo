@@ -529,3 +529,49 @@ async fn names_cannot_hide_or_reorder_text() {
     drop(guest);
     daemon.shutdown().await;
 }
+
+/// A session id comes back as an argument of the agent's resume command after a restart: one
+/// shaped like a flag would turn into an option (`--dangerously-skip-permissions`).
+#[tokio::test(flavor = "multi_thread")]
+async fn session_ids_shaped_like_flags_are_never_kept_or_resumed() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path()).await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = owner.attach_and_follow().await;
+    let flag = "--dangerously-skip-permissions";
+    claude_hook(
+        &daemon,
+        dir.path(),
+        pane,
+        "SessionStart",
+        serde_json::json!({"session_id": flag, "hook_event_name": "SessionStart", "cwd": "/tmp"}),
+    )
+    .await;
+    let layout = dir.path().join("layout.json");
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !std::fs::read_to_string(&layout).is_ok_and(|text| text.contains("Claude")) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the agent was never recorded"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let text = std::fs::read_to_string(&layout).unwrap();
+    assert!(!text.contains(flag), "{text}");
+
+    let outcome = owner
+        .op(LayoutOp::Split {
+            pane_id: pane,
+            axis: Axis::Horizontal,
+            launch: PaneLaunch::Agent {
+                agent: client_core::proto::AgentKind::Claude,
+                resume: Some(flag.into()),
+                cwd: None,
+            },
+        })
+        .await;
+    assert!(matches!(outcome, OpOutcome::Failed { .. }), "{outcome:?}");
+    drop(owner);
+    daemon.shutdown().await;
+}

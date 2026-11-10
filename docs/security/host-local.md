@@ -209,6 +209,12 @@ forwards end with it.
 - Saved screens (`screens/<pane>.zst`) are written like `layout.json`: atomically, 0600, in a
   0700 directory. A screen is removed when its pane leaves the saved layout. All of them
   together are capped at 64 MiB, and each at 1 MiB of text before compression.
+- Agent session ids in `layout.json` come from hooks, command lines and file names any program
+  can write, and go back as an argument of the agent's resume command. Only ids of letters,
+  digits, `-` and `_`, at most 128 bytes and not starting with `-`, are kept or resumed, so none
+  can turn into an option such as `--dangerously-skip-permissions`. Words the daemon types into
+  a shell (Run again, a pi or Kimi resume) are quoted so they stay one word in sh, bash, zsh and
+  fish.
 - A pane brought back after a restart keeps the time it was first opened (`created_at` in
   `layout.json`; a record without one counts as older than any guest). A since-join guest
   therefore gets it as a pane from before they joined, starting from the screen when they next
@@ -373,6 +379,11 @@ Each test runs the attack against the real code (real git, real sockets, a real 
   trusted commands run, and changed committed commands are untrusted again.
   `ws::trust::tests::only_the_trusted_commands_of_that_repository_run`: per repository, per
   command, kept across restarts.
+- `redteam::session_ids_shaped_like_flags_are_never_kept_or_resumed` (it),
+  `resumable::tests::a_session_on_the_command_line_is_used` and
+  `core::tests::quoted_words_come_back_whole_in_every_shell`: a hook naming the session
+  `--dangerously-skip-permissions`, a client asking to resume it, and a word ending in `\`
+  typed into fish.
 - `timeline::complete_recorded_changes_are_read_from_the_owning_tool_result` (it): a Viewer
   reading a tool's full output and recorded changes is refused; a Prompter reads them.
 - `multiplayer_mp2::since_join_guests_see_no_saved_screen_after_a_restart` (it): a since-join

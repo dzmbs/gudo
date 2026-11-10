@@ -69,31 +69,26 @@ impl ResumableProgram {
             Self::Pi => &["--session", "--session-id"],
             Self::Kimi => &["--session", "-S", "-r"],
         };
-        argv.iter().enumerate().find_map(|(i, arg)| {
-            if flags.contains(&arg.as_str()) {
-                return argv
-                    .get(i + 1)
-                    .filter(|value| !value.starts_with('-'))
-                    .cloned();
-            }
-            flags.iter().find_map(|flag| {
-                arg.strip_prefix(flag)?
-                    .strip_prefix('=')
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_owned)
+        argv.iter()
+            .enumerate()
+            .find_map(|(i, arg)| {
+                if flags.contains(&arg.as_str()) {
+                    return argv.get(i + 1).cloned();
+                }
+                flags
+                    .iter()
+                    .find_map(|flag| arg.strip_prefix(flag)?.strip_prefix('=').map(str::to_owned))
             })
-        })
+            .filter(|id| is_session_id(id))
     }
 
     /// The shell line that resumes `session_id`, or the newest session in the directory.
     /// Nothing else from the first run comes back: a prompt in its arguments would be sent
     /// again.
     pub fn resume_line(self, session_id: Option<&str>) -> String {
-        let flags = match (self, session_id) {
-            (Self::Pi, Some(id)) => format!("--session {}", shell_quote(id)),
-            (Self::Pi, None) => "--continue".to_owned(),
-            (Self::Kimi, Some(id)) => format!("--session {}", shell_quote(id)),
-            (Self::Kimi, None) => "--continue".to_owned(),
+        let flags = match session_id.filter(|id| is_session_id(id)) {
+            Some(id) => format!("--session {}", shell_quote(id)),
+            None => "--continue".to_owned(),
         };
         format!("{} {flags}", self.executable())
     }
@@ -185,10 +180,13 @@ fn entries(directory: &Path) -> impl Iterator<Item = (PathBuf, SystemTime)> {
         .filter_map(|entry| Some((entry.path(), entry.metadata().ok()?.modified().ok()?)))
 }
 
-/// Ids are read from file names that any program could have written.
-fn is_session_id(id: &str) -> bool {
+/// Whether `id` may name an agent's session: ids come from file names, command lines and hook
+/// payloads that any program could have written, and go back as an argument of the agent's
+/// resume command, so one that starts with `-` would be read as an option.
+pub(crate) fn is_session_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 128
+        && !id.starts_with('-')
         && id
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
@@ -253,6 +251,17 @@ mod tests {
             Some("def".into())
         );
         assert_eq!(pi.session_from_argv(&argv(&["pi", "fix the bug"])), None);
+        for flag_shaped in [
+            &["pi", "--session=--dangerously-skip-permissions"][..],
+            &["pi", "--session", "--model"],
+            &["pi", "--session=a b"],
+        ] {
+            assert_eq!(pi.session_from_argv(&argv(flag_shaped)), None);
+        }
+        assert_eq!(
+            pi.resume_line(Some("--dangerously-skip-permissions")),
+            "pi --continue"
+        );
         assert_eq!(
             ResumableProgram::Kimi.session_from_argv(&argv(&["kimi", "-S", "session_1"])),
             Some("session_1".into())
