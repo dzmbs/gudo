@@ -102,6 +102,12 @@ impl AssistState {
         }
     }
 
+    /// The pane closed: nothing is kept for it.
+    pub(crate) fn forget(&self, pane_id: PaneId) {
+        lock(&self.foreground).remove(&pane_id);
+        lock(&self.prompts).remove(&pane_id);
+    }
+
     fn remember(&self, state: &PaneAssist) {
         if let Some(foreground) = &state.foreground {
             lock(&self.foreground).insert(foreground.pane_id, foreground.clone());
@@ -319,5 +325,31 @@ impl Client {
             AssistResponse::Done => Ok(()),
             other => Err(unexpected(other)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_closed_panes_input_state_is_forgotten() {
+        let assist = AssistState::default();
+        let pane_id = PaneId(4);
+        let prompt = PromptState {
+            pane_id,
+            prompt_id: 1,
+            at_seq: Seq(0),
+            phase: proto::PromptPhase::Unknown,
+        };
+        assert!(
+            assist
+                .dispatch(ServerCtl::Assist(AssistPush::Prompt(prompt)))
+                .is_none()
+        );
+        assert!(lock(&assist.prompts).contains_key(&pane_id));
+        assist.forget(pane_id);
+        assert!(lock(&assist.prompts).is_empty());
+        assert!(lock(&assist.foreground).is_empty());
     }
 }

@@ -1056,6 +1056,7 @@ async fn read_ctl(inner: Arc<Inner>, mut ctl_rx: RecvStream) -> String {
                 lock(&inner.mirrors).remove(&pane_id);
                 lock(&inner.pane_output_turns).remove(&pane_id);
                 lock(&inner.programs).remove(&pane_id);
+                inner.assist.forget(pane_id);
                 lock(&inner.wanted).subscribed.retain(|&id| id != pane_id);
                 ClientEvent::PaneClosed { pane_id }
             }
