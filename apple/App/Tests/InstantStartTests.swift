@@ -453,14 +453,20 @@ final class InstantStartTests: XCTestCase {
         shell.view.onInput?(Array("ls\r".utf8))
         tests.view.onInput?(Array("q".utf8))
         XCTAssertEqual(client.inputs, [], "nothing reaches the host before its screen is shown")
-        try await Task.sleep(for: .milliseconds(50))
+        let holding = ContinuousClock.now + .seconds(30)
+        while shell.heldInput != .holding(1), ContinuousClock.now < holding {
+            try await Task.sleep(for: .milliseconds(20))
+        }
         XCTAssertEqual(shell.heldInput, .holding(1), "and says it waits")
 
         // The shell's screen is the same: its input is sent. The test run moved on: dropped.
         InstantStartFixture.goLive(client)
-        let deadline = ContinuousClock.now + .seconds(5)
-        // The toast follows the drop on a later turn of the main actor.
-        while client.inputs.isEmpty || tests.heldInput != .dropped || model.toasts.current == nil, ContinuousClock.now < deadline {
+        // Held input is released as each pane's screen arrives, while the status turns live
+        // when the main actor takes the layout, and the toast follows the drop on a later
+        // turn of it: no order among them to rely on.
+        let deadline = ContinuousClock.now + .seconds(30)
+        while client.inputs.isEmpty || tests.heldInput != .dropped || model.toasts.current == nil || !connection.status.isLive,
+              ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(20))
         }
         XCTAssertEqual(client.inputs, ["ls\r"])
