@@ -23,10 +23,12 @@ nonisolated enum TimelineJob: Sendable {
     case snapshot(String)
     case update(String)
     case older(String)
+    case highlights
 
     var bytes: Int {
         switch self {
         case .snapshot(let json), .update(let json), .older(let json): json.utf8.count
+        case .highlights: 0
         }
     }
 }
@@ -37,6 +39,7 @@ nonisolated struct TimelineRenderResult: Sendable {
     let consumedSnapshot: Bool
     let consumedHistory: Bool
     let hasLiveChanges: Bool
+    let awaitsHighlights: Bool
 }
 
 actor TimelineRenderWorker {
@@ -57,7 +60,7 @@ actor TimelineRenderWorker {
         window = TimelineWindow(byteLimit: valueByteLimit)
     }
 
-    func apply(_ jobs: [TimelineJob], resetsSnapshot: Bool, protectsHistory: Bool, historyAnchor: String? = nil) async throws -> TimelineRenderResult {
+    func apply(_ jobs: [TimelineJob], resetsSnapshot: Bool, protectsHistory: Bool, historyAnchor: String? = nil) throws -> TimelineRenderResult {
         var next = window
         var changed: Set<String> = []
         var removed: Set<String> = []
@@ -66,6 +69,7 @@ actor TimelineRenderWorker {
         var consumedHistory = false
         var hasLiveChanges = false
         for job in jobs {
+            try Task.checkCancellation()
             let changes: TimelineChanges
             switch job {
             case .snapshot(let json):
@@ -84,13 +88,16 @@ actor TimelineRenderWorker {
                 let snapshot = try TimelineJSON.decode(TimelineSnapshot.self, from: json)
                 changes = try next.prepend(snapshot, protecting: historyAnchor)
                 consumedHistory = true
+            case .highlights:
+                continue
             }
             changed.formUnion(changes.changed)
             removed.formUnion(changes.removed)
             didReset = didReset || changes.didReset
         }
         removed.subtract(next.items.keys)
-        let prepared = await prepareRows(in: next, changed: changed, removed: removed, resetting: didReset)
+        changed.formUnion(builder.itemsAwaitingHighlights.subtracting(removed))
+        let prepared = try prepareRows(in: next, changed: changed, removed: removed, resetting: didReset)
         let changedRows: [ChatRow]
         if let prepared {
             window = next
@@ -107,7 +114,7 @@ actor TimelineRenderWorker {
                 renderCost = LRUCost()
                 generation = UUID()
             }
-            await builder.clear()
+            builder.clear()
             changedRows = []
         }
         let parentRevision = revision
@@ -121,19 +128,24 @@ actor TimelineRenderWorker {
             cursor: window.cursor, before: window.before, hasNewerGap: window.hasNewerGap,
             note: window.note, revision: revision, generation: generation,
             parentRevision: parentRevision, orderRevision: orderRevision, changedRows: changedRows)
-        return TimelineRenderResult(frame: frame, needsHistoryCursor: window.needsHistoryCursor, consumedSnapshot: consumedSnapshot, consumedHistory: consumedHistory, hasLiveChanges: hasLiveChanges)
+        return TimelineRenderResult(frame: frame, needsHistoryCursor: window.needsHistoryCursor, consumedSnapshot: consumedSnapshot,
+                                    consumedHistory: consumedHistory, hasLiveChanges: hasLiveChanges,
+                                    awaitsHighlights: !builder.itemsAwaitingHighlights.isEmpty)
     }
 
     private func prepareRows(in next: TimelineWindow, changed: Set<String>, removed: Set<String>,
-                             resetting: Bool) async -> RenderedPage? {
-        if resetting { await builder.clear() }
+                             resetting: Bool) throws -> RenderedPage? {
+        if resetting { builder.clear() }
+        builder.beginPage()
+        defer { builder.endPage() }
         var prepared = resetting ? RenderedPage() : RenderedPage(items: rowsByItem, cost: renderCost)
         for identifier in removed { prepared.remove(identifier) }
-        await builder.remove(removed)
+        builder.remove(removed)
         let identifiers = resetting ? Set(next.order) : changed
         for identifier in identifiers {
+            try Task.checkCancellation()
             guard let item = next.items[identifier] else { continue }
-            let rendered = await builder.render(item)
+            let rendered = builder.render(item)
             guard prepared.store(rendered, for: identifier) else { return nil }
             let previous = rowsByItem[identifier]?.rows ?? []
             for (index, row) in rendered.rows.enumerated() {
@@ -143,7 +155,7 @@ actor TimelineRenderWorker {
         return prepared
     }
 
-    func clearRenderCache() async { await builder.clear() }
+    func clearRenderCache() { builder.clear() }
 }
 
 @MainActor
@@ -320,6 +332,7 @@ final class TimelineModel {
                     if result.consumedHistory { isLoadingHistory = false }
                     expanded.formIntersection(frame.rowIDs)
                     if result.needsHistoryCursor { channel?.requestSnapshot() }
+                    if result.awaitsHighlights, pending.isEmpty { pending.append(.highlights) }
                 } catch TimelineWindowError.valueTooLarge, TimelineWindowError.historyBudget {
                     guard self.lifetime == lifetime, !Task.isCancelled else { return }
                     self.error = "This Chat page exceeds the memory budget. Open Terminal."

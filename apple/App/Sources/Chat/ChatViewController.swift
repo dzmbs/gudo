@@ -388,7 +388,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         var changed = previousExpanded.symmetricDifference(expanded)
         measured.subtract(changed)
         for row in candidates {
-            if resetting || rows[row.id]?.revision != row.revision {
+            if resetting || rows[row.id]?.revision != row.revision || rows[row.id]?.awaitsHighlights == true {
                 measured.remove(row.id)
                 changed.insert(row.id)
             }

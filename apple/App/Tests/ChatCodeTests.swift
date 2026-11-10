@@ -11,7 +11,7 @@ import XCTest
         let builder = RowBuilder()
         let source = "// Native colours\nfn greet() { let text = \"Hello 👋\"; }\n"
         for agent in ["claude", "codex"] {
-            let rendered = await builder.render(try assistant("```rust\n" + source + "```", id: agent))
+            let rendered = builder.render(try assistant("```rust\n" + source + "```", id: agent))
             let row = try XCTUnwrap(rendered.rows.first)
             guard case .markdown(let block) = row.content else { return XCTFail("Expected code") }
             let code = try XCTUnwrap(block.code)
@@ -31,7 +31,7 @@ import XCTest
     }
 
     func testProjectionCacheIncludesThemeAndContrastButNeverChangesGeometry() async throws {
-        let rows = await RowBuilder().rows(for: try assistant("```swift\nlet projection_test = 42\n```", id: "style-cache"))
+        let rows = RowBuilder().rows(for: try assistant("```swift\nlet projection_test = 42\n```", id: "style-cache"))
         let row = try XCTUnwrap(rows.first)
         guard case .markdown(let block) = row.content else { return XCTFail("Expected code") }
         let code = try XCTUnwrap(block.code)
@@ -54,7 +54,7 @@ import XCTest
         let builder = RowBuilder()
         for language in ["unknown", "rust"] {
             let source = String(repeating: "let greeting = \"hello 👋\";\n", count: 100)
-            let rows = await builder.rows(for: try assistant("```\(language)\n" + source + "```", id: language))
+            let rows = builder.rows(for: try assistant("```\(language)\n" + source + "```", id: language))
             guard case .markdown(let block) = try XCTUnwrap(rows.first).content else { return XCTFail("Expected code") }
             let code = try XCTUnwrap(block.code)
             XCTAssertEqual(code.text, source)

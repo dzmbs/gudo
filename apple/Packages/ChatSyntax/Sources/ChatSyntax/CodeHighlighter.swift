@@ -1,7 +1,7 @@
 import Foundation
 import SwiftTreeSitter
 
-/// Synchronous, non-Sendable state owned by a rendering worker (RowBuilder's actor in the app).
+/// Synchronous, non-Sendable state owned by one rendering worker.
 /// Only immutable UTF-16 ranges cross to the UI. Neither trees nor parsers leave this object.
 public final class CodeHighlighter {
     public static let maximumBytes = 16 * 1_024
@@ -22,9 +22,17 @@ public final class CodeHighlighter {
         let parser: Parser
         let query: Query
     }
+    public enum Highlighting: Equatable, Sendable {
+        case tokens([CodeToken])
+        /// The allowance ran out before this block; it highlights on a later render.
+        case deferred
+    }
+
     private var states: [CodeLanguage: State] = [:]
     private var cache: [Key: Entry] = [:]
     private var clock: UInt64 = 0
+    private var allowanceDeadline: ContinuousClock.Instant?
+    private var hasParsedInAllowance = false
     public private(set) var parseCount = 0
     public private(set) var cacheBytes = 0
     public private(set) var unavailableLanguages: Set<CodeLanguage> = []
@@ -32,18 +40,38 @@ public final class CodeHighlighter {
 
     public init() {}
 
+    /// Bounds the parsing time of the highlights that follow, until `endAllowance()`. The first
+    /// uncached block still parses so every allowance makes progress.
+    public func beginAllowance(_ allowance: Duration) {
+        allowanceDeadline = .now + allowance
+        hasParsedInAllowance = false
+    }
+
+    public func endAllowance() {
+        allowanceDeadline = nil
+        hasParsedInAllowance = false
+    }
+
     public func highlights(_ text: String, language: CodeLanguage?) -> [CodeToken] {
+        guard case .tokens(let tokens) = highlighting(text, language: language) else { return [] }
+        return tokens
+    }
+
+    public func highlighting(_ text: String, language: CodeLanguage?, caches: Bool = true) -> Highlighting {
         guard let language, !text.isEmpty, text.utf8.count <= Self.maximumBytes,
-              text.utf8.lazy.filter({ $0 == 10 }).prefix(2_000).count < 2_000 else { return [] }
+              text.utf8.lazy.filter({ $0 == 10 }).prefix(2_000).count < 2_000 else { return .tokens([]) }
         if clock == .max { cache.removeAll(); cacheBytes = 0; clock = 0 }
         clock += 1
         let key = Key(text: text, language: language)
         if var entry = cache[key] {
             entry.access = clock
             cache[key] = entry
-            return entry.tokens
+            return .tokens(entry.tokens)
         }
+        if let allowanceDeadline, hasParsedInAllowance, ContinuousClock.now >= allowanceDeadline { return .deferred }
+        hasParsedInAllowance = true
         let tokens = parse(text, language: language)
+        guard caches else { return .tokens(tokens) }
         let bytes = text.utf8.count * 2 + tokens.count * 32 + 256
         while cache.count >= Self.cacheEntryLimit || cacheBytes + bytes > Self.cacheByteLimit {
             guard let oldest = cache.min(by: { $0.value.access < $1.value.access })?.key,
@@ -52,7 +80,7 @@ public final class CodeHighlighter {
         }
         cache[key] = Entry(tokens: tokens, bytes: bytes, access: clock)
         cacheBytes += bytes
-        return tokens
+        return .tokens(tokens)
     }
 
     private func parse(_ text: String, language: CodeLanguage) -> [CodeToken] {

@@ -92,4 +92,31 @@ final class CodeHighlighterTests: XCTestCase {
         XCTAssertLessThanOrEqual(tokens.count, CodeHighlighter.maximumTokens)
         for token in tokens { XCTAssertNotNil(Range(token.range, in: source)) }
     }
+
+    func testAnAllowanceDefersLaterBlocksWithoutCachingThem() {
+        let highlighter = CodeHighlighter()
+        let first = "fn first() { let text = \"one\"; }\n", second = "fn second() { let text = \"two\"; }\n"
+        highlighter.beginAllowance(.zero)
+        guard case .tokens(let tokens) = highlighter.highlighting(first, language: .rust) else {
+            return XCTFail("The first block of an allowance always highlights")
+        }
+        XCTAssertFalse(tokens.isEmpty)
+        XCTAssertEqual(highlighter.highlighting(second, language: .rust), .deferred)
+        XCTAssertEqual(highlighter.highlighting(first, language: .rust), .tokens(tokens), "cached blocks need no allowance")
+        XCTAssertEqual(highlighter.parseCount, 1)
+        XCTAssertEqual(highlighter.cacheEntryCount, 1)
+        highlighter.endAllowance()
+        XCTAssertFalse(highlighter.highlights(second, language: .rust).isEmpty)
+    }
+
+    func testTransientBlocksAreHighlightedButNotCached() {
+        let highlighter = CodeHighlighter()
+        let source = "fn partial() { let text = \"stream"
+        guard case .tokens(let tokens) = highlighter.highlighting(source, language: .rust, caches: false) else {
+            return XCTFail("Transient blocks still highlight")
+        }
+        XCTAssertFalse(tokens.isEmpty)
+        XCTAssertEqual(highlighter.cacheEntryCount, 0)
+        XCTAssertEqual(highlighter.cacheBytes, 0)
+    }
 }

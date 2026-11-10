@@ -593,7 +593,7 @@ enum ChatTestFixtures {
                                         "origin": index == 0 ? "Terminal" : "Agent", "body": body]
             let data = try JSONSerialization.data(withJSONObject: value)
             let item = try TimelineJSON.decode(TimelineItem.self, from: String(decoding: data, as: UTF8.self))
-            rows += await builder.rows(for: item)
+            rows += builder.rows(for: item)
         }
         return TimelineFrame(rows: rows, rowIDs: Set(rows.map(\.id)), revision: 1)
     }

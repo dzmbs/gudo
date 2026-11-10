@@ -28,7 +28,7 @@ final class ChatInlineCacheTests: XCTestCase {
         let value: [String: Any] = ["id": id, "revision": 1, "at": 1, "origin": "Agent",
                                    "body": ["Assistant": ["text": source, "streaming": false]]]
         let item = try JSONDecoder().decode(TimelineItem.self, from: JSONSerialization.data(withJSONObject: value))
-        let rows = await builder.rows(for: item)
+        let rows = builder.rows(for: item)
         for row in rows {
             guard case .markdown(let block) = row.content, block.kind == .paragraph else { continue }
             var expected = try AttributedString(markdown: block.source, options: .init(

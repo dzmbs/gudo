@@ -31,7 +31,7 @@ final class RowBuilderTests: XCTestCase {
         <div>Literal HTML</div>
         """
         let item = try assistant(markdown)
-        let rows = await builder.rows(for: item)
+        let rows = builder.rows(for: item)
         XCTAssertEqual(rows.count, 8)
         XCTAssertEqual(Set(rows.map(\.id)).count, 8)
         let blocks = rows.compactMap { row -> ChatMarkdownBlock? in
@@ -46,9 +46,9 @@ final class RowBuilderTests: XCTestCase {
         XCTAssertEqual(blocks[5].table.count, 2)
         XCTAssertEqual(String(blocks[5].table[1][1].characters).trimmingCharacters(in: .whitespacesAndNewlines), "Passed")
         XCTAssertTrue(String(blocks[7].text.characters).contains("<div>"))
-        let cached = await builder.rows(for: item)
+        let cached = builder.rows(for: item)
         XCTAssertEqual(cached, rows)
-        let parseCount = await builder.parseCount
+        let parseCount = builder.parseCount
         XCTAssertEqual(parseCount, 1)
     }
 
@@ -70,9 +70,9 @@ final class RowBuilderTests: XCTestCase {
             var item = try assistant(text)
             item.id = "cold-4k-\(index)"
             let start = clock.now
-            let rows = await builder.rows(for: item)
+            let rows = builder.rows(for: item)
             let roundTrip = start.duration(to: clock.now).components
-            let duration = await builder.lastRenderDuration.components
+            let duration = builder.lastRenderDuration.components
             XCTAssertFalse(rows.isEmpty)
             samples.append(Double(duration.seconds) * 1_000 + Double(duration.attoseconds) / 1e15)
             roundTrips.append(Double(roundTrip.seconds) * 1_000 + Double(roundTrip.attoseconds) / 1e15)
@@ -81,29 +81,29 @@ final class RowBuilderTests: XCTestCase {
         roundTrips.sort()
         print("Chat cold 4KiB \(label) worker median: \(samples[50]) ms, p99: \(samples[98]) ms; actor round-trip median: \(roundTrips[50]) ms")
         XCTAssertLessThan(samples[50], 2)
-        let count = await builder.parseCount
+        let count = builder.parseCount
         XCTAssertEqual(count, 100)
     }
 
     func testOnlyAChangedRevisionIsRebuilt() async throws {
         let builder = RowBuilder()
         let first = try assistant("First paragraph.\n\nSecond paragraph.")
-        let original = await builder.rows(for: first)
-        let changed = await builder.rows(for: try assistant("First paragraph.\n\nChanged paragraph.", revision: 2))
+        let original = builder.rows(for: first)
+        let changed = builder.rows(for: try assistant("First paragraph.\n\nChanged paragraph.", revision: 2))
         XCTAssertEqual(original.map(\.id), changed.map(\.id))
         XCTAssertEqual(original.first, changed.first)
         XCTAssertNotEqual(original.last?.content, changed.last?.content)
-        let parseCount = await builder.parseCount
+        let parseCount = builder.parseCount
         XCTAssertEqual(parseCount, 2)
     }
 
     func testAppendOnlyUpdatesParseOnlyTheLastTopLevelBlock() async throws {
         let builder = RowBuilder()
         let source = (0..<200).map { "Finished paragraph \($0)." }.joined(separator: "\n\n") + "\n\nMutable tail"
-        let original = await builder.rows(for: try assistant(source))
-        let before = await builder.parsedBytes
-        let updated = await builder.rows(for: try assistant(source + " grows", revision: 2))
-        let parsed = await builder.parsedBytes - before
+        let original = builder.rows(for: try assistant(source))
+        let before = builder.parsedBytes
+        let updated = builder.rows(for: try assistant(source + " grows", revision: 2))
+        let parsed = builder.parsedBytes - before
         XCTAssertLessThan(parsed, 128, "Appending a tail must not parse the completed 200-block prefix")
         XCTAssertEqual(original.first, updated.first)
         XCTAssertEqual(original.dropLast(), updated.dropLast())
@@ -112,11 +112,11 @@ final class RowBuilderTests: XCTestCase {
     func testTailPartitionPreservesUnicodeCRLFAndIndentedCode() async throws {
         let builder = RowBuilder()
         let source = "🙂 first\r\n\r\n    let value = 1\r\n"
-        _ = await builder.rows(for: try assistant(source))
+        _ = builder.rows(for: try assistant(source))
         let updatedSource = source + "    let next = 2\r\n"
-        let updated = await builder.rows(for: try assistant(updatedSource, revision: 2))
+        let updated = builder.rows(for: try assistant(updatedSource, revision: 2))
         let fresh = RowBuilder()
-        let canonical = await fresh.rows(for: try assistant(updatedSource, revision: 2))
+        let canonical = fresh.rows(for: try assistant(updatedSource, revision: 2))
         XCTAssertEqual(updated.map(\.content), canonical.map(\.content))
         XCTAssertEqual(updated.map(\.id), canonical.map(\.id))
     }
@@ -133,8 +133,8 @@ final class RowBuilderTests: XCTestCase {
             let boundaries = Array(stride(from: 1, through: characters.count, by: 3)) + [characters.count]
             for end in boundaries {
                 let item = try assistant(String(characters.prefix(end)), id: "replay-\(sourceIndex)", revision: UInt32(end))
-                let incremental = await builder.rows(for: item)
-                let canonical = await RowBuilder().rows(for: item)
+                let incremental = builder.rows(for: item)
+                let canonical = RowBuilder().rows(for: item)
                 XCTAssertEqual(incremental.map(\.content), canonical.map(\.content), "Source \(sourceIndex), character \(end)")
                 XCTAssertEqual(incremental.map(\.id), canonical.map(\.id))
             }
@@ -143,11 +143,11 @@ final class RowBuilderTests: XCTestCase {
 
     func testAnAuthoritativeRewriteDiscardsTheFrozenPrefix() async throws {
         let builder = RowBuilder()
-        _ = await builder.rows(for: try assistant("Original prefix.\n\nMutable tail."))
+        _ = builder.rows(for: try assistant("Original prefix.\n\nMutable tail."))
         let rewritten = "Different prefix.\n\nDifferent tail."
-        let before = await builder.parsedBytes
-        let rows = await builder.rows(for: try assistant(rewritten, revision: 2))
-        let parsed = await builder.parsedBytes - before
+        let before = builder.parsedBytes
+        let rows = builder.rows(for: try assistant(rewritten, revision: 2))
+        let parsed = builder.parsedBytes - before
         XCTAssertEqual(parsed, rewritten.utf8.count)
         guard case .markdown(let block) = rows.first?.content else { return XCTFail("Missing rewritten paragraph") }
         XCTAssertEqual(block.source, "Different prefix.")
@@ -156,18 +156,18 @@ final class RowBuilderTests: XCTestCase {
     func testReferenceDefinitionsRetainTheSourceWideParserFallback() async throws {
         let builder = RowBuilder()
         let source = "Read [the guide][guide].\n\nAnother paragraph."
-        _ = await builder.rows(for: try assistant(source))
+        _ = builder.rows(for: try assistant(source))
         let updated = source + "\n\n[guide]: https://example.com\n"
-        let before = await builder.parsedBytes
-        _ = await builder.rows(for: try assistant(updated, revision: 2))
-        let parsed = await builder.parsedBytes - before
+        let before = builder.parsedBytes
+        _ = builder.rows(for: try assistant(updated, revision: 2))
+        let parsed = builder.parsedBytes - before
         XCTAssertEqual(parsed, updated.utf8.count)
     }
 
     func testLongListsAndParagraphsBecomeBoundedNativeRows() async throws {
         let builder = RowBuilder()
         let list = (0..<1_001).map { "- Entry \($0)" }.joined(separator: "\n")
-        let rows = await builder.rows(for: try assistant(list))
+        let rows = builder.rows(for: try assistant(list))
         let blocks = rows.compactMap { row -> ChatMarkdownBlock? in
             if case .markdown(let block) = row.content { return block }
             return nil
@@ -176,7 +176,7 @@ final class RowBuilderTests: XCTestCase {
         XCTAssertTrue(blocks.allSatisfy { $0.list.count <= 20 })
         XCTAssertEqual(blocks.flatMap(\.list).count, 1_001)
         let paragraph = String(repeating: "bounded ", count: 2_000)
-        let paragraphs = await builder.rows(for: try assistant(paragraph, id: "long-paragraph"))
+        let paragraphs = builder.rows(for: try assistant(paragraph, id: "long-paragraph"))
         let texts = paragraphs.compactMap { row -> AttributedString? in
             if case .markdown(let block) = row.content { return block.text }
             return nil
@@ -188,7 +188,7 @@ final class RowBuilderTests: XCTestCase {
     func testCodePreviewsArePreparedOffMainAndKeepTheFullSource() async throws {
         let builder = RowBuilder()
         let code = (0..<100).map { "print(\($0))" }.joined(separator: "\n")
-        let rows = await builder.rows(for: try assistant("```swift\n\(code)\n```"))
+        let rows = builder.rows(for: try assistant("```swift\n\(code)\n```"))
         guard case .markdown(let block) = rows.first?.content else { return XCTFail("Missing code") }
         XCTAssertEqual(block.code?.text, code + "\n")
         XCTAssertEqual(block.code?.lineCount, 101)
@@ -198,7 +198,7 @@ final class RowBuilderTests: XCTestCase {
     func testLongSingleLineCodeHasAByteBoundedUTF8Preview() async throws {
         let builder = RowBuilder()
         let code = "x" + String(repeating: "🙂", count: 3_000)
-        let rows = await builder.rows(for: try assistant("```text\n\(code)\n```"))
+        let rows = builder.rows(for: try assistant("```text\n\(code)\n```"))
         guard case .markdown(let block) = rows.first?.content else { return XCTFail("Missing code") }
         XCTAssertEqual(block.code?.preview.utf8.count, 8_189)
         XCTAssertEqual(block.code?.visibleLineCount, 1)
@@ -219,7 +219,7 @@ final class RowBuilderTests: XCTestCase {
             var item = try assistant("", id: "large-\(index)")
             let data = try JSONSerialization.data(withJSONObject: body)
             item.body = try TimelineJSON.decode(TimelineBody.self, from: String(decoding: data, as: UTF8.self))
-            let rows = await builder.rows(for: item)
+            let rows = builder.rows(for: item)
             XCTAssertEqual(rows.first?.preview?.utf8.count, 4_093)
             XCTAssertFalse(rows.first?.preview?.contains("�") ?? true)
             XCTAssertEqual(rows.first?.content, .item(item))
@@ -233,7 +233,7 @@ final class RowBuilderTests: XCTestCase {
         let data = try JSONSerialization.data(withJSONObject: ["Plan": ["entries": entries]])
         var item = try assistant("")
         item.body = try TimelineJSON.decode(TimelineBody.self, from: String(decoding: data, as: UTF8.self))
-        let rows = await builder.rows(for: item)
+        let rows = builder.rows(for: item)
         XCTAssertEqual(rows.first?.content, .item(item))
         let preview = try XCTUnwrap(rows.first?.planPreview)
         XCTAssertEqual(preview.entries.count, 20)
@@ -244,7 +244,7 @@ final class RowBuilderTests: XCTestCase {
         let builder = RowBuilder()
         let longCell = String(repeating: "x", count: 2_000)
         let source = "| Value |\n| --- |\n| \(longCell) |\n" + (0..<80).map { "| Value \($0) |" }.joined(separator: "\n")
-        let rows = await builder.rows(for: try assistant(source))
+        let rows = builder.rows(for: try assistant(source))
         guard case .markdown(let block) = rows.first?.content else { return XCTFail("Missing table") }
         XCTAssertEqual(block.source, source)
         XCTAssertEqual(block.table.count, 9)
@@ -259,7 +259,7 @@ final class RowBuilderTests: XCTestCase {
         let sources = [lines.map { "> \($0)" }.joined(separator: "\n"),
                        "- Item\n\n" + lines.map { "  \($0)" }.joined(separator: "\n")]
         for (index, source) in sources.enumerated() {
-            let rows = await builder.rows(for: try assistant(source, id: "nested-\(index)"))
+            let rows = builder.rows(for: try assistant(source, id: "nested-\(index)"))
             let characters = rows.reduce(0) { count, row in
                 guard case .markdown(let block) = row.content else { return count }
                 return count + block.text.characters.count + block.list.reduce(0) { $0 + $1.text.characters.count }
@@ -272,7 +272,7 @@ final class RowBuilderTests: XCTestCase {
         let builder = RowBuilder()
         let sources = ["🙂 αβ", "first\r\n第二段", "\u{feff}abcdef", "\u{feff}🙂 abcdef"]
         for (index, source) in sources.enumerated() {
-            let rows = await builder.rows(for: try assistant(source, id: "source-\(index)"))
+            let rows = builder.rows(for: try assistant(source, id: "source-\(index)"))
             guard case .markdown(let block) = rows.first?.content else { return XCTFail("Missing paragraph") }
             let markers = CharacterSet(charactersIn: "\u{feff}")
             XCTAssertEqual(block.source.trimmingCharacters(in: markers), source.trimmingCharacters(in: markers))
@@ -281,7 +281,7 @@ final class RowBuilderTests: XCTestCase {
 
     func testUntrustedLinkSchemesAreNeverInteractive() async throws {
         let builder = RowBuilder()
-        let rows = await builder.rows(for: try assistant("[web](https://example.com) [file](file:///private/file) [script](javascript:alert) [relative](../secret)"))
+        let rows = builder.rows(for: try assistant("[web](https://example.com) [file](file:///private/file) [script](javascript:alert) [relative](../secret)"))
         guard case .markdown(let block) = rows.first?.content else { return XCTFail("Missing paragraph") }
         let links = block.text.runs.compactMap(\.link)
         XCTAssertEqual(links.map(\.scheme), ["https"])
@@ -290,17 +290,17 @@ final class RowBuilderTests: XCTestCase {
     func testRenderCachesStayBoundedAndCanBePurged() async throws {
         let builder = RowBuilder()
         for index in 0..<600 {
-            _ = await builder.rows(for: try assistant("Paragraph \(index).", id: "message-\(index)"))
+            _ = builder.rows(for: try assistant("Paragraph \(index).", id: "message-\(index)"))
         }
-        let size = await builder.cacheSize
-        let bytes = await builder.cacheBytes
+        let size = builder.cacheSize
+        let bytes = builder.cacheBytes
         XCTAssertLessThanOrEqual(size, 500)
         XCTAssertLessThanOrEqual(bytes, 4 * 1_024 * 1_024)
-        await builder.remove(["message-599"])
-        let reduced = await builder.cacheSize
+        builder.remove(["message-599"])
+        let reduced = builder.cacheSize
         XCTAssertEqual(reduced, size - 1)
-        await builder.clear()
-        let empty = await builder.cacheSize
+        builder.clear()
+        let empty = builder.cacheSize
         XCTAssertEqual(empty, 0)
     }
 
@@ -308,9 +308,9 @@ final class RowBuilderTests: XCTestCase {
         let builder = RowBuilder()
         let text = (0..<100).map { "Paragraph \($0)." }.joined(separator: "\n\n")
         for index in 0..<10 {
-            _ = await builder.rows(for: try assistant(text, id: "message-\(index)"))
+            _ = builder.rows(for: try assistant(text, id: "message-\(index)"))
         }
-        let count = await builder.cacheRowCount
+        let count = builder.cacheRowCount
         XCTAssertLessThanOrEqual(count, 500)
         XCTAssertEqual(count, 500)
     }
@@ -318,17 +318,17 @@ final class RowBuilderTests: XCTestCase {
     func testOversizedAssistantTextDoesNotReachTheMarkdownParser() async throws {
         let builder = RowBuilder()
         let item = try assistant(String(repeating: "é", count: 131_073), id: "over-source-budget")
-        let rows = await builder.rows(for: item)
+        let rows = builder.rows(for: item)
         XCTAssertEqual(rows.count, 1)
         XCTAssertFalse(rows.contains { if case .markdown = $0.content { return true }; return false })
-        let parses = await builder.parseCount
+        let parses = builder.parseCount
         XCTAssertEqual(parses, 0, "UTF-8 source admission must precede cmark allocation")
     }
 
     func testBlockExpansionHasAHardPerMessageLimit() async throws {
         let builder = RowBuilder()
         let text = (0..<3_001).map { "Paragraph \($0)." }.joined(separator: "\n\n")
-        let rows = await builder.rows(for: try assistant(text, id: "over-block-budget"))
+        let rows = builder.rows(for: try assistant(text, id: "over-block-budget"))
         XCTAssertEqual(rows.count, 1)
         XCTAssertFalse(rows.contains { if case .markdown = $0.content { return true }; return false })
     }
@@ -336,62 +336,62 @@ final class RowBuilderTests: XCTestCase {
     func testRenderAdmissionIncludesItsExactByteAndRowBoundaries() async throws {
         let builder = RowBuilder()
         let atBytes = try assistant(String(repeating: "é", count: 131_072), id: "at-byte-limit")
-        let byteRows = await builder.rows(for: atBytes)
+        let byteRows = builder.rows(for: atBytes)
         XCTAssertFalse(byteRows.contains { $0.content == .omitted })
         let text = (0..<3_000).map { "Paragraph \($0)." }.joined(separator: "\n\n")
-        let blockRows = await builder.rows(for: try assistant(text, id: "at-block-limit"))
+        let blockRows = builder.rows(for: try assistant(text, id: "at-block-limit"))
         XCTAssertEqual(blockRows.count, 3_000)
     }
 
     func testAnOmittedRevisionDiscardsOnlyItsOwnOldRender() async throws {
         let builder = RowBuilder()
-        _ = await builder.rows(for: try assistant("Other retained prefix.", id: "other"))
+        _ = builder.rows(for: try assistant("Other retained prefix.", id: "other"))
         var item = try assistant("Old content.", id: "changing")
-        _ = await builder.rows(for: item)
+        _ = builder.rows(for: item)
         item.revision = 2
         if case .assistant(var value) = item.body {
             value.text = String(repeating: "é", count: 131_073)
             item.body = .assistant(value)
         }
-        let omitted = await builder.rows(for: item)
+        let omitted = builder.rows(for: item)
         XCTAssertEqual(omitted.first?.content, .omitted)
         XCTAssertEqual(omitted.first?.id.item, item.id)
         XCTAssertEqual(omitted.first?.turn, item.turn)
-        let entries = await builder.cacheSize
+        let entries = builder.cacheSize
         XCTAssertEqual(entries, 1)
-        let parses = await builder.parseCount
-        _ = await builder.rows(for: try assistant("Other retained prefix.", id: "other"))
-        let after = await builder.parseCount
+        let parses = builder.parseCount
+        _ = builder.rows(for: try assistant("Other retained prefix.", id: "other"))
+        let after = builder.parseCount
         XCTAssertEqual(after, parses)
     }
 
     func testAssistantCacheChargesIdentifiersAndTurnMetadata() async throws {
         let builder = RowBuilder()
         let item = try assistant("", id: String(repeating: "id", count: 50_000))
-        _ = await builder.rows(for: item)
-        let bytes = await builder.cacheBytes
+        _ = builder.rows(for: item)
+        let bytes = builder.cacheBytes
         XCTAssertGreaterThanOrEqual(bytes, TimelineValueWeight.of(item))
     }
 
     func testAnUncacheableDocumentDoesNotDiscardOtherRetainedPrefixes() async throws {
         let builder = RowBuilder()
         let retained = try assistant("Retained paragraph.", id: "retained")
-        _ = await builder.rows(for: retained)
+        _ = builder.rows(for: retained)
         let text = (0..<501).map { "Paragraph \($0)." }.joined(separator: "\n\n")
-        let rows = await builder.rows(for: try assistant(text, id: "too-many-blocks"))
+        let rows = builder.rows(for: try assistant(text, id: "too-many-blocks"))
         XCTAssertEqual(rows.count, 501)
-        let before = await builder.parseCount
-        _ = await builder.rows(for: retained)
-        let after = await builder.parseCount
+        let before = builder.parseCount
+        _ = builder.rows(for: retained)
+        let after = builder.parseCount
         XCTAssertEqual(after, before, "An uncacheable value must not flush unrelated completed prefixes")
     }
 
     func testEmptyMessagesStillConsumeTheEntryBudget() async throws {
         let builder = RowBuilder()
         for index in 0..<600 {
-            _ = await builder.rows(for: try assistant("", id: "empty-\(index)"))
+            _ = builder.rows(for: try assistant("", id: "empty-\(index)"))
         }
-        let count = await builder.cacheSize
+        let count = builder.cacheSize
         XCTAssertLessThanOrEqual(count, 500)
     }
 

@@ -5,16 +5,20 @@ upstream grammars/queries. Rust, Swift, JavaScript/JSX, TypeScript/TSX, Python, 
 YAML, TOML, Markdown, C/C++, HTML, CSS and diff fences are supported. Unknown fences stay plain.
 No JavaScript runtime, subprocess, networking, file opening or input/approval authority is used.
 
-`CodeHighlighter` is synchronous and deliberately non-Sendable. The app owns one on its
-`RowBuilder` actor; only immutable UTF-16 `CodeToken` ranges cross to the UI. Parsers stay on their
-worker. Immutable queries are shared behind a lock (at most one per bundled language), avoiding
-repeated cold query compilation, particularly expensive for Swift in Debug. There is no await
-under that lock. TypeScript/TSX and C++ compile inherited base queries against their own grammar.
+`CodeHighlighter` is synchronous and deliberately non-Sendable. The app's timeline render worker
+owns one through its `RowBuilder`; only immutable UTF-16 `CodeToken` ranges cross to the UI.
+Parsers stay on their worker. Immutable queries are shared, at most one per bundled language, each
+behind its own lock, so a cold compile of one language never waits on another. There is no await
+under those locks. TypeScript/TSX and C++ compile inherited base queries against their own grammar.
 
 Limits: 16 KiB / fewer than 2,000 newlines per input, 1,024 matches/tokens, parser 10 ms timeout,
 256 concurrent query matches and a 20 ms query-consumption allowance. Unsupported, unavailable,
 invalid or over-budget highlighting falls back to unmodified plain text. Timed-out parsers are
 reset before reuse. A source-and-language keyed LRU retains at most 128 entries / 512 KiB.
+`beginAllowance(_:)` bounds a whole render pass: once it is spent, uncached blocks return
+`.deferred` (plain, not cached) and highlight on a later pass. The first uncached block of a pass
+always parses, so every pass makes progress. Callers can skip caching for text that is still
+changing, such as a streaming block.
 The app sends only its existing 30-line / 8 KiB preview, not hidden full code. Full copy text is
 unchanged and never contains highlighting metadata.
 

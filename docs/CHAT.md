@@ -301,7 +301,10 @@ and an explicit full-code action. `ChatSyntax` prepares Tree-sitter token ranges
 worker for both agents. Rust, Swift, JS/JSX, TS/TSX, Python, Go, shell, JSON, YAML, TOML, Markdown,
 C/C++, HTML, CSS and diff fences use the theme's ANSI hues, adjusted to 4.5:1 text contrast;
 Increase Contrast targets 7:1 or the surface's maximum possible contrast. Unknown, unavailable or
-over-budget highlighting stays plain. Source/copy text is unchanged, and no links/actions are added.
+over-budget highlighting stays plain. Each render pass has a 4 ms highlighting allowance; code past
+it renders plain and the worker highlights it in follow-up passes. The unfinished tail of a
+streaming message is highlighted but never cached. Source/copy text is unchanged, and no
+links/actions are added.
 Mutable parsers never cross to the UI; immutable queries are shared once per bundled language.
 Highlighting has separate 128-entry/512-KiB content and 64-entry/512-KiB theme-projection caches;
 retained token ranges are also charged to row/page budgets. Theme/contrast changes do not reparse

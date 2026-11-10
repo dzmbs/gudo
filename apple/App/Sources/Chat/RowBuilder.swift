@@ -41,6 +41,10 @@ nonisolated struct ChatRow: Equatable, Sendable, Identifiable {
     var planPreview: TimelinePlan?
     var inlineDiff: ChatInlineDiff?
 
+    var awaitsHighlights: Bool {
+        if case .markdown(let block) = content { block.awaitsHighlights } else { false }
+    }
+
     enum Content: Equatable, Sendable {
         case markdown(ChatMarkdownBlock)
         case item(TimelineItem)
@@ -60,6 +64,8 @@ nonisolated struct ChatMarkdownBlock: Equatable, Sendable {
     var table: [[AttributedString]] = []
     var code: ChatCodeSnippet?
     var hasOmittedContent = false
+
+    var awaitsHighlights: Bool { code?.awaitsHighlights == true }
 }
 
 nonisolated struct ChatCodeSnippet: Equatable, Sendable {
@@ -69,6 +75,7 @@ nonisolated struct ChatCodeSnippet: Equatable, Sendable {
     let visibleLineCount: Int
     let isTruncated: Bool
     var highlights: [CodeToken] = []
+    var awaitsHighlights = false
 }
 
 nonisolated struct ChatListLine: Equatable, Sendable {
@@ -108,7 +115,7 @@ nonisolated private struct MarkdownSource {
     }
 }
 
-actor RowBuilder {
+nonisolated final class RowBuilder {
     private struct MarkdownPartition {
         let source: String
         let blocks: [ChatMarkdownBlock]
@@ -121,6 +128,7 @@ actor RowBuilder {
         let rows: [ChatRow]
         let cost: LRUCost
         let partition: MarkdownPartition?
+        let awaitsHighlights: Bool
     }
 
     private let cache = BoundedLRU<String, Entry>(
@@ -131,6 +139,11 @@ actor RowBuilder {
     private(set) var parseCount = 0
     private(set) var parsedBytes = 0
     private(set) var lastRenderDuration = Duration.zero
+    private(set) var itemsAwaitingHighlights: Set<String> = []
+    static let highlightAllowance = Duration.milliseconds(4)
+
+    func beginPage() { codeHighlighter.beginAllowance(Self.highlightAllowance) }
+    func endPage() { codeHighlighter.endAllowance() }
 
     func rows(for item: TimelineItem) -> [ChatRow] { render(item).rows }
 
@@ -138,15 +151,16 @@ actor RowBuilder {
         let start = ContinuousClock.now
         defer { lastRenderDuration = start.duration(to: .now) }
         let previous = cache.value(for: item.id)
-        if let previous, previous.revision == item.revision {
+        if let previous, previous.revision == item.revision, !previous.awaitsHighlights {
             return RenderedChatRows(rows: previous.rows, cost: previous.cost)
         }
         let rows: [ChatRow]
         var bytes = TimelineValueWeight.of(item)
         var partition: MarkdownPartition?
         if case .assistant(let assistant) = item.body {
-            guard let rendered = markdown(assistant.text, after: previous?.partition) else {
+            guard let rendered = markdown(assistant.text, after: previous?.partition, streaming: assistant.streaming) else {
                 cache.remove(item.id)
+                itemsAwaitingHighlights.remove(item.id)
                 let row = ChatRow(id: ChatRowID(item: item.id, part: 0), revision: item.revision,
                                   turn: item.turn, content: .omitted)
                 let bytes = 2 * (item.id.utf8.count + (item.turn?.utf8.count ?? 0)) + rowOverhead + 256
@@ -172,16 +186,22 @@ actor RowBuilder {
         }
         bytes += rows.count * rowOverhead + 256
         let cost = LRUCost(bytes: bytes, units: rows.count)
-        cache.insert(Entry(revision: item.revision, rows: rows, cost: cost, partition: partition),
+        let awaitsHighlights = rows.contains(where: \.awaitsHighlights)
+        if awaitsHighlights { itemsAwaitingHighlights.insert(item.id) } else { itemsAwaitingHighlights.remove(item.id) }
+        cache.insert(Entry(revision: item.revision, rows: rows, cost: cost, partition: partition, awaitsHighlights: awaitsHighlights),
                      for: item.id, cost: cost)
         return RenderedChatRows(rows: rows, cost: cost)
     }
 
     func remove(_ identifiers: Set<String>) {
         for identifier in identifiers { cache.remove(identifier) }
+        itemsAwaitingHighlights.subtract(identifiers)
     }
 
-    func clear() { cache.removeAll() }
+    func clear() {
+        cache.removeAll()
+        itemsAwaitingHighlights.removeAll()
+    }
 
     var cacheSize: Int { cache.count }
     var cacheRowCount: Int { cache.cost.units }
@@ -221,9 +241,9 @@ actor RowBuilder {
         return String(decoding: prefix, as: UTF8.self)
     }
 
-    private func markdown(_ source: String, after previous: MarkdownPartition?) -> MarkdownPartition? {
+    private func markdown(_ source: String, after previous: MarkdownPartition?, streaming: Bool) -> MarkdownPartition? {
         guard source.utf8.count <= ChatRenderLimits.markdownBytes else { return nil }
-        if let previous, previous.source == source { return previous }
+        if let previous, previous.source == source, !previous.blocks.contains(where: \.awaitsHighlights) { return previous }
         var retained: [ChatMarkdownBlock] = []
         var offset = 0
         var pending = source
@@ -249,20 +269,25 @@ actor RowBuilder {
         // Retain one extra block until the final source line is complete.
         let mutableCount = pending.hasSuffix("\n") || pending.hasSuffix("\r") ? 1 : 2
         let boundary = max(0, document.childCount - mutableCount)
+        var hasStableEnd = false
         for (index, markup) in document.children.enumerated() {
-            if index == boundary, let start = original.blockStart(markup.range) {
-                stableBytes = offset + start
-                stableBlocks = blocks.count
+            let rows = blockRows(markup, original: original, cachesHighlights: !streaming || index < boundary)
+            if !hasStableEnd, index == boundary || rows.contains(where: \.awaitsHighlights) {
+                hasStableEnd = true
+                if let start = original.blockStart(markup.range) {
+                    stableBytes = offset + start
+                    stableBlocks = blocks.count
+                }
             }
-            let rows = blockRows(markup, original: original)
             guard rows.count <= ChatRenderLimits.rowsPerMessage - blocks.count else { return nil }
             blocks.append(contentsOf: rows)
         }
         return MarkdownPartition(source: source, blocks: blocks, stableBytes: stableBytes, stableBlocks: stableBlocks)
     }
 
-    private func blockRows(_ markup: any Markup, original: MarkdownSource) -> [ChatMarkdownBlock] {
-        let rendered = block(markup, source: original.text(in: markup.range) ?? original.whole, original: original)
+    private func blockRows(_ markup: any Markup, original: MarkdownSource, cachesHighlights: Bool) -> [ChatMarkdownBlock] {
+        let rendered = block(markup, source: original.text(in: markup.range) ?? original.whole, original: original,
+                             cachesHighlights: cachesHighlights)
         if rendered.kind == .list, rendered.list.count > 20 {
             return stride(from: 0, to: rendered.list.count, by: 20).map { start in
                 var chunk = rendered
@@ -281,15 +306,19 @@ actor RowBuilder {
         }
     }
 
-    private func block(_ markup: any Markup, source: String, original: MarkdownSource) -> ChatMarkdownBlock {
+    private func block(_ markup: any Markup, source: String, original: MarkdownSource, cachesHighlights: Bool) -> ChatMarkdownBlock {
         if let code = markup as? CodeBlock {
             let text = code.code
             let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
             let preview = prefix(lines.prefix(30).joined(separator: "\n"), bytes: 8_192)
+            let highlighting = codeHighlighter.highlighting(preview, language: CodeLanguage(fence: code.language),
+                                                            caches: cachesHighlights)
+            var highlights: [CodeToken] = []
+            if case .tokens(let tokens) = highlighting { highlights = tokens }
             let snippet = ChatCodeSnippet(text: text, preview: preview, lineCount: lines.count,
                                           visibleLineCount: preview.split(separator: "\n", omittingEmptySubsequences: false).count,
                                           isTruncated: lines.count > 30 || text.utf8.count > preview.utf8.count,
-                                          highlights: codeHighlighter.highlights(preview, language: CodeLanguage(fence: code.language)))
+                                          highlights: highlights, awaitsHighlights: highlighting == .deferred)
             return ChatMarkdownBlock(kind: .code(code.language), source: source, text: AttributedString(text), code: snippet)
         }
         if markup is ThematicBreak {

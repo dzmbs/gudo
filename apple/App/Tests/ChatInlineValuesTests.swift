@@ -41,7 +41,7 @@ final class ChatInlineValuesTests: XCTestCase {
             var item = TimelineFixtureJSON.item(index)
             item["body"] = ["Assistant": ["text": source, "streaming": false]]
             let value = try TimelineJSON.decode(TimelineItem.self, from: TimelineFixtureJSON.json(item))
-            let rows = await builder.rows(for: value)
+            let rows = builder.rows(for: value)
             guard case .markdown(let block) = try XCTUnwrap(rows.first).content else { return XCTFail("Expected Markdown") }
             let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace, failurePolicy: .returnPartiallyParsedIfPossible)
             XCTAssertEqual(block.text, try AttributedString(markdown: source, options: options))

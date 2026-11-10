@@ -314,6 +314,57 @@ final class TimelineModelTests: XCTestCase {
         XCTAssertEqual(String(block.text.characters), "Message 59 accepted")
     }
 
+    func testCodeHighlightingIsBoundedPerPageAndFinishesOnLaterRenders() async throws {
+        let worker = TimelineRenderWorker(pane: 7)
+        let json = try codePage(120)
+        var result = try await worker.apply([.snapshot(json)], resetsSnapshot: true, protectsHistory: false)
+        XCTAssertTrue(result.awaitsHighlights)
+        XCTAssertTrue(result.frame.rows.contains { $0.awaitsHighlights })
+        XCTAssertTrue(result.frame.rows.contains { !$0.awaitsHighlights })
+        var passes = 0
+        while result.awaitsHighlights, passes < 200 {
+            result = try await worker.apply([.highlights], resetsSnapshot: false, protectsHistory: false)
+            passes += 1
+        }
+        XCTAssertFalse(result.awaitsHighlights)
+        for row in result.frame.rows {
+            guard case .markdown(let block) = row.content else { return XCTFail("Missing code block") }
+            XCTAssertFalse(block.code?.highlights.isEmpty ?? true)
+        }
+    }
+
+    func testTheModelSchedulesDeferredHighlights() async throws {
+        let model = TimelineModel(pane: 7)
+        model.receive(.snapshot(try codePage(120, name: "item")))
+        try await wait { model.frame.rows.count == 120 && !model.frame.rows.contains { $0.awaitsHighlights } }
+        model.stop()
+    }
+
+    func testACancelledRenderStopsBeforeFinishing() async throws {
+        let worker = TimelineRenderWorker(pane: 7)
+        let json = try TimelineFixtureJSON.snapshot(0..<200)
+        let render = Task { try await worker.apply([.snapshot(json)], resetsSnapshot: true, protectsHistory: false) }
+        render.cancel()
+        do {
+            _ = try await render.value
+            XCTFail("A cancelled render finished")
+        } catch is CancellationError {}
+        let next = try await worker.apply([.snapshot(json)], resetsSnapshot: true, protectsHistory: false)
+        XCTAssertEqual(next.frame.rows.count, 200)
+    }
+
+    private func codePage(_ count: Int, name: String = "block") throws -> String {
+        let items: [[String: Any]] = (0..<count).map { index in
+            let lines = (0..<30).map { "    let \(name)_\(index)_\($0) = compute(\"\($0)\", \(index));" }.joined(separator: "\n")
+            var item = TimelineFixtureJSON.item(index)
+            item["body"] = ["Assistant": ["text": "```rust\nfn \(name)_\(index)() {\n\(lines)\n}\n```\n", "streaming": false]]
+            return item
+        }
+        var page = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(TimelineFixtureJSON.snapshot(0..<0).utf8)) as? [String: Any])
+        page["items"] = items
+        return try TimelineFixtureJSON.json(page)
+    }
+
     private func expandedPage(_ range: Range<Int>, sequence: UInt64 = 0) throws -> String {
         var page = try TimelineJSON.decode(TimelineSnapshot.self, from: TimelineFixtureJSON.snapshot(range, sequence: sequence))
         let text = (0..<31).map { "Paragraph \($0)." }.joined(separator: "\n\n")
