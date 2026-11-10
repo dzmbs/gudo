@@ -929,11 +929,13 @@ openvscode-server must be asked for with `Only(OpenVsCode)`.
   (the app's editor panes, several at once, are one server each, each behind its own compressing proxy sharing one
   asset cache; why not one server per host: APP-ARCHITECTURE §20 "Daemon"); bound to `127.0.0.1` on a
   free port with a random 128-bit token read from a 0600 file (`--connection-token-file`, never
-  argv: other users can read the process list); own process group, killed on
-  `EditorStop` and daemon shutdown; logs in `<state>/editors/`. Returns port, token and
+  argv: other users can read the process list); own process group, ended on
+  `EditorStop`, a restart and daemon shutdown (SIGTERM, SIGKILL after 2 s, awaited so the
+  next server gets the port); logs in `<state>/editors/`. Returns port, token and
   `url_path` (`/?tkn=…&folder=…`; the server answers with the token cookie and a redirect).
   The returned port is the **compressing proxy's** (below), not the server's. It is stable per
-  folder (`<state>/editors/ports.json`, a random port in 20000-29999 kept while it can be bound),
+  folder (`<state>/editors/ports.json`, a random port in 20000-29999, retried for 1 s while a stopping server lets go, entries for
+  deleted folders dropped at start),
   and the app forwards the same local port when free, so the workbench's origin and with it
   WebKit's cache and VS Code's browser storage survive server restarts and app relaunches.
   When an owner app connects (`Caps::BROWSER`; not the CLI), the editor a client launched last (`<state>/editors/last-launch.json`,
