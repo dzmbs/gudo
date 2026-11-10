@@ -14,7 +14,7 @@ struct AgentPowerSettings: View {
                 }
             }
         } header: {
-            Text("Keep Mac awake while agents work")
+            Text("Keep hosts awake while agents work")
         } footer: {
             Text("The display can sleep and lock. Closing a laptop's lid can still put it to sleep.")
         }
@@ -83,6 +83,8 @@ struct PowerPolicyControl: View {
 struct AgentPowerStatus: View {
     private let hosts = AppModel.shared.hosts
     @State private var awakeHosts: [String] = []
+    /// A host keeps itself awake for as long as its agents work: minutes, so this need not be quick.
+    private static let refreshInterval = Duration.seconds(15)
 
     var body: some View {
         Group {
@@ -98,13 +100,13 @@ struct AgentPowerStatus: View {
                 var awake: [String] = []
                 for host in DeviceHosts.owned(hosts) {
                     guard let connection = hosts.connection(host.id) as? DaemonConnection,
-                          connection.isReady else { continue }
+                          connection.isReady, !connection.isLowDataMode else { continue }
                     if let status = try? await connection.powerSettings(), status.keepingAwake {
                         awake.append(host.name)
                     }
                 }
                 awakeHosts = awake
-                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                do { try await Task.sleep(for: Self.refreshInterval) } catch { return }
             }
         }
     }

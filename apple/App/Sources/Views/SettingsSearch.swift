@@ -108,7 +108,7 @@ enum SettingsIndex {
             .init(id: "website-appearance", title: "Browser Appearance", section: .browser, synonyms: ["browser", "websites", "dark", "light", "theme", "color scheme", "dark mode"]),
             .init(id: "browser-history", title: "Clear Browsing History", section: .browser, synonyms: ["browser", "history", "recent", "frequent"]),
             .init(id: "accounts", title: "Agent Accounts", section: .accounts, synonyms: ["account", "sign in", "login", "personal", "work", "claude", "codex"]),
-            .init(id: "agent-power", title: "Keep Mac awake while agents work", section: .agentTools, synonyms: ["sleep", "battery", "power", "awake", "plugged in"]),
+            .init(id: "agent-power", title: "Keep hosts awake while agents work", section: .agentTools, synonyms: ["sleep", "battery", "power", "awake", "plugged in"]),
             .init(id: "agent-tools", title: "Agent Hooks and Terminal Tools", section: .agentTools, synonyms: ["mcp", "claude", "codex", "browser", "drawings", "tools"]),
             .init(id: "record-agent-sessions", title: "Record Agent Sessions", section: .browser, synonyms: ["replay", "recording", "browser", "session", "rrweb"]),
             .init(id: "delete-replays", title: "Delete All Replays", section: .browser, synonyms: ["replay", "recording", "storage", "clear"]),

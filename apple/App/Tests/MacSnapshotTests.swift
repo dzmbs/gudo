@@ -837,7 +837,7 @@ final class MacSnapshotTests: XCTestCase {
         guard wanted("agent-power") else { return }
         let window = makeWindow(ThemedRoot {
             Form {
-                Section("Keep Mac awake while agents work") {
+                Section("Keep hosts awake while agents work") {
                     PowerPolicyControl(name: "This Mac", policy: .constant(.whenPluggedIn), keepingAwake: true)
                 }
                 Text("The display can sleep and lock. Closing a laptop's lid can still put it to sleep.")
