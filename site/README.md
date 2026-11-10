@@ -6,11 +6,11 @@ cookies. Served by Cloudflare as static assets (`wrangler deploy` from the repo 
 ## Deploy
 
 ```sh
-wrangler pages deploy site --project-name gudo
+wrangler deploy
 ```
 
-Run it from the repository root. The first time, create the project and attach the domain in the
-Cloudflare dashboard (Workers & Pages, gudo, Custom domains: `gudo.dev`).
+Run it from the repository root: `wrangler.jsonc` there publishes `site/` as the `gudo` worker's
+static assets on `gudo.dev` and `www.gudo.dev`.
 
 ## Preview
 
