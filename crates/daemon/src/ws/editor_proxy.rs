@@ -175,13 +175,24 @@ impl Drop for Busy {
     }
 }
 
+/// Pause after a failed `accept`.
+const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
+
 async fn accept(listener: TcpListener, shared: Arc<Shared>) {
     // Owned here, so aborting the accept loop also ends every open connection.
     let mut connections = JoinSet::new();
     loop {
         tokio::select! {
             accepted = listener.accept() => {
-                let Ok((tcp, _)) = accepted else { continue };
+                let tcp = match accepted {
+                    Ok((tcp, _)) => tcp,
+                    Err(error) => {
+                        // Out of descriptors, typically: retrying at once would spin.
+                        tracing::warn!("accepting an editor proxy connection: {error}");
+                        tokio::time::sleep(ACCEPT_BACKOFF).await;
+                        continue;
+                    }
+                };
                 let _ = tcp.set_nodelay(true);
                 let shared = Arc::clone(&shared);
                 connections.spawn(async move {
