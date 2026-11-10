@@ -4,7 +4,6 @@ mod support;
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::time::Duration;
 
 use client_core::ClientConfig;
 use client_core::grants::GrantSpec;
@@ -155,7 +154,7 @@ async fn a_fenced_agent_can_exit_to_a_shell_without_accepting_a_stale_prompt() {
     let pat = guest(&owner, pane, Roles::PROMPTER).await;
     pat.client.prompt(pane, "first".into(), true).await.unwrap();
     owner.wait_text(pane, "agent-read:first").await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    owner.wait_text(pane, "FENCE-SHELL-READY>").await;
     assert!(matches!(
         pat.client
             .prompt(pane, "echo LEAKED-$((6*7))".into(), true)
@@ -165,6 +164,33 @@ async fn a_fenced_agent_can_exit_to_a_shell_without_accepting_a_stale_prompt() {
     owner.type_line(pane, "echo shell-$((1+1))");
     owner.wait_text(pane, "shell-2").await;
     assert!(!owner.text(pane).contains("LEAKED"));
+    drop((pat, owner));
+    daemon.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_prompt_racing_the_agent_exit_never_reaches_the_shell() {
+    let dir = tempfile::tempdir().unwrap();
+    let (daemon, mut owner, pane) = agent(
+        dir.path(),
+        "IFS= read -r line; printf 'agent-read:%s\\n' \"$line\"",
+    )
+    .await;
+    let pat = guest(&owner, pane, Roles::PROMPTER).await;
+    pat.client.prompt(pane, "first".into(), true).await.unwrap();
+    owner.wait_text(pane, "agent-read:first").await;
+    let result = pat
+        .client
+        .prompt(pane, "echo LEAKED-$((6*7))".into(), true)
+        .await;
+    assert!(
+        matches!(result, Ok(_) | Err(MpError::Forbidden(_))),
+        "{result:?}"
+    );
+    owner.wait_text(pane, "FENCE-SHELL-READY>").await;
+    owner.type_line(pane, "echo shell-$((1+1))");
+    owner.wait_text(pane, "shell-2").await;
+    assert!(!owner.text(pane).contains("LEAKED-42"));
     drop((pat, owner));
     daemon.shutdown().await;
 }
