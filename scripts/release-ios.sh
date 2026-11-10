@@ -44,6 +44,7 @@ api_key_base64 | node "$repo_root/scripts/asc-profiles.mjs" IOS_APP_STORE DISTRI
 
 if [ "${SKIP_RUST:-0}" != 1 ]; then
   (cd "$repo_root" && cargo xtask build-xcframework)
+  "$apple_dir/scripts/build-libghostty-vt.sh"
 fi
 echo "==> coding agents render as in Ghostty"
 if [ "${SKIP_AGENT_TUI_PARITY:-0}" != 1 ]; then

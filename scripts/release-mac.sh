@@ -51,6 +51,7 @@ security find-generic-password -s "$ASC_KEYCHAIN_SERVICE" >/dev/null 2>&1 \
 
 if [ "${SKIP_RUST:-0}" != 1 ]; then
   (cd "$repo_root" && cargo xtask build-xcframework --macos-only)
+  "$apple_dir/scripts/build-libghostty-vt.sh"
   (cd "$repo_root" && cargo xtask build-hostd-macos)
   (cd "$repo_root" && cargo xtask build-hostd-linux)
 fi
