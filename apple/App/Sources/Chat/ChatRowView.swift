@@ -6,6 +6,7 @@ import UIKit
 
 struct ChatRowActions {
     var supportsDiffs = true
+    var readsToolDetails = true
     var showTerminal: (UInt64?) -> Void = { _ in }
     var selectText: (String) -> Void = { _ in }
     var showTool: (TimelineItem) -> Void = { _ in }
@@ -282,8 +283,10 @@ struct ChatRowView: View {
                         .font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
                 }
                 HStack {
-                    Button("Details", systemImage: "arrow.up.left.and.arrow.down.right") { actions.showTool(item) }
-                    if actions.supportsDiffs, !tool.diff.isEmpty {
+                    if actions.readsToolDetails {
+                        Button("Details", systemImage: "arrow.up.left.and.arrow.down.right") { actions.showTool(item) }
+                    }
+                    if actions.readsToolDetails, actions.supportsDiffs, !tool.diff.isEmpty {
                         Button("Changes", systemImage: "plus.forwardslash.minus") {
                             actions.showDiff(.tool(item: item.id, path: nil))
                         }.accessibilityIdentifier("chat-tool-changes-\(item.id)")

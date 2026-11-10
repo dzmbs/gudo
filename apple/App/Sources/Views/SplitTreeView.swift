@@ -618,6 +618,7 @@ struct PaneSlot: View {
                          approval: SharedApproval(workspace: workspace, session: daemon.multiplayer,
                                                   pane: pane.id.rawValue, placement: .chatComposer),
                          permitsSending: daemon.multiplayer.isOwner,
+                         readsToolDetails: daemon.multiplayer.canPrompt,
                          working: daemon.meta[pane.id]?.agent?.state == .running) { active in
                 terminalContent(pane, isActive: active)
             }

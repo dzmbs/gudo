@@ -11,6 +11,8 @@ struct PaneChatView<Terminal: View>: View {
     let hub: DaemonWorkspace
     var approval: SharedApproval? = nil
     var permitsSending = false
+    /// A tool's full output and recorded changes need the right to prompt; a viewer sees the row only.
+    var readsToolDetails = true
     var working = false
     @Environment(\.scenePhase) private var scenePhase
     @ViewBuilder var terminal: (Bool) -> Terminal
@@ -384,7 +386,7 @@ struct PaneChatView<Terminal: View>: View {
     }
 
     private var actions: ChatRowActions {
-        ChatRowActions(supportsDiffs: state.capabilities.contains(.diffs), showTerminal: { state.showTerminal(commandMark: $0, terminal: pane) }, selectText: { text in
+        ChatRowActions(supportsDiffs: state.capabilities.contains(.diffs), readsToolDetails: readsToolDetails, showTerminal: { state.showTerminal(commandMark: $0, terminal: pane) }, selectText: { text in
             state.presentDetail { _ in .text(ChatSelectedText(title: "Select Text", text: text)) }
         }, showTool: { item in
             guard case .tool(let tool) = item.body else { return }
