@@ -209,6 +209,103 @@ async fn fish_integration_marks_commands() {
     scenario(&fish, false).await;
 }
 
+/// Shell integration reports the directory (OSC 7) and titles it (OSC 2); a directory named with
+/// BEL and ESC, raw or as backslash escapes, must not end those early and send an OSC 52
+/// clipboard write of its own. A real write afterwards shows the client would have copied it.
+async fn directory_names_cannot_inject_sequences(
+    shell: &Path,
+    cd_command: impl Fn(&str) -> String,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let home_path = home.path().canonicalize().unwrap();
+    let raw_name = "x\x07\x1b]52;c;aW5qZWN0ZWQ=\x07y";
+    let escaped_name = r"x\a\e]52;c;aW5qZWN0ZWQ=\ay";
+    for name in [raw_name, escaped_name] {
+        std::fs::create_dir_all(home_path.join(name)).unwrap();
+    }
+    let shell = shell.to_owned();
+    let home_str = home_path.to_string_lossy().into_owned();
+    let daemon = start_with(dir.path(), move |config| {
+        config.shell = Some(shell);
+        config.pane_env = vec![
+            ("HOME".into(), home_str.clone()),
+            ("PS1".into(), "$ ".into()),
+            ("ZDOTDIR".into(), home_str),
+        ];
+    })
+    .await;
+    let mut config = ClientConfig::new(ClientConfig::generate_key());
+    config.relay = client_core::RelayMode::Disabled;
+    let options = client_core::ConnectOptions {
+        clipboard: true,
+        ..client_core::ConnectOptions::default()
+    };
+    let mut client = TestClient::connect_with(&ticket(&daemon), config, options);
+    let pane = client.attach_and_follow().await;
+    client
+        .until("prompt hint", |client| {
+            client.hints.iter().any(|hint| hint.hint.at_prompt)
+        })
+        .await;
+
+    client.type_line(pane, &format!("cd {}", home_path.display()));
+    client.type_line(pane, &cd_command(r"x\x07\x1b]52;c;aW5qZWN0ZWQ=\x07y"));
+    client.type_line(pane, &format!("cd {}", home_path.display()));
+    client.type_line(pane, &cd_command(r"x\\a\\e]52;c;aW5qZWN0ZWQ=\\ay"));
+    client.type_line(pane, "printf '\\033]52;c;%s\\007' Y29udHJvbA==");
+    client
+        .until("the real clipboard write", |client| {
+            !client.clipboard.is_empty()
+        })
+        .await;
+    assert_eq!(client.clipboard, [(pane, "control".to_owned())]);
+    let escaped_directory = home_path.join(escaped_name).to_string_lossy().into_owned();
+    client
+        .until("the escaped directory reported", |client| {
+            client.metas.get(&pane).and_then(|meta| meta.cwd.as_deref())
+                == Some(escaped_directory.as_str())
+        })
+        .await;
+
+    drop(client);
+    daemon.shutdown().await;
+}
+
+fn posix_cd(printf_format: &str) -> String {
+    format!("cd \"$(printf '{printf_format}')\"")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn zsh_directory_names_cannot_inject_sequences() {
+    let Some(zsh) = zsh() else {
+        eprintln!("skipping: zsh not installed");
+        return;
+    };
+    directory_names_cannot_inject_sequences(&zsh, posix_cd).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn bash_directory_names_cannot_inject_sequences() {
+    let Some(bash) = bash() else {
+        eprintln!("skipping: no bash 4.4+ installed");
+        return;
+    };
+    directory_names_cannot_inject_sequences(&bash, posix_cd).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn fish_directory_names_cannot_inject_sequences() {
+    let Some(fish) = fish() else {
+        eprintln!("skipping: fish not installed");
+        return;
+    };
+    directory_names_cannot_inject_sequences(&fish, |printf_format| {
+        format!("cd (printf '{printf_format}')")
+    })
+    .await;
+}
+
 /// The zle-line-init fallback can mark a fresh input area without another 133;A.
 /// Replay through a real pane PTY, with enough completion rows to scroll the old input away.
 #[tokio::test(flavor = "multi_thread")]

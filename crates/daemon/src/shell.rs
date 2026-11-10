@@ -2,7 +2,8 @@
 //! (`vendor/ghostty/src/termio/shell_integration.zig`), without touching the user's dotfiles.
 //!
 //! Ghostty's scripts (`vendor/ghostty/src/shell-integration`) are written to
-//! `<state>/shell-integration/` on start, unmodified, and each shell is pointed at them:
+//! `<state>/shell-integration/` on start, unmodified except for `ghostty.bash`'s directory
+//! title (see `BASH_DIRECTORY_TITLE`), and each shell is pointed at them:
 //!
 //! - **zsh**: `ZDOTDIR` names our directory; its `.zshenv` restores the user's `ZDOTDIR`
 //!   (kept in `GHOSTTY_ZSH_ZDOTDIR`), sources the user's `.zshenv` and loads the integration.
@@ -15,9 +16,10 @@
 //! directories; libghostty-vt parses them in the pane's terminal.
 //!
 //! Licensing: the zsh and bash scripts derive from kitty's and are GPL-3.0 (their headers say
-//! so); fish's and `bash-preexec.sh` are MIT. They are shipped as separate, unmodified files
-//! executed by the shell, as Ghostty ships them.
+//! so); fish's and `bash-preexec.sh` are MIT. They are shipped as separate files executed by the
+//! shell, as Ghostty ships them; the modified `ghostty.bash` says so in its header.
 
+use std::borrow::Cow;
 use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -35,7 +37,7 @@ const FILES: &[(&str, &str)] = &[
         include_str!("../../../vendor/ghostty/src/shell-integration/zsh/ghostty-integration"),
     ),
     (
-        "bash/ghostty.bash",
+        BASH_SCRIPT,
         include_str!("../../../vendor/ghostty/src/shell-integration/bash/ghostty.bash"),
     ),
     (
@@ -49,6 +51,59 @@ const FILES: &[(&str, &str)] = &[
         ),
     ),
 ];
+
+const BASH_SCRIPT: &str = "bash/ghostty.bash";
+
+/// `(vendored text, replacement)` edits to `ghostty.bash`. Its directory title is `\w` in `PS1`,
+/// which prints the directory's control bytes as they are: a directory named with BEL and ESC
+/// could end the title and send a sequence of its own (an OSC 52 clipboard write). The title is
+/// printed at each prompt from `$PWD` without them instead, with `~` for home as `\w` shows it.
+/// GPL-3.0 asks a modified copy to say so in the file.
+const BASH_DIRECTORY_TITLE: [(&str, &str); 3] = [
+    (
+        "# We need to be in interactive mode to proceed.\n",
+        "# This copy is modified (November 2026): the working-directory title is printed from\n\
+         # $PWD without control bytes, instead of with \\w in PS1.\n\
+         \n\
+         # We need to be in interactive mode to proceed.\n",
+    ),
+    (
+        "\n    # Title (working directory)\n    \
+         if [[ \"$GHOSTTY_SHELL_FEATURES\" == *\"title\"* ]]; then\n      \
+         PS1=$PS1'\\[\\e]2;\\w\\a\\]'\n    \
+         fi\n",
+        "",
+    ),
+    (
+        "\n  _ghostty_executing=0\n}\n",
+        r#"
+  if [[ "$GHOSTTY_SHELL_FEATURES" == *"title"* ]]; then
+    builtin local title_directory="${PWD//[[:cntrl:]]/}"
+    if [[ -n "$HOME" && "$HOME" != / ]] &&
+      [[ "$title_directory" == "$HOME" || "$title_directory" == "$HOME"/* ]]; then
+      title_directory="~${title_directory#"$HOME"}"
+    fi
+    builtin printf "\e]2;%s\a" "$title_directory"
+  fi
+
+  _ghostty_executing=0
+}
+"#,
+    ),
+];
+
+/// A script as it is installed: the vendored file, with `ghostty.bash`'s directory title made
+/// safe.
+fn installed_contents(relative: &str, vendored: &'static str) -> Cow<'static, str> {
+    if relative != BASH_SCRIPT {
+        return Cow::Borrowed(vendored);
+    }
+    let mut script = vendored.to_owned();
+    for (vendored_text, replacement) in BASH_DIRECTORY_TITLE {
+        script = script.replacen(vendored_text, replacement, 1);
+    }
+    Cow::Owned(script)
+}
 
 /// Features the scripts enable: a blinking bar cursor at the prompt and titles from the
 /// running command and directory; `path` too when the CLI is linked. `sudo` and `ssh-*` need
@@ -98,7 +153,8 @@ impl ShellIntegration {
     /// Writes the scripts under `<state_dir>/shell-integration`, replacing stale copies.
     pub fn install(state_dir: &Path) -> io::Result<Self> {
         let dir = state_dir.join("shell-integration");
-        for (relative, contents) in FILES {
+        for (relative, vendored) in FILES {
+            let contents = installed_contents(relative, vendored);
             let path = dir.join(relative);
             if std::fs::read(&path).is_ok_and(|old| old == contents.as_bytes()) {
                 continue;
@@ -174,9 +230,7 @@ impl ShellIntegration {
                 if let Some(old) = existing("ENV").filter(|value| !value.is_empty()) {
                     injection.env.push(("GHOSTTY_BASH_ENV".into(), old));
                 }
-                injection
-                    .env
-                    .push(("ENV".into(), path("bash/ghostty.bash")));
+                injection.env.push(("ENV".into(), path(BASH_SCRIPT)));
                 injection
                     .env
                     .push(("GHOSTTY_BASH_INJECT".into(), "1".into()));
@@ -235,6 +289,23 @@ mod tests {
                 .unwrap()
                 .contains("GHOSTTY_ZSH_ZDOTDIR")
         );
+        let bash_script =
+            std::fs::read_to_string(dir.path().join("shell-integration").join(BASH_SCRIPT))
+                .unwrap();
+        let vendored_bash_script = FILES
+            .iter()
+            .find(|(relative, _)| *relative == BASH_SCRIPT)
+            .unwrap()
+            .1;
+        for (vendored_text, replacement) in BASH_DIRECTORY_TITLE {
+            assert_eq!(
+                vendored_bash_script.matches(vendored_text).count(),
+                1,
+                "{vendored_text}"
+            );
+            assert!(bash_script.contains(replacement), "{replacement}");
+        }
+        assert!(!bash_script.contains(r"\w\a"));
         // Installing again keeps the files.
         ShellIntegration::install(dir.path()).unwrap();
 
@@ -279,6 +350,61 @@ mod tests {
             .1;
         assert!(xdg.ends_with(":/usr/local/share:/usr/share"), "{xdg}");
         assert!(integration.injection(Path::new("/bin/sh"), env).is_none());
+    }
+
+    /// Any bash runs the script: before 4.4 it takes the `bash-preexec.sh` path, so macOS's
+    /// `/bin/bash` covers the title and directory code too.
+    #[test]
+    fn bash_directory_names_cannot_inject_sequences() {
+        let Some(bash) = ["/bin/bash", "/usr/bin/bash"]
+            .into_iter()
+            .map(Path::new)
+            .find(|path| path.exists())
+        else {
+            return;
+        };
+        let state = tempfile::tempdir().unwrap();
+        ShellIntegration::install(state.path()).unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let home_path = home.path().canonicalize().unwrap();
+        for name in [
+            "x\x07\x1b]52;c;aW5qZWN0ZWQ=\x07y",
+            r"x\a\e]52;c;aW5qZWN0ZWQ=\ay",
+        ] {
+            std::fs::create_dir_all(home_path.join(name)).unwrap();
+        }
+        let commands = home_path.join("commands");
+        std::fs::write(
+            &commands,
+            "cd \"$(printf 'x\\007\\033]52;c;aW5qZWN0ZWQ=\\007y')\"\ncd ..\n\
+             cd 'x\\a\\e]52;c;aW5qZWN0ZWQ=\\ay'\necho DONE\n",
+        )
+        .unwrap();
+        let output = std::process::Command::new(bash)
+            .args(["--noprofile", "--rcfile"])
+            .arg(state.path().join("shell-integration/bash/ghostty.bash"))
+            .arg("-i")
+            .env_clear()
+            .env("HOME", &home_path)
+            .env("PATH", "/usr/bin:/bin")
+            .env("PS1", "$ ")
+            .env("GHOSTTY_SHELL_FEATURES", FEATURES)
+            .current_dir(&home_path)
+            .stdin(std::fs::File::open(&commands).unwrap())
+            .output()
+            .unwrap();
+        let printed = [output.stdout, output.stderr].concat();
+        let shown = String::from_utf8_lossy(&printed);
+        assert!(shown.contains("DONE"), "{shown:?}");
+        assert!(
+            shown.contains("\x1b]2;~/x]52;c;aW5qZWN0ZWQ=y\x07"),
+            "{shown:?}"
+        );
+        assert!(
+            shown.contains("\x1b]2;~/x\\a\\e]52;c;aW5qZWN0ZWQ=\\ay\x07"),
+            "{shown:?}"
+        );
+        assert!(!shown.contains("\x1b]52"), "{shown:?}");
     }
 
     #[test]

@@ -135,6 +135,12 @@ An unbracketed paste containing `\n` or `\r` needs confirmation in the app.
   titles of every pane) cleans titles the same way.
 - OSC 7 must be an absolute, printable path, in the daemon (including the directory recorded
   with each command) and in the app.
+- Shell integration never prints a directory, host name or command line into an escape
+  sequence with its control bytes, so a directory named with BEL and ESC cannot end the
+  sequence and start its own (an OSC 52 write). The installed `ghostty.bash` titles the
+  directory from `$PWD` without them rather than with `\w`
+  (`shell::tests::bash_directory_names_cannot_inject_sequences`; with real shells in a pane,
+  `shell::{zsh,bash,fish}_directory_names_cannot_inject_sequences`).
 
 **Secrets.** The daemon's echo state (ECHO off, canonical mode) drives:
 - disabling prediction;
