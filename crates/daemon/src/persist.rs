@@ -68,6 +68,10 @@ impl Saved {
             .collect()
     }
 
+    pub fn pane_ids(&self) -> HashSet<PaneId> {
+        self.panes.keys().map(|&id| PaneId(id)).collect()
+    }
+
     pub fn into_parts(self) -> (Layout, Restore) {
         let panes = self
             .panes
@@ -117,24 +121,29 @@ fn backup(file: &Path) -> io::Result<()> {
     std::fs::rename(file, aside)
 }
 
+/// Keeps the screens of panes that ended a moment ago as well: a shutdown now brings them back.
 pub(crate) async fn save(core: &Arc<Core>) -> io::Result<()> {
-    write(core, saved_state(core)).await
+    let saved = saved_state(core);
+    let mut screens_to_keep = saved.pane_ids();
+    screens_to_keep.extend(core.panes_before_exits());
+    write(core, saved, screens_to_keep).await
 }
 
 /// Saves on shutdown, keeping what programs that ended a moment before lost
 /// (`core::ENDED_BY_SHUTDOWN`).
 pub(crate) async fn save_on_shutdown(core: &Arc<Core>) -> io::Result<()> {
-    write(core, core.state_to_save_on_shutdown()).await
+    let saved = core.state_to_save_on_shutdown();
+    let screens_to_keep = saved.pane_ids();
+    write(core, saved, screens_to_keep).await
 }
 
-async fn write(core: &Arc<Core>, saved: Saved) -> io::Result<()> {
+async fn write(core: &Arc<Core>, saved: Saved, screens_to_keep: HashSet<PaneId>) -> io::Result<()> {
     let bytes = serde_json::to_vec_pretty(&saved).map_err(io::Error::other)?;
     let file = path(&core.cfg.state_dir);
-    let panes: HashSet<PaneId> = saved.panes.keys().map(|&id| PaneId(id)).collect();
     let core = Arc::clone(core);
     tokio::task::spawn_blocking(move || {
         write_atomic(&file, &bytes)?;
-        core.screens.keep_only(&panes);
+        core.screens.keep_only(&screens_to_keep);
         Ok(())
     })
     .await

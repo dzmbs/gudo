@@ -1676,6 +1676,16 @@ impl Core {
         }
     }
 
+    /// The panes a shutdown now would bring back although their programs ended.
+    pub fn panes_before_exits(&self) -> HashSet<PaneId> {
+        match lock(&self.before_exits).as_ref() {
+            Some(burst) if burst.latest_exit.elapsed() < ENDED_BY_SHUTDOWN => {
+                burst.saved.pane_ids()
+            }
+            _ => HashSet::new(),
+        }
+    }
+
     /// What a shutdown saves: the state from before programs started ending, if that was a
     /// moment ago, else the current one.
     pub fn state_to_save_on_shutdown(&self) -> persist::Saved {

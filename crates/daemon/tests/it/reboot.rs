@@ -170,6 +170,49 @@ async fn a_closed_pane_takes_its_screen_with_it() {
     daemon.shutdown().await;
 }
 
+/// A reboot can end a pane's shell a moment before the daemon: the pane comes back with its
+/// screen, even after the layout was saved without it in between.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pane_whose_shell_ended_just_before_shutdown_keeps_its_screen() {
+    let state = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let daemon = start_with(state.path(), configure(home.path())).await;
+    let (mut owner, first) = restored_pane(&daemon).await;
+    let client_core::proto::OpOutcome::PaneCreated { pane_id: second } = owner
+        .op(client_core::proto::LayoutOp::Split {
+            pane_id: first,
+            axis: client_core::proto::Axis::Horizontal,
+            launch: client_core::proto::PaneLaunch::Shell { cwd: None },
+        })
+        .await
+    else {
+        panic!("split failed");
+    };
+    owner.follow(second).await;
+    owner.type_line(second, "echo \"ended by the reboot $((6 * 7))\"");
+    owner.wait_text(second, "ended by the reboot 42").await;
+    let screen = state.path().join(format!("screens/{}.zst", second.0));
+    wait_for_file(&screen);
+    owner.type_line(second, "exit");
+    let pane_key = format!("\"{}\":", second.0);
+    wait_layout(
+        state.path(),
+        |text| text.contains("\"panes\"") && !text.contains(&pane_key),
+        "dropped the ended pane",
+    );
+    drop(owner);
+    daemon.shutdown().await;
+
+    let daemon = start_with(state.path(), configure(home.path())).await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    owner.attach_and_follow().await;
+    owner.follow(second).await;
+    owner.wait_text(second, "ended by the reboot 42").await;
+    owner.wait_text(second, "Restored after restart").await;
+    drop(owner);
+    daemon.shutdown().await;
+}
+
 const CLAUDE_ID: &str = "7a1c2e3f-4b5d-4e6f-8a9b-0c1d2e3f4a5b";
 
 /// Writes its transcript as Claude Code does and its pid next to it, then runs as `claude`.
