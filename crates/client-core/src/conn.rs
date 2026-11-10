@@ -916,20 +916,56 @@ fn compatible_input_payload(
 /// Holds a connection the daemon admitted for an upgrade only: requests are dropped, the
 /// connection stays up for [`Client::upgrade_daemon`](crate::Client::upgrade_daemon).
 async fn run_incompatible(inner: &Arc<Inner>, live: Live) -> String {
-    let Live { conn, ctl_tx, .. } = live;
+    let Live {
+        conn, mut ctl_tx, ..
+    } = live;
     *lock(&inner.connection) = Some(conn.clone());
     inner.emit(ClientEvent::Incompatible {
         reason: incompatible_words(&proto::RefuseReason::SnapshotFormat { daemon: 0 }),
     });
+    let mut answers = JoinSet::new();
     let reason = loop {
         tokio::select! {
-            _ = inner.outgoing.next() => {}
+            item = inner.outgoing.next() => {
+                let Outgoing::Ctl(ClientCtl::Ping { nonce }) = item else {
+                    continue;
+                };
+                let heard_before = conn.stats().udp_rx.datagrams;
+                if let Err(err) = send(&mut ctl_tx, &ClientCtl::Ping { nonce }).await {
+                    break err.to_string();
+                }
+                answers.spawn(answer_once_heard(
+                    Arc::clone(inner),
+                    conn.clone(),
+                    heard_before,
+                    nonce,
+                ));
+            }
             closed = conn.closed() => break closed.to_string(),
         }
     };
+    answers.abort_all();
     drop(ctl_tx);
     conn.close(0u32.into(), b"");
     reason
+}
+
+/// A daemon serving an upgrade only does not answer pings, but its QUIC stack acknowledges
+/// them: anything heard from it after the ping counts as its pong.
+async fn answer_once_heard(inner: Arc<Inner>, conn: Connection, heard_before: u64, nonce: u64) {
+    let heard = tokio::time::timeout(PROBE_SLOW_DEADLINE, async {
+        while conn.stats().udp_rx.datagrams <= heard_before {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    if heard.is_ok() {
+        inner.pong.send_if_modified(|last| {
+            let newer = nonce > *last;
+            *last = (*last).max(nonce);
+            newer
+        });
+    }
 }
 
 async fn write_ctl(

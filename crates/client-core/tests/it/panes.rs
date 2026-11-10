@@ -23,7 +23,7 @@ enum PaneStream {
     UnreadableSnapshot,
 }
 
-async fn read_frame(stream: &mut RecvStream) -> Option<ClientCtl> {
+pub(super) async fn read_frame(stream: &mut RecvStream) -> Option<ClientCtl> {
     let mut prefix = [0; proto::frame::LEN_PREFIX];
     stream.read_exact(&mut prefix).await.ok()?;
     let length = proto::frame::body_len(prefix, proto::MAX_FRAME_LEN).ok()?;
