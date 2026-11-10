@@ -314,7 +314,7 @@ fn run(
         .enable_all()
         .thread_name("hostd")
         .build()?;
-    runtime.block_on(async move {
+    let served = runtime.block_on(async move {
         let mut daemon = Daemon::start_inheriting(config, inherited).await?;
         let task_ended = daemon.task_ended();
         eprintln!(
@@ -373,8 +373,13 @@ fn run(
             None
         };
         restart_into(&exe, hand_off)
-    })
+    });
+    // A git or file read stuck on a stalled mount must not keep a stopping daemon alive.
+    runtime.shutdown_timeout(RUNTIME_STOP_WAIT);
+    served
 }
+
+const RUNTIME_STOP_WAIT: Duration = Duration::from_secs(2);
 
 /// Takes over an install made under the product's earlier name: its state and config
 /// directories move to today's, and a build that runs under the old binary name as the old
