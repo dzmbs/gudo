@@ -306,11 +306,17 @@ final class Workspace {
     /// working on (`AgentTabTitle`), else the friendly name it got when it was created
     /// ("quiet-otter"). With Settings ▸ "Title from shell", a program's OSC 0/2 title, else the
     /// directory, replaces a generated name (never a rename).
-    func title(of tab: Tab) -> String {
-        if let daemon = host as? DaemonConnection, let agent = daemon.meta[tab.focused]?.agent,
-           tab.title.map(FriendlyName.isGenerated) ?? true
-        {
+    func title(of tab: Tab) -> String { title(of: tab, agentName: nil) }
+
+    /// `agentName`: the focused program's name when it is an agent the host does not report
+    /// (no hooks), so its tab is still named for the agent, not a generated name.
+    func title(of tab: Tab, agentName: String?) -> String {
+        let generated = tab.title.map(FriendlyName.isGenerated) ?? true
+        if let daemon = host as? DaemonConnection, let agent = daemon.meta[tab.focused]?.agent, generated {
             return AgentTabTitle(terminalTitle: pane(tab.focused)?.title, kind: AgentKind(agent.kind)).resolved
+        }
+        if let agentName, generated {
+            return AgentTabTitle(terminalTitle: pane(tab.focused)?.title, kind: .other, name: agentName).resolved
         }
         if let title = tab.title {
             if UserDefaults.standard.bool(forKey: TabNaming.titleFromShell), FriendlyName.isGenerated(title),

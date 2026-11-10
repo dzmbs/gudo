@@ -25,6 +25,8 @@ struct TabSubtitle: View {
     var host: String?
     /// The agent's kind, state and how long, in place of `context`.
     var status: AgentStatusLine?
+    /// Names a running command the shell did not report, by the program running it.
+    var program: String?
 
     /// Quick commands never show: the line would flicker on every `ls`.
     static let threshold = 3
@@ -45,14 +47,14 @@ struct TabSubtitle: View {
                     if seconds >= Self.threshold {
                         HStack(spacing: 0) {
                             separator
-                            Text(running.command ?? "command")
+                            Text(running.command ?? program ?? "running")
                                 .truncationMode(.tail)
                             Text(" · \(CommandBlocks.elapsed(seconds: seconds))")
                                 .monospacedDigit()
                                 .fixedSize()
                         }
                         .accessibilityElement(children: .combine)
-                        .accessibilityLabel("\(running.command ?? "A command") running for \(CommandBlocks.elapsed(seconds: seconds))")
+                        .accessibilityLabel("\(running.command ?? program ?? "A command") running for \(CommandBlocks.elapsed(seconds: seconds))")
                     } else {
                         contextLine
                     }

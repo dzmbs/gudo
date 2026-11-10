@@ -20,6 +20,12 @@ final class AgentTabTitleTests: XCTestCase {
         XCTAssertEqual(AgentTabTitle(terminalTitle: "⠂ Onboarding tests", kind: .claude).resolved, "Onboarding tests")
     }
 
+    func testAnAgentTheKindDoesNotNameFallsBackToItsProgramName() {
+        XCTAssertEqual(AgentTabTitle(terminalTitle: nil, kind: .other, name: "Kimi Code").resolved, "Kimi Code")
+        XCTAssertEqual(AgentTabTitle(terminalTitle: "pi", kind: .other, name: "pi").resolved, "pi")
+        XCTAssertEqual(AgentTabTitle(terminalTitle: "✳ Port the parser", kind: .other, name: "pi").resolved, "Port the parser")
+    }
+
     func testAPathOrTheAgentsOwnNameFallsBackToTheKind() {
         XCTAssertEqual(AgentTabTitle(terminalTitle: "~/src/gudo", kind: .claude).resolved, "Claude Code")
         XCTAssertEqual(AgentTabTitle(terminalTitle: "✳ Claude Code", kind: .claude).resolved, "Claude Code")

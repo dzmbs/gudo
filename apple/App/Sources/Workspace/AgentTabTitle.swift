@@ -9,6 +9,10 @@ nonisolated struct AgentTabTitle: Equatable, Sendable {
     var firstPrompt: String?
     var terminalTitle: String?
     var kind: AgentKind
+    /// The program's own name, for agents the kind does not name (pi, Kimi Code).
+    var name: String?
+
+    private var kindName: String { name ?? kind.title }
 
     var resolved: String {
         if let chosen = [rename, sessionTitle, firstPrompt].lazy.compactMap({ $0.flatMap(Self.meaningful) }).first {
@@ -17,12 +21,12 @@ nonisolated struct AgentTabTitle: Equatable, Sendable {
         if let terminal = terminalTitle.flatMap(Self.cleanedTerminalTitle), !names(kind: terminal) {
             return terminal
         }
-        return kind.title
+        return kindName
     }
 
     private func names(kind title: String) -> Bool {
         let lowered = title.lowercased()
-        return lowered == kind.title.lowercased() || lowered == kind.rawValue
+        return lowered == kindName.lowercased() || lowered == kind.title.lowercased() || lowered == kind.rawValue
             || AgentKind.allCases.contains { $0.title.lowercased() == lowered || $0.rawValue == lowered }
     }
 
