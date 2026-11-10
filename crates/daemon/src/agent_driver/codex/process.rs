@@ -1,0 +1,106 @@
+//! The launch-owned Codex app-server's process group and private directory.
+
+use std::os::unix::fs::MetadataExt;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
+
+use rustix::process::{Pid, Signal};
+
+#[cfg(test)]
+mod tests;
+
+const EXIT_WAIT: Duration = Duration::from_secs(2);
+
+/// Where this daemon keeps one launch's sockets; the name carries the daemon's process ID so
+/// a later daemon can tell whose directories are left over.
+pub(super) fn create_directory() -> std::io::Result<PathBuf> {
+    crate::fsutil::create_private_temp_dir(&format!("{}{}", directory_prefix(), std::process::id()))
+}
+
+fn directory_prefix() -> String {
+    format!("{}-codex-", brand::DIR_NAME)
+}
+
+/// Spawns the app-server as the leader of its own process group, so teardown reaches the
+/// tools it started.
+pub(super) fn isolate(command: &mut tokio::process::Command) {
+    command.process_group(0);
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: runs between fork and exec and only calls `prctl`, which is
+        // async-signal-safe. The forking thread is a runtime worker that lives as long as the
+        // daemon, so the signal fires only when the daemon itself is gone.
+        unsafe {
+            command.pre_exec(|| {
+                rustix::process::set_parent_process_death_signal(Some(Signal::KILL))
+                    .map_err(std::io::Error::from)
+            });
+        }
+    }
+}
+
+/// Asks the app-server's group to stop, then kills whatever is left.
+pub(super) async fn terminate(mut process: tokio::process::Child) {
+    let Some(group) = process.id().and_then(group_of) else {
+        return;
+    };
+    let _ = rustix::process::kill_process_group(group, Signal::TERM);
+    if tokio::time::timeout(EXIT_WAIT, process.wait())
+        .await
+        .is_err()
+    {
+        let _ = rustix::process::kill_process_group(group, Signal::KILL);
+        let _ = tokio::time::timeout(EXIT_WAIT, process.wait()).await;
+    } else {
+        let _ = rustix::process::kill_process_group(group, Signal::KILL);
+    }
+}
+
+/// Teardown without an async context: the group is killed at once.
+pub(super) fn kill(process: &tokio::process::Child) {
+    if let Some(group) = process.id().and_then(group_of) {
+        let _ = rustix::process::kill_process_group(group, Signal::KILL);
+    }
+}
+
+fn group_of(pid: u32) -> Option<Pid> {
+    i32::try_from(pid).ok().and_then(Pid::from_raw)
+}
+
+/// Removes launch directories left by daemons of this user that are no longer running.
+pub(crate) fn sweep_stale_directories(started: SystemTime) {
+    sweep(&std::env::temp_dir(), &directory_prefix(), started);
+}
+
+fn sweep(parent: &Path, prefix: &str, started: SystemTime) {
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+    let user = rustix::process::geteuid().as_raw();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(owner) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix(prefix))
+            .and_then(|rest| rest.split_once('-'))
+            .and_then(|(pid, _)| pid.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if owner == std::process::id() || is_running(owner) {
+            continue;
+        }
+        let Ok(metadata) = std::fs::symlink_metadata(entry.path()) else {
+            continue;
+        };
+        let older = metadata.modified().is_ok_and(|modified| modified < started);
+        if metadata.is_dir() && metadata.uid() == user && older {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+fn is_running(pid: u32) -> bool {
+    group_of(pid)
+        .is_none_or(|pid| rustix::process::test_kill_process(pid) != Err(rustix::io::Errno::SRCH))
+}

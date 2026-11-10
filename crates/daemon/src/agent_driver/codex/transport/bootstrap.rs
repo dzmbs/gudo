@@ -6,7 +6,16 @@ mod tests;
 use std::ffi::OsString;
 use std::io;
 use std::sync::Weak;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+/// The pane's launcher reports its environment as soon as the login shell hands over.
+const LAUNCHER_CONNECT_WAIT: Duration = Duration::from_secs(120);
+const ENVIRONMENT_WAIT: Duration = Duration::from_secs(10);
+const MAX_ENVIRONMENT_VARIABLES: usize = 4096;
+const ENVIRONMENT_VERSION: u8 = 1;
+const NATIVE: u8 = 1;
+const TERMINAL: u8 = 2;
 
 pub(super) struct Peers {
     pub tui: u32,
@@ -27,12 +36,14 @@ pub(super) async fn start(
     owner: u32,
 ) -> io::Result<Started> {
     let listener = tokio::net::UnixListener::from_std(listener)?;
-    let (mut connection, _) = listener.accept().await?;
+    let (mut connection, _) = tokio::time::timeout(LAUNCHER_CONNECT_WAIT, listener.accept())
+        .await
+        .map_err(io::Error::other)??;
     let tui = super::peer::pid(&connection)?;
     if !super::peer::in_tree(tui, owner).await {
         return Err(invalid());
     }
-    let bytes = tokio::time::timeout(std::time::Duration::from_secs(10), receive(&mut connection))
+    let bytes = tokio::time::timeout(ENVIRONMENT_WAIT, receive(&mut connection))
         .await
         .map_err(io::Error::other)??;
     let environment = tokio::task::spawn_blocking(move || decode(&bytes, &expected))
@@ -50,7 +61,7 @@ pub(super) async fn start(
         }
         let source = source.upgrade().ok_or_else(invalid)?;
         terminal(&source, tui)?;
-        connection.write_all(&[2]).await?;
+        connection.write_all(&[TERMINAL]).await?;
         connection.write_u32(bytes.len() as u32).await?;
         connection.write_all(&bytes).await?;
         return Ok(Started::Terminal);
@@ -71,6 +82,7 @@ pub(super) async fn start(
     for name in spec.env_remove {
         command.env_remove(name);
     }
+    super::super::process::isolate(&mut command);
     let process = command.spawn()?;
     let server = process.id().ok_or_else(invalid)?;
     let source = source
@@ -79,7 +91,7 @@ pub(super) async fn start(
     *lock(&source.process) = Some(process);
     source.capture_context(cwd, tui);
     drop(source);
-    connection.write_all(&[1]).await?;
+    connection.write_all(&[NATIVE]).await?;
     Ok(Started::Native(Peers { tui, server }))
 }
 
@@ -128,8 +140,8 @@ fn decode(
 ) -> io::Result<agents::CodexPaneEnvironment> {
     let environment: agents::CodexPaneEnvironment =
         serde_json::from_slice(bytes).map_err(|_| invalid())?;
-    if environment.version != 1
-        || environment.variables.len() > 4096
+    if environment.version != ENVIRONMENT_VERSION
+        || environment.variables.len() > MAX_ENVIRONMENT_VARIABLES
         || !environment.cwd.is_absolute()
     {
         return Err(invalid());

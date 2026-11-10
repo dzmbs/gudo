@@ -177,6 +177,7 @@ impl Daemon {
         adopted: &mut handoff::Adopted,
     ) -> Result<Self, StartError> {
         limits::raise_fd_limit();
+        agent_driver::codex::process::sweep_stale_directories(std::time::SystemTime::now());
         config.apply_user_file()?;
         config.hook_shim = Some(config.hook_bin());
         match hook_launcher::install(&config) {

@@ -121,7 +121,8 @@ async fn common_watch_is_read_only_and_catches_up_after_unwatch() {
             )
             .is_err()
     );
-    assert!(source.is_running());
+    assert!(!source.fault.load(std::sync::atomic::Ordering::Acquire));
+    assert!(lock(&source.state).is_chat_ready());
     raw.daemon.shutdown().await;
 }
 
@@ -303,4 +304,31 @@ async fn a_slow_observer_still_sees_every_byte_in_order() {
     assert_eq!(reader.await.unwrap(), expected);
     assert_eq!(observed, expected);
     assert!(!source.fault.load(std::sync::atomic::Ordering::Acquire));
+}
+
+#[tokio::test]
+async fn a_launch_that_never_bootstrapped_does_not_hold_helper_restarts() {
+    let source = source();
+    assert!(!source.is_running(), "no app-server and no launch");
+    let launch = tokio::spawn(std::future::pending::<()>());
+    *lock(&source.task) = Some(launch.abort_handle());
+    assert!(source.is_running());
+    launch.abort();
+    let _ = launch.await;
+    assert!(!source.is_running());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_exit_fence_retires_the_pane_codex_source() {
+    let raw = crate::agent_input::chat_tests::raw_fixture().await;
+    let source = source();
+    let launch = tokio::spawn(std::future::pending::<()>());
+    *lock(&source.task) = Some(launch.abort_handle());
+    *lock(&raw.entry.codex) = Some(source);
+    assert!(raw.daemon.core.has_live_codex());
+    end_launch(&raw.entry);
+    assert!(lock(&raw.entry.codex).is_none());
+    assert!(!raw.daemon.core.has_live_codex());
+    assert!(launch.await.unwrap_err().is_cancelled());
+    raw.daemon.shutdown().await;
 }

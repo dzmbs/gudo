@@ -25,7 +25,8 @@ const CONTROL_QUEUE: usize = 8;
 const RELAY_BUFFER_BYTES: usize = 16 * 1024;
 /// A wedged observer gives up observation rather than holding Terminal bytes longer.
 const OBSERVATION_STALL: Duration = Duration::from_secs(2);
-const PROCESS_EXIT_WAIT: Duration = Duration::from_secs(2);
+/// Codex connects to its app-server before any onboarding screen.
+const TUI_CONNECT_WAIT: Duration = Duration::from_secs(60);
 const SERVER_CONNECT_WAIT: Duration = Duration::from_secs(5);
 const SERVER_CONNECT_RETRY: Duration = Duration::from_millis(20);
 
@@ -41,7 +42,7 @@ impl Live {
         context: &agents::LaunchContext,
         mode: &agents::LaunchMode,
     ) -> io::Result<(Arc<Self>, agents::LaunchSpec)> {
-        let directory = crate::fsutil::create_private_temp_dir("gudo-codex")?;
+        let directory = super::process::create_directory()?;
         match prepare(context, mode, &directory) {
             Ok(result) => Ok(result),
             Err(error) => {
@@ -129,8 +130,8 @@ fn prepare(
                 let _ = sender.try_send(Observation::Closed);
             }
             let process = lock(&source.process).take();
-            if let Some(mut process) = process {
-                let _ = tokio::time::timeout(PROCESS_EXIT_WAIT, process.kill()).await;
+            if let Some(process) = process {
+                super::process::terminate(process).await;
             }
             if let Err(error) = result {
                 tracing::debug!(%error, "Codex live relay closed");
@@ -149,7 +150,9 @@ async fn run(
     peers: bootstrap::Peers,
 ) -> io::Result<()> {
     let listener = tokio::net::UnixListener::from_std(listener)?;
-    let (tui, _) = listener.accept().await?;
+    let (tui, _) = tokio::time::timeout(TUI_CONNECT_WAIT, listener.accept())
+        .await
+        .map_err(io::Error::other)??;
     let native_tui = peer::in_tree(peer::pid(&tui)?, peers.tui).await;
     let upstream = tokio::time::timeout(SERVER_CONNECT_WAIT, async {
         loop {

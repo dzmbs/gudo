@@ -235,6 +235,7 @@ pub(crate) async fn serve(core: &Arc<Core>, call: AgentInputCall) -> AgentInputR
     if !lock(&entry.pane.agent_input_gate).close(launch) {
         return AgentInputReply::Refused;
     }
+    crate::agent_driver::codex::end_launch(&entry);
     match tokio::time::timeout(Duration::from_secs(5), entry.pane.pty().flush_writes()).await {
         Ok(Ok(())) => AgentInputReply::Closed,
         _ => AgentInputReply::Refused,

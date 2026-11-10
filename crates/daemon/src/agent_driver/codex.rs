@@ -1,6 +1,7 @@
 mod history;
 #[cfg(test)]
 mod live_probe;
+pub(crate) mod process;
 mod projection;
 mod runtime;
 #[cfg(test)]
@@ -302,9 +303,22 @@ impl Live {
         }
     }
 
+    /// The app-server runs, or its launch is still within its bounded bootstrap.
     pub(crate) fn is_running(&self) -> bool {
-        !self.fault.load(std::sync::atomic::Ordering::Acquire) || lock(&self.process).is_some()
+        lock(&self.process).is_some()
+            || lock(&self.task)
+                .as_ref()
+                .is_some_and(|task| !task.is_finished())
     }
+}
+
+/// The launch's exit fence closed: the agent is gone, so its source goes too.
+pub(crate) fn end_launch(entry: &crate::core::PaneEntry) {
+    let source = lock(&entry.codex).clone();
+    if let Some(source) = source {
+        source.control_failed();
+    }
+    lock(&entry.codex).take();
 }
 
 impl Drop for Live {
@@ -321,9 +335,16 @@ impl Drop for Live {
         let process = self
             .process
             .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Tokio's kill-on-drop child reaper must not block a pane close on waitpid.
-        process.take();
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(process) = process {
+            match tokio::runtime::Handle::try_current() {
+                Ok(runtime) => {
+                    runtime.spawn(process::terminate(process));
+                }
+                Err(_) => process::kill(&process),
+            }
+        }
         let _ = std::fs::remove_dir_all(&self.directory);
     }
 }
