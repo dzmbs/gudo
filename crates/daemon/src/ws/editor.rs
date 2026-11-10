@@ -89,6 +89,7 @@ const PREWARM_RECENCY: Duration = Duration::from_secs(7 * 24 * 3600);
 const PREWARM_UNUSED: Duration = Duration::from_secs(15 * 60);
 /// How long a stopping server gets to end before it is killed.
 const STOP_GRACE: Duration = Duration::from_secs(2);
+const STOP_POLL: Duration = Duration::from_millis(20);
 
 struct Running {
     /// `info.port` is the proxy's port when there is one, else the server's.
@@ -117,20 +118,37 @@ struct LastLaunch {
 }
 
 impl Running {
-    /// Stops the server and waits a moment for it to end, so a server started next for the
-    /// folder gets its port.
+    /// Stops the server and everything in its group, so a server started next for the folder
+    /// gets its port. The leader is reaped last: until then its id cannot name another group.
     async fn stop(mut self) {
         if let Some(proxy) = self.proxy.take() {
             proxy.close().await;
         }
         self.signal_group(libc::SIGTERM);
-        if tokio::time::timeout(STOP_GRACE, self.child.wait())
-            .await
-            .is_err()
-        {
-            self.signal_group(libc::SIGKILL);
-            let _ = tokio::time::timeout(STOP_GRACE, self.child.wait()).await;
+        let deadline = tokio::time::Instant::now() + STOP_GRACE;
+        while !self.has_exited() && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(STOP_POLL).await;
         }
+        self.signal_group(libc::SIGKILL);
+        let _ = tokio::time::timeout(STOP_GRACE, self.child.wait()).await;
+    }
+
+    /// Whether the server exited, without reaping it.
+    fn has_exited(&self) -> bool {
+        let Some(pid) = self
+            .child
+            .id()
+            .and_then(|pid| rustix::process::Pid::from_raw(pid as i32))
+        else {
+            return true;
+        };
+        rustix::process::waitid(
+            rustix::process::WaitId::Pid(pid),
+            rustix::process::WaitIdOptions::EXITED
+                | rustix::process::WaitIdOptions::NOHANG
+                | rustix::process::WaitIdOptions::NOWAIT,
+        )
+        .map_or(true, |status| status.is_some())
     }
 
     /// Signals the server's process group (extension hosts, the downloaded server under
@@ -1229,6 +1247,61 @@ mod tests {
         // SAFETY: as above.
         while unsafe { libc::kill(helper, 0) } == 0 {
             assert!(Instant::now() < deadline, "the server's helper outlived it");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_helper_that_ignores_the_stop_is_killed_even_when_the_server_ends_at_once() {
+        let state = tempfile::tempdir().unwrap();
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let listen = format!(
+            "import signal, socket; signal.signal(signal.SIGTERM, signal.SIG_IGN); \
+             server = socket.socket(); \
+             server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); \
+             server.bind(('127.0.0.1', {port})); server.listen(); \
+             open('helper', 'w').write('ready'); signal.pause()"
+        );
+        let child = Command::new("/bin/sh")
+            .args(["-c", "python3 -c \"$0\" & wait", &listen])
+            .current_dir(state.path())
+            .process_group(0)
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let pid = child.id().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !state.path().join("helper").exists() {
+            assert!(Instant::now() < deadline, "the helper never started");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let editor = Running {
+            info: EditorInstance {
+                kind: EditorKind::OpenVsCode,
+                folder: "/src/app".into(),
+                port,
+                token: "t".into(),
+                url_path: "/".into(),
+                pid,
+                started_at: UnixMillis(0),
+            },
+            upstream_port: port,
+            child,
+            proxy: None,
+            server_dir: None,
+            origin: LaunchOrigin::Client,
+        };
+        editor.stop().await;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while std::net::TcpListener::bind(("127.0.0.1", port)).is_err() {
+            assert!(
+                Instant::now() < deadline,
+                "the server's helper kept its port"
+            );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     }
