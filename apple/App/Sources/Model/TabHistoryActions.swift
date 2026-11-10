@@ -14,6 +14,7 @@ extension WindowModel {
     /// Closes tabs (host tabs and the window's own), each host tab kept in Recently Closed; tabs
     /// closed together come back together (⇧⌘T, Undo).
     func closeTabs(_ refs: [TabRef], undoable: Bool) {
+        expandedTabs.subtract(refs)
         let batch = refs.count > 1 ? UUID() : nil
         var closed: [ClosedTab] = []
         for ref in refs {

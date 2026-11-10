@@ -117,7 +117,12 @@ final class Workspace {
     }
 
     func changeFocusedFontSize(_ change: TerminalPreferences.FontSizeChange) {
-        guard let id = focusedPane, let pane = made[id] else { return }
+        guard let id = focusedPane else { return }
+        changeFontSize(of: id, change)
+    }
+
+    func changeFontSize(of id: PaneId, _ change: TerminalPreferences.FontSizeChange) {
+        guard let pane = made[id] else { return }
         zoomedFontSizes[id] = change.applied(to: Double(pane.view.surface.fontSize)).map { CGFloat($0) }
         pane.view.surface.appearance = paneAppearance(id)
     }
@@ -346,10 +351,10 @@ final class Workspace {
     func title(of tab: Tab, agentName: String?) -> String {
         let generated = tab.title.map(FriendlyName.isGenerated) ?? true
         if let daemon = host as? DaemonConnection, let agent = daemon.meta[tab.focused]?.agent, generated {
-            return AgentTabTitle(terminalTitle: pane(tab.focused)?.title, kind: AgentKind(agent.kind)).resolved
+            return AgentTabTitle(terminalTitle: pane(tab.focused)?.agentTitle, kind: AgentKind(agent.kind)).resolved
         }
         if let agentName, generated {
-            return AgentTabTitle(terminalTitle: pane(tab.focused)?.title, kind: .other, name: agentName).resolved
+            return AgentTabTitle(terminalTitle: pane(tab.focused)?.agentTitle, kind: .other, name: agentName).resolved
         }
         if let title = tab.title {
             if UserDefaults.standard.bool(forKey: TabNaming.titleFromShell), FriendlyName.isGenerated(title),
@@ -362,6 +367,14 @@ final class Workspace {
         if let title = pane(tab.focused)?.title, !title.isEmpty { return title }
         if let foreground = foregrounds[tab.focused], !foreground.title.isEmpty { return foreground.title }
         return "Shell"
+    }
+
+    /// What the focused pane's agent asks while it waits for an answer, when it may be shown.
+    func agentQuestion(of tab: Tab) -> String? {
+        guard let daemon = host as? DaemonConnection, case .blocked(_, let summary, _)? = daemon.meta[tab.focused]?.agent?.state,
+              SharedApproval.shows(summary: summary), !summary.isEmpty
+        else { return nil }
+        return summary
     }
 
     /// The live line under a tab's name: the drawing in a focused canvas pane, else what its

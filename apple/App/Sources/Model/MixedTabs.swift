@@ -209,6 +209,10 @@ extension WindowModel {
             syncMixedFocus()
         case .resize(let direction):
             composites.apply(.resize(mixed.focusedLeaf, direction, amount: 0.05), to: mixed.id)
+        case .resetFontSize, .increaseFontSize, .decreaseFontSize:
+            // The terminal in front, on its own host; a browser or editor in front keeps its size.
+            guard let member = mixed.focusedMember, let change = action.fontSizeChange else { break }
+            workspace(ofGroup: member.hostId)?.changeFontSize(of: member.pane, change)
         default:
             return false
         }

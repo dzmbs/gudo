@@ -696,10 +696,35 @@ struct TreeChevron: View {
             .foregroundStyle(DS.Palette.textTertiary)
             .rotationEffect(.degrees(isExpanded ? 90 : 0))
             .frame(width: 12, height: SidebarFont.icon)
-            .contentShape(.rect)
+            // A finger's 44 pt target around the small glyph, without moving the row's layout.
+            .contentShape(.rect.inset(by: -(DS.Size.touchTarget - 12) / 2))
             .highPriorityGesture(TapGesture().onEnded { toggle() })
             .accessibilityLabel(isExpanded ? "Hide panes" : "Show panes")
             .accessibilityAddTraits(.isButton)
+    }
+}
+
+/// Opening a tab into its panes from VoiceOver (the row combines its chevron away), and closing it
+/// once it is down to one pane, so a later split does not open it by itself.
+private struct PaneTreeActions: ViewModifier {
+    let ref: TabRef
+    let paneCount: Int
+    let opens: Bool
+    @Environment(WindowModel.self) private var model
+
+    func body(content: Content) -> some View {
+        let expanded = model.expandedTabs.contains(ref)
+        content
+            .accessibilityActions {
+                if opens, paneCount > 1 {
+                    Button(expanded ? "Hide Panes" : "Show Panes") {
+                        withAnimation(DS.Motion.snappy) { model.expandedTabs.formSymmetricDifference([ref]) }
+                    }
+                }
+            }
+            .onChange(of: paneCount) { _, count in
+                if count < 2, expanded { model.expandedTabs.remove(ref) }
+            }
     }
 }
 
@@ -715,10 +740,11 @@ struct PaneTreeRow: View {
         let program = model.programIdentity(ofPane: pane, onGroup: group.id)
         let state = model.agentState(ofPane: pane, onGroup: group.id)
         let workspace = model.workspace(ofGroup: group.id)
-        let paneTitle = workspace?.panes[pane]?.title
         let title = switch program.kind {
-        case .agent: AgentTabTitle(terminalTitle: paneTitle, kind: AgentKind(program.id), name: program.displayName).resolved
-        case _ where program.isShell: workspace?.directory(ofPane: pane) ?? paneTitle?.nonEmpty ?? program.displayName
+        case .agent:
+            AgentTabTitle(terminalTitle: workspace?.panes[pane]?.agentTitle, kind: AgentKind(program.id), name: program.displayName).resolved
+        case _ where program.isShell:
+            workspace?.directory(ofPane: pane) ?? workspace?.panes[pane]?.title.nonEmpty ?? program.displayName
         default: program.displayName
         }
         Button {
@@ -876,7 +902,9 @@ struct TabRow: View {
         let context = workspace?.context(of: tab)
         let running = program.kind == .agent ? nil : workspace?.runningCommand(of: tab)
         let worktree = model.groups.worktree(of: ref)
-        let status = Self.statusLine(program: program, state: state, context: context, since: model.agentSince(ofPane: tab.focused, onGroup: group.id))
+        let status = Self.statusLine(
+            program: program, state: state, question: state == .blocked ? workspace?.agentQuestion(of: tab) : nil,
+            since: model.agentSince(ofPane: tab.focused, onGroup: group.id))
         let informative = status == nil ? context.flatMap { Self.isInformative($0, title: title) ? $0 : nil } : nil
         let host = showsHost ? group.name : nil
 
@@ -971,6 +999,7 @@ struct TabRow: View {
             }
         }
         .accessibilityAction(named: "Move Up") { withAnimation(DS.Motion.reorder) { model.groups.moveTab(ref, by: -1) } }
+        .modifier(PaneTreeActions(ref: ref, paneCount: tab.root.panes.count, opens: listStyle == .plain))
         .accessibilityAction(named: "Move Down") { withAnimation(DS.Motion.reorder) { model.groups.moveTab(ref, by: 1) } }
     }
 
@@ -994,16 +1023,13 @@ struct TabRow: View {
         }
     }
 
-    /// A context line worth a second line in the row.
-    /// An agent tab's kind, state and how long; what it asks while it waits (from the host's
-    /// "Claude Code · needs you: …" context).
-    static func statusLine(program: ProgramIdentity, state: AgentState?, context: String?, since: Date?) -> AgentStatusLine? {
+    /// An agent tab's kind, state and how long, and what it asks while it waits.
+    static func statusLine(program: ProgramIdentity, state: AgentState?, question: String?, since: Date?) -> AgentStatusLine? {
         guard program.kind == .agent, let state, state != .unknown else { return nil }
-        let asking = "\(program.displayName) · needs you: "
-        let question = state == .blocked ? context.flatMap { $0.hasPrefix(asking) ? String($0.dropFirst(asking.count)) : nil } : nil
         return AgentStatusLine(kind: program.displayName, state: state, since: since, question: question)
     }
 
+    /// A context line worth a second line in the row.
     static func isInformative(_ context: String, title: String) -> Bool {
         let trimmed = context.trimmingCharacters(in: .whitespaces)
         return !trimmed.isEmpty && trimmed != "~" && trimmed != title

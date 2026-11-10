@@ -12,6 +12,13 @@ final class AgentStatusLineTests: XCTestCase {
         XCTAssertEqual(AgentStatusLine(kind: "Codex", state: .idle, since: now.addingTimeInterval(-40)).text(at: now), "Codex · idle 40s")
     }
 
+    func testAnyAgentsRowCarriesItsQuestion() {
+        let pi = ProgramIdentity(id: "pi", displayName: "pi", kind: .agent)
+        let line = TabRow.statusLine(program: pi, state: .blocked, question: "run the migration?", since: now)
+        XCTAssertEqual(line?.text(at: now), "pi · needs you: run the migration?")
+        XCTAssertNil(TabRow.statusLine(program: ProgramIdentity(id: "zsh", displayName: "zsh", kind: .shell), state: .blocked, question: "x", since: now))
+    }
+
     func testAWaitingAgentSaysWhatItAsks() {
         let line = AgentStatusLine(kind: "Claude Code", state: .blocked, since: now, question: "allow npm run build?")
         XCTAssertEqual(line.text(at: now), "Claude Code · needs you: allow npm run build?")

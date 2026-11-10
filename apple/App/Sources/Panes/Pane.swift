@@ -19,6 +19,10 @@ final class Pane {
     /// The program's OSC 0/2 title as tabs show it (`Terminal.shownTitle`): "" until a program
     /// sets one, and at a shell prompt with shell integration.
     private(set) var title = ""
+    /// The title without an agent's status marks (`AgentTabTitle.cleanedTerminalTitle`): it holds
+    /// still while an agent animates a spinner in `title`, so rows naming the agent only redraw
+    /// when its words change.
+    private(set) var agentTitle: String?
     /// OSC 7 working directory, as a path ("" until the shell reports one).
     private(set) var workingDirectory = ""
     /// The foreground program as the daemon reports it; nil when the backend cannot tell, and the title stands in.
@@ -292,6 +296,8 @@ final class Pane {
         let title = view.surface.terminal.shownTitle
         guard title != self.title else { return }
         self.title = title
+        let agentTitle = AgentTabTitle.cleanedTerminalTitle(title)
+        if agentTitle != self.agentTitle { self.agentTitle = agentTitle }
         onContextChange?()
     }
 

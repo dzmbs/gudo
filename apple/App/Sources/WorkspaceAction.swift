@@ -309,9 +309,17 @@ enum WorkspaceAction: Hashable {
         case .draw: DrawingCommands.toggleDrawing(in: workspace)
         case .newDrawing: if let window = ActiveWindow.model { DrawingDocuments.newDrawing(window: window) }
         case .commandPalette, .commandPaletteGhostty, .find, .findNext, .findPrevious, .links, .inbox, .jumpToWaitingAgent, .hosts, .toggleSidebar, .shortcuts: break
-        case .resetFontSize: workspace.changeFocusedFontSize(.reset)
-        case .increaseFontSize: workspace.changeFocusedFontSize(.increase)
-        case .decreaseFontSize: workspace.changeFocusedFontSize(.decrease)
+        case .resetFontSize, .increaseFontSize, .decreaseFontSize:
+            if let change = fontSizeChange { workspace.changeFocusedFontSize(change) }
+        }
+    }
+
+    var fontSizeChange: TerminalPreferences.FontSizeChange? {
+        switch self {
+        case .resetFontSize: .reset
+        case .increaseFontSize: .increase
+        case .decreaseFontSize: .decrease
+        default: nil
         }
     }
 

@@ -31,7 +31,8 @@ final class SidebarPaneRowsTests: XCTestCase {
         let grouped = model.sidebarItems(drop: nil, projectMove: nil, opensPanes: false).items
         XCTAssertFalse(grouped.contains { if case .pane = $0 { true } else { false } })
 
-        model.expandedTabs.remove(opened)
+        model.closeTabs([opened], undoable: false)
+        XCTAssertFalse(model.expandedTabs.contains(opened), "a closed tab is not remembered as opened")
         let closed = model.sidebarItems(drop: nil, projectMove: nil, opensPanes: true).items
         XCTAssertFalse(closed.contains { if case .pane = $0 { true } else { false } })
     }
