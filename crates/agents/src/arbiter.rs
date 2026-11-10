@@ -753,7 +753,8 @@ impl Arbiter {
         let turn_ended = self.in_turn && old_state != new_state && !refused;
         self.in_turn = match new_state {
             AgentState::Working | AgentState::Blocked => true,
-            AgentState::Idle | AgentState::Error | AgentState::Unknown => false,
+            AgentState::Idle | AgentState::Error => false,
+            AgentState::Unknown => self.in_turn && self.process != Process::Exited,
         };
         if turn_ended
             && matches!(new_state, AgentState::Idle | AgentState::Error)
@@ -1481,6 +1482,37 @@ mod tests {
         let event = update.event.unwrap();
         assert_eq!(event.kind, EventKind::Stale);
         assert_eq!(event.status, Status::Unknown);
+    }
+
+    #[test]
+    fn a_turn_that_went_stale_still_notifies_when_it_finishes() {
+        let mut arbiter = new_arbiter(HookCoverage::FullLifecycle);
+        let _ = arbiter.apply(hook(EventKind::TurnStarted, Claim::Working, 1), at(0));
+        let thirty_min = 30 * 60 * 1000;
+        assert_eq!(
+            arbiter.tick(at(thirty_min)).event.unwrap().kind,
+            EventKind::Stale
+        );
+        let update = arbiter.apply(
+            hook(EventKind::TurnEnded, Claim::Idle, 2),
+            at(thirty_min + 1),
+        );
+        assert_eq!(update.notify, Some(Notify::Done));
+    }
+
+    #[test]
+    fn a_stale_turn_ends_with_its_agent() {
+        let mut arbiter = new_arbiter(HookCoverage::FullLifecycle);
+        let _ = arbiter.apply(hook(EventKind::TurnStarted, Claim::Working, 1), at(0));
+        let thirty_min = 30 * 60 * 1000;
+        let _ = arbiter.tick(at(thirty_min));
+        let _ = arbiter.process_exited(at(thirty_min + 1));
+        arbiter.process_started(at(thirty_min + 2));
+        let update = arbiter.apply(
+            hook(EventKind::TurnEnded, Claim::Idle, 2),
+            at(thirty_min + 3),
+        );
+        assert_eq!(update.notify, None);
     }
 
     #[test]
