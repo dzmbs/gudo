@@ -19,6 +19,7 @@ struct PaneChatView<Terminal: View>: View {
         nonmutating set { state.detail = newValue }
     }
     @State private var photoPickerPresented = false
+    @State private var confirmationPresented = false
     @State private var selectedPhoto: PhotosPickerItem?
 
     private var nativePresentations: some View {
@@ -63,9 +64,8 @@ struct PaneChatView<Terminal: View>: View {
         .onChange(of: state.composer.confirmedText) { _, text in
             if let text, state.draft == text { state.draft = "" }
         }
-        .alert(unsentWarning, isPresented: Binding(
-            get: { state.composer.needsConfirmation || state.interrupt.needsConfirmation }, set: { _ in }
-        )) {
+        .onChange(of: pendingConfirmation, initial: true) { _, pending in confirmationPresented = pending != nil }
+        .alert(unsentWarning, isPresented: $confirmationPresented) {
             Button(state.interrupt.needsConfirmation ? "Interrupt anyway" : "Send anyway", action: confirmAction)
             Button("Cancel", role: .cancel) { state.cancelPreparedActions() }
         }
@@ -287,6 +287,21 @@ struct PaneChatView<Terminal: View>: View {
         if let message = state.interrupt.message { return message }
         if state.interrupt.isBusy { return "Requesting interrupt…" }
         return state.composer.message ?? (state.composer.isBusy ? "Waiting for confirmation…" : nil)
+    }
+
+    private struct PendingConfirmation: Equatable {
+        let generation: UUID
+        let revision: UInt64
+    }
+
+    private var pendingConfirmation: PendingConfirmation? {
+        if let revision = state.interrupt.confirmationRevision {
+            return PendingConfirmation(generation: state.interrupt.requestGeneration, revision: revision)
+        }
+        if let revision = state.composer.confirmationRevision {
+            return PendingConfirmation(generation: state.composer.requestGeneration, revision: revision)
+        }
+        return nil
     }
 
     private var unsentWarning: String {
