@@ -26,6 +26,19 @@ public struct Tab: Identifiable, Hashable, Sendable, Codable {
         self.focused = focused
         self.zoomed = zoomed
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, root, focused, zoomed
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(TabId.self, forKey: .id)
+        title = try container.decodeIfPresent(String.self, forKey: .title)
+        root = try container.decode(Node.self, forKey: .root).sanitizingRatios
+        focused = try container.decode(PaneId.self, forKey: .focused)
+        zoomed = try container.decodeIfPresent(PaneId.self, forKey: .zoomed)
+    }
 }
 
 /// A change to a session's layout. The same vocabulary as the daemon's layout model, so a

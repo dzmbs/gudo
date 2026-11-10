@@ -57,6 +57,19 @@ struct WorkspaceCacheTests {
 
     // MARK: The store
 
+    @Test func aSavedLayoutWithHostileRatiosLoadsSafe() throws {
+        let store = WorkspaceCacheStore(directory: temporaryDirectory(), secrets: MemorySecretStore())
+        let hostileRoot = Node.split(
+            axis: .horizontal, ratio: .nan, first: .leaf(PaneId(1)),
+            second: .split(axis: .vertical, ratio: -.infinity, first: .leaf(PaneId(2)), second: .leaf(PaneId(3))))
+        var workspace = cached()
+        workspace.session = Session(tabs: [Tab(id: TabId(10), root: hostileRoot, focused: PaneId(3))], activeTabId: TabId(10))
+        try store.save(workspace)
+
+        let loaded = try #require(store.load(hostId: "h", daemonId: "d1", sessionId: 7))
+        #expect(loaded.session.activeTab?.root == hostileRoot.sanitizingRatios)
+    }
+
     @Test func roundTripKeepsTheLayoutNamesAndScreens() throws {
         let store = WorkspaceCacheStore(directory: temporaryDirectory(), secrets: MemorySecretStore())
         let source = terminal((1...60).map { "line \($0)" } + ["$ cargo test", "test result: ok"])

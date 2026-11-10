@@ -23,6 +23,16 @@ import GudoCore
         #expect(LayoutConversion.session(layout).tabs.isEmpty)
     }
 
+    @Test func hostileRatiosAreMadeSafe() throws {
+        for (hostile, expected) in [(Float.nan, 0.5), (.infinity, 0.5), (-.infinity, 0.5), (7, 0.95), (-1, 0.05), (0, 0.05)] {
+            var layout = sampleLayout()
+            layout.tabs[0].nodes[0] = .split(axis: .horizontal, ratio: hostile, first: 1, second: 2)
+            let root = try #require(LayoutConversion.session(layout).activeTab?.root)
+            guard case .split(_, let ratio, _, _) = root else { Issue.record("not a split"); continue }
+            #expect(ratio == expected, "\(hostile)")
+        }
+    }
+
     @Test func opsMapToTheDaemonVocabulary() {
         let session = LayoutConversion.session(sampleLayout())
         func op(_ local: PaneLayout.LayoutOp) -> GudoCore.LayoutOp? {

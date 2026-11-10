@@ -30,7 +30,7 @@ nonisolated enum LayoutConversion {
             guard Int(first) > index, Int(second) > index,
                   let firstNode = node(nodes, Int(first)), let secondNode = node(nodes, Int(second))
             else { return nil }
-            return .split(axis: PaneLayout.Axis(axis), ratio: Double(ratio), first: firstNode, second: secondNode)
+            return .split(axis: PaneLayout.Axis(axis), ratio: Node.sanitizedRatio(Double(ratio)), first: firstNode, second: secondNode)
         }
     }
 

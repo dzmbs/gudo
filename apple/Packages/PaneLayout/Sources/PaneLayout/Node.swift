@@ -42,6 +42,26 @@ public indirect enum Node: Hashable, Sendable, Codable {
     /// Ratios are clamped so that no divider drag or resize can collapse a child.
     public static let ratioRange = 0.1...0.9
 
+    /// The bounds a host keeps its own ratios in; a ratio a host or a saved file sends is held
+    /// to them.
+    public static let receivedRatioRange = 0.05...0.95
+
+    /// A ratio from outside (a host, a saved file) that is safe to lay out: an even split when
+    /// it is not a number.
+    public static func sanitizedRatio(_ ratio: Double) -> Double {
+        guard ratio.isFinite else { return 0.5 }
+        return min(max(ratio, receivedRatioRange.lowerBound), receivedRatioRange.upperBound)
+    }
+
+    /// The same tree with every ratio sanitized.
+    public var sanitizingRatios: Node {
+        switch self {
+        case .leaf: self
+        case .split(let axis, let ratio, let first, let second):
+            .split(axis: axis, ratio: Self.sanitizedRatio(ratio), first: first.sanitizingRatios, second: second.sanitizingRatios)
+        }
+    }
+
     /// Every pane, in reading order (first before second).
     public var panes: [PaneId] {
         switch self {

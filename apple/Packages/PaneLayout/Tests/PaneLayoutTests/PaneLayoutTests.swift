@@ -319,3 +319,32 @@ private func grid() -> Session {
 private extension Double {
     func isApproximately(_ other: Double) -> Bool { abs(self - other) < 1e-9 }
 }
+
+@Suite struct ReceivedRatioTests {
+    @Test func nonFiniteRatiosBecomeAnEvenSplit() {
+        for hostile in [Double.nan, .infinity, -.infinity, .signalingNaN] {
+            #expect(Node.sanitizedRatio(hostile) == 0.5)
+        }
+    }
+
+    @Test func finiteRatiosStayWithinWhatHostsAllow() {
+        #expect(Node.sanitizedRatio(0.3) == 0.3)
+        #expect(Node.sanitizedRatio(0.05) == 0.05)
+        #expect(Node.sanitizedRatio(5) == Node.receivedRatioRange.upperBound)
+        #expect(Node.sanitizedRatio(0) == Node.receivedRatioRange.lowerBound)
+        #expect(Node.sanitizedRatio(-3) == Node.receivedRatioRange.lowerBound)
+    }
+
+    @Test func decodedTreesHaveSafeRatios() throws {
+        let hostile = Node.split(
+            axis: .horizontal, ratio: .nan, first: .leaf(p1),
+            second: .split(axis: .vertical, ratio: .infinity, first: .leaf(PaneId(3)), second: .leaf(PaneId(4))))
+        let session = Session(tabs: [Tab(id: TabId(2), root: hostile, focused: p1)], activeTabId: TabId(2))
+        let encoder = PropertyListEncoder()
+        encoder.outputFormat = .binary
+        let decoded = try PropertyListDecoder().decode(Session.self, from: encoder.encode(session))
+        #expect(decoded.activeTab?.root == .split(
+            axis: .horizontal, ratio: 0.5, first: .leaf(p1),
+            second: .split(axis: .vertical, ratio: 0.5, first: .leaf(PaneId(3)), second: .leaf(PaneId(4)))))
+    }
+}

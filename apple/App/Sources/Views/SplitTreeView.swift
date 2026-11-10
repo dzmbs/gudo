@@ -379,7 +379,8 @@ struct SplitLayout {
         switch node {
         case .leaf(let pane):
             leaves.append(Leaf(pane: pane, frame: rect))
-        case .split(let axis, let ratio, let first, let second):
+        case .split(let axis, let storedRatio, let first, let second):
+            let ratio = Node.sanitizedRatio(storedRatio)
             let horizontal = axis == .horizontal
             let extent = horizontal ? rect.width : rect.height
             // Whole cells per pane; in a vertical split each side also carries its pane header.
@@ -440,7 +441,7 @@ private struct SplitDivider: View {
             .accessibilityElement()
             .accessibilityLabel(horizontal ? "Horizontal split divider" : "Vertical split divider")
             .accessibilityHint(horizontal ? "Drag to resize the left and right panes" : "Drag to resize the top and bottom panes")
-            .accessibilityValue("\(Int((divider.ratio * 100).rounded())) percent")
+            .accessibilityValue(divider.ratio.formatted(.percent.precision(.fractionLength(0))))
             .accessibilityAdjustableAction { direction in
                 move(by: direction == .increment ? 0.025 : -0.025)
             }

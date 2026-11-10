@@ -144,6 +144,18 @@ pub struct TabLayout {
     pub zoomed: Option<u64>,
 }
 
+/// The bounds the daemon keeps its own split ratios in.
+const SPLIT_RATIO_BOUNDS: std::ops::RangeInclusive<f32> = 0.05..=0.95;
+
+/// A ratio the app can lay out whatever the peer sent: an even split when it is not a number.
+fn sanitized_ratio(ratio: f32) -> f32 {
+    if ratio.is_finite() {
+        ratio.clamp(*SPLIT_RATIO_BOUNDS.start(), *SPLIT_RATIO_BOUNDS.end())
+    } else {
+        0.5
+    }
+}
+
 fn flatten(node: &proto::LayoutNode, out: &mut Vec<LayoutNode>) -> u32 {
     let index = u32::try_from(out.len()).expect("a split tree fits in u32 nodes");
     match node {
@@ -156,7 +168,7 @@ fn flatten(node: &proto::LayoutNode, out: &mut Vec<LayoutNode>) -> u32 {
         } => {
             out.push(LayoutNode::Split {
                 axis: (*axis).into(),
-                ratio: *ratio,
+                ratio: sanitized_ratio(*ratio),
                 first: 0,
                 second: 0,
             });
@@ -1592,5 +1604,33 @@ mod tests {
                 LayoutNode::Leaf { pane_id: 3 },
             ]
         );
+    }
+
+    #[test]
+    fn hostile_split_ratios_are_made_safe() {
+        for (hostile, expected) in [
+            (f32::NAN, 0.5),
+            (f32::INFINITY, 0.5),
+            (f32::NEG_INFINITY, 0.5),
+            (7.0, 0.95),
+            (-1.0, 0.05),
+        ] {
+            let tab = TabLayout::from(proto::TabLayout {
+                tab_id: proto::TabId(7),
+                name: String::new(),
+                root: proto::LayoutNode::Split {
+                    axis: proto::Axis::Horizontal,
+                    ratio: hostile,
+                    first: Box::new(proto::LayoutNode::Leaf(proto::PaneId(1))),
+                    second: Box::new(proto::LayoutNode::Leaf(proto::PaneId(2))),
+                },
+                focused: proto::PaneId(1),
+                zoomed: None,
+            });
+            let LayoutNode::Split { ratio, .. } = tab.nodes[0] else {
+                panic!("the root is a split");
+            };
+            assert_eq!(ratio, expected, "{hostile}");
+        }
     }
 }
