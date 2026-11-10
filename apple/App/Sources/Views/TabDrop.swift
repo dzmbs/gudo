@@ -5,8 +5,9 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 extension View {
-    /// A tab of the same host dragged onto the pane merges into its tab on the nearest edge,
-    /// with that half of the pane lit while it hovers (Ghostty's split drop zones).
+    /// A tab of the same host, or a browser or VS Code tab, dragged onto the pane merges into its
+    /// tab on the nearest edge, with that half of the pane lit while it hovers (Ghostty's split
+    /// drop zones).
     func tabDropTarget(pane: PaneId, workspace: Workspace, enabled: Bool) -> some View {
         modifier(TabDropTarget(pane: pane, workspace: workspace, enabled: enabled))
     }
@@ -45,18 +46,31 @@ private struct TabDropTarget: ViewModifier {
         }
     }
 
-    /// The dragged tab, when it can merge here: same host, another tab.
-    private func source() -> TabId? {
-        guard let ref = model.draggedTab, ref.hostId == workspace.groupId,
-              ref.tab != workspace.session.tab(containing: pane)?.id
-        else { return nil }
-        return ref.tab
+    private enum DraggedTab {
+        case hostTab(TabId)
+        case windowTab(TabId)
+    }
+
+    /// The dragged tab, when it can merge here: another tab of the same host, or a window tab
+    /// without host panes.
+    private func source() -> DraggedTab? {
+        guard let ref = model.draggedTab else { return nil }
+        if ref.hostId == HostGroups.mixedId {
+            return model.composites.tab(ref.tab)?.members.isEmpty == true ? .windowTab(ref.tab) : nil
+        }
+        guard ref.hostId == workspace.groupId, ref.tab != workspace.session.tab(containing: pane)?.id else { return nil }
+        return .hostTab(ref.tab)
     }
 
     private func merge(_ side: Direction) {
-        guard let tab = source(), let target = workspace.session.tab(containing: pane) else { return }
+        guard let dragged = source(), let target = workspace.session.tab(containing: pane) else { return }
         model.draggedTab = nil
-        model.mergeTab(tab, in: workspace, into: target, beside: pane, side: side)
+        switch dragged {
+        case .hostTab(let tab):
+            model.mergeTab(tab, in: workspace, into: target, beside: pane, side: side)
+        case .windowTab(let tab):
+            model.mergeWindowTab(tab, into: TabRef(hostId: workspace.groupId, tab: target.id), beside: pane, side: side)
+        }
     }
 
     private static func alignment(_ side: Direction) -> Alignment {
@@ -71,7 +85,7 @@ private struct TabDropTarget: ViewModifier {
     private struct Delegate: DropDelegate {
         let size: CGSize
         @Binding var side: Direction?
-        let source: () -> TabId?
+        let source: () -> DraggedTab?
         let merge: (Direction) -> Void
 
         func validateDrop(info: DropInfo) -> Bool { info.isTabDrag && source() != nil }

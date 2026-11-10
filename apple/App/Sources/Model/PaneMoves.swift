@@ -66,6 +66,37 @@ extension WindowModel {
         workspace.apply(.mergeTab(tab, beside: pane ?? target.root.trailingPane(along: .horizontal), side: side))
     }
 
+    /// The tabs a window-owned tab (pages, editors, tools; no host panes) can merge into.
+    func windowTabMergeTargets(besides id: TabId) -> [TabRef] {
+        guard composites.tab(id)?.members.isEmpty == true else { return [] }
+        return groups.tabs.filter { $0 != Self.mixedRef(id) }
+    }
+
+    /// Merges window tab `id` into `target` as a split beside `pane` (a host tab's pane, a window
+    /// tab's leaf; else its last) on `side`. A host tab becomes a mixed tab in its place, in its
+    /// project.
+    func mergeWindowTab(_ id: TabId, into target: TabRef, beside pane: PaneId? = nil, side: Direction = .right) {
+        destination = .terminal
+        if target.hostId == HostGroups.mixedId {
+            guard composites.merge(id, into: target.tab, beside: pane, side: side) else { return }
+            focus(target)
+            return
+        }
+        // Planned from before the merge: a host tab carrying a mixed tab leaves its project's
+        // listing, and a project left with no tab listed with it.
+        let planner = groups.planner()
+        let project = planner.project(of: target)
+        guard let hostTab = workspace(ofGroup: target.hostId)?.session.tabs.first(where: { $0.id == target.tab }),
+              let merged = composites.merge(id, intoHost: target.hostId, tab: hostTab, beside: pane, side: side)
+        else { return }
+        if pairedTab == target { pairedTab = nil }
+        let mergedRef = Self.mixedRef(merged)
+        if let project, let index = project.tabs.firstIndex(of: target) {
+            groups.apply(planner.move(mergedRef, into: project.id, at: index))
+        }
+        focus(mergedRef)
+    }
+
     private func moveLeafToNewTab(_ mixed: CompositeTab) {
         guard canMovePaneToNewTab else {
             if let host = mixed.focusedMember?.hostId, let open = workspace(ofGroup: host) { moveUnsupported(open) }

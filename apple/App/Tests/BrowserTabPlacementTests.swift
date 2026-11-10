@@ -5,7 +5,8 @@ import XCTest
 @testable import App
 
 /// A browser opens as a tab of its own, in the project of the tab it was opened from, and
-/// leaves that tab's panes as they were. Open Browser Beside is in `SplitWebLeavesTests`.
+/// leaves that tab's panes as they were; a browser tab merges into a terminal tab. Open Browser
+/// Beside is in `SplitWebLeavesTests`.
 @MainActor
 final class BrowserTabPlacementTests: XCTestCase {
     private var model: WindowModel!
@@ -63,6 +64,26 @@ final class BrowserTabPlacementTests: XCTestCase {
         let browserTab = try XCTUnwrap(model.activeMixed)
         XCTAssertTrue(browserTab.isBrowserOnly)
         XCTAssertNil(model.groups.project(of: WindowModel.mixedRef(browserTab.id)))
+    }
+
+    func testABrowserTabMergesIntoATerminalTab() throws {
+        let pane = try XCTUnwrap(terminalPanes.first)
+        model.newProject(from: [terminal], name: "Browser Tab Merge", naming: false)
+        let project = try XCTUnwrap(model.groups.project(of: terminal))
+        projectId = project.id
+        let page = model.openBrowser(URL(string: "about:blank")!, hostId: nil, placement: .tab)
+        let browserTab = try XCTUnwrap(model.activeMixed)
+        XCTAssertTrue(model.windowTabMergeTargets(besides: browserTab.id).contains(terminal), "the terminal tab is offered")
+
+        model.mergeWindowTab(browserTab.id, into: terminal)
+
+        XCTAssertNil(model.composites.tab(browserTab.id), "the browser tab goes")
+        let merged = try XCTUnwrap(model.activeMixed, "the merged tab comes forward")
+        XCTAssertEqual(merged.leaves.compactMap { merged.members[$0]?.pane }, [pane])
+        XCTAssertEqual(merged.leaves.compactMap { merged.browsers[$0]?.id }, [page.id], "the same page, beside the terminal")
+        XCTAssertEqual(merged.focusedBrowser?.id, page.id)
+        XCTAssertEqual(terminalPanes, [pane], "no pane opens on the host")
+        XCTAssertEqual(model.groups.project(of: WindowModel.mixedRef(merged.id))?.id, project.id, "it stays in the terminal's project")
     }
 }
 #endif

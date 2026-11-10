@@ -483,6 +483,7 @@ struct MixedTabRow: View {
         .rowActions(actions(busy: state == .working || state == .blocked), id: ref.description, name: title) { action in
             perform(action, busy: state == .working || state == .blocked)
         } menu: {
+            MergeWindowTabMenu(tab: tab.id)
             ProjectMenuItems(model: model, ref: ref)
         }
     }
@@ -572,6 +573,7 @@ struct MixedTabChip: View {
         .onTapGesture { model.focus(ref) }
         .onHover { isHovered = $0 }
         .contextMenu {
+            MergeWindowTabMenu(tab: tab.id)
             Button(RowAction.closeTab.title, systemImage: RowAction.closeTab.systemImage, role: .destructive) {
                 model.closeWindowTab(tab.id, undoable: true)
             }
@@ -579,6 +581,25 @@ struct MixedTabChip: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("tabbar-\(ref)")
+    }
+}
+
+/// A browser or VS Code tab into another tab, as a split on the right (dragged onto a terminal
+/// pane's edge, on that edge).
+struct MergeWindowTabMenu: View {
+    let tab: TabId
+    @Environment(WindowModel.self) private var model
+
+    var body: some View {
+        let targets = model.windowTabMergeTargets(besides: tab)
+        if !targets.isEmpty {
+            Menu("Merge Into Tab", systemImage: "rectangle.split.2x1") {
+                ForEach(targets, id: \.self) { target in
+                    Button(model.title(ofTab: target)) { model.mergeWindowTab(tab, into: target) }
+                }
+            }
+            .accessibilityIdentifier("tab-merge-into")
+        }
     }
 }
 
