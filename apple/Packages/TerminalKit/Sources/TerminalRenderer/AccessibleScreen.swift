@@ -13,6 +13,17 @@ final class AccessibleScreen {
         var viewportTop: Int
     }
 
+    /// What the screen showed when its text was read: frames drawn and output written, since
+    /// output keeps coming while no frame is drawn (a hidden or paused view).
+    private struct ContentVersion: Equatable {
+        var frames: Int
+        var outputs: UInt64
+    }
+
+    private var currentVersion: ContentVersion {
+        ContentVersion(frames: surface.contentGeneration, outputs: surface.outputArrivals)
+    }
+
     /// A link on screen as ⌘-click finds it, and its text.
     struct Link: Equatable {
         var range: Range<Int>
@@ -22,8 +33,8 @@ final class AccessibleScreen {
     let surface: TerminalSurface
     private let quietPeriod: Duration
     private var cachedText: AccessibleScreenText?
-    private var cachedGeneration = 0
-    private var cachedLinks: (generation: Int, links: [Link])?
+    private var cachedVersion: ContentVersion?
+    private var cachedLinks: (version: ContentVersion?, links: [Link])?
     private var observedGeneration = 0
     private var observedCaret: Caret?
     private var hasPendingValueChange = false
@@ -39,21 +50,22 @@ final class AccessibleScreen {
     }
 
     var text: AccessibleScreenText {
-        if let cachedText, cachedGeneration == surface.contentGeneration { return cachedText }
+        let version = currentVersion
+        if let cachedText, cachedVersion == version { return cachedText }
         let text = surface.terminal.accessibleScreenText()
         cachedText = text
-        cachedGeneration = surface.contentGeneration
+        cachedVersion = version
         return text
     }
 
     /// Every link on screen in reading order, found again only when the text changes.
     var links: [Link] {
         let text = text
-        if let cachedLinks, cachedLinks.generation == cachedGeneration { return cachedLinks.links }
+        if let cachedLinks, cachedLinks.version == cachedVersion { return cachedLinks.links }
         let links = text.linkRanges().compactMap { range in
             surface.terminal.link(atViewport: text.cell(atOffset: range.lowerBound)).map { Link(range: range, link: $0) }
         }
-        cachedLinks = (cachedGeneration, links)
+        cachedLinks = (cachedVersion, links)
         return links
     }
 

@@ -100,6 +100,8 @@ public final class TerminalSurface {
     public var onHiddenInputChanged: (() -> Void)?
     /// Counts frames that showed a change to the terminal's cells, cursor or viewport.
     public private(set) var contentGeneration = 0
+    /// Counts `outputArrived` calls, which come whether or not a frame is drawn.
+    public nonisolated var outputArrivals: UInt64 { outputSerial.load(ordering: .acquiring) }
 
     /// Inline images over the grid (placements), asked for before every frame so they follow
     /// pinned rows as the output scrolls. Call `invalidateInlineImages()` when the set changes

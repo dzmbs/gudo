@@ -33,6 +33,15 @@ import Testing
         #expect(screen.text.string == "one two")
     }
 
+    @Test func outputThatArrivesWhileNoFrameIsDrawnIsRead() throws {
+        let screen = try screen()
+        show("one", on: screen)
+        #expect(screen.text.string == "one")
+        screen.surface.terminal.write(Array(" two".utf8))
+        screen.surface.outputArrived()
+        #expect(screen.text.string == "one two")
+    }
+
     @Test func selectedRangeIsTheSelectionOrTheCursor() throws {
         let screen = try screen()
         show("$ ls\r\nfile\r\n$ ", on: screen)
