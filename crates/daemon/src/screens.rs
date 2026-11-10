@@ -8,6 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io;
+use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -113,8 +114,10 @@ impl Screens {
     /// Saves every pane whose screen changed. Blocks.
     pub fn save_all(&self, core: &Core) {
         for (pane_id, entry) in core.pane_entries() {
-            if let Err(error) = self.save(&entry.pane) {
-                tracing::warn!(pane = %pane_id, "saving the screen: {error}");
+            match std::panic::catch_unwind(AssertUnwindSafe(|| self.save(&entry.pane))) {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => tracing::warn!(pane = %pane_id, "saving the screen: {error}"),
+                Err(_) => tracing::error!(pane = %pane_id, "saving the screen panicked"),
             }
         }
     }
@@ -189,7 +192,10 @@ fn newest_part(text: &str, max_bytes: usize) -> &str {
     if text.len() <= max_bytes {
         return text;
     }
-    let cut = text.len() - max_bytes;
+    let mut cut = text.len() - max_bytes;
+    while !text.is_char_boundary(cut) {
+        cut += 1;
+    }
     match text[cut..].find('\n') {
         Some(line_end) => &text[cut + line_end + 1..],
         None => "",
@@ -251,6 +257,8 @@ mod tests {
     fn long_screens_keep_their_newest_lines() {
         assert_eq!(newest_part("one\ntwo\nthree", 9), "three");
         assert_eq!(newest_part("one\ntwo", 100), "one\ntwo");
+        assert_eq!(newest_part("\u{e9}\nab", 3), "ab");
+        assert_eq!(newest_part("\u{23fa}\u{2500}\u{2500}\nab", 7), "ab");
     }
 
     #[test]
