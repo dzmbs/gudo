@@ -97,12 +97,42 @@ final class Workspace {
     @ObservationIgnored var appearance = TerminalAppearance.fromPreferences() {
         didSet {
             for pane in made.values {
-                pane.view.surface.appearance = appearance
+                pane.view.surface.appearance = paneAppearance(pane.id)
                 PaneDrawing.of(pane.id)?.appearanceChanged()
             }
             announceTerminalColors()
         }
     }
+    /// Panes zoomed with ⌘+ and ⌘-, at their own size until ⌘0, as Ghostty's surfaces: a Settings
+    /// change leaves them as they are. Not saved; a relaunch draws every pane at the Settings size.
+    @ObservationIgnored private var zoomedFontSizes: [PaneId: CGFloat] = [:]
+    /// A split from a zoomed pane, still to arrive (at once for a local layout, after the
+    /// daemon's answer for a remote one): the new pane in `tab` starts at `size`.
+    @ObservationIgnored private var pendingSplitFontSize: (tab: TabId, existing: Set<PaneId>, size: CGFloat, deadline: ContinuousClock.Instant)?
+
+    private func paneAppearance(_ id: PaneId) -> TerminalAppearance {
+        var paneAppearance = appearance
+        if let size = zoomedFontSizes[id] { paneAppearance.fontSize = size }
+        return paneAppearance
+    }
+
+    func changeFocusedFontSize(_ change: TerminalPreferences.FontSizeChange) {
+        guard let id = focusedPane, let pane = made[id] else { return }
+        zoomedFontSizes[id] = change.applied(to: Double(pane.view.surface.fontSize)).map { CGFloat($0) }
+        pane.view.surface.appearance = paneAppearance(id)
+    }
+
+    private func inheritSplitFontSize(_ id: PaneId) {
+        guard let pending = pendingSplitFontSize else { return }
+        guard ContinuousClock.now < pending.deadline else {
+            pendingSplitFontSize = nil
+            return
+        }
+        guard !pending.existing.contains(id), session.tab(containing: id)?.id == pending.tab else { return }
+        zoomedFontSizes[id] = pending.size
+        pendingSplitFontSize = nil
+    }
+
     /// One terminal cell in points, once a pane has laid out: split sizes snap to whole cells so
     /// panes waste no partial cells (the remainder becomes padding).
     private(set) var cellSize: CGSize?
@@ -293,6 +323,9 @@ final class Workspace {
         // Splits, closes and zooms animate the panes' sizes (`SplitTreeView`): no cols × rows
         // overlay through them. Divider moves keep it.
         if case .resize = op {} else { layoutChangeUntil = .now + .milliseconds(700) }
+        if case .split(let source, _) = op, let size = zoomedFontSizes[source], let tab = session.tab(containing: source) {
+            pendingSplitFontSize = (tab.id, session.panes, size, .now + .seconds(5))
+        }
         let signpost = Self.signposter.beginInterval("Layout op")
         layout.apply(op)
         reconcilePanes()
@@ -575,6 +608,7 @@ final class Workspace {
             if notices[id] != nil { notices[id] = nil }
             if foregrounds[id] != nil { foregrounds[id] = nil }
             if canvasTitles[id] != nil { canvasTitles[id] = nil }
+            zoomedFontSizes[id] = nil
             changed = true
         }
         if failures.keys.contains(where: { !live.contains($0) }) { failures = failures.filter { live.contains($0.key) } }
@@ -653,7 +687,8 @@ final class Workspace {
 
     private func makePane(_ id: PaneId) throws -> Pane {
         let saved = (host as? DaemonConnection)?.cachedScreen(for: id)
-        let pane = try Pane(id: id, backend: makeBackend(id), appearance: appearance, saved: saved) { [weak self] in
+        inheritSplitFontSize(id)
+        let pane = try Pane(id: id, backend: makeBackend(id), appearance: paneAppearance(id), saved: saved) { [weak self] in
             // The process exited: close its pane.
             Task { @MainActor in self?.apply(.close(id)) }
         }
@@ -683,7 +718,8 @@ final class Workspace {
                 input: action.shortcut.key.uiKeyInput, modifierFlags: action.shortcut.modifiers.uiKeyModifierFlags,
                 action: #selector(TerminalView.performAppKeyCommand(_:)))
         }
-        pane.view.onFontSizeChange = { size in
+        pane.view.onFontSizeChange = { [weak self] size in
+            self?.zoomedFontSizes[id] = nil
             UserDefaults.standard.set(Double(size), forKey: TerminalPreferences.Key.fontSize)
         }
         pane.view.onFind = { [weak self] in
