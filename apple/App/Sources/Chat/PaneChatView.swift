@@ -361,7 +361,7 @@ struct PaneChatView<Terminal: View>: View {
 
     private func canEditDraft(_ context: PaneChatState.ActionContext) -> Bool {
         state.actionContext == context && state.presentation == .chat && permitsSending && !state.dictation.isActive
-            && approval?.hasBlockedRequest != true && pane.view.markedTextRange == nil && state.controller?.prepareToPark() != false
+            && approval?.hasBlockedRequest != true && pane.view.markedTextRange == nil && state.controller?.hasMarkedText != true
     }
 
     private var actions: ChatRowActions {

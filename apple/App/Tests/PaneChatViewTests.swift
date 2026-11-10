@@ -276,6 +276,33 @@ final class PaneChatViewTests: XCTestCase {
         XCTAssertTrue(fixture.backend.state.withLock { $0.input.isEmpty })
     }
 
+    func testSendingKeepsTheKeyboardUp() async throws {
+        let suite = "chat-send-keyboard-test-" + UUID().uuidString
+        let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let fixture = try makeFixture(preferences: preferences, permitsSending: true, nativeMessageReceipts: true)
+        defer {
+            fixture.state.deactivate()
+            fixture.window.isHidden = true
+            fixture.window.rootViewController = nil
+            preferences.removePersistentDomain(forName: suite)
+        }
+        func input(in view: UIView) -> (UIView & UITextInput)? {
+            if let text = view as? UITextView, text.isEditable, text.text == "Keep typing" { return text }
+            if let field = view as? UITextField, field.isEnabled, field.text == "Keep typing" { return field }
+            return view.subviews.lazy.compactMap { input(in: $0) }.first
+        }
+        try await wait { fixture.state.controller != nil && fixture.state.model?.frame.rows.count == 60 }
+        fixture.state.draft = "Keep typing"
+        try await Task.sleep(for: .milliseconds(30))
+        let editor = try XCTUnwrap(input(in: fixture.window))
+        XCTAssertTrue(editor.becomeFirstResponder())
+        PaneChatView(pane: fixture.pane, state: fixture.state, hub: fixture.hub,
+                     permitsSending: true) { _ in Color.clear }.send()
+        try await wait { fixture.state.composer.confirmedText != nil }
+        XCTAssertEqual(fixture.client.calls.filter { $0.hasPrefix("send ") }, ["send 7 Keep typing"])
+        XCTAssertTrue(editor.isFirstResponder)
+    }
+
     func testQueuedActionsCannotReissueAfterTheirOriginalGenerationCompletesOrResets() async throws {
         let suite = "chat-action-generation-test-" + UUID().uuidString
         let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
