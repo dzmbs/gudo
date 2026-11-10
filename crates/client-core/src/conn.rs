@@ -861,9 +861,10 @@ fn control_supported(
         ClientCtl::WatchRunAgain => more_features.contains(proto::MoreDaemonFeatures::RUN_AGAIN),
         ClientCtl::PaneActivity { .. }
         | ClientCtl::ClaimSize { .. }
-        | ClientCtl::SetSizePolicy { .. } => {
-            features.contains(proto::DaemonFeatures::ACTIVE_SIZING)
-        }
+        | ClientCtl::SetSizePolicy {
+            policy: proto::SizePolicy::LastActive,
+            ..
+        } => features.contains(proto::DaemonFeatures::ACTIVE_SIZING),
         _ => true,
     }
 }
@@ -1489,6 +1490,21 @@ mod tests {
             proto::DaemonFeatures::default(),
             proto::MoreDaemonFeatures::EMPTY
         ));
+        for policy in [
+            proto::SizePolicy::FollowLease,
+            proto::SizePolicy::LastInput,
+            proto::SizePolicy::Fixed { cols: 80, rows: 24 },
+            proto::SizePolicy::Smallest,
+        ] {
+            assert!(control_supported(
+                &ClientCtl::SetSizePolicy {
+                    pane_id: PaneId(1),
+                    policy,
+                },
+                proto::DaemonFeatures::default(),
+                proto::MoreDaemonFeatures::EMPTY
+            ));
+        }
     }
 
     #[test]
