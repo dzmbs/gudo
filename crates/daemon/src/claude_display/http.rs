@@ -210,7 +210,7 @@ fn parse_headers(bytes: &[u8], host: &str) -> Option<Request> {
         {
             return None;
         }
-        if name.eq_ignore_ascii_case("x-gudo-pane")
+        if name.eq_ignore_ascii_case(brand::PANE_HEADER)
             && pane.replace(PaneId(value.parse().ok()?)).is_some()
         {
             return None;

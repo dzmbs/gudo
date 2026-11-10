@@ -84,7 +84,7 @@ fn mcp_environment(context: &LaunchContext) -> String {
         .map(|(name, _)| name)
         .collect();
     names.extend(account.into_iter().map(|(name, _)| name));
-    names.extend(["GUDO_DAEMON_PID".into(), CODEX_DIR_VAR.into()]);
+    names.extend([brand::DAEMON_PID_ENV.into(), CODEX_DIR_VAR.into()]);
     names.sort();
     names.dedup();
     let names = names
@@ -181,7 +181,7 @@ mod tests {
             brand::env_var("TOKEN"),
             brand::env_var("ACCOUNT_DIR"),
             "CODEX_HOME".into(),
-            "GUDO_DAEMON_PID".into(),
+            brand::DAEMON_PID_ENV.into(),
         ] {
             assert!(
                 names.iter().any(|value| value.as_str() == Some(&name)),

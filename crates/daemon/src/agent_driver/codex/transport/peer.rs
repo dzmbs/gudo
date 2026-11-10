@@ -2,7 +2,7 @@ use std::io;
 
 pub(super) fn pid(stream: &tokio::net::UnixStream) -> io::Result<u32> {
     let credentials = stream.peer_cred()?;
-    if credentials.uid() != unsafe { libc::geteuid() } {
+    if credentials.uid() != rustix::process::geteuid().as_raw() {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "wrong Codex socket peer",

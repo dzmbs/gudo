@@ -2,6 +2,8 @@ use super::{CodexBindingError, CodexItem, CodexTurnOutcome, parse, validate_id};
 use serde::Deserialize;
 use std::collections::HashSet;
 
+const MAX_CWD_BYTES: usize = 4096;
+
 /// History from a correlated thread reply; this payload alone proves no pane ownership.
 #[derive(Debug, Deserialize)]
 pub struct CodexThreadHistory {
@@ -62,7 +64,7 @@ impl CodexThreadHistory {
         validate_id(&history.id)?;
         if let Some(cwd) = &history.cwd {
             let bytes = cwd.as_os_str().as_encoded_bytes();
-            if !cwd.is_absolute() || bytes.len() > 4096 || bytes.contains(&0) {
+            if !cwd.is_absolute() || bytes.len() > MAX_CWD_BYTES || bytes.contains(&0) {
                 return Err(CodexBindingError::InvalidFrame);
             }
         }

@@ -126,6 +126,9 @@ pub const RELAY_TOKEN: &str = "vpMx89kx8DZiOVUIP8aVBnCfbEUrMNzQfwVJKSBhRRI";
 /// `push.relay` in the daemon's `config.toml` names another. See `docs/PUSH.md`.
 pub const PUSH_RELAY_URL: &str = "https://push.gudo.dev";
 
+/// HTTP header naming the pane on agent hook requests sent to the daemon's local listener.
+pub const PANE_HEADER: &str = "X-Gudo-Pane";
+
 #[cfg(test)]
 mod tests {
     use super::*;

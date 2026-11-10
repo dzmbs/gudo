@@ -23,14 +23,20 @@ impl ClaudeCode {
         let token_variable = brand::env_var("CLAUDE_DISPLAY_TOKEN");
         let pane_variable = brand::env_var("PANE_ID");
         let mut settings = Self::hook_settings(context);
+        let mut headers = serde_json::Map::new();
+        headers.insert(
+            "Authorization".into(),
+            format!("Bearer ${{{token_variable}}}").into(),
+        );
+        headers.insert(
+            brand::PANE_HEADER.into(),
+            format!("${{{pane_variable}}}").into(),
+        );
         settings["hooks"]["MessageDisplay"] = json!([{"hooks":[{
             "type":"http",
             "url":format!("http://127.0.0.1:{port}/claude/message-display"),
             "timeout":2,
-            "headers":{
-                "Authorization":format!("Bearer ${{{token_variable}}}"),
-                "X-Gudo-Pane":format!("${{{pane_variable}}}"),
-            },
+            "headers":headers,
             "allowedEnvVars":[token_variable, pane_variable],
         }]}]);
         launch.files.push(SupportFile {
