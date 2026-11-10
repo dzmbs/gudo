@@ -111,16 +111,16 @@ final class KeyBarUITests: XCTestCase {
         hold()
     }
 
-    /// esc, ctrl, tab and ^C are pinned in the same place in every profile, the joystick sits
+    /// esc, ctrl, tab and enter are pinned in the same place in every profile, the joystick sits
     /// beside the row, a key's second character is in its long-press menu, and ctrl locks on a
     /// double tap.
     @MainActor
     func testPinnedKeysStayLongPressSendsAlternateAndCtrlLocks() throws {
         let app = launch()
-        let pinned = ["keybar-esc", "keybar-ctrl", "keybar-tab", "keybar-ctrl-c"]
+        let pinned = ["keybar-esc", "keybar-ctrl", "keybar-tab", "keybar-enter"]
         XCTAssertTrue(element(app, "keybar-tab").waitForExistence(timeout: 5))
         let shellFrames = pinned.map { element(app, $0).frame }
-        for id in ["keybar-ctrl-c", "keybar-tilde", "keybar-joystick", "keybar-hide-keyboard"] {
+        for id in ["keybar-enter", "keybar-up", "keybar-down", "keybar-joystick", "keybar-hide-keyboard"] {
             XCTAssertTrue(element(app, id).isHittable, "\(id) is on the bar")
         }
         XCTAssertFalse(app.buttons["keybar-home"].exists, "Home and the paging keys are in the keys panel")
@@ -273,7 +273,7 @@ final class KeyBarUITests: XCTestCase {
         let reset = element(app, "keypanel-reset")
         XCTAssertTrue(reset.waitForExistence(timeout: 5))
         if reset.isEnabled { reset.tap() }
-        XCTAssertTrue(element(app, "keypanel-bar-tilde").waitForExistence(timeout: 5), "the bar's keys lead the editor")
+        XCTAssertTrue(element(app, "keypanel-bar-up").waitForExistence(timeout: 5), "the bar's keys lead the editor")
         snapshot(app, "3-edit")
 
         let keys = element(app, "keypanel-keys")

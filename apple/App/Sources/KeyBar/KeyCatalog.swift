@@ -30,7 +30,7 @@ enum KeyCatalog {
             KeySpec.esc.captioned("Escape"),
             KeySpec.tab.captioned("Tab"),
             KeySpec.shiftTab.captioned("Shift Tab"),
-            KeySpec.enter.captioned("Return"),
+            KeySpec.enter.captioned("Enter"),
             KeySpec.backspace.captioned("Delete"),
             .key("forward-delete", PhysicalKey(hidUsage: 0x4C)!, symbol: "delete.right", label: "Forward delete", repeatable: true)
                 .captioned("Fwd delete"),
@@ -74,12 +74,14 @@ enum KeyCatalog {
 
     static func key(id: String) -> KeySpec? { byID[id] }
 
-    /// Pinned at the bar's start in every profile; not part of the favourites.
-    static let pinnedIDs: Set<String> = ["esc", "tab", "ctrl-c"]
+    /// Pinned at the bar's start in every profile, beside `ctrl`; not part of the favourites.
+    static let pinnedIDs: Set<String> = ["esc", "tab", "enter"]
 
-    /// The bar's keys after the pinned ones until the user picks their own.
+    /// The bar's keys after the pinned ones until the user picks their own: the arrows, then
+    /// interrupt, then what a shell and coding agents type most.
     static let defaultFavourites = [
-        "tilde", "pipe", "slash", "dash", "ctrl-r", "ctrl-d", "ctrl-z", "ctrl-l",
+        "up", "down", "left", "right", "ctrl-c",
+        "pipe", "slash", "tilde", "dash", "ctrl-r", "ctrl-d", "ctrl-z", "ctrl-l",
         "backtick", "star", "dollar", "gt", "backslash", "paste",
     ]
 }
@@ -88,7 +90,13 @@ enum KeyCatalog {
 @MainActor
 final class FavouriteKeys {
     static let shared = FavouriteKeys()
-    static let storageKey = "keyBar.favourites.v1"
+    static let storageKey = "keyBar.favourites.v2"
+    /// Saved while ^C was pinned and Enter was not.
+    static let previousStorageKey = "keyBar.favourites.v1"
+    static let previousDefaults = [
+        "tilde", "pipe", "slash", "dash", "ctrl-r", "ctrl-d", "ctrl-z", "ctrl-l",
+        "backtick", "star", "dollar", "gt", "backslash", "paste",
+    ]
 
     var onChange: (() -> Void)?
 
@@ -96,12 +104,23 @@ final class FavouriteKeys {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        migrate()
+    }
+
+    /// A list the user made keeps its keys, with ^C first where it was pinned; the old defaults
+    /// give way to the new ones.
+    private func migrate() {
+        guard defaults.object(forKey: Self.storageKey) == nil,
+              let previous = defaults.stringArray(forKey: Self.previousStorageKey),
+              previous != Self.previousDefaults else { return }
+        let kept = previous.filter { !KeyCatalog.pinnedIDs.contains($0) && $0 != KeyCatalog.interrupt.id }
+        defaults.set([KeyCatalog.interrupt.id] + kept, forKey: Self.storageKey)
     }
 
     var ids: [String] {
         get {
             guard let stored = defaults.stringArray(forKey: Self.storageKey) else { return KeyCatalog.defaultFavourites }
-            return stored.filter { KeyCatalog.key(id: $0) != nil }
+            return stored.filter { KeyCatalog.key(id: $0) != nil && !KeyCatalog.pinnedIDs.contains($0) }
         }
         set {
             var seen = Set<String>()
@@ -136,6 +155,7 @@ final class FavouriteKeys {
 
     func reset() {
         defaults.removeObject(forKey: Self.storageKey)
+        defaults.removeObject(forKey: Self.previousStorageKey)
         onChange?()
     }
 }

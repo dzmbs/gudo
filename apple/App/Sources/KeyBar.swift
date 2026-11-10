@@ -11,12 +11,12 @@ import VoiceKit
 /// The keys above the software keyboard: one slim Liquid Glass row floating over the terminal.
 ///
 /// ```
-/// ( esc  ctrl  ⇥  ^C │ ~  |  /  -  ^R  … )  (✥) (⋯) (⌄)
-///   pinned             scrolls: the profile's keys, then the user's favourites
+/// ( esc  ctrl  tab  enter │ ↑  ↓  ←  →  ^C  |  … )  (✥) (⋯) (⌄)
+///   pinned                  scrolls: the profile's keys, then the user's favourites
 /// ```
 ///
-/// - `esc ctrl ⇥ ^C` (and `alt` where there is room) never move; the rest scrolls, faded at the
-///   edge while more keys wait. A program's profile puts its keys before the favourites.
+/// - `esc ctrl tab enter` (and `alt` where there is room) never move; the rest scrolls, faded at
+///   the edge while more keys wait. A program's profile puts its keys before the favourites.
 /// - ✥ sends arrows while dragged from it (repeating, faster further out); a tap opens the keys
 ///   panel in place of the keyboard, at the keyboard's height, where the favourites are edited.
 /// - A key's second character is in its long-press menu. ⌫ repeats while held.
@@ -149,7 +149,7 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
     private let ctrlKey: CapsuleKey
     private let altKey: CapsuleKey
     private let tabKey: CapsuleKey
-    private let interruptKey: CapsuleKey
+    private let enterKey: CapsuleKey
     /// The scrolling keys: the profile's, then the favourites.
     private var rowKeys: [(spec: KeySpec, view: CapsuleKey)] = []
     private let joystick = JoystickView()
@@ -174,7 +174,7 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
         ctrlKey = CapsuleKey(metrics: metrics)
         altKey = CapsuleKey(metrics: metrics)
         tabKey = CapsuleKey(metrics: metrics)
-        interruptKey = CapsuleKey(metrics: metrics)
+        enterKey = CapsuleKey(metrics: metrics)
         menuCircle = CircleView(content: menuButton)
         hideCircle = CircleView(content: hideButton)
         micCircle = CircleView(content: micButton)
@@ -390,7 +390,7 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
     private func applyMetrics() {
         strip.metrics = metrics
         pill.metrics = metrics
-        for key in [escKey, ctrlKey, altKey, tabKey, interruptKey] + rowKeys.map(\.view) {
+        for key in [escKey, ctrlKey, altKey, tabKey, enterKey] + rowKeys.map(\.view) {
             key.metrics = metrics
         }
         configureCircles()
@@ -493,7 +493,7 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
             UIAction(title: "Lock Option", image: UIImage(systemName: "lock")) { [weak self] _ in self?.alt = .locked },
         ])
 
-        tabKey.symbol = "arrow.right.to.line"
+        tabKey.title = "tab"
         tabKey.accessibilityIdentifier = "keybar-tab"
         tabKey.accessibilityLabel = "Tab"
         tabKey.onTap = { [weak self] in
@@ -509,7 +509,10 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
         ])
         updateModifiers()
 
-        configure(interruptKey, for: KeyCatalog.interrupt, idPrefix: "keybar-")
+        configure(enterKey, for: .enter, idPrefix: "keybar-")
+        enterKey.menu = UIMenu(children: [
+            UIAction(title: "Shift Enter") { [weak self] _ in self?.send(.newline) },
+        ])
 
         joystick.accessibilityIdentifier = "keybar-joystick"
         joystick.accessibilityLabel = "Arrow keys"
@@ -567,7 +570,7 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
             return
         }
         pill.isHidden = true
-        let pinned: [CapsuleKey] = [escKey, ctrlKey] + (metrics.showsAlt ? [altKey] : []) + [tabKey, interruptKey]
+        let pinned: [CapsuleKey] = [escKey, ctrlKey] + (metrics.showsAlt ? [altKey] : []) + [tabKey, enterKey]
         let scrolling = rowKeys.map(\.view)
         let pinnedSlots = pinned.map { metrics.slotWidth(title: $0.title, symbol: $0.symbol) }
         let scrollingSlots = scrolling.map { metrics.slotWidth(title: $0.title, symbol: $0.symbol) }
@@ -681,11 +684,14 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
             return
         }
         if lineEditor.isActive {
-            // Plain characters go into the draft; ^C clears it; anything else is for the shell,
-            // so the draft goes back to the shell's line first.
+            // Plain characters go into the draft; Enter runs it; ^C clears it; anything else is
+            // for the shell, so the draft goes back to the shell's line first.
             switch output {
             case .text(let text, let modifiers) where modifiers.isEmpty && ctrl == .off && alt == .off:
                 lineEditor.insert(text)
+                return
+            case .key(.enter, let modifiers) where modifiers.isEmpty && ctrl == .off && alt == .off:
+                lineEditor.submit(run: true)
                 return
             case .text("c", .control) where lineEditor.interrupt():
                 return

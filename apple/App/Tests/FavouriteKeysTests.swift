@@ -49,9 +49,9 @@ final class FavouriteKeysTests: XCTestCase {
         favourites.move(from: favourites.ids.count - 1, to: 0)
         XCTAssertEqual(favourites.ids.first, "f5")
 
-        favourites.ids += ["ctrl-c", "esc", "no-such-key", "f5"]
+        favourites.ids += ["enter", "esc", "no-such-key", "f5"]
         XCTAssertEqual(favourites.ids.filter { $0 == "f5" }.count, 1, "no duplicates")
-        XCTAssertFalse(favourites.contains("ctrl-c"), "pinned keys are not favourites")
+        XCTAssertFalse(favourites.contains("enter"), "pinned keys are not favourites")
         XCTAssertFalse(favourites.contains("no-such-key"))
 
         favourites.reset()
@@ -62,7 +62,42 @@ final class FavouriteKeysTests: XCTestCase {
     func testProfilesKeepTheirKeysAndAShellShowsOnlyFavourites() {
         XCTAssertTrue(KeyBarProfile.shell.keys.isEmpty)
         let claude = KeyBarProfile.claude.keys.map(\.id)
-        XCTAssertEqual(claude.first, "mode", "Shift Tab leads Claude Code's keys")
+        XCTAssertEqual(Array(claude.prefix(3)), ["up", "down", "mode"], "the arrows for Claude Code's menus, then Shift Tab")
         XCTAssertTrue(claude.contains("shift-enter"), "a new line in Claude's prompt")
+        XCTAssertEqual(Array(KeyBarProfile.codex.keys.map(\.id).prefix(2)), ["up", "down"])
+    }
+
+    func testTheBarLeadsWithWhatAShellAndAgentsUseMost() {
+        XCTAssertEqual(KeyCatalog.pinnedIDs, ["esc", "tab", "enter"])
+        XCTAssertEqual(Array(KeyCatalog.defaultFavourites.prefix(5)), ["up", "down", "left", "right", "ctrl-c"])
+        XCTAssertTrue(KeyCatalog.defaultFavourites.contains("paste"))
+    }
+
+    func testEnterAndTabReadAsWords() {
+        XCTAssertEqual(KeySpec.enter.title, "enter")
+        XCTAssertNil(KeySpec.enter.symbol)
+        XCTAssertEqual(KeySpec.enter.accessibilityLabel, "Enter")
+        XCTAssertEqual(KeySpec.tab.title, "tab")
+        XCTAssertNil(KeySpec.tab.symbol)
+        XCTAssertEqual(KeySpec.newline.title, "⇧enter")
+    }
+
+    func testTheOldDefaultsGiveWayToTheNewOnes() {
+        defaults.set(FavouriteKeys.previousDefaults, forKey: FavouriteKeys.previousStorageKey)
+        let favourites = FavouriteKeys(defaults: defaults)
+        XCTAssertEqual(favourites.ids, KeyCatalog.defaultFavourites)
+        XCTAssertTrue(favourites.isDefault)
+    }
+
+    func testAListTheUserMadeIsKeptWithInterruptFirst() {
+        defaults.set(["f5", "tilde", "enter", "pipe"], forKey: FavouriteKeys.previousStorageKey)
+        let favourites = FavouriteKeys(defaults: defaults)
+        XCTAssertEqual(favourites.ids, ["ctrl-c", "f5", "tilde", "pipe"], "^C stays where it was pinned; Enter is pinned now")
+
+        favourites.toggle("ctrl-c")
+        XCTAssertEqual(FavouriteKeys(defaults: defaults).ids, ["f5", "tilde", "pipe"], "the move happens once")
+
+        favourites.reset()
+        XCTAssertEqual(FavouriteKeys(defaults: defaults).ids, KeyCatalog.defaultFavourites, "Reset forgets the old list too")
     }
 }
