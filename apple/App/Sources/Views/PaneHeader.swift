@@ -167,8 +167,13 @@ private struct PaneHeaderButtons: View {
             HeaderButton("Split Down", systemImage: "rectangle.split.1x2", shortcut: WorkspaceAction.splitDown) {
                 act { WorkspaceAction.splitDown.perform(on: workspace, window: model) }
             }
-            HeaderButton(WorkspaceAction.openBrowser.title, systemImage: "globe", shortcut: WorkspaceAction.openBrowser) {
-                act { model.openBrowser(besidePane: id, onGroup: workspace.groupId) }
+            HeaderButton(WorkspaceAction.newBrowserTab.title, systemImage: "globe", shortcut: WorkspaceAction.newBrowserTab) {
+                act { model.openBrowserTab(fromPane: id, onGroup: workspace.groupId) }
+            }
+            .contextMenu {
+                Button(WorkspaceAction.openBrowserBeside.title, systemImage: "rectangle.split.2x1") {
+                    act { model.openBrowser(besidePane: id, onGroup: workspace.groupId) }
+                }
             }
             .accessibilityIdentifier("pane-browser-button")
             if model.activeMixedTab == nil {

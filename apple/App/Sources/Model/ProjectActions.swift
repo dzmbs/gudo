@@ -152,6 +152,15 @@ extension WindowModel {
         claimJoinedTabs()
     }
 
+    /// A window tab opened from a project's tab joins that project right after it, as ⌘T's
+    /// terminal does.
+    func join(_ ref: TabRef, projectOf origin: TabRef?) {
+        guard let origin, let project = groups.project(of: origin), let index = project.tabs.firstIndex(of: origin) else { return }
+        withAnimation(DS.Motion.reorder) { groups.apply(groups.planner().move(ref, into: project.id, at: index + 1)) }
+        groups.collapsedProjects.remove(project.id)
+        flashJoined(ref)
+    }
+
     /// Joins tabs that arrived for a project's + or ⌘T, and keeps watching while any is due
     /// (a daemon makes its tab a round trip later).
     private func claimJoinedTabs() {

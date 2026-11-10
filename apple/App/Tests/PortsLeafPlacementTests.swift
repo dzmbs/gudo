@@ -4,7 +4,7 @@ import XCTest
 @testable import App
 
 /// A page opened from a Ports leaf goes beside that leaf, whichever leaf had the focus; one
-/// opened from elsewhere (the offer, a pane's link) goes beside the focused leaf.
+/// opened from elsewhere (the offer, a pane's link) opens a tab of its own.
 @MainActor
 final class PortsLeafPlacementTests: XCTestCase {
     private var model: WindowModel!
@@ -43,12 +43,19 @@ final class PortsLeafPlacementTests: XCTestCase {
         let page = try XCTUnwrap(tab.leaves.first { tab.browsers[$0] != nil })
         XCTAssertEqual(tab.leaves, [terminal, portsLeaf, page], "right of Ports, not between the terminal and Ports")
 
-        // From elsewhere: beside the focused leaf.
+        // From elsewhere: a tab of its own, and the tab with Ports keeps its leaves.
         model.focusLeaf(terminal, inMixedTab: tab.id)
         model.openPage(URL(string: "http://localhost:3000")!, hostId: nil)
-        tab = try XCTUnwrap(model.activeMixed)
-        XCTAssertEqual(tab.leaves.count, 4)
-        XCTAssertNotNil(tab.browsers[tab.leaves[1]], "the second page beside the terminal")
+        XCTAssertEqual(model.composites.tab(tab.id)?.leaves.count, 3)
+        let pageTab = try XCTUnwrap(model.activeMixed)
+        XCTAssertTrue(pageTab.isBrowserOnly)
+        XCTAssertEqual(pageTab.focusedBrowser?.url, "http://localhost:3000")
+
+        // Asked again: the tab already showing it comes forward.
+        model.focus(WindowModel.mixedRef(tab.id))
+        model.openPage(URL(string: "http://localhost:3000")!, hostId: nil)
+        XCTAssertEqual(model.activeMixed?.id, pageTab.id)
+        XCTAssertEqual(model.composites.tabs.count, 2)
     }
 }
 #endif

@@ -165,7 +165,7 @@ enum DesignFixtures {
             // `-page <url>` opens a site instead of the start page.
             try? await Task.sleep(for: .seconds(1))
             guard let url = LaunchArguments().string(forKey: "page").flatMap(URL.init(string:)), let pane = workspace.focusedPane else {
-                WorkspaceAction.openBrowser.perform(on: workspace, window: model)
+                WorkspaceAction.openBrowserBeside.perform(on: workspace, window: model)
                 return
             }
             if model.opensToolsAsLeaves {

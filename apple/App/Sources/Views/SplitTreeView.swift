@@ -680,7 +680,10 @@ struct PaneMenuItems: View {
         Button("Find…", systemImage: "magnifyingglass") { focusThen { model.isSearchShown = true } }
         Button("Links & Paths…", systemImage: "link") { focusThen { model.sheet = .links } }
         if let target = pane ?? workspace.focusedPane {
-            Button(WorkspaceAction.openBrowser.title, systemImage: "globe") {
+            Button(WorkspaceAction.newBrowserTab.title, systemImage: "globe") {
+                focusThen { model.openBrowserTab(fromPane: target, onGroup: workspace.groupId) }
+            }
+            Button(WorkspaceAction.openBrowserBeside.title, systemImage: "rectangle.split.2x1") {
                 focusThen { model.openBrowser(besidePane: target, onGroup: workspace.groupId) }
             }
         }

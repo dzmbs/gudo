@@ -35,8 +35,11 @@ extension WindowModel {
                 return member
             }
         }
+        let origin = currentTab
         noteLeavingTab()
-        focus(Self.mixedRef(composites.openBrowser(member)))
+        let ref = Self.mixedRef(composites.openBrowser(member))
+        join(ref, projectOf: origin)
+        focus(ref)
         return member
     }
 
@@ -64,17 +67,50 @@ extension WindowModel {
         return member
     }
 
+    /// ⇧⌘B: a browser tab on the dev server the focused pane runs, else the start page.
+    func openBrowserTab() {
+        guard destination == .terminal else { return }
+        if let mixed = activeMixed {
+            if let member = mixed.focusedMember {
+                openBrowserTab(fromPane: member.pane, onGroup: member.hostId)
+            } else {
+                openStartPage(hostId: mixed.focusedBrowser?.hostId)
+            }
+        } else if let workspace, let pane = workspace.focusedPane {
+            openBrowserTab(fromPane: pane, onGroup: workspace.groupId)
+        } else {
+            openStartPage(hostId: workspace?.hostId)
+        }
+    }
+
+    /// A browser tab on the dev server the pane runs, else the start page.
+    func openBrowserTab(fromPane pane: PaneId, onGroup groupId: String) {
+        let server = devServer(ofPane: pane, onGroup: groupId)
+        guard opensToolsAsLeaves else { return showBrowserSheet(on: server) }
+        let hostId = groupId == HostGroups.localId ? nil : groupId
+        openBrowser(server.map(DevServerRouting.pageURL) ?? URL(string: "about:blank")!, hostId: hostId, placement: .tab)
+    }
+
     /// A page beside the pane: the dev server the pane runs, else the start page.
     func openBrowser(besidePane pane: PaneId, onGroup groupId: String) {
         let server = devServer(ofPane: pane, onGroup: groupId)
-        guard opensToolsAsLeaves else {
-            if let server { Task { await openPort(server) } } else {
-                browserURL = nil
-                sheet = .browser
-            }
-            return
-        }
+        guard opensToolsAsLeaves else { return showBrowserSheet(on: server) }
         openBrowser(server.map(DevServerRouting.pageURL) ?? URL(string: "about:blank")!, beside: HostPane(hostId: groupId, pane: pane))
+    }
+
+    private func openStartPage(hostId: String?) {
+        guard opensToolsAsLeaves else { return showBrowserSheet(on: nil) }
+        openBrowser(URL(string: "about:blank")!, hostId: hostId, placement: .tab)
+    }
+
+    /// Where tools are not leaves (iPhone, a narrow iPad window): the browser sheet.
+    private func showBrowserSheet(on server: DetectedPort?) {
+        if let server {
+            Task { await openPort(server) }
+        } else {
+            browserURL = nil
+            sheet = .browser
+        }
     }
 
     func openBrowserBesideFocusedPane() {
@@ -141,12 +177,11 @@ extension WindowModel {
     }
 
     var browserPaletteExtras: [(String, String, String, [String]?, () -> Void)] {
-        let start = URL(string: "about:blank")!
-        return [
-            ("browser-tab", "New Browser Tab", "globe", nil, { [weak self] in
-                self?.openBrowser(start, hostId: self?.workspace?.hostId, placement: .tab)
+        [
+            ("browser-tab", WorkspaceAction.newBrowserTab.title, "globe", WorkspaceAction.newBrowserTab.shortcut.symbols, { [weak self] in
+                self?.openBrowserTab()
             }),
-            ("browser-split", WorkspaceAction.openBrowser.title, "rectangle.split.2x1", WorkspaceAction.openBrowser.shortcut.symbols, { [weak self] in
+            ("browser-split", WorkspaceAction.openBrowserBeside.title, "rectangle.split.2x1", WorkspaceAction.openBrowserBeside.shortcut.symbols, { [weak self] in
                 self?.openBrowserBesideFocusedPane()
             }),
         ]

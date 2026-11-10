@@ -85,10 +85,10 @@ final class SplitWebLeavesTests: XCTestCase {
         XCTAssertEqual(model.activeMixed?.browsers.count, 1)
     }
 
-    func testOpenBrowserPutsAPageBesideTheFocusedPane() async throws {
+    func testOpenBrowserBesidePutsAPageBesideTheFocusedPane() async throws {
         let workspace = try XCTUnwrap(model.workspace)
         let pane = try XCTUnwrap(workspace.focusedPane)
-        try perform(.openBrowser)
+        try perform(.openBrowserBeside)
         let mixed = try XCTUnwrap(model.activeMixed)
         XCTAssertEqual(mixed.browsers.count, 1)
         XCTAssertEqual(mixed.members.values.map(\.pane), [pane])

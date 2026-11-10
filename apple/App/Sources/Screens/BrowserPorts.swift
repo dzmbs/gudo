@@ -285,8 +285,8 @@ extension WindowModel {
         openPage(url, hostId: nil)
     }
 
-    /// Where tools are leaves, a page leaf beside `tool` (or the focused leaf), reusing one already
-    /// showing the URL; otherwise the browser sheet.
+    /// Where tools are leaves, a page leaf beside `tool`, else a browser tab, reusing a leaf already
+    /// showing the URL (in the current tab first); otherwise the browser sheet.
     func openPage(_ url: URL, hostId: String?, besideTool tool: UUID? = nil) {
         guard opensToolsAsLeaves else {
             browserURL = url
@@ -297,12 +297,14 @@ extension WindowModel {
         if let tool, let tab = composites.tab(containingTool: tool), let leaf = tab.leaf(forTool: tool) {
             focusLeaf(leaf, inMixedTab: tab.id)
         }
-        if let mixed = activeMixed, let leaf = mixed.leaves.first(where: { candidate in
-            mixed.browsers[candidate].map { $0.url == url.absoluteString && $0.hostId == hostId } ?? false
-        }) {
-            focusLeaf(leaf, inMixedTab: mixed.id)
-            return
+        let candidates = (activeMixed.map { [$0] } ?? []) + composites.tabs.filter { $0.id != activeMixedTab }
+        for tab in candidates {
+            if let leaf = tab.leaves.first(where: { tab.browsers[$0].map { $0.url == url.absoluteString && $0.hostId == hostId } ?? false }) {
+                composites.apply(.focus(leaf), to: tab.id)
+                focus(Self.mixedRef(tab.id))
+                return
+            }
         }
-        openBrowser(url, hostId: hostId, placement: .split)
+        openBrowser(url, hostId: hostId, placement: tool == nil ? .tab : .split)
     }
 }

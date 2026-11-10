@@ -48,8 +48,11 @@ enum WorkspaceAction: Hashable {
     case movePane(Direction)
     /// A split along the focused pane's longer side.
     case splitBestFit
-    /// A browser beside the focused pane, on the dev server it runs.
-    case openBrowser
+    /// A browser tab on the dev server the focused pane runs, in the project of the tab it was
+    /// opened from.
+    case newBrowserTab
+    /// The same page beside the focused pane instead, splitting its tab.
+    case openBrowserBeside
     /// The focused pane's own font size (Ghostty's View menu).
     case resetFontSize, increaseFontSize, decreaseFontSize
 
@@ -59,7 +62,7 @@ enum WorkspaceAction: Hashable {
         + [.previousPrompt, .nextPrompt, .returnToTerminal, .fullScreenEditor]
     static let floatActions: [Self] = [.toggleFloat, .minimizeFloat, .cycleFloats, .toggleFloatsHidden]
     static let drawActions: [Self] = [.draw, .newDrawing]
-    static let browserActions: [Self] = [.openBrowser]
+    static let browserActions: [Self] = [.newBrowserTab, .openBrowserBeside]
     static let tabActions: [Self] = [.previousTab, .nextTab] + (1...8).map(Self.selectTab) + [.lastTab, .goToTab, .moveTabUp, .moveTabDown]
     static let hostActions: [Self] = (1...9).map(Self.selectHost)
     static let historyActions: [Self] = [.reopenClosedTab]
@@ -132,7 +135,8 @@ enum WorkspaceAction: Hashable {
         case .focusPreviousPane: "Focus Previous Pane"
         case .movePane(let direction): "Move Pane \(direction.moveName)"
         case .splitBestFit: "Split Pane Best Fit"
-        case .openBrowser: "Open Browser Beside"
+        case .newBrowserTab: "New Browser Tab"
+        case .openBrowserBeside: "Open Browser Beside"
         case .resetFontSize: "Reset Font Size"
         case .increaseFontSize: "Increase Font Size"
         case .decreaseFontSize: "Decrease Font Size"
@@ -207,7 +211,9 @@ enum WorkspaceAction: Hashable {
         case .movePane(let direction): KeyboardShortcut(direction.arrow, modifiers: [.command, .option, .shift])
         case .splitBestFit: KeyboardShortcut(.return, modifiers: .command)
         // Free in the app and the systems; ⌘B beside it is the sidebar.
-        case .openBrowser: KeyboardShortcut("b", modifiers: [.command, .shift])
+        case .newBrowserTab: KeyboardShortcut("b", modifiers: [.command, .shift])
+        // ⌥ is "beside the focused pane", as when choosing Open in VS Code.
+        case .openBrowserBeside: KeyboardShortcut("b", modifiers: [.command, .option, .shift])
         case .resetFontSize: KeyboardShortcut("0")
         case .increaseFontSize: KeyboardShortcut("+")
         case .decreaseFontSize: KeyboardShortcut("-")
@@ -267,7 +273,8 @@ enum WorkspaceAction: Hashable {
         case .focusPreviousPane: window.focusPane(offset: -1)
         case .movePane(let direction): window.movePane(direction)
         case .splitBestFit: window.splitBestFit()
-        case .openBrowser: window.openBrowserBesideFocusedPane()
+        case .newBrowserTab: window.openBrowserTab()
+        case .openBrowserBeside: window.openBrowserBesideFocusedPane()
         case .resize(let direction) where window.focusedFloats: _ = window.resizeFloat(direction)
         case .closePane: window.closeFocusedPaneOrTab()
         case .returnToTerminal: window.returnToTerminal()
@@ -295,7 +302,7 @@ enum WorkspaceAction: Hashable {
         case .selectTab(let number): workspace.selectTab(at: number - 1)
         case .lastTab: workspace.selectTab(at: nil)
         case .goToTab, .moveTabUp, .moveTabDown, .newWindow, .newAgent, .newProject, .splitWithHost, .returnToTerminal, .fullScreenEditor, .selectHost, .reopenClosedTab: break
-        case .toggleFloat, .minimizeFloat, .cycleFloats, .toggleFloatsHidden, .movePane, .openBrowser: break
+        case .toggleFloat, .minimizeFloat, .cycleFloats, .toggleFloatsHidden, .movePane, .newBrowserTab, .openBrowserBeside: break
         case .focusNextPane: workspace.apply(.focusDirection(.right))
         case .focusPreviousPane: workspace.apply(.focusDirection(.left))
         case .splitBestFit: workspace.split(.horizontal)
