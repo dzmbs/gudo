@@ -5,6 +5,9 @@ step and can take over. Pages reach this host's localhost, as on the host, so `l
 is the dev server you started. Without the MCP tools the same verbs work from the shell:
 `{{HOOK_BIN}} browser <verb> [json | key=value …]`.
 
+Contents: how to work, the user is there, tools (navigate, read, act, wait, look, tabs and
+dialogs, upload, debug), from the shell.
+
 ## How to work
 
 1. `browser_navigate` with a URL. It waits for the page to load and answers with its snapshot.

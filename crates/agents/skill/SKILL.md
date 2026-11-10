@@ -1,6 +1,6 @@
 ---
 name: {{SKILL}}
-description: Work in the {{PRODUCT}} terminal this agent runs in. Run commands in panes the user can watch, split panes and open tabs, start other coding agents as workers and collect their results, drive the browser pane beside the terminal, and read the user's drawings. Use only when the {{ENV}}PANE_ID environment variable is set and the task needs a visible command, a dev server, parallel or reviewing agents, a web page, or a drawing.
+description: Runs commands in {{PRODUCT}} panes the user can watch, splits panes and opens tabs, starts Claude Code or Codex as workers and collects their answers, drives the browser pane beside the terminal, and reads the user's drawings. Use when the {{ENV}}PANE_ID environment variable is set and the task needs a command the user should see, a dev server, parallel or reviewing agents, a web page, or a drawing. Not for ordinary commands your own shell tool already runs well.
 ---
 
 # {{PRODUCT}}
@@ -28,15 +28,16 @@ If the tools are not loaded, the helper has not registered its server with this 
 user. The browser still works from the shell: `{{HOOK_BIN}} browser` lists its verbs, and
 `{{HOOK_BIN}} browser navigate url=localhost:3000` runs one.
 
-Read a reference when you need its details:
+The sections below cover most work. Read a reference only when the task needs it:
 
-- `references/terminal.md`: run, read, wait for and type into panes.
-- `references/layout.md`: split panes, open tabs, floating windows, closing.
-- `references/agents.md`: start workers, prompt them, wait, read their answers, report status.
-- `references/browser.md`: the browser pane beside this terminal.
-- `references/drawings.md`: the drawings and images the user made in this session.
-- `examples/parallel-workers.md`, `examples/review-a-diff.md`,
-  `examples/dev-server-and-browser.md`: worked examples.
+- `references/terminal.md` when a run needs more than `cmd_run`: reading by cursor, waiting on
+  output or a full-screen program, typing into a pane, following events.
+- `references/layout.md` before opening floating windows or moving panes around.
+- `references/agents.md` before starting workers.
+- `references/browser.md` when the task involves a web page.
+- `references/drawings.md` when the user mentions a drawing, sketch or image.
+- `references/examples.md` for three complete runs: parallel workers, a review by a second
+  agent, a dev server checked in the browser.
 
 ## Run a command and watch it
 

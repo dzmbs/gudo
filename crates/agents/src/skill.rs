@@ -35,16 +35,8 @@ const TEMPLATES: &[(&str, &str)] = &[
         include_str!("../skill/references/drawings.md"),
     ),
     (
-        "examples/parallel-workers.md",
-        include_str!("../skill/examples/parallel-workers.md"),
-    ),
-    (
-        "examples/review-a-diff.md",
-        include_str!("../skill/examples/review-a-diff.md"),
-    ),
-    (
-        "examples/dev-server-and-browser.md",
-        include_str!("../skill/examples/dev-server-and-browser.md"),
+        "references/examples.md",
+        include_str!("../skill/references/examples.md"),
     ),
 ];
 
@@ -150,7 +142,7 @@ mod tests {
             .map(|(path, _)| (*path).to_owned())
             .collect();
         assert_eq!(on_disk, bundled);
-        let links = regex::Regex::new(r"`((?:references|examples)/[a-z-]+\.md)`").unwrap();
+        let links = regex::Regex::new(r"`(references/[a-z-]+\.md)`").unwrap();
         for file in skill_files() {
             for link in links.captures_iter(&file.contents) {
                 assert!(
