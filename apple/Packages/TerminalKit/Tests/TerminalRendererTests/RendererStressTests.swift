@@ -188,6 +188,21 @@ import Testing
         #expect(!focused.mayRender(focused: false, now: now) || focused.mayRender(focused: true, now: now))
     }
 
+    /// A frame the layer had no drawable for is not lost: the pane stays dirty and draws it on
+    /// the next tick.
+    @Test func aMissedDrawableKeepsThePaneDirty() throws {
+        let terminal = Terminal(cols: 40, rows: 10) { _ in }
+        let surface = try TerminalSurface(terminal: terminal, fontSize: 13)
+        surface.layout(size: CGSize(width: 400, height: 200), scale: 2)
+        terminal.write(Array("hello".utf8))
+        surface.drawableSource = { _ in nil }
+        #expect(surface.renderIfDirty(), "still has a frame to show")
+        #expect(!surface.hasPresentedFrame)
+        surface.drawableSource = { $0.nextDrawable() }
+        #expect(surface.renderIfDirty())
+        #expect(surface.hasPresentedFrame)
+    }
+
     /// A memory warning empties grown atlases; the pane still draws every glyph afterwards.
     @Test func memoryWarningReleasesGrownAtlases() throws {
         let terminal = Terminal(cols: 60, rows: 10) { _ in }

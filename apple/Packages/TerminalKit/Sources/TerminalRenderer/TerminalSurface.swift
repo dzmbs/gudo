@@ -1139,6 +1139,8 @@ public final class TerminalSurface {
 
     /// Main-thread time shared by every surface's display-link frames.
     static var renderBudget = RenderBudget()
+    /// Where frames for the screen come from (tests stand in a layer out of drawables).
+    var drawableSource: (CAMetalLayer) -> CAMetalDrawable? = { $0.nextDrawable() }
 
     fileprivate func tick(_ link: CADisplayLink) {
         // Over budget: stay dirty and try again on a later tick.
@@ -1247,6 +1249,9 @@ public final class TerminalSurface {
         guard terminalChanged || overlayChanged || imagesChanged || marksChanged || kittyChanged
             || builder.isIncomplete
         else { return false }
+        let drawable = offscreen ? nil : drawableSource(layer)
+        // No drawable (the layer timed out): everything stays dirty for the next tick.
+        guard offscreen || drawable != nil else { return true }
         if terminalChanged { contentGeneration &+= 1 }
         if cursor.blinking != cursorBlinks {
             cursorBlinks = cursor.blinking
@@ -1273,7 +1278,6 @@ public final class TerminalSurface {
         let built = CACurrentMediaTime()
 
         let stats = stats
-        let drawable = offscreen ? nil : layer.nextDrawable()
 #if !targetEnvironment(simulator)
         if let drawable,
            let timedFrame = keyToScreen.frameEncoding(
