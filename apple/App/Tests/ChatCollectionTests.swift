@@ -260,6 +260,8 @@ final class ChatCollectionTests: XCTestCase {
         XCTAssertTrue(controller.model.followsBottom)
         let control = try XCTUnwrap(controller.view.subviews.first { $0.accessibilityIdentifier == "chat-jump-latest" })
         XCTAssertFalse(control.isHidden, "The loaded bottom is not the live bottom when newer values were evicted")
+        controller.view.layoutIfNeeded()
+        XCTAssertGreaterThanOrEqual(control.bounds.height, DS.Size.touchTarget)
         XCTAssertNotNil(controller.model.readingItem)
     }
 

@@ -223,7 +223,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         if visibilityChanged, isViewLoaded { view.setNeedsLayout() }
         footer.rootView = composer
         latest.rootView = AnyView(Button { [weak self] in self?.jumpToLatest() } label: {
-            Label("New", systemImage: "arrow.down").font(.callout.weight(.medium)).padding(.horizontal, 14).padding(.vertical, 10)
+            Label("New", systemImage: "arrow.down").font(.callout.weight(.medium)).padding(.horizontal, 14)
+                .frame(minHeight: DS.Size.touchTarget)
         }.buttonStyle(.plain).themedGlass(in: .capsule, interactive: true).environment(\.self, environment))
         latest.view.isHidden = !(model.hasNewItems || frame.hasNewerGap)
         guard isViewLoaded else { pending = frame; return }

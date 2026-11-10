@@ -173,7 +173,7 @@ struct PaneChatView<Terminal: View>: View {
                 Spacer(minLength: 0)
                 Button { state.show(.terminal, terminal: pane) } label: {
                     Label("Open Terminal", systemImage: "terminal").labelStyle(.iconOnly).font(DS.Font.caption)
-                        .frame(minHeight: DS.Size.touchTarget)
+                        .frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
                 }
                 .buttonStyle(.quiet)
                 if working, state.capabilities.contains(.stop), !state.dictation.isActive {
