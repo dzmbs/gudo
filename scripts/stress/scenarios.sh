@@ -119,8 +119,9 @@ case_subs() {
 }
 
 case_hoard() {
-  echo "== 16 connections hoarding blob downloads, stalled uploads and query floods"
-  RECOVER=10 D hoard "$W/s-hoard.sh" 16 40
+  # A device keeps 16 connections: room for the probe, the echo client and closing ones.
+  echo "== 12 connections hoarding blob downloads, stalled uploads and query floods"
+  RECOVER=10 D hoard "$W/s-hoard.sh" 12 40
 }
 
 case_lag() {

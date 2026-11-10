@@ -20,6 +20,8 @@ B=target/release
 scripts/stress/scenarios.sh $B panes churn floods slow clients control lifecycle soak
 scripts/stress/scenarios.sh $B outages hooks term knocks upgrade many   # second pass
 scripts/stress/scenarios.sh $B deadmount     # needs FUSE (bindfs, or sshfs to localhost)
+
+scripts/stress/scenarios.sh $B subs hoard lag                            # third pass
 SOAK_MIN=90 scripts/stress/scenarios.sh $B soak
 ```
 
@@ -32,9 +34,11 @@ SOAK_MIN=90 scripts/stress/scenarios.sh $B soak
 | `s-slow.sh`, `s-clients.sh`, `s-control.sh`, `s-soak.sh` | Stuck clients; many clients (paired or `GUESTS=1`); input and control storms; mixed soak |
 | `gen.py <kind> [rate]` | Output generators: titles, OSC 7/133/9/777/7501/52, OSC 8 links, Unicode storm, alt-screen storm, kitty images, long lines |
 | `s-gen.sh`, `profile-during.sh`, `mem-during.sh` | Diagnostics: RSS of one generator without a client; a `sample(1)` profile; heap and VM regions mid-run |
-| `gudo-stress` (`crates/stress`) | The driver: `churn`, `deep`, `tabs`, `spawn`, `latency`, `clients`, `slow` (raw peers that never read), `reconnect`, `stale-resume` (raw garbage `Hello`s), `keys`, `paste`, `layout`, `projects`, `outages` (lines typed while the daemon is frozen, checked exactly once), `push-sink` (a device registered with a local fake push relay, counting pushes), `knocks` (fresh devices knocking on one invite) |
+| `gudo-stress` (`crates/stress`) | The driver: `churn`, `deep`, `tabs`, `spawn`, `latency`, `clients`, `slow` (raw peers that never read), `reconnect`, `stale-resume` (raw garbage `Hello`s), `keys`, `paste`, `layout`, `projects`, `outages` (lines typed while the daemon is frozen, checked exactly once), `push-sink` (a device registered with a local fake push relay, counting pushes), `knocks` (fresh devices knocking on one invite), `subs`, `hoard` and `approvals` (the third pass) |
 | `s-outages.sh`, `s-hooks.sh`, `s-term.sh`, `s-knocks.sh`, `s-upgrade.sh`, `many.sh`, `s-soak-heap.sh` | Second pass: input across outages; real `gudo-hook` floods and approval spam with a push sink; agents' terminal tools at high concurrency (a fake `codex` for `agent_spawn`); knock floods; self-upgrade under full load; 1000 panes and a restart; the soak with heap snapshots |
 | `s-deadmount.sh` | A pane, a git worktree and agents' `pane_split cwd=` on a FUSE mount whose server is stopped (SIGSTOP), next to a healthy repository and a client with `Caps::REPO_STATUS`: echo, tab and sidebar latency while it hangs (`gudo-stress dead-mount`) |
+
+| `s-subs.sh`, `s-hoard.sh`, `s-lag.sh` | Third pass: one raw client following and resuming 150 panes; 16 connections hoarding blob downloads, stalled uploads, header-less streams and query floods; approvals during floods and freezes, followed by one client |
 | `hookload.py`, `jobs.sh` | Load from inside panes (they hold the pane's hook token): `gudo-hook` processes, held approvals, terminal-tool calls on the hook socket |
 
 "Echo latency" is the time from sending a token to a pane running `cat` until it comes back in
@@ -226,6 +230,43 @@ echo p99 3.3 ms, a tab in 40 ms, a change in the healthy repository on the sideb
 (the 250 ms tick plus the debounce). Run it on Linux with bindfs or sshfs to localhost, or
 set `DEADMOUNT_MOUNT`, `DEADMOUNT_PID` and `DEADMOUNT_UNMOUNT` for an NFS export whose server
 can be stopped.
+
+### Third pass
+
+Peers that hold the daemon's resources rather than flood it: many subscriptions, hoarded
+streams, queries that never end, and clients that fall behind the event bus. Same shared Mac,
+release build after the fixes. The "before" behaviour is what the regression tests reproduce
+against the earlier code.
+
+| Scenario | Peak (RSS, CPU, fds, threads) | Focused-pane echo | Outcome |
+|---|---|---|---|
+| One raw client (QUIC's default of 100 incoming streams, never accepting one) follows 151 panes, then reconnects resuming all 151 (`subs`) | 32 MB, 13 %, 350 fds, 249 threads | - | before: the 101st stream open blocked the `ctl` reader, so no ping, op or unsubscribe was answered and the app reconnected forever. **Fixed**: ping and op answered in 1.3 ms following, 1.3 ms resuming |
+| 12 connections, each with 64 unread 30 MiB blob downloads, 4 uploads stalled after one byte, 4 streams that never send a header, and a flood of links and history requests for every pane (84 000 in 40 s), 2 panes running `yes` (`hoard`) | 79 MB, 292 %, 130 fds, 87 threads | p50 0.40 ms, p99 9 ms, max 78 ms | before: each download read 30 MiB on an async worker and held it until written (768 × 30 MiB), uploads held a blocking thread forever, queries piled up on the blocking pool, and a header-less stream stalled every later stream of its connection. **Fixed**: a fresh subscription's first frame in 0.8-2.0 ms and its ping in 0.2-0.4 ms throughout; 58 MB 10 s after |
+| 4 panes flooding OSC 133 marks and 4 running `yes`, 8 fake agents asking for approval every second, the daemon frozen (SIGSTOP) 5 s every 10 s, one client following for 60 s (`lag`) | 181 MB, 251 %, 79 fds, 59 threads | - | before: a client that fell behind the event bus got back sessions, layout and participants only; approvals raised meanwhile never showed. **Fixed**: 34 resyncs in the run, and the follower held all 8 open approvals a fresh client saw (missed 0). Identical requests merge, so 8 is one per agent |
+
+Bugs found and fixed in the third pass:
+
+| Severity | Bug | Cause | Fix | Test |
+|---|---|---|---|---|
+| High | A client following or resuming more than ~100 panes stopped being answered at all ("connecting" forever) | `subscribe` opened each pane stream inline in the `ctl` reader; neither side raised QUIC's limit of 100 open unidirectional streams | Both sides allow 1024 (`proto::MAX_UNI_STREAMS`, a transport parameter); each pane's task opens its own stream, waiting at most 10 s; 512 followed panes per connection, then `Forbidden` | `stress::following_more_panes_…`, `stress::resuming_more_panes_…`, `stress::the_app_follows_more_panes_than_quics_default_stream_limit`, `stress::subscriptions_past_the_cap_are_refused` |
+| High | A View guest could grow the daemon by 30 MiB per blob stream it never read, and stall a worker on each read | Synchronous `fs::read` of the whole blob on an async worker, written with no deadline; a put allocated its announced size up front | Blobs stream in 64 KiB pieces from and to disk off the workers, only headers sniffed (`drawing::sniff_reader`); 4 blob streams per connection, the rest wait; 30 s without progress ends a stream | `stress::a_blob_download_nobody_reads_gives_up_its_turn`, `image::tests::a_reader_sees_what_the_bytes_show` |
+| Medium | A client that fell behind the events lost approvals, drive asks, askpass prompts, knocks, leases, agent pane state, attention items and ports until it reconnected | The lag handler resent only sessions, layout and participants | Replay what attaching sends plus the connection-wide state, at most every 500 ms; browser calls go straight to their connection instead of the bus | `approvals::an_approval_reaches_a_client_that_fell_behind_the_events` |
+| Medium | Uploads from a silent peer held a blocking thread forever; searches, links, command output and history pages had no limit per connection; one stream without a header held up all later streams | No read deadline; one `spawn_blocking` per request; headers read inline in the accept loop | 30 s stall timeout on uploads, downloads, blobs and `bulk`; 2 running and 32 accepted per kind and connection, then "busy"; headers within 10 s, each stream in its own task | `stress::an_upload_that_stops_sending_fails_and_leaves_nothing`, `stress::pane_queries_past_the_budget_are_refused`, `stress::a_stream_without_a_header_does_not_hold_up_the_next` |
+| Medium | A Draw guest sending changes quickly parked the daemon's workers | Each drawing change appended and fsynced its log under the artifact store's lock, on an async worker; every connection's event forwarder takes that lock | A single writer prepares and commits under the lock and writes outside it, on the blocking pool | `art::tests::parallel_batches_are_written_in_order` |
+| Low | Steady layout churn postponed `layout.json` forever | Debounce without an upper bound | Saved at most 5 s after the first change | `persist::tests::steady_changes_are_saved_within_the_longest_delay` |
+| Low | Out of descriptors, the editor proxy's accept loop spun | `continue` on an accept error | 100 ms back-off, like the hook socket | - |
+
+New limits (by design):
+
+| Limit | Value | When hit |
+|---|---|---|
+| Panes followed per connection | 512 | `Forbidden { what: "Subscribe" }` |
+| Waiting for the client to allow a pane stream | 10 s | The subscription is dropped with `Forbidden`; the client may subscribe again |
+| Blob streams, file transfers per connection | 4 each at once | The rest wait their turn (QUIC bounds how many can wait) |
+| Pane queries, history pages, drawing requests per connection | 2 running and 32 accepted per kind | Answered "busy: too many requests of this kind at once" (`HistoryGone` for pages) |
+| A transfer, blob or `bulk` stream without progress | 30 s | Failed or reset |
+| A stream's header | within 10 s | The stream is stopped |
+| Layout save while changes keep coming | at most 5 s after the first | - |
 
 ### Not tested, and open items
 

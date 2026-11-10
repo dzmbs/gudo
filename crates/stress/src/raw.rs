@@ -353,7 +353,7 @@ pub async fn hoard(
     let mut setup = dial(key, ticket, false, Vec::new()).await?;
     let hash = put_blob(&mut setup, blob_mib << 20).await?;
     let panes = setup.panes.clone();
-    drop(setup);
+    setup.conn.close(0u32.into(), b"done");
     let home = std::env::var("HOME").context("HOME")?;
     let mut hoards = Vec::new();
     for connection in 0..connections {
@@ -458,5 +458,6 @@ async fn probe_snapshot(key: &[u8], ticket: &str, pane: PaneId) -> Result<(Durat
     .await
     .context("no snapshot within 30 s")??;
     let ping = ctl_round_trip(&mut raw, 3, Duration::from_secs(30)).await?;
+    raw.conn.close(0u32.into(), b"done");
     Ok((first_frame, ping))
 }
