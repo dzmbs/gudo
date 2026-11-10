@@ -27,6 +27,7 @@ const MAX_SCREEN_BYTES: usize = 1 << 20;
 /// Compressed bytes of every pane's screen together; a screen that does not fit is not saved.
 const MAX_TOTAL_BYTES: u64 = 64 << 20;
 const ZSTD_LEVEL: i32 = 3;
+const RESTORED_LABEL: &str = "Restored after restart";
 
 /// What a saved screen brings back.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -201,17 +202,33 @@ pub(crate) fn restored_preamble(saved: Option<&SavedScreen>) -> Vec<u8> {
     let mut preamble = Vec::new();
     let label = match saved {
         Some(saved) => {
-            preamble.extend_from_slice(saved.text.as_bytes());
+            preamble.extend_from_slice(without_last_label(&saved.text).as_bytes());
             preamble.extend_from_slice(b"\x1b[0m\r\n");
-            format!(
-                "Restored after restart \u{b7} {}",
-                local_time(saved.saved_at)
-            )
+            format!("{RESTORED_LABEL} \u{b7} {}", local_time(saved.saved_at))
         }
-        None => "Restored after restart".to_owned(),
+        None => RESTORED_LABEL.to_owned(),
     };
     preamble.extend_from_slice(format!("\x1b[2m{label}\x1b[0m\r\n").as_bytes());
     preamble
+}
+
+/// A screen restored and saved again before anything ran ends with the earlier label and a
+/// prompt: the text up to that label, so only the newest label shows.
+fn without_last_label(text: &str) -> &str {
+    let mut line_start = text.len();
+    for _ in 0..3 {
+        let line_end = text[..line_start].trim_end().len();
+        line_start = text[..line_end]
+            .rfind('\n')
+            .map_or(0, |newline| newline + 1);
+        if text[line_start..line_end].contains(RESTORED_LABEL) {
+            return text[..line_start].trim_end_matches(['\r', '\n']);
+        }
+        if line_start == 0 {
+            break;
+        }
+    }
+    text
 }
 
 /// `at` in this computer's time zone, `2026-11-08 23:04`.
@@ -253,6 +270,23 @@ mod tests {
     fn long_screens_keep_their_newest_lines() {
         assert_eq!(newest_part("one\ntwo\nthree", 9), "three");
         assert_eq!(newest_part("one\ntwo", 100), "one\ntwo");
+    }
+
+    #[test]
+    fn a_screen_restored_twice_says_so_once() {
+        let first = SavedScreen {
+            saved_at: UnixMillis(1_762_639_440_000),
+            text: "$ echo hi\r\nhi\r\n$ ".to_owned(),
+        };
+        let restored = String::from_utf8(restored_preamble(Some(&first))).unwrap();
+        let again = SavedScreen {
+            saved_at: UnixMillis(1_762_639_500_000),
+            text: format!("{restored}$ "),
+        };
+        let twice = String::from_utf8(restored_preamble(Some(&again))).unwrap();
+        assert_eq!(twice.matches(RESTORED_LABEL).count(), 1, "{twice:?}");
+        assert!(twice.starts_with("$ echo hi\r\nhi\r\n$ "), "{twice:?}");
+        assert!(twice.contains(&local_time(again.saved_at)), "{twice:?}");
     }
 
     #[test]
