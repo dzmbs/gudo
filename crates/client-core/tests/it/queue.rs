@@ -53,7 +53,7 @@ async fn requests_given_up_during_an_outage_are_never_applied_and_the_rest_stays
                 height_px: 0,
             },
         );
-        client.set_typing(pane, cols % 2 == 0);
+        client.set_typing(pane, cols.is_multiple_of(2));
     }
     assert!(
         client.queued() < 10,

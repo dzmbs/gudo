@@ -67,7 +67,7 @@ async fn keep_working(client: &Client, pane: PaneId, until: Instant) -> (usize, 
                 },
             );
             client.ink_live(ink(chunk));
-            client.set_typing(pane, chunk % 2 == 0);
+            client.set_typing(pane, chunk.is_multiple_of(2));
         }
         // A terminal line holds at most 1024 typed bytes (macOS drops the rest, Return
         // included): kill the line before it fills, as a long outage types far more.
