@@ -1,14 +1,16 @@
 //! "What did this agent turn change": the worktree is snapshotted as a git tree when an agent
 //! turn starts and again when it ends (see [`git::worktree_tree`]), and the turn's diff is the
-//! diff between the two trees. Snapshots run one at a time on a worker so a turn's end can
-//! never be recorded before its start.
+//! diff between the two trees. A pane's snapshots run one at a time so a turn's end can
+//! never be recorded before its start; panes run independently, so a repository whose git
+//! hangs holds only its own panes' turns.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use proto::{GitDiff, PaneId, TurnInfo, UnixMillis, WsError};
 use tokio::sync::mpsc;
+use tokio::task::JoinSet;
 
 use super::git;
 use crate::core::{Core, lock};
@@ -19,6 +21,14 @@ const MAX_TURNS: usize = 50;
 pub(crate) enum Boundary {
     Start { pane: PaneId, cwd: PathBuf },
     End { pane: PaneId },
+}
+
+impl Boundary {
+    fn pane(&self) -> PaneId {
+        match self {
+            Self::Start { pane, .. } | Self::End { pane } => *pane,
+        }
+    }
 }
 
 pub(crate) struct Turns {
@@ -82,12 +92,49 @@ impl Turns {
 }
 
 pub(crate) async fn run(core: Arc<Core>) {
-    let Some(mut rx) = lock(&core.ws.turns.rx).take() else {
+    let Some(boundaries) = lock(&core.ws.turns.rx).take() else {
         return;
     };
-    while let Some(boundary) = rx.recv().await {
-        let core = Arc::clone(&core);
-        let _ = tokio::task::spawn_blocking(move || apply(&core, boundary)).await;
+    apply_per_pane(boundaries, Arc::new(move |boundary| apply(&core, boundary))).await;
+}
+
+type Apply = Arc<dyn Fn(Boundary) + Send + Sync>;
+
+/// Applies each pane's boundaries in order, one at a time, and different panes' at once.
+async fn apply_per_pane(mut boundaries: mpsc::UnboundedReceiver<Boundary>, apply: Apply) {
+    let mut waiting: HashMap<PaneId, VecDeque<Boundary>> = HashMap::new();
+    let mut applying: JoinSet<PaneId> = JoinSet::new();
+    let start = |applying: &mut JoinSet<PaneId>, boundary: Boundary| {
+        let pane = boundary.pane();
+        let apply = Arc::clone(&apply);
+        applying.spawn(async move {
+            let _ = tokio::task::spawn_blocking(move || apply(boundary)).await;
+            pane
+        });
+    };
+    loop {
+        tokio::select! {
+            received = boundaries.recv() => {
+                let Some(boundary) = received else {
+                    return;
+                };
+                match waiting.get_mut(&boundary.pane()) {
+                    Some(queue) => queue.push_back(boundary),
+                    None => {
+                        waiting.insert(boundary.pane(), VecDeque::new());
+                        start(&mut applying, boundary);
+                    }
+                }
+            }
+            Some(Ok(pane)) = applying.join_next() => {
+                match waiting.get_mut(&pane).and_then(VecDeque::pop_front) {
+                    Some(next) => start(&mut applying, next),
+                    None => {
+                        waiting.remove(&pane);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -160,5 +207,57 @@ fn finish(turns: &Turns, pane: PaneId, root: &std::path::Path, now: UnixMillis) 
     {
         last.end_tree = Some(tree);
         last.ended_at = Some(now);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// One pane's snapshot hangs (its repository is on a stalled mount): the other pane's
+    /// turns are still recorded, and the stuck pane's own boundaries keep their order.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_stuck_pane_holds_only_its_own_turns() {
+        let stuck = PaneId(1);
+        let other = PaneId(2);
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let released = Mutex::new(released);
+        let (applied_tx, mut applied) = mpsc::unbounded_channel();
+        let apply: Apply = Arc::new(move |boundary: Boundary| {
+            if matches!(boundary, Boundary::Start { pane, .. } if pane == stuck) {
+                let _ = lock(&released).recv();
+            }
+            let _ = applied_tx.send(format!("{boundary:?}"));
+        });
+        let (boundaries, receiver) = mpsc::unbounded_channel();
+        let worker = tokio::spawn(apply_per_pane(receiver, apply));
+        let cwd = PathBuf::from("/repo");
+        for boundary in [
+            Boundary::Start {
+                pane: stuck,
+                cwd: cwd.clone(),
+            },
+            Boundary::End { pane: stuck },
+            Boundary::Start {
+                pane: other,
+                cwd: cwd.clone(),
+            },
+            Boundary::End { pane: other },
+        ] {
+            boundaries.send(boundary).unwrap();
+        }
+        let mut next = async || {
+            tokio::time::timeout(Duration::from_secs(5), applied.recv())
+                .await
+                .expect("a boundary is applied")
+                .unwrap()
+        };
+        assert!(next().await.starts_with("Start { pane: PaneId(2)"));
+        assert!(next().await.starts_with("End { pane: PaneId(2)"));
+        release.send(()).unwrap();
+        assert!(next().await.starts_with("Start { pane: PaneId(1)"));
+        assert!(next().await.starts_with("End { pane: PaneId(1)"));
+        worker.abort();
     }
 }
