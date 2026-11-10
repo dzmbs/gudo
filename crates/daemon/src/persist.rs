@@ -167,13 +167,15 @@ async fn write(
     .map_err(io::Error::other)?
 }
 
-/// Saves after every burst of changes, once the debounce window has been quiet.
+/// Saves after every burst of changes, once the debounce window has been quiet, and at the
+/// latest `persist_max_delay` after the first change while changes keep coming.
 pub(crate) async fn run(core: Arc<Core>) {
     loop {
         core.persist_dirty.notified().await;
+        let latest = tokio::time::Instant::now() + core.cfg.persist_max_delay;
         loop {
-            let quiet =
-                tokio::time::timeout(core.cfg.persist_debounce, core.persist_dirty.notified());
+            let quiet_until = (tokio::time::Instant::now() + core.cfg.persist_debounce).min(latest);
+            let quiet = tokio::time::timeout_at(quiet_until, core.persist_dirty.notified());
             if quiet.await.is_err() {
                 break;
             }
@@ -208,6 +210,30 @@ mod tests {
             .await
             .unwrap();
         assert!(!being_written.exists());
+        daemon.shutdown().await;
+    }
+
+    /// Changes that never pause still reach the disk within the longest delay.
+    #[tokio::test]
+    async fn steady_changes_are_saved_within_the_longest_delay() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = crate::Config::new(directory.path());
+        config.relay = crate::RelayMode::Disabled;
+        config.bind = Some("127.0.0.1:0".parse().unwrap());
+        config.persist_debounce = std::time::Duration::from_millis(300);
+        config.persist_max_delay = std::time::Duration::from_secs(1);
+        let daemon = crate::Daemon::start(config).await.unwrap();
+        let file = path(directory.path());
+        let _ = std::fs::remove_file(&file);
+        let started = std::time::Instant::now();
+        while !file.exists() {
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(4),
+                "not saved while changes kept coming"
+            );
+            daemon.core.mark_dirty();
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
         daemon.shutdown().await;
     }
 }

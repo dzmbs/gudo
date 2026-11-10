@@ -146,6 +146,8 @@ pub struct Config {
     pub default_size: (u16, u16),
     /// Quiet period before layout changes are written to disk.
     pub persist_debounce: Duration,
+    /// Longest layout changes wait for the disk while they keep coming.
+    pub persist_max_delay: Duration,
     /// How long after output a pane's screen is saved for after a restart (`screens`): at
     /// most once per this while it keeps changing.
     pub screen_save_delay: Duration,
@@ -377,6 +379,7 @@ impl Config {
             image_storage_bytes: ghostty_vt::KITTY_IMAGE_STORAGE_LIMIT,
             default_size: (80, 24),
             persist_debounce: Duration::from_millis(500),
+            persist_max_delay: Duration::from_secs(5),
             screen_save_delay: Duration::from_secs(5),
             drive_ask_wait: Duration::from_secs(120),
             hook_bin: None,
