@@ -194,8 +194,9 @@ Stop/StopFailure retire that hook identity; a hook generated before the latest i
 This is not proof of a unique CLI submission, or of the input queue being consumed or clean.
 The handler requires owner/Prompt authorization, a still-working Claude runtime, actual foreground,
 open exit fence and no pending writer. Dirty/unknown input requires the same current-revision warning
-with an explicit Interrupt anyway action. Admission consumes the ticket and dirties the draft before
-one Escape is enqueued. A second ticket cannot repeat Escape in that hook turn. The only positive
+with an explicit Interrupt anyway action. Admission consumes the ticket; once the Escape is
+written, the draft is dirtied and a second ticket cannot repeat Escape in that hook turn. A stop
+that could not be delivered leaves the turn stoppable. The only positive
 receipt is **Interrupt requested**, not Stopped. UI/transport failures never automatically retry;
 phone text is never cleared. The state machine is independent of a pending prompt receipt, which an
 interrupt may make unconfirmed. Current-link capability and live-request checks also cover queued
@@ -392,8 +393,9 @@ prefix cannot truncate a longer live row. Partial canonical text is held behind 
 canonical text covers it; bounded same-epoch snapshots hand over in canonical order, including
 interleaved tools, while preserving overlapping older history. No transcript is rewritten.
 
-Capture admits at most 64 panes, 16 active messages and 64 message identities per prompt, with
-256 KiB/message and 768 KiB/stream budgets (including retained replay delta). The overlay has a
+Capture admits at most 64 panes and 16 active messages, with 256 KiB/message and 768 KiB/stream
+budgets (including retained replay delta). A new message retires the oldest finished one when
+either is full, so a long turn keeps streaming; the last 1024 retired identities stay duplicates. The overlay has a
 separate 768 KiB conservative value budget and shares the existing push/snapshot budget. These
 are bounds, not latency or RSS acceptance. Hot relay handoff remains deferred. Upgrades/restarts
 are refused while a dedicated Claude launch using the enabled recipe is pending/open, as for
@@ -490,7 +492,7 @@ the same bounded allowance. Ephemeral user threads remain supported; unverified 
 close native observation rather than guessing. Each successful binding has a non-reused identity,
 so deferred work cannot survive a same-thread round trip or another connection. Typed envelopes
 reject duplicate identity fields. Observation retains at most 256 bounded binding-request IDs
-and parses at most 64KiB per pending control frame; exhaustion closes native binding, not Terminal.
+and parses at most 8MiB per frame; exhaustion closes native binding, not Terminal.
 The opt-in relay forwards official frames unchanged, independently of these native limits.
 
 This is the adapter's correlation foundation, not an enabled production Codex timeline/control
@@ -516,15 +518,17 @@ of all Gudo MCP tools or arbitrary user MCP configurations.
 
 `CodexLiveEvents` decodes turn boundaries, assistant deltas and approval identities from the proven
 physical transport. It requires the exact private binding identity and active turn; auxiliary threads
-and obsolete turn deltas/completions are ignored. Parsing is bounded to 64KiB; malformed frames close
-native observation, not transport forwarding. Unknown outcomes are not success. A real TUI capture
+and obsolete turn deltas/completions are ignored. Frames are read by method first, and only the ones
+the cursor uses are decoded, up to 8MiB; a command's output keeps its last 64KiB. Malformed frames
+close native observation, not transport forwarding. Unknown outcomes are not success. A real TUI capture
 includes an app-server command approval held without sending a decision. Approval signals are not
 authority to approve. Native delivery retains the complete request metadata and offered decisions,
 then uses the shared signed-policy path described below. Notify is not a live adapter completion or
 approval source. `serverRequest/resolved` retires only the exact pending numeric or string request
 on the bound thread and active turn; duplicate, foreign and obsolete resolutions are ignored. Resolved
 request identities remain reserved within a bounded allowance so late frames cannot resolve a reused
-identity. Resolution does not establish approval, execution or success.
+identity; a new turn keeps only the last 256 of them, and the last 500 turn identities stay reserved,
+so a long thread stays bound. Resolution does not establish approval, execution or success.
 
 ### Version-gated pane producer and controls
 
@@ -532,7 +536,11 @@ identity. Resolution does not establish approval, execution or success.
 Setting it to false retains the legacy Terminal path. Existing, adopted and manually launched agents
 are not upgraded into native conversations. The pane owns an app-server,
 private randomized 0700 directory and 0600 environment/relay sockets; timeline watches own none of
-these. Before any native server or conversation exists, a bounded successful `--version` check
+these. The app-server leads its own process group: teardown sends the group SIGTERM, then SIGKILL,
+and on Linux the server dies with the daemon. A daemon start removes launch directories left by
+ended daemons of the same user. The launch's exit fence retires the pane's source, and the
+launcher and TUI connections are awaited for at most two minutes and one minute, so a launch that
+never started cannot hold off helper upgrades. Before any native server or conversation exists, a bounded successful `--version` check
 selects exactly 0.166.0 for native operation. Other, malformed or timed-out version results select
 the existing standalone Terminal recipe. The private bootstrap still validates the pane and returns
 bounded arguments, account pins and credential removals. The helper execs that recipe in the same
@@ -546,12 +554,15 @@ owned PTY, exact pane environment, and TUI/server peer process trees. Secrets st
 and private socket payloads, never argv, event metadata or persisted bootstrap files. The helper
 currently accepts exactly Codex 0.166.0.
 
-A bounded observer runs independently of byte forwarding: 64 chunks of at most 16KiB, 64KiB native
-messages, and at most 256 queued timeline operations / 1MiB. Observation failure or queue overflow
-closes the native producer, not official frame forwarding. The projection handles user/assistant
-items, assistant deltas, command summaries and completed reasoning. It admits at most 500 items
-and 768KiB of serialized bodies; exceeding admission limits disables Chat rather than silently
-losing older history. Item identity is turn-scoped. Final items reconcile partial text, unknown
+Each direction is copied on its own and handed to the observer in order: 64 chunks of at most
+16KiB, waiting for the observer rather than dropping bytes. An observer stalled for two seconds
+gives up observation; official frames keep flowing either way. Messages over 8MiB are skipped:
+from the server they leave a Terminal notice in Chat, while a skipped TUI message or binding reply
+closes observation. At most 256 timeline operations / 1MiB are queued. The projection handles
+user/assistant items, assistant deltas, command summaries and completed reasoning. It keeps at most
+500 items and 768KiB of serialized bodies, forgetting the oldest; a single item over 256KiB becomes
+a Terminal notice. When Chat cannot show the conversation (a full capture before history, a missing
+resume history, a rollback), only Chat closes: status, notifications and approvals keep flowing. Item identity is turn-scoped. Final items reconcile partial text, unknown
 command status is explicit, and non-success turn endings are notices, never inferred success.
 
 The common `AgentSession` exposes READ and STREAMING_DELTAS, adding SEND, ACKNOWLEDGED_SEND,
@@ -571,26 +582,27 @@ Resume/fork history must be complete, with unambiguous turn/item identities. Whe
 calls `thread/read(includeTurns: true)` for the already proven thread. It never calls thread/start,
 thread/resume or turn/start. Peer ownership and current binding are checked, including after asynchronous initialization at
 request serialization and again on receipt; the request has a
-5-second deadline, bounded notification allowance and 64KiB reply limit, without retries. Captured
+5-second deadline, bounded notification allowance and 8MiB reply limit, without retries. Captured
 new live turns replace their corresponding snapshot turns, avoiding duplicate text; completed
 baseline turn identities reject delayed replay. An active read snapshot without an observed turn
-start has no ordered baseline and disables native Chat, leaving Terminal intact. Historical
+start has no ordered baseline and closes Chat, leaving Terminal and status intact. Historical
 completions never increment runtime turn counts or send completion notifications. A current-thread
-TUI rollback disables native observation until ordered rollback hydration is implemented; it cannot
-leave stale history advertised as current. Foreign-thread rollbacks do not retire this source.
+TUI rollback closes Chat until ordered rollback hydration is implemented; it cannot leave stale
+history advertised as current. Foreign-thread rollbacks do not retire this source.
 
 Native controls use independent, peer-verified connections to that same owned app-server, not a
-second conversation. A four-entry launch-owned queue has a four-second deadline per admitted action;
+second conversation. An eight-entry launch-owned queue has a four-second deadline per admitted action;
 there are no retries. Immediately before JSON serialization, the worker rechecks the current pane,
 producer, exact binding/active turn, foreground process and input-fence revision. Encoded requests
-are limited to 60KiB; incoming messages remain limited to 64KiB and 256 messages per response wait.
+are limited to 60KiB; incoming messages are limited to 8MiB and 256 messages per response wait.
 A server request sharing a numeric ID with a client request is not a response.
 
 An explicit Send uses `turn/start`, or `turn/steer` with the exact `expectedTurnId`, and confirms only
 a validated official turn receipt on the current source. This does not submit or clear a draft in
 Terminal. Stop uses `turn/interrupt` for the captured active turn and reports **Interrupt requested**,
-not stopped; only the structured completion establishes interruption. Send/Stop retain the common
-owner-device, prepared-ticket, confirmation, once-only and exit-fence admission checks.
+not stopped; only the structured completion establishes interruption. No Escape reaches Terminal,
+so the draft stays clean. Send/Stop retain the common owner-device, prepared-ticket, confirmation,
+once-only and exit-fence admission checks.
 
 Command and file-change answers map the common signed request back to the exact pending numeric or
 string app-server RPC ID. Only supported one-request acceptance and refusal/cancellation are exposed;
@@ -606,8 +618,11 @@ retains the exact grants of the answering actor and any required prior witness, 
 issuer chain and scope. It rechecks all their validity and pane authority and the unchanged policy
 at serialization. A signed auto-approval rule retains its exact consent record and must still be
 present, unrevoked and unexpired at serialization; a rule ID alone is insufficient. A Terminal resolution first retires a queued mobile answer; duplicate signed
-answers cannot execute it again. Delivery failure withdraws the native producer rather than retrying
-an admitted decision or reporting execution. Official forwarding and launch-owned server lifetime
+answers cannot execute it again. An answer that no longer applies at serialization (Terminal input,
+a new turn, a resolved request or changed policy) is dropped and the request is offered again; a
+refused delivery is never reported as decided. Allow-all rules on a native Codex pane are owner-only.
+Transport failure withdraws native control rather than retrying an admitted decision or reporting
+execution. Official forwarding and launch-owned server lifetime
 remain independent of observation/control failure.
 
 This is the default dedicated launch path, not a claim of completed production acceptance. Validation
