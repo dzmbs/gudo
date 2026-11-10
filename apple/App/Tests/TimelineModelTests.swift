@@ -335,6 +335,30 @@ final class TimelineModelTests: XCTestCase {
         }
     }
 
+    func testDeferredHighlightsOfStreamingCodeFinishAndStop() async throws {
+        let worker = TimelineRenderWorker(pane: 7, highlightAllowance: .zero)
+        var item = TimelineFixtureJSON.item(0)
+        let text = "```rust\nfn first() { let text = \"one\"; }\n```\n\n```rust\nfn second() { let text = \"two\"; }\n```"
+        item["body"] = ["Assistant": ["text": text, "streaming": true]]
+        var page = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(TimelineFixtureJSON.snapshot(0..<0).utf8)) as? [String: Any])
+        page["items"] = [item]
+        var result = try await worker.apply([.snapshot(try TimelineFixtureJSON.json(page))], resetsSnapshot: true, protectsHistory: false)
+        XCTAssertTrue(result.awaitsHighlights)
+        var passes = 0
+        while result.awaitsHighlights, passes < 10 {
+            result = try await worker.apply([.highlights], resetsSnapshot: false, protectsHistory: false)
+            passes += 1
+        }
+        XCTAssertFalse(result.awaitsHighlights, "Every pass must make progress, so retries stop")
+        XCTAssertLessThanOrEqual(passes, 2)
+        let blocks = result.frame.rows.compactMap { row -> ChatCodeSnippet? in
+            guard case .markdown(let block) = row.content else { return nil }
+            return block.code
+        }
+        XCTAssertEqual(blocks.count, 2)
+        for block in blocks { XCTAssertFalse(block.highlights.isEmpty) }
+    }
+
     func testTheModelSchedulesDeferredHighlights() async throws {
         let model = TimelineModel(pane: 7)
         model.receive(.snapshot(try codePage(120, name: "item")))

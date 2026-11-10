@@ -8,6 +8,9 @@ public final class CodeHighlighter {
     public static let maximumTokens = 1_024
     public static let cacheByteLimit = 512 * 1_024
     public static let cacheEntryLimit = 128
+    /// Blocks still changing (`caches: false`) keep their last highlights apart from the cache,
+    /// so a later pass over the same text reuses them instead of spending its allowance again.
+    static let transientEntryLimit = 16
 
     private struct Key: Hashable {
         let text: String
@@ -30,6 +33,7 @@ public final class CodeHighlighter {
 
     private var states: [CodeLanguage: State] = [:]
     private var cache: [Key: Entry] = [:]
+    private var transient: [Key: Entry] = [:]
     private var clock: UInt64 = 0
     private var allowanceDeadline: ContinuousClock.Instant?
     private var hasParsedInAllowance = false
@@ -60,7 +64,7 @@ public final class CodeHighlighter {
     public func highlighting(_ text: String, language: CodeLanguage?, caches: Bool = true) -> Highlighting {
         guard let language, !text.isEmpty, text.utf8.count <= Self.maximumBytes,
               text.utf8.lazy.filter({ $0 == 10 }).prefix(2_000).count < 2_000 else { return .tokens([]) }
-        if clock == .max { cache.removeAll(); cacheBytes = 0; clock = 0 }
+        if clock == .max { cache.removeAll(); transient.removeAll(); cacheBytes = 0; clock = 0 }
         clock += 1
         let key = Key(text: text, language: language)
         if var entry = cache[key] {
@@ -68,10 +72,22 @@ public final class CodeHighlighter {
             cache[key] = entry
             return .tokens(entry.tokens)
         }
+        if var entry = transient[key] {
+            entry.access = clock
+            transient[key] = entry
+            return .tokens(entry.tokens)
+        }
         if let allowanceDeadline, hasParsedInAllowance, ContinuousClock.now >= allowanceDeadline { return .deferred }
         hasParsedInAllowance = true
         let tokens = parse(text, language: language)
-        guard caches else { return .tokens(tokens) }
+        guard caches else {
+            if transient.count >= Self.transientEntryLimit,
+               let oldest = transient.min(by: { $0.value.access < $1.value.access })?.key {
+                transient.removeValue(forKey: oldest)
+            }
+            transient[key] = Entry(tokens: tokens, bytes: 0, access: clock)
+            return .tokens(tokens)
+        }
         let bytes = text.utf8.count * 2 + tokens.count * 32 + 256
         while cache.count >= Self.cacheEntryLimit || cacheBytes + bytes > Self.cacheByteLimit {
             guard let oldest = cache.min(by: { $0.value.access < $1.value.access })?.key,

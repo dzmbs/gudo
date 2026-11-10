@@ -46,7 +46,7 @@ nonisolated struct TimelineRenderResult: Sendable {
 
 actor TimelineRenderWorker {
     private var window: TimelineWindow
-    private let builder = RowBuilder()
+    private let builder: RowBuilder
     private var rowsByItem: [String: RenderedChatRows] = [:]
     private var renderCost = LRUCost()
     private var revision = 0
@@ -57,8 +57,10 @@ actor TimelineRenderWorker {
     private var identifiers: [ChatRowID] = []
     private let pane: UInt64
 
-    init(pane: UInt64, valueByteLimit: Int = TimelineWindow.defaultByteLimit) {
+    init(pane: UInt64, valueByteLimit: Int = TimelineWindow.defaultByteLimit,
+         highlightAllowance: Duration = RowBuilder.highlightAllowance) {
         self.pane = pane
+        builder = RowBuilder(highlightAllowance: highlightAllowance)
         window = TimelineWindow(byteLimit: valueByteLimit)
     }
 

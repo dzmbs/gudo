@@ -141,8 +141,13 @@ nonisolated final class RowBuilder {
     private(set) var lastRenderDuration = Duration.zero
     private(set) var itemsAwaitingHighlights: Set<String> = []
     static let highlightAllowance = Duration.milliseconds(4)
+    private let highlightAllowance: Duration
 
-    func beginPage() { codeHighlighter.beginAllowance(Self.highlightAllowance) }
+    init(highlightAllowance: Duration = RowBuilder.highlightAllowance) {
+        self.highlightAllowance = highlightAllowance
+    }
+
+    func beginPage() { codeHighlighter.beginAllowance(highlightAllowance) }
     func endPage() { codeHighlighter.endAllowance() }
 
     func rows(for item: TimelineItem) -> [ChatRow] { render(item).rows }

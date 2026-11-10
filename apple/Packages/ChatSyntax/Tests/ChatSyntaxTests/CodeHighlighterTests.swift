@@ -119,4 +119,21 @@ final class CodeHighlighterTests: XCTestCase {
         XCTAssertEqual(highlighter.cacheEntryCount, 0)
         XCTAssertEqual(highlighter.cacheBytes, 0)
     }
+
+    func testTransientBlocksAreNotParsedAgainOnTheNextAllowance() {
+        let highlighter = CodeHighlighter()
+        let first = "fn first() { let text = \"one\"; }\n", second = "fn second() { let text = \"two\"; }\n"
+        var passes = 0
+        var pending = true
+        while pending, passes < 10 {
+            highlighter.beginAllowance(.zero)
+            pending = [first, second].contains { highlighter.highlighting($0, language: .rust, caches: false) == .deferred }
+            highlighter.endAllowance()
+            passes += 1
+        }
+        XCTAssertFalse(pending, "Every allowance must make progress on unchanged transient blocks")
+        XCTAssertEqual(passes, 2)
+        XCTAssertEqual(highlighter.parseCount, 2)
+        XCTAssertEqual(highlighter.cacheEntryCount, 0)
+    }
 }
