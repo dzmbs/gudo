@@ -126,24 +126,41 @@ pub(crate) async fn save(core: &Arc<Core>) -> io::Result<()> {
     let saved = saved_state(core);
     let mut screens_to_keep = saved.pane_ids();
     screens_to_keep.extend(core.panes_before_exits());
-    write(core, saved, screens_to_keep).await
+    write(core, saved, Some(screens_to_keep)).await
+}
+
+/// Whether the shutdown's own save of the screens finished.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScreensSaving {
+    Done,
+    /// Still writing files, so none may be removed under it.
+    StillRunning,
 }
 
 /// Saves on shutdown, keeping what programs that ended a moment before lost
 /// (`core::ENDED_BY_SHUTDOWN`).
-pub(crate) async fn save_on_shutdown(core: &Arc<Core>) -> io::Result<()> {
+pub(crate) async fn save_on_shutdown(core: &Arc<Core>, screens: ScreensSaving) -> io::Result<()> {
     let saved = core.state_to_save_on_shutdown();
-    let screens_to_keep = saved.pane_ids();
+    let screens_to_keep = match screens {
+        ScreensSaving::Done => Some(saved.pane_ids()),
+        ScreensSaving::StillRunning => None,
+    };
     write(core, saved, screens_to_keep).await
 }
 
-async fn write(core: &Arc<Core>, saved: Saved, screens_to_keep: HashSet<PaneId>) -> io::Result<()> {
+async fn write(
+    core: &Arc<Core>,
+    saved: Saved,
+    screens_to_keep: Option<HashSet<PaneId>>,
+) -> io::Result<()> {
     let bytes = serde_json::to_vec_pretty(&saved).map_err(io::Error::other)?;
     let file = path(&core.cfg.state_dir);
     let core = Arc::clone(core);
     tokio::task::spawn_blocking(move || {
         write_atomic(&file, &bytes)?;
-        core.screens.keep_only(&screens_to_keep);
+        if let Some(screens_to_keep) = screens_to_keep {
+            core.screens.keep_only(&screens_to_keep);
+        }
         Ok(())
     })
     .await
@@ -164,5 +181,33 @@ pub(crate) async fn run(core: Arc<Core>) {
         if let Err(error) = save(&core).await {
             tracing::warn!("saving layout: {error}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_shutdown_still_saving_screens_removes_none() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = crate::Config::new(directory.path());
+        config.relay = crate::RelayMode::Disabled;
+        config.bind = Some("127.0.0.1:0".parse().unwrap());
+        let daemon = crate::Daemon::start(config).await.unwrap();
+        let screens = directory.path().join("screens");
+        std::fs::create_dir_all(&screens).unwrap();
+        let being_written = screens.join("999.zst");
+        std::fs::write(&being_written, b"screen").unwrap();
+
+        save_on_shutdown(&daemon.core, ScreensSaving::StillRunning)
+            .await
+            .unwrap();
+        assert!(being_written.exists());
+        save_on_shutdown(&daemon.core, ScreensSaving::Done)
+            .await
+            .unwrap();
+        assert!(!being_written.exists());
+        daemon.shutdown().await;
     }
 }

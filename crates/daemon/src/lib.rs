@@ -424,13 +424,14 @@ impl Daemon {
         self.core.art.flush();
         let saving = Arc::clone(&self.core);
         let screens = tokio::task::spawn_blocking(move || saving.screens.save_all(&saving));
-        if tokio::time::timeout(SHUTDOWN_SCREENS_WAIT, screens)
-            .await
-            .is_err()
-        {
-            tracing::warn!("saving the screens took too long; the newest may be missing");
-        }
-        if let Err(error) = persist::save_on_shutdown(&self.core).await {
+        let screens = match tokio::time::timeout(SHUTDOWN_SCREENS_WAIT, screens).await {
+            Ok(_) => persist::ScreensSaving::Done,
+            Err(_) => {
+                tracing::warn!("saving the screens took too long; the newest may be missing");
+                persist::ScreensSaving::StillRunning
+            }
+        };
+        if let Err(error) = persist::save_on_shutdown(&self.core, screens).await {
             tracing::warn!("saving layout on shutdown: {error}");
         }
         self.endpoint.close().await;
