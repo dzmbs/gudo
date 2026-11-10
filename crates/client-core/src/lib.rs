@@ -1306,6 +1306,7 @@ impl Drop for Client {
         for task in lock(&self.tasks).drain(..) {
             task.abort();
         }
+        self.inner.ws.stop_forwards();
         let Some(runtime) = self.runtime.take() else {
             // A shared runtime: close in the background, never block the caller (it may be
             // the app's main thread).

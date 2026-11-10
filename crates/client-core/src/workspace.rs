@@ -184,6 +184,13 @@ impl WsState {
         None
     }
 
+    /// Stops every forward (the client is going away).
+    pub(crate) fn stop_forwards(&self) {
+        for (_, (_, task)) in lock(&self.forwards).drain() {
+            task.abort();
+        }
+    }
+
     /// The connection dropped: requests in flight will not be answered.
     pub(crate) fn fail_pending(&self) {
         for (_, tx) in lock(&self.pending).drain() {

@@ -1,9 +1,10 @@
-//! Without a link: transfers and forwards give up instead of waiting forever.
+//! Without a link: transfers and forwards give up instead of waiting forever, and dropping a
+//! client lets go of everything it bound.
 
 use std::time::{Duration, Instant};
 
-use client_core::ClientEvent;
 use client_core::proto::ForwardTarget;
+use client_core::{Client, ClientConfig, ClientEvent, EventQueue, RelayMode};
 
 use super::{Host, connect, next_matching};
 
@@ -99,4 +100,31 @@ async fn a_forwarded_connection_while_the_host_is_down_is_closed_in_time() {
     )
     .await;
     assert!(ended.is_ok(), "the forwarded connection hung");
+}
+
+#[test]
+fn dropping_a_client_on_a_shared_runtime_frees_its_forwarded_ports() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let mut host = runtime.block_on(Host::start());
+    let (listener, _events) = EventQueue::channel();
+    let mut config = ClientConfig::new(ClientConfig::generate_key());
+    config.relay = RelayMode::Disabled;
+    let client = Client::connect_on(runtime.handle(), &host.ticket(), config, listener).unwrap();
+    let forwarded = client
+        .forward(0, ForwardTarget::Tcp { port: 9 })
+        .expect("bound");
+    let port_forwarded = client.forward_port(0, 9).expect("bound");
+    drop(client);
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    for port in [forwarded, port_forwarded] {
+        while std::net::TcpListener::bind(("127.0.0.1", port)).is_err() {
+            assert!(
+                Instant::now() < deadline,
+                "port {port} is still bound after the client was dropped"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    runtime.block_on(host.go_down());
 }
