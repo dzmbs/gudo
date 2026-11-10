@@ -115,6 +115,36 @@ impl Approvals {
         Ok(Verdict::Decide)
     }
 
+    /// Judges an allow that `ballot` gives alone, never held for a second person: an edited
+    /// command (the first vote was for another one) or a rule standing in for future answers.
+    ///
+    /// # Errors
+    ///
+    /// [`MpError::Forbidden`] or [`MpError::Conflict`] with the reason in words.
+    pub fn judge_alone(
+        &self,
+        policy: ApprovalPolicy,
+        pane: PaneId,
+        request: Option<RequestId>,
+        risk: Risk,
+        ballot: Ballot<'_>,
+    ) -> Result<(), MpError> {
+        let claimed = request.and_then(|request| lock(&self.open).get(&request)?.claimed.clone());
+        let alone = Open {
+            pane,
+            risk,
+            approvals: Vec::new(),
+            authorizations: Vec::new(),
+            claimed,
+        };
+        match rule(policy, &alone, true, ballot)? {
+            Outcome::Decide => Ok(()),
+            Outcome::Hold => Err(MpError::Forbidden(
+                "this session needs two people to allow this; approve it from the card".into(),
+            )),
+        }
+    }
+
     /// Rechecks the admitted decision and retains the exact grants behind required votes.
     pub(crate) fn delivery_signers(
         &self,

@@ -1469,11 +1469,23 @@ impl Client {
                 if input.is_empty() || input.len() > 64 * 1024 {
                     return Err(E::Invalid("the command is empty or too long".into()));
                 }
-                let (original, allow) =
-                    crate::approve::editable(&self.core, pane, decide.request_id)?;
+                let crate::approve::Editable {
+                    tool,
+                    original,
+                    allow,
+                } = crate::approve::editable(&self.core, pane, decide.request_id)?;
                 if decide.option_id != allow {
                     return Err(E::Invalid("an edited request can only be allowed".into()));
                 }
+                crate::mp::gate_allow_alone(
+                    &self.core,
+                    self.ballot(&name),
+                    pane,
+                    Some(decide.request_id),
+                    &tool,
+                    "approve an edited command",
+                )
+                .map_err(|error| E::Forbidden(error.to_string()))?;
                 let signature = decide.sig.clone();
                 let record = |decided: &proto::Decided, details: &crate::agent::DecidedRequest| {
                     self.answered(
@@ -1537,7 +1549,16 @@ impl Client {
                     grants::RuleError::Signature => E::Forbidden(error.to_string()),
                     _ => E::Invalid(error.to_string()),
                 })?;
-                crate::approve::add_rule(&self.core, rule, name)?;
+                crate::mp::gate_allow_alone(
+                    &self.core,
+                    self.ballot(&name),
+                    rule.pane_id,
+                    rule.request_id,
+                    &rule.matcher.tool,
+                    &format!("allow all {}", crate::approve::describe(&rule.matcher)),
+                )
+                .map_err(|error| E::Forbidden(error.to_string()))?;
+                crate::approve::add_rule(&self.core, rule, name, self.authz.clone())?;
                 Ok(proto::ApprovalResponse::Done)
             }
             proto::ApprovalRequest::RevokeRule { rule_id } => {
@@ -2599,6 +2620,16 @@ impl Client {
         }
     }
 
+    /// This connection's say under a session's approval policy, as `name`.
+    fn ballot<'a>(&'a self, name: &'a str) -> crate::mp::approvals::Ballot<'a> {
+        crate::mp::approvals::Ballot {
+            actor: self.actor,
+            name,
+            owner: is_owner(&self.core, &self.authz),
+            authorization: Some(&self.authz),
+        }
+    }
+
     /// An approval decision: approver role on the request's pane, a valid signature by the
     /// deciding device, first valid decision wins, recorded in the audit log.
     fn decide(&self, decide: proto::Decide) {
@@ -2653,12 +2684,7 @@ impl Client {
             decide.option_id,
             decide.actor,
         );
-        let ballot = crate::mp::approvals::Ballot {
-            actor: self.actor,
-            name: &name,
-            owner: is_owner(&self.core, &self.authz),
-            authorization: Some(&self.authz),
-        };
+        let ballot = self.ballot(&name);
         // Approval policies are for agents' own tool calls; a drive request is the owner's.
         let gate = if drive {
             Ok(crate::mp::Gate::Proceed)

@@ -235,6 +235,13 @@ makes, and then without its old invites.
   panes in its scope. A guest marking, focusing or merely watching a pane never makes the
   owner's item seen, so it cannot silence the owner's notifications or pushes, which follow
   the owner's "seen" only. Push registration and notification actions are owner-only.
+- **Approval policies bind every way of allowing.** A session's policy (owner only, a risk
+  cap for approvers, two people, claims) applies to a plain decision, to an edited command and
+  to an "allow all like this" rule alike. An edited command or a rule is one person's allow
+  that is never held for a second vote, so under the two-person rule neither is accepted for a
+  call that needs two, from anyone. A rule is checked again each time it would answer: its
+  author must still hold Approver on the pane and the policy as it is then must let them allow
+  that call alone. Revoking the author, or their grant expiring, ends their rules.
 - **No guest answers for the owner unnoticed.** When anyone but a paired owner device answers
   an agent's request (a signed decision, an edited approval, or an option picked on screen),
   every owner device is told at once, whatever it has seen, is looking at or has turned off:
@@ -341,6 +348,8 @@ was confirmed to fail.
 | Prompt or review sent just after the agent exited, while the pane is still marked an agent | `multiplayer::text_for_an_agent_that_just_exited_reaches_nobody` |
 | Bidi, zero-width and control characters in invite labels and `SetName` | `redteam::names_cannot_hide_or_reorder_text`, `devices::*` |
 | Prompter pasting prompts at line rate; guest reconnecting in a loop | `multiplayer::a_prompt_flood_is_cut_and_audited_once`, `multiplayer::a_reconnect_loop_does_not_grow_the_audit_log`, `mp::rate_limit::tests::*` (unit) |
+| Approver guest under owner only, a reads-only cap or the two-person rule approving an edited command or adding a rule | `approvals::edited_approvals_and_rules_follow_the_sessions_policy` |
+| Guest's rule answering after a stricter policy is set, or after the guest is revoked | `approvals::a_guests_rule_ends_with_their_access_and_follows_the_policy` |
 | Guest approving while the owner looks elsewhere or has seen the request | `notify::a_guests_answer_is_always_pushed_to_the_owner`, `multiplayer::approvals_are_signed_single_flight_and_audited` |
 | Pane-scoped guest marking, focusing or watching to clear the owner's attention items | `redteam::a_guest_cannot_mark_the_owners_attention_seen`, `ws::attention::tests::*` (unit) |
 | zstd bomb / huge declared length from a hostile daemon | `client-core conn::tests::inflating_is_bounded` (unit) |

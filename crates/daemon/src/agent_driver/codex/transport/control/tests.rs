@@ -207,7 +207,7 @@ async fn a_deferred_rule_answer_requires_the_exact_unexpired_unrevoked_rule() {
         sig: Vec::new(),
     };
     // Synthetic already-admitted evidence: these tests exercise serialization, not signature verification.
-    crate::approve::add_rule(core, rule.clone(), "fixture".into()).unwrap();
+    crate::approve::add_rule(core, rule.clone(), "fixture".into(), owner(fixture.actor)).unwrap();
     command.rule = Some(rule.clone());
     assert!(serialize(&source, &command).is_ok());
     command.rule.as_mut().unwrap().matcher.prefix = "different".into();
@@ -222,7 +222,13 @@ async fn a_deferred_rule_answer_requires_the_exact_unexpired_unrevoked_rule() {
         "revocation during RPC initialize retires the broad grant"
     );
     rule.expires_at = proto::UnixMillis(0);
-    crate::approve::add_rule(core, rule.clone(), "expired fixture".into()).unwrap();
+    crate::approve::add_rule(
+        core,
+        rule.clone(),
+        "expired fixture".into(),
+        owner(fixture.actor),
+    )
+    .unwrap();
     command.rule = Some(rule);
     assert!(
         serialize(&source, &command).is_err(),
@@ -289,6 +295,10 @@ fn guest() -> Actor {
     }
 }
 
+fn owner(actor: Actor) -> crate::mp::Authz {
+    crate::mp::Authz::owner(actor)
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn an_answer_overtaken_by_terminal_input_is_dropped_and_offered_again() {
     let fixture = Fixture::new().await;
@@ -343,9 +353,17 @@ async fn a_guest_cannot_add_an_allow_all_rule_on_a_native_codex_pane() {
     };
     let core = &fixture.raw.daemon.core;
     assert!(matches!(
-        crate::approve::add_rule(core, rule(guest()), "guest".into()),
+        crate::approve::add_rule(core, rule(guest()), "guest".into(), owner(guest())),
         Err(proto::ApprovalError::Forbidden(_))
     ));
-    assert!(crate::approve::add_rule(core, rule(fixture.actor), "owner".into()).is_ok());
+    assert!(
+        crate::approve::add_rule(
+            core,
+            rule(fixture.actor),
+            "owner".into(),
+            owner(fixture.actor)
+        )
+        .is_ok()
+    );
     fixture.raw.daemon.shutdown().await;
 }

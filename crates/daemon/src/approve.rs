@@ -4,8 +4,10 @@
 //! Rules live per pane, in memory only: a daemon restart ends them, as does the agent
 //! session they were made in (it ends, restarts or changes id), the pane closing, their
 //! expiry and their turn limit. A rule answers only a live request the adapter can deliver to,
-//! always with the "allow once" option, as the person who made it,
-//! and every answer is in the audit log with the rule's signature.
+//! always with the "allow once" option, as the person who made it, and only while that person
+//! still holds Approver on the pane and the session's approval policy would let them allow the
+//! call alone. Revoking the person ends their rules. Every answer is in the audit log with the
+//! rule's signature.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -17,11 +19,19 @@ use proto::{
 
 use crate::core::{Core, Event, lock};
 use crate::identity::now_millis;
+use crate::mp::{Authz, Need, Target};
+
+/// A rule in force and the grant of the person who made it, rechecked each time it answers.
+#[derive(Clone)]
+struct HeldRule {
+    active: ActiveRule,
+    author: Authz,
+}
 
 /// The rules in force and the open requests' extras, per pane.
 #[derive(Default)]
 pub(crate) struct Approvals {
-    rules: Mutex<HashMap<PaneId, Vec<ActiveRule>>>,
+    rules: Mutex<HashMap<PaneId, Vec<HeldRule>>>,
     open: Mutex<HashMap<PaneId, ApprovalInfo>>,
 }
 
@@ -35,8 +45,8 @@ impl Approvals {
         let now = now();
         let mut rules = lock(&self.rules);
         let list = rules.entry(pane).or_default();
-        list.retain(|active| active.rule.expires_at > now);
-        let in_force = list.clone();
+        list.retain(|held| held.active.rule.expires_at > now);
+        let in_force = list.iter().map(|held| held.active.clone()).collect();
         if list.is_empty() {
             rules.remove(&pane);
         }
@@ -62,8 +72,23 @@ impl Approvals {
     fn pane_of(&self, id: RuleId) -> Option<PaneId> {
         lock(&self.rules)
             .iter()
-            .find(|(_, list)| list.iter().any(|active| active.rule.rule_id == id))
+            .find(|(_, list)| list.iter().any(|held| held.active.rule.rule_id == id))
             .map(|(pane, _)| *pane)
+    }
+
+    /// Drops the rules whose author fails `keeps`; returns the panes that lost one.
+    fn drop_authors(&self, keeps: impl Fn(&Authz) -> bool) -> Vec<PaneId> {
+        let mut rules = lock(&self.rules);
+        let mut changed = Vec::new();
+        for (pane, list) in rules.iter_mut() {
+            let before = list.len();
+            list.retain(|held| keeps(&held.author));
+            if list.len() != before {
+                changed.push(*pane);
+            }
+        }
+        rules.retain(|_, list| !list.is_empty());
+        changed
     }
 }
 
@@ -114,32 +139,72 @@ fn auto_approve(
     input: &str,
 ) -> bool {
     let now = now();
+    drop_revoked(core);
     let rule = {
         let mut rules = lock(&core.approvals.rules);
         let Some(list) = rules.get_mut(&pane) else {
             return false;
         };
-        list.retain(|active| active.rule.expires_at > now);
-        let Some(active) = list.iter_mut().find(|active| {
+        list.retain(|held| held.active.rule.expires_at > now);
+        let Some(held) = list.iter_mut().find(|held| {
+            let active = &held.active;
             grants::permits(&active.rule, pane, tool, input, now, active.turns_used)
         }) else {
             return false;
         };
-        active.uses += 1;
-        active.clone()
+        held.active.uses += 1;
+        held.clone()
     };
-    let decided = decide_by_rule(core, &rule, wire, allow);
+    let decided = author_may_allow(core, &rule.author, pane, wire, tool)
+        && decide_by_rule(core, &rule.active, wire, allow);
     if !decided {
         // Not answered after all: give the use back.
-        if let Some(active) = lock(&core.approvals.rules).get_mut(&pane).and_then(|list| {
+        if let Some(held) = lock(&core.approvals.rules).get_mut(&pane).and_then(|list| {
             list.iter_mut()
-                .find(|active| active.rule.rule_id == rule.rule.rule_id)
+                .find(|held| held.active.rule.rule_id == rule.active.rule.rule_id)
         }) {
-            active.uses = active.uses.saturating_sub(1);
+            held.active.uses = held.active.uses.saturating_sub(1);
         }
     }
     emit_rules(core, pane);
     decided
+}
+
+/// Whether the rule's author could allow `tool` on `pane` alone right now: their grant still
+/// holds Approver there and the session's approval policy, as it is now, lets them.
+fn author_may_allow(
+    core: &Core,
+    author: &Authz,
+    pane: PaneId,
+    request: RequestId,
+    tool: &str,
+) -> bool {
+    let ballot = crate::mp::approvals::Ballot {
+        actor: author.actor,
+        name: &author.name,
+        owner: author.is_owner_device(core),
+        authorization: Some(author),
+    };
+    crate::mp::policy::check(core, author, Need::Approve, Target::Pane(pane)).is_ok()
+        && crate::mp::gate_allow_alone(
+            core,
+            ballot,
+            pane,
+            Some(request),
+            tool,
+            "auto-approve with a rule",
+        )
+        .is_ok()
+}
+
+/// Ends the rules of everyone whose grant was revoked or expired, or whose device was removed.
+pub(crate) fn drop_revoked(core: &Core) {
+    for pane in core
+        .approvals
+        .drop_authors(|author| core.mp.still_valid(author))
+    {
+        emit_rules(core, pane);
+    }
 }
 
 /// Decides `wire` with `allow` as the rule's author, recording the rule in the audit log.
@@ -213,10 +278,10 @@ pub(crate) fn turn_started(core: &Core, pane: PaneId) {
         let Some(list) = rules.get_mut(&pane) else {
             return;
         };
-        for active in list.iter_mut() {
-            active.turns_used += 1;
+        for held in list.iter_mut() {
+            held.active.turns_used += 1;
         }
-        list.retain(|active| active.turns_used <= active.rule.max_turns);
+        list.retain(|held| held.active.turns_used <= held.active.rule.max_turns);
     }
     // Clients show the turns left, so tell them even when no rule lapsed.
     emit_rules(core, pane);
@@ -230,12 +295,13 @@ pub(crate) fn session_over(core: &Core, pane: PaneId) {
     }
 }
 
-/// Adds `rule` for `granted_by` (already checked: role, actor, signature, bounds), then
-/// approves the request it names if that request is open and covered.
+/// Adds `rule` for `author`, named `granted_by` (already checked: role, actor, signature,
+/// bounds, policy), then approves the request it names if that request is open and covered.
 pub(crate) fn add_rule(
     core: &Core,
     rule: AutoApproveRule,
     granted_by: String,
+    author: Authz,
 ) -> Result<(), ApprovalError> {
     let pane = rule.pane_id;
     if !core.is_agent_pane(pane) {
@@ -277,8 +343,8 @@ pub(crate) fn add_rule(
     {
         let mut rules = lock(&core.approvals.rules);
         let list = rules.entry(pane).or_default();
-        list.retain(|existing| existing.rule.rule_id != active.rule.rule_id);
-        list.push(active);
+        list.retain(|existing| existing.active.rule.rule_id != active.rule.rule_id);
+        list.push(HeldRule { active, author });
     }
     // "Approve this and all like it": answer the open request now if the rule covers it.
     if let Some(request) = request
@@ -310,9 +376,9 @@ pub(crate) fn revoke(
         let list = rules.get_mut(&pane).ok_or(ApprovalError::NotFound)?;
         let at = list
             .iter()
-            .position(|active| active.rule.rule_id == id)
+            .position(|held| held.active.rule.rule_id == id)
             .ok_or(ApprovalError::NotFound)?;
-        list.remove(at)
+        list.remove(at).active
     };
     core.mp.audit.append(
         AuditKind::Revoked,
@@ -337,13 +403,19 @@ pub(crate) fn rule_pane(core: &Core, id: RuleId) -> Option<PaneId> {
     core.approvals.pane_of(id)
 }
 
-/// The held request `wire` on `pane`, when it takes edited input: the agent's request id, the
-/// original command and the option that allows it.
+/// A held request that takes edited input.
+pub(crate) struct Editable {
+    pub tool: String,
+    pub original: String,
+    pub allow: proto::OptionId,
+}
+
+/// The held request `wire` on `pane`, when it takes edited input.
 pub(crate) fn editable(
     core: &Core,
     pane: PaneId,
     wire: RequestId,
-) -> Result<(String, proto::OptionId), ApprovalError> {
+) -> Result<Editable, ApprovalError> {
     let (current, request, allow) = core
         .pane(pane)
         .and_then(|entry| {
@@ -363,5 +435,9 @@ pub(crate) fn editable(
         .ok_or(ApprovalError::NotEditable)?
         .to_owned();
     let allow = allow.ok_or(ApprovalError::NotEditable)?;
-    Ok((original, allow))
+    Ok(Editable {
+        tool: held.tool,
+        original,
+        allow,
+    })
 }

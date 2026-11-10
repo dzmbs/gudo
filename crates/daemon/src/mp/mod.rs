@@ -1509,6 +1509,7 @@ impl Mp {
             self.save(&mut store);
         }
         crate::notifier::drop_revoked(core);
+        crate::approve::drop_revoked(core);
         let disconnected = self.kick_invalid();
         let detail = format!(
             "revoked {} grant(s) {}, {} device(s) {}; {disconnected} connection(s) closed",
@@ -2255,6 +2256,7 @@ impl Mp {
             self.transfer(core, pane, to, "took control (holder idle)");
         }
         self.kick_invalid();
+        crate::approve::drop_revoked(core);
         self.drop_invalid_knocks(core);
         self.tick_presence(core);
     }
@@ -2337,6 +2339,39 @@ pub(crate) fn gate_decision(
             Ok(Gate::Held)
         }
     }
+}
+
+/// Applies the session's approval policy to an allow `ballot` gives on its own for `tool` on
+/// `pane`: an edited command, or a rule that answers later requests without asking anyone.
+/// `what` names it for the audit log.
+///
+/// # Errors
+///
+/// The policy's refusal, audited as [`AuditKind::Denied`].
+pub(crate) fn gate_allow_alone(
+    core: &Core,
+    ballot: approvals::Ballot<'_>,
+    pane: PaneId,
+    request: Option<proto::RequestId>,
+    tool: &str,
+    what: &str,
+) -> Result<(), MpError> {
+    let mp = &core.mp;
+    let policy = mp.policy_of_pane(core, pane);
+    let risk = proto::Risk::of_tool(Some(tool));
+    mp.approvals
+        .judge_alone(policy, pane, request, risk, ballot)
+        .inspect_err(|error| {
+            mp.audit.append(
+                AuditKind::Denied,
+                AuditEntry {
+                    actor: Some(ballot.actor),
+                    pane_id: Some(pane),
+                    detail: format!("{} could not {what}: {error}", ballot.name),
+                    ..AuditEntry::default()
+                },
+            );
+        })
 }
 
 /// Tells a connection its grant is gone and closes it shortly after (so the message lands).
