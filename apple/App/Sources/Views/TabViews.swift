@@ -16,8 +16,7 @@ struct WorkspaceSidebar: View {
     var showsDestinations = true
     @State private var swipe = RowSwipeState()
     @State private var geometry = SidebarGeometry()
-    @State private var scrollOffset: CGFloat = 0
-    @State private var contentTop: CGFloat = 0
+    @State private var scroll = SidebarScroll()
 
     var body: some View {
         List {
@@ -48,16 +47,14 @@ struct WorkspaceSidebar: View {
         .listStyle(.plain)
         .contentMargins(.all, 0, for: .scrollContent)
         .coordinateSpace(name: "sidebar-list")
+        // Written here, read only by the pinned header, so scrolling never rebuilds the list.
         .onScrollGeometryChange(for: [CGFloat].self) { [$0.contentOffset.y, $0.contentInsets.top] } action: { _, values in
-            scrollOffset = values[0]
-            contentTop = values[1]
+            scroll.offset = values[0]
+            scroll.top = values[1]
         }
         .overlay(alignment: .top) {
             if listStyle == .plain {
-                StickyProjectHeader(geometry: geometry, scrollOffset: scrollOffset, top: contentTop)
-                    .frame(maxHeight: .infinity, alignment: .top)
-                    // A header pushed up leaves under the bars, not over them.
-                    .mask(alignment: .top) { Rectangle().padding(.top, contentTop) }
+                StickyProjectHeader(geometry: geometry, scroll: scroll)
             }
         }
         .onDrop(of: [.text], delegate: SidebarDropDelegate(model: model, drag: model.sidebarDrag, geometry: geometry))
@@ -245,13 +242,15 @@ enum SidebarFont {
     static var project: Font { .system(size: SidebarSize.shared.metrics.title, weight: .semibold) }
     static var number: Font { .system(size: SidebarSize.shared.metrics.subtitle).monospacedDigit() }
     static var icon: CGFloat { SidebarSize.shared.metrics.icon }
+    static var projectMark: CGFloat { (SidebarSize.shared.metrics.icon * 0.6).rounded() }
     #else
     static let title = Font.body
     static let subtitle = Font.subheadline
     static let section = Font.subheadline.weight(.semibold)
     static let project = Font.headline
     static let number = Font.subheadline.monospacedDigit()
-    static let icon: CGFloat = 28
+    static let icon: CGFloat = 24
+    static let projectMark: CGFloat = 14
     #endif
 }
 
@@ -266,7 +265,7 @@ final class SidebarSize {
         var title: CGFloat
         var subtitle: CGFloat
         var section: CGFloat
-        /// The program tile leading each tab row.
+        /// The program glyph's slot leading each tab row.
         var icon: CGFloat
     }
 
@@ -275,9 +274,9 @@ final class SidebarSize {
 
     var metrics: Metrics {
         switch mode {
-        case 1: Metrics(title: 11, subtitle: 10, section: 10, icon: 18)
-        case 3: Metrics(title: 15, subtitle: 13, section: 13, icon: 26)
-        default: Metrics(title: 13, subtitle: 11, section: 11, icon: 22)
+        case 1: Metrics(title: 11, subtitle: 10, section: 10, icon: 15)
+        case 3: Metrics(title: 15, subtitle: 13, section: 13, icon: 20)
+        default: Metrics(title: 13, subtitle: 11, section: 11, icon: 17)
         }
     }
 
@@ -626,30 +625,26 @@ struct TabLeadingMark: View {
     }
 }
 
-/// A sidebar row's program on a small tile, its agent's state a badge on the tile's corner, so
-/// the state never takes the title's room and every row's title starts at the same place.
+/// A sidebar row's program glyph, its agent's state a badge on the glyph's corner, so the state
+/// never takes the title's room and every row's title starts at the same place.
 struct SidebarTabIcon: View {
     let program: ProgramIdentity
     let state: AgentState?
     var favicon: Image?
-    @Environment(\.sidebarListStyle) private var listStyle
 
     var body: some View {
         let size = SidebarFont.icon
         let badge = Self.badge(for: state)
-        let dot = size * 0.4
-        let gap = size * 0.09
-        // The dot's centre, out past the tile's corner.
-        let centre = CGPoint(x: size + size * 0.2 - dot / 2, y: size + size * 0.2 - dot / 2)
+        let dot = size * 0.42
+        let gap = size * 0.1
+        // The dot's centre, on the glyph's bottom trailing corner.
+        let centre = CGPoint(x: size - dot / 2 + size * 0.08, y: size - dot / 2 + size * 0.08)
         ZStack {
-            // On a grouped card the raised surface is the card's own colour.
-            RoundedRectangle(cornerRadius: size * 0.27, style: .continuous)
-                .fill(listStyle == .grouped ? DS.Palette.selectedFill : DS.Palette.raised)
             if let favicon {
-                Favicon(image: favicon, size: size * 0.64)
+                Favicon(image: favicon, size: size * 0.88)
             } else {
-                ProgramMark(program, size: size * 0.64)
-                    .foregroundStyle(.primary)
+                ProgramMark(program, size: size * 0.88)
+                    .foregroundStyle(DS.Palette.textSecondary)
             }
         }
         .frame(width: size, height: size)
@@ -690,7 +685,7 @@ struct SidebarTabIcon: View {
     }
 }
 
-/// A tab with several panes opens into a list of them from this chevron, beside its icon.
+/// A tab with several panes opens into a list of them from this chevron, before its number.
 struct TreeChevron: View {
     let isShown: Bool
     let isExpanded: Bool
@@ -874,28 +869,14 @@ struct TabRow: View {
     @Environment(\.sidebarListStyle) private var listStyle
 
     var body: some View {
-        let expanded = model.expandedTabs.contains(ref)
-        VStack(alignment: .leading, spacing: 0) {
-            mainRow
-            if expanded, listStyle == .plain {
-                ForEach(tab.root.panes, id: \.self) { pane in
-                    PaneTreeRow(pane: pane, group: group, isFocusedPane: model.currentTab == ref && tab.focused == pane)
-                        .transition(.opacity)
-                }
-            }
-        }
-        .animation(DS.Motion.snappy, value: expanded)
-    }
-
-    @ViewBuilder private var mainRow: some View {
         let workspace = model.workspace(ofGroup: group.id)
         let isActive = model.destination == .terminal && model.currentTab == ref
         let states = tab.root.panes.compactMap { model.agentState(ofPane: $0, onGroup: group.id) }
         let state = states.min { $0.urgency < $1.urgency }
-        let title = workspace?.title(of: tab) ?? tab.title ?? "Shell"
-        let context = workspace?.context(of: tab)
-        let running = workspace?.runningCommand(of: tab)
         let program = model.programIdentity(of: tab, onGroup: group.id)
+        let title = workspace?.title(of: tab, agentName: program.kind == .agent ? program.displayName : nil) ?? tab.title ?? "Shell"
+        let context = workspace?.context(of: tab)
+        let running = program.kind == .agent ? nil : workspace?.runningCommand(of: tab)
         let worktree = model.groups.worktree(of: ref)
         let status = Self.statusLine(program: program, state: state, context: context, since: model.agentSince(ofPane: tab.focused, onGroup: group.id))
         let informative = status == nil ? context.flatMap { Self.isInformative($0, title: title) ? $0 : nil } : nil
@@ -906,15 +887,6 @@ struct TabRow: View {
         } label: {
             HStack(alignment: .center, spacing: DS.Space.gap10) {
                 SidebarTabIcon(program: program, state: state)
-                    // In the row's leading margin, so it costs no title any room.
-                    .overlay(alignment: .leading) {
-                        if listStyle == .plain, tab.root.panes.count > 1 {
-                            TreeChevron(isShown: true, isExpanded: model.expandedTabs.contains(ref)) {
-                                withAnimation(DS.Motion.snappy) { model.expandedTabs.formSymmetricDifference([ref]) }
-                            }
-                            .offset(x: -(TreeChevron.width + DS.Space.xxs))
-                        }
-                    }
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: DS.Space.row) {
                         Text(title)
@@ -936,7 +908,8 @@ struct TabRow: View {
                     // blank second line that pushes the title up.
                     if status != nil || informative != nil || running != nil || worktree != nil || host != nil {
                         // In a project it leads with the host, which the section header doesn't name.
-                        TabSubtitle(context: informative, running: running, worktree: worktree, host: host, status: status)
+                        TabSubtitle(context: informative, running: running, worktree: worktree, host: host, status: status,
+                                    program: program.isShell ? nil : program.displayName)
                             .transition(.opacity)
                     }
                 }
@@ -951,6 +924,12 @@ struct TabRow: View {
                         .foregroundStyle(selected ? DS.Palette.accent : DS.Palette.textTertiary)
                         .contentTransition(.symbolEffect(.replace))
                         .accessibilityHidden(true)
+                }
+                // Trailing, as a project's own chevron is.
+                if listStyle == .plain, tab.root.panes.count > 1 {
+                    TreeChevron(isShown: true, isExpanded: model.expandedTabs.contains(ref)) {
+                        withAnimation(DS.Motion.snappy) { model.expandedTabs.formSymmetricDifference([ref]) }
+                    }
                 }
                 TabNumber(number: number, shortcut: CommandKeyState.shared.held ? model.groups.shortcutNumber(of: ref) : nil)
             }
