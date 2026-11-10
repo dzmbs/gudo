@@ -371,9 +371,15 @@ impl Editors {
             accept_vscode_license: request.accept_vscode_license,
             at: UnixMillis(crate::identity::now_millis()),
         };
-        let saved = serde_json::to_vec(&last)
-            .map_err(std::io::Error::other)
-            .and_then(|bytes| fsutil::write_atomic(&self.last_launch_path, &bytes));
+        let path = self.last_launch_path.clone();
+        let saved = tokio::task::spawn_blocking(move || {
+            serde_json::to_vec(&last)
+                .map_err(std::io::Error::other)
+                .and_then(|bytes| fsutil::write_atomic(&path, &bytes))
+        })
+        .await
+        .map_err(std::io::Error::other)
+        .flatten();
         if let Err(error) = saved {
             tracing::warn!("recording the last editor launch: {error}");
         }
