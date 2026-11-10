@@ -1,11 +1,13 @@
 //! Small filesystem helpers: atomic writes and private files.
 
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 /// Writes `data` to `path` atomically: a temporary file in the same directory, `fsync`, rename,
 /// then `fsync` of the directory, so a crash leaves either the old or the new contents.
@@ -116,4 +118,98 @@ pub(crate) fn unhex<const N: usize>(text: &str) -> Option<[u8; N]> {
         .ok()?
         .try_into()
         .ok()
+}
+
+/// How long a directory may take to answer before it counts as unreachable: `stat` on a
+/// stalled network mount (NFS, SMB, sshfs, autofs) blocks for minutes.
+pub(crate) const DIR_PROBE_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// Whether `path` is a directory, asked on a thread of its own so a stalled mount holds the
+/// caller at most `within`. While an earlier probe of `path` is stuck past `within`, answers
+/// `false` at once without starting another.
+pub(crate) fn is_reachable_dir(path: &Path, within: Duration) -> bool {
+    probe_dir_with(path, within, |path| path.is_dir())
+}
+
+fn probe_dir_with(
+    path: &Path,
+    within: Duration,
+    probe: impl FnOnce(&Path) -> bool + Send + 'static,
+) -> bool {
+    // Each path's oldest unanswered probe and when it gave up waiting.
+    static PROBING: Mutex<BTreeMap<PathBuf, Instant>> = Mutex::new(BTreeMap::new());
+    let probing = || PROBING.lock().unwrap_or_else(PoisonError::into_inner);
+    {
+        let mut probing = probing();
+        match probing.get(path) {
+            Some(gave_up_at) if Instant::now() >= *gave_up_at => return false,
+            Some(_) => {}
+            None => {
+                probing.insert(path.to_owned(), Instant::now() + within);
+            }
+        }
+    }
+    let (answer_tx, answer_rx) = std::sync::mpsc::channel();
+    let probed_path = path.to_owned();
+    let spawned = std::thread::Builder::new()
+        .name("dir-probe".into())
+        .spawn(move || {
+            let is_dir = probe(&probed_path);
+            probing().remove(&probed_path);
+            let _ = answer_tx.send(is_dir);
+        });
+    if spawned.is_err() {
+        probing().remove(path);
+        return false;
+    }
+    answer_rx.recv_timeout(within).unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    /// A directory on a stalled network mount: `stat` never returns.
+    #[test]
+    fn a_hanging_directory_is_unreachable_without_holding_the_caller() {
+        let path = Path::new("/stalled-mount-for-a-probe-test");
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let started = Instant::now();
+        let reachable = probe_dir_with(path, Duration::from_millis(100), move |_| {
+            let _ = released.recv();
+            true
+        });
+        assert!(!reachable);
+        assert!(started.elapsed() < Duration::from_secs(2));
+
+        let probed_again = Arc::new(AtomicBool::new(false));
+        let probed = Arc::clone(&probed_again);
+        let started = Instant::now();
+        let reachable = probe_dir_with(path, Duration::from_secs(5), move |_| {
+            probed.store(true, Ordering::SeqCst);
+            true
+        });
+        assert!(!reachable, "still stuck: unreachable at once");
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(!probed_again.load(Ordering::SeqCst));
+
+        release.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !probe_dir_with(path, Duration::from_secs(5), |_| true) {
+            assert!(Instant::now() < deadline, "the mount answers again");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn a_healthy_directory_is_reachable() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(is_reachable_dir(dir.path(), DIR_PROBE_TIMEOUT));
+        assert!(!is_reachable_dir(
+            &dir.path().join("missing"),
+            DIR_PROBE_TIMEOUT
+        ));
+    }
 }

@@ -1794,7 +1794,12 @@ impl Core {
         }
         let cwd = launch_cwd
             .or(cwd_hint)
-            .filter(|dir| std::path::Path::new(dir).is_dir())
+            .filter(|dir| {
+                crate::fsutil::is_reachable_dir(
+                    std::path::Path::new(dir),
+                    crate::fsutil::DIR_PROBE_TIMEOUT,
+                )
+            })
             .unwrap_or(home);
         let shell = self.cfg.shell();
         let mut command = Command::new(&shell);
@@ -2369,7 +2374,9 @@ impl Core {
                     .session
                     .cwd
                     .clone()
-                    .filter(|cwd| cwd.is_dir())
+                    .filter(|cwd| {
+                        crate::fsutil::is_reachable_dir(cwd, crate::fsutil::DIR_PROBE_TIMEOUT)
+                    })
                     .or_else(|| {
                         self.pane(id).and_then(|entry| {
                             let meta = lock(&entry.meta).cwd.clone();

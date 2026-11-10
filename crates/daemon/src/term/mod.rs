@@ -826,6 +826,26 @@ fn max_bytes(asked: Option<usize>) -> usize {
     asked.unwrap_or(DEFAULT_MAX_BYTES).clamp(256, MAX_BYTES)
 }
 
+/// `cwd` checked off the async workers before `opening` is taken, so a directory on a
+/// stalled mount holds neither; the home directory when it does not answer in time.
+async fn reachable_cwd(cwd: Option<String>) -> Option<String> {
+    let dir = cwd?;
+    let probed = dir.clone();
+    let reachable = tokio::task::spawn_blocking(move || {
+        crate::fsutil::is_reachable_dir(
+            std::path::Path::new(&probed),
+            crate::fsutil::DIR_PROBE_TIMEOUT,
+        )
+    })
+    .await
+    .unwrap_or(false);
+    if reachable {
+        Some(dir)
+    } else {
+        Some(std::env::var("HOME").unwrap_or_else(|_| "/".to_owned()))
+    }
+}
+
 impl CallContext {
     async fn call(&self, tool: &str, value: Value) -> Result<Value> {
         match tool {
@@ -1185,10 +1205,11 @@ impl CallContext {
         let (of, _) = self.resolve(args.of.as_deref())?;
         self.may_read(of)?;
         let float = float_opts(args.float, args.frame, args.close_when_done)?;
+        let cwd = reachable_cwd(args.cwd).await;
         let pane = self.open(
             of,
             args.direction,
-            Self::launch(args.command, args.agent, args.cwd),
+            Self::launch(args.command, args.agent, cwd),
             args.focus,
             float,
         )?;
@@ -1268,6 +1289,7 @@ impl CallContext {
     }
 
     async fn tab_new(&self, args: TabArgs) -> Result<Value> {
+        let cwd = reachable_cwd(args.cwd).await;
         if let Some(float) = float_opts(args.float, args.frame, args.close_when_done)? {
             // Over the caller's own tab instead of a tab of its own.
             if args.title.is_some() {
@@ -1279,7 +1301,7 @@ impl CallContext {
             let pane = self.open(
                 self.caller,
                 Direction::Right,
-                Self::launch(args.command, None, args.cwd),
+                Self::launch(args.command, None, cwd),
                 args.focus,
                 Some(float),
             )?;
@@ -1290,7 +1312,7 @@ impl CallContext {
         let (tab, pane) = {
             let _opening = lock(&self.core.term.opening);
             self.may_open()?;
-            let launch = Self::launch(args.command, None, args.cwd);
+            let launch = Self::launch(args.command, None, cwd);
             self.open_tab(args.title.unwrap_or_default(), launch, args.focus)?
         };
         let entry = self.core.pane(pane).ok_or_else(closed)?;
@@ -1440,7 +1462,7 @@ impl CallContext {
             }
             None => {
                 let launch = PaneLaunch::Shell {
-                    cwd: args.cwd.clone(),
+                    cwd: reachable_cwd(args.cwd.clone()).await,
                 };
                 let pane = self.split(self.caller, Direction::Down, launch, false)?;
                 (pane, self.core.pane(pane).ok_or_else(closed)?)
@@ -1854,7 +1876,7 @@ impl CallContext {
     async fn agent_spawn(&self, args: SpawnArgs) -> Result<Value> {
         let (of, _) = self.resolve(args.of.as_deref())?;
         self.may_read(of)?;
-        let launch = Self::launch(None, Some(args.kind), args.cwd);
+        let launch = Self::launch(None, Some(args.kind), reachable_cwd(args.cwd).await);
         let float = float_opts(args.float, args.frame, args.close_when_done)?;
         let pane = self.open(of, args.direction, launch, false, float)?;
         let entry = self.core.pane(pane).ok_or_else(closed)?;
