@@ -555,6 +555,16 @@ pub(crate) async fn run_on<T: Send + 'static>(
     (&mut task.0).await
 }
 
+/// What waiting for a connection does while the client is suspended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WhileSuspended {
+    /// Give up at once: no connection comes until the app is back (transfers).
+    GiveUp,
+    /// Keep waiting: a local connection to a forward made then is often what brings the app
+    /// back.
+    Wait,
+}
+
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -568,12 +578,15 @@ impl Inner {
         self.listener.on_event(event);
     }
 
-    /// The connection, waiting up to `wait` while the client is between reconnects. `None` at
-    /// once while suspended: no connection is coming.
-    pub(crate) async fn connection_within(&self, wait: std::time::Duration) -> Option<Connection> {
+    /// The connection, waiting up to `wait` while the client is between reconnects.
+    pub(crate) async fn connection_within(
+        &self,
+        wait: std::time::Duration,
+        while_suspended: WhileSuspended,
+    ) -> Option<Connection> {
         let waiting = async {
             loop {
-                if *lock(&self.paused) {
+                if while_suspended == WhileSuspended::GiveUp && *lock(&self.paused) {
                     return None;
                 }
                 if let Some(connection) = lock(&self.connection).clone() {

@@ -36,7 +36,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::AbortHandle;
 
 use crate::listen::LocalListener;
-use crate::{Client, ClientError, Inner, lock};
+use crate::{Client, ClientError, Inner, WhileSuspended, lock};
 
 /// How long a request waits for its answer (a large diff or a first editor start can take a
 /// while; `code serve-web` downloads its server on first use).
@@ -1090,9 +1090,12 @@ impl Client {
 }
 
 /// The live connection, waiting up to [`LINK_WAIT`] while the client is between reconnects.
-async fn connection(inner: &Inner) -> Result<iroh::endpoint::Connection, WsError> {
+async fn connection(
+    inner: &Inner,
+    while_suspended: WhileSuspended,
+) -> Result<iroh::endpoint::Connection, WsError> {
     inner
-        .connection_within(LINK_WAIT)
+        .connection_within(LINK_WAIT, while_suspended)
         .await
         .ok_or(WsError::Disconnected)
 }
@@ -1178,7 +1181,7 @@ async fn open_forward(
     inner: &Inner,
     target: &ForwardTarget,
 ) -> Result<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream), WsError> {
-    let conn = connection(inner).await?;
+    let conn = connection(inner, WhileSuspended::Wait).await?;
     let first = try_open_forward(&conn, target).await;
     let Err(OpenError::Link(link_error)) = first else {
         return first.map_err(OpenError::into_ws);
@@ -1186,7 +1189,7 @@ async fn open_forward(
     let dead = conn.stable_id();
     let next = tokio::time::timeout(LINK_WAIT, async {
         loop {
-            let candidate = connection(inner).await?;
+            let candidate = connection(inner, WhileSuspended::Wait).await?;
             if candidate.stable_id() != dead && candidate.close_reason().is_none() {
                 return Ok(candidate);
             }
@@ -1319,7 +1322,7 @@ async fn upload(
     target: WriteTarget,
     progress: Option<Arc<dyn TransferProgress>>,
 ) -> Result<FileStat, WsError> {
-    let conn = connection(inner).await?;
+    let conn = connection(inner, WhileSuspended::GiveUp).await?;
     let (mut send, mut recv) = conn.open_bi().await.map_err(failed)?;
     let _ = send.set_priority(1);
     send_frame(
@@ -1365,7 +1368,7 @@ async fn download(
     local_path: PathBuf,
     progress: Option<Arc<dyn TransferProgress>>,
 ) -> Result<FileStat, WsError> {
-    let conn = connection(inner).await?;
+    let conn = connection(inner, WhileSuspended::GiveUp).await?;
     let (mut send, mut recv) = conn.open_bi().await.map_err(failed)?;
     let _ = send.set_priority(1);
     send_frame(&mut send, &StreamHeader::Download(header)).await?;

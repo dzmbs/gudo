@@ -891,7 +891,7 @@ impl Client {
 
 async fn connection(inner: &Inner) -> Result<iroh::endpoint::Connection, ArtifactError> {
     inner
-        .connection_within(crate::workspace::LINK_WAIT)
+        .connection_within(crate::workspace::LINK_WAIT, crate::WhileSuspended::GiveUp)
         .await
         .ok_or(ArtifactError::Disconnected)
 }

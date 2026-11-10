@@ -142,7 +142,7 @@ async fn send_build(
     progress: Option<Arc<dyn TransferProgress>>,
 ) -> Result<DaemonInfo, UpgradeError> {
     let connection = inner
-        .connection_within(CONNECT_WAIT)
+        .connection_within(CONNECT_WAIT, crate::WhileSuspended::GiveUp)
         .await
         .ok_or_else(|| UpgradeError::Connection("the host is not connected".into()))?;
     let (mut send_stream, mut recv_stream) = connection.open_bi().await.map_err(link_error)?;

@@ -1555,7 +1555,7 @@ async fn forward_one(
     remote_port: u16,
 ) -> Result<(), ConnError> {
     let conn = inner
-        .connection_within(crate::workspace::LINK_WAIT)
+        .connection_within(crate::workspace::LINK_WAIT, crate::WhileSuspended::Wait)
         .await
         .ok_or_else(|| ConnError::Net("no connection to the daemon".into()))?;
     let (mut send_stream, mut recv_stream) = conn.open_bi().await.map_err(net_error)?;
