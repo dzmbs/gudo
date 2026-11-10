@@ -353,6 +353,21 @@ final class TimelineModelTests: XCTestCase {
         XCTAssertEqual(next.frame.rows.count, 200)
     }
 
+    func testJumpingToLatestAbandonsAnOlderHistoryRequest() async throws {
+        let hub = DaemonWorkspace(hostId: "fixture", events: WorkspaceEventHub(), resolve: { nil })
+        let model = TimelineModel(pane: 7)
+        model.start(in: hub)
+        model.receive(.snapshot(try TimelineFixtureJSON.snapshot(0..<3)))
+        try await wait { model.frame.rows.count == 3 }
+        model.requestOlder()
+        XCTAssertTrue(model.isLoadingHistory)
+        model.jumpToLatest()
+        XCTAssertFalse(model.isLoadingHistory)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertNil(model.historyError)
+        model.stop()
+    }
+
     func testAFailedHistoryLoadKeepsChatAndItsCapabilities() async throws {
         let hub = DaemonWorkspace(hostId: "fixture", events: WorkspaceEventHub(), resolve: { nil })
         let model = TimelineModel(pane: 7)

@@ -248,6 +248,10 @@ final class TimelineModel {
     }
 
     func jumpToLatest() {
+        history?.cancel()
+        history = nil
+        isLoadingHistory = false
+        historyError = nil
         followsBottom = true
         hasNewItems = false
         resetsSnapshot = true
