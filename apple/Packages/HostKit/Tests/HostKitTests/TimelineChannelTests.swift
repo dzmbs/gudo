@@ -176,7 +176,7 @@ struct TimelineChannelTests {
         try await wait { await client.watchCalls == 1 }
         await client.failWatch(WorkspaceError.Unavailable(message: "Chat stopped; reopen it to retry"))
         try await wait { !packets.isEmpty }
-        #expect(packets == [.unavailable("Chat stopped; reopen it to retry. Open Terminal.")])
+        #expect(packets == [.unavailable("Chat stopped; reopen it to retry.")])
     }
 
     private func wait(_ condition: () async -> Bool) async throws {

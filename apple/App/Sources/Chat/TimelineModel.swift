@@ -351,7 +351,7 @@ final class TimelineModel {
                     if result.awaitsHighlights, pending.isEmpty { pending.append(.highlights) }
                 } catch TimelineWindowError.valueTooLarge, TimelineWindowError.historyBudget {
                     guard self.lifetime == lifetime, !Task.isCancelled else { return }
-                    self.error = "This Chat page exceeds the memory budget. Open Terminal."
+                    self.error = "This Chat page exceeds the memory budget."
                     isLoading = false
                     isLoadingHistory = false
                 } catch is TimelineWindowError {
@@ -360,7 +360,7 @@ final class TimelineModel {
                     channel?.requestSnapshot()
                 } catch {
                     guard self.lifetime == lifetime, !Task.isCancelled else { return }
-                    self.error = "Chat could not read this session. Open Terminal."
+                    self.error = "Chat could not read this session."
                     isLoading = false
                     isLoadingHistory = false
                 }

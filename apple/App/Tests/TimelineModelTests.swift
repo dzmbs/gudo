@@ -140,7 +140,7 @@ final class TimelineModelTests: XCTestCase {
             model.receive(.snapshot(json))
             try await wait { model.frame.revision == 1 }
             XCTAssertTrue(model.frame.rows.isEmpty)
-            XCTAssertEqual(model.error, "This Chat page exceeds the memory budget. Open Terminal.")
+            XCTAssertEqual(model.error, "This Chat page exceeds the memory budget.")
         }
     }
 

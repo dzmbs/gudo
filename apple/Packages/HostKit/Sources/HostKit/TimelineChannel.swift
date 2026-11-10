@@ -31,7 +31,7 @@ public final class TimelineChannel {
 
     public func observe(_ handler: @escaping (Packet) -> Void) -> UUID {
         let token = UUID()
-        guard !isClosed else { handler(.unavailable("This pane has closed. Open Terminal.")); return token }
+        guard !isClosed else { handler(.unavailable("This pane has closed.")); return token }
         observers[token] = handler
         requestSnapshot()
         return token
@@ -46,7 +46,7 @@ public final class TimelineChannel {
         guard !isClosed, !isPaused, !observers.isEmpty, watchTask == nil, stopTask == nil else { return }
         let client: any DaemonTimelineAPI
         do { client = try resolve() } catch {
-            publish(.unavailable("Chat is unavailable. Open Terminal."))
+            publish(.unavailable("Chat is unavailable."))
             return
         }
         self.client = client
@@ -124,7 +124,7 @@ public final class TimelineChannel {
 
     func close() {
         isClosed = true
-        publish(.unavailable("This pane has closed. Open Terminal."))
+        publish(.unavailable("This pane has closed."))
         observers.removeAll()
         stop()
     }
@@ -132,12 +132,12 @@ public final class TimelineChannel {
     private static func refusal(_ error: any Error) -> String {
         let reason: String
         switch error as? WorkspaceError {
-        case .NotFound: return "This pane has closed. Open Terminal."
+        case .NotFound: return "This pane has closed."
         case .Unavailable(let message), .Denied(let message), .Conflict(let message): reason = message
-        default: return "Chat could not connect. Open Terminal."
+        default: return "Chat could not connect."
         }
         let sentence = reason.prefix(1).uppercased() + reason.dropFirst()
-        return sentence.hasSuffix(".") ? "\(sentence) Open Terminal." : "\(sentence). Open Terminal."
+        return sentence.hasSuffix(".") ? sentence : sentence + "."
     }
 
     private func publish(_ packet: Packet) {
