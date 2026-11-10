@@ -351,5 +351,61 @@ final class AppStressTests: XCTestCase {
         await close(model, window, host)
         XCTAssertLessThan(report.worst, .milliseconds(stress ? 100 : 500), report.description)
     }
+
+    /// A minified bundle (one line of a MiB) previewed and reviewed, and an image that declares
+    /// 30000×30000 pixels: the window keeps answering throughout.
+    func testPreviewAndDiffOfMinifiedFileStayResponsive() async throws {
+        let minified = String(repeating: "var a=function(b){return b+1};", count: 35_000)
+        let files = OversizedFiles(text: minified, image: OversizedPNG.declaring(width: 30_000, height: 30_000))
+        let actions = FileActions(openInEditor: nil, revealInTerminal: { _ in }, insertPath: { _ in })
+        let model = WindowModel(app: .shared)
+        model.start()
+        defer { model.close() }
+        let screens: [(String, AnyView)] = [
+            ("text preview", AnyView(NavigationStack { FilePreviewScreen(source: files, entry: files.textEntry, actions: actions) })),
+            ("image preview", AnyView(NavigationStack { FilePreviewScreen(source: files, entry: files.imageEntry, actions: actions) })),
+            ("unified diff", AnyView(NavigationStack { DiffReviewView(source: MinifiedDiff(text: minified)) })),
+        ]
+        // The window is up before the watch starts: what is measured is the screen alone.
+        let slot = ScreenSlot()
+        let window = makeWindow(ScreenSlotView(slot: slot).environment(model).environment(model.app))
+        defer { dismantle(window) }
+        await pump(1)
+        for (name, screen) in screens {
+            let report = await measure(name) {
+                slot.screen = screen
+                await pump(2)
+            }
+            slot.screen = nil
+            await pump(0.5)
+            XCTAssertLessThan(report.worst, .milliseconds(200), "\(name): \(report.description)")
+        }
+    }
+
+    private func makeWindow(_ content: some View) -> NSWindow {
+        let size = CGSize(width: 1280, height: 860)
+        let window = OffscreenWindow(
+            contentRect: NSRect(x: -30000, y: -30000, width: size.width, height: size.height),
+            styleMask: [.titled, .closable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentViewController = NSHostingController(rootView: content)
+        window.setFrame(NSRect(x: -30000, y: -30000, width: size.width, height: size.height), display: false)
+        window.orderFrontRegardless()
+        return window
+    }
+}
+
+@MainActor
+@Observable
+private final class ScreenSlot {
+    var screen: AnyView?
+}
+
+private struct ScreenSlotView: View {
+    let slot: ScreenSlot
+
+    var body: some View {
+        if let screen = slot.screen { screen } else { Color.clear }
+    }
 }
 #endif
