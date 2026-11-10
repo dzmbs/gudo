@@ -44,6 +44,18 @@ nonisolated func temporaryDirectory() -> URL {
         #expect(HostsModel(secrets: secrets, repository: HostRepository(directory: directory)).record("a") == nil)
     }
 
+    @Test func lowDataModeTurnedOffAfterOpeningReachesTheClient() throws {
+        let model = HostsModel(secrets: MemorySecretStore(), repository: HostRepository(directory: temporaryDirectory()))
+        model.dialer = { _, listener in FakeClient(listener: listener) }
+        model.upsert(HostRecord(id: "h", name: "studio", kind: .daemon, daemonId: "d1"))
+        try model.secrets.set("ticket", for: "host.h.ticket")
+        model.network.update(offline: false, interfaces: ["wifi"], lowDataMode: true, signature: "wifi-constrained")
+        let connection = try #require(try model.open("h") as? DaemonConnection)
+        model.network.update(offline: false, interfaces: ["wifi"], lowDataMode: false, signature: "wifi")
+        let client = try #require(connection.client as? FakeClient)
+        #expect(client.calls.last { if case .lowDataMode = $0 { true } else { false } } == .lowDataMode(false))
+    }
+
     @Test func sshHostsNeedACredential() throws {
         let model = HostsModel(secrets: MemorySecretStore(), repository: HostRepository(directory: temporaryDirectory()))
         let endpoint = SSHEndpoint(user: "me", host: "127.0.0.1", port: 1, identity: .password)

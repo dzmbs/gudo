@@ -46,7 +46,7 @@ public final class NetworkMonitor {
         monitor.start(queue: DispatchQueue(label: "network-monitor"))
     }
 
-    private func update(offline: Bool, interfaces: [String], lowDataMode: Bool, signature: String) {
+    func update(offline: Bool, interfaces: [String], lowDataMode: Bool, signature: String) {
         isOffline = offline
         self.interfaces = interfaces
         if lowDataMode != isLowDataMode {

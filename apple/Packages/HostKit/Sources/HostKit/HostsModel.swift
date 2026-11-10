@@ -224,6 +224,7 @@ public final class HostsModel {
         connection.browser.onPush = { [weak self] push in self?.onBrowserPush?(record.id, push) }
         connection.onClipboard = { [weak self] pane, text in self?.onClipboard?(record.id, pane, text) }
         connection.isGuest = record.isGuest
+        connection.isLowDataMode = network.isLowDataMode
         connection.onRefused = { [weak self] reason in
             guard let self, DaemonConnection.meansDeviceRemoved(reason), self.record(record.id)?.isThisDevice == true else { return false }
             return self.onThisDeviceRemoved?(record.id) ?? false
