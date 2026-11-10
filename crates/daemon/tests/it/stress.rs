@@ -520,6 +520,10 @@ async fn read_ctl_until(
     .is_ok()
 }
 
+/// Held by the tests with more than a hundred panes: macOS allows 511 pseudo-terminals for
+/// the whole machine, so they take turns.
+static MANY_PANES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// An owner client and `count` panes (tabs running `sleep`, the first a shell).
 async fn owner_with_panes(daemon: &daemon::Daemon, count: usize) -> (TestClient, Vec<PaneId>) {
     let mut owner = TestClient::connect(&support::ticket(daemon), ClientConfig::generate_key());
@@ -537,7 +541,7 @@ async fn owner_with_panes(daemon: &daemon::Daemon, count: usize) -> (TestClient,
             })
             .await
         else {
-            panic!("no tab")
+            panic!("no tab for pane {}", panes.len() + 1)
         };
         panes.push(pane_id);
     }
@@ -559,6 +563,7 @@ fn subscriptions(panes: &[PaneId]) -> Vec<ClientCtl> {
 /// by default, and this raw client never accepts one) still has its `ctl` answered.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn following_more_panes_than_the_client_takes_streams_for_keeps_ctl_answering() {
+    let _one_at_a_time = MANY_PANES.lock().await;
     let directory = tempfile::tempdir().unwrap();
     let daemon = support::start(directory.path()).await;
     let (_owner, panes) = owner_with_panes(&daemon, 120).await;
@@ -585,6 +590,7 @@ async fn following_more_panes_than_the_client_takes_streams_for_keeps_ctl_answer
 /// which are replayed before its `ctl` is read.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn resuming_more_panes_than_the_client_takes_streams_for_keeps_ctl_answering() {
+    let _one_at_a_time = MANY_PANES.lock().await;
     let directory = tempfile::tempdir().unwrap();
     let daemon = support::start(directory.path()).await;
     let (_owner, panes) = owner_with_panes(&daemon, 120).await;
@@ -617,6 +623,7 @@ async fn resuming_more_panes_than_the_client_takes_streams_for_keeps_ctl_answeri
 /// The app follows more panes than QUIC's default stream limit, and every one streams.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_app_follows_more_panes_than_quics_default_stream_limit() {
+    let _one_at_a_time = MANY_PANES.lock().await;
     let directory = tempfile::tempdir().unwrap();
     let daemon = support::start(directory.path()).await;
     let (mut owner, panes) = owner_with_panes(&daemon, 120).await;
