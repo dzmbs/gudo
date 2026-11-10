@@ -393,7 +393,8 @@ nonisolated final class PaneRouter: Sendable {
         case .paneHistoryGone:
             break
         case .connected:
-            suspended.withLock { $0 = false }
+            // A dial that finished while the app was away: the pane stays paused.
+            guard !suspended.withLock({ $0 }) else { return false }
             beginCatchingUp()
             return false
         case .paneStreaming(let pane):
@@ -446,6 +447,11 @@ nonisolated final class PaneRouter: Sendable {
     func suspend() {
         suspended.withLock { $0 = true }
         broadcast(.stale(reason: "Paused"))
+    }
+
+    /// The app is back and redials: the next connection brings the panes back.
+    func resume() {
+        suspended.withLock { $0 = false }
     }
 
     /// Marks every pane live or stale (suspend, connection state). While stale nothing is

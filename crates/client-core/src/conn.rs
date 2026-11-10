@@ -705,7 +705,16 @@ async fn run(inner: &Arc<Inner>, live: Live) -> String {
     for mirror in lock(&inner.mirrors).values_mut() {
         mirror.history.in_flight = false;
     }
-    *lock(&inner.connection) = Some(conn.clone());
+    {
+        // Checked under the lock `suspend` takes first: a suspend either sees this connection
+        // and closes it, or this sees the suspend.
+        let paused = lock(&inner.paused);
+        if *paused {
+            conn.close(0u32.into(), b"suspend");
+            return "suspended".into();
+        }
+        *lock(&inner.connection) = Some(conn.clone());
+    }
     inner.emit(ClientEvent::Connected { epoch, resumed });
 
     let mut input = match conn.open_uni().await {

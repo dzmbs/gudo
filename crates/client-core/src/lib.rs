@@ -1253,6 +1253,8 @@ impl Client {
         if let Some(connection) = lock(&self.inner.connection).take() {
             connection.close(0u32.into(), b"suspend");
         }
+        // A dial in flight is abandoned rather than left to come up behind the pause.
+        self.inner.reconnect.notify_one();
     }
 
     /// Forwards `127.0.0.1:local_port` on this device to `localhost:remote_port` on the

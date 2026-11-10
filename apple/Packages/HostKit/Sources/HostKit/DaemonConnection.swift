@@ -334,6 +334,7 @@ public final class DaemonConnection: HostConnection {
 
     public func retry() {
         attempt = 0
+        router.resume()
         if client == nil {
             try? connect()
         } else {
@@ -347,6 +348,7 @@ public final class DaemonConnection: HostConnection {
     /// is probed (it may have died while the app was away), one dialling carries on.
     public func foreground() {
         guard let client else { return }
+        router.resume()
         let wasDown = switch status {
         case .connected, .connecting: false
         default: true
@@ -523,6 +525,10 @@ public final class DaemonConnection: HostConnection {
             status = .needsAttention(reason: Self.incompatibleWords)
             Self.log.error("incompatible host=\(self.hostId, privacy: .public): \(reason, privacy: .public)")
         case .connected(let epoch, let resumed):
+            if case .suspended = status {
+                Self.log.info("connected while suspended host=\(self.hostId, privacy: .public): staying paused")
+                return
+            }
             clearSizing()
             incompatibility = nil
             refusal = nil

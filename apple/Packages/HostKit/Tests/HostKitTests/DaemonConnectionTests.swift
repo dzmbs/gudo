@@ -212,6 +212,12 @@ import GudoCore
         try await Task.sleep(for: .milliseconds(30))
         #expect(connection.status == .suspended)
 
+        // A dial that was under way when the app left comes up while it is away: still paused.
+        client().send(.connected(epoch: 1, resumed: true))
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(connection.status == .suspended)
+        #expect(sink.lastConnection == .stale(reason: "Paused"))
+
         connection.foreground()
         #expect(client().calls.last == .reconnect)
         // A daemon restart (new epoch) resets layout revisions.

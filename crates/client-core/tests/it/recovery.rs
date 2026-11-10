@@ -156,6 +156,29 @@ async fn resuming_in_the_foreground_redials_at_once_whatever_the_backoff() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn suspending_during_a_dial_leaves_no_connection_behind() {
+    let (endpoint, ticket, accepted) = welcoming_daemon(Duration::from_millis(800)).await;
+    let (client, mut events) = super::connect(&ticket.to_string(), false);
+    let dialling = tokio::time::timeout(Duration::from_secs(5), async {
+        while accepted.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(dialling.is_ok(), "the client never dialled");
+    client.suspend();
+    let is_connected = |event: &ClientEvent| matches!(event, ClientEvent::Connected { .. });
+    assert!(
+        !wait_for(&mut events, Duration::from_secs(3), is_connected).await,
+        "a dial finished while suspended"
+    );
+    client.resume_now();
+    assert!(wait_for(&mut events, Duration::from_secs(10), is_connected).await);
+    drop(client);
+    endpoint.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_network_change_during_a_dial_lets_it_finish() {
     let (endpoint, ticket, accepted) = welcoming_daemon(Duration::from_millis(800)).await;
     let (client, mut events) = super::connect(&ticket.to_string(), false);
