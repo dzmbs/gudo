@@ -87,6 +87,8 @@ const HOUSEKEEPING_INTERVAL: Duration = Duration::from_secs(600);
 const PREWARM_RECENCY: Duration = Duration::from_secs(7 * 24 * 3600);
 /// A prewarmed server no client used stops after this long.
 const PREWARM_UNUSED: Duration = Duration::from_secs(15 * 60);
+/// How long a stopping server gets to end before it is killed.
+const STOP_GRACE: Duration = Duration::from_secs(2);
 
 struct Running {
     /// `info.port` is the proxy's port when there is one, else the server's.
@@ -114,12 +116,37 @@ struct LastLaunch {
     at: UnixMillis,
 }
 
+impl Running {
+    /// Stops the server and waits a moment for it to end, so a server started next for the
+    /// folder gets its port.
+    async fn stop(mut self) {
+        if let Some(proxy) = self.proxy.take() {
+            proxy.close().await;
+        }
+        self.signal_group(libc::SIGTERM);
+        if tokio::time::timeout(STOP_GRACE, self.child.wait())
+            .await
+            .is_err()
+        {
+            self.signal_group(libc::SIGKILL);
+            let _ = tokio::time::timeout(STOP_GRACE, self.child.wait()).await;
+        }
+    }
+
+    /// Signals the server's process group (extension hosts, the downloaded server under
+    /// `code serve-web`), only while the server is unreaped: after that its pid may be reused.
+    fn signal_group(&self, signal: libc::c_int) {
+        let Some(pid) = self.child.id().filter(|&pid| pid != 0) else {
+            return;
+        };
+        // SAFETY: plain syscall; the group id is the child's pid (process_group(0)).
+        unsafe { libc::kill(-(pid as libc::pid_t), signal) };
+    }
+}
+
 impl Drop for Running {
     fn drop(&mut self) {
-        // The server runs in its own process group; take its children (extension hosts,
-        // the downloaded server under `code serve-web`) down with it.
-        // SAFETY: plain syscall; the group id is the child's pid (process_group(0)).
-        unsafe { libc::kill(-(self.info.pid as libc::pid_t), libc::SIGTERM) };
+        self.signal_group(libc::SIGTERM);
         let _ = self.child.start_kill();
     }
 }
@@ -449,12 +476,16 @@ impl Editors {
                 return Ok(info);
             }
             tracing::warn!(folder = %folder.display(), pid = info.pid, "editor refuses its token; restarting it");
-            let mut running = self.running.lock().await;
-            if running
-                .get(&folder_key)
-                .is_some_and(|editor| editor.info.pid == info.pid)
-            {
-                running.remove(&folder_key);
+            let refusing = {
+                let mut running = self.running.lock().await;
+                running
+                    .get(&folder_key)
+                    .is_some_and(|editor| editor.info.pid == info.pid)
+                    .then(|| running.remove(&folder_key))
+                    .flatten()
+            };
+            if let Some(editor) = refusing {
+                editor.stop().await;
             }
         }
         let code = find_code(config);
@@ -474,9 +505,29 @@ impl Editors {
             }
             EditorChoice::Auto => EditorKind::VsCode,
         };
+        let code = match (kind, code) {
+            (EditorKind::VsCode, None) => {
+                return Err(WsError::Unavailable(
+                    "the VS Code `code` CLI is not installed".into(),
+                ));
+            }
+            (EditorKind::VsCode, Some(_)) if !request.accept_vscode_license => {
+                return Err(WsError::Denied(
+                    "code serve-web needs the Microsoft VS Code Server licence accepted \
+                     (https://aka.ms/vscode-server-license)"
+                        .into(),
+                ));
+            }
+            (_, code) => code,
+        };
+        let replaced = self.running.lock().await.remove(&folder_key);
+        if let Some(editor) = replaced {
+            editor.stop().await;
+        }
         let stable = self
             .ports
             .bind(&folder_key)
+            .await
             .map_err(|error| WsError::Failed(format!("no free port: {error}")))?;
         let (port, proxy_listener) = if config.editor_compress {
             (free_port()?, Some(stable))
@@ -501,13 +552,6 @@ impl Editors {
                 let code = code.ok_or_else(|| {
                     WsError::Unavailable("the VS Code `code` CLI is not installed".into())
                 })?;
-                if !request.accept_vscode_license {
-                    return Err(WsError::Denied(
-                        "code serve-web needs the Microsoft VS Code Server licence accepted \
-                         (https://aka.ms/vscode-server-license)"
-                            .into(),
-                    ));
-                }
                 let direct = if config.vscode_serve_web {
                     None
                 } else {
@@ -616,14 +660,7 @@ impl Editors {
 
     /// Reaps idle servers and fetches a newer VS Code server when a check is due.
     pub(crate) async fn keep_current(&self, config: &Config) {
-        let in_use = {
-            let mut running = self.running.lock().await;
-            reap(&mut running);
-            running
-                .values()
-                .filter_map(|editor| editor.server_dir.clone())
-                .collect()
-        };
+        let in_use = self.servers_in_use().await;
         if config.vscode_serve_web {
             return;
         }
@@ -632,20 +669,42 @@ impl Editors {
         }
     }
 
+    /// The VS Code server directories editors run from.
+    async fn servers_in_use(&self) -> Vec<PathBuf> {
+        let in_use: Vec<PathBuf> = {
+            let mut running = self.running.lock().await;
+            reap(&mut running);
+            running
+                .values()
+                .filter_map(|editor| editor.server_dir.clone())
+                .collect()
+        };
+        in_use
+    }
+
     pub async fn stop(&self, folder: &str) -> Result<(), WsError> {
-        self.running
+        let editor = self
+            .running
             .lock()
             .await
             .remove(folder)
-            .map(drop)
-            .ok_or_else(|| WsError::NotFound(format!("no editor serving {folder}")))
+            .ok_or_else(|| WsError::NotFound(format!("no editor serving {folder}")))?;
+        editor.stop().await;
+        Ok(())
     }
 
     pub async fn stop_all(&self) {
         if let Some(cache) = self.asset_cache.get() {
             cache.close();
         }
-        self.running.lock().await.clear();
+        let editors: Vec<Running> = self
+            .running
+            .lock()
+            .await
+            .drain()
+            .map(|(_, editor)| editor)
+            .collect();
+        futures_util::future::join_all(editors.into_iter().map(Running::stop)).await;
     }
 
     pub async fn open(
@@ -1070,5 +1129,55 @@ mod tests {
         let port = gone.local_addr().unwrap().port();
         drop(gone);
         assert!(!accepts_token(port, "t").await, "nothing listening");
+    }
+
+    #[tokio::test]
+    async fn stopping_a_server_waits_until_it_and_its_group_are_gone() {
+        let state = tempfile::tempdir().unwrap();
+        let child = Command::new("/bin/sh")
+            .args(["-c", "trap '' TERM; /bin/sleep 60 & echo $! > helper; wait"])
+            .current_dir(state.path())
+            .process_group(0)
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let pid = child.id().unwrap();
+        let helper_file = state.path().join("helper");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let helper: libc::pid_t = loop {
+            if let Some(pid) = std::fs::read_to_string(&helper_file)
+                .ok()
+                .and_then(|text| text.trim().parse().ok())
+            {
+                break pid;
+            }
+            assert!(Instant::now() < deadline, "the helper never started");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        let editor = Running {
+            info: EditorInstance {
+                kind: EditorKind::OpenVsCode,
+                folder: "/src/app".into(),
+                port: 1,
+                token: "t".into(),
+                url_path: "/".into(),
+                pid,
+                started_at: UnixMillis(0),
+            },
+            upstream_port: 1,
+            child,
+            proxy: None,
+            server_dir: None,
+            origin: LaunchOrigin::Client,
+        };
+        editor.stop().await;
+        // SAFETY: signal 0 only asks whether the process exists.
+        assert_ne!(unsafe { libc::kill(pid as libc::pid_t, 0) }, 0);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        // SAFETY: as above.
+        while unsafe { libc::kill(helper, 0) } == 0 {
+            assert!(Instant::now() < deadline, "the server's helper outlived it");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     }
 }

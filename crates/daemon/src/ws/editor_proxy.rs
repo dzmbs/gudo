@@ -131,6 +131,12 @@ impl EditorProxy {
         }
         Some(lock(&self.shared.idle_since).elapsed())
     }
+
+    /// Stops accepting and waits until the port is free.
+    pub(crate) async fn close(mut self) {
+        self.task.abort();
+        let _ = (&mut self.task).await;
+    }
 }
 
 impl Drop for EditorProxy {
