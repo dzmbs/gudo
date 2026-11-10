@@ -272,36 +272,9 @@ private struct DirectoryListing: View {
         }
     }
 
-    private struct Row: Identifiable {
-        let entry: FileEntry
-        let depth: Int
-        var id: String { entry.path }
-    }
-
-    private static func sorted(_ entries: [FileEntry]) -> [FileEntry] {
-        entries.sorted {
-            if $0.isDirectory != $1.isDirectory { return $0.isDirectory }
-            return $0.name.localizedStandardCompare($1.name) == .orderedAscending
-        }
-    }
-
-    /// The folder's entries, each expanded folder's beneath it (Finder's list view); a filter
-    /// matches the folder's own entries.
-    private var rows: [Row] {
-        let query = filter.trimmingCharacters(in: .whitespaces)
-        guard query.isEmpty else {
-            return Self.sorted(entries ?? []).filter { $0.name.localizedCaseInsensitiveContains(query) }.map { Row(entry: $0, depth: 0) }
-        }
-        func tree(_ entries: [FileEntry], depth: Int) -> [Row] {
-            Self.sorted(entries).flatMap { entry in
-                var rows = [Row(entry: entry, depth: depth)]
-                if entry.isDirectory, let navigator, navigator.expanded.contains(entry.path) {
-                    rows += tree(navigator.listings[entry.path] ?? [], depth: depth + 1)
-                }
-                return rows
-            }
-        }
-        return tree(entries ?? [], depth: 0)
+    private var rows: [FileListingRow] {
+        FileListingRows.rows(
+            entries ?? [], filter: filter, expanded: navigator?.expanded ?? [], listings: navigator?.listings ?? [:])
     }
 
     var body: some View {
@@ -382,6 +355,7 @@ private struct DirectoryListing: View {
 
     @ViewBuilder private var content: some View {
         if entries != nil {
+            let rows = rows
             List {
                 ForEach(rows) { row in
                     self.row(row.entry, depth: row.depth)
@@ -524,7 +498,7 @@ private struct DirectoryListing: View {
     private func loadChildren(_ path: String) async {
         guard let navigator else { return }
         do {
-            let loaded = try await source.list(path)
+            let loaded = await FileListingRows.sortedInBackground(try await source.list(path))
             withAnimation(DS.Motion.snappy) { navigator.listings[path] = loaded }
         } catch {
             navigator.expanded.remove(path)
@@ -696,7 +670,7 @@ private struct DirectoryListing: View {
     private func load() async {
         problem = nil
         do {
-            let loaded = try await source.list(directory)
+            let loaded = await FileListingRows.sortedInBackground(try await source.list(directory))
             withAnimation(entries == nil ? nil : DS.Motion.snappy) { entries = loaded }
             for path in navigator?.expanded ?? [] where path.hasPrefix(directory + "/") {
                 await loadChildren(path)
