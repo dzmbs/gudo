@@ -296,6 +296,20 @@ import GudoCore
         try await eventually("healthy again") { !connection.status.isSlow }
     }
 
+    /// The tasks that follow a connection's round trips and stalls end with it.
+    @Test func aReleasedConnectionStopsFollowingItsLink() async throws {
+        var connection: DaemonConnection? = try makeConnection().0
+        let feeds = try #require(connection?.linkFeeds)
+        #expect(feeds.count == 2)
+        connection = nil
+        let ended = Atomic(false)
+        Task {
+            for feed in feeds { await feed.value }
+            ended.store(true, ordering: .releasing)
+        }
+        try await eventually("the feeds end") { ended.load(ordering: .acquiring) }
+    }
+
     @Test func attachFailureNeedsTheUser() async throws {
         let (connection, client) = try makeConnection()
         client().send(.connected(epoch: 1, resumed: false))

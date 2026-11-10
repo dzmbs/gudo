@@ -167,7 +167,7 @@ public final class DaemonConnection: HostConnection {
             onEchoRoundTrip: { echo.continuation.yield($0) },
             onInputStalled: { stalls.continuation.yield() })
         sendOp = { [weak self] op in self?.client?.op(op: op) ?? 0 }
-        Task { [weak self] in
+        let roundTrips = Task { [weak self] in
             var recent: [Duration] = []
             for await rtt in echo.stream {
                 guard let self else { return }
@@ -180,11 +180,12 @@ public final class DaemonConnection: HostConnection {
                 Self.log.debug("echo rtt \(rtt / .milliseconds(1), format: .fixed(precision: 1)) ms host=\(self.hostId, privacy: .public)")
             }
         }
-        Task { [weak self] in
+        let stallChecks = Task { [weak self] in
             for await _ in stalls.stream {
                 self?.probeLink()
             }
         }
+        linkFeeds = [roundTrips, stallChecks]
         observeView()
         let router = router
         let session = multiplayer
@@ -193,6 +194,14 @@ public final class DaemonConnection: HostConnection {
                 Task { @MainActor [weak session] in session?.noteBlockedInput(pane) }
             }
         }
+    }
+
+    /// Follow the router's round trips and stalls; they would never end on their own (the
+    /// router keeps their streams open).
+    @ObservationIgnored private(set) var linkFeeds: [Task<Void, Never>] = []
+
+    isolated deinit {
+        for feed in linkFeeds { feed.cancel() }
     }
 
     /// Dials the daemon. Errors are a bad ticket or device key (nothing to retry).
