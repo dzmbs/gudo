@@ -80,9 +80,10 @@ enum FileLinks {
     /// Resolved where the command that printed it ran, then opened as the user chose.
     static func open(_ link: TerminalLink, from pane: Pane, in workspace: Workspace, window: WindowModel, optionHeld: Bool) {
         let machine = workspace.isRemote ? window.ports.hostName : ProcessInfo.processInfo.hostName
+        // A file URL naming another machine is never handed to the system: it ignores the host
+        // and would open (or run) the file at the same path here.
         if let host = link.host, !isThisMachine(host, machineName: machine) {
-            guard let url = URL(string: link.text) else { return }
-            PaneLinks.confirmOpen(url, from: pane) { PaneLinks.openExternally(url) }
+            window.toasts.show(Toast("This file is on \(host)", systemImage: "desktopcomputer", style: .neutral))
             return
         }
         let block = PaneCommandMarks.of(pane)?.block(atViewportRow: link.row)
