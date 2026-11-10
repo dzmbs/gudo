@@ -24,6 +24,7 @@ use std::time::Duration;
 
 use proto::{AgentState, AttentionKind};
 use tokio::sync::broadcast::error::RecvError;
+use tokio::task::JoinSet;
 use tokio::time::Instant;
 
 use super::{Registration, SendError, post};
@@ -160,6 +161,17 @@ pub(crate) struct DeviceState {
     started: bool,
     /// Since when every agent is idle.
     idle_since: Option<Instant>,
+    /// A push to the device is on its way (its relay may make it wait minutes).
+    delivering: bool,
+}
+
+/// A push to one device that finished, delivered or not.
+struct Delivered {
+    registration: Registration,
+    send: Send,
+    summary: Summary,
+    decided_at: Instant,
+    result: Result<(), SendError>,
 }
 
 /// Decides what to send one device now, given whether it has a push-to-start and a running
@@ -255,6 +267,9 @@ pub(crate) async fn run(core: Arc<Core>) {
     }
     let mut events = core.events.subscribe();
     let mut next: Option<Instant> = None;
+    // Each device's pushes run on their own, so a relay throttling one device (a 429 asks
+    // for up to five minutes) holds up no other.
+    let mut deliveries = JoinSet::new();
     loop {
         let wait = async {
             match next {
@@ -275,13 +290,18 @@ pub(crate) async fn run(core: Arc<Core>) {
                 let settle = Instant::now() + core.cfg.push.activity_debounce;
                 next = Some(next.map_or(settle, |pending| pending.min(settle)));
             }
-            () = wait => next = evaluate(&core).await,
+            () = wait => next = evaluate(&core, &mut deliveries),
+            Some(Ok(delivered)) = deliveries.join_next() => {
+                let retry = finish(&core, delivered);
+                let again = retry.unwrap_or_else(Instant::now);
+                next = Some(next.map_or(again, |pending| pending.min(again)));
+            }
         }
     }
 }
 
-/// Sends what each device needs now; returns when to look again.
-async fn evaluate(core: &Arc<Core>) -> Option<Instant> {
+/// Starts what each device needs now; returns when to look again.
+fn evaluate(core: &Arc<Core>, deliveries: &mut JoinSet<Delivered>) -> Option<Instant> {
     if !core.cfg.push.enabled {
         return None;
     }
@@ -297,6 +317,9 @@ async fn evaluate(core: &Arc<Core>) -> Option<Instant> {
         let (send, recheck) = {
             let mut devices = lock(&core.push.activities);
             let state = devices.entry(registration.device.clone()).or_default();
+            if state.delivering {
+                continue;
+            }
             decide(
                 state,
                 &summary,
@@ -311,49 +334,76 @@ async fn evaluate(core: &Arc<Core>) -> Option<Instant> {
             next = Some(next.map_or(at, |pending| pending.min(at)));
         }
         let Some(send) = send else { continue };
-        let result = deliver(core, &registration, &summary, send).await;
-        let mut devices = lock(&core.push.activities);
-        let state = devices.entry(registration.device.clone()).or_default();
-        match result {
-            Ok(()) => {
-                lock(&core.push.errors).remove(&registration.device);
-                match send {
-                    Send::Start { .. } => state.started = true,
-                    Send::Update { .. } => {}
-                    Send::End => {
-                        *state = DeviceState::default();
-                        drop(devices);
-                        core.push.update(&registration.device, |stored| {
-                            stored.activity_update_cap.take().is_some()
-                        });
-                        continue;
-                    }
-                }
-                state.sent = Some(summary.clone());
-                state.sent_at = Some(now);
-            }
-            Err(SendError::Gone) => {
-                tracing::info!(device = %&registration.device[..8], ?send, "live activity token gone");
-                *state = DeviceState::default();
-                drop(devices);
-                core.push.update(&registration.device, |stored| match send {
-                    Send::Start { .. } => stored.activity_cap.take().is_some(),
-                    _ => stored.activity_update_cap.take().is_some(),
-                });
-            }
-            Err(SendError::Failed(why)) => {
-                tracing::warn!(device = %&registration.device[..8], "live activity push failed: {why}");
-                // Not marked sent: the next change (or this recheck) tries again.
-                if matches!(send, Send::Start { .. }) {
-                    state.started = true;
-                }
-                lock(&core.push.errors).insert(registration.device.clone(), why);
-                let retry = now + core.cfg.push.activity_interval;
-                next = Some(next.map_or(retry, |pending| pending.min(retry)));
-            }
+        if let Some(state) = lock(&core.push.activities).get_mut(&registration.device) {
+            state.delivering = true;
         }
+        let core = Arc::clone(core);
+        let summary = summary.clone();
+        deliveries.spawn(async move {
+            let result = deliver(&core, &registration, &summary, send).await;
+            Delivered {
+                registration,
+                send,
+                summary,
+                decided_at: now,
+                result,
+            }
+        });
     }
     next
+}
+
+/// Records how a push went; returns when to try again after a failure.
+fn finish(core: &Core, delivered: Delivered) -> Option<Instant> {
+    let Delivered {
+        registration,
+        send,
+        summary,
+        decided_at,
+        result,
+    } = delivered;
+    let mut devices = lock(&core.push.activities);
+    let state = devices.entry(registration.device.clone()).or_default();
+    state.delivering = false;
+    match result {
+        Ok(()) => {
+            lock(&core.push.errors).remove(&registration.device);
+            match send {
+                Send::Start { .. } => state.started = true,
+                Send::Update { .. } => {}
+                Send::End => {
+                    *state = DeviceState::default();
+                    drop(devices);
+                    core.push.update(&registration.device, |stored| {
+                        stored.activity_update_cap.take().is_some()
+                    });
+                    return None;
+                }
+            }
+            state.sent = Some(summary);
+            state.sent_at = Some(decided_at);
+            None
+        }
+        Err(SendError::Gone) => {
+            tracing::info!(device = %&registration.device[..8], ?send, "live activity token gone");
+            *state = DeviceState::default();
+            drop(devices);
+            core.push.update(&registration.device, |stored| match send {
+                Send::Start { .. } => stored.activity_cap.take().is_some(),
+                _ => stored.activity_update_cap.take().is_some(),
+            });
+            None
+        }
+        Err(SendError::Failed(why)) => {
+            tracing::warn!(device = %&registration.device[..8], "live activity push failed: {why}");
+            // Not marked sent: the next change (or this recheck) tries again.
+            if matches!(send, Send::Start { .. }) {
+                state.started = true;
+            }
+            lock(&core.push.errors).insert(registration.device.clone(), why);
+            Some(Instant::now() + core.cfg.push.activity_interval)
+        }
+    }
 }
 
 /// Seals the summary for the device and posts it as a Live Activity push.

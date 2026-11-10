@@ -860,6 +860,106 @@ async fn live_activity_starts_updates_and_ends() {
     daemon.shutdown().await;
 }
 
+/// A relay that asks every caller to come back in five minutes.
+async fn throttling_relay() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut reader = BufReader::new(stream);
+                let mut length = 0;
+                loop {
+                    let mut header = String::new();
+                    if reader.read_line(&mut header).await.unwrap_or(0) == 0 {
+                        return;
+                    }
+                    let header = header.trim_end();
+                    if header.is_empty() {
+                        break;
+                    }
+                    if let Some((name, value)) = header.split_once(':')
+                        && name.eq_ignore_ascii_case("content-length")
+                    {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut body = vec![0; length];
+                let _ = reader.read_exact(&mut body).await;
+                let _ = reader
+                    .get_mut()
+                    .write_all(b"HTTP/1.1 429 X\r\nretry-after: 300\r\ncontent-length: 0\r\n\r\n")
+                    .await;
+            });
+        }
+    });
+    url
+}
+
+/// One device's relay throttles Live Activity pushes: another device's activity still starts
+/// at once.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_throttled_device_does_not_hold_up_another_live_activity() {
+    let state = tempfile::tempdir().unwrap();
+    let mut relay = FakeRelay::start().await;
+    let url = relay.url.clone();
+    let daemon = start_with(state.path(), move |config| {
+        config.push.relay_url = url;
+        config.push.delay = Duration::from_secs(600);
+        config.push.backoff = Duration::from_millis(50);
+        config.push.activity_debounce = Duration::from_millis(100);
+    })
+    .await;
+    let none = PushPrefs {
+        approvals: false,
+        blocked: false,
+        done: false,
+        failed: false,
+        commands: false,
+    };
+    let throttled = throttling_relay().await;
+    let mut clients = Vec::new();
+    let mut seal_secrets = Vec::new();
+    for relay_url in [Some(throttled), None] {
+        let mut client = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+        client.until("connected", |c| c.connected > 0).await;
+        let (seal_secret, seal_public) = client_core::push::x25519_keypair();
+        client
+            .client
+            .push_register(PushRegistration {
+                cap: "alert-cap".into(),
+                seal_key: seal_public,
+                relay_url,
+                prefs: none,
+                activity_cap: Some("start-cap".into()),
+            })
+            .await
+            .unwrap();
+        clients.push(client);
+        seal_secrets.push(seal_secret);
+    }
+    let (_, hidden) = two_panes(&mut clients[1]).await;
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+    hook(
+        &daemon,
+        state.path(),
+        hidden,
+        "UserPromptSubmit",
+        serde_json::json!({
+            "session_id": "s", "cwd": home, "hook_event_name": "UserPromptSubmit", "prompt": "go",
+        }),
+    )
+    .await;
+    let received = tokio::time::timeout(Duration::from_secs(10), relay.rx.recv())
+        .await
+        .expect("the unthrottled device's activity starts at once")
+        .unwrap();
+    let (start, _) = activity(&received, &daemon, &seal_secrets[1]);
+    assert_eq!(start.event, Some(push::ActivityEvent::Start));
+    drop(clients);
+    daemon.shutdown().await;
+}
+
 /// The real Worker in `wrangler dev` with the fake APNs (docs/PUSH.md "Local development"):
 ///
 /// ```text
