@@ -16,6 +16,10 @@ const RESPONSE: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nC
 const REQUEST_TIMEOUT: Duration = Duration::from_millis(250);
 const HEADER_LIMIT: usize = 4096;
 const DRAIN_LIMIT: usize = 512 * 1024;
+const PORT_FILE: &str = "claude-display.port";
+const MAX_PORT_FILE_BYTES: u64 = 8;
+const ANY_PORT: u16 = 0;
+const LISTEN_BACKLOG: u32 = 32;
 
 pub(crate) struct HttpListener {
     address: SocketAddr,
@@ -29,33 +33,44 @@ struct Request {
     body: Vec<u8>,
 }
 
+fn saved_port(port_file: &std::path::Path) -> io::Result<Option<u16>> {
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(port_file)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let mut bytes = Vec::new();
+    file.take(MAX_PORT_FILE_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_PORT_FILE_BYTES {
+        return Err(io::Error::other("invalid display port"));
+    }
+    std::str::from_utf8(&bytes)
+        .ok()
+        .and_then(|port| port.trim().parse::<u16>().ok())
+        .filter(|port| *port != ANY_PORT)
+        .map(Some)
+        .ok_or_else(|| io::Error::other("invalid display port"))
+}
+
+fn listen(port: u16) -> io::Result<TcpListener> {
+    let socket = TcpSocket::new_v4()?;
+    socket.set_reuseaddr(true)?;
+    socket.bind((Ipv4Addr::LOCALHOST, port).into())?;
+    socket.listen(LISTEN_BACKLOG)
+}
+
 impl HttpListener {
     pub fn bind(state_dir: &std::path::Path) -> io::Result<Self> {
-        let port_file = state_dir.join("claude-display.port");
-        let port = match std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open(&port_file)
-        {
-            Ok(file) => {
-                let mut bytes = Vec::new();
-                file.take(9).read_to_end(&mut bytes)?;
-                if bytes.len() > 8 {
-                    return Err(io::Error::other("invalid display port"));
-                }
-                std::str::from_utf8(&bytes)
-                    .ok()
-                    .and_then(|port| port.trim().parse::<u16>().ok())
-                    .filter(|port| *port != 0)
-                    .ok_or_else(|| io::Error::other("invalid display port"))?
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => 0,
-            Err(error) => return Err(error),
+        let port_file = state_dir.join(PORT_FILE);
+        let listener = match saved_port(&port_file)? {
+            // Running agents keep the saved port in their settings; a new one serves new launches.
+            Some(port) => listen(port).or_else(|_| listen(ANY_PORT))?,
+            None => listen(ANY_PORT)?,
         };
-        let socket = TcpSocket::new_v4()?;
-        socket.set_reuseaddr(true)?;
-        socket.bind((Ipv4Addr::LOCALHOST, port).into())?;
-        let listener = socket.listen(32)?;
         let address = listener.local_addr()?;
         crate::fsutil::write_atomic(&port_file, address.port().to_string().as_bytes())?;
         Ok(Self {

@@ -108,6 +108,20 @@ async fn listener_reuses_its_private_port_after_recreation() {
     assert_eq!(restored.address, address);
 }
 
+#[tokio::test]
+async fn a_saved_port_taken_by_another_program_falls_back_to_a_new_one() {
+    let directory = tempfile::tempdir().unwrap();
+    let taken = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = taken.local_addr().unwrap().port();
+    std::fs::write(directory.path().join(PORT_FILE), port.to_string()).unwrap();
+    let listener = HttpListener::bind(directory.path()).unwrap();
+    assert_ne!(listener.port(), port);
+    assert_eq!(
+        std::fs::read_to_string(directory.path().join(PORT_FILE)).unwrap(),
+        listener.port().to_string()
+    );
+}
+
 #[test]
 fn display_tokens_are_pane_and_purpose_scoped() {
     let capture = super::super::Capture::new(b"fixture-secret");
