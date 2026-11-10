@@ -50,8 +50,8 @@ memory in them, and what stops that.
   `npm ci --ignore-scripts`; Playwright's sources are additionally pinned by commit and a
   SHA-256 over the extracted tree.
 - Swift: the app has no remote Swift packages; every package is local.
-- libghostty-vt: `vendor/ghostty` is a submodule at Ghostty's `v1.4.0` tag
-  (`83fb956…`). We carry our own fixes as `patches/ghostty/*.patch` (until upstream ships
+- libghostty-vt: `vendor/ghostty` is a submodule at a Ghostty `main` commit after the
+  libghostty-vt 1.0.0 release (`bd1e6a4…`, Ghostty 1.4.1-dev, libghostty-vt 1.1.0-dev). We carry our own fixes as `patches/ghostty/*.patch` (until upstream ships
   them, see Residual risk). Every build compiles the same tree: `scripts/ghostty-source.sh`
   exports the pinned commit (`git archive`, so local edits in the submodule never leak in),
   applies the patches with `git apply` and fails the build if one does not apply.
@@ -152,7 +152,8 @@ LIBGHOSTTY_VT_OPTIMIZE=safe CORRUPT_SEEDS=100000 CARGO_TARGET_DIR=target/safe \
 
 ## Residual risk
 
-- **Ghostty 1.4.0 bugs we patch locally until upstream fixes them** (`patches/ghostty`):
+- **Ghostty bugs we patch locally until upstream fixes them** (`patches/ghostty`, all still
+  present at the pinned commit):
   1. `BitmapAllocator.findFreeChunks` read, and could write, one bitmap word past the end
      when a request over 64 chunks started in the last word; a snapshot page with a small
      string capacity and a long hyperlink reached it (memory corruption in `ReleaseFast`).
@@ -162,7 +163,7 @@ LIBGHOSTTY_VT_OPTIMIZE=safe CORRUPT_SEEDS=100000 CARGO_TARGET_DIR=target/safe \
   4. A kitty graphics load could hold ~400 MB at each step whatever the image storage limit
      (~380 KiB of `o=z` data, or endless chunked loads, from any program's output).
   Fixes 2-3 degrade the invalid state on decode, as Ghostty's snapshot code does for other
-  fields. These are to be reported upstream to Ghostty as a private advisory; drop each patch when the pinned release contains it (`ghostty-source.sh`
+  fields. These are to be reported upstream to Ghostty as a private advisory; drop each patch when the pinned commit contains it (`ghostty-source.sh`
   fails loudly once a patch no longer applies).
 - The Excalidraw lockfile pins fixed nanoid, lodash-es and katex through npm `overrides`
   (`npm audit` clean, checked in CI). The rebuilt `canvas.js` is byte-identical: the bundle

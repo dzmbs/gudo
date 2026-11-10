@@ -187,8 +187,8 @@ interactive stream. Shell-integration marks (OSC 133) are trusted only for displ
   any time (a toast shows it), as in Ghostty's default.
 - **Guest marking.** Only connected guests mark a pane. Text a guest typed before leaving
   stays in the scrollback unmarked.
-- **Kitty parsing.** Kitty graphics parsing is Ghostty's code. We rely on its fixes in 1.4.0
-  and have no fuzzing of our own yet.
+- **Kitty parsing.** Kitty graphics parsing is Ghostty's code. We rely on its fixes up to the
+  pinned commit and have no fuzzing of our own yet.
 - **Huge OSC bodies.** Unfinished OSC bodies up to 1 MiB are kept for snapshots
   (`CONTINUATION_MAX_BYTES`). Larger ones are dropped from snapshots only.
 
