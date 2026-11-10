@@ -4,7 +4,7 @@ mod live_probe;
 mod projection;
 mod runtime;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 mod transport;
 
 use super::{AgentCapabilities, AgentSession, ReadFuture, TimelineRead};

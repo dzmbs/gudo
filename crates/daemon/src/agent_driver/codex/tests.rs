@@ -1,7 +1,7 @@
 use super::*;
 use serde_json::{Value, json};
 
-pub(super) fn source() -> Arc<Live> {
+pub(crate) fn source() -> Arc<Live> {
     Arc::new(Live {
         owner: tokio::sync::watch::channel(None).0,
         fault: std::sync::atomic::AtomicBool::new(false),
