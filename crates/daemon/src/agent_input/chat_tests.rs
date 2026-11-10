@@ -670,3 +670,29 @@ async fn private_dev_daemon_sends_once_and_requires_hook_and_current_draft_confi
     drop(client);
     daemon.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn input_the_terminal_refuses_as_busy_is_not_recorded_as_typed() {
+    let fixture = raw_fixture().await;
+    let pane = fixture.entry.pane.id;
+    let chunk = vec![b'x'; 1 << 20];
+    let before_busy = (0..64)
+        .find_map(|_| {
+            let before = {
+                let gate = lock(&fixture.entry.pane.agent_input_gate);
+                (gate.revision, gate.last_user_input_seq)
+            };
+            match super::enqueue(&fixture.daemon.core, pane, chunk.clone()) {
+                Err(super::EnqueueError::Busy) => Some(before),
+                Err(super::EnqueueError::Unavailable) => panic!("the agent's input is closed"),
+                Ok(()) => None,
+            }
+        })
+        .expect("the terminal never refused input");
+    let after_busy = {
+        let gate = lock(&fixture.entry.pane.agent_input_gate);
+        (gate.revision, gate.last_user_input_seq)
+    };
+    assert_eq!(after_busy, before_busy);
+    fixture.daemon.shutdown().await;
+}

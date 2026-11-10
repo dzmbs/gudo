@@ -177,19 +177,22 @@ pub(crate) fn enqueue(
     if gate.pending_unproven_writes != 0 {
         return Err(EnqueueError::Busy);
     }
+    if gate.revision.saturating_add(1) == u64::MAX {
+        gate.advance_revision();
+        return Err(EnqueueError::Unavailable);
+    }
+    let bytes = bytes::Bytes::from(bytes);
+    entry
+        .pane
+        .pty()
+        .try_write(bytes.clone())
+        .map_err(|_| EnqueueError::Busy)?;
     gate.draft.input(&bytes);
     if !bytes.is_empty() {
         gate.last_user_input_seq = crate::hook_seq();
     }
     gate.advance_revision();
-    if !matches!(&gate.phase, AgentInputPhase::Open(_)) {
-        return Err(EnqueueError::Unavailable);
-    }
-    entry
-        .pane
-        .pty()
-        .try_write(bytes)
-        .map_err(|_| EnqueueError::Busy)
+    Ok(())
 }
 
 pub(crate) async fn serve(core: &Arc<Core>, call: AgentInputCall) -> AgentInputReply {
