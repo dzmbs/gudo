@@ -10,16 +10,21 @@ fn ended_pid() -> u32 {
 #[test]
 fn only_directories_of_ended_daemons_from_before_this_start_are_removed() {
     let parent = tempfile::tempdir().unwrap();
-    let prefix = "brand-codex-";
-    let ended = parent.path().join(format!("{prefix}{}-left", ended_pid()));
-    let current = parent
-        .path()
-        .join(format!("{prefix}{}-live", std::process::id()));
-    let legacy = parent.path().join(format!("{prefix}0123456789abcdef"));
-    let unrelated = parent.path().join("other-1-directory");
-    for directory in [&ended, &current, &legacy, &unrelated] {
-        std::fs::create_dir(directory).unwrap();
-    }
+    let prefix = "brand-codex";
+    let directory = |name: &str, owner: Option<u32>| {
+        let path = parent.path().join(format!("{prefix}-{name}"));
+        std::fs::create_dir(&path).unwrap();
+        if let Some(owner) = owner {
+            std::fs::write(path.join(OWNER_FILE), owner.to_string()).unwrap();
+        }
+        path
+    };
+    let ended = directory("left", Some(ended_pid()));
+    let current = directory("live", Some(std::process::id()));
+    let legacy = directory("0123456789abcdef", None);
+    let unrelated = parent.path().join("other-directory");
+    std::fs::create_dir(&unrelated).unwrap();
+    std::fs::write(unrelated.join(OWNER_FILE), ended_pid().to_string()).unwrap();
     sweep(parent.path(), prefix, SystemTime::UNIX_EPOCH);
     assert!(ended.exists(), "a directory newer than the start stays");
     sweep(
@@ -31,6 +36,15 @@ fn only_directories_of_ended_daemons_from_before_this_start_are_removed() {
     assert!(current.exists());
     assert!(legacy.exists());
     assert!(unrelated.exists());
+}
+
+#[test]
+fn launch_socket_paths_fit_the_platform_limit() {
+    let directory = create_directory().unwrap();
+    let socket = directory.join("environment.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&socket);
+    std::fs::remove_dir_all(&directory).unwrap();
+    listener.unwrap();
 }
 
 #[tokio::test]
