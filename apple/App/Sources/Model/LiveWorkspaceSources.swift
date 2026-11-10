@@ -956,7 +956,7 @@ final class LiveFileSource: FileSource {
     }
 }
 
-extension FileEntry.GitStatus {
+nonisolated extension FileEntry.GitStatus {
     init(_ file: GitFileStatus) {
         let change = file.unstaged == .unmodified ? file.staged : file.unstaged
         self.init(change)
@@ -1041,7 +1041,7 @@ final class LiveDiffSource: DiffSource {
         case .turn(let pane, let turn):
             diff = try await api.turnDiff(paneId: pane, turn: turn, context: 3, hunks: true)
         }
-        return diff.files.map(DiffFile.init)
+        return await DiffFile.converted(diff.files)
     }
 
     private func repositoryRoot() async throws -> String {
@@ -1118,7 +1118,12 @@ enum PathMatch {
     }
 }
 
-extension DiffFile {
+nonisolated extension DiffFile {
+    /// A diff is up to 8 MiB of lines: converted off the main thread.
+    static func converted(_ files: [FileDiff]) async -> [DiffFile] {
+        await Task.detached(priority: .userInitiated) { files.map(DiffFile.init) }.value
+    }
+
     /// A daemon file diff with old/new line numbers counted from each hunk's start.
     init(_ file: FileDiff) {
         var hunks: [DiffHunk] = []

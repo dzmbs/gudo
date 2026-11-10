@@ -322,6 +322,22 @@ final class WorkspaceScreenModelTests: XCTestCase {
         XCTAssertEqual(Set(lines.map(\.id)).count, 5)
     }
 
+    func testALargeDaemonDiffIsConvertedOffTheMainThread() async {
+        let lines = (0..<20_000).map { GudoCore.DiffLine(kind: .added, text: "line \($0)") }
+        let hunk = Hunk(oldStart: 0, oldLines: 0, newStart: 1, newLines: 20_000, header: "", lines: lines)
+        let daemonFiles = (0..<4).map {
+            FileDiff(path: "src/\($0).rs", oldPath: nil, change: .added, binary: false, additions: 20_000, deletions: 0, hunks: [hunk], hunksOmitted: false)
+        }
+        let converted = await Task.detached {
+            XCTAssertFalse(Thread.isMainThread)
+            return daemonFiles.map(DiffFile.init)
+        }.value
+        XCTAssertEqual(converted.map(\.status), [.added, .added, .added, .added])
+        let background = await DiffFile.converted(daemonFiles)
+        XCTAssertEqual(background, converted)
+        XCTAssertEqual(background[3].hunks[0].lines.last?.newNumber, 20_000)
+    }
+
     func testSplitRowsPairRemovedWithAdded() {
         let lines: [App.DiffLine] = [
             .init(id: 0, kind: .context, oldNumber: 1, newNumber: 1, text: "a"),
