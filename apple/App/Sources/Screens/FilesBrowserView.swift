@@ -934,32 +934,56 @@ private struct ImagePreview: View {
     let data: Data
     let name: String
     @Environment(\.terminalTheme) private var theme
+    @Environment(\.displayScale) private var displayScale
+    @State private var shownPixels = 0
+    @State private var decoded: Decoded?
+
+    nonisolated private enum Decoded: Sendable {
+        case image(CGImage)
+        case failure(ImageThumbnail.Failure)
+    }
+
+    /// Decoding again only when the view outgrows the last decode by a step, not at every
+    /// point of a live resize.
+    private static let pixelStep = 512
 
     var body: some View {
         Group {
-            #if canImport(UIKit)
-            if let image = UIImage(data: data) {
-                Image(uiImage: image).resizable().scaledToFit()
-            } else {
-                unreadable
+            switch decoded {
+            case .image(let image):
+                Image(decorative: image, scale: 1).resizable().scaledToFit()
+            case .failure(.tooLarge(let width, let height)):
+                EmptyState(name, systemImage: "photo", message: "\(width) × \(height) pixels is too large to preview here.") {}
+            case .failure(.unreadable):
+                EmptyState(name, systemImage: "photo", message: "This image could not be decoded here.") {}
+            case nil:
+                Color.clear
             }
-            #else
-            if let image = NSImage(data: data) {
-                Image(nsImage: image).resizable().scaledToFit()
-            } else {
-                unreadable
-            }
-            #endif
         }
         .padding(DS.Space.l)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            max(proxy.size.width, proxy.size.height)
+        } action: { longestSide in
+            let pixels = (Int((longestSide * displayScale).rounded(.up)) / Self.pixelStep + 1) * Self.pixelStep
+            shownPixels = max(shownPixels, pixels)
+        }
+        .task(id: shownPixels) {
+            guard shownPixels > 0 else { return }
+            let data = data, pixels = shownPixels
+            let result = await Task.detached(priority: .userInitiated) { () -> Decoded in
+                do throws(ImageThumbnail.Failure) {
+                    return .image(try ImageThumbnail.decode(data, maximumPixelSize: pixels))
+                } catch {
+                    return .failure(error)
+                }
+            }.value
+            guard !Task.isCancelled else { return }
+            decoded = result
+        }
         .background(theme.background)
         .accessibilityLabel(name)
         .accessibilityIdentifier("file-image-preview")
-    }
-
-    private var unreadable: some View {
-        EmptyState(name, systemImage: "photo", message: "This image could not be decoded here.") {}
     }
 }
 
