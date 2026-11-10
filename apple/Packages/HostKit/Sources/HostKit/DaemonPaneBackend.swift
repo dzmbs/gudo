@@ -53,6 +53,10 @@ nonisolated final class PaneRouter: Sendable {
         var live = false
         /// The daemon streams the pane on the current connection, so its screen is current.
         var isStreaming = false
+        /// Taps being seeded from another tap's terminal. Meanwhile events wait in `held`, so
+        /// the terminal being copied stays as it was when the copy began.
+        var seedings = 0
+        var held: [(event: PaneEvent, offset: Offset?)] = []
         /// Inputs not acknowledged yet, in send order (the daemon acks each input frame once):
         /// when it was sent, the predictor's sequence number for keystrokes, and whose it was.
         var unacked: [(sent: ContinuousClock.Instant, predicted: UInt64?, tap: UInt64)] = []
@@ -70,9 +74,9 @@ nonisolated final class PaneRouter: Sendable {
     }
 
     private let routes = Mutex<[UInt64: Route]>([:])
-    /// Held while events are handed to taps and while a tap is seeded, so a seed is exactly the
-    /// state before the next event (never taken in the middle of one, never missing one).
-    /// Order: `delivery`, then `routes`, never the reverse.
+    /// Held while events are handed to taps. A tap being seeded holds its pane's events back
+    /// instead (`Route.held`), so a seed is exactly the state before the next event without
+    /// stalling other panes. Order: `delivery`, then `routes`, never the reverse.
     private let delivery = Mutex(())
     private let nextTap = Atomic<UInt64>(1)
     /// The last connection state, replayed to panes that register later.
@@ -113,20 +117,25 @@ nonisolated final class PaneRouter: Sendable {
     }
 
     /// Starts delivering to a tap. The first tap gets the buffered stream; a later one starts
-    /// from another tap's terminal (`seed` of the others), then follows the stream. Returns
-    /// whether this is the pane's first running tap (the caller subscribes then).
+    /// from another tap's terminal (`seed` of the others), copied off the caller's thread, then
+    /// follows the stream. Returns whether this is the pane's first running tap (the caller
+    /// subscribes then).
     @discardableResult
     func start(_ pane: UInt64, tap id: UInt64, sink: @escaping Sink, seed: Seed? = nil) -> Bool {
         delivery.withLock { _ in
             let state = connection.withLock { $0 }
-            let (first, source, pending, offsets, lastApplied, isStreaming) = routes.withLock { routes in
+            let (first, source, pending, offsets, isStreaming) = routes.withLock { routes in
                 var route = routes[pane] ?? Route()
                 let running = route.started
                 let source = route.driver.flatMap { route.taps[$0]?.sink != nil ? route.taps[$0]?.seed : nil }
                     ?? running.lazy.compactMap { route.taps[$0.id]?.seed }.first
                 var tap = route.taps[id] ?? Tap()
-                tap.sink = sink
                 tap.seed = seed
+                if source == nil || running.isEmpty {
+                    tap.sink = sink
+                } else {
+                    route.seedings += 1
+                }
                 route.taps[id] = tap
                 let (pendingEvents, pendingOffsets) = (route.pending, route.pendingApplied)
                 if running.isEmpty {
@@ -134,7 +143,7 @@ nonisolated final class PaneRouter: Sendable {
                     route.pendingApplied = []
                 }
                 routes[pane] = route
-                return (running.isEmpty, source, pendingEvents, pendingOffsets, route.lastApplied, route.isStreaming)
+                return (running.isEmpty, running.isEmpty ? nil : source, pendingEvents, pendingOffsets, route.isStreaming)
             }
             sink(.connection(state == .live && !isStreaming ? .stale(reason: Self.catchingUp) : state))
             if first {
@@ -143,11 +152,42 @@ nonisolated final class PaneRouter: Sendable {
                     if let offset { applied(pane, offset, only: id) }
                 }
             } else if let source {
-                for event in source() { sink(event) }
-                if let lastApplied { applied(pane, Offset(seq: lastApplied, snapshot: true), only: id) }
+                Task.detached(priority: .userInitiated) { [self] in
+                    let seedEvents = source()
+                    for event in seedEvents { sink(event) }
+                    finishSeeding(pane, tap: id, sink: sink)
+                }
             }
             return first
         }
+    }
+
+    /// The copy is in the new tap's terminal: it joins the others, and the events held back
+    /// meanwhile go to every tap, in order.
+    private func finishSeeding(_ pane: UInt64, tap id: UInt64, sink: @escaping Sink) {
+        delivery.withLock { _ in
+            let state = connection.withLock { $0 }
+            typealias Joined = (Bool, UInt64?, Bool, [(event: PaneEvent, offset: Offset?)], [Sink])
+            let (isJoining, lastApplied, isStreaming, held, sinks) = routes.withLock { routes -> Joined in
+                guard var route = routes[pane] else { return (false, nil, false, [], []) }
+                let isJoining = route.taps[id] != nil
+                if isJoining { route.taps[id]?.sink = sink }
+                route.seedings = max(0, route.seedings - 1)
+                let held = route.seedings == 0 ? route.held : []
+                if route.seedings == 0 { route.held = [] }
+                routes[pane] = route
+                return (isJoining, route.lastApplied, route.isStreaming, held, route.started.map(\.sink))
+            }
+            if isJoining {
+                sink(.connection(state == .live && !isStreaming ? .stale(reason: Self.catchingUp) : state))
+                if let lastApplied { applied(pane, Offset(seq: lastApplied, snapshot: true), only: id) }
+            }
+            for (event, offset) in held {
+                for sink in sinks { sink(event) }
+                if let offset { applied(pane, offset) }
+            }
+        }
+        if let through = routes.withLock({ $0[pane]?.lastApplied }) { flushAck(pane, through: through) }
     }
 
     func startPrediction(_ pane: UInt64, tap id: UInt64, _ onUpdate: @escaping Prediction) {
@@ -455,7 +495,8 @@ nonisolated final class PaneRouter: Sendable {
     private func flushAck(_ pane: UInt64, through: UInt64?) {
         let update = routes.withLock { routes -> (feed: Prediction?, update: PredictionUpdate)? in
             guard let ack = routes[pane]?.pendingAck else { return nil }
-            if let through, through <= ack.atSeq { return nil }
+            // The echo is held back while a tap is seeded: it has not reached any terminal.
+            if let through, through <= ack.atSeq || routes[pane]?.seedings ?? 0 > 0 { return nil }
             routes[pane]?.pendingAck = nil
             return (routes[pane]?.taps[ack.tap]?.prediction, .acknowledged(upTo: ack.predicted, hint: routes[pane]?.hint))
         }
@@ -496,6 +537,10 @@ nonisolated final class PaneRouter: Sendable {
         delivery.withLock { _ in
             let sinks = routes.withLock { routes -> [Sink]? in
                 guard let route = routes[pane] else { return nil }
+                guard route.seedings == 0 else {
+                    routes[pane]?.held.append((event, offset))
+                    return nil
+                }
                 let sinks = route.started.map(\.sink)
                 if sinks.isEmpty {
                     routes[pane]?.pending.append(event)

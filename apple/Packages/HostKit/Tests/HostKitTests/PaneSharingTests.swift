@@ -56,7 +56,7 @@ import GudoCore
         let tapB = try #require(try connection.makeBackend(for: PaneId(3)) as? DaemonPaneBackend)
         tapB.start(events: windowB.handler, seed: windowB.seed)
         #expect(client().calls.filter { $0 == .subscribe(3) }.count == 1)
-        #expect(windowB.text.contains("first line"))
+        try await eventually("the second window's copy") { windowB.text.contains("first line") }
         #expect(windowB.events.lastConnection == .live)
 
         // Both follow the stream.
@@ -72,6 +72,42 @@ import GudoCore
         #expect(!windowA.text.contains("third"))
         tapB.terminate()
         #expect(client().calls.last == .unsubscribe(3))
+    }
+
+    /// Copying a window's terminal for another (up to megabytes of scrollback) happens off the
+    /// caller's thread and never holds up the host's other panes; output that arrives meanwhile
+    /// reaches both windows once, after the copy.
+    @Test func aSlowCopyStallsNeitherTheCallerNorOtherPanes() async throws {
+        let (connection, client) = try makeConnection()
+        client().send(.connected(epoch: 1, resumed: false))
+        let windowA = Window(), windowB = Window(), other = Window()
+        let copying = Atomic(false), release = DispatchSemaphore(value: 0)
+        let slowSeed: @Sendable () -> [PaneEvent] = { [seed = windowA.seed] in
+            copying.store(true, ordering: .releasing)
+            _ = release.wait(timeout: .now() + 5)
+            return seed()
+        }
+        let tapA = try #require(try connection.makeBackend(for: PaneId(3)) as? DaemonPaneBackend)
+        tapA.start(events: windowA.handler, seed: slowSeed)
+        let otherTap = try #require(try connection.makeBackend(for: PaneId(4)) as? DaemonPaneBackend)
+        otherTap.start(events: other.handler, seed: other.seed)
+        client().send(.paneBytes(paneId: 3, seq: 0, data: Data("first line\r\n".utf8)))
+
+        let tapB = try #require(try connection.makeBackend(for: PaneId(3)) as? DaemonPaneBackend)
+        let started = ContinuousClock.now
+        tapB.start(events: windowB.handler, seed: windowB.seed)
+        #expect(ContinuousClock.now - started < .milliseconds(500), "the caller does not wait for the copy")
+        try await eventually("the copy") { copying.load(ordering: .acquiring) }
+
+        // While the copy runs, other panes' output arrives at once; this pane's waits for it.
+        client().send(.paneBytes(paneId: 4, seq: 0, data: Data("other pane".utf8)))
+        #expect(other.text.contains("other pane"))
+        client().send(.paneBytes(paneId: 3, seq: 12, data: Data("during copy".utf8)))
+        release.signal()
+        try await eventually("both windows") { windowA.text.contains("during copy") && windowB.text.contains("during copy") }
+        #expect(windowB.text.contains("first line"))
+        #expect(windowB.text.components(separatedBy: "during copy").count == 2, "applied once")
+        #expect(windowB.events.lastConnection == .live)
     }
 
     @Test(arguments: [false, true])
