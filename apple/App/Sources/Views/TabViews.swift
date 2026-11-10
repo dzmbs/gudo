@@ -687,29 +687,24 @@ struct SidebarTabIcon: View {
 
 /// A tab with several panes opens into a list of them from this chevron, before its number.
 struct TreeChevron: View {
-    let isShown: Bool
     let isExpanded: Bool
     let toggle: () -> Void
-
-    static let width: CGFloat = 12
 
     var body: some View {
         Image(systemName: "chevron.right")
             .font(.system(size: 9, weight: .semibold))
             .foregroundStyle(DS.Palette.textTertiary)
             .rotationEffect(.degrees(isExpanded ? 90 : 0))
-            .frame(width: Self.width, height: SidebarFont.icon)
+            .frame(width: 12, height: SidebarFont.icon)
             .contentShape(.rect)
-            .opacity(isShown ? 1 : 0)
-            .highPriorityGesture(TapGesture().onEnded { if isShown { toggle() } })
-            .accessibilityHidden(!isShown)
+            .highPriorityGesture(TapGesture().onEnded { toggle() })
             .accessibilityLabel(isExpanded ? "Hide panes" : "Show panes")
             .accessibilityAddTraits(.isButton)
     }
 }
 
-/// One pane of an opened tab: its program and state, named as its tab would be; showing it
-/// focuses that pane.
+/// One pane of an opened tab: its program and state, named as its tab would be (an agent by its
+/// task, a shell by its folder); showing it focuses that pane.
 struct PaneTreeRow: View {
     let pane: PaneId
     let group: HostGroup
@@ -719,10 +714,13 @@ struct PaneTreeRow: View {
     var body: some View {
         let program = model.programIdentity(ofPane: pane, onGroup: group.id)
         let state = model.agentState(ofPane: pane, onGroup: group.id)
-        let paneTitle = model.workspace(ofGroup: group.id)?.panes[pane]?.title
-        let title = program.kind == .agent
-            ? AgentTabTitle(terminalTitle: paneTitle, kind: AgentKind(program.id)).resolved
-            : paneTitle?.nonEmpty ?? program.displayName
+        let workspace = model.workspace(ofGroup: group.id)
+        let paneTitle = workspace?.panes[pane]?.title
+        let title = switch program.kind {
+        case .agent: AgentTabTitle(terminalTitle: paneTitle, kind: AgentKind(program.id), name: program.displayName).resolved
+        case _ where program.isShell: workspace?.directory(ofPane: pane) ?? paneTitle?.nonEmpty ?? program.displayName
+        default: program.displayName
+        }
         Button {
             model.focus(pane: pane, onGroup: group.id)
         } label: {
@@ -737,7 +735,7 @@ struct PaneTreeRow: View {
                 Spacer(minLength: 0)
             }
             // One level in: the pane's icon sits under its tab's title.
-            .padding(.leading, SidebarFont.icon + DS.Space.gap10)
+            .padding(.leading, SidebarFont.icon + DS.Space.gap10 + DS.Space.xs)
             .sidebarRow(selected: false)
         }
         .buttonStyle(.plain)
@@ -927,13 +925,15 @@ struct TabRow: View {
                 }
                 // Trailing, as a project's own chevron is.
                 if listStyle == .plain, tab.root.panes.count > 1 {
-                    TreeChevron(isShown: true, isExpanded: model.expandedTabs.contains(ref)) {
+                    TreeChevron(isExpanded: model.expandedTabs.contains(ref)) {
                         withAnimation(DS.Motion.snappy) { model.expandedTabs.formSymmetricDifference([ref]) }
                     }
                 }
                 TabNumber(number: number, shortcut: CommandKeyState.shared.held ? model.groups.shortcutNumber(of: ref) : nil)
             }
             .opacity(group.showsAsLive ? 1 : 0.6)
+            // A step in from its project's or host's header.
+            .padding(.leading, DS.Space.xs)
             // In Select mode only the checks say what is selected.
             .sidebarRow(selected: isActive && !model.isSelectingTabs)
         }

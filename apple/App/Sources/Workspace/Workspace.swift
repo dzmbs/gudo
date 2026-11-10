@@ -421,11 +421,13 @@ final class Workspace {
     }
 
     /// The focused pane's directory (OSC 7, else the PTY's cwd), with ~ for home.
-    func directory(of tab: Tab) -> String? {
-        if let pwd = pane(tab.focused)?.workingDirectory, !pwd.isEmpty {
+    func directory(of tab: Tab) -> String? { directory(ofPane: tab.focused) }
+
+    func directory(ofPane id: PaneId) -> String? {
+        if let pwd = pane(id)?.workingDirectory, !pwd.isEmpty {
             return PaneForeground(program: "", directory: pwd).shortDirectory
         }
-        return foregrounds[tab.focused]?.shortDirectory
+        return foregrounds[id]?.shortDirectory
     }
 
     /// What a pane runs, for headers and lists: the reported program, else what the PTY says,

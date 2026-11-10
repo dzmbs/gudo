@@ -233,7 +233,7 @@ struct SidebarTabList: View {
     @Environment(\.sidebarListStyle) private var listStyle
     let geometry: SidebarGeometry
     @AppStorage(ProjectsIntroRow.dismissedKey) private var introDismissed = false
-    private static let space = "sidebar-list"
+    nonisolated private static let space = "sidebar-list"
 
     var body: some View {
         let drag = model.sidebarDrag
@@ -620,6 +620,7 @@ struct StickyProjectHeader: View {
     @State private var height: CGFloat = 40
 
     var body: some View {
+        // Read so the header follows every scroll; the list itself never does.
         let _ = scroll.offset
         let top = scroll.top
         ZStack(alignment: .top) {
@@ -658,6 +659,8 @@ struct StickyProjectHeader: View {
     }
 }
 
+/// A project: its mark, name (renamed in place), tab count while collapsed and + New Terminal.
+/// A click collapses it; dragging it reorders projects; its menu holds the rest.
 private struct ProjectHeader: View {
     let project: Project
     @Environment(WindowModel.self) private var model
@@ -672,9 +675,11 @@ private struct ProjectHeader: View {
         let collapsed = model.groups.collapsedProjects.contains(project.id)
         // A tab joining from elsewhere lights the project it joins.
         let dropping = { if case .insert(let ref, .project(let id), _)? = drag.plan { id == project.id && !project.tabs.contains(ref) } else { false } }()
-        HStack(spacing: DS.Space.gap10) {
+        // Lined up with a host's header: its mark where the host's icon sits, its name where the
+        // host's name starts, so the rows under both read as indented.
+        HStack(spacing: DS.Space.s) {
             ProjectMark(project: project)
-                .frame(width: SidebarFont.icon)
+                .frame(minWidth: 16)
             if renaming {
                 nameField
             } else {
@@ -708,7 +713,7 @@ private struct ProjectHeader: View {
                 .accessibilityHidden(true)
         }
         .frame(minHeight: 28)
-        .padding(.leading, DS.Space.m + DS.Space.s)
+        .padding(.leading, DS.Space.l)
         .padding(.trailing, DS.Space.gap10)
         .padding(.top, DS.Space.m)
         .animation(DS.Motion.hover, value: controlsShown)
