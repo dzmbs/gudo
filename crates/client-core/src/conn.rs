@@ -1431,13 +1431,10 @@ async fn forward_one(
     tcp: tokio::net::TcpStream,
     remote_port: u16,
 ) -> Result<(), ConnError> {
-    // Wait for a connection if the client is between reconnects.
-    let conn = loop {
-        if let Some(conn) = lock(&inner.connection).clone() {
-            break conn;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    };
+    let conn = inner
+        .connection_within(crate::workspace::LINK_WAIT)
+        .await
+        .ok_or_else(|| ConnError::Net("no connection to the daemon".into()))?;
     let (mut send_stream, mut recv_stream) = conn.open_bi().await.map_err(net_error)?;
     send(
         &mut send_stream,

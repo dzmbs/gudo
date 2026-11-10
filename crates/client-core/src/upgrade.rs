@@ -141,16 +141,10 @@ async fn send_build(
     build: DaemonBuild,
     progress: Option<Arc<dyn TransferProgress>>,
 ) -> Result<DaemonInfo, UpgradeError> {
-    let connection = tokio::time::timeout(CONNECT_WAIT, async {
-        loop {
-            if let Some(connection) = lock(&inner.connection).clone() {
-                return connection;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await
-    .map_err(|_| UpgradeError::Connection("the host is not connected".into()))?;
+    let connection = inner
+        .connection_within(CONNECT_WAIT)
+        .await
+        .ok_or_else(|| UpgradeError::Connection("the host is not connected".into()))?;
     let (mut send_stream, mut recv_stream) = connection.open_bi().await.map_err(link_error)?;
     let _ = send_stream.set_priority(1);
     let size = build.data.len() as u64;

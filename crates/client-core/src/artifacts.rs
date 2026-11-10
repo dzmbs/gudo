@@ -792,7 +792,7 @@ impl Client {
         let inner = Arc::clone(&self.inner);
         self.handle
             .spawn(async move {
-                let conn = connection(&inner).await;
+                let conn = connection(&inner).await?;
                 let (mut send, mut recv) = conn.open_bi().await.map_err(failed)?;
                 let _ = send.set_priority(1);
                 let header = BlobHeader::Put {
@@ -852,7 +852,7 @@ impl Client {
         let inner = Arc::clone(&self.inner);
         self.handle
             .spawn(async move {
-                let conn = connection(&inner).await;
+                let conn = connection(&inner).await?;
                 let (mut send, mut recv) = conn.open_bi().await.map_err(failed)?;
                 let _ = send.set_priority(1);
                 crate::conn::send(&mut send, &StreamHeader::Blob(BlobHeader::Get { hash }))
@@ -884,11 +884,9 @@ impl Client {
     }
 }
 
-async fn connection(inner: &Inner) -> iroh::endpoint::Connection {
-    loop {
-        if let Some(conn) = lock(&inner.connection).clone() {
-            return conn;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+async fn connection(inner: &Inner) -> Result<iroh::endpoint::Connection, ArtifactError> {
+    inner
+        .connection_within(crate::workspace::LINK_WAIT)
+        .await
+        .ok_or(ArtifactError::Disconnected)
 }

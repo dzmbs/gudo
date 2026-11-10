@@ -1,6 +1,7 @@
 //! client-core against a real daemon (relays off, loopback), and against an SSH host.
 
 mod liveness;
+mod offline;
 mod recovery;
 mod redial;
 mod ssh_host;
@@ -18,6 +19,87 @@ async fn daemon(dir: &std::path::Path) -> daemon::Daemon {
     config.bind = Some("127.0.0.1:0".parse().unwrap());
     config.shell = Some("/bin/sh".into());
     daemon::Daemon::start(config).await.unwrap()
+}
+
+/// A daemon that goes down and comes back on the same address with the same identity, as a
+/// host that drops off the network or restarts.
+struct Host {
+    daemon: Option<daemon::Daemon>,
+    address: std::net::SocketAddr,
+    state: std::path::PathBuf,
+    home: std::path::PathBuf,
+    _dirs: (tempfile::TempDir, tempfile::TempDir),
+}
+
+impl Host {
+    async fn start() -> Self {
+        let state_dir = tempfile::tempdir().unwrap();
+        let home_dir = tempfile::tempdir().unwrap();
+        let state = state_dir.path().canonicalize().unwrap();
+        let home = home_dir.path().canonicalize().unwrap();
+        let unbound = "127.0.0.1:0".parse().unwrap();
+        let daemon = Self::start_daemon(&state, &home, unbound).await;
+        let address = daemon
+            .bound_sockets()
+            .into_iter()
+            .find(std::net::SocketAddr::is_ipv4)
+            .expect("an IPv4 socket");
+        Self {
+            daemon: Some(daemon),
+            address,
+            state,
+            home,
+            _dirs: (state_dir, home_dir),
+        }
+    }
+
+    async fn start_daemon(
+        state: &std::path::Path,
+        home: &std::path::Path,
+        address: std::net::SocketAddr,
+    ) -> daemon::Daemon {
+        let mut config = daemon::Config::new(state);
+        config.relay = daemon::RelayMode::Disabled;
+        config.bind = Some(address);
+        config.shell = Some("/bin/sh".into());
+        config.pane_env = vec![
+            ("PS1".into(), "$ ".into()),
+            ("ENV".into(), String::new()),
+            ("HOME".into(), home.to_string_lossy().into_owned()),
+        ];
+        config.fs_allow.push(home.to_path_buf());
+        daemon::Daemon::start(config).await.unwrap()
+    }
+
+    fn ticket(&self) -> String {
+        self.daemon
+            .as_ref()
+            .expect("the host is up")
+            .pairing_ticket(daemon::PAIRING_TTL)
+            .unwrap()
+            .to_string()
+    }
+
+    async fn go_down(&mut self) {
+        if let Some(daemon) = self.daemon.take() {
+            daemon.shutdown().await;
+        }
+    }
+
+    async fn come_back(&mut self) {
+        assert!(self.daemon.is_none(), "the host is already up");
+        self.daemon = Some(Self::start_daemon(&self.state, &self.home, self.address).await);
+    }
+
+    fn write_target(&self, name: &str) -> client_core::proto::WriteTarget {
+        client_core::proto::WriteTarget {
+            path: self.home.join(name).to_string_lossy().into_owned(),
+            if_match: None,
+            create_new: false,
+            mkdirs: true,
+            mode: None,
+        }
+    }
 }
 
 fn connect(ticket: &str, mirror_vt: bool) -> (Client, UnboundedReceiver<ClientEvent>) {

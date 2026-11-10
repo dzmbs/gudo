@@ -1096,14 +1096,12 @@ impl Client {
     }
 }
 
-/// The live connection, waiting while the client is between reconnects.
-async fn connection(inner: &Inner) -> iroh::endpoint::Connection {
-    loop {
-        if let Some(conn) = lock(&inner.connection).clone() {
-            return conn;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+/// The live connection, waiting up to [`LINK_WAIT`] while the client is between reconnects.
+async fn connection(inner: &Inner) -> Result<iroh::endpoint::Connection, WsError> {
+    inner
+        .connection_within(LINK_WAIT)
+        .await
+        .ok_or(WsError::Disconnected)
 }
 
 async fn send_frame<T: serde::Serialize>(
@@ -1177,9 +1175,9 @@ enum Ended {
     Broken,
 }
 
-/// How long a new forward connection waits for the link to come back when the connection it
-/// found had already died: about VS Code's own wait before it calls a socket dead.
-const LINK_WAIT: Duration = Duration::from_secs(20);
+/// How long a transfer or a new forward connection waits for the link to come back: about
+/// VS Code's own wait before it calls a socket dead.
+pub(crate) const LINK_WAIT: Duration = Duration::from_secs(20);
 
 /// Opens a forward stream to `target`. A connection that died before the client noticed fails
 /// the first try; nothing has flowed yet, so the next live connection gets one more.
@@ -1187,7 +1185,7 @@ async fn open_forward(
     inner: &Inner,
     target: &ForwardTarget,
 ) -> Result<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream), WsError> {
-    let conn = connection(inner).await;
+    let conn = connection(inner).await?;
     let first = try_open_forward(&conn, target).await;
     let Err(OpenError::Link(link_error)) = first else {
         return first.map_err(OpenError::into_ws);
@@ -1195,15 +1193,15 @@ async fn open_forward(
     let dead = conn.stable_id();
     let next = tokio::time::timeout(LINK_WAIT, async {
         loop {
-            let candidate = connection(inner).await;
+            let candidate = connection(inner).await?;
             if candidate.stable_id() != dead && candidate.close_reason().is_none() {
-                return candidate;
+                return Ok(candidate);
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
     .await
-    .map_err(|_| link_error)?;
+    .unwrap_or(Err(link_error))?;
     try_open_forward(&next, target)
         .await
         .map_err(OpenError::into_ws)
@@ -1328,7 +1326,7 @@ async fn upload(
     target: WriteTarget,
     progress: Option<Arc<dyn TransferProgress>>,
 ) -> Result<FileStat, WsError> {
-    let conn = connection(inner).await;
+    let conn = connection(inner).await?;
     let (mut send, mut recv) = conn.open_bi().await.map_err(failed)?;
     let _ = send.set_priority(1);
     send_frame(
@@ -1374,7 +1372,7 @@ async fn download(
     local_path: PathBuf,
     progress: Option<Arc<dyn TransferProgress>>,
 ) -> Result<FileStat, WsError> {
-    let conn = connection(inner).await;
+    let conn = connection(inner).await?;
     let (mut send, mut recv) = conn.open_bi().await.map_err(failed)?;
     let _ = send.set_priority(1);
     send_frame(&mut send, &StreamHeader::Download(header)).await?;

@@ -558,6 +558,23 @@ impl Inner {
         self.listener.on_event(event);
     }
 
+    /// The connection, waiting up to `wait` while the client is between reconnects. `None` at
+    /// once while suspended: no connection is coming.
+    pub(crate) async fn connection_within(&self, wait: std::time::Duration) -> Option<Connection> {
+        let waiting = async {
+            loop {
+                if *lock(&self.paused) {
+                    return None;
+                }
+                if let Some(connection) = lock(&self.connection).clone() {
+                    return Some(connection);
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        };
+        tokio::time::timeout(wait, waiting).await.ok().flatten()
+    }
+
     fn send(&self, ctl: ClientCtl) {
         let _ = self.outgoing_tx.send(Outgoing::Ctl(ctl));
     }
