@@ -19,6 +19,7 @@ struct PaneSearchBar: View {
             needle: Bindable(model).searchNeedle,
             caseSensitive: Bindable(model).searchCaseSensitive,
             selected: display.selected, total: display.total,
+            focusRequested: Bindable(model).searchWantsFocus,
             onNext: { model.findNext() }, onPrevious: { model.findPrevious() },
             onClose: { model.closeSearch() })
             .onAppear { model.attachSearch(pane) }
@@ -40,6 +41,12 @@ extension WindowModel {
         case (false, nil): local.total > 0 ? local.total : nil
         }
         return (local.selected, total)
+    }
+
+    /// Find (⌘F): opens the bar, or with it open takes the keyboard back to its field.
+    func showSearch() {
+        isSearchShown = true
+        searchWantsFocus = true
     }
 
     func attachSearch(_ pane: Pane?) {
@@ -94,7 +101,7 @@ extension WindowModel {
     private func stepSearch(_ direction: TerminalSearch.Direction) {
         // ⌘G with the bar closed brings it back with the last needle.
         if !isSearchShown {
-            isSearchShown = true
+            showSearch()
         }
         if searchPane == nil { attachSearch(workspace?.focusedPane.flatMap { workspace?.pane($0) }) }
         guard let pane = searchPane, !searchNeedle.isEmpty else { return }

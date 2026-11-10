@@ -739,7 +739,7 @@ final class Workspace {
         }
         pane.view.onFind = { [weak self] in
             guard let self else { return }
-            ActiveWindow.model(for: self)?.isSearchShown = true
+            ActiveWindow.model(for: self)?.showSearch()
         }
         pane.view.onAppKeyCommand = { [weak self] index in
             guard let self, shortcuts.indices.contains(index) else { return }

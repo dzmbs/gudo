@@ -10,6 +10,9 @@ public struct TerminalSearchBar: View {
     let selected: Int?
     /// Total matches; nil while the search is still running.
     let total: Int?
+    /// Set to put the keyboard in the field; the bar clears it once it has. A bar shown again
+    /// (its pane rebuilt, another tab) leaves the keyboard where it is.
+    @Binding var focusRequested: Bool
     let onNext: () -> Void
     let onPrevious: () -> Void
     let onClose: () -> Void
@@ -23,12 +26,14 @@ public struct TerminalSearchBar: View {
 
     public init(
         needle: Binding<String>, caseSensitive: Binding<Bool>? = nil, selected: Int?, total: Int?,
+        focusRequested: Binding<Bool>,
         onNext: @escaping () -> Void, onPrevious: @escaping () -> Void, onClose: @escaping () -> Void
     ) {
         _needle = needle
         self.caseSensitive = caseSensitive
         self.selected = selected
         self.total = total
+        _focusRequested = focusRequested
         self.onNext = onNext
         self.onPrevious = onPrevious
         self.onClose = onClose
@@ -116,7 +121,8 @@ public struct TerminalSearchBar: View {
             .accessibilityElement(children: .contain)
             .accessibilityValue(countText)
             .accessibilityIdentifier("search-bar")
-            .onAppear { isFocused = true }
+            .onAppear(perform: takeFocusIfRequested)
+            .onChange(of: focusRequested) { takeFocusIfRequested() }
             .onGeometryChange(for: CGSize.self) { $0.size } action: { barSize = $0 }
             .padding(padding)
             .offset(dragOffset)
@@ -133,6 +139,12 @@ public struct TerminalSearchBar: View {
                         }
                     })
         }
+    }
+
+    private func takeFocusIfRequested() {
+        guard focusRequested else { return }
+        isFocused = true
+        focusRequested = false
     }
 
     private var countText: String {

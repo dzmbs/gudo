@@ -164,6 +164,8 @@ final class WindowModel {
     }
 
     var isSearchShown = false
+    /// Find was asked for (⌘F): the bar puts the keyboard in its field, open already or not.
+    var searchWantsFocus = false
     /// Every floating window is out of sight for a look at the panes under them (⌥⌘F); the
     /// host keeps them as they are.
     var floatsHidden = false

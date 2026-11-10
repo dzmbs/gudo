@@ -516,7 +516,9 @@ private struct TerminalToolbar: ToolbarContent {
             ToolbarSpacer(.fixed, placement: .primaryAction)
         }
         ToolbarItemGroup(placement: .primaryAction) {
-            Button("Find", systemImage: "magnifyingglass") { model.isSearchShown.toggle() }
+            Button("Find", systemImage: "magnifyingglass") {
+                if model.isSearchShown { model.closeSearch() } else { model.showSearch() }
+            }
                 .lit(model.isSearchShown && model.destination == .terminal)
                 .help(model.isSearchShown ? "Hide Find (⌘F)" : "Find (⌘F)")
                 .accessibilityIdentifier("find-button")

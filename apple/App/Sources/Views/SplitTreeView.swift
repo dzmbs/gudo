@@ -679,7 +679,7 @@ struct PaneMenuItems: View {
         }
         moveItems
         Divider()
-        Button("Find…", systemImage: "magnifyingglass") { focusThen { model.isSearchShown = true } }
+        Button("Find…", systemImage: "magnifyingglass") { focusThen { model.showSearch() } }
         Button("Links & Paths…", systemImage: "link") { focusThen { model.sheet = .links } }
         if let target = pane ?? workspace.focusedPane {
             Button(WorkspaceAction.newBrowserTab.title, systemImage: "globe") {

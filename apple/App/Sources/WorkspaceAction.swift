@@ -255,7 +255,7 @@ enum WorkspaceAction: Hashable {
         case .moveTabDown: withAnimation(DS.Motion.reorder) { window.moveCurrentTab(by: 1) }
         case .newWindow: window.newWindow()
         case .commandPalette, .commandPaletteGhostty: window.isPaletteShown.toggle()
-        case .find: window.isSearchShown = true
+        case .find: window.showSearch()
         case .findNext: window.findNext()
         case .findPrevious: window.findPrevious()
         case .links: window.sheet = .links

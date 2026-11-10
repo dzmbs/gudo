@@ -58,7 +58,7 @@ enum PaletteCommands {
         commands += paneCommands(workspace: workspace, model: model)
 
         let tools: [(String, String, String, [String]?, () -> Void)] = [
-            ("find", "Find in Scrollback", "magnifyingglass", ["⌘", "F"], { model.isSearchShown = true }),
+            ("find", "Find in Scrollback", "magnifyingglass", ["⌘", "F"], { model.showSearch() }),
             ("links", "Links & Paths", "link", ["⇧", "⌘", "L"], { model.sheet = .links }),
             ("copy-output", "Copy Last Command Output", "doc.on.clipboard", nil, { Task { await model.copyLastCommandOutput() } }),
             ("workflows", "Workflows…", "terminal", ["/"], { model.paletteMode = .workflows; model.isPaletteShown = true }),

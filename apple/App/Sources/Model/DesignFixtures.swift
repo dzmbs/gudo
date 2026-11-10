@@ -95,7 +95,7 @@ enum DesignFixtures {
             try? await Task.sleep(for: .seconds(1))
             model.isHostSwitcherShown = true
         case "palette-search":
-            model.isSearchShown = true
+            model.showSearch()
             model.searchNeedle = "error"
             model.isPaletteShown = true
         case "goto":
@@ -105,7 +105,7 @@ enum DesignFixtures {
             model.paletteMode = .workflows
             model.isPaletteShown = true
         case "search":
-            model.isSearchShown = true
+            model.showSearch()
             model.searchNeedle = "error"
         case "keybar":
             #if os(iOS)
