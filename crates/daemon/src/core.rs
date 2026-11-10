@@ -3029,12 +3029,16 @@ fn track_resumable_agent(core: &Core, entry: &PaneEntry, foreground: &pty::Foreg
     let mut record = lock(&entry.record);
     match (running, record.resumable.as_mut()) {
         (Some(program), Some(agent)) if agent.program == program => {
-            if agent.session_id.is_none()
-                && let Some(session_id) = program.session_from_argv(&foreground.argv)
-            {
+            if agent.session_id.is_some() {
+                return;
+            }
+            if let Some(session_id) = program.session_from_argv(&foreground.argv) {
                 agent.session_id = Some(session_id);
                 core.mark_dirty();
+                return;
             }
+            // A pane restored with `--continue`: its session file says which session it is.
+            lock(&entry.resumable_process).get_or_insert((foreground.pid, SystemTime::now()));
         }
         (Some(program), _) => {
             record.resumable = Some(ResumableAgent {

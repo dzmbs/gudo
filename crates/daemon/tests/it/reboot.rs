@@ -326,6 +326,62 @@ async fn a_pi_session_started_by_hand_resumes() {
     daemon.shutdown().await;
 }
 
+/// Writes its session file only once continued, as pi does when a continued session goes on.
+const FAKE_PI_WRITING_WHEN_CONTINUED: &str = r#"#!/bin/bash
+echo "fake pi $* in $(pwd -P)"
+case " $* " in *" --continue "*)
+  dir="$PI_CODING_AGENT_DIR/sessions/--$(pwd -P | sed 's|^/||; s|[/:]|-|g')--"
+  mkdir -p "$dir"
+  printf '{"type":"session"}\n' > "$dir/2026-11-08T10-00-00-000Z___ID__.jsonl"
+  ;;
+esac
+exec -a pi /bin/sleep 600
+"#;
+
+/// A pi session whose id was never learned comes back with `--continue`; the daemon then
+/// learns the id, so the next restart resumes that session rather than the newest one.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_continued_pi_session_learns_its_id() {
+    use std::os::unix::fs::PermissionsExt;
+    let state = tempfile::tempdir().unwrap();
+    let tools = tempfile::tempdir().unwrap();
+    let mut env = agent_env(tools.path());
+    let pi = tools.path().join("bin/pi");
+    std::fs::write(&pi, FAKE_PI_WRITING_WHEN_CONTINUED.replace("__ID__", PI_ID)).unwrap();
+    std::fs::set_permissions(&pi, std::fs::Permissions::from_mode(0o755)).unwrap();
+    env.push((
+        "PI_CODING_AGENT_DIR".to_owned(),
+        tools.path().join("pi-agent").display().to_string(),
+    ));
+    let work = tools.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let work = work.canonicalize().unwrap();
+
+    let daemon = start_with(state.path(), configure_env(env.clone())).await;
+    let (mut owner, pane) = restored_pane(&daemon).await;
+    owner.type_line(pane, &format!("cd '{}' && pi", work.display()));
+    owner.wait_text(pane, "fake pi").await;
+    wait_layout(
+        state.path(),
+        |text| text.contains("\"program\": \"pi\""),
+        "recorded the pi agent",
+    );
+    drop(owner);
+    daemon.shutdown().await;
+
+    let daemon = start_with(state.path(), configure_env(env)).await;
+    let (mut owner, restored) = restored_pane(&daemon).await;
+    assert_eq!(restored, pane);
+    owner.wait_flat(pane, "fake pi --continue").await;
+    wait_layout(
+        state.path(),
+        |text| text.contains(PI_ID),
+        "named the continued pi session",
+    );
+    drop(owner);
+    daemon.shutdown().await;
+}
+
 /// At a reboot the system stops the programs in the panes too, sometimes a moment before the
 /// daemon: what they lose by dying then is not lost.
 #[tokio::test(flavor = "multi_thread")]
