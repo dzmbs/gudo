@@ -301,6 +301,29 @@ public struct CompositeTab: Identifiable, Hashable, Sendable, Codable {
         tools[leaf] = tool
     }
 
+    /// Takes in a window-owned tab's leaves beside `leaf` on `side`, in their own arrangement and
+    /// under leaf ids of this tab's; the leaf that had the focus there has it here.
+    mutating func graft(_ source: CompositeTab, beside leaf: PaneId, side: Direction) {
+        let offset = leaves.map(\.rawValue).max() ?? 0
+        func shifted(_ pane: PaneId) -> PaneId { PaneId(pane.rawValue + offset) }
+        func shifted(_ node: Node) -> Node {
+            switch node {
+            case .leaf(let pane): .leaf(shifted(pane))
+            case .split(let axis, let ratio, let first, let second):
+                .split(axis: axis, ratio: ratio, first: shifted(first), second: shifted(second))
+            }
+        }
+        let grafted = shifted(source.layout.root)
+        layout.root = layout.root.replacing(leaf, with: side.isForward
+            ? .split(axis: side.axis, ratio: 0.5, first: .leaf(leaf), second: grafted)
+            : .split(axis: side.axis, ratio: 0.5, first: grafted, second: .leaf(leaf)))
+        layout.focused = shifted(source.focusedLeaf)
+        layout.zoomed = nil
+        for (pane, editor) in source.editors { editors[shifted(pane)] = editor }
+        for (pane, browser) in source.browsers { browsers[shifted(pane)] = browser }
+        for (pane, tool) in source.tools { tools[shifted(pane)] = tool }
+    }
+
     private mutating func splitLeaf(_ leaf: PaneId, axis: Axis) -> PaneId? {
         var session = Session(tabs: [layout], activeTabId: layout.id)
         let before = Set(leaves)
@@ -558,6 +581,37 @@ public final class CompositeTabs {
     public func addTool(_ tool: ToolMember, besideHost host: String, tab: Tab, axis: Axis = .horizontal) -> TabId {
         let id = make(fromHost: host, tab: tab)
         addTool(tool, to: id, axis: axis)
+        return id
+    }
+
+    // MARK: Merging
+
+    /// A window-owned tab (pages, editors, tools; no host panes) into composite `target`, beside
+    /// `leaf` (its last leaf) on `side`, in its own arrangement. The merged tab goes.
+    @discardableResult
+    public func merge(_ source: TabId, into target: TabId, beside leaf: PaneId? = nil, side: Direction = .right) -> Bool {
+        guard source != target, let merged = tab(source), merged.members.isEmpty,
+              let index = tabs.firstIndex(where: { $0.id == target })
+        else { return false }
+        let anchor = leaf ?? tabs[index].leaves.last
+        guard let anchor, tabs[index].leaves.contains(anchor) else { return false }
+        tabs[index].graft(merged, beside: anchor, side: side)
+        tabs.removeAll { $0.id == source }
+        pending.removeAll { $0.composite == source }
+        return true
+    }
+
+    /// The same into a host tab, beside its `pane` (its last): the host tab becomes a composite in
+    /// its place, whose id is returned.
+    @discardableResult
+    public func merge(_ source: TabId, intoHost host: String, tab hostTab: Tab, beside pane: PaneId? = nil, side: Direction = .right) -> TabId? {
+        guard tab(source)?.members.isEmpty == true else { return nil }
+        let id = make(fromHost: host, tab: hostTab)
+        let leaf = pane.flatMap { tab(id)?.leaf(for: HostPane(hostId: host, pane: $0)) }
+        guard merge(source, into: id, beside: leaf, side: side) else {
+            settle(id)
+            return nil
+        }
         return id
     }
 

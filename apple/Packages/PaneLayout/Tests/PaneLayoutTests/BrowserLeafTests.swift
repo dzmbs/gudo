@@ -59,4 +59,44 @@ import Testing
         hosts.store.dropHost("alpha")
         #expect(hosts.store.browsers == [docs], "the web page stays, the host's dev server goes")
     }
+    @Test func aBrowserTabMergesIntoAHostTabBesideAPane() throws {
+        let hosts = Hosts()
+        let source = hosts.store.openBrowser(docs)
+        hosts.store.addBrowser(app, to: source, axis: .vertical)
+        let hostTab = hosts.sessions["alpha"]!.tabs[0]
+        let id = try #require(hosts.store.merge(source, intoHost: "alpha", tab: hostTab, beside: PaneId(1), side: .left))
+        #expect(hosts.store.tab(source) == nil, "the browser tab goes")
+        let tab = hosts.tab(id)
+        #expect(tab.leaves.count == 3)
+        #expect(tab.leaves.compactMap { tab.browsers[$0] } == [docs, app], "its pages keep their order")
+        #expect(tab.members[tab.leaves[2]] == HostPane(hostId: "alpha", pane: PaneId(1)), "on the left of the pane")
+        guard case .split(.horizontal, _, .split(.vertical, _, _, _), .leaf) = tab.layout.root else {
+            Issue.record("the pages keep their own arrangement: \(tab.layout.root)")
+            return
+        }
+        #expect(tab.focusedBrowser != nil)
+        #expect(hosts.sent.isEmpty, "no host pane opens or closes")
+        hosts.store.reconcile()
+        #expect(hosts.store.tab(id) != nil)
+    }
+
+    @Test func aBrowserTabMergesIntoAnotherWindowTab() throws {
+        let hosts = Hosts()
+        let target = hosts.store.openBrowser(docs)
+        let source = hosts.store.openBrowser(app)
+        #expect(hosts.store.merge(source, into: target))
+        #expect(hosts.store.tabs.map(\.id) == [target])
+        let tab = hosts.tab(target)
+        #expect(tab.leaves.compactMap { tab.browsers[$0] } == [docs, app], "on the right by default")
+        #expect(tab.focusedBrowser == app)
+    }
+
+    @Test func aTabWithHostPanesDoesNotMergeAsAWindowTab() {
+        let hosts = Hosts()
+        let mixed = hosts.mixed()
+        let target = hosts.store.openBrowser(docs)
+        #expect(!hosts.store.merge(mixed, into: target))
+        #expect(!hosts.store.merge(target, into: target))
+        #expect(hosts.store.tabs.count == 2)
+    }
 }
