@@ -374,13 +374,12 @@ final class FrameBuilder {
     }
 
     /// Ghostty's `addCursor` plus the block-cursor uniforms from `rebuildCells`. A block cursor
-    /// fills the slot reserved at the front of the text, or gives it up when it draws nothing.
+    /// fills the slot reserved at the front of the text; one that draws nothing leaves it empty
+    /// (zero size, which draws nothing) rather than moving every instance after it.
     private func addCursor(
         _ cursor: RenderState.Cursor, style: RenderState.CursorStyle, overlay: FrameOverlay, colors: RenderState.Colors,
         rowWide: [[Bool]], rowFg: [[SIMD4<UInt8>]], fonts: FontGrid, frame: inout FrameContents
     ) {
-        var slotFilled = false
-        defer { if style == .block, !slotFilled { frame.text.removeFirst() } }
         guard let position = cursor.position else { return }
         var x = Int(position.x)
         var y = Int(position.y)
@@ -410,7 +409,6 @@ final class FrameBuilder {
 
         if style == .block {
             frame.text[0] = glyph
-            slotFilled = true
             frame.blockCursor = (SIMD2(UInt16(x), UInt16(y)), wide, rowFg[y][x])
         } else {
             frame.text.append(glyph)

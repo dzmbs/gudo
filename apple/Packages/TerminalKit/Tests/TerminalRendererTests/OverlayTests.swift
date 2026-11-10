@@ -74,7 +74,8 @@ import Testing
     }
 
     /// The block cursor is the first instance (drawn under the text it inverts); one that falls
-    /// outside the grid leaves nothing behind in its place.
+    /// outside the grid leaves an empty instance that draws nothing in its place, so the text
+    /// after it never moves.
     @Test func blockCursorComesFirstOrNotAtAll() {
         let frame = build("abc")
         #expect(frame.text.first?.flags == CellText.Flags.isCursorGlyph.rawValue)
@@ -85,8 +86,10 @@ import Testing
         outside.cursorOverride = GridPoint(x: 40, y: 0)
         let clipped = build("abc", overlay: outside)
         #expect(clipped.blockCursor == nil)
-        #expect(clipped.text.count == frame.text.count - 1)
-        #expect(clipped.text.allSatisfy { $0.flags == 0 && $0.glyphSize != .zero })
+        #expect(clipped.text.count == frame.text.count)
+        #expect(clipped.text.first?.glyphSize == .zero)
+        #expect(clipped.text.dropFirst().allSatisfy { $0.glyphSize != .zero })
+        #expect(clipped.text.allSatisfy { $0.flags == 0 })
     }
 
     @Test func overlayCellsReplaceGridCellsAndMoveTheCursor() {
