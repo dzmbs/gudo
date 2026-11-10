@@ -1,5 +1,5 @@
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
@@ -21,8 +21,12 @@ fn install_shared_agent_integration(config: &Config) -> io::Result<()> {
     let launcher_path = hook_launcher::path(&config.state_dir);
     let claude_directory = config
         .pane_var(agents::CLAUDE_DIR_VAR)
-        .map(std::path::PathBuf::from)
+        .map(PathBuf::from)
         .unwrap_or_else(|| home_directory.join(".claude"));
+    let pi_directory = config
+        .pane_var(agents::PI_DIR_VAR)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home_directory.join(".pi/agent"));
     let claude_config = agents::ClaudeCode::user_config_file(
         &home_directory,
         config
@@ -47,10 +51,16 @@ fn install_shared_agent_integration(config: &Config) -> io::Result<()> {
         cwd: home_directory,
         account: agents::AccountContext::system(),
     };
+    let codex_directory = codex_config.parent().map(Path::to_path_buf);
     let outcomes = [
         install_claude_settings(&claude_directory.join("settings.json"), &context),
         install_claude_server(&claude_config, &launcher_path),
         install_codex_config(&codex_config, &launcher_path),
+        install_skill(&claude_directory, &launcher_path),
+        codex_directory.map_or(Ok(()), |directory| {
+            install_skill(&directory, &launcher_path)
+        }),
+        install_skill(&pi_directory, &launcher_path),
     ];
     outcomes
         .into_iter()
@@ -315,6 +325,93 @@ fn normalize_notification(arguments: Vec<String>) -> io::Result<Vec<String>> {
             })
         })
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+}
+
+/// Names the launcher that installed a skill folder: a folder without it is not ours.
+const SKILL_OWNER_FILE: &str = ".hook-launcher";
+
+/// Installs the product's skill in `<agent_directory>/skills/<name>` for an agent whose
+/// directory exists, writing only files whose contents differ, and removes the other
+/// flavour's skill once its launcher is gone. A folder with our name that is not ours is left
+/// alone.
+fn install_skill(agent_directory: &Path, launcher_path: &Path) -> io::Result<()> {
+    if !agent_directory.is_dir() {
+        return Ok(());
+    }
+    let skills_directory = agent_directory.join("skills");
+    for name in brand::SKILL_NAMES
+        .into_iter()
+        .filter(|name| *name != brand::SKILL_NAME)
+    {
+        let folder = skills_directory.join(name);
+        if skill_launcher(&folder).is_some_and(|launcher| is_missing_hook_program(&launcher)) {
+            std::fs::remove_dir_all(&folder)?;
+        }
+    }
+    let folder = skills_directory.join(brand::SKILL_NAME);
+    match std::fs::symlink_metadata(&folder) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "agent skill folder is a symbolic link",
+            ));
+        }
+        Ok(_) if skill_launcher(&folder).is_none() => return Ok(()),
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let mut files = vec![(
+        PathBuf::from(SKILL_OWNER_FILE),
+        launcher_path.to_string_lossy().into_owned(),
+    )];
+    files.extend(
+        agents::skill_files()
+            .into_iter()
+            .map(|file| (PathBuf::from(file.path), file.contents)),
+    );
+    for (relative_path, contents) in &files {
+        let path = folder.join(relative_path);
+        let original = read_config(&path)?;
+        write_config(&path, original.as_deref().unwrap_or(""), contents)?;
+    }
+    for stale in skill_folder_files(&folder)?
+        .into_iter()
+        .filter(|relative_path| files.iter().all(|(bundled, _)| bundled != relative_path))
+    {
+        std::fs::remove_file(folder.join(stale))?;
+    }
+    Ok(())
+}
+
+/// The launcher recorded in a skill folder we installed; `None` for anything else.
+fn skill_launcher(folder: &Path) -> Option<String> {
+    let metadata = std::fs::symlink_metadata(folder).ok()?;
+    if !metadata.is_dir() {
+        return None;
+    }
+    let launcher = read_config(&folder.join(SKILL_OWNER_FILE)).ok()??;
+    let launcher = launcher.trim();
+    (Path::new(launcher).is_absolute() && agents::is_hook_program(launcher))
+        .then(|| launcher.to_owned())
+}
+
+/// Every file under `folder`, relative to it, without following symbolic links.
+fn skill_folder_files(folder: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    let mut directories = vec![PathBuf::new()];
+    while let Some(directory) = directories.pop() {
+        for entry in std::fs::read_dir(folder.join(&directory))? {
+            let entry = entry?;
+            let relative_path = directory.join(entry.file_name());
+            if entry.file_type()?.is_dir() {
+                directories.push(relative_path);
+            } else {
+                files.push(relative_path);
+            }
+        }
+    }
+    Ok(files)
 }
 
 #[cfg(test)]
@@ -746,5 +843,176 @@ mod tests {
             rewritten_servers
         );
         assert_eq!(std::fs::read_to_string(&codex_path).unwrap(), codex);
+    }
+
+    fn skill_config(directory: &Path) -> (Config, [PathBuf; 3]) {
+        let home = directory.join("home");
+        let agent_directories = [
+            directory.join("claude-config"),
+            directory.join("codex-home"),
+            directory.join("pi-agent"),
+        ];
+        for agent_directory in &agent_directories {
+            std::fs::create_dir_all(agent_directory).unwrap();
+        }
+        std::fs::create_dir_all(&home).unwrap();
+        let mut config = Config::new(directory.join("state"));
+        config.pane_env = vec![("HOME".into(), home.to_string_lossy().into_owned())];
+        for (variable, agent_directory) in [
+            agents::CLAUDE_DIR_VAR,
+            agents::CODEX_DIR_VAR,
+            agents::PI_DIR_VAR,
+        ]
+        .into_iter()
+        .zip(&agent_directories)
+        {
+            config.pane_env.push((
+                variable.into(),
+                agent_directory.to_string_lossy().into_owned(),
+            ));
+        }
+        config.agent_integration = crate::AgentIntegration::Install;
+        (config, agent_directories)
+    }
+
+    fn installed_skill(agent_directory: &Path) -> PathBuf {
+        agent_directory.join("skills").join(brand::SKILL_NAME)
+    }
+
+    fn file_identities(folder: &Path) -> Vec<(PathBuf, u64, std::time::SystemTime)> {
+        use std::os::unix::fs::MetadataExt;
+        let mut identities: Vec<_> = skill_folder_files(folder)
+            .unwrap()
+            .into_iter()
+            .map(|relative_path| {
+                let metadata = std::fs::metadata(folder.join(&relative_path)).unwrap();
+                (relative_path, metadata.ino(), metadata.modified().unwrap())
+            })
+            .collect();
+        identities.sort();
+        identities
+    }
+
+    #[test]
+    fn the_skill_is_installed_in_each_agents_own_directory_and_a_second_start_writes_nothing() {
+        let directory = tempfile::tempdir().unwrap();
+        let (config, agent_directories) = skill_config(directory.path());
+        install_agent_integration(&config).unwrap();
+        for agent_directory in &agent_directories {
+            let folder = installed_skill(agent_directory);
+            for file in agents::skill_files() {
+                assert_eq!(
+                    std::fs::read_to_string(folder.join(file.path)).unwrap(),
+                    file.contents,
+                    "{}",
+                    folder.join(file.path).display()
+                );
+            }
+            assert_eq!(
+                skill_launcher(&folder).as_deref().map(Path::new),
+                Some(hook_launcher::path(&config.state_dir).as_path())
+            );
+        }
+        let home = config.home();
+        assert!(!home.join(".claude/skills").exists());
+        assert!(!home.join(".codex/skills").exists());
+        assert!(!home.join(".pi").exists());
+
+        let before: Vec<_> = agent_directories
+            .iter()
+            .map(|agent_directory| file_identities(&installed_skill(agent_directory)))
+            .collect();
+        install_agent_integration(&config).unwrap();
+        let after: Vec<_> = agent_directories
+            .iter()
+            .map(|agent_directory| file_identities(&installed_skill(agent_directory)))
+            .collect();
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn pi_gets_no_skill_without_its_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let (config, [_, _, pi_directory]) = skill_config(directory.path());
+        std::fs::remove_dir(&pi_directory).unwrap();
+        install_agent_integration(&config).unwrap();
+        assert!(!pi_directory.exists());
+    }
+
+    #[test]
+    fn other_skills_and_a_foreign_or_linked_folder_with_our_name_are_left_alone() {
+        let directory = tempfile::tempdir().unwrap();
+        let (config, [claude_directory, codex_directory, pi_directory]) =
+            skill_config(directory.path());
+        let other_skill = claude_directory.join("skills/my-skill/SKILL.md");
+        std::fs::create_dir_all(other_skill.parent().unwrap()).unwrap();
+        std::fs::write(&other_skill, "mine").unwrap();
+        let foreign = installed_skill(&codex_directory).join("SKILL.md");
+        std::fs::create_dir_all(foreign.parent().unwrap()).unwrap();
+        std::fs::write(&foreign, "someone else's").unwrap();
+        let linked_target = directory.path().join("dotfiles-skill");
+        std::fs::create_dir_all(&linked_target).unwrap();
+        std::fs::create_dir_all(pi_directory.join("skills")).unwrap();
+        std::os::unix::fs::symlink(&linked_target, installed_skill(&pi_directory)).unwrap();
+
+        assert!(install_agent_integration(&config).is_err());
+        assert_eq!(std::fs::read_to_string(&other_skill).unwrap(), "mine");
+        assert!(installed_skill(&claude_directory).join("SKILL.md").exists());
+        assert_eq!(std::fs::read_to_string(&foreign).unwrap(), "someone else's");
+        assert_eq!(
+            skill_folder_files(foreign.parent().unwrap()).unwrap().len(),
+            1
+        );
+        assert_eq!(std::fs::read_dir(&linked_target).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn skills_whose_launcher_is_gone_are_removed_and_leftover_files_go() {
+        let directory = tempfile::tempdir().unwrap();
+        let (config, [claude_directory, codex_directory, _]) = skill_config(directory.path());
+        let other_name = brand::SKILL_NAMES
+            .into_iter()
+            .find(|name| *name != brand::SKILL_NAME)
+            .unwrap();
+        let (other_hook, _) = other_flavour();
+        let missing_launcher = directory.path().join("gone/bin").join(other_hook);
+        let live_launcher = directory.path().join("live/bin").join(other_hook);
+        std::fs::create_dir_all(live_launcher.parent().unwrap()).unwrap();
+        std::fs::write(&live_launcher, "live hook fixture").unwrap();
+        for (agent_directory, launcher) in [
+            (&claude_directory, &missing_launcher),
+            (&codex_directory, &live_launcher),
+        ] {
+            let folder = agent_directory.join("skills").join(other_name);
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(
+                folder.join(SKILL_OWNER_FILE),
+                launcher.to_string_lossy().as_ref(),
+            )
+            .unwrap();
+            std::fs::write(folder.join("SKILL.md"), "an older skill").unwrap();
+        }
+        let leftover = installed_skill(&claude_directory).join("references/retired.md");
+        std::fs::create_dir_all(leftover.parent().unwrap()).unwrap();
+        std::fs::write(
+            installed_skill(&claude_directory).join(SKILL_OWNER_FILE),
+            hook_launcher::path(&config.state_dir)
+                .to_string_lossy()
+                .as_ref(),
+        )
+        .unwrap();
+        std::fs::write(&leftover, "from an older version").unwrap();
+
+        install_agent_integration(&config).unwrap();
+        assert!(!claude_directory.join("skills").join(other_name).exists());
+        assert!(
+            codex_directory
+                .join("skills")
+                .join(other_name)
+                .join("SKILL.md")
+                .exists()
+        );
+        assert!(!leftover.exists());
+        assert!(installed_skill(&claude_directory).join("SKILL.md").exists());
     }
 }
