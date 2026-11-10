@@ -1061,4 +1061,139 @@ mod tests {
         assert_eq!(own_token("12", None, token), None);
         assert_eq!(own_token("12", Some("12"), || Some(String::new())), None);
     }
+
+    fn backticked(text: &str) -> impl Iterator<Item = &str> {
+        text.split('`').skip(1).step_by(2)
+    }
+
+    /// Each tool's argument names and the required ones, as `tools/list` declares them.
+    fn declared_tools() -> HashMap<String, (Vec<String>, Vec<String>)> {
+        let names = |value: &Value| -> Vec<String> {
+            let mut names: Vec<String> = match value {
+                Value::Object(map) => map.keys().cloned().collect(),
+                Value::Array(list) => list
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect(),
+                _ => Vec::new(),
+            };
+            names.sort();
+            names
+        };
+        tools()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| {
+                let schema = &tool["inputSchema"];
+                (
+                    tool["name"].as_str().unwrap().to_owned(),
+                    (names(&schema["properties"]), names(&schema["required"])),
+                )
+            })
+            .collect()
+    }
+
+    /// The skill's references name every tool under a `### \`name\`` heading, followed by an
+    /// `Arguments:` paragraph listing exactly the tool's arguments and marking the required ones.
+    #[test]
+    fn the_skill_documents_every_tool_with_its_exact_arguments() {
+        let declared = declared_tools();
+        let mut documented = HashMap::new();
+        for file in agents::skill_files() {
+            if !file.path.starts_with("references/") {
+                continue;
+            }
+            let mut tool: Option<&str> = None;
+            for paragraph in file.contents.split("\n\n") {
+                if let Some(name) = paragraph
+                    .strip_prefix("### `")
+                    .and_then(|rest| rest.strip_suffix('`'))
+                {
+                    tool = Some(name);
+                    continue;
+                }
+                let Some(arguments) = paragraph.strip_prefix("Arguments:") else {
+                    continue;
+                };
+                let name = tool.take().unwrap_or_else(|| {
+                    panic!("{}: arguments without a tool: {paragraph}", file.path)
+                });
+                let mut all: Vec<String> = backticked(arguments).map(str::to_owned).collect();
+                let mut required: Vec<String> = arguments
+                    .split(", ")
+                    .filter(|argument| argument.contains("(required)"))
+                    .flat_map(backticked)
+                    .map(str::to_owned)
+                    .collect();
+                all.sort();
+                required.sort();
+                assert!(
+                    documented
+                        .insert(name.to_owned(), (all, required))
+                        .is_none(),
+                    "{name} is documented twice"
+                );
+            }
+        }
+        let mut declared_names: Vec<&String> = declared.keys().collect();
+        let mut documented_names: Vec<&String> = documented.keys().collect();
+        declared_names.sort();
+        documented_names.sort();
+        assert_eq!(documented_names, declared_names);
+        for (name, arguments) in &declared {
+            assert_eq!(
+                &documented[name], arguments,
+                "{name}: (arguments, required)"
+            );
+        }
+    }
+
+    /// Worked examples and prose name only real tools and arguments, and example calls
+    /// (`tool {json}` lines) pass only arguments the tool takes.
+    #[test]
+    fn the_skill_names_only_real_tools_and_arguments() {
+        let declared = declared_tools();
+        let arguments: Vec<&String> = declared.values().flat_map(|(all, _)| all).collect();
+        let prefixes = [
+            "pane_", "cmd_", "tab_", "agent_", "events_", "status_", "browser_",
+        ];
+        let mut calls = 0;
+        for file in agents::skill_files() {
+            for name in backticked(&file.contents) {
+                let looks_like_a_tool = prefixes.iter().any(|prefix| name.starts_with(prefix))
+                    && name
+                        .bytes()
+                        .all(|byte| byte.is_ascii_lowercase() || byte == b'_');
+                if looks_like_a_tool {
+                    assert!(
+                        declared.contains_key(name)
+                            || arguments.iter().any(|argument| *argument == name),
+                        "{} names {name}",
+                        file.path
+                    );
+                }
+            }
+            for line in file.contents.lines() {
+                let Some((name, json)) = line.split_once(' ') else {
+                    continue;
+                };
+                let Ok(Value::Object(call)) = serde_json::from_str::<Value>(json) else {
+                    continue;
+                };
+                let (all, required) = declared
+                    .get(name)
+                    .unwrap_or_else(|| panic!("{}: no tool {name}", file.path));
+                for key in call.keys() {
+                    assert!(all.contains(key), "{}: {name} takes no {key}", file.path);
+                }
+                for key in required {
+                    assert!(call.contains_key(key), "{}: {name} needs {key}", file.path);
+                }
+                calls += 1;
+            }
+        }
+        assert!(calls >= 20, "{calls} example calls");
+    }
 }
