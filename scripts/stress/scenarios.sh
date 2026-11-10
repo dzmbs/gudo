@@ -113,6 +113,22 @@ case_deadmount() {
   RECOVER=5 D deadmount "$W/s-deadmount.sh"
 }
 
+case_subs() {
+  echo "== one raw client follows and resumes 150 panes"
+  RECOVER=3 D subs "$W/s-subs.sh" 150
+}
+
+case_hoard() {
+  echo "== 16 connections hoarding blob downloads, stalled uploads and query floods"
+  RECOVER=10 D hoard "$W/s-hoard.sh" 16 40
+}
+
+case_lag() {
+  # info logs count the resyncs of clients that fell behind the event bus.
+  echo "== approvals during floods and freezes, followed by one client"
+  GUDO_LOG=warn,daemon::conn=info RECOVER=3 D lag "$W/s-lag.sh" 60
+}
+
 for s in "$@"; do
   echo "######## $s"
   "case_$s"

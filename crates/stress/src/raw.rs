@@ -8,8 +8,8 @@ use anyhow::{Context, Result, bail};
 use iroh::endpoint::{Connection, RecvStream, SendStream, presets};
 use iroh::{Endpoint, EndpointAddr, EndpointId};
 use proto::{
-    Caps, ClientCtl, DeviceId, GrantId, Hello, LinkClass, PaneId, ResumePoint, Seq, ServerCtl,
-    SignedGrant, SnapGen, SubscribeMode, Ticket,
+    BlobReply, Caps, ClientCtl, DeviceId, GrantId, Hello, LinkClass, PaneId, ResumePoint, Seq,
+    ServerCtl, SignedGrant, SnapGen, StreamHeader, SubscribeMode, Ticket,
 };
 
 async fn send(stream: &mut SendStream, message: &ClientCtl) -> Result<()> {
@@ -210,4 +210,253 @@ pub async fn stale_resume(key: &[u8], ticket: &str, secs: u64) -> Result<()> {
     }
     println!("stale-resume: {rounds} rounds, daemon answered every time");
     Ok(())
+}
+
+/// Sends a `Ping` and a `ListSessions` and waits for both answers; the time it took.
+async fn ctl_round_trip(raw: &mut RawClient, nonce: u64, limit: Duration) -> Result<Duration> {
+    let started = Instant::now();
+    send(&mut raw.tx, &ClientCtl::Ping { nonce }).await?;
+    send(&mut raw.tx, &ClientCtl::ListSessions).await?;
+    let (mut pong, mut sessions) = (false, false);
+    tokio::time::timeout(limit, async {
+        while !(pong && sessions) {
+            match recv(&mut raw.rx).await? {
+                Some(ServerCtl::Pong { nonce: answered }) if answered == nonce => pong = true,
+                Some(ServerCtl::Sessions { .. }) => sessions = true,
+                Some(_) => {}
+                None => bail!("ctl closed"),
+            }
+        }
+        Ok(())
+    })
+    .await
+    .with_context(|| format!("no pong and session list within {} ms", limit.as_millis()))??;
+    Ok(started.elapsed())
+}
+
+fn subscriptions(panes: &[PaneId]) -> Vec<ClientCtl> {
+    panes
+        .iter()
+        .map(|&pane_id| ClientCtl::Subscribe {
+            pane_id,
+            mode: SubscribeMode::Live,
+            rows_hint: 50,
+        })
+        .collect()
+}
+
+/// One raw client (QUIC's default of 100 incoming streams, never accepting one, as an older
+/// app at its limit) follows every pane, then reconnects resuming all of them; after each,
+/// a ping and an op must be answered within `limit_ms`.
+pub async fn subs(key: &[u8], ticket: &str, limit_ms: u64) -> Result<()> {
+    let limit = Duration::from_millis(limit_ms);
+    let mut raw = dial(key, ticket, false, Vec::new()).await?;
+    let panes = raw.panes.clone();
+    for message in subscriptions(&panes) {
+        send(&mut raw.tx, &message).await?;
+    }
+    let following = ctl_round_trip(&mut raw, 1, limit).await?;
+    println!(
+        "subs: following {} panes, ping and op answered in {:.1} ms",
+        panes.len(),
+        following.as_secs_f64() * 1000.0
+    );
+    let epoch = raw.epoch;
+    raw.conn.close(0u32.into(), b"reconnecting");
+    drop(raw);
+    let resume = panes
+        .iter()
+        .map(|&pane_id| ResumePoint {
+            pane_id,
+            last_seq: Seq(0),
+            snap_gen: SnapGen(epoch),
+        })
+        .collect();
+    let mut raw = dial(key, ticket, false, resume).await?;
+    let resuming = ctl_round_trip(&mut raw, 2, limit).await?;
+    println!(
+        "subs: resuming {} panes, ping and op answered in {:.1} ms",
+        panes.len(),
+        resuming.as_secs_f64() * 1000.0
+    );
+    Ok(())
+}
+
+/// A PNG header padded to `size` bytes: all the daemon checks of a blob.
+fn padded_png(size: usize) -> Vec<u8> {
+    let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR\0\0\0\x10\0\0\0\x10".to_vec();
+    png.resize(size, 0);
+    png
+}
+
+async fn open_stream(conn: &Connection, header: &StreamHeader) -> Result<(SendStream, RecvStream)> {
+    let (mut tx, rx) = conn.open_bi().await?;
+    tx.write_all(&proto::frame::to_vec(header)?).await?;
+    Ok((tx, rx))
+}
+
+async fn recv_frame<T: serde::de::DeserializeOwned>(stream: &mut RecvStream) -> Result<T> {
+    let mut prefix = [0; proto::frame::LEN_PREFIX];
+    stream.read_exact(&mut prefix).await?;
+    let mut body = vec![0; proto::frame::body_len(prefix, proto::MAX_FRAME_LEN)?];
+    stream.read_exact(&mut body).await?;
+    Ok(proto::frame::decode_body(&body)?)
+}
+
+/// Stores a padded PNG of `size` bytes in the attached session; its hash.
+async fn put_blob(raw: &mut RawClient, size: usize) -> Result<proto::BlobHash> {
+    send(&mut raw.tx, &ClientCtl::Attach { session_id: None }).await?;
+    let session_id = loop {
+        match recv(&mut raw.rx).await? {
+            Some(ServerCtl::AttachResult(Ok(attachment))) => break attachment.session_id,
+            Some(ServerCtl::AttachResult(Err(failure))) => bail!("attach: {failure:?}"),
+            Some(_) => {}
+            None => bail!("closed before attaching"),
+        }
+    };
+    let image = padded_png(size);
+    let header = StreamHeader::Blob(proto::BlobHeader::Put {
+        session_id,
+        size: image.len() as u64,
+        media: proto::MediaType::Png,
+    });
+    let (mut tx, mut rx) = open_stream(&raw.conn, &header).await?;
+    let ready: BlobReply = recv_frame(&mut rx).await?;
+    if ready != BlobReply::Ready {
+        bail!("blob put: {ready:?}");
+    }
+    tx.write_all(&image).await?;
+    match recv_frame(&mut rx).await? {
+        BlobReply::Stored(image) => Ok(image.hash),
+        other => bail!("blob put: {other:?}"),
+    }
+}
+
+/// What one hoarding connection holds open: streams the daemon must not let pile up.
+struct Hoard {
+    _streams: Vec<(SendStream, RecvStream)>,
+    raw: RawClient,
+}
+
+/// `connections` raw connections of the paired device each open `streams` blob downloads they
+/// never read, 4 uploads that stop after one byte and 4 streams without a header, and keep
+/// asking for links and history pages of every pane without reading the answers. Every 5 s a
+/// fresh connection follows a pane and times its first frame, and its ping.
+pub async fn hoard(
+    key: &[u8],
+    ticket: &str,
+    connections: usize,
+    streams: usize,
+    blob_mib: usize,
+    secs: u64,
+) -> Result<()> {
+    let mut setup = dial(key, ticket, false, Vec::new()).await?;
+    let hash = put_blob(&mut setup, blob_mib << 20).await?;
+    let panes = setup.panes.clone();
+    drop(setup);
+    let home = std::env::var("HOME").context("HOME")?;
+    let mut hoards = Vec::new();
+    for connection in 0..connections {
+        let raw = dial(key, ticket, false, Vec::new()).await?;
+        let mut held = Vec::new();
+        let get = StreamHeader::Blob(proto::BlobHeader::Get { hash });
+        for _ in 0..streams {
+            held.push(open_stream(&raw.conn, &get).await?);
+        }
+        for upload in 0..4 {
+            let header = StreamHeader::Upload(proto::UploadHeader {
+                target: proto::WriteTarget {
+                    path: format!("{home}/hoard-{connection}-{upload}.bin"),
+                    if_match: None,
+                    create_new: false,
+                    mkdirs: true,
+                    mode: None,
+                },
+                size: 1 << 30,
+            });
+            let (mut tx, rx) = open_stream(&raw.conn, &header).await?;
+            tx.write_all(&[0]).await?;
+            held.push((tx, rx));
+        }
+        for _ in 0..4 {
+            let (mut tx, rx) = raw.conn.open_bi().await?;
+            tx.write_all(&[0]).await?;
+            held.push((tx, rx));
+        }
+        hoards.push(Hoard {
+            _streams: held,
+            raw,
+        });
+    }
+    println!(
+        "hoard: {connections} connections, each {streams} unread {blob_mib} MiB blob downloads, \
+         4 stalled uploads, 4 streams without a header"
+    );
+    let end = Instant::now() + Duration::from_secs(secs);
+    let mut requests = 0u64;
+    let mut probes = Vec::new();
+    let mut next_probe = Instant::now();
+    while Instant::now() < end {
+        for hoard in &mut hoards {
+            for &pane_id in &panes {
+                requests += 1;
+                send(
+                    &mut hoard.raw.tx,
+                    &ClientCtl::Links {
+                        req_id: requests,
+                        pane_id,
+                        commands: 1000,
+                    },
+                )
+                .await?;
+                send(
+                    &mut hoard.raw.tx,
+                    &ClientCtl::FetchHistory {
+                        pane_id,
+                        snapshot_seq: Seq(0),
+                        offset: 0,
+                        max_bytes: 2 << 20,
+                    },
+                )
+                .await?;
+            }
+        }
+        if Instant::now() >= next_probe {
+            next_probe = Instant::now() + Duration::from_secs(5);
+            probes.push(probe_snapshot(key, ticket, panes[0]).await?);
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let closed = hoards
+        .iter()
+        .filter(|hoard| hoard.raw.conn.close_reason().is_some())
+        .count();
+    println!("hoard: {requests} links and history requests sent; {closed} connections closed");
+    for (snapshot, ping) in &probes {
+        println!(
+            "hoard probe: first frame of a fresh subscription {:.1} ms, ping {:.1} ms",
+            snapshot.as_secs_f64() * 1000.0,
+            ping.as_secs_f64() * 1000.0
+        );
+    }
+    Ok(())
+}
+
+/// A fresh connection follows `pane`: the time to its stream's first frame, and to a pong.
+async fn probe_snapshot(key: &[u8], ticket: &str, pane: PaneId) -> Result<(Duration, Duration)> {
+    let mut raw = dial(key, ticket, false, Vec::new()).await?;
+    let started = Instant::now();
+    for message in subscriptions(&[pane]) {
+        send(&mut raw.tx, &message).await?;
+    }
+    let first_frame = tokio::time::timeout(Duration::from_secs(30), async {
+        let mut stream = raw.conn.accept_uni().await?;
+        let _header: StreamHeader = recv_frame(&mut stream).await?;
+        let _frame: proto::PaneOutput = recv_frame(&mut stream).await?;
+        Ok::<_, anyhow::Error>(started.elapsed())
+    })
+    .await
+    .context("no snapshot within 30 s")??;
+    let ping = ctl_round_trip(&mut raw, 3, Duration::from_secs(30)).await?;
+    Ok((first_frame, ping))
 }

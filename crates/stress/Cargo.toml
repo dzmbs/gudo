@@ -18,6 +18,7 @@ client-core.workspace = true
 ghostty-vt.workspace = true
 iroh.workspace = true
 proto.workspace = true
+serde.workspace = true
 tokio = { workspace = true, features = ["io-util"] }
 
 [lints]

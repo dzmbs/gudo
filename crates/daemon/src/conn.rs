@@ -1433,6 +1433,7 @@ impl Client {
 
     /// The state the event bus keeps this client current on, for a client that missed events.
     fn resync(&self) {
+        tracing::info!(conn = %self.id, "client fell behind the events; sending the state again");
         self.send(self.core.sessions_message(self.authz.scope));
         let session = {
             let mut state = lock(&self.state);

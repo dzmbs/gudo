@@ -4721,6 +4721,7 @@ dependencies = [
  "ghostty-vt",
  "iroh",
  "proto",
+ "serde",
  "tokio",
 ]
 

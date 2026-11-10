@@ -178,6 +178,30 @@ enum Cmd {
         #[arg(long)]
         resume: String,
     },
+    /// A raw client (QUIC's default stream limit, never accepting a stream) follows every pane,
+    /// then reconnects resuming them all; a ping and an op must be answered within `limit_ms`.
+    Subs {
+        #[arg(long, default_value_t = 1000)]
+        limit_ms: u64,
+    },
+    /// Raw connections hoarding unread blob downloads, stalled uploads, streams without a
+    /// header and floods of links and history requests; probes a fresh subscription meanwhile.
+    Hoard {
+        #[arg(long, default_value_t = 16)]
+        connections: usize,
+        #[arg(long, default_value_t = 64)]
+        streams: usize,
+        #[arg(long, default_value_t = 30)]
+        blob_mib: usize,
+        #[arg(long, default_value_t = 30)]
+        secs: u64,
+    },
+    /// Follows the session for `secs` noting every pane's approval, then checks that a fresh
+    /// client sees no approval the follower missed.
+    Approvals {
+        #[arg(long, default_value_t = 30)]
+        secs: u64,
+    },
 }
 
 fn config_dir() -> PathBuf {
@@ -378,6 +402,14 @@ async fn run(cli: Cli, handle: tokio::runtime::Handle) -> Result<()> {
             parallel,
         } => reconnect(&handle, key, &ticket, secs, max_ms, parallel).await,
         Cmd::StaleResume { secs } => raw::stale_resume(&key, &ticket, secs).await,
+        Cmd::Subs { limit_ms } => raw::subs(&key, &ticket, limit_ms).await,
+        Cmd::Hoard {
+            connections,
+            streams,
+            blob_mib,
+            secs,
+        } => raw::hoard(&key, &ticket, connections, streams, blob_mib, secs).await,
+        Cmd::Approvals { secs } => approvals(&handle, key, &ticket, secs).await,
         Cmd::Keys { rate, secs } => keys(&handle, key, &ticket, rate, secs).await,
         Cmd::Paste { mb } => paste(&handle, key, &ticket, mb).await,
         Cmd::Layout { rate, secs } => layout_storm(&handle, key, &ticket, rate, secs).await,
@@ -629,6 +661,65 @@ async fn tabs(
         proto::frame::to_vec(&layout)?.len() / 1024,
         fresh_start.elapsed().as_secs_f64() * 1000.0
     );
+    Ok(())
+}
+
+/// Notes in `blocked` the request each pane's agent is blocked on, as `conn` is told over
+/// `secs`; returns how many new requests it saw.
+async fn follow_blocked(
+    conn: &mut Connection,
+    secs: u64,
+    blocked: &mut HashMap<PaneId, proto::RequestId>,
+) -> Result<u64> {
+    let mut seen = 0;
+    let end = Instant::now() + Duration::from_secs(secs);
+    while let Ok(event) = tokio::time::timeout_at(end.into(), conn.next()).await {
+        if let ClientEvent::PaneMeta { meta } = event? {
+            let request = meta.agent.and_then(|agent| match agent.state {
+                proto::AgentState::Blocked(blocker) => Some(blocker.request_id),
+                _ => None,
+            });
+            match request {
+                Some(request) => {
+                    if blocked.insert(meta.pane_id, request) != Some(request) {
+                        seen += 1;
+                    }
+                }
+                None => {
+                    blocked.remove(&meta.pane_id);
+                }
+            }
+        }
+    }
+    Ok(seen)
+}
+
+async fn approvals(
+    handle: &tokio::runtime::Handle,
+    key: Vec<u8>,
+    ticket: &str,
+    secs: u64,
+) -> Result<()> {
+    let mut follower = Connection::open(handle, key.clone(), ticket, false)?;
+    let mut followed = HashMap::new();
+    let seen = follow_blocked(&mut follower, secs, &mut followed).await?;
+    let mut fresh = Connection::open(handle, key, ticket, false)?;
+    let mut current = HashMap::new();
+    follow_blocked(&mut fresh, 3, &mut current).await?;
+    follow_blocked(&mut follower, 0, &mut followed).await?;
+    let missed: Vec<PaneId> = current
+        .iter()
+        .filter(|(pane, request)| followed.get(pane) != Some(request))
+        .map(|(pane, _)| *pane)
+        .collect();
+    println!(
+        "approvals: {seen} approvals followed over {secs} s; {} open now, the follower missed {}",
+        current.len(),
+        missed.len()
+    );
+    if !missed.is_empty() {
+        bail!("approvals missed in panes {missed:?}");
+    }
     Ok(())
 }
 
