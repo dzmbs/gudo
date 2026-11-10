@@ -8,7 +8,9 @@ interrupts and approvals use the existing input and signed-decision paths.
 
 `Caps::AGENT_TIMELINE` opts a connection into timeline pushes.
 `DaemonFeatures::AGENT_TIMELINE` gates requests to the helper. Terminal-only clients receive
-no timeline traffic.
+no timeline traffic. Apps open agent panes in Chat only when the helper advertises
+`DaemonFeatures::AGENT_TIMELINE`; with an older helper they stay in Terminal and choosing Chat
+says "Update the helper to use Chat."
 
 - `TimelineWatch` returns the last approximately 60 items and a cursor, then
   `ServerCtl::Timeline` pushes operations. Its frozen encoding always selects schema 1.

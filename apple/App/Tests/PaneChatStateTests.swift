@@ -25,7 +25,7 @@ final class PaneChatStateTests: XCTestCase {
     }
 
     func testWorkspaceUsesOnlyThisPanesTrackedAgentBeforeItsFirstLayout() async throws {
-        let client = FakeWorkspaceClient()
+        let client = TimelineFixtureClient(snapshot: try TimelineFixtureJSON.snapshot(0..<1))
         let host = "chat-metadata-test-" + UUID().uuidString
         let connection = DaemonConnection(hostId: host, ticket: "placeholder") { _, listener in
             client.state.withLock { $0.events = listener }
@@ -54,6 +54,33 @@ final class PaneChatStateTests: XCTestCase {
         XCTAssertEqual(backend.isSizeDeferred, preferred == .chat)
         XCTAssertEqual(backend.state.withLock { $0.claims }, 0)
         XCTAssertEqual(backend.state.withLock { $0.resizes }, 0)
+    }
+
+    func testAHelperWithoutAgentTimelinesKeepsTerminalAndSaysWhy() async throws {
+        let client = FakeWorkspaceClient()
+        let host = "chat-old-helper-test-" + UUID().uuidString
+        let connection = DaemonConnection(hostId: host, ticket: "placeholder") { _, listener in
+            client.state.withLock { $0.events = listener }
+            return client
+        }
+        try connection.connect()
+        let backend = PanePresentationTests.Backend()
+        let workspace = Workspace(hostId: host, connection: connection, makeBackend: { _ in backend })
+        defer { workspace.close() }
+        let pane = try Pane(id: PaneId(7), backend: backend, onExit: {})
+        client.send(.paneMeta(meta: PaneMeta(
+            paneId: 7, title: "private fixture", cwd: "/private/fixture", exit: nil,
+            agent: AgentStatus(kind: "claude", state: .idle), size: PaneSize(cols: 80, rows: 24),
+            sizePolicy: .lastActive, sizedBy: nil)))
+        for _ in 0..<100 where connection.meta[PaneId(7)] == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        workspace.updateChatState(of: pane)
+        let chat = try XCTUnwrap(pane.chat)
+        XCTAssertEqual(chat.presentation, .terminal)
+        XCTAssertFalse(chat.show(.chat, terminal: pane))
+        XCTAssertEqual(chat.presentation, .terminal)
+        XCTAssertEqual(chat.error, "Update the helper to use Chat.")
     }
 
     func testInputCallbacksReadOnlyTheAdmittedPresentation() throws {

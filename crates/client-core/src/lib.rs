@@ -1146,6 +1146,11 @@ impl Client {
         lock(&self.inner.more_daemon_features).contains(feature)
     }
 
+    /// Whether the daemon of the current (or last) connection announced `feature`.
+    pub fn daemon_supports(&self, feature: proto::DaemonFeatures) -> bool {
+        self.inner.daemon_has(feature)
+    }
+
     /// Drops the connection and redials immediately.
     pub fn reconnect(&self) {
         self.unpause();

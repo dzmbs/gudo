@@ -67,6 +67,12 @@ impl DaemonClient {
         .await
     }
 
+    /// Whether the daemon keeps agent timelines (old helpers only offer Terminal).
+    pub fn offers_agent_timeline(&self) -> bool {
+        self.inner
+            .daemon_supports(proto::DaemonFeatures::AGENT_TIMELINE)
+    }
+
     pub async fn timeline_watch(&self, pane_id: u64) -> Result<String, WorkspaceError> {
         self.ws_call(|client| async move {
             let snapshot = client

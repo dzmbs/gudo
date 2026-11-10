@@ -32,6 +32,7 @@ final class PaneChatState {
         }
     }
     private(set) var agent: AgentKind?
+    var offersChat: Bool
     private(set) var error: String?
     private(set) var terminalNotice: TerminalNotice?
     var draft = ""
@@ -67,6 +68,7 @@ final class PaneChatState {
         member: HostPane,
         defaultPresentation: PanePresentation,
         agent: AgentKind? = nil,
+        offersChat: Bool = true,
         inputPresentation: PaneInputPresentation = .init(),
         preferences: UserDefaults = .standard,
         pool: ChatModelPool = .shared,
@@ -76,6 +78,7 @@ final class PaneChatState {
         self.defaultPresentation = defaultPresentation
         self.inputPresentation = inputPresentation
         self.agent = agent
+        self.offersChat = offersChat
         self.preferences = preferences
         self.pool = pool
         self.dictation = dictation
@@ -93,7 +96,7 @@ final class PaneChatState {
     }
 
     func prepareInitialPresentation(_ prepare: () -> Bool) {
-        if presentation == .chat, !prepare() { presentation = .terminal }
+        if presentation == .chat, !offersChat || !prepare() { presentation = .terminal }
     }
 
     func updateAgent(_ agent: AgentKind?) {
@@ -156,6 +159,10 @@ final class PaneChatState {
         select(presentation, persistence: persistence) {
             switch presentation {
             case .chat:
+                guard offersChat else {
+                    error = "Update the helper to use Chat."
+                    return false
+                }
                 if model == nil, let hub { activate(in: hub) }
                 guard let model else { return false }
                 if model.error != nil { model.retry() }

@@ -11,9 +11,12 @@ nonisolated public protocol DaemonTimelineAPI: AnyObject, Sendable {
     func timelineItemsBefore(paneId: UInt64, before: UInt64, limit: UInt16) async throws -> String
     func timelineToolOutput(paneId: UInt64, handle: String, offset: UInt64, len: UInt32) async throws -> String
     func timelineToolDiff(paneId: UInt64, handle: String) async throws -> String
+    func offersAgentTimeline() -> Bool
 }
 
 extension DaemonTimelineAPI {
+    nonisolated public func offersAgentTimeline() -> Bool { true }
+
     public func chatPrepare(paneId: UInt64) async throws -> String {
         throw WorkspaceError.Unavailable(message: "Update the helper to send from Chat.")
     }
@@ -325,6 +328,9 @@ nonisolated public enum TimelineJSON {
 }
 
 extension DaemonWorkspace {
+    /// Whether the connected helper keeps agent timelines; older helpers only offer Terminal.
+    public var offersAgentTimeline: Bool { (try? timelineClient())?.offersAgentTimeline() ?? false }
+
     public func timelineClient() throws -> any DaemonTimelineAPI {
         guard let client = try client() as? any DaemonTimelineAPI else { throw HostError.notConnected }
         return client
