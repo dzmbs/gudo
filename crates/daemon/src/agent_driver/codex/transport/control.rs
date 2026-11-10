@@ -29,6 +29,14 @@ enum ControlError {
     Transport(#[from] io::Error),
 }
 
+/// How far a control got before it failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Delivery {
+    NotSent,
+    /// Codex may have it (the request was being written or was written).
+    Sent,
+}
+
 pub(in crate::agent_driver::codex) type Sender = mpsc::Sender<Command>;
 
 pub(in crate::agent_driver::codex) struct Command {
@@ -245,7 +253,9 @@ pub(super) async fn run(source: Weak<Live>, mut receiver: mpsc::Receiver<Command
 }
 
 async fn handle(source: &Weak<Live>, mut command: Command) {
-    let result = tokio::time::timeout_at(command.deadline, execute(source, &command)).await;
+    let mut delivery = Delivery::NotSent;
+    let result =
+        tokio::time::timeout_at(command.deadline, execute(source, &command, &mut delivery)).await;
     match (result, &command.action) {
         (Ok(Ok(())), _) => {
             if let Some(acknowledgement) = command.acknowledgement.take() {
@@ -254,7 +264,10 @@ async fn handle(source: &Weak<Live>, mut command: Command) {
                     .send(crate::agent_input::Receipt::Confirmed);
             }
         }
-        (Ok(Err(ControlError::Obsolete)), Action::Approve { common, .. }) => {
+        (result, Action::Approve { common, .. })
+            if delivery == Delivery::NotSent
+                || matches!(result, Ok(Err(ControlError::Obsolete))) =>
+        {
             if let Some(source) = source.upgrade() {
                 source.reopen_approval(common);
             }
@@ -268,7 +281,11 @@ async fn handle(source: &Weak<Live>, mut command: Command) {
     }
 }
 
-async fn execute(source: &Weak<Live>, command: &Command) -> Result<(), ControlError> {
+async fn execute(
+    source: &Weak<Live>,
+    command: &Command,
+    delivery: &mut Delivery,
+) -> Result<(), ControlError> {
     serialize(source, command)?;
     let (path, server) = {
         let source = source
@@ -282,6 +299,7 @@ async fn execute(source: &Weak<Live>, command: &Command) -> Result<(), ControlEr
     };
     let mut connection = rpc::connect(&path, server).await?;
     let request = serialize(source, command)?;
+    *delivery = Delivery::Sent;
     connection
         .send(Message::text(request))
         .await

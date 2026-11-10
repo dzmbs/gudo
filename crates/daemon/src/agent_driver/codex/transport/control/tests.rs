@@ -367,3 +367,22 @@ async fn a_guest_cannot_add_an_allow_all_rule_on_a_native_codex_pane() {
     );
     fixture.raw.daemon.shutdown().await;
 }
+
+/// Codex's server could not be reached, or did not answer the connection in time: nothing was
+/// sent, so the request is offered again and Chat keeps working.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_answer_that_never_left_is_offered_again_without_failing_chat() {
+    let fixture = Fixture::new().await;
+    let source = Arc::downgrade(&fixture.source);
+    handle(&source, fixture.approval()).await;
+    assert!(lock(&fixture.source.state).is_chat_ready());
+    assert!(!lock(&fixture.source.runtime).pending[0].admitted);
+    assert!(fixture.source.pending_approval().is_some());
+
+    let mut late = fixture.approval();
+    late.deadline = tokio::time::Instant::now();
+    handle(&source, late).await;
+    assert!(lock(&fixture.source.state).is_chat_ready());
+    assert!(!lock(&fixture.source.runtime).pending[0].admitted);
+    fixture.raw.daemon.shutdown().await;
+}
