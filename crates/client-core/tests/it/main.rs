@@ -2,6 +2,7 @@
 
 mod liveness;
 mod offline;
+mod outage;
 mod panes;
 mod queue;
 mod recovery;
