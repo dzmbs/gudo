@@ -157,7 +157,8 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
     }
 
     /// A finished turn waits a moment and goes only if nobody saw it and the agent did not go
-    /// straight on; one per pane per interval, the newest.
+    /// straight on (working again, or asking: its own note, with Approve and Deny, stands); one
+    /// per pane per interval, the newest.
     private func finishedStillDue(_ note: AttentionNote, daemon: DaemonConnection) async -> Bool {
         let key = LocalNotifications.identifier(hostId: note.hostId, paneId: note.paneId)
         newestFinished[key] = note.itemId
@@ -166,15 +167,18 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
         if wait > .zero { try? await Task.sleep(for: wait) }
         guard newestFinished[key] == note.itemId,
               !(seenItems[note.hostId]?.contains(note.itemId) ?? false),
-              !Self.isWorking(daemon.meta[PaneId(note.paneId)]?.agent)
+              !Self.hasMovedOn(daemon.meta[PaneId(note.paneId)]?.agent)
         else { return false }
         newestFinished[key] = nil
         pacer.posted(key, at: .now)
         return true
     }
 
-    static func isWorking(_ agent: AgentStatus?) -> Bool {
-        if case .running? = agent?.state { true } else { false }
+    static func hasMovedOn(_ agent: AgentStatus?) -> Bool {
+        switch agent?.state {
+        case .running?, .blocked?: true
+        default: false
+        }
     }
 
     /// The daemon's item as a note: approval options come from the pane's agent state.

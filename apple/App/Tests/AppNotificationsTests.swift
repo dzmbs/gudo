@@ -17,6 +17,13 @@ final class AppNotificationsTests: XCTestCase {
         requestId: 7, summary: "rm -rf build",
         options: [DecisionOption(id: 1, label: "Yes"), DecisionOption(id: 2, label: "No")]))
 
+    func testALateFinishedNoteStandsDownWhileTheAgentWorksOrAsks() {
+        XCTAssertTrue(AppNotifications.hasMovedOn(AgentStatus(kind: "claude", state: .running)))
+        XCTAssertTrue(AppNotifications.hasMovedOn(Self.blocked))
+        XCTAssertFalse(AppNotifications.hasMovedOn(AgentStatus(kind: "claude", state: .idle)))
+        XCTAssertFalse(AppNotifications.hasMovedOn(nil))
+    }
+
     func testAnApprovalWaitsForItsOptions() async {
         let box = Box()
         Task { @MainActor in
