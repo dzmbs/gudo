@@ -409,6 +409,14 @@ private final class FakeClient: NotificationActionClient {
         #expect(pacer.wait(for: "a", now: start + .seconds(31)) == .zero)
     }
 
+    @Test func panesPacedLongAgoAreForgotten() {
+        var pacer = PaneNotePacer(interval: .seconds(30))
+        let start = ContinuousClock.now
+        pacer.posted("closed", at: start)
+        pacer.posted("open", at: start + .seconds(31))
+        #expect(Array(pacer.lastPosted.keys) == ["open"])
+    }
+
     @Test func categoriesCarryTheActions() {
         let categories = Dictionary(uniqueKeysWithValues: NotificationCategories.all.map { ($0.identifier, $0) })
         let approval = categories["AGENT_APPROVAL"]

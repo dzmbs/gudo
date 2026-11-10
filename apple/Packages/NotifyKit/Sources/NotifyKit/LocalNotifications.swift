@@ -178,7 +178,7 @@ public enum LocalNotifications {
 /// for the rest of it (and is replaced by a newer one meanwhile).
 public struct PaneNotePacer: Sendable {
     public var interval: Duration
-    private var lastPosted: [String: ContinuousClock.Instant] = [:]
+    private(set) var lastPosted: [String: ContinuousClock.Instant] = [:]
 
     public init(interval: Duration = .seconds(30)) {
         self.interval = interval
@@ -192,6 +192,7 @@ public struct PaneNotePacer: Sendable {
     }
 
     public mutating func posted(_ key: String, at now: ContinuousClock.Instant) {
+        lastPosted = lastPosted.filter { now - $0.value < interval }
         lastPosted[key] = now
     }
 }
