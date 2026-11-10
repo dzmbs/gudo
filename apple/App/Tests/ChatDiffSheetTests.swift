@@ -23,6 +23,20 @@ final class ChatDiffSheetTests: XCTestCase {
         try capture(window)
     }
 
+    func testResizingKeepsTheRenderedDiffUntilTheNewLayoutIsReady() async throws {
+        let window = try show([ChatToolDiff(item: "tool", files: [try sample()])])
+        defer { close(window) }
+        try await wait { (self.collection(in: window)?.numberOfItems(inSection: 0) ?? 0) > 5 }
+        for width in [window.bounds.width * 0.7, window.bounds.width / 0.7] {
+            window.frame.size.width = width
+            window.layoutIfNeeded()
+            for _ in 0..<100 {
+                XCTAssertNotNil(collection(in: window), "The diff went blank while resizing")
+                try await Task.sleep(for: .milliseconds(1))
+            }
+        }
+    }
+
     func testAnEmptyScopedSelectionDoesNotCreateRowsFromAnotherTurn() async throws {
         let window = try show([])
         defer { close(window) }

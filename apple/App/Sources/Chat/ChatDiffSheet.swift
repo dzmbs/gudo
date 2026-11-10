@@ -8,7 +8,7 @@ struct ChatDiffSheet: View {
     @State private var document: DiffRenderDocument?
     @State private var collapsed: Set<String> = []
     @State private var layout = DiffLayout.automatic
-    @State private var width: CGFloat = 800
+    @State private var width: CGFloat?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.terminalTheme) private var theme
@@ -37,7 +37,7 @@ struct ChatDiffSheet: View {
                     note("No changes for this selection are available in Chat. Open Terminal to inspect them.")
                 } else { note("Loading diff…") }
             }
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { if $0 > 0 { width = $0 } }
             .background(theme.background)
             .safeAreaInset(edge: .bottom, spacing: 0) { recordedControls }
             .navigationTitle("Chat Changes").navigationBarTitleDisplayMode(.inline)
@@ -92,19 +92,23 @@ struct ChatDiffSheet: View {
 
     private var split: Bool {
         switch layout {
-        case .automatic: sizeClass == .regular && width >= 720
+        case .automatic: sizeClass == .regular && (width ?? 0) >= 720
         case .unified: false
         case .split: true
         }
     }
 
-    private func review(_ snapshot: ChatDiffSnapshot) -> some View {
+    @ViewBuilder private func review(_ snapshot: ChatDiffSnapshot) -> some View {
+        if let width { review(snapshot, width: width) } else { note("Preparing diff…") }
+    }
+
+    private func review(_ snapshot: ChatDiffSnapshot, width: CGFloat) -> some View {
         let input = DiffRenderInput(files: snapshot.files, collapsed: collapsed, split: split, notes: [],
             width: width, lineHeight: ceil(lineHeight), characterWidth: lineHeight * 0.45, textSize: lineHeight * 0.7,
             summaryHeight: ceil(summaryHeight), fileHeaderHeight: ceil(fileHeaderHeight),
             hunkHeaderHeight: max(24, ceil(lineHeight)))
         return Group {
-            if let document, document.input == input {
+            if let document {
                 NativeDiffList(document: document) { row in
                     render(row, document: document)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
