@@ -10,6 +10,29 @@
     <description>Updates for Gudo for Mac.</description>
     <language>en</language>
     <item>
+      <title>Version 0.1.5</title>
+      <pubDate>Tue, 10 Nov 2026 22:27:45 +0100</pubDate>
+      <sparkle:version>1311</sparkle:version>
+      <sparkle:shortVersionString>0.1.5</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <sparkle:releaseNotesLink>https://github.com/dzmbs/gudo/releases/tag/v0.1.5</sparkle:releaseNotesLink>
+      <description>Chat for Claude Code and Codex on iPhone and iPad: live replies, coloured code, Stop and approvals
+A cleaner sidebar: agents named by their task, state with its age, panes you can open into, double-click to rename
+⌘+ and ⌘- zoom the pane you are in, ⌘0 resets it
+Browsers open as tabs; merge one into any tab, or open beside on request
+Agents come back after a restart: Claude Code, Codex, pi and Kimi Code resume their sessions
+Agents in your panes know how to use Gudo: Claude Code, Codex and pi get a skill for running commands you can watch, starting other agents and using the browser
+Click a file path to open it in Gudo, with Markdown rendered
+Option and Command arrows move by word and line as in Ghostty
+iPhone keys: Esc, Ctrl, Tab, Enter and the arrows up front, and Paste works with text copied on a Mac
+Low Data Mode: hosts send less over a constrained connection
+Full VoiceOver support in the terminal, and stronger contrast throughout
+Newer terminal core with faster output and many fixes
+Security fixes for approvals, links and shell integration</description>
+      <enclosure url="https://github.com/dzmbs/gudo/releases/download/v0.1.5/Gudo.dmg" length="74241058" type="application/octet-stream"
+                 sparkle:edSignature="qgEk1goo+bRJqc22psu6myYcG6aTPklFiZ9pXi+o7AM2aUKlWGGM/Lh1JBVvkKT2koIRWn3t2UFKt9MssahCBw==" />
+    </item>
+    <item>
       <title>Version 0.1.4</title>
       <pubDate>Wed, 04 Nov 2026 11:38:36 +0100</pubDate>
       <sparkle:version>876</sparkle:version>
