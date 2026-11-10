@@ -156,6 +156,52 @@ struct Vt {
     image_storage_bytes: u64,
     /// Guests who see only what was written after they joined (multiplayer `since_join`).
     views: Vec<View>,
+    /// Whether the next output fed is a restored pane's preamble, which ends with its label.
+    preamble_pending: bool,
+    restore_label: Option<RestoreLabel>,
+}
+
+/// The line a restored pane's preamble ends with, where it was written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RestoreLabel {
+    row: u32,
+    text: String,
+}
+
+/// Rows a shell's prompt may take below a restore label while the label still counts as the
+/// end of the screen: a screen saved again before anything ran leaves the label out, so it
+/// shows once however often it is restored.
+const MAX_PROMPT_ROWS: u32 = 3;
+
+impl RestoreLabel {
+    /// The line just written above the cursor.
+    fn above_cursor(term: &Terminal) -> Option<Self> {
+        let cursor = term.cursor_point();
+        if cursor.x != 0 {
+            return None;
+        }
+        let row = cursor.y.checked_sub(1)?;
+        let text = row_text(term, row).ok()?;
+        Some(Self { row, text })
+    }
+
+    /// Whether the label is still where it was written and only a prompt follows it.
+    fn ends_screen(&self, term: &Terminal) -> bool {
+        let cursor_row = term.cursor_point().y;
+        cursor_row >= self.row
+            && cursor_row - self.row <= MAX_PROMPT_ROWS
+            && row_text(term, self.row).is_ok_and(|text| text == self.text)
+    }
+}
+
+fn row_text(term: &Terminal, row: u32) -> Result<String, ghostty_vt::Error> {
+    term.text(TextRegion::Range {
+        start: ghostty_vt::Point { y: row, x: 0 },
+        end: ghostty_vt::Point {
+            y: row,
+            x: term.cols().saturating_sub(1),
+        },
+    })
 }
 
 /// A guest's copy of the pane's terminal that started without scrollback (multiplayer
@@ -225,6 +271,8 @@ impl Vt {
             scrollback_bytes: limits.scrollback_bytes,
             image_storage_bytes: limits.image_storage_bytes,
             views: Vec::new(),
+            preamble_pending: false,
+            restore_label: None,
         };
         Ok((Arc::new(Mutex::new(vt)), latest, events_rx))
     }
@@ -240,6 +288,9 @@ impl Vt {
 
     fn feed(&mut self, seq: pty::Seq, data: &[u8]) {
         self.term.write(data);
+        if std::mem::take(&mut self.preamble_pending) {
+            self.restore_label = RestoreLabel::above_cursor(&self.term);
+        }
         for view in &mut self.views {
             view.term.write(data);
         }
@@ -345,7 +396,8 @@ fn internal(error: impl std::fmt::Display) -> RpcError {
 }
 
 impl Pane {
-    /// Starts `command` in a new pane whose output begins with `preamble`.
+    /// Starts `command` in a new pane whose output begins with `preamble`: a restored pane's
+    /// saved screen and the label line it ends with, or nothing.
     #[allow(clippy::too_many_arguments)]
     pub fn spawn(
         id: PaneId,
@@ -361,6 +413,7 @@ impl Pane {
         let term = new_terminal(size, limits).map_err(io::Error::other)?;
         let (vt, latest, events_rx) =
             Vt::start(id, term, size, limits, colors, Seq(0), 0, Vec::new())?;
+        lock(&vt).preamble_pending = !preamble.is_empty();
         let hook_vt = Arc::clone(&vt);
         let options = SpawnOptions::new(win_size(size))
             .ring_capacity(ring_capacity)
@@ -516,19 +569,26 @@ impl Pane {
         &self,
         since: Seq,
     ) -> Result<Option<(Seq, String)>, ghostty_vt::Error> {
-        let (seq, alternate_snapshot) = {
+        let (seq, alternate_snapshot, restore_label) = {
             let vt = lock(&self.vt);
             if vt.seq == since.0 {
                 return Ok(None);
             }
             match vt.term.active_screen() {
-                Screen::Primary => return Ok(Some((Seq(vt.seq), restorable_text(&vt.term)?))),
-                Screen::Alternate => (Seq(vt.seq), vt.term.encode_snapshot()?),
+                Screen::Primary => {
+                    let text = restorable_text(&vt.term, vt.restore_label.as_ref())?;
+                    return Ok(Some((Seq(vt.seq), text)));
+                }
+                Screen::Alternate => (
+                    Seq(vt.seq),
+                    vt.term.encode_snapshot()?,
+                    vt.restore_label.clone(),
+                ),
             }
         };
         let mut term = ghostty_vt::SnapshotDecoder::new(&alternate_snapshot)?.decode()?;
         term.write(b"\x1b[?1049l");
-        Ok(Some((seq, restorable_text(&term)?)))
+        Ok(Some((seq, restorable_text(&term, restore_label.as_ref())?)))
     }
 
     /// The visible screen as plain text, for screen-based agent detection.
@@ -1241,8 +1301,15 @@ pub(crate) struct PaneHandOff {
 /// Newest rows of a pane's primary screen kept for after a restart, up to the cursor's.
 const RESTORABLE_ROWS: u32 = 4000;
 
-fn restorable_text(term: &Terminal) -> Result<String, ghostty_vt::Error> {
-    let last = term.cursor_point().y;
+fn restorable_text(
+    term: &Terminal,
+    restore_label: Option<&RestoreLabel>,
+) -> Result<String, ghostty_vt::Error> {
+    let last = match restore_label.filter(|label| label.ends_screen(term)) {
+        Some(RestoreLabel { row: 0, .. }) => return Ok(String::new()),
+        Some(label) => label.row - 1,
+        None => term.cursor_point().y,
+    };
     term.styled_text(TextRegion::Range {
         start: ghostty_vt::Point {
             y: last.saturating_sub(RESTORABLE_ROWS - 1),

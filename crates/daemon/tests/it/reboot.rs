@@ -99,6 +99,73 @@ async fn screens_come_back_after_a_clean_shutdown() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn output_that_mentions_a_restart_comes_back_whole() {
+    let state = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let daemon = start_with(state.path(), configure(home.path())).await;
+    let (mut owner, pane) = restored_pane(&daemon).await;
+    owner.type_line(pane, "echo \"Restored after restart by hand $((6 * 7))\"");
+    owner
+        .wait_text(pane, "Restored after restart by hand 42")
+        .await;
+    drop(owner);
+    daemon.shutdown().await;
+
+    let daemon = start_with(state.path(), configure(home.path())).await;
+    let (mut owner, _) = restored_pane(&daemon).await;
+    owner
+        .wait_text(pane, "Restored after restart \u{b7} ")
+        .await;
+    owner.type_line(pane, "echo \"after the restart $((6 * 8))\"");
+    owner.wait_text(pane, "after the restart 48").await;
+    assert_in_order(
+        &owner.text(pane),
+        &[
+            "Restored after restart by hand 42",
+            "Restored after restart \u{b7} ",
+            "after the restart 48",
+        ],
+    );
+    drop(owner);
+    daemon.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_screen_restored_twice_says_so_once() {
+    let state = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let daemon = start_with(state.path(), configure(home.path())).await;
+    let (mut owner, pane) = restored_pane(&daemon).await;
+    owner.type_line(pane, "echo \"before the restarts $((6 * 7))\"");
+    owner.wait_text(pane, "before the restarts 42").await;
+    drop(owner);
+    daemon.shutdown().await;
+
+    for _ in 0..2 {
+        let daemon = start_with(state.path(), configure(home.path())).await;
+        let (mut owner, _) = restored_pane(&daemon).await;
+        owner
+            .wait_text(pane, "Restored after restart \u{b7} ")
+            .await;
+        drop(owner);
+        daemon.shutdown().await;
+    }
+
+    let daemon = start_with(state.path(), configure(home.path())).await;
+    let (mut owner, _) = restored_pane(&daemon).await;
+    owner
+        .wait_text(pane, "Restored after restart \u{b7} ")
+        .await;
+    owner.type_line(pane, "echo \"after the restarts $((6 * 8))\"");
+    owner.wait_text(pane, "after the restarts 48").await;
+    let text = owner.text(pane);
+    assert_in_order(&text, &["before the restarts 42", "after the restarts 48"]);
+    assert_eq!(text.matches("Restored after restart").count(), 1, "{text}");
+    drop(owner);
+    daemon.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn screens_saved_while_running_survive_a_crash() {
     let state = tempfile::tempdir().unwrap();
     let crashed = tempfile::tempdir().unwrap();
