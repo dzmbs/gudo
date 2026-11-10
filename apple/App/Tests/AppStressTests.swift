@@ -4,6 +4,7 @@ import DesignSystem
 @testable import HostKit
 import SwiftUI
 import GudoCore
+import PaneLayout
 import XCTest
 @testable import App
 
@@ -184,6 +185,75 @@ final class AppStressTests: XCTestCase {
         await close(model, window, host)
         XCTAssertEqual(typing, [:], "typing re-rendered \(typing)")
         XCTAssertEqual(Set(busyPane.keys).subtracting(["tab-row stress-typing/1"]), [], "one pane's updates re-rendered \(busyPane)")
+    }
+
+    /// Split ratios that are not numbers or out of range, from the host and from the saved
+    /// workspace, and a hosts file with one damaged record: windows draw and nothing traps.
+    func testHostileLayoutValuesDoNotCrash() async throws {
+        let hostile: [Float] = [.nan, .infinity, -.infinity, 7]
+        let host = try StressHost(id: "stress-hostile", tabs: 4, projects: 0)
+        host.client.send(.layout(layout: SessionLayout(
+            sessionId: 1, name: "main", revision: 2, activeTab: 1,
+            tabs: host.panes.map { pane in
+                TabLayout(
+                    tabId: pane, name: "",
+                    nodes: [.split(axis: .horizontal, ratio: hostile[Int(pane - 1)], first: 1, second: 2), .leaf(paneId: pane), .leaf(paneId: pane + 100)],
+                    focused: pane, zoomed: nil)
+            })))
+        let (model, window) = try await openWindow(on: host, tabs: 4)
+        for pane in host.panes {
+            model.focus(TabRef(hostId: host.id, tab: TabId(pane)))
+            await pump(0.2)
+        }
+        let ratios = model.workspace(ofGroup: host.id)?.session.tabs.compactMap { tab -> Double? in
+            if case .split(_, let ratio, _, _) = tab.root { ratio } else { nil }
+        } ?? []
+        XCTAssertEqual(ratios.count, 4)
+        XCTAssertTrue(ratios.allSatisfy { Node.receivedRatioRange.contains($0) }, "\(ratios)")
+        await close(model, window, host)
+
+        // A saved workspace drawn before the host answers.
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = WorkspaceCacheStore(directory: directory, secrets: MemorySecretStore())
+        let savedRoot = Node.split(
+            axis: .vertical, ratio: .nan, first: .leaf(PaneId(1)),
+            second: .split(axis: .horizontal, ratio: -.infinity, first: .leaf(PaneId(2)), second: .leaf(PaneId(3))))
+        try store.save(CachedWorkspace(
+            hostId: "stress-cached", daemonId: "stress-cached", sessionId: 1,
+            session: Session(tabs: [Tab(id: TabId(1), root: savedRoot, focused: PaneId(1))], activeTabId: TabId(1))))
+        let cached = try XCTUnwrap(store.load(hostId: "stress-cached", daemonId: "stress-cached", sessionId: 1))
+        let silent = FakeWorkspaceClient()
+        let connection = DaemonConnection(hostId: "stress-cached", ticket: "t") { _, listener in
+            silent.state.withLock { $0.events = listener }
+            return silent
+        }
+        connection.seed(cached)
+        try connection.connect()
+        let hosts = AppModel.shared.hosts
+        hosts.upsert(HostRecord(id: "stress-cached", name: "stress-cached", kind: .daemon, daemonId: "stress-cached"))
+        hosts.connections["stress-cached"] = connection
+        defer { hosts.remove("stress-cached") }
+        let feed = LiveAgentFeed(hosts: hosts)
+        let cachedModel = WindowModel(app: .shared, agents: feed)
+        feed.window = cachedModel
+        cachedModel.start()
+        let cachedWindow = makeWindow(cachedModel)
+        cachedModel.show(.host("stress-cached"))
+        try await until("the saved tabs") { cachedModel.workspace(ofGroup: "stress-cached")?.session.tabs.count == 1 }
+        await pump(0.5)
+        XCTAssertEqual(cachedModel.workspace(ofGroup: "stress-cached")?.session.tabs.first?.root, savedRoot.sanitizingRatios)
+        dismantle(cachedWindow)
+        cachedModel.close()
+
+        // A hosts file with one record this app cannot read keeps the others.
+        let repository = HostRepository(directory: directory)
+        try repository.save([HostRecord(id: "a", name: "studio", kind: .daemon), HostRecord(id: "b", name: "box", kind: .ssh)])
+        let file = directory.appending(path: "hosts.json")
+        var records = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [[String: Any]])
+        records.insert(["id": 7, "name": ["not": "a name"]], at: 0)
+        try JSONSerialization.data(withJSONObject: records).write(to: file)
+        XCTAssertEqual(repository.load().map(\.id), ["a", "b"])
     }
 
     private struct Weak {
