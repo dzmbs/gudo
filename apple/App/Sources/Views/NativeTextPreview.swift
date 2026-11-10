@@ -23,7 +23,7 @@ nonisolated struct NativeTextDocument: Sendable {
 
     init(input: Input) {
         lines = input.numbered
-            ? input.text.components(separatedBy: "\n")
+            ? input.text.components(separatedBy: "\n").map(DisplayLine.capped)
             : input.text.components(separatedBy: "\n\n")
         let characterWidth = input.lineHeight * 0.55
         gutterWidth = input.numbered ? CGFloat(max(3, String(lines.count).count)) * characterWidth + 16 : 0

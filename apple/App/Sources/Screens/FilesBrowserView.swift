@@ -737,6 +737,7 @@ struct FilePreviewScreen: View {
     @Environment(WindowModel.self) private var model
     @Environment(\.terminalTheme) private var theme
     @State private var preview: FilePreview?
+    @State private var lineCount = 0
     @State private var problem: ToolProblem?
     @State private var shared: SharedFile?
     @State private var downloading: Double?
@@ -850,8 +851,7 @@ struct FilePreviewScreen: View {
     private var meta: String? {
         var parts: [String] = []
         if let size = entry.size { parts.append(ByteCountFormatter.string(fromByteCount: size, countStyle: .file)) }
-        if case .text(let text, let truncated)? = preview {
-            let lineCount = text.reduce(into: 1) { count, character in if character == "\n" { count += 1 } }
+        if case .text(_, let truncated)? = preview {
             parts.append(truncated ? "first MiB" : "\(lineCount) line\(lineCount == 1 ? "" : "s")")
         }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
@@ -886,10 +886,18 @@ struct FilePreviewScreen: View {
     private func load() async {
         problem = nil
         do {
-            preview = try await source.preview(entry.path)
+            let loaded = try await source.preview(entry.path)
+            if case .text(let text, _) = loaded {
+                lineCount = await Task.detached(priority: .userInitiated) { Self.lineCount(text) }.value
+            }
+            preview = loaded
         } catch {
             problem = ToolProblem(error, path: entry.path)
         }
+    }
+
+    nonisolated private static func lineCount(_ text: String) -> Int {
+        text.utf8.reduce(into: 1) { count, byte in if byte == UInt8(ascii: "\n") { count += 1 } }
     }
 
     private func download() {

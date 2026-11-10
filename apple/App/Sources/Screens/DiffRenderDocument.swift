@@ -65,7 +65,7 @@ nonisolated struct DiffRenderDocument: Sendable {
                 for row in lines {
                     let linePrefix = "\(hunkPrefix)/line:\(row.id)"
                     append(linePrefix, fileIndex: fileIndex, content: .line(row.left, row.right), height: input.lineHeight)
-                    longestLine = max(longestLine, row.left?.text.utf16.count ?? 0, row.right?.text.utf16.count ?? 0)
+                    longestLine = max(longestLine, Self.displayWidth(row.left), Self.displayWidth(row.right))
                     var attachedNotes: Set<UUID> = []
                     for oldSide in [true, false] {
                         let line = input.split ? (oldSide ? row.left : row.right) : row.left
@@ -111,6 +111,10 @@ nonisolated struct DiffRenderDocument: Sendable {
     func anchor(at position: CGFloat) -> Anchor? { layout.anchor(at: position) }
 
     func position(of anchor: Anchor) -> CGFloat? { layout.position(of: anchor) }
+
+    private static func displayWidth(_ line: DiffLine?) -> Int {
+        line.map { DisplayLine.capped($0.text).utf16.count } ?? 0
+    }
 
     private mutating func append(_ id: String, fileIndex: Int? = nil, content: DiffRenderRow.Content, height: CGFloat) {
         rows.append(DiffRenderRow(id: id, fileIndex: fileIndex, content: content, height: height))

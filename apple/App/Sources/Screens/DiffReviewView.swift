@@ -584,7 +584,7 @@ struct DiffLineContent: View {
             number(line.oldNumber)
             number(line.newNumber)
             mark(line.kind)
-            Text(verbatim: line.text.isEmpty ? " " : line.text)
+            Text(verbatim: line.text.isEmpty ? " " : DisplayLine.capped(line.text))
                 .font(DS.Font.literal)
                 .foregroundStyle(line.kind == .context ? DS.Palette.textSecondary : DS.Palette.text)
                 .lineLimit(1)
@@ -610,7 +610,7 @@ struct DiffLineContent: View {
             HStack(alignment: .top, spacing: 0) {
                 number(oldSide ? line.oldNumber : line.newNumber)
                 mark(kind)
-                Text(verbatim: line.text.isEmpty ? " " : line.text)
+                Text(verbatim: line.text.isEmpty ? " " : DisplayLine.capped(line.text))
                     .font(DS.Font.literal)
                     .foregroundStyle(kind == .context ? DS.Palette.textSecondary : DS.Palette.text)
                     .lineLimit(1)
@@ -682,9 +682,9 @@ struct DiffLineContent: View {
 
     private func accessibility(_ line: DiffLine) -> String {
         switch line.kind {
-        case .context: "Line \(line.newNumber ?? 0): \(line.text)"
-        case .added: "Added line \(line.newNumber ?? 0): \(line.text)"
-        case .removed: "Removed line \(line.oldNumber ?? 0): \(line.text)"
+        case .context: "Line \(line.newNumber ?? 0): \(DisplayLine.capped(line.text))"
+        case .added: "Added line \(line.newNumber ?? 0): \(DisplayLine.capped(line.text))"
+        case .removed: "Removed line \(line.oldNumber ?? 0): \(DisplayLine.capped(line.text))"
         }
     }
 }
