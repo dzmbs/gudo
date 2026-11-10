@@ -9,5 +9,6 @@ cd "$(dirname "$0")/.."
   --allowlist-var 'GHOSTTY_.*' \
   --with-derive-default \
   --use-core \
+  --clang-macro-fallback \
   --output crates/ghostty-vt-sys/src/bindings.rs \
   -- -Ivendor/ghostty/include "$@"
