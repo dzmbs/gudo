@@ -1,4 +1,6 @@
 import PaneLayout
+import TerminalCore
+import TerminalRenderer
 import XCTest
 import os
 @testable import App
@@ -128,5 +130,24 @@ final class TerminalHostTests: XCTestCase {
         old.removeFromSuperview()
         XCTAssertTrue(pane.view.superview === new)
         _ = window
+    }
+}
+
+/// Picture in picture shows a pane's frames twice a second: a picture is taken again only when
+/// the terminal changed, since taking one waits for the GPU.
+@MainActor
+final class SurfaceFramesTests: XCTestCase {
+    func testAPictureIsTakenOnlyWhenTheTerminalChanged() throws {
+        let terminal = Terminal(cols: 40, rows: 10) { _ in }
+        let surface = try TerminalSurface(terminal: terminal, fontSize: 13)
+        surface.layout(size: CGSize(width: 400, height: 200), scale: 2)
+        terminal.write(Array("hello".utf8))
+        surface.renderIfDirty(offscreen: true)
+        let frames = SurfaceFrames()
+        let first = try XCTUnwrap(frames.latest(of: surface))
+        XCTAssertTrue(frames.latest(of: surface) === first, "unchanged: the same picture")
+        terminal.write(Array(" world".utf8))
+        surface.renderIfDirty(offscreen: true)
+        XCTAssertFalse(frames.latest(of: surface) === first, "changed: a new picture")
     }
 }

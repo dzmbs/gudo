@@ -2,6 +2,7 @@ import DesignSystem
 import HostKit
 import PaneLayout
 import SwiftUI
+import TerminalRenderer
 
 /// On a phone-width window the tab shows its focused pane alone; its floating windows become
 /// picture in picture: small live terminals resting in the corners, like a FaceTime call over
@@ -113,6 +114,21 @@ private struct PictureInPictureWindow: View {
     }
 }
 
+/// A surface's latest frame as a picture, taken again only when its content changed (taking
+/// one waits for the GPU).
+@MainActor
+final class SurfaceFrames {
+    private var image: CGImage?
+    private var generation: Int?
+
+    func latest(of surface: TerminalSurface) -> CGImage? {
+        if generation == surface.contentGeneration, let image { return image }
+        image = surface.snapshot()
+        generation = surface.contentGeneration
+        return image
+    }
+}
+
 /// A pane's terminal at its own grid, drawn small: never resized, so the program and the other
 /// devices keep their layout. The terminal runs unseen at its own size; what shows is a picture
 /// of its latest frame, twice a second (a platform view cannot be scaled).
@@ -121,6 +137,7 @@ private struct MiniTerminal: View {
     let workspace: Workspace
     @Environment(\.terminalTheme) private var theme
     @Environment(\.displayScale) private var displayScale
+    @State private var frames = SurfaceFrames()
     static let scale: CGFloat = 0.5
 
     var body: some View {
@@ -136,7 +153,7 @@ private struct MiniTerminal: View {
                         .opacity(0)
                     TimelineView(.periodic(from: .now, by: 0.5)) { _ in
                         let surface = terminal.view.surface
-                        if let frame = surface.snapshot() {
+                        if let frame = frames.latest(of: surface) {
                             // Up to the cursor's line, where a shell or an agent is writing; a
                             // full-screen program (no cursor) from its top.
                             let lift = surface.cursorRect.map { min(0, geometry.size.height - ($0.maxY * Self.scale + DS.Space.xs)) } ?? 0
