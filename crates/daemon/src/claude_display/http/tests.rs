@@ -100,11 +100,12 @@ fn empty_acknowledgement_precedes_a_blocked_consumer() {
 #[tokio::test]
 async fn listener_reuses_its_private_port_after_recreation() {
     let directory = tempfile::tempdir().unwrap();
-    let first = HttpListener::bind(directory.path()).unwrap();
+    let first = HttpListener::bind(directory.path()).await.unwrap();
     let address = first.address;
     assert!(address.ip().is_loopback());
+    assert!(PORT_RANGE.contains(&address.port()));
     drop(first);
-    let restored = HttpListener::bind(directory.path()).unwrap();
+    let restored = HttpListener::bind(directory.path()).await.unwrap();
     assert_eq!(restored.address, address);
 }
 
@@ -114,8 +115,9 @@ async fn a_saved_port_taken_by_another_program_falls_back_to_a_new_one() {
     let taken = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let port = taken.local_addr().unwrap().port();
     std::fs::write(directory.path().join(PORT_FILE), port.to_string()).unwrap();
-    let listener = HttpListener::bind(directory.path()).unwrap();
+    let listener = HttpListener::bind(directory.path()).await.unwrap();
     assert_ne!(listener.port(), port);
+    assert!(PORT_RANGE.contains(&listener.port()));
     assert_eq!(
         std::fs::read_to_string(directory.path().join(PORT_FILE)).unwrap(),
         listener.port().to_string()

@@ -192,7 +192,7 @@ impl Daemon {
         };
         let mut hooks = HookServer::new(&config.state_dir, config.hook_bin())?;
         if config.claude_chat_streaming {
-            match claude_display::http::HttpListener::bind(&config.state_dir) {
+            match claude_display::http::HttpListener::bind(&config.state_dir).await {
                 Ok(listener) => {
                     tracing::debug!(endpoint = %listener.url(), "Claude display receiver ready");
                     hooks.display_http = Some(listener);

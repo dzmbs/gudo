@@ -1,5 +1,6 @@
 use std::io::{self, Read};
 use std::net::{Ipv4Addr, SocketAddr};
+use std::ops::RangeInclusive;
 use std::os::unix::fs::OpenOptionsExt;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -19,6 +20,8 @@ const DRAIN_LIMIT: usize = 512 * 1024;
 const PORT_FILE: &str = "claude-display.port";
 const MAX_PORT_FILE_BYTES: u64 = 8;
 const ANY_PORT: u16 = 0;
+/// Apart from the editors' ports (`ws::editor_ports`).
+const PORT_RANGE: RangeInclusive<u16> = 30000..=32767;
 const LISTEN_BACKLOG: u32 = 32;
 
 pub(crate) struct HttpListener {
@@ -64,12 +67,16 @@ fn listen(port: u16) -> io::Result<TcpListener> {
 }
 
 impl HttpListener {
-    pub fn bind(state_dir: &std::path::Path) -> io::Result<Self> {
+    pub async fn bind(state_dir: &std::path::Path) -> io::Result<Self> {
         let port_file = state_dir.join(PORT_FILE);
-        let listener = match saved_port(&port_file)? {
-            // Running agents keep the saved port in their settings; a new one serves new launches.
-            Some(port) => listen(port).or_else(|_| listen(ANY_PORT))?,
-            None => listen(ANY_PORT)?,
+        let saved = match saved_port(&port_file)? {
+            Some(port) => crate::loopback_port::bind_saved(port, listen).await.ok(),
+            None => None,
+        };
+        // Running agents keep the saved port in their settings; a new one serves new launches.
+        let listener = match saved {
+            Some(listener) => listener,
+            None => crate::loopback_port::bind_new(&PORT_RANGE, |_| false, listen)?,
         };
         let address = listener.local_addr()?;
         crate::fsutil::write_atomic(&port_file, address.port().to_string().as_bytes())?;
