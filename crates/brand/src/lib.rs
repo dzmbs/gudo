@@ -44,6 +44,14 @@ pub const HOOK_BIN: &str = if IS_DEV {
 /// Shared agent registrations owned by either flavour.
 pub const MCP_SERVER_NAMES: [&str; 2] = ["gudo", "gudo_dev"];
 
+/// Agent skill folders owned by either flavour, in the agents' skill directories.
+pub const SKILL_NAMES: [&str; 2] = ["gudo", "gudo-dev"];
+pub const SKILL_NAME: &str = if IS_DEV {
+    SKILL_NAMES[1]
+} else {
+    SKILL_NAMES[0]
+};
+
 /// Directory name under the platform config/state roots (e.g. `~/.config/<this>`), and the
 /// prefix of names the daemon gives things on the host (branches, refs, repo config files).
 pub const DIR_NAME: &str = if IS_DEV { "gudo-dev" } else { "gudo" };
@@ -145,6 +153,7 @@ mod tests {
             SERVICE_LABEL,
             URL_SCHEME,
             ENV_PREFIX,
+            SKILL_NAME,
         ];
         let release = [
             "Gudo",
@@ -156,6 +165,7 @@ mod tests {
             "dev.gudo.hostd",
             "gudo",
             "GUDO_",
+            "gudo",
         ];
         let development = [
             "Gudo Dev",
@@ -167,6 +177,7 @@ mod tests {
             "dev.gudo.dev.hostd",
             "gudo-dev",
             "GUDO_DEV_",
+            "gudo-dev",
         ];
         assert_eq!(actual, if IS_DEV { development } else { release });
         for (release, development) in release.iter().zip(development.iter()) {

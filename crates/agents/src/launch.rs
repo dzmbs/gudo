@@ -68,6 +68,8 @@ pub const CREDENTIAL_VARS: &[&str] = &[
 pub const CLAUDE_DIR_VAR: &str = "CLAUDE_CONFIG_DIR";
 /// The variable naming Codex's home.
 pub const CODEX_DIR_VAR: &str = "CODEX_HOME";
+/// The variable naming pi's agent directory.
+pub const PI_DIR_VAR: &str = "PI_CODING_AGENT_DIR";
 
 /// Whether to start a new session or resume one.
 #[derive(Debug, Clone, PartialEq, Eq)]

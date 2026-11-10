@@ -29,6 +29,7 @@ mod manifest;
 mod notify_chain;
 mod program_status;
 mod signal;
+mod skill;
 
 pub use adapter::{AgentAdapter, HookCoverage, HookError};
 pub use arbiter::{Arbiter, ArbiterConfig, DecisionError, Notify, Update};
@@ -54,8 +55,8 @@ pub use event::{
 };
 pub use launch::{
     ACTING_TOOLS, AccountContext, CLAUDE_DIR_VAR, CODEX_DIR_VAR, CREDENTIAL_VARS, LaunchContext,
-    LaunchMode, LaunchSpec, SYSTEM_ACCOUNT, SupportFile, account_env, legacy_mcp_server_names,
-    mcp_args, mcp_server_name, pane_env, shell_quote,
+    LaunchMode, LaunchSpec, PI_DIR_VAR, SYSTEM_ACCOUNT, SupportFile, account_env,
+    legacy_mcp_server_names, mcp_args, mcp_server_name, pane_env, shell_quote,
 };
 pub use manifest::{
     ENGINE_VERSION, Manifest, ManifestError, Region, ScreenInput, ScreenMatch, ScreenVerdict,
@@ -63,6 +64,7 @@ pub use manifest::{
 pub use notify_chain::{CODEX_NOTIFY_SUBCOMMAND, NotifyChain, NotifyChainError, is_hook_program};
 pub use program_status::{ProgramKind, ProgramState, ProgramStatus};
 pub use signal::{Claim, SessionUpdate, Signal};
+pub use skill::{SkillFile, skill_files};
 
 #[cfg(test)]
 const EXPECTED_MCP_SERVER_NAME: &str = if brand::IS_DEV { "gudo_dev" } else { "gudo" };
