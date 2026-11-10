@@ -95,33 +95,18 @@ final class TerminalInputUITests: XCTestCase {
         expectScreen(app, containing: "example.com/install.sh")
     }
 
-    /// The key bar's paste key: another app's text through the system's Paste at the cursor (no
-    /// prompt); text copied in this app at once.
+    /// The key bar's paste key is the system's paste control: text another app copied (here, the
+    /// test runner) pastes at once, without a prompt.
     @MainActor
     func testKeyBarPasteKey() throws {
-        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .phone, "a phone's shell key set has no room for the paste key (the edit menu pastes)")
         let app = launchFocused(fullKeyBar: true)
         UIPasteboard.general.string = "pasted-from-key-bar"
+        // The system's paste control covers the key; a tap on the key is a tap on it.
         let key = element(app, "keybar-paste")
         XCTAssertTrue(key.waitForExistence(timeout: 5))
+        for _ in 0..<6 where !key.isHittable { element(app, "keybar-strip").swipeLeft() }
         key.tap()
-        let paste = app.menuItems["Paste"].firstMatch
-        XCTAssertTrue(paste.waitForExistence(timeout: 5))
-        paste.tap()
         expectScreen(app, containing: "pasted-from-key-bar")
-
-        // Copy "pane-1" from the banner here, then the key pastes it straight away.
-        cellPoint(element(app, "pane-1"), x: 12, y: 0).doubleTap()
-        let copy = app.menuItems["Copy"].firstMatch
-        XCTAssertTrue(copy.waitForExistence(timeout: 5))
-        copy.tap()
-        // Copying clears the selection; the paste below shows what was copied. (The 1.2 s
-        // "Copied" capsule can fade before XCUITest's next snapshot, and the runner cannot read
-        // another app's pasteboard without a prompt.)
-        XCTAssertTrue(element(app, "selection-start-handle").waitForNonExistence(timeout: 5), "copied")
-        key.tap()
-        XCTAssertFalse(app.menuItems["Paste"].firstMatch.waitForExistence(timeout: 1))
-        expectScreen(app, containing: "pasted-from-key-barpane-1")
     }
 
     /// A long-press on blank cells still offers Paste (the iPhone's way in).

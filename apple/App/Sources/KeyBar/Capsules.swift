@@ -29,6 +29,24 @@ final class CapsuleKey: UIButton {
     var onCancel: (() -> Void)?
     var onTap: (() -> Void)?
 
+    /// Shows the system's paste control on the key: its tap is the user's own paste, so the
+    /// clipboard reads without a prompt, from another app or another device as well.
+    var pasteTarget: (any UIPasteConfigurationSupporting)? {
+        get { pasteControl?.target }
+        set {
+            if pasteControl == nil { installPasteControl() }
+            pasteControl?.target = newValue
+        }
+    }
+
+    private var pasteControl: UIPasteControl?
+    private var pasteColors: [UIColor] = []
+
+    /// The system draws nothing in a paste control smaller than this, either way.
+    static let pasteControlSide: CGFloat = 34
+
+    var showsPasteControl: Bool { pasteControl != nil }
+
     private static let feedback = UIImpactFeedbackGenerator(style: .light)
 
     init(metrics: CapsuleMetrics) {
@@ -67,9 +85,10 @@ final class CapsuleKey: UIButton {
             attributes.font = UIFont.systemFont(ofSize: metrics.fontSize, weight: active ? .semibold : .medium)
             configuration.attributedTitle = AttributedString(title, attributes: attributes)
         }
-        if let symbol {
+        if let symbol, pasteControl == nil {
             configuration.image = UIImage(systemName: symbol, withConfiguration: metrics.symbolConfiguration)
         }
+        if pasteControl != nil, pasteColors != Self.pasteColors() { installPasteControl() }
         var background = UIBackgroundConfiguration.clear()
         background.backgroundColor = locked ? tintColor
             : active ? tintColor.withAlphaComponent(0.28)
@@ -84,6 +103,36 @@ final class CapsuleKey: UIButton {
         case .oneShot: accessibilityValue = "Latched"
         case .locked: accessibilityValue = "Locked"
         }
+    }
+
+    private static func pasteColors() -> [UIColor] {
+        [KeyBarTheme.ink, UIColor(KeyBarTheme.chrome.raised.color)]
+    }
+
+    /// The control's look is fixed when it is made, so a new theme makes it again.
+    private func installPasteControl() {
+        let target = pasteControl?.target
+        pasteControl?.removeFromSuperview()
+        let colors = Self.pasteColors()
+        let configuration = UIPasteControl.Configuration()
+        configuration.displayMode = .iconOnly
+        configuration.cornerStyle = .capsule
+        configuration.baseForegroundColor = colors[0]
+        configuration.baseBackgroundColor = colors[1]
+        let control = UIPasteControl(configuration: configuration)
+        control.target = target
+        addSubview(control)
+        pasteControl = control
+        pasteColors = colors
+        setNeedsLayout()
+        setNeedsUpdateConfiguration()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let side = Self.pasteControlSide
+        pasteControl?.frame = CGRect(x: bounds.midX - max(side, bounds.width - 4) / 2, y: bounds.midY - side / 2,
+                                     width: max(side, bounds.width - 4), height: side)
     }
 }
 
@@ -275,7 +324,8 @@ final class KeyStripView: UIView, UIScrollViewDelegate {
         animator.startAnimation(afterDelay: 0.15)
     }
 
-    /// Each key fades by how far it reaches past an edge.
+    /// Each key fades by how far it reaches past an edge. Not a mask over the strip: the system's
+    /// paste control does not draw under one.
     private func updateFade() {
         guard scrollView.bounds.width > 0 else { return }
         let offset = scrollView.contentOffset.x
@@ -293,7 +343,12 @@ final class KeyStripView: UIView, UIScrollViewDelegate {
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard isUserInteractionEnabled, !isHidden, alpha > 0.01, self.point(inside: point, with: event) else { return nil }
         let clamped = CGPoint(x: point.x, y: min(max(point.y, 1), bounds.height - 1))
-        if let hit = super.hitTest(clamped, with: event), hit is CapsuleKey || hit.superview is CapsuleKey { return hit }
+        // A paste key's hit is inside the system's paste control, a few views below the key.
+        if let hit = super.hitTest(clamped, with: event),
+           sequence(first: hit, next: \.superview).prefix(while: { $0 !== self }).contains(where: { $0 is CapsuleKey })
+        {
+            return hit
+        }
         let visible = scrollView.convert(scrollView.bounds, to: self)
         let candidates = pinnedKeys + scrollingKeys.filter { visible.intersects(scrollView.convert($0.frame, to: self)) }
         return candidates.min {

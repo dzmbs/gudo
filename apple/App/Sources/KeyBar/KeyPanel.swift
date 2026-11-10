@@ -11,6 +11,11 @@ final class KeyPanel: UIInputView, UICollectionViewDataSource, UICollectionViewD
 
     private(set) var isEditing = false
 
+    /// Where the panel's paste key pastes (the system's paste control).
+    weak var pasteTarget: (any UIPasteConfigurationSupporting)? {
+        didSet { if pasteTarget !== oldValue { collectionView.reloadData() } }
+    }
+
     private let favourites: FavouriteKeys
     private let header = UIView()
     private let keyboardButton = UIButton()
@@ -206,6 +211,7 @@ final class KeyPanel: UIInputView, UICollectionViewDataSource, UICollectionViewD
             }
         }
         cell.accessibilityCustomActions = isEditing && inBar ? reorderActions(at: indexPath.item) : nil
+        cell.showPasteControl(target: key.isPaste && !isEditing ? pasteTarget : nil)
         return cell
     }
 
@@ -349,6 +355,7 @@ private final class KeyCell: UICollectionViewCell {
     var onTap: (() -> Void)?
 
     private let button = UIButton()
+    private var pasteControl: UIPasteControl?
     private let badgeView = UIImageView()
     private var key: KeySpec?
     private var showsCaption = true
@@ -380,11 +387,34 @@ private final class KeyCell: UICollectionViewCell {
         onDown = nil
         onUp = nil
         onTap = nil
+        showPasteControl(target: nil)
+    }
+
+    /// The system's paste control in place of the key: its tap is the user's own paste, so the
+    /// clipboard reads without a prompt, from another app or another device as well.
+    func showPasteControl(target: (any UIPasteConfigurationSupporting)?) {
+        pasteControl?.removeFromSuperview()
+        pasteControl = nil
+        button.isHidden = false
+        guard let target else { return }
+        let configuration = UIPasteControl.Configuration()
+        configuration.displayMode = .iconOnly
+        configuration.cornerStyle = .fixed
+        configuration.cornerRadius = 9
+        configuration.baseForegroundColor = KeyBarTheme.ink
+        configuration.baseBackgroundColor = UIColor(KeyBarTheme.chrome.raised.color)
+        let control = UIPasteControl(configuration: configuration)
+        control.target = target
+        contentView.insertSubview(control, belowSubview: badgeView)
+        pasteControl = control
+        button.isHidden = true
+        setNeedsLayout()
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
         button.frame = contentView.bounds
+        pasteControl?.frame = contentView.bounds
         badgeView.frame = CGRect(x: contentView.bounds.width - 14, y: -4, width: 18, height: 18)
     }
 

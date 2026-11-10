@@ -63,5 +63,16 @@ final class UIKitPasteTests: XCTestCase {
         view.pasteURLs([URL(fileURLWithPath: "/tmp/a b/it's.png")])
         XCTAssertEqual(String(decoding: sink.bytes.withLock { $0 }, as: UTF8.self), "'/tmp/a b/it'\\''s.png'")
     }
+
+    /// The key bar's paste control hands the terminal item providers; they paste like ⌘V does,
+    /// bracketed when the program asks.
+    func testPasteControlItemsPasteBracketed() async throws {
+        let sink = PasteSink(), view = try makeView(sink)
+        view.surface.terminal.write(Array("\u{1b}[?2004h".utf8))
+        XCTAssertNotNil(view.pasteConfiguration, "a paste control can target the terminal")
+        view.paste(itemProviders: [NSItemProvider(object: "echo one" as NSString)])
+        for _ in 0..<50 where sink.bytes.withLock({ $0 }).isEmpty { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertEqual(String(decoding: sink.bytes.withLock { $0 }, as: UTF8.self), "\u{1b}[200~echo one\u{1b}[201~")
+    }
 }
 #endif

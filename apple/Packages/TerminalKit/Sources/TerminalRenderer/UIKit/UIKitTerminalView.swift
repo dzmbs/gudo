@@ -1,6 +1,7 @@
 #if os(iOS)
 import TerminalCore
 import UIKit
+import UniformTypeIdentifiers
 
 /// UIKit host for a `TerminalSurface`. It carries the surface's `CAMetalLayer`, paces it with a
 /// `CADisplayLink`, and turns input into terminal bytes:
@@ -106,8 +107,6 @@ public final class TerminalView: UIView {
     private var pointerDragRectangle = false
     /// A long-press began inside the selection: it stays as it is, for a drag out.
     private var pressKeepsSelection = false
-    /// The edit menu is up only to offer Paste (the key bar's paste key).
-    private var menuOffersPaste = false
     private let toast = CapsuleToast()
 
 
@@ -177,7 +176,10 @@ public final class TerminalView: UIView {
         addInteraction(drag)
         addInteraction(UIDropInteraction(delegate: self))
         addSubview(toast)
-        PasteboardOrigin.observe()
+        // The key bar's paste control pastes here (`paste(itemProviders:)`).
+        pasteConfiguration = UIPasteConfiguration(acceptableTypeIdentifiers: [
+            UTType.plainText, .utf8PlainText, .text, .url, .fileURL,
+        ].map(\.identifier))
         MemoryPressure.observe()
 
         surface.onFrameRendered = { [weak self] in self?.layoutSelectionHandles() }
@@ -905,24 +907,6 @@ public final class TerminalView: UIView {
         toast.show("Copied", symbol: "checkmark")
     }
 
-    /// The key bar's paste key. A button's read of the pasteboard is programmatic: iOS answers it
-    /// for another app's text with a prompt or, on iOS 27, with nothing at all. So this app's own
-    /// copies paste at once, and another app's text gets the system's Paste at the cursor, which
-    /// is the user's own paste and reads without asking.
-    public func pasteFromKeyBar() {
-        let board = UIPasteboard.general
-        if board.changeCount == PasteboardOrigin.ownChangeCount, let text = Self.pastedText(board), !text.isEmpty {
-            return pasteText(text)
-        }
-        guard board.hasStrings || board.hasURLs else { return }
-        if !isFirstResponder { becomeFirstResponder() }
-        menuOffersPaste = true
-        let cursor = surface.cursorRect ?? CGRect(x: bounds.midX, y: bounds.midY, width: 1, height: 1)
-        let point = CGPoint(x: cursor.midX, y: cursor.minY)
-        menuPoint = point
-        editMenu?.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
-    }
-
     private func isSelected(_ point: CGPoint) -> Bool {
         guard let selection = surface.terminal.selection,
               let cell = surface.terminal.screenPoint(fromViewport: surface.cell(at: point)) else { return false }
@@ -930,6 +914,15 @@ public final class TerminalView: UIView {
     }
 
     override public func paste(_ sender: Any?) { paste(from: .general) }
+
+    /// A `UIPasteControl`'s tap (the key bar's paste key): the user's own paste, so the clipboard
+    /// is read without a prompt, from another app or another device as well.
+    override public func paste(itemProviders: [NSItemProvider]) {
+        Task { [weak self] in
+            guard let text = await Self.pastedText(from: itemProviders) else { return }
+            self?.pasteText(text)
+        }
+    }
 
     func paste(from board: UIPasteboard) {
         guard let text = Self.pastedText(board) else { return }
@@ -1275,7 +1268,6 @@ extension TerminalView: @MainActor UIEditMenuInteractionDelegate {
         _ interaction: UIEditMenuInteraction, menuFor configuration: UIEditMenuConfiguration, suggestedActions: [UIMenuElement]
     ) -> UIMenu? {
         let paste = Self.command(#selector(UIResponderStandardEditActions.paste(_:)), in: suggestedActions)
-        if menuOffersPaste { return paste.map { UIMenu(children: [$0]) } }
         var actions: [UIMenuElement] = []
         let selection = surface.selectionEnds()
         if surface.terminal.selection != nil {
@@ -1324,7 +1316,6 @@ extension TerminalView: @MainActor UIEditMenuInteractionDelegate {
     ) {
         animator.addCompletion { [weak self] in
             self?.menuPoint = nil
-            self?.menuOffersPaste = false
         }
     }
 }
@@ -1532,21 +1523,6 @@ extension TerminalView: UIDragInteractionDelegate, UIDropInteractionDelegate {
                 if let text, !text.isEmpty { texts.append(text) }
             }
             if !texts.isEmpty { self?.pasteText(texts.joined(separator: " ")) }
-        }
-    }
-}
-
-/// The pasteboard's change count after this app last wrote it: its own text, which reads
-/// without a prompt. The notification reports only changes made in this process.
-@MainActor
-private enum PasteboardOrigin {
-    static var ownChangeCount = -1
-    private static var observer: (any NSObjectProtocol)?
-
-    static func observe() {
-        guard observer == nil else { return }
-        observer = NotificationCenter.default.addObserver(forName: UIPasteboard.changedNotification, object: nil, queue: .main) { _ in
-            MainActor.assumeIsolated { ownChangeCount = UIPasteboard.general.changeCount }
         }
     }
 }

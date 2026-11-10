@@ -18,6 +18,7 @@ import VoiceKit
 /// - `esc ctrl tab enter` (and `alt` where there is room) never move; the rest scrolls, a key cut
 ///   by an edge faded. A program's profile puts its keys before the favourites. The first few
 ///   times the keyboard comes up, the keys settle in from further along to show the row scrolls.
+/// - The paste key is the system's paste control: the user's own paste, read without a prompt.
 /// - ✥ sends arrows while dragged from it (repeating, faster further out); a tap opens the keys
 ///   panel in place of the keyboard, at the keyboard's height, where the favourites are edited.
 /// - A key's second character is in its long-press menu. ⌫ repeats while held.
@@ -71,6 +72,7 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
                 panelShown = false
             }
             lineEditor.terminal = target
+            updatePasteTargets()
             apply()
             // Focus may have crossed a fold: the bar follows it to the other page.
             setNeedsLayout()
@@ -575,7 +577,10 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
         let pinned: [CapsuleKey] = [escKey, ctrlKey] + (metrics.showsAlt ? [altKey] : []) + [tabKey, enterKey]
         let scrolling = rowKeys.map(\.view)
         let pinnedSlots = pinned.map { metrics.slotWidth(title: $0.title, symbol: $0.symbol) }
-        let scrollingSlots = scrolling.map { metrics.slotWidth(title: $0.title, symbol: $0.symbol) }
+        let scrollingSlots = scrolling.map { key in
+            let slot = metrics.slotWidth(title: key.title, symbol: key.symbol)
+            return key.showsPasteControl ? max(slot, CapsuleKey.pasteControlSide + 4) : slot
+        }
         altKey.isHidden = !metrics.showsAlt
         for view in scrolling { view.isHidden = false }
 
@@ -640,6 +645,7 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
         var seen = KeyCatalog.pinnedIDs
         let keys = profile.keys + favourites.keys
         rowKeys = keys.filter { seen.insert($0.id).inserted }.map { ($0, keyCap(for: $0, idPrefix: "keybar-")) }
+        updatePasteTargets()
         UIView.transition(with: strip, duration: UIAccessibility.isReduceMotionEnabled ? 0 : 0.18,
                           options: .transitionCrossDissolve) {
             self.layoutBand()
@@ -678,13 +684,15 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
         }
     }
 
+    /// A paste key is the system's paste control, which pastes into its target itself.
+    private func updatePasteTargets() {
+        for (key, view) in rowKeys where key.isPaste { view.pasteTarget = target }
+    }
+
     private func send(_ key: KeySpec, alternate: Bool = false) {
         guard let target else { return }
         let output = alternate ? (key.alternate ?? key.output) : key.output
-        if case .paste = output {
-            target.pasteFromKeyBar()
-            return
-        }
+        if case .paste = output { return }
         if lineEditor.isActive {
             // Plain characters go into the draft; Enter runs it; ^C clears it; anything else is
             // for the shell, so the draft goes back to the shell's line first.
@@ -894,6 +902,7 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
         guard let target else { return }
         keyPanel.frame.size.height = panelHeight()
         panelWidth = bounds.width
+        keyPanel.pasteTarget = target
         keyPanel.applyTheme()
         keyPanel.setEditing(editing)
         guard !panelShown else { return }

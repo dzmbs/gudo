@@ -9,7 +9,8 @@ import XCTest
 /// Renders the key bar above a terminal to PNGs, for reviewing the look:
 /// `TEST_RUNNER_GUDO_CHROME_CAPTURE_DIR=<dir>`, in the dark and light default themes, at a
 /// Pro iPhone's width and a small one's, in a shell (at the start and scrolled to the end) and in
-/// Claude Code, and the keys panel.
+/// Claude Code, and the keys panel. The system's paste control draws only on screen, so it is
+/// blank here.
 @MainActor
 final class KeyBarGalleryTests: XCTestCase {
     private static let themes = ["dark": TerminalPreferences.Default.theme, "light": ThemePair.resolvedDefaultLight]
@@ -84,8 +85,10 @@ final class KeyBarGalleryTests: XCTestCase {
         let controller = UIViewController()
         controller.view.backgroundColor = UIColor(KeyBarTheme.chrome.terminal.color)
         window.rootViewController = controller
+        let terminal = TerminalView(surface: try TerminalSurface(terminal: Terminal(cols: 40, rows: 5) { _ in }))
         let panel = KeyPanel(favourites: FavouriteKeys(defaults: storage))
         panel.frame = CGRect(x: 0, y: 874 - 336, width: 402, height: 336)
+        panel.pasteTarget = terminal
         panel.applyTheme()
         controller.view.addSubview(panel)
         window.makeKeyAndVisible()

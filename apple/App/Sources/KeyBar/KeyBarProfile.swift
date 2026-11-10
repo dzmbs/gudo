@@ -34,6 +34,10 @@ struct KeySpec: Identifiable {
     /// What the key does, in plain words, under its label in the keys panel.
     var caption: String?
 
+    var isPaste: Bool {
+        if case .paste = output { true } else { false }
+    }
+
     func events(latched: KeyModifiers, alternate useAlternate: Bool = false) -> [KeyEvent] {
         Self.events(useAlternate ? (alternate ?? output) : output, latched: latched)
     }
