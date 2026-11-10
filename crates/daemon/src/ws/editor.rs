@@ -163,6 +163,34 @@ pub(crate) struct Editors {
     prewarm_wanted: tokio::sync::Notify,
     ports: EditorPorts,
     last_launch_path: PathBuf,
+    /// VS Code server directories of editors still starting, kept from updates as those
+    /// running are.
+    starting_servers: std::sync::Mutex<Vec<PathBuf>>,
+}
+
+/// A VS Code server directory an editor is starting from, until it runs or fails.
+struct StartingServer<'a> {
+    starting_servers: &'a std::sync::Mutex<Vec<PathBuf>>,
+    dir: PathBuf,
+}
+
+impl<'a> StartingServer<'a> {
+    fn new(starting_servers: &'a std::sync::Mutex<Vec<PathBuf>>, dir: PathBuf) -> Self {
+        crate::core::lock(starting_servers).push(dir.clone());
+        Self {
+            starting_servers,
+            dir,
+        }
+    }
+}
+
+impl Drop for StartingServer<'_> {
+    fn drop(&mut self) {
+        let mut starting = crate::core::lock(self.starting_servers);
+        if let Some(index) = starting.iter().position(|dir| *dir == self.dir) {
+            starting.swap_remove(index);
+        }
+    }
 }
 
 /// The user's own VS Code CLI, else the one the daemon installed from Microsoft.
@@ -285,6 +313,7 @@ impl Editors {
             prewarm_wanted: tokio::sync::Notify::new(),
             ports: EditorPorts::load(config.state_dir.join("editors").join("ports.json")),
             last_launch_path: config.state_dir.join("editors").join("last-launch.json"),
+            starting_servers: std::sync::Mutex::default(),
         }
     }
 
@@ -553,6 +582,7 @@ impl Editors {
         fsutil::write_atomic(&token_file, token.as_bytes())
             .map_err(|error| WsError::Failed(error.to_string()))?;
         let mut server_dir = None;
+        let mut starting_server = None;
         let mut command = match kind {
             EditorKind::VsCode => {
                 let code = code.ok_or_else(|| {
@@ -572,6 +602,9 @@ impl Editors {
                         .ok()
                 };
                 server_dir.clone_from(&direct);
+                starting_server = direct
+                    .clone()
+                    .map(|dir| StartingServer::new(&self.starting_servers, dir));
                 match direct {
                     Some(dir) => vscode_server::command(&dir, port, &token_file),
                     None => {
@@ -657,6 +690,7 @@ impl Editors {
         let info = editor.info.clone();
         let runs_microsoft_server = editor.server_dir.is_some();
         self.running.lock().await.insert(folder_key, editor);
+        drop(starting_server);
         if runs_microsoft_server {
             self.update_wanted.notify_one();
         }
@@ -675,9 +709,9 @@ impl Editors {
         }
     }
 
-    /// The VS Code server directories editors run from.
+    /// The VS Code server directories editors run or are starting from.
     async fn servers_in_use(&self) -> Vec<PathBuf> {
-        let in_use: Vec<PathBuf> = {
+        let mut in_use: Vec<PathBuf> = {
             let mut running = self.running.lock().await;
             reap(&mut running);
             running
@@ -685,6 +719,7 @@ impl Editors {
                 .filter_map(|editor| editor.server_dir.clone())
                 .collect()
         };
+        in_use.extend(crate::core::lock(&self.starting_servers).iter().cloned());
         in_use
     }
 
@@ -1135,6 +1170,17 @@ mod tests {
         let port = gone.local_addr().unwrap().port();
         drop(gone);
         assert!(!accepts_token(port, "t").await, "nothing listening");
+    }
+
+    #[tokio::test]
+    async fn a_starting_server_is_kept_from_updates() {
+        let state = tempfile::tempdir().unwrap();
+        let editors = Editors::new(&Config::new(state.path()));
+        let server_dir = state.path().join("server-aa11");
+        let starting = StartingServer::new(&editors.starting_servers, server_dir.clone());
+        assert_eq!(editors.servers_in_use().await, [server_dir]);
+        drop(starting);
+        assert!(editors.servers_in_use().await.is_empty());
     }
 
     #[tokio::test]
