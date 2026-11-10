@@ -293,7 +293,7 @@ struct ChatRowView: View {
                 }.font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
             }
         }
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
     }
 
     private func inlineDiff(_ preview: ChatInlineDiff) -> some View {
