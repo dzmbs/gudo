@@ -10,6 +10,28 @@ use crate::mp::Authz;
 #[error("terminal grids need nonzero columns and rows")]
 pub(crate) struct EmptyGrid;
 
+/// The most columns or rows a pane gets: more than any screen shows legibly, and few enough
+/// that the daemon's terminal, and each since-join copy of it, stays bounded whatever a client
+/// asks for.
+pub(crate) const MAX_GRID_SIDE: u16 = 1000;
+
+/// `size` with at most [`MAX_GRID_SIDE`] columns and rows, its cells keeping their pixel size.
+fn bounded(size: PaneSize) -> PaneSize {
+    let cols = size.cols.min(MAX_GRID_SIDE);
+    let rows = size.rows.min(MAX_GRID_SIDE);
+    if (cols, rows) == (size.cols, size.rows) {
+        return size;
+    }
+    let (cell_width, cell_height) = size.cell_px();
+    let pixels = |cell: u32, cells: u16| u16::try_from(cell * u32::from(cells)).unwrap_or(u16::MAX);
+    PaneSize {
+        cols,
+        rows,
+        width_px: pixels(cell_width, cols),
+        height_px: pixels(cell_height, rows),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SizeChoice {
     pub owner: Option<(ConnId, PrincipalId)>,
@@ -39,11 +61,14 @@ impl Sizing {
     }
 
     pub fn set_policy(&mut self, policy: SizePolicy) -> Result<(), EmptyGrid> {
-        if let SizePolicy::Fixed { cols, rows } = policy
-            && (cols == 0 || rows == 0)
-        {
-            return Err(EmptyGrid);
-        }
+        let policy = match policy {
+            SizePolicy::Fixed { cols, rows } if cols == 0 || rows == 0 => return Err(EmptyGrid),
+            SizePolicy::Fixed { cols, rows } => SizePolicy::Fixed {
+                cols: cols.min(MAX_GRID_SIDE),
+                rows: rows.min(MAX_GRID_SIDE),
+            },
+            policy => policy,
+        };
         self.policy = Some(policy);
         Ok(())
     }
@@ -69,7 +94,7 @@ impl Sizing {
         if size.cols == 0 || size.rows == 0 {
             return Err(EmptyGrid);
         }
-        self.request(conn, authz, initial_activity).size = Some(size);
+        self.request(conn, authz, initial_activity).size = Some(bounded(size));
         Ok(())
     }
 
@@ -294,6 +319,39 @@ mod tests {
                 .is_err()
         );
         assert_eq!(sizing.policy(), SizePolicy::Fixed { cols: 90, rows: 30 });
+    }
+
+    /// Any connection that may size a pane could otherwise ask for a 65535 × 65535 grid, which
+    /// the daemon's terminal (and every since-join view of it) would try to allocate.
+    #[test]
+    fn grids_are_kept_to_a_sane_size() {
+        let mut sizing = Sizing::default();
+        let huge = PaneSize {
+            cols: u16::MAX,
+            rows: u16::MAX,
+            width_px: u16::MAX,
+            height_px: u16::MAX,
+        };
+        sizing
+            .set_size(1, &authz(1), huge, PaneActivity::Active)
+            .unwrap();
+        sizing.view_activity(1, &authz(1), PaneActivity::Active);
+        let chosen = sizing.choose(|_| true).unwrap().size;
+        assert_eq!((chosen.cols, chosen.rows), (MAX_GRID_SIDE, MAX_GRID_SIDE));
+        assert_eq!(chosen.cell_px(), huge.cell_px());
+        sizing
+            .set_policy(SizePolicy::Fixed {
+                cols: u16::MAX,
+                rows: 30,
+            })
+            .unwrap();
+        assert_eq!(
+            sizing.policy(),
+            SizePolicy::Fixed {
+                cols: MAX_GRID_SIDE,
+                rows: 30
+            }
+        );
     }
 
     #[test]
