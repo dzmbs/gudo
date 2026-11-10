@@ -601,10 +601,12 @@ struct KeyImporter: ViewModifier {
             return
         }
         pending = nil
-        do {
-            imported(try keys.importKey(pem: pem, passphrase: passphrase, label: label))
-        } catch {
-            failure = SshErrorText.describe(error)
+        Task {
+            do {
+                imported(try await keys.importKey(pem: pem, passphrase: passphrase, label: label))
+            } catch {
+                failure = SshErrorText.describe(error)
+            }
         }
     }
 }

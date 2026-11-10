@@ -231,11 +231,11 @@ nonisolated func temporaryDirectory() -> URL {
         #expect(files.keys().isEmpty)
     }
 
-    @Test func keysGenerateImportAndAuthenticate() throws {
+    @Test func keysGenerateImportAndAuthenticate() async throws {
         let secrets = MemorySecretStore()
         let directory = temporaryDirectory()
         let keys = KeyStore(secrets: secrets, directory: directory)
-        let generated = try keys.generate(label: "me@box")
+        let generated = try await keys.generate(label: "me@box")
         #expect(generated.publicKey.hasPrefix("ssh-ed25519 "))
         #expect(generated.fingerprint.hasPrefix("SHA256:"))
         #expect(generated.authorizeCommand.contains(generated.publicKey))
@@ -243,9 +243,9 @@ nonisolated func temporaryDirectory() -> URL {
 
         // Importing the same key again returns the existing entry.
         let other = KeyStore(secrets: secrets, directory: temporaryDirectory())
-        let imported = try other.importKey(pem: pem, passphrase: nil, label: "copy")
+        let imported = try await other.importKey(pem: pem, passphrase: nil, label: "copy")
         #expect(imported.fingerprint == generated.fingerprint)
-        #expect(throws: (any Error).self) { try other.importKey(pem: Data("junk".utf8), passphrase: nil, label: "x") }
+        await #expect(throws: (any Error).self) { try await other.importKey(pem: Data("junk".utf8), passphrase: nil, label: "x") }
 
         // The list survives a reload; removal deletes the secret.
         #expect(KeyStore(secrets: secrets, directory: directory).keys.map(\.id) == [generated.id])
@@ -253,7 +253,7 @@ nonisolated func temporaryDirectory() -> URL {
         #expect(throws: KeyStoreError.unknownKey(generated.id)) { try keys.auth(for: generated.id) }
     }
 
-    @Test func justSSHParsesDestinations() throws {
+    @Test func justSSHParsesDestinations() async throws {
         var configuration = HostsModel.Configuration()
         configuration.sshInventory = SSHInventory.Source()
         let model = HostsModel(secrets: MemorySecretStore(), repository: HostRepository(directory: temporaryDirectory()), configuration: configuration)
@@ -263,7 +263,7 @@ nonisolated func temporaryDirectory() -> URL {
         #expect(endpoint == SSHEndpoint(user: "mira", host: "example.com", port: 2222, identity: .password))
         flow.destination = "ssh://root@[::1]:22"
         #expect(try flow.endpoint().host == "::1")
-        try flow.generateKey()
+        try await flow.generateKey()
         guard case .key(let id) = flow.auth else { Issue.record("key not selected"); return }
         #expect(flow.newKey?.id == id)
         #expect(try flow.endpoint().identity == .key(id: id))

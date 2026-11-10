@@ -99,12 +99,15 @@ public final class KeyStore {
 
     /// A new key, its private part stored as OpenSSH PEM in the Keychain, encrypted with
     /// `passphrase` if one is given. The passphrase is kept only when `rememberPassphrase`;
-    /// otherwise it is asked for at each new connection.
+    /// otherwise it is asked for at each new connection. RSA and the passphrase's KDF take
+    /// seconds, so the key is made off the main actor.
     public func generate(
         label: String, type: SshKeyType = .ed25519, passphrase: String? = nil, rememberPassphrase: Bool = false
-    ) throws -> SSHKey {
+    ) async throws -> SSHKey {
         let passphrase = passphrase.flatMap { $0.isEmpty ? nil : $0 }
-        let generated = try generateSshKey(keyType: type, comment: label, passphrase: passphrase)
+        let generated = try await Task.detached(priority: .userInitiated) {
+            try generateSshKey(keyType: type, comment: label, passphrase: passphrase)
+        }.value
         var key = SSHKey(
             id: UUID().uuidString, label: label, kind: .generated,
             publicKey: generated.publicKey, fingerprint: generated.fingerprint)
@@ -133,9 +136,11 @@ public final class KeyStore {
     }
 
     /// Imports a private key (OpenSSH/PEM). An encrypted key needs its passphrase, which is
-    /// stored with it.
-    public func importKey(pem: Data, passphrase: String?, label: String) throws -> SSHKey {
-        let info = try inspectPrivateKey(pem: pem, passphrase: passphrase)
+    /// stored with it. Its KDF runs off the main actor.
+    public func importKey(pem: Data, passphrase: String?, label: String) async throws -> SSHKey {
+        let info = try await Task.detached(priority: .userInitiated) {
+            try inspectPrivateKey(pem: pem, passphrase: passphrase)
+        }.value
         if let existing = keys.first(where: { $0.fingerprint == info.fingerprint }) { return existing }
         var key = SSHKey(
             id: UUID().uuidString, label: label, kind: .imported,

@@ -425,13 +425,11 @@ struct CreateSSHKeySheet: View {
         let passphrase = passphrase
         let remember = rememberPassphrase
         Task {
-            // RSA takes seconds: let the button show its spinner first.
-            await Task.yield()
             do {
                 let key: SSHKey = switch kind {
                 case .secureEnclave: try keys.generateSecureEnclaveKey(label: label)
-                case .ed25519: try keys.generate(label: label, type: .ed25519, passphrase: passphrase, rememberPassphrase: remember)
-                case .rsa: try keys.generate(label: label, type: .rsa4096, passphrase: passphrase, rememberPassphrase: remember)
+                case .ed25519: try await keys.generate(label: label, type: .ed25519, passphrase: passphrase, rememberPassphrase: remember)
+                case .rsa: try await keys.generate(label: label, type: .rsa4096, passphrase: passphrase, rememberPassphrase: remember)
                 }
                 created(key)
                 dismiss()

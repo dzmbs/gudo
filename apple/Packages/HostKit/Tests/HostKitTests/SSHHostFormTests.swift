@@ -231,16 +231,16 @@ private struct Desk {
         #expect(desk.model.records.count == 1)
     }
 
-    @Test func passphraseProtectedAppKeys() throws {
+    @Test func passphraseProtectedAppKeys() async throws {
         let desk = try Desk()
-        let key = try desk.model.keys.generate(label: "laptop", type: .ed25519, passphrase: "secret")
+        let key = try await desk.model.keys.generate(label: "laptop", type: .ed25519, passphrase: "secret")
         #expect(key.encrypted == true)
         #expect(desk.model.keys.needsPassphrase(key.id))
         #expect(throws: HostError.missingSecret("passphrase for laptop")) { try desk.model.keys.auth(for: key.id) }
         _ = try desk.model.keys.auth(for: key.id, passphrase: "secret")
         try desk.model.keys.savePassphrase("secret", for: key.id)
         #expect(!desk.model.keys.needsPassphrase(key.id))
-        let remembered = try desk.model.keys.generate(label: "rsa", type: .ed25519, passphrase: "x", rememberPassphrase: true)
+        let remembered = try await desk.model.keys.generate(label: "rsa", type: .ed25519, passphrase: "x", rememberPassphrase: true)
         #expect(!desk.model.keys.needsPassphrase(remembered.id))
         #expect(remembered.typeName == "Ed25519")
     }

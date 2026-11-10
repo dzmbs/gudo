@@ -388,8 +388,8 @@ public final class JustSSHFlow {
     /// Generates an ed25519 key for this host and selects it. Show `newKey.publicKey` and
     /// `authorizeCommand` so the user can install it (or connect with a password first and
     /// use `authorizeOverSession`).
-    public func generateKey() throws {
-        let key = try hosts.keys.generate(label: keyLabel)
+    public func generateKey() async throws {
+        let key = try await hosts.keys.generate(label: keyLabel)
         select(key)
     }
 
@@ -399,8 +399,8 @@ public final class JustSSHFlow {
     }
 
     /// Imports a private key (file contents or paste) and selects it.
-    public func importKey(pem: Data, passphrase: String?, label: String) throws {
-        let key = try hosts.keys.importKey(pem: pem, passphrase: passphrase, label: label)
+    public func importKey(pem: Data, passphrase: String?, label: String) async throws {
+        let key = try await hosts.keys.importKey(pem: pem, passphrase: passphrase, label: label)
         select(key)
     }
 

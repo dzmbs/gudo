@@ -310,7 +310,7 @@ final class AppModel {
             do {
                 if let path = arguments.string(forKey: "testSSHKey") {
                     let pem = try Data(contentsOf: URL(fileURLWithPath: path))
-                    try flow.importKey(pem: pem, passphrase: nil, label: URL(fileURLWithPath: path).lastPathComponent)
+                    try await flow.importKey(pem: pem, passphrase: nil, label: URL(fileURLWithPath: path).lastPathComponent)
                 } else if let password = arguments.string(forKey: "testSSHPassword") {
                     flow.auth = .password
                     flow.password = password
