@@ -820,14 +820,14 @@ pub(crate) mod tests {
         let started = Instant::now();
         let mut status = git_program(&root);
         status.current_dir(&root).arg("status");
-        let result = output_within(&mut status, Duration::from_secs(2));
+        // Long enough for a loaded machine to start the fake git and its helper before the kill.
+        let result = output_within(&mut status, Duration::from_secs(5));
         assert!(matches!(result, Err(RunError::TimedOut)), "{result:?}");
-        assert!(started.elapsed() < Duration::from_secs(10));
+        assert!(started.elapsed() < Duration::from_secs(15));
         let helper: i32 = std::fs::read_to_string(&helper_pid)
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
+            .ok()
+            .and_then(|text| text.trim().parse().ok())
+            .expect("the fake git started its helper before it was killed");
         let deadline = Instant::now() + Duration::from_secs(5);
         while is_running(helper) {
             assert!(Instant::now() < deadline, "the helper outlived its git");
