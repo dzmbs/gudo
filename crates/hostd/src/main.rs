@@ -315,7 +315,8 @@ fn run(
         .thread_name("hostd")
         .build()?;
     runtime.block_on(async move {
-        let daemon = Daemon::start_inheriting(config, inherited).await?;
+        let mut daemon = Daemon::start_inheriting(config, inherited).await?;
+        let task_ended = daemon.task_ended();
         eprintln!(
             "{} {} serving as {}",
             brand::DAEMON_BIN,
@@ -345,6 +346,13 @@ fn run(
                 None
             }
             exe = daemon.restart_requested() => Some(exe),
+            ended = task_ended => {
+                // Exiting with a failure has the service manager start a fresh daemon,
+                // which restores the saved layout.
+                tracing::error!("{ended}; stopping so the daemon is started again");
+                daemon.shutdown().await;
+                return Err(anyhow::Error::new(ended));
+            }
         };
         eprintln!(
             "{}",

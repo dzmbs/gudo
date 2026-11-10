@@ -87,7 +87,7 @@ use std::time::Duration;
 use iroh::Endpoint;
 use iroh::endpoint::presets;
 use proto::{DaemonId, DeviceId, Ticket};
-use tokio::task::JoinHandle;
+use tokio::task::{AbortHandle, JoinHandle};
 
 pub use agent::{HookRequest, HookResponse, PERMISSION_WAIT, STATUS_LINE_EVENT};
 pub use agent_integration::install_agent_integration;
@@ -142,7 +142,37 @@ pub enum StartError {
 pub struct Daemon {
     core: Arc<Core>,
     endpoint: Endpoint,
-    tasks: Vec<JoinHandle<()>>,
+    tasks: Vec<AbortHandle>,
+    watched: Vec<(&'static str, JoinHandle<()>)>,
+}
+
+/// A daemon-wide task that ended while the daemon was running, which none does on its own.
+#[derive(Debug)]
+pub struct TaskEnded {
+    pub task: &'static str,
+    pub panicked: bool,
+}
+
+impl std::fmt::Display for TaskEnded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let how = if self.panicked { "panicked" } else { "ended" };
+        write!(f, "the daemon's {} task {how}", self.task)
+    }
+}
+
+impl std::error::Error for TaskEnded {}
+
+/// Resolves with the first of `tasks` to end; never with none.
+async fn first_to_end(tasks: Vec<(&'static str, JoinHandle<()>)>) -> TaskEnded {
+    if tasks.is_empty() {
+        return std::future::pending().await;
+    }
+    let (names, handles): (Vec<_>, Vec<_>) = tasks.into_iter().unzip();
+    let (result, index, _) = futures_util::future::select_all(handles).await;
+    TaskEnded {
+        task: names[index],
+        panicked: result.is_err_and(|error| error.is_panic()),
+    }
 }
 
 impl Daemon {
@@ -232,9 +262,9 @@ impl Daemon {
         core.inputs
             .carry_on(std::mem::take(&mut adopted.carried.inputs));
         repair_hook_paths(&core);
-        let mut tasks = vec![HookServer::listen(&core)?];
+        let mut tasks = vec![("hook socket", HookServer::listen(&core)?)];
         if let Some(listener) = &core.hooks.display_http {
-            tasks.push(listener.listen(&core)?);
+            tasks.push(("Claude display receiver", listener.listen(&core)?));
         }
         core::restore(&core, restore, adopted);
         core.term
@@ -248,36 +278,55 @@ impl Daemon {
             addrs = ?info.addrs,
             "listening"
         );
-        tasks.push(tokio::spawn(track_addresses(
-            Arc::clone(&core),
-            endpoint.clone(),
-        )));
-
-        tasks.push(tokio::spawn(accept_loop(
-            Arc::clone(&core),
-            endpoint.clone(),
-        )));
-        tasks.push(tokio::spawn(power::run(Arc::clone(&core))));
-        tasks.push(tokio::spawn(persist::run(Arc::clone(&core))));
-        tasks.push(tokio::spawn(screens::run(Arc::clone(&core))));
-        tasks.push(tokio::spawn(ws::ports::run(Arc::clone(&core))));
-        tasks.push(tokio::spawn(ws::turns::run(Arc::clone(&core))));
-        tasks.push(tokio::spawn(ws::repo::run(Arc::clone(&core))));
-        tasks.push(tokio::spawn(notifier::run(Arc::clone(&core))));
-        tasks.push(tokio::spawn(term::events::run(Arc::clone(&core))));
-        tasks.push(tokio::spawn(mp::run(Arc::clone(&core))));
-        tasks.push(tokio::spawn(art::run(Arc::clone(&core))));
-        tasks.push(tokio::spawn(assist::run(Arc::clone(&core))));
-        tasks.push(tokio::spawn(ws::editor::run(Arc::clone(&core))));
-        tasks.push(tokio::spawn(ws::editor::prewarm_on_connect(Arc::clone(
-            &core,
-        ))));
+        tasks.push((
+            "address tracker",
+            tokio::spawn(track_addresses(Arc::clone(&core), endpoint.clone())),
+        ));
+        tasks.push((
+            "connection accept",
+            tokio::spawn(accept_loop(Arc::clone(&core), endpoint.clone())),
+        ));
+        tasks.push(("power", tokio::spawn(power::run(Arc::clone(&core)))));
+        tasks.push((
+            "layout saving",
+            tokio::spawn(persist::run(Arc::clone(&core))),
+        ));
+        tasks.push((
+            "screen saving",
+            tokio::spawn(screens::run(Arc::clone(&core))),
+        ));
+        tasks.push((
+            "port scanner",
+            tokio::spawn(ws::ports::run(Arc::clone(&core))),
+        ));
+        tasks.push((
+            "agent turns",
+            tokio::spawn(ws::turns::run(Arc::clone(&core))),
+        ));
+        tasks.push((
+            "repository tracker",
+            tokio::spawn(ws::repo::run(Arc::clone(&core))),
+        ));
+        tasks.push(("notifier", tokio::spawn(notifier::run(Arc::clone(&core)))));
+        tasks.push((
+            "terminal events",
+            tokio::spawn(term::events::run(Arc::clone(&core))),
+        ));
+        tasks.push(("multiplayer", tokio::spawn(mp::run(Arc::clone(&core)))));
+        tasks.push(("artifacts", tokio::spawn(art::run(Arc::clone(&core)))));
+        tasks.push(("assist", tokio::spawn(assist::run(Arc::clone(&core)))));
+        tasks.push(("editors", tokio::spawn(ws::editor::run(Arc::clone(&core)))));
+        tasks.push((
+            "editor prewarm",
+            tokio::spawn(ws::editor::prewarm_on_connect(Arc::clone(&core))),
+        ));
         core.ws.tunnel.autostart(&core.cfg);
         core.mark_dirty();
         Ok(Self {
             core,
             endpoint,
-            tasks,
+            tasks: tasks.iter().map(|(_, task)| task.abort_handle()).collect(),
+            watched: tasks,
         })
     }
 
@@ -336,6 +385,14 @@ impl Daemon {
     /// `exec`s it with its own arguments; never resolves otherwise.
     pub fn restart_requested(&self) -> impl Future<Output = std::path::PathBuf> + Send + 'static {
         self.core.upgrade.restart_requested()
+    }
+
+    /// Resolves when one of the daemon-wide tasks (accepting connections, saving, the
+    /// repository tracker, …) ends or panics, which none does while the daemon runs. The host
+    /// process then calls [`Daemon::shutdown`] and exits with a failure, so the service
+    /// manager starts it again with the saved layout. Only the first call watches them.
+    pub fn task_ended(&mut self) -> impl Future<Output = TaskEnded> + Send + 'static {
+        first_to_end(std::mem::take(&mut self.watched))
     }
 
     /// This daemon's build and machine, as clients see it.
@@ -729,6 +786,35 @@ async fn accept_loop(core: Arc<Core>, endpoint: Endpoint) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_task_that_panics_or_ends_is_reported() {
+        let running = tokio::spawn(std::future::pending::<()>());
+        let panicking = tokio::spawn(async { panic!("injected") });
+        let ended = first_to_end(vec![("running", running), ("persist", panicking)]).await;
+        assert_eq!(ended.task, "persist");
+        assert!(ended.panicked);
+        assert_eq!(ended.to_string(), "the daemon's persist task panicked");
+
+        let running = tokio::spawn(std::future::pending::<()>());
+        let returning = tokio::spawn(async {});
+        let ended = first_to_end(vec![("running", running), ("repository", returning)]).await;
+        assert_eq!(ended.task, "repository");
+        assert!(!ended.panicked);
+    }
+
+    #[tokio::test]
+    async fn a_running_daemon_reports_no_ended_task() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = Config::new(directory.path());
+        config.relay = RelayMode::Disabled;
+        config.bind = Some("127.0.0.1:0".parse().unwrap());
+        let mut daemon = Daemon::start(config).await.unwrap();
+        let task_ended = daemon.task_ended();
+        let quiet = tokio::time::timeout(Duration::from_millis(500), task_ended).await;
+        assert!(quiet.is_err(), "{:?}", quiet.map(|ended| ended.to_string()));
+        daemon.shutdown().await;
+    }
 
     #[test]
     fn rebinds_the_ports_the_last_run_had() {
