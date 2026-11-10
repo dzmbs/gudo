@@ -11,8 +11,13 @@
 //! Everything here blocks; callers run it on `spawn_blocking`.
 
 use std::io::{BufRead, BufReader, Read};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::time::Duration;
 
 use proto::{
     DiffBase, DiffLine, FileChange, FileDiff, GitDiff, GitDiffRequest, GitFileStatus, GitStatus,
@@ -23,6 +28,9 @@ use proto::{
 const MAX_FILE_PATCH: usize = 1 << 20;
 /// Hunks stop being collected once the whole patch is this large.
 const MAX_TOTAL_PATCH: usize = 8 << 20;
+/// Longest any daemon-run git may take: a repository on a stalled mount or a hung helper
+/// must not hold the sidebar or a turn's snapshot for good.
+const GIT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Returns stdout.
 pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<Vec<u8>, WsError> {
@@ -58,7 +66,7 @@ pub(crate) fn guard(dir: &Path, hooks: bool) -> Vec<String> {
 }
 
 fn command(dir: &Path, args: &[&str], env: &[(&str, &Path)]) -> Command {
-    let mut command = Command::new("git");
+    let mut command = git_program(dir);
     command
         .current_dir(dir)
         .args(["-c", "core.quotePath=false", "-c", "color.ui=false"]);
@@ -99,14 +107,14 @@ const LFS_FILTERS: &[&str] = &[
 /// includes, and the worktree's config. Filters in the user's global or system config are
 /// theirs and stay.
 fn neutralised_filters(dir: &Path) -> Vec<String> {
-    let Ok(output) = Command::new("git")
+    let mut command = git_program(dir);
+    command
         .current_dir(dir)
         .args(["config", "--show-scope", "--null", "--get-regexp"])
         .arg(r"^filter\..*\.(clean|smudge|process)$")
         .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-    else {
+        .stderr(Stdio::null());
+    let Ok(output) = output_within(&mut command, GIT_TIMEOUT) else {
         return Vec::new();
     };
     overrides_for(&output.stdout)
@@ -134,8 +142,97 @@ fn overrides_for(listing: &[u8]) -> Vec<String> {
     overrides
 }
 
+/// `git`, in a process group of its own so a timeout ends the helpers it runs too.
+#[cfg_attr(not(test), expect(unused_variables))]
+fn git_program(dir: &Path) -> Command {
+    #[cfg(test)]
+    let program = tests::fake_git_for(dir).unwrap_or_else(|| "git".into());
+    #[cfg(not(test))]
+    let program = std::ffi::OsString::from("git");
+    let mut command = Command::new(program);
+    command.process_group(0);
+    command
+}
+
+/// Kills a child's process group once `timeout` passes, unless dropped first.
+struct Deadline {
+    _running: mpsc::Sender<()>,
+    expired: Arc<AtomicBool>,
+}
+
+impl Deadline {
+    fn start(child: &Child, timeout: Duration) -> Self {
+        let (running, finished) = mpsc::channel::<()>();
+        let expired = Arc::new(AtomicBool::new(false));
+        let group = i32::try_from(child.id())
+            .ok()
+            .and_then(rustix::process::Pid::from_raw);
+        let mark_expired = Arc::clone(&expired);
+        let watching = std::thread::Builder::new()
+            .name("git-deadline".into())
+            .spawn(move || {
+                if finished.recv_timeout(timeout) == Err(RecvTimeoutError::Timeout)
+                    && let Some(group) = group
+                {
+                    mark_expired.store(true, Ordering::Release);
+                    let _ =
+                        rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+                }
+            });
+        if watching.is_err() {
+            tracing::warn!("cannot watch git for a timeout");
+        }
+        Self {
+            _running: running,
+            expired,
+        }
+    }
+
+    fn expired(&self) -> bool {
+        self.expired.load(Ordering::Acquire)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+enum RunError {
+    #[error(transparent)]
+    Spawn(#[from] std::io::Error),
+    #[error("timed out")]
+    TimedOut,
+}
+
+/// Runs `command` to completion like [`Command::output`], killing its process group past
+/// `timeout`.
+fn output_within(command: &mut Command, timeout: Duration) -> Result<Output, RunError> {
+    let child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    wait_within(child, timeout)
+}
+
+fn wait_within(child: Child, timeout: Duration) -> Result<Output, RunError> {
+    let deadline = Deadline::start(&child, timeout);
+    let output = child.wait_with_output()?;
+    if deadline.expired() {
+        return Err(RunError::TimedOut);
+    }
+    Ok(output)
+}
+
+fn run_error(args: &[&str], error: RunError) -> WsError {
+    match error {
+        RunError::Spawn(error) => spawn_error(error),
+        RunError::TimedOut => WsError::Failed(format!(
+            "git {} timed out",
+            args.first().copied().unwrap_or_default()
+        )),
+    }
+}
+
 fn git_env(dir: &Path, args: &[&str], env: &[(&str, &Path)]) -> Result<Vec<u8>, WsError> {
-    let output = command(dir, args, env).output().map_err(spawn_error)?;
+    let output = output_within(&mut command(dir, args, env), GIT_TIMEOUT)
+        .map_err(|error| run_error(args, error))?;
     if output.status.success() {
         Ok(output.stdout)
     } else {
@@ -292,14 +389,14 @@ fn parse_status(root: &Path, porcelain: &[u8]) -> GitStatus {
 
 /// Hashed rather than hard-coded so it matches the repository's object format.
 fn empty_tree(root: &Path) -> Result<String, WsError> {
-    let output = command(root, &["hash-object", "-t", "tree", "--stdin"], &[])
+    let args = ["hash-object", "-t", "tree", "--stdin"];
+    let child = command(root, &args, &[])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(spawn_error)?
-        .wait_with_output()
-        .map_err(|error| WsError::Failed(error.to_string()))?;
+        .map_err(spawn_error)?;
+    let output = wait_within(child, GIT_TIMEOUT).map_err(|error| run_error(&args, error))?;
     Ok(text(output.stdout))
 }
 
@@ -566,6 +663,7 @@ fn attach_hunks(root: &Path, args: &[&str], files: &mut [FileDiff]) -> Result<bo
         .stderr(Stdio::null())
         .spawn()
         .map_err(spawn_error)?;
+    let deadline = Deadline::start(&child, GIT_TIMEOUT);
     let stdout = child.stdout.take().expect("piped");
     let mut reader = BufReader::with_capacity(64 << 10, stdout);
     let mut index: Option<usize> = None;
@@ -646,6 +744,9 @@ fn attach_hunks(root: &Path, args: &[&str], files: &mut [FileDiff]) -> Result<bo
         let _ = std::io::copy(&mut reader.by_ref().take(u64::MAX), &mut std::io::sink());
     }
     let _ = child.wait();
+    if deadline.expired() {
+        return Err(run_error(args, RunError::TimedOut));
+    }
     Ok(truncated)
 }
 
@@ -673,8 +774,76 @@ fn parse_hunk_header(line: &[u8]) -> Option<Hunk> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    use std::sync::Mutex;
+    use std::time::Instant;
+
+    /// Directories whose git is a fake program instead, for the tests that need git to hang.
+    static FAKE_GITS: Mutex<Vec<(PathBuf, PathBuf)>> = Mutex::new(Vec::new());
+
+    pub(crate) fn fake_git_for(dir: &Path) -> Option<std::ffi::OsString> {
+        crate::core::lock(&FAKE_GITS)
+            .iter()
+            .find(|(root, _)| dir.starts_with(root))
+            .map(|(_, program)| program.clone().into_os_string())
+    }
+
+    /// Makes every git the daemon runs under `root` run `script` (a `sh` body) instead.
+    pub(crate) fn fake_git_under(root: &Path, script: &str) {
+        let program = root.with_extension("fake-git");
+        std::fs::write(&program, format!("#!/bin/sh\n{script}\n")).unwrap();
+        std::fs::set_permissions(
+            &program,
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+        crate::core::lock(&FAKE_GITS).push((root.to_owned(), program));
+    }
+
+    fn is_running(pid: i32) -> bool {
+        rustix::process::Pid::from_raw(pid)
+            .is_some_and(|pid| rustix::process::test_kill_process(pid).is_ok())
+    }
+
+    /// A git that never finishes, with a helper of its own holding its output open.
+    #[test]
+    fn a_hung_git_is_killed_with_its_helpers() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("repo");
+        std::fs::create_dir(&root).unwrap();
+        let helper_pid = dir.path().join("helper.pid");
+        fake_git_under(
+            &root,
+            &format!("sleep 30 &\necho $! > '{}'\nsleep 30", helper_pid.display()),
+        );
+        let started = Instant::now();
+        let mut status = git_program(&root);
+        status.current_dir(&root).arg("status");
+        let result = output_within(&mut status, Duration::from_secs(2));
+        assert!(matches!(result, Err(RunError::TimedOut)), "{result:?}");
+        assert!(started.elapsed() < Duration::from_secs(10));
+        let helper: i32 = std::fs::read_to_string(&helper_pid)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while is_running(helper) {
+            assert!(Instant::now() < deadline, "the helper outlived its git");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn a_git_that_finishes_in_time_is_not_killed() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("repo");
+        std::fs::create_dir(&root).unwrap();
+        fake_git_under(&root, "echo answered");
+        let output = git(&root, &["status"]).unwrap();
+        assert_eq!(text(output), "answered");
+    }
 
     /// A `.git` from an unpacked archive whose config runs programs: looking at it (status,
     /// a worktree snapshot) must run none of them.
