@@ -481,6 +481,9 @@ pub(crate) struct Inner {
     /// Held while one stream applies a pane's frame and hands it to the app, so a pane being
     /// followed on two streams at once still reaches the app in the order it was applied.
     pub pane_output_turns: Mutex<HashMap<PaneId, Arc<Mutex<()>>>>,
+    /// The newest stream of each followed pane, to follow one again when its stream ends.
+    pub(crate) pane_streams: Mutex<HashMap<PaneId, conn::NewestPaneStream>>,
+    pub(crate) next_pane_stream: AtomicU64,
     pub(crate) outgoing: outgoing::OutgoingQueue,
     pub connection: Mutex<Option<Connection>>,
     pub endpoint: Mutex<Option<iroh::Endpoint>>,
@@ -785,6 +788,8 @@ impl Client {
             wanted: Mutex::new(Wanted::default()),
             mirrors: Mutex::new(HashMap::new()),
             pane_output_turns: Mutex::new(HashMap::new()),
+            pane_streams: Mutex::new(HashMap::new()),
+            next_pane_stream: AtomicU64::new(0),
             outgoing: outgoing::OutgoingQueue::default(),
             connection: Mutex::new(None),
             endpoint: Mutex::new(None),
@@ -879,6 +884,7 @@ impl Client {
             });
         }
         lock(&self.inner.mirrors).remove(&pane_id);
+        lock(&self.inner.pane_streams).remove(&pane_id);
         self.inner.send(ClientCtl::Unsubscribe { pane_id });
     }
 

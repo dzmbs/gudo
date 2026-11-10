@@ -45,6 +45,27 @@ const DIAL_DEADLINES: [Duration; 3] = [
     proto::IDLE_TIMEOUT,
 ];
 const MIN_BACKOFF: Duration = Duration::from_millis(100);
+/// Following a pane again after its stream ended waits this long, doubled for each stream in
+/// a row that ended without showing anything, up to [`MAX_FOLLOW_AGAIN_DELAY`].
+const FOLLOW_AGAIN_DELAY: Duration = Duration::from_millis(250);
+const MAX_FOLLOW_AGAIN_DELAY: Duration = Duration::from_secs(30);
+
+/// The newest stream the daemon opened for a pane.
+#[derive(Debug, Default)]
+pub(crate) struct NewestPaneStream {
+    stream_id: u64,
+    /// Streams in a row that ended without showing anything.
+    failures: u32,
+}
+
+/// What a pane stream's frame did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Frame {
+    Shown,
+    Ignored,
+    /// The stream cannot go on (a snapshot that does not decompress).
+    Unusable,
+}
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ProbeDeadlines {
@@ -1054,6 +1075,7 @@ async fn read_ctl(inner: Arc<Inner>, mut ctl_rx: RecvStream) -> String {
             ServerCtl::PaneClosed { pane_id } => {
                 lock(&inner.mirrors).remove(&pane_id);
                 lock(&inner.pane_output_turns).remove(&pane_id);
+                lock(&inner.pane_streams).remove(&pane_id);
                 lock(&inner.programs).remove(&pane_id);
                 inner.assist.forget(pane_id);
                 lock(&inner.wanted).subscribed.retain(|&id| id != pane_id);
@@ -1141,18 +1163,26 @@ async fn accept_panes(
         let inner = Arc::clone(&inner);
         let acks = Arc::clone(&acks);
         let ctl = ctl.clone();
+        let conn = conn.clone();
         tokio::spawn(async move {
             match recv(&mut stream).await {
                 Ok(Some(StreamHeader::Pane { pane_id })) => {
+                    let stream_id = opened_pane_stream(&inner, pane_id);
                     inner.emit(ClientEvent::PaneStreaming { pane_id });
+                    let mut showed_output = false;
                     while let Ok(Some(output)) = recv::<PaneOutput>(&mut stream).await {
-                        apply_output(&inner, pane_id, output, &ctl);
+                        match apply_output(&inner, pane_id, output, &ctl) {
+                            Frame::Shown => showed_output = true,
+                            Frame::Ignored => {}
+                            Frame::Unusable => break,
+                        }
                         acks.notify_one();
                         // A flooding stream always has the next frame ready, so its reads
                         // never yield: let other panes' output and the input writer run
                         // between frames, as the listener's terminal work is slow.
                         tokio::task::yield_now().await;
                     }
+                    follow_again(&inner, &conn, pane_id, stream_id, showed_output, &ctl).await;
                 }
                 Ok(Some(StreamHeader::Bulk)) => {
                     while let Ok(Some(msg)) = recv::<Bulk>(&mut stream).await {
@@ -1165,12 +1195,70 @@ async fn accept_panes(
     }
 }
 
+fn opened_pane_stream(inner: &Inner, pane_id: PaneId) -> u64 {
+    let stream_id = inner.next_pane_stream.fetch_add(1, Ordering::Relaxed);
+    lock(&inner.pane_streams)
+        .entry(pane_id)
+        .or_default()
+        .stream_id = stream_id;
+    stream_id
+}
+
+/// A followed pane's stream ended, or cannot go on, while the connection lives: the daemon
+/// still counts the pane as followed and sends nothing more, so follow it again from a fresh
+/// snapshot. Waits first, longer while streams keep failing; a newer stream for the pane in
+/// the meantime makes it unneeded.
+async fn follow_again(
+    inner: &Inner,
+    conn: &Connection,
+    pane_id: PaneId,
+    stream_id: u64,
+    showed_output: bool,
+    ctl: &mpsc::UnboundedSender<ClientCtl>,
+) {
+    let is_newest = |inner: &Inner| {
+        lock(&inner.pane_streams)
+            .get(&pane_id)
+            .is_some_and(|newest| newest.stream_id == stream_id)
+    };
+    let failures = {
+        let mut streams = lock(&inner.pane_streams);
+        let Some(newest) = streams
+            .get_mut(&pane_id)
+            .filter(|newest| newest.stream_id == stream_id)
+        else {
+            return;
+        };
+        newest.failures = if showed_output {
+            0
+        } else {
+            newest.failures.saturating_add(1)
+        };
+        newest.failures
+    };
+    let delay = FOLLOW_AGAIN_DELAY
+        .saturating_mul(1 << failures.min(8))
+        .min(MAX_FOLLOW_AGAIN_DELAY);
+    tokio::time::sleep(delay).await;
+    let still_followed = lock(&inner.wanted).subscribed.contains(&pane_id);
+    if !still_followed || !is_newest(inner) || conn.close_reason().is_some() {
+        return;
+    }
+    tracing::info!(%pane_id, "pane stream ended; following it again");
+    let _ = ctl.send(ClientCtl::Unsubscribe { pane_id });
+    let _ = ctl.send(ClientCtl::Subscribe {
+        pane_id,
+        mode: proto::SubscribeMode::Live,
+        rows_hint: 0,
+    });
+}
+
 fn apply_output(
     inner: &Inner,
     pane_id: PaneId,
     output: PaneOutput,
     ctl: &mpsc::UnboundedSender<ClientCtl>,
-) {
+) -> Frame {
     let turn = inner.pane_output_turn(pane_id);
     let _turn = lock(&turn);
     let keep_vt = inner.config.mirror_vt;
@@ -1181,7 +1269,7 @@ fn apply_output(
             // No mirror: the pane is not followed (any more). Output that was in flight when
             // it was unsubscribed or closed is dropped, never a reason to follow it again.
             let Some(mirror) = mirrors.get_mut(&pane_id) else {
-                return;
+                return Frame::Ignored;
             };
             let applied = mirror.apply(seq.0, &data);
             if applied == Applied::Gap {
@@ -1200,7 +1288,7 @@ fn apply_output(
                         data[start..].to_vec()
                     },
                 },
-                Applied::Duplicate => return,
+                Applied::Duplicate => return Frame::Ignored,
                 Applied::Gap => {
                     // Lost continuity (should not happen on one stream): start over.
                     tracing::warn!(%pane_id, "output gap; resubscribing");
@@ -1210,7 +1298,7 @@ fn apply_output(
                         mode: proto::SubscribeMode::Live,
                         rows_hint: 0,
                     });
-                    return;
+                    return Frame::Ignored;
                 }
             }
         }
@@ -1222,11 +1310,11 @@ fn apply_output(
         } => match inflate(&data, raw_len) {
             Ok(raw) => match snapshot_event(inner, pane_id, seq, snap_gen, raw, keep_vt) {
                 Some(event) => event,
-                None => return,
+                None => return Frame::Ignored,
             },
             Err(err) => {
                 tracing::warn!(%pane_id, "bad snapshot: {err}");
-                return;
+                return Frame::Unusable;
             }
         },
         PaneOutput::Snapshot {
@@ -1235,7 +1323,7 @@ fn apply_output(
             data,
         } => match snapshot_event(inner, pane_id, seq, snap_gen, data, keep_vt) {
             Some(event) => event,
-            None => return,
+            None => return Frame::Ignored,
         },
         PaneOutput::Resized { seq, size } => {
             let mut mirrors = lock(&inner.mirrors);
@@ -1245,7 +1333,7 @@ fn apply_output(
                 .get_mut(&pane_id)
                 .filter(|mirror| seq.0 >= mirror.seq())
             else {
-                return;
+                return Frame::Ignored;
             };
             mirror.resize(size);
             drop(mirrors);
@@ -1265,6 +1353,7 @@ fn apply_output(
         }
     };
     inner.emit(event);
+    Frame::Shown
 }
 
 /// The most a snapshot or history page may inflate to. Far above any real one (a READY

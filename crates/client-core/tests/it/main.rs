@@ -2,6 +2,7 @@
 
 mod liveness;
 mod offline;
+mod panes;
 mod queue;
 mod recovery;
 mod redial;
