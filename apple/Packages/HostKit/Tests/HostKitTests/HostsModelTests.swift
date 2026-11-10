@@ -91,6 +91,30 @@ nonisolated func temporaryDirectory() -> URL {
         #expect(model.helperUpdates["h"] == nil)
     }
 
+    /// One record this app cannot read (damaged, or written by a newer app) costs that record,
+    /// never every saved host; the file is kept aside so nothing is lost.
+    @Test func anUnreadableRecordKeepsTheOthers() throws {
+        let directory = temporaryDirectory()
+        let repository = HostRepository(directory: directory)
+        try repository.save([
+            HostRecord(id: "a", name: "studio", kind: .daemon),
+            HostRecord(id: "b", name: "box", kind: .daemon),
+        ])
+        let file = directory.appending(path: "hosts.json")
+        var records = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [[String: Any]])
+        records.insert(["id": "bad", "kind": "teleporter"], at: 1)
+        try JSONSerialization.data(withJSONObject: records).write(to: file)
+
+        #expect(repository.load().map(\.id) == ["a", "b"])
+        let aside = try FileManager.default.contentsOfDirectory(atPath: directory.path).filter { $0.hasPrefix("hosts.json.unreadable") }
+        #expect(aside.count == 1)
+
+        try Data("not json".utf8).write(to: file)
+        #expect(repository.load().isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: file.path), "an unreadable file is moved aside, not overwritten later")
+        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).filter { $0.hasPrefix("hosts.json.unreadable") }.count == 2)
+    }
+
     @Test func sshHostsNeedACredential() throws {
         let model = HostsModel(secrets: MemorySecretStore(), repository: HostRepository(directory: temporaryDirectory()))
         let endpoint = SSHEndpoint(user: "me", host: "127.0.0.1", port: 1, identity: .password)

@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// A saved host: metadata only (`hosts.json` in the app container). Secrets (ticket, password,
 /// private keys) live in the `SecretStore` under keys derived from `id`.
@@ -151,11 +152,39 @@ nonisolated public final class HostRepository: Sendable {
     private var hostsURL: URL { directory.appending(path: "hosts.json") }
     private var sshConfigURL: URL { directory.appending(path: "ssh_config") }
 
+    /// The saved hosts. A record this app cannot read is skipped and the others kept; the file
+    /// as it was is kept beside it (`hosts.json.unreadable-…`), since the next save leaves the
+    /// skipped records out.
     public func load() -> [HostRecord] {
         guard let data = try? Data(contentsOf: hostsURL) else { return [] }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return (try? decoder.decode([HostRecord].self, from: data)) ?? []
+        guard let entries = try? decoder.decode([ReadableRecord].self, from: data) else {
+            Self.log.error("hosts.json is unreadable; moving it aside")
+            try? FileManager.default.moveItem(at: hostsURL, to: unreadableURL())
+            return []
+        }
+        let records = entries.compactMap(\.record)
+        if records.count < entries.count {
+            Self.log.error("skipping \(entries.count - records.count) unreadable host records")
+            try? FileManager.default.copyItem(at: hostsURL, to: unreadableURL())
+        }
+        return records
+    }
+
+    private func unreadableURL() -> URL {
+        directory.appending(path: "hosts.json.unreadable-\(UUID().uuidString)")
+    }
+
+    private static let log = Logger(subsystem: Log.subsystem, category: "hosts")
+
+    /// One entry of `hosts.json`: the record, or nil when it does not decode.
+    private struct ReadableRecord: Decodable {
+        var record: HostRecord?
+
+        init(from decoder: any Decoder) throws {
+            record = try? HostRecord(from: decoder)
+        }
     }
 
     public func save(_ hosts: [HostRecord]) throws {
