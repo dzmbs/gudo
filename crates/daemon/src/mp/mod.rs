@@ -2236,6 +2236,14 @@ impl Mp {
         lock(&self.leases).remove(&pane);
     }
 
+    /// Sends `message` to connection `conn` only, straight to its `ctl` queue: unlike the
+    /// event bus, nothing is lost when a client falls behind.
+    pub fn send_to_conn(&self, conn: ConnId, message: ServerCtl) {
+        if let Some(connection) = lock(&self.live).get(&conn) {
+            let _ = connection.ctl.send(message);
+        }
+    }
+
     fn send_to_principal(&self, principal: PrincipalId, message: &ServerCtl) {
         for connection in lock(&self.live).values() {
             if connection.authz.actor.principal == principal {

@@ -211,6 +211,9 @@ pub struct Config {
     pub artifacts: ArtifactLimits,
     /// What one client connection may hold at once.
     pub connection: ConnectionLimits,
+    /// Events kept for connections that are behind; one that misses more is sent the state
+    /// itself again.
+    pub event_backlog: usize,
     /// Native password prompts (`[askpass]` in `config.toml`).
     pub askpass: AskpassConfig,
     /// The executable this daemon runs from, when its owner may replace it over the
@@ -386,6 +389,7 @@ impl Config {
             presence: PresenceTimes::default(),
             artifacts: ArtifactLimits::default(),
             connection: ConnectionLimits::default(),
+            event_backlog: 1024,
             askpass: AskpassConfig::default(),
             history: crate::assist::HistoryConfig::default(),
             self_exe: None,

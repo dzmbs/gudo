@@ -700,3 +700,33 @@ async fn a_guests_rule_ends_with_their_access_and_follows_the_policy() {
     drop((guest, owner));
     daemon.shutdown().await;
 }
+
+/// A client that falls behind the daemon's events (a flood of command marks in another pane,
+/// a tiny backlog) is sent the state again, so an approval raised meanwhile still shows.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_approval_reaches_a_client_that_fell_behind_the_events() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = crate::support::start_with(dir.path(), |config| config.event_backlog = 2).await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = owner.attach_and_follow().await;
+    let session = owner.layout.as_ref().unwrap().session_id;
+    let flood = "while :; do printf '\\033]133;A\\007\\033]133;C\\007\\033]133;D;0\\007'; done";
+    owner
+        .op(client_core::proto::LayoutOp::NewTab {
+            session_id: session,
+            name: String::new(),
+            launch: client_core::proto::PaneLaunch::Command {
+                argv: vec!["/bin/sh".into(), "-c".into(), flood.into()],
+                cwd: None,
+            },
+        })
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let mut agent = Agent::new(dir.path(), &daemon, pane);
+    let _waiting = agent.bash("make release");
+    owner
+        .until("blocked", |owner| blocked(owner, pane).is_some())
+        .await;
+    let blocker = blocked(&owner, pane).unwrap();
+    info(&mut owner, pane, blocker.request_id).await;
+}

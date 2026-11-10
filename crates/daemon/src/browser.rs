@@ -20,13 +20,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use proto::{BrowserPush, Caps, PaneId};
+use proto::{BrowserPush, Caps, PaneId, ServerCtl};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::AsyncRead;
 use tokio::sync::oneshot;
 
-use crate::core::{ConnId, Core, Event, lock, shell_quote};
+use crate::core::{ConnId, Core, lock, shell_quote};
 use crate::mp::{Authz, Need, Target, policy};
 
 /// The protocol version in [`BrowserCall::v`].
@@ -220,10 +220,8 @@ pub(crate) async fn serve(
                 return BrowserReply::Error("only http and https URLs open in the app".into());
             }
             tracing::info!(pane = %pane, "opening a URL in the app");
-            core.emit(Event::Browser {
-                conn,
-                push: BrowserPush::Open { pane_id: pane, url },
-            });
+            let push = BrowserPush::Open { pane_id: pane, url };
+            core.mp.send_to_conn(conn, ServerCtl::Browser(push));
             BrowserReply::Opened
         }
         BrowserAsk::Tool { name, args } => {
@@ -238,15 +236,13 @@ pub(crate) async fn serve(
             let id = core.browser.next_call_id.fetch_add(1, Ordering::Relaxed);
             let (tx, rx) = oneshot::channel();
             lock(&core.browser.calls).insert(id, Pending { conn, reply: tx });
-            core.emit(Event::Browser {
-                conn,
-                push: BrowserPush::Call {
-                    id,
-                    pane_id: pane,
-                    tool: name,
-                    args: args.to_string(),
-                },
-            });
+            let push = BrowserPush::Call {
+                id,
+                pane_id: pane,
+                tool: name,
+                args: args.to_string(),
+            };
+            core.mp.send_to_conn(conn, ServerCtl::Browser(push));
             let reply = tokio::select! {
                 answer = rx => match answer {
                     Ok(Ok(result)) => BrowserReply::Result(result),
@@ -257,10 +253,8 @@ pub(crate) async fn serve(
                 () = crate::askpass::gone(&mut rest) => BrowserReply::Error("cancelled".into()),
             };
             if lock(&core.browser.calls).remove(&id).is_some() {
-                core.emit(Event::Browser {
-                    conn,
-                    push: BrowserPush::CallClosed { id },
-                });
+                let push = BrowserPush::CallClosed { id };
+                core.mp.send_to_conn(conn, ServerCtl::Browser(push));
             }
             reply
         }

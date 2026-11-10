@@ -118,11 +118,6 @@ pub(crate) enum Event {
     /// The agent accounts or the panes' accounts changed (read them with
     /// `Core::accounts_report`).
     Accounts,
-    /// For connection `conn` only: open a URL or run a browser tool (`browser`).
-    Browser {
-        conn: ConnId,
-        push: proto::BrowserPush,
-    },
     /// A program wrote to the clipboard (OSC 52): for `conn` only.
     Clipboard {
         conn: ConnId,
@@ -411,7 +406,7 @@ impl Core {
         mp: crate::mp::Mp,
         carried_epoch: Option<SessionEpoch>,
     ) -> Arc<Self> {
-        let (events, _) = broadcast::channel(1024);
+        let (events, _) = broadcast::channel(config.event_backlog.max(1));
         let ws = crate::ws::Ws::new(&config, events.clone());
         let started = crate::identity::now_millis();
         Arc::new_cyclic(|weak_self| Self {

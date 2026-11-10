@@ -723,17 +723,32 @@ async fn read_ctl(client: &Arc<Client>, mut stream: RecvStream) -> Result<(), Ne
 }
 
 async fn forward_events(client: Arc<Client>, mut events: broadcast::Receiver<Event>) {
+    // A client that keeps falling behind is sent the state at most this often: each resync
+    // is a burst of messages of its own.
+    const RESYNC_INTERVAL: Duration = Duration::from_millis(500);
+    let mut last_resync: Option<tokio::time::Instant> = None;
+    let mut resync_at: Option<tokio::time::Instant> = None;
     loop {
-        match events.recv().await {
-            Ok(event) => client.forward(event),
-            Err(broadcast::error::RecvError::Lagged(_)) => {
-                // Events are hints; after missing some, resend the state itself.
-                client.send(client.core.sessions_message(client.authz.scope));
-                let session = lock(&client.state).session;
-                if let Some(session) = session {
-                    client.forward(Event::Layout(session));
+        let received = match resync_at {
+            Some(at) => tokio::select! {
+                received = events.recv() => received,
+                () = tokio::time::sleep_until(at) => {
+                    resync_at = None;
+                    last_resync = Some(tokio::time::Instant::now());
+                    client.resync();
+                    continue;
                 }
-                client.forward(Event::Participants);
+            },
+            None => events.recv().await,
+        };
+        match received {
+            Ok(event) => client.forward(event),
+            // Events are hints; after missing some, resend the state itself.
+            Err(broadcast::error::RecvError::Lagged(_)) => {
+                let now = tokio::time::Instant::now();
+                resync_at.get_or_insert_with(|| {
+                    last_resync.map_or(now, |last| (last + RESYNC_INTERVAL).max(now))
+                });
             }
             Err(broadcast::error::RecvError::Closed) => return,
         }
@@ -1360,11 +1375,6 @@ impl Client {
                     self.send(ServerCtl::WorkflowsChanged { rev: revision });
                 }
             }
-            Event::Browser { conn, push } => {
-                if conn == self.id {
-                    self.send(ServerCtl::Browser(push));
-                }
-            }
             Event::Clipboard {
                 conn,
                 pane_id,
@@ -1380,6 +1390,48 @@ impl Client {
                     });
                 }
             }
+        }
+    }
+
+    /// The state the event bus keeps this client current on, for a client that missed events.
+    fn resync(&self) {
+        self.send(self.core.sessions_message(self.authz.scope));
+        let session = {
+            let mut state = lock(&self.state);
+            state.sent_meta.clear();
+            state.sent_sizing.clear();
+            state.session
+        };
+        if let Some(session) = session {
+            self.send_session_state(session);
+        }
+        self.approvals_state();
+        self.program_state();
+        if self.caps.contains(Caps::KNOCK) && is_owner(&self.core, &self.authz) {
+            for knock in self.core.mp.knocks() {
+                self.send(ServerCtl::Knock(proto::KnockUpdate::Added(knock)));
+            }
+        }
+        let attention = &self.core.ws.attention;
+        let unseen = attention.unseen_by(self.ws.viewer, |pane| self.pane_allowed(pane));
+        for item in attention.list_for(self.ws.viewer).items {
+            if !item.seen && self.pane_allowed(item.pane_id) {
+                self.send(ServerCtl::Attention(proto::AttentionUpdate::Added {
+                    item,
+                    unseen,
+                }));
+            }
+        }
+        for event in [
+            Event::Participants,
+            Event::Ports,
+            Event::Accounts,
+            Event::RunAgain,
+        ] {
+            self.forward(event);
+        }
+        if self.caps.contains(Caps::REPO_STATUS) {
+            self.forward(Event::Repos);
         }
     }
 
@@ -3158,6 +3210,13 @@ impl Client {
                 session_id: session,
             }
         });
+        self.send_session_state(session);
+    }
+
+    /// Everything a client shows of `session`: the layout and, per pane, what the event bus
+    /// keeps it current on.
+    fn send_session_state(&self, session: SessionId) {
+        let scope = self.authz.scope;
         let Some(layout) = self.core.layout_for(session, scope) else {
             return;
         };
