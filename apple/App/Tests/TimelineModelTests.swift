@@ -353,6 +353,20 @@ final class TimelineModelTests: XCTestCase {
         XCTAssertEqual(next.frame.rows.count, 200)
     }
 
+    func testAFailedHistoryLoadKeepsChatAndItsCapabilities() async throws {
+        let hub = DaemonWorkspace(hostId: "fixture", events: WorkspaceEventHub(), resolve: { nil })
+        let model = TimelineModel(pane: 7)
+        model.start(in: hub)
+        model.receive(.snapshot(try TimelineFixtureJSON.snapshot(0..<3)))
+        try await wait { model.frame.rows.count == 3 && model.error == nil }
+        model.requestOlder()
+        try await wait { model.historyError != nil }
+        XCTAssertNil(model.error)
+        XCTAssertFalse(model.isLoadingHistory)
+        XCTAssertFalse(model.frame.capabilities.isEmpty)
+        model.stop()
+    }
+
     private func codePage(_ count: Int, name: String = "block") throws -> String {
         let items: [[String: Any]] = (0..<count).map { index in
             let lines = (0..<30).map { "    let \(name)_\(index)_\($0) = compute(\"\($0)\", \(index));" }.joined(separator: "\n")

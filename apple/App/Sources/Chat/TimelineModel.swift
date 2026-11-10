@@ -168,6 +168,7 @@ final class TimelineModel {
     private(set) var isLoadingHistory = false
     private(set) var hasNewItems = false
     private(set) var error: String?
+    private(set) var historyError: String?
     var followsBottom = true
     var expanded: Set<ChatRowID> = []
 
@@ -225,7 +226,7 @@ final class TimelineModel {
     }
 
     func requestOlder() {
-        guard frame.note != ChatRenderLimits.pageNotice, !isLoadingHistory,
+        guard frame.note != ChatRenderLimits.pageNotice, !isLoadingHistory, historyError == nil,
               let before = frame.before, let hub else { return }
         isLoadingHistory = true
         let lifetime = self.lifetime
@@ -241,7 +242,7 @@ final class TimelineModel {
                 guard let self, self.lifetime == lifetime, !Task.isCancelled else { return }
                 history = nil
                 isLoadingHistory = false
-                self.error = "History could not load. Try again or open Terminal."
+                historyError = "History could not load. Scroll up to try again, or open Terminal."
             }
         }
     }
@@ -255,6 +256,8 @@ final class TimelineModel {
         isLoading = frame.rows.isEmpty
         channel?.requestSnapshot()
     }
+
+    func allowHistoryRetry() { historyError = nil }
 
     func retry() {
         error = nil
@@ -289,6 +292,7 @@ final class TimelineModel {
             readingItem = nil
             isLoading = true
             isLoadingHistory = false
+            historyError = nil
             hasNewItems = false
             followsBottom = true
             error = nil
@@ -329,7 +333,7 @@ final class TimelineModel {
                     error = result.frame.note
                     isLoading = false
                     if result.consumedSnapshot { self.resetsSnapshot = false }
-                    if result.consumedHistory { isLoadingHistory = false }
+                    if result.consumedHistory { isLoadingHistory = false; historyError = nil }
                     expanded.formIntersection(frame.rowIDs)
                     if result.needsHistoryCursor { channel?.requestSnapshot() }
                     if result.awaitsHighlights, pending.isEmpty { pending.append(.highlights) }

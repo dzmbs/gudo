@@ -117,7 +117,7 @@ struct PaneChatView<Terminal: View>: View {
     }
 
     @ViewBuilder private var fallbackNote: some View {
-        if let message = state.error ?? state.terminalNotice?.message ?? state.model?.error {
+        if let message = state.error ?? state.terminalNotice?.message ?? state.model?.error ?? state.model?.historyError {
             Text(verbatim: message).font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
                 .padding(DS.Space.s).frame(maxWidth: .infinity).background(DS.Palette.raised)
                 .accessibilityIdentifier("chat-unavailable-note")
