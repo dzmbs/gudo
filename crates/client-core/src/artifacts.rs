@@ -372,18 +372,17 @@ impl Client {
             req: request,
         });
         let inner = Arc::clone(&self.inner);
-        self.handle
-            .spawn(async move {
-                match tokio::time::timeout(REQUEST_TIMEOUT, rx).await {
-                    Ok(Ok(result)) => result,
-                    _ => {
-                        lock(&inner.art.pending).remove(&req_id);
-                        Err(ArtifactError::Disconnected)
-                    }
+        crate::run_on(&self.handle, async move {
+            match tokio::time::timeout(REQUEST_TIMEOUT, rx).await {
+                Ok(Ok(result)) => result,
+                _ => {
+                    lock(&inner.art.pending).remove(&req_id);
+                    Err(ArtifactError::Disconnected)
                 }
-            })
-            .await
-            .unwrap_or(Err(ArtifactError::Disconnected))
+            }
+        })
+        .await
+        .unwrap_or(Err(ArtifactError::Disconnected))
     }
 
     /// A session's artifacts.
@@ -790,49 +789,48 @@ impl Client {
             .ok_or_else(|| ArtifactError::Invalid("not a PNG or JPEG image".into()))?
             .0;
         let inner = Arc::clone(&self.inner);
-        self.handle
-            .spawn(async move {
-                let conn = connection(&inner).await?;
-                let (mut send, mut recv) = conn.open_bi().await.map_err(failed)?;
-                let _ = send.set_priority(1);
-                let header = BlobHeader::Put {
-                    session_id,
-                    size: bytes.len() as u64,
-                    media,
-                };
-                crate::conn::send(&mut send, &StreamHeader::Blob(header))
-                    .await
-                    .map_err(failed)?;
-                match crate::conn::recv::<BlobReply>(&mut recv)
-                    .await
-                    .map_err(failed)?
-                {
-                    Some(BlobReply::Ready) => {}
-                    Some(BlobReply::Failed(err)) => return Err(err),
-                    other => return Err(failed(format!("unexpected {other:?}"))),
+        crate::run_on(&self.handle, async move {
+            let conn = connection(&inner).await?;
+            let (mut send, mut recv) = conn.open_bi().await.map_err(failed)?;
+            let _ = send.set_priority(1);
+            let header = BlobHeader::Put {
+                session_id,
+                size: bytes.len() as u64,
+                media,
+            };
+            crate::conn::send(&mut send, &StreamHeader::Blob(header))
+                .await
+                .map_err(failed)?;
+            match crate::conn::recv::<BlobReply>(&mut recv)
+                .await
+                .map_err(failed)?
+            {
+                Some(BlobReply::Ready) => {}
+                Some(BlobReply::Failed(err)) => return Err(err),
+                other => return Err(failed(format!("unexpected {other:?}"))),
+            }
+            // QUIC flow control paces the upload.
+            let total = bytes.len() as u64;
+            let mut done = 0u64;
+            for chunk in bytes.chunks(CHUNK) {
+                send.write_all(chunk).await.map_err(failed)?;
+                done += chunk.len() as u64;
+                if let Some(progress) = &progress {
+                    progress.on_progress(done, total);
                 }
-                // QUIC flow control paces the upload.
-                let total = bytes.len() as u64;
-                let mut done = 0u64;
-                for chunk in bytes.chunks(CHUNK) {
-                    send.write_all(chunk).await.map_err(failed)?;
-                    done += chunk.len() as u64;
-                    if let Some(progress) = &progress {
-                        progress.on_progress(done, total);
-                    }
-                }
-                let _ = send.finish();
-                match crate::conn::recv::<BlobReply>(&mut recv)
-                    .await
-                    .map_err(failed)?
-                {
-                    Some(BlobReply::Stored(image)) => Ok(image),
-                    Some(BlobReply::Failed(err)) => Err(err),
-                    other => Err(failed(format!("unexpected {other:?}"))),
-                }
-            })
-            .await
-            .unwrap_or_else(|err| Err(failed(err)))
+            }
+            let _ = send.finish();
+            match crate::conn::recv::<BlobReply>(&mut recv)
+                .await
+                .map_err(failed)?
+            {
+                Some(BlobReply::Stored(image)) => Ok(image),
+                Some(BlobReply::Failed(err)) => Err(err),
+                other => Err(failed(format!("unexpected {other:?}"))),
+            }
+        })
+        .await
+        .unwrap_or_else(|err| Err(failed(err)))
     }
 
     /// Reads an image blob from the host.
@@ -850,37 +848,36 @@ impl Client {
         progress: Option<Arc<dyn TransferProgress>>,
     ) -> Result<(ImageRef, Vec<u8>), ArtifactError> {
         let inner = Arc::clone(&self.inner);
-        self.handle
-            .spawn(async move {
-                let conn = connection(&inner).await?;
-                let (mut send, mut recv) = conn.open_bi().await.map_err(failed)?;
-                let _ = send.set_priority(1);
-                crate::conn::send(&mut send, &StreamHeader::Blob(BlobHeader::Get { hash }))
-                    .await
-                    .map_err(failed)?;
-                let _ = send.finish();
-                let image = match crate::conn::recv::<BlobReply>(&mut recv)
-                    .await
-                    .map_err(failed)?
-                {
-                    Some(BlobReply::Found(image)) => image,
-                    Some(BlobReply::Failed(err)) => return Err(err),
-                    other => return Err(failed(format!("unexpected {other:?}"))),
-                };
-                let mut bytes = vec![0; image.size as usize];
-                let total = image.size;
-                let mut done = 0u64;
-                for chunk in bytes.chunks_mut(CHUNK) {
-                    recv.read_exact(chunk).await.map_err(failed)?;
-                    done += chunk.len() as u64;
-                    if let Some(progress) = &progress {
-                        progress.on_progress(done, total);
-                    }
+        crate::run_on(&self.handle, async move {
+            let conn = connection(&inner).await?;
+            let (mut send, mut recv) = conn.open_bi().await.map_err(failed)?;
+            let _ = send.set_priority(1);
+            crate::conn::send(&mut send, &StreamHeader::Blob(BlobHeader::Get { hash }))
+                .await
+                .map_err(failed)?;
+            let _ = send.finish();
+            let image = match crate::conn::recv::<BlobReply>(&mut recv)
+                .await
+                .map_err(failed)?
+            {
+                Some(BlobReply::Found(image)) => image,
+                Some(BlobReply::Failed(err)) => return Err(err),
+                other => return Err(failed(format!("unexpected {other:?}"))),
+            };
+            let mut bytes = vec![0; image.size as usize];
+            let total = image.size;
+            let mut done = 0u64;
+            for chunk in bytes.chunks_mut(CHUNK) {
+                recv.read_exact(chunk).await.map_err(failed)?;
+                done += chunk.len() as u64;
+                if let Some(progress) = &progress {
+                    progress.on_progress(done, total);
                 }
-                Ok((image, bytes))
-            })
-            .await
-            .unwrap_or_else(|err| Err(failed(err)))
+            }
+            Ok((image, bytes))
+        })
+        .await
+        .unwrap_or_else(|err| Err(failed(err)))
     }
 }
 

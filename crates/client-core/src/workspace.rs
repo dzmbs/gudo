@@ -262,18 +262,17 @@ impl Client {
         });
         let inner = Arc::clone(&self.inner);
         // The timer runs on the client's runtime, so any executor can await this.
-        self.handle
-            .spawn(async move {
-                match tokio::time::timeout(timeout, rx).await {
-                    Ok(Ok(result)) => result,
-                    _ => {
-                        lock(&inner.ws.pending).remove(&req_id);
-                        Err(WsError::Disconnected)
-                    }
+        crate::run_on(&self.handle, async move {
+            match tokio::time::timeout(timeout, rx).await {
+                Ok(Ok(result)) => result,
+                _ => {
+                    lock(&inner.ws.pending).remove(&req_id);
+                    Err(WsError::Disconnected)
                 }
-            })
-            .await
-            .unwrap_or(Err(WsError::Disconnected))
+            }
+        })
+        .await
+        .unwrap_or(Err(WsError::Disconnected))
     }
 
     /// Listening ports in the daemon's panes, scanned now.
@@ -326,15 +325,14 @@ impl Client {
         writer: impl tokio::io::AsyncWrite + Unpin + Send + 'static,
     ) -> Result<(), WsError> {
         let inner = Arc::clone(&self.inner);
-        self.handle
-            .spawn(async move {
-                match forward_stream(&inner, target, reader, writer).await? {
-                    Ended::Clean => Ok(()),
-                    Ended::Broken => Err(WsError::Failed("the forward stream broke".into())),
-                }
-            })
-            .await
-            .unwrap_or(Err(WsError::Disconnected))
+        crate::run_on(&self.handle, async move {
+            match forward_stream(&inner, target, reader, writer).await? {
+                Ended::Clean => Ok(()),
+                Ended::Broken => Err(WsError::Failed("the forward stream broke".into())),
+            }
+        })
+        .await
+        .unwrap_or(Err(WsError::Disconnected))
     }
 
     /// Forwards started with [`forward`](Self::forward): `(local port, target)`.
@@ -776,16 +774,15 @@ impl Client {
         progress: Option<Arc<dyn TransferProgress>>,
     ) -> Result<FileStat, WsError> {
         let inner = Arc::clone(&self.inner);
-        self.handle
-            .spawn(async move {
-                let file = tokio::fs::File::open(&local_path)
-                    .await
-                    .map_err(|err| WsError::NotFound(format!("{local_path}: {err}")))?;
-                let size = file.metadata().await.map_err(failed)?.len();
-                upload(&inner, file, size, target, progress).await
-            })
-            .await
-            .unwrap_or_else(|err| Err(failed(err)))
+        crate::run_on(&self.handle, async move {
+            let file = tokio::fs::File::open(&local_path)
+                .await
+                .map_err(|err| WsError::NotFound(format!("{local_path}: {err}")))?;
+            let size = file.metadata().await.map_err(failed)?.len();
+            upload(&inner, file, size, target, progress).await
+        })
+        .await
+        .unwrap_or_else(|err| Err(failed(err)))
     }
 
     /// Uploads bytes held in memory (see [`upload_file`](Self::upload_file)).
@@ -796,12 +793,11 @@ impl Client {
     ) -> Result<FileStat, WsError> {
         let inner = Arc::clone(&self.inner);
         let size = data.len() as u64;
-        self.handle
-            .spawn(
-                async move { upload(&inner, std::io::Cursor::new(data), size, target, None).await },
-            )
-            .await
-            .unwrap_or_else(|err| Err(failed(err)))
+        crate::run_on(&self.handle, async move {
+            upload(&inner, std::io::Cursor::new(data), size, target, None).await
+        })
+        .await
+        .unwrap_or_else(|err| Err(failed(err)))
     }
 
     /// Downloads a remote file to `local_path` (written to a temporary file next to it, then
@@ -815,17 +811,16 @@ impl Client {
         progress: Option<Arc<dyn TransferProgress>>,
     ) -> Result<FileStat, WsError> {
         let inner = Arc::clone(&self.inner);
-        self.handle
-            .spawn(async move {
-                let header = DownloadHeader {
-                    path: remote_path,
-                    offset,
-                    len,
-                };
-                download(&inner, header, PathBuf::from(local_path), progress).await
-            })
-            .await
-            .unwrap_or_else(|err| Err(failed(err)))
+        crate::run_on(&self.handle, async move {
+            let header = DownloadHeader {
+                path: remote_path,
+                offset,
+                len,
+            };
+            download(&inner, header, PathBuf::from(local_path), progress).await
+        })
+        .await
+        .unwrap_or_else(|err| Err(failed(err)))
     }
 
     /// The attention feed (the inbox) and its unseen count.

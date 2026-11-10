@@ -545,6 +545,22 @@ pub(crate) enum Dial {
     Invite(proto::Invite),
 }
 
+/// Runs `work` on `runtime` and waits for it. Dropping the wait stops the work, so a caller
+/// that gives up leaves nothing running (and holding the client) in the background.
+pub(crate) async fn run_on<T: Send + 'static>(
+    runtime: &tokio::runtime::Handle,
+    work: impl std::future::Future<Output = T> + Send + 'static,
+) -> Result<T, tokio::task::JoinError> {
+    struct AbortOnDrop<T>(tokio::task::JoinHandle<T>);
+    impl<T> Drop for AbortOnDrop<T> {
+        fn drop(&mut self) {
+            self.0.abort();
+        }
+    }
+    let mut task = AbortOnDrop(runtime.spawn(work));
+    (&mut task.0).await
+}
+
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

@@ -128,3 +128,27 @@ fn dropping_a_client_on_a_shared_runtime_frees_its_forwarded_ports() {
     }
     runtime.block_on(host.go_down());
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_transfer_its_caller_gave_up_on_never_runs_once_the_host_is_back() {
+    let mut host = Host::start().await;
+    let (client, mut events) = connect(&host.ticket(), false);
+    connected(&mut events).await;
+    host.go_down().await;
+
+    let gave_up = tokio::time::timeout(
+        Duration::from_millis(500),
+        client.upload_bytes(b"stale".to_vec(), host.write_target("abandoned.txt")),
+    )
+    .await;
+    assert!(gave_up.is_err(), "the upload ended on its own: {gave_up:?}");
+    host.come_back().await;
+    connected(&mut events).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(
+        !host.home.join("abandoned.txt").exists(),
+        "an upload its caller dropped ran after all"
+    );
+    drop(client);
+    host.go_down().await;
+}
