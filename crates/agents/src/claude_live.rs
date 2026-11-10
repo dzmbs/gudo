@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::path::PathBuf;
 
 use serde::Deserialize;
@@ -6,7 +7,8 @@ pub const CLAUDE_DISPLAY_BATCH_LIMIT: usize = 64 * 1024;
 const MESSAGE_LIMIT: usize = 256 * 1024;
 const STREAM_LIMIT: usize = 768 * 1024;
 const MESSAGE_COUNT_LIMIT: usize = 16;
-const MESSAGE_TOTAL_LIMIT: u64 = 64;
+/// Retired identities remembered so a retried batch is not shown twice.
+const RETIRED_LIMIT: usize = 1024;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ClaudeDisplayError {
@@ -114,7 +116,7 @@ pub struct ClaudeDisplayStream {
     prompt_id: Option<String>,
     turn_id: Option<String>,
     messages: Vec<ClaudeDisplayMessage>,
-    retired: Vec<String>,
+    retired: VecDeque<String>,
     next_ordinal: u64,
     bytes: usize,
 }
@@ -126,7 +128,7 @@ impl ClaudeDisplayStream {
             prompt_id,
             turn_id: None,
             messages: Vec::new(),
-            retired: Vec::new(),
+            retired: VecDeque::new(),
             next_ordinal: 0,
             bytes: 0,
         }
@@ -188,14 +190,17 @@ impl ClaudeDisplayStream {
             if batch.index != 0 {
                 return Err(ClaudeDisplayError::Order);
             }
-            if self.messages.len() >= MESSAGE_COUNT_LIMIT
-                || self.next_ordinal >= MESSAGE_TOTAL_LIMIT
-                || self
-                    .bytes
-                    .saturating_add(batch.delta.len().saturating_mul(2))
-                    > STREAM_LIMIT
+            let additional = batch.delta.len().saturating_mul(2);
+            while self.messages.len() >= MESSAGE_COUNT_LIMIT
+                || self.bytes.saturating_add(additional) > STREAM_LIMIT
             {
-                return Err(ClaudeDisplayError::Limit);
+                let finished = self
+                    .messages
+                    .iter()
+                    .find(|message| message.is_final)
+                    .map(|message| message.id.clone())
+                    .ok_or(ClaudeDisplayError::Limit)?;
+                self.retire(&finished);
             }
             self.bytes += batch.delta.len() * 2;
             self.turn_id = Some(batch.turn_id);
@@ -220,7 +225,10 @@ impl ClaudeDisplayStream {
         {
             let message = self.messages.remove(index);
             self.bytes -= message.text.len() + message.last_delta.len();
-            self.retired.push(message.id);
+            self.retired.push_back(message.id);
+            if self.retired.len() > RETIRED_LIMIT {
+                self.retired.pop_front();
+            }
         }
     }
 }

@@ -120,7 +120,7 @@ fn empty_final_flush_and_retired_late_frames_do_not_create_extra_rows() {
 }
 
 #[test]
-fn retired_identity_bound_never_forgets_and_readmits_a_replay() {
+fn retired_identities_stay_duplicates_and_do_not_limit_later_messages() {
     let mut stream = stream();
     for ordinal in 0..64 {
         let mut batch = raw_batch();
@@ -140,7 +140,26 @@ fn retired_identity_bound_never_forgets_and_readmits_a_replay() {
     );
     assert_eq!(
         stream.apply(decode(raw_batch())),
-        Err(ClaudeDisplayError::Limit)
+        Ok(ClaudeDisplayChange::Updated)
+    );
+}
+
+#[test]
+fn a_long_agentic_turn_keeps_streaming_past_the_live_message_limit() {
+    let mut stream = stream();
+    for ordinal in 0..(MESSAGE_COUNT_LIMIT as u64 * 8) {
+        let mut batch = raw_batch();
+        batch["message_id"] = json!(format!("{ordinal:08x}-2222-4222-8222-222222222222"));
+        batch["final"] = json!(true);
+        assert_eq!(
+            stream.apply(decode(batch)),
+            Ok(ClaudeDisplayChange::Updated)
+        );
+    }
+    assert_eq!(stream.messages().len(), MESSAGE_COUNT_LIMIT);
+    assert_eq!(
+        stream.messages().last().unwrap().ordinal,
+        MESSAGE_COUNT_LIMIT as u64 * 8 - 1
     );
 }
 
