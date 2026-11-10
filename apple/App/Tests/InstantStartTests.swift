@@ -180,6 +180,14 @@ final class InstantStartTests: XCTestCase {
         AppModel.shared.hosts.disconnect(InstantStartFixture.hostId)
     }
 
+    /// The deadline only bounds a hang: on a busy machine stages and sheets take their time.
+    private func waitUntil(_ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + .seconds(30)
+        while !condition(), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
     private func window(_ model: WindowModel) -> NSWindow {
         let window = OffscreenWindow(
             contentRect: NSRect(x: -30000, y: -30000, width: 1180, height: 760),
@@ -239,7 +247,7 @@ final class InstantStartTests: XCTestCase {
         // The host answers: the screens are the host's, in place, same tabs. (Panes of other
         // tabs are made in later stages and subscribe then; this silent host sends each screen
         // once, so it answers after all three exist.)
-        for _ in 0..<100 where workspace.panes.count < 3 { try await Task.sleep(for: .milliseconds(10)) }
+        try await waitUntil { workspace.panes.count >= 3 }
         InstantStartFixture.goLive(client)
         let deadline = ContinuousClock.now + .seconds(5)
         while workspace.showsSavedWorkspace || pane.showsSavedScreen || !connection.status.isLive, ContinuousClock.now < deadline {
@@ -271,7 +279,7 @@ final class InstantStartTests: XCTestCase {
             print("instant start: round \(round) saved workspace on screen \(ContinuousClock.now - started)")
             // The window's tab first, the other tabs' panes in the next stages.
             XCTAssertEqual(model.workspace?.panes.count, 2)
-            for _ in 0..<50 where model.workspace?.panes.count != 3 { try await Task.sleep(for: .milliseconds(10)) }
+            try await waitUntil { model.workspace?.panes.count == 3 }
             XCTAssertEqual(model.workspace?.panes.count, 3)
             window.close()
             model.close()
@@ -392,10 +400,10 @@ final class InstantStartTests: XCTestCase {
         }
         model.sheet = .join
         window.orderFrontRegardless()
-        for _ in 0..<40 where window.attachedSheet == nil { try await Task.sleep(for: .milliseconds(50)) }
+        try await waitUntil { window.attachedSheet != nil }
         XCTAssertNotNil(window.attachedSheet)
         model.sheet = nil
-        for _ in 0..<40 where window.attachedSheet != nil { try await Task.sleep(for: .milliseconds(50)) }
+        try await waitUntil { window.attachedSheet == nil }
     }
 
     /// A pane saved scrolled back stays at that position when the host's screen replaces the
