@@ -321,6 +321,84 @@ async fn session_requests_reach_the_daemon_without_waiting_for_its_welcome() {
     endpoint.close().await;
 }
 
+/// A daemon stand-in that welcomes each client after `welcome_delay` and reports the link
+/// class of every Hello it reads.
+async fn link_reporting_daemon(
+    welcome_delay: Duration,
+) -> (
+    iroh::Endpoint,
+    Ticket,
+    tokio::sync::mpsc::UnboundedReceiver<proto::LinkClass>,
+) {
+    let endpoint = iroh::Endpoint::builder(presets::Minimal)
+        .alpns(vec![proto::ALPN.to_vec()])
+        .clear_ip_transports()
+        .bind_addr("127.0.0.1:0".parse::<std::net::SocketAddr>().unwrap())
+        .unwrap()
+        .bind()
+        .await
+        .unwrap();
+    let ticket = ticket_for(
+        DaemonId(*endpoint.id().as_bytes()),
+        endpoint.bound_sockets(),
+    );
+    let (links_tx, links_rx) = tokio::sync::mpsc::unbounded_channel();
+    let server = endpoint.clone();
+    let daemon_id = ticket.daemon_id;
+    tokio::spawn(async move {
+        while let Some(incoming) = server.accept().await {
+            let links_tx = links_tx.clone();
+            tokio::spawn(async move {
+                let Ok(connection) = incoming.await else {
+                    return;
+                };
+                let Ok((mut control_tx, mut control_rx)) = connection.accept_bi().await else {
+                    return;
+                };
+                let Some(ClientCtl::Hello(hello)) = super::liveness::read(&mut control_rx).await
+                else {
+                    return;
+                };
+                let _ = links_tx.send(hello.link);
+                tokio::time::sleep(welcome_delay).await;
+                let welcome = ServerCtl::Welcome(Welcome {
+                    daemon_id,
+                    session_epoch: SessionEpoch(1),
+                    roles: Roles::OWNER,
+                    snapshot_format: u32::from(ghostty_vt::snapshot_format()),
+                    panes: vec![],
+                    resume_token: ResumeToken(vec![1]),
+                });
+                let _ = control_tx
+                    .write_all(&proto::frame::to_vec(&welcome).unwrap())
+                    .await;
+                connection.closed().await;
+            });
+        }
+    });
+    (endpoint, ticket, links_rx)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn low_data_mode_turned_on_during_a_dial_reaches_the_daemon() {
+    let (endpoint, ticket, mut hello_links) =
+        link_reporting_daemon(Duration::from_millis(500)).await;
+    let (client, _events) = super::connect(&ticket.to_string(), false);
+    let first_link = tokio::time::timeout(Duration::from_secs(10), hello_links.recv())
+        .await
+        .expect("the client dialled")
+        .unwrap();
+    assert_eq!(first_link, proto::LinkClass::Normal);
+    client.set_link(proto::LinkClass::Constrained);
+    let next_link = tokio::time::timeout(Duration::from_secs(10), hello_links.recv())
+        .await
+        .expect("the client redialled with the link it was told")
+        .unwrap();
+    assert_eq!(next_link, proto::LinkClass::Constrained);
+    drop(client);
+    endpoint.close().await;
+}
+
 /// A daemon stand-in that announces `features`, welcomes each client and reports every
 /// control message after the Hello with the number of the connection it came on.
 async fn recording_daemon(

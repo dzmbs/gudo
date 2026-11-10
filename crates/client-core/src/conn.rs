@@ -342,6 +342,12 @@ pub(crate) async fn supervise(inner: Arc<Inner>) {
         };
         consecutive_timeouts = 0;
         match result {
+            // The link changed while dialling, before `set_link` could see a connection to
+            // drop: the daemon must hear the new one in a fresh Hello.
+            Ok(live) if live.link != *lock(&inner.link) => {
+                live.conn.close(0u32.into(), b"link changed");
+                continue;
+            }
             Ok(live) => {
                 let connected_at = tokio::time::Instant::now();
                 let reason = run(&inner, live).await;
@@ -405,6 +411,8 @@ struct Live {
     epoch: u64,
     /// Admitted for an upgrade only (the daemon's snapshot format differs).
     incompatible: bool,
+    /// What the Hello told the daemon about the device's network.
+    link: proto::LinkClass,
 }
 
 async fn connect_once(inner: &Arc<Inner>, endpoint: &Endpoint) -> Result<Live, ConnError> {
@@ -543,6 +551,7 @@ async fn handshake(
         link: *lock(&inner.link),
         resume_token: lock(&inner.resume_token).clone(),
     };
+    let link = hello.link;
     send(&mut ctl_tx, &ClientCtl::Hello(hello)).await?;
     // Sent before the Welcome to save a round trip: every daemon that admits this Hello reads
     // them after it, and a refused connection drops them.
@@ -581,6 +590,7 @@ async fn handshake(
                 ctl_rx,
                 epoch: welcome.session_epoch.0,
                 incompatible,
+                link,
             })
         }
         Some(ServerCtl::Refused { reason }) => Err(ConnError::Refused(reason)),
@@ -675,6 +685,7 @@ async fn run(inner: &Arc<Inner>, live: Live) -> String {
         ctl_rx,
         epoch,
         incompatible: _,
+        link: _,
     } = live;
     let (resumed, same_run) = {
         let mut last_epoch = lock(&inner.epoch);
