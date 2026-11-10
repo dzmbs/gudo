@@ -11,6 +11,8 @@ public final class CodeHighlighter {
     /// Blocks still changing (`caches: false`) keep their last highlights apart from the cache,
     /// so a later pass over the same text reuses them instead of spending its allowance again.
     static let transientEntryLimit = 16
+    /// Passes a block that runs out of parse or query time gets before it stays plain.
+    public static let timeoutAttempts = 3
 
     private struct Key: Hashable {
         let text: String
@@ -34,6 +36,8 @@ public final class CodeHighlighter {
     private var states: [CodeLanguage: State] = [:]
     private var cache: [Key: Entry] = [:]
     private var transient: [Key: Entry] = [:]
+    private var timeouts: [Key: Int] = [:]
+    private let queryTimeLimit: Duration
     private var clock: UInt64 = 0
     private var allowanceDeadline: ContinuousClock.Instant?
     private var hasParsedInAllowance = false
@@ -42,7 +46,9 @@ public final class CodeHighlighter {
     public private(set) var unavailableLanguages: Set<CodeLanguage> = []
     public var cacheEntryCount: Int { cache.count }
 
-    public init() {}
+    public init(queryTimeLimit: Duration = .milliseconds(20)) {
+        self.queryTimeLimit = queryTimeLimit
+    }
 
     /// Bounds the parsing time of the highlights that follow, until `endAllowance()`. The first
     /// uncached block still parses so every allowance makes progress.
@@ -79,7 +85,8 @@ public final class CodeHighlighter {
         }
         if let allowanceDeadline, hasParsedInAllowance, ContinuousClock.now >= allowanceDeadline { return .deferred }
         hasParsedInAllowance = true
-        let tokens = parse(text, language: language)
+        guard let tokens = parse(text, language: language) ?? finalTokens(afterTimeoutOf: key) else { return .deferred }
+        timeouts.removeValue(forKey: key)
         guard caches else {
             if transient.count >= Self.transientEntryLimit,
                let oldest = transient.min(by: { $0.value.access < $1.value.access })?.key {
@@ -99,7 +106,17 @@ public final class CodeHighlighter {
         return .tokens(tokens)
     }
 
-    private func parse(_ text: String, language: CodeLanguage) -> [CodeToken] {
+    /// Plain once a block has timed out on every attempt; until then `nil`, to retry later.
+    private func finalTokens(afterTimeoutOf key: Key) -> [CodeToken]? {
+        let attempts = (timeouts[key] ?? 0) + 1
+        guard attempts < Self.timeoutAttempts else { return [] }
+        if timeouts.count >= Self.cacheEntryLimit { timeouts.removeAll() }
+        timeouts[key] = attempts
+        return nil
+    }
+
+    /// The block's tokens, or `nil` when the parser or the query ran out of time.
+    private func parse(_ text: String, language: CodeLanguage) -> [CodeToken]? {
         guard !unavailableLanguages.contains(language) else { return [] }
         let state: State
         do {
@@ -118,7 +135,7 @@ public final class CodeHighlighter {
         parseCount += 1
         guard let tree = state.parser.parse(text) else {
             state.parser.reset()
-            return []
+            return nil
         }
         defer { state.parser.reset() }
         let cursor = state.query.execute(in: tree)
@@ -126,7 +143,8 @@ public final class CodeHighlighter {
         let started = ContinuousClock.now
         var matches: [QueryMatch] = []
         for match in cursor.resolve(with: .init(string: text)) {
-            guard matches.count < Self.maximumTokens, started.duration(to: .now) < .milliseconds(20) else { return [] }
+            guard started.duration(to: .now) < queryTimeLimit else { return nil }
+            guard matches.count < Self.maximumTokens else { return [] }
             matches.append(match)
         }
         var tokens: [CodeToken] = []

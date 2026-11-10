@@ -14,11 +14,13 @@ under those locks. TypeScript/TSX and C++ compile inherited base queries against
 Limits: 16 KiB / fewer than 2,000 newlines per input, 1,024 matches/tokens, parser 10 ms timeout,
 256 concurrent query matches and a 20 ms query-consumption allowance. Unsupported, unavailable,
 invalid or over-budget highlighting falls back to unmodified plain text. Timed-out parsers are
-reset before reuse. A source-and-language keyed LRU retains at most 128 entries / 512 KiB.
+reset before reuse. A block that runs out of parse or query time is `.deferred`, not cached, and
+retried on later passes; after three timed-out attempts it stays plain. A source-and-language keyed LRU retains at most 128 entries / 512 KiB.
 `beginAllowance(_:)` bounds a whole render pass: once it is spent, uncached blocks return
 `.deferred` (plain, not cached) and highlight on a later pass. The first uncached block of a pass
 always parses, so every pass makes progress. Callers can skip caching for text that is still
-changing, such as a streaming block.
+changing, such as a streaming block; its newest 16 results are kept apart, so a later pass over
+the same text reuses them.
 The app sends only its existing 30-line / 8 KiB preview, not hidden full code. Full copy text is
 unchanged and never contains highlighting metadata.
 

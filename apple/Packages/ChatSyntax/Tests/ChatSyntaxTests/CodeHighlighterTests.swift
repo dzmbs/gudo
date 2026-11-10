@@ -136,4 +136,15 @@ final class CodeHighlighterTests: XCTestCase {
         XCTAssertEqual(highlighter.parseCount, 2)
         XCTAssertEqual(highlighter.cacheEntryCount, 0)
     }
+
+    func testATimedOutBlockIsRetriedAFewTimesThenStaysPlain() {
+        let highlighter = CodeHighlighter(queryTimeLimit: .zero)
+        let source = "fn slow() { let text = \"slow\"; }\n"
+        for _ in 1..<CodeHighlighter.timeoutAttempts {
+            XCTAssertEqual(highlighter.highlighting(source, language: .rust), .deferred)
+        }
+        XCTAssertEqual(highlighter.highlighting(source, language: .rust), .tokens([]))
+        XCTAssertEqual(highlighter.highlighting(source, language: .rust), .tokens([]))
+        XCTAssertEqual(highlighter.parseCount, CodeHighlighter.timeoutAttempts)
+    }
 }
