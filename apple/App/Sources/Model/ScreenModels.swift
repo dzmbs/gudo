@@ -68,6 +68,9 @@ nonisolated struct HostSummary: Identifiable, Hashable, Sendable {
 @MainActor
 protocol HostDirectory: AnyObject, Observable {
     var hosts: [HostSummary] { get }
+    /// How many `hosts` there are, without what each one is doing.
+    var hostCount: Int { get }
+    func isPinned(_ id: HostSummary.ID) -> Bool
     /// The device has no network; hosts resume when it is back.
     var isOffline: Bool { get }
     /// Opens the host in this window.
@@ -89,6 +92,11 @@ protocol HostDirectory: AnyObject, Observable {
     /// A pairing ticket pasted, scanned from the host's QR code or from a deep link; returns the
     /// paired host's id.
     func pair(ticket: String, name: String?) async throws -> HostSummary.ID
+}
+
+extension HostDirectory {
+    var hostCount: Int { hosts.count }
+    func isPinned(_ id: HostSummary.ID) -> Bool { hosts.first { $0.id == id }?.isPinned ?? false }
 }
 
 // MARK: - Agents

@@ -269,6 +269,27 @@ import GudoCore
 
     /// Nothing to attach to (a guest whose session ended): needs the user, with words, never
     /// "Connected" with nothing on screen.
+    @Test func keystrokeRoundTripsChangeTheStatusOnlyWhenTheLinkTurnsSlowOrHealthy() async throws {
+        let (connection, client) = try makeConnection()
+        client().send(.connected(epoch: 1, resumed: false))
+        client().send(.layout(layout: sampleLayout()))
+        try await eventually("live") { connection.status.isLive }
+        let invalidations = Invalidations()
+        invalidations.watch { _ = connection.status }
+
+        for sample in 0..<200 { connection.router.onEchoRoundTrip(.milliseconds(5 + sample % 40)) }
+        try await eventually("the samples") { connection.echoRoundTrip == .milliseconds(42) }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(invalidations.count == 0, "a healthy link never re-renders what reads the status")
+        #expect(!connection.status.isSlow)
+
+        for _ in 0..<5 { connection.router.onEchoRoundTrip(.milliseconds(900)) }
+        try await eventually("slow") { connection.status.isSlow }
+        #expect(connection.status == .connected(rtt: .milliseconds(900)))
+        for _ in 0..<5 { connection.router.onEchoRoundTrip(.milliseconds(20)) }
+        try await eventually("healthy again") { !connection.status.isSlow }
+    }
+
     @Test func attachFailureNeedsTheUser() async throws {
         let (connection, client) = try makeConnection()
         client().send(.connected(epoch: 1, resumed: false))

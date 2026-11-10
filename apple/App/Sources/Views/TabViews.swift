@@ -27,7 +27,7 @@ struct WorkspaceSidebar: View {
                             CountBadge(model.needsYouCount)
                         }
                         destinationRow(.hosts) {
-                            Text("\(model.hosts.hosts.count)").font(DS.Font.meta).foregroundStyle(DS.Palette.textTertiary)
+                            Text("\(model.hosts.hostCount)").font(DS.Font.meta).foregroundStyle(DS.Palette.textTertiary)
                         }
                     }
                     .padding(.top, DS.Space.s)
@@ -444,8 +444,7 @@ private struct HostGroupHeader: View {
     }
 
     private var actions: RowActions {
-        let pinned = model.hosts.hosts.first { $0.id == group.id }?.isPinned ?? false
-        return RowActions(.host(isLocal: group.isLocal, isOpen: true, isPinned: pinned))
+        RowActions(.host(isLocal: group.isLocal, isOpen: true, isPinned: model.hosts.isPinned(group.id)))
     }
 
     private func perform(_ action: RowAction) {

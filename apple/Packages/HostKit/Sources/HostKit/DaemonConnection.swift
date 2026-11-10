@@ -57,8 +57,9 @@ public final class DaemonConnection: HostConnection {
             return agent
         }
     }
-    /// Keystroke-to-echo round trip: the median of the last five.
-    public private(set) var echoRoundTrip: Duration?
+    /// Keystroke-to-echo round trip: the median of the last five. Changes with every
+    /// keystroke; `status` changes only when the link turns slow or healthy.
+    @ObservationIgnored public private(set) var echoRoundTrip: Duration?
     /// Timings of the current connection, for diagnostics and the report.
     public private(set) var timings = Timings()
     /// How many times this connection dialled or redialled (connect, retry, foreground and
@@ -172,8 +173,10 @@ public final class DaemonConnection: HostConnection {
                 guard let self else { return }
                 // The median of the last five, so one slow keystroke does not flag the link.
                 recent = Array((recent + [rtt]).suffix(5))
-                echoRoundTrip = recent.sorted()[recent.count / 2]
-                if case .connected = status { status = .connected(rtt: echoRoundTrip) }
+                let median = recent.sorted()[recent.count / 2]
+                echoRoundTrip = median
+                let measured = status.measuring(roundTrip: median)
+                if measured != status { status = measured }
                 Self.log.debug("echo rtt \(rtt / .milliseconds(1), format: .fixed(precision: 1)) ms host=\(self.hostId, privacy: .public)")
             }
         }

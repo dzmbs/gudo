@@ -106,30 +106,32 @@ public final class HostGroups {
     /// This device (when it has a shell), then the open hosts, then any other host connected in
     /// this app (opened from another window, a deep link), each in a stable order.
     public var groups: [HostGroup] {
-        var result: [HostGroup] = []
         let carriers = composites.carriers
-        if let local, !(local.layout.session.tabs.isEmpty && helperServesLocal()) {
-            let session = local.layout.session
-            result.append(HostGroup(
-                id: Self.localId, name: local.name, kind: .local, status: .connected(rtt: nil),
-                tabs: session.tabs.filter { !(carriers[Self.localId]?.contains($0.id) ?? false) && !hiddenTabs.contains(TabRef(hostId: Self.localId, tab: $0.id)) },
-                activeTabId: session.activeTabId, isReady: true))
-        }
-        for id in hostOrder {
-            guard let record = hosts.record(id) else { continue }
-            let connection = hosts.connection(id)
-            let ready = connection?.isReady ?? false
-            let cached = !ready && connection?.showsCachedLayout == true
-            let session = ready || cached ? connection?.layoutStore.session : nil
-            var status = connection?.status ?? .idle
-            if connection == nil, let failure = failures[id] { status = .needsAttention(reason: failure) }
-            result.append(HostGroup(
-                id: id, name: record.name, kind: record.kind == .daemon ? .daemon : .ssh, status: status,
-                tabs: (session?.tabs ?? []).filter { !(carriers[id]?.contains($0.id) ?? false) && !hiddenTabs.contains(TabRef(hostId: id, tab: $0.id)) },
-                activeTabId: session?.activeTabId, isReady: ready,
-                failure: connection == nil ? failures[id] : nil, isCached: cached))
-        }
-        return result
+        return [localGroup(carriers: carriers)].compactMap(\.self) + hostOrder.compactMap { hostGroup($0, carriers: carriers) }
+    }
+
+    private func localGroup(carriers: [String: Set<TabId>]) -> HostGroup? {
+        guard let local, !(local.layout.session.tabs.isEmpty && helperServesLocal()) else { return nil }
+        let session = local.layout.session
+        return HostGroup(
+            id: Self.localId, name: local.name, kind: .local, status: .connected(rtt: nil),
+            tabs: session.tabs.filter { !(carriers[Self.localId]?.contains($0.id) ?? false) && !hiddenTabs.contains(TabRef(hostId: Self.localId, tab: $0.id)) },
+            activeTabId: session.activeTabId, isReady: true)
+    }
+
+    private func hostGroup(_ id: String, carriers: [String: Set<TabId>]) -> HostGroup? {
+        guard let record = hosts.record(id) else { return nil }
+        let connection = hosts.connection(id)
+        let ready = connection?.isReady ?? false
+        let cached = !ready && connection?.showsCachedLayout == true
+        let session = ready || cached ? connection?.layoutStore.session : nil
+        var status = connection?.status ?? .idle
+        if connection == nil, let failure = failures[id] { status = .needsAttention(reason: failure) }
+        return HostGroup(
+            id: id, name: record.name, kind: record.kind == .daemon ? .daemon : .ssh, status: status,
+            tabs: (session?.tabs ?? []).filter { !(carriers[id]?.contains($0.id) ?? false) && !hiddenTabs.contains(TabRef(hostId: id, tab: $0.id)) },
+            activeTabId: session?.activeTabId, isReady: ready,
+            failure: connection == nil ? failures[id] : nil, isCached: cached)
     }
 
     /// This device's helper first, then the open hosts, then hosts connected elsewhere in the
@@ -141,8 +143,12 @@ public final class HostGroups {
         return thisDevice + order.filter { !thisDevice.contains($0) }
     }
 
+    /// One group, built alone: what depends on it does not depend on every other host.
     public func group(_ id: String) -> HostGroup? {
-        groups.first { $0.id == id }
+        let carriers = composites.carriers
+        if id == Self.localId { return localGroup(carriers: carriers) }
+        guard openHosts.contains(id) || hosts.connections[id] != nil else { return nil }
+        return hostGroup(id, carriers: carriers)
     }
 
     /// Every tab in sidebar order: the unified list ⌘1…⌘9 and ⇧⌘[ ] walk. Projects first (in

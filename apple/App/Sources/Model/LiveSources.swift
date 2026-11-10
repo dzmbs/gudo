@@ -24,11 +24,23 @@ final class LiveHostDirectory: HostDirectory {
     }
 
     var hosts: [HostSummary] {
-        // This Mac's helper stands in for the plain login shell while no such shell is open.
-        let helperServes = app.thisDeviceHostId != nil && app.localLayout.session.tabs.isEmpty
         let entries = app.hosts.entries
-        return (LaunchOptions.hasLocalShell && !helperServes ? [local] : [])
+        return (listsLocal ? [local] : [])
             + entries.filter(\.isThisDevice).map(summary) + entries.filter { !$0.isThisDevice }.map(summary)
+    }
+
+    var hostCount: Int {
+        (listsLocal ? 1 : 0) + app.hosts.records.count
+    }
+
+    func isPinned(_ id: HostSummary.ID) -> Bool {
+        app.hosts.record(id)?.pinned ?? false
+    }
+
+    /// This Mac's helper stands in for the plain login shell while no such shell is open.
+    private var listsLocal: Bool {
+        let helperServes = app.thisDeviceHostId != nil && app.localLayout.session.tabs.isEmpty
+        return LaunchOptions.hasLocalShell && !helperServes
     }
 
     var isOffline: Bool { app.hosts.network.isOffline }

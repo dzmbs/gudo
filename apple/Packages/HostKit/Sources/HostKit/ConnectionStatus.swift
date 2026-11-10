@@ -39,6 +39,21 @@ nonisolated public enum ConnectionStatus: Sendable, Equatable {
     /// Round trips above this read as a slow link.
     public static let slowRoundTrip = Duration.milliseconds(400)
 
+    /// While slow, the shown round trip follows the link in steps of this.
+    static let slowRoundTripStep = Duration.milliseconds(100)
+
+    /// The status after a new keystroke round trip: unchanged while the link stays healthy, so
+    /// typing never invalidates what shows hosts; while slow it follows the link in steps.
+    public func measuring(roundTrip: Duration) -> ConnectionStatus {
+        guard case .connected(let shown) = self else { return self }
+        let isSlowNow = roundTrip > Self.slowRoundTrip
+        guard isSlowNow || isSlow else { return self }
+        if isSlowNow, isSlow, let shown, max(shown, roundTrip) - min(shown, roundTrip) < Self.slowRoundTripStep {
+            return self
+        }
+        return .connected(rtt: roundTrip)
+    }
+
     /// Whether the host belongs in "Needs you" for connection reasons.
     public var needsUser: Bool {
         switch self {
