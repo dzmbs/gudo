@@ -33,6 +33,33 @@ final class NativeListLayoutTests: XCTestCase {
         XCTAssertEqual(layout.positions, [0, 36, 88, 118])
     }
 
+    func testReplacingTheTailMatchesBuildingTheWholeList() {
+        let header = NativeListRow(id: "header", height: 36, isHeader: true)
+        let first = NativeListRow(id: "first", height: 18, sectionID: "header")
+        let streaming = NativeListRow(id: "streaming", height: 40, sectionID: "header")
+        var layout = NativeListLayout(rows: [header, first, streaming], contentWidth: 400)
+        let tail = [NativeListRow(id: "streaming", height: 64, sectionID: "header"),
+                    NativeListRow(id: "next", height: 24, isHeader: true),
+                    NativeListRow(id: "last", height: 18, sectionID: "next")]
+        let revision = layout.revision
+        layout.replaceRows(from: 2, with: tail)
+        let whole = NativeListLayout(rows: [header, first] + tail, contentWidth: 400)
+        XCTAssertEqual(layout.rows, whole.rows)
+        XCTAssertEqual(layout.positions, whole.positions)
+        XCTAssertEqual(layout.indices, whole.indices)
+        XCTAssertEqual(layout.headers, whole.headers)
+        XCTAssertNotEqual(layout.revision, revision)
+
+        let unchanged = layout.revision
+        layout.replaceRows(from: 3, with: Array(tail.dropFirst()))
+        XCTAssertEqual(layout.revision, unchanged)
+
+        layout.replaceRows(from: 1, with: [])
+        XCTAssertEqual(layout.indices, ["header": 0])
+        XCTAssertEqual(layout.headers, [0])
+        XCTAssertEqual(layout.positions, [0, 36])
+    }
+
     func testAnchorsKeepValidSubpointPositionsAtTheEndOfARow() throws {
         let rows = [NativeListRow(id: "first", height: 18), NativeListRow(id: "reading", height: 36),
                     NativeListRow(id: "next", height: 18)]

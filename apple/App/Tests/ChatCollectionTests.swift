@@ -391,6 +391,46 @@ final class ChatCollectionTests: XCTestCase {
         XCTAssertLessThan(percentile, 4)
     }
 
+    func testAppendingBlocksCostsTheSameInALargeWindowAsInASmallOne() async throws {
+        let small = try await medianAppendDuration(window: 100)
+        let large = try await medianAppendDuration(window: 2_000)
+        print("Chat appending apply median: \(small) ms with 100 rows, \(large) ms with 2000")
+        // UIKit's diffable apply still walks every identifier; the rest must not grow with the window.
+        XCTAssertLessThan(large, small + 2.5)
+    }
+
+    private func medianAppendDuration(window: Int) async throws -> Double {
+        var frame = preparedFrame(window)
+        frame.orderRevision = 1
+        let (window, controller) = try open(frame)
+        defer { close(window) }
+        try await settle()
+        let baseline = controller.applyDurations.count
+        let existing = frame.rows.count
+        for index in 0..<60 {
+            let text = "Block \(index) of a streamed answer arrives as its own paragraph."
+            let row = ChatRow(id: ChatRowID(item: "streamed", part: index), revision: 1, turn: "turn",
+                              content: .markdown(ChatMarkdownBlock(kind: .paragraph, source: text, text: AttributedString(text))))
+            frame.keptOrder = frame.rows.count
+            frame.rows.append(row)
+            frame.rowIDs.insert(row.id)
+            frame.parentRevision = frame.revision
+            frame.changedRows = [row]
+            frame.revision += 1
+            frame.orderRevision = (frame.orderRevision ?? 0) + 1
+            update(controller, frame)
+            try await Task.sleep(for: .milliseconds(35))
+        }
+        try await settle()
+        XCTAssertEqual(controller.collection.numberOfItems(inSection: 0), existing + 60)
+        let previous = try XCTUnwrap(controller.collection.layoutAttributesForItem(at: IndexPath(item: existing - 1, section: 0))).frame
+        let last = try XCTUnwrap(controller.collection.layoutAttributesForItem(at: IndexPath(item: existing + 59, section: 0))).frame
+        XCTAssertGreaterThan(last.minY, previous.maxY)
+        let samples = controller.applyDurations.dropFirst(baseline).sorted()
+        XCTAssertGreaterThan(samples.count, 50)
+        return samples.isEmpty ? .infinity : samples[samples.count / 2]
+    }
+
     func testDynamicTypeOverridesInvalidateVisibleGeometry() async throws {
         let frame = preparedFrame(20)
         let (window, controller) = try open(frame, following: false)

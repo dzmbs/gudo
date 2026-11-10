@@ -51,6 +51,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
     private var source: UICollectionViewDiffableDataSource<Int, ChatRowID>?
     private let layout: NativeCollectionLayout
     private var document = NativeListLayout()
+    private var documentRowIDs: [ChatRowID] = []
     private var current = TimelineFrame()
     private var pending: TimelineFrame?
     private var rows: [ChatRowID: ChatRow] = [:]
@@ -348,19 +349,24 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
             document = NativeListLayout()
         }
         let changed = updateRows(in: frame, resetting: resets)
+        let keptOrder = changesOrder && !resets ? keptOrder(of: frame) : nil
+        let appended = keptOrder == documentRowIDs.count ? frame.rows[documentRowIDs.count...].map(\.id) : nil
         current = frame
-        if changesOrder || needsRestyle { rebuildDocument() }
+        if changesOrder || needsRestyle { rebuildDocument(keeping: needsRestyle ? nil : keptOrder, changed: changed) }
         needsRestyle = false
         previousExpanded = expanded
         guard changesOrder || !changed.isEmpty else { isApplying = false; return }
         let initial = source.snapshot().numberOfItems == 0
         measureBeforeSnapshot(anchor: anchor, following: wasFollowing, includingCurrent: !initial)
         var snapshot: NSDiffableDataSourceSnapshot<Int, ChatRowID>
-        if changesOrder {
+        if changesOrder, initial || appended == nil {
             snapshot = NSDiffableDataSourceSnapshot<Int, ChatRowID>()
             snapshot.appendSections([0])
             snapshot.appendItems(frame.rows.map(\.id))
-        } else { snapshot = source.snapshot() }
+        } else {
+            snapshot = source.snapshot()
+            if changesOrder, let appended { snapshot.appendItems(appended, toSection: 0) }
+        }
         snapshot.reconfigureItems(changed)
         onSnapshot?(snapshot)
         let completion: () -> Void = { [weak self] in
@@ -383,7 +389,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
             if following, model.followsBottom, !holdsPosition { scrollToBottom() }
             else if let anchor, let y = document.position(of: anchor) { restore(y - collection.adjustedContentInset.top) }
         }
-        if changesOrder {
+        if changesOrder, rows.count > current.rowIDs.count {
             let identifiers = current.rowIDs
             rows = rows.filter { identifiers.contains($0.key) }
             measured.formIntersection(identifiers)
@@ -409,19 +415,39 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         return Array(changed.intersection(frame.rowIDs))
     }
 
-    private func rebuildDocument() {
+    /// Rows before `keptOrder` that did not change keep their geometry and only the rest is
+    /// rebuilt; streaming appends at the end.
+    private func rebuildDocument(keeping keptOrder: Int?, changed: [ChatRowID]) {
         let old = document
         let width = collection.bounds.width
-        let geometry = current.rows.map { row -> NativeListRow in
+        let kept = keptOrder.map { keptRowCount(keptOrder: $0, width: width, changed: changed) } ?? 0
+        let scale = UIFont.preferredFont(forTextStyle: .body).lineHeight / 20
+        let tail = current.rows[kept...].map { row -> NativeListRow in
             let height: CGFloat
             if let cached = heights.peek(key(row)) { height = cached }
             else if old.contentWidth == width, let index = old.indices[row.id.storageKey] { height = old.rows[index].height }
-            else { height = estimate(row) }
+            else { height = estimate(row, scale: scale) }
             return NativeListRow(id: row.id.storageKey, height: max(1, height))
         }
-        document = NativeListLayout(rows: geometry, contentWidth: width)
+        if kept > 0 { document.replaceRows(from: kept, with: tail) }
+        else { document = NativeListLayout(rows: tail, contentWidth: width) }
+        documentRowIDs.removeSubrange(min(kept, documentRowIDs.count)...)
+        documentRowIDs.append(contentsOf: current.rows[kept...].lazy.map(\.id))
         layout.document = document
         layout.invalidateLayout()
+    }
+
+    /// The worker counts the rows that kept their place since the frame it built before; a
+    /// frame that skipped some is compared here.
+    private func keptOrder(of frame: TimelineFrame) -> Int {
+        if frame.parentRevision == current.revision, let kept = frame.keptOrder { return kept }
+        return zip(frame.rows, documentRowIDs).prefix { $0.id == $1 }.count
+    }
+
+    private func keptRowCount(keptOrder: Int, width: CGFloat, changed: [ChatRowID]) -> Int {
+        guard document.contentWidth == width, documentRowIDs.count == document.rows.count else { return 0 }
+        let firstChanged = changed.lazy.compactMap { self.document.indices[$0.storageKey] }.min()
+        return min(keptOrder, firstChanged ?? keptOrder, document.rows.count)
     }
 
     private func fittedHeight(_ row: ChatRow) -> CGFloat? {
@@ -526,8 +552,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
                   expanded: expanded.contains(row.id), fontSize: codeFontSize)
     }
 
-    private func estimate(_ row: ChatRow) -> CGFloat {
-        let scale = UIFont.preferredFont(forTextStyle: .body).lineHeight / 20
+    private func estimate(_ row: ChatRow, scale: CGFloat) -> CGFloat {
         switch row.content {
         case .markdown(let block):
             switch block.kind {

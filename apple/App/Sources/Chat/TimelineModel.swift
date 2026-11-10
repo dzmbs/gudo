@@ -16,6 +16,8 @@ nonisolated struct TimelineFrame: Sendable {
     var generation = UUID()
     var parentRevision: Int?
     var orderRevision: Int?
+    /// How many leading rows are where they were in the parent frame.
+    var keptOrder: Int?
     var changedRows: [ChatRow]?
 }
 
@@ -121,13 +123,17 @@ actor TimelineRenderWorker {
         revision += 1
         let rows = window.order.flatMap { rowsByItem[$0]?.rows ?? [] }
         let identifiers = rows.map(\.id)
-        if self.identifiers != identifiers { orderRevision += 1; self.identifiers = identifiers }
+        let keptOrder = zip(self.identifiers, identifiers).prefix { $0 == $1 }.count
+        if keptOrder != identifiers.count || keptOrder != self.identifiers.count {
+            orderRevision += 1
+            self.identifiers = identifiers
+        }
         let frame = TimelineFrame(
             capabilities: capabilities, capabilityGeneration: capabilityGeneration,
             rows: rows, rowIDs: Set(identifiers), session: window.session,
             cursor: window.cursor, before: window.before, hasNewerGap: window.hasNewerGap,
             note: window.note, revision: revision, generation: generation,
-            parentRevision: parentRevision, orderRevision: orderRevision, changedRows: changedRows)
+            parentRevision: parentRevision, orderRevision: orderRevision, keptOrder: keptOrder, changedRows: changedRows)
         return TimelineRenderResult(frame: frame, needsHistoryCursor: window.needsHistoryCursor, consumedSnapshot: consumedSnapshot,
                                     consumedHistory: consumedHistory, hasLiveChanges: hasLiveChanges,
                                     awaitsHighlights: !builder.itemsAwaitingHighlights.isEmpty)

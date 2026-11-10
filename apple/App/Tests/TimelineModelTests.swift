@@ -193,6 +193,7 @@ final class TimelineModelTests: XCTestCase {
         XCTAssertNil(model.error)
         XCTAssertEqual(model.frame.parentRevision, first.revision)
         XCTAssertEqual(model.frame.orderRevision, first.orderRevision)
+        XCTAssertEqual(model.frame.keptOrder, 60)
         XCTAssertEqual(model.frame.changedRows?.map(\.id), [original].compactMap { $0 })
         XCTAssertEqual(model.frame.generation, first.generation)
         let second = model.frame
@@ -201,6 +202,7 @@ final class TimelineModelTests: XCTestCase {
         XCTAssertEqual(model.frame.parentRevision, second.revision)
         XCTAssertGreaterThan(model.frame.orderRevision ?? 0, second.orderRevision ?? 0)
         XCTAssertEqual(model.frame.rows.count, 61)
+        XCTAssertEqual(model.frame.keptOrder, 60)
         XCTAssertEqual(model.frame.rows[59], second.rows[59])
         model.stop()
     }

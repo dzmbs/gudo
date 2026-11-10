@@ -53,6 +53,27 @@ nonisolated struct NativeListLayout: Sendable {
         revision = hasher.finalize()
     }
 
+    /// Keeps the first `start` rows and their geometry, and puts `tail` after them.
+    mutating func replaceRows(from start: Int, with tail: [NativeListRow]) {
+        let start = min(max(0, start), rows.count)
+        guard !rows[start...].elementsEqual(tail) else { return }
+        for row in rows[start...] { indices[row.id] = nil }
+        rows.removeSubrange(start...)
+        positions.removeSubrange((start + 1)...)
+        headers.removeAll { $0 >= start }
+        var hasher = Hasher()
+        hasher.combine(revision)
+        hasher.combine(start)
+        for row in tail {
+            hasher.combine(row)
+            indices[row.id] = rows.count
+            if row.isHeader { headers.append(rows.count) }
+            positions.append((positions.last ?? 0) + row.height)
+            rows.append(row)
+        }
+        revision = hasher.finalize()
+    }
+
     func row(at position: CGFloat) -> Int? {
         guard !rows.isEmpty else { return nil }
         var lower = 0
