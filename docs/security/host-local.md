@@ -111,6 +111,8 @@ explicit `--install-agent-integration` opt-in before changing shared agent confi
 Otherwise startup does not create, edit or clean agent configuration files, even if `HOME`
 still names the user's actual home. Dedicated launches retain their per-launch integration.
 Tests and capture tools must also supply private home and agent configuration directories.
+A start writes these files only when its own entries need to change: the agents rewrite them
+while they run, and a needless rewrite would race them and reformat a hand-edited file.
 
 **Agent timelines.** Watching a timeline requires View on its pane. A tool's full output and
 recorded changes need Prompt there, like a turn's diff: they hold what the agent read (the whole

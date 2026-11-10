@@ -80,7 +80,7 @@ fn write_config(path: &Path, original: &str, contents: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn read_json_config(path: &Path) -> io::Result<(String, Value)> {
+fn read_json_config(path: &Path) -> io::Result<Value> {
     let original = read_config(path)?.unwrap_or_else(|| "{}".into());
     let settings: Value = serde_json::from_str(&original).map_err(io::Error::other)?;
     if !settings.is_object() {
@@ -89,7 +89,17 @@ fn read_json_config(path: &Path) -> io::Result<(String, Value)> {
             "agent config must be an object",
         ));
     }
-    Ok((original, settings))
+    Ok(settings)
+}
+
+/// Writes `settings` only when they differ from what was read: the agents rewrite these files
+/// in their own layout while they run, and a rewrite of ours would race theirs for nothing.
+fn write_json_config(path: &Path, original: &Value, settings: &Value) -> io::Result<()> {
+    if original == settings {
+        return Ok(());
+    }
+    let contents = serde_json::to_string_pretty(settings).map_err(io::Error::other)?;
+    fsutil::write_atomic(path, contents.as_bytes())
 }
 
 fn is_hook_program(program: &str) -> bool {
@@ -143,7 +153,8 @@ fn remove_hook_handlers(groups: &mut Vec<Value>, removes: fn(&str) -> bool) {
 }
 
 fn install_claude_settings(path: &Path, context: &agents::LaunchContext) -> io::Result<()> {
-    let (original, mut settings) = read_json_config(path)?;
+    let original = read_json_config(path)?;
+    let mut settings = original.clone();
     let generated = agents::ClaudeCode::hook_settings(context);
     if settings.get("hooks").is_none() {
         settings["hooks"] = json!({});
@@ -162,12 +173,12 @@ fn install_claude_settings(path: &Path, context: &agents::LaunchContext) -> io::
         remove_hook_handlers(groups, is_owned_hook);
         groups.extend(generated_groups.as_array().into_iter().flatten().cloned());
     }
-    let contents = serde_json::to_string_pretty(&settings).map_err(io::Error::other)?;
-    write_config(path, &original, &contents)
+    write_json_config(path, &original, &settings)
 }
 
 fn install_claude_server(path: &Path, launcher_path: &Path) -> io::Result<()> {
-    let (original, mut settings) = read_json_config(path)?;
+    let original = read_json_config(path)?;
+    let mut settings = original.clone();
     let name = agents::mcp_server_name();
     let mut removed_stale_server = false;
     if let Some(servers) = settings
@@ -190,8 +201,7 @@ fn install_claude_server(path: &Path, launcher_path: &Path) -> io::Result<()> {
         && !server["command"].as_str().is_some_and(is_hook_program)
     {
         return if removed_stale_server {
-            let contents = serde_json::to_string_pretty(&settings).map_err(io::Error::other)?;
-            write_config(path, &original, &contents)
+            write_json_config(path, &original, &settings)
         } else {
             Ok(())
         };
@@ -206,8 +216,7 @@ fn install_claude_server(path: &Path, launcher_path: &Path) -> io::Result<()> {
         name,
         json!({"type":"stdio", "command":launcher_path, "args":["mcp"]}),
     );
-    let contents = serde_json::to_string_pretty(&settings).map_err(io::Error::other)?;
-    write_config(path, &original, &contents)
+    write_json_config(path, &original, &settings)
 }
 
 fn install_codex_config(path: &Path, launcher_path: &Path) -> io::Result<()> {
@@ -693,5 +702,49 @@ mod tests {
             std::fs::read_to_string(codex_config).unwrap(),
             "notify = false\n"
         );
+    }
+
+    /// Claude Code rewrites its own files in its own layout and key order while it runs: a start
+    /// that finds our entries in place writes nothing.
+    #[test]
+    fn a_start_with_nothing_to_change_leaves_the_files_as_they_are() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = private_config(directory.path());
+        let settings_path = config.home().join(".claude/settings.json");
+        let server_path = config.home().join(".claude/.claude.json");
+        let codex_path = config.home().join(".codex/config.toml");
+        std::fs::write(
+            &settings_path,
+            "{\"theme\": \"dark\", \"alwaysThinking\": true}",
+        )
+        .unwrap();
+        std::fs::write(&server_path, "{\"numStartups\": 3, \"autoUpdates\": false}").unwrap();
+        install_agent_integration(&config).unwrap();
+        let settings = std::fs::read_to_string(&settings_path).unwrap();
+        let servers = std::fs::read_to_string(&server_path).unwrap();
+
+        let installed: Value = serde_json::from_str(&settings).unwrap();
+        let rewritten_settings = format!(
+            "{{\"zz\":1,\"hooks\":{},\"theme\":\"dark\",\"alwaysThinking\":true}}",
+            installed["hooks"]
+        );
+        let installed: Value = serde_json::from_str(&servers).unwrap();
+        let rewritten_servers = format!(
+            "{{\n\t\"userID\": \"x\",\n\t\"mcpServers\": {},\n\t\"numStartups\": 4\n}}",
+            installed["mcpServers"]
+        );
+        std::fs::write(&settings_path, &rewritten_settings).unwrap();
+        std::fs::write(&server_path, &rewritten_servers).unwrap();
+        let codex = std::fs::read_to_string(&codex_path).unwrap();
+        install_agent_integration(&config).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&settings_path).unwrap(),
+            rewritten_settings
+        );
+        assert_eq!(
+            std::fs::read_to_string(&server_path).unwrap(),
+            rewritten_servers
+        );
+        assert_eq!(std::fs::read_to_string(&codex_path).unwrap(), codex);
     }
 }
