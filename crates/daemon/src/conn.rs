@@ -1770,6 +1770,18 @@ impl Client {
     }
 
     /// Gated by the policy table and the artifact's visibility.
+    /// [`crate::art::Art::apply`] on the blocking pool: it waits for the disk.
+    async fn apply_off_workers(
+        &self,
+        artifact_id: proto::ArtifactId,
+        ops: Vec<proto::DrawOp>,
+    ) -> Result<(ArtifactInfo, proto::OpBatch), ArtifactError> {
+        let (core, actor) = (Arc::clone(&self.core), self.actor);
+        tokio::task::spawn_blocking(move || core.art.apply(artifact_id, actor, ops))
+            .await
+            .map_err(|error| ArtifactError::Failed(error.to_string()))?
+    }
+
     async fn artifact(&self, request: ArtifactRequest) -> Result<ArtifactResponse, ArtifactError> {
         let (need, target) = policy::artifact(&request);
         self.allow(need, target)
@@ -1831,7 +1843,7 @@ impl Client {
                 artifact_id, ops, ..
             } => {
                 self.visible_artifact(artifact_id)?;
-                let (info, batch) = art.apply(artifact_id, self.actor, ops)?;
+                let (info, batch) = self.apply_off_workers(artifact_id, ops).await?;
                 let version = info.version;
                 core.emit_artifact(
                     info.session_id,
@@ -2116,7 +2128,7 @@ impl Client {
                 applied.info
             }
             crate::art::history::RestorePlan::Ops(ops) => {
-                let (info, batch) = art.apply(artifact_id, self.actor, ops)?;
+                let (info, batch) = self.apply_off_workers(artifact_id, ops).await?;
                 core.emit_artifact(
                     info.session_id,
                     ArtifactEvent::Changed {

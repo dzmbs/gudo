@@ -60,6 +60,14 @@ fn not_found(id: ArtifactId) -> ArtifactError {
     ArtifactError::NotFound(format!("artifact {id}"))
 }
 
+/// A drawing's next batch, ready to be written to its log.
+struct Prepared {
+    batch: OpBatch,
+    encoded: Vec<u8>,
+    scene: Scene,
+    dir: PathBuf,
+}
+
 /// A blob arriving in pieces ([`Art::begin_blob`]); dropped unfinished, it leaves nothing.
 pub(crate) struct BlobUpload {
     temp: TempFile,
@@ -123,6 +131,8 @@ pub(crate) struct Art {
     dir: PathBuf,
     pub limits: ArtifactLimits,
     state: Mutex<State>,
+    /// Held by the one batch being written to a drawing's log ([`Art::apply`]).
+    log_writer: Mutex<()>,
 }
 
 impl Art {
@@ -136,6 +146,7 @@ impl Art {
                 next_id: 1,
                 ..State::default()
             }),
+            log_writer: Mutex::new(()),
         };
         if let Err(error) = art.load() {
             tracing::warn!("loading artifacts: {error}");
@@ -628,7 +639,9 @@ impl Art {
         }
     }
 
-    /// Commits `ops` as the next batch.
+    /// Commits `ops` as the next batch. Blocks while another batch is written (call it off the
+    /// async workers); the state lock is not held while the log is written and synced, so
+    /// readers of the store never wait for the disk.
     pub fn apply(
         &self,
         id: ArtifactId,
@@ -636,6 +649,51 @@ impl Art {
         ops: Vec<DrawOp>,
     ) -> Result<(ArtifactInfo, OpBatch)> {
         validate(&ops)?;
+        // The single writer: nothing else changes a drawing between its batch being prepared
+        // and committed.
+        let _writer = lock(&self.log_writer);
+        let prepared = self.prepare_batch(id, actor, ops)?;
+        let mut frame = (prepared.encoded.len() as u32).to_le_bytes().to_vec();
+        frame.extend_from_slice(&prepared.encoded);
+        let appended = fs::create_dir_all(&prepared.dir).and_then(|()| {
+            let mut log_file = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(prepared.dir.join("ops.log"))?;
+            log_file.write_all(&frame)?;
+            log_file.sync_data()
+        });
+        let added = frame.len() as u64;
+        let mut state = lock(&self.state);
+        let committed = appended
+            .map_err(|error| failed(format!("writing the drawing's log: {error}")))
+            .and_then(|()| state.items.get_mut(&id).ok_or_else(|| not_found(id)));
+        let item = match committed {
+            Ok(item) => item,
+            Err(error) => {
+                state.total -= added;
+                return Err(error);
+            }
+        };
+        let batch = prepared.batch;
+        item.scene = prepared.scene;
+        item.log.push(batch.clone());
+        item.log_bytes += added;
+        item.info.version = batch.version;
+        item.info.updated_at = batch.at;
+        item.info.elements = item.scene.elements().len() as u32;
+        if let Some(title) = &item.scene.title {
+            item.info.title.clone_from(title);
+        }
+        let info = item.info.clone();
+        drop(state);
+        self.save_info(&info);
+        Ok((info, batch))
+    }
+
+    /// The next batch of drawing `id` with its new scene, checked against the caps, its bytes
+    /// reserved in the store.
+    fn prepare_batch(&self, id: ArtifactId, actor: Actor, ops: Vec<DrawOp>) -> Result<Prepared> {
         let mut state = lock(&self.state);
         let item = state.items.get_mut(&id).ok_or_else(|| not_found(id))?;
         if item.info.kind != ArtifactKind::Drawing {
@@ -672,6 +730,7 @@ impl Art {
                 "a drawing holds at most {ELEMENTS_MAX} elements"
             )));
         }
+        let dir = self.item_dir(&item.info);
         let added = encoded.len() as u64 + 4;
         if state.total + added > self.limits.total_max {
             return Err(ArtifactError::TooLarge(
@@ -679,36 +738,12 @@ impl Art {
             ));
         }
         state.total += added;
-        let item = state.items.get_mut(&id).ok_or_else(|| not_found(id))?;
-        let dir = self.item_dir(&item.info);
-        let mut frame = (encoded.len() as u32).to_le_bytes().to_vec();
-        frame.extend_from_slice(&encoded);
-        let appended = fs::create_dir_all(&dir).and_then(|()| {
-            let mut log_file = fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(dir.join("ops.log"))?;
-            log_file.write_all(&frame)?;
-            log_file.sync_data()
-        });
-        if let Err(error) = appended {
-            state.total -= added;
-            return Err(failed(format!("writing the drawing's log: {error}")));
-        }
-        let item = state.items.get_mut(&id).ok_or_else(|| not_found(id))?;
-        item.scene = scene;
-        item.log.push(batch.clone());
-        item.log_bytes += added;
-        item.info.version = batch.version;
-        item.info.updated_at = batch.at;
-        item.info.elements = item.scene.elements().len() as u32;
-        if let Some(title) = &item.scene.title {
-            item.info.title.clone_from(title);
-        }
-        let info = item.info.clone();
-        drop(state);
-        self.save_info(&info);
-        Ok((info, batch))
+        Ok(Prepared {
+            batch,
+            encoded,
+            scene,
+            dir,
+        })
     }
 
     /// Changes an artifact's info with `change` and saves it.
@@ -1131,4 +1166,51 @@ pub(crate) fn render_png(scene: &Scene, space: CoordSpace) -> Vec<u8> {
         },
     );
     drawing::encode_png(&raster)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Batches applied from many threads at once get consecutive versions, and the log on
+    /// disk replays to the same drawing.
+    #[test]
+    fn parallel_batches_are_written_in_order() {
+        let directory = tempfile::tempdir().unwrap();
+        let art = Art::open(directory.path(), ArtifactLimits::default());
+        let actor = Actor {
+            principal: proto::PrincipalId([1; 16]),
+            device: proto::DeviceId([2; 32]),
+        };
+        let create = ArtifactCreate {
+            session_id: SessionId(1),
+            kind: ArtifactKind::Drawing,
+            title: String::new(),
+            space: CoordSpace::Canvas,
+            anchor: None,
+            image: None,
+            ops: Vec::new(),
+        };
+        let (info, _) = art.create(actor, &create, None).unwrap();
+        let id = info.artifact_id;
+        std::thread::scope(|scope| {
+            for thread in 0..8 {
+                let art = &art;
+                scope.spawn(move || {
+                    for batch in 0..20 {
+                        let title = DrawOp::SetTitle(format!("{thread}-{batch}"));
+                        art.apply(id, actor, vec![title]).unwrap();
+                    }
+                });
+            }
+        });
+        let applied = art.info(id).unwrap();
+        assert_eq!(applied.version, 160);
+        let reopened = Art::open(directory.path(), ArtifactLimits::default());
+        let loaded = reopened.info(id).unwrap();
+        assert_eq!(
+            (loaded.version, loaded.title),
+            (applied.version, applied.title)
+        );
+    }
 }
