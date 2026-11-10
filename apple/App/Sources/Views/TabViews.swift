@@ -1211,6 +1211,12 @@ struct CompactTerminalView: View {
             } else if let tab = workspace.session.activeTab, tab.root.panes.count > 1 {
                 paneSwitcher(tab)
             }
+            #if os(iOS)
+            if model.destination == .terminal, model.activeMixed == nil, let id = workspace.focusedPane,
+               let pane = workspace.panes[id], let chat = pane.chat, chat.agent != nil, chat.offersChat {
+                PaneChatButton(pane: pane, state: chat)
+            }
+            #endif
             Button("Command Palette", systemImage: "command") { model.isPaletteShown = true }
                 .labelStyle(.iconOnly)
                 .help("Command Palette (⌘K)")

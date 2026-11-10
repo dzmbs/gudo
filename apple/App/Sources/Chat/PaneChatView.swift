@@ -429,4 +429,24 @@ struct PaneChatToggle: View {
         .accessibilityIdentifier("pane-presentation")
     }
 }
+
+/// The iPhone bar's Chat switch: filled while Chat shows, as the pane header lights its toggles.
+struct PaneChatButton: View {
+    let pane: Pane
+    @Bindable var state: PaneChatState
+
+    var body: some View {
+        let showsChat = state.presentation == .chat
+        Button {
+            withAnimation(DS.Motion.split) { _ = state.show(showsChat ? .terminal : .chat, terminal: pane) }
+        } label: {
+            Label("Chat", systemImage: showsChat ? "text.bubble.fill" : "text.bubble")
+                .foregroundStyle(showsChat ? DS.Palette.text : DS.Palette.textSecondary)
+                .contentTransition(.symbolEffect(.replace))
+        }
+        .help(showsChat ? "Show Terminal" : "Show Chat")
+        .accessibilityAddTraits(showsChat ? .isSelected : [])
+        .accessibilityIdentifier("pane-presentation")
+    }
+}
 #endif
