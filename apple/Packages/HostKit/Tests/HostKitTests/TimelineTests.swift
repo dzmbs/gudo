@@ -57,6 +57,28 @@ struct TimelineTests {
         }
     }
 
+    @Test func longTextDecodesItsReferenceAndRoundTrips() throws {
+        let json = #"{"LongText":{"role":"Assistant","content":{"handle":"17:1234:item:36:turn-id:item-id","preview":"The first part","bytes":2097152}}}"#
+        let body = try TimelineJSON.decode(TimelineBody.self, from: json)
+        guard case .longText(let longText) = body else { Issue.record("Missing long text"); return }
+        #expect(longText.role == .known(.assistant))
+        #expect(longText.content.handle == "17:1234:item:36:turn-id:item-id")
+        #expect(longText.content.preview == "The first part")
+        #expect(longText.content.bytes == 2_097_152)
+        let encoded = try TimelineJSON.encode(body)
+        #expect(try TimelineJSON.decode(TimelineBody.self, from: String(decoding: encoded, as: UTF8.self)) == body)
+    }
+
+    @Test func longTextKeepsAnUnknownRole() throws {
+        let json = #"{"LongText":{"role":"Summary","content":{"handle":"h","preview":"","bytes":0}}}"#
+        let body = try TimelineJSON.decode(TimelineBody.self, from: json)
+        guard case .longText(let longText) = body else { Issue.record("Missing long text"); return }
+        #expect(longText.role == .unknown("Summary"))
+        #expect(longText.role.wireValue == "Summary")
+        let encoded = String(decoding: try TimelineJSON.encode(body), as: UTF8.self)
+        #expect(encoded.contains(#""role":"Summary""#))
+    }
+
     @Test func malformedOrUnknownContentIsNotSilentlyInterpreted() {
         #expect(throws: (any Error).self) { try TimelineJSON.decode(TimelineBody.self, from: #"{"FutureBlock":{}}"#) }
         #expect(throws: (any Error).self) { try TimelineJSON.decode(TimelineOperation.self, from: #"{"Append":{"cursor":{"epoch":1,"sequence":2}}}"#) }

@@ -26,7 +26,7 @@ struct ChatToolDetailSheet: View {
                 }
                 .pickerStyle(.segmented).padding(DS.Space.l)
                 .frame(minHeight: DS.Size.touchTarget)
-                if section == .input { input } else { output }
+                if section == .input { input } else { ChatOutputPager(reader: reader, offset: $offset) }
             }
             .background(DS.Palette.base).foregroundStyle(DS.Palette.text)
             .navigationTitle(String(tool.title.prefix(160))).navigationBarTitleDisplayMode(.inline)
@@ -46,11 +46,11 @@ struct ChatToolDetailSheet: View {
 
     @ViewBuilder private var input: some View {
         if tool.input.isEmpty {
-            note("No input was recorded for this tool.")
+            ChatOutputNote(message: "No input was recorded for this tool.")
         } else if admitsInput {
             NativeTextPreview(text: tool.input).accessibilityIdentifier("chat-tool-input")
         } else {
-            note("This input is too large to show here. Open Terminal to read it.")
+            ChatOutputNote(message: "This input is too large to show here. Open Terminal to read it.")
         }
     }
 
@@ -58,60 +58,6 @@ struct ChatToolDetailSheet: View {
         guard tool.input.utf8.count <= ChatOutputLimits.pageBytes else { return false }
         return tool.input.utf8.lazy.filter { $0 == 10 }.prefix(ChatOutputLimits.pageLines).count
             < ChatOutputLimits.pageLines
-    }
-
-    private var output: some View {
-        VStack(spacing: 0) {
-            if let page = reader.page {
-                let end = page.offset + UInt64(page.text.utf8.count)
-                Text("Bytes \(page.offset.formatted()) to \(end.formatted()) of \(page.totalBytes.formatted())")
-                    .font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
-                    .padding(.horizontal, DS.Space.l).frame(maxWidth: .infinity, alignment: .leading)
-                    .accessibilityIdentifier("chat-tool-output-range")
-                if page.text.isEmpty {
-                    note("This output is empty.")
-                } else {
-                    NativeTextPreview(text: page.text).id(page.offset)
-                        .accessibilityIdentifier("chat-tool-output")
-                }
-                navigation(page)
-            } else if reader.isLoading {
-                note("Loading output…")
-            } else if reader.error == nil {
-                note("No output was recorded for this tool.")
-            }
-            if let error = reader.error {
-                VStack(alignment: .leading, spacing: DS.Space.s) {
-                    Text(verbatim: error).font(DS.Font.proseSecondary).foregroundStyle(DS.Palette.textSecondary)
-                    Button("Try Again") { Task { await reader.load(offset: offset) } }
-                        .frame(minHeight: DS.Size.touchTarget)
-                }.padding(DS.Space.l).frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-    }
-
-    private func navigation(_ page: ChatOutputPage) -> some View {
-        HStack(spacing: DS.Space.m) {
-            pageButton("Beginning", target: page.offset == 0 ? nil : 0)
-            Spacer(minLength: 0)
-            pageButton("Previous", target: reader.previousOffset)
-            pageButton("Next", target: page.nextOffset)
-        }
-        .font(DS.Font.caption).frame(minHeight: DS.Size.touchTarget)
-        .padding(.horizontal, DS.Space.l).disabled(reader.isLoading)
-        .accessibilityIdentifier("chat-tool-output-navigation")
-    }
-
-    private func pageButton(_ title: String, target: UInt64?) -> some View {
-        let enabled = target != nil && !reader.isLoading
-        return Button(title) { if let target { offset = target } }
-            .frame(minHeight: DS.Size.touchTarget).disabled(!enabled)
-            .foregroundStyle(enabled ? DS.Palette.text : DS.Palette.textQuaternary)
-    }
-
-    private func note(_ message: String) -> some View {
-        Text(verbatim: message).font(DS.Font.proseSecondary).foregroundStyle(DS.Palette.textSecondary)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).padding(DS.Space.l)
     }
 }
 #endif

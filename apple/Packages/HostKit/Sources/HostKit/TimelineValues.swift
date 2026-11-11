@@ -66,6 +66,11 @@ nonisolated public enum TimelineToolStatusTag: String, Hashable, Sendable, CaseI
 }
 public typealias TimelineToolStatus = TimelineValue<TimelineToolStatusTag>
 
+nonisolated public enum TimelineTextRoleTag: String, Hashable, Sendable, CaseIterable {
+    case user = "User", assistant = "Assistant", thinking = "Thinking"
+}
+public typealias TimelineTextRole = TimelineValue<TimelineTextRoleTag>
+
 nonisolated public enum TimelineFileChangeTag: String, Hashable, Sendable, CaseIterable {
     case unmodified = "Unmodified", modified = "Modified", added = "Added", deleted = "Deleted"
     case renamed = "Renamed", copied = "Copied", typeChanged = "TypeChanged", unmerged = "Unmerged", untracked = "Untracked"

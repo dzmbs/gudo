@@ -23,6 +23,8 @@ nonisolated enum TimelineValueWeight {
         case .thinking(let value): 128 + strings(value.text)
         case .notice(let value): 128 + strings(value.kind.wireValue, value.text)
         case .turnEnd: 128
+        case .longText(let value):
+            128 + 96 + strings(value.role.wireValue, value.content.handle, value.content.preview)
         case .user(let value):
             128 + strings(value.text) + value.attachments.reduce(0) { $0 + 64 + strings($1.path, $1.mediaType) }
         case .plan(let value):

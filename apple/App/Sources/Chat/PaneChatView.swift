@@ -112,6 +112,11 @@ struct PaneChatView<Terminal: View>: View {
                 return try await hub.timelineClient().timelineToolOutput(
                     paneId: pane.id.rawValue, handle: output.handle, offset: offset, len: length)
             }, openTerminal: { openTerminalFromDetail(commandMark: tool.commandMark) })
+        case .longText(let longText):
+            ChatLongTextSheet(longText: longText, source: { offset, length in
+                try await hub.timelineClient().timelineToolOutput(
+                    paneId: pane.id.rawValue, handle: longText.content.handle, offset: offset, len: length)
+            }, openTerminal: openTerminalFromDetail)
         case .diff(let groups):
             ChatDiffSheet(groups: groups, source: { handle in
                 try await hub.timelineClient().timelineToolDiff(paneId: pane.id.rawValue, handle: handle)
@@ -405,6 +410,8 @@ struct PaneChatView<Terminal: View>: View {
         }, showTool: { item in
             guard case .tool(let tool) = item.body else { return }
             state.presentDetail { _ in .tool(tool) }
+        }, showLongText: { longText in
+            state.presentDetail { _ in .longText(longText) }
         }, showDiff: { selectDiffPreview($0) })
     }
 
@@ -422,7 +429,10 @@ struct PaneChatView<Terminal: View>: View {
 }
 
 struct ChatDetail: Identifiable {
-    enum Content { case text(ChatSelectedText), tool(TimelineTool), diff([ChatToolDiff]), commands(ChatCommandOffer) }
+    enum Content {
+        case text(ChatSelectedText), tool(TimelineTool), longText(TimelineLongText), diff([ChatToolDiff])
+        case commands(ChatCommandOffer)
+    }
     let id = UUID()
     let content: Content
 }

@@ -10,6 +10,7 @@ struct ChatRowActions {
     var showTerminal: (UInt64?) -> Void = { _ in }
     var selectText: (String) -> Void = { _ in }
     var showTool: (TimelineItem) -> Void = { _ in }
+    var showLongText: (TimelineLongText) -> Void = { _ in }
     var showDiff: (ChatDiffTarget) -> Void = { _ in }
 }
 
@@ -56,6 +57,7 @@ struct ChatRowView: View {
         switch row.content {
         case .markdown(let block): markdown(block)
         case .item(let item): itemContent(item)
+        case .showAll(let longText): showAllContent(longText)
         case .omitted:
             VStack(alignment: .leading, spacing: DS.Space.s) {
                 Text(verbatim: ChatRenderLimits.omittedMessage)
@@ -136,6 +138,7 @@ struct ChatRowView: View {
         case .plan(let plan): planContent(plan)
         case .notice(let notice): noticeContent(notice)
         case .turnEnd(let end): turnEndContent(item, end: end)
+        case .longText(let longText): longTextContent(item, longText: longText)
         }
     }
 
@@ -145,9 +148,7 @@ struct ChatRowView: View {
                 Label("Queued", systemImage: "clock").font(DS.Font.caption)
                     .foregroundStyle(DS.Palette.textSecondary)
             }
-            Text(verbatim: row.preview ?? user.text).font(DS.Font.prose)
-                .padding(.horizontal, DS.Space.l).padding(.vertical, DS.Space.m)
-                .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.panel))
+            bubble(row.preview ?? user.text)
             if row.preview != nil {
                 Button("Read full prompt") { actions.selectText(user.text) }.font(DS.Font.caption)
             }
@@ -161,33 +162,82 @@ struct ChatRowView: View {
                     actions.selectText(user.attachments.map(\.path).joined(separator: "\n"))
                 }.font(DS.Font.caption)
             }
-            if item.origin == .terminal {
-                Text("From Terminal").font(DS.Font.captionDetail).foregroundStyle(DS.Palette.textTertiary)
-            }
+            if item.origin == .terminal { fromTerminal }
         }.frame(maxWidth: .infinity, alignment: .trailing)
             .padding(.leading, DS.Space.xxxl).padding(.vertical, DS.Space.row)
     }
 
+    private func bubble(_ text: String) -> some View {
+        Text(verbatim: text).font(DS.Font.prose)
+            .padding(.horizontal, DS.Space.l).padding(.vertical, DS.Space.m)
+            .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.panel))
+    }
+
+    private var fromTerminal: some View {
+        Text("From Terminal").font(DS.Font.captionDetail).foregroundStyle(DS.Palette.textTertiary)
+    }
+
     private func thinkingContent(_ thinking: TimelineThinking) -> some View {
         VStack(alignment: .leading, spacing: DS.Space.gap10) {
-            Button(action: toggle) {
-                HStack(spacing: DS.Space.s) {
-                    Image(systemName: "sparkle")
-                    Text(ChatItemPresentation.thinkingTitle(thinking))
-                    Spacer(minLength: DS.Space.s)
-                    if ChatItemPresentation.hasThinkingText(thinking) {
-                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right").font(DS.Font.captionDetail)
-                    }
-                }.font(DS.Font.proseSecondary).foregroundStyle(DS.Palette.textSecondary)
-                    .frame(minHeight: DS.Size.touchTarget)
-            }.buttonStyle(ChatRowButtonStyle()).disabled(!ChatItemPresentation.hasThinkingText(thinking))
-                .accessibilityValue(ChatItemPresentation.hasThinkingText(thinking) ? (isExpanded ? "Expanded" : "Collapsed") : "Text not recorded")
+            thinkingHeader(ChatItemPresentation.thinkingTitle(thinking), hasText: ChatItemPresentation.hasThinkingText(thinking))
             if isExpanded, ChatItemPresentation.hasThinkingText(thinking), let text = thinking.text {
                 Text(verbatim: row.preview ?? text).font(DS.Font.proseSecondary)
                     .foregroundStyle(DS.Palette.textSecondary).fixedSize(horizontal: false, vertical: true)
                 if row.preview != nil { Button("Read all") { actions.selectText(text) }.font(DS.Font.caption) }
             }
         }
+    }
+
+    private func thinkingHeader(_ title: String, hasText: Bool) -> some View {
+        Button(action: toggle) {
+            HStack(spacing: DS.Space.s) {
+                Image(systemName: "sparkle")
+                Text(title)
+                Spacer(minLength: DS.Space.s)
+                if hasText {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right").font(DS.Font.captionDetail)
+                }
+            }.font(DS.Font.proseSecondary).foregroundStyle(DS.Palette.textSecondary)
+                .frame(minHeight: DS.Size.touchTarget)
+        }.buttonStyle(ChatRowButtonStyle()).disabled(!hasText)
+            .accessibilityValue(hasText ? (isExpanded ? "Expanded" : "Collapsed") : "Text not recorded")
+    }
+
+    @ViewBuilder private func longTextContent(_ item: TimelineItem, longText: TimelineLongText) -> some View {
+        let text = row.preview ?? longText.content.preview
+        switch longText.role {
+        case .known(.user):
+            VStack(alignment: .trailing, spacing: DS.Space.s) {
+                bubble(text)
+                if item.origin == .terminal { fromTerminal }
+            }.frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(.leading, DS.Space.xxxl).padding(.top, DS.Space.row)
+        case .known(.thinking):
+            VStack(alignment: .leading, spacing: DS.Space.gap10) {
+                thinkingHeader("Thinking", hasText: !text.isEmpty)
+                if isExpanded, !text.isEmpty {
+                    Text(verbatim: text).font(DS.Font.proseSecondary)
+                        .foregroundStyle(DS.Palette.textSecondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        case .known(.assistant), .unknown:
+            Text(verbatim: text).font(DS.Font.prose).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder private func showAllContent(_ longText: TimelineLongText) -> some View {
+        let alignment: Alignment = longText.role == .known(.user) ? .trailing : .leading
+        Group {
+            if actions.readsToolDetails {
+                Button(ChatLongText.showAllTitle(longText.content), systemImage: "text.alignleft") {
+                    actions.showLongText(longText)
+                }.accessibilityIdentifier("chat-long-text-show-all")
+            } else {
+                Text(verbatim: ChatLongText.previewNote(longText.content))
+            }
+        }
+        .font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
+        .frame(maxWidth: .infinity, alignment: alignment)
     }
 
     private func planContent(_ plan: TimelinePlan) -> some View {
@@ -324,23 +374,26 @@ struct ChatRowView: View {
         return false
     }
 
-    private var toolSelectionContent: String? {
+    private var selectionContent: String? {
+        if case .showAll = row.content { return "preview" }
+        if case .item(let item) = row.content, case .longText = item.body { return "preview" }
         guard case .item(let item) = row.content, case .tool(let tool) = item.body else { return nil }
         let input = !tool.input.isEmpty, output = tool.output?.preview.isEmpty == false
         return input && output ? "input and output preview" : input ? "input" : output ? "output preview" : "tool summary"
     }
 
     var copyTitle: String {
-        toolSelectionContent.map { "Copy " + $0 } ?? (usesRawMarkdownSelection ? "Copy raw Markdown" : "Copy")
+        selectionContent.map { "Copy " + $0 } ?? (usesRawMarkdownSelection ? "Copy raw Markdown" : "Copy")
     }
     var selectionTitle: String {
-        toolSelectionContent.map { "Select " + $0 } ?? (usesRawMarkdownSelection ? "Select raw Markdown" : "Select Text")
+        selectionContent.map { "Select " + $0 } ?? (usesRawMarkdownSelection ? "Select raw Markdown" : "Select Text")
     }
 
     var plainText: String {
         switch row.content {
         case .markdown(let block): markdownSelectionText(block)
         case .omitted: ChatRenderLimits.omittedMessage
+        case .showAll(let value): value.content.preview
         case .item(let item):
             switch item.body {
             case .user(let value): value.text
@@ -350,6 +403,7 @@ struct ChatRowView: View {
             case .plan(let value): value.entries.map(\.text).joined(separator: "\n")
             case .notice(let value): value.text
             case .turnEnd(let value): "Worked for \(duration(value.durationMs))"
+            case .longText(let value): value.content.preview
             }
         }
     }

@@ -48,6 +48,7 @@ nonisolated struct ChatRow: Equatable, Sendable, Identifiable {
     enum Content: Equatable, Sendable {
         case markdown(ChatMarkdownBlock)
         case item(TimelineItem)
+        case showAll(TimelineLongText)
         case omitted
     }
 }
@@ -184,6 +185,22 @@ nonisolated final class RowBuilder {
             // Preserve ID/turn/actor charges as well as copied Markdown buffers and row metadata.
             bytes += assistant.text.utf8.count * 2
             bytes += blocks.reduce(0) { $0 + ($1.code?.highlights.count ?? 0) * 32 }
+        } else if case .longText(let longText) = item.body {
+            let preview: [ChatRow]
+            if ChatLongText.rendersMarkdown(longText.role),
+               let rendered = markdown(longText.content.preview, after: previous?.partition, streaming: false) {
+                partition = rendered
+                preview = rendered.blocks.enumerated().map { index, block in
+                    ChatRow(id: ChatRowID(item: item.id, part: index), revision: item.revision,
+                            turn: item.turn, content: .markdown(block))
+                }
+                bytes += longText.content.preview.utf8.count * 2
+                bytes += rendered.blocks.reduce(0) { $0 + ($1.code?.highlights.count ?? 0) * 32 }
+            } else {
+                preview = [plainRow(item)]
+            }
+            rows = preview + [ChatRow(id: ChatRowID(item: item.id, part: preview.count), revision: item.revision,
+                                      turn: item.turn, content: .showAll(longText))]
         } else {
             let row = plainRow(item)
             rows = [row]
@@ -220,6 +237,7 @@ nonisolated final class RowBuilder {
         case .user(let user): text = user.text
         case .thinking(let thinking): text = thinking.text
         case .notice(let notice): text = notice.text
+        case .longText(let longText): text = longText.content.preview
         default: text = nil
         }
         let preview = text.flatMap { $0.utf8.count > 4_096 ? prefix($0, bytes: 4_096) : nil }

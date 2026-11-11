@@ -183,6 +183,11 @@ nonisolated public struct TimelineOutputReference: Codable, Equatable, Sendable 
     public var bytes: UInt64
 }
 
+nonisolated public struct TimelineLongText: Codable, Equatable, Sendable {
+    public var role: TimelineTextRole
+    public var content: TimelineOutputReference
+}
+
 nonisolated public struct TimelineFileDiff: Codable, Equatable, Sendable {
     public var path: String
     public var oldPath: String?
@@ -224,10 +229,11 @@ nonisolated public enum TimelineBody: Codable, Equatable, Sendable {
     case plan(TimelinePlan)
     case notice(TimelineNotice)
     case turnEnd(TimelineTurnEnd)
+    case longText(TimelineLongText)
 
     private enum Keys: String, CodingKey {
         case user = "User", assistant = "Assistant", thinking = "Thinking", tool = "Tool"
-        case plan = "Plan", notice = "Notice", turnEnd = "TurnEnd"
+        case plan = "Plan", notice = "Notice", turnEnd = "TurnEnd", longText = "LongText"
     }
 
     public init(from decoder: any Decoder) throws {
@@ -243,6 +249,7 @@ nonisolated public enum TimelineBody: Codable, Equatable, Sendable {
         case .plan: self = .plan(try container.decode(TimelinePlan.self, forKey: key))
         case .notice: self = .notice(try container.decode(TimelineNotice.self, forKey: key))
         case .turnEnd: self = .turnEnd(try container.decode(TimelineTurnEnd.self, forKey: key))
+        case .longText: self = .longText(try container.decode(TimelineLongText.self, forKey: key))
         }
     }
 
@@ -256,6 +263,7 @@ nonisolated public enum TimelineBody: Codable, Equatable, Sendable {
         case .plan(let value): try container.encode(value, forKey: .plan)
         case .notice(let value): try container.encode(value, forKey: .notice)
         case .turnEnd(let value): try container.encode(value, forKey: .turnEnd)
+        case .longText(let value): try container.encode(value, forKey: .longText)
         }
     }
 }
