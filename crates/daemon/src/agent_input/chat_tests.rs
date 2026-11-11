@@ -734,3 +734,29 @@ async fn text_sent_as_a_terminal_report_still_counts_as_typing() {
     assert!(lock(&fixture.entry.meta).typed_by.is_some());
     fixture.daemon.shutdown().await;
 }
+
+/// Chat types only into an agent the daemon launched; for `claude` typed into a shell it reads and
+/// approves but offers no send or stop, so the client shows no composer that can never send.
+#[tokio::test]
+async fn chat_offers_sending_only_to_an_agent_the_daemon_launched() {
+    use crate::agent_driver::{AgentCapabilities, AgentSession};
+    let fixture = raw_fixture_with_session("0b3bb01e-c7ff-4c07-b983-2dc15e6e1755").await;
+    let core = &fixture.daemon.core;
+    let pane = fixture.entry.pane.id;
+    let (wake, _wakes) = tokio::sync::mpsc::channel(1);
+    let open = || {
+        crate::timeline::claude_source::ClaudeSession::open(core, pane, 1, wake.clone()).unwrap()
+    };
+    let launched = open().capabilities();
+    assert!(launched.contains(AgentCapabilities::SEND | AgentCapabilities::STOP));
+    *lock(&fixture.entry.pane.agent_input_gate) = AgentInputGate::default();
+    let typed = open().capabilities();
+    assert!(typed.contains(AgentCapabilities::READ | AgentCapabilities::APPROVALS));
+    for control in [
+        AgentCapabilities::SEND,
+        AgentCapabilities::ACKNOWLEDGED_SEND,
+        AgentCapabilities::STOP,
+    ] {
+        assert!(!typed.contains(control));
+    }
+}

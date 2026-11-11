@@ -8,7 +8,7 @@ use proto::{
 use tokio::sync::mpsc;
 
 use super::{commands, native_watch::NativeWatch, transcript::Transcript};
-use crate::agent_driver::{AgentSession, ReadFuture, TimelineRead};
+use crate::agent_driver::{AgentCapabilities, AgentSession, ReadFuture, TimelineRead};
 use crate::core::{Core, lock};
 
 #[derive(Clone, PartialEq, Eq)]
@@ -28,6 +28,8 @@ pub(crate) struct ClaudeSession {
     wake: mpsc::Sender<()>,
     pub(super) watcher: NativeWatch,
     display: Option<super::display_overlay::DisplayOverlay>,
+    /// The daemon launched this Claude Code, so Chat may type into it; not one typed into a shell.
+    launched: bool,
 }
 
 impl ClaudeSession {
@@ -38,6 +40,9 @@ impl ClaudeSession {
         wake: mpsc::Sender<()>,
     ) -> Result<Self, WsError> {
         let mut session = Self::new(source(core, pane)?, epoch, wake.clone())?;
+        session.launched = core
+            .pane(pane)
+            .is_some_and(|entry| lock(&entry.pane.agent_input_gate).has_launch());
         if core.cfg.claude_chat_streaming
             && let Some(entry) = core.pane(pane)
         {
@@ -84,6 +89,7 @@ impl ClaudeSession {
             wake,
             watcher,
             display: None,
+            launched: true,
         })
     }
 
@@ -95,8 +101,10 @@ impl ClaudeSession {
             if let Some(display) = &mut display {
                 display.reset();
             }
+            let launched = self.launched;
             *self = Self::new(source, epoch, self.wake.clone())?;
             self.display = display;
+            self.launched = launched;
             if let (Some(display), Some(transcript)) = (&mut self.display, &mut self.transcript) {
                 display.refresh(&self.source, transcript);
             }
@@ -149,14 +157,20 @@ impl ClaudeSession {
 }
 
 impl AgentSession for ClaudeSession {
-    fn capabilities(&self) -> crate::agent_driver::AgentCapabilities {
+    fn capabilities(&self) -> AgentCapabilities {
         let mut capabilities = crate::agent_driver::driver(AgentKind::Claude).capabilities();
+        if !self.launched {
+            let controls = AgentCapabilities::SEND
+                | AgentCapabilities::ACKNOWLEDGED_SEND
+                | AgentCapabilities::STOP;
+            capabilities = AgentCapabilities(capabilities.0 & !controls.0);
+        }
         if self
             .display
             .as_ref()
             .is_some_and(|display| display.is_streaming)
         {
-            capabilities |= crate::agent_driver::AgentCapabilities::STREAMING_DELTAS;
+            capabilities |= AgentCapabilities::STREAMING_DELTAS;
         }
         capabilities
     }
