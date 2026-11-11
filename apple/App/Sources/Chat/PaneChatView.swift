@@ -22,6 +22,7 @@ struct PaneChatView<Terminal: View>: View {
     }
     @State private var photoPickerPresented = false
     @State private var confirmationPresented = false
+    @FocusState private var draftFocused: Bool
     @State private var selectedPhoto: PhotosPickerItem?
 
     private var nativePresentations: some View {
@@ -132,6 +133,7 @@ struct PaneChatView<Terminal: View>: View {
             if state.capabilities.contains(.send) {
                 TextField("Message", text: $state.draft, axis: .vertical)
                     .font(DS.Font.prose).lineLimit(1...6)
+                    .focused($draftFocused)
                     .disabled(state.dictation.isActive)
                     .accessibilityIdentifier("chat-draft")
                 if state.draft.hasPrefix("/"), ChatCommands.query(state.draft) != nil {
@@ -139,6 +141,10 @@ struct PaneChatView<Terminal: View>: View {
                         .font(DS.Font.caption).frame(minHeight: DS.Size.touchTarget)
                         .disabled(!permitsSending || state.dictation.isActive || state.composer.isBusy || state.interrupt.isBusy)
                 }
+            } else if state.capabilities.contains(.read) {
+                Text("Reply in Terminal. Chat sends only to agents started in \(Brand.name).")
+                    .font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
+                    .accessibilityIdentifier("chat-read-only")
             }
             if let message = composerStatus {
                 HStack {
@@ -173,6 +179,14 @@ struct PaneChatView<Terminal: View>: View {
                     dictationControls
                 }
                 Spacer(minLength: 0)
+                if draftFocused {
+                    Button { draftFocused = false } label: {
+                        Label("Hide Keyboard", systemImage: "keyboard.chevron.compact.down").labelStyle(.iconOnly)
+                            .frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
+                    }
+                    .buttonStyle(.quiet)
+                    .accessibilityIdentifier("chat-hide-keyboard")
+                }
                 Button { state.show(.terminal, terminal: pane) } label: {
                     Label("Open Terminal", systemImage: "terminal").labelStyle(.iconOnly).font(DS.Font.caption)
                         .frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)

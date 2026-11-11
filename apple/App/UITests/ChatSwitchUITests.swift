@@ -20,8 +20,25 @@ final class ChatSwitchUITests: XCTestCase {
         XCTAssertTrue(toggle.waitForExistence(timeout: 20), "an agent pane offers Chat")
         if !toggle.isSelected { toggle.tap() }
         let reply = app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'All 12 sign-up tests pass'")).firstMatch
-        XCTAssertTrue(reply.waitForExistence(timeout: 20), "Chat shows the conversation")
+        let shown = reply.waitForExistence(timeout: 20)
+        if !shown {
+            let tree = XCTAttachment(string: app.debugDescription)
+            tree.name = "tree"
+            tree.lifetime = .keepAlways
+            add(tree)
+        }
+        XCTAssertTrue(shown, "Chat shows the conversation")
         XCTAssertTrue(toggle.isSelected)
+        let composer = element("chat-draft").frame
+        XCTAssertGreaterThan(composer.minY, app.windows.firstMatch.frame.height * 0.6, "the composer sits at the bottom")
+        element("chat-draft").tap()
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
+        XCTAssertLessThanOrEqual(element("chat-draft").frame.maxY, keyboard.frame.minY, "the composer rides above the keyboard")
+        shot("chat, typing")
+        element("chat-hide-keyboard").tap()
+        XCTAssertTrue(keyboard.waitForNonExistence(timeout: 5), "the keyboard closes")
+        XCTAssertGreaterThan(element("chat-draft").frame.minY, app.windows.firstMatch.frame.height * 0.6)
         shot("chat, latest")
         app.swipeDown()
         app.swipeDown()
@@ -48,6 +65,9 @@ final class ChatSwitchUITests: XCTestCase {
         shot("typed claude, chat")
         let reply = app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'All 12 sign-up tests pass'")).firstMatch
         XCTAssertTrue(reply.waitForExistence(timeout: 20), "Chat shows the conversation")
+        XCTAssertTrue(element("chat-read-only").waitForExistence(timeout: 5), "Chat says to reply in Terminal")
+        XCTAssertFalse(element("chat-draft").exists, "no message field that could never send")
+        shot("typed claude, read only")
     }
 
     private func launch() throws {
@@ -56,7 +76,9 @@ final class ChatSwitchUITests: XCTestCase {
         app = XCUIApplication()
         app.launchArguments += ["-testTicket", ticket, "-testRelay", "disabled", "-noAutoFocus", "YES"]
         app.launch()
-        XCTAssertTrue(panes.firstMatch.waitForExistence(timeout: 30), "a daemon pane appears")
+        // A tab left in Chat by an earlier test shows no terminal, only the switch.
+        let ready = panes.firstMatch.waitForExistence(timeout: 30) || element("pane-presentation").exists
+        XCTAssertTrue(ready, "a daemon pane appears")
     }
 
     private var panes: XCUIElementQuery {
