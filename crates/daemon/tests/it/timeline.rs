@@ -349,11 +349,17 @@ async fn legacy_and_versioned_watches_negotiate_without_losing_an_existing_watch
         .await
         .unwrap();
     assert_eq!(metadata.snapshot, snapshot);
-    assert!(metadata.capabilities.contains(
-        proto::AgentCapabilities::READ
-            | proto::AgentCapabilities::STOP
-            | proto::AgentCapabilities::APPROVALS
-    ));
+    assert!(
+        metadata
+            .capabilities
+            .contains(proto::AgentCapabilities::READ | proto::AgentCapabilities::APPROVALS)
+    );
+    assert!(
+        !metadata
+            .capabilities
+            .contains(proto::AgentCapabilities::STOP),
+        "the harness agent was not launched by the daemon, so Chat cannot stop it"
+    );
     assert!(
         !metadata
             .capabilities
