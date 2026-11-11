@@ -149,8 +149,9 @@ pair transactional. Chat uses a separate owner-only, revision-checked, single-us
 one bracketed-paste-plus-Return write. Dirty or unknown drafts require explicit confirmation; real
 input invalidates that confirmation. Input a client marks as generated is exempt only when it is
 nothing but a terminal's own replies (focus, cursor position, device status and attributes, mode
-and keyboard-flag reports, OSC 4/10/11/12 colours); anything else counts as typing, so a driver
-cannot leave text in the draft unseen. A matching same-session Claude UserPromptSubmit confirms the
+and keyboard-flag reports, OSC 4/10/11/12 colours) or SGR and urxvt mouse reports, whose numeric
+CSI form carries no text; anything else, legacy mouse reports included, counts as typing, so a
+driver cannot leave text in the draft unseen. Mouse events the daemon encodes are exempt too. A matching same-session Claude UserPromptSubmit confirms the
 normalized text, not an independently identified submission or a proven-empty PTY queue. Timeout,
 mismatch, concurrent input and exit remain unconfirmed, never automatically retried. A known blocked
 question refuses both prompt preparation and enqueue: text such as `yes` must not become a dialog

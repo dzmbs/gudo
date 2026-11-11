@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use client_core::{Client, ClientConfig, ClientEvent, EventQueue};
-use proto::{ChatSendStatus, PaneId, PaneLaunch};
+use proto::{ChatSendStatus, MouseAction, MouseButton, MouseEvent, PaneId, PaneLaunch};
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
@@ -138,7 +138,7 @@ async fn raw_pane(
         .pane
         .write(
             format!(
-                "stty raw -echo; printf '\\033[?2004h'; /bin/cat > '{}'\n",
+                "stty raw -echo; printf '\\033[?2004h\\033[?1002h\\033[?1006h'; /bin/cat > '{}'\n",
                 captured.display()
             )
             .into_bytes(),
@@ -759,4 +759,82 @@ async fn chat_offers_sending_only_to_an_agent_the_daemon_launched() {
     ] {
         assert!(!typed.contains(control));
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pointer_input_leaves_the_draft_clean_and_keys_do_not() {
+    let fixture = raw_fixture().await;
+    let pane = fixture.entry.pane.id;
+    let delivered = |bytes: &'static [u8]| {
+        let captured = fixture.captured.clone();
+        move || std::fs::read(&captured).is_ok_and(|received| received.ends_with(bytes))
+    };
+    let needs_confirmation = || async {
+        let ChatSendStatus::Prepared {
+            needs_confirmation, ..
+        } = fixture.client.chat_prepare(pane).await.unwrap()
+        else {
+            panic!("no prompt ticket")
+        };
+        needs_confirmation
+    };
+    assert!(!needs_confirmation().await);
+
+    let click = b"\x1b[<0;12;5M\x1b[<0;14;5M\x1b[<0;14;5m";
+    fixture.client.send_generated_input(pane, click.to_vec());
+    wait_until(delivered(click)).await;
+    assert!(!needs_confirmation().await, "a click is not a draft");
+    assert!(
+        lock(&fixture.entry.meta).typed_by.is_some(),
+        "the clicking device still owns the copy a selection makes"
+    );
+
+    let wheel = b"\x1b[<65;12;5M\x1b[<65;12;5M\x1b[<64;12;5M";
+    fixture.client.send_generated_input(pane, wheel.to_vec());
+    wait_until(delivered(wheel)).await;
+    assert!(!needs_confirmation().await, "scrolling is not a draft");
+
+    fixture.client.send_mouse(
+        pane,
+        MouseEvent {
+            action: MouseAction::Release,
+            button: MouseButton::Left,
+            col: 3,
+            row: 2,
+            mods: 0,
+        },
+    );
+    wait_until(delivered(b"m")).await;
+    assert!(
+        !needs_confirmation().await,
+        "a mouse event the daemon encodes is not a draft"
+    );
+
+    fixture.client.send_input(pane, b"x".to_vec());
+    wait_until(delivered(b"x")).await;
+    assert!(needs_confirmation().await, "a typed key is a draft");
+    fixture.daemon.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn text_passed_off_as_a_mouse_report_still_counts_as_typing() {
+    let fixture = raw_fixture().await;
+    let pane = fixture.entry.pane.id;
+    let legacy_report = b"\x1b[Mabc";
+    fixture
+        .client
+        .send_generated_input(pane, legacy_report.to_vec());
+    let captured = fixture.captured.clone();
+    wait_until(|| std::fs::read(&captured).is_ok_and(|received| received.ends_with(b"abc"))).await;
+    let ChatSendStatus::Prepared {
+        needs_confirmation, ..
+    } = fixture.client.chat_prepare(pane).await.unwrap()
+    else {
+        panic!("no prompt ticket")
+    };
+    assert!(
+        needs_confirmation,
+        "a legacy report's payload bytes read as text where mouse tracking is off"
+    );
+    fixture.daemon.shutdown().await;
 }

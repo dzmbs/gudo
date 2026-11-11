@@ -15,14 +15,44 @@ const MAX_REPORT_DIGITS: usize = 10;
 /// keyboard-flag reports, colours). None of them can carry text, so a client may send them
 /// without it counting as typing; anything else it calls generated is typing.
 pub(crate) fn is_terminal_report(bytes: &[u8]) -> bool {
+    consists_of(bytes, report_len)
+}
+
+/// Whether `bytes` are nothing but SGR or urxvt mouse reports. Each is one complete CSI
+/// sequence of numbers, so no parser reads text out of it; legacy reports carry raw payload
+/// bytes that a program without mouse tracking reads as typed text, so they never pass.
+pub(crate) fn is_mouse_report(bytes: &[u8]) -> bool {
+    consists_of(bytes, mouse_report_len)
+}
+
+fn consists_of(bytes: &[u8], sequence_len: fn(&[u8]) -> Option<usize>) -> bool {
     let mut rest = bytes;
     while !rest.is_empty() {
-        match report_len(rest) {
+        match sequence_len(rest) {
             Some(len) => rest = &rest[len..],
             None => return false,
         }
     }
     !bytes.is_empty()
+}
+
+fn mouse_report_len(bytes: &[u8]) -> Option<usize> {
+    let body = bytes.strip_prefix(b"\x1b[")?;
+    let is_sgr = body.first() == Some(&b'<');
+    let after_marker = &body[usize::from(is_sgr)..];
+    let params_len = after_marker
+        .iter()
+        .take_while(|byte| byte.is_ascii_digit() || **byte == b';')
+        .count();
+    if number_count(&after_marker[..params_len]) != Some(3) {
+        return None;
+    }
+    match after_marker.get(params_len) {
+        Some(b'M') => {}
+        Some(b'm') if is_sgr => {}
+        _ => return None,
+    }
+    Some(2 + usize::from(is_sgr) + params_len + 1)
 }
 
 fn report_len(bytes: &[u8]) -> Option<usize> {
@@ -189,7 +219,36 @@ pub(crate) fn mouse(event: proto::MouseEvent) -> MouseEvent {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_focus_report, is_sizing_input, is_terminal_report};
+    use super::{is_focus_report, is_mouse_report, is_sizing_input, is_terminal_report};
+
+    #[test]
+    fn only_complete_numeric_mouse_reports_pass_as_pointer_input() {
+        for report in [
+            b"\x1b[<0;12;5M".as_slice(),
+            b"\x1b[<0;12;5m",
+            b"\x1b[<35;80;24M",
+            b"\x1b[<64;1;1M\x1b[<64;1;1M\x1b[<65;1;1M",
+            b"\x1b[32;12;5M",
+        ] {
+            assert!(is_mouse_report(report), "{report:?}");
+        }
+        for typed in [
+            b"".as_slice(),
+            b"x",
+            b"\x1b[M !!",
+            b"\x1b[Mabc",
+            b"\x1b[<0;12;5Mx",
+            b"\x1b[<0;12M",
+            b"\x1b[<0;12;5;1M",
+            b"\x1b[32;12;5m",
+            b"\x1b[<0;12;5",
+            b"\x1b[<12345678901;1;1M",
+            b"\x1b[I",
+            b"\x1b[A",
+        ] {
+            assert!(!is_mouse_report(typed), "{typed:?}");
+        }
+    }
 
     #[test]
     fn only_a_terminals_own_replies_pass_as_reports() {

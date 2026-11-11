@@ -976,6 +976,12 @@ async fn read_input(client: &Arc<Client>, mut stream: RecvStream) -> Result<(), 
             InputPayload::GeneratedBytes(bytes) => !crate::input::is_terminal_report(bytes),
             _ => true,
         };
+        // Pointer input still owns the copy a selection makes, but cannot put text in a draft.
+        let is_pointer_input = match &input.payload {
+            InputPayload::Mouse(_) => true,
+            InputPayload::GeneratedBytes(bytes) => crate::input::is_mouse_report(bytes),
+            _ => false,
+        };
         let bytes = match input.payload {
             InputPayload::Bytes(bytes) | InputPayload::GeneratedBytes(bytes) => bytes,
             payload => entry.pane.encode_input(payload),
@@ -988,7 +994,7 @@ async fn read_input(client: &Arc<Client>, mut stream: RecvStream) -> Result<(), 
                 .core
                 .apply_client_size(&entry, client.id, &client.authz, size, true);
         }
-        let written = if records_typing && !is_focus_report {
+        let written = if records_typing && !is_focus_report && !is_pointer_input {
             entry.pane.write(bytes).await
         } else {
             entry.pane.write_generated(bytes).await
