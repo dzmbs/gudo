@@ -16,8 +16,9 @@ says "Update the helper to use Chat."
   `ServerCtl::Timeline` pushes operations. Its frozen encoding always selects schema 1.
 - `TimelineWatchVersioned`, gated by `DaemonFeatures::VERSIONED_TIMELINE`, supplies the
   peer's highest readable schema. The helper selects the highest version supported by both;
-  version 0 is rejected before replacing a watch. Current peers support schema 1. A newer app
-  uses the frozen legacy request with helpers that do not advertise versioned watches.
+  version 0 is rejected before replacing a watch. Current peers support schemas 1 and 2. A
+  newer app uses the frozen legacy request with helpers that do not advertise versioned watches.
+  Each watch keeps its negotiated schema for its pushes, recovery snapshots and history pages.
 - `TimelineUnwatch` releases the subscription.
 - `TimelineItemsBefore` requests up to 100 older items. A page always includes whole native
   records, so its soft requested count can expand to at most 512 sibling items within the
@@ -28,6 +29,7 @@ says "Update the helper to use Chat."
   must hold at least four bytes. Rust retains a validated `OutputHandle` value and parses
   incoming opaque request strings once. Its JSON/postcard encoding remains the existing
   `epoch:record-offset:tool-id` string; assigning an epoch replaces it, never nests prefixes.
+  The same request pages the whole text behind a `LongText` body.
 - `TimelineToolDiff` reads complete recorded changes from that same result handle, not the
   working tree or a numeric repository capture. It requires `DaemonFeatures::TIMELINE_TOOL_DIFF`;
   clients construct no request without both this feature and the timeline feature. Request67,
@@ -49,8 +51,11 @@ unsupported item bodies/origins become a local Terminal notice, future tool kind
 and unsupported patches offer Terminal rather than closing the control stream. Initial, live,
 recovery and history snapshots pass through the schema adapter. Native unknown content blocks
 become bounded notices before retention; their opaque payload is never used as text or actions.
-Current watches all select schema 1. Adding a supported second schema requires carrying that
-selection through its watch and writers, not widening schema 1's whitelist.
+Schema 2 adds one body, `LongText { role, content }`: a user message, reply or thinking text too
+long to push, as its start (`content.preview`, about 16 KiB ending at a line break when one is
+near) and its full size, with a handle that `TimelineToolOutput` pages. Schema 1 receives the
+same item as its role's ordinary body holding the start and a note to update the app or open
+Terminal. Nothing else differs between the two schemas; a third goes through the same adapter.
 
 The Apple FFI carries timeline values as JSON strings; decoding and row preparation belong off
 the main actor.
@@ -561,8 +566,12 @@ from the server they leave a Terminal notice in Chat, and a turn they start or e
 from a bounded outline (arrays emptied, strings over 1KiB blanked, at most 64KiB), so status and
 Send follow it. A skipped TUI message or binding reply closes observation. At most 256 timeline
 operations / 1MiB are queued. The projection handles user/assistant items, assistant deltas, command summaries and completed reasoning. It keeps at most
-500 items and 768KiB of serialized bodies, forgetting the oldest; a single item over 256KiB becomes
-a Terminal notice. When Chat cannot show the conversation (a full capture before history, a missing
+500 items and 768KiB of serialized bodies, forgetting the oldest. These limits bound what is
+pushed, never what is reachable: the rollout keeps the whole conversation (see Codex rollout
+below). Text over 64 KiB becomes `LongText`, and a command's output is an output reference
+whose preview is its last 4 KiB; its title keeps the command's first 2 KiB and its input the
+first 64 KiB. A streaming reply that crosses 64 KiB becomes `LongText` at once and takes its
+final size when it completes. When Chat cannot show the conversation (a full capture before history, a missing
 resume history, a rollback), only Chat closes: status, notifications and approvals keep flowing. Item identity is turn-scoped. Final items reconcile partial text, unknown
 command status is explicit, and non-success turn endings are notices, never inferred success.
 
@@ -572,11 +581,38 @@ session cursor so a concurrently arriving delta cannot appear in both a snapshot
 append stream. Paging and late watches read captured or hydrated history; source/epoch
 changes invalidate stale reads. Since-join access is explicitly unavailable until original event
 time can be established safely: projection time cannot authorize buffered pre-join content. This
-source-specific scope check also precedes common watch and history delivery. Native diff and
-on-demand tool-output reads remain unavailable. Legacy terminal-only Codex launch and control behavior is unchanged when this
+source-specific scope check also precedes common watch and history delivery. Recorded file
+changes are not read yet: `TimelineToolDiff` answers that Chat does not show Codex file changes.
+Legacy terminal-only Codex launch and control behavior is unchanged when this
 opt-in producer is absent. Switching the TUI to resume/fork retires the old source until the exact
 correlated reply establishes a new projection epoch. Old rows remain frozen during this transition;
 no replacement conversation or bootstrap turn is created.
+
+### Codex rollout
+
+Codex records every thread in a rollout file, which the thread reply names (`path`, with
+`historyMode`). Chat reads it as the durable store, read only, like a Claude transcript. It opens
+only a regular file inside the app-server's `CODEX_HOME/sessions` (as its launch environment set
+it), named `rollout-…-<thread>.jsonl`, without following a final symbolic link, whose session
+record names the bound thread and the paginated history mode. Legacy rollouts and forks (whose
+inherited turns live in another rollout) are not read; their history stays the projection's.
+Reads reject a replaced file. Codex creates the file with the thread's first turn, so a session
+retries opening it on later refreshes.
+
+A snapshot is the projection's, frozen at the session cursor; its `before` cursor is the
+rollout record of its oldest saved item, so pages continue exactly below it without repeating a
+live item. Items not saved yet are newer and stay live only. Pages read the bounded 8 MiB window
+before the cursor, more windows when needed up to 64 MiB, and return up to 100 items within 1 MiB,
+back to the session record. Rollout items are shaped by the same code as live items and carry the
+same turn-scoped ids: user messages (injected context dropped), replies, reasoning and commands,
+one notice per turn for items Chat does not show, and interrupted or failed turn notices. A
+recorded rollback ends history there. A record over 8 MiB is passed over.
+
+Output references and `LongText` handles name the timeline item and, for items read from the
+rollout, its record offset. A live item's handle has offset zero and is found by its id in the
+last 64 MiB; until Codex saves it, the read answers that it is not saved yet. A page's text is
+exactly the item's full text: the reply, the user's text with attachment markers, the summary and
+content joined by line breaks, or the command's recorded output (Codex keeps 64 KiB of it).
 
 Resume/fork history must be complete, with unambiguous turn/item identities. When the TUI requests
 `excludeTurns`, an independent, read-only connection to the same owned app-server initializes and

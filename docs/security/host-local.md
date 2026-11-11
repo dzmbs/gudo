@@ -128,6 +128,12 @@ Canonical roots, matching session filenames, no-follow opens and file identity c
 reads. Result handles admit only main-conversation user tool-result records; sidechains and unknown
 record kinds stay unreadable even when a client guesses a handle. Native watches and workers stop with their last subscription. Push mailboxes and bulk
 reply permits bound memory while a client stops reading. See [Agent timelines](../CHAT.md).
+A Codex rollout path comes from the owned app-server's thread reply but is still treated as
+input: it must resolve inside that server's `CODEX_HOME/sessions`, carry the bound thread's id in
+its name and session record, and open as a regular file without following a final link. Its
+handles name a timeline item, and a read returns only a completed item of the bound thread.
+The full text of a long Codex message goes through the same request as tool output, so it also
+needs Prompt; a Viewer sees its start.
 
 **Agent input exit fence.** A dedicated agent launch has a fresh nonce and starts with native
 input disabled. Only the bundled shim's authenticated arm call enables it; ordinary agent hooks
