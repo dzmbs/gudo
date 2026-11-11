@@ -17,8 +17,12 @@ shift || true
 state="$(mktemp -d "${TMPDIR:-/tmp}/gudo-w3.XXXXXX")"
 "$apple/scripts/w3-fixtures.sh" "$state" >/dev/null
 export PORT="${PORT:-47613}"
-# Chat's suite gives the stand-in `claude` a conversation to show.
-[ "${UI_TEST_CLASS:-}" = ChatSwitchUITests ] && export CHAT_SESSION_SCRIPT="$apple/scripts/chat-session.py"
+# Chat's suite gives the stand-in `claude` a conversation, and installs the hooks a `claude` typed
+# into a shell reports through, as the Mac app's helper does.
+if [ "${UI_TEST_CLASS:-}" = ChatSwitchUITests ]; then
+  export CHAT_SESSION_SCRIPT="$apple/scripts/chat-session.py" GUDO_INSTALL_AGENT_INTEGRATION=1
+  mkdir -p "$state/work/.claude"
+fi
 
 daemon() { PORT="${PORT:-47613}" "$apple/scripts/w3-daemon.sh" "$1" "$state"; }
 ticket="$(daemon start)"

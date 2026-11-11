@@ -35,6 +35,21 @@ final class ChatSwitchUITests: XCTestCase {
         waitForExpectations(timeout: 5)
     }
 
+    /// Claude Code typed into a shell, not started as an agent: Chat still shows its session.
+    func testClaudeTypedIntoAShellShowsItsConversation() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "the bar switch is the iPhone layout's")
+        try launch()
+        let pane = panes.firstMatch
+        pane.tap()
+        pane.typeText("claude\n")
+        let toggle = element("pane-presentation")
+        XCTAssertTrue(toggle.waitForExistence(timeout: 30), "a shell running Claude Code offers Chat")
+        if !toggle.isSelected { toggle.tap() }
+        shot("typed claude, chat")
+        let reply = app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'All 12 sign-up tests pass'")).firstMatch
+        XCTAssertTrue(reply.waitForExistence(timeout: 20), "Chat shows the conversation")
+    }
+
     private func launch() throws {
         let ticket = ProcessInfo.processInfo.environment["PAIR_TICKET"] ?? ""
         try XCTSkipIf(ticket.isEmpty, "no daemon ticket (run apple/scripts/w3-ui-test.sh)")

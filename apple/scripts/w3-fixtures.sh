@@ -48,6 +48,8 @@ settings=""
 while [ $# -gt 0 ]; do
   case "$1" in --settings) settings="$2"; shift 2 ;; *) shift ;; esac
 done
+# Typed into a shell, Claude Code takes its hooks from the user's settings, as the real CLI does.
+[ -n "$settings" ] || settings="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
 hook_cmd=$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["hooks"]["Stop"][0]["hooks"][0]["command"])' "$settings")
 hook="${hook_cmd% Stop}"
 send() { printf '%s' "$2" | eval "$hook $1"; }
