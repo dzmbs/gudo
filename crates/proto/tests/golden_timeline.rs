@@ -232,6 +232,28 @@ fn timeline_unsupported_body_keeps_its_wire_index() {
 }
 
 #[test]
+fn timeline_long_text_body_is_appended_after_unsupported() {
+    frozen(
+        TimelineBody::LongText {
+            role: TimelineTextRole::Assistant,
+            content: TimelineOutputRef {
+                handle: "1:2:t".parse().unwrap(),
+                preview: "p".into(),
+                bytes: 9,
+            },
+        },
+        &[8, 1, 5, 49, 58, 50, 58, 116, 1, 112, 9],
+    );
+    for (role, index) in [
+        (TimelineTextRole::User, 0),
+        (TimelineTextRole::Assistant, 1),
+        (TimelineTextRole::Thinking, 2),
+    ] {
+        frozen(role, &[index]);
+    }
+}
+
+#[test]
 fn timeline_origins_keep_their_wire_indices() {
     frozen(TimelineOrigin::Terminal, &[0]);
     let actor = Actor {

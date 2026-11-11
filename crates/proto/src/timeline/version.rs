@@ -7,10 +7,12 @@ use crate::{DaemonFeatures, PaneId, WorkspaceRequest};
 #[repr(u16)]
 pub enum TimelineVersion {
     V1 = 1,
+    /// Adds `TimelineBody::LongText`.
+    V2 = 2,
 }
 
 impl TimelineVersion {
-    pub const SUPPORTED: &[Self] = &[Self::V1];
+    pub const SUPPORTED: &[Self] = &[Self::V1, Self::V2];
     pub const CURRENT: Self = Self::SUPPORTED[Self::SUPPORTED.len() - 1];
 
     pub fn negotiate(maximum: u16) -> Result<Self, UnsupportedTimelineVersion> {

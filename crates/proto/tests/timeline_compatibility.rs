@@ -1,7 +1,7 @@
 use proto::{
     AgentKind, PaneId, TimelineBody, TimelineCursor, TimelineItem, TimelineNoticeKind, TimelineOp,
-    TimelineOrigin, TimelineSession, TimelineSnapshot, TimelineToolKind, TimelineVersion,
-    UnixMillis,
+    TimelineOrigin, TimelineOutputRef, TimelineSession, TimelineSnapshot, TimelineTextRole,
+    TimelineToolKind, TimelineVersion, UnixMillis,
 };
 
 fn unsupported() -> TimelineItem {
@@ -85,4 +85,61 @@ fn snapshot_upsert_and_recovery_keep_identity_and_cursor_while_degrading() {
     };
     let json = serde_json::to_string(&update).unwrap();
     assert!(!json.contains("Unsupported"));
+}
+
+fn long_text(role: TimelineTextRole) -> TimelineItem {
+    TimelineItem {
+        body: TimelineBody::LongText {
+            role,
+            content: TimelineOutputRef {
+                handle: "7:0:item".parse().unwrap(),
+                preview: "The start".into(),
+                bytes: 2 * 1024 * 1024,
+            },
+        },
+        ..unsupported()
+    }
+}
+
+#[test]
+fn long_text_reaches_v2_unchanged() {
+    let mut item = long_text(TimelineTextRole::Assistant);
+    let canonical = item.clone();
+    TimelineVersion::V2.item(&mut item);
+    assert_eq!(item, canonical);
+}
+
+#[test]
+fn long_text_reaches_v1_as_its_role_with_the_start_and_a_note() {
+    let note = "The start\n\n[This shows the first part of 2.0 MB. Update the app to read all of it \
+                in Chat, or open Terminal.]";
+    let mut assistant = long_text(TimelineTextRole::Assistant);
+    TimelineVersion::V1.item(&mut assistant);
+    assert_eq!(
+        assistant.body,
+        TimelineBody::Assistant {
+            text: note.into(),
+            streaming: false
+        }
+    );
+    let mut user = long_text(TimelineTextRole::User);
+    TimelineVersion::V1.item(&mut user);
+    assert_eq!(
+        user.body,
+        TimelineBody::User {
+            text: note.into(),
+            attachments: Vec::new(),
+            queued: false
+        }
+    );
+    let mut thinking = long_text(TimelineTextRole::Thinking);
+    TimelineVersion::V1.item(&mut thinking);
+    assert_eq!(
+        thinking.body,
+        TimelineBody::Thinking {
+            text: Some(note.into()),
+            duration_ms: None
+        }
+    );
+    assert_eq!(assistant.id, "future-item");
 }

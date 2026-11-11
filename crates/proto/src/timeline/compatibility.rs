@@ -1,6 +1,7 @@
 use super::{
     TimelineBody, TimelineField, TimelineItem, TimelineNoticeKind, TimelineOp, TimelineOrigin,
-    TimelinePlanStatus, TimelineSnapshot, TimelineToolKind, TimelineToolStatus, TimelineVersion,
+    TimelineOutputRef, TimelinePlanStatus, TimelineSnapshot, TimelineTextRole, TimelineToolKind,
+    TimelineToolStatus, TimelineVersion,
 };
 
 const UNSUPPORTED_ITEM: &str = "This Chat item is not supported. Open Terminal.";
@@ -8,7 +9,17 @@ const UNSUPPORTED_ITEM: &str = "This Chat item is not supported. Open Terminal."
 impl TimelineVersion {
     pub fn item(self, item: &mut TimelineItem) {
         match self {
-            Self::V1 => v1_item(item),
+            Self::V1 => {
+                if let TimelineBody::LongText { role, content } = &item.body {
+                    item.body = v1_long_text(*role, content);
+                }
+                v1_item(item);
+            }
+            Self::V2 => {
+                if !matches!(item.body, TimelineBody::LongText { .. }) {
+                    v1_item(item);
+                }
+            }
         }
     }
 
@@ -48,7 +59,7 @@ impl TimelineVersion {
     fn supports_operation(self, operation: &TimelineOp) -> bool {
         // Closed whitelists keep appended variants out of older postcard decoders.
         match self {
-            Self::V1 => matches!(
+            Self::V1 | Self::V2 => matches!(
                 operation,
                 TimelineOp::Snapshot(_)
                     | TimelineOp::Upsert { .. }
@@ -63,7 +74,7 @@ impl TimelineVersion {
 
     fn supports_field(self, field: TimelineField) -> bool {
         match self {
-            Self::V1 => matches!(
+            Self::V1 | Self::V2 => matches!(
                 field,
                 TimelineField::Text | TimelineField::Output | TimelineField::Thinking
             ),
@@ -100,6 +111,40 @@ fn v1_item(item: &mut TimelineItem) {
                 text: UNSUPPORTED_ITEM.into(),
             }
         }
+    }
+}
+
+fn v1_long_text(role: TimelineTextRole, content: &TimelineOutputRef) -> TimelineBody {
+    let text = format!(
+        "{}\n\n[This shows the first part of {}. Update the app to read all of it in Chat, or \
+         open Terminal.]",
+        content.preview,
+        describe_size(content.bytes)
+    );
+    match role {
+        TimelineTextRole::User => TimelineBody::User {
+            text,
+            attachments: Vec::new(),
+            queued: false,
+        },
+        TimelineTextRole::Assistant => TimelineBody::Assistant {
+            text,
+            streaming: false,
+        },
+        TimelineTextRole::Thinking => TimelineBody::Thinking {
+            text: Some(text),
+            duration_ms: None,
+        },
+    }
+}
+
+fn describe_size(bytes: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = 1024 * KIB;
+    if bytes < MIB {
+        format!("{} KB", bytes.div_ceil(KIB))
+    } else {
+        format!("{:.1} MB", bytes as f64 / MIB as f64)
     }
 }
 

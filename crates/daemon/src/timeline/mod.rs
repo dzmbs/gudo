@@ -100,6 +100,7 @@ impl Drop for WorkerLifetime {
 pub(crate) struct Watch {
     task: AbortHandle,
     timeline: Arc<Timeline>,
+    version: proto::TimelineVersion,
 }
 
 impl Drop for Watch {
@@ -483,17 +484,17 @@ async fn retry_after(timeline: Arc<Timeline>) {
     let _ = wake.try_send(());
 }
 
-fn negotiate_request(request: WorkspaceRequest) -> Result<WorkspaceRequest, WsError> {
+fn negotiate_request(
+    request: WorkspaceRequest,
+) -> Result<(WorkspaceRequest, proto::TimelineVersion), WsError> {
     let (WorkspaceRequest::TimelineWatchVersioned { pane_id, version }
     | WorkspaceRequest::TimelineWatchCapabilities { pane_id, version }) = request
     else {
-        return Ok(request);
+        return Ok((request, proto::TimelineVersion::V1));
     };
     let version = proto::TimelineVersion::negotiate(version)
         .map_err(|error| WsError::Invalid(error.to_string()))?;
-    match version {
-        proto::TimelineVersion::V1 => Ok(WorkspaceRequest::TimelineWatch { pane_id }),
-    }
+    Ok((WorkspaceRequest::TimelineWatch { pane_id }, version))
 }
 
 pub(crate) async fn handle(
@@ -505,7 +506,8 @@ pub(crate) async fn handle(
         return Err(WsError::Unavailable("update the app to use Chat".into()));
     }
     let wants_capabilities = matches!(request, WorkspaceRequest::TimelineWatchCapabilities { .. });
-    match negotiate_request(request)? {
+    let (request, version) = negotiate_request(request)?;
+    match request {
         WorkspaceRequest::TimelineUnwatch { pane_id } => {
             lock(&connection.timeline_watches).remove(&pane_id);
             connection.timeline_mailbox.remove(pane_id);
@@ -532,7 +534,7 @@ pub(crate) async fn handle(
                 let state = lock(&reading.state);
                 state.check_history_scope(since)?;
                 Ok((
-                    proto::TimelineVersion::V1.snapshot(state.snapshot(since)),
+                    version.snapshot(state.snapshot(since)),
                     state.capabilities(),
                 ))
             })
@@ -547,6 +549,7 @@ pub(crate) async fn handle(
                 pane_id,
                 watch_token,
                 since,
+                version,
                 visible: snapshot.items.iter().map(|item| item.id.clone()).collect(),
                 timeline: Arc::clone(&timeline),
                 mailbox: Arc::clone(&connection.timeline_mailbox),
@@ -555,6 +558,7 @@ pub(crate) async fn handle(
             let watch = Watch {
                 task: task.abort_handle(),
                 timeline,
+                version,
             };
             watches.insert(pane_id, watch);
             if wants_capabilities {
@@ -610,6 +614,7 @@ struct Forwarder {
     pane_id: PaneId,
     watch_token: u64,
     since: Option<UnixMillis>,
+    version: proto::TimelineVersion,
     visible: HashSet<String>,
     timeline: Arc<Timeline>,
     mailbox: Arc<Mailbox>,
@@ -630,11 +635,9 @@ impl Forwarder {
     }
 
     async fn visible_operations(&mut self, operations: Vec<TimelineOp>) -> Vec<TimelineOp> {
-        let operations = proto::TimelineVersion::V1.operations(filter(
-            operations,
-            self.since,
-            &mut self.visible,
-        ));
+        let operations = self
+            .version
+            .operations(filter(operations, self.since, &mut self.visible));
         if self.visible.len() > MAX_VISIBLE_ITEMS {
             return self.fresh_snapshot().await;
         }
@@ -644,10 +647,9 @@ impl Forwarder {
     async fn fresh_snapshot(&mut self) -> Vec<TimelineOp> {
         let timeline = Arc::clone(&self.timeline);
         let since = self.since;
-        let snapshot = blocking(move || {
-            Ok(proto::TimelineVersion::V1.snapshot(lock(&timeline.state).snapshot(since)))
-        })
-        .await;
+        let version = self.version;
+        let snapshot =
+            blocking(move || Ok(version.snapshot(lock(&timeline.state).snapshot(since)))).await;
         match snapshot {
             Ok(snapshot) => {
                 self.visible = snapshot.items.iter().map(|item| item.id.clone()).collect();
@@ -692,7 +694,7 @@ async fn read_timeline(
     pane: PaneId,
     request: TimelineRead,
 ) -> Result<WorkspaceResponse, WsError> {
-    let timeline = watched(connection, pane)?;
+    let (timeline, version) = watched(connection, pane)?;
     let core = Arc::clone(core);
     let since = connection.timeline_since;
     let reading = Arc::clone(&timeline);
@@ -710,7 +712,7 @@ async fn read_timeline(
         validate_read(state.as_ref(), &core, pane, epoch)?;
         Ok(match response {
             WorkspaceResponse::Timeline(snapshot) => {
-                WorkspaceResponse::Timeline(proto::TimelineVersion::V1.snapshot(snapshot))
+                WorkspaceResponse::Timeline(version.snapshot(snapshot))
             }
             response => response,
         })
@@ -733,11 +735,14 @@ pub(crate) fn validate_read(
     Ok(())
 }
 
-fn watched(connection: &ConnCtx, pane: PaneId) -> Result<Arc<Timeline>, WsError> {
+fn watched(
+    connection: &ConnCtx,
+    pane: PaneId,
+) -> Result<(Arc<Timeline>, proto::TimelineVersion), WsError> {
     lock(&connection.timeline_watches)
         .get(&pane)
         .filter(|watch| watch.timeline.is_running())
-        .map(|watch| Arc::clone(&watch.timeline))
+        .map(|watch| (Arc::clone(&watch.timeline), watch.version))
         .ok_or_else(|| WsError::Unavailable("open Chat before reading its history".into()))
 }
 

@@ -3,8 +3,9 @@ use proto::{DaemonFeatures, PaneId, TimelineVersion, WorkspaceRequest};
 #[test]
 fn watch_negotiates_the_highest_mutually_supported_version() {
     assert!(TimelineVersion::negotiate(0).is_err());
-    for maximum in [1, 2, u16::MAX] {
-        assert_eq!(TimelineVersion::negotiate(maximum), Ok(TimelineVersion::V1));
+    assert_eq!(TimelineVersion::negotiate(1), Ok(TimelineVersion::V1));
+    for maximum in [2, 3, u16::MAX] {
+        assert_eq!(TimelineVersion::negotiate(maximum), Ok(TimelineVersion::V2));
     }
     assert!(
         TimelineVersion::SUPPORTED
@@ -33,10 +34,10 @@ fn versioned_watch_has_an_append_only_tag_and_feature_bit() {
         request,
         WorkspaceRequest::TimelineWatchVersioned {
             pane_id: PaneId(7),
-            version: 1
+            version: 2
         }
     );
-    assert_eq!(postcard::to_allocvec(&request).unwrap(), [66, 7, 1]);
+    assert_eq!(postcard::to_allocvec(&request).unwrap(), [66, 7, 2]);
     assert_eq!(
         postcard::to_allocvec(&DaemonFeatures::VERSIONED_TIMELINE).unwrap(),
         [128, 128, 128, 64]

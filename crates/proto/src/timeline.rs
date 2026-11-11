@@ -64,6 +64,19 @@ pub enum TimelineBody {
     },
     /// A producer placeholder; schema adapters must replace it before sending to schema 1.
     Unsupported,
+    /// Text over the push budget: its start, with the whole text read in pages through
+    /// `TimelineToolOutput` with the content's handle. Schema 2.
+    LongText {
+        role: TimelineTextRole,
+        content: TimelineOutputRef,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TimelineTextRole {
+    User,
+    Assistant,
+    Thinking,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

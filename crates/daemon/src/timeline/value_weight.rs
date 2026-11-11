@@ -1,6 +1,6 @@
 use proto::{
-    FileDiff, TimelineBody, TimelineItem, TimelineOp, TimelineSession, TimelineSnapshot,
-    TimelineTool, TimelineUpdate,
+    FileDiff, TimelineBody, TimelineItem, TimelineOp, TimelineOutputRef, TimelineSession,
+    TimelineSnapshot, TimelineTool, TimelineUpdate,
 };
 
 #[cfg(test)]
@@ -31,6 +31,7 @@ pub(super) fn item(item: &TimelineItem) -> usize {
             array(entries) + entries.iter().map(|entry| entry.text.len()).sum::<usize>()
         }
         TimelineBody::Tool(tool) => tool_bytes(tool),
+        TimelineBody::LongText { content, .. } => output_bytes(content),
         TimelineBody::TurnEnd { .. } | TimelineBody::Unsupported => 0,
     };
     2 * std::mem::size_of_val(item) + fields + body
@@ -90,16 +91,18 @@ fn array<T>(values: &[T]) -> usize {
 }
 
 fn tool_bytes(tool: &TimelineTool) -> usize {
-    let output = tool.output.as_ref().map_or(0, |output| {
-        // OutputHandle's string form adds two decimal u64s and separators to the native id.
-        output.handle.id().len() + output.preview.len() + OUTPUT_HANDLE_FORMAT_BYTES
-    });
+    let output = tool.output.as_ref().map_or(0, output_bytes);
     tool.name.len()
         + tool.title.len()
         + tool.input.len()
         + output
         + array(&tool.diff)
         + tool.diff.iter().map(diff_bytes).sum::<usize>()
+}
+
+fn output_bytes(output: &TimelineOutputRef) -> usize {
+    // OutputHandle's string form adds two decimal u64s and separators to the native id.
+    output.handle.id().len() + output.preview.len() + OUTPUT_HANDLE_FORMAT_BYTES
 }
 
 fn diff_bytes(diff: &FileDiff) -> usize {

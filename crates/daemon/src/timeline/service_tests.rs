@@ -624,6 +624,7 @@ fn forwarder(timeline: Arc<Timeline>, mailbox: Arc<Mailbox>) -> Forwarder {
         pane_id: PaneId(1),
         watch_token: 42,
         since: Some(UnixMillis(10)),
+        version: proto::TimelineVersion::V1,
         visible: HashSet::new(),
         timeline,
         mailbox,
@@ -647,6 +648,58 @@ async fn a_since_join_watch_over_its_visible_allowance_starts_over_from_a_snapsh
         .await;
     assert!(matches!(operations.as_slice(), [TimelineOp::Snapshot(_)]));
     assert!(forwarder.visible.len() <= MAX_VISIBLE_ITEMS);
+}
+
+#[tokio::test]
+async fn each_watch_receives_long_text_in_the_schema_it_negotiated() {
+    let root = tempfile::tempdir().unwrap();
+    let mut long_text = item("long", 20);
+    long_text.body = TimelineBody::LongText {
+        role: proto::TimelineTextRole::Assistant,
+        content: proto::TimelineOutputRef {
+            handle: "7:0:long".parse().unwrap(),
+            preview: "The start".into(),
+            bytes: 300_000,
+        },
+    };
+    let upsert = TimelineOp::Upsert {
+        cursor: cursor(1),
+        item: Box::new(long_text.clone()),
+    };
+    let mut current = forwarder(test_timeline(root.path()), Arc::default());
+    current.since = None;
+    current.version = proto::TimelineVersion::V2;
+    let operations = current.visible_operations(vec![upsert.clone()]).await;
+    assert!(matches!(
+        operations.as_slice(),
+        [TimelineOp::Upsert { item, .. }] if **item == long_text
+    ));
+    let mut legacy = forwarder(test_timeline(root.path()), Arc::default());
+    legacy.since = None;
+    legacy.version = proto::TimelineVersion::V1;
+    let operations = legacy.visible_operations(vec![upsert]).await;
+    assert!(matches!(
+        operations.as_slice(),
+        [TimelineOp::Upsert { item, .. }]
+            if matches!(&item.body, TimelineBody::Assistant { text, .. } if text.starts_with("The start"))
+    ));
+    assert_eq!(
+        negotiate_request(WorkspaceRequest::TimelineWatchVersioned {
+            pane_id: PaneId(1),
+            version: 2,
+        })
+        .unwrap(),
+        (
+            WorkspaceRequest::TimelineWatch { pane_id: PaneId(1) },
+            proto::TimelineVersion::V2
+        )
+    );
+    assert_eq!(
+        negotiate_request(WorkspaceRequest::TimelineWatch { pane_id: PaneId(1) })
+            .unwrap()
+            .1,
+        proto::TimelineVersion::V1
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
