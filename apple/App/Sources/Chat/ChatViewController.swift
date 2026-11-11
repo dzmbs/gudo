@@ -133,7 +133,6 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         install(footer)
         install(latest)
         latest.view.accessibilityIdentifier = "chat-jump-latest"
-        view.keyboardLayoutGuide.followsUndockedKeyboard = true
         NSLayoutConstraint.activate([
             collection.topAnchor.constraint(equalTo: view.topAnchor),
             collection.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -141,7 +140,9 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
             collection.bottomAnchor.constraint(equalTo: footer.view.topAnchor),
             footer.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             footer.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            footer.view.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor),
+            // SwiftUI already lifts this view above the keyboard; a keyboard guide here counted it
+            // twice, and kept a dismissed sheet's keyboard, leaving the composer at the top.
+            footer.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             latest.view.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
             latest.view.bottomAnchor.constraint(equalTo: footer.view.topAnchor, constant: -12),
         ])
