@@ -13,7 +13,7 @@ mod history;
 pub use approval::CodexApprovalDetails;
 mod items;
 pub use events::{CodexApprovalKind, CodexLiveEvent, CodexLiveEvents, CodexTurnOutcome};
-pub use history::{CodexHistoryStatus, CodexHistoryTurn, CodexThreadHistory};
+pub use history::{CodexHistoryMode, CodexHistoryStatus, CodexHistoryTurn, CodexThreadHistory};
 pub use items::{CodexInput, CodexItem};
 
 use serde::de::{DeserializeOwned, IgnoredAny};

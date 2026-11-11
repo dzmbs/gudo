@@ -44,8 +44,8 @@ pub use codex::{
 };
 pub use codex_live::{
     CODEX_FRAME_LIMIT, CodexApprovalDetails, CodexApprovalKind, CodexBinding, CodexBindingError,
-    CodexHistoryStatus, CodexHistoryTurn, CodexInput, CodexItem, CodexLiveEvent, CodexLiveEvents,
-    CodexRpcId, CodexThreadBinding, CodexThreadHistory, CodexTurnOutcome,
+    CodexHistoryMode, CodexHistoryStatus, CodexHistoryTurn, CodexInput, CodexItem, CodexLiveEvent,
+    CodexLiveEvents, CodexRpcId, CodexThreadBinding, CodexThreadHistory, CodexTurnOutcome,
 };
 pub use event::{
     ActorId, AgentEvent, AgentKind, AgentState, AnswerPath, ApprovalChoice, ApprovalOption,

@@ -2,7 +2,7 @@ use super::{CodexBindingError, CodexItem, CodexTurnOutcome, parse, validate_id};
 use serde::Deserialize;
 use std::collections::HashSet;
 
-const MAX_CWD_BYTES: usize = 4096;
+const MAX_PATH_BYTES: usize = 4096;
 
 /// History from a correlated thread reply; this payload alone proves no pane ownership.
 #[derive(Debug, Deserialize)]
@@ -12,6 +12,21 @@ pub struct CodexThreadHistory {
     pub cwd: Option<std::path::PathBuf>,
     /// Absent history is different from a complete empty history.
     pub turns: Option<Vec<CodexHistoryTurn>>,
+    /// The rollout file Codex records this thread in.
+    pub path: Option<std::path::PathBuf>,
+    #[serde(default, rename = "historyMode")]
+    pub history_mode: CodexHistoryMode,
+}
+
+/// How the rollout records items; only paginated rollouts carry the ids the app-server streams.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CodexHistoryMode {
+    #[default]
+    Legacy,
+    Paginated,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Deserialize)]
@@ -62,9 +77,9 @@ impl CodexThreadHistory {
         let reply: Reply = parse(frame)?;
         let history = reply.result.thread;
         validate_id(&history.id)?;
-        if let Some(cwd) = &history.cwd {
-            let bytes = cwd.as_os_str().as_encoded_bytes();
-            if !cwd.is_absolute() || bytes.len() > MAX_CWD_BYTES || bytes.contains(&0) {
+        for path in [&history.cwd, &history.path].into_iter().flatten() {
+            let bytes = path.as_os_str().as_encoded_bytes();
+            if !path.is_absolute() || bytes.len() > MAX_PATH_BYTES || bytes.contains(&0) {
                 return Err(CodexBindingError::InvalidFrame);
             }
         }
@@ -142,6 +157,32 @@ mod tests {
     fn thread_context_requires_an_absolute_non_nul_directory() {
         for cwd in ["relative", "/invalid\0directory"] {
             let frame = json!({"result":{"thread":{"id":"thread","cwd":cwd,"turns":[]}}});
+            assert!(CodexThreadHistory::parse(&frame.to_string()).is_err());
+        }
+    }
+
+    #[test]
+    fn the_rollout_path_and_history_mode_come_from_the_thread() {
+        let path = "/home/codex/sessions/2026/11/08/rollout-2026-11-08T20-38-29-thread.jsonl";
+        let frame = json!({"result":{"thread":{"id":"thread","path":path,"historyMode":"paginated","turns":[]}}});
+        let history = CodexThreadHistory::parse(&frame.to_string()).unwrap();
+        assert_eq!(history.path.as_deref(), Some(std::path::Path::new(path)));
+        assert_eq!(history.history_mode, CodexHistoryMode::Paginated);
+        let frame = json!({"result":{"thread":{"id":"thread","turns":[]}}});
+        let history = CodexThreadHistory::parse(&frame.to_string()).unwrap();
+        assert_eq!(
+            (history.path, history.history_mode),
+            (None, CodexHistoryMode::Legacy)
+        );
+        let frame = json!({"result":{"thread":{"id":"thread","historyMode":"future","turns":[]}}});
+        assert_eq!(
+            CodexThreadHistory::parse(&frame.to_string())
+                .unwrap()
+                .history_mode,
+            CodexHistoryMode::Unknown
+        );
+        for path in ["relative/rollout.jsonl", "/invalid\0rollout.jsonl"] {
+            let frame = json!({"result":{"thread":{"id":"thread","path":path,"turns":[]}}});
             assert!(CodexThreadHistory::parse(&frame.to_string()).is_err());
         }
     }
