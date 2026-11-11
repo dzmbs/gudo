@@ -67,6 +67,7 @@ pub(super) async fn start(
         return Ok(Started::Terminal);
     }
     let cwd = environment.cwd.clone();
+    let home = codex_home(&environment.variables, &spec);
     let mut command = tokio::process::Command::new(&spec.program);
     command
         .args(&spec.args)
@@ -89,10 +90,40 @@ pub(super) async fn start(
         .upgrade()
         .ok_or_else(|| io::Error::other("pane closed"))?;
     *lock(&source.process) = Some(process);
+    *lock(&source.codex_home) = home;
     source.capture_context(cwd, tui);
     drop(source);
     connection.write_all(&[NATIVE]).await?;
     Ok(Started::Native(Peers { tui, server }))
+}
+
+/// The app-server's `CODEX_HOME`, else `~/.codex`, from the environment it is started with:
+/// the pane's variables, then the launch's, then its pinned ones, less those it removes.
+fn codex_home(
+    variables: &[(OsString, OsString)],
+    spec: &agents::LaunchSpec,
+) -> Option<std::path::PathBuf> {
+    let value = |name: &str| {
+        if spec.env_remove.iter().any(|removed| removed == name) {
+            return None;
+        }
+        spec.env_pinned
+            .iter()
+            .rev()
+            .chain(spec.env.iter().rev())
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.clone())
+            .or_else(|| {
+                variables
+                    .iter()
+                    .rev()
+                    .find(|(key, _)| key == name)
+                    .map(|(_, value)| value.clone())
+            })
+            .map(std::path::PathBuf::from)
+            .filter(|path| path.is_absolute())
+    };
+    value("CODEX_HOME").or_else(|| value("HOME").map(|home| home.join(".codex")))
 }
 
 fn terminal(source: &std::sync::Arc<Live>, tui: u32) -> io::Result<()> {

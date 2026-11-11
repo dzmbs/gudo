@@ -1,8 +1,9 @@
 use agents::{CodexInput, CodexItem, CodexLiveEvent};
 use proto::{
-    AgentKind, TimelineBody, TimelineCursor, TimelineField, TimelineItem, TimelineNoticeKind,
-    TimelineOp, TimelineOrigin, TimelineSession, TimelineSnapshot, TimelineTool, TimelineToolKind,
-    TimelineToolStatus, UnixMillis, WsError,
+    AgentKind, OutputHandle, TimelineBody, TimelineCursor, TimelineField, TimelineItem,
+    TimelineNoticeKind, TimelineOp, TimelineOrigin, TimelineOutputRef, TimelineSession,
+    TimelineSnapshot, TimelineTextRole, TimelineTool, TimelineToolKind, TimelineToolStatus,
+    UnixMillis, WsError,
 };
 #[cfg(test)]
 mod tests;
@@ -13,8 +14,11 @@ pub(super) const SNAPSHOT_ITEMS: usize = 60;
 const MAX_ITEMS: usize = 500;
 const MAX_TEXT: usize = 256 * 1024;
 const MAX_BYTES: usize = 768 * 1024;
-const PREVIEW_BYTES: usize = 96 * 1024;
-const MIN_PREVIEW_BYTES: usize = 1024;
+/// Text over this is pushed as its start, with the whole text paged from the rollout.
+pub(super) const LONG_TEXT_BYTES: usize = 64 * 1024;
+const PREVIEW_BYTES: usize = 16 * 1024;
+const TITLE_BYTES: usize = 2 * 1024;
+const INPUT_BYTES: usize = 64 * 1024;
 const TOO_LARGE: &str = "This is too large for Chat. Check Terminal.";
 /// Codex sends this context to the model as user messages; its markers, matched as Codex does.
 const INJECTED_CONTEXT_MARKERS: [(&str, &str); 6] = [
@@ -25,6 +29,35 @@ const INJECTED_CONTEXT_MARKERS: [(&str, &str); 6] = [
     ("<turn_aborted>", "</turn_aborted>"),
     ("<subagent_notification>", "</subagent_notification>"),
 ];
+
+/// Where an item's whole text can be read again: its rollout record, once known.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Location {
+    epoch: u64,
+    record: Option<u64>,
+}
+
+impl Location {
+    /// An item seen on the app-server stream, located in the rollout by its id when read.
+    pub fn live(epoch: u64) -> Self {
+        Self {
+            epoch,
+            record: None,
+        }
+    }
+
+    pub fn recorded(epoch: u64, offset: u64) -> Self {
+        Self {
+            epoch,
+            record: Some(offset),
+        }
+    }
+
+    fn handle(self, id: &str) -> Option<OutputHandle> {
+        // A rollout starts with its session record, so offset zero never names an item.
+        OutputHandle::new(self.epoch, self.record.unwrap_or(0), id).ok()
+    }
+}
 
 pub(super) struct Projection {
     cursor: TimelineCursor,
@@ -64,6 +97,9 @@ impl Projection {
 
     pub fn cursor(&self) -> TimelineCursor {
         self.cursor
+    }
+    pub fn session(&self) -> &TimelineSession {
+        &self.session
     }
     fn advance(&mut self) -> TimelineCursor {
         self.cursor.sequence += 1;
@@ -120,16 +156,15 @@ impl Projection {
                 self.append(turn.clone(), item_id(&turn, &item), text)
             }
             CodexLiveEvent::Item {
-                item: CodexItem::UserMessage { content, .. },
-                ..
-            } if is_injected_context(&content) => Ok(Vec::new()),
-            CodexLiveEvent::Item {
                 turn,
                 item,
                 completed,
             } => {
-                let (id, body) = body(item, completed, &turn);
-                self.upsert(item_id(&turn, &id), turn, body)
+                let location = Location::live(self.cursor.epoch);
+                let Some((id, body)) = body(item, completed, &turn, location) else {
+                    return Ok(Vec::new());
+                };
+                self.upsert(id, turn, body)
             }
             CodexLiveEvent::TurnCompleted { turn, outcome } => {
                 let ids: Vec<_> = self
@@ -162,29 +197,8 @@ impl Projection {
                         },
                     )?);
                 }
-                let notice = match outcome {
-                    agents::CodexTurnOutcome::Completed => None,
-                    agents::CodexTurnOutcome::Interrupted => {
-                        Some((TimelineNoticeKind::Interrupted, "Turn interrupted."))
-                    }
-                    agents::CodexTurnOutcome::Failed => Some((
-                        TimelineNoticeKind::Error,
-                        "Turn failed. Check Terminal for details.",
-                    )),
-                    agents::CodexTurnOutcome::Unknown => Some((
-                        TimelineNoticeKind::Error,
-                        "Turn finished with an unknown status. Check Terminal.",
-                    )),
-                };
-                if let Some((kind, text)) = notice {
-                    operations.extend(self.upsert(
-                        format!("turn:{turn}:status"),
-                        turn,
-                        TimelineBody::Notice {
-                            kind,
-                            text: text.into(),
-                        },
-                    )?);
+                if let Some(body) = turn_notice(outcome) {
+                    operations.extend(self.upsert(turn_notice_id(&turn), turn, body)?);
                 }
                 Ok(operations)
             }
@@ -211,6 +225,7 @@ impl Projection {
                 },
             )?);
         }
+        let epoch = self.cursor.epoch;
         let (_, item) = self.items.get_mut(&id).ok_or_else(budget)?;
         let additional = serde_json::to_vec(&text)
             .map_err(|_| budget())?
@@ -223,13 +238,14 @@ impl Projection {
         else {
             return Ok(operations);
         };
-        if current.len().saturating_add(text.len()) > MAX_TEXT {
-            // Not streaming any more, so later deltas cannot land after the preview's marker;
-            // the completed item replaces it.
-            let body = TimelineBody::Assistant {
-                text: format!("{current}{text}"),
-                streaming: false,
-            };
+        if current.len().saturating_add(text.len()) > LONG_TEXT_BYTES {
+            // Later deltas no longer apply to the start; the completed item brings the full size.
+            let body = fitted_text(
+                TimelineTextRole::Assistant,
+                format!("{current}{text}"),
+                &id,
+                Location::live(epoch),
+            );
             let turn = item.turn.clone().unwrap_or_default();
             operations.extend(self.upsert(id, turn, body)?);
             return Ok(operations);
@@ -253,7 +269,7 @@ impl Projection {
         turn: String,
         body: TimelineBody,
     ) -> Result<Vec<TimelineOp>, WsError> {
-        let (body, size) = bounded(body)?;
+        let (body, size) = within_budget(body)?;
         let previous = self.items.remove(&id);
         let (ordinal, revision, at) = match previous {
             Some((ordinal, item)) => {
@@ -275,11 +291,7 @@ impl Projection {
             turn: Some(turn),
             parent: None,
             at,
-            origin: if matches!(body, TimelineBody::User { .. }) {
-                TimelineOrigin::Terminal
-            } else {
-                TimelineOrigin::Agent
-            },
+            origin: origin(&body),
             body,
         };
         self.items.insert(id.clone(), (ordinal, item.clone()));
@@ -308,8 +320,58 @@ impl Projection {
     }
 }
 
-fn item_id(turn: &str, item: &str) -> String {
+pub(super) fn origin(body: &TimelineBody) -> TimelineOrigin {
+    if matches!(
+        body,
+        TimelineBody::User { .. }
+            | TimelineBody::LongText {
+                role: TimelineTextRole::User,
+                ..
+            }
+    ) {
+        TimelineOrigin::Terminal
+    } else {
+        TimelineOrigin::Agent
+    }
+}
+
+pub(super) fn item_id(turn: &str, item: &str) -> String {
     format!("item:{}:{turn}:{item}", turn.len())
+}
+
+/// The turn and item of an id made by `item_id`.
+pub(super) fn split_item_id(id: &str) -> Option<(&str, &str)> {
+    let rest = id.strip_prefix("item:")?;
+    let (length, rest) = rest.split_once(':')?;
+    let length: usize = length.parse().ok()?;
+    let turn = rest.get(..length)?;
+    let item = rest.get(length..)?.strip_prefix(':')?;
+    Some((turn, item))
+}
+
+pub(super) fn turn_notice_id(turn: &str) -> String {
+    format!("turn:{turn}:status")
+}
+
+pub(super) fn turn_notice(outcome: agents::CodexTurnOutcome) -> Option<TimelineBody> {
+    let (kind, text) = match outcome {
+        agents::CodexTurnOutcome::Completed => return None,
+        agents::CodexTurnOutcome::Interrupted => {
+            (TimelineNoticeKind::Interrupted, "Turn interrupted.")
+        }
+        agents::CodexTurnOutcome::Failed => (
+            TimelineNoticeKind::Error,
+            "Turn failed. Check Terminal for details.",
+        ),
+        agents::CodexTurnOutcome::Unknown => (
+            TimelineNoticeKind::Error,
+            "Turn finished with an unknown status. Check Terminal.",
+        ),
+    };
+    Some(TimelineBody::Notice {
+        kind,
+        text: text.into(),
+    })
 }
 
 fn is_injected_context(content: &[CodexInput]) -> bool {
@@ -333,21 +395,11 @@ fn is_marked(text: &str, start_marker: &str, end_marker: &str) -> bool {
     starts && ends
 }
 
-/// The body with its JSON weight, shortened to a preview of its start and end when it is over
-/// the item limit.
-fn bounded(body: TimelineBody) -> Result<(TimelineBody, usize), WsError> {
+/// The body with its JSON weight; shaping keeps every body far below this guard.
+fn within_budget(body: TimelineBody) -> Result<(TimelineBody, usize), WsError> {
     let size = weight(&body)?;
     if size <= MAX_TEXT {
         return Ok((body, size));
-    }
-    let mut limit = PREVIEW_BYTES;
-    while limit >= MIN_PREVIEW_BYTES {
-        let shortened = shortened(&body, limit);
-        let size = weight(&shortened)?;
-        if size <= MAX_TEXT {
-            return Ok((shortened, size));
-        }
-        limit /= 2;
     }
     let body = too_large();
     let size = weight(&body)?;
@@ -356,64 +408,6 @@ fn bounded(body: TimelineBody) -> Result<(TimelineBody, usize), WsError> {
 
 fn weight(body: &TimelineBody) -> Result<usize, WsError> {
     Ok(serde_json::to_vec(body).map_err(|_| budget())?.len())
-}
-
-fn shortened(body: &TimelineBody, limit: usize) -> TimelineBody {
-    match body {
-        TimelineBody::User {
-            text,
-            attachments,
-            queued,
-        } => TimelineBody::User {
-            text: preview(text, limit),
-            attachments: attachments.clone(),
-            queued: *queued,
-        },
-        TimelineBody::Assistant { text, streaming } => TimelineBody::Assistant {
-            text: preview(text, limit),
-            streaming: *streaming,
-        },
-        TimelineBody::Thinking { text, duration_ms } => TimelineBody::Thinking {
-            text: text.as_deref().map(|text| preview(text, limit)),
-            duration_ms: *duration_ms,
-        },
-        TimelineBody::Tool(tool) => TimelineBody::Tool(TimelineTool {
-            title: preview(&tool.title, limit),
-            input: preview(&tool.input, limit),
-            ..tool.clone()
-        }),
-        other => other.clone(),
-    }
-}
-
-fn preview(text: &str, limit: usize) -> String {
-    if text.len() <= limit {
-        return text.to_owned();
-    }
-    let mut head_end = limit / 2;
-    while !text.is_char_boundary(head_end) {
-        head_end -= 1;
-    }
-    let mut tail_start = text.len() - limit / 2;
-    while !text.is_char_boundary(tail_start) {
-        tail_start += 1;
-    }
-    format!(
-        "{}\n\n[Showing the start and end of {}. The rest is in Terminal.]\n\n{}",
-        &text[..head_end],
-        describe_size(text.len()),
-        &text[tail_start..]
-    )
-}
-
-fn describe_size(bytes: usize) -> String {
-    const KIB: usize = 1024;
-    const MIB: usize = 1024 * KIB;
-    if bytes < MIB {
-        format!("{} KB", bytes.div_ceil(KIB))
-    } else {
-        format!("{:.1} MB", bytes as f64 / MIB as f64)
-    }
 }
 
 fn too_large() -> TimelineBody {
@@ -427,51 +421,124 @@ fn budget() -> WsError {
     WsError::Unavailable("This Codex message is too large for Chat. Use Terminal.".into())
 }
 
-fn body(item: CodexItem, completed: bool, turn: &str) -> (String, TimelineBody) {
+/// The whole text an item's handle pages through: what its preview starts or ends.
+pub(super) fn paged_text(item: &CodexItem) -> Option<String> {
     match item {
-        CodexItem::UserMessage { id, content } => {
-            let mut text = String::new();
-            for part in content {
-                match part {
-                    CodexInput::Text { text: part } => text.push_str(&part),
-                    CodexInput::Unsupported => {
-                        text.push_str("\n[Attachment available in Terminal]\n")
-                    }
-                }
-            }
-            (
-                id,
-                TimelineBody::User {
-                    text,
-                    attachments: Vec::new(),
-                    queued: false,
-                },
-            )
+        CodexItem::UserMessage { content, .. } => Some(user_text(content)),
+        CodexItem::AgentMessage { text, .. } => Some(text.clone()),
+        CodexItem::Reasoning {
+            summary, content, ..
+        } => Some(reasoning_text(summary, content)),
+        CodexItem::CommandExecution {
+            aggregated_output, ..
+        } => aggregated_output.clone(),
+        CodexItem::Unsupported => None,
+    }
+}
+
+fn user_text(content: &[CodexInput]) -> String {
+    let mut text = String::new();
+    for part in content {
+        match part {
+            CodexInput::Text { text: part } => text.push_str(part),
+            CodexInput::Unsupported => text.push_str("\n[Attachment available in Terminal]\n"),
         }
-        CodexItem::AgentMessage { id, text } => (
-            id,
-            TimelineBody::Assistant {
+    }
+    text
+}
+
+fn reasoning_text(summary: &[String], content: &[String]) -> String {
+    summary
+        .iter()
+        .chain(content)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The start of `text` within `limit` bytes, ending at a line break when one is near the end.
+fn head(text: &str, limit: usize) -> &str {
+    if text.len() <= limit {
+        return text;
+    }
+    let mut end = limit;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let start = &text[..end];
+    match start.rfind('\n') {
+        Some(line_end) if line_end >= end / 2 => &start[..=line_end],
+        _ => start,
+    }
+}
+
+fn fitted_text(role: TimelineTextRole, text: String, id: &str, location: Location) -> TimelineBody {
+    if text.len() <= LONG_TEXT_BYTES {
+        return match role {
+            TimelineTextRole::User => TimelineBody::User {
                 text,
-                streaming: !completed,
+                attachments: Vec::new(),
+                queued: false,
             },
-        ),
+            TimelineTextRole::Assistant => TimelineBody::Assistant {
+                text,
+                streaming: false,
+            },
+            TimelineTextRole::Thinking => TimelineBody::Thinking {
+                text: (!text.is_empty()).then_some(text),
+                duration_ms: None,
+            },
+        };
+    }
+    let Some(handle) = location.handle(id) else {
+        return too_large();
+    };
+    TimelineBody::LongText {
+        role,
+        content: TimelineOutputRef {
+            handle,
+            preview: head(&text, PREVIEW_BYTES).to_owned(),
+            bytes: text.len() as u64,
+        },
+    }
+}
+
+/// The timeline id and body Chat shows for `item`; `None` for context Codex injects.
+pub(super) fn body(
+    item: CodexItem,
+    completed: bool,
+    turn: &str,
+    location: Location,
+) -> Option<(String, TimelineBody)> {
+    let shaped = match item {
+        CodexItem::UserMessage { id, content } => {
+            if is_injected_context(&content) {
+                return None;
+            }
+            let id = item_id(turn, &id);
+            let body = fitted_text(TimelineTextRole::User, user_text(&content), &id, location);
+            (id, body)
+        }
+        CodexItem::AgentMessage { id, text } => {
+            let id = item_id(turn, &id);
+            let body = match fitted_text(TimelineTextRole::Assistant, text, &id, location) {
+                TimelineBody::Assistant { text, .. } => TimelineBody::Assistant {
+                    text,
+                    streaming: !completed,
+                },
+                body => body,
+            };
+            (id, body)
+        }
         CodexItem::Reasoning {
             id,
             summary,
             content,
         } => {
-            let text = summary
-                .into_iter()
-                .chain(content)
-                .collect::<Vec<_>>()
-                .join("\n");
-            (
-                id,
-                TimelineBody::Thinking {
-                    text: (!text.is_empty()).then_some(text),
-                    duration_ms: None,
-                },
-            )
+            let id = item_id(turn, &id);
+            let text = reasoning_text(&summary, &content);
+            let body = fitted_text(TimelineTextRole::Thinking, text, &id, location);
+            (id, body)
         }
         CodexItem::CommandExecution {
             id,
@@ -481,6 +548,7 @@ fn body(item: CodexItem, completed: bool, turn: &str) -> (String, TimelineBody) 
             exit_code,
             duration_ms,
         } => {
+            let id = item_id(turn, &id);
             let status = match status.as_str() {
                 "completed" if exit_code.is_some_and(|code| code != 0) => {
                     TimelineToolStatus::Failed
@@ -490,37 +558,45 @@ fn body(item: CodexItem, completed: bool, turn: &str) -> (String, TimelineBody) 
                 "declined" => TimelineToolStatus::Denied,
                 "inProgress" => TimelineToolStatus::Running,
                 _ => {
-                    return (
+                    return Some((
                         id,
                         TimelineBody::Notice {
                             kind: TimelineNoticeKind::Error,
                             text: "Command state is unknown. Check Terminal.".into(),
                         },
-                    );
+                    ));
                 }
             };
-            (
-                id,
-                TimelineBody::Tool(TimelineTool {
-                    kind: TimelineToolKind::Shell,
-                    name: "Shell".into(),
-                    title: command.clone(),
-                    input: [command, aggregated_output.unwrap_or_default()].join("\n"),
-                    status,
-                    output: None,
-                    diff: Vec::new(),
-                    exit: exit_code,
-                    duration_ms,
-                    command_mark: None,
-                }),
-            )
+            let output = aggregated_output
+                .filter(|output| !output.is_empty())
+                .and_then(|output| {
+                    Some(TimelineOutputRef {
+                        handle: location.handle(&id)?,
+                        preview: crate::timeline::output_preview(&output),
+                        bytes: output.len() as u64,
+                    })
+                });
+            let body = TimelineBody::Tool(TimelineTool {
+                kind: TimelineToolKind::Shell,
+                name: "Shell".into(),
+                title: head(&command, TITLE_BYTES).to_owned(),
+                input: head(&command, INPUT_BYTES).to_owned(),
+                status,
+                output,
+                diff: Vec::new(),
+                exit: exit_code,
+                duration_ms,
+                command_mark: None,
+            });
+            (id, body)
         }
         CodexItem::Unsupported => (
-            format!("unsupported:{turn}"),
+            item_id(turn, &format!("unsupported:{turn}")),
             TimelineBody::Notice {
                 kind: TimelineNoticeKind::ModeChanged,
                 text: "Additional agent details are available in Terminal.".into(),
             },
         ),
-    }
+    };
+    Some(shaped)
 }

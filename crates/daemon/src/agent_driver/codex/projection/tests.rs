@@ -67,7 +67,9 @@ fn unknown_tool_status_is_not_running_or_success_and_nonzero_exit_is_failed() {
             },
             true,
             "turn",
-        );
+            Location::live(0),
+        )
+        .unwrap();
         if exit.is_none() {
             assert!(matches!(body, TimelineBody::Notice { .. }));
         } else {
@@ -130,18 +132,17 @@ fn bodies(projection: &Projection) -> Vec<TimelineBody> {
         .collect()
 }
 
-fn is_preview_of(text: &str, head: &str, tail: &str, total_bytes: usize) -> bool {
-    text.starts_with(head)
-        && text.ends_with(tail)
-        && text.len() < total_bytes
-        && text.contains(&describe_size(total_bytes))
-        && text.contains("Terminal")
+fn long_text(body: &TimelineBody) -> Option<(TimelineTextRole, &TimelineOutputRef)> {
+    match body {
+        TimelineBody::LongText { role, content } => Some((*role, content)),
+        _ => None,
+    }
 }
 
 #[test]
-fn an_oversized_message_keeps_its_start_and_end_and_streaming_continues() {
+fn a_long_reply_shows_its_start_and_pages_the_rest_while_streaming_and_when_complete() {
     let mut projection = Projection::new("thread".into());
-    let chunk = "x".repeat(MAX_TEXT / 2);
+    let chunk = "x".repeat(LONG_TEXT_BYTES / 2);
     for _ in 0..3 {
         projection
             .apply(CodexLiveEvent::AssistantDelta {
@@ -151,10 +152,16 @@ fn an_oversized_message_keeps_its_start_and_end_and_streaming_continues() {
             })
             .unwrap();
     }
-    assert!(
-        matches!(&bodies(&projection)[..], [TimelineBody::Assistant { text, .. }] if is_preview_of(text, "xxx", "xxx", chunk.len() * 3))
-    );
-    let final_text = format!("start{}end", "y".repeat(MAX_TEXT));
+    let streaming = bodies(&projection);
+    let (role, content) = long_text(&streaming[0]).unwrap();
+    assert_eq!(role, TimelineTextRole::Assistant);
+    assert_eq!(content.bytes, 3 * chunk.len() as u64);
+    assert!(content.preview.len() <= PREVIEW_BYTES && chunk.starts_with(&content.preview));
+    assert_eq!(content.handle.id(), item_id("turn", "item"));
+    assert_eq!(content.handle.epoch(), projection.cursor().epoch);
+    assert_eq!(content.handle.offset(), 0);
+
+    let final_text = format!("start{}end", "y".repeat(4 * LONG_TEXT_BYTES));
     projection
         .apply(message("turn", "item", &final_text))
         .unwrap();
@@ -162,9 +169,9 @@ fn an_oversized_message_keeps_its_start_and_end_and_streaming_continues() {
         .apply(message("turn", "next", "still streaming"))
         .unwrap();
     let bodies = bodies(&projection);
-    assert!(
-        matches!(&bodies[0], TimelineBody::Assistant { text, streaming: false } if is_preview_of(text, "start", "end", final_text.len()))
-    );
+    let (_, content) = long_text(&bodies[0]).unwrap();
+    assert_eq!(content.bytes, final_text.len() as u64);
+    assert!(content.preview.starts_with("start") && final_text.starts_with(&content.preview));
     assert!(
         matches!(&bodies[1], TimelineBody::Assistant { text, .. } if text == "still streaming")
     );
@@ -172,8 +179,36 @@ fn an_oversized_message_keeps_its_start_and_end_and_streaming_continues() {
 }
 
 #[test]
-fn an_oversized_command_keeps_a_bounded_title_and_input() {
-    let command = format!("cat <<EOF{}EOF", "z".repeat(MAX_TEXT));
+fn long_user_messages_and_thinking_page_like_replies() {
+    let mut projection = Projection::new("thread".into());
+    let text = "u".repeat(LONG_TEXT_BYTES + 1);
+    projection.apply(user("turn", "typed", &[&text])).unwrap();
+    projection
+        .apply(CodexLiveEvent::Item {
+            turn: "turn".into(),
+            completed: true,
+            item: CodexItem::Reasoning {
+                id: "thought".into(),
+                summary: vec![text.clone()],
+                content: Vec::new(),
+            },
+        })
+        .unwrap();
+    let bodies = bodies(&projection);
+    assert_eq!(
+        long_text(&bodies[0]).map(|(role, content)| (role, content.bytes)),
+        Some((TimelineTextRole::User, text.len() as u64))
+    );
+    assert_eq!(
+        long_text(&bodies[1]).map(|(role, content)| (role, content.bytes)),
+        Some((TimelineTextRole::Thinking, text.len() as u64))
+    );
+}
+
+#[test]
+fn a_command_keeps_its_output_behind_a_handle_with_the_end_as_preview() {
+    let command = format!("cat <<EOF{}EOF", "z".repeat(4 * LONG_TEXT_BYTES));
+    let output = format!("first{}last", "o".repeat(2 * LONG_TEXT_BYTES));
     let mut projection = Projection::new("thread".into());
     projection
         .apply(CodexLiveEvent::Item {
@@ -183,19 +218,65 @@ fn an_oversized_command_keeps_a_bounded_title_and_input() {
                 id: "command".into(),
                 command: command.clone(),
                 status: "completed".into(),
-                aggregated_output: Some("done".into()),
+                aggregated_output: Some(output.clone()),
                 exit_code: Some(0),
                 duration_ms: None,
             },
         })
         .unwrap();
-    assert!(matches!(
-        &bodies(&projection)[..],
-        [TimelineBody::Tool(TimelineTool { title, input, status: TimelineToolStatus::Done, .. })]
-            if is_preview_of(title, "cat <<EOF", "EOF", command.len())
-                && input.starts_with("cat <<EOF")
-                && input.ends_with("done")
-    ));
+    let bodies = bodies(&projection);
+    let [TimelineBody::Tool(tool)] = &bodies[..] else {
+        panic!("expected one command, got {bodies:?}");
+    };
+    assert_eq!(tool.status, TimelineToolStatus::Done);
+    assert!(tool.title.len() <= TITLE_BYTES && command.starts_with(&tool.title));
+    assert!(tool.input.len() <= INPUT_BYTES && command.starts_with(&tool.input));
+    let reference = tool.output.as_ref().unwrap();
+    assert_eq!(reference.bytes, output.len() as u64);
+    assert!(reference.preview.ends_with("last") && reference.preview.len() <= 4096);
+    assert_eq!(reference.handle.id(), item_id("turn", "command"));
+}
+
+#[test]
+fn the_paged_text_of_an_item_is_exactly_what_its_preview_and_size_describe() {
+    let reply = CodexItem::AgentMessage {
+        id: "reply".into(),
+        text: "é".repeat(LONG_TEXT_BYTES),
+    };
+    assert_eq!(paged_text(&reply).unwrap(), "é".repeat(LONG_TEXT_BYTES));
+    let typed = CodexItem::UserMessage {
+        id: "typed".into(),
+        content: vec![
+            CodexInput::Text {
+                text: "look".into(),
+            },
+            CodexInput::Unsupported,
+        ],
+    };
+    assert_eq!(
+        paged_text(&typed).unwrap(),
+        "look\n[Attachment available in Terminal]\n"
+    );
+    let thought = CodexItem::Reasoning {
+        id: "thought".into(),
+        summary: vec!["a".into()],
+        content: vec!["b".into()],
+    };
+    assert_eq!(paged_text(&thought).unwrap(), "a\nb");
+    let command = CodexItem::CommandExecution {
+        id: "command".into(),
+        command: "ls".into(),
+        status: "completed".into(),
+        aggregated_output: Some("out".into()),
+        exit_code: Some(0),
+        duration_ms: None,
+    };
+    assert_eq!(paged_text(&command).unwrap(), "out");
+    assert_eq!(
+        split_item_id(&item_id("turn:with:colons", "item")),
+        Some(("turn:with:colons", "item"))
+    );
+    assert_eq!(split_item_id("turn:4:x"), None);
 }
 
 #[test]

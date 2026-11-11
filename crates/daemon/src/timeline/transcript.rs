@@ -599,7 +599,11 @@ fn record_notice(offset: u64, at: UnixMillis) -> TimelineItem {
     }
 }
 
-fn output_page(text: &str, offset: u64, length: u32) -> Result<TimelineToolOutput, WsError> {
+pub(crate) fn output_page(
+    text: &str,
+    offset: u64,
+    length: u32,
+) -> Result<TimelineToolOutput, WsError> {
     let start = usize::try_from(offset)
         .ok()
         .filter(|offset| *offset <= text.len() && text.is_char_boundary(*offset))

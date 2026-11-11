@@ -13,6 +13,7 @@ pub(crate) fn source() -> Arc<Live> {
         controls: Mutex::new(None),
         control_task: Mutex::new(None),
         history_result: Mutex::new(None),
+        codex_home: Mutex::new(None),
         observations: Mutex::new(None),
         directory: crate::fsutil::create_private_temp_dir("gudo-codex-fixture").unwrap(),
     })
@@ -176,6 +177,103 @@ async fn snapshot_and_refresh_have_one_cursor_even_when_the_producer_advances() 
             .await
             .is_err()
     );
+    raw.daemon.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn chat_pages_back_to_the_first_item_and_reads_long_text_whole_from_the_rollout() {
+    use super::rollout::tests::{Fixture, THREAD};
+    let raw = crate::agent_input::chat_tests::raw_fixture().await;
+    let pane = raw.entry.pane.id;
+    lock(&raw.entry.record).agent.as_mut().unwrap().kind = proto::AgentKind::Codex;
+    let source = source();
+    *lock(&raw.entry.codex) = Some(Arc::clone(&source));
+    let fixture = Fixture::new();
+    let long_reply: String = (0..140_000).map(|index| format!("{index:>14}\n")).collect();
+    assert!(long_reply.len() > 2 * 1024 * 1024);
+    let reply = |index: usize| {
+        if index == 650 {
+            long_reply.clone()
+        } else {
+            format!("reply {index}")
+        }
+    };
+    for index in 0..700 {
+        fixture.reply(
+            &format!("turn-{}", index / 10),
+            &format!("msg-{index}"),
+            &reply(index),
+        );
+    }
+    *lock(&source.codex_home) = Some(fixture.home.path().to_owned());
+    let mut recording = recording();
+    assert_eq!(recording["response"]["result"]["thread"]["id"], THREAD);
+    recording["response"]["result"]["thread"]["path"] = json!(fixture.path);
+    bind(&mut lock(&source.state), &recording);
+    {
+        let mut state = lock(&source.state);
+        for index in 600..700 {
+            state.project(
+                agents::CodexLiveEvent::Item {
+                    turn: format!("turn-{}", index / 10),
+                    item: agents::CodexItem::AgentMessage {
+                        id: format!("msg-{index}"),
+                        text: reply(index),
+                    },
+                    completed: true,
+                },
+                0,
+            );
+        }
+        state.project(
+            agents::CodexLiveEvent::AssistantDelta {
+                turn: "turn-70".into(),
+                item: "streaming".into(),
+                text: "Not saved yet".into(),
+            },
+            0,
+        );
+    }
+
+    let watched = raw.client.timeline_watch_capabilities(pane).await.unwrap();
+    let mut items = watched.snapshot.items;
+    assert_eq!(items.len(), projection::SNAPSHOT_ITEMS);
+    let mut before = watched.snapshot.before;
+    while let Some(cursor) = before {
+        let page = raw
+            .client
+            .timeline_items_before(pane, cursor, 100)
+            .await
+            .unwrap();
+        assert_eq!(page.cursor.epoch, watched.snapshot.cursor.epoch);
+        let mut older = page.items;
+        older.extend(items);
+        items = older;
+        before = page.before;
+    }
+    let ids: Vec<_> = items.iter().map(|item| item.id.clone()).collect();
+    let mut expected: Vec<_> = (0..700)
+        .map(|index| projection::item_id(&format!("turn-{}", index / 10), &format!("msg-{index}")))
+        .collect();
+    expected.push(projection::item_id("turn-70", "streaming"));
+    assert_eq!(ids, expected);
+
+    let proto::TimelineBody::LongText { content, .. } = &items[650].body else {
+        panic!("expected long text, got {:?}", items[650].body);
+    };
+    assert_eq!(content.bytes, long_reply.len() as u64);
+    let mut text = String::new();
+    let mut offset = Some(0);
+    while let Some(next) = offset {
+        let page = raw
+            .client
+            .timeline_tool_output(pane, content.handle.to_string(), next, 256 * 1024)
+            .await
+            .unwrap();
+        text.push_str(&page.text);
+        offset = page.next_offset;
+    }
+    assert_eq!(text, long_reply);
     raw.daemon.shutdown().await;
 }
 

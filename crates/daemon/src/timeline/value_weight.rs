@@ -12,7 +12,7 @@ const OUTPUT_HANDLE_FORMAT_BYTES: usize = 64;
 /// Conservative postcard bound, cached when a value changes rather than serializing to measure.
 /// String bytes are literal in postcard; doubled native metadata covers tags, lengths and varints.
 /// This is a wire allowance, not a resident-memory measurement.
-pub(super) fn item(item: &TimelineItem) -> usize {
+pub(crate) fn item(item: &TimelineItem) -> usize {
     let fields = item.id.len() + optional(&item.turn) + optional(&item.parent);
     let body = match &item.body {
         TimelineBody::User {

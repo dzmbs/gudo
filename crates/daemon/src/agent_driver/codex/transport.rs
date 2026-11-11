@@ -89,6 +89,7 @@ fn prepare(
         controls: Mutex::new(Some(controls)),
         control_task: Mutex::new(None),
         history_result: Mutex::new(None),
+        codex_home: Mutex::new(None),
         observations: Mutex::new(Some(observations.clone())),
         directory: directory.to_owned(),
     });

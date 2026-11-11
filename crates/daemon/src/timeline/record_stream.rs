@@ -1,4 +1,4 @@
-pub(super) const RECORD_BYTES_LIMIT: usize = 8 * 1024 * 1024;
+pub(crate) const RECORD_BYTES_LIMIT: usize = 8 * 1024 * 1024;
 // Reserve the terminating newline inside the same bounded read used by output/history.
 const BODY_BYTES_LIMIT: usize = RECORD_BYTES_LIMIT - 1;
 
@@ -10,7 +10,7 @@ enum PendingRecord {
 
 /// Scanning may advance through an oversized line; a published offset never does.
 #[derive(Debug)]
-pub(super) struct RecordStream {
+pub(crate) struct RecordStream {
     scan_offset: u64,
     complete_end: u64,
     pending: PendingRecord,

@@ -3,6 +3,7 @@ mod history;
 mod live_probe;
 pub(crate) mod process;
 mod projection;
+mod rollout;
 mod runtime;
 #[cfg(test)]
 pub(crate) mod tests;
@@ -15,6 +16,7 @@ use projection::Projection;
 use proto::{
     PaneId, TimelineCursor, TimelineOp, TimelineSnapshot, UnixMillis, WorkspaceResponse, WsError,
 };
+use rollout::Rollout;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::mpsc;
@@ -39,6 +41,8 @@ pub(crate) struct Live {
     controls: Mutex<Option<transport::control::Sender>>,
     control_task: Mutex<Option<tokio::task::AbortHandle>>,
     history_result: Mutex<Option<HistoryReply>>,
+    /// Where the app-server records rollouts, as its environment set it at launch.
+    codex_home: Mutex<Option<std::path::PathBuf>>,
     observations: Mutex<Option<ObservationSender>>,
     directory: std::path::PathBuf,
 }
@@ -60,6 +64,8 @@ struct State {
     captured: Vec<agents::CodexLiveEvent>,
     captured_bytes: usize,
     effects: Vec<runtime::Effect>,
+    /// The bound thread's rollout, when Codex records it with the ids it streams.
+    rollout: Option<std::path::PathBuf>,
 }
 
 /// Whether `frame` starts or ends a turn: what a skipped message's outline is read for.
@@ -139,6 +145,7 @@ impl State {
             captured: Vec::new(),
             captured_bytes: 0,
             effects: Vec::new(),
+            rollout: None,
         }
     }
 
@@ -276,6 +283,7 @@ impl State {
         self.captured.clear();
         self.captured_bytes = 0;
         self.history_ready = !self.deferred_history;
+        self.rollout = None;
         self.events = Some(CodexLiveEvents::new(binding.clone()));
         self.projection = Projection::new(binding.thread_id().to_owned());
         let thread = binding.thread_id().to_owned();
@@ -427,6 +435,25 @@ pub(super) struct Session {
     cursor: TimelineCursor,
     cached: TimelineSnapshot,
     wake: mpsc::Sender<()>,
+    /// The durable store older history and full text are read from, once Codex created it.
+    rollout: Option<Rollout>,
+}
+
+/// Where the bound thread's rollout is, as the app-server reported it.
+struct RolloutSource {
+    codex_home: std::path::PathBuf,
+    path: std::path::PathBuf,
+    thread: String,
+}
+
+impl State {
+    fn rollout_source(&self, codex_home: Option<std::path::PathBuf>) -> Option<RolloutSource> {
+        Some(RolloutSource {
+            codex_home: codex_home?,
+            path: self.rollout.clone()?,
+            thread: self.current.as_ref()?.thread_id().to_owned(),
+        })
+    }
 }
 
 pub(super) fn open(
@@ -436,17 +463,24 @@ pub(super) fn open(
 ) -> Result<Box<dyn AgentSession>, WsError> {
     let entry = core.pane(pane).ok_or_else(unavailable)?;
     let source = lock(&entry.codex).clone().ok_or_else(unavailable)?;
-    let mut state = lock(&source.state);
-    if !state.is_chat_ready() || source.fault.load(std::sync::atomic::Ordering::Acquire) {
-        return Err(unavailable());
-    }
-    state.wake = Some(wake.clone());
-    Ok(Box::new(Session {
-        source: Arc::downgrade(&source),
-        cursor: state.projection.cursor(),
-        cached: state.projection.snapshot(projection::SNAPSHOT_ITEMS, None),
-        wake,
-    }))
+    let codex_home = lock(&source.codex_home).clone();
+    let (mut session, location) = {
+        let mut state = lock(&source.state);
+        if !state.is_chat_ready() || source.fault.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(unavailable());
+        }
+        state.wake = Some(wake.clone());
+        let session = Session {
+            source: Arc::downgrade(&source),
+            cursor: state.projection.cursor(),
+            cached: state.projection.snapshot(projection::SNAPSHOT_ITEMS, None),
+            wake,
+            rollout: None,
+        };
+        (session, state.rollout_source(codex_home))
+    };
+    session.open_rollout(location);
+    Ok(Box::new(session))
 }
 
 impl Session {
@@ -465,6 +499,27 @@ impl Session {
             return Err(unavailable());
         }
         Ok(source)
+    }
+
+    /// Codex creates the rollout with the thread's first turn, so a fresh thread has none yet.
+    fn open_rollout(&mut self, location: Option<RolloutSource>) {
+        if self.rollout.is_some() {
+            return;
+        }
+        self.rollout = location.and_then(|location| {
+            Rollout::open(&location.codex_home, &location.path, &location.thread).ok()
+        });
+    }
+
+    /// The snapshot with its older history continuing in the rollout rather than in memory.
+    fn linked(&self, mut snapshot: TimelineSnapshot) -> TimelineSnapshot {
+        if let Some(rollout) = &self.rollout {
+            let ids: Vec<String> = snapshot.items.iter().map(|item| item.id.clone()).collect();
+            snapshot.before = rollout
+                .before_items(&ids, snapshot.cursor.epoch)
+                .unwrap_or(None);
+        }
+        snapshot
     }
 }
 
@@ -487,41 +542,58 @@ impl AgentSession for Session {
         Ok(())
     }
     fn snapshot(&self, since: Option<UnixMillis>) -> TimelineSnapshot {
-        let mut snapshot = self.cached.clone();
         if since.is_some() {
+            let mut snapshot = self.cached.clone();
             snapshot.items.clear();
             snapshot.before = None;
+            return snapshot;
         }
-        snapshot
+        self.linked(self.cached.clone())
     }
     fn refresh(&mut self, core: &Core, pane: PaneId) -> Result<Vec<TimelineOp>, WsError> {
         let source = self.check_identity(core, pane)?;
-        let state = lock(&source.state);
-        let current = state.projection.cursor();
-        if current == self.cursor {
-            return Ok(Vec::new());
-        }
-        let result = if current.epoch != self.cursor.epoch
-            || (state.operations.len() as u64)
-                < current.sequence.saturating_sub(self.cursor.sequence)
-        {
-            vec![TimelineOp::Snapshot(
-                state.projection.snapshot(projection::SNAPSHOT_ITEMS, None),
-            )]
-        } else {
-            state
-                .operations
-                .iter()
-                .filter(|operation| {
-                    operation_cursor(operation)
-                        .is_some_and(|cursor| cursor.sequence > self.cursor.sequence)
-                })
-                .cloned()
-                .collect()
+        let codex_home = lock(&source.codex_home).clone();
+        let (operations, location) = {
+            let state = lock(&source.state);
+            let location = state.rollout_source(codex_home);
+            let current = state.projection.cursor();
+            if current == self.cursor {
+                (Vec::new(), location)
+            } else {
+                let operations = if current.epoch != self.cursor.epoch
+                    || (state.operations.len() as u64)
+                        < current.sequence.saturating_sub(self.cursor.sequence)
+                {
+                    vec![TimelineOp::Snapshot(
+                        state.projection.snapshot(projection::SNAPSHOT_ITEMS, None),
+                    )]
+                } else {
+                    state
+                        .operations
+                        .iter()
+                        .filter(|operation| {
+                            operation_cursor(operation)
+                                .is_some_and(|cursor| cursor.sequence > self.cursor.sequence)
+                        })
+                        .cloned()
+                        .collect()
+                };
+                if current.epoch != self.cursor.epoch {
+                    self.rollout = None;
+                }
+                self.cached = state.projection.snapshot(projection::SNAPSHOT_ITEMS, None);
+                self.cursor = current;
+                (operations, location)
+            }
         };
-        self.cached = state.projection.snapshot(projection::SNAPSHOT_ITEMS, None);
-        self.cursor = current;
-        Ok(result)
+        self.open_rollout(location);
+        Ok(operations
+            .into_iter()
+            .map(|operation| match operation {
+                TimelineOp::Snapshot(snapshot) => TimelineOp::Snapshot(self.linked(snapshot)),
+                operation => operation,
+            })
+            .collect())
     }
     fn check_current(&self, core: &Core, pane: PaneId) -> Result<(), WsError> {
         let source = self.check_identity(core, pane)?;
@@ -534,25 +606,68 @@ impl AgentSession for Session {
         if let Err(error) = self.check_history_scope(since) {
             return Box::pin(async move { Err(error) });
         }
-        let result = self.source().and_then(|source| {
+        Box::pin(std::future::ready(self.read_now(request)))
+    }
+    fn wake(&self) -> mpsc::Sender<()> {
+        self.wake.clone()
+    }
+}
+
+impl Session {
+    fn read_now(&self, request: TimelineRead) -> Result<WorkspaceResponse, WsError> {
+        let source = self.source()?;
+        let (cursor, session) = {
             let state = lock(&source.state);
             if !state.is_chat_ready() || state.projection.cursor().epoch != self.cursor.epoch {
                 return Err(unavailable());
             }
-            match request {
-                TimelineRead::ItemsBefore { before, limit } => state
+            if let (TimelineRead::ItemsBefore { before, limit }, None) = (&request, &self.rollout) {
+                return state
                     .projection
-                    .page(before, usize::from(limit), since)
-                    .map(WorkspaceResponse::Timeline),
-                _ => Err(WsError::Unavailable(
-                    "Use Terminal for this tool's full output or changes.".into(),
-                )),
+                    .page(*before, usize::from(*limit), None)
+                    .map(WorkspaceResponse::Timeline);
             }
+            (
+                state.projection.cursor(),
+                state.projection.session().clone(),
+            )
+        };
+        let rollout = self.rollout.as_ref().ok_or_else(|| {
+            WsError::Unavailable(
+                "Codex has not saved this conversation yet. Try again when the turn ends.".into(),
+            )
         });
-        Box::pin(std::future::ready(result))
-    }
-    fn wake(&self) -> mpsc::Sender<()> {
-        self.wake.clone()
+        match request {
+            TimelineRead::ItemsBefore { before, limit } => {
+                let page = rollout?.page(before, usize::from(limit), cursor.epoch)?;
+                Ok(WorkspaceResponse::Timeline(TimelineSnapshot {
+                    cursor,
+                    session,
+                    items: page.items,
+                    before: page.before,
+                }))
+            }
+            TimelineRead::ToolOutput {
+                handle,
+                offset,
+                length,
+            } => {
+                let handle = handle
+                    .parse::<proto::OutputHandle>()
+                    .map_err(|error| WsError::Invalid(error.to_string()))?;
+                if handle.epoch() != cursor.epoch {
+                    return Err(WsError::Conflict(
+                        "the Codex session changed; reopen Chat".into(),
+                    ));
+                }
+                rollout?
+                    .text(&handle, offset, length)
+                    .map(WorkspaceResponse::TimelineOutput)
+            }
+            TimelineRead::ToolDiff { .. } => Err(WsError::Unavailable(
+                "Chat does not show Codex file changes yet. Open Terminal to see them.".into(),
+            )),
+        }
     }
 }
 

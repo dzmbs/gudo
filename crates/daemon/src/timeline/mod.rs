@@ -7,10 +7,13 @@ mod complete_diff;
 mod display_index;
 mod display_overlay;
 mod native_watch;
-mod record_stream;
+pub(crate) mod record_stream;
 mod text;
 mod transcript;
-mod value_weight;
+pub(crate) mod value_weight;
+
+pub(crate) use text::output_preview;
+pub(crate) use transcript::output_page;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};

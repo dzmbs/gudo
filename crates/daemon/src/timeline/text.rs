@@ -2,7 +2,7 @@ pub(super) fn plain_text(text: &str) -> String {
     strip_terminal_controls(text)
 }
 
-pub(super) fn output_preview(text: &str) -> String {
+pub(crate) fn output_preview(text: &str) -> String {
     let mut start = text.len().saturating_sub(4096);
     while !text.is_char_boundary(start) {
         start += 1;

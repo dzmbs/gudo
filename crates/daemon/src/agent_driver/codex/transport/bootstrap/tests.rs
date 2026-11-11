@@ -65,3 +65,34 @@ fn duplicate_environment_names_unknown_versions_and_relative_cwd_are_rejected() 
     ];
     assert!(decode(&serde_json::to_vec(&captured).unwrap(), &[]).is_err());
 }
+
+#[test]
+fn the_codex_home_is_the_one_the_app_server_is_started_with() {
+    let mut spec = agents::LaunchSpec {
+        program: "codex".into(),
+        args: Vec::new(),
+        env: Vec::new(),
+        cwd: "/fixture/project".into(),
+        files: Vec::new(),
+        env_remove: Vec::new(),
+        env_pinned: Vec::new(),
+    };
+    let variables: Vec<(OsString, OsString)> = vec![
+        ("HOME".into(), "/home/fixture".into()),
+        ("CODEX_HOME".into(), "/home/fixture/.codex-login".into()),
+    ];
+    assert_eq!(
+        codex_home(&variables, &spec),
+        Some("/home/fixture/.codex-login".into())
+    );
+    spec.env_pinned
+        .push(("CODEX_HOME".into(), "/accounts/work".into()));
+    assert_eq!(codex_home(&variables, &spec), Some("/accounts/work".into()));
+    spec.env_pinned.clear();
+    spec.env_remove.push("CODEX_HOME".into());
+    assert_eq!(
+        codex_home(&variables, &spec),
+        Some("/home/fixture/.codex".into())
+    );
+    assert_eq!(codex_home(&[], &spec), None);
+}

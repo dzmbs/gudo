@@ -83,6 +83,9 @@ pub(super) fn hydrate(
     frame: &str,
 ) -> Result<Option<std::path::PathBuf>, HistoryError> {
     let history = thread(state, frame)?;
+    state.rollout = history
+        .path
+        .filter(|_| history.history_mode == agents::CodexHistoryMode::Paginated);
     let turns = history.turns.unwrap_or_default();
     let mut completed = Vec::new();
     for turn in turns {
