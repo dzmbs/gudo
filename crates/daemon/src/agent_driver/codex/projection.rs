@@ -13,7 +13,18 @@ pub(super) const SNAPSHOT_ITEMS: usize = 60;
 const MAX_ITEMS: usize = 500;
 const MAX_TEXT: usize = 256 * 1024;
 const MAX_BYTES: usize = 768 * 1024;
+const PREVIEW_BYTES: usize = 96 * 1024;
+const MIN_PREVIEW_BYTES: usize = 1024;
 const TOO_LARGE: &str = "This is too large for Chat. Check Terminal.";
+/// Codex sends this context to the model as user messages; its markers, matched as Codex does.
+const INJECTED_CONTEXT_MARKERS: [(&str, &str); 6] = [
+    ("# AGENTS.md instructions", "</INSTRUCTIONS>"),
+    ("<user_instructions>", "</user_instructions>"),
+    ("<environment_context>", "</environment_context>"),
+    ("<user_shell_command>", "</user_shell_command>"),
+    ("<turn_aborted>", "</turn_aborted>"),
+    ("<subagent_notification>", "</subagent_notification>"),
+];
 
 pub(super) struct Projection {
     cursor: TimelineCursor,
@@ -22,7 +33,6 @@ pub(super) struct Projection {
     order: VecDeque<String>,
     next_item: u64,
     bytes: usize,
-    skipped: u64,
 }
 
 impl Projection {
@@ -44,19 +54,14 @@ impl Projection {
             order: VecDeque::new(),
             next_item: 0,
             bytes: 0,
-            skipped: 0,
         }
     }
 
-    /// Marks where a message too large to observe went past.
-    pub fn skipped(&mut self) -> Result<Vec<TimelineOp>, WsError> {
-        self.skipped += 1;
-        self.upsert(
-            format!("skipped:{}", self.skipped),
-            String::new(),
-            too_large(),
-        )
+    /// Marks where an item too large to observe went past.
+    pub fn skipped(&mut self, turn: String, item: &str) -> Result<Vec<TimelineOp>, WsError> {
+        self.upsert(item_id(&turn, item), turn, too_large())
     }
+
     pub fn cursor(&self) -> TimelineCursor {
         self.cursor
     }
@@ -111,18 +116,20 @@ impl Projection {
 
     pub fn apply(&mut self, event: CodexLiveEvent) -> Result<Vec<TimelineOp>, WsError> {
         match event {
-            CodexLiveEvent::AssistantDelta { turn, item, text } => self.append(
-                turn.clone(),
-                format!("item:{}:{turn}:{item}", turn.len()),
-                text,
-            ),
+            CodexLiveEvent::AssistantDelta { turn, item, text } => {
+                self.append(turn.clone(), item_id(&turn, &item), text)
+            }
+            CodexLiveEvent::Item {
+                item: CodexItem::UserMessage { content, .. },
+                ..
+            } if is_injected_context(&content) => Ok(Vec::new()),
             CodexLiveEvent::Item {
                 turn,
                 item,
                 completed,
             } => {
                 let (id, body) = body(item, completed, &turn);
-                self.upsert(format!("item:{}:{turn}:{id}", turn.len()), turn, body)
+                self.upsert(item_id(&turn, &id), turn, body)
             }
             CodexLiveEvent::TurnCompleted { turn, outcome } => {
                 let ids: Vec<_> = self
@@ -217,8 +224,14 @@ impl Projection {
             return Ok(operations);
         };
         if current.len().saturating_add(text.len()) > MAX_TEXT {
+            // Not streaming any more, so later deltas cannot land after the preview's marker;
+            // the completed item replaces it.
+            let body = TimelineBody::Assistant {
+                text: format!("{current}{text}"),
+                streaming: false,
+            };
             let turn = item.turn.clone().unwrap_or_default();
-            operations.extend(self.upsert(id, turn, too_large())?);
+            operations.extend(self.upsert(id, turn, body)?);
             return Ok(operations);
         }
         current.push_str(&text);
@@ -240,14 +253,7 @@ impl Projection {
         turn: String,
         body: TimelineBody,
     ) -> Result<Vec<TimelineOp>, WsError> {
-        let mut size = serde_json::to_vec(&body).map_err(|_| budget())?.len();
-        let body = if size > MAX_TEXT {
-            let body = too_large();
-            size = serde_json::to_vec(&body).map_err(|_| budget())?.len();
-            body
-        } else {
-            body
-        };
+        let (body, size) = bounded(body)?;
         let previous = self.items.remove(&id);
         let (ordinal, revision, at) = match previous {
             Some((ordinal, item)) => {
@@ -299,6 +305,114 @@ impl Projection {
                 self.bytes = self.bytes.saturating_sub(size);
             }
         }
+    }
+}
+
+fn item_id(turn: &str, item: &str) -> String {
+    format!("item:{}:{turn}:{item}", turn.len())
+}
+
+fn is_injected_context(content: &[CodexInput]) -> bool {
+    !content.is_empty()
+        && content.iter().all(|part| match part {
+            CodexInput::Text { text } => INJECTED_CONTEXT_MARKERS
+                .iter()
+                .any(|(start, end)| is_marked(text, start, end)),
+            CodexInput::Unsupported => false,
+        })
+}
+
+fn is_marked(text: &str, start_marker: &str, end_marker: &str) -> bool {
+    let text = text.trim();
+    let starts = text
+        .get(..start_marker.len())
+        .is_some_and(|start| start.eq_ignore_ascii_case(start_marker));
+    let ends = text
+        .get(text.len().saturating_sub(end_marker.len())..)
+        .is_some_and(|end| end.eq_ignore_ascii_case(end_marker));
+    starts && ends
+}
+
+/// The body with its JSON weight, shortened to a preview of its start and end when it is over
+/// the item limit.
+fn bounded(body: TimelineBody) -> Result<(TimelineBody, usize), WsError> {
+    let size = weight(&body)?;
+    if size <= MAX_TEXT {
+        return Ok((body, size));
+    }
+    let mut limit = PREVIEW_BYTES;
+    while limit >= MIN_PREVIEW_BYTES {
+        let shortened = shortened(&body, limit);
+        let size = weight(&shortened)?;
+        if size <= MAX_TEXT {
+            return Ok((shortened, size));
+        }
+        limit /= 2;
+    }
+    let body = too_large();
+    let size = weight(&body)?;
+    Ok((body, size))
+}
+
+fn weight(body: &TimelineBody) -> Result<usize, WsError> {
+    Ok(serde_json::to_vec(body).map_err(|_| budget())?.len())
+}
+
+fn shortened(body: &TimelineBody, limit: usize) -> TimelineBody {
+    match body {
+        TimelineBody::User {
+            text,
+            attachments,
+            queued,
+        } => TimelineBody::User {
+            text: preview(text, limit),
+            attachments: attachments.clone(),
+            queued: *queued,
+        },
+        TimelineBody::Assistant { text, streaming } => TimelineBody::Assistant {
+            text: preview(text, limit),
+            streaming: *streaming,
+        },
+        TimelineBody::Thinking { text, duration_ms } => TimelineBody::Thinking {
+            text: text.as_deref().map(|text| preview(text, limit)),
+            duration_ms: *duration_ms,
+        },
+        TimelineBody::Tool(tool) => TimelineBody::Tool(TimelineTool {
+            title: preview(&tool.title, limit),
+            input: preview(&tool.input, limit),
+            ..tool.clone()
+        }),
+        other => other.clone(),
+    }
+}
+
+fn preview(text: &str, limit: usize) -> String {
+    if text.len() <= limit {
+        return text.to_owned();
+    }
+    let mut head_end = limit / 2;
+    while !text.is_char_boundary(head_end) {
+        head_end -= 1;
+    }
+    let mut tail_start = text.len() - limit / 2;
+    while !text.is_char_boundary(tail_start) {
+        tail_start += 1;
+    }
+    format!(
+        "{}\n\n[Showing the start and end of {}. The rest is in Terminal.]\n\n{}",
+        &text[..head_end],
+        describe_size(text.len()),
+        &text[tail_start..]
+    )
+}
+
+fn describe_size(bytes: usize) -> String {
+    const KIB: usize = 1024;
+    const MIB: usize = 1024 * KIB;
+    if bytes < MIB {
+        format!("{} KB", bytes.div_ceil(KIB))
+    } else {
+        format!("{:.1} MB", bytes as f64 / MIB as f64)
     }
 }
 

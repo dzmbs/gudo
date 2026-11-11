@@ -105,8 +105,41 @@ fn a_long_conversation_forgets_its_oldest_items_instead_of_closing_chat() {
     assert_eq!(projection.order.len(), projection.items.len());
 }
 
+fn user(turn: &str, id: &str, parts: &[&str]) -> CodexLiveEvent {
+    CodexLiveEvent::Item {
+        turn: turn.into(),
+        completed: true,
+        item: CodexItem::UserMessage {
+            id: id.into(),
+            content: parts
+                .iter()
+                .map(|text| CodexInput::Text {
+                    text: (*text).into(),
+                })
+                .collect(),
+        },
+    }
+}
+
+fn bodies(projection: &Projection) -> Vec<TimelineBody> {
+    projection
+        .snapshot(SNAPSHOT_ITEMS, None)
+        .items
+        .into_iter()
+        .map(|item| item.body)
+        .collect()
+}
+
+fn is_preview_of(text: &str, head: &str, tail: &str, total_bytes: usize) -> bool {
+    text.starts_with(head)
+        && text.ends_with(tail)
+        && text.len() < total_bytes
+        && text.contains(&describe_size(total_bytes))
+        && text.contains("Terminal")
+}
+
 #[test]
-fn an_oversized_message_becomes_a_terminal_notice_and_streaming_continues() {
+fn an_oversized_message_keeps_its_start_and_end_and_streaming_continues() {
     let mut projection = Projection::new("thread".into());
     let chunk = "x".repeat(MAX_TEXT / 2);
     for _ in 0..3 {
@@ -118,23 +151,109 @@ fn an_oversized_message_becomes_a_terminal_notice_and_streaming_continues() {
             })
             .unwrap();
     }
+    assert!(
+        matches!(&bodies(&projection)[..], [TimelineBody::Assistant { text, .. }] if is_preview_of(text, "xxx", "xxx", chunk.len() * 3))
+    );
+    let final_text = format!("start{}end", "y".repeat(MAX_TEXT));
     projection
-        .apply(message("turn", "item", &"y".repeat(MAX_TEXT + 1)))
+        .apply(message("turn", "item", &final_text))
         .unwrap();
     projection
         .apply(message("turn", "next", "still streaming"))
         .unwrap();
-    let snapshot = projection.snapshot(SNAPSHOT_ITEMS, None);
-    assert!(matches!(
-        &snapshot.items[0].body,
-        TimelineBody::Notice {
-            kind: TimelineNoticeKind::Error,
-            ..
-        }
-    ));
+    let bodies = bodies(&projection);
     assert!(
-        matches!(&snapshot.items[1].body, TimelineBody::Assistant { text, .. } if text == "still streaming")
+        matches!(&bodies[0], TimelineBody::Assistant { text, streaming: false } if is_preview_of(text, "start", "end", final_text.len()))
     );
-    projection.skipped().unwrap();
-    assert_eq!(projection.snapshot(SNAPSHOT_ITEMS, None).items.len(), 3);
+    assert!(
+        matches!(&bodies[1], TimelineBody::Assistant { text, .. } if text == "still streaming")
+    );
+    assert!(projection.bytes <= MAX_BYTES);
+}
+
+#[test]
+fn an_oversized_command_keeps_a_bounded_title_and_input() {
+    let command = format!("cat <<EOF{}EOF", "z".repeat(MAX_TEXT));
+    let mut projection = Projection::new("thread".into());
+    projection
+        .apply(CodexLiveEvent::Item {
+            turn: "turn".into(),
+            completed: true,
+            item: CodexItem::CommandExecution {
+                id: "command".into(),
+                command: command.clone(),
+                status: "completed".into(),
+                aggregated_output: Some("done".into()),
+                exit_code: Some(0),
+                duration_ms: None,
+            },
+        })
+        .unwrap();
+    assert!(matches!(
+        &bodies(&projection)[..],
+        [TimelineBody::Tool(TimelineTool { title, input, status: TimelineToolStatus::Done, .. })]
+            if is_preview_of(title, "cat <<EOF", "EOF", command.len())
+                && input.starts_with("cat <<EOF")
+                && input.ends_with("done")
+    ));
+}
+
+#[test]
+fn a_skipped_item_is_marked_where_it_belongs_and_a_later_copy_replaces_it() {
+    let mut projection = Projection::new("thread".into());
+    projection
+        .apply(message("turn", "before", "before"))
+        .unwrap();
+    projection.skipped("turn".into(), "huge").unwrap();
+    assert!(matches!(
+        &bodies(&projection)[1],
+        TimelineBody::Notice { kind: TimelineNoticeKind::Error, text } if text == TOO_LARGE
+    ));
+    projection.apply(message("turn", "huge", "fits")).unwrap();
+    assert!(
+        matches!(&bodies(&projection)[..], [_, TimelineBody::Assistant { text, .. }] if text == "fits")
+    );
+}
+
+#[test]
+fn context_codex_injects_as_user_messages_is_not_a_user_row() {
+    let mut projection = Projection::new("thread".into());
+    for (index, parts) in [
+        &["# AGENTS.md instructions for /project\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>"][..],
+        &["<environment_context>\n  <cwd>/project</cwd>\n</environment_context>"],
+        &["<user_instructions>\nbe brief\n</user_instructions>\n"],
+        &[
+            "<ENVIRONMENT_CONTEXT>x</ENVIRONMENT_CONTEXT>",
+            "<turn_aborted>\nstopped\n</turn_aborted>",
+        ],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let operations = projection
+            .apply(user("turn", &index.to_string(), parts))
+            .unwrap();
+        assert!(operations.is_empty(), "{parts:?}");
+    }
+    projection
+        .apply(user(
+            "turn",
+            "typed",
+            &[
+                "<environment_context>x</environment_context>",
+                "What changed?",
+            ],
+        ))
+        .unwrap();
+    projection
+        .apply(user(
+            "turn",
+            "quoted",
+            &["Why does <environment_context> exist?"],
+        ))
+        .unwrap();
+    assert!(matches!(
+        &bodies(&projection)[..],
+        [TimelineBody::User { .. }, TimelineBody::User { .. }]
+    ));
 }

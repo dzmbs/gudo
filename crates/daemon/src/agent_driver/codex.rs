@@ -76,6 +76,50 @@ fn is_turn_lifecycle(frame: &str) -> bool {
     })
 }
 
+/// The turn and item a skipped message's outline started, completed or streamed into on
+/// `thread`, when it is an item Chat shows. Replies and other notifications leave no row.
+fn skipped_item(outline: &str, thread: &str) -> Option<(String, String)> {
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "method")]
+    enum Skipped {
+        #[serde(rename = "item/started", alias = "item/completed")]
+        Item { params: ItemParams },
+        #[serde(rename = "item/agentMessage/delta")]
+        Delta { params: DeltaParams },
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ItemParams {
+        thread_id: String,
+        turn_id: String,
+        item: Item,
+    }
+    #[derive(serde::Deserialize)]
+    struct Item {
+        #[serde(rename = "type")]
+        kind: String,
+        id: String,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct DeltaParams {
+        thread_id: String,
+        turn_id: String,
+        item_id: String,
+    }
+    let (thread_id, turn, item) = match serde_json::from_str(outline).ok()? {
+        Skipped::Item { params } => {
+            let is_shown = matches!(
+                params.item.kind.as_str(),
+                "userMessage" | "agentMessage" | "commandExecution" | "reasoning"
+            );
+            is_shown.then_some((params.thread_id, params.turn_id, params.item.id))?
+        }
+        Skipped::Delta { params } => (params.thread_id, params.turn_id, params.item_id),
+    };
+    (thread_id == thread && !turn.is_empty() && !item.is_empty()).then_some((turn, item))
+}
+
 impl State {
     fn new() -> Self {
         Self {
@@ -188,8 +232,15 @@ impl State {
             self.fail();
             return;
         }
-        if !self.projection_lost && self.current.is_some() {
-            match self.projection.skipped() {
+        let skipped = self
+            .current
+            .as_ref()
+            .zip(outline)
+            .and_then(|(binding, outline)| skipped_item(outline, binding.thread_id()));
+        if !self.projection_lost
+            && let Some((turn, item)) = skipped
+        {
+            match self.projection.skipped(turn, &item) {
                 Ok(operations) => {
                     for operation in operations {
                         self.push(operation);

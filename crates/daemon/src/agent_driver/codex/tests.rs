@@ -212,21 +212,74 @@ fn primary() -> State {
     state
 }
 
+fn chat_bodies(state: &State) -> Vec<proto::TimelineBody> {
+    state
+        .projection
+        .snapshot(projection::SNAPSHOT_ITEMS, None)
+        .items
+        .into_iter()
+        .map(|item| item.body)
+        .collect()
+}
+
 #[test]
-fn a_skipped_server_message_leaves_a_notice_and_status_keeps_flowing() {
+fn a_skipped_reply_or_unreadable_message_leaves_no_row_and_status_keeps_flowing() {
     let mut state = primary();
     state.skipped(Direction::FromServer, None);
+    state.skipped(
+        Direction::FromServer,
+        Some(r#"{"id":4,"result":{"data":[],"nextCursor":null}}"#),
+    );
+    state.skipped(
+        Direction::FromServer,
+        Some(r#"{"id":5,"result":{"thread":{"id":"primary","turns":[]}}}"#),
+    );
+    state.skipped(
+        Direction::FromServer,
+        Some(r#"{"method":"skills/changed","params":{"threadId":"primary"}}"#),
+    );
     assert!(state.is_chat_ready());
-    assert!(matches!(
-        &state
-            .projection
-            .snapshot(projection::SNAPSHOT_ITEMS, None)
-            .items[0]
-            .body,
-        proto::TimelineBody::Notice { .. }
-    ));
+    assert!(chat_bodies(&state).is_empty());
     state.observe(&started_turn("turn"), Direction::FromServer);
     assert!(matches!(state.effects[..], [runtime::Effect::Started]));
+}
+
+#[test]
+fn a_skipped_conversation_item_on_this_thread_leaves_one_notice() {
+    let mut state = primary();
+    state.observe(&started_turn("turn"), Direction::FromServer);
+    let item = |method: &str, thread: &str, kind: &str| {
+        json!({"method":method,"params":{"threadId":thread,"turnId":"turn","item":{"type":kind,"id":"item","text":""}}}).to_string()
+    };
+    state.skipped(
+        Direction::FromServer,
+        Some(&item("item/completed", "other", "agentMessage")),
+    );
+    state.skipped(
+        Direction::FromServer,
+        Some(&item("item/completed", "primary", "imageGeneration")),
+    );
+    assert!(chat_bodies(&state).is_empty());
+    state.skipped(
+        Direction::FromServer,
+        Some(&item("item/started", "primary", "agentMessage")),
+    );
+    state.skipped(
+        Direction::FromServer,
+        Some(&json!({"method":"item/agentMessage/delta","params":{"threadId":"primary","turnId":"turn","itemId":"item","delta":""}}).to_string()),
+    );
+    state.skipped(
+        Direction::FromServer,
+        Some(&item("item/completed", "primary", "agentMessage")),
+    );
+    assert!(matches!(
+        &chat_bodies(&state)[..],
+        [proto::TimelineBody::Notice {
+            kind: proto::TimelineNoticeKind::Error,
+            ..
+        }]
+    ));
+    assert!(state.is_chat_ready());
 }
 
 #[test]
