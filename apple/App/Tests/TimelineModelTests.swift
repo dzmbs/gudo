@@ -238,7 +238,7 @@ final class TimelineModelTests: XCTestCase {
         model.stop()
     }
 
-    func testMalformedDataKeepsTheLastValidFrameAndOffersTerminal() async throws {
+    func testMalformedDataKeepsTheLastValidFrameAndSaysWhy() async throws {
         let model = TimelineModel(pane: 7)
         model.receive(.snapshot(try TimelineFixtureJSON.snapshot(0..<60)))
         try await wait { model.frame.rows.count == 60 }
@@ -246,7 +246,7 @@ final class TimelineModelTests: XCTestCase {
         model.receive(.update("not JSON"))
         try await wait { model.error != nil }
         XCTAssertEqual(model.frame.rows, original)
-        XCTAssertTrue(model.error?.contains("Terminal") ?? false)
+        XCTAssertEqual(model.error, "Chat could not read this session.")
         model.stop()
     }
 

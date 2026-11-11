@@ -216,7 +216,7 @@ nonisolated struct TimelineWindow: Sendable {
                 session = snapshot.session
                 hasNewerGap = true
                 needsHistoryCursor = false
-                note = "This Chat page exceeds the memory budget. Open Terminal."
+                note = "This Chat page exceeds the memory budget."
                 return
             }
             changes.removed.formUnion(order)
@@ -226,7 +226,7 @@ nonisolated struct TimelineWindow: Sendable {
             before = nil
             hasNewerGap = true
             needsHistoryCursor = false
-            note = "This Chat page exceeds the memory budget. Open Terminal."
+            note = "This Chat page exceeds the memory budget."
             changes.didReset = true
             return
         }
