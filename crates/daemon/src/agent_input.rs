@@ -85,6 +85,16 @@ impl AgentInputGate {
         self.draft.record_turn(Some(session), crate::hook_seq());
     }
 
+    pub(crate) fn cleared_in_terminal(&mut self, session: &str) {
+        if self.pending_user_writes == 0 {
+            self.draft.cleared_in_terminal(session);
+        }
+    }
+
+    pub(crate) fn delivered_beside_terminal(&mut self, session: &str) {
+        self.draft.delivered_beside_terminal(session);
+    }
+
     pub(crate) fn pending(launch: String) -> Self {
         Self {
             phase: AgentInputPhase::Pending(launch),

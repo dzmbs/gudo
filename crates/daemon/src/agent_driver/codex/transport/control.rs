@@ -257,13 +257,7 @@ async fn handle(source: &Weak<Live>, mut command: Command) {
     let result =
         tokio::time::timeout_at(command.deadline, execute(source, &command, &mut delivery)).await;
     match (result, &command.action) {
-        (Ok(Ok(())), _) => {
-            if let Some(acknowledgement) = command.acknowledgement.take() {
-                let _ = acknowledgement
-                    .receipt
-                    .send(crate::agent_input::Receipt::Confirmed);
-            }
-        }
+        (Ok(Ok(())), _) => accepted(source, &mut command),
         (result, Action::Approve { common, .. })
             if delivery == Delivery::NotSent
                 || matches!(result, Ok(Err(ControlError::Obsolete))) =>
@@ -279,6 +273,18 @@ async fn handle(source: &Weak<Live>, mut command: Command) {
         }
         _ => {}
     }
+}
+
+pub(in crate::agent_driver::codex) fn accepted(source: &Weak<Live>, command: &mut Command) {
+    let Some(acknowledgement) = command.acknowledgement.take() else {
+        return;
+    };
+    if let Some((_, entry)) = source.upgrade().and_then(|source| source.target()) {
+        lock(&entry.pane.agent_input_gate).delivered_beside_terminal(command.binding.thread_id());
+    }
+    let _ = acknowledgement
+        .receipt
+        .send(crate::agent_input::Receipt::Confirmed);
 }
 
 async fn execute(

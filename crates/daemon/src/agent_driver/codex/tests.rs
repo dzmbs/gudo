@@ -19,6 +19,90 @@ pub(crate) fn source() -> Arc<Live> {
     })
 }
 
+/// A pane whose Codex runs in the app-server lane, bound to the recorded thread, with its
+/// controls queued for the test to answer instead of a real app-server.
+pub(crate) struct Structured {
+    source: Arc<Live>,
+    controls: mpsc::Receiver<transport::control::Command>,
+}
+
+impl Structured {
+    pub(crate) fn launch(core: &Arc<Core>, entry: &Arc<crate::core::PaneEntry>) -> Self {
+        *lock(&entry.agent) = Some(crate::agent::AgentRuntime::structured(
+            proto::AgentKind::Codex,
+            entry.pane.id,
+            crate::agent::adapter(proto::AgentKind::Codex),
+        ));
+        lock(&entry.record).agent.as_mut().unwrap().kind = proto::AgentKind::Codex;
+        let source = source();
+        *lock(&entry.codex) = Some(Arc::clone(&source));
+        source.set_owner(core, entry);
+        source.capture_context(
+            std::env::temp_dir(),
+            entry.pane.pty().foreground_pgid().unwrap(),
+        );
+        let (sender, controls) = mpsc::channel(1);
+        *lock(&source.controls) = Some(sender);
+        let structured = Self { source, controls };
+        let recording = recording();
+        structured.observe(&recording["request"], Direction::FromTui);
+        structured.observe(&recording["response"], Direction::FromServer);
+        structured
+    }
+
+    fn observe(&self, frame: &Value, direction: Direction) {
+        let effects = {
+            let mut state = lock(&self.source.state);
+            state.observe(&frame.to_string(), direction);
+            std::mem::take(&mut state.effects)
+        };
+        self.source.publish(effects);
+    }
+
+    pub(crate) fn session(&self) -> String {
+        lock(&self.source.state)
+            .current
+            .as_ref()
+            .unwrap()
+            .thread_id()
+            .to_owned()
+    }
+
+    pub(crate) fn terminal_submits(&self, text: &str) {
+        let thread = self.session();
+        self.observe(
+            &json!({"id":40,"method":"turn/start","params":{"threadId":thread,"input":[{"type":"text","text":text,"text_elements":[]}]}}),
+            Direction::FromTui,
+        );
+    }
+
+    pub(crate) fn turn_started(&self, turn: &str) {
+        let thread = self.session();
+        self.observe(
+            &json!({"method":"turn/started","params":{"threadId":thread,"turn":{"id":turn,"status":"inProgress"}}}),
+            Direction::FromServer,
+        );
+    }
+
+    pub(crate) fn turn_completed(&self, turn: &str) {
+        let thread = self.session();
+        self.observe(
+            &json!({"method":"turn/completed","params":{"threadId":thread,"turn":{"id":turn,"status":"completed"}}}),
+            Direction::FromServer,
+        );
+    }
+
+    /// Answers the next queued Chat send as Codex accepting its turn.
+    pub(crate) async fn accept_send(&mut self) {
+        let mut command =
+            tokio::time::timeout(std::time::Duration::from_secs(10), self.controls.recv())
+                .await
+                .expect("Chat sent nothing to Codex")
+                .unwrap();
+        transport::control::accepted(&Arc::downgrade(&self.source), &mut command);
+    }
+}
+
 fn recording() -> Value {
     serde_json::from_str(include_str!(
         "../../../../agents/tests/fixtures/codex-live/pane-stream-0.166.0.json"

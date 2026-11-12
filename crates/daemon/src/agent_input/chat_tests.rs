@@ -838,3 +838,134 @@ async fn text_passed_off_as_a_mouse_report_still_counts_as_typing() {
     );
     fixture.daemon.shutdown().await;
 }
+
+async fn structured_fixture() -> (RawFixture, crate::agent_driver::codex::tests::Structured) {
+    let raw = raw_fixture().await;
+    raw.reset_input("codex launch");
+    let structured =
+        crate::agent_driver::codex::tests::Structured::launch(&raw.daemon.core, &raw.entry);
+    (raw, structured)
+}
+
+impl RawFixture {
+    async fn prepared(&self) -> super::draft::Offer {
+        match self.client.chat_prepare(self.entry.pane.id).await.unwrap() {
+            ChatSendStatus::Prepared {
+                ticket,
+                revision,
+                needs_confirmation,
+            } => super::draft::Offer {
+                ticket,
+                revision,
+                needs_confirmation,
+            },
+            status => panic!("expected prompt ticket, got {status:?}"),
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_structured_codex_launch_with_nothing_typed_sends_without_a_warning() {
+    let (raw, _structured) = structured_fixture().await;
+    let offer = raw.prepared().await;
+    raw.daemon.shutdown().await;
+    assert!(!offer.needs_confirmation);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_structured_codex_send_leaves_terminal_clean_until_someone_types() {
+    let (raw, mut structured) = structured_fixture().await;
+    let pane = raw.entry.pane.id;
+    let offer = raw.prepared().await;
+    let sender = Arc::clone(&raw.client);
+    let sent = tokio::spawn(async move {
+        sender
+            .chat_send(pane, offer.ticket, "first".into(), None)
+            .await
+            .unwrap()
+    });
+    structured.accept_send().await;
+    assert_eq!(sent.await.unwrap(), ChatSendStatus::Confirmed);
+    structured.turn_started("first");
+    let during_turn = raw.prepared().await;
+    structured.turn_completed("first");
+    let after_turn = raw.prepared().await;
+
+    let sender = Arc::clone(&raw.client);
+    let sent = tokio::spawn(async move {
+        sender
+            .chat_send(pane, after_turn.ticket, "raced".into(), None)
+            .await
+            .unwrap()
+    });
+    wait_until(|| lock(&raw.entry.pane.agent_input_gate).draft.is_pending()).await;
+    raw.type_draft("typed during send").await;
+    let raced = sent.await.unwrap();
+    structured.accept_send().await;
+    let after_race = raw.prepared().await;
+    raw.daemon.shutdown().await;
+    assert!(!during_turn.needs_confirmation);
+    assert!(!after_turn.needs_confirmation);
+    assert_eq!(raced, ChatSendStatus::NotConfirmed);
+    assert!(after_race.needs_confirmation);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn typing_after_a_structured_codex_turn_starts_needs_confirmation() {
+    let (raw, mut structured) = structured_fixture().await;
+    let pane = raw.entry.pane.id;
+    let offer = raw.prepared().await;
+    let sender = Arc::clone(&raw.client);
+    let sent = tokio::spawn(async move {
+        sender
+            .chat_send(pane, offer.ticket, "first".into(), None)
+            .await
+            .unwrap()
+    });
+    structured.accept_send().await;
+    assert_eq!(sent.await.unwrap(), ChatSendStatus::Confirmed);
+    structured.turn_started("first");
+    raw.type_draft("draft").await;
+    let after_typing = raw.prepared().await;
+    raw.daemon.shutdown().await;
+    assert!(after_typing.needs_confirmation);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_structured_codex_send_never_clears_a_draft_left_in_terminal() {
+    let (raw, mut structured) = structured_fixture().await;
+    let pane = raw.entry.pane.id;
+    raw.type_draft("draft").await;
+    let offer = raw.prepared().await;
+    assert!(offer.needs_confirmation);
+    let sender = Arc::clone(&raw.client);
+    let sent = tokio::spawn(async move {
+        sender
+            .chat_send(pane, offer.ticket, "confirmed".into(), Some(offer.revision))
+            .await
+            .unwrap()
+    });
+    structured.accept_send().await;
+    assert_eq!(sent.await.unwrap(), ChatSendStatus::Confirmed);
+    structured.turn_started("confirmed");
+    let after_send = raw.prepared().await;
+    raw.daemon.shutdown().await;
+    assert!(after_send.needs_confirmation);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_prompt_submitted_in_terminal_clears_a_structured_codex_draft_until_more_typing() {
+    let (raw, structured) = structured_fixture().await;
+    raw.type_draft("typed in Terminal\r").await;
+    let before_submit = raw.prepared().await;
+    structured.terminal_submits("typed in Terminal");
+    structured.turn_started("typed");
+    let after_submit = raw.prepared().await;
+    raw.type_draft("next").await;
+    structured.turn_completed("typed");
+    let after_typing = raw.prepared().await;
+    raw.daemon.shutdown().await;
+    assert!(before_submit.needs_confirmation);
+    assert!(!after_submit.needs_confirmation);
+    assert!(after_typing.needs_confirmation);
+}

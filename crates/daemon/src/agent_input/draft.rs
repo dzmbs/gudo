@@ -265,6 +265,41 @@ impl Draft {
         self.tainted_submission = false;
     }
 
+    /// Terminal's message field is empty when nothing was typed since the last submit, or when
+    /// the last key typed was Enter and the agent then started a turn or a thread.
+    pub(crate) fn cleared_in_terminal(&mut self, session: &str) {
+        if session.is_empty()
+            || self.tainted_submission
+            || !(self.byte_count == 0 || matches!(self.input.last(), Some(b'\r' | b'\n')))
+        {
+            return;
+        }
+        if self.byte_count != 0 {
+            self.revision = self.revision.saturating_add(1);
+            self.input.clear();
+            self.byte_count = 0;
+        }
+        if self.pending.is_none() {
+            self.baseline = Some(session.to_owned());
+        }
+    }
+
+    /// A Chat send the agent's own server accepted beside Terminal, which leaves Terminal's
+    /// message field as it was.
+    pub(crate) fn delivered_beside_terminal(&mut self, session: &str) {
+        if !self
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.session == session && pending.revision == self.revision)
+        {
+            return;
+        }
+        self.finish(Receipt::Confirmed);
+        if self.byte_count == 0 && !self.tainted_submission && !session.is_empty() {
+            self.baseline = Some(session.to_owned());
+        }
+    }
+
     pub(crate) fn acknowledgement(
         &self,
         revision: u64,

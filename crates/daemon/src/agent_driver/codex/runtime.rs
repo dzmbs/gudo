@@ -27,6 +27,7 @@ pub(super) enum Effect {
     Lost,
     Hydrate(agents::CodexThreadBinding),
     Ready,
+    SubmittedInTerminal(String),
 }
 
 impl Effect {
@@ -142,7 +143,7 @@ impl Runtime {
                 self.pending.clear();
                 (EventKind::Stale, Claim::Release, None)
             }
-            Effect::Hydrate(_) | Effect::Ready => return None,
+            Effect::Hydrate(_) | Effect::Ready | Effect::SubmittedInTerminal(_) => return None,
         };
         let mut signal =
             Signal::new(Source::Structured, Confidence::Authoritative, kind).with_claim(claim);
@@ -245,9 +246,15 @@ impl Live {
             return;
         };
         for effect in effects {
-            if let Effect::Hydrate(binding) = effect {
-                self.load_history(binding);
-                continue;
+            match &effect {
+                Effect::Hydrate(binding) => {
+                    self.load_history(binding.clone());
+                    continue;
+                }
+                Effect::Bound(thread, _) | Effect::SubmittedInTerminal(thread) => {
+                    lock(&entry.pane.agent_input_gate).cleared_in_terminal(thread);
+                }
+                _ => {}
             }
             let Some(signal) = lock(&self.runtime).apply(effect) else {
                 core.emit(crate::core::Event::PaneMeta(entry.pane.id));

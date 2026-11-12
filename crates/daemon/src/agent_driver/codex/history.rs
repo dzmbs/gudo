@@ -40,15 +40,21 @@ pub(super) fn observe_tui(state: &mut State, frame: &str) {
     if request.id.is_none() {
         return;
     }
-    if request.method == Some("thread/rollback")
-        && state.binding.binding().is_some_and(|binding| {
-            request
-                .params
-                .as_ref()
-                .and_then(|params| params.thread_id.as_deref())
-                == Some(binding.thread_id())
-        })
-    {
+    let bound_thread = state.binding.binding().is_some_and(|binding| {
+        request
+            .params
+            .as_ref()
+            .and_then(|params| params.thread_id.as_deref())
+            == Some(binding.thread_id())
+    });
+    if request.method == Some("turn/start") && bound_thread {
+        if let Some(binding) = &state.current {
+            let thread = binding.thread_id().to_owned();
+            state.effects.push(Effect::SubmittedInTerminal(thread));
+        }
+        return;
+    }
+    if request.method == Some("thread/rollback") && bound_thread {
         // Until rollback has an ordered baseline, never present old rows as current.
         // Status keeps flowing; the official request is forwarded unchanged.
         state.lose_projection();
