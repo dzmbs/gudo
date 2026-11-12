@@ -179,7 +179,7 @@ async fn bind_until_ok(inner: &Inner) -> Endpoint {
 
 fn route(inner: &Inner) -> Route {
     let network = lock(&inner.net);
-    Route::new(network.0, &inner.relays, &network.1)
+    Route::new(network.0, &inner.relays, &network.1).within(&inner.ticket.addrs)
 }
 
 /// How to reach a daemon: what the client asks for (this computer's daemon, local only, its
@@ -226,6 +226,15 @@ impl Route {
                 auth_token: auth_token.clone(),
                 own: false,
             },
+        }
+    }
+
+    /// A direct route to a daemon that only listens on loopback needs no other sockets.
+    fn within(self, addrs: &[std::net::SocketAddr]) -> Self {
+        let loopback_only = !addrs.is_empty() && addrs.iter().all(|addr| addr.ip().is_loopback());
+        match self {
+            Self::Direct if loopback_only => Self::Loopback,
+            route => route,
         }
     }
 }
@@ -2022,6 +2031,19 @@ mod tests {
             Route::Direct
         );
         assert!(relays(&Route::Direct).is_empty());
+    }
+
+    #[test]
+    fn a_direct_ticket_on_loopback_alone_binds_loopback_alone() {
+        let loopback: Vec<std::net::SocketAddr> = vec![
+            "127.0.0.1:47011".parse().unwrap(),
+            "[::1]:47012".parse().unwrap(),
+        ];
+        let mixed = [loopback[0], "192.0.2.20:47011".parse().unwrap()];
+        assert_eq!(Route::Direct.within(&loopback), Route::Loopback);
+        assert_eq!(Route::Direct.within(&mixed), Route::Direct);
+        assert_eq!(Route::Direct.within(&[]), Route::Direct);
+        assert_eq!(Route::Default.within(&loopback), Route::Default);
     }
 
     #[test]

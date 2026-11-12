@@ -38,7 +38,8 @@ On the app side `client_core::Client::connect*` reads the extras. The daemon on 
 (`ConnectOptions::this_computer`, the Mac app's own helper) is dialled on loopback alone, at the
 ticket's ports, from sockets bound to loopback, whatever the ticket and the settings say: it never
 needs the network. Otherwise, if the app's own `RelayMode` is `Disabled` (a "local only" switch
-in the app) that wins; then a local-only daemon (`Disabled` in the ticket) is dialled directly;
+in the app) that wins; then a local-only daemon (`Disabled` in the ticket) is dialled directly,
+from loopback sockets alone when every ticket address is loopback;
 then the app's own relays
 (`ConnectOptions::relay_urls`, `relay_auth_token`) replace the ticket's; otherwise the daemon's
 choice is used. `ConnectOptions::relay_ca_der` adds trust roots for a private-CA relay.
