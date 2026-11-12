@@ -749,9 +749,11 @@ public enum HostError: Error, Equatable, LocalizedError {
     case notConnected
     case badTicket(String)
     case missingSecret(String)
+    case offline
 
     public var errorDescription: String? {
         switch self {
+        case .offline: "No network. Pairing needs one, so connect and try again."
         case .notConnected: "The host is not connected. It will resume when it is back."
         case .badTicket: "That isn't a valid pairing ticket. Copy the whole ticket again from the host."
         case .missingSecret(let what): "Missing \(what)"

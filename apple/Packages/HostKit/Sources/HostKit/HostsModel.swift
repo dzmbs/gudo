@@ -525,6 +525,7 @@ public final class HostsModel {
     private func pair(
         _ ticket: PairingTicket, name: String?, replacing hostId: String? = nil, announcing: Bool, thisDevice: Bool = false
     ) async throws -> String {
+        if network.isOffline && !thisDevice { throw HostError.offline }
         let existing = hostId.flatMap(record) ?? records.first { $0.daemonId == ticket.info.daemonId }
         var record = existing ?? HostRecord(name: name ?? ticket.defaultName, kind: .daemon, daemonId: ticket.info.daemonId)
         if existing == nil { record.nameSource = .placeholder }

@@ -72,6 +72,28 @@ import GudoCore
         #expect(dialled.filter { $0.ticket == remoteTicket }.map(\.endpointFile) == [nil, nil])
     }
 
+    @Test func withoutANetworkOnlyThisMacPairs() async throws {
+        let remote = try LocalDaemon()
+        let mine = try LocalDaemon()
+        let model = makeModel()
+        let layout = sampleLayout()
+        model.dialer = { _, _, listener in
+            let client = FakeClient(listener: listener)
+            client.send(.connected(epoch: 1, resumed: false))
+            client.send(.attached(sessionId: 7, via: .requested, missing: nil))
+            client.send(.layout(layout: layout))
+            return client
+        }
+        let remoteTicket = try PairingTicket(try await remote.ticket())
+        model.network.update(offline: true, interfaces: [], lowDataMode: false, signature: "offline")
+        await #expect(throws: HostError.offline) {
+            try await model.pair(remoteTicket, name: "box")
+        }
+        #expect(model.records.isEmpty)
+        _ = try await model.pairThisDevice(try PairingTicket(try await mine.ticket()), name: "This Mac")
+        #expect(model.records.count == 1)
+    }
+
     @Test func aNewHelperReplacesTheOldOne() async throws {
         let first = try LocalDaemon()
         let model = makeModel()

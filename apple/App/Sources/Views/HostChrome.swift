@@ -12,11 +12,15 @@ struct HostNotices: View {
     @State private var offerDismissed = false
     @State private var updateDismissed = false
 
+    private var isThisDevice: Bool {
+        workspace.hostId.flatMap(app.hosts.record)?.isThisDevice == true
+    }
+
     var body: some View {
         VStack(alignment: .trailing, spacing: DS.Space.s) {
             if app.hosts.network.isOffline {
                 notice(systemImage: "wifi.slash", tint: DS.Palette.error) {
-                    Text("No network. Panes resume when it's back.")
+                    Text(isThisDevice ? "No network. This Mac keeps working; other hosts resume when it's back." : "No network. Panes resume when it's back.")
                 }
                 .accessibilityIdentifier("offline-banner")
             }
