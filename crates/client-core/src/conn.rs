@@ -45,6 +45,11 @@ const DIAL_DEADLINES: [Duration; 3] = [
     proto::IDLE_TIMEOUT,
 ];
 const MIN_BACKOFF: Duration = Duration::from_millis(100);
+/// Failed dials in a row after which the next one starts over on a fresh endpoint (and again
+/// after as many more): a network change can leave an endpoint unable to reach anyone (a
+/// socket that could not be bound again, a path to an address that is gone), and redialling
+/// on it would fail until the app restarts.
+const FRESH_ENDPOINT_AFTER: u32 = 3;
 /// Following a pane again after its stream ended waits this long, doubled for each stream in
 /// a row that ended without showing anything, up to [`MAX_FOLLOW_AGAIN_DELAY`].
 const FOLLOW_AGAIN_DELAY: Duration = Duration::from_millis(250);
@@ -373,6 +378,7 @@ pub(crate) async fn supervise(inner: Arc<Inner>) {
     *lock(&inner.endpoint) = Some(endpoint.clone());
     let mut backoff = MIN_BACKOFF;
     let mut consecutive_timeouts = 0;
+    let mut failed_dials = 0;
     loop {
         if *lock(&inner.paused) {
             inner.reconnect.notified().await;
@@ -383,9 +389,10 @@ pub(crate) async fn supervise(inner: Arc<Inner>) {
             consecutive_timeouts = 0;
         }
         if inner.rebind.load(Ordering::SeqCst) {
-            endpoint.close().await;
-            endpoint = bind_until_ok(&inner).await;
+            let stale = std::mem::replace(&mut endpoint, bind_until_ok(&inner).await);
             *lock(&inner.endpoint) = Some(endpoint.clone());
+            // Closing waits on the peers of its connections, which may be gone.
+            tokio::spawn(async move { stale.close().await });
         }
         let dial_deadline = DIAL_DEADLINES[consecutive_timeouts.min(DIAL_DEADLINES.len() - 1)];
         let result = match dial_within(&inner, &endpoint, dial_deadline).await {
@@ -393,6 +400,8 @@ pub(crate) async fn supervise(inner: Arc<Inner>) {
             DialOutcome::Interrupted => continue,
             DialOutcome::TimedOut => {
                 consecutive_timeouts += 1;
+                failed_dials += 1;
+                start_over_after(&inner, failed_dials);
                 inner.emit(ClientEvent::Disconnected {
                     reason: format!("no answer within {} s", dial_deadline.as_secs()),
                 });
@@ -410,6 +419,7 @@ pub(crate) async fn supervise(inner: Arc<Inner>) {
                 continue;
             }
             Ok(live) => {
+                failed_dials = 0;
                 let connected_at = tokio::time::Instant::now();
                 let reason = run(&inner, live).await;
                 *lock(&inner.connection) = None;
@@ -437,6 +447,8 @@ pub(crate) async fn supervise(inner: Arc<Inner>) {
                 continue;
             }
             Err(err) => {
+                failed_dials += 1;
+                start_over_after(&inner, failed_dials);
                 inner.emit(ClientEvent::Disconnected {
                     reason: err.to_string(),
                 });
@@ -444,6 +456,12 @@ pub(crate) async fn supervise(inner: Arc<Inner>) {
         }
         let _ = tokio::time::timeout(backoff, inner.reconnect.notified()).await;
         backoff = (backoff * 2).min(MAX_BACKOFF);
+    }
+}
+
+fn start_over_after(inner: &Inner, failed_dials: u32) {
+    if failed_dials.is_multiple_of(FRESH_ENDPOINT_AFTER) {
+        inner.rebind.store(true, Ordering::SeqCst);
     }
 }
 

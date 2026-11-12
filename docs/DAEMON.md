@@ -820,6 +820,12 @@ concurrent connections through one forward are tested;
 `Client::network_changed` (the device's network changed) keeps a live connection, telling iroh
 to look for paths again (it moves the connection onto one that works, relay or direct, without
 closing it, so forwarded websockets survive); only a client without a live connection redials.
+A redial after a network change, after three failed dials in a row, or asked for
+(`Client::reconnect`, "Reconnect Now") starts over on a fresh iroh endpoint: an endpoint a
+network change left unable to reach anyone (a socket that could not be bound again, a path to an
+address that is gone) would otherwise fail every redial until the app restarts
+(`recovery::dials_that_keep_failing_start_over_on_a_fresh_endpoint`,
+`reconnecting_now_starts_over_on_a_fresh_endpoint`).
 
 Loopback, one connection, 128 MiB, release build (`forward_throughput_and_latency`):
 

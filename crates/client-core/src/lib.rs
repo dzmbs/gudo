@@ -479,7 +479,8 @@ pub(crate) struct Inner {
     /// How to reach the daemon now: `config.relay` and the relay parts of `options` at first,
     /// replaced by [`Client::set_relays`].
     pub net: Mutex<(RelayMode, ConnectOptions)>,
-    /// `net` changed: bind a new endpoint before the next dial.
+    /// Bind a new endpoint before the next dial: `net` changed, or the old one may no longer
+    /// reach anyone.
     pub rebind: AtomicBool,
     pub listener: Arc<dyn ClientListener>,
     pub wanted: Mutex<Wanted>,
@@ -1229,12 +1230,13 @@ impl Client {
         self.inner.daemon_has(feature)
     }
 
-    /// Drops the connection and redials immediately.
+    /// Drops the connection and redials immediately, on a fresh endpoint.
     pub fn reconnect(&self) {
         self.unpause();
         if let Some(connection) = lock(&self.inner.connection).take() {
             connection.close(0u32.into(), b"reconnect");
         }
+        self.inner.rebind.store(true, Ordering::SeqCst);
         self.refresh_network();
         self.inner.skips_backoff.store(true, Ordering::SeqCst);
         self.inner.reconnect.notify_one();
@@ -1270,14 +1272,15 @@ impl Client {
 
     /// The device's network changed. A live connection is kept: iroh moves it onto a path that
     /// works (a new direct address, or the relay), so streams on it (forwarded websockets)
-    /// survive. Without one the client redials, unless a dial is in flight; a suspended client
-    /// stays suspended.
+    /// survive. Without one the client redials on a fresh endpoint, unless a dial is in flight
+    /// (it carries on, and the next dial starts fresh); a suspended client stays suspended.
     pub fn network_changed(&self) {
         if *lock(&self.inner.paused) {
             return;
         }
         self.refresh_network();
         if self.live_connection().is_none() {
+            self.inner.rebind.store(true, Ordering::SeqCst);
             self.redial_unless_dialing();
         }
     }

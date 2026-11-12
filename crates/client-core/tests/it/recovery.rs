@@ -1,9 +1,9 @@
 //! Recovery: a dead path is given up on quickly, the foreground redials at once whatever the
 //! backoff, and a network change never throws away a dial that is about to finish.
 
-use std::net::UdpSocket;
-use std::sync::Arc;
+use std::net::{SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use client_core::ClientEvent;
@@ -28,10 +28,53 @@ fn ticket_for(daemon_id: DaemonId, addrs: Vec<std::net::SocketAddr>) -> Ticket {
 /// A daemon stand-in that welcomes each client after `welcome_delay`. Returns its ticket and
 /// the number of QUIC connections it has accepted.
 async fn welcoming_daemon(welcome_delay: Duration) -> (iroh::Endpoint, Ticket, Arc<AtomicUsize>) {
+    let (endpoint, ticket) = stand_in_endpoint().await;
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let server = endpoint.clone();
+    let accepted_count = Arc::clone(&accepted);
+    let daemon_id = ticket.daemon_id;
+    tokio::spawn(async move {
+        while let Some(incoming) = server.accept().await {
+            accepted_count.fetch_add(1, Ordering::SeqCst);
+            tokio::spawn(welcome(incoming, daemon_id, welcome_delay));
+        }
+    });
+    (endpoint, ticket, accepted)
+}
+
+/// A daemon stand-in that refuses the first `refusals` connections and welcomes the rest.
+/// Returns its ticket and the address each connection came from.
+async fn refusing_daemon(refusals: usize) -> (iroh::Endpoint, Ticket, Arc<Mutex<Vec<SocketAddr>>>) {
+    let (endpoint, ticket) = stand_in_endpoint().await;
+    let sources = Arc::new(Mutex::new(Vec::new()));
+    let server = endpoint.clone();
+    let seen = Arc::clone(&sources);
+    let daemon_id = ticket.daemon_id;
+    tokio::spawn(async move {
+        while let Some(incoming) = server.accept().await {
+            let iroh::endpoint::IncomingAddr::Ip(source) = incoming.remote_addr() else {
+                continue;
+            };
+            let arrived = {
+                let mut seen = seen.lock().unwrap();
+                seen.push(source);
+                seen.len()
+            };
+            if arrived <= refusals {
+                incoming.refuse();
+            } else {
+                tokio::spawn(welcome(incoming, daemon_id, Duration::ZERO));
+            }
+        }
+    });
+    (endpoint, ticket, sources)
+}
+
+async fn stand_in_endpoint() -> (iroh::Endpoint, Ticket) {
     let endpoint = iroh::Endpoint::builder(presets::Minimal)
         .alpns(vec![proto::ALPN.to_vec()])
         .clear_ip_transports()
-        .bind_addr("127.0.0.1:0".parse::<std::net::SocketAddr>().unwrap())
+        .bind_addr("127.0.0.1:0".parse::<SocketAddr>().unwrap())
         .unwrap()
         .bind()
         .await
@@ -40,51 +83,43 @@ async fn welcoming_daemon(welcome_delay: Duration) -> (iroh::Endpoint, Ticket, A
         DaemonId(*endpoint.id().as_bytes()),
         endpoint.bound_sockets(),
     );
-    let accepted = Arc::new(AtomicUsize::new(0));
-    let server = endpoint.clone();
-    let accepted_count = Arc::clone(&accepted);
-    let daemon_id = ticket.daemon_id;
-    tokio::spawn(async move {
-        while let Some(incoming) = server.accept().await {
-            accepted_count.fetch_add(1, Ordering::SeqCst);
-            tokio::spawn(async move {
-                let Ok(connection) = incoming.await else {
-                    return;
-                };
-                let Ok((mut control_tx, mut control_rx)) = connection.accept_bi().await else {
-                    return;
-                };
-                let mut prefix = [0; proto::frame::LEN_PREFIX];
-                if control_rx.read_exact(&mut prefix).await.is_err() {
-                    return;
-                }
-                let length = proto::frame::body_len(prefix, proto::MAX_FRAME_LEN).unwrap();
-                let mut hello_bytes = vec![0; length];
-                if control_rx.read_exact(&mut hello_bytes).await.is_err() {
-                    return;
-                }
-                let _: ClientCtl = proto::frame::decode_body(&hello_bytes).unwrap();
-                tokio::time::sleep(welcome_delay).await;
-                let welcome = ServerCtl::Welcome(Welcome {
-                    daemon_id,
-                    session_epoch: SessionEpoch(1),
-                    roles: Roles::OWNER,
-                    snapshot_format: u32::from(ghostty_vt::snapshot_format()),
-                    panes: vec![],
-                    resume_token: ResumeToken(vec![1]),
-                });
-                if control_tx
-                    .write_all(&proto::frame::to_vec(&welcome).unwrap())
-                    .await
-                    .is_err()
-                {
-                    return;
-                }
-                connection.closed().await;
-            });
-        }
+    (endpoint, ticket)
+}
+
+async fn welcome(incoming: iroh::endpoint::Incoming, daemon_id: DaemonId, welcome_delay: Duration) {
+    let Ok(connection) = incoming.await else {
+        return;
+    };
+    let Ok((mut control_tx, mut control_rx)) = connection.accept_bi().await else {
+        return;
+    };
+    let mut prefix = [0; proto::frame::LEN_PREFIX];
+    if control_rx.read_exact(&mut prefix).await.is_err() {
+        return;
+    }
+    let length = proto::frame::body_len(prefix, proto::MAX_FRAME_LEN).unwrap();
+    let mut hello_bytes = vec![0; length];
+    if control_rx.read_exact(&mut hello_bytes).await.is_err() {
+        return;
+    }
+    let _: ClientCtl = proto::frame::decode_body(&hello_bytes).unwrap();
+    tokio::time::sleep(welcome_delay).await;
+    let welcome = ServerCtl::Welcome(Welcome {
+        daemon_id,
+        session_epoch: SessionEpoch(1),
+        roles: Roles::OWNER,
+        snapshot_format: u32::from(ghostty_vt::snapshot_format()),
+        panes: vec![],
+        resume_token: ResumeToken(vec![1]),
     });
-    (endpoint, ticket, accepted)
+    if control_tx
+        .write_all(&proto::frame::to_vec(&welcome).unwrap())
+        .await
+        .is_err()
+    {
+        return;
+    }
+    connection.closed().await;
 }
 
 async fn wait_for(
@@ -123,6 +158,42 @@ async fn a_dial_to_a_silent_address_is_given_up_long_before_the_idle_timeout() {
         elapsed < Duration::from_secs(6),
         "a dead path held the dial for {elapsed:?}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dials_that_keep_failing_start_over_on_a_fresh_endpoint() {
+    let (endpoint, ticket, sources) = refusing_daemon(4).await;
+    let (_client, mut events) = super::connect(&ticket.to_string(), false);
+    assert!(
+        wait_for(&mut events, Duration::from_secs(15), |event| {
+            matches!(event, ClientEvent::Connected { .. })
+        })
+        .await,
+        "the client never got past the refusals"
+    );
+    let sources = sources.lock().unwrap().clone();
+    assert!(
+        sources.windows(2).any(|pair| pair[0] != pair[1]),
+        "every dial came from the endpoint that kept failing: {sources:?}"
+    );
+    endpoint.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reconnecting_now_starts_over_on_a_fresh_endpoint() {
+    let (endpoint, ticket, sources) = refusing_daemon(0).await;
+    let (client, mut events) = super::connect(&ticket.to_string(), false);
+    let is_connected = |event: &ClientEvent| matches!(event, ClientEvent::Connected { .. });
+    assert!(wait_for(&mut events, Duration::from_secs(10), is_connected).await);
+    client.reconnect();
+    assert!(wait_for(&mut events, Duration::from_secs(10), is_connected).await);
+    let sources = sources.lock().unwrap().clone();
+    assert_eq!(sources.len(), 2, "{sources:?}");
+    assert_ne!(
+        sources[0], sources[1],
+        "Reconnect Now dialled again from the same endpoint"
+    );
+    endpoint.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
