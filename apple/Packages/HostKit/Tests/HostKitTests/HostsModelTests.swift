@@ -46,7 +46,7 @@ nonisolated func temporaryDirectory() -> URL {
 
     @Test func lowDataModeTurnedOffAfterOpeningReachesTheClient() throws {
         let model = HostsModel(secrets: MemorySecretStore(), repository: HostRepository(directory: temporaryDirectory()))
-        model.dialer = { _, listener in FakeClient(listener: listener) }
+        model.dialer = { _, _, listener in FakeClient(listener: listener) }
         model.upsert(HostRecord(id: "h", name: "studio", kind: .daemon, daemonId: "d1"))
         try model.secrets.set("ticket", for: "host.h.ticket")
         model.network.update(offline: false, interfaces: ["wifi"], lowDataMode: true, signature: "wifi-constrained")
@@ -62,7 +62,7 @@ nonisolated func temporaryDirectory() -> URL {
         let model = HostsModel(
             secrets: MemorySecretStore(), repository: HostRepository(directory: temporaryDirectory()),
             configuration: configuration)
-        model.dialer = { _, listener in FakeClient(listener: listener) }
+        model.dialer = { _, _, listener in FakeClient(listener: listener) }
         model.upsert(HostRecord(id: "h", name: "studio", kind: .daemon, daemonId: "d1"))
         try model.secrets.set("ticket", for: "host.h.ticket")
         let connection = try #require(try model.open("h") as? DaemonConnection)

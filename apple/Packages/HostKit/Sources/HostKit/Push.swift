@@ -130,7 +130,7 @@ extension HostsModel {
         let key = try DeviceIdentity.load(from: secrets)
         return try await sendPushAction(
             ticket: ticket, config: clientConfig(key, mirrorVt: false),
-            options: relaySettings.connectOptions(askpass: false), token: token,
+            options: connectOptions(for: record, askpass: false), token: token,
             decision: approve ? .approve : .deny, timeoutMs: UInt64(timeout / .milliseconds(1)))
     }
 }

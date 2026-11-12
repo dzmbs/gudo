@@ -445,11 +445,12 @@ default folder (`~/Library/Application Support/<name>`, where `gudo` and the age
 daemon already running there that is not an app's (`hostd service install`, a `run` in a
 terminal: its executable is outside any `.app`) is used as is, and the app's own login item is
 unregistered so launchd does not keep starting one that cannot take the folder. The app pairs
-once with a `pair --json --local` ticket (loopback addresses: works offline; `gudo devices` lists
-the device as "This Mac (Gudo app)") as the owner, saved as a host with `thisDevice` and named
-"This Mac": listed first, no helper-update offers (a new app build restarts the login item:
-`launchctl kickstart -k`), and an empty plain local group gives way to it (plain shells still
-open stay until closed). When the helper refuses the app's device as removed (`InvalidGrant`,
+once with a `pair --json --local` ticket (`gudo devices` lists the device as "This Mac (Gudo
+app)") as the owner, saved as a host with `thisDevice` and named "This Mac": dialled on loopback
+alone (`ConnectOptions.thisComputer`: no relay, no Wi-Fi address, no lookup, from the first
+pairing dial on), so it never needs the network; listed first, no helper-update offers (a new
+app build restarts the login item: `launchctl kickstart -k`), and an empty plain local group
+gives way to it (plain shells still open stay until closed). When the helper refuses the app's device as removed (`InvalidGrant`,
 `Revoked`: `gudo devices` removed it, or its pairing was lost), `HostsModel.onThisDeviceRemoved`
 has `LocalHelper.pairAgain` mint a fresh local ticket and pair again without asking; the host
 shows as connecting meanwhile, and the refusal (in words) only if that fails. Remote hosts never

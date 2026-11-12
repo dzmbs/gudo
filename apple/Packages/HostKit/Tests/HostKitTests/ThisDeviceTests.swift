@@ -1,6 +1,7 @@
 import Foundation
 @testable import HostKit
 import PaneLayout
+import Synchronization
 import Testing
 import GudoCore
 
@@ -35,6 +36,37 @@ import GudoCore
         try groups.open(other)
         try groups.open(id)
         #expect(groups.groups.map(\.id) == [id, other])
+    }
+
+    /// This Mac never needs the network to reach its own helper: it is dialled on loopback alone
+    /// from the first pairing dial on, and again whenever it is opened. Other hosts follow the
+    /// relay settings.
+    @Test func thisMacIsDialledOnLoopbackAlone() async throws {
+        let remote = try LocalDaemon()
+        let mine = try LocalDaemon()
+        let model = makeModel()
+        let dials = Mutex<[(ticket: String, thisComputer: Bool)]>([])
+        let layout = sampleLayout()
+        model.dialer = { ticket, options, listener in
+            dials.withLock { $0.append((ticket, options.thisComputer)) }
+            let client = FakeClient(listener: listener)
+            client.send(.connected(epoch: 1, resumed: false))
+            client.send(.attached(sessionId: 7, via: .requested, missing: nil))
+            client.send(.layout(layout: layout))
+            return client
+        }
+        let remoteTicket = try await remote.ticket()
+        let myTicket = try await mine.ticket()
+        let other = try await model.pair(try PairingTicket(remoteTicket), name: "box")
+        let id = try await model.pairThisDevice(try PairingTicket(myTicket), name: "This Mac")
+        model.disconnect(id)
+        model.disconnect(other)
+        try model.open(id)
+        try model.open(other)
+
+        let dialled = dials.withLock { $0 }
+        #expect(dialled.filter { $0.ticket == myTicket }.map(\.thisComputer) == [true, true])
+        #expect(dialled.filter { $0.ticket == remoteTicket }.map(\.thisComputer) == [false, false])
     }
 
     @Test func aNewHelperReplacesTheOldOne() async throws {

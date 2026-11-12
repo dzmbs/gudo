@@ -187,13 +187,13 @@ A window opens on the workspace this device saved of each host, before the host 
 | First frame of a window on the saved workspace, no host connected (seed + window model + 3 panes + layout + draw, in-process offscreen) | 0.37-0.86 s first window of a test process; 0.17-0.36 s warm (three runs, machine shared with other builds) |
 | The same window on this device's plain shell, for comparison | 0.14-0.24 s warm |
 
-This Mac as the app reaches it (its own helper with relays on, a `pair --local` ticket, the app's
-relay settings; HostKit `ThisDeviceTests`, M5 Max, debug):
+This Mac as the app reaches it (its own helper with relays on, a `pair --local` ticket, dialled on
+loopback alone; HostKit `ThisDeviceTests`, M5 Max, debug):
 
 | | Time |
 |---|---|
-| Opened again: connected / daemon layout | 8 / 12 ms median of 5 |
-| Helper started after the app dialled (login item still starting): helper up, then live | 50 ms, then 11 ms (was 430-460 ms: the redial waited for the dial in flight to find the helper) |
+| Opened again: connected / daemon layout | 5 / 10 ms median of 5 (was 8 / 12 ms with relays and lookup on the dial) |
+| Helper started after the app dialled (login item still starting): helper up, then live | 57 ms, then 10 ms on a fresh endpoint (was 430-460 ms: the redial waited for the dial in flight to find the helper) |
 
 A connection on its way shows nothing for 1 s (no notice, no "Connecting to…" page, the saved
 tabs undimmed), so none of this is seen.

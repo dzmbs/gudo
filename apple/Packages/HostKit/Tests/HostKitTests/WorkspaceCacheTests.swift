@@ -295,7 +295,7 @@ struct WorkspaceCacheTests {
         let model = HostsModel(secrets: MemorySecretStore(), repository: HostRepository(directory: temporaryDirectory()))
         let store = WorkspaceCacheStore(directory: temporaryDirectory(), secrets: MemorySecretStore())
         model.workspaceCache = store
-        model.dialer = { _, listener in FakeClient(listener: listener) }
+        model.dialer = { _, _, listener in FakeClient(listener: listener) }
         var record = HostRecord(id: "h", name: "studio", kind: .daemon, daemonId: "d1")
         record.sessionId = 7
         model.upsert(record)

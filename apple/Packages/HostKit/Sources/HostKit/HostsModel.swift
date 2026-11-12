@@ -88,7 +88,8 @@ public final class HostsModel {
     @ObservationIgnored private var lastForeground: ContinuousClock.Instant?
     @ObservationIgnored private var deferredForeground: Task<Void, Never>?
     @ObservationIgnored private lazy var knownHosts = KnownHosts.load(from: secrets)
-    @ObservationIgnored var dialer: DaemonDialer?
+    /// Dials an owner device's host with the options it is given; tests replace it.
+    @ObservationIgnored var dialer: (@Sendable (_ ticket: String, _ options: ConnectOptions, _ listener: any ClientEventListener) throws -> any DaemonClientAPI)?
     @ObservationIgnored var joinDialer: DaemonDialer?
     /// Knocks with a knock invite (`knockInvite`); tests replace it.
     @ObservationIgnored var knocker: Knocker?
@@ -218,7 +219,7 @@ public final class HostsModel {
         }
         let connection = DaemonConnection(
             hostId: record.id, ticket: ticket, session: record.sessionId,
-            dialer: record.isGuest ? try guestDialer() : try daemonDialer())
+            dialer: record.isGuest ? try guestDialer(connectOptions(for: record)) : try daemonDialer(connectOptions(for: record)))
         connection.onAttached = { [weak self] session in self?.update(record.id) { $0.sessionId = session } }
         connection.onDaemonInfo = { [weak self] info in self?.daemonReported(record.id, info) }
         connection.browser.onPush = { [weak self] push in self?.onBrowserPush?(record.id, push) }
@@ -246,13 +247,20 @@ public final class HostsModel {
         return connection
     }
 
-    func daemonDialer() throws -> DaemonDialer {
-        if let dialer { return dialer }
+    /// How a host is dialled: this device's own helper on loopback alone, so reaching it never
+    /// needs the network; any other host as the relay settings say. The app shows native
+    /// password prompts (AskpassSession), so by default it asks the daemon for them.
+    func connectOptions(for record: HostRecord, askpass: Bool = true) -> ConnectOptions {
+        var options = relaySettings.connectOptions(askpass: askpass, guest: record.isGuest)
+        options.thisComputer = record.isThisDevice
+        return options
+    }
+
+    func daemonDialer(_ options: ConnectOptions) throws -> DaemonDialer {
+        if let dialer { return { ticket, listener in try dialer(ticket, options, listener) } }
         let key = try deviceKey ?? DeviceIdentity.load(from: secrets)
         deviceKey = key
         let config = clientConfig(key)
-        // The app shows native password prompts (AskpassSession), so it asks the daemon for them.
-        let options = relaySettings.connectOptions(askpass: true)
         let delay = configuration.linkDelay
         return { ticket, listener in
             let listener = delay.map { DelayedListener(listener, delay: $0) } ?? listener
@@ -268,12 +276,11 @@ public final class HostsModel {
     }
 
     /// Dials with an invite (`DaemonClient.join`): the device key proves who redeemed it.
-    func guestDialer() throws -> DaemonDialer {
+    func guestDialer(_ options: ConnectOptions) throws -> DaemonDialer {
         if let joinDialer { return joinDialer }
         let key = try deviceKey ?? DeviceIdentity.load(from: secrets)
         deviceKey = key
         let config = clientConfig(key)
-        let options = relaySettings.connectOptions(askpass: true, guest: true)
         return { invite, listener in
             try DaemonClient.joinWith(invite: invite, config: config, options: options, listener: listener)
         }
@@ -493,7 +500,7 @@ public final class HostsModel {
     @discardableResult
     public func pairThisDevice(_ ticket: PairingTicket, name: String) async throws -> String {
         let stale = records.filter { $0.isThisDevice && $0.daemonId != ticket.info.daemonId }.map(\.id)
-        let id = try await pair(ticket, name: name, announcing: false)
+        let id = try await pair(ticket, name: name, announcing: false, thisDevice: true)
         update(id) { $0.thisDevice = true }
         for old in stale where old != id { remove(old) }
         return id
@@ -509,7 +516,11 @@ public final class HostsModel {
         try await pair(ticket, name: name, replacing: hostId, announcing: true)
     }
 
-    private func pair(_ ticket: PairingTicket, name: String?, replacing hostId: String? = nil, announcing: Bool) async throws -> String {
+    /// `thisDevice`: the helper on this device, dialled on loopback alone from the first dial
+    /// (it is marked as this device once paired, so a refusal here is not taken for a removal).
+    private func pair(
+        _ ticket: PairingTicket, name: String?, replacing hostId: String? = nil, announcing: Bool, thisDevice: Bool = false
+    ) async throws -> String {
         let existing = hostId.flatMap(record) ?? records.first { $0.daemonId == ticket.info.daemonId }
         var record = existing ?? HostRecord(name: name ?? ticket.defaultName, kind: .daemon, daemonId: ticket.info.daemonId)
         if existing == nil { record.nameSource = .placeholder }
@@ -524,9 +535,11 @@ public final class HostsModel {
         let previous = connections[record.id]
         connections[record.id] = nil
         upsert(record)
+        var dialled = record
+        if thisDevice { dialled.thisDevice = true }
         let connection: DaemonConnection
         do {
-            connection = try openDaemon(record)
+            connection = try openDaemon(dialled)
         } catch {
             if let previous { connections[record.id] = previous }
             throw error
