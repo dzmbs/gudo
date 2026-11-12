@@ -45,10 +45,11 @@ import GudoCore
         let remote = try LocalDaemon()
         let mine = try LocalDaemon()
         let model = makeModel()
-        let dials = Mutex<[(ticket: String, thisComputer: Bool)]>([])
+        model.thisDeviceEndpointFile = URL(filePath: "/helper/endpoint.json")
+        let dials = Mutex<[(ticket: String, thisComputer: Bool, endpointFile: String?)]>([])
         let layout = sampleLayout()
         model.dialer = { ticket, options, listener in
-            dials.withLock { $0.append((ticket, options.thisComputer)) }
+            dials.withLock { $0.append((ticket, options.thisComputer, options.helperEndpointFile)) }
             let client = FakeClient(listener: listener)
             client.send(.connected(epoch: 1, resumed: false))
             client.send(.attached(sessionId: 7, via: .requested, missing: nil))
@@ -67,6 +68,8 @@ import GudoCore
         let dialled = dials.withLock { $0 }
         #expect(dialled.filter { $0.ticket == myTicket }.map(\.thisComputer) == [true, true])
         #expect(dialled.filter { $0.ticket == remoteTicket }.map(\.thisComputer) == [false, false])
+        #expect(dialled.filter { $0.ticket == myTicket }.map(\.endpointFile) == ["/helper/endpoint.json", "/helper/endpoint.json"])
+        #expect(dialled.filter { $0.ticket == remoteTicket }.map(\.endpointFile) == [nil, nil])
     }
 
     @Test func aNewHelperReplacesTheOldOne() async throws {

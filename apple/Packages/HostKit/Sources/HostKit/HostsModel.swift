@@ -253,8 +253,12 @@ public final class HostsModel {
     func connectOptions(for record: HostRecord, askpass: Bool = true) -> ConnectOptions {
         var options = relaySettings.connectOptions(askpass: askpass, guest: record.isGuest)
         options.thisComputer = record.isThisDevice
+        if record.isThisDevice { options.helperEndpointFile = thisDeviceEndpointFile?.path }
         return options
     }
+
+    /// Where this device's helper writes the ports it listens on (Mac).
+    @ObservationIgnored public var thisDeviceEndpointFile: URL?
 
     func daemonDialer(_ options: ConnectOptions) throws -> DaemonDialer {
         if let dialer { return { ticket, listener in try dialer(ticket, options, listener) } }

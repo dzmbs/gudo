@@ -55,6 +55,7 @@ final class LocalHelper {
         self.stateDirectory = stateDirectory
         self.isIsolated = isIsolated
         self.defaults = defaults
+        hosts.thisDeviceEndpointFile = stateDirectory.appending(path: "endpoint.json")
     }
 
     /// The app's helper: the bundled build in the daemon's default folder (where the `gudo` CLI
