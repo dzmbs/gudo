@@ -54,7 +54,11 @@ fn install_shared_agent_integration(config: &Config) -> io::Result<()> {
     let codex_directory = codex_config.parent().map(Path::to_path_buf);
     let outcomes = [
         install_claude_settings(&claude_directory.join("settings.json"), &context),
-        install_claude_server(&claude_config, &launcher_path),
+        install_server(
+            &claude_config,
+            json!({"type": "stdio", "command": launcher_path, "args": ["mcp"]}),
+        ),
+        install_pi_server(&pi_directory, &launcher_path),
         install_codex_config(&codex_config, &launcher_path),
         install_skill(&claude_directory, &launcher_path),
         codex_directory.map_or(Ok(()), |directory| {
@@ -186,7 +190,21 @@ fn install_claude_settings(path: &Path, context: &agents::LaunchContext) -> io::
     write_json_config(path, &original, &settings)
 }
 
-fn install_claude_server(path: &Path, launcher_path: &Path) -> io::Result<()> {
+fn install_pi_server(pi_directory: &Path, launcher_path: &Path) -> io::Result<()> {
+    if !pi_directory.is_dir() {
+        return Ok(());
+    }
+    install_server(
+        &pi_directory.join("mcp.json"),
+        json!({
+            "command": launcher_path,
+            "args": ["mcp"],
+            "description": "Panes, agents, the browser and drawings of the terminal pi runs in",
+        }),
+    )
+}
+
+fn install_server(path: &Path, server: Value) -> io::Result<()> {
     let original = read_json_config(path)?;
     let mut settings = original.clone();
     let name = agents::mcp_server_name();
@@ -222,10 +240,7 @@ fn install_claude_server(path: &Path, launcher_path: &Path) -> io::Result<()> {
     let servers = settings["mcpServers"].as_object_mut().ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidData, "mcpServers must be an object")
     })?;
-    servers.insert(
-        name,
-        json!({"type":"stdio", "command":launcher_path, "args":["mcp"]}),
-    );
+    servers.insert(name, server);
     write_json_config(path, &original, &settings)
 }
 
@@ -937,6 +952,31 @@ mod tests {
         std::fs::remove_dir(&pi_directory).unwrap();
         install_agent_integration(&config).unwrap();
         assert!(!pi_directory.exists());
+    }
+
+    #[test]
+    fn pi_gets_the_tools_beside_its_own_servers() {
+        let directory = tempfile::tempdir().unwrap();
+        let (config, [_, _, pi_directory]) = skill_config(directory.path());
+        let servers_path = pi_directory.join("mcp.json");
+        let own_server = json!({"url": "https://example.com/mcp"});
+        std::fs::write(
+            &servers_path,
+            json!({"mcpServers": {"mine": own_server}}).to_string(),
+        )
+        .unwrap();
+        install_agent_integration(&config).unwrap();
+        let servers: Value =
+            serde_json::from_slice(&std::fs::read(&servers_path).unwrap()).unwrap();
+        let installed = &servers["mcpServers"][agents::mcp_server_name()];
+        assert_eq!(servers["mcpServers"]["mine"], own_server);
+        assert_eq!(
+            installed["command"],
+            json!(hook_launcher::path(&config.state_dir))
+        );
+        assert_eq!(installed["args"], json!(["mcp"]));
+        assert!(installed.get("type").is_none());
+        assert!(installed["description"].is_string());
     }
 
     #[test]

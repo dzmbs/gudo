@@ -22,7 +22,8 @@ Linux release assets, SSH bootstrap or service install.
 
 On startup with the default production state directory, the helper registers its MCP server
 and hooks in the user's Claude Code and Codex configuration, including `CLAUDE_CONFIG_DIR`
-and `CODEX_HOME` when supplied. Custom state directories and Gudo Dev leave shared agent
+and `CODEX_HOME` when supplied, and its MCP server in pi's `mcp.json` (`PI_CODING_AGENT_DIR` or
+`~/.pi/agent`, only when that directory exists). Custom state directories and Gudo Dev leave shared agent
 configuration untouched unless explicitly enabled with `run --install-agent-integration` or
 the flavour's `INSTALL_AGENT_INTEGRATION=1` environment variable (`GUDO_` or `GUDO_DEV_` prefix).
 An isolated state directory alone is not an isolated home; tests and capture tools supply a
