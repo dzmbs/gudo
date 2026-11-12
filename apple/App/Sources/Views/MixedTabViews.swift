@@ -33,6 +33,7 @@ struct MixedTabTree: PaneTree {
     }
 
     func setRatio(leaf: PaneId, _ axis: PaneLayout.Axis, ratio: Double) {
+        for shown in tab?.leaves ?? [] { resolve(shown)?.workspace.quietResizeOverlay() }
         model.composites.apply(.setRatio(leaf, axis, ratio: ratio), to: id)
     }
 

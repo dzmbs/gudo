@@ -80,6 +80,11 @@ final class Workspace {
     /// width), which must not flash the cols x rows overlay.
     @ObservationIgnored var layoutChangeUntil = ContinuousClock.now
     @ObservationIgnored private var keyboardFrameChangeUntil = ContinuousClock.now
+
+    /// The grids about to change come from the layout, not from a resize to measure.
+    func quietResizeOverlay() {
+        layoutChangeUntil = .now + .milliseconds(700)
+    }
     #if os(iOS)
     /// The top of the software keyboard (with the key bar) in the window, nil while it is down:
     /// the terminals' room at the bottom (`KeyboardRoom`).
@@ -325,12 +330,10 @@ final class Workspace {
             onLayoutUnavailable?()
             return
         }
-        // Splits, closes and zooms animate the panes' sizes (`SplitTreeView`): no cols × rows
-        // overlay through them. Divider moves keep it.
-        switch op {
-        case .resize, .setRatio: break
-        default: layoutChangeUntil = .now + .milliseconds(700)
-        }
+        // Splits, closes and zooms animate the panes' sizes (`SplitTreeView`), and a dragged
+        // divider resizes them under the pointer: no cols × rows overlay through them. A divider
+        // moved from the keyboard keeps it.
+        if case .resize = op {} else { quietResizeOverlay() }
         if case .split(let source, _) = op, let size = zoomedFontSizes[source], let tab = session.tab(containing: source) {
             pendingSplitFontSize = (tab.id, session.panes, size, .now + .seconds(5))
         }

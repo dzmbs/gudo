@@ -401,8 +401,9 @@ tabs to reorder.
   it failed), a failed command's rows tinted with the theme's red at 6 %, its ✓ / ✗ exit and run
   time at the right of its prompt row on hover, and the command whose output fills the top of the
   pane pinned there as a small header while you scroll.
-- Overlays on the grid: cols × rows centered while resizing (hidden while the software keyboard
-  moves, so it only answers user resizes); process-exited bar at the bottom (red 50 % on failure,
+- Overlays on the grid: cols × rows centered while the window resizes or a divider moves from
+  the keyboard (hidden while a divider is dragged, where the panes moving under the pointer are
+  the feedback, and while the software keyboard moves); process-exited bar at the bottom (red 50 % on failure,
   hides under the pointer); secure-input badge top-right; bell border; hovered URL bottom-left;
   scrollback search bar top-right (draggable to any corner).
 - Comfortable pane style (Settings → Panes): inset rounded panes on a divider-colored field.
