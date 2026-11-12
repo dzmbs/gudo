@@ -372,9 +372,9 @@ public final class TerminalSurface {
 
     // MARK: Grid commits
 
-    /// The least time between two grid changes while the size keeps changing (Ghostty
-    /// coalesces for 25 ms; kitty waits 100 ms before redrawing a live resize).
-    public static let gridInterval = Duration.milliseconds(100)
+    /// The least time between two grid changes while the size keeps changing: about a frame at
+    /// 30 Hz, so a program reflows while a divider is dragged (Ghostty coalesces for 25 ms).
+    public static let gridInterval = Duration.milliseconds(33)
     /// How long a held view's size must stay put before its grid changes: a spring's tail
     /// still moves it after the animation's nominal duration.
     static let settleInterval = Duration.milliseconds(50)

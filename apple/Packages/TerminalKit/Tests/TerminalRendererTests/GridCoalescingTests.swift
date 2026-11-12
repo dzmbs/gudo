@@ -88,9 +88,10 @@ extension LayoutHoldTests {
                 try await Task.sleep(for: .milliseconds(8))
             }
             try await Task.sleep(for: .milliseconds(150))
-            // 600 ms at one change per 100 ms, the first at once, plus the release.
-            #expect(changes().count >= 2)
-            #expect(changes().count <= 8)
+            // 600 ms at one change per 33 ms, the first at once, plus the release: the program
+            // reflows on the way, not only once the pointer stops.
+            #expect(changes().count >= 10)
+            #expect(changes().count <= 21)
             let final = try #require(surface.grid)
             #expect(changes().last == final)
             surface.layout(size: CGSize(width: width, height: 200), scale: 2)

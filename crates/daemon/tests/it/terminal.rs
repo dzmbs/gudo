@@ -406,6 +406,73 @@ async fn a_burst_of_window_sizes_emits_one_final_grid_resize() {
     assert_eq!(resize_events, 1);
 }
 
+/// A divider dragged for a while: the program sees sizes on the way, not only once the
+/// pointer stops, and the last size wins.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_long_drag_resizes_the_terminal_while_it_lasts() {
+    let directory = tempfile::tempdir().unwrap();
+    let daemon = start(directory.path()).await;
+    let mut client = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = client.attach_and_follow().await;
+    client
+        .until("initial size", |client| {
+            client
+                .metas
+                .get(&pane)
+                .is_some_and(|meta| meta.size.cols == 100)
+        })
+        .await;
+    let resized = |client: &TestClient| {
+        client
+            .log
+            .iter()
+            .any(|event| event.starts_with("PaneResized") && !event.contains("cols: 100,"))
+    };
+    let mut resized_while_dragging = false;
+    for cols in 101..=160 {
+        client.client.resize(
+            pane,
+            PaneSize {
+                cols,
+                rows: 30,
+                width_px: 0,
+                height_px: 0,
+            },
+        );
+        let next_move = tokio::time::Instant::now() + Duration::from_millis(10);
+        client
+            .until("the next pointer move", |_| {
+                tokio::time::Instant::now() >= next_move
+            })
+            .await;
+        if resized(&client) {
+            resized_while_dragging = true;
+            break;
+        }
+    }
+    assert!(
+        resized_while_dragging,
+        "the terminal kept its size until the drag ended"
+    );
+    client.client.resize(
+        pane,
+        PaneSize {
+            cols: 170,
+            rows: 30,
+            width_px: 0,
+            height_px: 0,
+        },
+    );
+    client
+        .until("the last size", |client| {
+            client
+                .metas
+                .get(&pane)
+                .is_some_and(|meta| meta.size.cols == 170)
+        })
+        .await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn input_takeover_cancels_the_previous_windows_deferred_resize() {
     let directory = tempfile::tempdir().unwrap();

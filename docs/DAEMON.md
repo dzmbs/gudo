@@ -346,9 +346,11 @@ Lone focus-in/out reports (`CSI I` / `CSI O`, including
 backends also leave the sizing window unchanged when forwarding those reports. Pixel-only
 changes leave the PTY, VT and resize history unchanged, so changing display scale does not send
 SIGWINCH. Pixel metrics are refreshed with the next columns-or-rows change. Window resize
-bursts settle for 120 ms in the existing per-pane task; there is only one pending request per
-pane. Actual input from an active eligible client applies the selected size immediately before
-writing and cancels any older pending resize. Deferred work rechecks current eligibility and
+bursts coalesce in the existing per-pane task: the first request of a burst starts a 25 ms
+window that later ones do not extend, and the PTY takes the latest size when it ends, so a long
+drag resizes it on the way (about 40 times a second) and a quick burst still once; there is only
+one pending request per pane. Actual input from an active eligible client applies the selected
+size immediately before writing and cancels any older pending resize. Deferred work rechecks current eligibility and
 policy selection before applying. Lease changes recompute selection as well.
 
 Clients can mark encoded reports as `InputPayload::GeneratedBytes` when the daemon advertises

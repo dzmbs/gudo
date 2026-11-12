@@ -1169,10 +1169,16 @@ impl Core {
                 self.resize_pane(entry, choice.size, ownership_changed);
             }
             ResizeTiming::Deferred => {
+                // The first request of a burst sets when it applies; later ones only replace
+                // the size, so a long drag resizes the PTY on the way rather than after it.
+                let due = pending.as_ref().map_or_else(
+                    || tokio::time::Instant::now() + RESIZE_COALESCE,
+                    |request| request.due,
+                );
                 *pending = Some(PendingResize {
                     choice,
                     ownership_changed,
-                    due: tokio::time::Instant::now() + RESIZE_DEBOUNCE,
+                    due,
                 });
                 entry.resize_changed.notify_one();
             }
@@ -2648,7 +2654,9 @@ const PANE_ACTIVE: Duration = Duration::from_secs(5);
 /// Title and directory changes reach clients at most this often per pane (the last one always
 /// arrives): a program that sets its title in a loop must not flood every client.
 const META_INTERVAL: Duration = Duration::from_millis(50);
-const RESIZE_DEBOUNCE: Duration = Duration::from_millis(120);
+/// How long a burst of size requests gathers before the PTY takes the latest: one SIGWINCH per
+/// window at most, so a program redraws at about 40 Hz while a divider or window is dragged.
+const RESIZE_COALESCE: Duration = Duration::from_millis(25);
 
 /// Per-pane task: turns VT events, termios changes, agent timers and process exit into
 /// metadata, echo hints and agent events.
