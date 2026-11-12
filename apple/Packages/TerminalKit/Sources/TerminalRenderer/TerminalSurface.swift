@@ -292,7 +292,9 @@ public final class TerminalSurface {
     /// `gridInterval` while the size keeps changing (a divider drag, a live window resize),
     /// always ending at the final size. Meanwhile the
     /// local grid stays anchored top-left, without reflow. A stream-sized grid that differs
-    /// from the requested size scales down to fit and is centered on the terminal background.
+    /// from the requested size stays anchored top-left at its cell size while a resize this view
+    /// asked for is on its way (`streamResizeWait`); otherwise it scales down to fit and is
+    /// centered on the terminal background.
     /// A view in a layout motion
     /// (`prepareResize`, `holdFrames`) does not even redraw: it shows its last frame.
     public func layout(size: CGSize, scale requestedScale: CGFloat) {
@@ -397,6 +399,16 @@ public final class TerminalSurface {
     private var lastGridCommit: ContinuousClock.Instant?
     private var lastSizeChange = ContinuousClock.now
     private var gridCommitTask: Task<Void, Never>?
+    /// When this view last asked its stream for a new grid (a remote pane, after its first).
+    private var streamResizeAsked: ContinuousClock.Instant?
+    private var streamResizeWaitEnd: Task<Void, Never>?
+    /// How long after asking for a new grid the stream's older one is drawn as it is, at its
+    /// cell size from the top-left corner, rather than fitted: the resize is on its way.
+    static let streamResizeWait = Duration.milliseconds(500)
+
+    private var awaitsStreamResize: Bool {
+        streamResizeAsked.map { ContinuousClock.now < $0 + Self.streamResizeWait } ?? false
+    }
     /// The grid's top-left inset in pixels when it was last applied, kept while a grid waits.
     private var gridInset = SIMD2<Int>(0, 0)
 
@@ -436,16 +448,31 @@ public final class TerminalSurface {
         gridCommitTask?.cancel()
         gridCommitTask = nil
         // The first grid is a starting point, not a step of a resize: the next may follow at once.
-        if grid != nil { lastGridCommit = .now }
+        let hadGrid = grid != nil
+        if hadGrid { lastGridCommit = .now }
         let changed = newGrid != grid
         grid = newGrid
         updateInset(for: newGrid, in: pixels ?? pixelSize)
         guard changed else { return }
         if !sizeFollowsStream {
             terminal.resize(cols: newGrid.cols, rows: newGrid.rows, cellWidth: newGrid.cellWidth, cellHeight: newGrid.cellHeight)
+        } else if hadGrid {
+            awaitStreamResize()
         }
         predictor?.reset()
         onGridChange?(newGrid)
+    }
+
+    private func awaitStreamResize() {
+        streamResizeAsked = .now
+        streamResizeWaitEnd?.cancel()
+        streamResizeWaitEnd = Task { [weak self] in
+            try? await Task.sleep(for: Self.streamResizeWait)
+            guard !Task.isCancelled, let self else { return }
+            // A grid the stream never took (another device sizes the pane) is fitted from now on.
+            self.needsFullRender = true
+            self.invalidate()
+        }
     }
 
     /// The whole cells that fit a drawable of `pixels`, the remainder becoming padding.
@@ -620,7 +647,7 @@ public final class TerminalSurface {
 
     private var gridFit: GridFit {
         guard sizeFollowsStream, let grid, let drawingGrid,
-              grid.cols != drawingGrid.cols || grid.rows != drawingGrid.rows else {
+              grid.cols != drawingGrid.cols || grid.rows != drawingGrid.rows, !awaitsStreamResize else {
             return GridFit(scale: 1, origin: CGPoint(x: gridInset.x, y: gridInset.y))
         }
         return GridFit.fit(

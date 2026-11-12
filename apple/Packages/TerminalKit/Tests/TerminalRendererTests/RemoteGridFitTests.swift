@@ -96,3 +96,37 @@ import TerminalCore
         #expect(Int((pixels.x - Double(geometry.paddingLeft)) / Double(geometry.cellWidth)) == 159)
     }
 }
+
+extension LayoutHoldTests {
+    /// Waits for grid changes, which another suite's layout hold would hold.
+    @MainActor
+    @Suite struct StreamResizeTests {
+        /// While a resize this view asked for is on its way, the stream's grid keeps its cell size
+        /// and its top-left corner: text never shrinks, grows or moves to the middle under a drag.
+        @Test func aGridOnItsWayKeepsItsSizeAndCorner() async throws {
+            let terminal = Terminal(cols: 80, rows: 20) { _ in }
+            let surface = try TerminalSurface(terminal: terminal, fontSize: 12)
+            surface.sizeFollowsStream = true
+            surface.layout(size: CGSize(width: 2000, height: 1000), scale: 2)
+            let settled = try #require(surface.grid)
+            terminal.resize(cols: settled.cols, rows: settled.rows, cellWidth: settled.cellWidth, cellHeight: settled.cellHeight)
+            let cell = try #require(surface.cellSize)
+            let corner = surface.rect(for: GridPoint(x: 0, y: 0)).origin
+
+            for width in [1400.0, 2600.0] {
+                let before = surface.grid
+                surface.layout(size: CGSize(width: width, height: 1000), scale: 2)
+                let deadline = ContinuousClock.now + .seconds(3)
+                while surface.grid == before, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
+                #expect(surface.grid != before, "a new grid was asked for")
+                #expect(terminal.size.cols == Int(settled.cols), "the stream has not resized yet")
+                #expect(surface.cellSize == cell)
+                #expect(surface.rect(for: GridPoint(x: 0, y: 0)).origin == corner)
+            }
+
+            // A size the stream never takes (another device sizes the pane) is fitted after a while.
+            try await Task.sleep(for: TerminalSurface.streamResizeWait + .milliseconds(100))
+            #expect(surface.rect(for: GridPoint(x: 0, y: 0)).origin != corner)
+        }
+    }
+}
