@@ -34,9 +34,12 @@ predate it ignore trailing bytes, so older apps still pair (through `relay_url`,
 custom-relay daemon sets to its home relay among its own). With default relays nothing is
 appended and the ticket is byte-identical to before. Extras of a newer version are ignored.
 
-On the app side `client_core::Client::connect*` reads the extras: if the app's own
-`RelayMode` is `Disabled` (a "local only" switch in the app) that wins; then a local-only
-daemon (`Disabled` in the ticket) is dialled directly; then the app's own relays
+On the app side `client_core::Client::connect*` reads the extras. The daemon on this computer
+(`ConnectOptions::this_computer`, the Mac app's own helper) is dialled on loopback alone, at the
+ticket's ports, from sockets bound to loopback, whatever the ticket and the settings say: it never
+needs the network. Otherwise, if the app's own `RelayMode` is `Disabled` (a "local only" switch
+in the app) that wins; then a local-only daemon (`Disabled` in the ticket) is dialled directly;
+then the app's own relays
 (`ConnectOptions::relay_urls`, `relay_auth_token`) replace the ticket's; otherwise the daemon's
 choice is used. `ConnectOptions::relay_ca_der` adds trust roots for a private-CA relay.
 `Client::set_relays` changes all of this on a running client (a new endpoint, then the usual

@@ -1,12 +1,12 @@
 //! The connection supervisor: dial, handshake, replay wanted state, pump streams, redial.
 
-use std::net::TcpListener as StdTcpListener;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener as StdTcpListener};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use iroh::endpoint::{Connection, ReadExactError, RecvStream, SendStream, presets};
+use iroh::endpoint::{BindOpts, Connection, ReadExactError, RecvStream, SendStream, presets};
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayUrl};
 use proto::{
     AttachFailure, AttachVia, Attachment, Bulk, Caps, ClientCtl, ClientInput, ForwardReply, Hello,
@@ -177,10 +177,12 @@ fn route(inner: &Inner) -> Route {
     Route::new(network.0, &inner.relays, &network.1)
 }
 
-/// How to reach a daemon: what the client asks for (local only, its own relays) over what
-/// the daemon's ticket says.
+/// How to reach a daemon: what the client asks for (this computer's daemon, local only, its
+/// own relays) over what the daemon's ticket says.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Route {
+    /// The daemon on this computer: the ticket's ports on loopback, from loopback sockets.
+    Loopback,
     /// Direct addresses only: no relay, no address lookup.
     Direct,
     /// The default relay ([`brand::RELAY_URL`]) and the daemon's home relay.
@@ -196,8 +198,9 @@ pub(crate) enum Route {
 }
 
 impl Route {
-    /// The client's `Disabled` wins (the app's local-only switch), then a local-only daemon,
-    /// then the client's own relays, then the daemon's choice.
+    /// This computer's daemon wins, then the client's `Disabled` (the app's local-only
+    /// switch), then a local-only daemon, then the client's own relays, then the daemon's
+    /// choice.
     pub(crate) fn new(
         mode: RelayMode,
         relays: &proto::TicketRelays,
@@ -205,6 +208,7 @@ impl Route {
     ) -> Self {
         use proto::TicketRelays;
         match (mode, relays) {
+            _ if options.this_computer => Self::Loopback,
             (RelayMode::Disabled, _) | (_, TicketRelays::Disabled) => Self::Direct,
             _ if !options.relay_urls.is_empty() => Self::Custom {
                 urls: options.relay_urls.clone(),
@@ -235,6 +239,25 @@ pub(crate) fn endpoint_builder(
     options: &crate::ConnectOptions,
 ) -> Result<iroh::endpoint::Builder, ConnError> {
     let mut builder = match route {
+        // Sockets on loopback that only route to loopback: no path through the network can
+        // be opened, so no network change can take the connection down.
+        Route::Loopback => Endpoint::builder(presets::Minimal)
+            .clear_ip_transports()
+            .bind_addr_with_opts(
+                SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+                BindOpts::default()
+                    .set_prefix_len(8)
+                    .set_is_default_route(false),
+            )
+            .map_err(net_error)?
+            .bind_addr_with_opts(
+                SocketAddr::from((Ipv6Addr::LOCALHOST, 0)),
+                BindOpts::default()
+                    .set_prefix_len(128)
+                    .set_is_default_route(false)
+                    .set_is_required(false),
+            )
+            .map_err(net_error)?,
         Route::Direct => Endpoint::builder(presets::Minimal),
         Route::Default => {
             Endpoint::builder(presets::N0).relay_mode(iroh::RelayMode::Custom(default_relays()))
@@ -274,9 +297,11 @@ pub(crate) fn endpoint_builder(
 }
 
 fn daemon_addr(inner: &Inner) -> Result<EndpointAddr, ConnError> {
-    let ticket_address = ticket_addr(&inner.ticket, &route(inner))?;
+    let route = route(inner);
+    let ticket_address = ticket_addr(&inner.ticket, &route)?;
     Ok(lock(&inner.last_direct_addresses)
         .iter()
+        .filter(|direct_address| route != Route::Loopback || direct_address.ip().is_loopback())
         .fold(ticket_address, |address, &direct_address| {
             address.with_ip_addr(direct_address)
         }))
@@ -300,7 +325,9 @@ async fn remember_direct_addresses(inner: Arc<Inner>, connection: Connection) {
 }
 
 /// Where to dial the ticket's daemon: its direct addresses, plus the relays `route` allows
-/// (the daemon's home relay, and for self-hosted relays the others it may move to).
+/// (the daemon's home relay, and for self-hosted relays the others it may move to). This
+/// computer's daemon is dialled on loopback at every port the ticket names: one listening on
+/// all interfaces is there on the same port.
 pub(crate) fn ticket_addr(
     ticket: &proto::Ticket,
     route: &Route,
@@ -308,11 +335,14 @@ pub(crate) fn ticket_addr(
     let endpoint_id = EndpointId::from_bytes(&ticket.daemon_id.0).map_err(net_error)?;
     let mut addr = EndpointAddr::new(endpoint_id);
     for ip_addr in &ticket.addrs {
-        addr = addr.with_ip_addr(*ip_addr);
+        addr = addr.with_ip_addr(match route {
+            Route::Loopback => on_loopback(*ip_addr),
+            _ => *ip_addr,
+        });
     }
     let home = ticket.relay_url.as_deref();
     let urls: Vec<&str> = match route {
-        Route::Direct => vec![],
+        Route::Loopback | Route::Direct => vec![],
         Route::Default => home.into_iter().collect(),
         Route::Custom { urls, own, .. } => (!own)
             .then_some(home)
@@ -327,6 +357,14 @@ pub(crate) fn ticket_addr(
         }
     }
     Ok(addr)
+}
+
+fn on_loopback(address: SocketAddr) -> SocketAddr {
+    let loopback: IpAddr = match address.ip().to_canonical() {
+        IpAddr::V4(_) => Ipv4Addr::LOCALHOST.into(),
+        IpAddr::V6(_) => Ipv6Addr::LOCALHOST.into(),
+    };
+    SocketAddr::new(loopback, address.port())
 }
 
 /// Keeps a connection up for the client's lifetime.
@@ -1966,6 +2004,53 @@ mod tests {
             Route::Direct
         );
         assert!(relays(&Route::Direct).is_empty());
+    }
+
+    #[test]
+    fn this_computers_daemon_is_dialled_on_loopback_alone() {
+        let this_computer = ConnectOptions {
+            this_computer: true,
+            ..own_relays()
+        };
+        let custom = TicketRelays::Custom {
+            urls: vec![HOME.into()],
+            auth_token: None,
+        };
+        for mode in [RelayMode::Default, RelayMode::Disabled] {
+            for relays in [
+                TicketRelays::Default,
+                custom.clone(),
+                TicketRelays::Disabled,
+            ] {
+                assert_eq!(Route::new(mode, &relays, &this_computer), Route::Loopback);
+            }
+        }
+        assert!(relays(&Route::Loopback).is_empty());
+        let addr = ticket_addr(&ticket(), &Route::Loopback).unwrap();
+        assert_eq!(
+            addr.ip_addrs().copied().collect::<Vec<_>>(),
+            vec!["127.0.0.1:47011".parse().unwrap()]
+        );
+    }
+
+    #[tokio::test]
+    async fn this_computers_endpoint_binds_loopback_only() {
+        let options = ConnectOptions {
+            this_computer: true,
+            ..ConnectOptions::default()
+        };
+        let endpoint = endpoint_builder(&Route::Loopback, &options)
+            .unwrap()
+            .bind()
+            .await
+            .unwrap();
+        let bound = endpoint.bound_sockets();
+        assert!(!bound.is_empty());
+        assert!(
+            bound.iter().all(|address| address.ip().is_loopback()),
+            "{bound:?}"
+        );
+        endpoint.close().await;
     }
 
     #[test]

@@ -583,6 +583,10 @@ pub struct ConnectOptions {
     /// last (`ClientEvent::Clipboard`).
     #[uniffi(default = false)]
     pub clipboard: bool,
+    /// The daemon runs on this device (the Mac app's own helper): dial it on loopback alone,
+    /// with no relay and no address lookup, so reaching it never depends on the network.
+    #[uniffi(default = false)]
+    pub this_computer: bool,
 }
 
 impl std::fmt::Debug for ConnectOptions {
@@ -605,6 +609,7 @@ impl From<ConnectOptions> for client_core::ConnectOptions {
             browser: connect_options.browser,
             program_status: connect_options.program_status,
             clipboard: connect_options.clipboard,
+            this_computer: connect_options.this_computer,
             extra_caps: proto::Caps::EMPTY,
         }
     }
@@ -1089,9 +1094,10 @@ mod tests {
             browser: true,
             program_status: true,
             clipboard: true,
+            this_computer: true,
         };
         let core = client_core::ConnectOptions::from(options);
-        assert!(core.clipboard);
+        assert!(core.clipboard && core.this_computer);
         assert_eq!(core.extra_caps, proto::Caps::EMPTY);
         assert_eq!(core.relay_ca_der, vec![vec![0x30, 0x82]]);
         assert_eq!(core.relay_urls, vec!["https://relay.example.com"]);

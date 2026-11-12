@@ -171,6 +171,11 @@ pub struct ConnectOptions {
     /// Copy what programs write to the clipboard (OSC 52) in panes this device typed into
     /// last: announce `Caps::CLIPBOARD`, so the daemon sends [`ClientEvent::Clipboard`].
     pub clipboard: bool,
+    /// The daemon runs on this computer (the Mac app's own helper): it is dialled on loopback
+    /// alone, from loopback sockets, with no relay and no address lookup, so reaching it never
+    /// depends on the network. The ticket's ports are dialled on loopback whatever addresses
+    /// it names. Wins over [`RelayMode`] and the relay settings.
+    pub this_computer: bool,
     /// Capabilities announced on top of the ones above, whatever the rules for guests (tests
     /// that play a client ignoring them).
     #[doc(hidden)]
@@ -190,6 +195,7 @@ impl std::fmt::Debug for ConnectOptions {
             .field("browser", &self.browser)
             .field("program_status", &self.program_status)
             .field("clipboard", &self.clipboard)
+            .field("this_computer", &self.this_computer)
             .finish_non_exhaustive()
     }
 }

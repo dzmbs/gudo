@@ -9,6 +9,7 @@ mod recovery;
 mod redial;
 mod ssh_host;
 mod streams;
+mod this_computer;
 mod upgrade_only;
 
 use std::time::Duration;
