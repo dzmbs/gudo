@@ -45,12 +45,16 @@ fn ticket_from_another_network(helper: &daemon::Daemon) -> String {
     })
 }
 
-fn connect_this_computer(ticket: &str) -> (Client, UnboundedReceiver<ClientEvent>) {
+fn connect_this_computer(
+    ticket: &str,
+    helper_endpoint_file: Option<std::path::PathBuf>,
+) -> (Client, UnboundedReceiver<ClientEvent>) {
     let (listener, events) = EventQueue::channel();
     let mut config = ClientConfig::new(ClientConfig::generate_key());
     config.relay = RelayMode::Default;
     let options = ConnectOptions {
         this_computer: true,
+        helper_endpoint_file,
         ..ConnectOptions::default()
     };
     let client = Client::connect_with(ticket, config, options, listener).unwrap();
@@ -91,7 +95,7 @@ async fn echoes(
 async fn this_computer_is_reached_over_loopback_when_its_network_is_gone() {
     let state = tempfile::tempdir().unwrap();
     let helper = helper(state.path()).await;
-    let (client, mut events) = connect_this_computer(&ticket_from_another_network(&helper));
+    let (client, mut events) = connect_this_computer(&ticket_from_another_network(&helper), None);
     let connected = tokio::time::timeout(
         Duration::from_secs(10),
         next_matching(&mut events, |event| {
@@ -115,6 +119,26 @@ async fn this_computer_is_reached_over_loopback_when_its_network_is_gone() {
     })
     .await;
     echoes(&client, &mut events, pane, "redialled").await;
+    drop(client);
+    helper.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn this_computer_follows_its_helper_to_new_ports() {
+    let state = tempfile::tempdir().unwrap();
+    let helper = helper(state.path()).await;
+    let silent_socket = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let mut ticket = helper.pairing_ticket(daemon::PAIRING_TTL).unwrap();
+    ticket.addrs = vec![silent_socket.local_addr().unwrap()];
+    ticket.relay_url = None;
+    let (client, mut events) = connect_this_computer(
+        &ticket.to_string(),
+        Some(state.path().join("endpoint.json")),
+    );
+    let pane = tokio::time::timeout(Duration::from_secs(10), first_pane(&client, &mut events))
+        .await
+        .expect("the helper was never found at its new ports");
+    echoes(&client, &mut events, pane, "moved").await;
     drop(client);
     helper.shutdown().await;
 }

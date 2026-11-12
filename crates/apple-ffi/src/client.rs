@@ -587,6 +587,10 @@ pub struct ConnectOptions {
     /// with no relay and no address lookup, so reaching it never depends on the network.
     #[uniffi(default = false)]
     pub this_computer: bool,
+    /// The helper's `endpoint.json`: This Mac also dials the ports it names, so a helper that
+    /// had to take new ports is still found.
+    #[uniffi(default = None)]
+    pub helper_endpoint_file: Option<String>,
 }
 
 impl std::fmt::Debug for ConnectOptions {
@@ -610,6 +614,7 @@ impl From<ConnectOptions> for client_core::ConnectOptions {
             program_status: connect_options.program_status,
             clipboard: connect_options.clipboard,
             this_computer: connect_options.this_computer,
+            helper_endpoint_file: connect_options.helper_endpoint_file.map(Into::into),
             extra_caps: proto::Caps::EMPTY,
         }
     }
@@ -1101,9 +1106,14 @@ mod tests {
             program_status: true,
             clipboard: true,
             this_computer: true,
+            helper_endpoint_file: Some("/state/endpoint.json".into()),
         };
         let core = client_core::ConnectOptions::from(options);
         assert!(core.clipboard && core.this_computer);
+        assert_eq!(
+            core.helper_endpoint_file.as_deref(),
+            Some(std::path::Path::new("/state/endpoint.json"))
+        );
         assert_eq!(core.extra_caps, proto::Caps::EMPTY);
         assert_eq!(core.relay_ca_der, vec![vec![0x30, 0x82]]);
         assert_eq!(core.relay_urls, vec!["https://relay.example.com"]);

@@ -176,6 +176,10 @@ pub struct ConnectOptions {
     /// depends on the network. The ticket's ports are dialled on loopback whatever addresses
     /// it names. Wins over [`RelayMode`] and the relay settings.
     pub this_computer: bool,
+    /// The file where this computer's daemon writes the ports it listens on: each dial of
+    /// [`this_computer`](Self::this_computer) tries them too, so a daemon that had to take new
+    /// ports is still found.
+    pub helper_endpoint_file: Option<std::path::PathBuf>,
     /// Capabilities announced on top of the ones above, whatever the rules for guests (tests
     /// that play a client ignoring them).
     #[doc(hidden)]
@@ -196,6 +200,7 @@ impl std::fmt::Debug for ConnectOptions {
             .field("program_status", &self.program_status)
             .field("clipboard", &self.clipboard)
             .field("this_computer", &self.this_computer)
+            .field("helper_endpoint_file", &self.helper_endpoint_file)
             .finish_non_exhaustive()
     }
 }

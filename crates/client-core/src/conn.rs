@@ -313,12 +313,33 @@ pub(crate) fn endpoint_builder(
 fn daemon_addr(inner: &Inner) -> Result<EndpointAddr, ConnError> {
     let route = route(inner);
     let ticket_address = ticket_addr(&inner.ticket, &route)?;
+    let helper_sockets = match route {
+        Route::Loopback => helper_sockets(&lock(&inner.net).1),
+        _ => Vec::new(),
+    };
     Ok(lock(&inner.last_direct_addresses)
         .iter()
         .filter(|direct_address| route != Route::Loopback || direct_address.ip().is_loopback())
+        .chain(&helper_sockets)
         .fold(ticket_address, |address, &direct_address| {
             address.with_ip_addr(direct_address)
         }))
+}
+
+/// Where this computer's daemon listens now, on loopback, from the file it writes at startup.
+fn helper_sockets(options: &crate::ConnectOptions) -> Vec<std::net::SocketAddr> {
+    #[derive(serde::Deserialize)]
+    struct EndpointFile {
+        #[serde(default)]
+        bound: Vec<std::net::SocketAddr>,
+    }
+    options
+        .helper_endpoint_file
+        .as_deref()
+        .and_then(|path| std::fs::read(path).ok())
+        .and_then(|contents| serde_json::from_slice::<EndpointFile>(&contents).ok())
+        .map(|file| file.bound.into_iter().map(on_loopback).collect())
+        .unwrap_or_default()
 }
 
 async fn remember_direct_addresses(inner: Arc<Inner>, connection: Connection) {
