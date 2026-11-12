@@ -86,7 +86,15 @@ nonisolated enum LayoutConversion {
             return .dockPane(paneId: pane.rawValue, target: target?.rawValue, side: GudoCore.Direction(side))
         case .movePaneToEdge(let pane, let tab, let side):
             return .movePaneToEdge(paneId: pane.rawValue, tabId: tab.rawValue, side: GudoCore.Direction(side))
+        case .setRatio(let pane, let axis, let ratio):
+            return .setRatio(paneId: pane.rawValue, axis: GudoCore.Axis(axis), ratio: Float(ratio))
         }
+    }
+
+    /// `ratio` as the daemon keeps it: in the range local layouts keep, at `Float` precision, so
+    /// the daemon's answer draws the divider exactly where it already is.
+    static func wireRatio(_ ratio: Double) -> Double {
+        Double(Float(min(max(ratio, Node.ratioRange.lowerBound), Node.ratioRange.upperBound)))
     }
 
     /// Whether `pane` is in the first child of the deepest split along `axis` on its path whose
@@ -106,7 +114,7 @@ nonisolated enum LayoutConversion {
     /// focus or ratios but allocates no ids and starts or ends no process.
     static func isOptimistic(_ op: PaneLayout.LayoutOp) -> Bool {
         switch op {
-        case .focus, .focusDirection, .resize, .toggleZoom, .moveTab, .rename: true
+        case .focus, .focusDirection, .resize, .setRatio, .toggleZoom, .moveTab, .rename: true
         // A window lifting out, moving, going to the tray or docking in place: at once, so it
         // follows the hand; nothing is created and no pane changes tab.
         case .float, .setFloat: true
@@ -120,7 +128,7 @@ nonisolated enum LayoutConversion {
     /// sets a state (focus, position, name) rather than stepping one (a resize, a zoom toggle).
     static func isReplayable(_ op: PaneLayout.LayoutOp) -> Bool {
         switch op {
-        case .focus, .moveTab, .rename, .float, .setFloat: true
+        case .focus, .moveTab, .rename, .float, .setFloat, .setRatio: true
         case .dock(_, let target, _): target == nil
         default: false
         }

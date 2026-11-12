@@ -32,8 +32,8 @@ struct MixedTabTree: PaneTree {
         model.focusLeaf(leaf, inMixedTab: id)
     }
 
-    func resize(leaf: PaneId, _ direction: Direction, amount: Double) {
-        model.composites.apply(.resize(leaf, direction, amount: amount), to: id)
+    func setRatio(leaf: PaneId, _ axis: PaneLayout.Axis, ratio: Double) {
+        model.composites.apply(.setRatio(leaf, axis, ratio: ratio), to: id)
     }
 
     /// Every host draws with the same font, so any measured pane's cell will do.

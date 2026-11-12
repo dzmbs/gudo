@@ -462,5 +462,7 @@ bitset! {
         /// Offers the command a restored pane was running when the daemon stopped
         /// (`ClientCtl::WatchRunAgain`, `ServerCtl::RunAgainOffers`).
         RUN_AGAIN = 2;
+        /// Applies `LayoutOp::SetRatio`.
+        SPLIT_RATIOS = 3;
     }
 }

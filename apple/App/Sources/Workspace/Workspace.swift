@@ -327,7 +327,10 @@ final class Workspace {
         }
         // Splits, closes and zooms animate the panes' sizes (`SplitTreeView`): no cols × rows
         // overlay through them. Divider moves keep it.
-        if case .resize = op {} else { layoutChangeUntil = .now + .milliseconds(700) }
+        switch op {
+        case .resize, .setRatio: break
+        default: layoutChangeUntil = .now + .milliseconds(700)
+        }
         if case .split(let source, _) = op, let size = zoomedFontSizes[source], let tab = session.tab(containing: source) {
             pendingSplitFontSize = (tab.id, session.panes, size, .now + .seconds(5))
         }

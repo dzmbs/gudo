@@ -27,6 +27,12 @@ public final class DaemonLayoutStore: LayoutStore {
     public var supportsProjects = false
     /// Whether the daemon keeps floating windows (`DaemonFeatures::FLOATS`).
     public var supportsFloats = false
+    /// Whether the daemon sets dividers to a ratio (`MoreDaemonFeatures::SPLIT_RATIOS`); others
+    /// get each new ratio as the step from the one before.
+    public var supportsSplitRatios = false
+    /// The least time between two ratios sent for a divider being dragged: it follows the
+    /// pointer here at once, while the daemon and every other device hear of it this often.
+    @ObservationIgnored public var ratioInterval = Duration.milliseconds(33)
 
     private enum Pending {
         case layout(PaneLayout.LayoutOp)
@@ -34,6 +40,13 @@ public final class DaemonLayoutStore: LayoutStore {
         /// A zoom toggled here, as the state it leads to: a layout that arrives before the
         /// daemon has applied it (the echo of an earlier op) must not draw it undone.
         case zoom(PaneId?, tab: TabId)
+
+        /// Whether this sets the same divider as `op` (both `setRatio`).
+        func setsDivider(of op: PaneLayout.LayoutOp) -> Bool {
+            guard case .layout(.setRatio(let pane, let axis, _)) = self,
+                  case .setRatio(let otherPane, let otherAxis, _) = op else { return false }
+            return pane == otherPane && axis == otherAxis
+        }
     }
 
     @ObservationIgnored private var revision: UInt64?
@@ -52,6 +65,11 @@ public final class DaemonLayoutStore: LayoutStore {
     /// How long a layout waits for its floats before it shows anyway.
     @ObservationIgnored public var floatsWait = Duration.milliseconds(250)
     @ObservationIgnored private var pending: [(id: UInt64, change: Pending)] = []
+    /// A dragged divider's latest ratio, waiting for `ratioInterval` to pass since the last one
+    /// went. Replayed like a pending op.
+    @ObservationIgnored private var heldRatio: PaneLayout.LayoutOp?
+    @ObservationIgnored private var heldRatioSend: Task<Void, Never>?
+    @ObservationIgnored private var lastRatioSent: ContinuousClock.Instant?
     @ObservationIgnored private let send: (GudoCore.LayoutOp) -> UInt64
 
     /// `send` delivers an op to the daemon and returns its id (`DaemonClient.op`).
@@ -63,6 +81,7 @@ public final class DaemonLayoutStore: LayoutStore {
     }
 
     public func apply(_ op: PaneLayout.LayoutOp) {
+        if case .setRatio(let pane, let axis, let ratio) = op { return setRatio(pane, axis, ratio) }
         guard let sessionId, let daemonOp = LayoutConversion.op(op, sessionId: sessionId, session: session) else { return }
         if LayoutConversion.isOptimistic(op) {
             var next = session
@@ -77,6 +96,59 @@ public final class DaemonLayoutStore: LayoutStore {
         } else if case .focusDirection = op, let tab = session.activeTab {
             pending.append((id, .layout(.focus(tab.focused))))
         }
+    }
+
+    /// Shows the divider at its new ratio at once. The ratio replaces any of the same divider
+    /// still unanswered, and is replayed over every layout until the daemon has it, so its
+    /// answers to a drag's earlier ratios never draw the divider back.
+    private func setRatio(_ pane: PaneId, _ axis: PaneLayout.Axis, _ ratio: Double) {
+        guard let sessionId, ratio.isFinite else { return }
+        let op = PaneLayout.LayoutOp.setRatio(pane, axis, ratio: LayoutConversion.wireRatio(ratio))
+        let before = session
+        var next = session
+        next.apply(op)
+        guard next != session else { return }
+        session = next
+        pending.removeAll { $0.change.setsDivider(of: op) }
+        guard supportsSplitRatios else {
+            guard let old = before.dividerRatio(after: pane, along: axis),
+                  let new = next.dividerRatio(after: pane, along: axis),
+                  let step = LayoutConversion.op(
+                      .resize(pane, axis == .horizontal ? .right : .down, amount: new - old), sessionId: sessionId, session: before)
+            else { return }
+            pending.append((send(step), .layout(op)))
+            return
+        }
+        if let held = heldRatio, !Pending.layout(held).setsDivider(of: op) { sendRatio(held) }
+        heldRatio = op
+        sendHeldRatio()
+    }
+
+    private func sendHeldRatio() {
+        guard let op = heldRatio, heldRatioSend == nil else { return }
+        if let lastRatioSent, ContinuousClock.now < lastRatioSent + ratioInterval {
+            heldRatioSend = Task { [weak self, due = lastRatioSent + ratioInterval] in
+                try? await Task.sleep(until: due, clock: .continuous)
+                guard !Task.isCancelled, let self else { return }
+                self.heldRatioSend = nil
+                self.sendHeldRatio()
+            }
+            return
+        }
+        sendRatio(op)
+    }
+
+    private func sendRatio(_ op: PaneLayout.LayoutOp) {
+        if heldRatio == op { heldRatio = nil }
+        lastRatioSent = .now
+        guard let sessionId, let daemonOp = LayoutConversion.op(op, sessionId: sessionId, session: session) else { return }
+        pending.append((send(daemonOp), .layout(op)))
+    }
+
+    private func dropHeldRatio() {
+        heldRatio = nil
+        heldRatioSend?.cancel()
+        heldRatioSend = nil
     }
 
     /// Changes the session's projects: shown at once, sent to the daemon.
@@ -190,6 +262,7 @@ public final class DaemonLayoutStore: LayoutStore {
     func sessionGone() {
         isCached = false
         pending.removeAll()
+        dropHeldRatio()
         sessionId = nil
         revision = nil
         projectsRevision = nil
@@ -201,6 +274,7 @@ public final class DaemonLayoutStore: LayoutStore {
     /// Drops every optimistic change and shows the daemon's state again.
     func revertToConfirmed() {
         pending.removeAll()
+        dropHeldRatio()
         rebase()
     }
 
@@ -215,6 +289,7 @@ public final class DaemonLayoutStore: LayoutStore {
             case .zoom(let pane, let tab): next.setZoom(pane, inTab: tab)
             }
         }
+        if let heldRatio { next.apply(heldRatio) }
         nextProjects.keep(tabs: Set(next.tabs.map(\.id)))
         if next != session { session = next }
         if nextProjects != projects { projects = nextProjects }

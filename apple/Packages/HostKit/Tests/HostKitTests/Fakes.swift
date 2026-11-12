@@ -108,14 +108,14 @@ func eventually(
 }
 
 /// A layout: one tab (id 10) with panes 1 | (2 / 3), pane 3 focused.
-func sampleLayout(revision: UInt64 = 1, focused: UInt64 = 3, zoomed: UInt64? = nil) -> SessionLayout {
+func sampleLayout(revision: UInt64 = 1, focused: UInt64 = 3, zoomed: UInt64? = nil, ratio: Float = 0.5) -> SessionLayout {
     SessionLayout(
         sessionId: 7, name: "main", revision: revision, activeTab: 10,
         tabs: [
             TabLayout(
                 tabId: 10, name: "",
                 nodes: [
-                    .split(axis: .horizontal, ratio: 0.5, first: 1, second: 2),
+                    .split(axis: .horizontal, ratio: ratio, first: 1, second: 2),
                     .leaf(paneId: 1),
                     .split(axis: .vertical, ratio: 0.25, first: 3, second: 4),
                     .leaf(paneId: 2),

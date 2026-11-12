@@ -129,7 +129,11 @@ handler on that thread, in order (no main-actor hop on the keystroke path); ever
 Layout: `DaemonLayoutStore` (a `LayoutStore`) applies `LayoutChanged` by revision (reset when
 the daemon's epoch changes) and sends every op to the daemon. Focus/ratio/zoom/tab-move/rename
 ops are also applied locally at once (the daemon's answer replaces them; a failed op reverts);
-split/close/new tab wait for the daemon, which allocates ids. `Workspace` follows the store with
+split/close/new tab wait for the daemon, which allocates ids. A dragged divider sets an absolute
+ratio from the pointer's position (`LayoutOp.setRatio`): drawn at once, sent at most every
+`ratioInterval` (33 ms, the last always), replayed over every layout until the daemon has it,
+so its answers to earlier ratios never draw it back; daemons without `SPLIT_RATIOS` get the
+step from the previous ratio as a `resize`. `Workspace` follows the store with
 observation tracking, so splits made by other clients appear too. `setView(focused, visible)`
 is pushed on every layout change (stream priorities).
 

@@ -74,7 +74,10 @@ Tab  = { tab_id, name, root, focused: PaneId, zoomed: Option<PaneId> }
   first child's share (clamped to 0.05-0.95). Split puts the new pane *after* the old one and
   focuses it.
 - Ops (`proto::LayoutOp`): split, close pane, focus, focus direction, resize (moves the nearest
-  divider on that axis), toggle zoom, new/close/move/select/rename tab, create/rename/close
+  divider on that axis), set ratio (puts the divider at a pane's trailing edge at a ratio; offered
+  as `MoreDaemonFeatures::SPLIT_RATIOS`; a dragged divider sends it at most every 33 ms, and the
+  client replays it over the layouts that answer older ones, so they never pull the divider
+  back), toggle zoom, new/close/move/select/rename tab, create/rename/close
   session. Closing a tab's last pane closes the tab; a session outlives its last tab (clients
   attached to it get an empty layout, the host shows its New Terminal row, and Undo or ⇧⌘T can
   reopen into it); only `CloseSession` removes one. A pane whose process exits is closed like

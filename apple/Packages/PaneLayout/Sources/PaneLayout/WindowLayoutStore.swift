@@ -94,7 +94,7 @@ public final class WindowLayoutStore: LayoutStore {
             expectNewPanes(op, before: base.session)
             base.apply(op)
             adoptIfReady()
-        case .split, .close, .closeTab, .resize, .moveTab, .rename:
+        case .split, .close, .closeTab, .resize, .setRatio, .moveTab, .rename:
             expectNewPanes(op, before: base.session)
             base.apply(op)
             adoptIfReady()

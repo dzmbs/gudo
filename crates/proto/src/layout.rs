@@ -357,6 +357,15 @@ pub enum LayoutOp {
         /// Which edge.
         side: Direction,
     },
+    /// Moves the divider at `pane_id`'s trailing edge along `axis` (the nearest split on that
+    /// axis holding the pane in its first child) to `ratio`, the first child's share. A no-op
+    /// when the pane has no such divider. Needs
+    /// [`MoreDaemonFeatures::SPLIT_RATIOS`](crate::MoreDaemonFeatures::SPLIT_RATIOS).
+    SetRatio {
+        pane_id: PaneId,
+        axis: Axis,
+        ratio: f32,
+    },
 }
 
 /// The result of a [`LayoutOp`], in [`ServerCtl::OpResult`](crate::ServerCtl::OpResult).

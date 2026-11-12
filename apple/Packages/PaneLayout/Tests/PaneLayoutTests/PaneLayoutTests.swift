@@ -224,6 +224,60 @@ private func grid() -> Session {
     }
 }
 
+@Suite struct SetRatioTests {
+    /// p1 | (p3 | p4)
+    private func threeColumns() -> Session {
+        var session = Session()
+        session.apply(.split(p1, .horizontal))
+        session.apply(.split(PaneId(3), .horizontal))
+        return session
+    }
+
+    private func ratios(_ session: Session) -> (outer: Double, inner: Double?) {
+        guard case .split(_, let outer, _, let inner) = session.activeTab!.root else { return (0, nil) }
+        return (outer, ratio(inner))
+    }
+
+    @Test func setsTheDividerAtThePanesTrailingEdge() {
+        var session = threeColumns()
+        session.apply(.setRatio(PaneId(3), .horizontal, ratio: 0.7))
+        #expect(ratios(session) == (0.5, 0.7))
+        session.apply(.setRatio(p1, .horizontal, ratio: 0.3))
+        #expect(ratios(session) == (0.3, 0.7))
+    }
+
+    @Test func setsAStateSoItCanBeAppliedAgain() {
+        var session = threeColumns()
+        session.apply(.setRatio(p1, .horizontal, ratio: 0.3))
+        let once = session
+        session.apply(.setRatio(p1, .horizontal, ratio: 0.3))
+        #expect(session == once)
+    }
+
+    @Test func withoutADividerAtThatEdgeIsANoOp() {
+        var session = threeColumns()
+        let before = session
+        session.apply(.setRatio(PaneId(4), .horizontal, ratio: 0.2))
+        session.apply(.setRatio(p1, .vertical, ratio: 0.2))
+        #expect(session == before)
+    }
+
+    @Test func clampsSoNoChildCollapses() {
+        var session = threeColumns()
+        session.apply(.setRatio(p1, .horizontal, ratio: 0.99))
+        #expect(ratios(session).outer == Node.ratioRange.upperBound)
+        session.apply(.setRatio(p1, .horizontal, ratio: .nan))
+        #expect(ratios(session).outer == Node.ratioRange.upperBound)
+    }
+
+    @Test func readsTheRatioItSets() {
+        var session = threeColumns()
+        session.apply(.setRatio(PaneId(3), .horizontal, ratio: 0.65))
+        #expect(session.dividerRatio(after: PaneId(3), along: .horizontal) == 0.65)
+        #expect(session.dividerRatio(after: PaneId(4), along: .horizontal) == nil)
+    }
+}
+
 @Suite struct ZoomTests {
     @Test func aSinglePaneCannotZoom() {
         var session = Session()

@@ -86,6 +86,10 @@ public enum LayoutOp: Hashable, Sendable, Codable {
     case dock(PaneId, beside: PaneId?, side: Direction)
     /// Moves `pane` (out of a window too) along the whole `side` edge of a tab's tiled panes.
     case movePaneToEdge(PaneId, tab: TabId, side: Direction)
+    /// Sets the divider at `pane`'s trailing edge along `axis` (the nearest split on `axis` with
+    /// `pane` in its first child) to `ratio`, the first child's share. A state, unlike `resize`:
+    /// applying it again changes nothing.
+    case setRatio(PaneId, Axis, ratio: Double)
 }
 
 /// Session → ordered tabs → split tree per tab. A value type: `apply` is pure apart from id
@@ -256,6 +260,7 @@ public struct Session: Hashable, Sendable, Codable {
             setFloat(pane, frame: frame?.clamped, minimized: minimized, pinned: pinned)
         case .dock(let pane, let target, let side): dock(pane, beside: target, side: side)
         case .movePaneToEdge(let pane, let tab, let side): movePaneToEdge(pane, tab: tab, side: side)
+        case .setRatio(let pane, let axis, let ratio): setRatio(pane, axis, ratio)
         }
     }
 
@@ -344,18 +349,43 @@ public struct Session: Hashable, Sendable, Codable {
     }
 
     private mutating func resize(_ pane: PaneId, _ direction: Direction, _ amount: Double) {
-        guard let tab = tab(containing: pane), let path = tab.root.path(to: pane) else { return }
-        // Only dividers the pane's own layer shows: a split whose other side lies wholly in
-        // another layer (a window over the tiled panes, or the panes around a window) is hidden.
-        let own = window(containing: pane)?.id
-        let candidates = path.indices.reversed().filter {
-            path[$0].axis == direction.axis && path[$0].sibling.panes.contains { window(containing: $0)?.id == own }
-        }
+        guard let (tab, path, candidates) = dividers(around: pane, along: direction.axis) else { return }
         // The divider on the pane's `direction` side: the pane is in `first` for right/down.
         guard let depth = candidates.first(where: { path[$0].inFirst == direction.isForward }) ?? candidates.first else { return }
         updateTab(tab.id) {
-            $0.root = $0.root.adjustingRatio(towards: pane, depth: depth, by: direction.isForward ? amount : -amount)
+            $0.root = $0.root.changingRatio(towards: pane, depth: depth) { $0 + (direction.isForward ? amount : -amount) }
         }
+    }
+
+    private mutating func setRatio(_ pane: PaneId, _ axis: Axis, _ ratio: Double) {
+        guard ratio.isFinite, let (tab, depth) = trailingDivider(of: pane, along: axis) else { return }
+        updateTab(tab.id) {
+            $0.root = $0.root.changingRatio(towards: pane, depth: depth) { _ in ratio }
+        }
+    }
+
+    /// The ratio of the divider at `pane`'s trailing edge along `axis` (what `setRatio` sets).
+    public func dividerRatio(after pane: PaneId, along axis: Axis) -> Double? {
+        guard let (tab, depth) = trailingDivider(of: pane, along: axis) else { return nil }
+        return tab.root.ratio(towards: pane, depth: depth)
+    }
+
+    private func trailingDivider(of pane: PaneId, along axis: Axis) -> (tab: Tab, depth: Int)? {
+        guard let (tab, path, candidates) = dividers(around: pane, along: axis),
+              let depth = candidates.first(where: { path[$0].inFirst }) else { return nil }
+        return (tab, depth)
+    }
+
+    /// The splits on `axis` around `pane`, deepest first, that show a divider: only dividers
+    /// the pane's own layer shows, as a split whose other side lies wholly in another layer (a
+    /// window over the tiled panes, or the panes around a window) is hidden.
+    private func dividers(around pane: PaneId, along axis: Axis) -> (tab: Tab, path: [Node.Step], depths: [Int])? {
+        guard let tab = tab(containing: pane), let path = tab.root.path(to: pane) else { return nil }
+        let own = window(containing: pane)?.id
+        let depths = path.indices.reversed().filter {
+            path[$0].axis == axis && path[$0].sibling.panes.contains { window(containing: $0)?.id == own }
+        }
+        return (tab, path, depths)
     }
 
     /// Zooms `pane` in `tab`, or unzooms it (nil): a state, so it can be applied again to a

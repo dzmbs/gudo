@@ -14,7 +14,8 @@ protocol PaneTree {
     /// The leaf that takes the keyboard; nil when none of this tree's does (the other column).
     var focusedLeaf: PaneId? { get }
     func focus(leaf: PaneId)
-    func resize(leaf: PaneId, _ direction: Direction, amount: Double)
+    /// Sets the divider at `leaf`'s trailing edge along `axis` to `ratio`.
+    func setRatio(leaf: PaneId, _ axis: PaneLayout.Axis, ratio: Double)
     /// One terminal cell, for snapping split sizes to whole cells.
     var cellSize: CGSize? { get }
     var padding: CGFloat { get }
@@ -61,8 +62,8 @@ struct HostTabTree: PaneTree {
         if let model { model.focus(pane: leaf, onGroup: workspace.groupId) } else { workspace.apply(.focus(leaf)) }
     }
 
-    func resize(leaf: PaneId, _ direction: Direction, amount: Double) {
-        workspace.apply(.resize(leaf, direction, amount: amount))
+    func setRatio(leaf: PaneId, _ axis: PaneLayout.Axis, ratio: Double) {
+        workspace.apply(.setRatio(leaf, axis, ratio: ratio))
     }
 
     var cellSize: CGSize? { workspace.cellSize }
@@ -360,8 +361,18 @@ struct SplitLayout {
         let first: Node
         /// The visible line.
         var frame: CGRect
-        /// The split's length along its axis, for turning drags into ratios.
-        let extent: CGFloat
+        /// Where the split starts along its axis.
+        let start: CGFloat
+        /// The length the ratio divides: the split's, less the line and, across a vertical
+        /// split, both panes' headers.
+        let available: CGFloat
+        /// The header length the first pane has over its share.
+        let headers: CGFloat
+
+        /// The ratio that puts the line's leading edge at `position` along the axis.
+        func ratio(placingLineAt position: CGFloat) -> Double {
+            Double((position - start - headers) / max(available, 1))
+        }
     }
 
     private(set) var leaves: [Leaf] = []
@@ -385,8 +396,9 @@ struct SplitLayout {
             let extent = horizontal ? rect.width : rect.height
             // Whole cells per pane; in a vertical split each side also carries its pane header.
             let headers: CGFloat = horizontal ? 0 : header
+            let available = extent - gap - 2 * headers
             let firstLength = headers + SplitSnapping.firstLength(
-                available: extent - gap - 2 * headers, ratio: ratio,
+                available: available, ratio: ratio,
                 cell: cell.map { horizontal ? $0.width : $0.height }, padding: padding)
             let firstRect, line, secondRect: CGRect
             if horizontal {
@@ -402,7 +414,7 @@ struct SplitLayout {
             place(second, in: secondRect, gap: gap, header: header, cell: cell, padding: padding)
             dividers.append(Divider(
                 id: "\(axis.rawValue)-\(first.trailingPane(along: axis))", axis: axis, ratio: ratio,
-                first: first, frame: line, extent: extent))
+                first: first, frame: line, start: horizontal ? rect.minX : rect.minY, available: available, headers: headers))
         }
     }
 }
@@ -416,8 +428,8 @@ private struct SplitDivider: View {
     @Environment(\.terminalTheme) private var theme
     @AppStorage(TerminalPreferences.Key.paneStyle) private var paneStyle = TerminalPreferences.PaneStyle.compact
 
-    /// Drag translation already applied, so each change sends only the new delta.
-    @State private var appliedTranslation: CGFloat?
+    /// Where in the line the drag took hold of it, so the line keeps that spot under the pointer.
+    @State private var grabOffset: CGFloat?
 
     var body: some View {
         let horizontal = divider.axis == .horizontal
@@ -443,31 +455,32 @@ private struct SplitDivider: View {
             .accessibilityHint(horizontal ? "Drag to resize the left and right panes" : "Drag to resize the top and bottom panes")
             .accessibilityValue(divider.ratio.formatted(.percent.precision(.fractionLength(0))))
             .accessibilityAdjustableAction { direction in
-                move(by: direction == .increment ? 0.025 : -0.025)
+                setRatio(divider.ratio + (direction == .increment ? 0.025 : -0.025))
             }
     }
 
-    /// Moves the divider by resizing the pane on its leading side towards it, which `resize`
-    /// resolves to exactly this split.
+    /// The line follows the pointer: each position becomes the ratio that puts it there, so
+    /// nothing accumulates and a late answer from the host cannot leave it behind.
     private var drag: some Gesture {
-        // Global space: the divider moves under the finger, so local translations would undercount.
-        DragGesture(minimumDistance: 1, coordinateSpace: .global)
+        // The canvas's space: the divider moves under the pointer, its own space with it.
+        DragGesture(minimumDistance: 1, coordinateSpace: .named(PaneArrangement.space))
             .onChanged { value in
-                let translation = divider.axis == .horizontal ? value.translation.width : value.translation.height
-                let delta = translation - (appliedTranslation ?? 0)
-                appliedTranslation = translation
-                move(by: delta / max(divider.extent, 1))
+                let horizontal = divider.axis == .horizontal
+                let pointer = horizontal ? value.location.x : value.location.y
+                let grab = grabOffset ?? (horizontal ? value.startLocation.x - divider.frame.minX : value.startLocation.y - divider.frame.minY)
+                grabOffset = grab
+                setRatio(divider.ratio(placingLineAt: pointer - grab))
             }
-            .onEnded { _ in appliedTranslation = nil }
+            .onEnded { _ in grabOffset = nil }
     }
 
-    private func move(by amount: Double) {
-        let pane = divider.first.trailingPane(along: divider.axis)
-        tree.resize(leaf: pane, divider.axis == .horizontal ? .right : .down, amount: amount)
+    private func setRatio(_ ratio: Double) {
+        let ratio = min(max(ratio, Node.ratioRange.lowerBound), Node.ratioRange.upperBound)
+        tree.setRatio(leaf: divider.first.trailingPane(along: divider.axis), divider.axis, ratio: ratio)
     }
 
     private func equalize() {
-        withAnimation(DS.Motion.snappy) { move(by: 0.5 - divider.ratio) }
+        withAnimation(DS.Motion.snappy) { setRatio(0.5) }
     }
 }
 

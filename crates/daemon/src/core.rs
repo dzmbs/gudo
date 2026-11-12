@@ -1263,6 +1263,13 @@ impl Core {
             } => self.simple(self.session_of_pane(pane_id), |layout| {
                 layout.resize(pane_id, axis, delta)
             })?,
+            LayoutOp::SetRatio {
+                pane_id,
+                axis,
+                ratio,
+            } => self.simple(self.session_of_pane(pane_id), |layout| {
+                layout.set_ratio(pane_id, axis, ratio)
+            })?,
             LayoutOp::ToggleZoom { pane_id } => self
                 .simple(self.session_of_pane(pane_id), |layout| {
                     layout.toggle_zoom(pane_id)

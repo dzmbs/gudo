@@ -637,7 +637,17 @@ impl Layout {
     }
 
     pub fn resize(&mut self, pane: PaneId, axis: Axis, delta: f32) -> OpResult<()> {
-        if !delta.is_finite() {
+        self.move_divider(pane, axis, DividerMove::Grow(delta))
+    }
+
+    /// Sets the divider at `pane`'s trailing edge along `axis` to `ratio` (`LayoutOp::SetRatio`).
+    pub fn set_ratio(&mut self, pane: PaneId, axis: Axis, ratio: f32) -> OpResult<()> {
+        self.move_divider(pane, axis, DividerMove::To(ratio))
+    }
+
+    fn move_divider(&mut self, pane: PaneId, axis: Axis, change: DividerMove) -> OpResult<()> {
+        let (DividerMove::Grow(value) | DividerMove::To(value)) = change;
+        if !value.is_finite() {
             return Err(OpError::Invalid);
         }
         let (session_index, tab_index) = self.locate(pane).ok_or(OpError::NotFound)?;
@@ -662,7 +672,7 @@ impl Layout {
             &mut session.tabs[tab_index].root,
             pane,
             axis,
-            delta,
+            change,
             &in_own_layer,
         ) == Resize::Changed
         {
@@ -1401,13 +1411,21 @@ enum Resize {
     Unchanged,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum DividerMove {
+    /// Grows the pane by this share of its nearest split on the axis.
+    Grow(f32),
+    /// Sets the split at the pane's trailing edge to this ratio.
+    To(f32),
+}
+
 /// Moves the divider of the nearest split on `axis` around `pane` whose other side holds a
-/// pane `in_own_layer` accepts.
+/// pane `in_own_layer` accepts (for `DividerMove::To`, one holding `pane` in its first child).
 fn resize_in(
     node: &mut LayoutNode,
     pane: PaneId,
     axis: Axis,
-    delta: f32,
+    change: DividerMove,
     in_own_layer: &dyn Fn(PaneId) -> bool,
 ) -> Resize {
     match node {
@@ -1419,17 +1437,20 @@ fn resize_in(
             first,
             second,
         } => {
-            let (child, in_first) = match resize_in(first, pane, axis, delta, in_own_layer) {
-                Resize::NotFound => (resize_in(second, pane, axis, delta, in_own_layer), false),
+            let (child, in_first) = match resize_in(first, pane, axis, change, in_own_layer) {
+                Resize::NotFound => (resize_in(second, pane, axis, change, in_own_layer), false),
                 other => (other, true),
             };
             let other = if in_first { &**second } else { &**first };
-            match child {
-                Resize::Pending { .. }
+            let target = match change {
+                DividerMove::Grow(delta) => Some(*ratio + if in_first { delta } else { -delta }),
+                DividerMove::To(target) => in_first.then_some(target),
+            };
+            match (child, target) {
+                (Resize::Pending { .. }, Some(target))
                     if *split_axis == axis && leaves(other).any(in_own_layer) =>
                 {
-                    let signed = if in_first { delta } else { -delta };
-                    let next = (*ratio + signed).clamp(MIN_RATIO, 1.0 - MIN_RATIO);
+                    let next = target.clamp(MIN_RATIO, 1.0 - MIN_RATIO);
                     if (next - *ratio).abs() > f32::EPSILON {
                         *ratio = next;
                         Resize::Changed
@@ -1437,8 +1458,8 @@ fn resize_in(
                         Resize::Unchanged
                     }
                 }
-                Resize::Pending { .. } => Resize::Pending { in_first },
-                other => other,
+                (Resize::Pending { .. }, _) => Resize::Pending { in_first },
+                (other, _) => other,
             }
         }
     }
@@ -1616,6 +1637,50 @@ mod tests {
         assert!(layout.session(session).unwrap().revision > before);
         assert_eq!(
             layout.resize(p1, Axis::Horizontal, f32::NAN),
+            Err(OpError::Invalid)
+        );
+    }
+
+    #[test]
+    fn set_ratio_moves_the_divider_at_the_panes_trailing_edge() {
+        let mut layout = Layout::default();
+        let (session, _, p1) = session_with(&mut layout);
+        let p2 = layout.alloc_pane();
+        layout.split(p1, Axis::Horizontal, p2).unwrap();
+        let p3 = layout.alloc_pane();
+        layout.split(p2, Axis::Horizontal, p3).unwrap();
+        let ratios = |layout: &Layout| {
+            let LayoutNode::Split { ratio, second, .. } =
+                &layout.snapshot(session).unwrap().tabs[0].root
+            else {
+                panic!("the root is a split")
+            };
+            let LayoutNode::Split {
+                ratio: inner_ratio, ..
+            } = **second
+            else {
+                panic!("the second child is a split")
+            };
+            (*ratio, inner_ratio)
+        };
+        layout.set_ratio(p2, Axis::Horizontal, 0.7).unwrap();
+        assert_eq!(ratios(&layout), (0.5, 0.7), "p2 leads the inner split");
+        layout.set_ratio(p1, Axis::Horizontal, 0.3).unwrap();
+        assert_eq!(ratios(&layout), (0.3, 0.7));
+        layout.set_ratio(p1, Axis::Horizontal, 0.3).unwrap();
+        layout.set_ratio(p3, Axis::Horizontal, 0.9).unwrap();
+        layout.set_ratio(p1, Axis::Vertical, 0.9).unwrap();
+        assert_eq!(
+            ratios(&layout),
+            (0.3, 0.7),
+            "p3 and the vertical axis have no divider"
+        );
+        let before = layout.session(session).unwrap().revision;
+        layout.set_ratio(p1, Axis::Horizontal, 2.0).unwrap();
+        assert_eq!(ratios(&layout), (1.0 - MIN_RATIO, 0.7));
+        assert!(layout.session(session).unwrap().revision > before);
+        assert_eq!(
+            layout.set_ratio(p1, Axis::Horizontal, f32::NAN),
             Err(OpError::Invalid)
         );
     }

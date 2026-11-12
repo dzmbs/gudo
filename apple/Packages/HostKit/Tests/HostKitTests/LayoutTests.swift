@@ -150,6 +150,77 @@ import GudoCore
         #expect(store.session.activeTab?.focused == moved)
     }
 
+    private func rootRatio(_ store: DaemonLayoutStore) -> Double? {
+        guard case .split(_, let ratio, _, _) = store.session.activeTab?.root else { return nil }
+        return ratio
+    }
+
+    /// The daemon's answers to a drag's earlier ratios arrive while the pointer has moved on,
+    /// and the last one after it is let go: the divider stays where the pointer left it.
+    @Test func aDraggedDividerNeverStepsBackForAnEcho() {
+        var sent: [GudoCore.LayoutOp] = []
+        let store = DaemonLayoutStore { sent.append($0); return UInt64(sent.count) }
+        store.supportsSplitRatios = true
+        store.ratioInterval = .zero
+        store.receive(sampleLayout(revision: 1))
+        let ratios = [0.55, 0.6, 0.65]
+        for ratio in ratios { store.apply(.setRatio(PaneId(1), .horizontal, ratio: ratio)) }
+        let final = LayoutConversion.wireRatio(0.65)
+        #expect(sent == ratios.map { .setRatio(paneId: 1, axis: .horizontal, ratio: Float($0)) })
+        #expect(rootRatio(store) == final)
+
+        store.receive(sampleLayout(revision: 2, ratio: 0.55))
+        store.acknowledge(1, failed: false)
+        #expect(rootRatio(store) == final)
+        store.receive(sampleLayout(revision: 3, ratio: 0.6))
+        store.acknowledge(2, failed: false)
+        #expect(rootRatio(store) == final)
+        store.receive(sampleLayout(revision: 4, ratio: 0.65))
+        store.acknowledge(3, failed: false)
+        #expect(rootRatio(store) == final, "the daemon's ratio is the one drawn")
+    }
+
+    @Test func aDraggedDividerIsSentAtMostOncePerInterval() async throws {
+        var sent: [GudoCore.LayoutOp] = []
+        let store = DaemonLayoutStore { sent.append($0); return UInt64(sent.count) }
+        store.supportsSplitRatios = true
+        store.ratioInterval = .milliseconds(40)
+        store.receive(sampleLayout(revision: 1))
+
+        store.apply(.setRatio(PaneId(1), .horizontal, ratio: 0.55))
+        store.apply(.setRatio(PaneId(1), .horizontal, ratio: 0.6))
+        store.apply(.setRatio(PaneId(1), .horizontal, ratio: 0.65))
+        #expect(sent == [.setRatio(paneId: 1, axis: .horizontal, ratio: 0.55)])
+        #expect(rootRatio(store) == LayoutConversion.wireRatio(0.65), "the divider follows the pointer at once")
+        store.receive(sampleLayout(revision: 2, ratio: 0.55))
+        store.acknowledge(1, failed: false)
+        #expect(rootRatio(store) == LayoutConversion.wireRatio(0.65))
+
+        let deadline = ContinuousClock.now + .seconds(5)
+        while sent.count < 2, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(sent.last == .setRatio(paneId: 1, axis: .horizontal, ratio: 0.65), "the last ratio always goes")
+        #expect(sent.count == 2)
+    }
+
+    /// A daemon without `SetRatio` gets each ratio as the step from the one before; the ratio
+    /// still holds against its echoes.
+    @Test func olderDaemonsGetStepsAndTheDividerStillHolds() {
+        var sent: [GudoCore.LayoutOp] = []
+        let store = DaemonLayoutStore { sent.append($0); return UInt64(sent.count) }
+        store.receive(sampleLayout(revision: 1))
+        store.apply(.setRatio(PaneId(1), .horizontal, ratio: 0.6))
+        store.apply(.setRatio(PaneId(1), .horizontal, ratio: 0.55))
+        let steps = sent.compactMap { op -> Float? in
+            guard case .resize(paneId: 1, axis: .horizontal, let delta) = op else { return nil }
+            return delta
+        }
+        #expect(steps.count == 2)
+        #expect(abs(steps[0] - 0.1) < 1e-6 && abs(steps[1] + 0.05) < 1e-6)
+        store.receive(sampleLayout(revision: 2, ratio: 0.6))
+        store.acknowledge(1, failed: false)
+        #expect(rootRatio(store) == LayoutConversion.wireRatio(0.55))
+    }
+
     @Test func zoomedTabsShowOnlyTheZoomedPane() {
         let store = DaemonLayoutStore { _ in 0 }
         store.receive(sampleLayout(zoomed: 2))

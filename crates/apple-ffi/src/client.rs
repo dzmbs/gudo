@@ -780,6 +780,12 @@ impl DaemonClient {
         self.inner.op(op.into())
     }
 
+    /// Whether the daemon applies [`LayoutOp::SetRatio`].
+    pub fn sets_split_ratios(&self) -> bool {
+        self.inner
+            .daemon_offers(proto::MoreDaemonFeatures::SPLIT_RATIOS)
+    }
+
     /// Starts following a pane's output. Kept across reconnects.
     pub fn subscribe(&self, pane_id: u64) {
         self.inner.subscribe(PaneId(pane_id));

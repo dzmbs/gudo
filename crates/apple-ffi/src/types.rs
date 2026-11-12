@@ -464,6 +464,13 @@ pub enum LayoutOp {
         tab_id: u64,
         side: Direction,
     },
+    /// Moves the divider at a pane's trailing edge along `axis` to `ratio`, the first child's
+    /// share (daemons that `sets_split_ratios`).
+    SetRatio {
+        pane_id: u64,
+        axis: Axis,
+        ratio: f32,
+    },
 }
 
 /// Where a floating window sits, in fractions of its tab (`0,0` top left).
@@ -734,6 +741,15 @@ impl From<LayoutOp> for proto::LayoutOp {
                 pane_id: PaneId(pane_id),
                 tab_id: TabId(tab_id),
                 side: side.into(),
+            },
+            LayoutOp::SetRatio {
+                pane_id,
+                axis,
+                ratio,
+            } => Self::SetRatio {
+                pane_id: PaneId(pane_id),
+                axis: axis.into(),
+                ratio,
             },
         }
     }

@@ -526,6 +526,7 @@ public final class DaemonConnection: HostConnection {
             daemonInfo = info
             layout.supportsProjects = info?.projects ?? false
             layout.supportsFloats = info?.floats ?? false
+            layout.supportsSplitRatios = (client as? any SplitRatioClient)?.setsSplitRatios() ?? false
             daemonInfoReported = true
             onDaemonInfo?(info)
         case .incompatible(let reason):

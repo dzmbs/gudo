@@ -149,9 +149,10 @@ pub(crate) fn op(op: &LayoutOp) -> (Need, Target) {
         O::NewTab { session_id, .. } | O::RenameSession { session_id, .. } => {
             (Need::Drive, Target::Session(*session_id))
         }
-        O::Focus { pane_id } | O::Resize { pane_id, .. } | O::ToggleZoom { pane_id } => {
-            (Need::Drive, Target::Pane(*pane_id))
-        }
+        O::Focus { pane_id }
+        | O::Resize { pane_id, .. }
+        | O::SetRatio { pane_id, .. }
+        | O::ToggleZoom { pane_id } => (Need::Drive, Target::Pane(*pane_id)),
         O::FocusDirection { tab_id, .. }
         | O::MoveTab { tab_id, .. }
         | O::SelectTab { tab_id }

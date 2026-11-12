@@ -35,6 +35,13 @@ nonisolated public protocol PaneSizingClient: AnyObject, Sendable {
 
 extension DaemonClient: PaneSizingClient {}
 
+/// A client that knows whether its daemon sets dividers to a ratio (`LayoutOp.setRatio`).
+nonisolated public protocol SplitRatioClient: AnyObject, Sendable {
+    func setsSplitRatios() -> Bool
+}
+
+extension DaemonClient: SplitRatioClient {}
+
 /// Updating the daemon over its connection (`DaemonClient.upgradeDaemon`), separate from
 /// `DaemonClientAPI` so test fakes need not implement it.
 nonisolated public protocol DaemonUpgradeAPI: AnyObject, Sendable {

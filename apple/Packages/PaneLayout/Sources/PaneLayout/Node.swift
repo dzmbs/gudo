@@ -139,15 +139,23 @@ public indirect enum Node: Hashable, Sendable, Codable {
         }
     }
 
-    /// Adds `delta` to the ratio of the split `depth` steps down the path to `pane`.
-    func adjustingRatio(towards pane: PaneId, depth: Int, by delta: Double) -> Node {
+    /// Replaces the ratio of the split `depth` steps down the path to `pane` with
+    /// `change(ratio)`, kept in `ratioRange`.
+    func changingRatio(towards pane: PaneId, depth: Int, _ change: (Double) -> Double) -> Node {
         guard case .split(let axis, let ratio, let first, let second) = self else { return self }
         guard depth > 0 else {
-            let clamped = min(max(ratio + delta, Self.ratioRange.lowerBound), Self.ratioRange.upperBound)
+            let clamped = min(max(change(ratio), Self.ratioRange.lowerBound), Self.ratioRange.upperBound)
             return .split(axis: axis, ratio: clamped, first: first, second: second)
         }
         return first.contains(pane)
-            ? .split(axis: axis, ratio: ratio, first: first.adjustingRatio(towards: pane, depth: depth - 1, by: delta), second: second)
-            : .split(axis: axis, ratio: ratio, first: first, second: second.adjustingRatio(towards: pane, depth: depth - 1, by: delta))
+            ? .split(axis: axis, ratio: ratio, first: first.changingRatio(towards: pane, depth: depth - 1, change), second: second)
+            : .split(axis: axis, ratio: ratio, first: first, second: second.changingRatio(towards: pane, depth: depth - 1, change))
+    }
+
+    /// The ratio of the split `depth` steps down the path to `pane`.
+    func ratio(towards pane: PaneId, depth: Int) -> Double? {
+        guard case .split(_, let ratio, let first, let second) = self else { return nil }
+        guard depth > 0 else { return ratio }
+        return (first.contains(pane) ? first : second).ratio(towards: pane, depth: depth - 1)
     }
 }

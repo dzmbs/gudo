@@ -251,7 +251,7 @@ public struct CompositeTab: Identifiable, Hashable, Sendable, Codable {
     /// Ops that make or end panes go through `CompositeTabs`, which asks the hosts first.
     public mutating func apply(_ op: LayoutOp) {
         switch op {
-        case .focus, .focusDirection, .resize, .toggleZoom, .rename:
+        case .focus, .focusDirection, .resize, .setRatio, .toggleZoom, .rename:
             var session = Session(tabs: [layout], activeTabId: layout.id)
             session.apply(op)
             if let tab = session.tabs.first { layout = tab }
