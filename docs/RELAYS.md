@@ -37,7 +37,8 @@ appended and the ticket is byte-identical to before. Extras of a newer version a
 On the app side `client_core::Client::connect*` reads the extras. The daemon on this computer
 (`ConnectOptions::this_computer`, the Mac app's own helper) is dialled on loopback alone, at the
 ticket's ports, from sockets bound to loopback, whatever the ticket and the settings say: it never
-needs the network. Otherwise, if the app's own `RelayMode` is `Disabled` (a "local only" switch
+needs the network. Each dial also tries the ports the helper wrote to its `endpoint.json`
+(`ConnectOptions::helper_endpoint_file`), so a helper that had to take new ports is still found. Otherwise, if the app's own `RelayMode` is `Disabled` (a "local only" switch
 in the app) that wins; then a local-only daemon (`Disabled` in the ticket) is dialled directly,
 from loopback sockets alone when every ticket address is loopback;
 then the app's own relays
