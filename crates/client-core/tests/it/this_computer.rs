@@ -16,9 +16,9 @@ const GONE_WIFI_ADDRESS: IpAddr = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1));
 /// A relay nothing answers on, as when the internet is down.
 const UNREACHABLE_RELAY: &str = "https://127.0.0.1:1";
 
-/// A daemon listening on every interface, as the helper does.
 async fn helper(state: &std::path::Path) -> daemon::Daemon {
     let mut config = daemon::Config::new(state);
+    config.bind = Some((Ipv4Addr::LOCALHOST, 0).into());
     config.relay = daemon::RelayMode::Disabled;
     config.shell = Some("/bin/sh".into());
     config.pane_env = vec![("PS1".into(), "$ ".into()), ("ENV".into(), String::new())];
