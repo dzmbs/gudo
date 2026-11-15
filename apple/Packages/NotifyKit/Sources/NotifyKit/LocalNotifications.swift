@@ -93,8 +93,17 @@ public enum LocalNotifications {
         "\(hostId).pane.\(paneId)"
     }
 
-    public static func content(for note: AttentionNote) -> UNMutableNotificationContent {
+    /// The attachment that shows the program's mark beside the note.
+    public static let markAttachment = "mark"
+
+    /// `mark`: a picture of the program's mark the app drew for this note (the system moves it
+    /// into its own store); a file it cannot read leaves the note without one.
+    public static func content(for note: AttentionNote, mark: URL? = nil) -> UNMutableNotificationContent {
         let content = UNMutableNotificationContent()
+        if let mark, FileManager.default.isReadableFile(atPath: mark.path),
+           let attachment = try? UNNotificationAttachment(identifier: markAttachment, url: mark) {
+            content.attachments = [attachment]
+        }
         content.title = note.title.isEmpty ? defaultTitle(note) : note.title
         content.subtitle = [note.place, note.hostName].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
         content.body = body(note)

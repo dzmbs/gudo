@@ -495,3 +495,21 @@ private final class FakeClient: NotificationActionClient {
         #expect(try reader(vectors, rows: Rows()).board(for: AgentsActivityState(s: vectors.payloads[0].sealed)) == nil, "a notification is no activity")
     }
 }
+
+/// A note carries the program's mark as its picture, when the app drew one.
+@Test func aNoteCarriesTheProgramMark() throws {
+    let note = AttentionNote(hostId: "h1", hostName: "studio", itemId: 1, paneId: 2, kind: .blocked, title: "", body: "Which one?", agent: "pi", agentId: "pi")
+    #expect(LocalNotifications.content(for: note).attachments.isEmpty)
+
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let mark = directory.appendingPathComponent("mark.png")
+    let onePixelPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+    try #require(Data(base64Encoded: onePixelPNG)).write(to: mark)
+    let content = LocalNotifications.content(for: note, mark: mark)
+    #expect(content.attachments.map(\.identifier) == [LocalNotifications.markAttachment])
+
+    // A mark that cannot be read leaves the note as it was.
+    #expect(LocalNotifications.content(for: note, mark: directory.appendingPathComponent("missing.png")).attachments.isEmpty)
+}

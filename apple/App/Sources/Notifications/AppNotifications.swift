@@ -312,7 +312,7 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
         postedAt[LocalNotifications.identifier(hostId: note.hostId, paneId: note.paneId)] = .now
         let request = UNNotificationRequest(
             identifier: LocalNotifications.identifier(hostId: note.hostId, paneId: note.paneId),
-            content: LocalNotifications.content(for: note), trigger: nil)
+            content: LocalNotifications.content(for: note, mark: NotificationMark.write(program: note.agentId)), trigger: nil)
         do {
             try await UNUserNotificationCenter.current().add(request)
             Self.log.info("posted \(note.pushKind.rawValue, privacy: .public) host=\(note.hostId, privacy: .public) pane=\(note.paneId)")
