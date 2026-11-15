@@ -13,12 +13,12 @@ struct PaneSizingOverlay: View {
     var body: some View {
         if let daemon = workspace.host as? DaemonConnection {
             let source = source(in: daemon)
-            ZStack(alignment: .bottomTrailing) {
+            ZStack(alignment: .top) {
                 if let shown, shown == source, !pane.showsSavedScreen, pane.connection == .live {
                     PaneSizingChip(label: label(for: shown, in: daemon), enabled: canUseSize(in: daemon)) {
                         (pane.backend as? any SharedPaneTap)?.useSize()
                     }
-                    .padding(8)
+                    .motionTransition(.panel(from: .top))
                 }
             }
             .task(id: source) {
@@ -68,7 +68,6 @@ struct PaneSizingChip: View {
     let label: String
     let enabled: Bool
     let useSize: () -> Void
-    @Environment(\.terminalTheme) private var theme
 
     private var controlHeight: CGFloat {
         #if os(macOS)
@@ -78,27 +77,32 @@ struct PaneSizingChip: View {
         #endif
     }
 
+    /// A header strip along the pane's top edge: the terminal's own input lines stay clear.
     var body: some View {
-        HStack(spacing: 6) {
-            Text(label + " ·")
+        HStack(spacing: 8) {
+            Text(label)
                 .lineLimit(1)
                 .truncationMode(.middle)
+                .foregroundStyle(DS.Palette.textSecondary)
+            Spacer(minLength: 0)
             Button(action: useSize) {
                 Text("Use this size")
-                    .underline()
                     .fixedSize()
                     .frame(minWidth: 44, minHeight: controlHeight)
                     .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            .foregroundStyle(DS.Palette.text)
             .disabled(!enabled)
             .accessibilityIdentifier("terminal-sizing-takeover")
             .accessibilityHint("Makes this window set the shared terminal size.")
         }
         .font(DS.Font.meta)
-        .foregroundStyle(theme.foreground)
-        .padding(.horizontal, 10)
-        .background(theme.background, in: .capsule)
-        .overlay { Capsule().strokeBorder(DS.Palette.border, lineWidth: 1).allowsHitTesting(false) }
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity)
+        .background(DS.Palette.raised)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(DS.Palette.hairline).frame(height: 1).allowsHitTesting(false)
+        }
     }
 }
