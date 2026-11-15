@@ -22,13 +22,16 @@ public struct ProgramMark: View {
 
     let identity: ProgramIdentity
     var size: CGFloat
-    /// Symbols and one-colour logos draw at its `markOpacity` of the inherited foreground. Colour
-    /// logos stay as their owners publish them.
+    /// Symbols and one-colour logos draw at its `markOpacity` of the inherited foreground unless
+    /// `isMuted` is off (a monochrome or inverted tile). Colour logos stay as their owners
+    /// publish them.
+    var isMuted: Bool
     @Environment(\.chrome) private var chrome
 
-    public init(_ identity: ProgramIdentity, size: CGFloat = ProgramMark.rowSize) {
+    public init(_ identity: ProgramIdentity, size: CGFloat = ProgramMark.rowSize, isMuted: Bool = true) {
         self.identity = identity
         self.size = size
+        self.isMuted = isMuted
     }
 
     public var body: some View {
@@ -56,14 +59,16 @@ public struct ProgramMark: View {
                 .interpolation(.high)
                 .aspectRatio(contentMode: .fit)
                 .frame(width: size, height: size)
-                .opacity(logo.template ? chrome.markOpacity : 1)
+                .opacity(logo.template ? markOpacity : 1)
         } else {
             Image(systemName: identity.symbol)
                 .font(.system(size: size * 0.82, weight: .medium))
                 .frame(width: size, height: size)
-                .opacity(chrome.markOpacity)
+                .opacity(markOpacity)
         }
     }
+
+    private var markOpacity: Double { isMuted ? chrome.markOpacity : 1 }
 }
 
 /// The bundle's logo images, for tests.

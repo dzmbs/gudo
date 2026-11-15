@@ -125,4 +125,27 @@ struct ChromeContrastTests {
         }
         #expect(failures.isEmpty, "\(Self.summary(failures))")
     }
+
+    /// A program tile in every tint on the rows that carry one (sidebar, tab strip, palette):
+    /// the muted symbol on its neutral tile, the full ink, the accent on its dim tile, and the
+    /// inverted tile of a selected row.
+    @Test(arguments: schemes)
+    func programTilesKeepTheirMarksLegible(scheme: ColorScheme?) {
+        let failures = Self.failures(scheme: scheme, minimum: ChromePalette.minimumGlyphContrast) { chrome in
+            let selected = ChromePalette.fillLevels.selected
+            return [("sidebar", chrome.sidebar), ("base", chrome.base), ("raised", chrome.raised)].flatMap { name, surface in
+                let tile = surface.blended(with: chrome.foreground, selected)
+                let accentTile = surface.blended(with: chrome.accent, ChromePalette.containerLevel)
+                let invertedTile = surface.blended(with: chrome.foreground, ChromePalette.textLevels.primary)
+                return [
+                    ("muted mark on tile on \(name)", tile.blended(with: chrome.foreground, ChromePalette.textLevels.primary * chrome.markOpacity), tile),
+                    ("mark on tile on \(name)", tile.blended(with: chrome.foreground, ChromePalette.textLevels.primary), tile),
+                    ("accent mark on accent tile on \(name)", chrome.accent, accentTile),
+                    ("base on inverted tile on \(name)", chrome.base, invertedTile),
+                    ("onAccent on accent tile", chrome.onAccent, chrome.accent),
+                ]
+            }
+        }
+        #expect(failures.isEmpty, "\(Self.summary(failures))")
+    }
 }

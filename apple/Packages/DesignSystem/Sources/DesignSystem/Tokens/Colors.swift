@@ -109,6 +109,9 @@ public extension DS {
         public static let hoverFill = ChromeStyle(.hoverFill)
         public static let selectedFill = ChromeStyle(.selectedFill)
         public static let pressedFill = ChromeStyle(.pressedFill)
+        /// A program mark's tile: the ink at the selected level over whatever row it sits on, so
+        /// it stands apart from the row at rest and under hover alike.
+        public static let tile = selectedFill
 
         /// Lines: the foreground at 10 / 15 / 20 %.
         public static let hairline = ChromeStyle(.hairline)
