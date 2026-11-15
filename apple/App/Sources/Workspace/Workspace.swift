@@ -330,6 +330,8 @@ final class Workspace {
     }
     /// Input typed over a saved screen was not sent (the host's screen had changed).
     @ObservationIgnored var onHeldInputDropped: (() -> Void)?
+    /// A pane rang the bell, whatever the bell's border setting.
+    @ObservationIgnored var onPaneBell: ((PaneId) -> Void)?
     /// Whether any of this window's panes on the host still shows its saved screen, or the
     /// layout itself is the saved one (instant start): "Connecting…" in the header.
     var showsSavedWorkspace: Bool {
@@ -736,6 +738,7 @@ final class Workspace {
     /// Ghostty's `bell-features = border` (Settings ▸ Notifications): the pane's border lights up
     /// for a moment. Off by default, like Ghostty.
     private func ringBell(_ id: PaneId) {
+        onPaneBell?(id)
         guard UserDefaults.standard.bool(forKey: TerminalPreferences.Key.bellFeatures) else { return }
         notices[id, default: PaneNotice()].bell = true
         Task { @MainActor [weak self] in

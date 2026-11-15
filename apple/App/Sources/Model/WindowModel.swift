@@ -107,6 +107,10 @@ final class WindowModel {
     var joinedTab: TabRef?
     /// Tabs an agent or a host changed while the user was elsewhere, until the user shows them.
     var changedTabs: Set<TabRef> = []
+    /// Tabs that called for the user out of sight (`Model/TabAttention.swift`).
+    var attention = TabAttention()
+    /// Every tab's most urgent agent state at the last look, nil before the first.
+    @ObservationIgnored var attentionStates: [TabRef: DesignSystem.AgentState]?
     /// Tabs selected in the sidebar for bulk actions (`Model/TabHistoryActions.swift`).
     var tabSelection = TabSelection()
     /// Touch selection mode (long-press › Select, the compact switcher's Select): a tap
@@ -218,7 +222,13 @@ final class WindowModel {
     /// This window's workspace on each group (this device and every open host), kept for as
     /// long as the host is open so switching to it is instant: its panes keep streaming in the
     /// background.
-    private(set) var workspaces: [String: Workspace] = [:]
+    private(set) var workspaces: [String: Workspace] = [:] {
+        didSet {
+            for (id, open) in workspaces {
+                open.onPaneBell = { [weak self] pane in self?.noteBell(inPane: pane, onGroup: id) }
+            }
+        }
+    }
     /// The connection each host's workspace was made on (a new connection, plain SSH upgraded
     /// to the daemon, gets a new workspace).
     @ObservationIgnored private var workspaceConnections: [String: ObjectIdentifier] = [:]
@@ -490,6 +500,7 @@ final class WindowModel {
         followEditors()
         followFullScreen()
         followAgentToasts()
+        followAgentAttention()
         followIdleTabs()
     }
 
@@ -661,6 +672,7 @@ final class WindowModel {
         }
         leaveTabOverview()
         changedTabs.remove(ref)
+        attention.shown(ref)
         // A tab kept out of sight at launch comes back once it is asked for.
         groups.unhide(ref)
         destination = .terminal
@@ -1068,6 +1080,7 @@ final class WindowModel {
     /// With a mixed tab or Two Columns on screen, every host with a visible pane hears it; only
     /// the focused pane's host hears a focus (`screenViews`).
     func reportViews() {
+        clearShownAttention()
         let views = destination == .terminal && isOnScreen && !isClosed ? screenViews() : [:]
         for (id, open) in workspaces {
             guard let daemon = open.host as? DaemonConnection else { continue }
