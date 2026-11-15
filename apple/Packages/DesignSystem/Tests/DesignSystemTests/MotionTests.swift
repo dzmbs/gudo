@@ -29,20 +29,28 @@ func everyRoleMovesOneWayWithoutOvershoot(role: DS.Motion.Role) {
 func everyRoleSettlesWithinItsBudget(role: DS.Motion.Role) {
     let atBudget = role.spring.value(target: 1.0, time: role.budget)
     #expect(1 - atBudget <= 0.01, "\(role) is \(1 - atBudget) short at \(role.budget) s")
-    let early = role.spring.value(target: 1.0, time: role.budget * 0.6)
-    #expect(1 - early > 0.01, "\(role)'s budget is looser than its spring")
+    let justBefore = role.spring.value(target: 1.0, time: role.budget - 0.005)
+    #expect(1 - justBefore > 0.01, "\(role)'s budget is looser than its spring")
 }
 
-@Test func smallThingsSettleWellUnderTwoHundredMilliseconds() {
-    #expect(DS.Motion.Role.micro.budget < 0.2)
+@Test func rolesAreFastAndLight() {
+    #expect(abs(DS.Motion.Role.micro.spring.duration - 0.10) < 1e-9)
+    #expect(abs(DS.Motion.Role.standard.spring.duration - 0.18) < 1e-9)
+    #expect(abs(DS.Motion.Role.structural.spring.duration - 0.24) < 1e-9)
+    #expect(DS.Motion.Role.micro.budget < 0.12)
     #expect(DS.Motion.Role.micro.budget < DS.Motion.Role.standard.budget)
     #expect(DS.Motion.Role.standard.budget < DS.Motion.Role.structural.budget)
 }
 
-@Test func structuralMovesAreWithinAPointWhenTheTerminalsRedraw() {
-    let move = 600.0
-    let left = move * (1 - DS.Motion.Role.structural.spring.value(target: 1.0, time: DS.Motion.structuralSettle))
-    #expect(left < 1)
+/// A pane's still gives way to its live terminal at `structuralSettle`: both ride the same
+/// transform, so the spring must be at rest there, and no later (no pause before the swap).
+@Test func structuralSettleIsTheSpringsOwnSettleTime() {
+    let spring = DS.Motion.Role.structural.spring
+    let left = 1 - spring.value(target: 1.0, time: DS.Motion.structuralSettle)
+    #expect(left <= DS.Motion.restFraction)
+    let justBefore = 1 - spring.value(target: 1.0, time: DS.Motion.structuralSettle - 0.005)
+    #expect(justBefore > DS.Motion.restFraction, "settle is later than the spring")
+    #expect(DS.Motion.structuralSettle < 0.3)
     #expect(DS.Motion.arrivalDelay + DS.Motion.Role.micro.budget <= DS.Motion.structuralSettle)
 }
 
@@ -91,7 +99,7 @@ private let named: [(String, MotionTransition)] = [
         let delay = transition.waitsForArrival ? DS.Motion.arrivalDelay : 0
         let away = transition.away(reduceMotion: false)
         var previous = away
-        for time in samples(until: delay + role.budget) {
+        for time in samples(until: delay + role.budget) + [delay + role.budget] {
             let progress = time < delay ? 0 : role.spring.value(target: 1.0, time: time - delay)
             let frame = away.toward(.rest, progress: progress)
             #expect(frame.opacity >= previous.opacity - 1e-12, "\(name) never fades back")

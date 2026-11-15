@@ -124,33 +124,29 @@ public extension DS {
 
             public var spring: Spring {
                 switch self {
-                case .micro: Spring(duration: 0.12, bounce: 0)
-                case .standard: Spring(duration: 0.22, bounce: 0)
-                case .structural: Spring(duration: 0.3, bounce: 0)
+                case .micro: Spring(duration: 0.1, bounce: 0)
+                case .standard: Spring(duration: 0.18, bounce: 0)
+                case .structural: Spring(duration: 0.24, bounce: 0)
                 }
             }
 
             public var animation: Animation { .spring(spring) }
 
             /// When it is within 1 % of where it is going, which is when it reads as still.
-            public var budget: Double {
-                switch self {
-                case .micro: 0.15
-                case .standard: 0.25
-                case .structural: 0.34
-                }
-            }
+            public var budget: Double { spring.settleTime(within: 0.01) }
         }
 
         public static let micro = Role.micro.animation
         public static let standard = Role.standard.animation
         public static let structural = Role.structural.animation
 
-        /// A structural move is within a point of a full-window move: each terminal shows its
-        /// last frame on the way and draws at its new size from here.
-        public static let structuralSettle = 0.42
-        /// Something that lands where a structural move is heading shows as the move arrives.
-        public static let arrivalDelay = 0.16
+        /// What is left of a move when a layout motion counts as at rest.
+        public static let restFraction = 0.005
+        /// A structural move is at rest (`restFraction`): each pane's still gives way to its live
+        /// terminal, and the grids are released, here.
+        public static let structuralSettle = Role.structural.spring.settleTime(within: restFraction)
+        /// Content that lands where a structural move is heading shows as the move arrives.
+        public static let arrivalDelay = 0.08
 
         /// None on the Mac, where the palette is a panel that appears at once; `standard` on touch.
         #if os(macOS)
@@ -176,6 +172,15 @@ public extension DS {
         public static let feedbackDelay = Duration.milliseconds(200)
         /// A collapsed group opening under a drag that rests on it.
         public static let springOpenDelay = Duration.milliseconds(600)
+    }
+}
+
+nonisolated extension Spring {
+    /// The first moment, to the millisecond, a move on this spring is within `fraction` of its end.
+    func settleTime(within fraction: Double) -> Double {
+        var milliseconds = 0
+        while 1 - value(target: 1.0, time: Double(milliseconds) / 1000) > fraction { milliseconds += 1 }
+        return Double(milliseconds) / 1000
     }
 }
 
