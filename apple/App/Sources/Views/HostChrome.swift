@@ -236,7 +236,7 @@ struct SavedScreenOverlay: View {
         ZStack(alignment: .bottomTrailing) {
             if pane.showsSavedScreen {
                 Rectangle().fill(DS.Palette.veil)
-                    .transition(.opacity)
+                    .motionTransition(.fade)
             }
             if case .holding = pane.heldInput {
                 Label("Sends when connected", systemImage: "keyboard")
