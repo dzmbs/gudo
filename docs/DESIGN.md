@@ -175,9 +175,9 @@ offset; it never animates its own frame, size or padding. Small things are fast 
 
 | Role | Spring | Within 1 % by | Use |
 |---|---|---|---|
-| `micro` | 0.12 s, no bounce | 0.15 s | hover fills, a press (scale 0.97), pills, badges, status glyphs, ⌘ hints, lit toggles, a field's focus ring |
-| `standard` | 0.22 s, no bounce | 0.25 s | rows and selection, toasts and banners, menus, popovers, the host switcher's highlight, panels and bars, overlays, the search corner snap, a swipe settling, sidebar rows making room for a drag, the bell border |
-| `structural` | 0.3 s, no bounce | 0.34 s (within a point of a full-window move by `structuralSettle`, 0.42 s) | splits, closing, zoom, a pane floating out or docking, a window to the tray and back, a floating window settling after a flick, picture in picture, the sidebar, the iPhone Duo's fold |
+| `micro` | 0.10 s, no bounce | 0.106 s | hover fills, a press (scale 0.97), pills, badges, status glyphs, ⌘ hints, lit toggles, a field's focus ring |
+| `standard` | 0.18 s, no bounce | 0.191 s | rows and selection, toasts and banners, menus, popovers, the host switcher's highlight, panels and bars, overlays, the search corner snap, a swipe settling, sidebar rows making room for a drag, the bell border |
+| `structural` | 0.24 s, no bounce | 0.254 s (at rest, within 0.5 %, by `structuralSettle`, 0.284 s) | splits, closing, zoom, a pane floating out or docking, a window to the tray and back, a floating window settling after a flick, picture in picture, the sidebar, the iPhone Duo's fold |
 | `palette` | none on the Mac (`animationBehavior = .none`); `standard` on touch | | command palette in and out |
 
 Named transitions (`.motionTransition(_:)`), each only opacity, scale and offset, each on its
@@ -192,7 +192,7 @@ own role so it never pops even when the change is not animated:
 | `panel(from:)` | opacity 0, scale 0.98, 10 pt toward the edge | `standard` | the tab strip, bottom bars, the exit bar, the browser's address panel |
 | `card(anchor:)` | opacity 0, scale 0.96 | `standard` | the reconnect card, cards under an avatar, picture in picture |
 | `tab` | opacity 0, scale 0.985 | `standard` | a tab arriving in the strip |
-| `arriving` | opacity 0, after `arrivalDelay` (0.16 s) | `micro` | what lands where a structural move is heading: a new divider, the minimize button once the header has made room, the exit control's label |
+| `arriving` | opacity 0, after `arrivalDelay` (0.08 s) | `micro` | content that lands where a structural move is heading: the minimize button once the header has made room, the exit control's label |
 
 Under Reduce Motion every named transition only fades, and a highlight that would slide between
 rows (the switchers) or a banner settling back after a drag changes in place
@@ -204,7 +204,8 @@ out of sight plays it once on its mark, in the sidebar and the strip
 
 | Timing | Value | Use |
 |---|---|---|
-| layout motion | every terminal a layout change moves | travels as its last frame, anchored top-left (cropped as it shrinks, on its background as it grows); its grid changes once, for where it is going, before it moves (one SIGWINCH), and it draws again when it is there and the program's redraw has come in (quiet 30 ms, 150 ms at most). Nothing reflows on the way, nothing jumps at rest, no cols × rows overlay. The sidebar's animation holds frames the same way and changes the grids once it settles (`TerminalSurface.prepareResize`, `holdFrames`, `structuralSettle`) |
+| layout motion | every pane a split, close, zoom, float or dock moves | laid out once, at its new frame; only the rectangle it is shown in travels, from its old frame, by offset and clip (`CanvasMotion`, `PaneTravel`), over a still of its last frame anchored top-left (cropped as it shrinks, on its background as it grows). Its grid changes once, for where it is going, as the motion starts (one SIGWINCH), so the program redraws under the still; at `structuralSettle` the still crossfades (`micro`) to the live terminal and the grid hold ends, both at the moment the spring is at rest. A new pane grows in from the edge it splits from and fades in, its neighbours making room in the same spring; a closed pane is squeezed toward its far edge by the neighbour taking its space and fades (between two neighbours, toward its middle); a divider rides the edge it sits on from the first frame. A zoomed pane grows over its neighbours with the `panel` shadow while it moves. Interrupted, everything carries on from where it is. Under Reduce Motion nothing travels: panes crossfade. No cols × rows overlay |
+| sidebar | show and hide | the sidebar and the detail slide by offset in the `structural` spring; the detail keeps its width while the sidebar comes in and narrows once it has, and widens at once when it goes, its terminals on their last frame until it settles, so each grid changes once (`SidebarSlide`, `holdFrames`) |
 | lift beat | 1.03 floating, 0.985 docking, on `micro` until `arrivalDelay`, back to 1 on `structural` by `structuralSettle` | the pane coming towards you as it lifts, pressed in as it docks; off under Reduce Motion |
 | resize overlay | visible 750 ms after the last change | cols × rows (Ghostty `resize-overlay-duration`) |
 | toast | 2.4 s; failures 4 s; with an action 5 s | |
@@ -223,7 +224,8 @@ idle. UIKit and layer animations use the same springs (`Role.layerAnimation(keyP
 `DS.Motion`, and on `.transition` used directly instead of a named one; a line may opt out with
 `motion-lint-allow:` and its reason (the keyboard following the system's own duration, TerminalKit
 below DesignSystem, the Duo's deck rising its full height). `MotionTests` checks every role is
-critically damped, never reverses and settles within its budget, and drives each named transition
+critically damped, never reverses and settles within its budget, that `structuralSettle` is the
+structural spring's own rest time, and drives each named transition
 on a sampled clock to check it only fades, grows and travels, settles in time and never changes
 layout.
 
@@ -668,7 +670,7 @@ hardware's halves, not resizable: no divider handle on the fold (HIG: split view
 **Continuity.**
 - Folding, unfolding, opening into a book and standing it up keep the tab, the focused pane, its
   scroll position, the cursor and the composer draft.
-- The views move rather than being rebuilt: the sidebar's width animates into the page and the
+- The views move rather than being rebuilt: the sidebar slides into the page and the
   deck rises from below in one `structural` spring.
 - The grids reflow once as it settles. No cols × rows overlay, no blank frame
   (`snaps/duo/transitions`).
