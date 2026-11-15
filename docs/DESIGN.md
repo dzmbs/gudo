@@ -127,7 +127,7 @@ tab strip at XXL, pane headers and the iPhone bar at XL.
 | Divider visible / hit (pointer) / hit (touch) | one physical pixel / +6 / 20 pt | Ghostty `SplitView` (1 + 6), drawn at `1 / displayScale` as every chrome line; touch is ours |
 | Pane header | 24 pt | Ghostty-quiet |
 | Tab strip / tab | 34 / 28 pt (selected pill inset 3) | macOS 26 titlebar tabs, Ghostty native tabs |
-| Strip chip width | an equal share of the strip, 160 to 240 pt; more tabs scroll | - |
+| Strip chip width / edge fade | as wide as its title, 120 to 240 pt (`tabMinWidth`, `tabMaxWidth`); more tabs scroll / 16 pt (`stripFade`) | - |
 | Command palette width | 580 pt Mac / 640 pt touch | Spotlight: a title and its context on one line |
 | Chat reading column | 680 pt of text, centred; full width on iPhone | about 75 characters of body text |
 | Key bar row | 44 iPhone / 52 iPad, keys 34 / 40, hardware strip 28 | keyboard key height |
@@ -198,9 +198,9 @@ Under Reduce Motion every named transition only fades, and a highlight that woul
 rows (the switchers) or a banner settling back after a drag changes in place
 (`ChromeAccessibility.travel`). `attentionCue(trigger:)` is the one beat
 that draws the eye to something that changed (it grows to 1.08 on `micro` and settles back on
-`standard`); it does nothing under Reduce Motion. A tab whose agent turns blocked while the tab is
-out of sight plays it once on its mark, in the sidebar and the strip
-(`attentionWhenBlocked(_:isVisible:)`); it never takes focus.
+`standard`); it does nothing under Reduce Motion. A tab that rings the bell or whose agent turns
+blocked while the tab is out of sight plays it once on its mark, in the sidebar and the strip
+(`TabAttention`); it never takes focus.
 
 | Timing | Value | Use |
 |---|---|---|
@@ -449,8 +449,9 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
   the dot: rows carry no stripe of it. Drop a tab
   on another to group them (the row lights in the colour), between rows to place it (the rows
   slide apart with `DS.Motion.standard`; the dragged row leaves a gap, never slides over others).
-  A one-tap "Group 3 tabs in app" suggestion when loose tabs share a repository. The strip draws
-  a project's colour under its tabs.
+  A one-tap "Group 3 tabs in app" suggestion when loose tabs share a repository. An empty project
+  is its header alone, + on hover (always on touch); the phone's grouped cards keep a "New
+  Terminal" line under it.
 - Tab history (APP-ARCHITECTURE §25), in the suggestion's voice at the top of the list: one
   quiet line each, glyph, the verb in secondary ink, a dismiss ×, the meaning in the tooltip.
   "↺ Restore 6 Tabs" while tabs a launch under "A New Terminal" kept aside still run; "Close 6
@@ -467,37 +468,48 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
 - Then one group per host the window shows (its loose tabs), all at once (switching hosts never
   goes through the Hosts screen): This Mac first (macOS only), then each open daemon and plain-SSH
   host in the order it was opened. Group header: `server.rack`
-  (`laptopcomputer` for this Mac) in `.secondary`, the host's name in the section font
+  (`laptopcomputer` for this Mac) in `.secondary`, the host's name in the section font, sentence case
   (`.primary` when live, `.tertiary` when not), an "SSH" outline badge for plain-SSH hosts, the
   host's most urgent agent state (its dot or pill), a state glyph **only when not live** (§3.3: reconnecting
   `arrow.triangle.2.circlepath` amber, offline `wifi.slash`, can't connect
   `exclamationmark.triangle.fill` red, a mini spinner after 1 s while dialling; each labelled with
   its copy), and + "New Terminal" (quiet until hover on the Mac, always on touch). No dots, no
-  status text. Tapping the header collapses the group (a collapsed group shows its tab count).
+  status text. Plan usage stays in the host's agents popover and its Agent Usage detail; the
+  header names a meter only once it nears its limit. Tapping the header collapses the group (a collapsed group shows its tab count).
   Rows of a host that is down stay, at 60 %. Context menu: New Terminal, Collapse, Retry Now
   (only when not live), Show in Hosts, Disconnect.
 - A host with no tabs shows one row "New Terminal" (`plus` in `.secondary`) under its header
   (§3.5); the terminal area shows the welcome view with New Terminal ⌘T, never a void.
-- One row per tab: its number across all hosts (tertiary, monospaced), a leading slot (16 pt on
-  the Mac, 18 on touch), the tab's name (one weight; a path keeps its end). The slot
-  holds the focused pane's program tile (Program marks and status: the official logo,
-  unmodified, where one ships, else our glyph or a neutral SF Symbol per kind), with the tab's
-  most urgent quiet state as a dot on it and "Needs you" or "Failed" as a pill at the row's
-  trailing edge. Every row has the slot so titles align. The live context in SF Mono underneath, under the title, ⌘N on the Mac (⌘1-8 index the
-  unified list; numbers do not change when a group collapses or a host goes down). Selection is a
-  10 % fill of the theme's ink with radius 8 (hover 5 %), never the accent. Drag to reorder or group; context
-  menu Rename / Close / New Project from Tab / Move to Project ▸. Under a group's tabs, its agents. Rows touch (no gap); the host's agent
-  glyph opens its agents on hover (`HoverPopover`). On iPad the sidebar's bar holds Settings (⌘,)
-  and New Tab only: no app name.
+- One row per tab, at most two lines and one trailing element: a leading slot (16 pt on
+  the Mac, 18 on touch), the tab's name (one weight; a path keeps its end), and under it the live
+  context in SF Mono (host, branch with its pull request number, a long-running command or the
+  agent's state). The slot holds the focused pane's program tile (Program marks and status: the
+  official logo, unmodified, where one ships, else our glyph or a neutral SF Symbol per kind),
+  with the tab's most urgent quiet state as a dot on it. The trailing element is the most
+  pressing of: the Select-mode check; ⌘N while ⌘ is held (1-8 by position, 9 for the last tab;
+  numbers never show otherwise); "Needs you" or "Failed" as a pill; the panes chevron, on hover
+  or while open (always on touch); the attention dot; the diff counts; presence avatars. Every
+  row has the slot so titles align. Selection is a 10 % fill of the theme's ink with radius 8
+  (hover 5 %), never the accent. Drag to reorder or group; context menu Rename / Close / New
+  Project from Tab / Move to Project ▸. Under a group's tabs, its agents. Rows touch (no gap);
+  the host's agent glyph opens its agents on hover (`HoverPopover`). On iPad the sidebar's bar
+  holds Settings (⌘,) and New Tab only: no app name.
+- The active tab's row stays in view: a new tab, ⌘1-9, or a tab chosen in the strip or the
+  palette scrolls the list on `standard` only when its row is off screen (or under the pinned
+  project header), by the least travel (`SidebarReveal`).
+- Attention: a bell, or an agent turning to need you, in a tab you can't see marks the tab
+  (`TabAttention`) with a dot in the attention colour on its row and its strip chip and one
+  `attentionCue` on its tile, until the tab is shown. While the sidebar is hidden its toggle
+  carries the same dot.
 - Footer: Settings only (no connection summary, §3.7 rule 1).
-- Tab strip: one scrolling row of chips, leading-aligned, each an equal share of the strip
-  between 160 and 240 pt. Adding a tab never moves the chips already there: they keep their
-  width (the strip scrolls to the new one) until the pointer leaves the strip or the window
-  resizes; a close under the pointer keeps the width the same way. The selected chip has its
-  own fill (no sliding pill); only the two chips involved change. A tab's terminal replaces
-  the shown one once it has drawn its screen at its own grid (at most 300 ms), never a blank
-  terminal, a grid at the size it started at or the blank a resize leaves before the program
-  redraws (`TerminalSurface.presentsSettledOutput`).
+- Tab strip: one scrolling row of chips, leading-aligned, each as wide as its title between
+  120 and 240 pt, so a few tabs leave the rest of the strip empty and adding a tab never moves
+  the chips already there. The selected chip is always scrolled whole into view by the least
+  travel; an edge with chips running past it fades over 16 pt. The selected chip has its own
+  fill (no sliding pill) and is the only marker: no project colour under chips (the tooltip
+  names the project). A tab's terminal replaces the shown one once it has drawn its screen at
+  its own grid (at most 300 ms), never a blank terminal, a grid at the size it started at or
+  the blank a resize leaves before the program redraws (`TerminalSurface.presentsSettledOutput`).
 - Tab strip: a single-host window shows no host; with tabs from several hosts, each tab gets the
   host's name as a second line (`meta`, `.tertiary`).
 - iPhone: the bar shows the tab's title with the host's name as a second line (state glyph after
@@ -524,15 +536,14 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
 
 ### Tab strip (horizontal tabs): Ghostty native tabs
 
-Equal-width tabs across the row; centered title led by the same slot as the sidebar
+Tabs as wide as their titles (120 to 240 pt); the title led by the same slot as the sidebar
 (the program tile with its state dot; a pill after the title for
 what needs you); ⌘N right-aligned only while ⌘ is held;
 close button on hover at the leading edge; one-pixel separators between unselected tabs (none
 beside the selected one); one title weight (callout on the Mac, subheadline on touch), inactive
 tabs the same ink at 0.7 opacity (0.85 hovered); the selected tab a pill, `Surface.selection`
 (the ink at 10 %, its edge and top light, radius `field`; the ink at 5 % in an inactive window), moved with `matchedGeometryEffect` (easeInOut 0.15); + at the end.
-After a close under the pointer the tabs keep their width until the pointer leaves the strip;
-⌘ hints appear after ⌘ is held 750 ms; a path title keeps its end; the tooltip is the
+⌘ hints appear after ⌘ is held 750 ms; a title truncates at its tail, a path title keeps its end; the tooltip is the
 title, host · directory, and the context line. The strip stays with a single tab (it carries + and the drop target).
 The strip sits under the shared toolbar (Mac and iPad alike) on the window base (the terminal
 background) with a one-pixel `separator` rule. Drag

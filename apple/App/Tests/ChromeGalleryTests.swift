@@ -61,6 +61,22 @@ final class ChromeGalleryTests: XCTestCase {
                 model.isSidebarShown = false
                 for _ in 0..<4 { model.newTab() }
             }
+            try await capture("\(appearance)-tab-strip-overflow") { model in
+                model.isSidebarShown = false
+                for _ in 0..<12 { model.newTab() }
+                if let second = model.groups.tabs.dropFirst().first { model.attention.raise(second) }
+            }
+            try await capture("\(appearance)-sidebar-attention") { model in
+                await SidebarFixture.arrangeProjects(model)
+                if let tab = model.groups.tabs.dropFirst(2).first { model.attention.raise(tab) }
+                // The new tabs run below the fold: the list follows the active one.
+                for _ in 0..<10 { model.newTab() }
+            }
+            try await capture("\(appearance)-sidebar-hidden-attention") { model in
+                model.isSidebarShown = false
+                model.newTab()
+                if let first = model.groups.tabs.first { model.attention.raise(first) }
+            }
             try await capture("\(appearance)-splits") { model in
                 model.isSidebarShown = true
                 model.workspace?.split(.horizontal)
