@@ -503,6 +503,36 @@ fn fitted_text(role: TimelineTextRole, text: String, id: &str, location: Locatio
     }
 }
 
+/// A finished tool row with no output yet, its title and input bounded like a command's.
+pub(super) fn tool(kind: TimelineToolKind, name: String, title: &str, input: &str) -> TimelineTool {
+    TimelineTool {
+        kind,
+        name,
+        title: head(title, TITLE_BYTES).to_owned(),
+        input: head(input, INPUT_BYTES).to_owned(),
+        status: TimelineToolStatus::Done,
+        output: None,
+        diff: Vec::new(),
+        exit: None,
+        duration_ms: None,
+        command_mark: None,
+    }
+}
+
+/// The output of `item` in `turn`, previewed by its tail and paged whole by its handle.
+pub(super) fn output_ref(
+    location: Location,
+    turn: &str,
+    item: &str,
+    text: &str,
+) -> Option<TimelineOutputRef> {
+    Some(TimelineOutputRef {
+        handle: location.handle(&item_id(turn, item))?,
+        preview: crate::timeline::output_preview(text),
+        bytes: text.len() as u64,
+    })
+}
+
 /// The timeline id and body Chat shows for `item`; `None` for context Codex injects.
 pub(super) fn body(
     item: CodexItem,

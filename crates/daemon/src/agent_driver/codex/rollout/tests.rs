@@ -17,7 +17,7 @@ impl Fixture {
         Self::with_meta(json!({}))
     }
 
-    fn with_meta(changes: Value) -> Self {
+    pub fn with_meta(changes: Value) -> Self {
         let home = tempfile::tempdir().unwrap();
         let day = home.path().join("sessions/2026/11/08");
         std::fs::create_dir_all(&day).unwrap();
@@ -223,11 +223,11 @@ fn context_codex_injects_is_not_a_user_row_and_status_notices_match_the_live_one
     );
     fixture.item(
         "turn",
-        json!({"type": "FileChange", "id": "patch", "changes": {}, "status": "completed"}),
+        json!({"type": "CollabAgentSpawn", "id": "spawn", "prompt": "Review it"}),
     );
     fixture.item(
         "turn",
-        json!({"type": "ImageView", "id": "view", "path": "/tmp/shot.png"}),
+        json!({"type": "Extension", "kind": "image_generation", "id": "drawn"}),
     );
     fixture.append(&json!({"type": "event_msg", "payload": {"type": "turn_aborted", "turn_id": "turn", "reason": "interrupted"}}));
     fixture.append(&json!({"type": "event_msg", "payload": {"type": "task_complete", "turn_id": "other", "error": {"message": "boom"}}}));
@@ -257,6 +257,117 @@ fn context_codex_injects_is_not_a_user_row_and_status_notices_match_the_live_one
     );
     assert_eq!(page.items[0].origin, proto::TimelineOrigin::Terminal);
     assert_eq!(page.before, None);
+}
+
+#[test]
+fn tool_calls_mcp_edits_images_and_searches_are_tool_rows() {
+    use proto::{TimelineToolKind, TimelineToolStatus};
+    let fixture = Fixture::new();
+    fixture.item(
+        "turn",
+        json!({
+            "type": "McpToolCall", "id": "mcp-1", "server": "gudo", "tool": "pane_list",
+            "arguments": {"all": true}, "readOnlyHint": true, "status": "completed",
+            "result": {"content": [{"type": "text", "text": "3 panes"}], "structuredContent": {}},
+            "duration": {"secs": 0, "nanos": 250_000_000},
+        }),
+    );
+    fixture.item(
+        "turn",
+        json!({
+            "type": "McpToolCall", "id": "mcp-2", "server": "gudo", "tool": "pane_send",
+            "arguments": {}, "status": "failed", "error": {"message": "no such pane"},
+        }),
+    );
+    let diff = "@@ -1 +1 @@\n-old\n+new\n";
+    fixture.item(
+        "turn",
+        json!({
+            "type": "FileChange", "id": "patch", "status": "completed", "stdout": "", "stderr": "",
+            "changes": {
+                "/p/src/main.rs": {"type": "update", "unified_diff": diff, "move_path": null},
+                "/p/README.md": {"type": "add", "content": "hello\n"},
+            },
+        }),
+    );
+    fixture.item(
+        "turn",
+        json!({"type": "ImageView", "id": "view", "path": "/tmp/shot.png"}),
+    );
+    fixture.item(
+        "turn",
+        json!({
+            "type": "Extension", "kind": "web_search", "id": "search", "query": "ghostty releases",
+            "action": {"type": "search", "query": "ghostty releases", "queries": null}, "results": [],
+        }),
+    );
+    let rollout = fixture.open();
+    let page = rollout.page(rollout.end().unwrap(), 100, EPOCH).unwrap();
+    let tools: Vec<_> = page
+        .items
+        .iter()
+        .map(|item| match &item.body {
+            TimelineBody::Tool(tool) => tool.clone(),
+            body => panic!("expected a tool row, got {body:?}"),
+        })
+        .collect();
+    let rows: Vec<_> = tools
+        .iter()
+        .map(|tool| {
+            (
+                tool.kind,
+                tool.name.as_str(),
+                tool.title.as_str(),
+                tool.status,
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (
+                TimelineToolKind::Mcp,
+                "mcp__gudo__pane_list",
+                "gudo pane_list",
+                TimelineToolStatus::Done
+            ),
+            (
+                TimelineToolKind::Mcp,
+                "mcp__gudo__pane_send",
+                "gudo pane_send",
+                TimelineToolStatus::Failed
+            ),
+            (
+                TimelineToolKind::Edit,
+                "Edit",
+                "/p/README.md, /p/src/main.rs",
+                TimelineToolStatus::Done
+            ),
+            (
+                TimelineToolKind::Read,
+                "View image",
+                "/tmp/shot.png",
+                TimelineToolStatus::Done
+            ),
+            (
+                TimelineToolKind::WebSearch,
+                "Web search",
+                "ghostty releases",
+                TimelineToolStatus::Done
+            ),
+        ]
+    );
+    assert_eq!(tools[0].input, r#"{"all":true}"#);
+    assert_eq!(tools[0].duration_ms, Some(250));
+    let read =
+        |tool: &proto::TimelineTool| read_all(&rollout, &tool.output.as_ref().unwrap().handle).0;
+    assert_eq!(read(&tools[0]), "3 panes");
+    assert_eq!(read(&tools[1]), "no such pane");
+    assert_eq!(
+        read(&tools[2]),
+        format!("/p/README.md\nhello\n\n/p/src/main.rs\n{diff}")
+    );
+    assert!(tools[3].output.is_none() && tools[4].output.is_none());
 }
 
 #[test]

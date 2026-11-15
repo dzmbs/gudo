@@ -9,7 +9,10 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 use agents::{CodexInput, CodexItem, CodexTurnOutcome};
-use proto::{OutputHandle, TimelineItem, TimelineToolOutput, UnixMillis, WsError};
+use proto::{
+    OutputHandle, TimelineBody, TimelineItem, TimelineTool, TimelineToolKind, TimelineToolOutput,
+    TimelineToolStatus, UnixMillis, WsError,
+};
 use serde::Deserialize;
 use serde::de::IgnoredAny;
 
@@ -35,6 +38,16 @@ pub(super) struct Rollout {
 pub(super) struct RolloutPage {
     pub items: Vec<TimelineItem>,
     pub before: Option<u64>,
+}
+
+/// What Codex recorded since the last read.
+#[derive(Debug)]
+pub(super) struct Appended {
+    pub items: Vec<TimelineItem>,
+    /// A rollback dropped turns already shown.
+    pub rolled_back: bool,
+    /// More was recorded than one read takes.
+    pub more: bool,
 }
 
 enum Record {
@@ -80,7 +93,7 @@ enum Event {
     ItemCompleted {
         thread_id: Option<String>,
         turn_id: String,
-        item: RecordedItem,
+        item: Box<RecordedItem>,
         started_at_ms: Option<i64>,
         completed_at_ms: Option<i64>,
     },
@@ -124,8 +137,55 @@ enum RecordedItem {
         exit_code: Option<i32>,
         duration: Option<RecordedDuration>,
     },
+    McpToolCall {
+        id: String,
+        server: String,
+        tool: String,
+        #[serde(default)]
+        arguments: serde_json::Value,
+        status: String,
+        result: Option<McpResult>,
+        error: Option<serde_json::Value>,
+        duration: Option<RecordedDuration>,
+    },
+    FileChange {
+        id: String,
+        changes: std::collections::BTreeMap<String, RecordedChange>,
+        status: String,
+    },
+    ImageView {
+        id: String,
+        path: String,
+    },
+    /// Web search records its query; other extensions stay Terminal-only.
+    Extension {
+        id: String,
+        query: Option<String>,
+    },
     #[serde(other)]
     Other,
+}
+
+#[derive(Deserialize)]
+struct McpResult {
+    #[serde(default)]
+    content: Vec<McpContent>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum McpContent {
+    Text {
+        text: String,
+    },
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Deserialize)]
+struct RecordedChange {
+    unified_diff: Option<String>,
+    content: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -150,9 +210,126 @@ impl RecordedItem {
             Self::UserMessage { id, .. }
             | Self::AgentMessage { id, .. }
             | Self::Reasoning { id, .. }
-            | Self::CommandExecution { id, .. } => Some(id),
+            | Self::CommandExecution { id, .. }
+            | Self::McpToolCall { id, .. }
+            | Self::FileChange { id, .. }
+            | Self::ImageView { id, .. }
+            | Self::Extension { id, .. } => Some(id),
             Self::Other => None,
         }
+    }
+
+    /// The row Chat shows for the item. Tools only the rollout records are shaped here; the
+    /// rest go through the live shape, so both sources show them the same way.
+    fn into_body(self, turn: &str, location: Location) -> Option<(String, TimelineBody)> {
+        let output = self
+            .text()
+            .and_then(|text| projection::output_ref(location, turn, self.id()?, &text));
+        let (id, tool) = match &self {
+            Self::McpToolCall {
+                id,
+                server,
+                tool,
+                arguments,
+                status,
+                error,
+                duration,
+                ..
+            } => (
+                id,
+                TimelineTool {
+                    status: match status.as_str() {
+                        "completed" if error.is_none() => TimelineToolStatus::Done,
+                        "inProgress" | "in_progress" => TimelineToolStatus::Running,
+                        _ => TimelineToolStatus::Failed,
+                    },
+                    duration_ms: duration.as_ref().map(RecordedDuration::millis),
+                    output,
+                    ..projection::tool(
+                        TimelineToolKind::Mcp,
+                        format!("mcp__{server}__{tool}"),
+                        &format!("{server} {tool}"),
+                        &arguments.to_string(),
+                    )
+                },
+            ),
+            Self::FileChange {
+                id,
+                changes,
+                status,
+            } => {
+                let paths: Vec<&str> = changes.keys().map(String::as_str).collect();
+                let tool = TimelineTool {
+                    status: match status.as_str() {
+                        "completed" => TimelineToolStatus::Done,
+                        "declined" => TimelineToolStatus::Denied,
+                        "inProgress" | "in_progress" => TimelineToolStatus::Running,
+                        _ => TimelineToolStatus::Failed,
+                    },
+                    output,
+                    ..projection::tool(
+                        TimelineToolKind::Edit,
+                        "Edit".into(),
+                        &paths.join(", "),
+                        &paths.join("\n"),
+                    )
+                };
+                (id, tool)
+            }
+            Self::ImageView { id, path } => (
+                id,
+                projection::tool(TimelineToolKind::Read, "View image".into(), path, path),
+            ),
+            Self::Extension {
+                id,
+                query: Some(query),
+            } => (
+                id,
+                projection::tool(
+                    TimelineToolKind::WebSearch,
+                    "Web search".into(),
+                    query,
+                    query,
+                ),
+            ),
+            _ => return projection::body(self.into_live(), true, turn, location),
+        };
+        Some((projection::item_id(turn, id), TimelineBody::Tool(tool)))
+    }
+
+    /// The whole text behind a tool row only the rollout records: a result or the edits.
+    fn text(&self) -> Option<String> {
+        let text = match self {
+            Self::McpToolCall { result, error, .. } => {
+                let mut parts: Vec<&str> = result
+                    .iter()
+                    .flat_map(|result| &result.content)
+                    .filter_map(|content| match content {
+                        McpContent::Text { text } => Some(text.as_str()),
+                        McpContent::Other => None,
+                    })
+                    .collect();
+                let message = error.as_ref().map(|error| match error {
+                    serde_json::Value::String(message) => message.clone(),
+                    error => error
+                        .get("message")
+                        .and_then(serde_json::Value::as_str)
+                        .map_or_else(|| error.to_string(), str::to_owned),
+                });
+                parts.extend(message.as_deref());
+                parts.join("\n")
+            }
+            Self::FileChange { changes, .. } => changes
+                .iter()
+                .filter_map(|(path, change)| {
+                    let body = change.unified_diff.as_ref().or(change.content.as_ref())?;
+                    Some(format!("{path}\n{body}"))
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+            _ => return None,
+        };
+        Some(text).filter(|text| !text.is_empty())
     }
 
     /// The item as the app-server streams it, so both sources shape it the same way.
@@ -194,15 +371,22 @@ impl RecordedItem {
                 },
                 aggregated_output,
                 exit_code,
-                duration_ms: duration.map(|duration| {
-                    duration
-                        .secs
-                        .saturating_mul(1000)
-                        .saturating_add(u64::from(duration.nanos / 1_000_000))
-                }),
+                duration_ms: duration.as_ref().map(RecordedDuration::millis),
             },
-            Self::Other => CodexItem::Unsupported,
+            Self::McpToolCall { .. }
+            | Self::FileChange { .. }
+            | Self::ImageView { .. }
+            | Self::Extension { .. }
+            | Self::Other => CodexItem::Unsupported,
         }
+    }
+}
+
+impl RecordedDuration {
+    fn millis(&self) -> u64 {
+        self.secs
+            .saturating_mul(1000)
+            .saturating_add(u64::from(self.nanos / 1_000_000))
     }
 }
 
@@ -252,12 +436,13 @@ impl Rollout {
         }
         if meta.history_mode != agents::CodexHistoryMode::Paginated {
             return Err(WsError::Unavailable(
-                "this Codex session records history in an older format".into(),
+                "This Codex saves its history in an older format. Update Codex to see it in Chat."
+                    .into(),
             ));
         }
         if meta.history_base.is_some() {
             return Err(WsError::Unavailable(
-                "this Codex session continues history from another rollout".into(),
+                "This Codex conversation continues a forked one, which Chat cannot show yet. Use Terminal.".into(),
             ));
         }
         Ok(Self {
@@ -275,6 +460,31 @@ impl Rollout {
         let mut stream = self.stream_at(start)?;
         stream.push(&self.read(start, length)?);
         Ok(stream.complete_end())
+    }
+
+    /// The items Codex recorded past where `stream` stopped, at most one bounded read of them.
+    pub fn appended(&self, stream: &mut RecordStream, epoch: u64) -> Result<Appended, WsError> {
+        let length = self.length()?;
+        let start = stream.scan_offset();
+        if start > length {
+            return Err(WsError::Conflict(
+                "the Codex rollout changed; reopen Chat".into(),
+            ));
+        }
+        let end = length.min(start.saturating_add(RECORD_BYTES_LIMIT as u64));
+        let mut appended = Appended {
+            items: Vec::new(),
+            rolled_back: false,
+            more: end < length,
+        };
+        for (offset, record) in stream.push(&self.read(start, end)?) {
+            match self.parse(offset, &record, epoch) {
+                Record::Item(item) => appended.items.push(*item),
+                Record::RolledBack => appended.rolled_back = true,
+                Record::Other => {}
+            }
+        }
+        Ok(appended)
     }
 
     /// Up to `limit` items recorded before the record at `before`, oldest first.
@@ -363,7 +573,9 @@ impl Rollout {
                 )
             })?,
         };
-        let text = projection::paged_text(&recorded.into_live())
+        let text = recorded
+            .text()
+            .or_else(|| projection::paged_text(&recorded.into_live()))
             .ok_or_else(|| WsError::NotFound("text".into()))?;
         crate::timeline::output_page(&text, offset, length)
     }
@@ -418,7 +630,7 @@ impl Rollout {
                     .as_deref()
                     .is_none_or(|thread| thread == self.thread) =>
             {
-                Some(recorded)
+                Some(*recorded)
             }
             _ => None,
         }
@@ -440,8 +652,7 @@ impl Rollout {
                     return Record::Other;
                 }
                 let location = Location::recorded(epoch, offset);
-                let Some((id, body)) = projection::body(item.into_live(), true, &turn_id, location)
-                else {
+                let Some((id, body)) = (*item).into_body(&turn_id, location) else {
                     return Record::Other;
                 };
                 let at = completed_at_ms.or(started_at_ms).unwrap_or(0);
