@@ -100,6 +100,7 @@ public struct CommandPalette: View {
             } else {
                 list(results)
             }
+            KeyHintBar(results.isEmpty ? [] : [.move, .choose("Run")])
         }
         .chromeContent()
         .frame(maxWidth: DS.Size.paletteWidth)

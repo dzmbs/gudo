@@ -77,6 +77,7 @@ public struct HostSwitcher: View {
     @State private var height: CGFloat = 0
     @FocusState private var isFieldFocused: Bool
     @Namespace private var highlight
+    @Environment(\.chromeAccessibility) private var accessibility
 
     public init(
         hosts: [HostSwitcherHost], commands: [HostSwitcherCommand],
@@ -165,6 +166,9 @@ public struct HostSwitcher: View {
                 .padding([.horizontal, .bottom], DS.Space.row)
                 .padding(.top, hostRows.isEmpty ? DS.Space.row : 0)
             }
+            if focusesFilter {
+                KeyHintBar(rows.isEmpty ? [] : [.move, .choose(chooseWord(rows))])
+            }
         }
         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { height = max(height, $0) }
         .frame(width: DS.Size.switcherWidth, height: height > 0 ? height : nil, alignment: .top)
@@ -217,7 +221,7 @@ public struct HostSwitcher: View {
                         .frame(width: 20)
                         .overlay(alignment: .topTrailing) {
                             if host.needsYou {
-                                Circle().fill(DS.Palette.attention).frame(width: 7, height: 7).offset(x: 3, y: -2)
+                                NeedsYouMark(withShape: accessibility.marksStateWithShape)
                             }
                         }
                     VStack(alignment: .leading, spacing: 0) {
@@ -274,9 +278,18 @@ public struct HostSwitcher: View {
             .switcherRow(isHighlighted: isHighlighted, in: highlight)
         }
         .buttonStyle(.plain)
-        .onHover { if $0 { withAnimation(DS.Motion.standard) { highlighted = row.id } } }
+        .onHover { if $0 { withAnimation(accessibility.travel(DS.Motion.standard)) { highlighted = row.id } } }
         .accessibilityAddTraits(isCurrent(row) ? .isSelected : [])
         .accessibilityIdentifier("host-switcher-\(row.id)")
+    }
+
+    /// What ↩ does on the highlighted row.
+    private func chooseWord(_ rows: [Row]) -> String {
+        switch rows.first(where: { $0.id == highlighted }) ?? rows.first {
+        case .host, nil: "Switch"
+        case .create: "Connect"
+        case .command: "Open"
+        }
     }
 
     private func isCurrent(_ row: Row) -> Bool {
@@ -294,7 +307,7 @@ public struct HostSwitcher: View {
         let rowIDs = rows.map(\.id)
         guard !rowIDs.isEmpty else { return }
         let index = highlighted.flatMap { rowIDs.firstIndex(of: $0) } ?? (step > 0 ? -1 : rowIDs.count)
-        withAnimation(DS.Motion.standard) { highlighted = rowIDs[min(max(index + step, 0), rowIDs.count - 1)] }
+        withAnimation(accessibility.travel(DS.Motion.standard)) { highlighted = rowIDs[min(max(index + step, 0), rowIDs.count - 1)] }
     }
 
     private func choose(_ id: String?) {
@@ -372,6 +385,24 @@ public struct SwitcherCheck: View {
             .opacity(isOn ? 1 : 0)
             .frame(width: 16)
             .accessibilityHidden(!isOn)
+    }
+}
+
+/// The corner mark on a host that needs you: an amber dot, or under Differentiate Without Color
+/// an exclamation mark in it, so the state is not the hue alone.
+private struct NeedsYouMark: View {
+    let withShape: Bool
+
+    var body: some View {
+        if withShape {
+            Image(systemName: "exclamationmark.circle.fill")
+                .font(.caption2.weight(.bold))
+                .imageScale(.small)
+                .foregroundStyle(DS.Palette.attention)
+                .offset(x: DS.Space.xs, y: -DS.Space.xs)
+        } else {
+            Circle().fill(DS.Palette.attention).frame(width: 7, height: 7).offset(x: 3, y: -2)
+        }
     }
 }
 

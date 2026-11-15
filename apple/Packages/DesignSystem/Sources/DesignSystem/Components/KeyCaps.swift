@@ -32,6 +32,7 @@ public struct KeyCap: View {
     public var body: some View {
         Text(text)
             .font(DS.Font.keyCap)
+            .monospacedDigit()
             .padding(.horizontal, 5)
             .padding(.vertical, 2)
             .background(DS.Palette.raised, in: .rounded(DS.Radius.chip))

@@ -31,6 +31,11 @@ public struct PeopleSwitcher: View {
 
     @State private var highlighted: String?
     @Namespace private var highlight
+    @FocusState private var isFocused: Bool
+    @Environment(\.chromeAccessibility) private var accessibility
+
+    /// The rows ↑/↓ move through: everyone but you, then the commands.
+    private var rowIDs: [String] { people.filter { !$0.isMe }.map(\.id) + commands.map(\.id) }
 
     public init(
         people: [PeopleSwitcherPerson], commands: [HostSwitcherCommand],
@@ -61,18 +66,56 @@ public struct PeopleSwitcher: View {
                 ForEach(commands) { command in commandRow(command) }
             }
             .padding(DS.Space.row)
+            KeyHintBar(rowIDs.isEmpty ? [] : [.move, .choose(chooseWord)])
         }
         .frame(width: DS.Size.switcherWidth)
         .chromeContent()
+        .focusable()
+        .focusEffectDisabled()
+        .focused($isFocused)
+        .onAppear {
+            highlighted = rowIDs.first
+            isFocused = KeyHintBar.hasKeyboard
+        }
+        .onKeyPress(.downArrow) { move(1); return .handled }
+        .onKeyPress(.upArrow) { move(-1); return .handled }
+        .onKeyPress(.return) { choose(); return .handled }
+        .onKeyPress(.escape) { onDismiss(); return .handled }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("people-switcher")
     }
 
+    /// What ↩ does on the highlighted row.
+    private var chooseWord: String {
+        if let person = people.first(where: { $0.id == highlighted }) { return person.isFollowed ? "Stop Following" : "Follow" }
+        return "Open"
+    }
+
+    private func move(_ step: Int) {
+        let rowIDs = rowIDs
+        guard !rowIDs.isEmpty else { return }
+        let index = highlighted.flatMap { rowIDs.firstIndex(of: $0) } ?? (step > 0 ? -1 : rowIDs.count)
+        withAnimation(accessibility.travel(DS.Motion.standard)) { highlighted = rowIDs[min(max(index + step, 0), rowIDs.count - 1)] }
+    }
+
+    private func choose() {
+        if let person = people.first(where: { $0.id == highlighted }) {
+            follow(person)
+        } else if let command = commands.first(where: { $0.id == highlighted }) {
+            onDismiss()
+            command.perform()
+        }
+    }
+
+    private func follow(_ person: PeopleSwitcherPerson) {
+        guard !person.isMe else { return }
+        onDismiss()
+        onFollow(person.isFollowed ? nil : person.id)
+    }
+
     private func personRow(_ person: PeopleSwitcherPerson) -> some View {
         Button {
-            guard !person.isMe else { return }
-            onDismiss()
-            onFollow(person.isFollowed ? nil : person.id)
+            follow(person)
         } label: {
             HStack(spacing: DS.Space.gap10) {
                 PresenceAvatar(person.avatar, size: 24)
@@ -102,7 +145,7 @@ public struct PeopleSwitcher: View {
         }
         .buttonStyle(.plain)
         .disabled(person.isMe)
-        .onHover { if $0 { withAnimation(DS.Motion.standard) { highlighted = person.id } } }
+        .onHover { if $0 { withAnimation(accessibility.travel(DS.Motion.standard)) { highlighted = person.id } } }
         .accessibilityLabel(person.isMe ? "\(person.name), you" : person.isFollowed ? "Stop Following \(person.name)" : "Follow \(person.name)")
         .accessibilityValue(person.detail ?? "")
         .accessibilityAddTraits(person.isFollowed ? .isSelected : [])
@@ -129,7 +172,7 @@ public struct PeopleSwitcher: View {
             .switcherRow(isHighlighted: highlighted == command.id, in: highlight)
         }
         .buttonStyle(.plain)
-        .onHover { if $0 { withAnimation(DS.Motion.standard) { highlighted = command.id } } }
+        .onHover { if $0 { withAnimation(accessibility.travel(DS.Motion.standard)) { highlighted = command.id } } }
         .accessibilityIdentifier("people-\(command.id)")
     }
 }
