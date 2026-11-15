@@ -326,7 +326,13 @@ private struct PlatformCodeView: UIViewRepresentable {
     let colors: CodeTextColors
 
     func makeUIView(context: Context) -> CodeUITextView {
-        let textView = CodeUITextView(usingTextLayoutManager: false)
+        let storage = NSTextStorage()
+        let layout = NSLayoutManager()
+        storage.addLayoutManager(layout)
+        let container = NSTextContainer(size: CGSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+        container.widthTracksTextView = true
+        layout.addTextContainer(container)
+        let textView = CodeUITextView(frame: .zero, textContainer: container)
         textView.isEditable = false
         textView.isSelectable = true
         textView.dataDetectorTypes = []
