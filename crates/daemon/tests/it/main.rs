@@ -20,6 +20,7 @@ mod history;
 mod hostile_output;
 mod installs;
 mod kitty;
+mod layout_tools;
 mod low_data;
 mod multiplayer;
 mod multiplayer_mp2;

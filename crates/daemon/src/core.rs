@@ -1220,6 +1220,14 @@ impl Core {
         }
     }
 
+    /// Puts back the focus a change made for an agent moved (`Layout::restore_focus`).
+    pub(crate) fn restore_focus(&self, session: SessionId, marks: &crate::layout::FocusMarks) {
+        let restored = self.simple(Some(session), |layout| layout.restore_focus(session, marks));
+        if let Err((_, message)) = restored {
+            tracing::debug!(%message, "focus not restored");
+        }
+    }
+
     fn try_op(self: &Arc<Self>, op: LayoutOp) -> Result<OpOutcome, (OpError, String)> {
         let fail = |code: OpError| (code, format!("{code:?}"));
         let outcome = match op {

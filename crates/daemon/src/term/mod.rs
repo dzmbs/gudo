@@ -10,6 +10,7 @@
 //! ([`ask`]). Nothing it opens takes focus from the user. Input is refused at a password
 //! prompt, whoever allowed it.
 
+mod arrange;
 pub(crate) mod ask;
 pub(crate) mod events;
 mod output;
@@ -49,8 +50,11 @@ const PROMPT_WAIT: Duration = Duration::from_secs(10);
 /// no integration.
 const START_WAIT: Duration = Duration::from_secs(2);
 const TICK: Duration = Duration::from_millis(50);
-/// Live panes one agent, with all the workers it started, may have opened at once.
-const MAX_OPEN_PANES: usize = 32;
+/// Live panes one agent may have opened itself at once.
+const PANES_PER_AGENT: usize = 32;
+/// Live panes all the agents of one session may have opened at once: a quarter of macOS's
+/// default 511 pseudo-terminals, so agents opening workers that open more leave the host room.
+pub(crate) const AGENT_PANES_PER_SESSION: usize = 128;
 /// Calls one pane may have running at once (the hook socket serves 512 connections in all).
 const MAX_CALLS_PER_PANE: usize = 32;
 /// Output a wait holds at most (the pane's ring is 1 MiB).
@@ -118,6 +122,8 @@ pub enum ErrorCode {
     /// The agent is still working, or not ready for a prompt yet.
     AgentBusy,
     Failed,
+    /// The change would move a pane into another tab; say so with `moveTab: true`.
+    CrossTab,
 }
 
 impl ToolError {
@@ -193,24 +199,17 @@ impl Term {
         false
     }
 
-    /// How many live panes the agent at the top of `caller`'s chain of creators has opened,
-    /// through any of its workers.
-    fn opened_by_tree(&self, caller: PaneId, live: impl Fn(PaneId) -> bool) -> usize {
-        let creators = lock(&self.creators);
-        let top = |mut current: PaneId| {
-            for _ in 0..=creators.len() {
-                match creators.get(&current) {
-                    Some(&creator) => current = creator,
-                    None => break,
-                }
+    /// How many of the `live` panes each pane opened, most first.
+    fn holders(&self, live: impl Fn(PaneId) -> bool) -> Vec<(PaneId, usize)> {
+        let mut holders: HashMap<PaneId, usize> = HashMap::new();
+        for (&pane, &creator) in lock(&self.creators).iter() {
+            if live(pane) {
+                *holders.entry(creator).or_default() += 1;
             }
-            current
-        };
-        let root = top(caller);
-        creators
-            .keys()
-            .filter(|&&pane| live(pane) && top(pane) == root)
-            .count()
+        }
+        let mut holders: Vec<(PaneId, usize)> = holders.into_iter().collect();
+        holders.sort_by_key(|&(holder, open)| (std::cmp::Reverse(open), holder));
+        holders
     }
 
     fn created(&self, caller: PaneId, pane: PaneId) {
@@ -392,14 +391,18 @@ fn args<T: for<'de> Deserialize<'de>>(value: Value) -> Result<T> {
 struct ListArgs {
     #[serde(default)]
     scope: ListScope,
+    #[serde(default)]
+    tab: Option<String>,
 }
 
-#[derive(Deserialize, Default, Clone, Copy)]
+#[derive(Deserialize, Default, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum ListScope {
     Tab,
     #[default]
     Session,
+    /// The panes the caller created, directly or through its workers.
+    Mine,
 }
 
 #[derive(Deserialize, Default, Clone, Copy)]
@@ -532,6 +535,31 @@ struct DockArgs {
     beside: Option<String>,
     #[serde(default)]
     side: Side,
+    /// Docking beside a pane of another tab moves the window there.
+    #[serde(default)]
+    move_tab: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CloseArgs {
+    pane: String,
+    /// Closing a tab's last pane in place closes the windows floating over it too.
+    #[serde(default)]
+    close_floats: bool,
+}
+
+/// Whether a layout change may leave the user's focus where the change put it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UserFocus {
+    Keep,
+    Move,
+}
+
+impl UserFocus {
+    fn asked(focus: bool) -> Self {
+        if focus { Self::Move } else { Self::Keep }
+    }
 }
 
 #[derive(Deserialize)]
@@ -774,20 +802,47 @@ fn tidy(fraction: f32) -> f64 {
     (f64::from(fraction) * 1e4).round() / 1e4
 }
 
-/// The floating window holding `pane` as tools report it, `null` for a pane in place.
-fn float_info(core: &Core, pane: PaneId) -> Value {
-    let Some(window) = lock(&core.layout).window_of(pane) else {
-        return Value::Null;
-    };
-    let frame = window.frame;
+fn frame_json(frame: FloatFrame) -> Value {
+    json!({ "x": tidy(frame.x), "y": tidy(frame.y), "w": tidy(frame.w), "h": tidy(frame.h) })
+}
+
+fn window_json(window: &proto::FloatWindow) -> Value {
     json!({
         "window": format!("w{}", window.id.0),
         "panes": window.panes.iter().map(|&pane| pane_ref(pane)).collect::<Vec<_>>(),
-        "frame": { "x": tidy(frame.x), "y": tidy(frame.y), "w": tidy(frame.w), "h": tidy(frame.h) },
+        "frame": frame_json(window.frame),
         "minimized": window.minimized,
         "pinned": window.pinned,
         "closeWhenDone": window.close == CloseWhen::Done,
     })
+}
+
+/// The floating window holding `pane` as tools report it, `null` for a pane in place.
+fn float_info(core: &Core, pane: PaneId) -> Value {
+    lock(&core.layout)
+        .window_of(pane)
+        .map_or(Value::Null, |window| window_json(&window))
+}
+
+/// A tab's panes in place as a tree: `"p3"`, or a split with the first side's share.
+fn tree_json(node: &proto::LayoutNode) -> Value {
+    match node {
+        proto::LayoutNode::Leaf(pane) => json!(pane_ref(*pane)),
+        proto::LayoutNode::Split {
+            axis,
+            ratio,
+            first,
+            second,
+        } => json!({
+            "split": match axis {
+                Axis::Horizontal => "horizontal",
+                Axis::Vertical => "vertical",
+            },
+            "ratio": tidy(*ratio),
+            "first": tree_json(first),
+            "second": tree_json(second),
+        }),
+    }
 }
 
 /// The pane's last agent turn as tools report it, `null` before the first.
@@ -814,6 +869,71 @@ fn pane_ref(id: PaneId) -> String {
 
 fn tab_ref(id: TabId) -> String {
     format!("t{}", id.0)
+}
+
+/// `t3` or `3`.
+fn parse_tab(target: &str) -> Result<TabId> {
+    let target = target.trim();
+    target
+        .strip_prefix('t')
+        .unwrap_or(target)
+        .parse()
+        .map(TabId)
+        .map_err(|_| {
+            ToolError::new(ErrorCode::InvalidArgs, format!("{target} is not a tab id"))
+                .hint("tab ids look like t3; pane_list lists them")
+        })
+}
+
+/// How many panes the caller and all agents of its session have open.
+struct PaneCounts {
+    yours: usize,
+    session: usize,
+    session_max: usize,
+    /// Who opened the session's panes, most first.
+    holders: Vec<(PaneId, usize)>,
+}
+
+impl PaneCounts {
+    fn to_json(&self) -> Value {
+        json!({
+            "yours": { "open": self.yours, "max": PANES_PER_AGENT },
+            "session": { "open": self.session, "max": self.session_max },
+        })
+    }
+
+    /// The refusal once either cap is reached, saying whose panes are open.
+    fn refusal(&self, caller: PaneId) -> Option<ToolError> {
+        let others: Vec<String> = self
+            .holders
+            .iter()
+            .filter(|&&(holder, _)| holder != caller)
+            .take(5)
+            .map(|&(holder, open)| format!("{} holds {open}", pane_ref(holder)))
+            .collect();
+        let rest = if others.is_empty() {
+            String::new()
+        } else {
+            format!("; {}", others.join(", "))
+        };
+        let message = if self.yours >= PANES_PER_AGENT {
+            format!(
+                "you have {} panes open, the most one agent may have; agents in this session hold {} of {}{rest}",
+                self.yours, self.session, self.session_max
+            )
+        } else if self.session >= self.session_max {
+            format!(
+                "agents in this session hold {} of {} panes, {} of them yours{rest}",
+                self.session, self.session_max, self.yours
+            )
+        } else {
+            return None;
+        };
+        Some(
+            ToolError::new(ErrorCode::Forbidden, message)
+                .hint("close panes you no longer need with pane_close"),
+        )
+    }
 }
 
 fn wait_for(timeout_ms: Option<u64>) -> Duration {
@@ -877,7 +997,16 @@ impl CallContext {
 
     /// `self`, `p12` or `12`.
     fn resolve(&self, target: Option<&str>) -> Result<(PaneId, Arc<PaneEntry>)> {
-        let id = match target.map(str::trim) {
+        let id = self.parse_pane(target)?;
+        let entry = self.core.pane(id).ok_or_else(|| {
+            ToolError::new(ErrorCode::NotFound, format!("no pane {}", pane_ref(id)))
+                .hint("pane_list lists the panes you can reach")
+        })?;
+        Ok((id, entry))
+    }
+
+    fn parse_pane(&self, target: Option<&str>) -> Result<PaneId> {
+        Ok(match target.map(str::trim) {
             None | Some("" | "self") => self.caller,
             Some(target) => target
                 .strip_prefix('p')
@@ -888,12 +1017,7 @@ impl CallContext {
                     ToolError::new(ErrorCode::InvalidArgs, format!("{target} is not a pane id"))
                         .hint("pane ids look like p12; pane_list lists them")
                 })?,
-        };
-        let entry = self.core.pane(id).ok_or_else(|| {
-            ToolError::new(ErrorCode::NotFound, format!("no pane {}", pane_ref(id)))
-                .hint("pane_list lists the panes you can reach")
-        })?;
-        Ok((id, entry))
+        })
     }
 
     fn session(&self) -> Option<SessionId> {
@@ -1058,21 +1182,69 @@ impl CallContext {
         }
     }
 
-    /// Refuses a new pane once the caller's agent (with all its workers) has
-    /// [`MAX_OPEN_PANES`] open: a looping or misled agent must not exhaust the host.
-    fn may_open(&self) -> Result<()> {
-        let open = self
+    fn pane_counts(&self) -> PaneCounts {
+        // Read before the ownership map is locked, which is never held while taking the layout.
+        let in_session: Vec<PaneId> = self
+            .session()
+            .and_then(|session| lock(&self.core.layout).snapshot(session))
+            .map(|layout| {
+                layout
+                    .tabs
+                    .iter()
+                    .flat_map(|tab| crate::layout::leaves(&tab.root))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let holders = self
             .core
             .term
-            .opened_by_tree(self.caller, |pane| self.core.pane(pane).is_some());
-        if open < MAX_OPEN_PANES {
-            return Ok(());
+            .holders(|pane| in_session.contains(&pane) && self.core.pane(pane).is_some());
+        let yours = holders
+            .iter()
+            .find(|&&(holder, _)| holder == self.caller)
+            .map_or(0, |&(_, open)| open);
+        PaneCounts {
+            yours,
+            session: holders.iter().map(|&(_, open)| open).sum(),
+            session_max: self.core.cfg.agent_panes_per_session,
+            holders,
         }
-        Err(ToolError::new(
-            ErrorCode::Forbidden,
-            format!("{open} panes you opened are still open"),
-        )
-        .hint("close panes you no longer need with pane_close"))
+    }
+
+    /// Refuses a new pane once the caller has [`PANES_PER_AGENT`] of its own open, or the
+    /// agents of its session together their cap: a looping or misled agent, or a tree of
+    /// workers opening workers, must not exhaust the host.
+    fn may_open(&self) -> Result<()> {
+        match self.pane_counts().refusal(self.caller) {
+            Some(refusal) => Err(refusal),
+            None => Ok(()),
+        }
+    }
+
+    /// Runs `change` on the caller's session and lists what it moved. With
+    /// [`UserFocus::Keep`], focus the change moved goes back: the tab in front and every
+    /// tab's focused pane.
+    fn arranged<T>(
+        &self,
+        focus: UserFocus,
+        change: impl FnOnce() -> Result<T>,
+    ) -> Result<(T, Vec<Value>)> {
+        let Some(session) = self.session() else {
+            return change().map(|value| (value, Vec::new()));
+        };
+        let (marks, before) = {
+            let layout = lock(&self.core.layout);
+            (
+                layout.focus_marks(session),
+                arrange::placements(&layout, session),
+            )
+        };
+        let value = change()?;
+        if let (UserFocus::Keep, Some(marks)) = (focus, marks) {
+            self.core.restore_focus(session, &marks);
+        }
+        let after = arrange::placements(&lock(&self.core.layout), session);
+        Ok((value, arrange::effects(&before, &after)))
     }
 
     fn pane_info(&self, id: PaneId, entry: &PaneEntry) -> Value {
@@ -1140,31 +1312,106 @@ impl CallContext {
             "limits": {
                 "maxWaitMs": MAX_WAIT.as_millis() as u64,
                 "maxOutputBytes": MAX_BYTES,
+                "panes": self.pane_counts().to_json(),
             },
             "protocol": TERM_VERSION,
         }))
     }
 
+    /// The session's tabs, each with its title, project, focus, tree and windows, and every
+    /// listed pane's details, flat, in `panes`.
     fn pane_list(&self, args: ListArgs) -> Result<Value> {
+        let wanted_tab = args.tab.as_deref().map(parse_tab).transpose()?;
+        let empty = json!({ "tabs": [], "panes": [] });
         let Some(session) = self.session() else {
-            return Ok(json!({ "panes": [] }));
+            return Ok(empty);
         };
-        let Some(layout) = lock(&self.core.layout).snapshot(session) else {
-            return Ok(json!({ "panes": [] }));
+        // Cloned so no lock is held while each pane's details look the layout up again.
+        let Some(listing) = lock(&self.core.layout).session(session).cloned() else {
+            return Ok(empty);
         };
-        let my_tab = layout
-            .tabs
+        if let Some(wanted) = wanted_tab
+            && !listing.tabs.iter().any(|tab| tab.tab_id == wanted)
+        {
+            return Err(
+                ToolError::new(ErrorCode::NotFound, format!("no tab {}", tab_ref(wanted)))
+                    .hint("pane_list without `tab` lists them"),
+            );
+        }
+        let my_tab = self.core.tab_of_pane(self.caller);
+        let mut tabs = Vec::new();
+        let mut panes = Vec::new();
+        for tab in &listing.tabs {
+            let in_scope = match args.scope {
+                ListScope::Tab => Some(tab.tab_id) == my_tab,
+                ListScope::Session | ListScope::Mine => true,
+            };
+            if !in_scope || wanted_tab.is_some_and(|wanted| wanted != tab.tab_id) {
+                continue;
+            }
+            let listed: Vec<PaneId> = crate::layout::leaves(&tab.root)
+                .filter(|&pane| {
+                    args.scope != ListScope::Mine || self.core.term.owns(self.caller, pane)
+                })
+                .collect();
+            if listed.is_empty() && args.scope == ListScope::Mine {
+                continue;
+            }
+            tabs.push(self.tab_info(&listing, tab, &listed));
+            panes.extend(
+                listed
+                    .into_iter()
+                    .filter_map(|id| self.core.pane(id).map(|entry| self.pane_info(id, &entry))),
+            );
+        }
+        Ok(json!({ "tabs": tabs, "panes": panes }))
+    }
+
+    fn tab_info(
+        &self,
+        listing: &crate::layout::Session,
+        tab: &proto::TabLayout,
+        listed: &[PaneId],
+    ) -> Value {
+        let project = listing
+            .tab_projects
             .iter()
-            .find(|tab| crate::layout::leaves(&tab.root).any(|leaf| leaf == self.caller))
-            .map(|tab| tab.tab_id);
-        let panes: Vec<Value> = layout
-            .tabs
+            .find(|membership| membership.tab_id == tab.tab_id)
+            .and_then(|membership| {
+                listing
+                    .projects
+                    .iter()
+                    .find(|project| project.id == membership.project)
+            })
+            .map(|project| json!({ "id": project.id, "name": project.name }));
+        let fixed_title = !tab.name.trim().is_empty();
+        let title = if fixed_title {
+            tab.name.clone()
+        } else {
+            self.core
+                .pane_meta(tab.focused)
+                .map(|meta| meta.title)
+                .unwrap_or_default()
+        };
+        let in_tab = |pane: &PaneId| crate::layout::leaves(&tab.root).any(|leaf| leaf == *pane);
+        let windows: Vec<&proto::FloatWindow> = listing
+            .floats
             .iter()
-            .filter(|tab| matches!(args.scope, ListScope::Session) || Some(tab.tab_id) == my_tab)
-            .flat_map(|tab| crate::layout::leaves(&tab.root).collect::<Vec<_>>())
-            .filter_map(|id| self.core.pane(id).map(|entry| self.pane_info(id, &entry)))
+            .filter(|window| window.panes.iter().any(in_tab))
             .collect();
-        Ok(json!({ "panes": panes }))
+        let floating = |pane: PaneId| windows.iter().any(|window| window.panes.contains(&pane));
+        json!({
+            "id": tab_ref(tab.tab_id),
+            "title": title,
+            "fixedTitle": fixed_title,
+            "project": project,
+            "active": listing.active_tab == Some(tab.tab_id),
+            "focused": pane_ref(tab.focused),
+            "zoomed": tab.zoomed.map(pane_ref),
+            "tree": crate::layout::tiled_tree(&tab.root, floating).as_ref().map(tree_json),
+            "floats": windows.into_iter().map(window_json).collect::<Vec<_>>(),
+            "panes": listed.iter().map(|&pane| pane_ref(pane)).collect::<Vec<_>>(),
+        })
     }
 
     fn launch(
@@ -1206,15 +1453,17 @@ impl CallContext {
         self.may_read(of)?;
         let float = float_opts(args.float, args.frame, args.close_when_done)?;
         let cwd = reachable_cwd(args.cwd).await;
-        let pane = self.open(
-            of,
-            args.direction,
-            Self::launch(args.command, args.agent, cwd),
-            args.focus,
-            float,
-        )?;
+        let (pane, effects) = self.arranged(UserFocus::asked(args.focus), || {
+            self.open(
+                of,
+                args.direction,
+                Self::launch(args.command, args.agent, cwd),
+                args.focus,
+                float,
+            )
+        })?;
         let entry = self.core.pane(pane).ok_or_else(closed)?;
-        Ok(json!({ "pane": self.pane_info(pane, &entry) }))
+        Ok(json!({ "pane": self.pane_info(pane, &entry), "effects": effects }))
     }
 
     /// Opens a pane beside `of`: a split, or a floating window over its tab. A float takes
@@ -1240,9 +1489,8 @@ impl CallContext {
             close,
         }) {
             OpOutcome::PaneCreated { pane_id } => pane_id,
-            OpOutcome::Failed { message, .. } => {
-                return Err(ToolError::new(ErrorCode::Failed, message)
-                    .hint("a tab holds at most 16 floating windows"));
+            OpOutcome::Failed { code, message } => {
+                return Err(self.float_refusal(of, code, message));
             }
             other => return Err(ToolError::new(ErrorCode::Failed, format!("{other:?}"))),
         };
@@ -1298,25 +1546,29 @@ impl CallContext {
                     "a floating window has no tab title",
                 ));
             }
-            let pane = self.open(
-                self.caller,
-                Direction::Right,
-                Self::launch(args.command, None, cwd),
-                args.focus,
-                Some(float),
-            )?;
+            let (pane, effects) = self.arranged(UserFocus::asked(args.focus), || {
+                self.open(
+                    self.caller,
+                    Direction::Right,
+                    Self::launch(args.command, None, cwd),
+                    args.focus,
+                    Some(float),
+                )
+            })?;
             let tab = self.core.tab_of_pane(pane).map(tab_ref);
             let entry = self.core.pane(pane).ok_or_else(closed)?;
-            return Ok(json!({ "tab": tab, "pane": self.pane_info(pane, &entry) }));
+            return Ok(
+                json!({ "tab": tab, "pane": self.pane_info(pane, &entry), "effects": effects }),
+            );
         }
-        let (tab, pane) = {
+        let ((tab, pane), effects) = self.arranged(UserFocus::asked(args.focus), || {
             let _opening = lock(&self.core.term.opening);
             self.may_open()?;
             let launch = Self::launch(args.command, None, cwd);
-            self.open_tab(args.title.unwrap_or_default(), launch, args.focus)?
-        };
+            self.open_tab(args.title.unwrap_or_default(), launch, args.focus)
+        })?;
         let entry = self.core.pane(pane).ok_or_else(closed)?;
-        Ok(json!({ "tab": tab_ref(tab), "pane": self.pane_info(pane, &entry) }))
+        Ok(json!({ "tab": tab_ref(tab), "pane": self.pane_info(pane, &entry), "effects": effects }))
     }
 
     /// Opens a tab in the caller's session; the tab the user was on stays selected unless
@@ -1344,18 +1596,66 @@ impl CallContext {
         Ok((tab, pane))
     }
 
-    async fn pane_close(&self, args: PaneArg) -> Result<Value> {
-        let Ok((pane, entry)) = self.resolve(Some(&args.pane)) else {
-            return Ok(json!({ "closed": false, "alreadyClosed": true }));
+    async fn pane_close(&self, args: CloseArgs) -> Result<Value> {
+        let pane = self.parse_pane(Some(&args.pane))?;
+        let Some(entry) = self.core.pane(pane) else {
+            if lock(&self.core.layout).was_allocated(pane) {
+                return Ok(json!({ "closed": false, "alreadyClosed": true, "effects": [] }));
+            }
+            return Err(ToolError::new(
+                ErrorCode::NotFound,
+                format!("there never was a pane {}", pane_ref(pane)),
+            )
+            .hint("pane_list lists the panes you can reach"));
         };
         self.may_drive(pane, &entry, DriveAction::Close).await?;
-        match self.core.apply_op(LayoutOp::ClosePane { pane_id: pane }) {
-            OpOutcome::Failed { message, .. } => Err(ToolError::new(ErrorCode::Failed, message)),
-            _ => {
-                self.core.term.forget(pane);
-                Ok(json!({ "closed": true, "alreadyClosed": false }))
-            }
+        let floats = lock(&self.core.layout).floats_over_last_tiled(pane);
+        let ((), effects) = if floats.is_empty() {
+            self.arranged(UserFocus::Keep, || {
+                self.layout_op(LayoutOp::ClosePane { pane_id: pane })
+            })?
+        } else {
+            self.may_close_floats(pane, &floats, args.close_floats)?;
+            let tab = self.core.tab_of_pane(pane).ok_or_else(closed)?;
+            self.arranged(UserFocus::Keep, || {
+                self.layout_op(LayoutOp::CloseTab { tab_id: tab })
+            })?
+        };
+        for closed in std::iter::once(pane).chain(floats) {
+            self.core.term.forget(closed);
         }
+        Ok(json!({ "closed": true, "alreadyClosed": false, "effects": effects }))
+    }
+
+    /// Closing a tab's last pane in place would dock a window over it into the tab, losing
+    /// its frame: refused unless the caller asks to close the windows too, and only windows
+    /// it may close.
+    fn may_close_floats(&self, pane: PaneId, floats: &[PaneId], close_floats: bool) -> Result<()> {
+        let names = floats
+            .iter()
+            .map(|&float| pane_ref(float))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let tab = self.core.tab_of_pane(pane).map(tab_ref).unwrap_or_default();
+        if !close_floats {
+            return Err(ToolError::new(
+                ErrorCode::InvalidArgs,
+                format!(
+                    "{} is the last pane in place in {tab}; closing it would dock the floating {names} in its place. Dock or close them first, or pass closeFloats: true to close them with it",
+                    pane_ref(pane)
+                ),
+            ));
+        }
+        if let Some(theirs) = floats.iter().find(|&&float| !self.drives(float)) {
+            return Err(ToolError::new(
+                ErrorCode::Forbidden,
+                format!(
+                    "closeFloats would close {}, which floats over {tab} and is not a pane you opened",
+                    pane_ref(*theirs)
+                ),
+            ));
+        }
+        Ok(())
     }
 
     /// The output from `since` to now, rendered.
@@ -2031,9 +2331,32 @@ impl CallContext {
         }
     }
 
-    fn pane_result(&self, pane: PaneId) -> Result<Value> {
+    fn pane_result(&self, pane: PaneId, effects: Vec<Value>) -> Result<Value> {
         let entry = self.core.pane(pane).ok_or_else(closed)?;
-        Ok(json!({ "pane": self.pane_info(pane, &entry) }))
+        Ok(json!({ "pane": self.pane_info(pane, &entry), "effects": effects }))
+    }
+
+    /// Why the layout refused to float a pane in `pane`'s tab.
+    fn float_refusal(&self, pane: PaneId, code: proto::OpError, message: String) -> ToolError {
+        let (room, floating) = {
+            let layout = lock(&self.core.layout);
+            (layout.room_around(pane), layout.window_of(pane).is_some())
+        };
+        let message = match room {
+            Some(room) if room.windows >= proto::MAX_FLOATS_PER_TAB => format!(
+                "{} already holds {} floating windows, the most a tab may",
+                tab_ref(room.tab),
+                room.windows
+            ),
+            Some(room) if !floating && room.tiled == [pane] => format!(
+                "{} is the only pane in place in {}; a tab keeps one in place",
+                pane_ref(pane),
+                tab_ref(room.tab)
+            ),
+            _ if code == proto::OpError::NotFound => format!("{} is gone", pane_ref(pane)),
+            _ => message,
+        };
+        ToolError::new(ErrorCode::Failed, message)
     }
 
     fn pane_float(&self, args: FloatPaneArgs) -> Result<Value> {
@@ -2046,33 +2369,36 @@ impl CallContext {
                 "frame values must be numbers",
             ));
         }
-        self.layout_op(LayoutOp::FloatPane {
-            pane_id: pane,
-            frame,
-        })
-        .map_err(|error| {
-            error.hint(
-                "a tab keeps at least one pane in place; it holds at most 16 floating windows",
-            )
-        })?;
-        if args.pinned.is_some() {
-            self.layout_op(LayoutOp::SetFloat {
+        let ((), effects) = self.arranged(UserFocus::Keep, || {
+            let floated = self.core.apply_op(LayoutOp::FloatPane {
                 pane_id: pane,
-                frame: None,
-                minimized: None,
-                pinned: args.pinned,
-            })?;
-        }
-        self.pane_result(pane)
+                frame,
+            });
+            if let OpOutcome::Failed { code, message } = floated {
+                return Err(self.float_refusal(pane, code, message));
+            }
+            if args.pinned.is_some() {
+                self.layout_op(LayoutOp::SetFloat {
+                    pane_id: pane,
+                    frame: None,
+                    minimized: None,
+                    pinned: args.pinned,
+                })?;
+            }
+            Ok(())
+        })?;
+        self.pane_result(pane, effects)
     }
 
-    /// Docks the window, then gives the user back the focus docking moves.
+    /// Docks the window, in its own tab unless the caller says it may move to another.
     fn pane_dock(&self, args: DockArgs) -> Result<Value> {
         let (pane, _) = self.own_float(&args.pane)?;
+        let from = self.core.tab_of_pane(pane).ok_or_else(closed)?;
         let beside = match args.beside.as_deref() {
             Some(beside) => {
                 let (target, _) = self.resolve(Some(beside))?;
                 self.may_read(target)?;
+                self.may_dock_beside(pane, from, target, args.move_tab)?;
                 Some(DockTarget {
                     pane_id: target,
                     side: args.side.into(),
@@ -2080,27 +2406,72 @@ impl CallContext {
             }
             None => None,
         };
-        let focused = self.user_focus();
-        self.layout_op(LayoutOp::DockPane {
-            pane_id: pane,
-            beside,
-        })
-        .map_err(|error| error.hint("dock beside a pane that is not floating"))?;
-        if let Some(focused) = focused.filter(|&focused| focused != pane) {
-            self.core.apply_op(LayoutOp::Focus { pane_id: focused });
+        let ((), effects) = self.arranged(UserFocus::Keep, || {
+            self.layout_op(LayoutOp::DockPane {
+                pane_id: pane,
+                beside,
+            })
+        })?;
+        let mut result = self.pane_result(pane, effects)?;
+        if let Some(to) = self.core.tab_of_pane(pane).filter(|&to| to != from) {
+            result["moved"] = json!({ "from": tab_ref(from), "to": tab_ref(to) });
         }
-        self.pane_result(pane)
+        Ok(result)
+    }
+
+    fn may_dock_beside(
+        &self,
+        pane: PaneId,
+        from: TabId,
+        target: PaneId,
+        move_tab: bool,
+    ) -> Result<()> {
+        if lock(&self.core.layout).window_of(target).is_some() {
+            return Err(ToolError::new(
+                ErrorCode::InvalidArgs,
+                format!(
+                    "{} floats too; dock beside a pane in place",
+                    pane_ref(target)
+                ),
+            ));
+        }
+        let to = self.core.tab_of_pane(target).ok_or_else(closed)?;
+        if to != from && !move_tab {
+            return Err(ToolError::new(
+                ErrorCode::CrossTab,
+                format!(
+                    "{pane} floats over {from} and {target} is in {to}: docking beside it moves {pane} into {to}. Pass moveTab: true to move it",
+                    pane = pane_ref(pane),
+                    from = tab_ref(from),
+                    target = pane_ref(target),
+                    to = tab_ref(to),
+                ),
+            ));
+        }
+        if lock(&self.core.layout).check_split(target).is_err() {
+            return Err(ToolError::new(
+                ErrorCode::Failed,
+                format!(
+                    "{} is nested as deep as splits go (at most {})",
+                    pane_ref(target),
+                    crate::layout::MAX_SPLIT_DEPTH
+                ),
+            ));
+        }
+        Ok(())
     }
 
     fn pane_minimize(&self, args: MinimizeArgs) -> Result<Value> {
         let (pane, _) = self.own_float(&args.pane)?;
-        self.layout_op(LayoutOp::SetFloat {
-            pane_id: pane,
-            frame: None,
-            minimized: Some(args.minimized),
-            pinned: None,
+        let ((), effects) = self.arranged(UserFocus::Keep, || {
+            self.layout_op(LayoutOp::SetFloat {
+                pane_id: pane,
+                frame: None,
+                minimized: Some(args.minimized),
+                pinned: None,
+            })
         })?;
-        self.pane_result(pane)
+        self.pane_result(pane, effects)
     }
 
     /// Brings the window to the front, out of the tray, without the keyboard: the user's
@@ -2108,25 +2479,15 @@ impl CallContext {
     fn pane_raise(&self, args: PaneArg) -> Result<Value> {
         let (pane, _) = self.own_float(&args.pane)?;
         // Restoring raises it, from the tray or not, and leaves the focus where it is.
-        self.layout_op(LayoutOp::SetFloat {
-            pane_id: pane,
-            frame: None,
-            minimized: Some(false),
-            pinned: None,
+        let ((), effects) = self.arranged(UserFocus::Keep, || {
+            self.layout_op(LayoutOp::SetFloat {
+                pane_id: pane,
+                frame: None,
+                minimized: Some(false),
+                pinned: None,
+            })
         })?;
-        self.pane_result(pane)
-    }
-
-    /// The pane with the user's focus: the focused pane of the session's tab on screen.
-    fn user_focus(&self) -> Option<PaneId> {
-        let session = self.session()?;
-        let layout = lock(&self.core.layout).snapshot(session)?;
-        let active = layout.active_tab?;
-        layout
-            .tabs
-            .iter()
-            .find(|tab| tab.tab_id == active)
-            .map(|tab| tab.focused)
+        self.pane_result(pane, effects)
     }
 
     fn agent_result(&self, args: PaneArg) -> Result<Value> {
@@ -2543,7 +2904,7 @@ mod tests {
     }
 
     #[test]
-    fn workers_count_against_the_agent_that_started_them() {
+    fn each_agent_counts_the_panes_it_opened_itself() {
         let term = Term::default();
         let (lead, worker, other) = (PaneId(1), PaneId(2), PaneId(50));
         term.created(lead, worker);
@@ -2552,14 +2913,52 @@ mod tests {
         }
         term.created(other, PaneId(51));
         let live = |pane: PaneId| pane != PaneId(9);
-        // The worker and its seven panes, one of them closed.
-        assert_eq!(term.opened_by_tree(lead, live), 7);
         assert_eq!(
-            term.opened_by_tree(worker, live),
-            7,
-            "a worker cannot reset the count"
+            term.holders(live),
+            [(worker, 6), (lead, 1), (other, 1)],
+            "most first; a closed pane counts for no one"
         );
-        assert_eq!(term.opened_by_tree(other, live), 1);
+    }
+
+    #[test]
+    fn the_session_cap_fits_four_full_agents_well_under_the_pty_limit() {
+        // macOS hands out 511 pseudo-terminals by default (kern.tty.ptmx_max).
+        const MACOS_PTYS: usize = 511;
+        assert_eq!(AGENT_PANES_PER_SESSION, 4 * PANES_PER_AGENT);
+        const { assert!(AGENT_PANES_PER_SESSION * 3 < MACOS_PTYS) };
+    }
+
+    #[test]
+    fn a_full_cap_says_whose_panes_are_open() {
+        let counts = PaneCounts {
+            yours: 3,
+            session: 128,
+            session_max: 128,
+            holders: vec![(PaneId(4), 100), (PaneId(7), 25), (PaneId(1), 3)],
+        };
+        let refusal = counts.refusal(PaneId(1)).unwrap();
+        assert_eq!(refusal.code, ErrorCode::Forbidden);
+        assert_eq!(
+            refusal.message,
+            "agents in this session hold 128 of 128 panes, 3 of them yours; p4 holds 100, p7 holds 25"
+        );
+        let mine = PaneCounts {
+            yours: 32,
+            session: 40,
+            ..counts
+        };
+        assert!(
+            mine.refusal(PaneId(1))
+                .unwrap()
+                .message
+                .starts_with("you have 32 panes open, the most one agent may have; agents in this session hold 40 of 128")
+        );
+        let room = PaneCounts {
+            yours: 31,
+            session: 127,
+            ..mine
+        };
+        assert!(room.refusal(PaneId(1)).is_none());
     }
 
     #[test]

@@ -19,14 +19,14 @@ fn zsh() -> Option<PathBuf> {
         .find(|path| path.exists())
 }
 
-struct Caller {
-    socket: PathBuf,
-    token: String,
-    pane: String,
+pub(crate) struct Caller {
+    pub socket: PathBuf,
+    pub token: String,
+    pub pane: String,
 }
 
 impl Caller {
-    async fn call(&self, tool: &str, args: Value) -> TermReply {
+    pub async fn call(&self, tool: &str, args: Value) -> TermReply {
         tokio::time::timeout(
             std::time::Duration::from_secs(20),
             call(&self.socket, &self.token, &self.pane, tool, args),
@@ -35,7 +35,7 @@ impl Caller {
         .unwrap_or_else(|_| panic!("{tool} hung"))
     }
 
-    async fn ok(&self, tool: &str, args: Value) -> Value {
+    pub async fn ok(&self, tool: &str, args: Value) -> Value {
         match self.call(tool, args.clone()).await {
             TermReply::Ok(value) => value,
             TermReply::Error(error) => panic!("{tool} {args}: {error:?}"),
@@ -229,7 +229,7 @@ async fn an_agent_runs_waits_reads_and_stays_in_its_lane() {
 }
 
 impl Caller {
-    fn clone_as(&self, pane: String) -> Self {
+    pub fn clone_as(&self, pane: String) -> Self {
         Self {
             socket: self.socket.clone(),
             token: self.token.clone(),
@@ -934,23 +934,27 @@ async fn a_panes_environment_reaches_only_that_pane() {
     .await;
     assert!(browser.contains("bad token"), "{browser}");
 
-    // The agent's tree, worker included, opens at most 32 panes.
-    let mut opened = 1;
+    // Each agent opens at most 32 panes of its own; the session's cap bounds the tree.
+    let mut opened = 0;
     loop {
         match worker.call("tab_new", json!({})).await {
             TermReply::Ok(_) => opened += 1,
             TermReply::Error(error) => {
                 assert_eq!(error.code, TermErrorCode::Forbidden, "{error:?}");
+                assert!(
+                    error.message.contains("you have 32 panes open"),
+                    "{error:?}"
+                );
                 break;
             }
         }
         assert!(opened <= 32, "no limit on panes");
     }
     assert_eq!(opened, 32);
+    let run = agent.ok("cmd_run", json!({ "command": "true" })).await;
     assert_eq!(
-        agent.refused("cmd_run", json!({ "command": "true" })).await,
-        TermErrorCode::Forbidden,
-        "the agent that started the worker shares its limit"
+        run["status"], "exited",
+        "the agent that started the worker keeps its own limit"
     );
 }
 
@@ -1045,12 +1049,13 @@ async fn panes_past_the_nesting_limit_open_in_a_tab() {
     assert_eq!(user.focused(), agent_pane, "the user's tab stays in front");
 }
 
-/// Parallel calls must not all pass the open-pane count before any pane exists, or an agent
-/// asking for many panes at once would end up with more than its 32.
+/// Parallel calls must not all pass the open-pane counts before any pane exists, or agents
+/// asking for many panes at once would end up with more than their 32 each, or more than the
+/// session's cap together.
 #[tokio::test(flavor = "multi_thread")]
 async fn parallel_opens_stay_within_the_pane_budget() {
     let dir = tempfile::tempdir().unwrap();
-    let daemon = start_with(dir.path(), |_| {}).await;
+    let daemon = start_with(dir.path(), |config| config.agent_panes_per_session = 40).await;
     let mut user = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
     let agent_pane = user.attach_and_follow().await;
     let token = std::fs::read_to_string(dir.path().join("hook.token")).unwrap();
@@ -1080,13 +1085,16 @@ async fn parallel_opens_stay_within_the_pane_budget() {
             tokio::spawn(async move { call(&socket, &token, &pane, "tab_new", json!({})).await })
         })
         .collect();
+    let mut opened_by_agent = 1;
     let mut opened = 1;
-    for pending in calls {
+    for (index, pending) in calls.into_iter().enumerate() {
         if matches!(pending.await.unwrap(), TermReply::Ok(_)) {
             opened += 1;
+            opened_by_agent += usize::from(index < 32);
         }
     }
-    assert_eq!(opened, 32);
+    assert!(opened_by_agent <= 32, "{opened_by_agent}");
+    assert_eq!(opened, 40);
 }
 
 #[tokio::test(flavor = "multi_thread")]

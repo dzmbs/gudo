@@ -153,6 +153,8 @@ pub struct Config {
     pub screen_save_delay: Duration,
     /// How long an agent's request to drive one of the user's panes waits for the owner.
     pub drive_ask_wait: Duration,
+    /// Panes all the agents of one session may have opened at once.
+    pub agent_panes_per_session: usize,
     /// The agent hook shim; next to the current executable when `None`.
     pub hook_bin: Option<PathBuf>,
     /// The shim itself once `hook_bin` points at the launcher in front of it.
@@ -382,6 +384,7 @@ impl Config {
             persist_max_delay: Duration::from_secs(5),
             screen_save_delay: Duration::from_secs(5),
             drive_ask_wait: Duration::from_secs(120),
+            agent_panes_per_session: crate::term::AGENT_PANES_PER_SESSION,
             hook_bin: None,
             hook_shim: None,
             shell_integration: true,
