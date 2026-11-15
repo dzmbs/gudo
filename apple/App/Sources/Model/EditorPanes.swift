@@ -496,9 +496,9 @@ extension WindowModel {
             }
             if let workspace, let tab = workspace.session.activeTab {
                 let groupId = currentGroupId
-                let id = composites.addEditor(member, besideHost: groupId, tab: tab)
-                if pairedTab == TabRef(hostId: groupId, tab: tab.id) { pairedTab = nil }
-                activeMixedTab = id
+                if let id = replaceHostTab(TabRef(hostId: groupId, tab: tab.id), with: { composites.addEditor(member, besideHost: groupId, tab: tab) }) {
+                    activeMixedTab = id
+                }
                 syncMixedFocus()
                 return pane
             }

@@ -454,7 +454,7 @@ struct MixedTabRow: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title)
                         .font(SidebarFont.title)
-                        .fontWeight(state == .done && !isActive ? .semibold : .regular)
+                        .fontWeight((state == .done || model.changedTabs.contains(ref)) && !isActive ? .semibold : .regular)
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -548,8 +548,8 @@ struct MixedTabChip: View {
                     .foregroundStyle(DS.Palette.textTertiary)
                     .lineLimit(1)
             }
-            .font(.callout.weight(isActive ? .medium : .regular))
-            .foregroundStyle(isActive ? DS.Palette.text : DS.Palette.textSecondary)
+            .font(.callout.weight(isActive ? .medium : model.changedTabs.contains(ref) ? .semibold : .regular))
+            .foregroundStyle(isActive || model.changedTabs.contains(ref) ? DS.Palette.text : DS.Palette.textSecondary)
             .padding(.horizontal, 40)
             HStack(spacing: 0) {
                 Button("Close Tab", systemImage: "xmark") { model.closeMixedTab(tab.id) }

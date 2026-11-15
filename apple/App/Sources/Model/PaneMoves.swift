@@ -82,19 +82,10 @@ extension WindowModel {
             focus(target)
             return
         }
-        // Planned from before the merge: a host tab carrying a mixed tab leaves its project's
-        // listing, and a project left with no tab listed with it.
-        let planner = groups.planner()
-        let project = planner.project(of: target)
         guard let hostTab = workspace(ofGroup: target.hostId)?.session.tabs.first(where: { $0.id == target.tab }),
-              let merged = composites.merge(id, intoHost: target.hostId, tab: hostTab, beside: pane, side: side)
+              let merged = replaceHostTab(target, with: { composites.merge(id, intoHost: target.hostId, tab: hostTab, beside: pane, side: side) })
         else { return }
-        if pairedTab == target { pairedTab = nil }
-        let mergedRef = Self.mixedRef(merged)
-        if let project, let index = project.tabs.firstIndex(of: target) {
-            groups.apply(planner.move(mergedRef, into: project.id, at: index))
-        }
-        focus(mergedRef)
+        focus(Self.mixedRef(merged))
     }
 
     private func moveLeafToNewTab(_ mixed: CompositeTab) {

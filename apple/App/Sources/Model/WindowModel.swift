@@ -105,6 +105,8 @@ final class WindowModel {
     var namingProject: String?
     /// A tab that just joined a project from its + or ⌘T: its row lights a moment.
     var joinedTab: TabRef?
+    /// Tabs an agent or a host changed while the user was elsewhere, until the user shows them.
+    var changedTabs: Set<TabRef> = []
     /// Tabs selected in the sidebar for bulk actions (`Model/TabHistoryActions.swift`).
     var tabSelection = TabSelection()
     /// Touch selection mode (long-press › Select, the compact switcher's Select): a tap
@@ -631,6 +633,7 @@ final class WindowModel {
             noteLeavingTab()
         }
         leaveTabOverview()
+        changedTabs.remove(ref)
         // A tab kept out of sight at launch comes back once it is asked for.
         groups.unhide(ref)
         destination = .terminal

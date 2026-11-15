@@ -91,9 +91,9 @@ extension WindowModel {
             syncMixedFocus()
         } else if let open = workspace, let tab = open.session.activeTab {
             let own = currentGroupId
-            let id = composites.addTool(member, besideHost: own, tab: tab)
-            if pairedTab == TabRef(hostId: own, tab: tab.id) { pairedTab = nil }
-            activeMixedTab = id
+            if let id = replaceHostTab(TabRef(hostId: own, tab: tab.id), with: { composites.addTool(member, besideHost: own, tab: tab) }) {
+                activeMixedTab = id
+            }
             syncMixedFocus()
         } else {
             noteLeavingTab()

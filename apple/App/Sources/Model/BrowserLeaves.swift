@@ -4,6 +4,13 @@ import HostKit
 import PaneLayout
 import SwiftUI
 
+/// Whether opening something beside a pane brings its tab forward: the user's own actions do;
+/// agents' and hosts' requests never take the user's tab, sheet or focus.
+enum Reveal: Equatable {
+    case bringForward
+    case inBackground
+}
+
 extension ProgramIdentity {
     static let browser = ProgramIdentity(id: "browser", displayName: "Browser", kind: .remote)
 }
@@ -14,8 +21,10 @@ extension WindowModel {
         return browsers.existing(member.id)
     }
 
+    /// `origin`: the tab it was opened from (the one on screen when nil); a page in a tab of its
+    /// own joins that tab's project, right after it.
     @discardableResult
-    func openBrowser(_ url: URL, hostId: String?, placement: EditorPlacement) -> BrowserMember {
+    func openBrowser(_ url: URL, hostId: String?, placement: EditorPlacement, origin: TabRef? = nil) -> BrowserMember {
         let member = BrowserMember(hostId: hostId, url: url.absoluteString)
         destination = .terminal
         if sheet == .browser { sheet = nil }
@@ -28,14 +37,14 @@ extension WindowModel {
             }
             if let workspace, let tab = workspace.session.activeTab {
                 let groupId = currentGroupId
-                let id = composites.addBrowser(member, besideHost: groupId, tab: tab)
-                if pairedTab == TabRef(hostId: groupId, tab: tab.id) { pairedTab = nil }
-                activeMixedTab = id
+                if let id = replaceHostTab(TabRef(hostId: groupId, tab: tab.id), with: { composites.addBrowser(member, besideHost: groupId, tab: tab) }) {
+                    activeMixedTab = id
+                }
                 syncMixedFocus()
                 return member
             }
         }
-        let origin = currentTab
+        let origin = origin ?? currentTab
         noteLeavingTab()
         let ref = Self.mixedRef(composites.openBrowser(member))
         join(ref, projectOf: origin)
@@ -43,28 +52,52 @@ extension WindowModel {
         return member
     }
 
-    /// Opens a page in the pane's tab, which comes forward.
+    /// Opens a page beside a pane, in the pane's tab. `.inBackground` (an agent's or a host's
+    /// request): the user's tab, sheet and focus stay as they are, and the tab's row marks the
+    /// change; `.bringForward` (the user's own action): the tab comes forward with the page focused.
     @discardableResult
-    func openBrowser(_ url: URL, beside pane: HostPane, axis: Axis = .horizontal) -> BrowserMember {
+    func openBrowser(_ url: URL, beside pane: HostPane, axis: Axis = .horizontal, reveal: Reveal = .inBackground) -> BrowserMember {
         let member = BrowserMember(hostId: pane.hostId == HostGroups.localId ? nil : pane.hostId, url: url.absoluteString)
-        destination = .terminal
-        if sheet == .browser { sheet = nil }
+        let leafFocus: NewLeafFocus = reveal == .bringForward ? .newLeaf : .unchanged
+        if reveal == .bringForward {
+            destination = .terminal
+            if sheet == .browser { sheet = nil }
+        }
         if let tab = composites.tab(containing: pane), let leaf = tab.leaf(for: pane) {
-            composites.apply(.focus(leaf), to: tab.id)
-            composites.addBrowser(member, to: tab.id, axis: axis)
-            focusMixedTab(tab.id)
-        } else if let hostWorkspace = workspace(ofGroup: pane.hostId), var tab = hostWorkspace.session.tab(containing: pane.pane) {
-            tab.focused = pane.pane
-            noteLeavingTab()
-            let id = composites.addBrowser(member, besideHost: pane.hostId, tab: tab, axis: axis)
-            if pairedTab == TabRef(hostId: pane.hostId, tab: tab.id) { pairedTab = nil }
-            activeMixedTab = id
-            syncMixedFocus()
+            composites.addBrowser(member, to: tab.id, beside: leaf, axis: axis, focus: leafFocus)
+            if reveal == .bringForward {
+                focusMixedTab(tab.id)
+            } else {
+                noteChangedOutOfSight(Self.mixedRef(tab.id))
+            }
+        } else if let hostWorkspace = workspace(ofGroup: pane.hostId), let tab = hostWorkspace.session.tab(containing: pane.pane) {
+            let hostRef = TabRef(hostId: pane.hostId, tab: tab.id)
+            let wasOnScreen = currentTab == hostRef
+            if reveal == .bringForward { noteLeavingTab() }
+            guard let id = replaceHostTab(hostRef, with: {
+                composites.addBrowser(member, besideHost: pane.hostId, tab: tab, pane: pane.pane, axis: axis, focus: leafFocus)
+            }) else { return member }
+            if reveal == .bringForward || wasOnScreen {
+                activeMixedTab = id
+                syncMixedFocus()
+            } else {
+                noteChangedOutOfSight(Self.mixedRef(id))
+            }
         } else {
-            noteLeavingTab()
-            focus(Self.mixedRef(composites.openBrowser(member)))
+            let origin = tabRef(containing: pane)
+            if reveal == .bringForward { noteLeavingTab() }
+            let ref = Self.mixedRef(composites.openBrowser(member))
+            join(ref, projectOf: origin)
+            if reveal == .bringForward { focus(ref) } else { noteChangedOutOfSight(ref) }
         }
         return member
+    }
+
+    /// The tab showing a host's pane: a mixed tab holding it, else its host tab.
+    func tabRef(containing pane: HostPane) -> TabRef? {
+        if let mixed = composites.tab(containing: pane) { return Self.mixedRef(mixed.id) }
+        guard let tab = groups.group(pane.hostId)?.tabs.first(where: { $0.root.contains(pane.pane) }) else { return nil }
+        return TabRef(hostId: pane.hostId, tab: tab.id)
     }
 
     /// ⇧⌘B: a browser tab on the dev server the focused pane runs, else the start page.
@@ -88,14 +121,15 @@ extension WindowModel {
         let server = devServer(ofPane: pane, onGroup: groupId)
         guard opensToolsAsLeaves else { return showBrowserSheet(on: server) }
         let hostId = groupId == HostGroups.localId ? nil : groupId
-        openBrowser(server.map(DevServerRouting.pageURL) ?? URL(string: "about:blank")!, hostId: hostId, placement: .tab)
+        let origin = tabRef(containing: HostPane(hostId: groupId, pane: pane))
+        openBrowser(server.map(DevServerRouting.pageURL) ?? URL(string: "about:blank")!, hostId: hostId, placement: .tab, origin: origin)
     }
 
     /// A page beside the pane: the dev server the pane runs, else the start page.
     func openBrowser(besidePane pane: PaneId, onGroup groupId: String, axis: Axis = .horizontal) {
         let server = devServer(ofPane: pane, onGroup: groupId)
         guard opensToolsAsLeaves else { return showBrowserSheet(on: server) }
-        openBrowser(server.map(DevServerRouting.pageURL) ?? URL(string: "about:blank")!, beside: HostPane(hostId: groupId, pane: pane), axis: axis)
+        openBrowser(server.map(DevServerRouting.pageURL) ?? URL(string: "about:blank")!, beside: HostPane(hostId: groupId, pane: pane), axis: axis, reveal: .bringForward)
     }
 
     private func openStartPage(hostId: String?) {
@@ -140,8 +174,14 @@ extension WindowModel {
         else { return nil }
         let member = BrowserMember(id: id, hostId: openerMember.hostId, url: url.absoluteString)
         browsers.popups.insert(member.id)
-        composites.addBrowser(member, to: tab.id)
-        if activeMixedTab == tab.id { syncMixedFocus() }
+        // An agent's click opens it without taking the tab's focus.
+        let byAgent = browsers.existing(opener)?.agentActing == true
+        composites.addBrowser(member, to: tab.id, beside: tab.leaf(forBrowser: opener), focus: byAgent ? .unchanged : .newLeaf)
+        if byAgent {
+            noteChangedOutOfSight(Self.mixedRef(tab.id))
+        } else if activeMixedTab == tab.id {
+            syncMixedFocus()
+        }
         return member
     }
 

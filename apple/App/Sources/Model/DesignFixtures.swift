@@ -169,7 +169,7 @@ enum DesignFixtures {
                 return
             }
             if model.opensToolsAsLeaves {
-                model.openBrowser(url, beside: HostPane(hostId: workspace.groupId, pane: pane))
+                model.openBrowser(url, beside: HostPane(hostId: workspace.groupId, pane: pane), reveal: .bringForward)
             } else {
                 model.browserURL = url
                 model.sheet = .browser

@@ -122,6 +122,7 @@ extension WindowModel {
     /// Shows a mixed tab, its focused pane taking the keyboard.
     func focusMixedTab(_ id: TabId) {
         guard composites.tab(id) != nil else { return }
+        changedTabs.remove(Self.mixedRef(id))
         destination = .terminal
         activeMixedTab = id
         syncMixedFocus()
@@ -261,11 +262,36 @@ extension WindowModel {
         }
         guard mixedHostSession(own) != nil else { return hostUnavailable(own) }
         guard mixedHostSession(host) != nil else { return hostUnavailable(host) }
-        let id = composites.make(fromHost: own, tab: tab)
-        if pairedTab == TabRef(hostId: own, tab: tab.id) { pairedTab = nil }
+        guard let id = replaceHostTab(TabRef(hostId: own, tab: tab.id), with: { composites.make(fromHost: own, tab: tab) }) else { return }
         activeMixedTab = id
         composites.split(id, onHost: host, axis: axis)
         syncMixedFocus()
+    }
+
+    /// Makes host tab `ref` a mixed tab with `make`, in its place: the mixed tab takes the host
+    /// tab's project and position there, and its column. Returns the mixed tab's id (nil: `make`
+    /// made none).
+    @discardableResult
+    func replaceHostTab(_ ref: TabRef, with make: () -> TabId?) -> TabId? {
+        // Planned from before: a host tab carrying a mixed tab leaves its project's listing.
+        let planner = groups.planner()
+        let project = planner.project(of: ref)
+        guard let id = make() else { return nil }
+        let replacement = Self.mixedRef(id)
+        if pairedTab == ref { pairedTab = replacement }
+        if lastTerminalTab == ref { lastTerminalTab = replacement }
+        changedTabs.remove(ref)
+        if let project, let index = project.tabs.firstIndex(of: ref) {
+            groups.apply(planner.move(replacement, into: project.id, at: index))
+        }
+        return id
+    }
+
+    /// An agent or a host changed a tab the user is not looking at: its row says so until shown.
+    func noteChangedOutOfSight(_ ref: TabRef) {
+        guard ref != currentTab else { return }
+        changedTabs.insert(ref)
+        flashJoined(ref)
     }
 
     /// Closes a mixed tab: each host closes the panes it holds for it.
