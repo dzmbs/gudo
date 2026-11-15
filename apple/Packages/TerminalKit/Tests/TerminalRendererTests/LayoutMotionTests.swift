@@ -71,6 +71,30 @@ extension LayoutHoldTests {
             #expect(surface.pendingGridSize == nil)
         }
 
+        /// The canvas lays a moving pane out once, at its final size, and moves it by transform
+        /// over a still: the grid changes once, for that size, and the terminal draws again
+        /// before the motion settles, so the still gives way to a terminal already redrawn.
+        @Test func aPaneLaidOutOnceAtItsFinalSizeChangesItsGridOnceAndDrawsBeforeTheSettle() async throws {
+            let terminal = Terminal(cols: 20, rows: 6) { _ in }
+            terminal.write(Array("$ echo a long line that wraps when narrow\r\n$ ".utf8))
+            let (surface, changes) = try surface(terminal, width: 800)
+            let settle = Duration.milliseconds(280)
+            let began = ContinuousClock.now
+
+            surface.prepareResize(to: CGSize(width: 400, height: 200), within: settle)
+            surface.layout(size: CGSize(width: 400, height: 200), scale: 2)
+            let after = try #require(surface.grid)
+            #expect(changes() == [after])
+            #expect(surface.isHoldingFrame)
+
+            terminal.write(Array("\r\u{1b}[K$ ".utf8))
+            surface.outputArrived()
+            try await waitUntilDrawing(surface)
+            #expect(ContinuousClock.now - began < settle, "drawing again before the still gives way")
+            try await Task.sleep(for: .milliseconds(150))
+            #expect(changes() == [after], "one grid change, for the final size")
+        }
+
         @Test func theFrameHoldsUntilTheProgramsRedrawHasComeIn() async throws {
             let terminal = Terminal(cols: 20, rows: 6) { _ in }
             let (surface, _) = try surface(terminal, width: 800)
