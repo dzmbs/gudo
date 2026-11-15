@@ -54,6 +54,8 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
     // NSTextInputClient state.
     private var markedText = NSMutableAttributedString()
     private var keyTextAccumulator: [String]?
+    /// ⌘ keys whose press went to the program, so their release follows.
+    private var commandKeysSent: Set<UInt16> = []
 
     /// First responder of its window (AppKit sets `firstResponder` only after
     /// `becomeFirstResponder` returns, so the view tracks it itself).
@@ -759,7 +761,14 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
             emit(bytes)
             return
         }
-        guard !event.modifierFlags.contains(.command) else { return super.keyDown(with: event) }
+        if event.modifierFlags.contains(.command) {
+            // A ⌘ chord no menu item took (Copy without a selection) is the program's, as in
+            // Ghostty: the legacy encoding drops it and the kitty protocol reports it.
+            guard !hasMarkedText() else { return super.keyDown(with: event) }
+            commandKeysSent.insert(event.keyCode)
+            send(keyEvent(event, action: action))
+            return
+        }
         if !hasMarkedText(), keyInterceptor?(keyEvent(event, action: action)) == true { return }
         if surface.terminal.selection != nil { surface.terminal.clearSelection() }
         if !hasMarkedText(), let meta = metaEvent(event, action: action) {
@@ -783,6 +792,10 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
     }
 
     override public func keyUp(with event: NSEvent) {
+        if commandKeysSent.remove(event.keyCode) != nil {
+            send(keyEvent(event, action: .release))
+            return
+        }
         guard !event.modifierFlags.contains(.command), !hasMarkedText(),
               keyEvent(event, action: .release).lineEditingBytes == nil
         else { return }

@@ -81,6 +81,102 @@ import Testing
         #expect(NSPasteboard.general.string(forType: .string) == "world")
     }
 
+    private func commandKey(_ type: NSEvent.EventType, _ characters: String, keyCode: UInt16, window: NSWindow) throws -> NSEvent {
+        try #require(NSEvent.keyEvent(
+            with: type, location: .zero, modifierFlags: .command, timestamp: 1, windowNumber: window.windowNumber, context: nil,
+            characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode))
+    }
+
+    /// Ghostty: Copy is enabled only with a selection; otherwise ⌘C is the program's key, which
+    /// the legacy encoding drops and the kitty protocol reports. It never reaches the window,
+    /// which would beep.
+    @Test func commandCWithoutSelectionGoesToTheProgramNotTheWindow() throws {
+        let (view, window, written) = try makeView()
+        view.onInput = { bytes in written.bytes.withLock { $0 += bytes } }
+        let beyond = KeyRecorder()
+        view.nextResponder = beyond
+        let copyItem = NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        #expect(!view.validateMenuItem(copyItem))
+
+        view.keyDown(with: try commandKey(.keyDown, "c", keyCode: 8, window: window))
+        view.keyUp(with: try commandKey(.keyUp, "c", keyCode: 8, window: window))
+        #expect(written.bytes.withLock { $0 }.isEmpty)
+        #expect(beyond.keyDowns == 0)
+
+        view.surface.terminal.write(Array("\u{1b}[>3u".utf8))
+        view.keyDown(with: try commandKey(.keyDown, "c", keyCode: 8, window: window))
+        view.keyUp(with: try commandKey(.keyUp, "c", keyCode: 8, window: window))
+        #expect(String(decoding: written.bytes.withLock { $0 }, as: UTF8.self) == "\u{1b}[99;9u\u{1b}[99;9:3u")
+        #expect(beyond.keyDowns == 0)
+    }
+
+    @Test func commandCWithSelectionCopiesAndSendsNothing() throws {
+        let (view, window, written) = try makeView()
+        view.onInput = { bytes in written.bytes.withLock { $0 += bytes } }
+        view.surface.terminal.write(Array("\u{1b}[>3uhello".utf8))
+        view.surface.terminal.selectWord(atViewport: GridPoint(x: 1, y: 0))
+        let copyItem = NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        #expect(view.validateMenuItem(copyItem))
+        NSPasteboard.general.clearContents()
+        window.firstResponder?.tryToPerform(#selector(NSText.copy(_:)), with: copyItem)
+        // The menu took the key down; only its key up reaches the view.
+        view.keyUp(with: try commandKey(.keyUp, "c", keyCode: 8, window: window))
+        #expect(NSPasteboard.general.string(forType: .string) == "hello")
+        #expect(written.bytes.withLock { $0 }.isEmpty)
+    }
+
+    @Test func selectAllThenCopyTakesTheScrollbackToo() throws {
+        let (view, window, _) = try makeView()
+        view.surface.terminal.write(Array((0..<12).map { "line \($0)\r\n" }.joined().utf8))
+        let selectAll = NSMenuItem(title: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        #expect(view.validateMenuItem(selectAll))
+        window.firstResponder?.tryToPerform(#selector(NSText.selectAll(_:)), with: selectAll)
+        window.firstResponder?.tryToPerform(#selector(NSText.copy(_:)), with: nil)
+        #expect(NSPasteboard.general.string(forType: .string) == (0..<12).map { "line \($0)" }.joined(separator: "\n"))
+    }
+
+    @Test func rightClickMenuOffersCopyOnlyWithASelectionAndAlwaysPaste() throws {
+        let (view, window, _) = try makeView()
+        view.surface.terminal.write(Array("hello".utf8))
+        let click = try #require(NSEvent.mouseEvent(
+            with: .rightMouseDown, location: NSPoint(x: 10, y: 190), modifierFlags: [], timestamp: 1,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        let plain = try #require(view.menu(for: click))
+        #expect(plain.items.map(\.title) == ["Paste", "Select All"])
+        view.surface.terminal.selectWord(atViewport: GridPoint(x: 1, y: 0))
+        let selected = try #require(view.menu(for: click))
+        #expect(selected.items.map(\.title) == ["Copy", "Paste", "Select All"])
+        #expect(selected.items.allSatisfy { $0.target === view })
+    }
+
+    /// Shift takes the mouse back from a program that tracks it, as in Ghostty: the drag selects.
+    @Test func shiftDragSelectsWhileTheProgramTracksTheMouse() throws {
+        let (view, window, written) = try makeView()
+        view.surface.terminal.write(Array("\u{1b}[?1000h\u{1b}[?1006hhello world".utf8))
+        let first = view.surface.rect(for: GridPoint(x: 0, y: 0)), fifth = view.surface.rect(for: GridPoint(x: 4, y: 0))
+        // A drag takes in the cell it ends on once it passes the cell's middle, as in Ghostty.
+        let from = CGPoint(x: first.minX + 1, y: first.midY), to = CGPoint(x: fifth.maxX - 1, y: fifth.midY)
+        func mouse(_ type: NSEvent.EventType, _ point: CGPoint, _ flags: NSEvent.ModifierFlags) throws -> NSEvent {
+            try #require(NSEvent.mouseEvent(
+                with: type, location: view.convert(point, to: nil), modifierFlags: flags, timestamp: 1,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        }
+        var reported: [UInt8] = []
+        view.onInput = { reported += $0 }
+        view.mouseDown(with: try mouse(.leftMouseDown, from, []))
+        view.mouseUp(with: try mouse(.leftMouseUp, from, []))
+        #expect(!reported.isEmpty, "a plain click is the program's")
+        #expect(view.surface.terminal.selection == nil)
+        reported = []
+
+        view.mouseDown(with: try mouse(.leftMouseDown, from, .shift))
+        view.mouseDragged(with: try mouse(.leftMouseDragged, to, .shift))
+        view.mouseUp(with: try mouse(.leftMouseUp, to, .shift))
+        #expect(reported.isEmpty)
+        #expect(written.bytes.withLock { $0 }.isEmpty)
+        #expect(view.surface.terminal.selectionText() == "hello")
+    }
+
     @Test func copyJoinsSoftWrapsTrimsBlanksKeepsNewlines() throws {
         let (view, window, _) = try makeView()
         // 50 columns wrap on a 40-column grid; a hard newline; trailing blanks.
@@ -193,6 +289,12 @@ import Testing
         #expect(around.events == ["entered", "updated", "exited", "perform"])
         #expect(String(decoding: written.bytes.withLock { $0 }, as: UTF8.self) == "ls", "the tab was not pasted")
     }
+}
+
+/// The responder after the terminal: a key reaching it would beep.
+private final class KeyRecorder: NSResponder {
+    var keyDowns = 0
+    override func keyDown(with event: NSEvent) { keyDowns += 1 }
 }
 
 /// A view that takes drops and records what reached it.
