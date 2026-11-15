@@ -160,6 +160,7 @@ struct SettingsView: View {
     private var form: some View {
         Form {
             AppearanceSection().chromeRows()
+            PanesSettingsSection().chromeRows()
             TabsSettingsSection().chromeRows()
             FontSection().chromeRows()
             CursorSection().chromeRows()
@@ -204,7 +205,7 @@ struct SettingsView: View {
     #if os(macOS)
     @ViewBuilder private func detail(_ pane: SettingsPane) -> some View {
         switch pane {
-        case .appearance: AppearanceSection(); TabsSettingsSection()
+        case .appearance: AppearanceSection(); PanesSettingsSection(); TabsSettingsSection()
         case .terminal: FontSection(); CursorSection(); SplitsSection(); LinksSettingsSection(); FileLinksSettingsSection()
         case .keyboard: KeyboardSection(); VoiceSettingsSection()
         case .browser: BrowserSettingsSection(); ReplaySettingsSection()
@@ -441,7 +442,8 @@ private struct TabsSettingsSection: View {
 private struct AppearanceSection: View {
     @AppStorage(TerminalPreferences.Key.theme) private var theme = TerminalPreferences.Default.theme
     @AppStorage(TerminalPreferences.Key.windowTheme) private var windowTheme = TerminalPreferences.WindowTheme.auto
-    @AppStorage(TerminalPreferences.Key.paneStyle) private var paneStyle = TerminalPreferences.PaneStyle.compact
+    @AppStorage(TerminalPreferences.Key.sidebarTextSize) private var sidebarTextSize = TerminalPreferences.Default.sidebarTextSize
+    @AppStorage(ToastPosition.key) private var toastPosition = ToastPosition.standard
     @AppStorage(TabNaming.titleFromShell) private var titleFromShell = false
     @AppStorage(TabPlacement.showsTabBarKey) private var showsTabBar = true
     @AppStorage(ThemePair.enabledKey) private var themePair = false
@@ -461,12 +463,16 @@ private struct AppearanceSection: View {
                 .settingAnchor("theme")
             }
             ThemePairRows()
-            Picker(selection: $paneStyle) {
-                ForEach(TerminalPreferences.PaneStyle.allCases) { Text($0.title).tag($0) }
-            } label: {
-                ConfigLabel("Panes", key: "pane-style")
+            Picker("Sidebar Text Size", selection: $sidebarTextSize) {
+                ForEach(TerminalPreferences.SidebarTextSize.allCases) { Text($0.title).tag($0) }
             }
-            .settingAnchor("pane-style")
+            .accessibilityIdentifier("settings-sidebar-text-size")
+            .settingAnchor("sidebar-text-size")
+            Picker("Toasts", selection: $toastPosition) {
+                ForEach(ToastPosition.allCases) { Text($0.title).tag($0) }
+            }
+            .accessibilityIdentifier("settings-toast-position")
+            .settingAnchor("toast-position")
             Toggle(isOn: $titleFromShell) {
                 ConfigLabel("Tab Title from Shell", key: "title-from-shell")
             }
