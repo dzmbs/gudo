@@ -431,6 +431,20 @@ final class ChatCollectionTests: XCTestCase {
         return samples.isEmpty ? .infinity : samples[samples.count / 2]
     }
 
+    func testExpandingARowKeepsItInPlaceInsteadOfFollowingTheBottom() async throws {
+        let frame = preparedFrame(40)
+        let (window, controller) = try open(frame)
+        defer { close(window) }
+        try await settle()
+        let path = IndexPath(item: 37, section: 0)
+        let before = try XCTUnwrap(controller.collection.layoutAttributesForItem(at: path)).frame.minY - controller.collection.contentOffset.y
+        update(controller, frame, expanded: [frame.rows[37].id])
+        try await settle()
+        let after = try XCTUnwrap(controller.collection.layoutAttributesForItem(at: path)).frame.minY - controller.collection.contentOffset.y
+        XCTAssertFalse(controller.model.followsBottom)
+        XCTAssertEqual(after, before, accuracy: 1)
+    }
+
     func testDynamicTypeOverridesInvalidateVisibleGeometry() async throws {
         let frame = preparedFrame(20)
         let (window, controller) = try open(frame, following: false)

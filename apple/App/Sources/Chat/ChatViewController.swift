@@ -343,6 +343,9 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         pending = nil
         isApplying = true
         let generation = userScrollGeneration
+        if previousExpanded != expanded, !current.rows.isEmpty, frame.generation == current.generation {
+            model.followsBottom = false
+        }
         let wasFollowing = model.followsBottom && !holdsPosition
         let anchor = document.anchor(at: collection.contentOffset.y + collection.adjustedContentInset.top)
         let resets = frame.generation != current.generation
