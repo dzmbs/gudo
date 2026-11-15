@@ -81,6 +81,9 @@ private struct GitRowStyle: ViewModifier {
     }
 }
 
+/// A tab's worktree, named where the core's types are not imported.
+typealias TabWorktree = WorktreeState
+
 /// A tab's worktree on its row's second line: the branch, with the pull request's glyph when
 /// there is one.
 struct TabBranchLabel: View {
@@ -92,6 +95,11 @@ struct TabBranchLabel: View {
                 .imageScale(.small)
             Text(worktree.displayBranch)
                 .truncationMode(.middle)
+            if let pr = worktree.visiblePR {
+                Text("#\(pr.number)")
+                    .monospacedDigit()
+                    .fixedSize()
+            }
         }
         .lineLimit(1)
     }
@@ -101,11 +109,13 @@ struct TabBranchLabel: View {
 struct TabGitBadges: View {
     let worktree: WorktreeState
     let selected: Bool
+    /// A tab row names the pull request on its second line instead.
+    var showsPullRequest = true
 
     var body: some View {
         HStack(spacing: DS.Space.row) {
             DiffStat(added: worktree.added, removed: worktree.removed, selected: selected)
-            if let pr = worktree.visiblePR {
+            if showsPullRequest, let pr = worktree.visiblePR {
                 Text("#\(pr.number)")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(DS.Palette.textSecondary)

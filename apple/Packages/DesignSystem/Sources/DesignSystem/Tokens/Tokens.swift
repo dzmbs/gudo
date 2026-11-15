@@ -104,6 +104,8 @@ public extension DS {
         public static let keyBarHardware: CGFloat = 36
         public static let swipeAction: CGFloat = 74
         public static let statusDot: CGFloat = 8
+        /// A tab that called for you while out of sight, on its row, its chip and the sidebar toggle.
+        public static let attentionDot: CGFloat = 6
         /// A host name, its state and ⌃⌘9 on one line.
         public static let switcherWidth: CGFloat = 320
     }

@@ -105,7 +105,9 @@ final class FakeConnection: HostConnection {
         #expect(grown.count == 10)
         #expect(groups.tab(forShortcut: 8) == grown[7])
         #expect(groups.tab(forShortcut: 9) == grown[9])
+        #expect(groups.shortcutNumber(of: grown[7]) == 8)
         #expect(groups.shortcutNumber(of: grown[8]) == nil)
+        #expect(groups.shortcutNumber(of: grown[9]) == 9, "the last tab answers to ⌘9")
 
         // Collapsing hides rows, not numbers.
         groups.toggleCollapsed("cloud")

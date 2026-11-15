@@ -687,10 +687,12 @@ public final class HostGroups {
         return all[number - 1]
     }
 
-    /// The ⌘N a tab answers to (1…8), or nil past the eighth.
+    /// The ⌘N a tab answers to: 1…8 by position, 9 for the last past the eighth, else nil.
     public func shortcutNumber(of ref: TabRef) -> Int? {
-        guard let index = tabs.firstIndex(of: ref), index < 8 else { return nil }
-        return index + 1
+        let all = tabs
+        guard let index = all.firstIndex(of: ref) else { return nil }
+        if index < 8 { return index + 1 }
+        return index == all.count - 1 ? 9 : nil
     }
 
     public func index(of ref: TabRef) -> Int? {

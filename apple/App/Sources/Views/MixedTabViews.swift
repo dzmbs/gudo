@@ -445,21 +445,24 @@ struct MixedTabRow: View {
         } label: {
             HStack(alignment: .center, spacing: DS.Space.gap10) {
                 SidebarTabIcon(program: program, state: state, favicon: model.favicon(ofMixedTab: tab), isSelected: isActive)
-                    .attentionWhenBlocked(state, isVisible: isActive)
+                    .attentionCue(trigger: model.attention.beat(of: ref))
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title)
                         .font(SidebarFont.title)
                         .fontWeight((state == .done || model.changedTabs.contains(ref)) && !isActive ? .semibold : .regular)
                         .foregroundStyle(.primary)
                         .lineLimit(1)
-                        .truncationMode(.middle)
+                        .truncationMode(.tail)
                     MixedHostsLine(tab: tab)
                 }
                 Spacer(minLength: DS.Space.xs)
-                if let state, state.statusMark == .pill {
+                if CommandKeyState.shared.held, let shortcut = model.groups.shortcutNumber(of: ref) {
+                    TabShortcut(number: shortcut).motionTransition(.pill(anchor: .trailing))
+                } else if let state, state.statusMark == .pill {
                     StatePill(state).motionTransition(.pill(anchor: .trailing))
+                } else if model.attention.contains(ref) {
+                    AttentionDot().motionTransition(.pill(anchor: .trailing))
                 }
-                TabNumber(number: number, shortcut: CommandKeyState.shared.held ? model.groups.shortcutNumber(of: ref) : nil)
             }
             .sidebarRow(selected: isActive)
         }
@@ -515,7 +518,30 @@ struct MixedTabChip: View {
 
     var body: some View {
         let ref = WindowModel.mixedRef(tab.id)
-        ZStack {
+        let changed = model.changedTabs.contains(ref)
+        HStack(spacing: DS.Space.row) {
+            TabLeadingMark(program: model.programIdentity(ofMixedTab: tab), state: nil, favicon: model.favicon(ofMixedTab: tab), isSelected: isActive)
+                .attentionCue(trigger: model.attention.beat(of: ref))
+            VStack(spacing: 0) {
+                Text(model.title(ofMixedTab: tab))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Text(tab.hosts.map(model.groupName).joined(separator: " + "))
+                    .font(DS.Font.meta)
+                    .foregroundStyle(DS.Palette.textTertiary)
+                    .lineLimit(1)
+            }
+            .layoutPriority(1)
+            if model.attention.contains(ref) {
+                AttentionDot().motionTransition(.pill(anchor: .leading))
+            }
+        }
+        .font(DS.Font.tabTitle.weight(isActive ? .medium : changed ? .semibold : .regular))
+        .foregroundStyle(isActive || changed ? DS.Palette.text : DS.Palette.textSecondary)
+        .padding(.horizontal, DS.Space.xxxl)
+        .frame(maxWidth: .infinity)
+        .frame(height: DS.Size.tabStrip)
+        .background {
             if isActive {
                 Color.clear
                     .surface(.selection, in: RoundedRectangle.rounded(DS.Radius.field))
@@ -525,25 +551,8 @@ struct MixedTabChip: View {
                     .fill(DS.Palette.hoverFill)
                     .padding(.vertical, 3)
             }
-            VStack(spacing: 0) {
-                HStack(spacing: DS.Space.xs) {
-                    if tab.isEditorOnly {
-                        TabLeadingMark(program: .vscode, state: nil, isSelected: isActive)
-                    } else if tab.isBrowserOnly {
-                        TabLeadingMark(program: .browser, state: nil, favicon: model.favicon(ofMixedTab: tab), isSelected: isActive)
-                    }
-                    Text(model.title(ofMixedTab: tab))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                Text(tab.hosts.map(model.groupName).joined(separator: " + "))
-                    .font(DS.Font.meta)
-                    .foregroundStyle(DS.Palette.textTertiary)
-                    .lineLimit(1)
-            }
-            .font(.callout.weight(isActive ? .medium : model.changedTabs.contains(ref) ? .semibold : .regular))
-            .foregroundStyle(isActive || model.changedTabs.contains(ref) ? DS.Palette.text : DS.Palette.textSecondary)
-            .padding(.horizontal, 40)
+        }
+        .overlay {
             HStack(spacing: 0) {
                 Button("Close Tab", systemImage: "xmark") { model.closeMixedTab(tab.id) }
                     .labelStyle(.iconOnly)
@@ -553,16 +562,17 @@ struct MixedTabChip: View {
                     .opacity(isHovered ? 1 : 0)
                     .accessibilityHidden(!isHovered)
                 Spacer(minLength: 0)
-                if let number = model.groups.shortcutNumber(of: ref) {
+                if CommandKeyState.shared.held, let number = model.groups.shortcutNumber(of: ref) {
                     Text("⌘\(number)")
                         .font(DS.Font.meta)
-                        .foregroundStyle(DS.Palette.textTertiary)
+                        .foregroundStyle(DS.Palette.textSecondary)
                         .padding(.trailing, DS.Space.s)
+                        .motionTransition(.fade)
                 }
             }
             .padding(.leading, 3)
+            .animation(DS.Motion.micro, value: CommandKeyState.shared.held)
         }
-        .frame(height: 34)
         .contentShape(.rect)
         .onTapGesture { model.focus(ref) }
         .onHover { isHovered = $0 }

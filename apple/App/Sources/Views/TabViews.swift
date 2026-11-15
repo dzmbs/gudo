@@ -712,20 +712,55 @@ struct PaneTreeRow: View {
     }
 }
 
-/// A tab's number at the row's trailing edge, quiet; its ⌘ shortcut while ⌘ is held.
-struct TabNumber: View {
+/// A tab's ⌘ shortcut at the row's trailing edge, shown only while ⌘ is held.
+struct TabShortcut: View {
     let number: Int
-    let shortcut: Int?
 
     var body: some View {
-        Text(shortcut.map { "⌘\($0)" } ?? "\(number)")
+        Text("⌘\(number)")
             .font(SidebarFont.number)
-            .foregroundStyle(shortcut == nil ? DS.Palette.textTertiary : DS.Palette.textSecondary)
+            .foregroundStyle(DS.Palette.textSecondary)
             .lineLimit(1)
             .fixedSize()
             // A renumbered row swaps its digit in place, never a cross-fade.
             .contentTransition(.identity)
             .accessibilityHidden(true)
+    }
+}
+
+/// A tab that called for the user out of sight, until it is shown.
+struct AttentionDot: View {
+    var body: some View {
+        StateDot(.blocked, diameter: DS.Size.attentionDot)
+            .accessibilityLabel("Wants attention")
+    }
+}
+
+/// The one thing at a tab row's trailing edge, the most pressing; the rest wait for the hover
+/// or the second line.
+enum TabRowAccessory: Hashable {
+    case selection(isSelected: Bool)
+    case shortcut(Int)
+    case pill(AgentState)
+    case panes(isExpanded: Bool)
+    case attention
+    case diff
+    case presence
+    case none
+
+    /// `shortcut` is the row's ⌘N while ⌘ is held, else nil.
+    static func pick(
+        isSelecting: Bool, isSelected: Bool, shortcut: Int?, state: AgentState?, paneCount: Int, opensPanes: Bool,
+        isExpanded: Bool, isHovered: Bool, needsAttention: Bool, hasDiff: Bool, hasPresence: Bool
+    ) -> TabRowAccessory {
+        if isSelecting { return .selection(isSelected: isSelected) }
+        if let shortcut { return .shortcut(shortcut) }
+        if let state, state.statusMark == .pill { return .pill(state) }
+        if opensPanes, paneCount > 1, isHovered || isExpanded { return .panes(isExpanded: isExpanded) }
+        if needsAttention { return .attention }
+        if hasDiff { return .diff }
+        if hasPresence { return .presence }
+        return .none
     }
 }
 
@@ -836,6 +871,7 @@ struct TabRow: View {
     @Environment(\.sidebarListStyle) private var listStyle
     /// The command that has run long enough to name; a quick one never changes the row's height.
     @State private var longRunning: UInt64?
+    @State private var hovered = false
 
     var body: some View {
         let workspace = model.workspace(ofGroup: group.id)
@@ -855,13 +891,20 @@ struct TabRow: View {
             since: model.agentSince(ofPane: tab.focused, onGroup: group.id))
         let informative = status == nil ? context.flatMap { Self.isInformative($0, title: title) ? $0 : nil } : nil
         let host = showsHost ? group.name : nil
+        let trailing = TabRowAccessory.pick(
+            isSelecting: model.isSelectingTabs, isSelected: model.tabSelection.contains(ref),
+            shortcut: CommandKeyState.shared.held ? model.groups.shortcutNumber(of: ref) : nil, state: state,
+            paneCount: tab.root.panes.count, opensPanes: listStyle == .plain, isExpanded: model.expandedTabs.contains(ref),
+            isHovered: showsHoverAccessories, needsAttention: model.attention.contains(ref),
+            hasDiff: worktree.map { $0.added > 0 || $0.removed > 0 } ?? false,
+            hasPresence: !TabPresence.value(workspace, tab.root.panes).isEmpty)
 
         Button {
             model.clickTab(ref, modifiers: ClickModifiers.current)
         } label: {
             HStack(alignment: .center, spacing: DS.Space.gap10) {
                 SidebarTabIcon(program: program, state: state, isSelected: isActive && !model.isSelectingTabs)
-                    .attentionWhenBlocked(state, isVisible: isActive)
+                    .attentionCue(trigger: model.attention.beat(of: ref))
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: DS.Space.row) {
                         Text(title)
@@ -890,26 +933,7 @@ struct TabRow: View {
                 }
                 .animation(DS.Motion.standard, value: status != nil || informative != nil || running != nil)
                 Spacer(minLength: DS.Space.xs)
-                if let state, state.statusMark == .pill {
-                    StatePill(state).motionTransition(.pill(anchor: .trailing))
-                }
-                if let worktree { TabGitBadges(worktree: worktree, selected: isActive) }
-                TabPresence(workspace: workspace, panes: tab.root.panes)
-                if model.isSelectingTabs {
-                    let selected = model.tabSelection.contains(ref)
-                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                        .font(.body)
-                        .foregroundStyle(selected ? DS.Palette.accent : DS.Palette.textTertiary)
-                        .contentTransition(.symbolEffect(.replace))
-                        .accessibilityHidden(true)
-                }
-                // Trailing, as a project's own chevron is.
-                if listStyle == .plain, tab.root.panes.count > 1 {
-                    TreeChevron(isExpanded: model.expandedTabs.contains(ref)) {
-                        withAnimation(DS.Motion.standard) { model.expandedTabs.formSymmetricDifference([ref]) }
-                    }
-                }
-                TabNumber(number: number, shortcut: CommandKeyState.shared.held ? model.groups.shortcutNumber(of: ref) : nil)
+                accessory(trailing, worktree: worktree, workspace: workspace, isActive: isActive)
             }
             .opacity(group.showsAsLive ? 1 : 0.6)
             // A step in from its project's or host's header.
@@ -918,6 +942,7 @@ struct TabRow: View {
             .sidebarRow(selected: isActive && !model.isSelectingTabs)
         }
         .buttonStyle(.plain)
+        .onHover { hovered = $0 }
         .task(id: started?.startedAtMs) {
             guard let started else { return longRunning = nil }
             let ranFor = Date.now.timeIntervalSince1970 - Double(started.startedAtMs) / 1000
@@ -959,6 +984,46 @@ struct TabRow: View {
         .accessibilityAction(named: "Move Up") { withAnimation(DS.Motion.standard) { model.groups.moveTab(ref, by: -1) } }
         .modifier(PaneTreeActions(ref: ref, paneCount: tab.root.panes.count, opens: listStyle == .plain))
         .accessibilityAction(named: "Move Down") { withAnimation(DS.Motion.standard) { model.groups.moveTab(ref, by: 1) } }
+    }
+
+    /// Touch has no hover: the panes chevron stays.
+    private var showsHoverAccessories: Bool {
+        #if os(macOS)
+        hovered
+        #else
+        true
+        #endif
+    }
+
+    @ViewBuilder private func accessory(_ accessory: TabRowAccessory, worktree: TabWorktree?, workspace: Workspace?, isActive: Bool) -> some View {
+        Group {
+            switch accessory {
+            case .selection(let selected):
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .font(.body)
+                    .foregroundStyle(selected ? DS.Palette.accent : DS.Palette.textTertiary)
+                    .contentTransition(.symbolEffect(.replace))
+                    .accessibilityHidden(true)
+            case .shortcut(let number):
+                TabShortcut(number: number)
+            case .pill(let state):
+                StatePill(state)
+            case .panes(let expanded):
+                TreeChevron(isExpanded: expanded) {
+                    withAnimation(DS.Motion.standard) { model.expandedTabs.formSymmetricDifference([ref]) }
+                }
+            case .attention:
+                AttentionDot()
+            case .diff:
+                if let worktree { TabGitBadges(worktree: worktree, selected: isActive, showsPullRequest: false) }
+            case .presence:
+                TabPresence(workspace: workspace, panes: tab.root.panes)
+            case .none:
+                EmptyView()
+            }
+        }
+        .id(accessory)
+        .motionTransition(.pill(anchor: .trailing))
     }
 
     private var actions: RowActions {
@@ -1381,10 +1446,27 @@ struct SidebarToggle: View {
     @AppStorage(TabPlacement.showsTabBarKey) private var showsTabBar = true
 
     var body: some View {
-        Button(model.isSidebarShown ? "Hide Sidebar" : "Show Sidebar", systemImage: "sidebar.leading") {
+        // Hidden, the sidebar's rows can't show a tab that called for you: the toggle does.
+        let calls = !model.isSidebarShown && !model.attention.isEmpty
+        Button {
             WorkspaceAction.toggleSidebar.perform(window: model)
+        } label: {
+            Label {
+                Text(model.isSidebarShown ? "Hide Sidebar" : "Show Sidebar")
+            } icon: {
+                Image(systemName: "sidebar.leading")
+                    .overlay(alignment: .topTrailing) {
+                        if calls {
+                            StateDot(.blocked, diameter: DS.Size.attentionDot)
+                                .offset(x: DS.Size.attentionDot / 2, y: -DS.Size.attentionDot / 2)
+                                .motionTransition(.pill())
+                        }
+                    }
+                    .animation(DS.Motion.micro, value: calls)
+            }
         }
         .help(model.isSidebarShown ? "Hide Sidebar (⌘B)" : "Show Sidebar (⌘B)")
+        .accessibilityValue(calls ? "A tab wants attention" : "")
         .tint(.primary)
         .contextMenu {
             Toggle("Tab Bar When the Sidebar Is Hidden", isOn: $showsTabBar)
