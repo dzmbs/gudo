@@ -447,6 +447,7 @@ private struct AppearanceSection: View {
     @AppStorage(TabNaming.titleFromShell) private var titleFromShell = false
     @AppStorage(TabPlacement.showsTabBarKey) private var showsTabBar = true
     @AppStorage(ThemePair.enabledKey) private var themePair = false
+    @AppStorage(ProgramTileTint.key) private var programMarkTint = ProgramTileTint.original
 
     var body: some View {
         Section {
@@ -473,6 +474,11 @@ private struct AppearanceSection: View {
             }
             .accessibilityIdentifier("settings-toast-position")
             .settingAnchor("toast-position")
+            Picker("Program Marks", selection: $programMarkTint) {
+                ForEach(ProgramTileTint.allCases) { Text($0.title).tag($0) }
+            }
+            .accessibilityIdentifier("settings-program-marks")
+            .settingAnchor("program-marks")
             Toggle(isOn: $titleFromShell) {
                 ConfigLabel("Tab Title from Shell", key: "title-from-shell")
             }
@@ -641,9 +647,26 @@ private struct KeyboardSection: View {
 /// Per-kind notification choices (`NotificationPrefsSection`, Notifications/) plus the bell.
 private struct NotificationsSection: View {
     @AppStorage(TerminalPreferences.Key.bellFeatures) private var bellBorder = false
+    #if os(macOS)
+    @AppStorage(MenuBarAgents.key) private var showsMenuBarAgents = false
+    #endif
 
     var body: some View {
         NotificationPrefsSection()
+        #if os(macOS)
+        Section {
+            Toggle(isOn: $showsMenuBarAgents) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Agents in the Menu Bar")
+                    Text("The most urgent state, and the agents that need you")
+                        .font(.caption)
+                        .foregroundStyle(DS.Palette.textTertiary)
+                }
+            }
+            .accessibilityIdentifier("settings-menu-bar-agents")
+            .settingAnchor("menu-bar-agents")
+        }
+        #endif
         Section {
             Toggle(isOn: $bellBorder) { ConfigLabel("Flash Border on Bell", key: "bell-features = border") }
                 .settingAnchor("bell-features")

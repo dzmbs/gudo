@@ -1,3 +1,4 @@
+import DesignSystem
 import HostKit
 import NotifyKit
 import GudoCore
@@ -128,5 +129,33 @@ final class AppNotificationsTests: XCTestCase {
         XCTAssertEqual(authorizer.requests, 1, "asked after the first pairing")
         await notifications.askAfterPairing(allowed: true)
         XCTAssertEqual(authorizer.requests, 1, "asked once")
+    }
+
+    func testANoteShowsAPictureOfItsProgramsMark() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = try XCTUnwrap(NotificationMark.write(program: "claude", in: directory))
+        XCTAssertEqual(try Data(contentsOf: file).prefix(4), Data([0x89, 0x50, 0x4E, 0x47]), "a PNG")
+        XCTAssertNotEqual(NotificationMark.write(program: "pi", in: directory), file, "a new file for every note")
+        XCTAssertNil(NotificationMark.write(program: nil, in: directory), "a long command has no program")
+    }
+
+    func testTheMenuBarShowsTheMostUrgentStateAndWhoNeedsYou() {
+        func item(_ id: String, _ state: DesignSystem.AgentState, minutesAgo: Double, isCommand: Bool = false) -> AgentItem {
+            var item = AgentItem(id: id, agent: .claude, hostName: "studio", sessionTitle: "gudo", state: state,
+                                 since: Date(timeIntervalSinceNow: -minutesAgo * 60), prompt: id)
+            item.isCommand = isCommand
+            return item
+        }
+        let items = [
+            item("working", .working, minutesAgo: 1), item("failed", .error, minutesAgo: 9),
+            item("waiting-long", .blocked, minutesAgo: 20), item("waiting", .blocked, minutesAgo: 2),
+            item("command", .error, minutesAgo: 30, isCommand: true), item("done", .done, minutesAgo: 3),
+        ]
+        XCTAssertEqual(MenuBarAgents.needingYou(items).map(\.id), ["waiting-long", "waiting", "failed"])
+        XCTAssertEqual(MenuBarAgents.symbol(for: items), DesignSystem.AgentState.blocked.symbol)
+        XCTAssertEqual(MenuBarAgents.symbol(for: [items[0], items[5]]), DesignSystem.AgentState.working.symbol)
+        XCTAssertEqual(MenuBarAgents.symbol(for: []), "sparkle")
+        XCTAssertEqual(MenuBarAgents.symbol(for: [item("idle", .idle, minutesAgo: 1)]), "sparkle")
     }
 }

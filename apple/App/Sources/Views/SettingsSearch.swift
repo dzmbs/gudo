@@ -84,6 +84,7 @@ enum SettingsIndex {
             .init(id: "pane-active-border", title: "Ring Around the Active Pane", section: .appearance, synonyms: ["border", "outline", "focus", "highlight", "active pane"]),
             .init(id: "sidebar-text-size", title: "Sidebar Text Size", section: .appearance, synonyms: ["sidebar", "font", "small", "large", "bigger", "smaller"]),
             .init(id: "toast-position", title: "Toasts", section: .appearance, synonyms: ["toast", "banner", "notice", "position", "corner"]),
+            .init(id: "program-marks", title: "Program Marks", section: .appearance, synonyms: ["icons", "logos", "tiles", "tint", "monochrome", "accent"]),
             .init(id: "title-from-shell", title: "Tab Title from Shell", key: "title-from-shell", section: .appearance, synonyms: ["tab", "name", "osc"]),
             .init(id: "launch-tabs", title: "Opens With", section: .tabs, synonyms: ["launch", "startup", "restore", "previous tabs", "new terminal", "session", "reopen", "start"]),
             .init(id: "font-family", title: "Font Family", key: "font-family", section: .font, synonyms: ["typeface", "jetbrains", "mono"]),
@@ -139,6 +140,7 @@ enum SettingsIndex {
         #else
         entries.append(.init(id: "tab-bar", title: "Tab Bar When the Sidebar Is Hidden", section: .appearance, synonyms: ["tabs", "strip"]))
         entries += [
+            .init(id: "menu-bar-agents", title: "Agents in the Menu Bar", section: .notifications, synonyms: ["menu bar", "status", "needs you", "icon"]),
             .init(id: "this-mac-keep-running", title: "Keep Sessions Running in the Background", section: .thisMac, synonyms: ["helper", "daemon", "login item", "background", "quit"]),
             .init(id: "this-mac-helper", title: "Stop Helper", section: .thisMac, synonyms: ["helper", "daemon", "start", "local"]),
             .init(id: "this-mac-command-line-tool", title: "Command Line Tool", section: .thisMac, synonyms: ["cli", "terminal", "shell", "path", "pair", "devices"]),

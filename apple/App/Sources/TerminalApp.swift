@@ -15,6 +15,7 @@ struct TerminalApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     #else
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @AppStorage(MenuBarAgents.key) private var showsMenuBarAgents = false
     #endif
 
     init() {
@@ -96,6 +97,12 @@ struct TerminalApp: App {
         .restorationBehavior(.disabled)
         .defaultLaunchBehavior(.suppressed)
         .commandsRemoved()
+
+        MenuBarExtra(isInserted: $showsMenuBarAgents) {
+            MenuBarAgentsMenu()
+        } label: {
+            MenuBarAgentsLabel()
+        }
         #endif
     }
 }
