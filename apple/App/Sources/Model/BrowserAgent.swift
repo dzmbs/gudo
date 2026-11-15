@@ -39,8 +39,13 @@ final class BrowserAgent {
     static let shared = BrowserAgent()
 
     private var calls: [UInt64: Task<Void, Never>] = [:]
-    /// The page each agent's pane acts on, once it switched tabs.
+    /// Each agent pane's current page: the one it opened or switched to, else the first page
+    /// beside it no other agent is on.
     private var active: [HostPane: UUID] = [:]
+    /// Who closed a page, when it was not the user: "the agent in pane 4", "the page itself".
+    private var closers: [UUID: String] = [:]
+    /// Each page's address when an agent last used it, to name a page that has closed since.
+    private var addresses: [UUID: String] = [:]
     /// `t1`, `t2`, …; never reused.
     private var tabNumbers: [UUID: Int] = [:]
     private var nextTab = 1
@@ -95,13 +100,13 @@ final class BrowserAgent {
     private func perform(_ tool: String, _ args: [String: Any], pane: HostPane, window: WindowModel) async throws -> Answer {
         switch tool {
         case "browser_navigate":
-            return try await navigate(args["url"] as? String ?? "", pane: pane, window: window)
+            return try await navigate(args["url"] as? String ?? "", args, pane: pane, window: window)
         case "browser_tabs":
             return try await tabs(args, pane: pane, window: window)
         default:
             break
         }
-        let (member, page) = try await self.page(for: pane, in: window)
+        let (member, page) = try await self.page(for: pane, args, in: window)
         // A dialog stops the page's scripts until it is answered.
         if let dialog = page.dialog, tool != "browser_dialog" {
             throw BrowserCallError(Self.dialogNote(dialog))
@@ -143,11 +148,14 @@ final class BrowserAgent {
         }
     }
 
-    /// The page the agent switched to, else the first beside its pane.
-    private func page(for pane: HostPane, in window: WindowModel) async throws -> (BrowserMember, BrowserPane) {
-        let members = pages(beside: pane, in: window)
-        guard let member = members.first(where: { $0.id == active[pane] }) ?? members.first else {
-            throw BrowserCallError("No page is open beside this terminal: call browser_navigate first.")
+    /// The page an agent's call acts on: the one `page` names, else the agent's current page.
+    private func page(for pane: HostPane, _ args: [String: Any], in window: WindowModel) async throws -> (BrowserMember, BrowserPane) {
+        guard let member = try current(for: pane, args, in: window) else {
+            let members = pages(beside: pane, in: window)
+            if members.isEmpty { throw BrowserCallError("No page is open beside this terminal: call browser_navigate first.") }
+            throw BrowserCallError(
+                "Every page beside this terminal is another agent's current page: \(listing(members, for: pane, in: window)). "
+                    + "Open one of your own with browser_navigate or browser_tabs new, or pass page to act on one of these.")
         }
         guard let page = await window.browsers.pane(for: member, app: window.app) else {
             throw BrowserCallError("The page could not be opened.")
@@ -164,6 +172,61 @@ final class BrowserAgent {
         return tab.leaves.compactMap { tab.browsers[$0] }
     }
 
+    /// The page `page` names, else the agent pane's current page, else the first page beside it
+    /// no other agent is on (it becomes the current page). Nil: there is none of its own. A
+    /// current page closed by someone else is an error naming who closed it and what is open:
+    /// the agent never moves to another page without knowing.
+    private func current(for pane: HostPane, _ args: [String: Any], in window: WindowModel) throws -> BrowserMember? {
+        let members = pages(beside: pane, in: window)
+        if let wanted = (args["page"] as? String)?.lowercased() {
+            if let member = members.first(where: { tabId($0) == wanted }) { return remembered(member) }
+            if let closed = tabNumbers.first(where: { "t\($0.value)" == wanted })?.key {
+                throw closedError(closed, yours: false, members: members, for: pane, in: window)
+            }
+            throw BrowserCallError("No page \(wanted) beside this terminal. Open pages: \(listing(members, for: pane, in: window)).")
+        }
+        if let id = active[pane] {
+            if let member = members.first(where: { $0.id == id }) { return remembered(member) }
+            throw closedError(id, yours: true, members: members, for: pane, in: window)
+        }
+        let taken = Set(active.filter { $0.key != pane }.map(\.value))
+        guard let free = members.first(where: { !taken.contains($0.id) }) else { return nil }
+        active[pane] = free.id
+        return remembered(free)
+    }
+
+    private func remembered(_ member: BrowserMember) -> BrowserMember {
+        addresses[member.id] = member.url
+        return member
+    }
+
+    private func closedError(_ id: UUID, yours: Bool, members: [BrowserMember], for pane: HostPane, in window: WindowModel) -> BrowserCallError {
+        let name = tabNumbers[id].map { "t\($0)" } ?? "page"
+        let address = addresses[id].map { " (\($0))" } ?? ""
+        let open = members.isEmpty ? "No pages are open beside this terminal" : "Open pages: \(listing(members, for: pane, in: window))"
+        return BrowserCallError(
+            "page_closed: \(yours ? "your current page" : "page") \(name)\(address) was closed by \(closers[id] ?? "the user"). \(open). "
+                + "Pass page, switch with browser_tabs, or open a new page with browser_navigate.")
+    }
+
+    /// The pages as `t1 "Title" url`, marking the caller's current page and other agents' pages.
+    private func listing(_ members: [BrowserMember], for pane: HostPane, in window: WindowModel) -> String {
+        members.map { line($0, for: pane, in: window) }.joined(separator: "; ")
+    }
+
+    private func line(_ member: BrowserMember, for pane: HostPane, in window: WindowModel) -> String {
+        let title = window.browsers.existing(member.id)?.page.title ?? ""
+        let url = window.browsers.existing(member.id)?.page.url?.absoluteString ?? member.url
+        let holders = active.filter { $0.value == member.id && $0.key != pane }.map { "pane \($0.key.pane.rawValue)" }.sorted()
+        let owner = active[pane] == member.id ? " (your current page)" : holders.isEmpty ? "" : " (current page of \(holders.joined(separator: ", ")))"
+        return "\(tabId(member)) \(title.isEmpty ? "" : "\"\(title)\" ")\(url)\(owner)"
+    }
+
+    /// Notes who closed a page, for the agents whose current page it was.
+    func noteClosed(_ id: UUID, by closer: String) {
+        closers[id] = closer
+    }
+
     private func tabId(_ member: BrowserMember) -> String {
         if let number = tabNumbers[member.id] { return "t\(number)" }
         tabNumbers[member.id] = nextTab
@@ -171,8 +234,17 @@ final class BrowserAgent {
         return "t\(nextTab - 1)"
     }
 
-    private func navigate(_ text: String, pane: HostPane, window: WindowModel) async throws -> Answer {
-        let existing = pages(beside: pane, in: window).first { $0.id == active[pane] } ?? pages(beside: pane, in: window).first
+    private func navigate(_ text: String, _ args: [String: Any], pane: HostPane, window: WindowModel) async throws -> Answer {
+        var note = ""
+        var existing: BrowserMember?
+        do {
+            existing = try current(for: pane, args, in: window)
+        } catch let error as BrowserCallError where error.message.hasPrefix("page_closed") && args["page"] == nil {
+            // Its page went: a new one of its own, said in the answer.
+            let closer = active[pane].flatMap { closers[$0] } ?? "the user"
+            active[pane] = nil
+            note = "Your current page was closed by \(closer), so this opened a new one.\n"
+        }
         if let existing, let page = await window.browsers.pane(for: existing, app: window.app) {
             if page.userHasControl { throw BrowserCallError("The user has taken over this page.") }
             page.dialog?.answer(false, nil)
@@ -195,6 +267,9 @@ final class BrowserAgent {
             reportNavigation(text, from: before, page: page, pane: pane)
             return Answer(text: try await page.snapshot(["full": true]))
         }
+        if ["back", "forward", "reload"].contains(text.lowercased()) {
+            throw BrowserCallError("No page of yours to go \(text.lowercased()) in: open one with a URL first.")
+        }
         let url = try Self.url(text)
         let member = window.openBrowser(url, beside: pane)
         active[pane] = member.id
@@ -206,7 +281,7 @@ final class BrowserAgent {
         defer { done(page) }
         await page.settleNavigation()
         reportNavigation(text, from: nil, page: page, pane: pane)
-        return Answer(text: try await page.snapshot(["full": true]))
+        return Answer(text: note + (try await page.snapshot(["full": true])))
     }
 
     private func reportNavigation(_ url: String, from before: URL?, page: BrowserPane, pane: HostPane) {
@@ -233,10 +308,18 @@ final class BrowserAgent {
 
     private func tabs(_ args: [String: Any], pane: HostPane, window: WindowModel) async throws -> Answer {
         let members = pages(beside: pane, in: window)
-        let current = members.first { $0.id == active[pane] }?.id ?? members.first?.id
         let wanted = (args["tab_id"] as? String)?.lowercased()
         let target = members.first { tabId($0) == wanted }
-        switch args["action"] as? String {
+        let action = args["action"] as? String ?? "list"
+        if ["switch", "close"].contains(action) {
+            guard let wanted else {
+                throw BrowserCallError("browser_tabs \(action) needs tab_id: one of \(members.map(tabId).joined(separator: ", ")).")
+            }
+            guard target != nil else {
+                throw BrowserCallError("No tab \(wanted) beside this terminal. Open pages: \(listing(members, for: pane, in: window)).")
+            }
+        }
+        switch action {
         case "new":
             let url = try (args["url"] as? String).map(Self.url) ?? URL(string: "about:blank")!
             let member = window.openBrowser(url, beside: pane)
@@ -245,18 +328,20 @@ final class BrowserAgent {
                 page.start()
                 await page.settleNavigation()
             }
-            return Answer(text: "Opened tab \(tabId(member)).")
+            return Answer(text: "Opened tab \(tabId(member)), now your current page.")
         case "switch":
-            guard let target else { throw BrowserCallError("No tab \(wanted ?? "?"). Call browser_tabs with action list.") }
+            guard let target else { throw BrowserCallError("No tab to switch to.") }
             active[pane] = target.id
-            if let tab = window.composites.tab(containingBrowser: target.id), let leaf = tab.leaf(forBrowser: target.id) {
-                window.focusLeaf(leaf, inMixedTab: tab.id)
-            }
             return Answer(text: "Switched to tab \(tabId(target)).")
         case "close":
-            guard let target else { throw BrowserCallError("No tab \(wanted ?? "?"). Call browser_tabs with action list.") }
+            guard let target else { throw BrowserCallError("No tab to close.") }
             let id = target.id
-            let close: @MainActor @Sendable () -> Void = { [weak window] in window?.closeBrowser(id) }
+            let closer = "the agent in pane \(pane.pane.rawValue)"
+            let close: @MainActor @Sendable () -> Void = { [weak window, weak self] in
+                self?.noteClosed(id, by: closer)
+                window?.closeBrowser(id)
+            }
+            if active[pane] == id { active[pane] = nil }
             if let page = window.browsers.existing(target.id), let note = await leave(page, then: close) {
                 return Answer(text: note)
             }
@@ -264,11 +349,8 @@ final class BrowserAgent {
             return Answer(text: "Closed tab \(tabId(target)).")
         default:
             if members.isEmpty { return Answer(text: "No pages are open beside this terminal.") }
-            let lines = members.map { member in
-                let title = window.browsers.existing(member.id)?.page.title ?? ""
-                let url = window.browsers.existing(member.id)?.page.url?.absoluteString ?? member.url
-                return "\(member.id == current ? "* " : "  ")\(tabId(member)) \(title.isEmpty ? "" : "\"\(title)\" ")\(url)"
-            }
+            let current = try? current(for: pane, [:], in: window)
+            let lines = members.map { member in "\(member.id == current?.id ? "* " : "  ")\(line(member, for: pane, in: window))" }
             return Answer(text: lines.joined(separator: "\n"))
         }
     }
@@ -320,9 +402,11 @@ final class BrowserAgent {
             }
         }
 
-        // Nothing changed: once more as the element's own click(), which some sites need.
+        // Nothing changed: once more as the element's own click(), which some sites need. A
+        // click that opened a tab did something: a second would open another.
         var changes = result.changes
-        if changes.isEmpty, kind == "click", target.frame != nil || args["target"].flatMap({ ($0 as? [String: Any])?["ref"] }) != nil,
+        let openedTab = pages(beside: pane, in: window).contains { !tabsBefore.contains($0.id) }
+        if changes.isEmpty, !openedTab, kind == "click", target.frame != nil || args["target"].flatMap({ ($0 as? [String: Any])?["ref"] }) != nil,
            args["force"] as? Bool != true, page.dialog == nil {
             var again = input
             again["kind"] = "click_element"
@@ -607,9 +691,11 @@ final class BrowserAgent {
         }
     }
 
+    /// A step waits for the user on the page: its tab's row says so, without taking the user's
+    /// tab or focus.
     private func bringForward(_ member: BrowserMember, in window: WindowModel) {
-        guard let tab = window.composites.tab(containingBrowser: member.id), let leaf = tab.leaf(forBrowser: member.id) else { return }
-        window.focusLeaf(leaf, inMixedTab: tab.id)
+        guard let tab = window.composites.tab(containingBrowser: member.id) else { return }
+        window.noteChangedOutOfSight(WindowModel.mixedRef(tab.id))
     }
 
     private func done(_ page: BrowserPane) {

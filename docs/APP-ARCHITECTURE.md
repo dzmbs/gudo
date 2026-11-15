@@ -726,10 +726,12 @@ own leaf ids plus `members` (leaf → `HostPane`, a host id and that host's `Pan
 arranging op (focus, directional focus, resize, zoom, rename) runs the same `Session` code as a
 host tab, on a one-tab scratch session. The window owns its mixed tabs: `HostGroups.composites`
 (`CompositeTabs`), persisted per window like `openHosts` (`@SceneStorage("mixedTabs")`, JSON, plus
-the app's last copy). In the unified tab order they come first (`TabRef(hostId: HostGroups.mixedId,
-tab: id)`), so ⌘1…⌘9, ⇧⌘[ ], Go to Tab and focus restore treat them like any tab. The sidebar
-shows them under **Mixed** at the window's top, each row naming its hosts with their glyphs (the
-link's state glyph while a host is down); the strip and the iPhone switcher list them too.
+the app's last copy). A mixed tab made from a host tab stands in that tab's place: in its project
+at its position (`replaceHostTab`), else in its host's section where the tab was
+(`CompositeTab.home`, `HostGroup.listed`); only one that never had a host tab is listed under
+**Mixed** at the window's top. As `TabRef(hostId: HostGroups.mixedId, tab: id)` ⌘1…⌘9, ⇧⌘[ ], Go
+to Tab and focus restore treat them like any tab. Each row names its hosts with their glyphs (the
+link's state glyph while a host is down); the strip and the iPhone switcher list them the same way.
 
 **Decisions.**
 - *Where a host's panes live.* Each host's panes in a mixed tab live in one tab on that host, its
@@ -899,8 +901,8 @@ mouse-down monitor on the Mac); the focused leaf's web view takes first responde
 when focus moves to a terminal.
 
 **Chrome.** The sidebar's "VS Code" group lists VS Code tabs (code glyph `ProgramIdentity.vscode`,
-the folder name, its host line); a composite with an editor beside terminals stays under Mixed, its
-mark the code glyph while the editor has the focus. The strip, the iPhone switcher, the palette's Go
+the folder name, its host line); a composite with an editor beside terminals stays where its host
+tab was, its mark the code glyph while the editor has the focus. The strip, the iPhone switcher, the palette's Go
 to Tab and Two Columns' headers do the same. The window's target follows the focused editor's host,
 so ⌘T, Files and the toolbar act there. A host going down dims its editor leaves with its connection
 overlay, as for its terminals.
@@ -949,13 +951,22 @@ tab, keeping its arrangement: Merge Into Tab on its row, or dragged onto a termi
 in its project (`BrowserTabPlacementTests`). Also opened from the browser sheet (Open as Tab),
 and by the host: a URL a pane opens through `BROWSER` comes up beside that pane (`openFromHost`),
 where the agents' browser tools find it, a sign-in in the system sign-in sheet instead
-(`HostSignIn`). Where tools are leaves, a dev server or address opened from a Ports leaf goes
+(`HostSignIn`). What a host or an agent opens never takes the user's tab, sheet or focus
+(`Reveal.inBackground`): the page joins its pane's tab without moving that tab's focused pane, a
+tab the user is on keeps showing (now with the page) and its terminal keeps the keyboard, and a tab
+out of sight marks the change on its row until shown (`changedTabs`). A page with no pane to sit
+beside opens as a tab of its own in that pane's project, right after its tab
+(`AgentBrowserPlacementTests`). Where tools are leaves, a dev server or address opened from a Ports leaf goes
 beside that Ports leaf (`openPage(_:hostId:besideTool:)`), whichever leaf had the focus, so Ports
 stays a list with its pages next to it; the port offer and a pane's link open a browser tab; a
 leaf already showing the page, in any tab, comes forward instead (`PortsLeafPlacementTests`).
 
-Agents' browser tools (`BrowserAgent`) act on the page beside the agent's pane, the first
-`browser_navigate` opening it. Pages carry two scripts (`BrowserAgentScript`). One runs in
+Agents' browser tools (`BrowserAgent`) act on the pages beside the agent's pane, the first
+`browser_navigate` opening one. The tab's pages are shared, but each agent pane has its own
+current page (the one it opened or switched to, else one no other agent is on); every tool takes
+`page`, a current page someone else closed fails with `page_closed` naming who closed it and the
+pages open, and switching never brings a page forward on screen. A click that opens a popup is not
+retried, so it opens one tab (`AgentBrowserPagesTests`). Pages carry two scripts (`BrowserAgentScript`). One runs in
 every frame in an isolated content world: Playwright's injected script (`AgentBrowser/`, built
 from a pinned commit by `apple/scripts/build-agent-browser.sh`) under ours (`agent.js`).
 Snapshots are Playwright's aria tree as `role "name" [ref_N]` lines; a ref keeps its element,
@@ -1144,7 +1155,8 @@ second line ("studio · cargo build") when the window shows more than one host. 
 every host keeps its own section with its loose tabs (and its repositories and agents): the host
 header stays where connection state, + New Terminal, usage, agents, Retry and Disconnect live, so
 nothing host-level moved. A host whose tabs are all in projects shows its header alone. Window
-tabs not in a project stay under Mixed / VS Code / Browser. ⌘1…⌘9, ⇧⌘[ ], Go to Tab (whose rows
+tabs not in a project stay under VS Code / Browser (and Mixed, for one that never had a host tab);
+a mixed tab made from a host tab stays in that tab's host section. ⌘1…⌘9, ⇧⌘[ ], Go to Tab (whose rows
 name the project) and the tab strip (a project's tabs carry its colour along their foot) follow
 this order (`HostGroups.tabs`). Project colours are the theme's own ANSI hues softened like the
 state colours (`ProjectColor`), so they sit in any theme.

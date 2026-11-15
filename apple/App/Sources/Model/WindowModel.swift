@@ -402,7 +402,10 @@ final class WindowModel {
         git.window = self
         browsers.onPopup = { [weak self] opener, url in self?.openPopup(url, from: opener) }
         browsers.onPopupPane = { [weak self] opener, pane in self?.openPopup(pane.initialURL, from: opener, id: pane.id) }
-        browsers.onClose = { [weak self] in self?.closeBrowser($0) }
+        browsers.onClose = { [weak self] id in
+            BrowserAgent.shared.noteClosed(id, by: "the page itself")
+            self?.closeBrowser(id)
+        }
         #if os(iOS)
         // A first guess from the screen until the window is measured (`WindowRoot`), so an
         // iPhone never draws the regular layout for a frame.
