@@ -19,10 +19,12 @@ nonisolated enum ChatRowEstimate {
                 let lines = block.list.reduce(0) { $0 + lineCount(String($1.text.characters), width: textWidth - DS.Space.xxl, scale: scale) }
                 return (CGFloat(lines) * lineHeight + CGFloat(block.list.count) * DS.Space.s + 2 * DS.Space.s) * scale
             case .separator: return 31
+            case .image: return (ChatImageBox.height + 2 * DS.Space.s) * scale
             default: return textHeight(String(block.text.characters), width: textWidth, scale: scale)
             }
         case .omitted: return 96 * scale
         case .showAll: return 60 * scale
+        case .toolGroup: return DS.Size.touchTarget * scale
         case .item(let item):
             switch item.body {
             case .plan(let plan): return CGFloat(min(plan.entries.count, 20) * 30 + 64) * scale
@@ -44,7 +46,7 @@ nonisolated enum ChatRowEstimate {
 
     private static func bubbleHeight(_ text: String, width: CGFloat, scale: CGFloat) -> CGFloat {
         let lines = lineCount(text, width: width - DS.Space.xxxl - 2 * DS.Space.l, scale: scale)
-        return max(64 * scale, (CGFloat(lines) * lineHeight + 2 * DS.Space.m + 2 * DS.Space.s) * scale)
+        return max(64 * scale, (CGFloat(lines) * lineHeight + 2 * DS.Space.m + 2 * DS.Space.s + DS.Size.touchTarget) * scale)
     }
 
     static func lineCount(_ text: String, width: CGFloat, scale: CGFloat) -> Int {

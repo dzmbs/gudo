@@ -40,6 +40,7 @@ nonisolated struct ChatRow: Equatable, Sendable, Identifiable {
     var preview: String?
     var planPreview: TimelinePlan?
     var inlineDiff: ChatInlineDiff?
+    var imagePath: String?
 
     var awaitsHighlights: Bool {
         if case .markdown(let block) = content { block.awaitsHighlights } else { false }
@@ -50,12 +51,13 @@ nonisolated struct ChatRow: Equatable, Sendable, Identifiable {
         case item(TimelineItem)
         case showAll(TimelineLongText)
         case omitted
+        case toolGroup(ChatToolGroup)
     }
 }
 
 nonisolated struct ChatMarkdownBlock: Equatable, Sendable {
     enum Kind: Equatable, Sendable {
-        case paragraph, heading(Int), quote, list, code(String?), table, separator, plain
+        case paragraph, heading(Int), quote, list, code(String?), table, separator, plain, image(String)
     }
 
     let kind: Kind
@@ -201,6 +203,8 @@ nonisolated final class RowBuilder {
             }
             rows = preview + [ChatRow(id: ChatRowID(item: item.id, part: preview.count), revision: item.revision,
                                       turn: item.turn, content: .showAll(longText))]
+        } else if case .thinking(let thinking) = item.body, thinking.text?.isEmpty != false, thinking.durationMs == nil {
+            rows = []
         } else {
             let row = plainRow(item)
             rows = [row]
@@ -253,9 +257,13 @@ nonisolated final class RowBuilder {
             planPreview = limited
         }
         let diff: ChatInlineDiff?
-        if case .tool(let tool) = item.body { diff = ChatInlineDiff(tool: tool, item: item.id) } else { diff = nil }
+        var image: String?
+        if case .tool(let tool) = item.body {
+            diff = ChatInlineDiff(tool: tool, item: item.id)
+            image = ChatImages.path(read: tool)
+        } else { diff = nil }
         return ChatRow(id: ChatRowID(item: item.id, part: 0), revision: item.revision, turn: item.turn,
-                       content: .item(item), preview: preview, planPreview: planPreview, inlineDiff: diff)
+                       content: .item(item), preview: preview, planPreview: planPreview, inlineDiff: diff, imagePath: image)
     }
 
     private func prefix(_ text: String, bytes: Int) -> String {
@@ -365,6 +373,9 @@ nonisolated final class RowBuilder {
             let content = quote.children.map { ChatLineBreaks.joiningSoftBreaks(inlineSource($0, original: original)) }
                 .joined(separator: "\n")
             return ChatMarkdownBlock(kind: .quote, source: source, text: inline(content))
+        }
+        if let image = ChatImages.path(alone: markup) {
+            return ChatMarkdownBlock(kind: .image(image), source: source, text: AttributedString(image))
         }
         if markup is HTMLBlock {
             return ChatMarkdownBlock(kind: .plain, source: source, text: AttributedString(source))

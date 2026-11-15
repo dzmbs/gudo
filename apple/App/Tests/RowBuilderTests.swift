@@ -430,6 +430,43 @@ final class RowBuilderTests: XCTestCase {
         try blocks(markdown).map { String($0.text.characters) }
     }
 
+    func testThinkingWithNothingToShowHasNoRowAndATimedOneReadsQuietly() async throws {
+        let builder = RowBuilder()
+        for text in [nil, ""] as [String?] {
+            XCTAssertTrue(builder.rows(for: try thinking(text: text, duration: nil)).isEmpty)
+        }
+        XCTAssertEqual(builder.rows(for: try thinking(text: nil, duration: 4_000, id: "timed")).count, 1)
+        XCTAssertEqual(builder.rows(for: try thinking(text: "Considering", duration: nil, id: "text")).count, 1)
+    }
+
+    func testAnImageAloneInAParagraphIsAnInlineImageAndWebImagesAreNot() async throws {
+        let image = try XCTUnwrap(blocks("![Screenshot](/tmp/after.png)").first)
+        XCTAssertEqual(image.kind, .image("/tmp/after.png"))
+        XCTAssertEqual(try blocks("![Remote](https://example.com/a.png)").first?.kind, .paragraph)
+        XCTAssertEqual(try blocks("See ![inline](/tmp/a.png) here").first?.kind, .paragraph)
+    }
+
+    func testAReadOfAnImageFileCarriesItsPath() async throws {
+        let value: [String: Any] = [
+            "id": "read", "revision": 1, "turn": "turn", "parent": NSNull(), "at": 0, "origin": "Agent",
+            "body": ["Tool": ["kind": "Read", "name": "Read", "title": "Read shot.png", "input": #"{"file_path":"/tmp/shot.png"}"#,
+                              "status": "Done", "output": NSNull(), "diff": [], "exit": NSNull(), "duration_ms": NSNull(),
+                              "command_mark": NSNull()]],
+        ]
+        let encoded = try JSONSerialization.data(withJSONObject: value)
+        let item = try TimelineJSON.decode(TimelineItem.self, from: String(decoding: encoded, as: UTF8.self))
+        XCTAssertEqual(RowBuilder().rows(for: item).first?.imagePath, "/tmp/shot.png")
+    }
+
+    private func thinking(text: String?, duration: UInt64?, id: String = "thinking") throws -> TimelineItem {
+        let value: [String: Any] = [
+            "id": id, "revision": 1, "turn": "turn", "parent": NSNull(), "at": 0, "origin": "Agent",
+            "body": ["Thinking": ["text": text.map { $0 as Any } ?? NSNull(), "duration_ms": duration.map { $0 as Any } ?? NSNull()]],
+        ]
+        let encoded = try JSONSerialization.data(withJSONObject: value)
+        return try TimelineJSON.decode(TimelineItem.self, from: String(decoding: encoded, as: UTF8.self))
+    }
+
     func testIdentifierComponentsCannotCollide() {
         XCTAssertNotEqual(ChatRowID(item: "a:1", part: 2).storageKey, ChatRowID(item: "a", part: 12).storageKey)
     }

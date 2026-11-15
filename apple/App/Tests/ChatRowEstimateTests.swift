@@ -1,3 +1,4 @@
+import DesignSystem
 import Foundation
 import HostKit
 import XCTest
@@ -20,9 +21,10 @@ final class ChatRowEstimateTests: XCTestCase {
         XCTAssertGreaterThan(ChatRowEstimate.height(for: row, rowWidth: 390, scale: 1), 400)
     }
 
-    func testShortRowsKeepTheirSmallEstimate() throws {
+    func testAShortPromptIsOneBubbleLineAndItsFooter() throws {
         let row = ChatRow(id: ChatRowID(item: "prompt", part: 0), revision: 1, turn: "turn", content: .item(try user("Hi")))
-        XCTAssertEqual(ChatRowEstimate.height(for: row, rowWidth: 390, scale: 1), 64)
+        XCTAssertEqual(ChatRowEstimate.height(for: row, rowWidth: 390, scale: 1),
+                       ChatRowEstimate.lineHeight + 2 * DS.Space.m + 2 * DS.Space.s + DS.Size.touchTarget)
     }
 
     func testHardLineBreaksCountAsLines() {
