@@ -202,15 +202,13 @@ struct SplitTreeView: View {
                         .transaction(value: leaf.frame.size) { $0.animation = nil }
                         .modifier(PaneTravel(
                             shown: leaf.shownFrame, frame: leaf.frame, still: arrangement.still(of: leaf.pane),
-                            stillTop: layout.headerHeight(of: leaf), background: theme.background, radius: paneRadius(of: leaf)))
+                            stillTop: leaf.header, background: theme.background, radius: paneRadius(of: leaf)))
                         // A pane zooming over its neighbours, or shrinking back onto them,
                         // keeps an edge against them on the way.
                         .shadow(.panel, visible: leaf.z == CanvasLayout.zoomZ && arrangement.isMoving) // style-exempt: a pane zooming over its neighbours, only while it moves
                         .liftBeat(floating: leaf.window != nil, anchor: Self.anchor(.center, of: leaf))
                         .scaleEffect(leaf.scale, anchor: Self.anchor(leaf.hiddenAnchor, of: leaf))
-                        // Going: it stays solid while it shrinks and fades at the end. Coming
-                        // back: solid at once, then it grows.
-                        .animation(arrangement.scrub == nil ? (leaf.visible ? DS.Motion.micro : DS.Motion.micro.delay(DS.Motion.arrivalDelay)) : nil) {
+                        .animation(arrangement.scrub == nil ? Self.fade(of: leaf) : nil) {
                             $0.opacity(leaf.opacity)
                         }
                         .allowsHitTesting(leaf.visible)
@@ -258,10 +256,23 @@ struct SplitTreeView: View {
     @ViewBuilder private func leafContent(_ leaf: CanvasLayout.Leaf) -> some View {
         if leaf.departing {
             theme.background
+                .overlay(alignment: .top) {
+                    if leaf.header > 0, let header = arrangement.header(of: leaf.pane) {
+                        PaneHeaderStill(still: header)
+                    }
+                }
         } else {
             PaneLeaf(leaf: leaf.pane, tree: tree, isSplit: isSplit || leaf.window != nil)
-                .environment(\.paneStill, arrangement.still(of: leaf.pane))
+                .environment(\.paneTerminalHidden, arrangement.hidesTerminal(of: leaf.pane))
         }
+    }
+
+    /// How a leaf's opacity changes. Closed: it fades in the spring it is squeezed out in. Out of
+    /// sight (under a zoomed pane, into the tray): solid while it shrinks, fading at the end.
+    /// Coming back: solid at once, then it grows.
+    static func fade(of leaf: CanvasLayout.Leaf) -> Animation {
+        if leaf.departing { return DS.Motion.structural }
+        return leaf.visible ? DS.Motion.micro : DS.Motion.micro.delay(DS.Motion.arrivalDelay)
     }
 
     /// `point` of `leaf`'s frame as a unit point of the box a leaf is laid out in: its frame's
@@ -293,7 +304,11 @@ struct SplitTreeView: View {
                 guard let (workspace, pane) = tree.resolve(leaf) else { return nil }
                 return workspace.panes[pane]?.view.surface.snapshot()
             },
-            departed: { leaf in tree.resolve(leaf)?.workspace.takeDepartedFrame(of: leaf) })
+            departed: { leaf in tree.resolve(leaf)?.workspace.takeDepartedFrame(of: leaf) },
+            holding: { [tree] leaf in
+                guard let (workspace, pane) = tree.resolve(leaf) else { return false }
+                return workspace.panes[pane]?.view.surface.isHoldingFrame ?? false
+            })
     }
 
     private func paneRadius(of leaf: CanvasLayout.Leaf) -> CGFloat {
@@ -584,7 +599,7 @@ struct PaneSlot: View {
 
     @Environment(\.terminalTheme) private var theme
     @Environment(WindowModel.self) private var model
-    @Environment(\.paneStill) private var still
+    @Environment(\.paneTerminalHidden) private var terminalHidden
     @AppStorage(TerminalPreferences.Key.unfocusedSplitOpacity) private var unfocusedOpacity = TerminalPreferences.Default.unfocusedSplitOpacity
     @AppStorage(TerminalPreferences.Key.resizeOverlay) private var resizeOverlay = TerminalPreferences.ResizeOverlay.afterFirst
     @AppStorage(TerminalPreferences.Key.paneStyle) private var paneStyle = TerminalPreferences.PaneStyle.compact
@@ -594,44 +609,49 @@ struct PaneSlot: View {
     var body: some View {
         let focused = isFocused
         let notice = workspace.notices[id] ?? PaneNotice()
-        VStack(spacing: 0) {
-            // A drawing always has its header: its close and pane controls, docked alone or not.
-            if isSplit || workspace.canvasTitles[id] != nil {
+        // A drawing always has its header: its close and pane controls, docked alone or not.
+        let showsHeader = isSplit || workspace.canvasTitles[id] != nil
+        ZStack {
+            content
+            ResizeOverlay(size: workspace.grids[id], mode: resizeOverlay) { [workspace] in
+                ContinuousClock.now < workspace.keyboardResizeUntil
+            }
+            .onChange(of: workspace.grids[id]) { old, new in
+                // UI tests count the overlays a grid change shows (`-windowProbe`).
+                guard WindowProbe.isEnabled, old != nil, new != old, ContinuousClock.now >= workspace.keyboardResizeUntil else { return }
+                model.resizeOverlayShows += 1
+            }
+            if let url = notice.hoveredURL {
+                URLHoverBanner(url: url)
+            }
+            if let exit = notice.exit {
+                ProcessExitedBar(exit.message, failed: exit.failed)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+            }
+            if notice.secureInput && focused {
+                SecureInputBadge()
+            }
+            BellBorder(ringing: notice.bell)
+            MultiplayerPaneOverlay(workspace: workspace, pane: id, isFocused: focused)
+            AskpassPaneOverlay(workspace: workspace, pane: id)
+            if model.isSearchShown && focused {
+                PaneSearchBar(model: model, pane: workspace.pane(id))
+            }
+        }
+        .hostLinkOverlay(groupId: workspace.groupId, enabled: namesHost)
+        // The terminal is laid out once, below where the header goes; the header itself only
+        // fades, so the first split never pushes the grid down in one step.
+        .padding(.top, showsHeader ? PaneHeader.height : 0)
+        .overlay(alignment: .top) {
+            if showsHeader {
                 PaneHeader(id: id, workspace: workspace, isFocused: focused, namesHost: namesHost, focus: focus)
                     .overlay {
                         if isSplit && !focused && inactiveFade == .header {
                             UnfocusedDim(unfocusedSplitOpacity: unfocusedOpacity, fill: theme.background)
                         }
                     }
+                    .motionTransition(PaneHeader.arrival)
             }
-            ZStack {
-                content
-                ResizeOverlay(size: workspace.grids[id], mode: resizeOverlay) { [workspace] in
-                    ContinuousClock.now < workspace.keyboardResizeUntil
-                }
-                .onChange(of: workspace.grids[id]) { old, new in
-                    // UI tests count the overlays a grid change shows (`-windowProbe`).
-                    guard WindowProbe.isEnabled, old != nil, new != old, ContinuousClock.now >= workspace.keyboardResizeUntil else { return }
-                    model.resizeOverlayShows += 1
-                }
-                if let url = notice.hoveredURL {
-                    URLHoverBanner(url: url)
-                }
-                if let exit = notice.exit {
-                    ProcessExitedBar(exit.message, failed: exit.failed)
-                        .frame(maxHeight: .infinity, alignment: .bottom)
-                }
-                if notice.secureInput && focused {
-                    SecureInputBadge()
-                }
-                BellBorder(ringing: notice.bell)
-                MultiplayerPaneOverlay(workspace: workspace, pane: id, isFocused: focused)
-                AskpassPaneOverlay(workspace: workspace, pane: id)
-                if model.isSearchShown && focused {
-                    PaneSearchBar(model: model, pane: workspace.pane(id))
-                }
-            }
-            .hostLinkOverlay(groupId: workspace.groupId, enabled: namesHost)
         }
         .overlay {
             // Ghostty unfocused-split-opacity: the background color at 1 - opacity, header included.
@@ -642,6 +662,8 @@ struct PaneSlot: View {
         .overlay {
             if isSplit && activeBorder {
                 ActivePaneRing(isActive: focused, cornerRadius: paneStyle == .comfortable ? DS.Radius.pane : 0)
+            } else if isSplit && paneStyle == .comfortable {
+                PaneFocusEdge(isFocused: focused)
             }
         }
         .background(theme.background, ignoresSafeAreaEdges: [])
@@ -683,11 +705,11 @@ struct PaneSlot: View {
 
     private func terminalContent(_ pane: Pane, isActive: Bool = true) -> some View {
         // Identity must include the host: otherwise a reused container can keep typing into the previous pane.
-        TerminalHost(pane: pane, isFocused: isFocused, workspace: workspace, isActive: isActive)
+        TerminalHost(pane: pane, isFocused: isFocused, workspace: workspace, isActive: isActive, isConcealed: terminalHidden)
             .id(HostPane(hostId: workspace.groupId, pane: id))
-            // A moving pane shows its still (`PaneTravel`): platform views do not follow SwiftUI
-            // transforms.
-            .opacity(still == nil ? 1 : 0)
+            // A moving pane shows its still (`PaneTravel`), an arriving one its background:
+            // platform views do not follow SwiftUI transforms or clips.
+            .opacity(terminalHidden ? 0 : 1)
             .clipped()
             .fadedTowardTerminalBackground(pane.showsSavedScreen ? 0.25 : 0)
             .overlay { SavedScreenOverlay(pane: pane) }
@@ -793,8 +815,9 @@ struct PaneMenuItems: View {
 }
 
 extension EnvironmentValues {
-    /// The still drawn over a pane while a layout motion moves it: its live terminal hides under it.
-    @Entry var paneStill: CGImage?
+    /// A layout motion moves the pane or brings it in: its live terminal hides under its still
+    /// or its background until the motion settles.
+    @Entry var paneTerminalHidden = false
 }
 
 extension Node {

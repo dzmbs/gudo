@@ -2,6 +2,7 @@ import CoreGraphics
 import DesignSystem
 import PaneLayout
 import SwiftUI
+import TerminalRenderer
 import XCTest
 @testable import App
 
@@ -12,10 +13,10 @@ final class PaneMotionTests: XCTestCase {
     private static let size = CGSize(width: 1200, height: 800)
     private static let gap: CGFloat = 1
 
-    private static func canvas(_ node: Node, zoomed: PaneId? = nil) -> CanvasLayout {
+    private static func canvas(_ node: Node, zoomed: PaneId? = nil, headers: Bool = true) -> CanvasLayout {
         CanvasLayout(
             node: node, floats: .none, zoomed: zoomed, focused: node.panes.first, size: size, gap: gap,
-            header: PaneHeader.height, cell: nil, padding: 4)
+            header: PaneHeader.height, cell: nil, padding: 4, headers: headers)
     }
 
     private static let one = Node.leaf(PaneId(1))
@@ -75,6 +76,82 @@ final class PaneMotionTests: XCTestCase {
         }
     }
 
+    /// The first split brings the pane headers: the terminal under its still goes down to make
+    /// room in the same spring, from where it was, never in one step.
+    func testTheFirstSplitMakesRoomForTheHeadersInTheSpring() throws {
+        let before = Self.canvas(Self.one, headers: false), after = Self.canvas(Self.two)
+        let tops = Self.frames(from: before, to: after).compactMap { $0.leaf(PaneId(1))?.header }
+        XCTAssertEqual(tops.first ?? -1, 0, accuracy: 0.01, "the terminal starts where it was")
+        XCTAssertEqual(tops.last ?? 0, PaneHeader.height, accuracy: PaneHeader.height * DS.Motion.restFraction + 0.01)
+        let steps = zip(tops, tops.dropFirst()).map { $1 - $0 }
+        XCTAssertLessThan(steps.max() ?? .infinity, PaneHeader.height / 4, "no frame moves it by much")
+        XCTAssertTrue(steps.allSatisfy { $0 >= -0.001 }, "it only goes down")
+
+        let back = Self.frames(from: after, to: before).compactMap { $0.leaf(PaneId(1))?.header }
+        XCTAssertEqual(back.first ?? 0, PaneHeader.height, accuracy: 0.01, "closing back to one pane starts below the header")
+        XCTAssertEqual(back.last ?? -1, 0, accuracy: PaneHeader.height * DS.Motion.restFraction + 0.01)
+    }
+
+    func testAStillTravelsWithItsHeaderTop() {
+        var travel = PaneTravel(shown: .zero, frame: .zero, stillTop: 0)
+        var data = travel.animatableData
+        data.second = 12
+        travel.animatableData = data
+        XCTAssertEqual(travel.stillTop, 12, "the header's room animates with the rectangle")
+    }
+
+    /// Split down shows its first change as soon as split right does: on the first display
+    /// frame the new pane is already in view and solid (its header and the line with it), as far
+    /// along its axis as split right's is along its own.
+    func testSplitDownShowsItsFirstChangeAsSoonAsSplitRight() throws {
+        let spring = DS.Motion.Role.structural.spring
+        let firstFrame = spring.value(target: 1.0, time: 1.0 / 60)
+        var shares: [CGFloat] = []
+        for axis in [PaneLayout.Axis.horizontal, .vertical] {
+            let after = Self.canvas(.split(axis: axis, ratio: 0.5, first: .leaf(PaneId(1)), second: .leaf(PaneId(2))))
+            let frame = after.blended(from: Self.canvas(Self.one, headers: false), progress: firstFrame)
+            let arriving = try XCTUnwrap(frame.leaf(PaneId(2)))
+            XCTAssertEqual(arriving.opacity, 1, "\(axis): solid from its first frame, not fading in from nothing")
+            let shown = axis == .horizontal ? arriving.shownFrame.width : arriving.shownFrame.height
+            let whole = axis == .horizontal ? Self.size.width : Self.size.height
+            XCTAssertGreaterThan(shown, PaneHeader.height / 2, "\(axis): in view on the first frame")
+            shares.append(shown / whole)
+        }
+        XCTAssertEqual(shares[0], shares[1], accuracy: 0.002)
+    }
+
+    /// A live terminal is a platform view, which SwiftUI's clip and offset do not reach: while
+    /// a pane arrives or moves, its terminal stays hidden under its still or its background,
+    /// so nothing of it is drawn outside the rectangle the pane is shown in.
+    func testTerminalsStayHiddenWhileTheirPanesArriveOrMove() async throws {
+        let arrangement = PaneArrangement()
+        let before = Self.canvas(Self.one, headers: false), after = Self.canvas(Self.two)
+        let start = ContinuousClock.now
+        arrangement.begin(
+            CanvasMotion(from: before, to: after), in: after, raising: nil, for: DS.Motion.structuralSettle,
+            image: { _ in Self.picture }, departed: { _ in nil })
+        XCTAssertTrue(arrangement.hidesTerminal(of: PaneId(1)), "the moving pane shows its still")
+        XCTAssertTrue(arrangement.hidesTerminal(of: PaneId(2)), "the arriving pane shows its background")
+        let version = arrangement.settledVersion
+        while arrangement.settledVersion == version, ContinuousClock.now - start < .seconds(2) {
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        XCTAssertFalse(arrangement.hidesTerminal(of: PaneId(1)))
+        XCTAssertFalse(arrangement.hidesTerminal(of: PaneId(2)))
+    }
+
+    /// A layout pass that begins again from where the motion is going (the canvas lays out
+    /// twice for one change) keeps what is arriving: its terminal stays hidden and it stays
+    /// under the panes making room.
+    func testBeginningAgainMidwayKeepsWhatIsArriving() {
+        let arrangement = PaneArrangement()
+        let before = Self.canvas(Self.one, headers: false), after = Self.canvas(Self.two)
+        arrangement.begin(CanvasMotion(from: before, to: after), in: after, raising: nil, for: 5, image: { _ in Self.picture }, departed: { _ in nil })
+        arrangement.begin(CanvasMotion(from: after, to: after), in: after, raising: nil, for: 5, image: { _ in Self.picture }, departed: { _ in nil })
+        XCTAssertNotNil(arrangement.motion.seeds[PaneId(2)])
+        XCTAssertTrue(arrangement.hidesTerminal(of: PaneId(2)))
+    }
+
     // MARK: Close
 
     func testAClosedPaneIsSqueezedOutByTheNeighbourTakingItsSpace() throws {
@@ -99,6 +176,40 @@ final class PaneMotionTests: XCTestCase {
         XCTAssertLessThan(frames.last!.leaf(PaneId(2))!.opacity, 0.02, "faded by the end")
     }
 
+    /// It never pops: it fades in the same spring it is squeezed out in, from solid.
+    func testAClosedPaneFadesInTheSpringItIsSqueezedOutIn() throws {
+        let before = Self.canvas(Self.two), after = Self.canvas(Self.one)
+        let width = try XCTUnwrap(before.leaf(PaneId(2))).frame.width
+        let frames = Self.frames(from: before, to: after)
+        XCTAssertEqual(frames.first?.leaf(PaneId(2))?.opacity ?? 0, 1, accuracy: 0.001)
+        for frame in frames {
+            let closing = try XCTUnwrap(frame.leaf(PaneId(2)))
+            XCTAssertEqual(closing.opacity, closing.shownFrame.width / width, accuracy: 0.01, "fading as it narrows")
+        }
+        var drawn = after
+        drawn.depart(CanvasMotion(from: before, to: after))
+        let departing = try XCTUnwrap(drawn.leaf(PaneId(2)))
+        XCTAssertEqual(SplitTreeView.fade(of: departing), DS.Motion.structural)
+        XCTAssertEqual(departing.header, PaneHeader.height, "it keeps the room its header had")
+    }
+
+    func testAClosedPaneGoesWithItsHeaderUntilTheSpringSettles() async throws {
+        let arrangement = PaneArrangement()
+        let headline = PaneHeadline(identity: .shell, shellName: "zsh", directory: "~/projects/unnamed")
+        arrangement.remember(.init(headline: headline, isFocused: true), of: PaneId(2))
+        let before = Self.canvas(Self.two), after = Self.canvas(Self.one)
+        let start = ContinuousClock.now
+        arrangement.begin(
+            CanvasMotion(from: before, to: after), in: after, raising: nil, for: DS.Motion.structuralSettle,
+            image: { _ in nil }, departed: { _ in Self.picture })
+        XCTAssertEqual(arrangement.header(of: PaneId(2))?.headline, headline, "drawn as it last showed")
+        let version = arrangement.settledVersion
+        while arrangement.settledVersion == version, ContinuousClock.now - start < .seconds(2) {
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        XCTAssertNil(arrangement.header(of: PaneId(2)), "gone once the spring settles")
+    }
+
     func testAMiddlePaneClosesTowardItsMiddle() {
         let columns = Node.split(
             axis: .horizontal, ratio: 1.0 / 3, first: .leaf(PaneId(1)),
@@ -107,6 +218,17 @@ final class PaneMotionTests: XCTestCase {
         let after = Self.canvas(.split(axis: .horizontal, ratio: 0.5, first: .leaf(PaneId(1)), second: .leaf(PaneId(3))))
         let old = before.leaf(PaneId(2))!.frame
         XCTAssertEqual(CanvasMotion(from: before, to: after).departures.first?.collapse.minX ?? 0, old.midX, accuracy: 0.5)
+    }
+
+    // MARK: Headers
+
+    func testAHeaderNamesTheShellOrTheProgramAndItsFolder() {
+        let shell = PaneHeadline(identity: .shell, shellName: "zsh", directory: "~/projects/unnamed")
+        XCTAssertEqual(shell.program, "zsh")
+        XCTAssertEqual(shell.directory, "~/projects/unnamed")
+        let claude = ProgramCatalog.identity(process: "claude")
+        XCTAssertEqual(PaneHeadline(identity: claude, shellName: "zsh", directory: "").program, claude.displayName)
+        XCTAssertNil(PaneHeadline(identity: claude, shellName: "zsh", directory: "").directory)
     }
 
     // MARK: Zoom
@@ -161,6 +283,37 @@ final class PaneMotionTests: XCTestCase {
         XCTAssertTrue(arrangement.motion.departures.isEmpty)
     }
 
+    /// The still gives way only to a terminal that has drawn its new frame: one still waiting
+    /// for the program's redraw keeps its still past the spring, then crossfades.
+    func testAStillWaitsForItsTerminalsRedrawBeforeItCrossfades() async throws {
+        let arrangement = PaneArrangement()
+        let before = Self.canvas(Self.two), after = Self.canvas(Self.two, zoomed: PaneId(2))
+        let start = ContinuousClock.now
+        let redrawnAt = start + .seconds(DS.Motion.structuralSettle) + .milliseconds(60)
+        arrangement.begin(
+            CanvasMotion(from: before, to: after), in: after, raising: nil, for: DS.Motion.structuralSettle,
+            image: { _ in Self.picture }, departed: { _ in nil }, holding: { _ in ContinuousClock.now < redrawnAt })
+        let version = arrangement.settledVersion
+        while arrangement.settledVersion == version, ContinuousClock.now - start < .seconds(2) {
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        XCTAssertGreaterThanOrEqual(ContinuousClock.now, redrawnAt, "not before the terminal has drawn")
+        XCTAssertLessThan(ContinuousClock.now - redrawnAt, .milliseconds(40), "as soon as it has")
+
+        let stuck = PaneArrangement()
+        let stuckStart = ContinuousClock.now
+        stuck.begin(
+            CanvasMotion(from: before, to: after), in: after, raising: nil, for: DS.Motion.structuralSettle,
+            image: { _ in Self.picture }, departed: { _ in nil }, holding: { _ in true })
+        let stuckVersion = stuck.settledVersion
+        while stuck.settledVersion == stuckVersion, ContinuousClock.now - stuckStart < .seconds(2) {
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        XCTAssertLessThan(
+            ContinuousClock.now - stuckStart, .seconds(DS.Motion.structuralSettle) + TerminalSurface.redrawWait + .milliseconds(60),
+            "a terminal that never redraws holds its still no longer than it holds its frame")
+    }
+
     /// A close that lands mid-split carries on: the panes start from where they are (SwiftUI
     /// retargets the shown rectangle), and what was leaving keeps leaving.
     func testAMotionStartedMidwayCarriesOnFromTheOneUnderWay() {
@@ -171,6 +324,19 @@ final class PaneMotionTests: XCTestCase {
         XCTAssertEqual(Set(arrangement.motion.departures.map(\.leaf.pane)), [PaneId(2), PaneId(3)])
         let drawn = SplitTreeView.drawn(third, motion: arrangement)
         XCTAssertEqual(Set(drawn.leaves.map(\.pane)), [PaneId(1), PaneId(2), PaneId(3)])
+    }
+
+    // MARK: Float
+
+    /// The lift is back to scale 1 when the frame's spring is at rest: no tail after the move.
+    func testTheLiftBeatEndsWithTheStructuralSpring() {
+        for floating in [true, false] {
+            let timeline = KeyframeTimeline(initialValue: CGFloat(1)) { LiftBeat.keyframes(floating: floating) }
+            XCTAssertLessThanOrEqual(timeline.duration, DS.Motion.structuralSettle + 0.001)
+            XCTAssertEqual(timeline.value(time: DS.Motion.structuralSettle), 1, accuracy: 0.002)
+            let away = timeline.value(time: DS.Motion.arrivalDelay)
+            XCTAssertGreaterThan(abs(away - 1), 0.01, "a beat you can see")
+        }
     }
 
     // MARK: Sidebar
@@ -192,6 +358,11 @@ final class PaneMotionTests: XCTestCase {
     }
 
     // MARK: Drawing
+
+    func testTextKeepsClearOfTheDividers() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "pane-padding-\(UUID())"))
+        XCTAssertGreaterThanOrEqual(TerminalAppearance.fromPreferences(defaults).padding, DS.Space.xs)
+    }
 
     func testATravellingPaneKeepsItsSizeAndIsCutToWhereItIsShown() {
         let frame = CGRect(x: 0, y: 0, width: 600, height: 800)

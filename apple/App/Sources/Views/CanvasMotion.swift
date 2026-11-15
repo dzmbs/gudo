@@ -66,9 +66,12 @@ struct CanvasMotion {
     }
 
     /// This motion, carrying on with what `earlier` still had going: panes and dividers that
-    /// left then and have not come back keep going.
+    /// left then and have not come back keep going, and panes still arriving keep arriving.
     func continuing(_ earlier: CanvasMotion, in after: CanvasLayout) -> CanvasMotion {
         var merged = self
+        for (pane, seed) in earlier.seeds where merged.seeds[pane] == nil && after.leaf(pane)?.visible == true {
+            merged.seeds[pane] = seed
+        }
         let gone = Set(departures.map(\.leaf.pane))
         merged.departures += earlier.departures.filter { after.leaf($0.leaf.pane) == nil && !gone.contains($0.leaf.pane) }
         let goneDividers = Set(departingDividers.map(\.divider.id))
@@ -132,16 +135,20 @@ struct PaneTravel: ViewModifier, Animatable {
     var shown: CGRect
     let frame: CGRect
     var still: CGImage?
-    /// How far down the pane its terminal starts (its header).
+    /// How far down the pane its terminal starts (its header): it travels too, so headers
+    /// arriving on a first split make room in the spring.
     var stillTop: CGFloat = 0
     var background: Color?
     var radius: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.displayScale) private var displayScale
 
-    var animatableData: CGRect.AnimatableData {
-        get { shown.animatableData }
-        set { shown.animatableData = newValue }
+    var animatableData: AnimatablePair<CGRect.AnimatableData, CGFloat> {
+        get { AnimatablePair(shown.animatableData, stillTop) }
+        set {
+            shown.animatableData = newValue.first
+            stillTop = newValue.second
+        }
     }
 
     /// Where the content goes on one frame of the motion: its offset from the canvas origin and
@@ -171,8 +178,10 @@ struct PaneTravel: ViewModifier, Animatable {
 }
 
 /// A new pane or divider arriving: it grows out of `seed` into `frame` (where its own
-/// `PaneTravel` already draws it), fading in unless it is a line that must be there at once.
-/// At rest it leaves the view alone, so a later move of the pane is not cut to where it arrived.
+/// `PaneTravel` already draws it), solid from its first frame, so the edge it comes in at shows
+/// at once whichever way it splits. Under Reduce Motion a pane fades in where it lands (a line
+/// is there at once). At rest it leaves the view alone, so a later move of the pane is not cut
+/// to where it arrived.
 struct ArrivalTransition: Transition {
     let seed: CGRect?
     let frame: CGRect
@@ -210,7 +219,7 @@ private struct ArrivalEffect: ViewModifier, Animatable {
         content
             .clipShape(TravelShape(rect: clip, radius: 0))
             .offset(x: change.minX, y: change.minY)
-            .opacity(opacity)
+            .opacity(reduceMotion ? opacity : 1)
     }
 }
 
@@ -225,7 +234,7 @@ nonisolated private struct TravelShape: Shape {
 }
 
 extension View {
-    /// Inserted growing out of `seed` into `frame`; removed at once (a departing pane stays in
+    /// Inserted growing out of `seed` into `frame` (`fades`: under Reduce Motion); removed at once (a departing pane stays in
     /// the layout while it goes, `CanvasLayout.depart`).
     func arrives(from seed: CGRect?, into frame: CGRect, fades: Bool = true) -> some View {
         // motion-lint-allow: rides the structural change it is inserted in, from the edge it splits from.

@@ -17,6 +17,10 @@ struct TerminalHost {
     let isFocused: Bool
     let workspace: Workspace
     var isActive = true
+    /// A layout motion moves or brings in the pane: the view draws nothing on screen (its still
+    /// or the pane's background stands in), set on the view itself, as SwiftUI's opacity does
+    /// not reach every platform view.
+    var isConcealed = false
 
     final class Coordinator {
         var wasFocused = false
@@ -81,6 +85,11 @@ struct TerminalHost {
     private func update(_ container: Container, coordinator: Coordinator) {
         container.isFocusedPane = isFocused
         container.isActive = isActive
+        #if os(macOS)
+        container.alphaValue = isConcealed ? 0 : 1
+        #else
+        container.alpha = isConcealed ? 0 : 1
+        #endif
         if isActive { pane.placeView(joining: container) }
         #if os(iOS)
         // A retiring container must not change the selection of the view in its new host.

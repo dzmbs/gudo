@@ -43,6 +43,9 @@ struct CanvasLayout {
         var shown: CGRect?
         /// Closed or moved away: drawn as its still while it goes.
         var departing = false
+        /// How far down its terminal starts (its header), as drawn: part way while headers
+        /// come or go.
+        var header: CGFloat = 0
 
         var shownFrame: CGRect { shown ?? frame }
         var opacity: Double { fade ?? (visible ? 1 : 0) }
@@ -137,7 +140,7 @@ struct CanvasLayout {
                 pane: leaf.pane, frame: isZoomed ? bounds : leaf.frame,
                 z: isZoomed ? Self.zoomZ : 0, radii: .init(), window: nil,
                 lifted: false, focusedWindow: false, visible: zoomedTile == nil || isZoomed || !zoomSettled,
-                hiddenScale: 1, hiddenAnchor: .center))
+                hiddenScale: 1, hiddenAnchor: .center, header: headers ? header : 0))
         }
         if zoomedTile == nil {
             dividers += base.dividers.map { Divider(id: "tiled-\($0.id)", divider: $0, z: 1, visible: true) }
@@ -178,7 +181,7 @@ struct CanvasLayout {
                 leaves.append(Leaf(
                     pane: leaf.pane, frame: leaf.frame, z: fillsTab ? Self.trayZ - 1 : z + 1, radii: radii,
                     window: window.id, lifted: single && !fillsTab, focusedWindow: hasFocus, visible: visible,
-                    hiddenScale: scale, hiddenAnchor: Self.anchor(anchor, of: rect, in: leaf.frame)))
+                    hiddenScale: scale, hiddenAnchor: Self.anchor(anchor, of: rect, in: leaf.frame), header: header))
                 if visible { front.append((leaf.pane, leaf.frame)) }
             }
             dividers += inner.dividers.map {
@@ -243,7 +246,7 @@ struct CanvasLayout {
             leaves.append(Leaf(
                 pane: old.pane, frame: old.frame, z: old.z - 0.5, radii: old.radii, window: old.window, lifted: old.lifted,
                 focusedWindow: old.focusedWindow, visible: false, hiddenScale: 1, hiddenAnchor: .center,
-                shown: departure.collapse, departing: true))
+                shown: departure.collapse, departing: true, header: old.header))
         }
         for departure in motion.departingDividers where !dividers.contains(where: { $0.id == departure.divider.id }) {
             var divider = departure.divider
@@ -292,9 +295,10 @@ struct CanvasLayout {
             var leaf = leaf
             if leaf.departing, let departure = motion.departures.first(where: { $0.leaf.pane == leaf.pane }) {
                 leaf.shown = CanvasMotion.mix(departure.leaf.frame, departure.collapse, t)
-                leaf.fade = 1 - t * t
+                leaf.fade = 1 - t
             } else if let old = from.leaves.first(where: { $0.pane == leaf.pane }) {
                 leaf.shown = CanvasMotion.mix(old.frame, leaf.frame, t)
+                leaf.header = old.header + (leaf.header - old.header) * t
                 // As drawn: solid while it shrinks, fading at the end; solid at once coming back.
                 let going = leaf.opacity < old.opacity
                 leaf.fade = old.opacity + (leaf.opacity - old.opacity) * (going ? t * t : 1 - (1 - t) * (1 - t))
@@ -302,7 +306,6 @@ struct CanvasLayout {
                 leaf.growth = from + (to - from) * t
             } else if let seed = motion.seeds[leaf.pane] {
                 leaf.shown = CanvasMotion.mix(seed, leaf.frame, t)
-                leaf.fade = t
             }
             return leaf
         }
@@ -384,6 +387,19 @@ final class PaneArrangement {
     private(set) var settledVersion = 0
 
     func still(of pane: PaneId) -> CGImage? { stills[pane] }
+    /// The pane moves over its still or arrives: its live terminal waits until the motion settles.
+    func hidesTerminal(of pane: PaneId) -> Bool { stills[pane] != nil || motion.seeds[pane] != nil }
+
+    /// A pane header as it last showed: a closed pane goes with it.
+    struct HeaderStill: Equatable {
+        let headline: PaneHeadline
+        let isFocused: Bool
+    }
+
+    @ObservationIgnored private var headers: [PaneId: HeaderStill] = [:]
+
+    func remember(_ header: HeaderStill, of pane: PaneId) { headers[pane] = header }
+    func header(of pane: PaneId) -> HeaderStill? { headers[pane] }
     /// The least time stills stand in (a capture keeps them longer).
     static var stillDuration = DS.Motion.structuralSettle
     /// Stretches how long a layout motion may take to settle (design review draws it slowly).
@@ -392,9 +408,14 @@ final class PaneArrangement {
     /// A layout motion starts for `seconds`: stills of the panes it moves (`image` draws one;
     /// `departed` gives a closed pane's last frame), and what it raises. A motion that starts
     /// while another runs carries on from it.
+    ///
+    /// `holding` tells whether a pane's terminal still shows its held frame (its program's
+    /// redraw has not come in): its still waits for it, so the crossfade never reveals a frame
+    /// that is about to jump.
     func begin(
         _ motion: CanvasMotion, in layout: CanvasLayout, raising: PaneId?, for seconds: Double,
-        image: (PaneId) -> CGImage?, departed: (PaneId) -> CGImage?
+        image: (PaneId) -> CGImage?, departed: (PaneId) -> CGImage?,
+        holding: @escaping (PaneId) -> Bool = { _ in false }
     ) {
         for pane in motion.moving where stills[pane] == nil {
             if let still = image(pane) { stills[pane] = still }
@@ -409,14 +430,26 @@ final class PaneArrangement {
         let generation = motionGeneration
         let length = max(seconds, Self.stillDuration)
         Task { @MainActor [weak self] in
+            let start = ContinuousClock.now
             try? await Task.sleep(for: .milliseconds(Int(length * 1000)))
+            let latest = start + .milliseconds(Int(length * 1000)) + TerminalSurface.redrawWait
+            while let self, self.motionGeneration == generation, ContinuousClock.now < latest,
+                  self.redrawing.contains(where: holding) {
+                try? await Task.sleep(for: .milliseconds(8))
+            }
             guard let self, self.motionGeneration == generation else { return }
             self.settle()
         }
     }
 
-    /// The motion is at rest: each still crossfades to its live terminal, at once.
+    /// The panes whose live terminal the motion hides.
+    private var redrawing: [PaneId] { Array(stills.keys) + Array(motion.seeds.keys) }
+
+    /// The motion is at rest and the terminals have drawn: each still crossfades to its live
+    /// terminal.
     private func settle() {
+        for departure in motion.departures { headers[departure.leaf.pane] = nil }
+        if let layout { headers = headers.filter { pane, _ in layout.leaf(pane).map { !$0.departing } ?? false } }
         stills.removeAll()
         motion = .none
         raised = nil
@@ -749,7 +782,7 @@ extension View {
     }
 }
 
-private struct LiftBeat: ViewModifier {
+struct LiftBeat: ViewModifier {
     let floating: Bool
     let anchor: UnitPoint
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -758,10 +791,17 @@ private struct LiftBeat: ViewModifier {
         content.keyframeAnimator(initialValue: CGFloat(1), trigger: floating) { content, scale in
             content.scaleEffect(reduceMotion ? 1 : scale, anchor: anchor)
         } keyframes: { _ in
-            KeyframeTrack {
-                SpringKeyframe(floating ? 1.03 : 0.985, duration: DS.Motion.arrivalDelay, spring: DS.Motion.Role.micro.spring)
-                SpringKeyframe(1, duration: DS.Motion.structuralSettle - DS.Motion.arrivalDelay, spring: DS.Motion.Role.structural.spring)
-            }
+            Self.keyframes(floating: floating)
+        }
+    }
+
+    /// Towards you (or pressed in) on `micro`, back to 1 on `structural`, at rest by
+    /// `structuralSettle` with the frame's spring.
+    @KeyframesBuilder<CGFloat>
+    static func keyframes(floating: Bool) -> some Keyframes<CGFloat> {
+        KeyframeTrack {
+            SpringKeyframe(floating ? 1.03 : 0.985, duration: DS.Motion.arrivalDelay, spring: DS.Motion.Role.micro.spring)
+            SpringKeyframe(1, duration: DS.Motion.structuralSettle - DS.Motion.arrivalDelay, spring: DS.Motion.Role.structural.spring)
         }
     }
 }

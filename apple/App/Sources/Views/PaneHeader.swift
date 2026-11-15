@@ -10,13 +10,17 @@ import SwiftUI
 /// window) or to move its window (a window of one pane); double-click to zoom; right-click or
 /// long-press for the context menu.
 struct PaneHeader: View {
-    /// The buttons' opacity on an unfocused, unhovered header: hidden on the Mac (hover shows
-    /// them), quiet on touch, where there is no hover.
+    /// The buttons' opacity on an unhovered header, the same on every pane so nothing changes
+    /// when focus moves: hidden on the Mac (hover shows them), quiet on touch, where there is no
+    /// hover.
     #if os(macOS)
     static let restingOpacity = 0.0
     #else
     static let restingOpacity = DS.Opacity.mutedGlyph
     #endif
+    /// Headers come and go with a split by fading in the structural spring, over a grid
+    /// already laid out below them.
+    static let arrival = MotionTransition(role: .structural)
     #if os(iOS)
     static let height = DS.Size.touchTarget
     #else
@@ -41,24 +45,14 @@ struct PaneHeader: View {
         let program = model.programIdentity(ofPane: id, onGroup: workspace.groupId)
         let window = workspace.window(of: id)
         let accounts = program.isShell ? nil : model.accountBook(onGroup: workspace.groupId)
+        let headline = PaneHeadline(identity: program, shellName: workspace.programName(of: id), directory: workspace.directory(ofPane: id))
         HStack(spacing: DS.Space.row) {
             ProgramTile(program, state: state)
-            // Shells keep their own word ("zsh"); programs their display name.
-            Text(program.isShell ? workspace.programName(of: id) : program.displayName)
-                .font(.caption.weight(isFocused ? .semibold : .regular))
-                .foregroundStyle(isFocused ? DS.Palette.text : DS.Palette.textSecondary)
-                .lineLimit(1)
-                .layoutPriority(1)
-            // "Claude Code · Work": only where the host has more than one account for it.
-            if let label = accounts?.paneLabel(id.rawValue) {
-                PaneAccountLabel(name: label.name, color: label.color, emphasized: isFocused)
-            }
-            if window != nil, let cwd = workspace.panes[id]?.workingDirectory, !cwd.isEmpty {
-                Text(verbatim: (cwd as NSString).abbreviatingWithTildeInPath)
-                    .font(DS.Font.literalSmall)
-                    .foregroundStyle(DS.Palette.textTertiary)
-                    .lineLimit(1)
-                    .truncationMode(.head)
+            PaneTitle(headline: headline, isFocused: isFocused) {
+                // "Claude Code · Work": only where the host has more than one account for it.
+                if let label = accounts?.paneLabel(id.rawValue) {
+                    PaneAccountLabel(name: label.name, color: label.color, emphasized: isFocused)
+                }
             }
             if namesHost, let group = model.groups.group(workspace.groupId) {
                 HostChip(group: group, emphasized: isFocused)
@@ -90,16 +84,12 @@ struct PaneHeader: View {
             #endif
             PanePresence(workspace: workspace, pane: id)
             PaneHeaderButtons(id: id, workspace: workspace, window: window, focus: focus)
-                .opacity(isFocused || isHovered ? 1 : Self.restingOpacity)
+                .opacity(isHovered ? 1 : Self.restingOpacity)
+                .animation(DS.Motion.micro, value: isHovered)
         }
-        .padding(.leading, DS.Space.s)
-        .padding(.trailing, DS.Space.xxs)
-        // The fixed band does not change when switching presentation or when an agent starts.
-        .dynamicTypeSize(...DynamicTypeSize.xLarge)
-        .frame(height: Self.height)
-        .background(theme.background, ignoresSafeAreaEdges: [])
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(theme.splitDivider).frame(height: 1)
+        .paneHeaderBand(isFocused: isFocused)
+        .onChange(of: PaneArrangement.HeaderStill(headline: headline, isFocused: isFocused), initial: true) { _, still in
+            arrangement?.remember(still, of: id)
         }
         .contentShape(.rect)
         .onTapGesture { focus() }
@@ -148,6 +138,123 @@ struct PaneHeader: View {
     }
 }
 
+/// What a pane header names: the program, then the folder it runs in.
+struct PaneHeadline: Equatable {
+    let identity: ProgramIdentity
+    /// Shells keep their own word ("zsh"); programs their display name.
+    let program: String
+    let directory: String?
+
+    init(identity: ProgramIdentity, shellName: String, directory: String?) {
+        self.identity = identity
+        program = identity.isShell ? shellName : identity.displayName
+        self.directory = directory.flatMap { $0.isEmpty ? nil : $0 }
+    }
+}
+
+/// "zsh  ~/projects/unnamed": the program in the text colour and its folder quieter, the
+/// folder giving way from its start; both recede on an unfocused pane, with nothing moving.
+struct PaneTitle<Detail: View>: View {
+    let headline: PaneHeadline
+    let isFocused: Bool
+    let detail: Detail
+
+    init(headline: PaneHeadline, isFocused: Bool, @ViewBuilder detail: () -> Detail = { EmptyView() }) {
+        self.headline = headline
+        self.isFocused = isFocused
+        self.detail = detail()
+    }
+
+    var body: some View {
+        HStack(spacing: DS.Space.row) {
+            Text(verbatim: headline.program)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(isFocused ? DS.Palette.text : DS.Palette.textTertiary)
+                .lineLimit(1)
+                .layoutPriority(1)
+            detail
+            if let directory = headline.directory {
+                Text(verbatim: directory)
+                    .font(.caption)
+                    .foregroundStyle(isFocused ? DS.Palette.textSecondary : DS.Palette.textTertiary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+            }
+        }
+        .animation(DS.Motion.micro, value: isFocused)
+    }
+}
+
+/// A closed pane's header on its way out, as it last showed.
+struct PaneHeaderStill: View {
+    let still: PaneArrangement.HeaderStill
+
+    var body: some View {
+        HStack(spacing: DS.Space.row) {
+            ProgramTile(still.headline.identity)
+            PaneTitle(headline: still.headline, isFocused: still.isFocused)
+            Spacer(minLength: 0)
+        }
+        .paneHeaderBand(isFocused: still.isFocused)
+        .terminalSurfaceChrome()
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+extension View {
+    /// The header's band: its height, insets, the terminal's background and the rule under it,
+    /// which marks the focused pane in the accent's ring tint.
+    func paneHeaderBand(isFocused: Bool) -> some View {
+        modifier(PaneHeaderBand(isFocused: isFocused))
+    }
+}
+
+private struct PaneHeaderBand: ViewModifier {
+    let isFocused: Bool
+    @Environment(\.terminalTheme) private var theme
+    @AppStorage(TerminalPreferences.Key.paneStyle) private var paneStyle = TerminalPreferences.PaneStyle.compact
+
+    func body(content: Content) -> some View {
+        // Compact panes are flush: the focused one's rule is its mark. A comfortable pane is a
+        // surface of its own and brightens its edge instead (`PaneFocusEdge`).
+        let marked = isFocused && paneStyle == .compact
+        content
+            .padding(.leading, DS.Space.s)
+            .padding(.trailing, DS.Space.xxs)
+            // The fixed band does not change when switching presentation or when an agent starts.
+            .dynamicTypeSize(...DynamicTypeSize.xLarge)
+            .frame(height: PaneHeader.height)
+            .background(theme.background, ignoresSafeAreaEdges: [])
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(theme.splitDivider)
+                    .overlay {
+                        Rectangle()
+                            .fill(DS.Palette.accentRing)
+                            .opacity(marked ? 1 : 0)
+                    }
+                    .frame(height: 1)
+                    .animation(DS.Motion.micro, value: marked)
+            }
+    }
+}
+
+/// The focused comfortable pane's edge, brighter than its neighbours'. Nothing dims.
+struct PaneFocusEdge: View {
+    let isFocused: Bool
+    @Environment(\.displayScale) private var displayScale
+
+    var body: some View {
+        RoundedRectangle.rounded(DS.Radius.pane)
+            .strokeBorder(DS.Palette.border, lineWidth: DS.Size.hairline(scale: displayScale))
+            .opacity(isFocused ? 1 : 0)
+            .animation(DS.Motion.micro, value: isFocused)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
 private struct PaneHeaderButtons: View {
     let id: PaneId
     let workspace: Workspace
@@ -166,40 +273,31 @@ private struct PaneHeaderButtons: View {
         }
     }
 
+    /// At most four, the same on every pane: split right, split down, zoom and close; a
+    /// floating window's own controls (dock, minimize) take the splits' place. The rest is in
+    /// the menu.
     @ViewBuilder private var buttons: some View {
         let zoomed = workspace.session.tab(containing: id)?.zoomed == id
         Group {
-            HeaderButton("Split Right", systemImage: "rectangle.split.2x1", shortcut: WorkspaceAction.splitRight) {
-                act { WorkspaceAction.splitRight.perform(on: workspace, window: model) }
-            }
-            HeaderButton("Split Down", systemImage: "rectangle.split.1x2", shortcut: WorkspaceAction.splitDown) {
-                act { WorkspaceAction.splitDown.perform(on: workspace, window: model) }
-            }
-            HeaderButton(WorkspaceAction.openBrowserBeside.title, systemImage: "globe", shortcut: WorkspaceAction.openBrowserBeside) {
-                act { model.openBrowser(besidePane: id, onGroup: workspace.groupId) }
-            }
-            .contextMenu {
-                BrowserPlacementItems(workspace: workspace, model: model, pane: id, act: act)
-            }
-            .accessibilityIdentifier("pane-browser-button")
-            if model.activeMixedTab == nil {
-                HeaderButton(
-                    window == nil ? "Float Pane" : "Dock Pane", systemImage: "square.on.square",
-                    shortcut: WorkspaceAction.toggleFloat, lit: window != nil,
-                    disabledReason: "a tab keeps one docked pane, so split first"
-                ) {
+            if let window {
+                HeaderButton("Dock Pane", systemImage: "square.on.square", shortcut: WorkspaceAction.toggleFloat, lit: true) {
                     model.toggleFloat(id, in: workspace)
                 }
-                .disabled(window == nil && !workspace.canToggleFloat(id) && workspace.canFloat)
                 .accessibilityIdentifier("pane-float-button")
-            }
-            if window != nil {
-                HeaderButton("Minimize Floating Window", systemImage: "minus", shortcut: WorkspaceAction.minimizeFloat) {
+                HeaderButton(
+                    window.minimized ? "Restore Floating Window" : "Minimize Floating Window", systemImage: "minus",
+                    shortcut: WorkspaceAction.minimizeFloat
+                ) {
                     model.toggleMinimized(id, in: workspace)
                 }
                 .accessibilityIdentifier("pane-minimize-button")
-                // Shows once the header has made room for it.
-                .motionTransition(.arriving)
+            } else {
+                HeaderButton("Split Right", systemImage: "rectangle.split.2x1", shortcut: WorkspaceAction.splitRight) {
+                    act { WorkspaceAction.splitRight.perform(on: workspace, window: model) }
+                }
+                HeaderButton("Split Down", systemImage: "rectangle.split.1x2", shortcut: WorkspaceAction.splitDown) {
+                    act { WorkspaceAction.splitDown.perform(on: workspace, window: model) }
+                }
             }
             HeaderButton(
                 zoomed ? "Restore Pane" : "Zoom Pane",
@@ -228,7 +326,7 @@ private struct PaneHeaderButtons: View {
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("Pane Menu: split, zoom, find, share, close")
+        .help("Pane Menu: browser, float, move, find, share")
         .accessibilityLabel("Pane Menu")
     }
 

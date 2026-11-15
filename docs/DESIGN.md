@@ -131,7 +131,7 @@ tab strip at XXL, pane headers and the iPhone bar at XL.
 | Command palette width | 580 pt Mac / 640 pt touch | Spotlight: a title and its context on one line |
 | Chat reading column | 680 pt of text, centred; full width on iPhone | about 75 characters of body text |
 | Key bar row | 44 iPhone / 52 iPad, keys 34 / 40, hardware strip 28 | keyboard key height |
-| Window padding | 2 pt, balanced | Ghostty `window-padding-x/y` = 2, `window-padding-balance` |
+| Window padding | 4 pt (`Space.xs`), balanced | Ghostty `window-padding-balance`; wider than Ghostty's 2 pt so text never touches a split's line |
 
 Six radii, nothing in between, every one with continuous corners: chrome rounds a rectangle with
 `.rounded(DS.Radius.x)` (or `style: .continuous`), never a literal and never circular corners
@@ -204,7 +204,7 @@ out of sight plays it once on its mark, in the sidebar and the strip
 
 | Timing | Value | Use |
 |---|---|---|
-| layout motion | every pane a split, close, zoom, float or dock moves | laid out once, at its new frame; only the rectangle it is shown in travels, from its old frame, by offset and clip (`CanvasMotion`, `PaneTravel`), over a still of its last frame anchored top-left (cropped as it shrinks, on its background as it grows). Its grid changes once, for where it is going, as the motion starts (one SIGWINCH), so the program redraws under the still; at `structuralSettle` the still crossfades (`micro`) to the live terminal and the grid hold ends, both at the moment the spring is at rest. A new pane grows in from the edge it splits from and fades in, its neighbours making room in the same spring; a closed pane is squeezed toward its far edge by the neighbour taking its space and fades (between two neighbours, toward its middle); a divider rides the edge it sits on from the first frame. A zoomed pane grows over its neighbours with the `panel` shadow while it moves. Interrupted, everything carries on from where it is. Under Reduce Motion nothing travels: panes crossfade. No cols × rows overlay |
+| layout motion | every pane a split, close, zoom, float or dock moves | laid out once, at its new frame; only the rectangle it is shown in travels, from its old frame, by offset and clip (`CanvasMotion`, `PaneTravel`), over a still of its last frame anchored top-left (cropped as it shrinks, on its background as it grows). Its grid changes once, for where it is going, as the motion starts (one SIGWINCH), so the program redraws under the still; at `structuralSettle`, once its terminal has drawn that redraw (at most `TerminalSurface.redrawWait` later), the still crossfades (`micro`) to the live terminal. A live terminal never shows while its pane moves or arrives (a platform view follows no SwiftUI clip), so nothing of it is drawn outside the pane's rectangle. A new pane grows in from the edge it splits from, solid from the first frame (its header and the divider with it, so a split down shows as soon as a split right), its neighbours making room in the same spring; a closed pane, its still under its header as it last showed, is squeezed toward its far edge by the neighbour taking its space and fades in that same spring (between two neighbours, toward its middle); a divider rides the edge it sits on from the first frame. Headers arriving or leaving with the first split or the last close only fade, and the still makes room for them in the spring. A zoomed pane grows over its neighbours with the `panel` shadow while it moves. Interrupted, everything carries on from where it is. Under Reduce Motion nothing travels: panes crossfade. No cols × rows overlay |
 | sidebar | show and hide | the sidebar and the detail slide by offset in the `structural` spring; the detail keeps its width while the sidebar comes in and narrows once it has, and widens at once when it goes, its terminals on their last frame until it settles, so each grid changes once (`SidebarSlide`, `holdFrames`) |
 | lift beat | 1.03 floating, 0.985 docking, on `micro` until `arrivalDelay`, back to 1 on `structural` by `structuralSettle` | the pane coming towards you as it lifts, pressed in as it docks; off under Reduce Motion |
 | resize overlay | visible 750 ms after the last change | cols × rows (Ghostty `resize-overlay-duration`) |
@@ -544,16 +544,22 @@ tabs to reorder.
   pointer highlight on iPad; double-click/tap equalizes; adjustable for VoiceOver ("Horizontal
   split divider", ±2.5 %). Split sizes snap to whole cells (main's `SplitSnapping`).
 - No focus ring by default. Unfocused panes are dimmed with the background at 1 − `unfocused-split-opacity`.
+  The focused pane is marked without dimming anything: in Compact its header's rule is
+  `accentRing`; in Comfortable its edge is `border` instead of the quieter surface edge
+  (`PaneFocusEdge`). Both change on `micro`.
 - Pane emphasis, opt-in (Settings › Appearance › Panes): `pane-active-border` draws
   `ActivePaneRing` around the focused pane in a split, one physical pixel of `accentRing` inside
   its edge (the pane's own corner radius), the accent at two pixels under Increase Contrast,
   fading in and out on `micro`. `pane-inactive-fade` sets how an unfocused pane recedes: Dim (the
   default, Ghostty's whole-pane dim), Dim Header Only, or None. Off and Dim are as Ghostty.
 - Pane header (only in splits, 24 pt, on the terminal background): program tile with its state
-  dot, program's display name, its account ("· ● Work", only when that agent has more than one account
+  dot, the program ("zsh", or its display name) in `text` and its folder in `textSecondary`,
+  head-truncated (`PaneTitle`; both `textTertiary` on an unfocused pane, same weight, so nothing
+  moves when focus does), its account ("· ● Work", only when that agent has more than one account
   on the host), "Needs you" or "Failed" as a pill and the program's own words, an "At Limit" mark in the attention colour
-  whose menu offers a new tab under another signed-in account, and the pane menu (… on
-  hover/focus on the Mac; at 0.6 on touch, where there is no hover). Tap focuses.
+  whose menu offers a new tab under another signed-in account, and the header buttons. Tap
+  focuses. It arrives with the first split by fading in the `structural` spring over a
+  terminal already laid out below it, whose still makes room in the same spring.
 - Shell commands (OSC 133, daemon panes): a gutter stripe per command (red when
   it failed), a failed command's rows tinted with the theme's red at 6 %, its ✓ / ✗ exit and run
   time at the right of its prompt row on hover, and the command whose output fills the top of the
@@ -573,10 +579,12 @@ docs/APP-ARCHITECTURE.md §28 has the model. One canvas per tab (`PaneCanvas.swi
 tiled or floating, is one view keyed by its id, so floating, docking, zooming, dropping and
 minimizing only move and resize views in one `structural` spring, and no terminal is ever rebuilt.
 
-- **Header buttons** (every pane while more than one shows, the zoomed one included): Split
-  Right, Split Down, Float/Dock (lit in the accent while floating), Minimize (windows only),
-  Zoom (lit while zoomed: the way back), Close, then ⋯ with the pane menu. Quiet: hidden until
-  hover or focus on the Mac, 0.6 on touch. Each has its shortcut in the tooltip. Double-click
+- **Header buttons** (every pane while more than one shows, the zoomed one included): at most
+  four, Split Right, Split Down, Zoom (lit while zoomed: the way back), Close; a floating
+  window's Dock (lit) and Minimize take the splits' place. Then ⋯ with the pane menu (browser,
+  float, move, find, share). The same set on every pane at the same resting opacity (hidden until
+  hover on the Mac, 0.6 on touch), so nothing changes when focus moves; a narrow pane keeps only
+  ⋯. Each has its shortcut in the tooltip. Double-click
   the header zooms. Right-click: Reset Terminal, splits, Float/Dock, Minimize, Pin Across Tabs,
   Zoom, Pop Out to Window, Copy Pane ID, Close.
 - **Drag to rearrange.** The header is the handle (6 pt to start). The pane dims to 45 %, a
