@@ -47,6 +47,8 @@ final class Workspace {
     }
     @ObservationIgnored private var made: [PaneId: Pane] = [:]
     @ObservationIgnored private var slots: [PaneId: PaneHolder] = [:]
+    /// The last frames of the panes the latest change closed on screen.
+    @ObservationIgnored private var departedFrames: [PaneId: CGImage] = [:]
     /// Bumped once per stage of panes made (what `panes` readers follow).
     private var madeStages = 0
     /// Live panes still to make: those views asked for first, then in the sidebar's order.
@@ -641,7 +643,10 @@ final class Workspace {
         nameNewTabs()
         let live = session.panes
         var changed = false
+        var departed: [PaneId: CGImage] = [:]
         for (id, pane) in made where !live.contains(id) {
+            // On screen: its last frame goes out with it (`takeDepartedFrame`).
+            if pane.view.window != nil, let frame = pane.view.surface.snapshot() { departed[id] = frame }
             pane.terminate()
             made[id] = nil
             slots.removeValue(forKey: id)?.pane = nil
@@ -652,6 +657,7 @@ final class Workspace {
             zoomedFontSizes[id] = nil
             changed = true
         }
+        if changed { departedFrames = departed }
         if failures.keys.contains(where: { !live.contains($0) }) { failures = failures.filter { live.contains($0.key) } }
         let shown = Set(session.activeTab?.root.panes ?? [])
         unmade.keep { live.contains($0) && made[$0] == nil && !shown.contains($0) }
@@ -665,6 +671,11 @@ final class Workspace {
         }
         if changed { madeStages += 1 }
         makeUnmadeSoon()
+    }
+
+    /// The last frame of a pane closed while on screen, once, for the canvas to draw as it goes.
+    func takeDepartedFrame(of pane: PaneId) -> CGImage? {
+        departedFrames.removeValue(forKey: pane)
     }
 
     /// Makes `id` now; false if it failed (the reason is in `failures`).

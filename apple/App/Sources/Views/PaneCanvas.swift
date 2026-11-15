@@ -38,7 +38,13 @@ struct CanvasLayout {
         /// Part way between shown and hidden (a layout blended for review).
         var fade: Double?
         var growth: Double?
+        /// Where it is drawn when that is not its frame: on its way from its last frame, or
+        /// (leaving) to the sliver it shrinks to. It stays laid out at `frame`.
+        var shown: CGRect?
+        /// Closed or moved away: drawn as its still while it goes.
+        var departing = false
 
+        var shownFrame: CGRect { shown ?? frame }
         var opacity: Double { fade ?? (visible ? 1 : 0) }
         var scale: CGFloat { hiddenScale + (1 - hiddenScale) * (growth ?? (visible ? 1 : 0)) }
     }
@@ -48,6 +54,14 @@ struct CanvasLayout {
         var divider: SplitLayout.Divider
         let z: Double
         let visible: Bool
+        /// Where its line is drawn when that is not its frame (see `Leaf.shown`).
+        var shown: CGRect?
+        /// Gone from the layout: it travels with its edge and fades.
+        var departing = false
+        var fade: Double?
+
+        var shownFrame: CGRect { shown ?? divider.frame }
+        var opacity: Double { fade ?? (departing ? 0 : (visible ? 1 : 0)) }
     }
 
     struct Card {
@@ -208,12 +222,6 @@ struct CanvasLayout {
 
     func leaf(_ pane: PaneId) -> Leaf? { leaves.first { $0.pane == pane } }
 
-    /// Tiled panes not in `before`.
-    func newTiles(since before: CanvasLayout?) -> Set<PaneId> {
-        guard let before else { return [] }
-        return Set(leaves.filter { $0.window == nil && before.leaf($0.pane) == nil }.map(\.pane))
-    }
-
     /// A tiled pane drawn over its neighbours: the one just unzoomed, shrinking back onto them.
     mutating func raise(_ pane: PaneId?) {
         guard let pane, let index = leaves.firstIndex(where: { $0.pane == pane && $0.window == nil }) else { return }
@@ -227,10 +235,32 @@ struct CanvasLayout {
         }
     }
 
+    /// Adds `motion`'s departing panes and dividers, each heading for where it goes: laid out
+    /// where they were, shown shrinking to their sliver.
+    mutating func depart(_ motion: CanvasMotion) {
+        for departure in motion.departures where leaf(departure.leaf.pane) == nil {
+            let old = departure.leaf
+            leaves.append(Leaf(
+                pane: old.pane, frame: old.frame, z: old.z - 0.5, radii: old.radii, window: old.window, lifted: old.lifted,
+                focusedWindow: old.focusedWindow, visible: false, hiddenScale: 1, hiddenAnchor: .center,
+                shown: departure.collapse, departing: true))
+        }
+        for departure in motion.departingDividers where !dividers.contains(where: { $0.id == departure.divider.id }) {
+            var divider = departure.divider
+            divider.shown = departure.target
+            divider.departing = true
+            dividers.append(divider)
+        }
+    }
+
+    /// The header above a leaf's terminal, when it has one.
+    func headerHeight(of leaf: Leaf) -> CGFloat {
+        metrics.headers || leaf.window != nil ? metrics.header : 0
+    }
+
     /// The terminal's part of a leaf: its frame less the pane header.
     func terminalSize(of leaf: Leaf) -> CGSize {
-        let header = metrics.headers || leaf.window != nil ? metrics.header : 0
-        return CGSize(width: leaf.frame.width, height: max(0, leaf.frame.height - header))
+        CGSize(width: leaf.frame.width, height: max(0, leaf.frame.height - headerHeight(of: leaf)))
     }
 
     /// The canvas `session`'s active tab gets at this layout's size: what an op would lead to.
@@ -251,39 +281,48 @@ struct CanvasLayout {
     }
 
     /// This layout `progress` of the way from `from` (0) to here (1), as an animation between
-    /// the two draws it: frames move, what appears or goes fades. For design review, where a
-    /// window off every display gets no animation frames.
+    /// the two draws it: every pane laid out where it is going and shown on its way, new ones
+    /// growing in, closed ones shrinking out, what appears or goes fading. For design review,
+    /// where a window off every display gets no animation frames.
     func blended(from: CanvasLayout, progress t: Double) -> CanvasLayout {
-        func mix(_ a: CGRect, _ b: CGRect) -> CGRect {
-            CGRect(
-                x: a.minX + (b.minX - a.minX) * t, y: a.minY + (b.minY - a.minY) * t,
-                width: a.width + (b.width - a.width) * t, height: a.height + (b.height - a.height) * t)
-        }
+        let motion = CanvasMotion(from: from, to: self)
         var out = self
-        out.leaves = leaves.map { leaf in
+        out.depart(motion)
+        out.leaves = out.leaves.map { leaf in
             var leaf = leaf
-            if let old = from.leaves.first(where: { $0.pane == leaf.pane }) {
-                leaf.frame = mix(old.frame, leaf.frame)
+            if leaf.departing, let departure = motion.departures.first(where: { $0.leaf.pane == leaf.pane }) {
+                leaf.shown = CanvasMotion.mix(departure.leaf.frame, departure.collapse, t)
+                leaf.fade = 1 - t * t
+            } else if let old = from.leaves.first(where: { $0.pane == leaf.pane }) {
+                leaf.shown = CanvasMotion.mix(old.frame, leaf.frame, t)
                 // As drawn: solid while it shrinks, fading at the end; solid at once coming back.
                 let going = leaf.opacity < old.opacity
                 leaf.fade = old.opacity + (leaf.opacity - old.opacity) * (going ? t * t : 1 - (1 - t) * (1 - t))
                 let (from, to): (Double, Double) = (old.visible ? 1 : 0, leaf.visible ? 1 : 0)
                 leaf.growth = from + (to - from) * t
+            } else if let seed = motion.seeds[leaf.pane] {
+                leaf.shown = CanvasMotion.mix(seed, leaf.frame, t)
+                leaf.fade = t
             }
             return leaf
         }
         out.cards = cards.map { card in
             var card = card
             if let old = from.card(card.id) {
-                card.frame = mix(old.frame, card.frame)
+                card.frame = CanvasMotion.mix(old.frame, card.frame, t)
                 card.fade = old.opacity + (card.opacity - old.opacity) * t
             }
             return card
         }
-        out.dividers = dividers.map { divider in
+        out.dividers = out.dividers.map { divider in
             var divider = divider
-            if let old = from.dividers.first(where: { $0.id == divider.id }) {
-                divider.divider.frame = mix(old.divider.frame, divider.divider.frame)
+            if divider.departing, let departure = motion.departingDividers.first(where: { $0.divider.id == divider.id }) {
+                divider.shown = CanvasMotion.mix(departure.divider.divider.frame, departure.target, t)
+                divider.fade = 1 - t * t
+            } else if let old = from.dividers.first(where: { $0.id == divider.id }) {
+                divider.shown = CanvasMotion.mix(old.divider.frame, divider.divider.frame, t)
+            } else if let seed = motion.dividerSeeds[divider.id] {
+                divider.shown = CanvasMotion.mix(seed, divider.divider.frame, t)
             }
             return divider
         }
@@ -331,32 +370,58 @@ final class PaneArrangement {
         var progress: Double
     }
 
-    /// Panes drawn as a still of their last frame while they lift, dock, go to the tray or
-    /// come back: a picture scales and fades with the motion, crisp, and the terminal under
-    /// it reflows once, at rest.
+    /// Panes drawn as a still of their last frame while a layout motion moves them: a picture
+    /// travels and fades with the motion, crisp, and the terminal under it reflows once.
     @ObservationIgnored private var stills: [PaneId: CGImage] = [:]
-    /// Bumped when the stills are taken away.
-    private(set) var stillsVersion = 0
+    /// The layout motion under way (not observed: its end is, through `settledVersion`).
+    @ObservationIgnored private(set) var motion = CanvasMotion.none
+    /// The pane drawn over the others while it moves (one shrinking back from a zoom).
+    @ObservationIgnored private(set) var raised: PaneId?
+    @ObservationIgnored private(set) var isMoving = false
+    @ObservationIgnored private var motionGeneration = 0
+    /// Bumped when a layout motion settles: the stills give way to the terminals, departing
+    /// panes go, and a zoomed pane's shadow fades.
+    private(set) var settledVersion = 0
 
     func still(of pane: PaneId) -> CGImage? { stills[pane] }
-    /// How long stills stand in: the motion's length (design review stretches it).
+    /// The least time stills stand in (a capture keeps them longer).
     static var stillDuration = DS.Motion.structuralSettle
     /// Stretches how long a layout motion may take to settle (design review draws it slowly).
     static var settleStretch = 1.0
 
-    /// Takes stills of `panes` (`image` draws one) for the length of the `lift` motion.
-    func holdStills(of panes: [PaneId], image: (PaneId) -> CGImage?) {
-        for pane in panes where stills[pane] == nil {
+    /// A layout motion starts for `seconds`: stills of the panes it moves (`image` draws one;
+    /// `departed` gives a closed pane's last frame), and what it raises. A motion that starts
+    /// while another runs carries on from it.
+    func begin(
+        _ motion: CanvasMotion, in layout: CanvasLayout, raising: PaneId?, for seconds: Double,
+        image: (PaneId) -> CGImage?, departed: (PaneId) -> CGImage?
+    ) {
+        for pane in motion.moving where stills[pane] == nil {
             if let still = image(pane) { stills[pane] = still }
         }
-        guard !panes.isEmpty else { return }
-        let version = stillsVersion
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(Int(Self.stillDuration * 1000)))
-            guard let self, self.stillsVersion == version else { return }
-            self.stills.removeAll()
-            self.stillsVersion += 1
+        for departure in motion.departures where stills[departure.leaf.pane] == nil {
+            if let still = departed(departure.leaf.pane) { stills[departure.leaf.pane] = still }
         }
+        self.motion = isMoving ? motion.continuing(self.motion, in: layout) : motion
+        raised = raising
+        isMoving = true
+        motionGeneration += 1
+        let generation = motionGeneration
+        let length = max(seconds, Self.stillDuration)
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(Int(length * 1000)))
+            guard let self, self.motionGeneration == generation else { return }
+            self.settle()
+        }
+    }
+
+    /// The motion is at rest: each still crossfades to its live terminal, at once.
+    private func settle() {
+        stills.removeAll()
+        motion = .none
+        raised = nil
+        isMoving = false
+        withAnimation(DS.Motion.micro) { settledVersion += 1 }
     }
 
     /// Windows being moved or resized, where the hand has them.
@@ -679,18 +744,19 @@ extension View {
 extension View {
     /// The beat of a pane leaving its tab or rejoining it: lifted towards you as it floats,
     /// pressed in for a moment as it docks, in step with the frame's spring.
-    func liftBeat(floating: Bool) -> some View {
-        modifier(LiftBeat(floating: floating))
+    func liftBeat(floating: Bool, anchor: UnitPoint = .center) -> some View {
+        modifier(LiftBeat(floating: floating, anchor: anchor))
     }
 }
 
 private struct LiftBeat: ViewModifier {
     let floating: Bool
+    let anchor: UnitPoint
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
         content.keyframeAnimator(initialValue: CGFloat(1), trigger: floating) { content, scale in
-            content.scaleEffect(reduceMotion ? 1 : scale)
+            content.scaleEffect(reduceMotion ? 1 : scale, anchor: anchor)
         } keyframes: { _ in
             KeyframeTrack {
                 SpringKeyframe(floating ? 1.03 : 0.985, duration: DS.Motion.arrivalDelay, spring: DS.Motion.Role.micro.spring)

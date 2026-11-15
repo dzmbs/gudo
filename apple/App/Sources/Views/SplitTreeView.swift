@@ -126,6 +126,7 @@ struct SplitTreeView: View {
 
     @AppStorage(TerminalPreferences.Key.paneStyle) private var paneStyle = TerminalPreferences.PaneStyle.compact
     @Environment(\.displayScale) private var displayScale
+    @Environment(\.terminalTheme) private var theme
     @State private var lastShape = ShapeMemo()
     @State private var lastLayout = LayoutMemo()
     @State private var ownArrangement = PaneArrangement()
@@ -169,44 +170,44 @@ struct SplitTreeView: View {
         }
         let motion: Animation? = animated ? DS.Motion.structural : nil
         return GeometryReader { geometry in
-            var target = CanvasLayout(
+            let target = CanvasLayout(
                 node: node, floats: floats, zoomed: zoomed, focused: tree.focusedLeaf,
                 size: geometry.size, gap: paneStyle == .comfortable ? DS.Space.row : DS.Size.hairline(scale: displayScale),
                 header: PaneHeader.height, cell: tree.cellSize, padding: tree.padding, headers: isSplit, live: arrangement.live,
                 zoomSettled: !animated || zoomed == settledZoom)
-            // A new pane comes in under the panes making room for it, which uncover it; a pane
-            // unzoomed shrinks back over the panes it covered.
-            let _ = change != .none && animated ? lastLayout.move(target.newTiles(since: lastLayout.layout), for: settle) : ()
-            let _ = target.lower(lastLayout.lowered)
-            let _ = target.raise(lastLayout.raised(lastShape.unzoomed))
-            let _ = arrangement.update(layout: target, tree: tree)
-            // Every terminal heads for its new size: its grid changes once, now, and its last
-            // frame stands in until it is there.
+            // Before any terminal is told its new size: the stills are of the frames on screen.
+            let _ = change != .none && animated ? beginMotion(from: lastLayout.layout, to: target, settle: settle) : ()
+            let _ = arrangement.settledVersion
+            let drawn = Self.drawn(target, motion: arrangement)
+            let _ = arrangement.update(layout: drawn, tree: tree)
+            // Every terminal is laid out once, at its new size: its grid changes once, now, and
+            // its last frame stands in, under its still, until the motion settles.
             let _ = change != .none && animated ? arrangement.prepareTerminals(for: target, within: settle) : ()
-            let shown = arrangement.preview ?? target
-            let layout = arrangement.scrub.map { shown.blended(from: $0.from, progress: $0.progress) } ?? shown
-            let _ = takeStills(before: lastLayout.layout, after: target, animated: change == .float && animated)
             let _ = lastLayout.layout = target
-            let _ = arrangement.stillsVersion
+            let shown = arrangement.preview ?? drawn
+            let layout = arrangement.scrub.map { shown.blended(from: $0.from, progress: $0.progress) } ?? shown
+            let seeds = arrangement.motion.seeds
+            let dividerSeeds = arrangement.motion.dividerSeeds
             ZStack(alignment: .topLeading) {
                 ForEach(layout.cards, id: \.id) { card in
                     FloatCardBackdrop(card: card)
                         .zIndex(card.z)
                 }
                 ForEach(layout.leaves, id: \.pane) { leaf in
-                    PaneLeaf(leaf: leaf.pane, tree: tree, isSplit: isSplit || leaf.window != nil)
-                        .environment(\.paneStill, arrangement.still(of: leaf.pane))
-                        // What does not fit a narrow pane is cut at its edge, never drawn over a neighbour.
+                    leafContent(leaf)
                         .frame(width: leaf.frame.width, height: leaf.frame.height)
-                        .clipped()
-                        .surface(paneSurface(of: leaf), in: .rounded(paneStyle == .comfortable && (isSplit || leaf.window != nil) ? DS.Radius.pane : 0))
+                        .surface(paneSurface(of: leaf), in: .rounded(paneRadius(of: leaf)))
                         .floatingChrome(leaf, dragging: arrangement.paneDrag?.pane == leaf.pane)
+                        // Laid out once, at its new size: only where it is shown moves.
+                        .transaction(value: leaf.frame.size) { $0.animation = nil }
+                        .modifier(PaneTravel(
+                            shown: leaf.shownFrame, frame: leaf.frame, still: arrangement.still(of: leaf.pane),
+                            stillTop: layout.headerHeight(of: leaf), background: theme.background, radius: paneRadius(of: leaf)))
                         // A pane zooming over its neighbours, or shrinking back onto them,
                         // keeps an edge against them on the way.
-                        .shadow(.panel, visible: leaf.z == CanvasLayout.zoomZ && lastLayout.isMoving) // style-exempt: a pane zooming over its neighbours, only while it moves
-                        .frame(width: leaf.frame.width, height: leaf.frame.height)
-                        .liftBeat(floating: leaf.window != nil)
-                        .scaleEffect(leaf.scale, anchor: leaf.hiddenAnchor)
+                        .shadow(.panel, visible: leaf.z == CanvasLayout.zoomZ && arrangement.isMoving) // style-exempt: a pane zooming over its neighbours, only while it moves
+                        .liftBeat(floating: leaf.window != nil, anchor: Self.anchor(.center, of: leaf))
+                        .scaleEffect(leaf.scale, anchor: Self.anchor(leaf.hiddenAnchor, of: leaf))
                         // Going: it stays solid while it shrinks and fades at the end. Coming
                         // back: solid at once, then it grows.
                         .animation(arrangement.scrub == nil ? (leaf.visible ? DS.Motion.micro : DS.Motion.micro.delay(DS.Motion.arrivalDelay)) : nil) {
@@ -214,19 +215,19 @@ struct SplitTreeView: View {
                         }
                         .allowsHitTesting(leaf.visible)
                         .accessibilityHidden(!leaf.visible)
-                        .offset(x: leaf.frame.minX, y: leaf.frame.minY)
                         .zIndex(leaf.z)
-                        .motionTransition(.fade)
+                        .arrives(from: seeds[leaf.pane], into: leaf.frame)
                 }
                 ForEach(layout.dividers, id: \.id) { divider in
                     SplitDivider(divider: divider.divider, tree: tree)
                         .frame(width: divider.divider.frame.width, height: divider.divider.frame.height)
-                        .opacity(divider.visible ? 1 : 0)
-                        .allowsHitTesting(divider.visible)
-                        .offset(x: divider.divider.frame.minX, y: divider.divider.frame.minY)
+                        .transaction(value: divider.divider.frame.size) { $0.animation = nil }
+                        .modifier(PaneTravel(shown: divider.shownFrame, frame: divider.divider.frame))
+                        .opacity(divider.opacity)
+                        .allowsHitTesting(divider.visible && !divider.departing)
                         .zIndex(divider.z)
-                        // A new divider lands where the panes are heading: it shows as they arrive.
-                        .motionTransition(.arriving)
+                        // A new divider rides the edge it sits on from the first frame.
+                        .arrives(from: dividerSeeds[divider.id], into: divider.divider.frame, fades: false)
                 }
                 if tree.arranges != nil {
                     ForEach(layout.cards.filter(\.visible), id: \.id) { card in
@@ -252,6 +253,52 @@ struct SplitTreeView: View {
             settledZoom = zoomed
         }
     }
+
+    /// A leaf's content: its pane, or a closed pane's background while its still goes.
+    @ViewBuilder private func leafContent(_ leaf: CanvasLayout.Leaf) -> some View {
+        if leaf.departing {
+            theme.background
+        } else {
+            PaneLeaf(leaf: leaf.pane, tree: tree, isSplit: isSplit || leaf.window != nil)
+                .environment(\.paneStill, arrangement.still(of: leaf.pane))
+        }
+    }
+
+    /// `point` of `leaf`'s frame as a unit point of the box a leaf is laid out in: its frame's
+    /// size at the canvas origin, drawn moved to where it is shown.
+    static func anchor(_ point: UnitPoint, of leaf: CanvasLayout.Leaf) -> UnitPoint {
+        let frame = leaf.frame
+        return UnitPoint(
+            x: (frame.minX + point.x * frame.width) / max(frame.width, 1),
+            y: (frame.minY + point.y * frame.height) / max(frame.height, 1))
+    }
+
+    /// The layout as drawn while a motion runs: new panes under the panes making room, the one
+    /// unzoomed over the panes it shrinks back onto, and what is leaving on its way out.
+    static func drawn(_ target: CanvasLayout, motion arrangement: PaneArrangement) -> CanvasLayout {
+        var drawn = target
+        drawn.lower(Set(arrangement.motion.seeds.keys))
+        drawn.raise(arrangement.raised)
+        drawn.depart(arrangement.motion)
+        return drawn
+    }
+
+    /// Starts the motion from `before` to `target`: stills of every pane it moves, taken from
+    /// the frames on screen, and of every pane leaving.
+    private func beginMotion(from before: CanvasLayout?, to target: CanvasLayout, settle: Double) {
+        guard let before else { return }
+        arrangement.begin(
+            CanvasMotion(from: before, to: target), in: target, raising: lastShape.unzoomed, for: settle,
+            image: { leaf in
+                guard let (workspace, pane) = tree.resolve(leaf) else { return nil }
+                return workspace.panes[pane]?.view.surface.snapshot()
+            },
+            departed: { leaf in tree.resolve(leaf)?.workspace.takeDepartedFrame(of: leaf) })
+    }
+
+    private func paneRadius(of leaf: CanvasLayout.Leaf) -> CGFloat {
+        paneStyle == .comfortable && (isSplit || leaf.window != nil) ? DS.Radius.pane : 0
+    }
 }
 
 extension SplitTreeView {
@@ -265,39 +312,6 @@ extension SplitTreeView {
 /// The canvas's last layout (not state SwiftUI observes).
 private final class LayoutMemo {
     var layout: CanvasLayout?
-    private var newTiles: Set<PaneId> = []
-    private var movingUntil = ContinuousClock.now
-
-    var isMoving: Bool { ContinuousClock.now < movingUntil }
-
-    /// New panes kept under the others while they make room.
-    var lowered: Set<PaneId> { ContinuousClock.now < movingUntil ? newTiles : [] }
-
-    /// `pane` while the last change is still moving (a pane unzoomed, kept over the panes it
-    /// shrinks back onto).
-    func raised(_ pane: PaneId?) -> PaneId? { ContinuousClock.now < movingUntil ? pane : nil }
-
-    /// A change starts moving panes for `seconds`; `newTiles` are the panes it brings in.
-    func move(_ newTiles: Set<PaneId>, for seconds: Double) {
-        self.newTiles = newTiles
-        movingUntil = .now + .milliseconds(Int(seconds * 1000))
-    }
-}
-
-extension SplitTreeView {
-    /// Stills of the panes a lift, dock or trip to the tray moves between layers or in and out
-    /// of sight, taken from their last frame before the motion starts.
-    fileprivate func takeStills(before: CanvasLayout?, after: CanvasLayout, animated: Bool) {
-        guard animated, let before else { return }
-        let moving = after.leaves.filter { leaf in
-            guard let old = before.leaves.first(where: { $0.pane == leaf.pane }) else { return false }
-            return old.window != leaf.window || old.visible != leaf.visible
-        }.map(\.pane)
-        arrangement.holdStills(of: moving) { leaf in
-            guard let (workspace, pane) = tree.resolve(leaf) else { return nil }
-            return workspace.panes[pane]?.view.surface.snapshot()
-        }
-    }
 }
 
 /// What a canvas last showed (not state SwiftUI observes), and which kind of change it was.
@@ -372,6 +386,8 @@ struct SplitLayout {
         let axis: PaneLayout.Axis
         let ratio: Double
         let first: Node
+        /// The pane against the line on its trailing side.
+        let next: PaneId
         /// The visible line.
         var frame: CGRect
         /// Where the split starts along its axis.
@@ -427,7 +443,7 @@ struct SplitLayout {
             place(second, in: secondRect, gap: gap, header: header, cell: cell, padding: padding)
             dividers.append(Divider(
                 id: "\(axis.rawValue)-\(first.trailingPane(along: axis))", axis: axis, ratio: ratio,
-                first: first, frame: line, start: horizontal ? rect.minX : rect.minY, available: available, headers: headers))
+                first: first, next: second.leadingPane(along: axis), frame: line, start: horizontal ? rect.minX : rect.minY, available: available, headers: headers))
         }
     }
 }
@@ -569,7 +585,6 @@ struct PaneSlot: View {
     @Environment(\.terminalTheme) private var theme
     @Environment(WindowModel.self) private var model
     @Environment(\.paneStill) private var still
-    @Environment(\.displayScale) private var displayScale
     @AppStorage(TerminalPreferences.Key.unfocusedSplitOpacity) private var unfocusedOpacity = TerminalPreferences.Default.unfocusedSplitOpacity
     @AppStorage(TerminalPreferences.Key.resizeOverlay) private var resizeOverlay = TerminalPreferences.ResizeOverlay.afterFirst
     @AppStorage(TerminalPreferences.Key.paneStyle) private var paneStyle = TerminalPreferences.PaneStyle.compact
@@ -670,15 +685,9 @@ struct PaneSlot: View {
         // Identity must include the host: otherwise a reused container can keep typing into the previous pane.
         TerminalHost(pane: pane, isFocused: isFocused, workspace: workspace, isActive: isActive)
             .id(HostPane(hostId: workspace.groupId, pane: id))
-            // Moving panes use a still because platform views do not follow SwiftUI transforms.
+            // A moving pane shows its still (`PaneTravel`): platform views do not follow SwiftUI
+            // transforms.
             .opacity(still == nil ? 1 : 0)
-            .overlay(alignment: .topLeading) {
-                if let still {
-                    Image(decorative: still, scale: displayScale)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                        .background(theme.background).allowsHitTesting(false)
-                }
-            }
             .clipped()
             .fadedTowardTerminalBackground(pane.showsSavedScreen ? 0.25 : 0)
             .overlay { SavedScreenOverlay(pane: pane) }
@@ -784,11 +793,19 @@ struct PaneMenuItems: View {
 }
 
 extension EnvironmentValues {
-    /// The still a pane shows instead of its live terminal while it moves between layers.
+    /// The still drawn over a pane while a layout motion moves it: its live terminal hides under it.
     @Entry var paneStill: CGImage?
 }
 
 extension Node {
+    /// The pane touching this subtree's leading edge along `axis` (left edge for horizontal).
+    func leadingPane(along axis: Axis) -> PaneId {
+        switch self {
+        case .leaf(let pane): pane
+        case .split(_, _, let first, _): first.leadingPane(along: axis)
+        }
+    }
+
     /// The pane touching this subtree's trailing edge along `axis` (right edge for horizontal).
     func trailingPane(along axis: Axis) -> PaneId {
         switch self {
