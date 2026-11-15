@@ -32,6 +32,14 @@ nonisolated enum ChatItemPresentation {
         }
     }
 
+    /// Only a call that did not finish names its state on its row; running shimmers, done shows its time.
+    static func toolStateLabel(_ tool: TimelineTool) -> String? {
+        switch tool.status {
+        case .known(.running), .known(.done): nil
+        default: toolStatus(tool)
+        }
+    }
+
     static func toolKind(_ tool: TimelineTool) -> String {
         switch tool.kind {
         case .known(.shell): "Command"

@@ -295,17 +295,14 @@ struct ChatRowView: View {
                     Image(systemName: toolGlyph(tool.kind))
                         .frame(width: DS.Space.l)
                         .foregroundStyle(tool.status == .known(.failed) ? DS.Palette.error : DS.Palette.textSecondary)
-                    VStack(alignment: .leading, spacing: DS.Space.xxs) {
-                        Text(verbatim: ChatItemPresentation.toolTitle(tool)).font(DS.Font.proseSecondary)
-                            .lineLimit(2).multilineTextAlignment(.leading)
-                            .shimmering(tool.status == .known(.running), text: ChatItemPresentation.toolTitle(tool))
-                        Text(ChatItemPresentation.toolKind(tool) + " · " + ChatItemPresentation.toolStatus(tool))
-                            .font(DS.Font.captionDetail)
-                            .foregroundStyle(tool.status == .known(.failed) || tool.status == .known(.denied)
-                                             ? DS.Palette.error : DS.Palette.textSecondary)
-                    }
+                    Text(verbatim: ChatItemPresentation.toolTitle(tool)).font(DS.Font.proseSecondary)
+                        .foregroundStyle(DS.Palette.textSecondary)
+                        .lineLimit(1).truncationMode(.tail)
+                        .shimmering(tool.status == .known(.running), text: ChatItemPresentation.toolTitle(tool))
                     Spacer(minLength: DS.Space.xs)
-                    if !tool.diff.isEmpty {
+                    if let state = ChatItemPresentation.toolStateLabel(tool) {
+                        Text(state).foregroundStyle(tool.status == .known(.interrupted) ? DS.Palette.textSecondary : DS.Palette.error)
+                    } else if !tool.diff.isEmpty {
                         Text("+\(tool.diff.reduce(UInt64(0)) { $0 + UInt64($1.additions) })")
                             .foregroundStyle(DS.Palette.done)
                         Text("−\(tool.diff.reduce(UInt64(0)) { $0 + UInt64($1.deletions) })")

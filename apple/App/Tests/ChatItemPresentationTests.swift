@@ -14,6 +14,13 @@ final class ChatItemPresentationTests: XCTestCase {
         }
     }
 
+    func testOnlyUnfinishedToolCallsNameTheirStateOnTheRow() throws {
+        for (status, label) in [("Running", nil), ("Done", nil), ("Failed", "Failed"), ("Denied", "Denied"),
+                                ("Interrupted", "Interrupted"), ("FutureStatus", "Status unavailable")] as [(String, String?)] {
+            XCTAssertEqual(ChatItemPresentation.toolStateLabel(try tool(status: status)), label)
+        }
+    }
+
     func testToolKindsAndTitlesAreLiteralAndBounded() throws {
         for (kind, label) in [("Shell", "Command"), ("Read", "Read"), ("Search", "Search"), ("Edit", "Edit"),
                               ("Write", "Write"), ("Fetch", "Fetch"), ("WebSearch", "Web search"),
