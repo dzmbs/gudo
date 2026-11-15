@@ -60,7 +60,6 @@ fn run(arguments: &[String]) -> io::Result<()> {
             let plan: agents::CodexTerminalLaunch =
                 serde_json::from_slice(&bytes).map_err(io::Error::other)?;
             apply_terminal(&mut command, plan);
-            eprintln!("Codex Chat is unavailable for this version. Continuing in Terminal.");
         }
         _ => return Err(io::Error::other("launch refused")),
     }
