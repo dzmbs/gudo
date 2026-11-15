@@ -3,11 +3,13 @@ import HostKit
 import PaneLayout
 import SwiftUI
 
-/// Equal-width horizontal tabs after Ghostty's macOS tab bar, every host's tabs in sidebar order.
+/// Horizontal tabs, every host's tabs in sidebar order, each as wide as its title within
+/// `DS.Size.tabMinWidth...tabMaxWidth`; more than fit scroll, faded at the edge they run past.
 struct TabBar: View {
     let workspace: Workspace
     @Environment(WindowModel.self) private var model
-    @State private var widths = TabStripWidths()
+    @State private var edges = StripEdges()
+    @State private var spans = StripSpans()
 
     var body: some View {
         #if DEBUG
@@ -19,19 +21,26 @@ struct TabBar: View {
             ScrollViewReader { scroller in
                 ScrollView(.horizontal) {
                     chips(active: active)
+                        .coordinateSpace(name: StripSpans.space)
                         .animation(DS.Motion.standard, value: refs)
                 }
                 .scrollIndicators(.never)
-                .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { width in widths.stripWidth = width }
+                .onScrollGeometryChange(for: StripEdges.self) { geometry in
+                    StripEdges(offset: geometry.contentOffset.x, content: geometry.contentSize.width, container: geometry.containerSize.width)
+                } action: { _, next in
+                    withAnimation(DS.Motion.micro) { edges = next }
+                }
+                .onScrollGeometryChange(for: ClosedRange<CGFloat>.self) { geometry in
+                    geometry.contentOffset.x...geometry.contentOffset.x + geometry.containerSize.width
+                } action: { _, visible in
+                    spans.visible = visible
+                }
+                .stripEdgeFade(edges)
                 .onChange(of: refs) { old, new in
-                    withAnimation(DS.Motion.standard) { widths.tabsChanged(to: new.count) }
                     if new.count > old.count { TabTimeline.mark(.chipInserted) }
+                    reveal(active, with: scroller)
                 }
-                .onChange(of: active, initial: true) { _, ref in
-                    guard let ref else { return }
-                    withAnimation(DS.Motion.standard) { scroller.scrollTo(ref) }
-                    TabTimeline.mark(.scrolledIntoView)
-                }
+                .onChange(of: active, initial: true) { _, ref in reveal(ref, with: scroller) }
             }
             NewTabButton(workspace: workspace)
                 .padding(.leading, DS.Space.xs)
@@ -43,16 +52,19 @@ struct TabBar: View {
         .overlay(alignment: .bottom) { Hairline(style: DS.Palette.separator) }
         // A 34 pt strip: titles grow with Dynamic Type only as far as it holds them.
         .dynamicTypeSize(...DynamicTypeSize.xxLarge)
-        .onHover { inside in
-            if inside {
-                widths.isPointerInside = true
-            } else {
-                withAnimation(DS.Motion.micro) { widths.pointerLeft() }
-            }
-        }
-        .onAppear { widths.tabsChanged(to: refs.count) }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("tab-bar")
+    }
+
+    /// Brings the selected chip whole into view by the least travel, once a chip just added has
+    /// been laid out.
+    private func reveal(_ ref: TabRef?, with scroller: ScrollViewProxy) {
+        guard let ref else { return }
+        Task { @MainActor in
+            guard let anchor = spans.anchor(revealing: ref) else { return }
+            withAnimation(DS.Motion.standard) { scroller.scrollTo(StripSpans.ChipID(ref: ref), anchor: anchor) }
+            TabTimeline.mark(.scrolledIntoView)
+        }
     }
 
     /// Every chip in strip order: window tabs, then each host's tabs (a mixed tab where the tab
@@ -65,15 +77,15 @@ struct TabBar: View {
         let groups = model.groups.groups
         let allTabs = model.groups.tabs
         let activeIndex = active.flatMap { allTabs.firstIndex(of: $0) }
-        let width = widths.chipWidth
         // Tabs name their host only while the window holds more than one host.
         let isMultiHost = Set(allTabs.map(\.hostId)).count > 1
         return HStack(spacing: 0) {
             ForEach(model.groups.windowTabs, id: \.self) { ref in
                 if let tab = model.composites.tab(ref.tab) {
                     MixedTabChip(tab: tab, isActive: ref == active)
-                        .frame(width: width)
-                        .id(ref)
+                        .id(StripSpans.ChipID(ref: ref))
+                        .tabChipWidth()
+                        .modifier(ChipSpanReport(ref: ref, spans: spans))
                         .modifier(ChipFrameReport(ref: ref))
                         .motionTransition(.tab)
                     Hairline(.vertical, style: DS.Palette.separator).frame(height: 16)
@@ -95,13 +107,108 @@ struct TabBar: View {
                             TabChip(tab: tab, ref: ref, group: group, isActive: ref == active, showsHost: isMultiHost)
                         }
                     }
-                    .frame(width: width)
-                    .id(ref)
+                    .id(StripSpans.ChipID(ref: ref))
+                    .tabChipWidth()
+                    .modifier(ChipSpanReport(ref: ref, spans: spans))
                     .modifier(ChipFrameReport(ref: ref))
                     .motionTransition(.tab)
                 }
             }
         }
+    }
+}
+
+/// Where each chip sits along the strip's content and which part of it shows; read when the
+/// selection changes, never observed.
+@MainActor
+final class StripSpans {
+    nonisolated static let space = "strip-content"
+    /// A chip's own id: the ref alone also names its separator, which the scroll would find first.
+    struct ChipID: Hashable {
+        let ref: TabRef
+    }
+
+    var chips: [TabRef: ClosedRange<CGFloat>] = [:]
+    var visible: ClosedRange<CGFloat> = 0...0
+
+    /// The edge to scroll `ref` to, the nearer one; nil while it shows whole or is not laid out.
+    func anchor(revealing ref: TabRef) -> UnitPoint? {
+        guard let chip = chips[ref] else { return nil }
+        return Self.anchor(chip: chip, visible: visible)
+    }
+
+    static func anchor(chip: ClosedRange<CGFloat>, visible: ClosedRange<CGFloat>) -> UnitPoint? {
+        if chip.lowerBound < visible.lowerBound - 0.5 { return .leading }
+        if chip.upperBound > visible.upperBound + 0.5 { return .trailing }
+        return nil
+    }
+}
+
+private struct ChipSpanReport: ViewModifier {
+    let ref: TabRef
+    let spans: StripSpans
+
+    func body(content: Content) -> some View {
+        content.onGeometryChange(for: ClosedRange<CGFloat>.self) { proxy in
+            let frame = proxy.frame(in: .named(StripSpans.space))
+            return frame.minX...frame.maxX
+        } action: { span in
+            spans.chips[ref] = span
+        }
+    }
+}
+
+/// Which edges of the strip have chips running past them.
+struct StripEdges: Equatable {
+    var leading = false
+    var trailing = false
+
+    init() {}
+
+    init(offset: CGFloat, content: CGFloat, container: CGFloat) {
+        leading = offset > 0.5
+        trailing = offset + container < content - 0.5
+    }
+}
+
+private extension View {
+    /// A soft fade where chips run past an edge, so a cut chip reads as more to scroll to.
+    func stripEdgeFade(_ edges: StripEdges) -> some View {
+        mask {
+            HStack(spacing: 0) {
+                // style-exempt: a mask, only its alpha counts
+                LinearGradient(colors: [edges.leading ? .clear : .black, .black], startPoint: .leading, endPoint: .trailing)
+                    .frame(width: DS.Size.stripFade)
+                Rectangle()
+                // style-exempt: a mask, only its alpha counts
+                LinearGradient(colors: [.black, edges.trailing ? .clear : .black], startPoint: .leading, endPoint: .trailing)
+                    .frame(width: DS.Size.stripFade)
+            }
+        }
+    }
+
+    func tabChipWidth() -> some View {
+        TabChipWidth(range: DS.Size.tabMinWidth...DS.Size.tabMaxWidth).callAsFunction { self }
+    }
+}
+
+/// Lays a chip out at its own width, held within `range`: as wide as its title, never a
+/// sliver and never the whole strip.
+struct TabChipWidth: Layout {
+    let range: ClosedRange<CGFloat>
+
+    static func width(ideal: CGFloat, in range: ClosedRange<CGFloat>) -> CGFloat {
+        min(max(ideal.rounded(.up), range.lowerBound), range.upperBound)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let chip = subviews.first else { return .zero }
+        let width = Self.width(ideal: chip.sizeThatFits(.unspecified).width, in: range)
+        return CGSize(width: width, height: chip.sizeThatFits(ProposedViewSize(width: width, height: proposal.height)).height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: bounds.height))
     }
 }
 
@@ -131,42 +238,6 @@ private struct ChipFrameReport: ViewModifier {
     }
 }
 
-/// Chips share the strip within `DS.Size.tabMinWidth...tabMaxWidth`; a tab added or closed under the pointer holds the width until the pointer leaves.
-struct TabStripWidths: Equatable {
-    var stripWidth: CGFloat = 0 {
-        didSet { if stripWidth != oldValue { heldWidth = nil } }
-    }
-    var isPointerInside = false
-    private(set) var count = 0
-    private(set) var heldWidth: CGFloat?
-
-    var chipWidth: CGFloat { heldWidth ?? share(of: count) }
-
-    func share(of count: Int) -> CGFloat {
-        guard count > 0, stripWidth > 0 else { return DS.Size.tabMaxWidth }
-        let equal = (stripWidth / CGFloat(count)).rounded(.down)
-        return min(DS.Size.tabMaxWidth, max(DS.Size.tabMinWidth, equal))
-    }
-
-    mutating func tabsChanged(to newCount: Int) {
-        guard newCount != count else { return }
-        let hadTabs = count > 0
-        let isInsertion = newCount > count
-        let shownWidth = chipWidth
-        count = newCount
-        if hadTabs, count > 0, isInsertion || isPointerInside, shownWidth != share(of: count) {
-            heldWidth = shownWidth
-        } else if !isPointerInside {
-            heldWidth = nil
-        }
-    }
-
-    mutating func pointerLeft() {
-        isPointerInside = false
-        heldWidth = nil
-    }
-}
-
 private struct TabChip: View {
     let tab: Tab
     let ref: TabRef
@@ -185,7 +256,43 @@ private struct TabChip: View {
         let state = AgentState.mostUrgent(tab.root.panes.compactMap { model.agentState(ofPane: $0, onGroup: group.id) })
         let title = workspace?.title(of: tab) ?? tab.title ?? "Shell"
         let program = model.programIdentity(of: tab, onGroup: group.id)
-        ZStack {
+        HStack(spacing: DS.Space.row) {
+            TabLeadingMark(program: program, state: state, isSelected: isActive)
+                .attentionCue(trigger: model.attention.beat(of: ref))
+            VStack(spacing: 0) {
+                Text(title)
+                    .lineLimit(1)
+                    // A path keeps its end: the directory you are in.
+                    .truncationMode(title.hasPrefix("/") || title.hasPrefix("~") ? .head : .tail)
+                if showsHost {
+                    Text(group.name)
+                        .font(DS.Font.meta)
+                        .foregroundStyle(DS.Palette.textTertiary)
+                        .lineLimit(1)
+                }
+            }
+            .layoutPriority(1)
+            if let state, state.statusMark == .pill {
+                // The words where the title leaves room for them, else the symbol.
+                ViewThatFits(in: .horizontal) {
+                    StatePill(state)
+                    StatePill(state, isCompact: true)
+                }
+                .motionTransition(.pill(anchor: .leading))
+            } else if model.attention.contains(ref) {
+                AttentionDot().motionTransition(.pill(anchor: .leading))
+            }
+            TabPresence(workspace: workspace, panes: tab.root.panes)
+        }
+        // Inactive tabs dim by opacity rather than colour, so glyph colours survive.
+        .font(DS.Font.tabTitle)
+        .foregroundStyle(.primary)
+        .opacity((isActive ? 1 : isHovered ? DS.Opacity.inactiveHover : DS.Opacity.inactive) * (group.showsAsLive ? 1 : 0.6))
+        // Room for the close button and the ⌘ hint, which sit over the edges.
+        .padding(.horizontal, DS.Space.xxxl)
+        .frame(maxWidth: .infinity)
+        .frame(height: DS.Size.tabStrip)
+        .background {
             if isActive {
                 Color.clear
                     .surface(.selection, in: RoundedRectangle.rounded(DS.Radius.field))
@@ -196,39 +303,8 @@ private struct TabChip: View {
                     .fill(DS.Palette.hoverFill)
                     .padding(.vertical, 3)
             }
-
-            HStack(spacing: DS.Space.row) {
-                TabLeadingMark(program: program, state: state, isSelected: isActive)
-                    .attentionWhenBlocked(state, isVisible: isActive)
-                VStack(spacing: 0) {
-                    Text(title)
-                        .lineLimit(1)
-                        // A path keeps its end: the directory you are in.
-                        .truncationMode(title.hasPrefix("/") || title.hasPrefix("~") ? .head : .middle)
-                    if showsHost {
-                        Text(group.name)
-                            .font(DS.Font.meta)
-                            .foregroundStyle(DS.Palette.textTertiary)
-                            .lineLimit(1)
-                    }
-                }
-                .layoutPriority(1)
-                if let state, state.statusMark == .pill {
-                    // The words where the title leaves room for them, else the symbol.
-                    ViewThatFits(in: .horizontal) {
-                        StatePill(state)
-                        StatePill(state, isCompact: true)
-                    }
-                    .motionTransition(.pill(anchor: .leading))
-                }
-                TabPresence(workspace: workspace, panes: tab.root.panes)
-            }
-            // Inactive tabs dim by opacity rather than colour, so glyph colours survive.
-            .font(DS.Font.tabTitle)
-            .foregroundStyle(.primary)
-            .opacity((isActive ? 1 : isHovered ? DS.Opacity.inactiveHover : DS.Opacity.inactive) * (group.showsAsLive ? 1 : 0.6))
-            .padding(.horizontal, 40)
-
+        }
+        .overlay {
             HStack(spacing: 0) {
                 Button("Close Tab", systemImage: "xmark") { model.closeTab(ref, undoable: false) }
                     .labelStyle(.iconOnly)
@@ -249,7 +325,6 @@ private struct TabChip: View {
             .padding(.leading, 3)
             .animation(DS.Motion.micro, value: CommandKeyState.shared.held)
         }
-        .frame(height: DS.Size.tabStrip)
         .animation(DS.Motion.micro, value: isActive)
         .contentShape(.rect)
         .onTapGesture { model.focus(ref) }
@@ -268,15 +343,6 @@ private struct TabChip: View {
                 Button("Close Tab", systemImage: "xmark", role: .destructive) { model.closeTab(ref, undoable: false) }
             }
         }
-        .overlay(alignment: .bottom) {
-            if let project = model.groups.project(of: ref) {
-                Capsule()
-                    .fill(DS.Palette.project(project.color))
-                    .frame(height: 2)
-                    .padding(.horizontal, DS.Space.m)
-                    .accessibilityHidden(true)
-            }
-        }
         .tabDrag(ref, model: model)
         .dropDestination(for: String.self) { items, _ in
             // Takes the dragged tab's place in this tab's section (its project or host); only
@@ -290,7 +356,9 @@ private struct TabChip: View {
             withAnimation(DS.Motion.standard) { model.commit(.insert(dragged, into: section.container, at: index)) }
             return true
         }
-        .help(Self.tooltip(title: title, host: group.isLocal ? nil : group.name, directory: workspace?.directory(of: tab), context: workspace?.context(of: tab)))
+        .help(Self.tooltip(
+            title: title, host: group.isLocal ? nil : group.name, directory: workspace?.directory(of: tab), context: workspace?.context(of: tab),
+            project: model.groups.project(of: ref)?.name))
         .accessibilityElement(children: .combine)
         .accessibilityLabel(TabLeadingMark.label(title: title, program: program, state: state, host: nil))
         .accessibilityValue(TabPresence.value(workspace, tab.root.panes))
@@ -298,11 +366,11 @@ private struct TabChip: View {
         .accessibilityIdentifier("tabbar-\(ref)")
     }
 
-    /// The title, then where the tab is (host, directory) and what it is on (branch, program or
-    /// task), each once.
-    static func tooltip(title: String, host: String?, directory: String?, context: String?) -> String {
+    /// The title, then where the tab is (project, host, directory) and what it is on (branch,
+    /// program or task), each once.
+    static func tooltip(title: String, host: String?, directory: String?, context: String?, project: String? = nil) -> String {
         var lines = [title]
-        let place = [host, directory].compactMap(\.self).joined(separator: " · ")
+        let place = [project, host, directory].compactMap(\.self).joined(separator: " · ")
         if !place.isEmpty, place != title { lines.append(place) }
         if let context, !context.isEmpty, context != title, context != directory, context != "~" { lines.append(context) }
         return lines.joined(separator: "\n")

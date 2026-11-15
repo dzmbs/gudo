@@ -4,67 +4,36 @@ import SwiftUI
 import XCTest
 @testable import App
 
-/// Stable strip chips (`TabStripWidths`) and the readiness-gated tab handoff (`TabHandoff`).
+/// Strip chips sized to their titles (`TabChipWidth`) and the readiness-gated tab handoff (`TabHandoff`).
 @MainActor
 final class TabStripTests: XCTestCase {
     // MARK: Widths
 
-    func testAddingATabKeepsTheOtherChipsWidth() {
-        var widths = TabStripWidths()
-        widths.stripWidth = 1000
-        widths.tabsChanged(to: 5)
-        XCTAssertEqual(widths.chipWidth, 200)
-        widths.tabsChanged(to: 6)
-        XCTAssertEqual(widths.chipWidth, 200, "the strip scrolls instead")
-        widths.pointerLeft()
-        XCTAssertEqual(widths.chipWidth, 166)
+    func testAChipIsAsWideAsItsTitleWithinTheRange() {
+        let range = DS.Size.tabMinWidth...DS.Size.tabMaxWidth
+        XCTAssertEqual(TabChipWidth.width(ideal: 40, in: range), DS.Size.tabMinWidth, "never a sliver")
+        XCTAssertEqual(TabChipWidth.width(ideal: 151.2, in: range), 152)
+        XCTAssertEqual(TabChipWidth.width(ideal: 900, in: range), DS.Size.tabMaxWidth, "never the whole strip")
     }
 
-    func testFewTabsStayAtTheWidestWidth() {
-        var widths = TabStripWidths()
-        widths.stripWidth = 1000
-        widths.tabsChanged(to: 1)
-        XCTAssertEqual(widths.chipWidth, DS.Size.tabMaxWidth)
-        widths.tabsChanged(to: 4)
-        XCTAssertEqual(widths.chipWidth, DS.Size.tabMaxWidth)
-        XCTAssertNil(widths.heldWidth)
+    func testTheStripFadesOnlyTheEdgesChipsRunPast() {
+        XCTAssertEqual(StripEdges(offset: 0, content: 400, container: 600), StripEdges())
+        let start = StripEdges(offset: 0, content: 1200, container: 600)
+        XCTAssertFalse(start.leading)
+        XCTAssertTrue(start.trailing)
+        let middle = StripEdges(offset: 300, content: 1200, container: 600)
+        XCTAssertTrue(middle.leading)
+        XCTAssertTrue(middle.trailing)
+        let end = StripEdges(offset: 600, content: 1200, container: 600)
+        XCTAssertTrue(end.leading)
+        XCTAssertFalse(end.trailing)
     }
 
-    func testManyTabsScrollAtTheNarrowestWidth() {
-        var widths = TabStripWidths()
-        widths.stripWidth = 1000
-        widths.tabsChanged(to: 20)
-        XCTAssertEqual(widths.chipWidth, DS.Size.tabMinWidth)
-        widths.tabsChanged(to: 21)
-        XCTAssertEqual(widths.chipWidth, DS.Size.tabMinWidth)
-    }
-
-    func testAClosedTabUnderThePointerKeepsTheWidthUntilThePointerLeaves() {
-        var widths = TabStripWidths()
-        widths.stripWidth = 1000
-        widths.tabsChanged(to: 6)
-        widths.isPointerInside = true
-        widths.tabsChanged(to: 5)
-        XCTAssertEqual(widths.chipWidth, 166, "the next close button lands under the pointer")
-        widths.pointerLeft()
-        XCTAssertEqual(widths.chipWidth, 200)
-    }
-
-    func testAClosedTabAwayFromThePointerSettlesAtOnce() {
-        var widths = TabStripWidths()
-        widths.stripWidth = 1000
-        widths.tabsChanged(to: 6)
-        widths.tabsChanged(to: 5)
-        XCTAssertEqual(widths.chipWidth, 200)
-    }
-
-    func testResizingTheStripSettlesAHeldWidth() {
-        var widths = TabStripWidths()
-        widths.stripWidth = 1000
-        widths.tabsChanged(to: 5)
-        widths.tabsChanged(to: 6)
-        widths.stripWidth = 1200
-        XCTAssertEqual(widths.chipWidth, 200)
+    func testTheSelectedChipScrollsToTheNearerEdgeOnlyWhenCut() {
+        let visible: ClosedRange<CGFloat> = 300...800
+        XCTAssertNil(StripSpans.anchor(chip: 400...560, visible: visible))
+        XCTAssertEqual(StripSpans.anchor(chip: 200...360, visible: visible), .leading)
+        XCTAssertEqual(StripSpans.anchor(chip: 700...860, visible: visible), .trailing)
     }
 
     // MARK: The strip on screen
@@ -104,6 +73,80 @@ final class TabStripTests: XCTestCase {
             XCTAssertEqual(moved.size, frame.size, "\(ref) changed size when a tab was added")
             XCTAssertEqual(moved.minX - shiftAfter, frame.minX - shiftBefore, "\(ref) moved among the other chips when a tab was added")
         }
+    }
+
+    /// Chips size to their titles: a short one at the narrowest width, a long one at the widest,
+    /// and they leave the rest of a wide strip empty.
+    func testChipsSizeToTheirTitles() async throws {
+        // No agent pills: only the titles set the widths.
+        MockPaneStatus.fixture = [:]
+        defer { MockPaneStatus.fixture = nil }
+        let (model, workspace) = try await stripModel(tabs: 3)
+        defer { model.close() }
+        let tabs = workspace.session.tabs
+        workspace.apply(.rename(tabs[0].id, "a"))
+        workspace.apply(.rename(tabs[1].id, "a fairly ordinary name"))
+        workspace.apply(.rename(tabs[2].id, String(repeating: "a very long tab title ", count: 8)))
+        let frames = ChipFrames()
+        let window = stripWindow(model: model, workspace: workspace, width: 1300, frames: frames)
+        defer { window.close() }
+        let settledFrames = try await settled(frames, count: 3)
+        let widths = tabs.map { tab in settledFrames.first { $0.key.tab == tab.id }?.value.width ?? 0 }
+        XCTAssertEqual(widths[0], DS.Size.tabMinWidth)
+        XCTAssertGreaterThan(widths[1], DS.Size.tabMinWidth)
+        XCTAssertLessThan(widths[1], DS.Size.tabMaxWidth)
+        XCTAssertEqual(widths[2], DS.Size.tabMaxWidth)
+    }
+
+    /// The selected chip is always scrolled whole into view, however far along the strip it is.
+    func testTheSelectedChipIsScrolledIntoView() async throws {
+        let (model, workspace) = try await stripModel(tabs: 14)
+        defer { model.close() }
+        let frames = ChipFrames()
+        let window = stripWindow(model: model, workspace: workspace, width: 520, frames: frames)
+        defer { window.close() }
+        _ = try await settled(frames, count: 14)
+        let scrollView = try XCTUnwrap(Self.scrollView(in: try XCTUnwrap(window.contentView)))
+        let shown = scrollView.convert(scrollView.bounds, to: nil)
+        for ref in [model.groups.tabs.last, model.groups.tabs.first, model.groups.tabs[7]].compactMap(\.self) {
+            model.focus(ref)
+            try await Task.sleep(for: .milliseconds(700))
+            let chip = try XCTUnwrap(frames.byTab[ref])
+            XCTAssertGreaterThanOrEqual(chip.minX, shown.minX - 1, "\(ref) cut at the leading edge")
+            XCTAssertLessThanOrEqual(chip.maxX, shown.maxX + 1, "\(ref) cut at the trailing edge")
+        }
+    }
+
+    private static func scrollView(in view: NSView) -> NSScrollView? {
+        if let scroll = view as? NSScrollView { return scroll }
+        for subview in view.subviews {
+            if let found = scrollView(in: subview) { return found }
+        }
+        return nil
+    }
+
+    private func stripModel(tabs count: Int) async throws -> (WindowModel, Workspace) {
+        let model = WindowModel(app: .shared)
+        model.start()
+        for _ in 0..<50 where model.workspace?.focusedPane == nil { try await Task.sleep(for: .milliseconds(100)) }
+        let workspace = try XCTUnwrap(model.workspace)
+        for tab in workspace.session.tabs.dropFirst() { workspace.apply(.closeTab(tab.id)) }
+        while workspace.session.tabs.count < count { workspace.apply(.newTab) }
+        return (model, workspace)
+    }
+
+    private func stripWindow(model: WindowModel, workspace: Workspace, width: CGFloat, frames: ChipFrames) -> NSWindow {
+        let window = NSWindow(
+            contentRect: NSRect(x: -30000, y: -30000, width: width, height: 60), styleMask: [.borderless], backing: .buffered,
+            defer: false)
+        window.isReleasedWhenClosed = false
+        let strip = TabBar(workspace: workspace)
+            .environment(model)
+            .environment(AppModel.shared)
+            .environment(\.tabChipFrames) { ref, frame in frames.byTab[ref] = frame }
+        window.contentView = NSHostingView(rootView: strip)
+        window.orderFrontRegardless()
+        return window
     }
 
     private final class ChipFrames {
