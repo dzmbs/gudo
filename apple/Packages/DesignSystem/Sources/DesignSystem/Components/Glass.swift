@@ -184,8 +184,8 @@ public extension ButtonStyle where Self == RowButtonStyle {
 }
 
 /// A sidebar row as the platform draws a selected one, in the theme's accent: the solid accent
-/// with its own label while the window is active, the soft accent tint once it is not (where the
-/// system would turn grey).
+/// with its own label while the window (or the iPad's scene) is active, the soft accent tint once
+/// it is not (where the system would turn grey).
 public struct SidebarRowButtonStyle: ButtonStyle {
     var isSelected: Bool
     @State private var isHovered = false
@@ -205,11 +205,7 @@ private struct SidebarRowBody: View {
     let isSelected: Bool
     let isHovered: Bool
     @Environment(\.chrome) private var chrome
-    #if os(macOS)
     @Environment(\.appearsActive) private var appearsActive
-    #else
-    private let appearsActive = true
-    #endif
 
     var body: some View {
         let selection = chrome.rowSelection(on: chrome.sidebar, emphasized: appearsActive)

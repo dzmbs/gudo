@@ -148,20 +148,27 @@ public struct BellBorder: View {
 }
 
 /// Ghostty's unfocused-split dimming: a rectangle of the fill color (the terminal background by
-/// default) at `1 - unfocused-split-opacity` over the pane.
+/// default) at `1 - unfocused-split-opacity` over the pane; while the window is not active the pane
+/// recedes further.
 public struct UnfocusedDim: View {
-    let opacity: Double
+    let shownOpacity: Double
     let fill: Color
+    @Environment(\.appearsActive) private var appearsActive
 
     public init(unfocusedSplitOpacity: Double = TerminalPreferences.Default.unfocusedSplitOpacity, fill: Color) {
-        self.opacity = 1 - min(max(unfocusedSplitOpacity, 0.15), 1)
+        self.shownOpacity = min(max(unfocusedSplitOpacity, 0.15), 1)
         self.fill = fill
+    }
+
+    /// The veil over the pane: the rest of its opacity, more while its window is not active.
+    public static func dimming(unfocusedSplitOpacity shownOpacity: Double, isWindowActive: Bool) -> Double {
+        1 - shownOpacity * (isWindowActive ? 1 : DS.Opacity.recededPane)
     }
 
     public var body: some View {
         Rectangle()
             .fill(fill)
-            .opacity(opacity)
+            .opacity(Self.dimming(unfocusedSplitOpacity: shownOpacity, isWindowActive: appearsActive))
             .allowsHitTesting(false)
             .accessibilityHidden(true)
     }

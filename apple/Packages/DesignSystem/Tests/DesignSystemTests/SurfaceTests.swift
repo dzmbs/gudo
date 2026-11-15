@@ -74,3 +74,14 @@ struct SurfaceTests {
         }
     }
 }
+
+struct UnfocusedDimTests {
+    @Test func anUnfocusedPaneRecedesFurtherInAnInactiveWindow() {
+        let opacity = TerminalPreferences.Default.unfocusedSplitOpacity
+        let active = UnfocusedDim.dimming(unfocusedSplitOpacity: opacity, isWindowActive: true)
+        let inactive = UnfocusedDim.dimming(unfocusedSplitOpacity: opacity, isWindowActive: false)
+        #expect(abs(active - (1 - opacity)) < 0.0001)
+        #expect(inactive > active)
+        #expect(inactive < 1)
+    }
+}
