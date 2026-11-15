@@ -87,8 +87,13 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
     public static let ringLevel = 0.25
     /// A scrollbar at rest; while scrolled or under the pointer it is the tertiary ink (≥ 3:1).
     public static let scrollbarLevel = 0.25
-    /// The light edge on floating glass (light / dark chrome).
+    /// A surface's inner edge (light / dark chrome).
     public static let edgeLevels = (light: 0.08, dark: 0.16)
+    /// The line just outside a surface, in the scrim's darker ink (light / dark chrome).
+    public static let outlineLevels = (light: 0.10, dark: 0.5)
+    /// The light along a surface's top edge: white on light chrome, a bevel that shows only on a
+    /// surface darker than its paper; the lighter ink on dark, added to what is under it.
+    public static let topLightLevels = (light: 0.6, dark: 0.14)
     /// The dim behind a modal panel (light / dark chrome).
     public static let scrimLevels = (light: 0.10, dark: 0.28)
     /// The terminal's own background over a pane it covers: a saved screen, a pane being moved,
@@ -381,6 +386,9 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
         let darker = background.luminance <= foreground.luminance ? background : foreground
         return darker.blended(with: .black, 0.5)
     }
+
+    /// The lighter of the theme's background and foreground.
+    var lighterInk: ThemeColor { background.luminance >= foreground.luminance ? background : foreground }
 
     /// A solid fill: the accent deepened toward the darker ink until the lighter ink reads on it
     /// at 4.5:1 (white-on-blue, the platform's prominent button, in both schemes).

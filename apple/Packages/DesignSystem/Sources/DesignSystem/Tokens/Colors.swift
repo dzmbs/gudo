@@ -86,8 +86,12 @@ public extension DS {
         /// A scrollbar at rest, and while scrolling or under the pointer (≥ 3:1).
         public static let scrollbar = ChromeStyle(.scrollbar)
         public static let scrollbarActive = ChromeStyle(.scrollbarActive)
-        /// The light edge on floating glass and lifted panes.
+        /// A surface's inner edge: light on dark chrome, a faint ink line on light (`Surface`).
         public static let edge = ChromeStyle(.edge)
+        /// The line just outside a surface: the theme's darker side, so it reads on what is under it.
+        public static let outline = ChromeStyle(.outline)
+        /// The faint light along a surface's top edge.
+        public static let topLight = ChromeStyle(.topLight)
         /// The dim behind a modal panel (the palette).
         public static let scrim = ChromeStyle(.scrim)
         /// The terminal's background laid over a pane it covers (a saved screen, a pane being moved).
@@ -135,7 +139,7 @@ nonisolated public struct ChromeStyle: ShapeStyle, Hashable, Sendable {
     public enum Token: Hashable, Sendable {
         case accent, selection, onSelection, prominent, onProminent
         case onAccent, accentDim, accentRing
-        case bell, scrollbar, scrollbarActive, edge, scrim, veil
+        case bell, scrollbar, scrollbarActive, edge, outline, topLight, scrim, veil
         indirect case container(Token)
         indirect case on(Token)
         case done, error, attention, working, info
@@ -203,6 +207,8 @@ nonisolated public extension ChromePalette {
         case .scrollbar: ChromeLayer(foreground, Self.scrollbarLevel)
         case .scrollbarActive: ChromeLayer(foreground, tertiaryLevel)
         case .edge: ChromeLayer(foreground, scheme == .dark ? Self.edgeLevels.dark : Self.edgeLevels.light)
+        case .outline: ChromeLayer(scrimColor, scheme == .dark ? Self.outlineLevels.dark : Self.outlineLevels.light)
+        case .topLight: scheme == .dark ? ChromeLayer(lighterInk, Self.topLightLevels.dark) : ChromeLayer(.white, Self.topLightLevels.light)
         case .scrim: ChromeLayer(scrimColor, scheme == .dark ? Self.scrimLevels.dark : Self.scrimLevels.light)
         case .veil: ChromeLayer(terminal, Self.veilLevel)
         case .container(let signal): ChromeLayer(layer(signal, theme: theme).color, Self.containerLevel)
