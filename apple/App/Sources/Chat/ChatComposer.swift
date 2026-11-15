@@ -10,6 +10,16 @@ final class ChatComposer {
     enum Command { case prepare, send(ticket: UInt64, text: String, confirmation: UInt64?) }
     typealias Source = @MainActor (Command) async throws -> ChatSendStatus
     enum Phase: Equatable { case idle, preparing, confirming, sending, finished }
+    enum TrailingAction: Equatable { case send, stop, dictate, finishDictation }
+
+    /// The one button at the composer's trailing edge: what the next tap most likely wants.
+    static func trailingAction(draft: String, isDictating: Bool, canStop: Bool, canSend: Bool) -> TrailingAction? {
+        if isDictating { return .finishDictation }
+        let hasDraft = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if canSend, hasDraft { return .send }
+        if canStop { return .stop }
+        return canSend ? .dictate : nil
+    }
 
     private(set) var phase: Phase = .idle
     private(set) var message: String?

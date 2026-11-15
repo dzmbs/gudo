@@ -217,6 +217,8 @@ finish/cancel cannot control a replacement recording in another pane, and failur
 target. Agent/presentation/lifetime changes and backgrounding cancel. Starting may survive an inactive
 scene for system permission dialogs, but host controls remain unavailable during that interval.
 
+The composer is one rounded surface: the field over a fixed 44 pt bar with the Add menu, a one-line status, and one trailing button that swaps in place between Send (a draft is typed), Stop (the agent is working and the draft is empty) and Dictate, so neither status text nor the agent starting or stopping moves the layout. Terminal is reached from the header's Chat/Terminal switch, not the composer.
+
 The composer Add menu offers Claude's bounded session command list (built-ins plus user/project
 command directories). Selecting a command only edits an unchanged, current-scope draft; it never
 submits. Offers are replaced rather than reused across navigation or session changes.

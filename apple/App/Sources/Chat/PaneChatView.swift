@@ -136,110 +136,170 @@ struct PaneChatView<Terminal: View>: View {
         VStack(alignment: .leading, spacing: DS.Space.s) {
             if state.capabilities.contains(.approvals), let approval { approval.frame(maxWidth: .infinity) }
             if state.capabilities.contains(.send) {
-                TextField("Message", text: $state.draft, axis: .vertical)
-                    .font(DS.Font.prose).lineLimit(1...6)
-                    .focused($draftFocused)
-                    .disabled(state.dictation.isActive)
-                    .accessibilityIdentifier("chat-draft")
-                if state.draft.hasPrefix("/"), ChatCommands.query(state.draft) != nil {
-                    Button("Choose command…", systemImage: "slash.circle", action: openCommands)
-                        .font(DS.Font.caption).frame(minHeight: DS.Size.touchTarget)
-                        .disabled(!permitsSending || state.dictation.isActive || state.composer.isBusy || state.interrupt.isBusy)
-                }
-            } else if state.capabilities.contains(.read) {
-                Text("Reply in Terminal. Chat sends only to agents started in \(Brand.name).")
-                    .font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
-                    .accessibilityIdentifier("chat-read-only")
-            }
-            if let message = composerStatus {
-                HStack {
-                    Text(message).font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
-                        .accessibilityIdentifier("chat-send-status")
-                    if state.photos.isBusy {
-                        Button("Cancel") { state.photos.cancel(); photoPickerPresented = false }
+                VStack(alignment: .leading, spacing: 0) {
+                    TextField("Message", text: $state.draft, axis: .vertical)
+                        .font(DS.Font.prose).lineLimit(1...6)
+                        .focused($draftFocused)
+                        .disabled(state.dictation.isActive)
+                        .padding(.horizontal, DS.Space.l).padding(.top, DS.Space.m).padding(.bottom, DS.Space.xs)
+                        .accessibilityIdentifier("chat-draft")
+                    if state.draft.hasPrefix("/"), ChatCommands.query(state.draft) != nil {
+                        Button("Choose command…", systemImage: "slash.circle", action: openCommands)
                             .font(DS.Font.caption).frame(minHeight: DS.Size.touchTarget)
-                    } else if state.photos.phase == .ready {
-                        Button("Add photo") {
-                            if canEditDraft(state.actionContext) { state.photos.append(to: state) }
-                        }
-                            .font(DS.Font.caption).frame(minHeight: DS.Size.touchTarget)
+                            .padding(.horizontal, DS.Space.l)
+                            .disabled(!permitsSending || state.dictation.isActive || state.composer.isBusy || state.interrupt.isBusy)
                     }
+                    composerBar.padding(.horizontal, DS.Space.xs).padding(.bottom, DS.Space.xs)
                 }
+                .surface(.tile, in: RoundedRectangle.rounded(DS.Radius.card), fill: DS.Palette.raised)
+                .contentShape(.rect)
+                .onTapGesture { if !state.dictation.isActive { draftFocused = true } }
+            } else {
+                if state.capabilities.contains(.read) {
+                    Text("Reply in Terminal. Chat sends only to agents started in \(Brand.name).")
+                        .font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
+                        .accessibilityIdentifier("chat-read-only")
+                }
+                if trailingAction != nil { composerBar }
             }
-            HStack(spacing: DS.Space.s) {
-                if state.capabilities.contains(.send) {
-                    Menu {
-                        Button("Commands", systemImage: "slash.circle", action: openCommands)
-                            .keyboardShortcut("/", modifiers: .command)
-                            .disabled(ChatCommands.query(state.draft) == nil)
-                        Button("Upload photo to host…", systemImage: "photo", action: choosePhoto)
-                    } label: {
-                        Label("Add to message", systemImage: "plus").labelStyle(.iconOnly)
-                            .frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
-                    }
-                    .buttonStyle(.quiet)
-                    .disabled(!permitsSending || state.dictation.isActive || state.photos.isBusy
-                              || state.composer.isBusy || state.interrupt.isBusy)
-                    .accessibilityIdentifier("chat-add")
-                    dictationControls
+        }
+        .padding(.horizontal, DS.Space.m).padding(.top, DS.Space.xs).padding(.bottom, DS.Space.s)
+        .frame(maxWidth: ChatReadingColumn.maximumWidth).frame(maxWidth: .infinity)
+        .foregroundStyle(DS.Palette.text)
+    }
+
+    private var composerBar: some View {
+        HStack(spacing: DS.Space.xs) {
+            if state.dictation.isActive {
+                Button { state.dictation.cancel() } label: {
+                    Label("Cancel dictation", systemImage: "xmark").labelStyle(.iconOnly)
+                        .frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
                 }
-                Spacer(minLength: 0)
-                if draftFocused {
-                    Button { draftFocused = false } label: {
-                        Label("Hide Keyboard", systemImage: "keyboard.chevron.compact.down").labelStyle(.iconOnly)
-                            .frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
-                    }
-                    .buttonStyle(.quiet)
-                    .accessibilityIdentifier("chat-hide-keyboard")
-                }
-                Button { state.show(.terminal, terminal: pane) } label: {
-                    Label("Open Terminal", systemImage: "terminal").labelStyle(.iconOnly).font(DS.Font.caption)
+                .buttonStyle(.quiet).keyboardShortcut(.escape, modifiers: [])
+                .accessibilityIdentifier("chat-cancel-dictation")
+            } else if state.capabilities.contains(.send) {
+                Menu {
+                    Button("Commands", systemImage: "slash.circle", action: openCommands)
+                        .keyboardShortcut("/", modifiers: .command)
+                        .disabled(ChatCommands.query(state.draft) == nil)
+                    Button("Upload photo to host…", systemImage: "photo", action: choosePhoto)
+                } label: {
+                    Label("Add to message", systemImage: "plus").labelStyle(.iconOnly)
                         .frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
                 }
                 .buttonStyle(.quiet)
-                if working, state.capabilities.contains(.stop), !state.dictation.isActive {
-                    Button(action: interrupt) {
-                        Label("Stop", systemImage: "stop.fill").labelStyle(.iconOnly)
-                            .frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
-                    }
-                        .buttonStyle(.quiet)
-                        .keyboardShortcut(.escape, modifiers: [])
-                        .disabled(state.presentation != .chat || !permitsSending || state.photos.isBusy || !state.interrupt.canBegin)
-                        .accessibilityIdentifier("chat-stop")
-                }
-                if state.capabilities.contains(.send) {
-                    Button(action: send) {
-                        Label("Send", systemImage: "arrow.up").labelStyle(.iconOnly)
-                            .frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
-                    }
-                        .buttonStyle(.quietProminent)
-                        .keyboardShortcut(.return, modifiers: .command)
-                    .disabled(state.presentation != .chat || !permitsSending || state.dictation.isActive || state.photos.isBusy || state.interrupt.isBusy
-                              || approval?.hasBlockedRequest == true || !state.composer.canSend(state.draft))
-                    .accessibilityIdentifier("chat-send")
-                }
+                .disabled(!permitsSending || state.photos.isBusy || state.composer.isBusy || state.interrupt.isBusy)
+                .accessibilityIdentifier("chat-add")
             }
+            composerStatusLine
+            Spacer(minLength: 0)
+            if draftFocused {
+                Button { draftFocused = false } label: {
+                    Label("Hide Keyboard", systemImage: "keyboard.chevron.compact.down").labelStyle(.iconOnly)
+                        .frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
+                }
+                .buttonStyle(.quiet)
+                .accessibilityIdentifier("chat-hide-keyboard")
+            }
+            trailingButton
         }
-        .padding(DS.Space.l).foregroundStyle(DS.Palette.text).background(DS.Palette.sidebar)
+        .frame(height: DS.Size.touchTarget)
     }
 
-    @ViewBuilder private var dictationControls: some View {
-        Button(action: dictate) {
-            Label(state.dictation.isActive ? "Use dictation" : "Dictate",
-                  systemImage: state.dictation.isActive ? "checkmark" : "mic.fill")
-                .labelStyle(.iconOnly).frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
-        }
-        .buttonStyle(.quiet)
-        .disabled(state.presentation != .chat || !permitsSending || state.photos.isBusy || state.composer.isBusy || state.interrupt.isBusy
-                  || (state.dictation.isActive && !state.dictation.canFinish))
-        .accessibilityIdentifier("chat-dictate")
-        if state.dictation.isActive {
-            Button { state.dictation.cancel() } label: {
-                Label("Cancel dictation", systemImage: "xmark").labelStyle(.iconOnly)
-                    .frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
+    @ViewBuilder private var composerStatusLine: some View {
+        if let message = composerStatus {
+            HStack(spacing: DS.Space.xs) {
+                Text(message).font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
+                    .lineLimit(1).truncationMode(.tail)
+                    .accessibilityIdentifier("chat-send-status")
+                if state.photos.isBusy {
+                    Button("Cancel") { state.photos.cancel(); photoPickerPresented = false }
+                        .font(DS.Font.caption).frame(minHeight: DS.Size.touchTarget)
+                } else if state.photos.phase == .ready {
+                    Button("Add photo") {
+                        if canEditDraft(state.actionContext) { state.photos.append(to: state) }
+                    }
+                    .font(DS.Font.caption).frame(minHeight: DS.Size.touchTarget)
+                }
             }
-            .buttonStyle(.quiet).keyboardShortcut(.escape, modifiers: [])
-            .accessibilityIdentifier("chat-cancel-dictation")
+            .motionTransition(.fade)
+        }
+    }
+
+    private var trailingAction: ChatComposer.TrailingAction? {
+        ChatComposer.trailingAction(draft: state.draft, isDictating: state.dictation.isActive,
+                                    canStop: working && state.capabilities.contains(.stop),
+                                    canSend: state.capabilities.contains(.send))
+    }
+
+    @ViewBuilder private var trailingButton: some View {
+        if let action = trailingAction {
+            Button { perform(action) } label: {
+                Label(trailingTitle(action), systemImage: trailingSymbol(action)).labelStyle(.iconOnly)
+                    .contentTransition(.symbolEffect(.replace))
+                    .frame(width: DS.Size.touchTarget, height: DS.Size.touchTarget)
+            }
+            .buttonStyle(QuietButtonStyle(prominent: action == .send))
+            .keyboardShortcut(trailingShortcut(action))
+            .disabled(isDisabled(action))
+            .animation(DS.Motion.micro, value: action)
+            .accessibilityIdentifier(trailingIdentifier(action))
+        }
+    }
+
+    private func perform(_ action: ChatComposer.TrailingAction) {
+        switch action {
+        case .send: send()
+        case .stop: interrupt()
+        case .dictate, .finishDictation: dictate()
+        }
+    }
+
+    private func trailingShortcut(_ action: ChatComposer.TrailingAction) -> KeyboardShortcut? {
+        switch action {
+        case .send: KeyboardShortcut(.return, modifiers: .command)
+        case .stop: KeyboardShortcut(.escape, modifiers: [])
+        case .dictate, .finishDictation: nil
+        }
+    }
+
+    private func trailingTitle(_ action: ChatComposer.TrailingAction) -> String {
+        switch action {
+        case .send: "Send"
+        case .stop: "Stop"
+        case .dictate: "Dictate"
+        case .finishDictation: "Use dictation"
+        }
+    }
+
+    private func trailingSymbol(_ action: ChatComposer.TrailingAction) -> String {
+        switch action {
+        case .send: "arrow.up"
+        case .stop: "stop.fill"
+        case .dictate: "mic.fill"
+        case .finishDictation: "checkmark"
+        }
+    }
+
+    private func trailingIdentifier(_ action: ChatComposer.TrailingAction) -> String {
+        switch action {
+        case .send: "chat-send"
+        case .stop: "chat-stop"
+        case .dictate, .finishDictation: "chat-dictate"
+        }
+    }
+
+    private func isDisabled(_ action: ChatComposer.TrailingAction) -> Bool {
+        let blocked = state.presentation != .chat || !permitsSending || state.photos.isBusy
+        switch action {
+        case .send:
+            return blocked || state.dictation.isActive || state.interrupt.isBusy
+                || approval?.hasBlockedRequest == true || !state.composer.canSend(state.draft)
+        case .stop:
+            return blocked || !state.interrupt.canBegin
+        case .dictate, .finishDictation:
+            return blocked || state.composer.isBusy || state.interrupt.isBusy
+                || (state.dictation.isActive && !state.dictation.canFinish)
         }
     }
 

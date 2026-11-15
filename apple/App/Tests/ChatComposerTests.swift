@@ -138,4 +138,15 @@ final class ChatComposerTests: XCTestCase {
         XCTAssertThrowsError(try ChatSendStatus.decode(#""FutureSuccess""#))
         XCTAssertThrowsError(try ChatSendStatus.decode(String(repeating: "x", count: 1_025)))
     }
+
+    func testTheTrailingButtonSwapsBetweenSendStopAndDictate() {
+        XCTAssertEqual(ChatComposer.trailingAction(draft: "", isDictating: false, canStop: false, canSend: true), .dictate)
+        XCTAssertEqual(ChatComposer.trailingAction(draft: "  \n", isDictating: false, canStop: false, canSend: true), .dictate)
+        XCTAssertEqual(ChatComposer.trailingAction(draft: "fix it", isDictating: false, canStop: false, canSend: true), .send)
+        XCTAssertEqual(ChatComposer.trailingAction(draft: "", isDictating: false, canStop: true, canSend: true), .stop)
+        XCTAssertEqual(ChatComposer.trailingAction(draft: "queue this", isDictating: false, canStop: true, canSend: true), .send)
+        XCTAssertEqual(ChatComposer.trailingAction(draft: "fix it", isDictating: true, canStop: true, canSend: true), .finishDictation)
+        XCTAssertEqual(ChatComposer.trailingAction(draft: "", isDictating: false, canStop: true, canSend: false), .stop)
+        XCTAssertNil(ChatComposer.trailingAction(draft: "", isDictating: false, canStop: false, canSend: false))
+    }
 }
