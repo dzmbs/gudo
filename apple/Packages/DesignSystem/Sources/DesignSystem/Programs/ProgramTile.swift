@@ -6,7 +6,8 @@ nonisolated public enum ProgramTileTint: String, CaseIterable, Identifiable, Sen
     case original
     /// A neutral tile; symbols and one-colour marks in the full ink.
     case monochrome
-    /// The accent's tint under the mark; symbols and one-colour marks in the accent.
+    /// The accent's tint under the mark; symbols and one-colour marks in the accent. A selected
+    /// tile inverts as in the others, so colour logos keep a neutral ground.
     case accent
 
     public static let key = "program-mark-tint"
@@ -77,7 +78,7 @@ public struct TileArtwork<Artwork: View>: View {
         artwork((size * Self.glyphShare).rounded(), tint == .original && !isSelected)
             .foregroundStyle(glyph)
             // On an inverted tile a logo takes the variant made for the tile's own lightness.
-            .environment(\.colorScheme, isSelected && tint != .accent ? colorScheme.inverted : colorScheme)
+            .environment(\.colorScheme, isSelected ? colorScheme.inverted : colorScheme)
             .frame(width: size, height: size)
             .background(fill, in: shape)
             .hairlineBorder(shape, style: DS.Palette.hairline)
@@ -96,7 +97,6 @@ public struct TileArtwork<Artwork: View>: View {
 
     private var fill: ChromeStyle {
         switch (tint, isSelected) {
-        case (.accent, true): DS.Palette.accent
         case (_, true): DS.Palette.text
         case (.accent, false): DS.Palette.accentDim
         case (_, false): DS.Palette.tile
@@ -105,7 +105,6 @@ public struct TileArtwork<Artwork: View>: View {
 
     private var glyph: ChromeStyle {
         switch (tint, isSelected) {
-        case (.accent, true): DS.Palette.onAccent
         case (_, true): DS.Palette.base
         case (.accent, false): DS.Palette.accent
         case (_, false): DS.Palette.text

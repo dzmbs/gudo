@@ -347,7 +347,8 @@ pane headers and the palette.
   fill with the mark in `base` (a light tile and a dark mark on a dark theme, the reverse on a
   light one), logos taking the variant made for the tile's lightness. Settings ▸ Appearance ▸
   Program Marks: Original (neutral tile, symbols in the muted ink), Monochrome (symbols in the full
-  ink) and Accent (`accentDim` tile, symbols in the accent; selected: `accent` with `onAccent`).
+  ink) and Accent (`accentDim` tile, symbols in the accent; a selected tile inverts as in the
+  others, so colour logos keep a neutral ground).
   Marks stay legible on every tile in every tint over all themes (`ChromeContrastTests`).
 - **Most urgent first.** A tab shows its panes' most urgent state, a collapsed project or a host
   its tabs': blocked, failed, working, done, idle (`AgentState.mostUrgent`).

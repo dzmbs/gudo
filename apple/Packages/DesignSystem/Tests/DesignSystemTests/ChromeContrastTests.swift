@@ -142,7 +142,6 @@ struct ChromeContrastTests {
                     ("mark on tile on \(name)", tile.blended(with: chrome.foreground, ChromePalette.textLevels.primary), tile),
                     ("accent mark on accent tile on \(name)", chrome.accent, accentTile),
                     ("base on inverted tile on \(name)", chrome.base, invertedTile),
-                    ("onAccent on accent tile", chrome.onAccent, chrome.accent),
                 ]
             }
         }
