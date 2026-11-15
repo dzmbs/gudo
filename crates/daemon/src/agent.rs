@@ -988,6 +988,19 @@ async fn handle_hook(
         }
         return HookResponse::default();
     }
+    if request.event == "PermissionRequest"
+        && request.agent == "claude"
+        && agents::opens_only_a_shell(
+            request.payload["tool_name"].as_str().unwrap_or_default(),
+            &request.payload["tool_input"],
+        )
+    {
+        return HookResponse {
+            stdout: Some(
+                ClaudeCode::permission_response(agents::ApprovalChoice::AllowOnce, &[]).to_string(),
+            ),
+        };
+    }
     let Some(entry) = core.pane(pane_id) else {
         return HookResponse::default();
     };

@@ -730,3 +730,35 @@ async fn an_approval_reaches_a_client_that_fell_behind_the_events() {
     let blocker = blocked(&owner, pane).unwrap();
     info(&mut owner, pane, blocker.request_id).await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_split_that_only_opens_a_shell_is_allowed_without_asking() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path()).await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = owner.attach_and_follow().await;
+    let mut agent = Agent::new(dir.path(), &daemon, pane);
+    let tool = |name: &str| format!("mcp__{}__{name}", agents::mcp_server_name());
+
+    let split = agent.ask(
+        &tool("pane_split"),
+        json!({ "direction": "down", "cwd": "/tmp" }),
+    );
+    assert_eq!(
+        answered(split).await["hookSpecificOutput"]["decision"]["behavior"],
+        "allow"
+    );
+    let tab = agent.ask(&tool("tab_new"), json!({ "title": "logs" }));
+    assert_eq!(
+        answered(tab).await["hookSpecificOutput"]["decision"]["behavior"],
+        "allow"
+    );
+    assert!(blocked(&owner, pane).is_none(), "nobody was asked");
+
+    let _running = agent.ask(&tool("pane_split"), json!({ "command": "make deploy" }));
+    owner
+        .until("a split that runs a command asks", |owner| {
+            blocked(owner, pane).is_some()
+        })
+        .await;
+}
