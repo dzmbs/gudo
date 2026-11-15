@@ -25,8 +25,7 @@ nonisolated public enum ProgramTileTint: String, CaseIterable, Identifiable, Sen
 
 /// A program's mark on a small tile from the theme: a neutral container fill, a hairline edge
 /// and a faint light along its top, continuous corners. The mark itself is drawn as it always
-/// is. A selected row inverts the tile (a light tile and a dark mark on a dark theme, the
-/// reverse on a light one). An agent's quiet states are a dot cut into the tile's corner; the
+/// is: muted on a quiet row, in full colour on the selected one, whose fill already marks it. An agent's quiet states are a dot cut into the tile's corner; the
 /// ones that need you are a `StatePill` beside the title instead.
 public struct ProgramTile: View {
     /// The tile leading sidebar rows and tab chips: the slot every row's title aligns after.
@@ -61,7 +60,6 @@ public struct TileArtwork<Artwork: View>: View {
     let isSelected: Bool
     let artwork: (_ glyphSize: CGFloat, _ isMuted: Bool) -> Artwork
     @AppStorage(ProgramTileTint.key) private var tint = ProgramTileTint.original
-    @Environment(\.colorScheme) private var colorScheme
 
     public init(size: CGFloat, isSelected: Bool = false, @ViewBuilder artwork: @escaping (_ glyphSize: CGFloat, _ isMuted: Bool) -> Artwork) {
         self.size = size
@@ -76,8 +74,6 @@ public struct TileArtwork<Artwork: View>: View {
         let shape = RoundedRectangle.rounded(radius)
         artwork((size * Self.glyphShare).rounded(), tint == .original && !isSelected)
             .foregroundStyle(glyph)
-            // On an inverted tile a logo takes the variant made for the tile's own lightness.
-            .environment(\.colorScheme, isSelected ? colorScheme.inverted : colorScheme)
             .frame(width: size, height: size)
             .surface(.mark, in: shape, fill: fill)
             .animation(DS.Motion.micro, value: isSelected)
@@ -87,22 +83,10 @@ public struct TileArtwork<Artwork: View>: View {
     private var radius: CGFloat { size > 20 ? DS.Radius.field : DS.Radius.chip }
 
     private var fill: ChromeStyle {
-        switch (tint, isSelected) {
-        case (_, true): DS.Palette.text
-        case (.accent, false): DS.Palette.accentDim
-        case (_, false): DS.Palette.tile
-        }
+        tint == .accent ? DS.Palette.accentDim : DS.Palette.tile
     }
 
     private var glyph: ChromeStyle {
-        switch (tint, isSelected) {
-        case (_, true): DS.Palette.base
-        case (.accent, false): DS.Palette.accent
-        case (_, false): DS.Palette.text
-        }
+        tint == .accent ? DS.Palette.accent : DS.Palette.text
     }
-}
-
-private extension ColorScheme {
-    var inverted: ColorScheme { self == .dark ? .light : .dark }
 }

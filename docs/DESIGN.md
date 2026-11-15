@@ -49,7 +49,7 @@ stay monochrome and keep their disabled look). UIKit/AppKit views read
 | `groupedPage` / `groupedRow` | dark: base / raised; light: sidebar / base (iOS convention) | Settings, sheets' forms |
 | `text`, `textSecondary`, `textTertiary`, `textQuaternary` | foreground at 90 / 60 / 40 / 20 % | the hierarchical styles under `chromeContent()` (`.primary`, `.secondary`, `.tertiary` are these) |
 | `hoverFill` / `selectedFill` / `pressedFill` | foreground at 5 / 10 / 15 % | every interaction state through `ControlState` (below): rows, tabs, the selected tab pill, bar, quiet and form buttons, lit toggles |
-| `tile` | the ink at the selected level (10 %) over the row under it | a program mark's tile (`ProgramTile`); a selected row's tile inverts to `text` with the mark in `base` |
+| `tile` | the ink at the selected level (10 %) over the row under it | a program mark's tile (`ProgramTile`); a selected row keeps its tile, its mark in full colour |
 | `hairline` / `separator` / `border` | foreground at 10 / 15 / 20 % | one-physical-pixel lines (`Hairline`, `hairlineBorder`), the sidebar edge, tab strip rule |
 | `accent` | the cursor colour when it is a real colour (chroma ≥ 20, not the foreground, not a red/green/yellow); else the theme's blue (bright, or normal where the bright is grey) when it stands clear of both inks; else the blue/magenta/cyan farthest (CIEDE2000) from background and foreground. Then refined in OKLCH: chroma ≤ 0.13, lightness 0.48-0.62 (light chrome) / 0.68-0.86 (dark), hue kept, so a raw `#0000FF` never reaches the chrome | focus, toggles, links, the selected theme card |
 | `selection` / `onSelection` | the accent at 14 % (light) / 24 % (dark), translucent, under the normal text (≥ 4.5:1) | the selected row in the palette and lists (as in Spotlight) |
@@ -344,12 +344,10 @@ pane headers and the palette.
   edge, a one-pixel `edge` light along its top, continuous corners (`chip` up to 20 pt, `field`
   above). The mark on it is unchanged: an official logo as its owner publishes it, else our own
   glyph (`ProgramCatalog.glyphs`: pi's π, opencode, Amp; simple drawings, not those programs'
-  artwork) or the kind's SF Symbol in the ink. A selected row or chip inverts the tile: `text`
-  fill with the mark in `base` (a light tile and a dark mark on a dark theme, the reverse on a
-  light one), logos taking the variant made for the tile's lightness. Settings ▸ Appearance ▸
+  artwork) or the kind's SF Symbol in the ink. A selected row or chip keeps its tile (the row's
+  fill marks it), its mark in full colour where quiet rows mute it. Settings ▸ Appearance ▸
   Program Marks: Original (neutral tile, symbols in the muted ink), Monochrome (symbols in the full
-  ink) and Accent (`accentDim` tile, symbols in the accent; a selected tile inverts as in the
-  others, so colour logos keep a neutral ground).
+  ink) and Accent (`accentDim` tile, symbols in the accent).
   Marks stay legible on every tile in every tint over all themes (`ChromeContrastTests`).
 - **Most urgent first.** A tab shows its panes' most urgent state, a collapsed project or a host
   its tabs': blocked, failed, working, done, idle (`AgentState.mostUrgent`).
@@ -434,8 +432,9 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
   the Mac, 0.6 on touch).
 - Projects first (like Safari's tab groups; docs/APP-ARCHITECTURE.md
   §23): a header with the project's colour dot (`ProjectColor`, the theme's ANSI hue softened like
-  the states), its name in the section font and + New Terminal; its tabs under it with a 2 pt
-  thread of its colour at their leading edge, each naming its host on the second line. Drop a tab
+  the states), its name as a quiet section label (the section font in the secondary ink) and
+  + New Terminal; its tabs under it, each naming its host on the second line. The colour stays in
+  the dot: rows carry no stripe of it. Drop a tab
   on another to group them (the row lights in the colour), between rows to place it (the rows
   slide apart with `DS.Motion.standard`; the dragged row leaves a gap, never slides over others).
   A one-tap "Group 3 tabs in app" suggestion when loose tabs share a repository. The strip draws
@@ -472,7 +471,7 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
   holds the focused pane's program tile (Program marks and status: the official logo,
   unmodified, where one ships, else our glyph or a neutral SF Symbol per kind), with the tab's
   most urgent quiet state as a dot on it and "Needs you" or "Failed" as a pill at the row's
-  trailing edge; the selected row's tile inverts. Every row has the slot so titles align. The live context in SF Mono underneath, under the title, ⌘N on the Mac (⌘1-8 index the
+  trailing edge. Every row has the slot so titles align. The live context in SF Mono underneath, under the title, ⌘N on the Mac (⌘1-8 index the
   unified list; numbers do not change when a group collapses or a host goes down). Selection is a
   10 % fill of the theme's ink with radius 8 (hover 5 %), never the accent. Drag to reorder or group; context
   menu Rename / Close / New Project from Tab / Move to Project ▸. Under a group's tabs, its agents. Rows touch (no gap); the host's agent
@@ -512,7 +511,7 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
 ### Tab strip (horizontal tabs): Ghostty native tabs
 
 Equal-width tabs across the row; centered title led by the same slot as the sidebar
-(the program tile with its state dot, inverted on the selected tab; a pill after the title for
+(the program tile with its state dot; a pill after the title for
 what needs you); ⌘N right-aligned only while ⌘ is held;
 close button on hover at the leading edge; one-pixel separators between unselected tabs (none
 beside the selected one); one title weight (callout on the Mac, subheadline on touch), inactive

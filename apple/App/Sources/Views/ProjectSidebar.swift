@@ -304,10 +304,9 @@ private struct SidebarItemView: View {
             if let project = model.groups.project(id) { ProjectEmptyRow(project: project) }
         case .row(let ref, let container):
             SidebarTabRow(ref: ref, container: container, number: numbers[ref] ?? 0)
-        case .pane(let ref, let pane, let container):
+        case .pane(let ref, let pane, _):
             if let group = model.groups.group(ref.hostId), let tab = group.tabs.first(where: { $0.id == ref.tab }) {
                 PaneTreeRow(pane: pane, group: group, isFocusedPane: model.currentTab == ref && tab.focused == pane)
-                    .projectThread(container, model: model)
             }
         case .windowHeader(let kind):
             WindowTabsHeader(kind: kind)
@@ -358,7 +357,6 @@ private struct SidebarTabRow: View {
         let joined = model.joinedTab == ref
         let tint: ChromeStyle = model.groups.project(of: ref).map { DS.Palette.project($0.color) } ?? DS.Palette.accent
         content(showsHost: project != nil && model.groups.groups.count > 1)
-            .projectThread(container, model: model)
             // What the drop will do, said quietly where the row's trailing glyphs sit.
             .overlay(alignment: .trailing) {
                 if isGroupTarget, let dragged = drag.dragging {
@@ -419,12 +417,6 @@ private struct SidebarTabRow: View {
 }
 
 extension View {
-    /// A project's colour as a thread down its rows' leading edge. Rows touch, so the threads
-    /// of one project read as a single line.
-    func projectThread(_ container: SidebarContainer, model: WindowModel, opacity: Double = 1) -> some View {
-        modifier(ProjectThread(project: { if case .project(let id) = container { model.groups.project(id) } else { nil } }(), opacity: opacity))
-    }
-
     /// Drags a tab from the sidebar with a lifted preview of its row.
     func sidebarTabDrag(_ ref: TabRef, model: WindowModel, drag: SidebarDragState, title: String) -> some View {
         onDrag {
@@ -433,24 +425,6 @@ extension View {
             return TabDrag.provider(for: ref, in: model)
         } preview: {
             DragLiftPreview(title: title, systemImage: nil)
-        }
-    }
-}
-
-private struct ProjectThread: ViewModifier {
-    let project: Project?
-    let opacity: Double
-    @Environment(\.sidebarListStyle) private var listStyle
-
-    func body(content: Content) -> some View {
-        content.overlay(alignment: .leading) {
-            if let project, listStyle == .plain {
-                Rectangle()
-                    .fill(DS.Palette.project(project.color).opacity(opacity))
-                    .frame(width: 2)
-                    .padding(.leading, DS.Space.s + 2)
-                    .accessibilityHidden(true)
-            }
         }
     }
 }
@@ -691,8 +665,8 @@ private struct ProjectHeader: View {
                 nameField
             } else {
                 Text(project.name)
-                    .font(SidebarFont.project)
-                    .foregroundStyle(DS.Palette.text)
+                    .font(SidebarFont.section)
+                    .foregroundStyle(DS.Palette.textSecondary)
                     .lineLimit(1)
                     .layoutPriority(-1)
             }
@@ -775,7 +749,7 @@ private struct ProjectHeader: View {
     private var nameField: some View {
         TextField("Project Name", text: $draft, selection: $selection)
             .textFieldStyle(.plain)
-            .font(SidebarFont.project)
+            .font(SidebarFont.section)
             .foregroundStyle(DS.Palette.text)
             .focused($fieldFocused)
             .onSubmit { finishRename() }
@@ -929,35 +903,29 @@ private struct ProjectEmptyRow: View {
         } label: {
             HStack(spacing: DS.Space.gap10) {
                 Image(systemName: "plus")
-                    .font(.system(size: size * 0.45, weight: .semibold))
-                    .foregroundStyle(dropping ? AnyShapeStyle(tint) : AnyShapeStyle(DS.Palette.textSecondary))
+                    .font(.system(size: size * 0.5, weight: .medium))
+                    .foregroundStyle(dropping ? AnyShapeStyle(tint) : AnyShapeStyle(DS.Palette.textTertiary))
                     .frame(width: size, height: size)
-                    .background {
-                        RoundedRectangle(cornerRadius: size * 0.27, style: .continuous)
-                            .fill(DS.Palette.container(tint).opacity(dropping ? 1 : 0))
-                            .strokeBorder(dropping ? AnyShapeStyle(tint) : AnyShapeStyle(DS.Palette.border),
-                                          style: StrokeStyle(lineWidth: 1, dash: dropping ? [] : [3, 2]))
-                    }
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(dropping ? "Drop to add" : "New Terminal")
-                        .font(SidebarFont.title)
-                        .foregroundStyle(DS.Palette.textSecondary)
-                    if !dropping {
-                        Text("or drag a tab here")
-                            .font(SidebarFont.subtitle)
-                            .foregroundStyle(DS.Palette.textTertiary)
-                    }
-                }
-                .lineLimit(1)
-                .contentTransition(.opacity)
+                Text(dropping ? "Drop to add" : "New Terminal")
+                    .font(SidebarFont.title)
+                    .foregroundStyle(dropping ? AnyShapeStyle(tint) : AnyShapeStyle(DS.Palette.textTertiary))
+                    .lineLimit(1)
+                    .contentTransition(.opacity)
                 Spacer(minLength: 0)
+            }
+            // A drop lights the line in the project's colour.
+            .background {
+                RoundedRectangle.rounded(DS.Radius.control)
+                    .fill(DS.Palette.container(tint))
+                    .padding(.horizontal, -DS.Space.m)
+                    .padding(.vertical, -DS.Space.row)
+                    .opacity(dropping ? 1 : 0)
             }
             .sidebarRow(selected: false)
         }
         .buttonStyle(.plain)
-        .projectThread(.project(project.id), model: model, opacity: 0.5)
         .animation(DS.Motion.micro, value: dropping)
-        .accessibilityLabel("No tabs in \(project.name). New Terminal")
+        .accessibilityLabel("No tabs in \(project.name). New Terminal, or drag a tab here")
         .accessibilityIdentifier("project-empty-\(project.name)")
     }
 }
