@@ -148,6 +148,7 @@ struct ScreenRecord {
     visible: bool,
     source: Source,
     since: UnixMillis,
+    rule_id: Option<String>,
 }
 
 impl ScreenRecord {
@@ -178,11 +179,11 @@ enum Target {
 }
 
 impl Target {
-    fn from_screen(state: AgentState) -> Self {
-        match state {
+    fn from_screen(screen: &ScreenRecord) -> Self {
+        match screen.state {
             AgentState::Working => Self::Working,
             AgentState::Blocked => {
-                let mut blocker = Blocker::new(BlockedReason::Other);
+                let mut blocker = Blocker::new(screen_blocker_reason(screen.rule_id.as_deref()));
                 blocker.answer_paths = vec![AnswerPath::Keystrokes];
                 Self::Blocked(blocker)
             }
@@ -191,6 +192,22 @@ impl Target {
             AgentState::Unknown => Self::Unknown,
         }
     }
+}
+
+/// What a dialog the screen shows asks for, by the manifest rule that matched it.
+fn screen_blocker_reason(rule_id: Option<&str>) -> BlockedReason {
+    let Some(rule) = rule_id else {
+        return BlockedReason::Other;
+    };
+    [
+        ("trust", BlockedReason::Trust),
+        ("update", BlockedReason::Update),
+        ("permission", BlockedReason::Permission),
+        ("elicitation", BlockedReason::Elicitation),
+    ]
+    .into_iter()
+    .find(|(word, _)| rule.contains(word))
+    .map_or(BlockedReason::Other, |(_, reason)| reason)
 }
 
 struct Provenance {
@@ -330,6 +347,11 @@ impl Arbiter {
     /// Returns whether this is a restored session that has not worked since.
     pub fn is_restored_unconfirmed(&self) -> bool {
         self.restored_unconfirmed
+    }
+
+    /// Returns whether the agent's process has exited.
+    pub fn has_exited(&self) -> bool {
+        self.process == Process::Exited
     }
 
     /// Returns the accepted decision for the current or most recent request.
@@ -578,6 +600,7 @@ impl Arbiter {
         if same {
             if let Some(screen) = &mut self.screen {
                 screen.source = matched.source;
+                screen.rule_id.clone_from(&matched.rule_id);
             }
         } else {
             self.screen = Some(ScreenRecord {
@@ -585,6 +608,7 @@ impl Arbiter {
                 visible: matched.is_visible(),
                 source: matched.source,
                 since: now,
+                rule_id: matched.rule_id.clone(),
             });
         }
     }
@@ -627,7 +651,7 @@ impl Arbiter {
                         source: screen.source,
                         confidence: screen.confidence(),
                     };
-                    return (Target::from_screen(screen.state), p, false);
+                    return (Target::from_screen(screen), p, false);
                 }
             }
             if claim_state == AgentState::Working
@@ -657,7 +681,7 @@ impl Arbiter {
                 source: screen.source,
                 confidence: screen.confidence(),
             };
-            return (Target::from_screen(screen.state), p, stale);
+            return (Target::from_screen(screen), p, stale);
         }
         let p = Provenance {
             source: Source::Process,
@@ -1097,6 +1121,27 @@ mod tests {
         // When the dialog closes, the still-valid hook claim is back in charge.
         let _ = arbiter.observe_screen(&screen(AgentState::Idle, false), at(200));
         assert_eq!(arbiter.status(), &Status::Working);
+    }
+
+    #[test]
+    fn a_dialog_on_screen_says_what_it_asks_for() {
+        let mut arbiter = new_arbiter(HookCoverage::Partial);
+        let dialog = |rule: &str| {
+            ScreenVerdict::State(ScreenMatch::new(
+                AgentState::Blocked,
+                Source::Screen,
+                Some(rule.into()),
+                true,
+            ))
+        };
+        let reason = |arbiter: &Arbiter| arbiter.status().blocked().unwrap().blocker.reason;
+        let _ = arbiter.observe_screen(&dialog("trust_directory"), at(0));
+        assert_eq!(reason(&arbiter), BlockedReason::Trust);
+        let _ = arbiter.observe_screen(&dialog("startup_update"), at(100));
+        assert_eq!(reason(&arbiter), BlockedReason::Update);
+        let mut unnamed = new_arbiter(HookCoverage::Partial);
+        let _ = unnamed.observe_screen(&dialog("weak_blocker"), at(0));
+        assert_eq!(reason(&unnamed), BlockedReason::Other);
     }
 
     #[test]
