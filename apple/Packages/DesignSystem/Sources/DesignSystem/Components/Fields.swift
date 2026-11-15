@@ -14,16 +14,18 @@ private struct FieldSurface: ViewModifier {
     let cornerRadius: CGFloat
 
     func body(content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius)
+        let shape = RoundedRectangle.rounded(cornerRadius)
         content
             .background(DS.Palette.raised, in: shape)
             .overlay {
-                shape.strokeBorder(isFocused ? AnyShapeStyle(DS.Palette.accent) : AnyShapeStyle(DS.Palette.hairline), lineWidth: isFocused ? 1 : 0.5)
+                if isFocused { shape.strokeBorder(DS.Palette.accent, lineWidth: 1) }
             }
+            .hairlineBorder(shape, style: isFocused ? AnyShapeStyle(Color.clear) : AnyShapeStyle(DS.Palette.hairline))
             .background {
                 shape
-                    .stroke(DS.Palette.accent.opacity(isFocused ? 0.25 : 0), lineWidth: 4)
+                    .stroke(DS.Palette.accentRing, lineWidth: 4)
                     .padding(-1)
+                    .opacity(isFocused ? 1 : 0)
             }
             .animation(DS.Motion.micro, value: isFocused)
     }

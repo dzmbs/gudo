@@ -22,6 +22,23 @@ import Testing
         #expect(ControlState(isHovered: true, isSelected: true, isEnabled: false).fillLevel == levels.selected)
     }
 
+    @Test func eachStateFillsWithItsNamedToken() {
+        #expect(ControlState().fill == nil)
+        #expect(ControlState(isHovered: true).fill == DS.Palette.hoverFill)
+        #expect(ControlState(isSelected: true).fill == DS.Palette.selectedFill)
+        #expect(ControlState(isPressed: true).fill == DS.Palette.pressedFill)
+    }
+
+    /// The accent variant: hover stays neutral (a pointer passing is not a choice), a press dims
+    /// the accent in, selection is the accent's soft tint.
+    @Test func theAccentVariantColoursOnlyPressAndSelection() {
+        #expect(ControlState(isHovered: true, tint: .accent).fill == DS.Palette.hoverFill)
+        #expect(ControlState(isPressed: true, tint: .accent).fill == DS.Palette.accentDim)
+        #expect(ControlState(isSelected: true, tint: .accent).fill == DS.Palette.selection)
+        #expect(ControlState(isPressed: true, isSelected: true, tint: .accent).fill == DS.Palette.selection)
+        #expect(ControlState(isSelected: true, isEnabled: false, tint: .accent).fill == DS.Palette.selection)
+    }
+
     @Test func disabledInkStepsDownOnceAndNeverPastTertiary() {
         #expect(DS.Palette.text.disabled == DS.Palette.textSecondary)
         #expect(DS.Palette.textSecondary.disabled == DS.Palette.textTertiary)

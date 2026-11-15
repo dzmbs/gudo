@@ -26,7 +26,7 @@ public extension View {
         modifier(ThemedGlassFill(shape: shape, interactive: interactive))
     }
 
-    /// A lit rim on dark chrome, a faint ink line on light.
+    /// A lit rim on dark chrome, a faint ink line on light (`DS.Palette.edge`), one pixel wide.
     func glassEdge(_ shape: some InsettableShape) -> some View {
         modifier(GlassEdge(shape: shape))
     }
@@ -35,12 +35,13 @@ public extension View {
 private struct GlassEdge<S: InsettableShape>: ViewModifier {
     let shape: S
     @Environment(\.chrome) private var chrome
+    @Environment(\.displayScale) private var scale
 
     func body(content: Content) -> some View {
         let dark = chrome.scheme == .dark
         content.overlay {
             shape
-                .strokeBorder(dark ? Color.white.opacity(0.16) : Color.black.opacity(0.08), lineWidth: 0.5)
+                .strokeBorder(DS.Palette.edge, lineWidth: DS.Size.hairline(scale: scale))
                 .blendMode(dark ? .plusLighter : .normal)
                 .allowsHitTesting(false)
         }
@@ -125,6 +126,7 @@ public struct BarButtonStyle: ButtonStyle {
     public init() {}
 
     public func makeBody(configuration: Configuration) -> some View {
+        let state = ControlState(isHovered: isHovered, isPressed: configuration.isPressed, isEnabled: isEnabled)
         let isLit = isEnabled && (isHovered || configuration.isPressed)
         configuration.label
             .labelStyle(.iconOnly)
@@ -132,8 +134,7 @@ public struct BarButtonStyle: ButtonStyle {
             .frame(minWidth: 26, minHeight: 26)
             .padding(.horizontal, 2)
             .background(
-                RoundedRectangle(cornerRadius: DS.Radius.field)
-                    .fill(DS.Palette.ink.opacity(isLit ? (configuration.isPressed ? 0.2 : 0.1) : 0))
+                ControlFillShape(state: state, shape: .rounded(DS.Radius.field))
                     .animation(DS.Motion.micro, value: isLit))
             .contentShape(.rect)
             .onHover { isHovered = $0 }
@@ -160,22 +161,17 @@ public struct RowButtonStyle: ButtonStyle {
     }
 
     public func makeBody(configuration: Configuration) -> some View {
+        let state = ControlState(
+            isHovered: isHovered, isPressed: configuration.isPressed, isSelected: isSelected, isEnabled: isEnabled, tint: .accent)
         configuration.label
             .contentShape(.rect)
             .background(
-                RoundedRectangle(cornerRadius: cornerRadius)
-                    .fill(fill(configuration.isPressed))
+                ControlFillShape(state: state, shape: .rounded(cornerRadius))
                     .animation(DS.Motion.micro, value: isHovered))
             .onHover { isHovered = $0 }
             #if os(iOS)
             .hoverEffect(.highlight)
             #endif
-    }
-
-    private func fill(_ pressed: Bool) -> AnyShapeStyle {
-        if isSelected || (isEnabled && pressed) { return AnyShapeStyle(DS.Palette.selection) }
-        if isEnabled && isHovered { return AnyShapeStyle(DS.Palette.hoverFill) }
-        return AnyShapeStyle(Color.clear)
     }
 }
 
@@ -217,18 +213,20 @@ private struct SidebarRowBody: View {
 
     var body: some View {
         let selection = chrome.rowSelection(on: chrome.sidebar, emphasized: appearsActive)
+        let state = ControlState(isHovered: isHovered, isPressed: configuration.isPressed, tint: .accent)
         configuration.label
             .foregroundStyle(isSelected ? AnyShapeStyle(selection.text.color) : AnyShapeStyle(DS.Palette.text))
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(.rect)
-            .background(RoundedRectangle(cornerRadius: DS.Radius.control).fill(fill(selection.fill.color)))
-    }
-
-    private func fill(_ selected: Color) -> AnyShapeStyle {
-        if isSelected { return AnyShapeStyle(selected) }
-        if configuration.isPressed { return AnyShapeStyle(DS.Palette.selection) }
-        if isHovered { return AnyShapeStyle(DS.Palette.hoverFill) }
-        return AnyShapeStyle(Color.clear)
+            .background {
+                // Selected, the platform's own sidebar selection in the accent; otherwise the
+                // control states.
+                if isSelected {
+                    RoundedRectangle.rounded(DS.Radius.control).fill(selection.fill.color)
+                } else {
+                    ControlFillShape(state: state, shape: .rounded(DS.Radius.control))
+                }
+            }
     }
 }
 
@@ -250,8 +248,7 @@ private struct LitModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .background {
-                Capsule()
-                    .fill(DS.Palette.ink.opacity(isOn ? 0.2 : 0))
+                ControlFillShape(state: ControlState(isSelected: isOn), shape: Capsule())
                     .padding(-DS.Space.xs)
             }
             .animation(DS.Motion.micro, value: isOn)
@@ -280,14 +277,15 @@ public struct QuietButtonStyle: ButtonStyle {
             .padding(.vertical, DS.Space.xs)
             .frame(minHeight: 28)
             .background(
-                RoundedRectangle(cornerRadius: DS.Radius.field)
-                    .fill(DS.Palette.ink.opacity(isEnabled ? (configuration.isPressed ? 0.15 : isHovered ? 0.08 : 0) : 0)))
-            .contentShape(.rect(cornerRadius: DS.Radius.field))
+                ControlFillShape(
+                    state: ControlState(isHovered: isHovered, isPressed: configuration.isPressed, isEnabled: isEnabled),
+                    shape: .rounded(DS.Radius.field)))
+            .contentShape(.rounded(DS.Radius.field))
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .animation(DS.Motion.micro, value: configuration.isPressed)
             .onHover { isHovered = $0 }
             #if os(iOS)
-            .contentShape(.hoverEffect, .rect(cornerRadius: DS.Radius.field))
+            .contentShape(.hoverEffect, .rounded(DS.Radius.field))
             .hoverEffect(.highlight)
             #endif
     }
@@ -313,10 +311,12 @@ public struct FormActionButtonStyle: ButtonStyle {
             .foregroundStyle(foreground(configuration.role))
             .padding(.horizontal, DS.Space.gap10)
             .padding(.vertical, 3)
+            // A push button's bezel is its selected fill, deeper while pressed.
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(DS.Palette.ink.opacity(!isEnabled ? 0.06 : configuration.isPressed ? 0.20 : 0.12)))
-            .contentShape(.rect(cornerRadius: 6))
+                ControlFillShape(
+                    state: ControlState(isPressed: configuration.isPressed, isSelected: true, isEnabled: isEnabled),
+                    shape: .rounded(DS.Radius.field)))
+            .contentShape(.rounded(DS.Radius.field))
         #else
         configuration.label
             .foregroundStyle(foreground(configuration.role))
