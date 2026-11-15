@@ -361,7 +361,7 @@ private struct ConnectionCard: View {
         .chromeContent()
         .padding(DS.Space.l)
         .frame(width: 340)
-        .floatingPanel(cornerRadius: DS.Radius.largeCard)
+        .floatingPanel(cornerRadius: DS.Radius.card)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("connection-overlay")
     }

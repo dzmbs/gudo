@@ -206,7 +206,7 @@ public struct CommandPalette: View {
     #endif
     static let sectionFont = SwiftUI.Font.caption.weight(.medium)
     /// Rows sit this far inside the panel, so their corners are concentric with its own.
-    static let listInset: CGFloat = DS.Radius.panel - DS.Radius.paletteRow
+    static let listInset: CGFloat = DS.Radius.panel - DS.Radius.control
 
     private func row(_ command: PaletteCommand, index: Int, selected: Bool) -> some View {
         Button { run(command) } label: {

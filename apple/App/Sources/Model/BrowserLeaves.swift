@@ -241,7 +241,7 @@ struct Favicon: View {
             .interpolation(.high)
             .aspectRatio(contentMode: .fit)
             .frame(width: size, height: size)
-            .clipShape(.rect(cornerRadius: 3))
+            .clipShape(.rect(cornerRadius: 3, style: .continuous))
             .accessibilityHidden(true)
     }
 }

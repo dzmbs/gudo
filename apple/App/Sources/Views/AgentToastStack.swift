@@ -127,8 +127,8 @@ private struct AgentToastCard: View {
                     .padding(.horizontal, DS.Space.s)
                     .padding(.vertical, DS.Space.xs)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.field))
-                    .overlay(RoundedRectangle(cornerRadius: DS.Radius.field).strokeBorder(DS.Palette.hairline, lineWidth: 0.5)))
+                    .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.field, style: .continuous))
+                    .overlay(RoundedRectangle.rounded(DS.Radius.field).strokeBorder(DS.Palette.hairline, lineWidth: 0.5)))
         case .question?:
             AgentToasts.summary(for: item).map { line in
                 AnyView(Text(verbatim: line).font(DS.Font.rowSubtitle).lineLimit(1))

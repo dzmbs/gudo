@@ -514,12 +514,12 @@ struct MixedTabChip: View {
         let ref = WindowModel.mixedRef(tab.id)
         ZStack {
             if isActive {
-                RoundedRectangle(cornerRadius: DS.Radius.tabPill)
+                RoundedRectangle.rounded(DS.Radius.field)
                     .fill(DS.Palette.selectedFill)
-                    .overlay(RoundedRectangle(cornerRadius: DS.Radius.tabPill).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
+                    .overlay(RoundedRectangle.rounded(DS.Radius.field).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
                     .padding(.vertical, 3)
             } else if isHovered {
-                RoundedRectangle(cornerRadius: DS.Radius.tabPill)
+                RoundedRectangle.rounded(DS.Radius.field)
                     .fill(DS.Palette.hoverFill)
                     .padding(.vertical, 3)
             }

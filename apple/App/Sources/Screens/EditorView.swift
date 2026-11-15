@@ -342,7 +342,7 @@ private struct EditorProgress: View {
                 }
                 .padding(DS.Space.l)
                 .frame(width: 340)
-                .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.panel))
+                .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.panel, style: .continuous))
                 Text(footnote)
                     .font(.footnote)
                     .foregroundStyle(DS.Palette.textSecondary)

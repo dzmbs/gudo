@@ -484,8 +484,8 @@ struct ReplayThumbnail: View {
                     Image(systemName: "photo").foregroundStyle(DS.Palette.textTertiary)
                 }
             }
-            .clipShape(.rect(cornerRadius: DS.Radius.field))
-            .overlay(RoundedRectangle(cornerRadius: DS.Radius.field).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
+            .clipShape(.rect(cornerRadius: DS.Radius.field, style: .continuous))
+            .overlay(RoundedRectangle.rounded(DS.Radius.field).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
             .task(id: name) {
                 guard let name, let data = ReplayStore.shared.keyframe(name, session: session) else { image = nil; return }
                 #if os(iOS)

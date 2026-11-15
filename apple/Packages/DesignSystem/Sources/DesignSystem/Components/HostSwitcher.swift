@@ -343,14 +343,14 @@ public extension View {
             .frame(minHeight: 36)
             .background {
                 if isHighlighted {
-                    RoundedRectangle(cornerRadius: DS.Radius.control)
+                    RoundedRectangle.rounded(DS.Radius.control)
                         .fill(DS.Palette.selectedFill)
                         .matchedGeometryEffect(id: "highlight", in: namespace)
                 }
             }
-            .contentShape(.rect(cornerRadius: DS.Radius.control))
+            .contentShape(.rect(cornerRadius: DS.Radius.control, style: .continuous))
             #if os(iOS)
-            .contentShape(.hoverEffect, .rect(cornerRadius: DS.Radius.control))
+            .contentShape(.hoverEffect, .rect(cornerRadius: DS.Radius.control, style: .continuous))
             .hoverEffect(.highlight)
             #endif
     }

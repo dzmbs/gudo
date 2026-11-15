@@ -9,7 +9,7 @@ struct UpdateCard: View {
     let prompt: UpdatePrompt
     @Environment(\.chrome) private var chrome
 
-    private static let shape = RoundedRectangle(cornerRadius: DS.Radius.searchPanel, style: .continuous)
+    private static let shape = RoundedRectangle(cornerRadius: DS.Radius.pane, style: .continuous)
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.gap10) {

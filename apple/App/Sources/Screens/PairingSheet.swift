@@ -527,12 +527,12 @@ private struct Viewfinder: View {
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: DS.Radius.panel)
+            RoundedRectangle.rounded(DS.Radius.panel)
                 .fill(.black)
             #if os(iOS)
             if isLive {
                 QRScannerView(found: found)
-                    .clipShape(.rect(cornerRadius: DS.Radius.panel))
+                    .clipShape(.rect(cornerRadius: DS.Radius.panel, style: .continuous))
                     .accessibilityLabel("Camera viewfinder. Point at the QR code shown by the host.")
             }
             #endif

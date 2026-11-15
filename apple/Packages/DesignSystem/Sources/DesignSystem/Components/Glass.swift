@@ -13,7 +13,7 @@ public extension View {
     /// reads as the theme's material, not the system's grey; `elevated` casts the deeper panel
     /// shadow for what sits above everything (the palette).
     func floatingPanel(cornerRadius: CGFloat = DS.Radius.panel, elevated: Bool = false) -> some View {
-        modifier(ThemedGlass(shape: .rect(cornerRadius: cornerRadius), interactive: false, elevated: elevated))
+        modifier(ThemedGlass(shape: .rect(cornerRadius: cornerRadius, style: .continuous), interactive: false, elevated: elevated))
     }
 
     func floatingCapsule(interactive: Bool = false) -> some View {
@@ -179,7 +179,7 @@ public extension ButtonStyle where Self == RowButtonStyle {
     static var row: RowButtonStyle { RowButtonStyle() }
     static func row(selected: Bool) -> RowButtonStyle { RowButtonStyle(isSelected: selected) }
     static func paletteRow(selected: Bool) -> RowButtonStyle {
-        RowButtonStyle(isSelected: selected, cornerRadius: DS.Radius.paletteRow)
+        RowButtonStyle(isSelected: selected, cornerRadius: DS.Radius.control)
     }
 }
 

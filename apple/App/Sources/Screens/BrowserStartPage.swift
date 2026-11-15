@@ -88,8 +88,8 @@ struct BrowserStartPage: View {
                     .padding(DS.Space.xs)
             }
         }
-        .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.panel))
-        .overlay(RoundedRectangle(cornerRadius: DS.Radius.panel).strokeBorder(DS.Palette.border))
+        .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.panel, style: .continuous))
+        .overlay(RoundedRectangle.rounded(DS.Radius.panel).strokeBorder(DS.Palette.border))
         .shadow(color: .black.opacity(isFocused ? 0.12 : 0.05), radius: isFocused ? 16 : 6, y: 4)
         .animation(DS.Motion.standard, value: isFocused)
     }
@@ -191,7 +191,7 @@ private struct Tile<Mark: View>: View {
         HStack(spacing: DS.Space.m) {
             mark
                 .frame(width: 32, height: 32)
-                .background(DS.Palette.hoverFill, in: .rect(cornerRadius: DS.Radius.control))
+                .background(DS.Palette.hoverFill, in: .rect(cornerRadius: DS.Radius.control, style: .continuous))
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(DS.Font.rowTitleEmphasis)
@@ -204,9 +204,9 @@ private struct Tile<Mark: View>: View {
             Spacer(minLength: 0)
         }
         .padding(DS.Space.m)
-        .controlFill(ControlState(isHovered: isHovered), in: .rect(cornerRadius: DS.Radius.pane))
-        .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.pane))
-        .overlay(RoundedRectangle(cornerRadius: DS.Radius.pane).strokeBorder(DS.Palette.hairline))
+        .controlFill(ControlState(isHovered: isHovered), in: .rect(cornerRadius: DS.Radius.pane, style: .continuous))
+        .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.pane, style: .continuous))
+        .overlay(RoundedRectangle.rounded(DS.Radius.pane).strokeBorder(DS.Palette.hairline))
         .contentShape(.rect)
         .onHover { isHovered = $0 }
         #if os(iOS)

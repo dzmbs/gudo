@@ -409,7 +409,7 @@ private struct AuditRow: View {
             }
         }
         .padding(DS.Space.gap10)
-        .background(DS.Palette.hoverFill, in: .rect(cornerRadius: DS.Radius.control))
+        .background(DS.Palette.hoverFill, in: .rect(cornerRadius: DS.Radius.control, style: .continuous))
         .padding(.leading, 22 + DS.Space.m)
     }
 

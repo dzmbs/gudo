@@ -605,7 +605,7 @@ struct PaneSlot: View {
             }
         }
         .background(theme.background, ignoresSafeAreaEdges: [])
-        .clipShape(.rect(cornerRadius: paneStyle == .comfortable && isSplit ? DS.Radius.pane : 0))
+        .clipShape(.rect(cornerRadius: paneStyle == .comfortable && isSplit ? DS.Radius.pane : 0, style: .continuous))
         // Header, banners and bars sit on the terminal: its colours, even in a window kept apart.
         .terminalSurfaceChrome()
         // A mixed tab's panes stay with it: tabs merge into host tabs only.

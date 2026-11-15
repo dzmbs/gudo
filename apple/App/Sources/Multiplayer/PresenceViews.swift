@@ -405,7 +405,7 @@ private struct PromptComposer: View {
             .padding(.leading, DS.Space.m)
             .padding(.trailing, DS.Space.xs)
             .padding(.vertical, DS.Space.xs)
-            .floatingPanel(cornerRadius: DS.Radius.largeCard)
+            .floatingPanel(cornerRadius: DS.Radius.card)
         }
         .frame(maxWidth: 640)
         .onChange(of: text.isEmpty) { _, empty in session.setTyping(empty ? nil : pane) }

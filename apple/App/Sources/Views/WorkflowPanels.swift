@@ -102,8 +102,8 @@ struct WorkflowArgumentsForm: View {
             input(argument, index: index)
                 .padding(.horizontal, DS.Space.s)
                 .padding(.vertical, DS.Space.row)
-                .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.field))
-                .overlay(RoundedRectangle(cornerRadius: DS.Radius.field).strokeBorder(
+                .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.field, style: .continuous))
+                .overlay(RoundedRectangle.rounded(DS.Radius.field).strokeBorder(
                     current == index ? AnyShapeStyle(DS.Palette.accent) : AnyShapeStyle(DS.Palette.hairline)))
                 .accessibilityIdentifier("workflow-arg-\(argument.name)")
             if let description = argument.description {
@@ -154,7 +154,7 @@ struct WorkflowArgumentsForm: View {
                 .padding(.horizontal, DS.Space.m)
                 .padding(.vertical, DS.Space.s)
         }
-        .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.field))
+        .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.field, style: .continuous))
         .padding(DS.Space.m)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Command")
@@ -311,8 +311,8 @@ struct NewWorkflowForm: View {
             #endif
             .padding(.horizontal, DS.Space.s)
             .padding(.vertical, DS.Space.row)
-            .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.field))
-            .overlay(RoundedRectangle(cornerRadius: DS.Radius.field).strokeBorder(
+            .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.field, style: .continuous))
+            .overlay(RoundedRectangle.rounded(DS.Radius.field).strokeBorder(
                 focused == field ? AnyShapeStyle(DS.Palette.accent) : AnyShapeStyle(DS.Palette.hairline)))
             .focused($focused, equals: field)
             .onKeyPress(.escape) {

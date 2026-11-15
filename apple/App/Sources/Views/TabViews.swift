@@ -238,7 +238,7 @@ private struct SidebarRowStyle: ViewModifier {
             .contentShape(.rect)
             .controlFill(ControlState(isHovered: hovered, isSelected: selected))
             #if os(iOS)
-            .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: DS.Radius.control))
+            .contentShape(.hoverEffect, RoundedRectangle.rounded(DS.Radius.control))
             .hoverEffect(.highlight)
             #endif
             .padding(.horizontal, DS.Space.s)
@@ -320,7 +320,7 @@ struct SelectionFill: View {
     let isSelected: Bool
 
     var body: some View {
-        RoundedRectangle(cornerRadius: DS.Radius.control)
+        RoundedRectangle.rounded(DS.Radius.control)
             .fill(DS.Palette.selectedFill.opacity(isSelected ? 1 : 0))
             .padding(.horizontal, DS.Space.s)
     }
@@ -401,7 +401,7 @@ private struct HostGroupHeader: View {
                         .padding(.horizontal, DS.Space.xs)
                         .padding(.vertical, 1)
                         .fixedSize()
-                        .overlay(RoundedRectangle(cornerRadius: DS.Radius.chip).strokeBorder(DS.Palette.textTertiary, lineWidth: 0.5))
+                        .overlay(RoundedRectangle.rounded(DS.Radius.chip).strokeBorder(DS.Palette.textTertiary, lineWidth: 0.5))
                         .help("Plain SSH: tabs end with the connection. Install the helper to keep them.")
                 }
                 Spacer(minLength: DS.Space.xs)

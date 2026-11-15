@@ -253,7 +253,7 @@ struct GhHintView: View {
                         .textSelection(.enabled)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 4)
-                        .background(DS.Palette.selectedFill, in: .rect(cornerRadius: DS.Radius.chip))
+                        .background(DS.Palette.selectedFill, in: .rect(cornerRadius: DS.Radius.chip, style: .continuous))
                     Button(copied ? "Copied" : "Copy") {
                         Pasteboard.copy(command)
                         copied = true

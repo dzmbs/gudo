@@ -52,7 +52,7 @@ public struct TerminalSearchBar: View {
                     .padding(.leading, 8)
                     .padding(.trailing, 50)
                     .padding(.vertical, 6)
-                    .background(DS.Palette.selectedFill, in: .rect(cornerRadius: DS.Radius.field))
+                    .background(DS.Palette.selectedFill, in: .rect(cornerRadius: DS.Radius.field, style: .continuous))
                     .focused($isFocused)
                     .overlay(alignment: .trailing) { counter }
                     .onSubmit {
@@ -114,7 +114,7 @@ public struct TerminalSearchBar: View {
             .buttonStyle(.bar)
             .chromeContent()
             .padding(8)
-            .floatingPanel(cornerRadius: DS.Radius.searchPanel)
+            .floatingPanel(cornerRadius: DS.Radius.pane)
             // The count lives inside the field, where accessibility does not reach it: the bar
             // carries it ("3/17", "-/17").
             .accessibilityElement(children: .contain)

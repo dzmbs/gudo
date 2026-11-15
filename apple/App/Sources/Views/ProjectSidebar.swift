@@ -378,7 +378,7 @@ private struct SidebarTabRow: View {
             // Selected for bulk actions: the selection tint, under the row's own fills.
             .background {
                 if model.isInMultipleSelection(ref) {
-                    RoundedRectangle(cornerRadius: DS.Radius.control)
+                    RoundedRectangle.rounded(DS.Radius.control)
                         .fill(DS.Palette.selection)
                         .padding(.horizontal, DS.Space.s)
                         .motionTransition(.fade)
@@ -387,9 +387,9 @@ private struct SidebarTabRow: View {
             .animation(DS.Motion.micro, value: model.isInMultipleSelection(ref))
             // "Will group": the row lights in the project's colour (the accent for a loose one).
             .background {
-                RoundedRectangle(cornerRadius: DS.Radius.control)
+                RoundedRectangle.rounded(DS.Radius.control)
                     .fill(tint.opacity(isGroupTarget ? 0.16 : joined ? 0.12 : 0))
-                    .overlay(RoundedRectangle(cornerRadius: DS.Radius.control).strokeBorder(tint.opacity(isGroupTarget ? 0.7 : 0), lineWidth: 1.5))
+                    .overlay(RoundedRectangle.rounded(DS.Radius.control).strokeBorder(tint.opacity(isGroupTarget ? 0.7 : 0), lineWidth: 1.5))
                     .padding(.horizontal, DS.Space.s)
             }
             .scaleEffect(isGroupTarget ? 1.015 : 1)
@@ -467,8 +467,8 @@ private struct DragLiftPreview: View {
         .padding(.horizontal, DS.Space.m)
         .padding(.vertical, DS.Space.s)
         .frame(minWidth: 160, alignment: .leading)
-        .background(DS.Palette.raised, in: RoundedRectangle(cornerRadius: DS.Radius.control))
-        .overlay(RoundedRectangle(cornerRadius: DS.Radius.control).strokeBorder(DS.Palette.border, lineWidth: 0.5))
+        .background(DS.Palette.raised, in: RoundedRectangle.rounded(DS.Radius.control))
+        .overlay(RoundedRectangle.rounded(DS.Radius.control).strokeBorder(DS.Palette.border, lineWidth: 0.5))
         .shadow(DS.Shadow.float)
         .chromeContent()
     }
@@ -724,7 +724,7 @@ private struct ProjectHeader: View {
         .padding(.top, DS.Space.m)
         .animation(DS.Motion.micro, value: controlsShown)
         .background {
-            RoundedRectangle(cornerRadius: DS.Radius.control)
+            RoundedRectangle.rounded(DS.Radius.control)
                 .fill(DS.Palette.project(project.color).opacity(dropping ? 0.14 : 0))
                 .padding(.horizontal, DS.Space.s)
                 .padding(.top, DS.Space.s)
@@ -993,7 +993,7 @@ struct ProjectsIntroRow: View {
         }
         .padding(.horizontal, DS.Space.m)
         .padding(.vertical, DS.Space.s)
-        .background(DS.Palette.ink.opacity(0.05), in: RoundedRectangle(cornerRadius: DS.Radius.control))
+        .background(DS.Palette.ink.opacity(0.05), in: RoundedRectangle.rounded(DS.Radius.control))
         .padding(.horizontal, DS.Space.s)
         .padding(.top, DS.Space.s)
         .accessibilityElement(children: .contain)

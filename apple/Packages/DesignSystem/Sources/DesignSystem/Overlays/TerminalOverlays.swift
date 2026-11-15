@@ -58,7 +58,7 @@ public struct ResizeOverlay: View {
                     .font(DS.Font.overlay)
                     .padding(5)
                     .background(
-                        RoundedRectangle(cornerRadius: DS.Radius.chip)
+                        RoundedRectangle.rounded(DS.Radius.chip)
                             .fill(DS.Palette.raised)
                             .shadow(radius: 3))
                     .lineLimit(1)
@@ -197,8 +197,8 @@ public struct SecureInputBadge: View {
                             // style-exempt: a mask, only its alpha counts
                             .mask(RadialGradient(colors: [.clear, .black], center: .center, startRadius: 0, endRadius: 25))
                             .opacity(gradientOpacity)))
-            .mask(RoundedRectangle(cornerRadius: DS.Radius.secureBadge))
-            .overlay(RoundedRectangle(cornerRadius: DS.Radius.secureBadge).stroke(DS.Palette.border, lineWidth: 1))
+            .mask(RoundedRectangle.rounded(DS.Radius.pane))
+            .overlay(RoundedRectangle.rounded(DS.Radius.pane).stroke(DS.Palette.border, lineWidth: 1))
             .onTapGesture { isExplaining = true }
             .popover(isPresented: $isExplaining, arrowEdge: .bottom) {
                 Text("Secure input is on while the terminal reads a password. Other apps can't read what you type here.")
@@ -247,7 +247,7 @@ public struct URLHoverBanner: View {
         Text(verbatim: url)
             .font(DS.Font.literalSmall)
             .padding(5)
-            .background(UnevenRoundedRectangle(cornerRadii: corner).fill(.background))
+            .background(UnevenRoundedRectangle(cornerRadii: corner, style: .continuous).fill(.background))
             .lineLimit(1)
             .truncationMode(.middle)
     }

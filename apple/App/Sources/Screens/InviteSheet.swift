@@ -459,12 +459,12 @@ private struct RolePicker: View {
             }
             .padding(DS.Space.gap10)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(isOn ? AnyShapeStyle(DS.Palette.accent.opacity(0.10)) : AnyShapeStyle(DS.Palette.hoverFill), in: .rect(cornerRadius: DS.Radius.control))
+            .background(isOn ? AnyShapeStyle(DS.Palette.accent.opacity(0.10)) : AnyShapeStyle(DS.Palette.hoverFill), in: .rect(cornerRadius: DS.Radius.control, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: DS.Radius.control)
+                RoundedRectangle.rounded(DS.Radius.control)
                     .strokeBorder(isOn ? AnyShapeStyle(DS.Palette.accent.opacity(0.55)) : AnyShapeStyle(DS.Palette.hairline), lineWidth: isOn ? 1 : 0.5)
             }
-            .contentShape(.rect(cornerRadius: DS.Radius.control))
+            .contentShape(.rect(cornerRadius: DS.Radius.control, style: .continuous))
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(role.title)\(locked ? ", always included" : "")")
@@ -674,9 +674,9 @@ struct QRCodeView: View {
                 .resizable()
                 .scaledToFit()
                 .padding(10)
-                .background(.white, in: .rect(cornerRadius: DS.Radius.control))
+                .background(.white, in: .rect(cornerRadius: DS.Radius.control, style: .continuous))
                 .overlay {
-                    RoundedRectangle(cornerRadius: DS.Radius.control).strokeBorder(DS.Palette.hairline, lineWidth: 0.5)
+                    RoundedRectangle.rounded(DS.Radius.control).strokeBorder(DS.Palette.hairline, lineWidth: 0.5)
                 }
                 .accessibilityLabel(label)
         }

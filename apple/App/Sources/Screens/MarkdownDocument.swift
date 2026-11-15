@@ -105,7 +105,7 @@ struct MarkdownDocumentView: View {
                     .font(DS.Font.literal)
                     .padding(DS.Space.m)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(chrome.raised.color, in: .rect(cornerRadius: DS.Radius.control))
+                    .background(chrome.raised.color, in: .rect(cornerRadius: DS.Radius.control, style: .continuous))
             case .listItem(let marker):
                 HStack(alignment: .firstTextBaseline, spacing: DS.Space.s) {
                     Text(verbatim: marker)

@@ -820,8 +820,8 @@ private struct ThemeSwatch: View {
                 .font(TerminalFont.font(size: 11, relativeTo: .caption2))
                 .foregroundStyle(theme.foreground)
                 .frame(width: 26, height: 18)
-                .background(theme.background, in: .rect(cornerRadius: DS.Radius.chip))
-                .overlay(RoundedRectangle(cornerRadius: DS.Radius.chip).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
+                .background(theme.background, in: .rect(cornerRadius: DS.Radius.chip, style: .continuous))
+                .overlay(RoundedRectangle.rounded(DS.Radius.chip).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
             ThemeSwatches(theme: theme, size: 8)
         }
         .accessibilityHidden(true)
@@ -868,8 +868,8 @@ private struct KeyBarProfilesView: View {
             }
             return AnyView(Image(systemName: key.symbol ?? "questionmark").font(.caption.weight(.medium))
                 .padding(.horizontal, 6).padding(.vertical, 3)
-                .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.chip))
-                .overlay(RoundedRectangle(cornerRadius: DS.Radius.chip).strokeBorder(DS.Palette.separator, lineWidth: 0.5)))
+                .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.chip, style: .continuous))
+                .overlay(RoundedRectangle.rounded(DS.Radius.chip).strokeBorder(DS.Palette.separator, lineWidth: 0.5)))
         }
         return spine + wing
     }

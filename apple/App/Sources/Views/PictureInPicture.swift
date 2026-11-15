@@ -76,10 +76,10 @@ private struct PictureInPictureWindow: View {
         }
         .frame(width: PictureInPicture.size.width, height: PictureInPicture.size.height)
         .background(theme.background)
-        .clipShape(.rect(cornerRadius: DS.Radius.searchPanel, style: .continuous))
-        .glassEdge(RoundedRectangle(cornerRadius: DS.Radius.searchPanel, style: .continuous))
+        .clipShape(.rect(cornerRadius: DS.Radius.pane, style: .continuous))
+        .glassEdge(RoundedRectangle(cornerRadius: DS.Radius.pane, style: .continuous))
         .shadow(.panel)
-        .contentShape(.rect(cornerRadius: DS.Radius.searchPanel))
+        .contentShape(.rect(cornerRadius: DS.Radius.pane, style: .continuous))
         .offset(x: frame.minX + drag.width, y: frame.minY + drag.height)
         .gesture(
             DragGesture(minimumDistance: 4)

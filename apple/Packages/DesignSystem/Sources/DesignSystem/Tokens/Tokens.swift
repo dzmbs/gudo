@@ -42,23 +42,21 @@ public extension DS {
 // MARK: - Radii
 
 public extension DS {
+    /// Six radii, each a step on from the last, every one drawn with continuous corners
+    /// (`.rounded(_:)`). A shape inset in another takes the outer radius less the inset.
     nonisolated enum Radius {
+        /// Status chips, key caps, the resize overlay.
         public static let chip: CGFloat = 4
-        /// Concentric with the panel's corners at an 8 pt inset.
-        public static let paletteRow: CGFloat = 8
+        /// Fields, bar buttons, quiet buttons, the selected tab.
         public static let field: CGFloat = 6
+        /// Rows, row highlights, palette rows (concentric with the panel at an 8 pt inset), code blocks.
         public static let control: CGFloat = 8
-        public static let pane: CGFloat = 10
-        /// Grown for glass, which reads smaller than an opaque edge.
+        /// Comfortable panes, the search bar, the secure-input badge, cards in the sidebar.
+        public static let pane: CGFloat = 12
+        /// Floating glass panels (the palette); glass reads smaller than an opaque edge.
         public static let panel: CGFloat = 16
-        public static let tabPill: CGFloat = 7
-        public static let searchPanel: CGFloat = 14
-        public static let secureBadge: CGFloat = 12
-        /// Glass cards over the terminal: secret prompts, knocks, control requests.
+        /// Glass cards over the terminal: secret prompts, knocks, reconnect and control requests.
         public static let card: CGFloat = 20
-        /// The reconnect card and the control-request card.
-        public static let largeCard: CGFloat = 22
-        public static let tabSelection: CGFloat = 16.5
     }
 }
 

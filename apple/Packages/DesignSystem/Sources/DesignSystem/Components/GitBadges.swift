@@ -97,7 +97,7 @@ public struct PRNumberBadge: View {
             .foregroundStyle(style)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .overlay(RoundedRectangle(cornerRadius: DS.Radius.chip).strokeBorder(style, lineWidth: 1))
+            .overlay(RoundedRectangle.rounded(DS.Radius.chip).strokeBorder(style, lineWidth: 1))
             .accessibilityLabel("Pull request \(number), \(kind.word)")
     }
 }

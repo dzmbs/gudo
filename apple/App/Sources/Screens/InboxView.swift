@@ -309,7 +309,7 @@ struct InboxView: View {
             .accessibilityValue(isFocused ? "focused" : "")
             // The keyboard's row: the selection fill, inset like the sidebar's rows.
             .listRowBackground(
-                RoundedRectangle(cornerRadius: DS.Radius.pane)
+                RoundedRectangle.rounded(DS.Radius.pane)
                     .fill(isFocused ? AnyShapeStyle(DS.Palette.selectedFill) : AnyShapeStyle(Color.clear))
                     .padding(.horizontal, DS.Space.xs))
             .listRowInsets(EdgeInsets(top: 0, leading: DS.Space.l, bottom: 0, trailing: DS.Space.m))
@@ -564,9 +564,9 @@ private struct InboxFilterBar: View {
                     .padding(.vertical, 3)
                     .background {
                         if isSelected {
-                            RoundedRectangle(cornerRadius: DS.Radius.field)
+                            RoundedRectangle.rounded(DS.Radius.field)
                                 .fill(DS.Palette.overlay)
-                                .overlay(RoundedRectangle(cornerRadius: DS.Radius.field).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
+                                .overlay(RoundedRectangle.rounded(DS.Radius.field).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
                                 .shadow(color: .black.opacity(0.08), radius: 1, y: 0.5)
                                 .matchedGeometryEffect(id: "pill", in: pill)
                         }
@@ -580,7 +580,7 @@ private struct InboxFilterBar: View {
             }
         }
         .padding(2)
-        .background(DS.Palette.hoverFill, in: .rect(cornerRadius: DS.Radius.control))
+        .background(DS.Palette.hoverFill, in: .rect(cornerRadius: DS.Radius.control, style: .continuous))
     }
 }
 
@@ -807,8 +807,8 @@ private struct InboxRow: View {
                     .padding(.horizontal, DS.Space.s)
                     .padding(.vertical, DS.Space.row)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.field))
-                    .overlay(RoundedRectangle(cornerRadius: DS.Radius.field).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
+                    .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.field, style: .continuous))
+                    .overlay(RoundedRectangle.rounded(DS.Radius.field).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
                     if let note = approval?.block ?? approval?.progress {
                         Label(note, systemImage: approval?.block != nil ? "lock" : "person.2")
                             .font(DS.Font.rowSubtitle)
@@ -947,8 +947,8 @@ private struct InboxRow: View {
             .padding(.horizontal, DS.Space.s)
             .padding(.vertical, DS.Space.row)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.field))
-            .overlay(RoundedRectangle(cornerRadius: DS.Radius.field).strokeBorder(DS.Palette.accent, lineWidth: 1))
+            .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.field, style: .continuous))
+            .overlay(RoundedRectangle.rounded(DS.Radius.field).strokeBorder(DS.Palette.accent, lineWidth: 1))
             HStack(spacing: DS.Space.s) {
                 Spacer()
                 Button(action: cancelEdit) { verb("Cancel", key: "esc") }
@@ -982,8 +982,8 @@ private struct InboxRow: View {
                 .lineLimit(1...5)
                 .padding(.horizontal, DS.Space.gap10)
                 .padding(.vertical, DS.Space.s)
-                .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.control))
-                .overlay(RoundedRectangle(cornerRadius: DS.Radius.control).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
+                .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.control, style: .continuous))
+                .overlay(RoundedRectangle.rounded(DS.Radius.control).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
                 .focused($isComposerFocused)
                 .onSubmit(send)
                 .submitLabel(.send)
@@ -1070,7 +1070,7 @@ private struct AutoApprovalChip: View {
         }
         .padding(.horizontal, DS.Space.s)
         .padding(.vertical, DS.Space.xs)
-        .background(DS.Palette.done.opacity(0.10), in: .rect(cornerRadius: DS.Radius.chip))
+        .background(DS.Palette.done.opacity(0.10), in: .rect(cornerRadius: DS.Radius.chip, style: .continuous))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("inbox-auto-approval")
     }

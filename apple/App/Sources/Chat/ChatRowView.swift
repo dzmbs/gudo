@@ -80,7 +80,7 @@ struct ChatRowView: View {
                 .fixedSize(horizontal: false, vertical: true)
         case .quote:
             HStack(alignment: .top, spacing: DS.Space.m) {
-                RoundedRectangle(cornerRadius: DS.Radius.chip).fill(DS.Palette.border)
+                RoundedRectangle.rounded(DS.Radius.chip).fill(DS.Palette.border)
                     .frame(width: DS.Size.proseQuoteRule)
                 Text(block.text).font(DS.Font.prose).foregroundStyle(DS.Palette.textSecondary)
             }.fixedSize(horizontal: false, vertical: true)
@@ -116,7 +116,7 @@ struct ChatRowView: View {
                     }.font(DS.Font.proseSecondary).padding(DS.Space.l)
                 }
                 .frame(height: CGFloat(block.table.count) * (tableLineHeight + DS.Space.gap10) + 2 * DS.Space.l)
-                .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.secureBadge))
+                .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.pane, style: .continuous))
                 if block.hasOmittedContent {
                     Button("Open full table") { actions.selectText(block.source) }
                         .font(DS.Font.caption).frame(minHeight: DS.Size.touchTarget)
@@ -170,7 +170,7 @@ struct ChatRowView: View {
     private func bubble(_ text: String) -> some View {
         Text(verbatim: text).font(DS.Font.prose)
             .padding(.horizontal, DS.Space.l).padding(.vertical, DS.Space.m)
-            .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.panel))
+            .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.panel, style: .continuous))
     }
 
     private var fromTerminal: some View {
@@ -257,7 +257,7 @@ struct ChatRowView: View {
                     actions.selectText(plan.entries.map(\.text).joined(separator: "\n"))
                 }.font(DS.Font.caption)
             }
-        }.padding(DS.Space.l).background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.searchPanel))
+        }.padding(DS.Space.l).background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.pane, style: .continuous))
     }
 
     private func noticeContent(_ notice: TimelineNotice) -> some View {
@@ -325,7 +325,7 @@ struct ChatRowView: View {
                             .fixedSize(horizontal: true, vertical: true).padding(DS.Space.m)
                     }
                     .frame(height: CGFloat(min(output.preview.split(separator: "\n", omittingEmptySubsequences: false).count, 12)) * outputLineHeight + 2 * DS.Space.m)
-                    .background(DS.Palette.terminal, in: .rect(cornerRadius: DS.Radius.pane))
+                    .background(DS.Palette.terminal, in: .rect(cornerRadius: DS.Radius.pane, style: .continuous))
                 }
                 if let preview = row.inlineDiff { inlineDiff(preview) }
                 if tool.kind == .known(.task) {
@@ -360,7 +360,7 @@ struct ChatRowView: View {
                 }
             }
             .frame(height: CGFloat(preview.file.hunks.first?.lines.count ?? 0) * diffLineHeight)
-            .clipShape(.rect(cornerRadius: DS.Radius.secureBadge))
+            .clipShape(.rect(cornerRadius: DS.Radius.pane, style: .continuous))
         }
     }
 
@@ -448,7 +448,7 @@ private struct ChatRowButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.frame(minHeight: DS.Size.touchTarget).contentShape(.rect)
-            .background(RoundedRectangle(cornerRadius: DS.Radius.control)
+            .background(RoundedRectangle.rounded(DS.Radius.control)
                 .fill(DS.Palette.selection.opacity(configuration.isPressed ? 1 : 0)))
             .animation(reduceMotion ? nil : DS.Motion.micro, value: configuration.isPressed)
             .hoverEffect(.highlight)
@@ -492,9 +492,9 @@ private struct ChatCodeBlock: View {
                     .foregroundStyle(DS.Palette.textSecondary).background(DS.Palette.raised)
             }
         }
-        .background(DS.Palette.terminal, in: .rect(cornerRadius: DS.Radius.secureBadge))
-        .clipShape(.rect(cornerRadius: DS.Radius.secureBadge))
-        .overlay { RoundedRectangle(cornerRadius: DS.Radius.secureBadge).strokeBorder(DS.Palette.hairline) }
+        .background(DS.Palette.terminal, in: .rect(cornerRadius: DS.Radius.pane, style: .continuous))
+        .clipShape(.rect(cornerRadius: DS.Radius.pane, style: .continuous))
+        .overlay { RoundedRectangle.rounded(DS.Radius.pane).strokeBorder(DS.Palette.hairline) }
     }
 }
 #endif

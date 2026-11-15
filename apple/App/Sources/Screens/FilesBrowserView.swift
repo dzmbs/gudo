@@ -316,7 +316,7 @@ private struct DirectoryListing: View {
             } isTargeted: { isDropTargeted = $0 }
             .overlay {
                 if isDropTargeted {
-                    RoundedRectangle(cornerRadius: DS.Radius.pane)
+                    RoundedRectangle.rounded(DS.Radius.pane)
                         .strokeBorder(DS.Palette.accent, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
                         .padding(DS.Space.s)
                         .allowsHitTesting(false)

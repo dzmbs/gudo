@@ -484,7 +484,7 @@ private struct StatusLetter: View {
             .font(.caption2.weight(.bold).monospaced())
             .foregroundStyle(color)
             .frame(width: 16, height: 16)
-            .background(color.opacity(0.14), in: .rect(cornerRadius: DS.Radius.chip))
+            .background(color.opacity(0.14), in: .rect(cornerRadius: DS.Radius.chip, style: .continuous))
             .accessibilityLabel(label)
     }
 
@@ -709,8 +709,8 @@ private struct NoteCard: View {
                 .controlSize(.small)
         }
         .padding(DS.Space.gap10)
-        .background(DS.Palette.accent.opacity(0.1), in: .rect(cornerRadius: DS.Radius.control))
-        .overlay(RoundedRectangle(cornerRadius: DS.Radius.control).strokeBorder(DS.Palette.accent.opacity(0.35), lineWidth: 0.5))
+        .background(DS.Palette.accent.opacity(0.1), in: .rect(cornerRadius: DS.Radius.control, style: .continuous))
+        .overlay(RoundedRectangle.rounded(DS.Radius.control).strokeBorder(DS.Palette.accent.opacity(0.35), lineWidth: 0.5))
         .padding(.leading, DiffLineContent.numberWidth + DS.Space.l)
         .padding(.trailing, DS.Space.l)
         .padding(.vertical, DS.Space.xs)
@@ -735,7 +735,7 @@ private struct NoteComposer: View {
                 .textFieldStyle(.plain)
                 .lineLimit(1...6)
                 .padding(DS.Space.s)
-                .background(theme.surface(0.10), in: .rect(cornerRadius: DS.Radius.control))
+                .background(theme.surface(0.10), in: .rect(cornerRadius: DS.Radius.control, style: .continuous))
                 .focused($focused)
                 .onSubmit { onSave(text) }
                 .onKeyPress(.escape) {
@@ -755,7 +755,7 @@ private struct NoteComposer: View {
             .controlSize(.small)
         }
         .padding(DS.Space.m)
-        .background(DS.Palette.hoverFill, in: .rect(cornerRadius: DS.Radius.control))
+        .background(DS.Palette.hoverFill, in: .rect(cornerRadius: DS.Radius.control, style: .continuous))
         .padding(.leading, DiffLineContent.numberWidth + DS.Space.l)
         .padding(.trailing, DS.Space.l)
         .padding(.vertical, DS.Space.xs)

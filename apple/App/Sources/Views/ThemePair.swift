@@ -159,8 +159,8 @@ struct ThemeSwatchTile: View {
             .font(.caption.weight(.semibold))
             .foregroundStyle(theme.foreground)
             .frame(width: 26, height: 18)
-            .background(theme.background, in: .rect(cornerRadius: DS.Radius.chip))
-            .overlay(RoundedRectangle(cornerRadius: DS.Radius.chip).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
+            .background(theme.background, in: .rect(cornerRadius: DS.Radius.chip, style: .continuous))
+            .overlay(RoundedRectangle.rounded(DS.Radius.chip).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
             .accessibilityHidden(true)
     }
 }
