@@ -408,22 +408,28 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
 - One layout for both tab placements: the integrated sidebar (vertical tabs only) beside a
   detail column whose toolbar is the same in both: the sidebar toggle leading (Xcode's: over the
   sidebar a bare glyph beside the traffic lights with the title starting at the detail column;
-  with the sidebar hidden a toolbar button before the title); the tab's name
-  with a subtitle ("Local · 3 panes", or the host's name); presence avatars; one monochrome glass
-  group with Hosts, Find, the pane menu and the command palette; the tab-placement toggle on its
-  own. Never accent-tinted. `ChromeUITests.testToolbarIsTheSameInBothTabPlacements` compares the
+  with the sidebar hidden too); the tab's name and its context on one line (`WindowTitleLine`,
+  the name in `rowTitleEmphasis`, the context after it in the secondary ink) in a compact
+  unified toolbar, the shortest band macOS has; with the strip on top the row drops the name,
+  which the selected tab already shows. Trailing, at most three controls: the host picker as
+  plain text, then one monochrome glass group with Split (the pane menu) and the command
+  palette. Presence avatars show only while someone else is here, and a worktree's pull request
+  as a quiet word, neither in a capsule. Find (⌘F), Sketch on Pane (⌃⌘D), New Drawing, Share
+  Session, Open In and Run live in the menu bar, the palette and their shortcuts. Never
+  accent-tinted. `ChromeUITests.testToolbarIsTheSameInBothTabPlacements` compares the
   buttons' frames in both placements and attaches screenshots.
 - The title's subtitle is the tab's context (agent task, program, `repo:branch` or directory)
-  when it differs from the title, then "3 panes". Find is lit with the ink at
-  20 % while the search bar is open. The host button is a title-bar picker: symbol,
+  when it differs from the title, then "3 panes", each once. The title changes with the content:
+  it names the tab on screen (`Workspace.shownTab`), which a new or selected tab replaces only
+  once it has drawn. The host button is a title-bar picker: symbol,
   name and a small chevron; it opens the host switcher (`HostSwitcher`): every host
   with its device symbol, ✓ on the window's and ⌃⌘1…⌃⌘9 (⌘1…⌘9 stay the tabs'), a word only
   when the link is not fine or agents wait (else the address, SF Mono), then New Tab, New Agent…,
   Connect via SSH…, Pair with a Ticket…, Join a Session… and All Hosts; only the hosts scroll.
   Typing an address no host matches offers Connect to it. Every icon control has a tooltip with its shortcut.
 - The toolbar background is hidden: the sidebar color runs up behind the traffic lights and the
-  terminal background behind the rest. The window title's folder is the proxy icon
-  (`navigationDocument`) for local tabs.
+  terminal background behind the rest. A local tab's folder is the window's represented
+  folder (`RepresentedDirectory`), for the Window menu and Mission Control.
 - Switching to vertical tabs always shows the sidebar; covered by
   `testSidebarAppearsAfterSwitchingFromTabStrip` and the `toggle` screenshot fixture. The divider
   drags to resize (200-360 pt, double-click restores 248).

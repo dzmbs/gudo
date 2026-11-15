@@ -74,7 +74,8 @@ struct TerminalApp: App {
         // Unit tests render their own offscreen windows; the app opens none.
         .defaultLaunchBehavior(LaunchOptions.isTesting ? .suppressed : .automatic)
         .defaultSize(width: 1180, height: 760)
-        .windowToolbarStyle(.unified(showsTitle: true))
+        // The shortest band a toolbar can have; the title is one line in it (`WindowTitleLine`).
+        .windowToolbarStyle(.unifiedCompact)
         #endif
 
         #if os(macOS)

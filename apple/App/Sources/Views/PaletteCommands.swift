@@ -65,6 +65,7 @@ enum PaletteCommands {
             ("new-workflow", "New Workflow from Last Command…", "text.badge.plus", nil, { model.newWorkflowFromLastCommand() }),
             ("diff", "Review Changes", "plusminus", nil, { model.sheet = .diff }),
             ("editor", "Open in VS Code", "chevron.left.forwardslash.chevron.right", nil, { model.openEditor() }),
+            ("editor-beside", "Open VS Code Beside", "rectangle.split.2x1", nil, { model.openEditor(placement: .split) }),
             ("files", "Browse Files", "folder", nil, { model.sheet = .files }),
             ("browser", "Dev Servers & Ports", "globe", nil, {
                 model.browserURL = nil
@@ -95,6 +96,9 @@ enum PaletteCommands {
         let updater = AppUpdater.shared
         if updater.isAvailable {
             commandLine.append(("check-for-updates", "Check for Updates", "arrow.down.circle", nil, { updater.checkForUpdates() }))
+        }
+        if DesktopVSCode.isInstalled {
+            commandLine.append(("desktop-editor", "Open in Desktop VS Code", "macwindow", nil, { model.openInDesktopVSCode() }))
         }
         #else
         let commandLine: [(String, String, String, [String]?, () -> Void)] = []

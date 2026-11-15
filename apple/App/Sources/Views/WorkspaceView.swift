@@ -414,7 +414,7 @@ private struct DetailColumn: View {
         VStack(spacing: 0) {
             // Across a fold each page's header names its tab and the sidebar is the tab list: a
             // strip would run over the crease.
-            if !model.isSidebarShown && showsTabBar && !model.isEditorFullScreen && !model.foldLayout.isPages {
+            if showsStrip {
                 TabBar(workspace: workspace)
                     .chromeContent()
                     .motionTransition(.panel(from: .top))
@@ -443,8 +443,20 @@ private struct DetailColumn: View {
         .navigationBarTitleDisplayMode(.inline)
         .chromeBarBackground(.base)
         #endif
+        #if os(iOS)
         .navigationSubtitle(model.destination == .terminal ? subtitle : "")
-        .toolbar { TerminalToolbar(workspace: workspace) }
+        #else
+        // The title and its context are one line in the toolbar row (`WindowTitleLine`); the
+        // window keeps its title for the Window menu and Mission Control.
+        .toolbar(removing: .title)
+        #endif
+        .toolbar {
+            // With the strip on top its selected tab names the tab: the row above it keeps only
+            // the window's controls, so the two read as one band.
+            TerminalToolbar(
+                workspace: workspace, title: showsStrip ? nil : title,
+                subtitle: model.destination == .terminal ? subtitle : "")
+        }
         #if os(iOS)
         .toolbar(model.isEditorFullScreen ? .hidden : .automatic, for: .navigationBar)
         #else
@@ -556,12 +568,18 @@ private struct TerminalToolbar: ToolbarContent {
         ToolbarItem(placement: .navigation) {
             SidebarToggle()
         }
-        .sharedBackgroundVisibility(overSidebar ? .hidden : .visible)
+        .sharedBackgroundVisibility(.hidden)
         if overSidebar {
             ToolbarItem(placement: .navigation) {
                 Color.clear
                     .frame(width: titleInset, height: 1)
                     .accessibilityHidden(true)
+            }
+            .sharedBackgroundVisibility(.hidden)
+        }
+        if let title {
+            ToolbarItem(placement: .navigation) {
+                WindowTitleLine(title: title, subtitle: subtitle)
             }
             .sharedBackgroundVisibility(.hidden)
         }
@@ -576,7 +594,12 @@ private struct TerminalToolbar: ToolbarContent {
             ToolbarItem(placement: .principal) { PaneChatToggle(pane: pane, state: chat) }
         }
         #endif
-        if let session = workspace.multiplayer {
+        #if os(macOS)
+        // Without the system title nothing else pushes the controls to the trailing edge.
+        ToolbarSpacer(.flexible, placement: .primaryAction)
+        #endif
+        // People here now: their faces, not a control (sharing starts from the palette).
+        if let session = workspace.multiplayer, !session.others.isEmpty {
             ToolbarItem(placement: .primaryAction) {
                 PresenceToolbarButton(session: session, place: { pane in
                     workspace.session.tabs.first { $0.root.panes.contains(PaneId(pane)) }.map(workspace.title(of:))
@@ -584,58 +607,34 @@ private struct TerminalToolbar: ToolbarContent {
                     .buttonStyle(.plain)
             }
             .sharedBackgroundVisibility(.hidden)
-            ToolbarSpacer(.fixed, placement: .primaryAction)
         }
-        // On its own, so the host's name shows (a glass group shows icons only).
-        ToolbarItem(placement: .primaryAction) {
-            HostToolbarButton(workspace: workspace)
-        }
-        ToolbarSpacer(.fixed, placement: .primaryAction)
+        // The worktree's pull request as a quiet word; Open In and Run are in the Git menu and
+        // the palette.
         if model.destination == .terminal, let worktree = model.git.worktree {
             ToolbarItem(placement: .primaryAction) {
                 PRToolbarButton(git: model.git, worktree: worktree)
             }
-            ToolbarSpacer(.fixed, placement: .primaryAction)
-            ToolbarItemGroup(placement: .primaryAction) {
-                OpenInMenu(git: model.git)
-                RunMenu(git: model.git, worktree: worktree)
-            }
-            ToolbarSpacer(.fixed, placement: .primaryAction)
+            .sharedBackgroundVisibility(.hidden)
         }
+        // A title-bar picker: its name in plain text, no capsule beside the one group.
+        ToolbarItem(placement: .primaryAction) {
+            HostToolbarButton(workspace: workspace)
+        }
+        .sharedBackgroundVisibility(.hidden)
+        // Find, drawing, sharing and the editor are in the menu bar, the palette and their
+        // shortcuts: the bar keeps the two things reached for most.
         ToolbarItemGroup(placement: .primaryAction) {
-            Button("Find", systemImage: "magnifyingglass") {
-                if model.isSearchShown { model.closeSearch() } else { model.showSearch() }
-            }
-                .lit(model.isSearchShown && model.destination == .terminal)
-                .help(model.isSearchShown ? "Hide Find (⌘F)" : "Find (⌘F)")
-                .accessibilityIdentifier("find-button")
-                .disabled(model.destination != .terminal)
-            Menu("Pane", systemImage: "rectangle.split.2x1") {
+            Menu("Split", systemImage: "rectangle.split.2x1") {
                 PaneMenuItems(workspace: workspace, model: model)
                 Divider()
                 Toggle("Two Columns", systemImage: "rectangle.split.2x1", isOn: Binding(
                     get: { model.isTwoColumns }, set: { _ in model.toggleTwoColumns() }))
                     .accessibilityIdentifier("two-columns")
             }
-            .help("Pane: split, zoom, close, Two Columns")
+            .help("Split, zoom, float or close the pane")
             .menuIndicator(.hidden)
             .disabled((workspace.focusedPane == nil && model.activeMixed == nil) || model.destination != .terminal)
             .accessibilityIdentifier("pane-menu")
-            Menu {
-                Button("Sketch on Pane", systemImage: "pencil.tip") { DrawingCommands.toggleDrawing(in: workspace) }
-                    .disabled(!DrawingCommands.canDraw(in: workspace))
-                    .accessibilityIdentifier("draw-sketch")
-                Button("New Drawing", systemImage: "scribble.variable") { DrawingDocuments.newDrawing(window: model) }
-                    .disabled(!DrawingDocuments.canCreate(in: model))
-                    .accessibilityIdentifier("draw-new-drawing")
-            } label: {
-                Label("Sketch on Pane", systemImage: "pencil.tip")
-            } primaryAction: {
-                DrawingCommands.toggleDrawing(in: workspace)
-            }
-            .help("Sketch on Pane (⌃⌘D)")
-            .disabled(model.destination != .terminal || (!DrawingCommands.canDraw(in: workspace) && !DrawingDocuments.canCreate(in: model)))
-            .accessibilityIdentifier("draw-button")
             Button("Command Palette", systemImage: "command") { model.isPaletteShown = true }
                 .help("Command Palette (⌘K)")
                 .accessibilityIdentifier("open-palette")

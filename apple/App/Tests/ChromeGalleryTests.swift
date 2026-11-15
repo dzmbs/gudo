@@ -87,6 +87,7 @@ final class ChromeGalleryTests: XCTestCase {
             backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.titlebarAppearsTransparent = true
+        window.toolbarStyle = .unifiedCompact
         let hosting = NSHostingController(rootView: AnyView(WindowContent(request: nil, model: model).environment(AppModel.shared)))
         hosting.sizingOptions = []
         window.contentViewController = hosting
