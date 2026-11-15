@@ -83,14 +83,36 @@ public final class ToastCenter {
     }
 
     public static func bottomInset(
-        base: CGFloat, banner size: CGSize, in host: CGRect, avoiding obstacles: [CGRect], spacing: CGFloat = DS.Space.s
+        base: CGFloat, banner size: CGSize, in host: CGRect, avoiding obstacles: [CGRect], spacing: CGFloat = DS.Space.s,
+        position: ToastPosition = .bottomLeading
     ) -> CGFloat {
         var inset = base
         for obstacle in obstacles.sorted(by: { $0.maxY > $1.maxY }) {
-            let banner = CGRect(x: host.minX + DS.Space.l, y: host.maxY - inset - size.height, width: size.width, height: size.height)
+            let banner = CGRect(x: bannerX(size, in: host, position: position), y: host.maxY - inset - size.height, width: size.width, height: size.height)
             if banner.intersects(obstacle) { inset = host.maxY - obstacle.minY + spacing }
         }
         return inset
+    }
+
+    /// The top-edge counterpart: the banner drops below any card it would cover.
+    public static func topInset(
+        base: CGFloat, banner size: CGSize, in host: CGRect, avoiding obstacles: [CGRect], spacing: CGFloat = DS.Space.s,
+        position: ToastPosition = .topTrailing
+    ) -> CGFloat {
+        var inset = base
+        for obstacle in obstacles.sorted(by: { $0.minY < $1.minY }) {
+            let banner = CGRect(x: bannerX(size, in: host, position: position), y: host.minY + inset, width: size.width, height: size.height)
+            if banner.intersects(obstacle) { inset = obstacle.maxY - host.minY + spacing }
+        }
+        return inset
+    }
+
+    private static func bannerX(_ size: CGSize, in host: CGRect, position: ToastPosition) -> CGFloat {
+        switch position.horizontalAlignment {
+        case .trailing: host.maxX - DS.Space.l - size.width
+        case .center: host.midX - size.width / 2
+        default: host.minX + DS.Space.l
+        }
     }
 }
 
@@ -118,32 +140,97 @@ private struct ToastObstacle: ViewModifier {
     }
 }
 
-/// One line in a glass capsule that rises from the bottom, clear of every pane's top bar. The
+/// Where a window's toasts appear: bottom leading by default, or top trailing or bottom centre.
+nonisolated public enum ToastPosition: String, CaseIterable, Identifiable, Sendable {
+    case bottomLeading = "bottom-leading"
+    case topTrailing = "top-trailing"
+    case bottomCenter = "bottom-center"
+
+    public static let key = "toast-position"
+    public static let standard = ToastPosition.bottomLeading
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .bottomLeading: "Bottom Left"
+        case .topTrailing: "Top Right"
+        case .bottomCenter: "Bottom Centre"
+        }
+    }
+
+    public var alignment: Alignment {
+        switch self {
+        case .bottomLeading: .bottomLeading
+        case .topTrailing: .topTrailing
+        case .bottomCenter: .bottom
+        }
+    }
+
+    /// The edge a toast arrives from and is flicked back to.
+    public var edge: Edge {
+        switch self {
+        case .bottomLeading, .bottomCenter: .bottom
+        case .topTrailing: .top
+        }
+    }
+
+    /// The edge the toast stack of agents slides in from: the side the stack sits on.
+    public var stackEdge: Edge {
+        switch self {
+        case .bottomLeading: .leading
+        case .topTrailing: .trailing
+        case .bottomCenter: .bottom
+        }
+    }
+
+    public var horizontalAlignment: HorizontalAlignment {
+        switch self {
+        case .bottomLeading: .leading
+        case .topTrailing: .trailing
+        case .bottomCenter: .center
+        }
+    }
+}
+
+/// One line in a glass capsule that rises from its edge, clear of every pane's top bar. The
 /// style's symbol sits in a small tinted disc so it reads on any background. A tap, or a flick
-/// down, dismisses it; taps beside it reach what is under it.
+/// toward its edge, dismisses it; taps beside it reach what is under it. Under Differentiate
+/// Without Color a success or failure always shows its symbol, and a failure's disc is square;
+/// under Increase Contrast the capsule takes a border.
 public struct Banner: View {
     let toast: Toast
+    let edge: Edge
+    let alignment: HorizontalAlignment
     let dismiss: () -> Void
     @State private var dragOffset: CGFloat = 0
+    @Environment(\.chromeAccessibility) private var accessibility
+    @Environment(\.displayScale) private var displayScale
 
-    public init(_ toast: Toast, dismiss: @escaping () -> Void) {
+    /// `alignment` is the side of its line it keeps to when the words are short.
+    public init(_ toast: Toast, edge: Edge = .bottom, alignment: HorizontalAlignment = .leading, dismiss: @escaping () -> Void) {
         self.toast = toast
+        self.edge = edge
+        self.alignment = alignment
         self.dismiss = dismiss
     }
+
+    /// Toward the edge it came from is positive.
+    private var flickSign: CGFloat { edge == .top ? -1 : 1 }
 
     public var body: some View {
         HStack(spacing: DS.Space.gap10) {
             if let person = toast.person {
                 PresenceAvatar(person, size: 24)
                     .accessibilityHidden(true)
-            } else if let image = toast.systemImage {
+            } else if let image = symbol {
                 // The disc is the circle: a circled symbol inside it would be a ring in a ring.
                 Image(systemName: image.replacingOccurrences(of: ".circle.fill", with: "").replacingOccurrences(of: ".circle", with: ""))
                     .font(.footnote.weight(.bold))
                     .imageScale(.small)
                     .foregroundStyle(tint)
                     .frame(width: 24, height: 24)
-                    .background(DS.Palette.container(tint), in: .circle)
+                    .background(DS.Palette.container(tint), in: discShape)
                     .accessibilityHidden(true)
             }
             Text(toast.message)
@@ -165,30 +252,57 @@ public struct Banner: View {
                 .accessibilityIdentifier("toast-action")
             }
         }
-        .padding(.leading, toast.systemImage == nil && toast.person == nil ? DS.Space.l : DS.Space.s)
+        .padding(.leading, symbol == nil && toast.person == nil ? DS.Space.l : DS.Space.s)
         .padding(.trailing, DS.Space.l)
         .padding(.vertical, DS.Space.s)
         .frame(minHeight: 40)
         .chromeContent()
         .floatingCapsule(interactive: true)
+        .overlay {
+            if accessibility.increaseContrast {
+                Capsule()
+                    .strokeBorder(DS.Palette.border, lineWidth: DS.Size.hairline(scale: displayScale) * accessibility.ringPixels)
+                    .allowsHitTesting(false)
+            }
+        }
         // As wide as its words, up to a line a glance takes in.
-        .frame(maxWidth: 560, alignment: .leading)
-        .offset(y: max(0, dragOffset))
+        .frame(maxWidth: 560, alignment: Alignment(horizontal: alignment, vertical: .center))
+        .offset(y: flickSign * max(0, dragOffset))
         // A tap dismisses; with a button only the button takes taps.
         .gesture(TapGesture().onEnded { dismiss() }, including: toast.action == nil ? .all : .subviews)
         .simultaneousGesture(
             DragGesture(minimumDistance: 8)
-                .onChanged { dragOffset = $0.translation.height }
+                .onChanged { dragOffset = flickSign * $0.translation.height }
                 .onEnded { value in
-                    if value.translation.height > 16 || value.velocity.height > 300 {
+                    if flickSign * value.translation.height > 16 || flickSign * value.velocity.height > 300 {
                         dismiss()
                     } else {
-                        withAnimation(DS.Motion.standard) { dragOffset = 0 }
+                        withAnimation(accessibility.travel(DS.Motion.standard)) { dragOffset = 0 }
                     }
                 })
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(toast.message)
+        .accessibilityLabel(spokenMessage)
         .accessibilityIdentifier("toast")
+    }
+
+    /// The toast's symbol; under Differentiate Without Color its style's own when it has none.
+    private var symbol: String? {
+        if let image = toast.systemImage { return image }
+        guard accessibility.marksStateWithShape else { return nil }
+        switch toast.style {
+        case .neutral: return nil
+        case .success: return "checkmark"
+        case .failure: return "exclamationmark"
+        }
+    }
+
+    private var discShape: AnyShape {
+        toast.style == .failure && accessibility.marksStateWithShape ? AnyShape(.rounded(DS.Radius.field)) : AnyShape(Circle())
+    }
+
+    /// The message, said as a failure when it is one: the tint is not heard.
+    private var spokenMessage: String {
+        toast.style == .failure ? "Failed: \(toast.message)" : toast.message
     }
 
     private var tint: ChromeStyle {
@@ -203,35 +317,47 @@ public struct Banner: View {
 private struct ToastHost: ViewModifier {
     let center: ToastCenter
     let bottomInset: CGFloat
+    let topInset: CGFloat
 
     @State private var host = CGRect.zero
     @State private var size = CGSize.zero
+    @AppStorage(ToastPosition.key) private var position = ToastPosition.standard
+    @Environment(\.chromeAccessibility) private var accessibility
 
     func body(content: Content) -> some View {
         content
             .environment(\.toastCenter, center)
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { host = $0 }
-            .overlay(alignment: .bottomLeading) {
+            .overlay(alignment: position.alignment) {
                 if let toast = center.current {
-                    Banner(toast) { center.dismiss() }
+                    Banner(toast, edge: position.edge, alignment: position.horizontalAlignment) { center.dismiss() }
                         .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
                         .padding(.horizontal, DS.Space.l)
-                        .padding(.bottom, bottomInset)
-                        .offset(y: bottomInset - ToastCenter.bottomInset(
-                            base: bottomInset, banner: size, in: host, avoiding: Array(center.obstacles.values)))
-                        .animation(DS.Motion.standard, value: center.obstacles.count)
-                        .motionTransition(.toast(from: .bottom))
+                        .padding(position.edge == .top ? .top : .bottom, position.edge == .top ? topInset : bottomInset)
+                        .offset(y: obstacleOffset)
+                        .animation(accessibility.travel(DS.Motion.standard), value: center.obstacles.count)
+                        .motionTransition(.toast(from: position.edge))
                         .id(toast.id)
                         .sensoryFeedback(toast.style == .failure ? DS.Haptic.failure : DS.Haptic.success, trigger: toast.id)
                 }
             }
     }
+
+    /// How far the banner moves off its inset to clear the cards it would cover.
+    private var obstacleOffset: CGFloat {
+        let obstacles = Array(center.obstacles.values)
+        if position.edge == .top {
+            return ToastCenter.topInset(base: topInset, banner: size, in: host, avoiding: obstacles, position: position) - topInset
+        }
+        return bottomInset - ToastCenter.bottomInset(base: bottomInset, banner: size, in: host, avoiding: obstacles, position: position)
+    }
 }
 
 public extension View {
-    /// Banners for `center`, `bottomInset` over the bottom safe area (and the keyboard).
-    func toastHost(_ center: ToastCenter, bottomInset: CGFloat = DS.Space.l) -> some View {
-        modifier(ToastHost(center: center, bottomInset: bottomInset))
+    /// Banners for `center` at the user's `ToastPosition`: `bottomInset` over the bottom safe
+    /// area (and the keyboard), `topInset` under the top one.
+    func toastHost(_ center: ToastCenter, bottomInset: CGFloat = DS.Space.l, topInset: CGFloat = DS.Space.l) -> some View {
+        modifier(ToastHost(center: center, bottomInset: bottomInset, topInset: topInset))
     }
 
     /// Keeps the window's banners (`toastHost`) clear of this view: a card at the bottom of a

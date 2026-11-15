@@ -1,21 +1,25 @@
 import DesignSystem
 import SwiftUI
 
+/// The agents' cards, stacked newest nearest the edge of the window's toast corner.
 struct AgentToastStack: View {
+    var position = ToastPosition.standard
     @Environment(WindowModel.self) private var model
+
     var body: some View {
         let toasts = model.agentToasts
         let compact = model.widthBucket == .compact
-        VStack(alignment: .leading, spacing: DS.Space.s) {
+        let fromTop = position.edge == .top
+        VStack(alignment: position.horizontalAlignment, spacing: DS.Space.s) {
             ForEach(Array(toasts.cards.enumerated()), id: \.element.id) { index, card in
                 AgentToastCard(card: card, isNewest: index == toasts.cards.count - 1)
-                    .motionTransition(.toast(from: .leading))
+                    .motionTransition(.toast(from: position.stackEdge))
             }
         }
         .frame(maxWidth: compact ? .infinity : 380)
         .toastObstacle()
         .padding(.horizontal, DS.Space.l)
-        .padding(.bottom, PortOfferBanner.bottomInset(model)
+        .padding(fromTop ? .top : .bottom, fromTop ? PaneHeader.height + DS.Space.l : PortOfferBanner.bottomInset(model)
             + (model.ports.offer != nil && !model.editorHasKeys ? PortOfferBanner.height + DS.Space.s : 0))
         .onHover { toasts.hold($0) }
         .simultaneousGesture(

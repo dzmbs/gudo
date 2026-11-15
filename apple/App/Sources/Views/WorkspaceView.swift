@@ -43,6 +43,7 @@ struct WorkspaceView: View {
     @State private var frame = CGRect.zero
     @AppStorage(TerminalPreferences.Key.theme) private var themeName = TerminalPreferences.Default.theme
     @AppStorage(TerminalPreferences.Key.windowTheme) private var windowTheme = TerminalPreferences.WindowTheme.auto
+    @AppStorage(ToastPosition.key) private var toastPosition = ToastPosition.standard
     #if os(macOS)
     @Environment(\.dismiss) private var dismiss
     #endif
@@ -77,9 +78,11 @@ struct WorkspaceView: View {
             .onChange(of: (workspace.host as? DaemonConnection)?.workspace.workflowsRev) {
                 if model.isPaletteShown { model.loadWorkflows() }
             }
-            .overlay(alignment: .bottomLeading) { AgentToastStack() }
+            .overlay(alignment: toastPosition.alignment) { AgentToastStack(position: toastPosition) }
+            // At the top, clear of the pane headers' buttons.
             .toastHost(model.toasts, bottomInset: PortOfferBanner.bottomInset(model)
-                + (model.ports.offer != nil && !model.editorHasKeys ? PortOfferBanner.height + DS.Space.s : 0))
+                + (model.ports.offer != nil && !model.editorHasKeys ? PortOfferBanner.height + DS.Space.s : 0),
+                topInset: PaneHeader.height + DS.Space.l)
             .dictationIndicator()
             .portOffers(model)
             .sheet(item: $model.sheet) { route in
