@@ -39,6 +39,17 @@ pub(crate) struct Session {
     /// The last floating window id handed out.
     #[serde(default)]
     pub next_float: u64,
+    /// Where docked panes' windows were, for when they float again.
+    #[serde(default)]
+    pub docked: Vec<DockedWindow>,
+}
+
+/// The frame and pin a pane's window had when it docked.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub(crate) struct DockedWindow {
+    pub pane: PaneId,
+    pub frame: FloatFrame,
+    pub pinned: bool,
 }
 
 impl Session {
@@ -144,6 +155,25 @@ impl Session {
         }
     }
 
+    /// Docks the window at `index`, remembering its frame and pin for its panes.
+    fn dock_window(&mut self, index: usize) -> FloatWindow {
+        let window = self.floats.remove(index);
+        self.docked
+            .retain(|docked| !window.panes.contains(&docked.pane));
+        self.docked
+            .extend(window.panes.iter().map(|&pane| DockedWindow {
+                pane,
+                frame: window.frame,
+                pinned: window.pinned,
+            }));
+        window
+    }
+
+    fn take_docked(&mut self, pane: PaneId) -> Option<DockedWindow> {
+        let index = self.docked.iter().position(|docked| docked.pane == pane)?;
+        Some(self.docked.remove(index))
+    }
+
     /// Takes `pane` out of the window holding it.
     fn release(&mut self, pane: PaneId) {
         for window in &mut self.floats {
@@ -188,9 +218,17 @@ impl Session {
                 else {
                     break;
                 };
-                self.floats.remove(front);
+                self.dock_window(front);
             }
         }
+        let all: Vec<PaneId> = self.panes().collect();
+        let floating: Vec<PaneId> = self
+            .floats
+            .iter()
+            .flat_map(|window| window.panes.iter().copied())
+            .collect();
+        self.docked
+            .retain(|docked| all.contains(&docked.pane) && !floating.contains(&docked.pane));
     }
 
     /// A spot for a new window in `tab`: the default frame, stepped down and right for each
@@ -212,6 +250,21 @@ impl Session {
             tabs: self.tab_projects.clone(),
         }
     }
+}
+
+/// Each tab's focused pane and the tab in front, as [`Layout::focus_marks`] saw them.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct FocusMarks {
+    active_tab: Option<TabId>,
+    focused: Vec<(TabId, PaneId)>,
+}
+
+/// A tab's panes in place and how many floating windows it holds.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TabRoom {
+    pub tab: TabId,
+    pub tiled: Vec<PaneId>,
+    pub windows: usize,
 }
 
 /// What a removal took away.
@@ -240,6 +293,60 @@ impl Layout {
     pub fn alloc_pane(&mut self) -> PaneId {
         self.next_pane += 1;
         PaneId(self.next_pane)
+    }
+
+    /// Whether `pane` was ever handed out, so a pane that is gone can be told from one that
+    /// never was.
+    pub fn was_allocated(&self, pane: PaneId) -> bool {
+        (1..=self.next_pane).contains(&pane.0)
+    }
+
+    /// Where each tab of `session` has its focus, and which tab is in front.
+    pub fn focus_marks(&self, session: SessionId) -> Option<FocusMarks> {
+        let session = self.session(session)?;
+        Some(FocusMarks {
+            active_tab: session.active_tab,
+            focused: session
+                .tabs
+                .iter()
+                .map(|tab| (tab.tab_id, tab.focused))
+                .collect(),
+        })
+    }
+
+    /// Puts back the focus a change moved: the tab in front, and each tab's focused pane
+    /// while it is still in that tab and not in the tray. Windows keep their order.
+    pub fn restore_focus(&mut self, session: SessionId, marks: &FocusMarks) -> OpResult<()> {
+        let index = self.session_index(session)?;
+        let session = &mut self.sessions[index];
+        let mut changed = false;
+        let hidden: Vec<PaneId> = session
+            .floats
+            .iter()
+            .filter(|window| window.minimized)
+            .flat_map(|window| window.panes.iter().copied())
+            .collect();
+        for &(tab_id, focused) in &marks.focused {
+            let Some(tab) = session.tabs.iter_mut().find(|tab| tab.tab_id == tab_id) else {
+                continue;
+            };
+            if tab.focused != focused && has_leaf(&tab.root, focused) && !hidden.contains(&focused)
+            {
+                tab.focused = focused;
+                changed = true;
+            }
+        }
+        let active_exists = marks
+            .active_tab
+            .is_some_and(|active| session.tabs.iter().any(|tab| tab.tab_id == active));
+        if active_exists && session.active_tab != marks.active_tab {
+            session.active_tab = marks.active_tab;
+            changed = true;
+        }
+        if changed {
+            session.revision += 1;
+        }
+        Ok(())
     }
 
     pub fn session(&self, id: SessionId) -> Option<&Session> {
@@ -438,6 +545,7 @@ impl Layout {
             tab_projects: Vec::new(),
             floats: Vec::new(),
             next_float: 0,
+            docked: Vec::new(),
         });
         self.touch(id);
         Ok((id, tab_id))
@@ -998,12 +1106,18 @@ impl Layout {
                 {
                     return Err(OpError::Invalid);
                 }
-                let frame = frame.unwrap_or_else(|| session.free_frame(&session.tabs[tab_index]));
+                let last = session.take_docked(pane);
+                let frame = frame
+                    .or(last.map(|last| last.frame))
+                    .unwrap_or_else(|| session.free_frame(&session.tabs[tab_index]));
                 let tab = &mut session.tabs[tab_index];
                 if tab.zoomed == Some(pane) {
                     tab.zoomed = None;
                 }
                 session.open_window(vec![pane], frame, CloseWhen::Never);
+                if let Some(window) = session.floats.last_mut() {
+                    window.pinned = last.is_some_and(|last| last.pinned);
+                }
             }
         }
         session.tidy_floats();
@@ -1065,7 +1179,7 @@ impl Layout {
             side,
         }) = beside
         else {
-            self.sessions[session_index].floats.remove(window_index);
+            self.sessions[session_index].dock_window(window_index);
             self.focus(pane)?;
             self.sessions[session_index].revision += 1;
             return Ok(self.sessions[session_index].id);
@@ -1079,7 +1193,7 @@ impl Layout {
             .ok_or(OpError::Invalid)?;
         self.check_insert(target, &node)?;
         let session = &mut self.sessions[session_index];
-        let window = session.floats.remove(window_index);
+        let window = session.dock_window(window_index);
         let tab = &mut session.tabs[tab_index];
         let node = take_subtree(&mut tab.root, &window.panes).ok_or(OpError::Invalid)?;
         if window.panes.contains(&tab.focused) || tab.zoomed.is_some() {
@@ -1159,6 +1273,32 @@ impl Layout {
 
     pub fn floats(&self, session: SessionId) -> Option<SessionFloats> {
         self.session(session).map(Session::to_floats)
+    }
+
+    /// How full `pane`'s tab is: its panes in place and its floating windows.
+    pub fn room_around(&self, pane: PaneId) -> Option<TabRoom> {
+        let (session_index, tab_index) = self.locate(pane)?;
+        let session = &self.sessions[session_index];
+        let tab = &session.tabs[tab_index];
+        Some(TabRoom {
+            tab: tab.tab_id,
+            tiled: session.tiled(tab).collect(),
+            windows: session.windows_in(tab),
+        })
+    }
+
+    /// The panes floating over `pane`'s tab when `pane` is the last one in place there: the
+    /// windows closing it would dock in its place.
+    pub fn floats_over_last_tiled(&self, pane: PaneId) -> Vec<PaneId> {
+        let Some((session_index, tab_index)) = self.locate(pane) else {
+            return Vec::new();
+        };
+        let session = &self.sessions[session_index];
+        let tab = &session.tabs[tab_index];
+        if session.tiled(tab).ne([pane]) {
+            return Vec::new();
+        }
+        leaves(&tab.root).filter(|&leaf| leaf != pane).collect()
     }
 
     /// The window holding `pane`, if it floats.
@@ -2418,6 +2558,98 @@ mod tests {
             panic!()
         };
         assert!((ratio - 0.7).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_docked_pane_floats_again_where_its_window_was() {
+        let mut layout = Layout::default();
+        let (session, _, [_, p2, p3]) = three(&mut layout);
+        let frame = FloatFrame {
+            x: 0.3,
+            y: 0.2,
+            w: 0.5,
+            h: 0.6,
+        };
+        layout.float_pane(p2, Some(frame)).unwrap();
+        layout.set_float(p2, None, None, Some(true)).unwrap();
+        layout.dock_pane(p2, None).unwrap();
+        let json = serde_json::to_string(&layout).unwrap();
+        let mut layout: Layout = serde_json::from_str(&json).unwrap();
+        layout.float_pane(p2, None).unwrap();
+        let window = layout.window_of(p2).unwrap();
+        assert_eq!((window.frame, window.pinned), (frame, true));
+
+        layout.float_pane(p3, None).unwrap();
+        assert!(!layout.window_of(p3).unwrap().pinned, "nothing to restore");
+        layout.close_pane(p3).unwrap();
+        assert!(
+            layout.session(session).unwrap().docked.is_empty(),
+            "closed and floating panes are forgotten"
+        );
+    }
+
+    #[test]
+    fn focus_moved_by_a_change_goes_back() {
+        let mut layout = Layout::default();
+        let (session, first_tab, [p1, p2, p3]) = three(&mut layout);
+        layout.focus(p1).unwrap();
+        let other = layout.alloc_pane();
+        let second_tab = layout.new_tab(session, String::new(), other).unwrap();
+        layout.select_tab(first_tab).unwrap();
+        let marks = layout.focus_marks(session).unwrap();
+
+        layout.float_pane(p2, None).unwrap();
+        layout.dock_pane(p2, None).unwrap();
+        layout.focus(other).unwrap();
+        assert_eq!(layout.focused_pane(session), Some(other));
+        layout.restore_focus(session, &marks).unwrap();
+        assert_eq!(layout.focused_pane(session), Some(p1));
+        let tab_focus = |layout: &Layout, tab: TabId| {
+            let session = layout.session(session).unwrap();
+            session
+                .tabs
+                .iter()
+                .find(|candidate| candidate.tab_id == tab)
+                .unwrap()
+                .focused
+        };
+        assert_eq!(tab_focus(&layout, second_tab), other);
+
+        layout.float_pane(p3, None).unwrap();
+        layout.focus(p3).unwrap();
+        let marks = layout.focus_marks(session).unwrap();
+        layout.set_float(p3, None, Some(true), None).unwrap();
+        layout.restore_focus(session, &marks).unwrap();
+        assert_ne!(
+            layout.focused_pane(session),
+            Some(p3),
+            "focus never goes back into the tray"
+        );
+    }
+
+    #[test]
+    fn panes_handed_out_are_told_from_ones_never_made() {
+        let mut layout = Layout::default();
+        let (_, _, p1) = session_with(&mut layout);
+        assert!(layout.was_allocated(p1));
+        assert!(!layout.was_allocated(PaneId(p1.0 + 1)));
+        assert!(!layout.was_allocated(PaneId(0)));
+    }
+
+    #[test]
+    fn closing_the_last_tiled_pane_names_the_windows_over_it() {
+        let mut layout = Layout::default();
+        let (_, _, p1) = session_with(&mut layout);
+        assert!(layout.floats_over_last_tiled(p1).is_empty());
+        let a = layout.alloc_pane();
+        layout
+            .new_float(p1, a, None, false, CloseWhen::Never)
+            .unwrap();
+        assert_eq!(layout.floats_over_last_tiled(p1), [a]);
+        assert!(layout.floats_over_last_tiled(a).is_empty());
+        let p2 = layout.alloc_pane();
+        layout.split(p1, Axis::Horizontal, p2).unwrap();
+        assert!(layout.floats_over_last_tiled(p1).is_empty());
     }
 
     #[test]
