@@ -15,11 +15,10 @@ final class ChromeGalleryTests: XCTestCase {
     private var savedDefaults: [String: Any?] = [:]
 
     override func setUp() async throws {
+        let path = ProcessInfo.processInfo.environment["GUDO_CHROME_CAPTURE_DIR"].flatMap { $0.isEmpty ? nil : $0 }
+        try XCTSkipIf(path == nil, "set TEST_RUNNER_GUDO_CHROME_CAPTURE_DIR to capture")
         try XCTSkipIf(!LaunchOptions.mock, "needs the mock hosts (TEST_RUNNER_GUDO_MOCK=1)")
-        let path = try XCTUnwrap(
-            ProcessInfo.processInfo.environment["GUDO_CHROME_CAPTURE_DIR"].flatMap { $0.isEmpty ? nil : $0 },
-            "set TEST_RUNNER_GUDO_CHROME_CAPTURE_DIR to capture")
-        captureDirectory = URL(fileURLWithPath: path, isDirectory: true)
+        captureDirectory = URL(fileURLWithPath: try XCTUnwrap(path), isDirectory: true)
         try FileManager.default.createDirectory(at: captureDirectory, withIntermediateDirectories: true)
         for key in [TerminalPreferences.Key.theme, ThemePair.enabledKey] + Self.windowStateKeys {
             savedDefaults[key] = UserDefaults.standard.object(forKey: key)
