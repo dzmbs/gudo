@@ -208,16 +208,16 @@ struct WindowContent: View {
                 reportSizingActivity()
             }
             #if os(macOS)
-            .onChange(of: controlActiveState, initial: true) { _, _ in reportSizingActivity() }
+            // Another app or window taking the keys leaves the size where it is; coming back
+            // takes it again.
+            .onChange(of: controlActiveState) { _, state in
+                if state == .key { model.claimVisibleSizes() }
+            }
             #endif
     }
 
     private func reportSizingActivity() {
-        #if os(macOS)
-        model.sizingActivity = scenePhase == .active && controlActiveState == .key ? .active : .inactive
-        #else
         model.sizingActivity = scenePhase == .active ? .active : .inactive
-        #endif
     }
 
     private func showError(_ error: String?) {

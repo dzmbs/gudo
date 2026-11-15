@@ -317,8 +317,9 @@ Backgrounding or disconnecting hands sizing to another eligible active client; i
 requests are saved without resizing the PTY. Legacy clients use visible-pane transitions as
 activity. New clients report `PaneActivity` separately and use `ClaimSize` for an explicit claim;
 repeated identical activity reports do not take sizing back. Apple windows aggregate activity
-separately from notification visibility, preferring the active window's focus. Scene activation
-and Mac key-window activation claim visible panes' local taps and their daemon grids. These controls require
+separately from notification visibility, preferring the active window's focus. A Mac window
+stays active while it is on screen, so another app taking the keys leaves sizing alone. Scene
+activation and Mac key-window activation claim visible panes' local taps and their daemon grids. These controls require
 `DaemonFeatures::ACTIVE_SIZING`; `Caps::ACTIVE_SIZING` permits `LastActive` in metadata. Older
 clients receive `LastInput` in its place, including in `Welcome` before attachment and on
 initial subscription. A separate

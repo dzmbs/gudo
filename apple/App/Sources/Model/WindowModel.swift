@@ -219,10 +219,15 @@ final class WindowModel {
         didSet {
             guard sizingActivity != oldValue else { return }
             reportViews()
-            guard reportedSizingActivity == .active else { return }
-            for (id, view) in screenViews() {
-                for pane in view.visible { workspaces[id]?.panes[pane]?.claimSize() }
-            }
+            claimVisibleSizes()
+        }
+    }
+
+    /// The panes this window shows take their size from it.
+    func claimVisibleSizes() {
+        guard reportedSizingActivity == .active else { return }
+        for (id, view) in screenViews() {
+            for pane in view.visible { workspaces[id]?.panes[pane]?.claimSize() }
         }
     }
     var reportedSizingActivity: PaneActivity {
