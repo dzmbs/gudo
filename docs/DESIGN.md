@@ -101,7 +101,7 @@ terminal background.
 Every number that changes (counts, countdowns, progress, ages, PR numbers, ⌘N, cols × rows) uses
 monospaced digits, through `meta`, `badge`, `overlay` or `.monospacedDigit()`.
 | `literal` / `literalSmall` | SF Mono callout / caption | paths, commands, hosts, code |
-| `sidebarTitle` / `sidebarSubtitle` | body / caption (Mac), subheadline / footnote (touch) | sidebar rows |
+| `sidebar(_:)` | Mac: the system sidebar's 11 / 13 / 15 pt rows (small, medium, large); touch: subheadline / body / title3 titles over footnote / subheadline / body | sidebar rows, at `sidebar-text-size` (Settings › Appearance: System, the default, follows System Settings › Appearance › Sidebar icon size on the Mac and is medium on touch; small, medium or large otherwise), applied live; the column widens or narrows with it (`widthExtra`) |
 | `tabTitle` | callout (Mac), subheadline (touch) | tab strip |
 | `paletteQuery` | title3 light | command palette field (Ghostty 20 pt light on touch, 15 on the Mac) |
 | `keyCap` | 12 pt medium rounded | shortcut key caps (Ghostty `KeyCap`) |
@@ -190,7 +190,9 @@ own role so it never pops even when the change is not animated:
 | `tab` | opacity 0, scale 0.985 | `standard` | a tab arriving in the strip |
 | `arriving` | opacity 0, after `arrivalDelay` (0.16 s) | `micro` | what lands where a structural move is heading: a new divider, the minimize button once the header has made room, the exit control's label |
 
-Under Reduce Motion every named transition only fades. `attentionCue(trigger:)` is the one beat
+Under Reduce Motion every named transition only fades, and a highlight that would slide between
+rows (the switchers) or a banner settling back after a drag changes in place
+(`ChromeAccessibility.travel`). `attentionCue(trigger:)` is the one beat
 that draws the eye to something that changed (it grows to 1.08 on `micro` and settles back on
 `standard`); it does nothing under Reduce Motion.
 
@@ -249,6 +251,12 @@ Two shadows (`.shadow(DS.Shadow.float)`, or `.shadow(_:visible:)` for one that c
   the update card and the palette, and the window in the compact and comfortable pane styles,
   dark and light, active and inactive, with and without Increase Contrast:
   `TEST_RUNNER_GUDO_DESIGN_GALLERY_DIR=<dir> TEST_RUNNER_GUDO_MOCK=1`.
+- `InteractionGalleryTests` (AppTests, Mac) renders the palette, the switchers, toasts (each
+  position) and the Appearance and Terminal Settings panes, dark and light, under each of
+  Increase Contrast, Reduce Transparency, Differentiate Without Color and Reduce Motion, and split
+  windows with each pane emphasis: `TEST_RUNNER_GUDO_INTERACTION_GALLERY_DIR=<dir>`. An offscreen
+  window cannot draw Liquid Glass, so the palette's contents show in the Reduce Transparency
+  captures. Every gallery skips unless its folder is set.
 
 ## Components (DesignSystem)
 
@@ -265,13 +273,16 @@ Two shadows (`.shadow(DS.Shadow.float)`, or `.shadow(_:visible:)` for one that c
 | `fieldSurface(isFocused:)` | `Components/Fields.swift` | a text field on a page (Hosts quick connect): the raised surface, a hairline edge, the accent's edge and the `accentRing` halo while focused; typed literals in SF Mono, the prompt in prose |
 | `glassEdge(_:)`, `.shadow(DS.Shadow)` | `Components/Glass.swift`, `Tokens/Tokens.swift` | see Shadows and edges |
 | `SwipeAction`, `SwipeActionTray` | `Components/SwipeActions.swift` | swipe actions beside hand-drawn rows, as `List` draws its own since iOS 26: a tinted circle per action (28-48 pt, as the row allows) with the symbol in the label that reads on it (`on(_:)`), the word under it on tall rows, the theme's signals in Mail's vocabulary (red ends, amber stops, blue goes, green completes, violet edits, bright yellow pins; never grey), scaling in with the reveal; armed, the outermost stretches into a capsule |
-| `HostSwitcher`, `HostSwitcherLabel`, `HostSwitcherHost`, `HostSwitcherCommand` | `Components/HostSwitcher.swift` | a session popup for hosts: "Filter or connect…", hosts with ⌃⌘N and ✓, a highlight that follows ↑/↓ and the pointer, then commands with their shortcuts; typing an unknown address offers Connect to it |
+| `HostSwitcher`, `HostSwitcherLabel`, `HostSwitcherHost`, `HostSwitcherCommand` | `Components/HostSwitcher.swift` | a session popup for hosts: "Filter or connect…", hosts with ⌃⌘N and ✓, a highlight that follows ↑/↓ and the pointer, then commands with their shortcuts; typing an unknown address offers Connect to it; ↩ chooses, esc closes, the key hint bar at its foot; a host that needs you carries an amber dot, an amber ! under Differentiate Without Color |
 | `floatingPanel`, `floatingCapsule`, `phoneDetents` | `Components/Glass.swift`, `Sheets.swift` | glass rules above; bottom sheets only on iPhone |
 | `ShortcutLabel`, `KeyCap` | `Components/KeyCaps.swift` | Ghostty `ShortcutSymbolsView`, `KeyCap` |
-| `Toast`, `ToastCenter`, `toastHost`, `Banner` | `Components/Toast.swift` | one at a time; a `person` (joined, left) leads with their avatar instead of the symbol; a glass capsule at the bottom leading edge, 16 pt from the content edges (never over a pane's top bar: address bar, editor bar, pane headers; above the dev-server offer, the iPhone tab bar and cards at the bottom of a pane such as someone's draft, `toastObstacle()`), edge and float shadow; the symbol in a 24 pt disc on its container; one line (failures two); the action in accent semibold after a hairline; tap or flick down dismisses; taps beside it pass through |
+| `ChromeAccessibility`, `\.chromeAccessibility` | `Components/ChromeAccessibility.swift` | the one reading of Reduce Motion, Reduce Transparency, Increase Contrast and Differentiate Without Color for hand-drawn controls: `transition(_:)` (only the fade under Reduce Motion), `travel(_:)` (no animation for a highlight sliding between rows under Reduce Motion), `surface(for:)` (opaque under Reduce Transparency), `style(_:)`, `ring` and `ringPixels` (the accent at two pixels under Increase Contrast), `marksStateWithShape` (a state in a hue also gets its own shape and word) |
+| `KeyHintBar`, `KeyHint` | `Components/KeyHintBar.swift` | the foot of every list popover (palette, host and people switchers): a hairline, then key caps and a caption in `meta`, ↑ ↓ Move and ↩ plus what it does on the highlighted row (Run, Switch, Connect, Open, Follow, Stop Following) leading, esc Close trailing; 30 pt; only where there is a keyboard (always on the Mac, a hardware keyboard on touch); one element for VoiceOver with the keys named |
+| `ActivePaneRing` | `Overlays/PaneEmphasis.swift` | the opt-in active-pane ring (Splits, panes) |
+| `Toast`, `ToastCenter`, `toastHost`, `Banner`, `ToastPosition` | `Components/Toast.swift` | one at a time; a `person` (joined, left) leads with their avatar instead of the symbol; a glass capsule at the user's `toast-position` (Settings › Appearance › Toasts: bottom left, the default; top right, under the pane headers; bottom centre), 16 pt from the content edges, arriving from and flicked back to its edge; the agent cards stack in the same corner and banners clear them at the top as at the bottom. Reduce Motion: it only fades; Reduce Transparency: opaque; Increase Contrast: a `border` edge; Differentiate Without Color: a success or failure always shows its symbol and a failure's disc is square; VoiceOver hears "Failed:" before a failure. At the bottom leading edge, 16 pt from the content edges (never over a pane's top bar: address bar, editor bar, pane headers; above the dev-server offer, the iPhone tab bar and cards at the bottom of a pane such as someone's draft, `toastObstacle()`), edge and float shadow; the symbol in a 24 pt disc on its container; one line (failures two); the action in accent semibold after a hairline; tap or flick down dismisses; taps beside it pass through |
 | `ShimmerMath`, `.shimmering(_:text:)` | `Components/Shimmer.swift` | "working" on a title instead of a spinner |
 | `PresenceAvatar`, `PresenceStack`, `Participant` | `Components/Presence.swift` | initials on ANSI hues, typing ring, +N; stacks at any size, each avatar cutting a thin gap out of the one under it so they read on any background |
-| `PeopleSwitcher`, `PeopleSwitcherPerson` | `Components/PeopleSwitcher.swift` | the presence button's popover in the host switcher's form: "4 people here", one row per person (avatar, what they are doing, ✓ on the one followed; a tap follows or stops), then Share Session… |
+| `PeopleSwitcher`, `PeopleSwitcherPerson` | `Components/PeopleSwitcher.swift` | the presence button's popover in the host switcher's form: "4 people here", one row per person (avatar, what they are doing, ✓ on the one followed; a tap follows or stops), then Share Session…; ↑ ↓ move, ↩ follows or stops, esc closes, with the key hint bar |
 | `.switcherRow(isHighlighted:in:)`, `SwitcherCheck` | `Components/HostSwitcher.swift` | the switchers' shared row: 36 pt, the sliding highlight, the ✓ slot |
 | `KeyBarLook` | `Components/KeyBarLook.swift` | the key bar's look (app passes it as `KeyBarStyle.designSystem`) |
 | `ResizeOverlay`, `ProcessExitedBar`, `BellBorder`, `UnfocusedDim`, `SecureInputBadge`, `URLHoverBanner` | `Overlays/TerminalOverlays.swift` | Ghostty `SurfaceView.swift` 1:1 |
@@ -443,7 +454,12 @@ tabs to reorder.
 - Dividers 1 pt in the split-divider color, 7 pt hit area with resize pointer on Mac, 20 pt with
   pointer highlight on iPad; double-click/tap equalizes; adjustable for VoiceOver ("Horizontal
   split divider", ±2.5 %). Split sizes snap to whole cells (main's `SplitSnapping`).
-- No focus ring. Unfocused panes are dimmed with the background at 1 − `unfocused-split-opacity`.
+- No focus ring by default. Unfocused panes are dimmed with the background at 1 − `unfocused-split-opacity`.
+- Pane emphasis, opt-in (Settings › Appearance › Panes): `pane-active-border` draws
+  `ActivePaneRing` around the focused pane in a split, one physical pixel of `accentRing` inside
+  its edge (the pane's own corner radius), the accent at two pixels under Increase Contrast,
+  fading in and out on `micro`. `pane-inactive-fade` sets how an unfocused pane recedes: Dim (the
+  default, Ghostty's whole-pane dim), Dim Header Only, or None. Off and Dim are as Ghostty.
 - Pane header (only in splits, 24 pt, on the terminal background): program mark (12 pt),
   program's display name, its account ("· ● Work", only when that agent has more than one account
   on the host), status glyph and state word in its color, an "At Limit" mark in the attention colour
@@ -625,7 +641,8 @@ symbol, the title, the subtitle inline in secondary, a badge, and the shortcut a
 caps. Small tertiary section headers. The selected row is the soft `selection` tint, the text
 unchanged. Empty query: sections Needs You → Tabs → Terminal → Go → Hosts. With a query: fuzzy
 ranked flat list, matched characters bold. ↑↓ / ⌃P ⌃N move, Return runs, Esc or a click outside
-closes. Workflow forms open in the same place. Fixtures: `palette`, `palette-search`, `goto`,
+closes. A `KeyHintBar` at the foot says so: "↑ ↓ Move", "↩ Run" leading, "esc Close" trailing.
+Workflow forms open in the same place. Fixtures: `palette`, `palette-search`, `goto`,
 `palette-workflows`.
 
 Two more modes of the same panel: **Go to Tab…** (⌘P, "Go to a tab on any host…") lists every
@@ -885,7 +902,12 @@ Ghostty's config as native settings; each control's Ghostty key is in its toolti
 results and, on the Mac, under the label while ⌥ is held (never a permanent second line). Appearance: Theme (463 Ghostty themes, searchable, Dark/Light filter; each theme a
 card in its own background with its name in its foreground, a prompt in its colours and four 12 pt
 swatches (red, green, blue, yellow), the selected card ringed in the accent; the setting row
-shows an "Aa" tile in the theme's colours and four dots), Window (`window-theme`), Panes (compact/comfortable).
+shows an "Aa" tile in the theme's colours and four dots), Window (`window-theme`), Sidebar Text
+Size, Toasts (where they appear). Panes: each choice a small card drawn in SwiftUI in the user's
+own theme (two panes, the left one active, prompt lines in its ANSI colours), live as the other
+settings change: Compact / Comfortable, then Dim / Dim Header Only / None for inactive panes,
+then the Ring Around the Active Pane toggle; the chosen card ringed in the accent with a ✓ by its
+name (`Views/PanesSettings.swift`).
 Follow Light and Dark Mode (Ghostty's `theme = light:X,dark:Y`): a light and a dark
 theme, each from the same picker; the system's appearance writes `theme` (`Views/ThemePair.swift`).
 Font: JetBrains Mono, size stepper with live sample. Cursor: style, blink. Splits: unfocused
