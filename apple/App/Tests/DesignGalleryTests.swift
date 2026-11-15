@@ -81,7 +81,8 @@ final class DesignGalleryTests: XCTestCase {
             for (windowName, isActive) in Self.windowStates {
                 try await captureWindow("tab-strip-\(appearance)-\(windowName)", isActive: isActive, contrast: .standard) { model in
                     model.isSidebarShown = false
-                    for _ in 0..<4 { model.newTab() }
+                    // The same tabs in both captures: the selected one stays in view.
+                    if isActive { for _ in 0..<4 { model.newTab() } }
                     model.workspace?.split(.horizontal)
                 }
             }
@@ -91,6 +92,25 @@ final class DesignGalleryTests: XCTestCase {
             }
             try await captureWindow("settings-\(appearance)", isActive: true, contrast: .standard) { model in
                 model.sheet = .settings
+            }
+        }
+        // Last: a floating window stays in the mock session and would show in every later capture.
+        for (appearance, themeName) in Self.themes {
+            UserDefaults.standard.set(themeName, forKey: TerminalPreferences.Key.theme)
+            for paneStyle in TerminalPreferences.PaneStyle.allCases {
+                UserDefaults.standard.set(paneStyle.rawValue, forKey: TerminalPreferences.Key.paneStyle)
+                for (windowName, isActive) in Self.windowStates {
+                    try await captureWindow(
+                        "floating-\(appearance)-\(paneStyle.rawValue)-\(windowName)", isActive: isActive, contrast: .standard
+                    ) { model in
+                        model.isSidebarShown = true
+                        model.workspace?.split(.horizontal)
+                        model.workspace?.split(.vertical)
+                        if let workspace = model.workspace, let pane = workspace.focusedPane {
+                            workspace.apply(.float(pane, frame: FloatFrame(x: 0.3, y: 0.25, width: 0.4, height: 0.45)))
+                        }
+                    }
+                }
             }
         }
     }
@@ -159,6 +179,7 @@ private struct GallerySheet: View {
             GallerySection("Rows and fields") { RowsAndFields() }
             GallerySection("Toasts") { Toasts() }
             GallerySection("Update card") { UpdateCardSample() }
+            GallerySection("Reconnect card") { ReconnectCardSample() }
             GallerySection("Command palette") { PaletteSample() }
         }
         .padding(DS.Space.xxl)
@@ -345,6 +366,16 @@ private struct UpdateCardSample: View {
 
     var body: some View {
         UpdateCard(prompt: prompt).frame(width: 300)
+    }
+}
+
+private struct ReconnectCardSample: View {
+    var body: some View {
+        Rectangle().fill(DS.Palette.terminal)
+            .frame(width: 420, height: 240)
+            .connectionOverlay(
+                .needsAttention(reason: "studio no longer trusts this device", action: "Re-pair…"),
+                hostName: "studio", onRetry: {}, onDisconnect: {})
     }
 }
 
